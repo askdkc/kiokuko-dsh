@@ -2,20 +2,20 @@
 
 ## インストールと設定
 
-Node.js 24.16.0以上が必要です。`kiokuko-dsh`をnpmに公開するまでは、local checkoutから実行します。
+Node.js 24.16.0以上が必要です。公開済みの`kiokuko-dsh@0.1.0`をnpmから導入するのが通常の手順です。
+
+```bash
+npm install --global kiokuko-dsh
+kiokuko setup
+```
+
+local checkoutを使う場合:
 
 ```bash
 cd /path/to/kiokuko-dsh
 pnpm install --frozen-lockfile
 pnpm run build
 node dist/bin/kiokuko.js setup
-```
-
-npm公開後はglobal installも使えます。
-
-```bash
-npm install --global kiokuko-dsh
-kiokuko setup
 ```
 
 `--clients codex,opencode,claude,hermes`で対象を明示できます。省略時はインストール済みclientを検出します。
@@ -60,21 +60,18 @@ Enno-Oduno有効時、Codex・OpenCode・Claude Codeには継続adapterがあり
 
 ## DeepSeek Harness Plugin
 
-このパッケージはnpmに未公開です。Git dependencyは`prepare`で`dist/`を生成するため、pnpmの明示的な許可が必要です。
-
-一度導入を実行し、pnpmが表示したcommit付きのexact keyを
-`~/.dsh/profiles/web/pnpm-workspace.yaml`へ追加して`true`にします:
-
-```yaml
-allowBuilds:
-  "kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/<commit>": true
-```
-
-その後、次を実行します。
+公開済みのビルド済みパッケージを一発で導入できます:
 
 ```bash
-dsh plugin add github:askdkc/kiokuko-dsh
+dsh plugin --profile web add kiokuko-dsh
 ```
+
+`/kiokuko-soul`を実行する必要はありません。プラグインがポリシーをDSHの
+system promptへ自動注入するため、profileを起動してそのまま依頼を入力します
+（web profileは`dsh web`）。
+
+source-pinned Git導入では[DeepSeek Harness Plugin](dsh-plugin.md)の自動fallbackを使ってください。
+commitを固定し、正確な`allowBuilds`項目を追加し、既存項目を保持してから自動再試行します。
 
 profileを分ける場合は次のようにします。
 

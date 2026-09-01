@@ -57,16 +57,31 @@ test('README entry points and English/Japanese docs carry the setup and trust co
   ].join('\n');
   assert.ok(renderCodexMcpConfig('').content.includes(requiredCore));
 
+  const usageStatements = new Map([
+    ['README.md', /Do not run `\/kiokuko-soul`[\s\S]*system prompt/u],
+    ['README.ja.md', /`\/kiokuko-soul`を実行する必要はありません[\s\S]*system prompt/u],
+    ['README.zh-CN.md', /无需运行 `\/kiokuko-soul`[\s\S]*system prompt/u],
+    ['README.ko.md', /`\/kiokuko-soul`을 실행할 필요가 없습니다[\s\S]*system prompt/u],
+  ]);
   for (const name of ['README.md', 'README.ja.md', 'README.zh-CN.md', 'README.ko.md']) {
     const readme = readFileSync(new URL(`../../${name}`, import.meta.url), 'utf8');
     assert.match(readme, /Node\.js 24\.16\.0/u, name);
-    assert.match(readme, /dsh plugin --profile web add github:askdkc\/kiokuko-dsh/u, name);
+    assert.match(readme, /dsh plugin --profile web add kiokuko-dsh/u, name);
+    assert.match(readme, /dsh web/u, name);
+    assert.match(readme, /0\.1\.0/u, name);
+    assert.doesNotMatch(readme, /not published|未公開|尚未发布|공개되지 않았/u, name);
     assert.match(readme, /docs\/dsh-plugin/u, name);
+    assert.doesNotMatch(readme, /<commit>/u, name);
     assert.doesNotMatch(readme, /kiokuko setup/u, name);
+    assert.match(readme, usageStatements.get(name)!, name);
   }
+
+  const dshPluginGuide = readFileSync(new URL('../../docs/dsh-plugin.md', import.meta.url), 'utf8');
+  assert.match(dshPluginGuide, /Do not run `\/kiokuko-soul`[\s\S]*`kiokuko:soul` system-prompt section/u);
 
   const gettingStarted = readFileSync(new URL('../../docs/getting-started.md', import.meta.url), 'utf8');
   assert.ok(gettingStarted.includes(requiredCore));
+  assert.match(gettingStarted, /Do not run `\/kiokuko-soul`[\s\S]*system prompt/u);
   for (const contractTerm of [
     'required = false',
     'CONFLICT',

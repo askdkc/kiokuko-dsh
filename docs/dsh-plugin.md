@@ -6,25 +6,63 @@ MCP clients; it does not fork DeepSeek Harness or modify a repository's files.
 
 ## Install
 
-The Git dependency runs `prepare` to build its exported `dist/` files. pnpm
-blocks that script until you explicitly allow this exact Git artifact. Run the
-install once, copy the exact commit key printed by pnpm into
-`~/.dsh/profiles/web/pnpm-workspace.yaml`, and set it to `true`:
-
-```yaml
-allowBuilds:
-  "kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/<commit>": true
-```
-
-Keep existing entries and replace `<commit>` with the value pnpm printed. Then,
-from a DeepSeek Harness source checkout, run:
+The published `kiokuko-dsh@0.1.0` npm package is the one-shot path because its
+tarball already contains `dist/`:
 
 ```bash
-pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh
+pnpm dsh --profile web --dump-config
+```
+
+For a source-pinned Git install, use this fallback. It pins one commit, lets
+the first run initialize the profile, adds the exact `allowBuilds` key without
+deleting existing entries, and retries automatically:
+
+```bash
+set -eu
+
+dsh_profile="$HOME/.dsh/profiles/web"
+dsh_workspace="$dsh_profile/pnpm-workspace.yaml"
+dsh_commit="$(git ls-remote https://github.com/askdkc/kiokuko-dsh.git HEAD | awk '{print $1}')"
+test -n "$dsh_commit"
+dsh_spec="github:askdkc/kiokuko-dsh#${dsh_commit}"
+dsh_key="kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/${dsh_commit}"
+
+if ! pnpm dsh plugin --profile web add "$dsh_spec"; then
+  node --input-type=module - "$dsh_workspace" "$dsh_key" <<'NODE'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
+const [file, key] = process.argv.slice(2);
+mkdirSync(dirname(file), { recursive: true });
+let text = existsSync(file) ? readFileSync(file, 'utf8') : '';
+if (!text.includes(key)) {
+  if (/^allowBuilds:\s*$/m.test(text)) {
+    text = text.replace(/^allowBuilds:\s*$/m, (line) => `${line}\n  "${key}": true`);
+  } else if (/^allowBuilds:\s*\{\}\s*$/m.test(text)) {
+    text = text.replace(/^allowBuilds:\s*\{\}\s*$/m, `allowBuilds:\n  "${key}": true`);
+  } else {
+    text += `${text.endsWith('\n') || text.length === 0 ? '' : '\n'}allowBuilds:\n  "${key}": true\n`;
+  }
+  writeFileSync(file, text);
+}
+NODE
+  pnpm dsh plugin --profile web add "$dsh_spec"
+fi
 pnpm dsh --profile web --dump-config
 ```
 
 With an installed dsh CLI, use the same commands without the `pnpm` launcher.
+
+## Usage
+
+Do not run `/kiokuko-soul`. The plugin mounts the bundled `kiokuko-soul` content
+as the `kiokuko:soul` system-prompt section automatically. Start the selected
+DSH profile and enter your task, for example:
+
+```bash
+dsh web
+```
 
 The package exposes the `./dsh` entrypoint and declares
 `dsh/cordis.patch.yml` as its bundle patch. Use a profile when testing or when

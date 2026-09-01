@@ -2,21 +2,21 @@
 
 ## Install and configure
 
-Node.js 24.16.0 or newer is required. Until `kiokuko-dsh` is published to npm,
-run the CLI from a local checkout:
+Node.js 24.16.0 or newer is required. The published `kiokuko-dsh@0.1.0` npm
+package is the normal install path:
+
+```bash
+npm install --global kiokuko-dsh
+kiokuko setup
+```
+
+For a local checkout instead:
 
 ```bash
 cd /path/to/kiokuko-dsh
 pnpm install --frozen-lockfile
 pnpm run build
 node dist/bin/kiokuko.js setup
-```
-
-After npm publication, the equivalent global install is:
-
-```bash
-npm install --global kiokuko-dsh
-kiokuko setup
 ```
 
 Use `--clients codex,opencode,claude,hermes` to select clients explicitly. Without
@@ -70,22 +70,19 @@ is enabled; Hermes uses native stdio MCP and bundled Skills without an adapter.
 
 ## DeepSeek Harness plugin
 
-The package is not published to npm. The Git dependency builds its `dist/`
-files through `prepare`, so pnpm requires an explicit build approval.
-
-Run the install once, copy the exact commit key printed by pnpm into
-`~/.dsh/profiles/web/pnpm-workspace.yaml`, and set it to `true`:
-
-```yaml
-allowBuilds:
-  "kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/<commit>": true
-```
-
-Then run:
+Install the published prebuilt package in one step:
 
 ```bash
-dsh plugin add github:askdkc/kiokuko-dsh
+dsh plugin --profile web add kiokuko-dsh
 ```
+
+Do not run `/kiokuko-soul`: the plugin injects its bundled policy into the DSH
+system prompt automatically. Start the profile and enter your task (for the
+web profile, run `dsh web`).
+
+For a source-pinned Git install, use the automatic fallback in
+[DeepSeek Harness Plugin](dsh-plugin.md). It pins the commit, adds the exact
+`allowBuilds` entry, preserves existing entries, and retries the install.
 
 Use a profile for an isolated test:
 
