@@ -1,0 +1,100 @@
+{
+  "name": "@askdkc/kiokuko",
+  "version": "0.2.17",
+  "description": "Model-agnostic external memory for AI coding agents",
+  "type": "module",
+  "bin": {
+    "kiokuko": "dist/bin/kiokuko.js"
+  },
+  "engines": {
+    "node": ">=24.16.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/",
+    "migrations/",
+    "skills/",
+    "dsh/cordis.patch.yml",
+    "docs/",
+    "templates/",
+    "README.md",
+    "README.ja.md",
+    "README.zh-CN.md",
+    "README.ko.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./dsh": {
+      "types": "./dist/dsh/index.d.ts",
+      "default": "./dist/dsh/index.js"
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./dsh/cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "clean:dist": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
+    "set-bin-permissions": "node --input-type=module --eval \"import { chmodSync } from 'node:fs'; chmodSync('dist/bin/kiokuko.js', 0o755);\"",
+    "build": "npm run clean:dist && tsc -p tsconfig.build.json && npm run set-bin-permissions",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node scripts/run-tests.mjs tests",
+    "test:unit": "node scripts/run-tests.mjs tests/unit",
+    "test:integration": "node scripts/run-tests.mjs tests/integration",
+    "test:sqlite-vec": "node --import tsx tests/ci/sqlite-vec-package-smoke.ts",
+    "test:global-install": "node tests/ci/global-install-smoke.mjs",
+    "test:evaluation": "npm run build && node scripts/run-retrieval-evaluation.mjs",
+    "test:benchmark": "npm run build && node scripts/run-retrieval-benchmark.mjs",
+    "test:e2e:codex": "npm run build && node scripts/run-enno-agent-e2e.mjs codex",
+    "test:e2e:opencode": "npm run build && node scripts/run-enno-agent-e2e.mjs opencode",
+    "test:e2e:claude": "npm run build && node scripts/run-enno-agent-e2e.mjs claude",
+    "test:e2e:agents": "npm run build && node scripts/run-enno-agent-e2e.mjs all",
+    "test:e2e:dsh": "npm run build && node scripts/run-enno-dsh-e2e.mjs",
+    "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko.sqlite3",
+    "test:sampledb": "npm run build && node --import tsx tests/ci/verify-sample-database.ts",
+    "pack:check": "node scripts/pack-check.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run pack:check"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^14.0.1",
+    "jsonc-parser": "^3.3.1",
+    "semver": "^7.8.5",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "overrides": {
+    "adm-zip": "0.6.0",
+    "sharp": "0.35.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@huggingface/hub": "2.16.1",
+    "@huggingface/transformers": "4.2.0",
+    "sqlite-vec": "0.1.9"
+  },
+  "peerDependenciesMeta": {
+    "@huggingface/hub": {
+      "optional": true
+    },
+    "@huggingface/transformers": {
+      "optional": true
+    },
+    "sqlite-vec": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@huggingface/hub": "2.16.1",
+    "@huggingface/transformers": "4.2.0",
+    "@types/node": "^24.0.0",
+    "@types/semver": "^7.8.0",
+    "sqlite-vec": "0.1.9",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
+  }
+}

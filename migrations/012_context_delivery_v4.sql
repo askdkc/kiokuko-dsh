@@ -1,0 +1,3 @@
+-- Reserve this version for validating released scoped deliveries.
+-- The application migration operation preserves their identities, policy,
+-- accounting, and all historical references.

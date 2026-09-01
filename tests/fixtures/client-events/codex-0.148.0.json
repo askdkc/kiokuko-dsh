@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "client": {
+    "kind": "codex",
+    "version": "0.148.0"
+  },
+  "capture": {
+    "status": "verified",
+    "method": "Invocation-only lifecycle hooks in a temporary Git repository; shell launch failed after hooks fired, so only hook shape and ordering are evidence"
+  },
+  "events": [
+    {
+      "hookEventName": "SessionStart",
+      "source": "startup",
+      "cwd": "<workspace>",
+      "sessionId": "<session-id>"
+    },
+    {
+      "hookEventName": "UserPromptSubmit",
+      "cwd": "<workspace>",
+      "sessionId": "<session-id>",
+      "turnId": "<turn-id>",
+      "prompt": "<bounded-user-prompt>"
+    },
+    {
+      "hookEventName": "PreToolUse",
+      "cwd": "<workspace>",
+      "sessionId": "<session-id>",
+      "turnId": "<turn-id>",
+      "toolName": "Bash",
+      "toolUseId": "<tool-use-id>",
+      "toolInput": {
+        "command": "pwd"
+      }
+    },
+    {
+      "hookEventName": "PostToolUse",
+      "cwd": "<workspace>",
+      "sessionId": "<session-id>",
+      "turnId": "<turn-id>",
+      "toolName": "Bash",
+      "toolUseId": "<tool-use-id>",
+      "toolInput": {
+        "command": "pwd"
+      },
+      "toolResponse": "<bounded-tool-result>"
+    },
+    {
+      "hookEventName": "Stop",
+      "cwd": "<workspace>",
+      "sessionId": "<session-id>",
+      "turnId": "<turn-id>",
+      "stopHookActive": false,
+      "lastAssistantMessage": "<bounded-assistant-message>"
+    },
+    {
+      "hookEventName": "SessionEnd",
+      "cwd": "<workspace>",
+      "sessionId": "<session-id>",
+      "reason": "other"
+    }
+  ]
+}

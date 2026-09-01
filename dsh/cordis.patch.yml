@@ -1,0 +1,7 @@
+# Kiokuko's DeepSeek Harness bundle layer. The host Loader owns lifecycle and
+# the package entrypoint owns the Cordis effects.
+- insert:
+    - id: kiokuko-dsh
+      name: '@askdkc/kiokuko/dsh'
+      config:
+        enabled: true

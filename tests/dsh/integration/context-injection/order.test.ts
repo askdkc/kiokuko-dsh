@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { injectDshContext } from '../../../../src/dsh/context-injection.js'
+import type { PreparedAgentTask } from '../../../../src/akinator/agent-task.js'
+
+test('context injection preserves the trusted prefix and places untrusted memory before the user task', async () => {
+  const prepared = {
+    intake: { status: 'ready', profile: { taskType: 'build', target: 'src/dsh', expected: 'focused checks pass', constraints: null } },
+    nextAction: 'proceed',
+    memoryPolicy: { memoryReasoningRequired: true, contextWithheld: false },
+    context: { untrusted: true, items: [{ title: 'Prior lesson', summary: 'Keep boundaries explicit.', bodyPreview: 'Use a focused verifier.', selectionReasons: ['word_match'] }] },
+  } as unknown as PreparedAgentTask
+  const messages = await injectDshContext({
+    prepared,
+    task: 'Implement the requested change.',
+    routeSkillNames: ['kiokuko-single-purpose-functions'],
+  })
+  assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'route-skill', 'memory', 'user-task'])
+  assert.equal(messages.at(-1)?.content, 'Implement the requested change.')
+})
