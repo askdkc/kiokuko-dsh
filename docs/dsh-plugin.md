@@ -10,7 +10,6 @@ From a DeepSeek Harness source checkout, use the plugin manager through its
 `pnpm dsh` development launcher:
 
 ```bash
-npm install --global @askdkc/kiokuko
 pnpm dsh plugin --profile web add @askdkc/kiokuko
 ```
 

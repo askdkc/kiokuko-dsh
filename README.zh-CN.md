@@ -1,52 +1,35 @@
-# Kiokuko（记忆库）
+# Kiokuko DeepSeek Harness Plugin
 
 [English](README.md) | [日本語](README.ja.md) | 简体中文 | [한국어](README.ko.md)
 
-**通过 MCP 连接，检索需要的记忆，并在工作后积累知识。**
+`@askdkc/kiokuko` 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 out-of-tree Cordis Plugin。
+它不 fork 或 patch Harness 源码。此仓库不是 OpenCode Plugin，也不是通用 Kiokuko MCP 安装指南。
 
-Kiokuko 是面向 AI 编程代理的本地外部记忆。它把知识保存在 SQLite 中，在下一次任务中检索相关上下文，
-并保存可复用的工作结果。
+## 要求与安装
 
-```text
-请求 → MCP 连接 → 检索相关记忆 → 完成工作
-                              ↓
-                         保存可复用知识
-```
-
-记忆分为 Project、Ecosystem 和 Global。当前代码、配置和运行结果优先于历史记忆。
-
-## 快速开始
-
-需要 Node.js 24.16.0 或更高版本（也支持 Node.js 26.1.0 或更高版本）。
+需要 Node.js 24.16.0 或更高版本，DeepSeek Harness 兼容目标为 `0.1.2-alpha.3`。
 
 ```bash
-npm install --global @askdkc/kiokuko
-kiokuko setup
+pnpm dsh plugin --profile web add @askdkc/kiokuko
+pnpm dsh --profile web --dump-config
 ```
 
-`setup` 会初始化数据库、检测支持的客户端、安装标准 Skill 并配置 MCP。已运行的客户端请在设置后重启。
-精确配置和恢复规则请参阅[英文 Getting started](docs/getting-started.md)。
-
-## 主要功能
-
-- RAG 记忆（默认 lexical，可选本地 semantic 检索）
-- Akinator 让模糊请求先变得具体
-- 役小角(enno-oduno) 负责计划、确认、验证和恢复
-- 本地 Web UI 用于检查和整理记忆
-- 外部 Skill 仅作为经过验证的参考，绝不自动执行
-
-可选的 semantic 检索使用与 `setup` 相同的客户端配置流程：
+删除 Plugin：
 
 ```bash
-kiokuko embeddings setup
+pnpm dsh plugin --profile web remove @askdkc/kiokuko
 ```
 
-它会更新 managed MCP block 和项目 instructions。替换 unmanaged identity 需要交互确认；非交互或 `--dry-run --json`
-执行会在不修改配置的情况下 fail closed。详见[英文 semantic retrieval](docs/semantic-retrieval.md)。
+安装后的 dsh CLI 使用相同参数但省略 `pnpm`。Plugin 只添加 `kiokuko-dsh` bundle row，不修改其他 Plugin、仓库文件、MCP 配置或 `AGENTS.md`。
 
-## 支持的客户端
+## 强制边界
 
-Codex、OpenCode、Claude Code、Hermes Agent，以及可安装的 DeepSeek Harness Cordis bundle。
+- Akinator intake 未解决时，不执行模型和非 Kiokuko 工具。
+- 14 个 Kiokuko operation 中，只有 7 个 model-facing operation 暴露给模型。
+- tool body 执行前检查 phase、run、revision、route、lease 和 idempotency。
+- SessionEvent 以有序、幂等方式桥接到 Kiokuko ledger；验证失败会强制 corrective step。
+
+OpenCode、Codex、Claude Code 和 Hermes Agent 不属于此仓库的 Plugin surface；它们使用 Kiokuko 本体的 MCP/client setup。详见[DeepSeek Harness Plugin 指南](docs/dsh-plugin.md)。
 
 ## 安全性与限制
 

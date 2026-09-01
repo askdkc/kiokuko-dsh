@@ -1,110 +1,110 @@
-# Kiokuko (記憶庫)
+# Kiokuko DeepSeek Harness Plugin
 
-English | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [한국어](README.ko.md)
+`@askdkc/kiokuko` is an out-of-tree plugin for
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). It adds
+Kiokuko memory, Akinator intake, Enno-Oduno orchestration, and verification
+boundaries to a DeepSeek Harness Cordis profile without forking or patching
+the Harness source tree.
 
-**Connect through MCP, recall useful context, and build reusable project memory.**
+This repository is the DeepSeek Harness plugin project. It is not an OpenCode
+plugin and it is not the general Kiokuko MCP setup guide.
 
-Kiokuko is local external memory for AI coding agents. It stores durable knowledge
-in SQLite, retrieves relevant context for the next task, and records useful results
-after work. You keep using your client normally; the client calls Kiokuko through MCP.
+## Install from a DeepSeek Harness checkout
 
-## The core idea
-
-```text
-request → MCP connection → retrieve relevant memory → do the work
-                                             ↓
-                                  save reusable knowledge
-```
-
-Memory is separated into Project, Ecosystem, and Global scopes. Current source,
-configuration, and execution results take precedence over remembered context.
-
-## Quick start
-
-Node.js 24.16.0 or newer is required (Node.js 26.1.0 or newer is also supported).
-
-```bash
-npm install --global @askdkc/kiokuko
-kiokuko setup
-```
-
-`setup` initializes the local database, detects supported clients, installs the
-bundled standard Skills, and configures their MCP connection. Restart a client that
-was already running after setup. Exact configuration rules and recovery procedures
-are in the [Getting started guide](docs/getting-started.md).
-
-## Main features
-
-- **RAG memory**: lexical retrieval by default, with optional local semantic retrieval.
-- **Akinator**: clarifies vague requests before work begins.
-- **役小角(enno-oduno)**: plans, confirms, verifies, and recovers multi-step agent work.
-- **Local Web UI**: review and curate saved memories.
-- **Reference-only Skills**: discovered external Skills are verified and never executed automatically.
-
-Enable optional semantic retrieval with the same client setup flow:
-
-```bash
-kiokuko embeddings setup
-```
-
-Managed MCP blocks are updated and registered-project instructions are refreshed.
-An unmanaged identity is replaced only after interactive confirmation; non-interactive
-and `--dry-run --json` invocations fail closed without changing it. See the
-[semantic retrieval guide](docs/semantic-retrieval.md) for runtime, offline, and
-fallback behavior.
-
-## Supported clients
-
-- Codex
-- OpenCode
-- Claude Code
-- Hermes Agent
-- DeepSeek Harness (installable out-of-tree Cordis bundle; see [DeepSeek Harness Plugin](docs/dsh-plugin.md))
-
-Client-specific setup, Web UI, and restart instructions are in
-[Getting started](docs/getting-started.md). The [documentation index](docs/README.md)
-links to conceptual and operational guides.
-
-### DeepSeek Harness Plugin
-
-From a DeepSeek Harness source checkout, install Kiokuko as an out-of-tree
-Cordis bundle in the `web` profile:
+DeepSeek Harness `0.1.2-alpha.3` is the compatibility target. From its source
+repository, with Node.js 24.16.0 or newer, install the plugin into the `web`
+profile:
 
 ```bash
 pnpm dsh plugin --profile web add @askdkc/kiokuko
 pnpm dsh --profile web --dump-config
 ```
 
-When using an installed dsh CLI, omit the `pnpm` launcher and use `dsh` with
-the same arguments.
+To remove it:
 
-The plugin exposes only the seven model-facing Kiokuko operations; host-owned
-intake, identity, confirmation, advisory, and verification operations remain
-behind the host boundary. Unresolved Akinator intake blocks model and tool
-execution. See the [DeepSeek Harness Plugin guide](docs/dsh-plugin.md) for
-removal, lifecycle, and compatibility details.
+```bash
+pnpm dsh plugin --profile web remove @askdkc/kiokuko
+```
 
-## Safety and limitations
+When using an installed `dsh` CLI instead of the Harness source checkout, use
+the same commands without the `pnpm` launcher:
 
-Kiokuko does not store full conversations and rejects content that resembles secrets
-such as passwords, API keys, tokens, or private keys. Saved memories are advisory;
-verify them against the current repository and runtime.
+```bash
+dsh plugin --profile web add @askdkc/kiokuko
+dsh --profile web --dump-config
+```
 
-MCP use is client- and model-mediated. There is **no guarantee that Kiokuko is called
-on every turn**. If a client cannot initialize the required MCP connection, a client
-may stop rather than silently continue without policy. Trust boundaries and public
-error behavior are documented in [Security and trust](docs/security-and-trust.md).
+The plugin adds one bundle row, `kiokuko-dsh`. Removal only removes that row
+and does not modify unrelated plugins, repository files, MCP configuration,
+or `AGENTS.md`.
 
-## More detail
+## What the plugin enforces
 
-- [Documentation index](docs/README.md)
-- [Getting started](docs/getting-started.md)
-- [Concepts](docs/concepts.md)
-- [役小角(enno-oduno)](docs/enno-oduno.md)
-- [Semantic retrieval](docs/semantic-retrieval.md)
-- [Security and trust](docs/security-and-trust.md)
-- [CLI contract](docs/cli-contract.md)
+- The exact bundled `kiokuko-soul` and six standard Skills are provided through
+  the Harness Skill and system-prompt surfaces.
+- Akinator runs before the main model request. An unresolved question blocks
+  model and non-Kiokuko tool execution.
+- Fourteen Kiokuko operations are available to the integration, but only the
+  seven model-facing operations are exposed as model tools. Host-owned intake,
+  identity, confirmation, advisory, and verification operations stay behind
+  the host boundary.
+- Tool phase, run, revision, route, lease, and idempotency checks are applied
+  before tool bodies run.
+- DeepSeek `SessionEvent` records are bridged losslessly and idempotently to
+  the Kiokuko ledger, with awaited flush barriers before model/tool dispatch
+  and terminal close.
+- Enno-Oduno verification is a hard turn-stopping gate. Incomplete or failed
+  verification forces a corrective step; accepted work must pass meditation
+  before completion.
 
-Implementation-focused references remain in [architecture](docs/architecture.md),
-[database](docs/database.md), [execution ledger](docs/execution-ledger.md), and
-[client compatibility](docs/client-compatibility.md).
+## Authority boundary
+
+Kiokuko SQLite is the semantic authority for memory, Akinator, Enno-Oduno
+state, receipts, leases, and verifier evidence. DeepSeek `SessionEvent` is the
+authority for the current session's ordered model-visible transcript and tool
+evidence. `session/event` observes committed events; it cannot veto an already
+executed external side effect. Flush, tool pre-execution, model dispatch, and
+turn-stopping are the enforcement boundaries.
+
+The plugin does not automatically install or execute external Skills, perform
+Git rollback, modify repository files, or expose continuation tokens to the
+model.
+
+## Compatibility
+
+| Harness surface | Status |
+| --- | --- |
+| `web` | Contract and host-adapter coverage included |
+| `headless` | Contract coverage included |
+| `sdk` | Unsupported without a real SDK host composition |
+| `acp` | Unsupported without a real ACP host composition |
+| `sdk-minimal` | Unsupported without a real SDK-minimal host composition |
+
+`web` and `headless` are compatibility targets, not claims that an external
+DeepSeek binary was executed. OpenCode, Codex, Claude Code, and Hermes Agent
+are outside this repository's plugin surface; their Kiokuko integration uses
+the separate MCP/client setup in the main Kiokuko project.
+
+## Verification
+
+Run from this checkout:
+
+```bash
+npm run typecheck
+node scripts/run-tests.mjs tests/dsh
+npm run build
+npm run pack:check
+npm run test:e2e:dsh
+```
+
+`test:e2e:dsh` always runs the in-memory composition and package checks. The
+real install/dump-config/remove portion runs only when a `dsh` executable is
+available; otherwise it reports `unsupported` instead of claiming a passing
+CLI installation.
+
+See [the DeepSeek Harness Plugin guide](docs/dsh-plugin.md) for the detailed
+runtime contract, lifecycle behavior, removal semantics, and known limits.
+
+## License
+
+MIT

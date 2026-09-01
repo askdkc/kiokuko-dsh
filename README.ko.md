@@ -1,52 +1,36 @@
-# Kiokuko (記憶庫)
+# Kiokuko DeepSeek Harness Plugin
 
 [English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | 한국어
 
-**MCP로 연결하고, 필요한 기억을 검색하고, 작업 후 지식을 축적합니다.**
+`@askdkc/kiokuko`는 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)를 위한 out-of-tree Cordis Plugin입니다.
+Harness를 fork하거나 patch하지 않습니다. 이 저장소는 OpenCode Plugin이나 일반 Kiokuko MCP 설치 안내서가 아닙니다.
 
-Kiokuko는 AI 코딩 에이전트를 위한 로컬 외부 메모리입니다. 지식을 SQLite에 저장하고 다음 작업에 관련된 문맥을 검색하며,
-재사용 가능한 결과를 기록합니다.
+## 요구 사항 및 설치
 
-```text
-요청 → MCP 연결 → 관련 기억 검색 → 작업 수행
-                             ↓
-                         재사용 지식 저장
-```
-
-기억은 Project·Ecosystem·Global로 분리되고 현재 코드, 설정, 실행 결과가 과거 기억보다 우선합니다.
-
-## 빠른 시작
-
-Node.js 24.16.0 이상이 필요합니다（Node.js 26.1.0 이상도 지원）.
+Node.js 24.16.0 이상과 DeepSeek Harness `0.1.2-alpha.3` 호환 환경이 필요합니다.
 
 ```bash
-npm install --global @askdkc/kiokuko
-kiokuko setup
+pnpm dsh plugin --profile web add @askdkc/kiokuko
+pnpm dsh --profile web --dump-config
 ```
 
-`setup`은 데이터베이스를 초기화하고 지원 클라이언트를 감지하며 표준 Skill과 MCP를 설정합니다. 이미 실행 중인 클라이언트는
-설정 후 재시작하십시오. 정확한 규칙은 [영문 Getting started](docs/getting-started.md)를 참조하십시오.
-
-## 주요 기능
-
-- RAG 기억（기본 lexical, 선택적 로컬 semantic 검색）
-- 모호한 요청을 구체화하는 Akinator
-- 계획·확인·검증·복구를 담당하는 役小角(enno-oduno)
-- 기억을 검토하는 로컬 Web UI
-- 자동 실행하지 않는 검증된 참조 전용 External Skill
-
-선택적 semantic 검색도 `setup`과 같은 클라이언트 설정 흐름을 사용합니다.
+삭제:
 
 ```bash
-kiokuko embeddings setup
+pnpm dsh plugin --profile web remove @askdkc/kiokuko
 ```
 
-managed MCP block과 프로젝트 instructions를 갱신합니다. unmanaged identity 교체는 대화형 확인 후에만 수행되며,
-비대화형 또는 `--dry-run --json` 실행은 변경 없이 fail closed합니다. 자세한 내용은 [영문 semantic retrieval](docs/semantic-retrieval.md)을 보십시오.
+설치된 dsh CLI를 사용하는 경우 같은 인자에서 `pnpm`만 생략합니다. Plugin은 `kiokuko-dsh` bundle row 하나만 추가하며 다른 Plugin,
+repository file, MCP 설정, `AGENTS.md`를 변경하지 않습니다.
 
-## 지원 클라이언트
+## 강제 경계
 
-Codex, OpenCode, Claude Code, Hermes Agent와 설치 가능한 DeepSeek Harness Cordis bundle.
+- Akinator intake가 해결되지 않으면 모델과 Kiokuko 외부 tool을 실행하지 않습니다.
+- 14개 operation 중 모델에 공개하는 model-facing operation은 7개뿐입니다.
+- tool body 실행 전에 phase, run, revision, route, lease, idempotency를 검사합니다.
+- SessionEvent를 순서와 idempotency를 유지해 ledger에 연결하고, 검증 실패 시 corrective step을 강제합니다.
+
+OpenCode, Codex, Claude Code, Hermes Agent는 이 저장소의 Plugin surface 대상이 아니며 Kiokuko 본체의 MCP/client setup을 사용합니다. 자세한 내용은 [DeepSeek Harness Plugin 안내](docs/dsh-plugin.md)를 참조하십시오.
 
 ## 안전성과 제한
 
