@@ -40,8 +40,10 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     exports?: Record<string, unknown>
     files?: string[]
     peerDependencies?: Record<string, string>
+    name?: string
     dsh?: { bundle?: { patch?: string } }
   }
+  assert.equal(packageManifest.name, 'kiokuko-dsh')
   assert.deepEqual(packageManifest.exports?.['./dsh'], {
     types: './dist/dsh/index.d.ts',
     default: './dist/dsh/index.js',
@@ -53,7 +55,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{ insert?: Array<{ name?: string }> }>
   const rows = patch.flatMap((operation) => operation.insert ?? [])
   assert.equal(rows.length, 1)
-  assert.equal(rows[0]?.name, '@askdkc/kiokuko/dsh')
+  assert.equal(rows[0]?.name, 'kiokuko-dsh/dsh')
   assert.deepEqual(Config.parse({}), { enabled: true })
 
   await run('npm', ['run', 'build'])
@@ -115,17 +117,17 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
     const dumped = await run(process.env.DSH_BIN ?? 'dsh', [
       '--profile', 'kiokuko-test', '--dump-config',
     ], env)
-    assert.equal((dumped.stdout.match(/@askdkc\/kiokuko\/dsh/g) ?? []).length, 1)
+    assert.equal((dumped.stdout.match(/kiokuko-dsh\/dsh/g) ?? []).length, 1)
 
     const remove = await run(process.env.DSH_BIN ?? 'dsh', [
-      'plugin', '--profile', 'kiokuko-test', 'remove', '@askdkc/kiokuko',
+      'plugin', '--profile', 'kiokuko-test', 'remove', 'kiokuko-dsh',
     ], env)
     assert.ok(remove.stdout !== undefined)
 
     const afterRemove = await run(process.env.DSH_BIN ?? 'dsh', [
       '--profile', 'kiokuko-test', '--dump-config',
     ], env)
-    assert.equal((afterRemove.stdout.match(/@askdkc\/kiokuko\/dsh/g) ?? []).length, 0)
+    assert.equal((afterRemove.stdout.match(/kiokuko-dsh\/dsh/g) ?? []).length, 0)
   } finally {
     await Promise.all([
       rm(home, { recursive: true, force: true }),

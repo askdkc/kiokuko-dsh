@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | 한국어
 
-`@askdkc/kiokuko`는 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)를 위한 out-of-tree Cordis Plugin입니다.
+`kiokuko-dsh`는 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)를 위한 out-of-tree Cordis Plugin입니다.
 Harness를 fork하거나 patch하지 않습니다. 이 저장소는 OpenCode Plugin이나 일반 Kiokuko MCP 설치 안내서가 아닙니다.
 
 ## 요구 사항 및 설치
@@ -10,14 +10,14 @@ Harness를 fork하거나 patch하지 않습니다. 이 저장소는 OpenCode Plu
 Node.js 24.16.0 이상과 DeepSeek Harness `0.1.2-alpha.3` 호환 환경이 필요합니다.
 
 ```bash
-pnpm dsh plugin --profile web add @askdkc/kiokuko
+pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
 삭제:
 
 ```bash
-pnpm dsh plugin --profile web remove @askdkc/kiokuko
+pnpm dsh plugin --profile web remove kiokuko-dsh
 ```
 
 설치된 dsh CLI를 사용하는 경우 같은 인자에서 `pnpm`만 생략합니다. Plugin은 `kiokuko-dsh` bundle row 하나만 추가하며 다른 Plugin,

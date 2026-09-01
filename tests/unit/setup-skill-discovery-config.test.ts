@@ -60,7 +60,7 @@ test('README entry points and English/Japanese docs carry the setup and trust co
   for (const name of ['README.md', 'README.ja.md', 'README.zh-CN.md', 'README.ko.md']) {
     const readme = readFileSync(new URL(`../../${name}`, import.meta.url), 'utf8');
     assert.match(readme, /Node\.js 24\.16\.0/u, name);
-    assert.match(readme, /dsh plugin --profile web add @askdkc\/kiokuko/u, name);
+    assert.match(readme, /dsh plugin --profile web add kiokuko-dsh/u, name);
     assert.match(readme, /docs\/dsh-plugin/u, name);
     assert.doesNotMatch(readme, /kiokuko setup/u, name);
   }

@@ -1,6 +1,6 @@
 # Kiokuko DeepSeek Harness Plugin
 
-`@askdkc/kiokuko` is an out-of-tree plugin for
+`kiokuko-dsh` is an out-of-tree plugin for
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). It adds
 Kiokuko memory, Akinator intake, Enno-Oduno orchestration, and verification
 boundaries to a DeepSeek Harness Cordis profile without forking or patching
@@ -16,21 +16,21 @@ repository, with Node.js 24.16.0 or newer, install the plugin into the `web`
 profile:
 
 ```bash
-pnpm dsh plugin --profile web add @askdkc/kiokuko
+pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
 To remove it:
 
 ```bash
-pnpm dsh plugin --profile web remove @askdkc/kiokuko
+pnpm dsh plugin --profile web remove kiokuko-dsh
 ```
 
 When using an installed `dsh` CLI instead of the Harness source checkout, use
 the same commands without the `pnpm` launcher:
 
 ```bash
-dsh plugin --profile web add @askdkc/kiokuko
+dsh plugin --profile web add kiokuko-dsh
 dsh --profile web --dump-config
 ```
 

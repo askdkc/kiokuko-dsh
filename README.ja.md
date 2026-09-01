@@ -2,7 +2,7 @@
 
 [English](README.md) | 日本語 | [简体中文](README.zh-CN.md) | [한국어](README.ko.md)
 
-`@askdkc/kiokuko`は、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)向けのout-of-tree Pluginです。
+`kiokuko-dsh`は、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)向けのout-of-tree Pluginです。
 DeepSeek Harnessをforkまたはpatchせず、Cordis profileへKiokukoのmemory、Akinator intake、Enno-Oduno orchestration、検証境界を追加します。
 
 このリポジトリはDeepSeek Harness Pluginのプロジェクトです。OpenCode Pluginではなく、Kiokuko本体のMCP導入ガイドでもありません。
@@ -12,14 +12,14 @@ DeepSeek Harnessをforkまたはpatchせず、Cordis profileへKiokukoのmemory�
 DeepSeek Harnessのソースcheckoutから、Node.js 24.16.0以上で`web` profileへ導入します。対象バージョンは`0.1.2-alpha.3`です。
 
 ```bash
-pnpm dsh plugin --profile web add @askdkc/kiokuko
+pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
 削除する場合:
 
 ```bash
-pnpm dsh plugin --profile web remove @askdkc/kiokuko
+pnpm dsh plugin --profile web remove kiokuko-dsh
 ```
 
 インストール済みの`dsh` CLIを使う場合は、`pnpm`を外して同じ引数で実行します。Pluginは`kiokuko-dsh`というbundle rowを1件だけ追加し、

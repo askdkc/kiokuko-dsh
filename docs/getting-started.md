@@ -5,7 +5,7 @@
 Node.js 24.16.0 or newer is required. Install and configure in two commands:
 
 ```bash
-npm install --global @askdkc/kiokuko
+npm install --global kiokuko-dsh
 kiokuko setup
 ```
 
@@ -63,16 +63,16 @@ is enabled; Hermes uses native stdio MCP and bundled Skills without an adapter.
 Install the out-of-tree bundle through the DeepSeek Harness plugin manager:
 
 ```bash
-npm install --global @askdkc/kiokuko
-dsh plugin add @askdkc/kiokuko
+npm install --global kiokuko-dsh
+dsh plugin add kiokuko-dsh
 ```
 
 Use a profile for an isolated test:
 
 ```bash
-dsh plugin --profile kiokuko-test add @askdkc/kiokuko
+dsh plugin --profile kiokuko-test add kiokuko-dsh
 dsh --profile kiokuko-test --dump-config
-dsh plugin --profile kiokuko-test remove @askdkc/kiokuko
+dsh plugin --profile kiokuko-test remove kiokuko-dsh
 ```
 
 See [DeepSeek Harness Plugin](dsh-plugin.md) for the lifecycle contract,

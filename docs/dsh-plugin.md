@@ -1,7 +1,7 @@
 # DeepSeek Harness Plugin
 
 Kiokuko provides an out-of-tree DeepSeek Harness bundle at
-`@askdkc/kiokuko/dsh`. It mounts the same Kiokuko core contracts used by the
+`kiokuko-dsh/dsh`. It mounts the same Kiokuko core contracts used by the
 MCP clients; it does not fork DeepSeek Harness or modify a repository's files.
 
 ## Install
@@ -10,20 +10,20 @@ From a DeepSeek Harness source checkout, use the plugin manager through its
 `pnpm dsh` development launcher:
 
 ```bash
-pnpm dsh plugin --profile web add @askdkc/kiokuko
+pnpm dsh plugin --profile web add kiokuko-dsh
 ```
 
 With an installed dsh CLI, use `dsh plugin --profile web add
-@askdkc/kiokuko` instead.
+kiokuko-dsh` instead.
 
 The package exposes the `./dsh` entrypoint and declares
 `dsh/cordis.patch.yml` as its bundle patch. Use a profile when testing or when
 you need an isolated configuration:
 
 ```bash
-dsh plugin --profile kiokuko-test add @askdkc/kiokuko
+dsh plugin --profile kiokuko-test add kiokuko-dsh
 dsh --profile kiokuko-test --dump-config
-dsh plugin --profile kiokuko-test remove @askdkc/kiokuko
+dsh plugin --profile kiokuko-test remove kiokuko-dsh
 ```
 
 `kiokuko-dsh` is the single named bundle row. Removal is exact and does not

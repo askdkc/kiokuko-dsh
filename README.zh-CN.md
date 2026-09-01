@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README.ja.md) | 简体中文 | [한국어](README.ko.md)
 
-`@askdkc/kiokuko` 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 out-of-tree Cordis Plugin。
+`kiokuko-dsh` 是面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 out-of-tree Cordis Plugin。
 它不 fork 或 patch Harness 源码。此仓库不是 OpenCode Plugin，也不是通用 Kiokuko MCP 安装指南。
 
 ## 要求与安装
@@ -10,14 +10,14 @@
 需要 Node.js 24.16.0 或更高版本，DeepSeek Harness 兼容目标为 `0.1.2-alpha.3`。
 
 ```bash
-pnpm dsh plugin --profile web add @askdkc/kiokuko
+pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
 删除 Plugin：
 
 ```bash
-pnpm dsh plugin --profile web remove @askdkc/kiokuko
+pnpm dsh plugin --profile web remove kiokuko-dsh
 ```
 
 安装后的 dsh CLI 使用相同参数但省略 `pnpm`。Plugin 只添加 `kiokuko-dsh` bundle row，不修改其他 Plugin、仓库文件、MCP 配置或 `AGENTS.md`。

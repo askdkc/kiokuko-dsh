@@ -2,6 +2,6 @@
 # the package entrypoint owns the Cordis effects.
 - insert:
     - id: kiokuko-dsh
-      name: '@askdkc/kiokuko/dsh'
+      name: 'kiokuko-dsh/dsh'
       config:
         enabled: true

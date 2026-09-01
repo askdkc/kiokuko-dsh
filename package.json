@@ -1,7 +1,7 @@
 {
-  "name": "@askdkc/kiokuko",
+  "name": "kiokuko-dsh",
   "version": "0.2.17",
-  "description": "Model-agnostic external memory for AI coding agents",
+  "description": "Kiokuko plugin for DeepSeek Harness",
   "type": "module",
   "bin": {
     "kiokuko": "dist/bin/kiokuko.js"

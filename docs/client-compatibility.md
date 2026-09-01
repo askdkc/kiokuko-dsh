@@ -8,7 +8,7 @@ Status: global MCP integration for Codex, OpenCode, Claude Code, and profile-sco
 | OpenCode | managed `mcp.kiokuko` property in global `opencode.json`/`opencode.jsonc` | managed block in global `AGENTS.md` | global config `skills/{memory-reasoning,kiokuko-soul,kiokuko-enno-oduno,kiokuko-single-purpose-functions,kiokuko-ui-design-soul}` | bounded `session.idle` plugin when Enno-Oduno is enabled |
 | Claude Code | managed `mcpServers.kiokuko` property in `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`) | managed block in global `CLAUDE.md` | Claude config `skills/{memory-reasoning,kiokuko-soul,kiokuko-enno-oduno,kiokuko-single-purpose-functions,kiokuko-ui-design-soul}` | bounded Stop hook when Enno-Oduno is enabled |
 | Hermes Agent | managed `mcp_servers.kiokuko` in the effective profile `config.yaml` | none | effective profile `skills/{memory-reasoning,kiokuko-soul,kiokuko-enno-oduno,kiokuko-single-purpose-functions,kiokuko-ui-design-soul}` | none |
-| DeepSeek Harness | profile-scoped plugin manager entry for `@askdkc/kiokuko/dsh` | host-managed | package-bundled six standard Skills | bounded Cordis `agent/turn-stopping` and lifecycle seams |
+| DeepSeek Harness | profile-scoped plugin manager entry for `kiokuko-dsh/dsh` | host-managed | package-bundled six standard Skills | bounded Cordis `agent/turn-stopping` and lifecycle seams |
 | Other MCP clients | manual `kiokuko mcp` stdio registration | client-specific | not installed | none |
 
 OpenCode global configuration follows XDG paths on every platform:

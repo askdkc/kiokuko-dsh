@@ -5,7 +5,7 @@
 Node.js 24.16.0以上が必要です。次の2コマンドで導入します。
 
 ```bash
-npm install --global @askdkc/kiokuko
+npm install --global kiokuko-dsh
 kiokuko setup
 ```
 
@@ -54,16 +54,16 @@ Enno-Oduno有効時、Codex・OpenCode・Claude Codeには継続adapterがあり
 DeepSeek Harnessのplugin managerからout-of-tree bundleを追加します。
 
 ```bash
-npm install --global @askdkc/kiokuko
-dsh plugin add @askdkc/kiokuko
+npm install --global kiokuko-dsh
+dsh plugin add kiokuko-dsh
 ```
 
 profileを分ける場合は次のようにします。
 
 ```bash
-dsh plugin --profile kiokuko-test add @askdkc/kiokuko
+dsh plugin --profile kiokuko-test add kiokuko-dsh
 dsh --profile kiokuko-test --dump-config
-dsh plugin --profile kiokuko-test remove @askdkc/kiokuko
+dsh plugin --profile kiokuko-test remove kiokuko-dsh
 ```
 
 install/remove、resume安全性、互換性、検証状況は

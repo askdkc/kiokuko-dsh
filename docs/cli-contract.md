@@ -3,7 +3,7 @@
 The default global installation is intentionally lightweight:
 
 ```bash
-npm install --global @askdkc/kiokuko
+npm install --global kiokuko-dsh
 kiokuko setup
 ```
 

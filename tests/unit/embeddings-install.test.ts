@@ -12,7 +12,7 @@ test('optional runtime installation uses npm directly on macOS', () => {
   assert.equal(invocation.args.includes('--package-lock=false'), true);
   assert.deepEqual(invocation.args.slice(3, 5), ['--prefix', packageRoot]);
   assert.equal(invocation.cwd, packageRoot);
-  assert.equal(invocation.args.includes('@askdkc/kiokuko'), false);
+  assert.equal(invocation.args.includes('kiokuko-dsh'), false);
   assert.equal(invocation.args.includes('sudo'), false);
 });
 
