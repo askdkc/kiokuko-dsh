@@ -56,6 +56,7 @@
     "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko.sqlite3",
     "test:sampledb": "npm run build && node --import tsx tests/ci/verify-sample-database.ts",
     "pack:check": "node scripts/pack-check.mjs",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run pack:check"
   },
   "dependencies": {

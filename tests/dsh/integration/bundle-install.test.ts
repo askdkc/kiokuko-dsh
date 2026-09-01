@@ -41,9 +41,11 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     files?: string[]
     peerDependencies?: Record<string, string>
     name?: string
+    scripts?: Record<string, string>
     dsh?: { bundle?: { patch?: string } }
   }
   assert.equal(packageManifest.name, 'kiokuko-dsh')
+  assert.equal(packageManifest.scripts?.prepare, 'npm run build')
   assert.deepEqual(packageManifest.exports?.['./dsh'], {
     types: './dist/dsh/index.d.ts',
     default: './dist/dsh/index.js',
