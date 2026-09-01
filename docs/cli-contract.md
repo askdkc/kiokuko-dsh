@@ -1,6 +1,6 @@
 # Embedding CLI contract
 
-The default global installation is intentionally lightweight:
+After npm publication, the default global installation is intentionally lightweight:
 
 ```bash
 npm install --global kiokuko-dsh

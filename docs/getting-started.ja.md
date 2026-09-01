@@ -2,7 +2,16 @@
 
 ## インストールと設定
 
-Node.js 24.16.0以上が必要です。次の2コマンドで導入します。
+Node.js 24.16.0以上が必要です。`kiokuko-dsh`をnpmに公開するまでは、local checkoutから実行します。
+
+```bash
+cd /path/to/kiokuko-dsh
+pnpm install --frozen-lockfile
+pnpm run build
+node dist/bin/kiokuko.js setup
+```
+
+npm公開後はglobal installも使えます。
 
 ```bash
 npm install --global kiokuko-dsh
@@ -51,17 +60,26 @@ Enno-Oduno有効時、Codex・OpenCode・Claude Codeには継続adapterがあり
 
 ## DeepSeek Harness Plugin
 
-DeepSeek Harnessのplugin managerからout-of-tree bundleを追加します。
+このパッケージはnpmに未公開です。Git dependencyは`prepare`で`dist/`を生成するため、pnpmの明示的な許可が必要です。
+
+一度導入を実行し、pnpmが表示したcommit付きのexact keyを
+`~/.dsh/profiles/web/pnpm-workspace.yaml`へ追加して`true`にします:
+
+```yaml
+allowBuilds:
+  "kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/<commit>": true
+```
+
+その後、次を実行します。
 
 ```bash
-npm install --global kiokuko-dsh
-dsh plugin add kiokuko-dsh
+dsh plugin add github:askdkc/kiokuko-dsh
 ```
 
 profileを分ける場合は次のようにします。
 
 ```bash
-dsh plugin --profile kiokuko-test add kiokuko-dsh
+dsh plugin --profile kiokuko-test add github:askdkc/kiokuko-dsh
 dsh --profile kiokuko-test --dump-config
 dsh plugin --profile kiokuko-test remove kiokuko-dsh
 ```

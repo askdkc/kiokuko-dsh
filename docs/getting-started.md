@@ -2,7 +2,17 @@
 
 ## Install and configure
 
-Node.js 24.16.0 or newer is required. Install and configure in two commands:
+Node.js 24.16.0 or newer is required. Until `kiokuko-dsh` is published to npm,
+run the CLI from a local checkout:
+
+```bash
+cd /path/to/kiokuko-dsh
+pnpm install --frozen-lockfile
+pnpm run build
+node dist/bin/kiokuko.js setup
+```
+
+After npm publication, the equivalent global install is:
 
 ```bash
 npm install --global kiokuko-dsh
@@ -60,17 +70,27 @@ is enabled; Hermes uses native stdio MCP and bundled Skills without an adapter.
 
 ## DeepSeek Harness plugin
 
-Install the out-of-tree bundle through the DeepSeek Harness plugin manager:
+The package is not published to npm. The Git dependency builds its `dist/`
+files through `prepare`, so pnpm requires an explicit build approval.
+
+Run the install once, copy the exact commit key printed by pnpm into
+`~/.dsh/profiles/web/pnpm-workspace.yaml`, and set it to `true`:
+
+```yaml
+allowBuilds:
+  "kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/<commit>": true
+```
+
+Then run:
 
 ```bash
-npm install --global kiokuko-dsh
-dsh plugin add kiokuko-dsh
+dsh plugin add github:askdkc/kiokuko-dsh
 ```
 
 Use a profile for an isolated test:
 
 ```bash
-dsh plugin --profile kiokuko-test add kiokuko-dsh
+dsh plugin --profile kiokuko-test add github:askdkc/kiokuko-dsh
 dsh --profile kiokuko-test --dump-config
 dsh plugin --profile kiokuko-test remove kiokuko-dsh
 ```

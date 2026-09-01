@@ -9,6 +9,17 @@
 
 DeepSeek Harness `0.1.2-alpha.3` 및 Node.js 24.16.0 이상이 필요합니다.
 
+처음 Git으로 설치하기 전에 `web` profile에서 이 패키지의 build를 허용합니다.
+실패한 설치에서 pnpm이 표시한 commit 포함 exact key를
+`~/.dsh/profiles/web/pnpm-workspace.yaml`에 추가하십시오.
+
+```yaml
+allowBuilds:
+  "kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/<commit>": true
+```
+
+기존 항목은 유지하고 `<commit>`을 pnpm이 표시한 값으로 바꾼 뒤 아래 설치 명령을 다시 실행합니다.
+
 DeepSeek Harness checkout에서 설치:
 
 ```bash

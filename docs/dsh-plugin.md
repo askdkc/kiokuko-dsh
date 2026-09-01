@@ -6,22 +6,32 @@ MCP clients; it does not fork DeepSeek Harness or modify a repository's files.
 
 ## Install
 
-From a DeepSeek Harness source checkout, use the plugin manager through its
-`pnpm dsh` development launcher:
+The Git dependency runs `prepare` to build its exported `dist/` files. pnpm
+blocks that script until you explicitly allow this exact Git artifact. Run the
+install once, copy the exact commit key printed by pnpm into
+`~/.dsh/profiles/web/pnpm-workspace.yaml`, and set it to `true`:
 
-```bash
-pnpm dsh plugin --profile web add kiokuko-dsh
+```yaml
+allowBuilds:
+  "kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/<commit>": true
 ```
 
-With an installed dsh CLI, use `dsh plugin --profile web add
-kiokuko-dsh` instead.
+Keep existing entries and replace `<commit>` with the value pnpm printed. Then,
+from a DeepSeek Harness source checkout, run:
+
+```bash
+pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
+pnpm dsh --profile web --dump-config
+```
+
+With an installed dsh CLI, use the same commands without the `pnpm` launcher.
 
 The package exposes the `./dsh` entrypoint and declares
 `dsh/cordis.patch.yml` as its bundle patch. Use a profile when testing or when
 you need an isolated configuration:
 
 ```bash
-dsh plugin --profile kiokuko-test add kiokuko-dsh
+dsh plugin --profile kiokuko-test add github:askdkc/kiokuko-dsh
 dsh --profile kiokuko-test --dump-config
 dsh plugin --profile kiokuko-test remove kiokuko-dsh
 ```

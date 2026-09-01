@@ -10,6 +10,18 @@ The package is not published to npm yet.
 
 DeepSeek Harness `0.1.2-alpha.3` and Node.js 24.16.0 or newer are required.
 
+Before the first Git install, allow this package's build in the `web` profile.
+The failed install prints the exact commit key to add to
+`~/.dsh/profiles/web/pnpm-workspace.yaml`:
+
+```yaml
+allowBuilds:
+  "kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/<commit>": true
+```
+
+Keep existing entries, replace `<commit>` with the value pnpm printed, then
+run the install command below again.
+
 From a DeepSeek Harness checkout:
 
 ```bash
