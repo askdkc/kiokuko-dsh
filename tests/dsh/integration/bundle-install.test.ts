@@ -70,6 +70,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   try {
     const packed = JSON.parse((await run('npm', ['pack', '--json', '--pack-destination', packageOutput], {
       npm_config_cache: npmCache,
+      npm_config_dry_run: 'false',
     })).stdout) as Array<{ filename?: string }>
     const filename = packed[0]?.filename
     assert.ok(filename)
@@ -104,13 +105,14 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
   try {
     const packed = JSON.parse((await run('npm', ['pack', '--json', '--pack-destination', packageOutput], {
       npm_config_cache: npmCache,
+      npm_config_dry_run: 'false',
     })).stdout) as Array<{ filename?: string }>
     const filename = packed[0]?.filename
     assert.ok(filename)
     const tarball = join(packageOutput, filename)
     await access(tarball)
 
-    const env = { DSH_HOME: home }
+    const env = { DSH_HOME: home, npm_config_dry_run: 'false' }
     const install = await run(process.env.DSH_BIN ?? 'dsh', [
       'plugin', '--profile', 'kiokuko-test', 'add', tarball,
     ], env)

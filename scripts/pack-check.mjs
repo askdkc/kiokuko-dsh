@@ -86,7 +86,7 @@ async function createAndSmokeTestTarball() {
   await Promise.all([mkdir(packageOutput), mkdir(extractRoot), mkdir(consumerRoot)])
   const packed = JSON.parse((await exec('npm', ['pack', '--json', '--pack-destination', packageOutput, '--ignore-scripts'], {
     cwd: root,
-    env: { ...process.env, npm_config_cache: cache },
+    env: { ...process.env, npm_config_cache: cache, npm_config_dry_run: 'false' },
     maxBuffer: 16 * 1024 * 1024,
   })).stdout)
   const filename = packed[0]?.filename
