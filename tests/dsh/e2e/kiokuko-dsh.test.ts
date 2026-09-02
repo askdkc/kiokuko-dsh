@@ -64,7 +64,6 @@ test('real Cordis composition mounts and unloads the bundled dsh surfaces', asyn
   await hostFiber
   const pluginFiber = root.plugin({ ...dshPlugin, inject: ['skills', 'systemPrompt'] }, { enabled: true })
   await pluginFiber
-  await new Promise<void>((resolve) => setImmediate(resolve))
   const provider = host.providers[0] as ReturnType<typeof createStandardSkillProvider>
   const listed = await provider.list({})
   assert.equal('complete' in listed ? listed.complete : false, true)

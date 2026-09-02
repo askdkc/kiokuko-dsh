@@ -43,11 +43,11 @@ export function mountDshRuntime(ctx: Context, runtime: DshRuntime): ReturnType<C
  * services are also discovered directly so a normal Cordis composition gets
  * the bundled provider and SOUL prompt without a second plugin.
  */
-export function apply(ctx: Context, config: DshConfig): void {
+export async function apply(ctx: Context, config: DshConfig): Promise<void> {
   if (!config.enabled) return
 
   console.info('[kiokuko-dsh] plugin loaded')
-  ctx.effect(async () => {
+  await ctx.effect(async () => {
     const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
       const composition = await mountDshComposition(ctx, host)
