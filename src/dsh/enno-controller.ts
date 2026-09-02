@@ -10,6 +10,11 @@ import type { DshAdvisoryRoundResult, DshAdvisoryRunner } from './advisory-runne
 
 export interface DshTurnStoppingAgent {
   readonly id: string
+  readonly sessionId?: string
+  /** Opaque native Agent object used to reject an ID-reused agent lifecycle. */
+  readonly nativeAgent?: object
+  /** Opaque native Session object used to reject same-ID cross-lifecycle events. */
+  readonly nativeSession?: object
   steer(message: DshContinuationMessage): void
   cancel?(reason: string): void
 }
@@ -30,11 +35,12 @@ export interface DshEnnoControllerDependencies {
   readonly injectNextStepContext?: (input: {
     readonly event: DshTurnStoppingEvent
     readonly selection: DshDirectiveSourceSelection
+    readonly state: EnnoOdunoState
   }) => void | PromiseLike<void>
   readonly maxSteersPerDirective?: number
   readonly advisoryRunner?: DshAdvisoryRunner
-  readonly submitAdvisory?: (result: DshAdvisoryRoundResult) => void | PromiseLike<void>
-  readonly runFinalVerification?: (input: { readonly event: DshTurnStoppingEvent; readonly state: EnnoOdunoState }) => void | PromiseLike<void>
+  readonly submitAdvisory?: (result: DshAdvisoryRoundResult, input: { readonly event: DshTurnStoppingEvent; readonly state: EnnoOdunoState }) => void | EnnoOdunoState | PromiseLike<void | EnnoOdunoState>
+  readonly runFinalVerification?: (input: { readonly event: DshTurnStoppingEvent; readonly state: EnnoOdunoState }) => void | EnnoOdunoState | PromiseLike<void | EnnoOdunoState>
 }
 
 export interface DshConfirmationControllerDependencies {
@@ -91,19 +97,48 @@ export class DshConfirmationController {
 export type DshTurnStoppingDecision =
   | { readonly kind: 'close'; readonly nextAction: EnnoNextAction }
   | { readonly kind: 'steer'; readonly nextAction: EnnoNextAction; readonly selection: DshDirectiveSourceSelection }
-  | { readonly kind: 'abort'; readonly reason: 'aborted' | 'state_unavailable' | 'directive_missing' | 'stale_directive' | 'continuation_limit' | 'verification_failed' | 'context_injection_failed' }
+  | { readonly kind: 'abort'; readonly reason: 'aborted' | 'stale_turn' | 'state_unavailable' | 'directive_missing' | 'stale_directive' | 'continuation_limit' | 'verification_failed' | 'context_injection_failed' }
 
 const continuationText = 'Kiokuko の現在の処理は未完了です。提示された現在の指示に従って次の処理を実行し、完了を先取りしないでください。'
+
+type ReplayScopeKey = object | string
+
+interface ReplayScope {
+  latestTurn: number
+  readonly steers: Map<string, number>
+  readonly steerIdentities: Map<string, { readonly nativeAgent?: object; readonly nativeSession?: object }>
+  readonly turnInFlight: Map<number, {
+    readonly nativeAgent?: object
+    readonly nativeSession?: object
+    readonly promise: Promise<DshTurnStoppingDecision>
+  }>
+}
 
 function directiveKey(event: DshTurnStoppingEvent, state: EnnoOdunoState): string {
   return canonicalContentHash({
     agentId: event.agent.id,
+    ...(event.agent.sessionId === undefined ? {} : { sessionId: event.agent.sessionId }),
     turn: event.turn,
     nextAction: state.nextAction,
     directive: state.directive,
     contractRevision: state.contractRevision,
     routeEpoch: state.routeEpoch,
   })
+}
+
+function textualScopeKey(event: DshTurnStoppingEvent): string {
+  return canonicalContentHash({ agentId: event.agent.id, sessionId: event.agent.sessionId ?? null })
+}
+
+function replayScopeKey(event: DshTurnStoppingEvent): ReplayScopeKey {
+  return event.agent.nativeSession ?? event.agent.nativeAgent ?? textualScopeKey(event)
+}
+
+function sameNativeIdentity(
+  left: { readonly nativeAgent?: object; readonly nativeSession?: object },
+  right: DshTurnStoppingEvent['agent'],
+): boolean {
+  return left.nativeAgent === right.nativeAgent && left.nativeSession === right.nativeSession
 }
 
 /** Own the awaited turn boundary and never convert an Enno error into a normal close. */
@@ -114,7 +149,7 @@ export class DshEnnoController {
   readonly #advisoryRunner: DshAdvisoryRunner | undefined
   readonly #submitAdvisory: DshEnnoControllerDependencies['submitAdvisory']
   readonly #runFinalVerification: DshEnnoControllerDependencies['runFinalVerification']
-  readonly #steers = new Map<string, number>()
+  readonly #replayScopes = new Map<ReplayScopeKey, ReplayScope>()
 
   constructor(dependencies: DshEnnoControllerDependencies) {
     this.#readState = dependencies.readState
@@ -128,59 +163,163 @@ export class DshEnnoController {
     }
   }
 
+  #scopeFor(event: DshTurnStoppingEvent): ReplayScope {
+    const key = replayScopeKey(event)
+    const existing = this.#replayScopes.get(key)
+    if (existing !== undefined) return existing
+    const scope: ReplayScope = {
+      latestTurn: event.turn,
+      steers: new Map(),
+      steerIdentities: new Map(),
+      turnInFlight: new Map(),
+    }
+    this.#replayScopes.set(key, scope)
+    return scope
+  }
+
+  #isStaleTurn(scope: ReplayScope, event: DshTurnStoppingEvent): boolean {
+    return event.turn < scope.latestTurn
+  }
+
   async turnStopping(event: DshTurnStoppingEvent): Promise<DshTurnStoppingDecision> {
     if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
+    const scope = this.#scopeFor(event)
+    if (event.turn < scope.latestTurn) return { kind: 'abort', reason: 'stale_turn' }
+    if (event.turn > scope.latestTurn) {
+      // Advance the high-water mark before dropping keys from older turns.
+      // The mark is synchronous, so a late older callback cannot re-enter the
+      // state/verification/effect pipeline after this point.
+      scope.latestTurn = event.turn
+      scope.steers.clear()
+      scope.steerIdentities.clear()
+    }
+    const existing = scope.turnInFlight.get(event.turn)
+    if (existing !== undefined) {
+      return sameNativeIdentity(existing, event.agent)
+        ? existing.promise
+        : { kind: 'abort', reason: 'state_unavailable' }
+    }
+    const promise = this.#decideTurnStopping(event, scope).finally(() => {
+      if (scope.turnInFlight.get(event.turn)?.promise === promise) scope.turnInFlight.delete(event.turn)
+    })
+    scope.turnInFlight.set(event.turn, {
+      ...(event.agent.nativeAgent === undefined ? {} : { nativeAgent: event.agent.nativeAgent }),
+      ...(event.agent.nativeSession === undefined ? {} : { nativeSession: event.agent.nativeSession }),
+      promise,
+    })
+    return promise
+  }
+
+  async #decideTurnStopping(event: DshTurnStoppingEvent, scope: ReplayScope): Promise<DshTurnStoppingDecision> {
     let state: EnnoOdunoState | null
     try {
       state = await this.#readState(event)
     } catch {
       return { kind: 'abort', reason: 'state_unavailable' }
     }
+    if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
+    if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
     if (state === null || !state.applicable) return { kind: 'close', nextAction: 'complete' }
     const handler = DSH_ENNO_NEXT_ACTION_HANDLERS[state.nextAction]
+    if (handler === undefined) return { kind: 'abort', reason: 'state_unavailable' }
     if (handler.kind === 'terminal') return { kind: 'close', nextAction: state.nextAction }
     if (state.directive === null) return { kind: 'abort', reason: 'directive_missing' }
     if ((state.contractRevision !== null && state.directive.contractRevision !== state.contractRevision)
       || (state.routeEpoch !== null && state.directive.routeEpoch !== state.routeEpoch)) {
       return { kind: 'abort', reason: 'stale_directive' }
     }
-    const key = directiveKey(event, state)
-    const used = this.#steers.get(key) ?? 0
-    if (used >= this.#maxSteersPerDirective) return { kind: 'abort', reason: 'continuation_limit' }
-    const selection = selectDshDirectiveSources(state.directive)
-    if (state.nextAction === 'run_final_verification') {
-      if (this.#runFinalVerification === undefined) return { kind: 'abort', reason: 'state_unavailable' }
-      try {
-        await this.#runFinalVerification({ event, state })
-      } catch {
-        return { kind: 'abort', reason: 'verification_failed' }
-      }
-    }
+    let currentState = state
+    let selection: DshDirectiveSourceSelection
     try {
-      if (state.directive.advisoryRound !== undefined) {
-        if (this.#advisoryRunner === undefined || this.#submitAdvisory === undefined) return { kind: 'abort', reason: 'state_unavailable' }
-        const advisory = await this.#advisoryRunner.run({ directive: state.directive.advisoryRound, signal: event.signal })
-        await this.#submitAdvisory(advisory)
+      selection = selectDshDirectiveSources(state.directive)
+      if (currentState.nextAction === 'run_final_verification') {
+        if (this.#runFinalVerification === undefined) return { kind: 'abort', reason: 'state_unavailable' }
+        try {
+          const verified = await this.#runFinalVerification({ event, state: currentState })
+          if (verified !== undefined) currentState = verified
+        } catch {
+          return { kind: 'abort', reason: 'verification_failed' }
+        }
+        if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
       }
-      await this.#injectNextStepContext({ event, selection })
+      if (currentState.directive?.advisoryRound !== undefined) {
+        if (this.#advisoryRunner === undefined || this.#submitAdvisory === undefined) return { kind: 'abort', reason: 'state_unavailable' }
+        const advisory = await this.#advisoryRunner.run({ directive: currentState.directive.advisoryRound, signal: event.signal })
+        if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
+        const submitted = await this.#submitAdvisory(advisory, { event, state: currentState })
+        if (submitted !== undefined) currentState = submitted
+      }
+      if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
+      if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
+      const fresh = await this.#readState(event)
+      if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
+      if (fresh === null || !fresh.applicable) return { kind: 'close', nextAction: 'complete' }
+      const freshHandler = DSH_ENNO_NEXT_ACTION_HANDLERS[fresh.nextAction]
+      if (freshHandler === undefined) return { kind: 'abort', reason: 'state_unavailable' }
+      if (freshHandler.kind === 'terminal') return { kind: 'close', nextAction: fresh.nextAction }
+      if (fresh.directive === null) return { kind: 'abort', reason: 'directive_missing' }
+      if (fresh.contractRevision !== currentState.contractRevision || fresh.routeEpoch !== currentState.routeEpoch
+        || fresh.nextAction !== currentState.nextAction
+        || canonicalContentHash(fresh.directive) !== canonicalContentHash(currentState.directive)) {
+        return { kind: 'abort', reason: 'stale_directive' }
+      }
+      currentState = fresh
+      selection = selectDshDirectiveSources(fresh.directive)
     } catch {
       return { kind: 'abort', reason: 'context_injection_failed' }
     }
-    this.#steers.set(key, used + 1)
+
+    // The fresh state, not the state read before verification/advisory work,
+    // owns replay accounting and the next-step injection.
+    if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
+    const key = directiveKey(event, currentState)
+    const boundIdentity = scope.steerIdentities.get(key)
+    if (boundIdentity !== undefined
+      && (boundIdentity.nativeAgent !== event.agent.nativeAgent || boundIdentity.nativeSession !== event.agent.nativeSession)) {
+      return { kind: 'abort', reason: 'state_unavailable' }
+    }
+    const used = scope.steers.get(key) ?? 0
+    if (used >= this.#maxSteersPerDirective) return { kind: 'abort', reason: 'continuation_limit' }
+    // Keys are scoped to the current native turn and are cleared only after
+    // the high-water mark advances. This prevents replay while allowing an
+    // unbounded sequence of independent turns.
+    if (used === 0 && scope.steers.size >= 4_096) return { kind: 'abort', reason: 'continuation_limit' }
+    try {
+      await this.#injectNextStepContext({ event, selection, state: currentState })
+    } catch {
+      return { kind: 'abort', reason: 'context_injection_failed' }
+    }
+    if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
+    if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
+    // Claim immediately before the irreversible native steer. A throwing
+    // steer remains consumed and cannot be retried automatically.
+    scope.steers.set(key, used + 1)
+    scope.steerIdentities.set(key, {
+      ...(event.agent.nativeAgent === undefined ? {} : { nativeAgent: event.agent.nativeAgent }),
+      ...(event.agent.nativeSession === undefined ? {} : { nativeSession: event.agent.nativeSession }),
+    })
     event.agent.steer({ content: continuationText, source: 'kiokuko-dsh' })
-    return { kind: 'steer', nextAction: state.nextAction, selection }
+    return { kind: 'steer', nextAction: currentState.nextAction, selection }
   }
 
   async handle(event: DshTurnStoppingEvent): Promise<DshTurnStoppingDecision> {
+    const scope = this.#scopeFor(event)
+    const existing = scope.turnInFlight.get(event.turn)
     const decision = await this.turnStopping(event)
-    if (decision.kind === 'abort' && decision.reason !== 'aborted') {
+    if (existing === undefined && decision.kind === 'abort' && decision.reason !== 'aborted' && decision.reason !== 'stale_turn') {
       event.agent.cancel?.(`kiokuko dsh Enno continuation stopped: ${decision.reason}`)
     }
     return decision
   }
 
+  /** Release replay memory when the host retires a native lifecycle. */
+  retire(identity: { readonly nativeAgent?: object; readonly nativeSession?: object }): void {
+    if (identity.nativeSession !== undefined) this.#replayScopes.delete(identity.nativeSession)
+    if (identity.nativeAgent !== undefined) this.#replayScopes.delete(identity.nativeAgent)
+  }
+
   dispose(): void {
-    this.#steers.clear()
+    this.#replayScopes.clear()
   }
 }
 

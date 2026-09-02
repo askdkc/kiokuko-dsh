@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -22,8 +22,21 @@ jobs:
           node-version: 24.16.0
           cache: npm
 
+      - name: Set up pnpm for DSH CLI
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Install pinned DeepSeek Harness CLI
+        run: |
+          dsh_cli_dir="$RUNNER_TEMP/dsh-cli"
+          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.2-alpha.3
+          echo "$dsh_cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
 
       - name: Type-check
         run: npm run typecheck
@@ -45,14 +58,71 @@ jobs:
       - name: Verify package contents
         run: npm run pack:check
 
+      - name: Verify reproducible prepare output
+        run: npm run verify:prepare
+
       - name: Verify DeepSeek Harness composition and package lifecycle
         run: npm run test:e2e:dsh
+        env:
+          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.2-alpha.3
+          KIOKUKO_REQUIRE_DSH_CLI: "1"
+          KIOKUKO_DSH_EVIDENCE_PATH: ${{ runner.temp }}/kiokuko-dsh-evidence.json
 
-      - name: Verify minimal global install
-        run: npm run test:global-install
+      - name: Upload DSH lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiokuko-dsh-evidence-linux
+          path: ${{ runner.temp }}/kiokuko-dsh-evidence.json
+          if-no-files-found: ignore
 
       - name: Verify pinned local embedding manifest
         run: node scripts/run-local-embedding-smoke.mjs --offline
+
+  dsh-runtime-macos:
+    name: DSH runtime smoke (macOS)
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+          cache: npm
+
+      - name: Set up pnpm for DSH CLI
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install pinned DeepSeek Harness CLI
+        run: |
+          dsh_cli_dir="$RUNNER_TEMP/dsh-cli"
+          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.2-alpha.3
+          echo "$dsh_cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
+        env:
+          npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
+
+      - name: Verify DeepSeek Harness Web lifecycle
+        run: npm run test:e2e:dsh
+        env:
+          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.2-alpha.3
+          KIOKUKO_REQUIRE_DSH_CLI: "1"
+          KIOKUKO_DSH_EVIDENCE_PATH: ${{ runner.temp }}/kiokuko-dsh-evidence.json
+
+      - name: Upload DSH lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiokuko-dsh-evidence-macos
+          path: ${{ runner.temp }}/kiokuko-dsh-evidence.json
+          if-no-files-found: ignore
 
   semantic-platform-smoke:
     name: Semantic smoke (${{ matrix.platform }})

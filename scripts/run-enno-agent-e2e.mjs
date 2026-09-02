@@ -147,7 +147,7 @@ async function runClient(client) {
   await requireSuccess('git', ['add', '.'], { cwd: project, timeoutMs: 10_000 });
   await requireSuccess('git', ['-c', 'user.name=Kiokuko E2E', '-c', 'user.email=kiokuko-e2e@example.invalid', 'commit', '-qm', 'fixture'], { cwd: project, timeoutMs: 10_000 });
 
-  const databasePath = path.join(data, 'kiokuko.sqlite3');
+  const databasePath = path.join(data, 'kiokuko-dsh.sqlite3');
   const environment = {
     ...process.env,
     HOME: home,

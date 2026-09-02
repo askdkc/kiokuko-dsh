@@ -27,7 +27,7 @@ test('model context has a fixed trusted-prefix order and user task last', async 
   assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'route-skill', 'expert', 'memory', 'user-task'])
   assert.equal(messages[0]?.content, await loadSoulPrompt())
   assert.equal(messages.at(-1)?.role, 'user')
-  assert.equal(messages.at(-1)?.content, 'Implement src/index.ts and make the focused tests pass.')
+  assert.match(messages.at(-1)?.content ?? '', /Implement src\/index\.ts and make the focused tests pass\.[\s\S]*Finalized intake:[\s\S]*src\/index\.ts[\s\S]*tests pass/u)
 })
 
 test('ordinary memory remains untrusted and removes path/internal-id material', async () => {
@@ -44,4 +44,17 @@ test('ordinary memory remains untrusted and removes path/internal-id material', 
   assert.equal(memory?.role, 'system')
   assert.equal(memory?.content.includes('/Users/dkc'), false)
   assert.equal(memory?.content.includes('abc12345'), false)
+})
+
+test('explicit current directive wins over a stale prepared directive', async () => {
+  const staleDirective = { role: 'zenki', objective: 'stale objective', requiredSkills: [], workUnit: null, stopConditions: [], reportSchema: {} }
+  const currentDirective = { role: 'goki', objective: 'current objective', requiredSkills: [], workUnit: null, stopConditions: [], reportSchema: {} }
+  const messages = await injectDshContext({
+    prepared: prepared({ ennoOduno: { directive: staleDirective } }),
+    task: 'Continue the current task.',
+    directive: currentDirective as any,
+  })
+  const directive = messages.find((message) => message.source === 'directive')
+  assert.match(directive?.content ?? '', /current objective/u)
+  assert.doesNotMatch(directive?.content ?? '', /stale objective/u)
 })

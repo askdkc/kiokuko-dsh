@@ -42,6 +42,14 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 type ParsedJsonObject = Record<string, unknown>;
 
+export function parseRequestUrl(rawUrl: string | undefined): URL {
+  try {
+    return new URL(rawUrl ?? '/', 'http://127.0.0.1');
+  } catch {
+    throw new KiokukoError('VALIDATION_ERROR', 'Request URL is invalid');
+  }
+}
+
 function isJsonContentType(value: string | undefined): boolean {
   if (value === undefined) return false;
   const parts = value.split(';');
@@ -125,7 +133,7 @@ async function readReadiness(readiness: Readiness): Promise<boolean> {
 
 export function createRouter(dependencies: RouterDependencies): HttpHandler {
   return async (request, response) => {
-    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    const url = parseRequestUrl(request.url);
     if (request.method === 'GET' && url.pathname === '/health/live') {
       writeJson(response, 200, { ok: true });
       return;

@@ -63,12 +63,12 @@ test('explicit host adapter mounts native dsh tools and commands and unloads the
   assert.ok(workReport)
   assert.deepEqual(workReport.output.schema, {})
   const denied = await (root.waterfall as unknown as (name: string, execution: unknown, next: () => Promise<unknown>) => Promise<unknown>)('tools/pre-execute', {
-    callId: 'wrong-phase-call', name: 'enno_plan_submit', arguments: {}, agent: { id: 'native-agent' }, signal: new AbortController().signal,
+    callId: 'wrong-phase-call', name: 'enno_plan_submit', arguments: {}, agent: { id: 'native-agent', session: { id: 'native-agent' } }, signal: new AbortController().signal,
   }, async () => ({ kind: 'allow' }))
   assert.deepEqual(denied, { kind: 'deny', reason: 'Kiokuko dsh tool denied (wrong_directive)' })
   assert.equal(tools.some((tool) => tool.name === 'task_prepare'), false)
   await workReport.execute({ result: { outcome: 'completed', summary: 'done', mutated: false, changedPaths: [] } }, {
-    callId: 'native-call', name: 'enno_work_report', arguments: {}, agent: { id: 'native-agent' }, signal: new AbortController().signal,
+    callId: 'native-call', name: 'enno_work_report', arguments: {}, agent: { id: 'native-agent', session: { id: 'native-agent' } }, signal: new AbortController().signal,
   })
   assert.deepEqual(calls, ['enno_work_report'])
   await plugin.dispose()
@@ -99,9 +99,105 @@ test('native session event contract bridges committed events and deduplicates re
   assert.equal(bridge.pendingCount, 1)
   await bridge.flush()
   assert.equal(batches.length, 1)
-  assert.equal(batches[0]![0]!.sourceEventId, 'dsh:session-native:7')
+  assert.match(batches[0]![0]!.sourceEventId, /^dsh:session-native:[^:]+:7$/u)
   assert.equal(bridge.pendingCount, 0)
   dispose()
   await bridge.close()
   assert.deepEqual(bridge.observerErrors, [])
+})
+
+test('native session observer contains identity conflicts without throwing from session/event', async () => {
+  const listeners = new Map<string, (...args: any[]) => void>()
+  const bridge = new DshSessionBridge({
+    runtime: { withDatabase: async <T>() => undefined as T },
+    appendBatch: async () => undefined,
+  })
+  const dispose = mountDshSessionBridge({
+    on(name, listener) {
+      listeners.set(name, listener)
+      return () => { listeners.delete(name) }
+    },
+  }, bridge, () => 'run-same')
+  const first = { id: 'session-same', header: { createdAt: 1 } }
+  const replacement = { id: 'session-same', header: { createdAt: 2 } }
+  listeners.get('session/created')!(first)
+  listeners.get('session/event')!(first, { type: 'turn/start', seq: 0, time: 0, data: null })
+  assert.doesNotThrow(() => listeners.get('session/event')!(replacement, { type: 'turn/start', seq: 0, time: 0, data: null }))
+  assert.equal(bridge.observerErrors.length, 1)
+  await assert.rejects(bridge.flush(), /session identity changed/u)
+  dispose()
+})
+
+test('late disposal of an older native session cannot unbind a rebound session', async () => {
+  const listeners = new Map<string, (...args: any[]) => void>()
+  const bridge = new DshSessionBridge({
+    runtime: { withDatabase: async <T>() => undefined as T },
+    appendBatch: async () => undefined,
+  })
+  const dispose = mountDshSessionBridge({
+    on(name, listener) {
+      listeners.set(name, listener)
+      return () => { listeners.delete(name) }
+    },
+  }, bridge, (session) => session.id === 'session-reused' ? session.header?.createdAt === 2 ? 'run-two' : 'run-one' : undefined)
+  const first = { id: 'session-reused', header: { createdAt: 1 } }
+  const replacement = { id: 'session-reused', header: { createdAt: 2 } }
+  listeners.get('session/created')!(first)
+  listeners.get('session/event')!(first, { type: 'turn/start', seq: 0, time: 0, data: null })
+  listeners.get('session/event')!(replacement, { type: 'turn/start', seq: 0, time: 0, data: null })
+  listeners.get('session/disposed')!(first)
+  assert.equal(bridge.bindingOf('session-reused'), 'run-two')
+  listeners.get('session/event')!(replacement, { type: 'turn/end', seq: 1, time: 1, data: null })
+  assert.equal(bridge.pendingCount, 3)
+  assert.equal(bridge.observerErrors.length, 1)
+  dispose()
+  await assert.rejects(bridge.close(), /stale session disposal ignored/u)
+})
+
+test('events after native session disposal fail closed until a new created event binds it', async () => {
+  const listeners = new Map<string, (...args: any[]) => void>()
+  const bridge = new DshSessionBridge({
+    runtime: { withDatabase: async <T>() => undefined as T },
+    appendBatch: async () => undefined,
+  })
+  const dispose = mountDshSessionBridge({
+    on(name, listener) {
+      listeners.set(name, listener)
+      return () => { listeners.delete(name) }
+    },
+  }, bridge, () => 'run-disposed')
+  const session = { id: 'session-disposed', header: { createdAt: 1 } }
+  listeners.get('session/created')!(session)
+  listeners.get('session/disposed')!(session)
+  listeners.get('session/event')!(session, { type: 'late/event', seq: 0, time: 0, data: null })
+  assert.equal(bridge.pendingCount, 0)
+  assert.equal(bridge.observerErrors.length, 1)
+  await assert.rejects(bridge.flush(), /after disposal/u)
+  dispose()
+})
+
+test('a stale native session object cannot be rebound through a current run resolver', async () => {
+  const listeners = new Map<string, (...args: any[]) => void>()
+  const bridge = new DshSessionBridge({
+    runtime: { withDatabase: async <T>() => undefined as T },
+    appendBatch: async () => undefined,
+  })
+  const first = { id: 'session-stale', header: { createdAt: 1 } }
+  const replacement = { id: 'session-stale', header: { createdAt: 2 } }
+  let active: object = first
+  const dispose = mountDshSessionBridge({
+    on(name, listener) {
+      listeners.set(name, listener)
+      return () => { listeners.delete(name) }
+    },
+  }, bridge, (session) => session === active ? session === first ? 'run-old' : 'run-new' : undefined)
+  listeners.get('session/created')!(first)
+  listeners.get('session/event')!(first, { type: 'turn/start', seq: 0, time: 0, data: null })
+  active = replacement
+  listeners.get('session/event')!(replacement, { type: 'turn/start', seq: 0, time: 1, data: null })
+  listeners.get('session/event')!(first, { type: 'late/event', seq: 1, time: 2, data: null })
+  assert.equal(bridge.pendingCount, 2)
+  assert.equal(bridge.observerErrors.length, 1)
+  dispose()
+  await assert.rejects(bridge.close(), /active run binding/u)
 })

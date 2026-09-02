@@ -28,7 +28,7 @@ function validation(message: string): never {
 }
 
 function boundedText(value: unknown, label: string, maximum: number): string {
-  if (typeof value !== 'string' || value.trim().length === 0 || value.length > maximum || /[\p{Cc}]/u.test(value)) validation(`${label} must be a bounded non-empty string`)
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > maximum || /[\p{Cc}\p{Cf}]/u.test(value)) validation(`${label} must be a bounded non-empty string`)
   return value.trim()
 }
 

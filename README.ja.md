@@ -2,7 +2,7 @@
 
 [English](README.md) | 日本語 | [简体中文](README.zh-CN.md) | [한국어](README.ko.md)
 
-`kiokuko-dsh@0.1.0`は、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)向けのout-of-tree Pluginで、[npm](https://www.npmjs.com/package/kiokuko-dsh)に公開済みです。
+`kiokuko-dsh`は、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)向けのout-of-tree Pluginです。[npmパッケージ](https://www.npmjs.com/package/kiokuko-dsh)に公開済みのreleaseがある場合はそれを使い、source-pinned Git導入ではPluginガイドの手順を使います。
 
 ## 導入
 
@@ -17,14 +17,27 @@ pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
-source-pinned Git導入は[Pluginガイド](docs/dsh-plugin.md)のfallbackを使ってください。
+GitHubを直接指定して導入する場合は、DeepSeek Harnessのcheckoutから実行します:
+
+```bash
+pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
+pnpm dsh --profile web --dump-config
+```
+
+commitを固定するsource-pinned Git導入は[Pluginガイド](docs/dsh-plugin.md)のfallbackを使ってください。
 
 ローカルcheckoutを使う場合は、先にビルドしてパスを指定します:
 
 ```bash
+# 次の2つはKiokuko checkoutで実行します。
 pnpm install --frozen-lockfile
 pnpm run build
-pnpm dsh plugin --profile web add /path/to/kiokuko-dsh
+```
+
+その後、DeepSeek Harnessのcheckoutからビルド済みパスを導入します:
+
+```bash
+dsh plugin --profile web add /absolute/path/to/kiokuko-dsh
 ```
 
 インストール済みの`dsh` CLIでは先頭の`pnpm`を外します。削除:

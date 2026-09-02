@@ -25,6 +25,16 @@ export const ENNO_CLIENTS = ENNO_CLIENT_KINDS;
 export type EnnoClient = EnnoClientKind;
 const CLAUDE_SAFE_STOP_BLOCK_LIMIT = 7;
 
+export interface ExactResumeExpectation {
+  readonly runId: string;
+  readonly workspace: string;
+  readonly clientKind: EnnoClient;
+  readonly clientSessionId: string;
+  readonly routeEpoch: number;
+  readonly resumeToken: string;
+  readonly requireExistingBinding: true;
+}
+
 const hookInputSchema = z.object({
   session_id: z.string().min(1).max(256).optional(),
   sessionId: z.string().min(1).max(256).optional(),
@@ -61,6 +71,7 @@ function exactSessionCandidates(
   client: EnnoClient,
   sessionId: string,
   repositoryRoot: string,
+  expectedRunId?: string,
 ): CandidateRow[] {
   return database.prepare(`
     SELECT ec.run_id AS runId, ec.workspace, ec.orchestration_session_id AS orchestrationId,
@@ -71,12 +82,13 @@ function exactSessionCandidates(
     WHERE ec.client_session_id = ?
       AND ec.client_kind = ?
       AND ec.repository_root = ?
+      AND (? IS NULL OR ec.run_id = ?)
       AND (ec.blocker IS NULL OR ec.blocker NOT LIKE ?)
       AND ec.status IN ('zenki_planning', 'goki_executing', 'enno_verifying')
-  `).all<CandidateRow>(sessionId, client, repositoryRoot, `${PLAN_START_RECOVERY_BLOCKER_PREFIX}%`);
+  `).all<CandidateRow>(sessionId, client, repositoryRoot, expectedRunId ?? null, expectedRunId ?? null, `${PLAN_START_RECOVERY_BLOCKER_PREFIX}%`);
 }
 
-function repositoryCandidates(database: SqliteDatabase, repositoryRoot: string): CandidateRow[] {
+function repositoryCandidates(database: SqliteDatabase, repositoryRoot: string, expectedRunId?: string): CandidateRow[] {
   return database.prepare(`
     SELECT ec.run_id AS runId, ec.workspace, ec.orchestration_session_id AS orchestrationId,
            ec.client_kind AS clientKind, ec.client_version AS clientVersion,
@@ -84,9 +96,10 @@ function repositoryCandidates(database: SqliteDatabase, repositoryRoot: string):
            ec.repository_root AS repositoryRoot, ec.status, ec.route_epoch AS routeEpoch
     FROM enno_contracts AS ec
     WHERE ec.repository_root = ?
+      AND (? IS NULL OR ec.run_id = ?)
       AND (ec.blocker IS NULL OR ec.blocker NOT LIKE ?)
       AND ec.status IN ('zenki_planning', 'goki_executing', 'enno_verifying')
-  `).all<CandidateRow>(repositoryRoot, `${PLAN_START_RECOVERY_BLOCKER_PREFIX}%`);
+  `).all<CandidateRow>(repositoryRoot, expectedRunId ?? null, expectedRunId ?? null, `${PLAN_START_RECOVERY_BLOCKER_PREFIX}%`);
 }
 
 type CandidateResolution =
@@ -163,14 +176,67 @@ function resolveCandidateInTransaction(
   client: EnnoClient,
   sessionId: string,
   repositoryRoot: string,
+  expectedRunId?: string,
 ): CandidateResolution {
-  const exact = exactSessionCandidates(database, client, sessionId, repositoryRoot);
+  const exact = exactSessionCandidates(database, client, sessionId, repositoryRoot, expectedRunId);
   if (exact.length > 1) return { kind: 'ambiguous' };
   if (exact[0] !== undefined) return { kind: 'resolved', candidate: exact[0] };
-  const repository = repositoryCandidates(database, repositoryRoot);
+  const repository = repositoryCandidates(database, repositoryRoot, expectedRunId);
   if (repository.length === 0) return { kind: 'none' };
   if (repository.length > 1) return { kind: 'ambiguous' };
   return { kind: 'resolved', candidate: routeCandidateInTransaction(database, repository[0]!, client, sessionId) };
+}
+
+function readExactResumeCandidate(
+  database: SqliteDatabase,
+  expectation: ExactResumeExpectation,
+  repositoryRoot: string,
+): CandidateRow {
+  const candidate = database.prepare(`
+    SELECT ec.run_id AS runId, ec.workspace, ec.orchestration_session_id AS orchestrationId,
+           ec.client_kind AS clientKind, ec.client_version AS clientVersion,
+           ec.client_session_id AS clientSessionId,
+           ec.repository_root AS repositoryRoot, ec.status, ec.route_epoch AS routeEpoch
+    FROM enno_contracts AS ec
+    WHERE ec.run_id = ? AND ec.repository_root = ?
+  `).get<CandidateRow>(expectation.runId, repositoryRoot);
+  if (candidate === undefined) throw new KiokukoError('CONFLICT', 'The exact resume run is not registered for this repository');
+  if (candidate.routeEpoch !== expectation.routeEpoch) throw new KiokukoError('CONFLICT', 'resumeToken route epoch is stale');
+  if (candidate.workspace !== expectation.workspace
+    || candidate.clientKind !== expectation.clientKind
+    || candidate.clientSessionId !== expectation.clientSessionId) {
+    throw new KiokukoError('CONFLICT', 'The exact resume route is stale');
+  }
+  if (!['zenki_planning', 'goki_executing', 'enno_verifying'].includes(candidate.status)) {
+    throw new KiokukoError('CONFLICT', 'The exact resume run is not active');
+  }
+  const tokenHash = createHash('sha256').update(expectation.resumeToken, 'utf8').digest('hex');
+  const token = database.prepare(`
+    SELECT run_id AS runId, repository_root AS repositoryRoot,
+           route_epoch AS routeEpoch, client_kind AS clientKind,
+           client_session_id AS clientSessionId, expires_at AS expiresAt
+    FROM enno_resume_tokens
+    WHERE token_hash = ?
+  `).get<{
+    runId: string;
+    repositoryRoot: string;
+    routeEpoch: number;
+    clientKind: EnnoClient;
+    clientSessionId: string;
+    expiresAt: string;
+  }>(tokenHash);
+  if (token !== undefined && token.routeEpoch !== expectation.routeEpoch) {
+    throw new KiokukoError('CONFLICT', 'resumeToken route epoch is stale');
+  }
+  if (token === undefined || token.runId !== expectation.runId
+    || token.repositoryRoot !== repositoryRoot
+    || token.clientKind !== expectation.clientKind
+    || token.clientSessionId !== expectation.clientSessionId
+    || !Number.isFinite(Date.parse(token.expiresAt))
+    || Date.parse(token.expiresAt) <= Date.now()) {
+    throw new KiokukoError('CONFLICT', 'The exact resume credential is stale');
+  }
+  return candidate;
 }
 
 function continuationPrompt(
@@ -282,14 +348,21 @@ function claimContinuation(
   return true;
 }
 
-export function decideAdapterContinuation(database: SqliteDatabase, client: EnnoClient, rawInput: unknown): AdapterDecision {
+export function decideAdapterContinuation(
+  database: SqliteDatabase,
+  client: EnnoClient,
+  rawInput: unknown,
+  expectedRun?: string | ExactResumeExpectation,
+): AdapterDecision {
   const parsed = hookInputSchema.safeParse(rawInput);
   if (!parsed.success) throw new KiokukoError('VALIDATION_ERROR', 'Enno client hook input is invalid');
   const sessionId = parsed.data.session_id ?? parsed.data.sessionId;
   if (sessionId === undefined) throw new KiokukoError('VALIDATION_ERROR', 'Enno client session ID is required');
   const repositoryRoot = detectRepositoryRoot({ cwd: parsed.data.cwd }).root;
   const continuation = withImmediateTransaction(database, () => {
-    const resolution = resolveCandidateInTransaction(database, client, sessionId, repositoryRoot);
+    const resolution = typeof expectedRun === 'object'
+      ? { kind: 'resolved' as const, candidate: readExactResumeCandidate(database, expectedRun, repositoryRoot) }
+      : resolveCandidateInTransaction(database, client, sessionId, repositoryRoot, expectedRun);
     if (resolution.kind !== 'resolved') return resolution;
     const candidate = resolution.candidate;
     const snapshot = readEnnoSnapshot(database, {

@@ -9,16 +9,8 @@
 外部Skill discoveryは参照専用です。source commitを検証し、boundedな内容をuntrusted candidateとして保存しますが、取得したSkillを自動install・実行・登録しません。
 既定は`official`、`community`は明示opt-in、`off`で無効化します。
 
-Skillの確認・管理:
-
-```bash
-kiokuko skills find svelte --official-only --json
-kiokuko skills list
-kiokuko skills disable <skill-id>
-kiokuko skills refresh <skill-id>
-```
-
-Web UIではmappingの確認・無効化だけを行い、install、script、MCP登録は行いません。
+DSH packageは汎用の`kiokuko skills` commandを公開しません。Web UIではmapping
+の確認・無効化だけを行い、install、script、MCP登録は行いません。
 
 ## MCP extensionと公開エラー
 

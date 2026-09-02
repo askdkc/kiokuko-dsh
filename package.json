@@ -3,8 +3,14 @@
   "version": "0.1.0",
   "description": "Kiokuko plugin for DeepSeek Harness",
   "type": "module",
-  "bin": {
-    "kiokuko": "dist/bin/kiokuko.js"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/askdkc/kiokuko-dsh.git"
+  },
+  "homepage": "https://github.com/askdkc/kiokuko-dsh#readme",
+  "bugs": {
+    "url": "https://github.com/askdkc/kiokuko-dsh/issues"
   },
   "engines": {
     "node": ">=24.16.0"
@@ -23,6 +29,7 @@
     "README.ja.md",
     "README.zh-CN.md",
     "README.ko.md",
+    "PERMISSIONS.md",
     "LICENSE"
   ],
   "exports": {
@@ -32,40 +39,78 @@
     }
   },
   "dsh": {
+    "displayName": "Kiokuko DSH",
+    "pluginType": "suite",
     "bundle": {
       "patch": "./dsh/cordis.patch.yml"
+    },
+    "compatibility": {
+      "dsh": "0.1.2-alpha.3",
+      "dshReleases": {
+        "0.1.2-alpha.2": "unknown",
+        "0.1.2-alpha.3": "compatible",
+        "0.1.2-alpha.4": "unknown"
+      },
+      "profiles": [
+        "web"
+      ]
+    },
+    "permissions": {
+      "summary": "Local Kiokuko state and managed project files, optional network-backed Skill or embedding features, and restricted verifier or backup subprocesses.",
+      "readPaths": [
+        "Configured Kiokuko data directory and SQLite database",
+        "Registered project roots and their repository metadata"
+      ],
+      "writePaths": [
+        "Configured Kiokuko database, backups, and runtime descriptors",
+        "Kiokuko-managed instruction and project state files only"
+      ],
+      "commands": [
+        "Restricted repository-relative verifier and backup subprocesses when explicitly requested"
+      ],
+      "externalServices": [
+        "GitHub or skills.sh for optional Skill discovery and source retrieval",
+        "User-configured embedding endpoint when remote embeddings are enabled"
+      ],
+      "credentials": [
+        "Optional user-provided GitHub or embedding credentials; never bundled or persisted by the plugin"
+      ],
+      "failureBoundaries": [
+        "Repository identity, run identity, lease, revision, and integrity mismatches fail closed",
+        "Remote embedding is disabled by default and unavailable services do not become normal success"
+      ],
+      "lifecycleEvidence": [
+        "prepare runs only npm run build",
+        "Git installs require the exact pnpm allowBuilds entry for the pinned source archive",
+        "Disposable-profile install, Web start, and uninstall evidence is recorded by CI"
+      ]
     }
   },
   "scripts": {
     "clean:dist": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
-    "set-bin-permissions": "node --input-type=module --eval \"import { chmodSync } from 'node:fs'; chmodSync('dist/bin/kiokuko.js', 0o755);\"",
-    "build": "npm run clean:dist && tsc -p tsconfig.build.json && npm run set-bin-permissions",
+    "build": "npm run clean:dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs tests",
     "test:unit": "node scripts/run-tests.mjs tests/unit",
     "test:integration": "node scripts/run-tests.mjs tests/integration",
     "test:sqlite-vec": "node --import tsx tests/ci/sqlite-vec-package-smoke.ts",
-    "test:global-install": "node tests/ci/global-install-smoke.mjs",
     "test:evaluation": "npm run build && node scripts/run-retrieval-evaluation.mjs",
     "test:benchmark": "npm run build && node scripts/run-retrieval-benchmark.mjs",
-    "test:e2e:codex": "npm run build && node scripts/run-enno-agent-e2e.mjs codex",
-    "test:e2e:opencode": "npm run build && node scripts/run-enno-agent-e2e.mjs opencode",
-    "test:e2e:claude": "npm run build && node scripts/run-enno-agent-e2e.mjs claude",
-    "test:e2e:agents": "npm run build && node scripts/run-enno-agent-e2e.mjs all",
     "test:e2e:dsh": "npm run build && node scripts/run-enno-dsh-e2e.mjs",
-    "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko.sqlite3",
+    "verify:prepare": "node scripts/verify-prepare-reproducibility.mjs",
+    "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko-dsh.sqlite3",
     "test:sampledb": "npm run build && node --import tsx tests/ci/verify-sample-database.ts",
     "pack:check": "node scripts/pack-check.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run pack:check"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "commander": "^14.0.1",
-    "jsonc-parser": "^3.3.1",
-    "semver": "^7.8.5",
-    "yaml": "^2.9.0",
-    "zod": "^4.4.3"
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "commander": "14.0.3",
+    "jsonc-parser": "3.3.1",
+    "semver": "7.8.5",
+    "yaml": "2.9.0",
+    "zod": "4.5.4"
   },
   "overrides": {
     "adm-zip": "0.6.0",
@@ -89,13 +134,13 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/cordis": "4.0.2",
     "@huggingface/hub": "2.16.1",
     "@huggingface/transformers": "4.2.0",
-    "@types/node": "^24.0.0",
-    "@types/semver": "^7.8.0",
+    "@types/node": "24.13.3",
+    "@types/semver": "7.8.0",
     "sqlite-vec": "0.1.9",
-    "tsx": "^4.20.3",
-    "typescript": "^5.9.2"
+    "tsx": "4.23.13",
+    "typescript": "5.9.3"
   }
 }

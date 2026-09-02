@@ -11,7 +11,7 @@ export interface DshUserQuestionRequest {
     readonly header?: string
     readonly options?: readonly DshUserQuestionOption[]
     readonly multiSelect?: boolean
-    readonly intent?: string
+    readonly intent?: { readonly kind: 'plan-review'; readonly approve: string }
   }]
   readonly signal?: AbortSignal
 }
@@ -112,10 +112,11 @@ export function createDshConfirmationAnswerer(service: DshUserQuestions): DshCon
       const result = await service.ask({
         questions: [{
           id: 'kiokuko-plan-confirmation',
-          question: renderDshConfirmation(confirmation),
+          question: 'Review the proposed plan and choose an action.',
+           detail: renderDshConfirmation(confirmation),
           options: confirmation.actions.map((label) => ({ label })),
           multiSelect: false,
-          intent: 'plan-confirmation',
+          intent: { kind: 'plan-review', approve: 'approve' },
         }],
         ...(signal === undefined ? {} : { signal }),
       })

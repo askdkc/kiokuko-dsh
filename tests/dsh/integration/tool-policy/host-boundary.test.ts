@@ -4,7 +4,7 @@ import { DshToolPolicy } from '../../../../src/dsh/tool-policy.js'
 
 const base = {
   runId: 'run-1', workspace: 'workspace-1', orchestrationId: 'orch-1', revision: 2, routeEpoch: 0,
-  phase: 'goki' as const, currentWorkUnitId: 'U06', workUnitId: 'U06', leaseToken: 'lease-1',
+  dshSessionId: 'session-1', phase: 'goki' as const, currentWorkUnitId: 'U06', workUnitId: 'U06', leaseToken: 'lease-1',
 }
 
 function call(name: string, arguments_: unknown, origin?: 'model' | 'host') {
@@ -20,9 +20,18 @@ test('host identity cannot be supplied through model arguments and host-only cal
   assert.deepEqual(injected, {
     kind: 'deny', code: 'IDENTITY_INJECTION', reason: 'Kiokuko dsh tool denied (identity_injection)',
   })
+  const hostField = policy.decide(call('memory_checkpoint', { deliveryId: 'forged-delivery' }, 'model'))
+  assert.equal(hostField.kind, 'deny')
+  if (hostField.kind === 'deny') assert.equal(hostField.code, 'IDENTITY_INJECTION')
 
   const hostOnly = policy.decide(call('task_answer', {}, 'model'))
   assert.equal(hostOnly.kind, 'deny')
   if (hostOnly.kind === 'deny') assert.equal(hostOnly.code, 'HOST_ONLY')
   assert.equal(policy.decide(call('enno_work_report', {}, 'model')).kind, 'allow')
+})
+
+test('invalid host identity values are denied before the operation boundary', () => {
+  const policy = new DshToolPolicy({ ...base, runId: 'run\u200b-1' })
+  const decision = policy.decide(call('enno_work_report', {}, 'model'))
+  assert.deepEqual(decision, { kind: 'deny', code: 'STALE_STATE', reason: 'Kiokuko dsh tool denied (stale_state)' })
 })

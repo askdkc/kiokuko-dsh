@@ -1,6 +1,6 @@
 # Kiokuko sample database
 
-`kiokuko.sqlite3` is a deterministic, synthetic CI fixture. It contains:
+`kiokuko-dsh.sqlite3` is a deterministic, synthetic CI fixture. It contains:
 
 - project-scoped memory entries, including Unicode and multiline text;
 - global memory entries;

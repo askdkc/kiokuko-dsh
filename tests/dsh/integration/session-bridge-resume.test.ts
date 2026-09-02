@@ -44,7 +44,7 @@ test('resume replay is idempotent in the real Kiokuko ledger', async () => {
   try {
     const rows = new LedgerStore(verified).readEvents('run-dsh-bridge')
     assert.equal(rows.length, 1)
-    assert.equal(rows[0]?.source_event_id, 'dsh:resume-session:0')
+    assert.match(rows[0]?.source_event_id ?? '', /^dsh:resume-session:[^:]+:0$/u)
     assert.equal(new LedgerStore(verified).verifyChain('run-dsh-bridge'), true)
   } finally {
     verified.close()

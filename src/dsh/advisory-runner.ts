@@ -88,9 +88,14 @@ async function runSlot(
         reject(new Error('advisory timeout'))
       }, timeoutMs)
     })
+    let unlinkParentAbort: (() => void) | undefined
     const aborted = new Promise<never>((_, reject) => {
       if (parentSignal.aborted) reject(new Error('advisory aborted'))
-      else parentSignal.addEventListener('abort', () => reject(new Error('advisory aborted')), { once: true })
+      else {
+        const onAbort = () => reject(new Error('advisory aborted'))
+        parentSignal.addEventListener('abort', onAbort, { once: true })
+        unlinkParentAbort = () => parentSignal.removeEventListener('abort', onAbort)
+      }
     })
     try {
       const output = await Promise.race([dependencies.execute(call), timeout, aborted])
@@ -105,6 +110,7 @@ async function runSlot(
         : failure(slot.slotId, 'host_execution_failed')
     } finally {
       if (timer !== undefined) clearTimeout(timer)
+      unlinkParentAbort?.()
     }
   } finally {
     unlink()

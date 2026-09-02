@@ -1,85 +1,56 @@
 # 導入ガイド
 
-## インストールと設定
+`kiokuko-dsh`はDeepSeek Harness向けPluginです。公開パッケージが提供する
+のは`./dsh` Plugin entrypointだけで、Codex、OpenCode、Claude Code、汎用
+`kiokuko` CLIの導入・設定は行いません。
 
-Node.js 24.16.0以上が必要です。公開済みの`kiokuko-dsh@0.1.0`をnpmから導入するのが通常の手順です。
+## インストール
+
+DeepSeek Harness `0.1.2-alpha.3` と Node.js 24.16.0 以上が必要です。
+
+DeepSeek Harnessのcheckoutから導入します:
 
 ```bash
-npm install --global kiokuko-dsh
-kiokuko setup
+pnpm dsh plugin --profile web add kiokuko-dsh
+pnpm dsh --profile web --dump-config
 ```
 
-local checkoutを使う場合:
+GitHubを直接指定する場合は、DeepSeek Harnessのcheckoutから実行します:
 
 ```bash
-cd /path/to/kiokuko-dsh
+pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
+pnpm dsh --profile web --dump-config
+```
+
+local checkoutを使う場合は、Kiokuko checkoutでビルドします:
+
+```bash
 pnpm install --frozen-lockfile
 pnpm run build
-node dist/bin/kiokuko.js setup
 ```
 
-`--clients codex,opencode,claude,hermes`で対象を明示できます。省略時はインストール済みclientを検出します。
-`--dry-run --json`は書き込みなしで計画を出力します。`--no-standard-skills`、`--skill-discovery off|official|community`、
-`--enno-oduno on|off`も指定できます。
-
-Codexでは次のmanaged blockを所有します。
-
-```toml
-[mcp_servers.kiokuko]
-command = "kiokuko"
-args = ["mcp"]
-enabled = true
-required = true
-```
-
-`required`を含まない完全一致の旧managed blockだけを再実行時に更新します。値、順序、重複key、余分なfieldの変更や
-`required = false`はuser-managed conflictとして無断上書きしません。対話実行では置換確認を行い、JSON・非対話・dry-runでは
-`CONFLICT`を返して変更しません。他の対応clientも同じ規則です。
-
-起動中のclientは設定後に再起動してください。Codex Stop hookを作成・更新した場合は`/hooks`で明示的にtrustします。
-`kiokuko doctor --json`はruntime、DB、Codex MCPを読み取り専用で検査します。
-
-## Embeddings
-
-`kiokuko embeddings setup`は固定semantic runtimeを導入し、`kiokuko setup`と同じclient設定フロー（conflict確認、managed MCP更新、
-登録済みプロジェクトのinstructions更新）を実行します。
+その後、DeepSeek Harnessのcheckoutからインストール済みの`dsh` launcherで
+ビルド済みパスを導入します:
 
 ```bash
-kiokuko embeddings setup --clients codex
-kiokuko embeddings setup --preset local-small --offline
-kiokuko embeddings status --json
+dsh plugin --profile web add /absolute/path/to/kiokuko-dsh
 ```
 
-`--replace`は別のembedding profileから切り替える指定です。`--dry-run`はdownloadと変更を行わず、`--json`は自動化向けで
-unmanaged MCP identityをfail closedします。
+## 使い方
 
-## Web UIとclient
-
-`kiokuko web`を実行し、`http://127.0.0.1:4173`を開きます。UIはローカル限定の管理画面で、model向けMCP呼び出しの代替ではありません。
-Enno-Oduno有効時、Codex・OpenCode・Claude Codeには継続adapterがあり、Hermesはnative stdio MCPを使います。
-
-## DeepSeek Harness Plugin
-
-公開済みのビルド済みパッケージを一発で導入できます:
+Pluginが同梱の`kiokuko-soul`ポリシーをDSHのsystem promptへ注入します。
+`/kiokuko-soul`を手動実行する必要はありません。
 
 ```bash
-dsh plugin --profile web add kiokuko-dsh
+dsh web
 ```
 
-`/kiokuko-soul`を実行する必要はありません。プラグインがポリシーをDSHの
-system promptへ自動注入するため、profileを起動してそのまま依頼を入力します
-（web profileは`dsh web`）。
-
-source-pinned Git導入では[DeepSeek Harness Plugin](dsh-plugin.md)の自動fallbackを使ってください。
-commitを固定し、正確な`allowBuilds`項目を追加し、既存項目を保持してから自動再試行します。
-
-profileを分ける場合は次のようにします。
+profileから削除する場合:
 
 ```bash
-dsh plugin --profile kiokuko-test add github:askdkc/kiokuko-dsh
-dsh --profile kiokuko-test --dump-config
-dsh plugin --profile kiokuko-test remove kiokuko-dsh
+dsh plugin --profile web remove kiokuko-dsh
 ```
 
-install/remove、resume安全性、互換性、検証状況は
-[DeepSeek Harness Plugin](dsh-plugin.md)を参照してください。
+Pluginが所有するのはDSHのcomposition、ローカルのKiokuko runtime state、
+明示的に登録されたDSH integration seamだけです。clientのMCP設定や
+projectのinstruction fileは変更しません。

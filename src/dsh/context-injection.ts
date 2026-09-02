@@ -42,15 +42,18 @@ export function selectDshDirectiveSources(directive: Pick<RoleDirective, 'requir
   })
 }
 
-function sourceInput(prepared: PreparedAgentTask, routeSkillNames: readonly string[], expertRefs: readonly DshExpertReference[]): DshMessageSourceInput {
+function sourceInput(prepared: PreparedAgentTask, fallbackTask: string, routeSkillNames: readonly string[], expertRefs: readonly DshExpertReference[], directive: DshMessageSourceInput['directive']): DshMessageSourceInput {
   if (prepared.intake.status !== 'ready' && prepared.intake.status !== 'exhausted') throw new Error('Cannot inject context before intake is finalized')
   if (prepared.nextAction !== 'proceed') throw new Error('Cannot inject context when the host gate did not permit proceeding')
+  const profile = prepared.intake.profile
+  const finalized = [profile.target, profile.expected, profile.constraints].filter((value): value is string => value !== null && value.length > 0).join('\n')
   return {
-    task: prepared.intake.profile.target === null ? prepared.intake.profile.expected ?? '' : prepared.intake.profile.target,
+    task: finalized.length === 0 || finalized === fallbackTask ? fallbackTask : `${fallbackTask}\n\nFinalized intake:\n${finalized}`,
     intakeStatus: prepared.intake.status,
     nextAction: 'proceed',
     memoryPolicy: prepared.memoryPolicy,
     context: prepared.context,
+    ...(directive === undefined ? {} : { directive }),
     routeSkillNames,
     expertRefs,
   }
@@ -62,6 +65,7 @@ export async function injectDshContext(input: {
   readonly task: string
   readonly routeSkillNames?: readonly string[]
   readonly expertRefs?: readonly DshExpertReference[]
+  readonly directive?: DshMessageSourceInput['directive']
   readonly runtime?: Pick<DshRuntime, 'withDatabase'>
 }): Promise<readonly DshModelMessage[]> {
   const assertMemoryCurrent = input.runtime === undefined || input.prepared.context === null
@@ -75,8 +79,7 @@ export async function injectDshContext(input: {
       })
     }
   const sources = await buildDshMessageSources({
-    ...sourceInput(input.prepared, input.routeSkillNames ?? [], input.expertRefs ?? []),
-    task: input.task,
+    ...sourceInput(input.prepared, input.task, input.routeSkillNames ?? [], input.expertRefs ?? [], input.directive),
     ...(assertMemoryCurrent === undefined ? {} : { assertMemoryCurrent }),
   })
   return Object.freeze(sources.map((source) => Object.freeze({

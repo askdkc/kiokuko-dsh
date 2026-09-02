@@ -12,7 +12,8 @@ import { createEmbeddingWorker, type EmbeddingWorker } from '../embedding/worker
 import { WriteQueue } from '../server/write-queue.js'
 import { DshAgentStateRegistry, type DshAgentIdentity, type DshAgentState } from './agent-state.js'
 import { DshContinuationRegistry, type DshContinuationBinding } from './agent-state.js'
-import { decideAdapterContinuation, type AdapterDecision } from '../enno-oduno/adapters.js'
+import { decideAdapterContinuation, type AdapterDecision, type ExactResumeExpectation } from '../enno-oduno/adapters.js'
+import { resolveProjectWorkspace } from '../memory/workspaces.js'
 
 export interface DshRuntimeOptions extends PathEnvironment {
   readonly repositoryRoot: string
@@ -24,6 +25,8 @@ export interface DshRuntimeOptions extends PathEnvironment {
   readonly embeddingProvider?: EmbeddingProvider
   readonly embeddingBackend?: VectorSearchBackend
   readonly now?: () => string
+  /** Automatically persist a local repository binding before startup. */
+  readonly autoRegisterRepository?: boolean
 }
 
 export type DshDatabaseOperation<T> = (database: SqliteDatabase, runtime: EmbeddingRuntime) => Promise<T> | T
@@ -102,13 +105,17 @@ export class DshRuntime {
   #closing = false
   #closed = false
   #closePromise: Promise<void> | undefined
+  #activeDatabaseOperations = 0
+  #activeDatabaseDrain: Promise<void> | undefined
+  #resolveActiveDatabaseDrain: (() => void) | undefined
 
   constructor(options: DshRuntimeOptions) {
     this.#options = options
   }
 
   async #initialize(): Promise<RuntimeResources> {
-    const repositoryRoot = requireRepositoryRoot(this.#options.repositoryRoot)
+    const configuredRepositoryRoot = requireRepositoryRoot(this.#options.repositoryRoot)
+    let repositoryRoot = configuredRepositoryRoot
     const databasePath = this.#options.databasePath ?? getGlobalDatabasePath(this.#options)
     const initialize = this.#options.initializeDatabase ?? initializeDatabase
     let database: SqliteDatabase | undefined
@@ -126,6 +133,10 @@ export class DshRuntime {
         ...(this.#options.embeddingBackend === undefined ? {} : { backend: this.#options.embeddingBackend }),
       })
       database = opened.database
+      if (this.#options.autoRegisterRepository === true) {
+        const resolved = await resolveProjectWorkspace(database, configuredRepositoryRoot)
+        if (resolved !== undefined) repositoryRoot = resolved.repositoryRoot
+      }
       const binding = findRepositoryBinding(database, repositoryRoot)
       queue = new WriteQueue<unknown>(64)
       embeddingRuntime = createEmbeddingRuntime(database, this.#options.embeddingConfig, {
@@ -165,8 +176,15 @@ export class DshRuntime {
   }
 
   async withDatabase<T>(operation: DshDatabaseOperation<T>): Promise<T> {
-    const resources = await this.#requireResources()
-    return operation(resources.database, resources.embeddingRuntime)
+    if (this.#closing || this.#closed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh runtime is closed')
+    this.#activeDatabaseOperations += 1
+    try {
+      const resources = await this.#requireResources()
+      return await operation(resources.database, resources.embeddingRuntime)
+    } finally {
+      this.#activeDatabaseOperations -= 1
+      if (this.#activeDatabaseOperations === 0) this.#resolveActiveDatabaseDrain?.()
+    }
   }
 
   async enqueueWrite<T>(operation: () => T | PromiseLike<T>): Promise<T> {
@@ -201,25 +219,22 @@ export class DshRuntime {
       if (row === undefined) throw new KiokukoError('CONFLICT', 'The resume run is not registered for this repository')
       return row
     })
-    let previousBinding: DshContinuationBinding | undefined
-    if (input.resumeToken !== undefined) {
-      if (route.clientKind !== 'dsh' || route.clientSessionId !== input.dshSessionId) {
-        throw new KiokukoError('CONFLICT', 'resumeToken is not bound to the current dsh session')
-      }
-      previousBinding = this.#continuations.resolveExact({
-        resumeToken: input.resumeToken,
-        dshSessionId: input.dshSessionId,
+    const expectedRun: string | ExactResumeExpectation = input.resumeToken === undefined
+      ? runId
+      : {
         runId,
         workspace: route.workspace,
-      })
-      if (route.routeEpoch !== previousBinding.routeEpoch) throw new KiokukoError('CONFLICT', 'resumeToken route epoch is stale')
-    }
+        clientKind: 'dsh',
+        clientSessionId: input.dshSessionId,
+        routeEpoch: route.routeEpoch,
+        resumeToken: input.resumeToken,
+        requireExistingBinding: true,
+      }
     const decision = await this.withDatabase((database) => decideAdapterContinuation(database, 'dsh', {
       session_id: input.dshSessionId,
       cwd,
-    }))
+    }, expectedRun))
     if (decision.runId !== null && decision.runId !== runId) throw new KiokukoError('CONFLICT', 'dsh resume resolved a different run')
-    if (previousBinding !== undefined && decision.routeEpoch !== previousBinding.routeEpoch) throw new KiokukoError('CONFLICT', 'dsh resume route epoch changed')
     if (decision.resumeToken !== null && decision.runId !== null && decision.routeEpoch !== null && decision.directive !== null) {
       const workspace = await this.withDatabase((database) => {
         const row = database.prepare('SELECT workspace FROM ledger_runs WHERE run_id = ?').get<{ workspace: string }>(decision.runId!)
@@ -256,6 +271,12 @@ export class DshRuntime {
     this.#agents.closeAll()
     this.#continuations.clear()
     this.#closePromise = (async () => {
+      if (this.#activeDatabaseOperations > 0) {
+        this.#activeDatabaseDrain = new Promise<void>((resolve) => { this.#resolveActiveDatabaseDrain = resolve })
+        await this.#activeDatabaseDrain
+        this.#activeDatabaseDrain = undefined
+        this.#resolveActiveDatabaseDrain = undefined
+      }
       const resources = this.#resources ?? await this.#initialization?.catch(() => undefined)
       if (resources === undefined) {
         this.#closed = true

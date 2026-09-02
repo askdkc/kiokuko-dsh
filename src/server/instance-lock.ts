@@ -78,38 +78,7 @@ export async function isPidAlive(pid: number): Promise<boolean> {
   }
 }
 
-export async function acquireInstanceLock(databasePath: string, options: InstanceLockOptions = {}): Promise<InstanceLock> {
-  const instanceId = options.instanceId ?? randomUUID();
-  const pid = options.pid ?? process.pid;
-  const pidLiveness = options.isPidAlive ?? isPidAlive;
-  const lockFilePath = lockPath(databasePath, options);
-  await mkdir(path.dirname(lockFilePath), { recursive: true, mode: 0o700 });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await writeFile(lockFilePath, `${JSON.stringify({ instanceId, pid })}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-      await chmod(lockFilePath, 0o600);
-      return {
-        path: lockFilePath,
-        instanceId,
-        release: () => releaseInstanceLock(lockFilePath, instanceId),
-      };
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-      const existing = await readLockRecord(lockFilePath);
-      if (await pidLiveness(existing.pid)) {
-        throw new KiokukoError('CONFLICT', 'Another live Kiokuko instance owns this database');
-      }
-      try {
-        await unlink(lockFilePath);
-      } catch (unlinkError) {
-        if (!(unlinkError instanceof Error && 'code' in unlinkError && unlinkError.code === 'ENOENT')) throw unlinkError;
-      }
-    }
-  }
-  throw new KiokukoError('CONFLICT', 'Database instance lock is busy');
-}
-
-export async function releaseInstanceLock(lockFilePath: string, expectedInstanceId: string): Promise<boolean> {
+async function releaseLock(lockFilePath: string, expectedInstanceId: string): Promise<boolean> {
   let record: LockRecord;
   try {
     record = await readLockRecord(lockFilePath);
@@ -125,4 +94,45 @@ export async function releaseInstanceLock(lockFilePath: string, expectedInstance
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
     throw error;
   }
+}
+
+export async function acquireInstanceLock(databasePath: string, options: InstanceLockOptions = {}): Promise<InstanceLock> {
+  const instanceId = options.instanceId ?? randomUUID();
+  const pid = options.pid ?? process.pid;
+  const lockFilePath = lockPath(databasePath, options);
+  await mkdir(path.dirname(lockFilePath), { recursive: true, mode: 0o700 });
+  let releasePromise: Promise<boolean> | undefined;
+  const release = (): Promise<boolean> => {
+    if (releasePromise !== undefined) return releasePromise;
+    releasePromise = releaseLock(lockFilePath, instanceId);
+    return releasePromise;
+  };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await writeFile(lockFilePath, `${JSON.stringify({ instanceId, pid })}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      await chmod(lockFilePath, 0o600);
+      return {
+        path: lockFilePath,
+        instanceId,
+        release,
+      };
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      // A dead PID is only evidence that the owner may have stopped. It is not
+      // proof that this process still owns the pathname after an asynchronous
+      // liveness check. Leave the record untouched and require an operator to
+      // remove it after all Kiokuko processes have been verified stopped.
+      try {
+        const existing = await readLockRecord(lockFilePath);
+        // Liveness is diagnostic only. Without an atomic compare-and-delete
+        // primitive, neither a dead nor a live PID authorizes unlinking.
+        await (options.isPidAlive ?? isPidAlive)(existing.pid);
+      } catch (readError) {
+        if (attempt === 0 && readError instanceof Error && 'code' in readError && readError.code === 'ENOENT') continue;
+        throw readError;
+      }
+      throw new KiokukoError('CONFLICT', 'Database instance lock is busy');
+    }
+  }
+  throw new KiokukoError('CONFLICT', 'Database instance lock is busy');
 }

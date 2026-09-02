@@ -3,5 +3,6 @@
 - insert:
     - id: kiokuko-dsh
       name: 'kiokuko-dsh/dsh'
+      inject: [skills, systemPrompt, tools, commands, userQuestions, sessions, agents]
       config:
         enabled: true

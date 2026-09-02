@@ -29,6 +29,14 @@ test('policy allows only the current phase and host binds identity after admissi
   assert.equal(policy.decide(call('task_prepare')).kind, 'deny')
 })
 
+test('policy retains independent state for concurrent dsh sessions', () => {
+  const policy = new DshToolPolicy({ ...base, dshSessionId: 'session-a' })
+  policy.setState({ ...base, dshSessionId: 'session-b' })
+  assert.equal(policy.decide(call('enno_plan_submit', { agent: { dshSessionId: 'session-a', turn: 1 } })).kind, 'allow')
+  assert.equal(policy.decide(call('enno_plan_submit', { agent: { dshSessionId: 'session-b', turn: 1 } })).kind, 'allow')
+  assert.equal(policy.decide(call('enno_plan_submit', { agent: { dshSessionId: 'session-c', turn: 1 } })).kind, 'deny')
+})
+
 test('Goki report requires the current work unit and lease, and stale agents are denied', () => {
   const policy = new DshToolPolicy({
     ...base,
@@ -57,4 +65,18 @@ test('denials are monotonic, cancellation is denied, and disposal remains denied
   policy.dispose()
   assert.match(policy.guardReason(call('enno_plan_submit'))!, /unloaded/iu)
   assert.doesNotMatch(policy.guardReason(call('enno_plan_submit'))!, /run-1|workspace-1|orch-1|lease-1/iu)
+})
+
+test('malformed runtime phase and directive state fail closed without throwing', () => {
+  const policy = new DshToolPolicy({ ...base, phase: 'future' as any, nextAction: 'not-a-real-action' as any })
+  const decision = policy.decide(call('enno_plan_submit', { signal: new AbortController().signal }))
+  assert.deepEqual(decision, { kind: 'deny', code: 'STALE_STATE', reason: 'Kiokuko dsh tool denied (stale_state)' })
+  assert.equal(policy.guardReason(call('enno_plan_submit', { signal: new AbortController().signal })), 'Kiokuko dsh tool denied (stale_state)')
+})
+
+test('a native tool cannot use a run-only policy snapshot without a bound session', () => {
+  const { dshSessionId: _dshSessionId, ...runOnly } = base
+  const policy = new DshToolPolicy(runOnly)
+  const decision = policy.decide(call('enno_plan_submit', { signal: new AbortController().signal }))
+  assert.deepEqual(decision, { kind: 'deny', code: 'STALE_STATE', reason: 'Kiokuko dsh tool denied (stale_state)' })
 })
