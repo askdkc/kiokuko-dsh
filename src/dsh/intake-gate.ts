@@ -115,6 +115,7 @@ export class DshIntakeGate {
     })
     const cached = this.#prepared.get(cacheKey)
     if (cached !== undefined) {
+      if (event.signal.aborted) return { admitted: false, prepared: cached.result.prepared, catalog: cached.result.catalog }
       if (cached.fingerprint !== fingerprint
         || cached.agentId !== event.agent.id
         || cached.nativeAgent !== event.nativeAgent
@@ -177,11 +178,13 @@ export class DshIntakeGate {
       ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
       ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
     })
+    if (event.signal.aborted) return { admitted: false, prepared, catalog: event.capabilities }
     return result
   }
 
   async preStep(event: DshPreStepEvent, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> {
     const result = await this.prepare(event)
+    if (event.signal.aborted) return { kind: 'reject' }
     if (!result.admitted) return { kind: 'reject' }
     return next()
   }

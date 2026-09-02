@@ -27,7 +27,7 @@ test('model context has a fixed trusted-prefix order and user task last', async 
   assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'route-skill', 'expert', 'memory', 'user-task'])
   assert.equal(messages[0]?.content, await loadSoulPrompt())
   assert.equal(messages.at(-1)?.role, 'user')
-  assert.equal(messages.at(-1)?.content, 'Implement src/index.ts and make the focused tests pass.')
+  assert.match(messages.at(-1)?.content ?? '', /Implement src\/index\.ts and make the focused tests pass\.[\s\S]*Finalized intake:[\s\S]*src\/index\.ts[\s\S]*tests pass/u)
 })
 
 test('ordinary memory remains untrusted and removes path/internal-id material', async () => {

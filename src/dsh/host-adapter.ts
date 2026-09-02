@@ -132,6 +132,7 @@ function policyState(state: EnnoOdunoState, record: TurnRecord, sessionId: strin
     runId: record.runId,
     workspace: record.workspace,
     orchestrationId: record.orchestrationId,
+    ...(record.prepared.context?.deliveryId === null || record.prepared.context?.deliveryId === undefined ? {} : { deliveryId: record.prepared.context.deliveryId }),
     revision: state.contractRevision ?? 1,
     routeEpoch: lease?.routeEpoch ?? state.routeEpoch ?? 0,
     ...(lease === undefined ? {} : { leaseToken: lease.leaseToken, workUnitId: lease.workUnitId, currentWorkUnitId: lease.workUnitId }),
@@ -178,7 +179,7 @@ function operationInput(args: unknown, binding: DshToolHostBinding, cwd: string,
   const identity = { runId: binding.runId, workspace: binding.workspace, orchestrationId: binding.orchestrationId, expectedRevision: binding.revision, idempotencyKey: binding.idempotencyKey }
   if (operation === 'enno_work_report') return { ...source, ...identity, leaseToken: binding.leaseToken, routeEpoch: binding.routeEpoch, workUnitId: binding.workUnitId }
   if (operation === 'curator_check') return { ...source, cwd, workspace: binding.workspace }
-  if (operation === 'memory_checkpoint') return { ...source, cwd, runId: binding.runId }
+  if (operation === 'memory_checkpoint') return { ...source, cwd, runId: binding.runId, ...(binding.deliveryId === undefined ? {} : { deliveryId: binding.deliveryId }) }
   return { ...source, ...identity }
 }
 
@@ -229,6 +230,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     if (previous !== undefined && (previous.nativeAgent !== event.nativeAgent || previous.nativeSession !== event.nativeSession)) {
       throw new Error('kiokuko-dsh logical turn changed native agent or session identity')
     }
+    const incomingRevision = result.prepared.ennoOduno.contractRevision ?? 0
+    if (previous !== undefined && incomingRevision <= (previous.prepared.ennoOduno.contractRevision ?? 0)) return
     const item: TurnRecord = previous ?? {
       agentId: event.agent.id,
       sessionId: event.sessionId,
@@ -446,12 +449,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     verifyReadOnly: advisory?.verifyReadOnly ?? (() => false),
     execute: advisory?.execute ?? (async () => { throw new Error('kiokuko-dsh advisory host is unavailable') }),
   })
-  const submitAdvisory = async (result: DshAdvisoryRoundResult, input: { readonly event: { readonly agent: { readonly id: string; readonly sessionId?: string; readonly nativeSession?: object; readonly nativeAgent?: object }; readonly turn: number }; readonly state: EnnoOdunoState }): Promise<void> => {
+  const submitAdvisory = async (result: DshAdvisoryRoundResult, input: { readonly event: { readonly agent: { readonly id: string; readonly sessionId?: string; readonly nativeSession?: object; readonly nativeAgent?: object }; readonly turn: number }; readonly state: EnnoOdunoState }): Promise<EnnoOdunoState> => {
     const item = currentForAgentEvent(input.event.agent.id, input.event.agent.sessionId, input.event.turn, input.event.agent.nativeSession, input.event.agent.nativeAgent)
     if (item === undefined || item.closed) throw new Error('kiokuko-dsh advisory turn is not bound')
     const directive = input.state.directive?.advisoryRound
     if (directive === undefined || input.state.contractRevision === null) throw new Error('kiokuko-dsh advisory directive is unavailable')
-    await runtime.withDatabase((database) => {
+    const response = await runtime.withDatabase((database) => {
       const snapshot = readEnnoSnapshot(database, { runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId })
       if (snapshot.revision !== input.state.contractRevision || snapshot.mutationRevision < 0) throw new Error('kiokuko-dsh advisory state changed')
       return submitEnnoAdvice(database, {
@@ -466,6 +469,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         contributions: result.contributions,
       })
     })
+    item.prepared = { ...item.prepared, ennoOduno: response.ennoOduno }
+    const next = policyState(response.ennoOduno, item, item.sessionId)
+    states.set(item.runId, next)
+    policy.setState(next)
+    return response.ennoOduno
   }
 
   const ennoController = new DshEnnoController({
@@ -500,18 +508,23 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       }
       item.contextInjectionKey = contextKey
     },
-    runFinalVerification: async ({ event }) => {
+    runFinalVerification: async ({ event }): Promise<EnnoOdunoState> => {
       const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
       if (item === undefined) throw new Error('kiokuko-dsh verification turn identity is not bound')
       const state = await runtime.withDatabase((database) => stateForRun(database, item))
       if (state.contractRevision === null) throw new Error('kiokuko-dsh verification revision is unavailable')
-      await runtime.withDatabase((database) => prepareEnnoVerification(database, {
+      const response = await runtime.withDatabase((database) => prepareEnnoVerification(database, {
         runId: item.runId,
         workspace: item.workspace,
         orchestrationId: item.orchestrationId,
         expectedRevision: state.contractRevision!,
         idempotencyKey: `dsh-verify:${canonicalContentHash({ runId: item.runId, revision: state.contractRevision })}`,
       }))
+      item.prepared = { ...item.prepared, ennoOduno: response.ennoOduno }
+      const next = policyState(response.ennoOduno, item, item.sessionId)
+      states.set(item.runId, next)
+      policy.setState(next)
+      return response.ennoOduno
     },
     advisoryRunner,
     submitAdvisory,

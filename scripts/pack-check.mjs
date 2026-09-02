@@ -16,8 +16,8 @@ const requiredFiles = [
   'README.ko.md',
   'PERMISSIONS.md',
   'dsh/cordis.patch.yml',
-  'dist/bin/kiokuko.js',
   'dist/dsh/index.js',
+  'dist/dsh/index.d.ts',
 ]
 const requiredDirectories = ['dist/', 'migrations/', 'skills/', 'docs/', 'templates/']
 const forbiddenPrefixes = [
@@ -39,8 +39,8 @@ function parsePackJson(stdout) {
 }
 
 try {
-  await access(join(root, 'dist/bin/kiokuko.js'))
   await access(join(root, 'dist/dsh/index.js'))
+  await access(join(root, 'dist/dsh/index.d.ts'))
   const result = await exec('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: root,
     env: { ...process.env, npm_config_cache: cache },
@@ -55,9 +55,6 @@ try {
   if (missing.length > 0 || missingDirectories.length > 0 || forbidden.length > 0) {
     throw new Error(JSON.stringify({ missing, missingDirectories, forbidden }, null, 2))
   }
-  const binary = files.find((entry) => entry.path === 'dist/bin/kiokuko.js')
-  if (binary?.mode !== 0o755) throw new Error(`dist/bin/kiokuko.js is not executable (mode ${binary?.mode ?? 'missing'})`)
-
   process.stdout.write(`${JSON.stringify({
     name: metadata.name,
     version: metadata.version,

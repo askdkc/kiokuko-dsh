@@ -71,9 +71,6 @@ jobs:
           path: ${{ runner.temp }}/kiokuko-dsh-evidence.json
           if-no-files-found: ignore
 
-      - name: Verify minimal global install
-        run: npm run test:global-install
-
       - name: Verify pinned local embedding manifest
         run: node scripts/run-local-embedding-smoke.mjs --offline
 

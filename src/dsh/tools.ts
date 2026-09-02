@@ -71,6 +71,7 @@ export interface DshToolHostBinding {
   readonly runId: string
   readonly workspace: string
   readonly orchestrationId: string
+  readonly deliveryId?: string
   readonly revision: number
   readonly routeEpoch: number
   readonly leaseToken?: string
@@ -196,6 +197,7 @@ export function bindDshToolInvocation(
   if (state.dshSessionId !== undefined) validBindingText(state.dshSessionId, 'session identity', 256)
   validBindingText(state.workspace, 'workspace')
   validBindingText(state.orchestrationId, 'orchestration identity')
+  if (state.deliveryId !== undefined) validBindingText(state.deliveryId, 'delivery identity')
   if (!Number.isSafeInteger(state.revision) || state.revision < 1
     || !Number.isSafeInteger(state.routeEpoch) || state.routeEpoch < 0) {
     throw new KiokukoError('VALIDATION_ERROR', 'dsh host binding is invalid')

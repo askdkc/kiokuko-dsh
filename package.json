@@ -12,9 +12,6 @@
   "bugs": {
     "url": "https://github.com/askdkc/kiokuko-dsh/issues"
   },
-  "bin": {
-    "kiokuko": "dist/bin/kiokuko.js"
-  },
   "engines": {
     "node": ">=24.16.0"
   },
@@ -22,7 +19,7 @@
     "access": "public"
   },
   "files": [
-    "dist/",
+    "dist/dsh/",
     "migrations/",
     "skills/",
     "dsh/cordis.patch.yml",
@@ -91,20 +88,14 @@
   },
   "scripts": {
     "clean:dist": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
-    "set-bin-permissions": "node --input-type=module --eval \"import { chmodSync } from 'node:fs'; chmodSync('dist/bin/kiokuko.js', 0o755);\"",
-    "build": "npm run clean:dist && tsc -p tsconfig.build.json && npm run set-bin-permissions",
+    "build": "npm run clean:dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs tests",
     "test:unit": "node scripts/run-tests.mjs tests/unit",
     "test:integration": "node scripts/run-tests.mjs tests/integration",
     "test:sqlite-vec": "node --import tsx tests/ci/sqlite-vec-package-smoke.ts",
-    "test:global-install": "node tests/ci/global-install-smoke.mjs",
     "test:evaluation": "npm run build && node scripts/run-retrieval-evaluation.mjs",
     "test:benchmark": "npm run build && node scripts/run-retrieval-benchmark.mjs",
-    "test:e2e:codex": "npm run build && node scripts/run-enno-agent-e2e.mjs codex",
-    "test:e2e:opencode": "npm run build && node scripts/run-enno-agent-e2e.mjs opencode",
-    "test:e2e:claude": "npm run build && node scripts/run-enno-agent-e2e.mjs claude",
-    "test:e2e:agents": "npm run build && node scripts/run-enno-agent-e2e.mjs all",
     "test:e2e:dsh": "npm run build && node scripts/run-enno-dsh-e2e.mjs",
     "verify:prepare": "node scripts/verify-prepare-reproducibility.mjs",
     "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko-dsh.sqlite3",

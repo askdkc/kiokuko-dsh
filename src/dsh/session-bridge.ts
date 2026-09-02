@@ -51,7 +51,7 @@ export interface DshSessionBridgeContext {
 export type DshSessionRunResolver = (session: DshNativeSession) => string | undefined
 
 export interface DshRunLifecycleOptions {
-  readonly bridge: Pick<DshSessionBridge, 'flush' | 'close'>
+  readonly bridge: Pick<DshSessionBridge, 'flush' | 'close'> & { readonly sealRun?: (runId: string) => void }
   readonly closeRun: (input: { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' }) => void | PromiseLike<void>
 }
 
@@ -68,6 +68,7 @@ export class DshRunLifecycle {
   async closeTurn(input: { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' }): Promise<void> {
     await this.#bridge.flush()
     await this.#closeRun(input)
+    this.#bridge.sealRun?.(input.runId)
   }
 
   async dispose(): Promise<void> {
@@ -175,6 +176,14 @@ export class DshSessionBridge {
     this.#runs.delete(session)
   }
 
+  /** Reject late native events after the owning run has been terminalized. */
+  sealRun(runId: string): void {
+    const run = validId(runId, 'runId')
+    for (const [sessionId, binding] of this.#runs) {
+      if (binding.runId === run) this.#runs.delete(sessionId)
+    }
+  }
+
   /** Replace an intentional turn-scoped binding without reattributing queued events. */
   rebindSession(sessionId: string, runId: string, incarnation = runId): void {
     const session = validId(sessionId, 'sessionId')
@@ -253,37 +262,39 @@ export class DshSessionBridge {
   }
 
   async #flushPending(): Promise<void> {
-    const grouped = new Map<string, DshQueuedSessionEvent[]>()
-    for (const item of this.#pending.values()) {
-      const group = grouped.get(item.runId) ?? []
-      group.push(item)
-      grouped.set(item.runId, group)
-    }
-    const markCommitted = (items: readonly DshQueuedSessionEvent[]): void => {
-      for (const item of items) {
-        if (this.#pending.get(item.sourceEventId) === item) {
-          this.#pending.delete(item.sourceEventId)
-          this.#committed.set(item.sourceEventId, queuedFingerprint(item))
-          while (this.#committed.size > MAX_COMMITTED_EVENTS) {
-            const oldest = this.#committed.keys().next().value as string | undefined
-            if (oldest === undefined) break
-            this.#committed.delete(oldest)
+    while (this.#pending.size > 0) {
+      const grouped = new Map<string, DshQueuedSessionEvent[]>()
+      for (const item of this.#pending.values()) {
+        const group = grouped.get(item.runId) ?? []
+        group.push(item)
+        grouped.set(item.runId, group)
+      }
+      const markCommitted = (items: readonly DshQueuedSessionEvent[]): void => {
+        for (const item of items) {
+          if (this.#pending.get(item.sourceEventId) === item) {
+            this.#pending.delete(item.sourceEventId)
+            this.#committed.set(item.sourceEventId, queuedFingerprint(item))
+            while (this.#committed.size > MAX_COMMITTED_EVENTS) {
+              const oldest = this.#committed.keys().next().value as string | undefined
+              if (oldest === undefined) break
+              this.#committed.delete(oldest)
+            }
           }
         }
       }
+      const batches = [...grouped.entries()].map(async ([runId, items]) => {
+        items.sort((left, right) => left.sourceSequence - right.sourceSequence)
+        for (let offset = 0; offset < items.length; offset += MAX_BATCH_EVENTS) {
+          const chunk = items.slice(offset, offset + MAX_BATCH_EVENTS)
+          await this.#appendBatch(runId, chunk.map(ledgerEvent))
+          // Commit each successful chunk immediately. If a later chunk fails,
+          // only the uncommitted suffix remains for retry; an exact retry of a
+          // completed prefix cannot duplicate its ledger evidence.
+          markCommitted(chunk)
+        }
+      })
+      await Promise.all(batches)
     }
-    const batches = [...grouped.entries()].map(async ([runId, items]) => {
-      items.sort((left, right) => left.sourceSequence - right.sourceSequence)
-      for (let offset = 0; offset < items.length; offset += MAX_BATCH_EVENTS) {
-        const chunk = items.slice(offset, offset + MAX_BATCH_EVENTS)
-        await this.#appendBatch(runId, chunk.map(ledgerEvent))
-        // Commit each successful chunk immediately. If a later chunk fails,
-        // only the uncommitted suffix remains for retry; an exact retry of a
-        // completed prefix cannot duplicate its ledger evidence.
-        markCommitted(chunk)
-      }
-    })
-    await Promise.all(batches)
     const observerError = this.#observerErrors[0]
     if (observerError !== undefined) throw observerError
   }

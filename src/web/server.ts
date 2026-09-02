@@ -876,7 +876,13 @@ function createLegacyApplication(context: HttpApplicationContext, trustedOrigin:
       jsonResponse(response, errorStatus(error), errorBody(error));
       return;
     }
-    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    let pathname: string;
+    try {
+      pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    } catch {
+      jsonResponse(response, 400, errorBody(new KiokukoError('VALIDATION_ERROR', 'Request URL is invalid')));
+      return;
+    }
     if (isSharedServerPath(pathname)) {
       sharedApplication(request, response);
       return;

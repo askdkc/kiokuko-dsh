@@ -47,7 +47,7 @@ test('Codex setup upgrades only the exact previous managed block to required MCP
   assert.equal(renderCodexMcpConfig(upgraded.content).action, 'unchanged');
 });
 
-test('README entry points and English/Japanese docs carry the setup and trust contracts', () => {
+test('README entry points and DSH docs carry the plugin boundary contract', () => {
   const requiredCore = [
     '[mcp_servers.kiokuko]',
     'command = "kiokuko"',
@@ -80,13 +80,12 @@ test('README entry points and English/Japanese docs carry the setup and trust co
   assert.match(dshPluginGuide, /Do not run `\/kiokuko-soul`[\s\S]*`kiokuko:soul` system-prompt section/u);
 
   const gettingStarted = readFileSync(new URL('../../docs/getting-started.md', import.meta.url), 'utf8');
-  assert.ok(gettingStarted.includes(requiredCore));
-  assert.match(gettingStarted, /Do not run `\/kiokuko-soul`[\s\S]*system prompt/u);
-  for (const contractTerm of [
-    'required = false',
-    'CONFLICT',
-    'doctor is read-only',
-  ]) assert.ok(gettingStarted.includes(contractTerm), `getting-started.md: ${contractTerm}`);
+  assert.match(gettingStarted, /Do not invoke `\/kiokuko-soul`[\s\S]*system prompt/u);
+  assert.match(gettingStarted, /does not install or configure Codex, OpenCode,[\s\n]+Claude Code/u);
+  assert.doesNotMatch(gettingStarted, /kiokuko setup/u);
+
+  const gettingStartedJa = readFileSync(new URL('../../docs/getting-started.ja.md', import.meta.url), 'utf8');
+  assert.match(gettingStartedJa, /Codex、OpenCode、Claude Code、汎用/u);
 
   const security = readFileSync(new URL('../../docs/security-and-trust.md', import.meta.url), 'utf8');
   for (const contractTerm of [

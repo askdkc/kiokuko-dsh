@@ -35,11 +35,17 @@ function boundedRetryAfterSeconds(error: KiokukoError): number {
 }
 
 function operationFor(request: IncomingMessage, v1?: V1RouteHandler): string {
-  const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+  let url: URL;
+  try {
+    url = new URL(request.url ?? '/', 'http://127.0.0.1');
+  } catch {
+    return 'server.request';
+  }
+  const pathname = url.pathname;
   try {
     const resolved = v1?.operationFor?.({
       method: request.method ?? 'GET',
-      url: new URL(request.url ?? '/', 'http://127.0.0.1'),
+      url,
     });
     if (typeof resolved === 'string' && resolved.length > 0) return resolved;
   } catch {

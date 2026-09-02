@@ -28,7 +28,10 @@ import {
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-const cliPath = path.join(repositoryRoot, "dist/bin/kiokuko.js");
+// The published DSH package intentionally has no generic `kiokuko` binary.
+// Sample-database verification still exercises the core CLI from source.
+const cliPath = path.join(repositoryRoot, "src/bin/kiokuko.ts");
+const tsxCliPath = path.join(repositoryRoot, "node_modules/tsx/dist/cli.mjs");
 const sampleDatabasePath = path.join(
   repositoryRoot,
   "tests/sampledb/kiokuko-dsh.sqlite3",
@@ -85,7 +88,7 @@ async function runCliJson(
   operation: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<CliEnvelope> {
-  const result = await execFileAsync(process.execPath, [cliPath, ...args], {
+  const result = await execFileAsync(process.execPath, [tsxCliPath, cliPath, ...args], {
     cwd: repositoryRoot,
     env: environment,
     encoding: "utf8",
@@ -463,7 +466,7 @@ async function verifyWebApi(baseUrl: string): Promise<void> {
 async function verifyWeb(environment: NodeJS.ProcessEnv): Promise<void> {
   const child = spawn(
     process.execPath,
-    [cliPath, "web", "--host", "127.0.0.1", "--port", "0", "--json"],
+    [tsxCliPath, cliPath, "web", "--host", "127.0.0.1", "--port", "0", "--json"],
     {
       cwd: repositoryRoot,
       env: environment,

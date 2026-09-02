@@ -28,10 +28,9 @@ export * from './host-adapter.js'
 
 /** Mount a runtime as a Cordis-owned effect; unload always drains it. */
 export function mountDshRuntime(ctx: Context, runtime: DshRuntime): void {
-  ctx.effect(() => {
-    const started = runtime.start()
+  ctx.effect(async () => {
+    await runtime.start()
     return async () => {
-      await started.catch(() => undefined)
       await runtime.close()
     }
   }, 'kiokuko-dsh runtime')
@@ -47,7 +46,7 @@ export function apply(ctx: Context, config: DshConfig): void {
   if (!config.enabled) return
 
   console.info('[kiokuko-dsh] plugin loaded')
-  ctx.effect(() => {
+  ctx.effect(async () => {
     const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) return mountDshComposition(ctx, host)
     const runtimeServices = [ctx.get('tools', false), ctx.get('sessions', false), ctx.get('agents', false)]
@@ -64,10 +63,10 @@ export function apply(ctx: Context, config: DshConfig): void {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
     const adapter = createDshHostAdapter(ctx)
-    const disposeComposition = mountDshComposition(ctx, adapter.host)
+    const disposeComposition = await mountDshComposition(ctx, adapter.host)
     return async () => {
-      disposeComposition()
       await adapter.dispose()
+      disposeComposition()
     }
   }, 'kiokuko-dsh composition')
 }

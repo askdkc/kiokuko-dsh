@@ -1,96 +1,41 @@
 # Getting started
 
-## Install and configure
+`kiokuko-dsh` is a DeepSeek Harness plugin. The published package contains the
+`./dsh` plugin entrypoint and does not install or configure Codex, OpenCode,
+Claude Code, or a generic `kiokuko` CLI.
 
-Node.js 24.16.0 or newer is required. A published `kiokuko-dsh` npm package is
-the normal install path when the desired release is available:
+## Install
+
+DeepSeek Harness `0.1.2-alpha.3` and Node.js 24.16.0 or newer are required.
 
 ```bash
-npm install --global kiokuko-dsh
-kiokuko setup
+pnpm dsh plugin --profile web add kiokuko-dsh
+pnpm dsh --profile web --dump-config
 ```
 
-For a local checkout instead:
+For a local checkout:
 
 ```bash
-cd /path/to/kiokuko-dsh
 pnpm install --frozen-lockfile
 pnpm run build
-node dist/bin/kiokuko.js setup
+pnpm dsh plugin --profile web add /path/to/kiokuko-dsh
 ```
 
-Use `--clients codex,opencode,claude,hermes` to select clients explicitly. Without
-it, setup detects installed clients. `--dry-run --json` validates and reports planned
-changes without writing. `--no-standard-skills`, `--skill-discovery off|official|community`,
-and `--enno-oduno on|off` control optional setup behavior.
+## Use
 
-For Codex, setup owns one exact managed block:
-
-```toml
-[mcp_servers.kiokuko]
-command = "kiokuko"
-args = ["mcp"]
-enabled = true
-required = true
-```
-
-The discovery environment line is managed with that block. Rerunning setup upgrades
-only the exact previous managed block that omitted `required`. Changed values,
-ordering, duplicate keys, extra fields, or an explicit `required = false` are
-user-managed conflicts and are never silently overwritten. Interactive setup asks
-whether to replace a conflicting identity; JSON, non-interactive, and dry-run calls
-return `CONFLICT` without mutation. The same rule applies to other supported clients.
-
-Restart a running client after setup. If a Codex Stop hook is created or updated,
-open `/hooks` and explicitly trust it. Use `kiokuko doctor --json` to inspect runtime,
-database, and Codex MCP health; doctor is read-only.
-
-## Embeddings setup
-
-`kiokuko embeddings setup` installs the pinned local semantic runtime and runs the
-same client configuration flow as `kiokuko setup`, including conflict confirmation,
-managed MCP replacement, and registered-project instruction refresh.
+Do not invoke `/kiokuko-soul` manually; the plugin injects the bundled
+`kiokuko-soul` policy into DSH's system prompt.
 
 ```bash
-kiokuko embeddings setup --clients codex
-kiokuko embeddings setup --preset local-small --offline
-kiokuko embeddings status --json
+dsh web
 ```
 
-`--replace` switches from another active embedding profile. `--dry-run` performs no
-download or mutation; `--json` is suitable for automation and fails closed on an
-unmanaged MCP identity.
-
-## Web UI and clients
-
-Run `kiokuko web` and open `http://127.0.0.1:4173`. The UI is local-only and is a
-human/operator management surface, not a substitute for model task-entry MCP calls.
-Codex, OpenCode, and Claude Code have bounded continuation adapters when Enno-Oduno
-is enabled; Hermes uses native stdio MCP and bundled Skills without an adapter.
-
-## DeepSeek Harness plugin
-
-Install the published prebuilt package in one step:
+Remove the plugin from the selected profile with:
 
 ```bash
-dsh plugin --profile web add kiokuko-dsh
+dsh plugin --profile web remove kiokuko-dsh
 ```
 
-Do not run `/kiokuko-soul`: the plugin injects its bundled policy into the DSH
-system prompt automatically. Start the profile and enter your task (for the
-web profile, run `dsh web`).
-
-For a source-pinned Git install, use the automatic fallback in
-[DeepSeek Harness Plugin](dsh-plugin.md). It pins the commit, adds the exact
-`allowBuilds` entry, preserves existing entries, and retries the install.
-
-Use a profile for an isolated test:
-
-```bash
-dsh plugin --profile kiokuko-test add github:askdkc/kiokuko-dsh
-dsh --profile kiokuko-test --dump-config
-dsh plugin --profile kiokuko-test remove kiokuko-dsh
-```
-
-See [DeepSeek Harness Plugin](dsh-plugin.md) for the lifecycle contract,
-resume safety, compatibility status, and verification command.
+The plugin owns only its DSH composition, local Kiokuko runtime state, and the
+explicitly registered DSH integration seams. It does not modify client MCP
+configuration or project instruction files.

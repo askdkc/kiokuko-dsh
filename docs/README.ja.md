@@ -2,7 +2,7 @@
 
 目的別に参照してください。
 
-- [導入ガイド](getting-started.ja.md) — インストール、Codex/OpenCode/Claude/Hermes設定、再起動、Web UI。
+- [導入ガイド](getting-started.ja.md) — DeepSeek Harness Pluginの導入と実行。
 - [基本概念](concepts.ja.md) — RAG、記憶のライフサイクル、Project/Ecosystem/Global、Akinator。
 - [役小角(enno-oduno)](enno-oduno.ja.md) — Agent Loop、確認、回復、継続、検証、Advisory Round。
 - [Semantic retrieval](semantic-retrieval.ja.md) — embedding runtime、運用、offline、fallback。

@@ -1,8 +1,9 @@
 import { findSecret } from '../memory/secrets.js'
 import type { ScopedContextItem, ScopedContextResult } from '../context/scoped-broker.js'
 import { loadStandardSkillParity } from './parity.js'
+import type { RoleDirective } from '../enno-oduno/types.js'
 
-export type DshMessageSourceKind = 'soul' | 'memory-reasoning' | 'route-skill' | 'expert' | 'memory' | 'user-task'
+export type DshMessageSourceKind = 'soul' | 'directive' | 'memory-reasoning' | 'route-skill' | 'expert' | 'memory' | 'user-task'
 
 export interface DshMessageSource {
   readonly kind: DshMessageSourceKind
@@ -25,9 +26,24 @@ export interface DshMessageSourceInput {
     readonly contextWithheld: boolean
   }
   readonly context: Pick<ScopedContextResult, 'items' | 'untrusted'> | null
+  readonly directive?: Pick<RoleDirective, 'role' | 'harness' | 'objective' | 'requiredSkills' | 'workUnit' | 'stopConditions' | 'reportSchema'>
   readonly routeSkillNames?: readonly string[]
   readonly expertRefs?: readonly DshExpertReference[]
   readonly assertMemoryCurrent?: (item: ScopedContextItem) => void | Promise<void>
+}
+
+function directiveSource(directive: DshMessageSourceInput['directive']): DshMessageSource | null {
+  if (directive === undefined) return null
+  const text = JSON.stringify({
+    role: directive.role,
+    harness: directive.harness,
+    objective: directive.objective,
+    requiredSkills: directive.requiredSkills,
+    workUnit: directive.workUnit,
+    stopConditions: directive.stopConditions,
+    reportSchema: directive.reportSchema,
+  })
+  return { kind: 'directive', name: 'kiokuko-directive', text: `Current Kiokuko role directive (host-authored; do not invent missing fields):\n${text}`, trust: 'system' }
 }
 
 const INTERNAL_ID = /\b(?:run|entry|delivery|session|work[_-]?unit|orchestration|request)[_-]?(?:id)?\s*[:=]\s*[A-Za-z0-9._:-]{4,}\b/giu
@@ -65,6 +81,8 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
   if (input.context !== null && input.context.untrusted !== true) throw new Error('Dsh context must remain untrusted')
   const parity = await loadStandardSkillParity()
   const sources: DshMessageSource[] = [{ kind: 'soul', name: 'kiokuko-soul', text: skillFile(parity.files, 'kiokuko-soul'), trust: 'system' }]
+  const directive = directiveSource(input.directive)
+  if (directive !== null) sources.push(directive)
   if (input.memoryPolicy.memoryReasoningRequired && !input.memoryPolicy.contextWithheld) {
     sources.push({ kind: 'memory-reasoning', name: 'memory-reasoning', text: skillFile(parity.files, 'memory-reasoning'), trust: 'system' })
   }

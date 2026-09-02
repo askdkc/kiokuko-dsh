@@ -99,6 +99,17 @@ export async function acquireInstanceLock(databasePath: string, options: Instanc
       if (await pidLiveness(existing.pid)) {
         throw new KiokukoError('CONFLICT', 'Another live Kiokuko instance owns this database');
       }
+      // Re-read after the liveness probe: another process may have replaced
+      // the stale record while the probe was awaiting. Never unlink a newer
+      // owner's lock (ABA-safe stale cleanup).
+      let current: LockRecord;
+      try {
+        current = await readLockRecord(lockFilePath);
+      } catch (readError) {
+        if (readError instanceof Error && 'code' in readError && readError.code === 'ENOENT') continue;
+        throw readError;
+      }
+      if (current.instanceId !== existing.instanceId || current.pid !== existing.pid) continue;
       try {
         await unlink(lockFilePath);
       } catch (unlinkError) {

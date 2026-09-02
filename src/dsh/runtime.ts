@@ -105,6 +105,9 @@ export class DshRuntime {
   #closing = false
   #closed = false
   #closePromise: Promise<void> | undefined
+  #activeDatabaseOperations = 0
+  #activeDatabaseDrain: Promise<void> | undefined
+  #resolveActiveDatabaseDrain: (() => void) | undefined
 
   constructor(options: DshRuntimeOptions) {
     this.#options = options
@@ -173,8 +176,15 @@ export class DshRuntime {
   }
 
   async withDatabase<T>(operation: DshDatabaseOperation<T>): Promise<T> {
-    const resources = await this.#requireResources()
-    return operation(resources.database, resources.embeddingRuntime)
+    if (this.#closing || this.#closed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh runtime is closed')
+    this.#activeDatabaseOperations += 1
+    try {
+      const resources = await this.#requireResources()
+      return await operation(resources.database, resources.embeddingRuntime)
+    } finally {
+      this.#activeDatabaseOperations -= 1
+      if (this.#activeDatabaseOperations === 0) this.#resolveActiveDatabaseDrain?.()
+    }
   }
 
   async enqueueWrite<T>(operation: () => T | PromiseLike<T>): Promise<T> {
@@ -225,7 +235,7 @@ export class DshRuntime {
     const decision = await this.withDatabase((database) => decideAdapterContinuation(database, 'dsh', {
       session_id: input.dshSessionId,
       cwd,
-    }))
+    }, runId))
     if (decision.runId !== null && decision.runId !== runId) throw new KiokukoError('CONFLICT', 'dsh resume resolved a different run')
     if (previousBinding !== undefined && decision.routeEpoch !== previousBinding.routeEpoch) throw new KiokukoError('CONFLICT', 'dsh resume route epoch changed')
     if (decision.resumeToken !== null && decision.runId !== null && decision.routeEpoch !== null && decision.directive !== null) {
@@ -264,6 +274,12 @@ export class DshRuntime {
     this.#agents.closeAll()
     this.#continuations.clear()
     this.#closePromise = (async () => {
+      if (this.#activeDatabaseOperations > 0) {
+        this.#activeDatabaseDrain = new Promise<void>((resolve) => { this.#resolveActiveDatabaseDrain = resolve })
+        await this.#activeDatabaseDrain
+        this.#activeDatabaseDrain = undefined
+        this.#resolveActiveDatabaseDrain = undefined
+      }
       const resources = this.#resources ?? await this.#initialization?.catch(() => undefined)
       if (resources === undefined) {
         this.#closed = true

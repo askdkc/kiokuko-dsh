@@ -1,4 +1,8 @@
-# Embedding CLI contract
+# Legacy core CLI contract
+
+この文書はKiokuko core CLIの実装契約です。`kiokuko-dsh`の公開パッケージは
+汎用CLIを配布せず、DeepSeek Harnessの`./dsh` entrypointだけを公開します。
+以下の`kiokuko`コマンドは、このPluginの導入後に利用できるコマンドではありません。
 
 After npm publication, the default global installation is intentionally lightweight:
 

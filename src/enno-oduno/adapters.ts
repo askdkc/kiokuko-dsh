@@ -61,6 +61,7 @@ function exactSessionCandidates(
   client: EnnoClient,
   sessionId: string,
   repositoryRoot: string,
+  expectedRunId?: string,
 ): CandidateRow[] {
   return database.prepare(`
     SELECT ec.run_id AS runId, ec.workspace, ec.orchestration_session_id AS orchestrationId,
@@ -71,12 +72,13 @@ function exactSessionCandidates(
     WHERE ec.client_session_id = ?
       AND ec.client_kind = ?
       AND ec.repository_root = ?
+      AND (? IS NULL OR ec.run_id = ?)
       AND (ec.blocker IS NULL OR ec.blocker NOT LIKE ?)
       AND ec.status IN ('zenki_planning', 'goki_executing', 'enno_verifying')
-  `).all<CandidateRow>(sessionId, client, repositoryRoot, `${PLAN_START_RECOVERY_BLOCKER_PREFIX}%`);
+  `).all<CandidateRow>(sessionId, client, repositoryRoot, expectedRunId ?? null, expectedRunId ?? null, `${PLAN_START_RECOVERY_BLOCKER_PREFIX}%`);
 }
 
-function repositoryCandidates(database: SqliteDatabase, repositoryRoot: string): CandidateRow[] {
+function repositoryCandidates(database: SqliteDatabase, repositoryRoot: string, expectedRunId?: string): CandidateRow[] {
   return database.prepare(`
     SELECT ec.run_id AS runId, ec.workspace, ec.orchestration_session_id AS orchestrationId,
            ec.client_kind AS clientKind, ec.client_version AS clientVersion,
@@ -84,9 +86,10 @@ function repositoryCandidates(database: SqliteDatabase, repositoryRoot: string):
            ec.repository_root AS repositoryRoot, ec.status, ec.route_epoch AS routeEpoch
     FROM enno_contracts AS ec
     WHERE ec.repository_root = ?
+      AND (? IS NULL OR ec.run_id = ?)
       AND (ec.blocker IS NULL OR ec.blocker NOT LIKE ?)
       AND ec.status IN ('zenki_planning', 'goki_executing', 'enno_verifying')
-  `).all<CandidateRow>(repositoryRoot, `${PLAN_START_RECOVERY_BLOCKER_PREFIX}%`);
+  `).all<CandidateRow>(repositoryRoot, expectedRunId ?? null, expectedRunId ?? null, `${PLAN_START_RECOVERY_BLOCKER_PREFIX}%`);
 }
 
 type CandidateResolution =
@@ -163,11 +166,12 @@ function resolveCandidateInTransaction(
   client: EnnoClient,
   sessionId: string,
   repositoryRoot: string,
+  expectedRunId?: string,
 ): CandidateResolution {
-  const exact = exactSessionCandidates(database, client, sessionId, repositoryRoot);
+  const exact = exactSessionCandidates(database, client, sessionId, repositoryRoot, expectedRunId);
   if (exact.length > 1) return { kind: 'ambiguous' };
   if (exact[0] !== undefined) return { kind: 'resolved', candidate: exact[0] };
-  const repository = repositoryCandidates(database, repositoryRoot);
+  const repository = repositoryCandidates(database, repositoryRoot, expectedRunId);
   if (repository.length === 0) return { kind: 'none' };
   if (repository.length > 1) return { kind: 'ambiguous' };
   return { kind: 'resolved', candidate: routeCandidateInTransaction(database, repository[0]!, client, sessionId) };
@@ -282,14 +286,14 @@ function claimContinuation(
   return true;
 }
 
-export function decideAdapterContinuation(database: SqliteDatabase, client: EnnoClient, rawInput: unknown): AdapterDecision {
+export function decideAdapterContinuation(database: SqliteDatabase, client: EnnoClient, rawInput: unknown, expectedRunId?: string): AdapterDecision {
   const parsed = hookInputSchema.safeParse(rawInput);
   if (!parsed.success) throw new KiokukoError('VALIDATION_ERROR', 'Enno client hook input is invalid');
   const sessionId = parsed.data.session_id ?? parsed.data.sessionId;
   if (sessionId === undefined) throw new KiokukoError('VALIDATION_ERROR', 'Enno client session ID is required');
   const repositoryRoot = detectRepositoryRoot({ cwd: parsed.data.cwd }).root;
   const continuation = withImmediateTransaction(database, () => {
-    const resolution = resolveCandidateInTransaction(database, client, sessionId, repositoryRoot);
+    const resolution = resolveCandidateInTransaction(database, client, sessionId, repositoryRoot, expectedRunId);
     if (resolution.kind !== 'resolved') return resolution;
     const candidate = resolution.candidate;
     const snapshot = readEnnoSnapshot(database, {

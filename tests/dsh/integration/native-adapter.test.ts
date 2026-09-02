@@ -77,8 +77,7 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
   } })
   await hostFiber
   const adapter = createDshHostAdapter(root, { repositoryRoot: f.root, databasePath: f.databasePath, migrationsDirectory: join(process.cwd(), 'migrations') })
-  const disposeComposition = mountDshComposition(root, adapter.host)
-  await new Promise<void>((resolve) => setImmediate(resolve))
+  const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
     assert.equal(registered.length, 7)
     const event = await adapter.host.mapPreStep!({

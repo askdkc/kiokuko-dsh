@@ -67,14 +67,13 @@ function toolRegistration(host: DshCompositionHost): { register: (definition: an
   return host.tools === undefined ? undefined : { register: host.tools.register }
 }
 
-function mountRuntime(ctx: Context, runtime: DshRuntime): () => void {
+async function mountRuntime(ctx: Context, runtime: DshRuntime): Promise<() => void> {
   let closed = false
-  ctx.effect(() => {
-    const started = runtime.start()
+  await ctx.effect(async () => {
+    await runtime.start()
     return async () => {
       if (closed) return
       closed = true
-      await started.catch(() => undefined)
       await runtime.close()
     }
   }, 'kiokuko-dsh runtime')
@@ -113,13 +112,14 @@ function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshE
  * adapter is deliberately explicit: a generic Cordis context cannot invent a
  * repository/run binding or an intake task projection safely.
  */
-export function mountDshComposition(ctx: Context, host: DshCompositionHost): () => void {
+export async function mountDshComposition(ctx: Context, host: DshCompositionHost): Promise<() => void> {
   const disposers: Array<() => unknown> = []
-  if (host.runtime !== undefined) disposers.push(mountRuntime(ctx, host.runtime))
+  if (host.runtime !== undefined) disposers.push(await mountRuntime(ctx, host.runtime))
   if (host.skills !== undefined) disposers.push(mountStandardSkillProvider({ skills: host.skills }))
   if (host.systemPrompt !== undefined) {
     const disposer = mountSoulPrompt({ systemPrompt: host.systemPrompt, effect: ctx.effect } as never)
     if (typeof disposer === 'function') disposers.push(() => disposer())
+    await disposer
   }
   if (host.commands !== undefined) disposers.push(mountDshPonytailCommand({ commands: host.commands }, host.ponytailModes ?? new DshPonytailModes()))
   const registration = toolRegistration(host)

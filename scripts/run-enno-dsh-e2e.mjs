@@ -90,7 +90,8 @@ async function runCliLifecycle() {
   const home = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-home-'))
   const output = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-pack-'))
   const cache = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-cache-'))
-  const env = { DSH_HOME: home, npm_config_cache: cache }
+  const dataDirectory = join(home, 'kiokuko-data')
+  const env = { DSH_HOME: home, KIOKUKO_DATA_DIR: dataDirectory, npm_config_cache: cache }
   let web
   try {
     try {

@@ -2,7 +2,7 @@
 
 Choose a guide by what you need to do:
 
-- [Getting started](getting-started.md) — install, configure Codex/OpenCode/Claude/Hermes, restart clients, and use the Web UI.
+- [Getting started](getting-started.md) — install and run the DeepSeek Harness plugin.
 - [Concepts](concepts.md) — RAG, memory lifecycle, Project/Ecosystem/Global scopes, and Akinator.
 - [役小角(enno-oduno)](enno-oduno.md) — the agent loop, confirmation, recovery, continuation, verification, and Advisory Round.
 - [Semantic retrieval](semantic-retrieval.md) — embedding runtime setup, operation, offline mode, and fallback.
