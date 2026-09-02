@@ -89,6 +89,8 @@ interface TurnRecord {
   task: string
   turn: number
   prepared: DshIntakeGateResult['prepared']
+  /** Monotonic host generation assigned before each prepare begins. */
+  prepareGeneration: number
   contextInjectionKey?: string
   failed: boolean
   closed: boolean
@@ -215,10 +217,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const bridge = new DshSessionBridge({ runtime })
   const modes = new DshPonytailModes()
   const confirmation = userQuestions === undefined ? undefined : createDshConfirmationAnswerer(userQuestions)
+  let prepareGeneration = 0
 
   const identityKey = (agentId: string, sessionId: string): string => `${agentId}\u0000${sessionId}`
   const turnKey = (agentId: string, sessionId: string, turn: number): string => `${identityKey(agentId, sessionId)}\u0000${turn}`
-  const record = (event: DshPreStepEvent, result: DshIntakeGateResult): void => {
+  const record = (event: DshPreStepEvent, result: DshIntakeGateResult, generation: number): void => {
     const run = result.prepared.run.runId
     const latest = latestBySession.get(event.sessionId)
     if (latest !== undefined && (latest.nativeAgent !== event.nativeAgent || latest.nativeSession !== event.nativeSession)) {
@@ -232,7 +235,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       throw new Error('kiokuko-dsh logical turn changed native agent or session identity')
     }
     const incomingRevision = result.prepared.ennoOduno.contractRevision ?? 0
-    if (previous !== undefined && incomingRevision <= (previous.prepared.ennoOduno.contractRevision ?? 0)) return
+    const previousRevision = previous?.prepared.ennoOduno.contractRevision ?? 0
+    if (previous !== undefined && (incomingRevision < previousRevision
+      || incomingRevision === previousRevision && generation <= previous.prepareGeneration)) return
     const item: TurnRecord = previous ?? {
       agentId: event.agent.id,
       sessionId: event.sessionId,
@@ -244,13 +249,23 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       task: event.task,
       turn: event.turn,
       prepared: result.prepared,
+      prepareGeneration: generation,
       failed: false,
       closed: false,
     }
     if (event.nativeAgent !== undefined) item.nativeAgent = event.nativeAgent
     if (event.nativeSession !== undefined) item.nativeSession = event.nativeSession
     item.turn = event.turn
-    item.prepared = result.prepared
+    const sameRevision = previous !== undefined && incomingRevision === previousRevision
+    if (sameRevision) {
+      // A newer prepare may carry a newer context delivery while Enno has not
+      // advanced its revision. Preserve the active lease and other policy
+      // state; only replace the authoritative prepared context and delivery.
+      item.prepared = { ...item.prepared, context: result.prepared.context }
+    } else {
+      item.prepared = result.prepared
+    }
+    item.prepareGeneration = generation
     item.task = event.task
     turns.set(key, item)
     latestBySession.set(event.sessionId, item)
@@ -262,16 +277,31 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       modes.begin(modeRequest)
       activeModeRequests.set(modeKey, modeRequest)
     }
-    const next = policyState(result.prepared.ennoOduno, item, event.sessionId)
-    states.set(item.runId, next)
-    policy.setState(next)
+    const existingState = states.get(item.runId)
+    if (sameRevision && existingState !== undefined) {
+      const { deliveryId: _previousDeliveryId, ...withoutDeliveryId } = existingState
+      const deliveryId = result.prepared.context?.deliveryId
+      const next = deliveryId === null || deliveryId === undefined
+        ? withoutDeliveryId
+        : { ...withoutDeliveryId, deliveryId }
+      states.set(item.runId, next)
+      policy.setState(next)
+    } else {
+      const next = policyState(result.prepared.ennoOduno, item, event.sessionId)
+      states.set(item.runId, next)
+      policy.setState(next)
+    }
   }
 
   class CapturingGate extends DshIntakeGate {
     override async prepare(event: DshPreStepEvent): Promise<DshIntakeGateResult> {
+      // Capture completion ordering before any asynchronous database or intake
+      // work. Revision ordering alone cannot distinguish two same-revision
+      // context deliveries that finish out of order.
+      const generation = ++prepareGeneration
       await runtime.withDatabase((database) => resolveProjectWorkspaceReadOnly(database, event.cwd))
       const prepared = await super.prepare(event)
-      if (prepared.admitted) record(event, prepared)
+      if (prepared.admitted) record(event, prepared, generation)
       return prepared
     }
     override async preStep(event: DshPreStepEvent, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> {
@@ -559,6 +589,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     await lifecycleClose(runtime)(input)
     const items = [...turns.values()].filter((candidate) => candidate.runId === input.runId)
     for (const item of items) {
+      ennoController.retire({
+        ...(item.nativeAgent === undefined ? {} : { nativeAgent: item.nativeAgent }),
+        ...(item.nativeSession === undefined ? {} : { nativeSession: item.nativeSession }),
+      })
       item.closed = true
       gate.clearTurn(item.sessionId, item.turn)
       const modeKey = identityKey(item.agentId, item.sessionId)

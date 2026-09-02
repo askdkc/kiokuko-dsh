@@ -84,6 +84,22 @@ test('event queue exhaustion fails closed instead of growing without bound', asy
   await assert.rejects(session.flush(), /capacity is exhausted/u)
 })
 
+test('sealed runs reject bind, rebind, quiesce, and late events fail-closed until disposal', async () => {
+  const session = bridge(() => undefined)
+  session.bindSession('sealed-session', 'sealed-run')
+  session.sealRun('sealed-run')
+  assert.throws(() => session.bindSession('new-session', 'sealed-run'), /run is sealed/u)
+  assert.throws(() => session.quiesceRun('sealed-run'), /run is sealed/u)
+  session.rebindSession('sealed-session', 'sealed-run')
+  // observe is a post-commit observer: the rejected late event is recorded, never thrown.
+  assert.doesNotThrow(() => session.observe({ sessionId: 'sealed-session', runId: 'sealed-run', event: { type: 'late', seq: 1, time: 0, data: null } }))
+  assert.equal(session.pendingCount, 0)
+  assert.equal(session.observerErrors.length, 1)
+  // The fail-closed observer error is surfaced by flush and again by close.
+  await assert.rejects(session.flush(), /matching run binding|sealed/u)
+  await assert.rejects(session.close(), /matching run binding|sealed/u)
+})
+
 test('failed flush retains the suffix for a later retry', async () => {
   let attempts = 0
   const session = bridge(() => {

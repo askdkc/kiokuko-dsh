@@ -8,7 +8,6 @@ import test from "node:test";
 import {
   acquireInstanceLock,
   isPidAlive,
-  releaseInstanceLock,
   type InstanceLockOptions,
 } from "../../src/server/instance-lock.js";
 import { initializeDatabase } from "../../src/commands/init.js";
@@ -105,24 +104,26 @@ test("writes instance locks with exact POSIX mode 0600", async () => {
   }
 });
 
-test("does not release a lock owned by another instance", async () => {
+test("an old lock handle cannot release a replacement owner", async () => {
   const directory = await temp("instance-lock-owner-mismatch");
-  const lock = await acquireInstanceLock(
-    path.join(directory, "kiokuko-dsh.sqlite3"),
-    {
-      runtimeDirectory: directory,
-      pid: process.pid,
-      instanceId: "123e4567-e89b-12d3-a456-426614174000",
-    },
-  );
-  assert.equal(
-    await releaseInstanceLock(
-      lock.path,
-      "123e4567-e89b-12d3-a456-426614174001",
-    ),
-    false,
-  );
+  const databasePath = path.join(directory, "kiokuko-dsh.sqlite3");
+  const lock = await acquireInstanceLock(databasePath, {
+    runtimeDirectory: directory,
+    pid: process.pid,
+    instanceId: "123e4567-e89b-12d3-a456-426614174000",
+  });
   assert.equal(await lock.release(), true);
+  const replacement = await acquireInstanceLock(databasePath, {
+    runtimeDirectory: directory,
+    pid: process.pid,
+    instanceId: "123e4567-e89b-12d3-a456-426614174001",
+  });
+  try {
+    assert.equal(await lock.release(), true);
+    assert.equal((await readFile(replacement.path, "utf8")).includes(replacement.instanceId), true);
+  } finally {
+    await replacement.release();
+  }
 });
 
 test("concurrent acquisition has exactly one winner", async () => {

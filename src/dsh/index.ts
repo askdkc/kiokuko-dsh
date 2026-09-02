@@ -28,8 +28,8 @@ export * from './composition.js'
 export * from './host-adapter.js'
 
 /** Mount a runtime as a Cordis-owned effect; unload always drains it. */
-export function mountDshRuntime(ctx: Context, runtime: DshRuntime): void {
-  ctx.effect(async () => {
+export function mountDshRuntime(ctx: Context, runtime: DshRuntime): ReturnType<Context['effect']> {
+  return ctx.effect(async () => {
     await runtime.start()
     return async () => {
       await runtime.close()

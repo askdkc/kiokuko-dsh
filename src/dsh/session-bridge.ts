@@ -51,12 +51,20 @@ export interface DshSessionBridgeContext {
 
 export type DshSessionRunResolver = (session: DshNativeSession) => string | undefined
 
+type DshRunStatus = 'completed' | 'failed' | 'cancelled'
+
 export interface DshRunLifecycleOptions {
   readonly bridge: Pick<DshSessionBridge, 'flush' | 'close'> & {
     readonly quiesceRun?: (runId: string) => number
     readonly sealRun?: (runId: string) => void
   }
-  readonly closeRun: (input: { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' }) => void | PromiseLike<void>
+  readonly closeRun: (input: { readonly runId: string; readonly status: DshRunStatus }) => void | PromiseLike<void>
+}
+
+interface DshCloseIntent {
+  readonly runId: string
+  readonly status: DshRunStatus
+  readonly targetGeneration: number | undefined
 }
 
 /** Close a run only after the ordered dsh suffix is durably bridged. */
@@ -64,20 +72,37 @@ export class DshRunLifecycle {
   readonly #bridge: DshRunLifecycleOptions['bridge']
   readonly #closeRun: DshRunLifecycleOptions['closeRun']
   readonly #closeInFlight = new Map<string, Promise<void>>()
+  readonly #closeIntents = new Map<string, DshCloseIntent>()
+  readonly #sealedRuns = new Map<string, DshRunStatus>()
 
   constructor(options: DshRunLifecycleOptions) {
     this.#bridge = options.bridge
     this.#closeRun = options.closeRun
   }
 
-  async closeTurn(input: { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' }): Promise<void> {
+  async closeTurn(input: { readonly runId: string; readonly status: DshRunStatus }): Promise<void> {
+    const sealedStatus = this.#sealedRuns.get(input.runId)
+    if (sealedStatus !== undefined) {
+      if (sealedStatus !== input.status) throw new KiokukoError('CONFLICT', 'Run close status is immutable')
+      return
+    }
+    const existingIntent = this.#closeIntents.get(input.runId)
+    if (existingIntent !== undefined && existingIntent.status !== input.status) {
+      throw new KiokukoError('CONFLICT', 'Run close status is immutable')
+    }
     const existing = this.#closeInFlight.get(input.runId)
     if (existing !== undefined) return existing
+    const intent = existingIntent ?? Object.freeze({
+      runId: input.runId,
+      status: input.status,
+      targetGeneration: this.#bridge.quiesceRun?.(input.runId),
+    })
+    this.#closeIntents.set(input.runId, intent)
     const operation = (async () => {
-      const target = this.#bridge.quiesceRun?.(input.runId)
-      await this.#bridge.flush(target)
-      await this.#closeRun(input)
-      this.#bridge.sealRun?.(input.runId)
+      await this.#bridge.flush(intent.targetGeneration)
+      await this.#closeRun({ runId: intent.runId, status: intent.status })
+      this.#bridge.sealRun?.(intent.runId)
+      this.#sealedRuns.set(intent.runId, intent.status)
     })().finally(() => {
       if (this.#closeInFlight.get(input.runId) === operation) this.#closeInFlight.delete(input.runId)
     })
@@ -92,6 +117,8 @@ export class DshRunLifecycle {
     }
     try { await this.#bridge.close() } catch (error) { failures.push(error) }
     this.#closeInFlight.clear()
+    this.#closeIntents.clear()
+    this.#sealedRuns.clear()
     if (failures.length === 1) throw failures[0]
     if (failures.length > 1) throw new AggregateError(failures, 'dsh run lifecycle cleanup failed')
   }
@@ -164,6 +191,8 @@ export class DshSessionBridge {
   readonly #appendBatch: (runId: string, events: readonly LedgerEventInput[]) => unknown | PromiseLike<unknown>
   readonly #runs = new Map<string, { readonly runId: string; readonly incarnation: string }>()
   readonly #closingRuns = new Map<string, number>()
+  /** Retain terminal run identities until bridge disposal. */
+  readonly #sealedRuns = new Set<string>()
   readonly #pending = new Map<string, DshQueuedSessionEvent>()
   readonly #committed = new Map<string, string>()
   readonly #observerErrors: unknown[] = []
@@ -188,6 +217,7 @@ export class DshSessionBridge {
     if (this.#closed || this.#closing) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh session bridge is closed')
     const session = validId(sessionId, 'sessionId')
     const run = validId(runId, 'runId')
+    if (this.#sealedRuns.has(run)) throw new KiokukoError('CONFLICT', 'dsh run is sealed')
     if (this.#closingRuns.has(run)) throw new KiokukoError('CONFLICT', 'dsh run is closing')
     const identity = validId(incarnation, 'incarnation')
     const existing = this.#runs.get(session)
@@ -205,6 +235,7 @@ export class DshSessionBridge {
   /** Reject late native events after the owning run has been terminalized. */
   quiesceRun(runId: string): number {
     const run = validId(runId, 'runId')
+    if (this.#sealedRuns.has(run)) throw new KiokukoError('CONFLICT', 'dsh run is sealed')
     const existing = this.#closingRuns.get(run)
     if (existing !== undefined) return existing
     const target = this.#nextGeneration
@@ -216,6 +247,7 @@ export class DshSessionBridge {
   sealRun(runId: string): void {
     const run = validId(runId, 'runId')
     this.#closingRuns.delete(run)
+    this.#sealedRuns.add(run)
     for (const [sessionId, binding] of this.#runs) {
       if (binding.runId === run) this.#runs.delete(sessionId)
     }
@@ -226,7 +258,7 @@ export class DshSessionBridge {
     const session = validId(sessionId, 'sessionId')
     const run = validId(runId, 'runId')
     const identity = validId(incarnation, 'incarnation')
-    if (this.#closed || this.#closing || this.#closingRuns.has(run)) return
+    if (this.#closed || this.#closing || this.#closingRuns.has(run) || this.#sealedRuns.has(run)) return
     this.#runs.set(session, { runId: run, incarnation: identity })
   }
 
@@ -247,6 +279,7 @@ export class DshSessionBridge {
       const sessionId = validId(input.sessionId, 'sessionId')
       const binding = this.#runs.get(sessionId)
       if (binding === undefined || binding.runId !== input.runId) validation('dsh session has no matching run binding')
+      if (this.#sealedRuns.has(binding.runId)) validation('dsh run is sealed')
       if (this.#closingRuns.has(binding.runId)) validation('dsh run is closing')
       const event = validEvent(input.event)
       const sourceEventId = dshSessionEventSourceId(sessionId, event.seq, binding.incarnation)
@@ -350,6 +383,7 @@ export class DshSessionBridge {
         this.#closed = true
         this.#runs.clear()
         this.#closingRuns.clear()
+        this.#sealedRuns.clear()
         this.#pending.clear()
         this.#committed.clear()
         this.#observerErrors.length = 0

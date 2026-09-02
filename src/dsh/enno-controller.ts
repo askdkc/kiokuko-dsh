@@ -97,10 +97,22 @@ export class DshConfirmationController {
 export type DshTurnStoppingDecision =
   | { readonly kind: 'close'; readonly nextAction: EnnoNextAction }
   | { readonly kind: 'steer'; readonly nextAction: EnnoNextAction; readonly selection: DshDirectiveSourceSelection }
-  | { readonly kind: 'abort'; readonly reason: 'aborted' | 'state_unavailable' | 'directive_missing' | 'stale_directive' | 'continuation_limit' | 'verification_failed' | 'context_injection_failed' }
+  | { readonly kind: 'abort'; readonly reason: 'aborted' | 'stale_turn' | 'state_unavailable' | 'directive_missing' | 'stale_directive' | 'continuation_limit' | 'verification_failed' | 'context_injection_failed' }
 
 const continuationText = 'Kiokuko の現在の処理は未完了です。提示された現在の指示に従って次の処理を実行し、完了を先取りしないでください。'
-const MAX_STEER_KEYS = 4_096
+
+type ReplayScopeKey = object | string
+
+interface ReplayScope {
+  latestTurn: number
+  readonly steers: Map<string, number>
+  readonly steerIdentities: Map<string, { readonly nativeAgent?: object; readonly nativeSession?: object }>
+  readonly turnInFlight: Map<number, {
+    readonly nativeAgent?: object
+    readonly nativeSession?: object
+    readonly promise: Promise<DshTurnStoppingDecision>
+  }>
+}
 
 function directiveKey(event: DshTurnStoppingEvent, state: EnnoOdunoState): string {
   return canonicalContentHash({
@@ -114,8 +126,12 @@ function directiveKey(event: DshTurnStoppingEvent, state: EnnoOdunoState): strin
   })
 }
 
-function turnKey(event: DshTurnStoppingEvent): string {
-  return canonicalContentHash({ agentId: event.agent.id, sessionId: event.agent.sessionId ?? null, turn: event.turn })
+function textualScopeKey(event: DshTurnStoppingEvent): string {
+  return canonicalContentHash({ agentId: event.agent.id, sessionId: event.agent.sessionId ?? null })
+}
+
+function replayScopeKey(event: DshTurnStoppingEvent): ReplayScopeKey {
+  return event.agent.nativeSession ?? event.agent.nativeAgent ?? textualScopeKey(event)
 }
 
 function sameNativeIdentity(
@@ -133,14 +149,7 @@ export class DshEnnoController {
   readonly #advisoryRunner: DshAdvisoryRunner | undefined
   readonly #submitAdvisory: DshEnnoControllerDependencies['submitAdvisory']
   readonly #runFinalVerification: DshEnnoControllerDependencies['runFinalVerification']
-  readonly #steers = new Map<string, number>()
-  readonly #steerIdentities = new Map<string, { readonly nativeAgent?: object; readonly nativeSession?: object }>()
-  readonly #steerInFlight = new Set<string>()
-  readonly #turnInFlight = new Map<string, {
-    readonly nativeAgent?: object
-    readonly nativeSession?: object
-    readonly promise: Promise<DshTurnStoppingDecision>
-  }>()
+  readonly #replayScopes = new Map<ReplayScopeKey, ReplayScope>()
 
   constructor(dependencies: DshEnnoControllerDependencies) {
     this.#readState = dependencies.readState
@@ -154,19 +163,46 @@ export class DshEnnoController {
     }
   }
 
+  #scopeFor(event: DshTurnStoppingEvent): ReplayScope {
+    const key = replayScopeKey(event)
+    const existing = this.#replayScopes.get(key)
+    if (existing !== undefined) return existing
+    const scope: ReplayScope = {
+      latestTurn: event.turn,
+      steers: new Map(),
+      steerIdentities: new Map(),
+      turnInFlight: new Map(),
+    }
+    this.#replayScopes.set(key, scope)
+    return scope
+  }
+
+  #isStaleTurn(scope: ReplayScope, event: DshTurnStoppingEvent): boolean {
+    return event.turn < scope.latestTurn
+  }
+
   async turnStopping(event: DshTurnStoppingEvent): Promise<DshTurnStoppingDecision> {
     if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
-    const logicalKey = turnKey(event)
-    const existing = this.#turnInFlight.get(logicalKey)
+    const scope = this.#scopeFor(event)
+    if (event.turn < scope.latestTurn) return { kind: 'abort', reason: 'stale_turn' }
+    if (event.turn > scope.latestTurn) {
+      // Advance the high-water mark before dropping keys from older turns.
+      // The mark is synchronous, so a late older callback cannot re-enter the
+      // state/verification/effect pipeline after this point.
+      scope.latestTurn = event.turn
+      scope.steers.clear()
+      scope.steerIdentities.clear()
+    }
+    const existing = scope.turnInFlight.get(event.turn)
     if (existing !== undefined) {
       return sameNativeIdentity(existing, event.agent)
         ? existing.promise
         : { kind: 'abort', reason: 'state_unavailable' }
     }
-    const promise = this.#decideTurnStopping(event).finally(() => {
-      if (this.#turnInFlight.get(logicalKey)?.promise === promise) this.#turnInFlight.delete(logicalKey)
+    const promise = this.#decideTurnStopping(event, scope).finally(() => {
+      if (scope.turnInFlight.get(event.turn)?.promise === promise) scope.turnInFlight.delete(event.turn)
     })
-    this.#turnInFlight.set(logicalKey, {
+    scope.turnInFlight.set(event.turn, {
       ...(event.agent.nativeAgent === undefined ? {} : { nativeAgent: event.agent.nativeAgent }),
       ...(event.agent.nativeSession === undefined ? {} : { nativeSession: event.agent.nativeSession }),
       promise,
@@ -174,7 +210,7 @@ export class DshEnnoController {
     return promise
   }
 
-  async #decideTurnStopping(event: DshTurnStoppingEvent): Promise<DshTurnStoppingDecision> {
+  async #decideTurnStopping(event: DshTurnStoppingEvent, scope: ReplayScope): Promise<DshTurnStoppingDecision> {
     let state: EnnoOdunoState | null
     try {
       state = await this.#readState(event)
@@ -182,6 +218,7 @@ export class DshEnnoController {
       return { kind: 'abort', reason: 'state_unavailable' }
     }
     if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
+    if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
     if (state === null || !state.applicable) return { kind: 'close', nextAction: 'complete' }
     const handler = DSH_ENNO_NEXT_ACTION_HANDLERS[state.nextAction]
     if (handler === undefined) return { kind: 'abort', reason: 'state_unavailable' }
@@ -213,7 +250,9 @@ export class DshEnnoController {
         if (submitted !== undefined) currentState = submitted
       }
       if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
+      if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
       const fresh = await this.#readState(event)
+      if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
       if (fresh === null || !fresh.applicable) return { kind: 'close', nextAction: 'complete' }
       const freshHandler = DSH_ENNO_NEXT_ACTION_HANDLERS[fresh.nextAction]
       if (freshHandler === undefined) return { kind: 'abort', reason: 'state_unavailable' }
@@ -232,52 +271,55 @@ export class DshEnnoController {
 
     // The fresh state, not the state read before verification/advisory work,
     // owns replay accounting and the next-step injection.
+    if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
     const key = directiveKey(event, currentState)
-    const boundIdentity = this.#steerIdentities.get(key)
+    const boundIdentity = scope.steerIdentities.get(key)
     if (boundIdentity !== undefined
       && (boundIdentity.nativeAgent !== event.agent.nativeAgent || boundIdentity.nativeSession !== event.agent.nativeSession)) {
       return { kind: 'abort', reason: 'state_unavailable' }
     }
-    const used = this.#steers.get(key) ?? 0
-    if (used >= this.#maxSteersPerDirective || this.#steerInFlight.has(key)) return { kind: 'abort', reason: 'continuation_limit' }
-    // Do not evict old keys: eviction would make an already-steered
-    // directive eligible for a second side effect after a memory-pressure
-    // event. Fail closed when the bounded replay guard is exhausted.
-    if (used === 0 && this.#steers.size >= MAX_STEER_KEYS) return { kind: 'abort', reason: 'continuation_limit' }
-    this.#steerInFlight.add(key)
+    const used = scope.steers.get(key) ?? 0
+    if (used >= this.#maxSteersPerDirective) return { kind: 'abort', reason: 'continuation_limit' }
+    // Keys are scoped to the current native turn and are cleared only after
+    // the high-water mark advances. This prevents replay while allowing an
+    // unbounded sequence of independent turns.
+    if (used === 0 && scope.steers.size >= 4_096) return { kind: 'abort', reason: 'continuation_limit' }
     try {
-      try {
-        await this.#injectNextStepContext({ event, selection, state: currentState })
-      } catch {
-        return { kind: 'abort', reason: 'context_injection_failed' }
-      }
-      if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
-      this.#steers.set(key, used + 1)
-      this.#steerIdentities.set(key, {
-        ...(event.agent.nativeAgent === undefined ? {} : { nativeAgent: event.agent.nativeAgent }),
-        ...(event.agent.nativeSession === undefined ? {} : { nativeSession: event.agent.nativeSession }),
-      })
-      event.agent.steer({ content: continuationText, source: 'kiokuko-dsh' })
-      return { kind: 'steer', nextAction: currentState.nextAction, selection }
-    } finally {
-      this.#steerInFlight.delete(key)
+      await this.#injectNextStepContext({ event, selection, state: currentState })
+    } catch {
+      return { kind: 'abort', reason: 'context_injection_failed' }
     }
+    if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
+    if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
+    // Claim immediately before the irreversible native steer. A throwing
+    // steer remains consumed and cannot be retried automatically.
+    scope.steers.set(key, used + 1)
+    scope.steerIdentities.set(key, {
+      ...(event.agent.nativeAgent === undefined ? {} : { nativeAgent: event.agent.nativeAgent }),
+      ...(event.agent.nativeSession === undefined ? {} : { nativeSession: event.agent.nativeSession }),
+    })
+    event.agent.steer({ content: continuationText, source: 'kiokuko-dsh' })
+    return { kind: 'steer', nextAction: currentState.nextAction, selection }
   }
 
   async handle(event: DshTurnStoppingEvent): Promise<DshTurnStoppingDecision> {
-    const existing = this.#turnInFlight.get(turnKey(event))
+    const scope = this.#scopeFor(event)
+    const existing = scope.turnInFlight.get(event.turn)
     const decision = await this.turnStopping(event)
-    if (existing === undefined && decision.kind === 'abort' && decision.reason !== 'aborted') {
+    if (existing === undefined && decision.kind === 'abort' && decision.reason !== 'aborted' && decision.reason !== 'stale_turn') {
       event.agent.cancel?.(`kiokuko dsh Enno continuation stopped: ${decision.reason}`)
     }
     return decision
   }
 
+  /** Release replay memory when the host retires a native lifecycle. */
+  retire(identity: { readonly nativeAgent?: object; readonly nativeSession?: object }): void {
+    if (identity.nativeSession !== undefined) this.#replayScopes.delete(identity.nativeSession)
+    if (identity.nativeAgent !== undefined) this.#replayScopes.delete(identity.nativeAgent)
+  }
+
   dispose(): void {
-    this.#steers.clear()
-    this.#steerIdentities.clear()
-    this.#steerInFlight.clear()
-    this.#turnInFlight.clear()
+    this.#replayScopes.clear()
   }
 }
 

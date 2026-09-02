@@ -6,6 +6,61 @@ import { LedgerStore } from '../../../src/ledger/store.js'
 import type { DshDatabaseOperation } from '../../../src/dsh/runtime.js'
 import { DshRunLifecycle, DshSessionBridge } from '../../../src/dsh/session-bridge.js'
 
+test('close status is immutable across concurrent and failed retries', async () => {
+  let releaseFlush!: () => void
+  const flushStarted = new Promise<void>((resolve) => {
+    releaseFlush = resolve
+  })
+  let closeCalls = 0
+  let flushCalls = 0
+  const bridge = {
+    quiesceRun: () => 7,
+    flush: async () => { flushCalls += 1; await flushStarted },
+    sealRun: () => undefined,
+    close: async () => undefined,
+  }
+  const lifecycle = new DshRunLifecycle({
+    bridge,
+    closeRun: async () => { closeCalls += 1 },
+  })
+  const first = lifecycle.closeTurn({ runId: 'immutable-run', status: 'completed' })
+  await assert.rejects(
+    lifecycle.closeTurn({ runId: 'immutable-run', status: 'failed' }),
+    (error: unknown) => error instanceof Error && 'code' in error && error.code === 'CONFLICT',
+  )
+  releaseFlush()
+  await first
+  assert.equal(flushCalls, 1)
+  assert.equal(closeCalls, 1)
+  await lifecycle.closeTurn({ runId: 'immutable-run', status: 'completed' })
+  assert.equal(closeCalls, 1)
+  await lifecycle.dispose()
+})
+
+test('failed close permits only an exact-status retry and seals the bridge after success', async () => {
+  let attempts = 0
+  let sealed = false
+  const bridge = {
+    quiesceRun: () => 3,
+    flush: async (target?: number) => { assert.equal(target, 3) },
+    sealRun: () => { sealed = true },
+    close: async () => undefined,
+  }
+  const lifecycle = new DshRunLifecycle({
+    bridge,
+    closeRun: async () => { attempts += 1; if (attempts === 1) throw new Error('close failed') },
+  })
+  await assert.rejects(lifecycle.closeTurn({ runId: 'retry-run', status: 'completed' }), /close failed/u)
+  await assert.rejects(
+    lifecycle.closeTurn({ runId: 'retry-run', status: 'cancelled' }),
+    (error: unknown) => error instanceof Error && 'code' in error && error.code === 'CONFLICT',
+  )
+  await lifecycle.closeTurn({ runId: 'retry-run', status: 'completed' })
+  assert.equal(attempts, 2)
+  assert.equal(sealed, true)
+  await lifecycle.dispose()
+})
+
 test('turn/end is flushed to the ledger before terminal run close', async () => {
   const database = openConnection(':memory:')
   migrateDatabase(database, 'migrations')
