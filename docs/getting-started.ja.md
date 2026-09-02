@@ -8,17 +8,32 @@
 
 DeepSeek Harness `0.1.2-alpha.3` と Node.js 24.16.0 以上が必要です。
 
+DeepSeek Harnessのcheckoutから導入します:
+
 ```bash
 pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
-local checkoutを使う場合:
+GitHubを直接指定する場合は、DeepSeek Harnessのcheckoutから実行します:
+
+```bash
+pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
+pnpm dsh --profile web --dump-config
+```
+
+local checkoutを使う場合は、Kiokuko checkoutでビルドします:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm run build
-pnpm dsh plugin --profile web add /path/to/kiokuko-dsh
+```
+
+その後、DeepSeek Harnessのcheckoutからインストール済みの`dsh` launcherで
+ビルド済みパスを導入します:
+
+```bash
+dsh plugin --profile web add /absolute/path/to/kiokuko-dsh
 ```
 
 ## 使い方

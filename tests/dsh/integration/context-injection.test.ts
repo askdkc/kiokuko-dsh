@@ -45,3 +45,16 @@ test('ordinary memory remains untrusted and removes path/internal-id material', 
   assert.equal(memory?.content.includes('/Users/dkc'), false)
   assert.equal(memory?.content.includes('abc12345'), false)
 })
+
+test('explicit current directive wins over a stale prepared directive', async () => {
+  const staleDirective = { role: 'zenki', objective: 'stale objective', requiredSkills: [], workUnit: null, stopConditions: [], reportSchema: {} }
+  const currentDirective = { role: 'goki', objective: 'current objective', requiredSkills: [], workUnit: null, stopConditions: [], reportSchema: {} }
+  const messages = await injectDshContext({
+    prepared: prepared({ ennoOduno: { directive: staleDirective } }),
+    task: 'Continue the current task.',
+    directive: currentDirective as any,
+  })
+  const directive = messages.find((message) => message.source === 'directive')
+  assert.match(directive?.content ?? '', /current objective/u)
+  assert.doesNotMatch(directive?.content ?? '', /stale objective/u)
+})

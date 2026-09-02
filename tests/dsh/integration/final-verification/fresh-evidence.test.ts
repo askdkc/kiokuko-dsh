@@ -32,3 +32,28 @@ test('the stop boundary waits for verifier evidence and aborts on stale directiv
   const stale = await controller.handle({ ...event, turn: 2 })
   assert.deepEqual(stale, { kind: 'abort', reason: 'stale_directive' })
 })
+
+test('verification transition records the fresh directive key before steering', async () => {
+  const events: string[] = []
+  const initial = state()
+  const fresh = { ...initial, nextAction: 'submit_final_review' } as EnnoOdunoState
+  let reads = 0
+  const controller = new DshEnnoController({
+    readState: async () => reads++ === 0 ? initial : fresh,
+    runFinalVerification: async () => { events.push('verify'); return fresh },
+    injectNextStepContext: async () => { events.push('inject') },
+  })
+  const agent = {
+    steers: [] as unknown[],
+    cancel: () => undefined,
+  }
+  const decision = await controller.handle({
+    agent: { id: 'agent', steer: (message: unknown) => agent.steers.push(message), cancel: agent.cancel },
+    turn: 1,
+    signal: new AbortController().signal,
+  })
+  assert.equal(decision.kind, 'steer')
+  assert.equal(decision.nextAction, 'submit_final_review')
+  assert.deepEqual(events, ['verify', 'inject'])
+  assert.equal(agent.steers.length, 1)
+})

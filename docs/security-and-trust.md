@@ -13,17 +13,9 @@ bounded content as an untrusted candidate, and never installs, runs, or register
 fetched Skill content automatically. `official` is the default discovery mode;
 `community` is explicit opt-in and `off` disables discovery.
 
-Inspect or manage mappings with:
-
-```bash
-kiokuko skills find svelte --official-only --json
-kiokuko skills list
-kiokuko skills disable <skill-id>
-kiokuko skills refresh <skill-id>
-```
-
-The Web UI can inspect and disable mappings, but has no install, script, or MCP
-registration action.
+The DSH package does not expose generic `kiokuko skills` commands. The Web UI
+can inspect and disable mappings, but has no install, script, or MCP registration
+action.
 
 ## MCP extensions and public errors
 

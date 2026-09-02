@@ -81,7 +81,6 @@ export async function isPidAlive(pid: number): Promise<boolean> {
 export async function acquireInstanceLock(databasePath: string, options: InstanceLockOptions = {}): Promise<InstanceLock> {
   const instanceId = options.instanceId ?? randomUUID();
   const pid = options.pid ?? process.pid;
-  const pidLiveness = options.isPidAlive ?? isPidAlive;
   const lockFilePath = lockPath(databasePath, options);
   await mkdir(path.dirname(lockFilePath), { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -95,26 +94,17 @@ export async function acquireInstanceLock(databasePath: string, options: Instanc
       };
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-      const existing = await readLockRecord(lockFilePath);
-      if (await pidLiveness(existing.pid)) {
-        throw new KiokukoError('CONFLICT', 'Another live Kiokuko instance owns this database');
-      }
-      // Re-read after the liveness probe: another process may have replaced
-      // the stale record while the probe was awaiting. Never unlink a newer
-      // owner's lock (ABA-safe stale cleanup).
-      let current: LockRecord;
+      // A dead PID is only evidence that the owner may have stopped. It is not
+      // proof that this process still owns the pathname after an asynchronous
+      // liveness check. Leave the record untouched and require an operator to
+      // remove it after all Kiokuko processes have been verified stopped.
       try {
-        current = await readLockRecord(lockFilePath);
+        await readLockRecord(lockFilePath);
       } catch (readError) {
-        if (readError instanceof Error && 'code' in readError && readError.code === 'ENOENT') continue;
+        if (attempt === 0 && readError instanceof Error && 'code' in readError && readError.code === 'ENOENT') continue;
         throw readError;
       }
-      if (current.instanceId !== existing.instanceId || current.pid !== existing.pid) continue;
-      try {
-        await unlink(lockFilePath);
-      } catch (unlinkError) {
-        if (!(unlinkError instanceof Error && 'code' in unlinkError && unlinkError.code === 'ENOENT')) throw unlinkError;
-      }
+      throw new KiokukoError('CONFLICT', 'Database instance lock is busy');
     }
   }
   throw new KiokukoError('CONFLICT', 'Database instance lock is busy');

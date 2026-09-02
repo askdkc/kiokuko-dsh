@@ -1,6 +1,6 @@
 import type { IncomingMessage, RequestListener } from 'node:http';
 import { KiokukoError } from '../errors.js';
-import { createRouter, type HttpHandler, type RouterDependencies, type V1RouteHandler } from './router.js';
+import { createRouter, parseRequestUrl, type HttpHandler, type RouterDependencies, type V1RouteHandler } from './router.js';
 
 export type AppDependencies = RouterDependencies;
 
@@ -37,7 +37,7 @@ function boundedRetryAfterSeconds(error: KiokukoError): number {
 function operationFor(request: IncomingMessage, v1?: V1RouteHandler): string {
   let url: URL;
   try {
-    url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    url = parseRequestUrl(request.url);
   } catch {
     return 'server.request';
   }

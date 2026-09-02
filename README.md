@@ -23,12 +23,25 @@ pnpm dsh --profile web --dump-config
 For a source-pinned Git install, use the fallback in
 [the plugin guide](docs/dsh-plugin.md).
 
+For a direct GitHub install from a DeepSeek Harness checkout:
+
+```bash
+pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
+pnpm dsh --profile web --dump-config
+```
+
 For a local checkout, build it first and pass its path:
 
 ```bash
+# Run these two commands in the Kiokuko checkout.
 pnpm install --frozen-lockfile
 pnpm run build
-pnpm dsh plugin --profile web add /path/to/kiokuko-dsh
+```
+
+Then, from a DeepSeek Harness checkout, install the built path:
+
+```bash
+dsh plugin --profile web add /absolute/path/to/kiokuko-dsh
 ```
 
 With an installed `dsh` CLI, omit the `pnpm` launcher. Remove the plugin with:

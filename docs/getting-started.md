@@ -8,17 +8,32 @@ Claude Code, or a generic `kiokuko` CLI.
 
 DeepSeek Harness `0.1.2-alpha.3` and Node.js 24.16.0 or newer are required.
 
+From a DeepSeek Harness checkout:
+
 ```bash
 pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
-For a local checkout:
+To install directly from GitHub, run this from a DeepSeek Harness checkout:
+
+```bash
+pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
+pnpm dsh --profile web --dump-config
+```
+
+For a local checkout, build it in the Kiokuko checkout:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm run build
-pnpm dsh plugin --profile web add /path/to/kiokuko-dsh
+```
+
+Then, from a DeepSeek Harness checkout, install the built path with the
+installed `dsh` launcher:
+
+```bash
+dsh plugin --profile web add /absolute/path/to/kiokuko-dsh
 ```
 
 ## Use

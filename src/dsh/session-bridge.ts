@@ -24,6 +24,7 @@ export interface DshSessionEventInput {
 export interface DshQueuedSessionEvent {
   readonly runId: string
   readonly sessionId: string
+  readonly queueGeneration: number
   readonly sourceEventId: string
   readonly sourceSequence: number
   readonly event: Readonly<{ type: string; seq: number; time: number; data: BoundaryJsonValue; surfaceOp?: BoundaryJsonValue; sourceEventSeqs?: readonly number[]; ignorable?: true }>
@@ -51,7 +52,10 @@ export interface DshSessionBridgeContext {
 export type DshSessionRunResolver = (session: DshNativeSession) => string | undefined
 
 export interface DshRunLifecycleOptions {
-  readonly bridge: Pick<DshSessionBridge, 'flush' | 'close'> & { readonly sealRun?: (runId: string) => void }
+  readonly bridge: Pick<DshSessionBridge, 'flush' | 'close'> & {
+    readonly quiesceRun?: (runId: string) => number
+    readonly sealRun?: (runId: string) => void
+  }
   readonly closeRun: (input: { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' }) => void | PromiseLike<void>
 }
 
@@ -59,6 +63,7 @@ export interface DshRunLifecycleOptions {
 export class DshRunLifecycle {
   readonly #bridge: DshRunLifecycleOptions['bridge']
   readonly #closeRun: DshRunLifecycleOptions['closeRun']
+  readonly #closeInFlight = new Map<string, Promise<void>>()
 
   constructor(options: DshRunLifecycleOptions) {
     this.#bridge = options.bridge
@@ -66,13 +71,29 @@ export class DshRunLifecycle {
   }
 
   async closeTurn(input: { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' }): Promise<void> {
-    await this.#bridge.flush()
-    await this.#closeRun(input)
-    this.#bridge.sealRun?.(input.runId)
+    const existing = this.#closeInFlight.get(input.runId)
+    if (existing !== undefined) return existing
+    const operation = (async () => {
+      const target = this.#bridge.quiesceRun?.(input.runId)
+      await this.#bridge.flush(target)
+      await this.#closeRun(input)
+      this.#bridge.sealRun?.(input.runId)
+    })().finally(() => {
+      if (this.#closeInFlight.get(input.runId) === operation) this.#closeInFlight.delete(input.runId)
+    })
+    this.#closeInFlight.set(input.runId, operation)
+    return operation
   }
 
   async dispose(): Promise<void> {
-    await this.#bridge.close()
+    const failures: unknown[] = []
+    for (const close of this.#closeInFlight.values()) {
+      try { await close } catch (error) { failures.push(error) }
+    }
+    try { await this.#bridge.close() } catch (error) { failures.push(error) }
+    this.#closeInFlight.clear()
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'dsh run lifecycle cleanup failed')
   }
 }
 
@@ -142,10 +163,14 @@ export class DshSessionBridge {
   readonly #runtime: Pick<DshRuntime, 'withDatabase'>
   readonly #appendBatch: (runId: string, events: readonly LedgerEventInput[]) => unknown | PromiseLike<unknown>
   readonly #runs = new Map<string, { readonly runId: string; readonly incarnation: string }>()
+  readonly #closingRuns = new Map<string, number>()
   readonly #pending = new Map<string, DshQueuedSessionEvent>()
   readonly #committed = new Map<string, string>()
   readonly #observerErrors: unknown[] = []
-  #flushPromise: Promise<void> | undefined
+  #flushTail: Promise<void> = Promise.resolve()
+  #closePromise: Promise<void> | undefined
+  #nextGeneration = 0
+  #closing = false
   #closed = false
 
   #recordObserverError(error: unknown): void {
@@ -160,9 +185,10 @@ export class DshSessionBridge {
   }
 
   bindSession(sessionId: string, runId: string, incarnation = runId): void {
-    if (this.#closed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh session bridge is closed')
+    if (this.#closed || this.#closing) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh session bridge is closed')
     const session = validId(sessionId, 'sessionId')
     const run = validId(runId, 'runId')
+    if (this.#closingRuns.has(run)) throw new KiokukoError('CONFLICT', 'dsh run is closing')
     const identity = validId(incarnation, 'incarnation')
     const existing = this.#runs.get(session)
     if (existing !== undefined && existing.runId !== run) throw new KiokukoError('CONFLICT', 'dsh session is already bound to another run')
@@ -177,8 +203,19 @@ export class DshSessionBridge {
   }
 
   /** Reject late native events after the owning run has been terminalized. */
+  quiesceRun(runId: string): number {
+    const run = validId(runId, 'runId')
+    const existing = this.#closingRuns.get(run)
+    if (existing !== undefined) return existing
+    const target = this.#nextGeneration
+    this.#closingRuns.set(run, target)
+    return target
+  }
+
+  /** Reject late native events after the owning run has been terminalized. */
   sealRun(runId: string): void {
     const run = validId(runId, 'runId')
+    this.#closingRuns.delete(run)
     for (const [sessionId, binding] of this.#runs) {
       if (binding.runId === run) this.#runs.delete(sessionId)
     }
@@ -189,7 +226,7 @@ export class DshSessionBridge {
     const session = validId(sessionId, 'sessionId')
     const run = validId(runId, 'runId')
     const identity = validId(incarnation, 'incarnation')
-    if (this.#closed) return
+    if (this.#closed || this.#closing || this.#closingRuns.has(run)) return
     this.#runs.set(session, { runId: run, incarnation: identity })
   }
 
@@ -205,11 +242,12 @@ export class DshSessionBridge {
 
   /** Post-commit observer: malformed events are recorded and never veto the session append. */
   observe(input: DshSessionEventInput): void {
-    if (this.#closed) return
+    if (this.#closed || this.#closing) return
     try {
       const sessionId = validId(input.sessionId, 'sessionId')
       const binding = this.#runs.get(sessionId)
       if (binding === undefined || binding.runId !== input.runId) validation('dsh session has no matching run binding')
+      if (this.#closingRuns.has(binding.runId)) validation('dsh run is closing')
       const event = validEvent(input.event)
       const sourceEventId = dshSessionEventSourceId(sessionId, event.seq, binding.incarnation)
       const data = cloneBoundaryJson(event.data ?? null, { maximumDepth: 32, maximumNodes: 2_000, maximumStringBytes: 64 * 1024, failure: () => new KiokukoError('VALIDATION_ERROR', 'SessionEvent data is not JSON-safe') })
@@ -219,6 +257,7 @@ export class DshSessionBridge {
       const queued = Object.freeze({
         runId: binding.runId,
         sessionId,
+        queueGeneration: ++this.#nextGeneration,
         sourceEventId,
         sourceSequence: event.seq,
         event: Object.freeze({
@@ -255,16 +294,17 @@ export class DshSessionBridge {
   get pendingCount(): number { return this.#pending.size }
   get observerErrors(): readonly unknown[] { return [...this.#observerErrors] }
 
-  async flush(): Promise<void> {
-    if (this.#flushPromise !== undefined) return this.#flushPromise
-    this.#flushPromise = this.#flushPending().finally(() => { this.#flushPromise = undefined })
-    return this.#flushPromise
+  async flush(target = this.#nextGeneration): Promise<void> {
+    const operation = this.#flushTail.then(() => this.#flushPending(target))
+    this.#flushTail = operation.catch(() => undefined)
+    return operation
   }
 
-  async #flushPending(): Promise<void> {
-    while (this.#pending.size > 0) {
+  async #flushPending(target: number): Promise<void> {
+    while ([...this.#pending.values()].some((item) => item.queueGeneration <= target)) {
       const grouped = new Map<string, DshQueuedSessionEvent[]>()
       for (const item of this.#pending.values()) {
+        if (item.queueGeneration > target) continue
         const group = grouped.get(item.runId) ?? []
         group.push(item)
         grouped.set(item.runId, group)
@@ -300,12 +340,26 @@ export class DshSessionBridge {
   }
 
   async close(): Promise<void> {
-    await this.flush()
-    this.#closed = true
-    this.#runs.clear()
-    this.#pending.clear()
-    this.#committed.clear()
-    this.#observerErrors.length = 0
+    if (this.#closed) return
+    if (this.#closePromise !== undefined) return this.#closePromise
+    this.#closing = true
+    const target = this.#nextGeneration
+    this.#closePromise = this.#flushTail
+      .then(() => this.#flushPending(target))
+      .then(() => {
+        this.#closed = true
+        this.#runs.clear()
+        this.#closingRuns.clear()
+        this.#pending.clear()
+        this.#committed.clear()
+        this.#observerErrors.length = 0
+      })
+      .finally(() => {
+        this.#closePromise = undefined
+        if (!this.#closed) this.#closing = false
+      })
+    this.#flushTail = this.#closePromise.catch(() => undefined)
+    return this.#closePromise
   }
 }
 

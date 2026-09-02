@@ -9,14 +9,24 @@ MCP clients; it does not fork DeepSeek Harness or modify a repository's files.
 The published `kiokuko-dsh` npm package is the one-shot path when a matching
 release is available because its tarball already contains `dist/`:
 
+Run the following from a DeepSeek Harness checkout:
+
 ```bash
 pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
+For a direct GitHub install, run the following from a DeepSeek Harness checkout:
+
+```bash
+pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
+pnpm dsh --profile web --dump-config
+```
+
 For a source-pinned Git install, use this fallback. It pins one commit, lets
 the first run initialize the profile, adds the exact `allowBuilds` key without
-deleting existing entries, and retries automatically:
+deleting existing entries, and retries automatically. Run it from a DeepSeek
+Harness checkout:
 
 ```bash
 set -eu

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { MODEL_TOOL_OPERATION_NAMES } from '../../../src/model-tools/contracts.js'
 import { modelFacingInputSchema } from '../../../src/model-tools/registry.js'
+import { projectDshDirective } from '../../../src/dsh/directive-projection.js'
 import {
   DSH_HOST_ONLY_OPERATIONS,
   DSH_MODEL_FACING_OPERATIONS,
@@ -35,6 +36,28 @@ test('model-facing schemas exclude every host-owned field', () => {
     const schema = modelFacingInputSchema(operation)
     const properties = schema.properties as Record<string, unknown>
     assert.deepEqual([...hostFields].filter((field) => Object.hasOwn(properties, field)), [], operation)
+  }
+})
+
+test('projected directives use the schema for the current model-facing action', () => {
+  const actions = [
+    ['submit_ideal', 'enno_ideal_submit'],
+    ['submit_plan', 'enno_plan_submit'],
+    ['execute_work_unit', 'enno_work_report'],
+    ['submit_final_review', 'enno_finish'],
+    ['submit_meditation', 'enno_meditation_submit'],
+  ] as const
+  for (const [nextAction, operation] of actions) {
+    const directive = {
+      role: 'enno-oduno',
+      harness: { kind: 'dsh', version: null, continuation: 'turn_stopping_plugin', instructions: [] },
+      objective: 'current objective', requiredSkills: [], workUnit: null, stopConditions: [],
+      reportSchema: { properties: { runId: { type: 'string' } }, required: ['runId'] },
+    } as any
+    const projected = projectDshDirective({ nextAction, directive } as any)
+    assert.deepEqual(projected?.reportSchema, modelFacingInputSchema(operation))
+    const properties = projected?.reportSchema?.properties as Record<string, unknown> | undefined
+    assert.equal(properties?.runId, undefined)
   }
 })
 

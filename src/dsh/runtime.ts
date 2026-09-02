@@ -12,7 +12,7 @@ import { createEmbeddingWorker, type EmbeddingWorker } from '../embedding/worker
 import { WriteQueue } from '../server/write-queue.js'
 import { DshAgentStateRegistry, type DshAgentIdentity, type DshAgentState } from './agent-state.js'
 import { DshContinuationRegistry, type DshContinuationBinding } from './agent-state.js'
-import { decideAdapterContinuation, type AdapterDecision } from '../enno-oduno/adapters.js'
+import { decideAdapterContinuation, type AdapterDecision, type ExactResumeExpectation } from '../enno-oduno/adapters.js'
 import { resolveProjectWorkspace } from '../memory/workspaces.js'
 
 export interface DshRuntimeOptions extends PathEnvironment {
@@ -219,25 +219,22 @@ export class DshRuntime {
       if (row === undefined) throw new KiokukoError('CONFLICT', 'The resume run is not registered for this repository')
       return row
     })
-    let previousBinding: DshContinuationBinding | undefined
-    if (input.resumeToken !== undefined) {
-      if (route.clientKind !== 'dsh' || route.clientSessionId !== input.dshSessionId) {
-        throw new KiokukoError('CONFLICT', 'resumeToken is not bound to the current dsh session')
-      }
-      previousBinding = this.#continuations.resolveExact({
-        resumeToken: input.resumeToken,
-        dshSessionId: input.dshSessionId,
+    const expectedRun: string | ExactResumeExpectation = input.resumeToken === undefined
+      ? runId
+      : {
         runId,
         workspace: route.workspace,
-      })
-      if (route.routeEpoch !== previousBinding.routeEpoch) throw new KiokukoError('CONFLICT', 'resumeToken route epoch is stale')
-    }
+        clientKind: 'dsh',
+        clientSessionId: input.dshSessionId,
+        routeEpoch: route.routeEpoch,
+        resumeToken: input.resumeToken,
+        requireExistingBinding: true,
+      }
     const decision = await this.withDatabase((database) => decideAdapterContinuation(database, 'dsh', {
       session_id: input.dshSessionId,
       cwd,
-    }, runId))
+    }, expectedRun))
     if (decision.runId !== null && decision.runId !== runId) throw new KiokukoError('CONFLICT', 'dsh resume resolved a different run')
-    if (previousBinding !== undefined && decision.routeEpoch !== previousBinding.routeEpoch) throw new KiokukoError('CONFLICT', 'dsh resume route epoch changed')
     if (decision.resumeToken !== null && decision.runId !== null && decision.routeEpoch !== null && decision.directive !== null) {
       const workspace = await this.withDatabase((database) => {
         const row = database.prepare('SELECT workspace FROM ledger_runs WHERE run_id = ?').get<{ workspace: string }>(decision.runId!)

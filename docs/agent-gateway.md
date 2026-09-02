@@ -6,14 +6,13 @@ The v1 gateway is **not** an OpenAI/Anthropic provider reverse proxy. It never r
 
 ## Runtime and discovery
 
-Start the foreground service with:
-
-```bash
-kiokuko serve [--host 127.0.0.1] [--port 0] [--json]
-kiokuko server status --json
-```
-
-`kiokuko web` is the compatibility entry point for the same server composition. The service accepts loopback hosts only. On startup it creates a same-user runtime descriptor containing protocol version, PID, base URL, database fingerprint, instance ID, start time, and a random capability token. The descriptor is mode `0600`; the token must not appear in stdout, argv, `AGENTS.md`, events, logs, or error responses.
+The DSH plugin owns the foreground Web/server composition. It does not expose
+the former generic `kiokuko serve`, `kiokuko web`, or `kiokuko server status`
+commands. The service accepts loopback hosts only. On startup it creates a
+same-user runtime descriptor containing protocol version, PID, base URL,
+database fingerprint, instance ID, start time, and a random capability token.
+The descriptor is mode `0600`; the token must not appear in stdout, argv,
+`AGENTS.md`, events, logs, or error responses.
 
 All `/api/v1/*` endpoints require `Authorization: Bearer <capability-token>`. `GET /health/live` exposes only liveness; `GET /health/ready` is authenticated. CORS is not permissive.
 

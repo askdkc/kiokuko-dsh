@@ -162,7 +162,7 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
       turn: 1, step: 3, signal: event.signal,
     })), /incomplete|mandatory|catalog/u)
   } finally {
-    disposeComposition()
+    await disposeComposition()
     await adapter.dispose()
     await hostFiber.dispose()
     await rm(f.root, { recursive: true, force: true })

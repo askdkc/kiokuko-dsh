@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
+import { connect } from 'node:net';
 import test from 'node:test';
 import { KiokukoError } from '../../src/errors.js';
 import { createApp } from '../../src/server/app.js';
@@ -24,6 +25,63 @@ async function closeServer(server: Server): Promise<void> {
   if (!server.listening) return;
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
+
+async function rawRequest(server: Server, target: string): Promise<string> {
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('server did not expose an address');
+  return new Promise<string>((resolve, reject) => {
+    const socket = connect(address.port, '127.0.0.1');
+    const chunks: Buffer[] = [];
+    socket.once('connect', () => {
+      socket.end(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${address.port}\r\nConnection: close\r\n\r\n`);
+    });
+    socket.on('data', (chunk: Buffer) => chunks.push(chunk));
+    socket.once('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    socket.once('error', reject);
+  });
+}
+
+function rawResponseBody(response: string): string {
+  const separator = response.indexOf('\r\n\r\n');
+  if (separator < 0) throw new Error('raw response has no header/body separator');
+  return response.slice(separator + 4);
+}
+
+test('malformed request targets return a fixed 400 and do not poison the server', async () => {
+  let dispatches = 0;
+  const app = await startApp({
+    expectedToken: token,
+    readiness: () => true,
+    v1: () => {
+      dispatches += 1;
+      return successEnvelope('agent.unexpected', { accepted: true });
+    },
+  });
+  try {
+    const rawResponse = await rawRequest(app.server, 'http://[');
+    const rawBody = rawResponseBody(rawResponse);
+
+    assert.match(rawResponse, /^HTTP\/1\.1 400\b/u);
+    assert.deepEqual(JSON.parse(rawBody), {
+      apiVersion: '1',
+      ok: false,
+      operation: 'server.request',
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Request is invalid',
+        details: {},
+      },
+    });
+    assert.equal(rawBody.includes('http://['), false);
+    assert.equal(dispatches, 0);
+
+    const live = await fetch(`${app.url}/health/live`);
+    assert.equal(live.status, 200);
+    assert.deepEqual(await live.json(), { ok: true });
+  } finally {
+    await closeServer(app.server);
+  }
+});
 
 test('GET /health/live returns only the minimal liveness JSON', async () => {
   const app = await startApp();

@@ -21,6 +21,7 @@ export * from './intake-gate.js'
 export * from './user-interaction.js'
 export * from './message-sources.js'
 export * from './context-injection.js'
+export * from './directive-projection.js'
 export * from './tools.js'
 export * from './tool-policy.js'
 export * from './composition.js'
@@ -48,25 +49,33 @@ export function apply(ctx: Context, config: DshConfig): void {
   console.info('[kiokuko-dsh] plugin loaded')
   ctx.effect(async () => {
     const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
-    if (host !== undefined) return mountDshComposition(ctx, host)
+    if (host !== undefined) {
+      const composition = await mountDshComposition(ctx, host)
+      return () => composition.dispose()
+    }
     const runtimeServices = [ctx.get('tools', false), ctx.get('sessions', false), ctx.get('agents', false)]
     // A deliberately minimal composition may expose only the prompt/Skill
     // plane. A partially installed runtime plane is different: mounting it as
     // prompt-only would silently drop run/session/tool safety boundaries.
     if (runtimeServices.every((service) => service === undefined)) {
-      return mountDshComposition(ctx, {
+      const composition = await mountDshComposition(ctx, {
         ...(ctx.get('skills', false) === undefined ? {} : { skills: ctx.get('skills', false) as DshCompositionHost['skills'] }),
         ...(ctx.get('systemPrompt', false) === undefined ? {} : { systemPrompt: ctx.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] }),
       } as DshCompositionHost)
+      return () => composition.dispose()
     }
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
     const adapter = createDshHostAdapter(ctx)
-    const disposeComposition = await mountDshComposition(ctx, adapter.host)
+    const composition = await mountDshComposition(ctx, adapter.host)
     return async () => {
-      await adapter.dispose()
-      disposeComposition()
+      composition.stopIngress()
+      const failures: unknown[] = []
+      try { await adapter.dispose() } catch (error) { failures.push(error) }
+      try { await composition.dispose() } catch (error) { failures.push(error) }
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) throw new AggregateError(failures, 'kiokuko-dsh unload failed')
     }
   }, 'kiokuko-dsh composition')
 }

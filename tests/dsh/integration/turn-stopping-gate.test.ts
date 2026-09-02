@@ -91,6 +91,30 @@ test('same directive is steered once per turn and then cancelled instead of loop
   assert.equal((await controller.handle(event(agent, 5))).kind, 'steer')
 })
 
+test('concurrent duplicate callbacks share one continuation decision without cancellation', async () => {
+  const agent = { id: 'concurrent', steers: [] as unknown[], cancels: [] as string[] }
+  let release!: () => void
+  let started!: () => void
+  const startedPromise = new Promise<void>((resolve) => { started = resolve })
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const controller = new DshEnnoController({
+    readState: async () => state('submit_plan'),
+    injectNextStepContext: async () => {
+      started()
+      await gate
+    },
+  })
+  const first = controller.handle(event(agent, 8))
+  await startedPromise
+  const second = controller.handle(event(agent, 8))
+  release()
+  const decisions = await Promise.all([first, second])
+  assert.deepEqual(decisions[0], decisions[1])
+  assert.equal(decisions[0]?.kind, 'steer')
+  assert.equal(agent.steers.length, 1)
+  assert.equal(agent.cancels.length, 0)
+})
+
 test('state, directive, context, and abort failures never become a normal close', async () => {
   const cases = [
     { readState: async () => { throw new Error('read failed') } },

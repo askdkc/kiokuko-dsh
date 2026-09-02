@@ -42,6 +42,7 @@ export interface DshCompositionHost {
   readonly skills?: DshSkillContext['skills']
   readonly systemPrompt?: Parameters<typeof mountSoulPrompt>[0]['systemPrompt']
   readonly runtime?: DshRuntime
+  readonly runtimeOwner?: 'composition' | 'host'
   readonly userQuestions?: DshUserQuestions
   readonly commands?: DshPonytailCommandContext['commands']
   readonly ponytailModes?: DshPonytailModes
@@ -54,6 +55,7 @@ export interface DshCompositionHost {
   readonly intakeGate?: DshIntakeGate
   readonly mapPreStep?: (payload: DshNativePreStepPayload) => DshPreStepEvent | PromiseLike<DshPreStepEvent>
   readonly bridge?: DshSessionBridge
+  readonly bridgeOwner?: 'composition' | 'host'
   readonly resolveSessionRunId?: DshSessionRunResolver
   readonly ennoController?: DshEnnoController
   readonly lifecycle?: DshRunLifecycle
@@ -67,17 +69,25 @@ function toolRegistration(host: DshCompositionHost): { register: (definition: an
   return host.tools === undefined ? undefined : { register: host.tools.register }
 }
 
-async function mountRuntime(ctx: Context, runtime: DshRuntime): Promise<() => void> {
+type DshDisposer = () => unknown
+
+export interface DshCompositionHandle {
+  /** Stop all event, command, tool, and session ingress synchronously. */
+  readonly stopIngress: () => void
+  /** Finish resource teardown after ingress has been stopped. */
+  readonly dispose: () => Promise<void>
+  /** Backward-compatible alias for dispose(). */
+  (): Promise<void>
+}
+
+async function mountRuntime(runtime: DshRuntime): Promise<DshDisposer> {
   let closed = false
-  await ctx.effect(async () => {
-    await runtime.start()
-    return async () => {
-      if (closed) return
-      closed = true
-      await runtime.close()
-    }
-  }, 'kiokuko-dsh runtime')
-  return () => { if (!closed) void runtime.close() }
+  await runtime.start()
+  return async () => {
+    if (closed) return
+    closed = true
+    await runtime.close()
+  }
 }
 
 function mountNativeIntakeGate(
@@ -112,44 +122,107 @@ function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshE
  * adapter is deliberately explicit: a generic Cordis context cannot invent a
  * repository/run binding or an intake task projection safely.
  */
-export async function mountDshComposition(ctx: Context, host: DshCompositionHost): Promise<() => void> {
-  const disposers: Array<() => unknown> = []
-  if (host.runtime !== undefined) disposers.push(await mountRuntime(ctx, host.runtime))
-  if (host.skills !== undefined) disposers.push(mountStandardSkillProvider({ skills: host.skills }))
-  if (host.systemPrompt !== undefined) {
-    const disposer = mountSoulPrompt({ systemPrompt: host.systemPrompt, effect: ctx.effect } as never)
-    if (typeof disposer === 'function') disposers.push(() => disposer())
-    await disposer
+export async function mountDshComposition(ctx: Context, host: DshCompositionHost): Promise<DshCompositionHandle> {
+  const ingressDisposers: DshDisposer[] = []
+  const cleanupDisposers: DshDisposer[] = []
+  const setupResourceDisposers: DshDisposer[] = []
+  const stopErrors: unknown[] = []
+  let ingressStopped = false
+  let disposePromise: Promise<void> | undefined
+
+  const stopIngress = (): void => {
+    if (ingressStopped) return
+    ingressStopped = true
+    for (const dispose of ingressDisposers.reverse()) {
+      try { dispose() } catch (error) { stopErrors.push(error) }
+    }
   }
-  if (host.commands !== undefined) disposers.push(mountDshPonytailCommand({ commands: host.commands }, host.ponytailModes ?? new DshPonytailModes()))
-  const registration = toolRegistration(host)
-  if ((registration === undefined) !== (host.toolHost === undefined)) {
-    if (host.toolPolicy === undefined) throw new Error('kiokuko-dsh requires a tool policy whenever native tools are mounted')
-    if (registration === undefined || host.toolHost === undefined) throw new Error('kiokuko-dsh native tool host is incomplete')
+
+  const runCleanup = async (): Promise<void> => {
+    const failures = [...stopErrors]
+    for (const dispose of cleanupDisposers.reverse()) {
+      try { await dispose() } catch (error) { failures.push(error) }
+    }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'kiokuko-dsh composition disposal failed')
   }
-  if (registration !== undefined && host.toolHost !== undefined) {
-    if (host.toolPolicy === undefined) throw new Error('kiokuko-dsh requires a monotonic tool policy')
-    const tools = host.tools
-    if (tools === undefined) throw new Error('kiokuko-dsh native tool registry is incomplete')
-    disposers.push(mountDshToolPolicy({
-      tools: { guard: tools.guard },
-      on: (name, listener, options) => ctx.on(name as never, listener as never, options),
-    }, host.toolPolicy))
-    disposers.push(mountDshModelTools({ tools: registration }, host.toolHost))
+
+  const runSetupCleanup = async (): Promise<void> => {
+    const failures: unknown[] = []
+    for (const dispose of setupResourceDisposers.reverse()) {
+      try { await dispose() } catch (error) { failures.push(error) }
+    }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'kiokuko-dsh composition setup cleanup failed')
   }
-  if (host.intakeGate !== undefined) {
-    if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')
-    disposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep))
+
+  try {
+    if (host.runtime !== undefined) {
+      const disposer = await mountRuntime(host.runtime)
+      setupResourceDisposers.push(disposer)
+      if (host.runtimeOwner !== 'host') cleanupDisposers.push(disposer)
+    }
+    if (host.skills !== undefined) {
+      const disposer = mountStandardSkillProvider({ skills: host.skills })
+      setupResourceDisposers.push(disposer)
+      cleanupDisposers.push(disposer)
+    }
+    if (host.systemPrompt !== undefined) {
+      const disposer = mountSoulPrompt({ systemPrompt: host.systemPrompt, effect: ctx.effect } as never)
+      if (typeof disposer === 'function') {
+        const cleanup = () => disposer()
+        setupResourceDisposers.push(cleanup)
+        cleanupDisposers.push(cleanup)
+      }
+      await disposer
+    }
+    if (host.commands !== undefined) ingressDisposers.push(mountDshPonytailCommand({ commands: host.commands }, host.ponytailModes ?? new DshPonytailModes()))
+    const registration = toolRegistration(host)
+    if ((registration === undefined) !== (host.toolHost === undefined)) {
+      if (host.toolPolicy === undefined) throw new Error('kiokuko-dsh requires a tool policy whenever native tools are mounted')
+      if (registration === undefined || host.toolHost === undefined) throw new Error('kiokuko-dsh native tool host is incomplete')
+    }
+    if (registration !== undefined && host.toolHost !== undefined) {
+      if (host.toolPolicy === undefined) throw new Error('kiokuko-dsh requires a monotonic tool policy')
+      const tools = host.tools
+      if (tools === undefined) throw new Error('kiokuko-dsh native tool registry is incomplete')
+      ingressDisposers.push(mountDshToolPolicy({
+        tools: { guard: tools.guard },
+        on: (name, listener, options) => ctx.on(name as never, listener as never, options),
+      }, host.toolPolicy))
+      ingressDisposers.push(mountDshModelTools({ tools: registration }, host.toolHost))
+    }
+    if (host.intakeGate !== undefined) {
+      if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')
+      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep))
+    }
+    if (host.bridge !== undefined) {
+      if (host.resolveSessionRunId === undefined) throw new Error('kiokuko-dsh session bridge requires a run resolver')
+      ingressDisposers.push(mountDshSessionBridge(ctx as unknown as DshSessionBridgeContext, host.bridge, host.resolveSessionRunId))
+      ingressDisposers.push(mountDshDurabilityBarriers(ctx as never, host.bridge))
+      const closeBridge = async () => {
+        if (host.lifecycle !== undefined) await host.lifecycle.dispose()
+        else await host.bridge!.close()
+      }
+      setupResourceDisposers.push(closeBridge)
+      if (host.bridgeOwner !== 'host') cleanupDisposers.push(closeBridge)
+    }
+    if (host.ennoController !== undefined) ingressDisposers.push(mountNativeEnnoController(ctx as unknown as DshTurnStoppingContext, host.ennoController))
+    if (host.lifecycle !== undefined) {
+      if (host.resolveIdleClose === undefined) throw new Error('kiokuko-dsh idle lifecycle requires a close resolver')
+      ingressDisposers.push(mountDshIdleLifecycle(ctx as unknown as DshIdleLifecycleContext, host.lifecycle, host.resolveIdleClose))
+    }
+  } catch (error) {
+    stopIngress()
+    try { await runSetupCleanup() } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'kiokuko-dsh composition setup failed') }
+    throw error
   }
-  if (host.bridge !== undefined) {
-    if (host.resolveSessionRunId === undefined) throw new Error('kiokuko-dsh session bridge requires a run resolver')
-    disposers.push(mountDshSessionBridge(ctx as unknown as DshSessionBridgeContext, host.bridge, host.resolveSessionRunId))
-    disposers.push(mountDshDurabilityBarriers(ctx as never, host.bridge))
+
+  const dispose = (): Promise<void> => {
+    if (disposePromise !== undefined) return disposePromise
+    stopIngress()
+    disposePromise = runCleanup()
+    return disposePromise
   }
-  if (host.ennoController !== undefined) disposers.push(mountNativeEnnoController(ctx as unknown as DshTurnStoppingContext, host.ennoController))
-  if (host.lifecycle !== undefined) {
-    if (host.resolveIdleClose === undefined) throw new Error('kiokuko-dsh idle lifecycle requires a close resolver')
-    disposers.push(mountDshIdleLifecycle(ctx as unknown as DshIdleLifecycleContext, host.lifecycle, host.resolveIdleClose))
-  }
-  return () => { for (const dispose of disposers.reverse()) void dispose() }
+  return Object.assign((() => dispose()) as () => Promise<void>, { stopIngress, dispose }) as DshCompositionHandle
 }

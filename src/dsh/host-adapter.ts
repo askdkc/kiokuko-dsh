@@ -26,6 +26,7 @@ import { createDshCapabilityCatalog, type DshCapabilityCatalog } from './capabil
 import { STANDARD_SKILL_MANIFESTS } from '../setup/standard-skills.js'
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js'
 import { injectDshContext, selectDshDirectiveSources } from './context-injection.js'
+import { projectDshDirective } from './directive-projection.js'
 import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, type EnnoOperationResponse } from '../enno-oduno/service.js'
 import { readEnnoSnapshot, terminalizeLedgerRunInTransaction } from '../enno-oduno/store.js'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
@@ -312,6 +313,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     expertRefs: selection.expertRefs,
     contractRevision: state.contractRevision,
     nextAction: state.nextAction,
+    directiveDigest: state.directive === null ? null : canonicalContentHash(state.directive),
   })
   const mapPreStep = async (payload: DshNativePreStepPayload): Promise<DshPreStepEvent> => {
     const nativeSession = payload.agent.session
@@ -354,7 +356,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const item = currentForAgentEvent(event.agent.id, event.sessionId, event.turn, event.nativeSession, event.nativeAgent)
     if (item === undefined || item.sessionId !== event.sessionId) throw new Error('kiokuko-dsh turn identity is not bound')
     if (event.nativeSession !== undefined && item.nativeSession !== event.nativeSession) throw new Error('kiokuko-dsh native session identity is not bound')
-    const directive = result.prepared.ennoOduno.directive
+    const directive = projectDshDirective(result.prepared.ennoOduno)
     const selection = directive === null ? { routeSkillNames: [], expertRefs: [] } : selectDshDirectiveSources(directive)
     const contextKey = contextInjectionKey(item, event.turn, result.prepared.ennoOduno, selection)
     if (item.contextInjectionKey === contextKey) return []
@@ -363,6 +365,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       task: event.task,
       routeSkillNames: selection.routeSkillNames,
       expertRefs: selection.expertRefs,
+      ...(directive === null ? {} : { directive }),
       runtime,
     })
     const nativeMessages = messages.map((message) => ({
@@ -390,6 +393,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         runId: state.runId,
         workspace: state.workspace,
         orchestrationId: state.orchestrationId,
+        ...(state.deliveryId === undefined ? {} : { deliveryId: state.deliveryId }),
         revision: state.revision,
         routeEpoch: state.routeEpoch,
         ...(state.leaseToken === undefined ? {} : { leaseToken: state.leaseToken }),
@@ -421,6 +425,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         return checkpointScopedMemoryWithProvenance(database, input as unknown as ScopedCheckpointInput, { clientKind: 'dsh', actor: 'dsh', reference: 'dsh' }, signal)
       }) as EnnoOperationResponse | unknown
       if (run !== undefined && isEnnoResponse(response)) {
+        run.prepared = { ...run.prepared, ennoOduno: response.ennoOduno }
         const next = policyState(response.ennoOduno, run, run.sessionId, response.executionLease)
         states.set(run.runId, next)
         policy.setState(next)
@@ -496,11 +501,15 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       }
       const contextKey = contextInjectionKey(item, event.turn, state, selection)
       if (item.contextInjectionKey === contextKey) return
+      const projectedDirective = projectDshDirective({ nextAction: state.nextAction, directive: state.directive })
       const messages = await injectDshContext({
         prepared: item.prepared,
         task: item.task,
         routeSkillNames: selection.routeSkillNames,
         expertRefs: selection.expertRefs,
+        ...(projectedDirective === null
+          ? {}
+          : { directive: projectedDirective }),
         runtime,
       })
       for (const message of messages) {
@@ -576,6 +585,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ...(skills === undefined ? {} : { skills: skills as any }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
     runtime,
+    runtimeOwner: 'host',
     ...(userQuestions === undefined ? {} : { userQuestions }),
     ...(commands === undefined ? {} : { commands: commands as any }),
     ponytailModes: modes,
@@ -586,6 +596,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     }),
     ...(tools === undefined ? {} : { intakeGate: gate, mapPreStep }),
     bridge,
+    bridgeOwner: 'host',
     resolveSessionRunId,
     ennoController,
     lifecycle: bridgeLifecycle,

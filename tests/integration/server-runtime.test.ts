@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -148,7 +148,7 @@ test("concurrent acquisition has exactly one winner", async () => {
   await winners[0]?.release();
 });
 
-test("replaces a lock whose PID is stale", async () => {
+test("rejects a lock whose PID is stale without changing the record", async () => {
   const directory = await temp("instance-lock-stale");
   const databasePath = path.join(directory, "kiokuko-dsh.sqlite3");
   const stale = await acquireInstanceLock(databasePath, {
@@ -157,15 +157,18 @@ test("replaces a lock whose PID is stale", async () => {
     instanceId: "123e4567-e89b-12d3-a456-426614174000",
   });
 
-  const replacement = await acquireInstanceLock(databasePath, {
-    runtimeDirectory: directory,
-    pid: process.pid,
-    instanceId: "123e4567-e89b-12d3-a456-426614174001",
-    isPidAlive: () => false,
-  });
-  assert.equal(replacement.instanceId, "123e4567-e89b-12d3-a456-426614174001");
-  await replacement.release();
-  assert.equal(await stale.release(), false);
+  const before = await readFile(stale.path, "utf8");
+  await assert.rejects(
+    () => acquireInstanceLock(databasePath, {
+      runtimeDirectory: directory,
+      pid: process.pid,
+      instanceId: "123e4567-e89b-12d3-a456-426614174001",
+      isPidAlive: () => false,
+    }),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "CONFLICT",
+  );
+  assert.equal(await readFile(stale.path, "utf8"), before);
+  assert.equal(await stale.release(), true);
 });
 
 test("rejects unknown runtime descriptor fields without exposing content", async () => {

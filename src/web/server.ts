@@ -13,6 +13,7 @@ import { projectLedger } from '../ledger/projection.js';
 import { readAkinatorSession, readRunIntakeLink } from '../akinator/store.js';
 import { startHttpServer, type HttpApplicationContext, type HttpServerOptions } from '../server/http.js';
 import { createAgentV1Handler } from '../server/agent-application.js';
+import { parseRequestUrl } from '../server/router.js';
 import { WEB_HTML } from './ui.js';
 import { curateMemoryCandidates, curatorFacets, globalizeCuratorCandidate } from '../memory/curator.js';
 import { MEMORY_CLASSES } from '../memory/structured-memory.js';
@@ -645,13 +646,13 @@ async function handleRequest(
   context: HttpApplicationContext,
   sessionToken: string,
   externalSkillRefreshFlights: ExternalSkillRefreshFlights,
+  url: URL,
 ): Promise<void> {
   if (request.method === 'OPTIONS') {
     response.writeHead(204, { 'cache-control': 'no-store' });
     response.end();
     return;
   }
-  const url = new URL(request.url ?? '/', 'http://127.0.0.1');
   if (request.method === 'GET' && url.pathname === '/') {
     htmlResponse(response, sessionToken);
     return;
@@ -870,24 +871,25 @@ function createLegacyApplication(context: HttpApplicationContext, trustedOrigin:
     operations: new Map(),
   };
   return (request, response) => {
+    let url: URL;
+    try {
+      url = parseRequestUrl(request.url);
+    } catch (error) {
+      jsonResponse(response, errorStatus(error), errorBody(error));
+      return;
+    }
     try {
       requireTrustedWebOrigin(request, trustedOrigin());
     } catch (error) {
       jsonResponse(response, errorStatus(error), errorBody(error));
       return;
     }
-    let pathname: string;
-    try {
-      pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
-    } catch {
-      jsonResponse(response, 400, errorBody(new KiokukoError('VALIDATION_ERROR', 'Request URL is invalid')));
-      return;
-    }
+    const pathname = url.pathname;
     if (isSharedServerPath(pathname)) {
       sharedApplication(request, response);
       return;
     }
-    void handleRequest(request, response, context, sessionToken, externalSkillRefreshFlights).catch((error: unknown) => {
+    void handleRequest(request, response, context, sessionToken, externalSkillRefreshFlights, url).catch((error: unknown) => {
       if (!response.headersSent) jsonResponse(response, errorStatus(error), errorBody(error));
       else response.destroy();
     });

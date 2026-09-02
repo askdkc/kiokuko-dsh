@@ -19,7 +19,7 @@
     "access": "public"
   },
   "files": [
-    "dist/dsh/",
+    "dist/",
     "migrations/",
     "skills/",
     "dsh/cordis.patch.yml",
