@@ -65,26 +65,48 @@ function publicReason(code: DshToolPolicyDenyCode): string {
 /** Own the monotonic policy decision without granting authority to the caller. */
 export class DshToolPolicy {
   #state: DshToolPolicyState | undefined
+  readonly #states = new Map<string, DshToolPolicyState>()
   #disposed = false
 
   constructor(state: DshToolPolicyState) {
-    this.#state = Object.freeze({ ...state })
+    this.#storeState(state)
+  }
+
+  #storeState(state: DshToolPolicyState): void {
+    const frozen = Object.freeze({ ...state })
+    this.#state = frozen
+    if (state.dshSessionId !== undefined) this.#states.set(state.dshSessionId, frozen)
   }
 
   setState(state: DshToolPolicyState): void {
     if (this.#disposed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh tool policy is disposed')
-    this.#state = Object.freeze({ ...state })
+    this.#storeState(state)
   }
 
   dispose(): void {
     this.#disposed = true
     this.#state = undefined
+    this.#states.clear()
+  }
+
+  /** Release the per-session snapshot after its run has reached a terminal state. */
+  clearSession(sessionId: string): void {
+    this.#states.delete(sessionId)
+    if (this.#state?.dshSessionId === sessionId) this.#state = undefined
   }
 
   decide(execution: DshToolExecution): DshToolPolicyDecision {
     if (this.#disposed) return denied('UNLOADED', publicReason('UNLOADED'))
-    const state = this.#state
-    if (state === undefined) return denied('UNLOADED', publicReason('UNLOADED'))
+    const state = execution.agent === undefined
+      ? this.#state
+      : this.#states.get(execution.agent.dshSessionId)
+        ?? (this.#state?.dshSessionId === undefined ? this.#state : undefined)
+    if (state === undefined) return denied('STALE_STATE', publicReason('STALE_STATE'))
+    // A native execution always carries a session object that the host must
+    // have bound into policy state. A run-only snapshot cannot authorize it.
+    if (execution.agent !== undefined && state.dshSessionId === undefined) {
+      return denied('STALE_STATE', publicReason('STALE_STATE'))
+    }
     if (execution.signal.aborted) return denied('CANCELLED', publicReason('CANCELLED'))
     if (!isDshModelFacingOperation(execution.name) && !isDshHostOnlyOperation(execution.name)) {
       return denied('UNKNOWN_TOOL', publicReason('UNKNOWN_TOOL'))
@@ -94,9 +116,12 @@ export class DshToolPolicy {
     }
     if (state.nextAction !== undefined && execution.origin !== 'host') {
       const expected = directiveOperation[state.nextAction]
+      if (expected === undefined) return denied('STALE_STATE', publicReason('STALE_STATE'))
       if (expected !== execution.name) return denied('WRONG_DIRECTIVE', publicReason('WRONG_DIRECTIVE'))
     }
-    if (!phaseAllowlist[state.phase].includes(execution.name)) {
+    const allowedOperations = phaseAllowlist[state.phase]
+    if (allowedOperations === undefined) return denied('STALE_STATE', publicReason('STALE_STATE'))
+    if (!allowedOperations.includes(execution.name)) {
       return denied('WRONG_PHASE', publicReason('WRONG_PHASE'))
     }
     if (execution.name === 'enno_work_report'
@@ -116,6 +141,9 @@ export class DshToolPolicy {
       if (error instanceof KiokukoError && error.code === 'CONFLICT') {
         return denied('STALE_STATE', publicReason('STALE_STATE'))
       }
+      if (error instanceof KiokukoError && error.code === 'VALIDATION_ERROR') {
+        return denied('STALE_STATE', publicReason('STALE_STATE'))
+      }
       throw error
     }
   }
@@ -129,10 +157,24 @@ export class DshToolPolicy {
 /** Install a final monotonic guard; later waterfall listeners cannot allow a denied call. */
 export function mountDshToolPolicy(ctx: DshToolPolicyContext, policy: DshToolPolicy): () => void {
   const guardDisposer = ctx.tools.guard((execution) => {
-    return policy.guardReason(normalizePolicyExecution(execution))
+    if (!isDshModelFacingOperation(execution.name) && !isDshHostOnlyOperation(execution.name)) return undefined
+    try {
+      return policy.guardReason(normalizePolicyExecution(execution))
+    } catch (error) {
+      if (error instanceof KiokukoError && error.code === 'VALIDATION_ERROR') return publicReason('STALE_STATE')
+      throw error
+    }
   })
   const preExecuteDisposer = ctx.on?.('tools/pre-execute', async (execution, next) => {
-    const decision = policy.decide(normalizePolicyExecution(execution))
+    if (!isDshModelFacingOperation(execution.name) && !isDshHostOnlyOperation(execution.name)) return next()
+    let normalized: DshToolExecution
+    try {
+      normalized = normalizePolicyExecution(execution)
+    } catch (error) {
+      if (error instanceof KiokukoError && error.code === 'VALIDATION_ERROR') return { kind: 'deny', reason: publicReason('STALE_STATE') }
+      throw error
+    }
+    const decision = policy.decide(normalized)
     if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
     return next()
   }, { prepend: true })
@@ -143,13 +185,21 @@ export function mountDshToolPolicy(ctx: DshToolPolicyContext, policy: DshToolPol
 }
 
 function normalizePolicyExecution(execution: DshToolExecution | DshNativeToolExecution): DshToolExecution {
-  if (execution.agent === undefined || 'dshSessionId' in execution.agent) return execution as DshToolExecution
+  if (execution.agent === undefined || !('id' in execution.agent)) return execution as DshToolExecution
+  const session = execution.agent.session
+  if (session === undefined || typeof session.id !== 'string' || session.id.length === 0) {
+    throw new KiokukoError('VALIDATION_ERROR', 'dsh native tool execution is missing its authoritative session')
+  }
   return {
       callId: execution.callId,
       ...(execution.rootCallId === undefined ? {} : { rootCallId: execution.rootCallId }),
       name: execution.name,
       arguments: execution.arguments,
-      agent: { dshSessionId: execution.agent.id, turn: 0 },
+      agent: {
+        dshSessionId: session.id,
+        ...(execution.agent.turn === undefined ? {} : { turn: execution.agent.turn }),
+        nativeSession: session,
+      },
       ...(execution.parent === undefined ? {} : { parent: execution.parent }),
       signal: execution.signal,
   }

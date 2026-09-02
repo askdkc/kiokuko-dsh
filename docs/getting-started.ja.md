@@ -2,7 +2,7 @@
 
 ## インストールと設定
 
-Node.js 24.16.0以上が必要です。公開済みの`kiokuko-dsh@0.1.0`をnpmから導入するのが通常の手順です。
+Node.js 24.16.0以上が必要です。対象releaseがnpmに公開済みの場合は、公開済みの`kiokuko-dsh`を導入するのが通常の手順です。
 
 ```bash
 npm install --global kiokuko-dsh

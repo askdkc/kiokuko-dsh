@@ -33,7 +33,7 @@ test('turn/end is flushed to the ledger before terminal run close', async () => 
     await lifecycle.closeTurn({ runId: 'run-dsh-close', status: 'completed' })
     assert.equal(bridge.pendingCount, 0)
     assert.equal(ledger.readEvents('run-dsh-close').length, 1)
-    assert.equal(ledger.readEvents('run-dsh-close')[0]?.source_event_id, 'dsh:session-dsh-close:1')
+    assert.match(ledger.readEvents('run-dsh-close')[0]?.source_event_id ?? '', /^dsh:session-dsh-close:[^:]+:1$/u)
     assert.equal(ledger.readRun('run-dsh-close')?.status, 'completed')
     assert.notEqual(ledger.readRun('run-dsh-close')?.endedAt, null)
   } finally {

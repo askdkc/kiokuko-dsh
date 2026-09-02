@@ -68,7 +68,7 @@ test('README entry points and English/Japanese docs carry the setup and trust co
     assert.match(readme, /Node\.js 24\.16\.0/u, name);
     assert.match(readme, /dsh plugin --profile web add kiokuko-dsh/u, name);
     assert.match(readme, /dsh web/u, name);
-    assert.match(readme, /0\.1\.0/u, name);
+    assert.doesNotMatch(readme, /kiokuko-dsh@0\.1\.0/u, name);
     assert.doesNotMatch(readme, /not published|未公開|尚未发布|공개되지 않았/u, name);
     assert.match(readme, /docs\/dsh-plugin/u, name);
     assert.doesNotMatch(readme, /<commit>/u, name);

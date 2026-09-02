@@ -199,7 +199,7 @@ test("delivery smoke: a stored Japanese policy is delivered to the next build ta
   const data = await mkdtemp(
     path.join(tmpdir(), "kiokuko-smoke-data-delivery-"),
   );
-  const databasePath = path.join(data, "kiokuko.sqlite3");
+  const databasePath = path.join(data, "kiokuko-dsh.sqlite3");
   const database = openConnection(databasePath);
   migrateDatabase(database, migrations);
   const client = await startServer(databasePath, repo);
@@ -238,7 +238,7 @@ test(
   async () => {
     const repo = await scratchRepository("cjk");
     const data = await mkdtemp(path.join(tmpdir(), "kiokuko-smoke-data-cjk-"));
-    const databasePath = path.join(data, "kiokuko.sqlite3");
+    const databasePath = path.join(data, "kiokuko-dsh.sqlite3");
     const database = openConnection(databasePath);
     migrateDatabase(database, migrations);
     const client = await startServer(databasePath, repo);
@@ -294,8 +294,8 @@ test("scope isolation smoke: writes under KIOKUKO_DATA_DIR never touch the user-
   const globalData = await mkdtemp(
     path.join(tmpdir(), "kiokuko-smoke-scope-global-"),
   );
-  const runDatabasePath = path.join(runData, "kiokuko.sqlite3");
-  const globalDatabasePath = path.join(globalData, "kiokuko.sqlite3");
+  const runDatabasePath = path.join(runData, "kiokuko-dsh.sqlite3");
+  const globalDatabasePath = path.join(globalData, "kiokuko-dsh.sqlite3");
   for (const databasePath of [runDatabasePath, globalDatabasePath]) {
     const connection = openConnection(databasePath);
     migrateDatabase(connection, migrations);

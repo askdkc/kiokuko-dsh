@@ -1,6 +1,7 @@
 import { answerAgentTask, prepareAgentTask, type PreparedAgentTask } from '../akinator/agent-task.js'
 import type { TaskProfile } from '../akinator/types.js'
 import { KiokukoError } from '../errors.js'
+import { canonicalContentHash } from '../serialization/validate.js'
 import type { DshRuntime } from './runtime.js'
 import {
   assertCompleteDshCapabilityCatalog,
@@ -13,6 +14,12 @@ import type { SkillDiscoveryMode } from '../skills/types.js'
 
 export interface DshPreStepEvent {
   readonly agent: { readonly id: string }
+  /** Opaque native Agent scope used for capability snapshots. */
+  readonly nativeAgent?: object
+  /** The native DSH session identity; it is distinct from agent.id. */
+  readonly sessionId: string
+  /** Opaque native Session object, retained only for exact host binding. */
+  readonly nativeSession?: object
   readonly turn: number
   readonly step: number
   readonly task: string
@@ -34,6 +41,13 @@ export interface DshIntakeGateResult {
   readonly catalog: DshCapabilityCatalog
 }
 
+export interface DshCapabilityReadContext {
+  readonly agent: { readonly id: string }
+  readonly nativeAgent?: object
+  readonly cwd: string
+  readonly signal: AbortSignal
+}
+
 export function assertDshModelAdmitted(result: DshIntakeGateResult): void {
   if (!result.admitted || (result.prepared.intake.status !== 'ready' && result.prepared.intake.status !== 'exhausted') || result.prepared.nextAction !== 'proceed') {
     throw new KiokukoError('CONFLICT', 'dsh model execution is not admitted before intake and capability checks complete')
@@ -48,17 +62,37 @@ function conflict(message: string): never {
   throw new KiokukoError('CONFLICT', message)
 }
 
-/** Host-native Akinator gate. It owns no duplicate intake state and never calls next while unresolved. */
+function assertAgentId(value: unknown): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256 || /[\p{Cc}\p{Cf}]/u.test(value)) {
+    throw new KiokukoError('VALIDATION_ERROR', 'dsh agent identity is invalid')
+  }
+}
+
+/** Host-native Akinator gate. It replays one bound result per logical turn and never calls next while unresolved. */
 export class DshIntakeGate {
   readonly #runtime: Pick<DshRuntime, 'withDatabase'>
   readonly #answerer: DshIntakeAnswerer | undefined
+  readonly #readCapabilities: ((context: DshCapabilityReadContext) => DshCapabilityCatalog | PromiseLike<DshCapabilityCatalog>) | undefined
+  readonly #prepared = new Map<string, {
+    readonly fingerprint: string
+    readonly result: DshIntakeGateResult
+    readonly agentId: string
+    readonly nativeAgent?: object
+    readonly nativeSession?: object
+  }>()
 
-  constructor(runtime: Pick<DshRuntime, 'withDatabase'>, answerer?: DshIntakeAnswerer) {
+  constructor(
+    runtime: Pick<DshRuntime, 'withDatabase'>,
+    answerer?: DshIntakeAnswerer,
+    readCapabilities?: (context: DshCapabilityReadContext) => DshCapabilityCatalog | PromiseLike<DshCapabilityCatalog>,
+  ) {
     this.#runtime = runtime
     this.#answerer = answerer
+    this.#readCapabilities = readCapabilities
   }
 
   async prepare(event: DshPreStepEvent): Promise<DshIntakeGateResult> {
+    assertAgentId(event.agent.id)
     assertCompleteDshCapabilityCatalog(event.capabilities)
     const grounded = resolveGroundedIntakeProfile({
       task: event.task,
@@ -66,21 +100,62 @@ export class DshIntakeGate {
       ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
       ...(event.evidence === undefined ? {} : { evidence: event.evidence }),
     })
-    const requestId = dshTurnRequestId({ dshSessionId: event.agent.id, turn: event.turn })
+    const requestId = dshTurnRequestId({ dshSessionId: event.sessionId, turn: event.turn })
+    const cacheKey = `${event.sessionId}\u0000${event.turn}`
+    const fingerprint = canonicalContentHash({
+      sessionId: event.sessionId,
+      agentId: event.agent.id,
+      turn: event.turn,
+      task: grounded.task,
+      cwd: grounded.cwd,
+      ...(grounded.profileHints === undefined ? {} : { profileHints: grounded.profileHints }),
+      ...(event.evidence === undefined ? {} : { evidence: event.evidence }),
+      ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
+      catalogDigest: event.capabilities.digest,
+    })
+    const cached = this.#prepared.get(cacheKey)
+    if (cached !== undefined) {
+      if (cached.fingerprint !== fingerprint
+        || cached.agentId !== event.agent.id
+        || cached.nativeAgent !== event.nativeAgent
+        || cached.nativeSession !== event.nativeSession) {
+        conflict('dsh logical turn was reused with different bound input')
+      }
+      assertDshCapabilityCatalogStable(cached.result.catalog, event.capabilities)
+      return cached.result
+    }
     let prepared = await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
       requestId,
       task: grounded.task,
       cwd: grounded.cwd,
       profileHints: grounded.profileHints,
       capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
-      client: { kind: 'dsh', sessionId: event.agent.id },
+      client: { kind: 'dsh', sessionId: event.sessionId },
       ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
       signal: event.signal,
     }))
     while (prepared.intake.status === 'needs_answer') {
-      if (this.#answerer === undefined || prepared.intake.question === null) return { admitted: false, prepared, catalog: event.capabilities }
+      if (this.#answerer === undefined || prepared.intake.question === null) {
+        const result = { admitted: false, prepared, catalog: event.capabilities }
+        this.#prepared.set(cacheKey, {
+          fingerprint,
+          result,
+          agentId: event.agent.id,
+          ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
+          ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
+        })
+        return result
+      }
       const value = await this.#answerer.ask(prepared.intake.question, event.signal)
-      assertDshCapabilityCatalogStable(event.capabilities, event.capabilities)
+      const currentCapabilities = this.#readCapabilities === undefined
+        ? event.capabilities
+        : await this.#readCapabilities({
+          agent: event.agent,
+          ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
+          cwd: event.cwd,
+          signal: event.signal,
+        })
+      assertDshCapabilityCatalogStable(event.capabilities, currentCapabilities)
       prepared = await this.#runtime.withDatabase((database) => answerAgentTask(database, {
         sessionId: prepared.intake.sessionId,
         runId: prepared.run.runId,
@@ -92,8 +167,17 @@ export class DshIntakeGate {
         signal: event.signal,
       }))
     }
-    if (prepared.nextAction !== 'proceed') return { admitted: false, prepared, catalog: event.capabilities }
-    return { admitted: true, prepared, catalog: event.capabilities }
+    const result = prepared.nextAction !== 'proceed'
+      ? { admitted: false, prepared, catalog: event.capabilities }
+      : { admitted: true, prepared, catalog: event.capabilities }
+    this.#prepared.set(cacheKey, {
+      fingerprint,
+      result,
+      agentId: event.agent.id,
+      ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
+      ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
+    })
+    return result
   }
 
   async preStep(event: DshPreStepEvent, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> {
@@ -109,6 +193,11 @@ export class DshIntakeGate {
   /** Turn-stopping callers use the same deny-before-side-effect check as pre-step. */
   assertTurnStoppingCatalog(expected: DshCapabilityCatalog, current: unknown): void {
     this.assertCatalog(expected, current)
+  }
+
+  /** Release the cached preparation for a turn once its owning run closes. */
+  clearTurn(sessionId: string, turn: number): void {
+    this.#prepared.delete(`${sessionId}\u0000${turn}`)
   }
 }
 

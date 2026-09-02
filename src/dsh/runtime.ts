@@ -13,6 +13,7 @@ import { WriteQueue } from '../server/write-queue.js'
 import { DshAgentStateRegistry, type DshAgentIdentity, type DshAgentState } from './agent-state.js'
 import { DshContinuationRegistry, type DshContinuationBinding } from './agent-state.js'
 import { decideAdapterContinuation, type AdapterDecision } from '../enno-oduno/adapters.js'
+import { resolveProjectWorkspace } from '../memory/workspaces.js'
 
 export interface DshRuntimeOptions extends PathEnvironment {
   readonly repositoryRoot: string
@@ -24,6 +25,8 @@ export interface DshRuntimeOptions extends PathEnvironment {
   readonly embeddingProvider?: EmbeddingProvider
   readonly embeddingBackend?: VectorSearchBackend
   readonly now?: () => string
+  /** Automatically persist a local repository binding before startup. */
+  readonly autoRegisterRepository?: boolean
 }
 
 export type DshDatabaseOperation<T> = (database: SqliteDatabase, runtime: EmbeddingRuntime) => Promise<T> | T
@@ -108,7 +111,8 @@ export class DshRuntime {
   }
 
   async #initialize(): Promise<RuntimeResources> {
-    const repositoryRoot = requireRepositoryRoot(this.#options.repositoryRoot)
+    const configuredRepositoryRoot = requireRepositoryRoot(this.#options.repositoryRoot)
+    let repositoryRoot = configuredRepositoryRoot
     const databasePath = this.#options.databasePath ?? getGlobalDatabasePath(this.#options)
     const initialize = this.#options.initializeDatabase ?? initializeDatabase
     let database: SqliteDatabase | undefined
@@ -126,6 +130,10 @@ export class DshRuntime {
         ...(this.#options.embeddingBackend === undefined ? {} : { backend: this.#options.embeddingBackend }),
       })
       database = opened.database
+      if (this.#options.autoRegisterRepository === true) {
+        const resolved = await resolveProjectWorkspace(database, configuredRepositoryRoot)
+        if (resolved !== undefined) repositoryRoot = resolved.repositoryRoot
+      }
       const binding = findRepositoryBinding(database, repositoryRoot)
       queue = new WriteQueue<unknown>(64)
       embeddingRuntime = createEmbeddingRuntime(database, this.#options.embeddingConfig, {

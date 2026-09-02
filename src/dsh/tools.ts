@@ -38,7 +38,13 @@ export interface DshToolExecution {
   readonly rootCallId?: string
   readonly name: string
   readonly arguments: unknown
-  readonly agent?: { readonly dshSessionId: string; readonly turn: number }
+  readonly agent?: {
+    readonly dshSessionId: string
+    /** Optional logical turn metadata; native ToolExecution does not carry it. */
+    readonly turn?: number
+    /** Opaque native Session object used to prevent same-ID cross-lifecycle rebinding. */
+    readonly nativeSession?: object
+  }
   readonly parent?: unknown
   readonly origin?: 'model' | 'host'
   readonly signal: AbortSignal
@@ -54,12 +60,14 @@ export interface DshNativeToolExecution {
   readonly rootCallId?: string
   readonly name: string
   readonly arguments: unknown
-  readonly agent?: { readonly id: string }
+  readonly agent?: { readonly id: string; readonly session?: { readonly id: string }; readonly sessionId?: string; readonly turn?: number }
   readonly parent?: unknown
   readonly signal: AbortSignal
 }
 
 export interface DshToolHostBinding {
+  /** Host-bound native session identity; never supplied by model arguments. */
+  readonly dshSessionId?: string
   readonly runId: string
   readonly workspace: string
   readonly orchestrationId: string
@@ -85,7 +93,7 @@ export interface DshToolDefinition {
 
 export interface DshToolHost {
   readonly bind: (execution: DshToolExecution) => Omit<DshToolHostBinding, 'idempotencyKey'>
-  readonly execute: (operation: ModelToolOperationName, args: unknown, binding: DshToolHostBinding) => Promise<unknown>
+  readonly execute: (operation: ModelToolOperationName, args: unknown, binding: DshToolHostBinding, signal?: AbortSignal) => Promise<unknown>
 }
 
 export interface DshToolRegistrationContext {
@@ -95,23 +103,40 @@ export interface DshToolRegistrationContext {
 }
 
 function normalizeExecution(execution: DshToolExecution | DshNativeToolExecution): DshToolExecution {
-  if (execution.agent === undefined || 'dshSessionId' in execution.agent) return execution as DshToolExecution
+  // Internal executions carry only the host-owned dshSessionId; native
+  // executions are identified by the authoritative Agent id. Do not trust a
+  // forged dshSessionId property on a native Agent to bypass session binding.
+  if (execution.agent === undefined || !('id' in execution.agent)) return execution as DshToolExecution
+  const session = execution.agent.session
+  if (session === undefined || typeof session.id !== 'string' || session.id.length === 0) {
+    throw new KiokukoError('VALIDATION_ERROR', 'dsh native tool execution is missing its authoritative session')
+  }
   return {
     callId: execution.callId,
     ...(execution.rootCallId === undefined ? {} : { rootCallId: execution.rootCallId }),
     name: execution.name,
     arguments: execution.arguments,
-    agent: { dshSessionId: execution.agent.id, turn: 0 },
+    agent: {
+      dshSessionId: session.id,
+      ...(execution.agent.turn === undefined ? {} : { turn: execution.agent.turn }),
+      nativeSession: session,
+    },
     ...(execution.parent === undefined ? {} : { parent: execution.parent }),
     signal: execution.signal,
   }
 }
 
 function validCallId(callId: unknown): string {
-  if (typeof callId !== 'string' || callId.length === 0 || callId.length > 256 || /[\p{Cc}]/u.test(callId)) {
+  if (typeof callId !== 'string' || callId.length === 0 || callId.length > 256 || /[\p{Cc}\p{Cf}]/u.test(callId)) {
     throw new KiokukoError('VALIDATION_ERROR', 'dsh tool call identity is invalid')
   }
   return callId
+}
+
+function validBindingText(value: unknown, label: string, maximum = 4_096): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\p{Cc}\p{Cf}]/u.test(value)) {
+    throw new KiokukoError('VALIDATION_ERROR', `dsh ${label} is invalid`)
+  }
 }
 
 function validOperation(name: unknown): ModelToolOperationName {
@@ -126,23 +151,23 @@ function ownKeys(value: unknown): string[] {
   return Object.keys(value)
 }
 
-function containsHostIdentity(value: unknown, seen = new Set<object>()): boolean {
+function containsHostIdentity(value: unknown, forbidden: ReadonlySet<string>, seen = new Set<object>()): boolean {
   if (typeof value !== 'object' || value === null) return false
   if (seen.has(value)) return true
   seen.add(value)
-  const forbidden = new Set(['runId', 'workspace', 'orchestrationId', 'resumeToken', 'expectedRevision', 'leaseToken', 'routeEpoch', 'idempotencyKey'])
   if (ownKeys(value).some((key) => forbidden.has(key))) return true
   return Array.isArray(value)
-    ? value.some((item) => containsHostIdentity(item, seen))
-    : Object.values(value).some((item) => containsHostIdentity(item, seen))
+    ? value.some((item) => containsHostIdentity(item, forbidden, seen))
+    : Object.values(value).some((item) => containsHostIdentity(item, forbidden, seen))
 }
 
 /** Derive one stable idempotency key for a direct or nested dsh tool call. */
 export function dshToolIdempotencyKey(execution: Pick<DshToolExecution, 'callId' | 'rootCallId' | 'name' | 'agent'>): string {
   const callId = validCallId(execution.rootCallId ?? execution.callId)
   if (execution.agent !== undefined) {
-    if (typeof execution.agent.dshSessionId !== 'string' || execution.agent.dshSessionId.length === 0
-      || !Number.isSafeInteger(execution.agent.turn) || execution.agent.turn < 0) {
+    if (typeof execution.agent.dshSessionId !== 'string' || execution.agent.dshSessionId.length === 0 || execution.agent.dshSessionId.length > 256
+      || /[\p{Cc}\p{Cf}]/u.test(execution.agent.dshSessionId)
+      || (execution.agent.turn !== undefined && (!Number.isSafeInteger(execution.agent.turn) || execution.agent.turn < 0))) {
       throw new KiokukoError('VALIDATION_ERROR', 'dsh agent identity is invalid')
     }
   }
@@ -150,7 +175,9 @@ export function dshToolIdempotencyKey(execution: Pick<DshToolExecution, 'callId'
     version: 1,
     callId,
     name: validOperation(execution.name),
-    agent: execution.agent === undefined ? null : execution.agent,
+    agent: execution.agent === undefined
+      ? null
+      : { dshSessionId: execution.agent.dshSessionId, ...(execution.agent.turn === undefined ? {} : { turn: execution.agent.turn }) },
   })}`
 }
 
@@ -161,16 +188,20 @@ export function bindDshToolInvocation(
 ): DshToolHostBinding {
   const operation = validOperation(execution.name)
   validCallId(execution.callId)
-  if (containsHostIdentity(execution.arguments)) {
+  const forbiddenFields = new Set(modelToolContract(operation).hostOwnedFields)
+  if (containsHostIdentity(execution.arguments, forbiddenFields)) {
     throw new KiokukoError('SECURITY_REJECTION', 'dsh tool arguments contain host-owned identity')
   }
-  if (typeof state.runId !== 'string' || state.runId.length === 0
-    || typeof state.workspace !== 'string' || state.workspace.length === 0
-    || typeof state.orchestrationId !== 'string' || state.orchestrationId.length === 0
-    || !Number.isSafeInteger(state.revision) || state.revision < 1
+  validBindingText(state.runId, 'run identity')
+  if (state.dshSessionId !== undefined) validBindingText(state.dshSessionId, 'session identity', 256)
+  validBindingText(state.workspace, 'workspace')
+  validBindingText(state.orchestrationId, 'orchestration identity')
+  if (!Number.isSafeInteger(state.revision) || state.revision < 1
     || !Number.isSafeInteger(state.routeEpoch) || state.routeEpoch < 0) {
     throw new KiokukoError('VALIDATION_ERROR', 'dsh host binding is invalid')
   }
+  if (state.workUnitId !== undefined) validBindingText(state.workUnitId, 'WorkUnit identity')
+  if (state.leaseToken !== undefined) validBindingText(state.leaseToken, 'lease token')
   if (operation === 'enno_work_report' && (state.workUnitId === undefined || state.leaseToken === undefined)) {
     throw new KiokukoError('CONFLICT', 'dsh WorkUnit report requires the current host lease')
   }
@@ -199,9 +230,14 @@ export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDef
       }]),
     },
     execute: async (args: unknown, rawExecution: DshToolExecution | DshNativeToolExecution): Promise<unknown> => {
-      const execution = normalizeExecution(rawExecution)
+      const normalized = normalizeExecution(rawExecution)
+      if (normalized.name !== operation) throw new KiokukoError('CONFLICT', 'dsh tool definition and execution operation differ')
+      // The first argument is the actual parsed tool payload. Rebind it onto
+      // the execution before checking host-owned fields; never rely on a
+      // duplicate metadata copy supplied by the native runtime.
+      const execution = Object.freeze({ ...normalized, arguments: args })
       const binding = bindDshToolInvocation(execution, host.bind(execution))
-      return host.execute(operation, args, binding)
+      return host.execute(operation, args, binding, execution.signal)
     },
   })))
 }

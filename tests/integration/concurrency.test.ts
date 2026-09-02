@@ -30,7 +30,7 @@ function runWorker(script: string, env: NodeJS.ProcessEnv): Promise<void> {
 
 test('8 processes × 10 records complete without loss or lock errors', async () => {
   const directory = await temp('concurrency-records');
-  const databasePath = path.join(directory, 'data', 'kiokuko.sqlite3');
+  const databasePath = path.join(directory, 'data', 'kiokuko-dsh.sqlite3');
   const workerPath = path.resolve('tests/fixtures/concurrent-writer.ts');
   await Promise.all(Array.from({ length: 8 }, (_, worker) => runWorker(workerPath, {
     KIOKUKO_TEST_DATABASE: databasePath,
@@ -52,7 +52,7 @@ test('concurrent use creates one binding and one managed block without losing us
   execFileSync('git', ['init', '-q', root]);
   await import('node:fs/promises').then(({ writeFile }) => writeFile(path.join(root, 'AGENTS.md'), 'human header\n'));
   const data = await temp('concurrency-use-data');
-  const databasePath = path.join(data, 'kiokuko.sqlite3');
+  const databasePath = path.join(data, 'kiokuko-dsh.sqlite3');
   const initialized = openConnection(databasePath);
   try {
     migrateDatabase(initialized);

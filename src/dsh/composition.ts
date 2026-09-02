@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingContext } from './enno-controller.js'
 import { DshIntakeGate, type DshPreStepDecision, type DshPreStepEvent, type DshPreStepContext } from './intake-gate.js'
@@ -14,7 +15,11 @@ import type { DshRuntime } from './runtime.js'
 export const KIOKUKO_DSH_HOST_SERVICE = 'kiokukoDsh'
 
 export interface DshNativePreStepPayload {
-  readonly agent: { readonly id: string }
+  readonly agent: {
+    readonly id: string
+    readonly session?: { readonly id: string; readonly header?: { readonly cwd?: string } }
+    readonly sessionId?: string
+  }
   readonly messages: readonly unknown[]
   readonly turn: number
   readonly step: number
@@ -24,6 +29,8 @@ export interface DshNativePreStepPayload {
 export interface DshNativeTurnStoppingPayload {
   readonly agent: {
     readonly id: string
+    readonly session?: { readonly id: string }
+    readonly sessionId?: string
     readonly steer: (message: unknown) => void
     readonly cancel?: (reason: unknown) => void
   }
@@ -45,12 +52,12 @@ export interface DshCompositionHost {
   readonly toolHost?: DshToolHost
   readonly toolPolicy?: DshToolPolicy
   readonly intakeGate?: DshIntakeGate
-  readonly mapPreStep?: (payload: DshNativePreStepPayload) => DshPreStepEvent
+  readonly mapPreStep?: (payload: DshNativePreStepPayload) => DshPreStepEvent | PromiseLike<DshPreStepEvent>
   readonly bridge?: DshSessionBridge
   readonly resolveSessionRunId?: DshSessionRunResolver
   readonly ennoController?: DshEnnoController
   readonly lifecycle?: DshRunLifecycle
-  readonly resolveIdleClose?: (agentId: string) => { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | undefined
+  readonly resolveIdleClose?: (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object) => { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | PromiseLike<{ readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | undefined> | undefined
 }
 
 type DshToolHostRegistration = DshToolRegistrationContext['tools']['register']
@@ -77,17 +84,20 @@ function mountRuntime(ctx: Context, runtime: DshRuntime): () => void {
 function mountNativeIntakeGate(
   ctx: { on(name: 'agent/pre-step', listener: (payload: DshNativePreStepPayload, next: () => Promise<DshPreStepDecision>) => Promise<DshPreStepDecision>, options?: { readonly prepend?: boolean }): () => void },
   gate: DshIntakeGate,
-  mapPreStep: (payload: DshNativePreStepPayload) => DshPreStepEvent,
+  mapPreStep: (payload: DshNativePreStepPayload) => DshPreStepEvent | PromiseLike<DshPreStepEvent>,
 ): () => void {
-  return ctx.on('agent/pre-step', (payload: DshNativePreStepPayload, next) => gate.preStep(mapPreStep(payload), next as () => Promise<DshPreStepDecision>), { prepend: true })
+  return ctx.on('agent/pre-step', async (payload: DshNativePreStepPayload, next) => gate.preStep(await mapPreStep(payload), next as () => Promise<DshPreStepDecision>), { prepend: true })
 }
 
 function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshEnnoController): () => void {
   return (ctx as unknown as { on(name: 'agent/turn-stopping', listener: (payload: DshNativeTurnStoppingPayload) => Promise<void>, options?: { readonly prepend?: boolean }): () => void }).on('agent/turn-stopping', async (payload: DshNativeTurnStoppingPayload) => {
     const agent: DshTurnStoppingAgent = {
       id: payload.agent.id,
+      nativeAgent: payload.agent as object,
+      ...(payload.agent.session?.id === undefined && payload.agent.sessionId === undefined ? {} : { sessionId: payload.agent.session?.id ?? payload.agent.sessionId }),
+      ...(payload.agent.session === undefined ? {} : { nativeSession: payload.agent.session as object }),
       steer: (message) => payload.agent.steer({
-        id: `kiokuko-dsh:${payload.agent.id}:${payload.turn}`,
+        id: randomUUID(),
         role: 'user',
         content: [{ type: 'text', text: message.content }],
         source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },

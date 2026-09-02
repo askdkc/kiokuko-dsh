@@ -1,108 +1,138 @@
-import assert from 'node:assert/strict';
-import { chmod, copyFile, mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { openConnection } from '../../src/db/connection.js';
-import { migrateDatabase } from '../../src/db/migrate.js';
-import { recordEntry } from '../../src/memory/entries.js';
-import { buildStructuredScope } from '../../src/memory/structured-memory.js';
-import { ensureGlobalWorkspace } from '../../src/memory/workspaces.js';
-import { registerRepositoryAndLocation } from '../../src/repository/binding.js';
-import { documentsFromSkillSnapshot } from '../../src/skills/import-preparation.js';
-import { requirementForOfficialSkill } from '../../src/skills/official-catalog.js';
-import { importSkillSnapshot } from '../../src/skills/store.js';
-import { validateSkillSnapshot } from '../../src/skills/source/snapshot-validator.js';
-import type { SkillCandidate } from '../../src/skills/types.js';
+import assert from "node:assert/strict";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rename,
+  rm,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { openConnection } from "../../src/db/connection.js";
+import { migrateDatabase } from "../../src/db/migrate.js";
+import { recordEntry } from "../../src/memory/entries.js";
+import { buildStructuredScope } from "../../src/memory/structured-memory.js";
+import { ensureGlobalWorkspace } from "../../src/memory/workspaces.js";
+import { registerRepositoryAndLocation } from "../../src/repository/binding.js";
+import { documentsFromSkillSnapshot } from "../../src/skills/import-preparation.js";
+import { requirementForOfficialSkill } from "../../src/skills/official-catalog.js";
+import { importSkillSnapshot } from "../../src/skills/store.js";
+import { validateSkillSnapshot } from "../../src/skills/source/snapshot-validator.js";
+import type { SkillCandidate } from "../../src/skills/types.js";
 
 export const SAMPLE_DATABASE_BASELINE_VERSION = 11;
-export const SAMPLE_PROJECT_WORKSPACE = 'project:sampledb-ci';
-export const SAMPLE_GLOBAL_WORKSPACE = 'global';
-export const SAMPLE_EXTERNAL_SKILL_ID = 'github:sveltejs/ai-tools:svelte-code-writer';
-export const SAMPLE_EXTERNAL_SKILL_WORKSPACE = 'external-skills:github:sveltejs-ai-tools-d93a72b29bf7a039';
+export const SAMPLE_PROJECT_WORKSPACE = "project:sampledb-ci";
+export const SAMPLE_GLOBAL_WORKSPACE = "global";
+export const SAMPLE_EXTERNAL_SKILL_ID =
+  "github:sveltejs/ai-tools:svelte-code-writer";
+export const SAMPLE_EXTERNAL_SKILL_WORKSPACE =
+  "external-skills:github:sveltejs-ai-tools-d93a72b29bf7a039";
 
 export const SAMPLE_PROJECT_TITLES = [
-  'CI project fixture: migration marker',
-  'CI project fixture: Unicode decision',
-  'CI project fixture: reference',
+  "CI project fixture: migration marker",
+  "CI project fixture: Unicode decision",
+  "CI project fixture: reference",
 ] as const;
-export const SAMPLE_PROJECT_UNICODE_BODY = '改行とUnicodeを保持する。\n記憶テスト 🧠';
+export const SAMPLE_PROJECT_UNICODE_BODY =
+  "改行とUnicodeを保持する。\n記憶テスト 🧠";
 
 export const SAMPLE_GLOBAL_TITLES = [
-  'CI global fixture: boundary validation',
-  'CI global fixture: idempotent persistence',
-  'CI global fixture: portable paths',
+  "CI global fixture: boundary validation",
+  "CI global fixture: idempotent persistence",
+  "CI global fixture: portable paths",
 ] as const;
 
-const FIXTURE_TIME = '2026-01-01T00:00:00.000Z';
-const FIXTURE_PROJECT_ROOT = '/tmp/kiokuko-sampledb-ci-project';
+const FIXTURE_TIME = "2026-01-01T00:00:00.000Z";
+const FIXTURE_PROJECT_ROOT = "/tmp/kiokuko-sampledb-ci-project";
 const FIXTURE_EXTERNAL_ENTRY_IDS = [
-  'entry-sampledb-external-overview',
-  'entry-sampledb-external-inspect',
-  'entry-sampledb-external-verify',
+  "entry-sampledb-external-overview",
+  "entry-sampledb-external-inspect",
+  "entry-sampledb-external-verify",
 ] as const;
-const repositoryRoot = path.resolve(import.meta.dirname, '../..');
-const migrationsRoot = path.join(repositoryRoot, 'migrations');
+const repositoryRoot = path.resolve(import.meta.dirname, "../..");
+const migrationsRoot = path.join(repositoryRoot, "migrations");
 
 const sampleSkillCandidate: SkillCandidate = {
-  id: 'fixture:sveltejs/ai-tools:svelte-code-writer',
-  provider: 'fixture',
-  name: 'svelte-code-writer',
-  slug: 'svelte-code-writer',
-  source: 'sveltejs/ai-tools',
-  sourceType: 'github',
-  installUrl: 'https://github.com/sveltejs/ai-tools',
+  id: "fixture:sveltejs/ai-tools:svelte-code-writer",
+  provider: "fixture",
+  name: "svelte-code-writer",
+  slug: "svelte-code-writer",
+  source: "sveltejs/ai-tools",
+  sourceType: "github",
+  installUrl: "https://github.com/sveltejs/ai-tools",
   installs: 0,
   duplicate: false,
-  officialStatus: 'catalog-verified',
+  officialStatus: "catalog-verified",
 };
 
 function sampleSkillSnapshot() {
   return validateSkillSnapshot({
     candidate: sampleSkillCandidate,
-    sourceCommit: '1'.repeat(40),
-    files: [{
-      path: 'tools/skills/svelte-code-writer/SKILL.md',
-      primary: true,
-      content: [
-        '---',
-        'name: svelte-code-writer',
-        'description: Deterministic external-skill fixture for migration and Web API tests.',
-        '---',
-        '# Sample Svelte skill',
-        '',
-        'This is synthetic CI fixture content. It is never installed or executed.',
-        '',
-        '## Inspect',
-        '',
-        'Read the component and identify the smallest testable change.',
-        '',
-        '## Verify',
-        '',
-        'Run the relevant static checks and focused tests.',
-        '',
-      ].join('\n'),
-    }],
+    sourceCommit: "1".repeat(40),
+    files: [
+      {
+        path: "tools/skills/svelte-code-writer/SKILL.md",
+        primary: true,
+        content: [
+          "---",
+          "name: svelte-code-writer",
+          "description: Deterministic external-skill fixture for migration and Web API tests.",
+          "---",
+          "# Sample Svelte skill",
+          "",
+          "This is synthetic CI fixture content. It is never installed or executed.",
+          "",
+          "## Inspect",
+          "",
+          "Read the component and identify the smallest testable change.",
+          "",
+          "## Verify",
+          "",
+          "Run the relevant static checks and focused tests.",
+          "",
+        ].join("\n"),
+      },
+    ],
   });
 }
 
-export const SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT = documentsFromSkillSnapshot(sampleSkillSnapshot()).length;
+export const SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT = documentsFromSkillSnapshot(
+  sampleSkillSnapshot(),
+).length;
 
 async function copyBaselineMigrations(targetDirectory: string): Promise<void> {
   const available = await readdir(migrationsRoot);
-  for (let version = 1; version <= SAMPLE_DATABASE_BASELINE_VERSION; version += 1) {
-    const prefix = String(version).padStart(3, '0');
-    const matches = available.filter((name) => name.startsWith(`${prefix}_`) && name.endsWith('.sql'));
-    assert.equal(matches.length, 1, `Expected exactly one migration for version ${version}`);
-    await copyFile(path.join(migrationsRoot, matches[0]!), path.join(targetDirectory, matches[0]!));
+  for (
+    let version = 1;
+    version <= SAMPLE_DATABASE_BASELINE_VERSION;
+    version += 1
+  ) {
+    const prefix = String(version).padStart(3, "0");
+    const matches = available.filter(
+      (name) => name.startsWith(`${prefix}_`) && name.endsWith(".sql"),
+    );
+    assert.equal(
+      matches.length,
+      1,
+      `Expected exactly one migration for version ${version}`,
+    );
+    await copyFile(
+      path.join(migrationsRoot, matches[0]!),
+      path.join(targetDirectory, matches[0]!),
+    );
   }
 }
 
-function recordProjectFixtures(database: ReturnType<typeof openConnection>): void {
+function recordProjectFixtures(
+  database: ReturnType<typeof openConnection>,
+): void {
   registerRepositoryAndLocation(database, {
-    repositoryId: 'repo_sampledb_ci',
+    repositoryId: "repo_sampledb_ci",
     workspace: SAMPLE_PROJECT_WORKSPACE,
-    displayName: 'sampledb-ci',
+    displayName: "sampledb-ci",
     canonicalRoot: FIXTURE_PROJECT_ROOT,
     remoteFingerprint: null,
     bindingSchemaVersion: 1,
@@ -110,116 +140,150 @@ function recordProjectFixtures(database: ReturnType<typeof openConnection>): voi
     now: FIXTURE_TIME,
   });
 
-  const records = [{
-    id: 'entry-sampledb-project-fact',
-    kind: 'fact' as const,
-    status: 'verified' as const,
-    trustLevel: 'source_verified' as const,
-    title: SAMPLE_PROJECT_TITLES[0],
-    body: 'This deterministic record must survive setup migration unchanged.',
-    tags: ['fixture:ci', 'fixture:project', 'sample:migration'],
-  }, {
-    id: 'entry-sampledb-project-decision',
-    kind: 'decision' as const,
-    status: 'candidate' as const,
-    trustLevel: 'user_asserted' as const,
-    title: SAMPLE_PROJECT_TITLES[1],
-    body: SAMPLE_PROJECT_UNICODE_BODY,
-    tags: ['fixture:ci', 'fixture:project', 'sample:unicode'],
-  }, {
-    id: 'entry-sampledb-project-reference',
-    kind: 'reference' as const,
-    status: 'candidate' as const,
-    trustLevel: 'user_asserted' as const,
-    title: SAMPLE_PROJECT_TITLES[2],
-    body: 'Reference marker: sampledb-reference-v1.',
-    tags: ['fixture:ci', 'fixture:project', 'sample:reference'],
-  }];
+  const records = [
+    {
+      id: "entry-sampledb-project-fact",
+      kind: "fact" as const,
+      status: "verified" as const,
+      trustLevel: "source_verified" as const,
+      title: SAMPLE_PROJECT_TITLES[0],
+      body: "This deterministic record must survive setup migration unchanged.",
+      tags: ["fixture:ci", "fixture:project", "sample:migration"],
+    },
+    {
+      id: "entry-sampledb-project-decision",
+      kind: "decision" as const,
+      status: "candidate" as const,
+      trustLevel: "user_asserted" as const,
+      title: SAMPLE_PROJECT_TITLES[1],
+      body: SAMPLE_PROJECT_UNICODE_BODY,
+      tags: ["fixture:ci", "fixture:project", "sample:unicode"],
+    },
+    {
+      id: "entry-sampledb-project-reference",
+      kind: "reference" as const,
+      status: "candidate" as const,
+      trustLevel: "user_asserted" as const,
+      title: SAMPLE_PROJECT_TITLES[2],
+      body: "Reference marker: sampledb-reference-v1.",
+      tags: ["fixture:ci", "fixture:project", "sample:reference"],
+    },
+  ];
 
   for (const record of records) {
-    recordEntry(database, {
-      workspace: SAMPLE_PROJECT_WORKSPACE,
-      kind: record.kind,
-      status: record.status,
-      trustLevel: record.trustLevel,
-      title: record.title,
-      body: record.body,
-      summary: 'Synthetic project-scoped CI fixture.',
-      scope: buildStructuredScope({
-        visibility: 'project',
-        repositoryId: 'repo_sampledb_ci',
-        retrievalScope: 'project-only',
-        memoryClass: 'reference',
-        applicability: { runtimes: ['Node.js'], tools: ['Kiokuko'] },
-        signals: { paths: ['tests/sampledb/kiokuko.sqlite3'] },
-      }),
-      provenance: { type: 'ci_fixture', reference: 'tests/sampledb/kiokuko.sqlite3' },
-      confidence: 1,
-      tags: record.tags,
-      createdBy: 'sampledb-generator',
-      actor: 'sampledb-generator',
-    }, { idFactory: () => record.id, now: FIXTURE_TIME });
+    recordEntry(
+      database,
+      {
+        workspace: SAMPLE_PROJECT_WORKSPACE,
+        kind: record.kind,
+        status: record.status,
+        trustLevel: record.trustLevel,
+        title: record.title,
+        body: record.body,
+        summary: "Synthetic project-scoped CI fixture.",
+        scope: buildStructuredScope({
+          visibility: "project",
+          repositoryId: "repo_sampledb_ci",
+          retrievalScope: "project-only",
+          memoryClass: "reference",
+          applicability: { runtimes: ["Node.js"], tools: ["Kiokuko"] },
+          signals: { paths: ["tests/sampledb/kiokuko-dsh.sqlite3"] },
+        }),
+        provenance: {
+          type: "ci_fixture",
+          reference: "tests/sampledb/kiokuko-dsh.sqlite3",
+        },
+        confidence: 1,
+        tags: record.tags,
+        createdBy: "sampledb-generator",
+        actor: "sampledb-generator",
+      },
+      { idFactory: () => record.id, now: FIXTURE_TIME },
+    );
   }
 }
 
-function recordGlobalFixtures(database: ReturnType<typeof openConnection>): void {
+function recordGlobalFixtures(
+  database: ReturnType<typeof openConnection>,
+): void {
   ensureGlobalWorkspace(database, FIXTURE_TIME);
-  const records = [{
-    id: 'entry-sampledb-global-boundary',
-    kind: 'lesson' as const,
-    title: SAMPLE_GLOBAL_TITLES[0],
-    body: 'Synthetic fixture: validate external input before persistence.',
-    memoryClass: 'implementation-pattern' as const,
-    applicability: { languages: ['TypeScript'], runtimes: ['Node.js'], tools: ['Kiokuko'] },
-    signals: { errors: ['VALIDATION_ERROR'] },
-  }, {
-    id: 'entry-sampledb-global-idempotency',
-    kind: 'decision' as const,
-    title: SAMPLE_GLOBAL_TITLES[1],
-    body: 'Synthetic fixture: replaying canonical input must not duplicate durable state.',
-    memoryClass: 'workflow' as const,
-    applicability: { databases: ['SQLite'], tools: ['Kiokuko'] },
-    signals: { commands: ['kiokuko setup'] },
-  }, {
-    id: 'entry-sampledb-global-paths',
-    kind: 'reference' as const,
-    title: SAMPLE_GLOBAL_TITLES[2],
-    body: 'Synthetic fixture: resolve application-data paths from the current platform.',
-    memoryClass: 'gotcha' as const,
-    applicability: { platforms: ['Linux', 'macOS'], tools: ['Kiokuko'] },
-    signals: { symbols: ['getGlobalDatabasePath'] },
-  }];
+  const records = [
+    {
+      id: "entry-sampledb-global-boundary",
+      kind: "lesson" as const,
+      title: SAMPLE_GLOBAL_TITLES[0],
+      body: "Synthetic fixture: validate external input before persistence.",
+      memoryClass: "implementation-pattern" as const,
+      applicability: {
+        languages: ["TypeScript"],
+        runtimes: ["Node.js"],
+        tools: ["Kiokuko"],
+      },
+      signals: { errors: ["VALIDATION_ERROR"] },
+    },
+    {
+      id: "entry-sampledb-global-idempotency",
+      kind: "decision" as const,
+      title: SAMPLE_GLOBAL_TITLES[1],
+      body: "Synthetic fixture: replaying canonical input must not duplicate durable state.",
+      memoryClass: "workflow" as const,
+      applicability: { databases: ["SQLite"], tools: ["Kiokuko"] },
+      signals: { commands: ["kiokuko setup"] },
+    },
+    {
+      id: "entry-sampledb-global-paths",
+      kind: "reference" as const,
+      title: SAMPLE_GLOBAL_TITLES[2],
+      body: "Synthetic fixture: resolve application-data paths from the current platform.",
+      memoryClass: "gotcha" as const,
+      applicability: { platforms: ["Linux", "macOS"], tools: ["Kiokuko"] },
+      signals: { symbols: ["getGlobalDatabasePath"] },
+    },
+  ];
 
   for (const record of records) {
-    recordEntry(database, {
-      workspace: SAMPLE_GLOBAL_WORKSPACE,
-      kind: record.kind,
-      status: 'candidate',
-      trustLevel: 'untrusted',
-      title: record.title,
-      body: record.body,
-      summary: 'Synthetic global CI fixture.',
-      scope: buildStructuredScope({
-        visibility: 'global',
-        retrievalScope: 'global',
-        memoryClass: record.memoryClass,
-        applicability: record.applicability,
-        signals: record.signals,
-        portableReason: 'Deterministic cross-project fixture for setup migration and Web API tests.',
-      }),
-      provenance: { type: 'ci_fixture', reference: 'tests/sampledb/kiokuko.sqlite3' },
-      confidence: 0.7,
-      tags: ['fixture:ci', 'fixture:global', 'sample:global'],
-      createdBy: 'sampledb-generator',
-      actor: 'sampledb-generator',
-    }, { idFactory: () => record.id, now: FIXTURE_TIME });
+    recordEntry(
+      database,
+      {
+        workspace: SAMPLE_GLOBAL_WORKSPACE,
+        kind: record.kind,
+        status: "candidate",
+        trustLevel: "untrusted",
+        title: record.title,
+        body: record.body,
+        summary: "Synthetic global CI fixture.",
+        scope: buildStructuredScope({
+          visibility: "global",
+          retrievalScope: "global",
+          memoryClass: record.memoryClass,
+          applicability: record.applicability,
+          signals: record.signals,
+          portableReason:
+            "Deterministic cross-project fixture for setup migration and Web API tests.",
+        }),
+        provenance: {
+          type: "ci_fixture",
+          reference: "tests/sampledb/kiokuko-dsh.sqlite3",
+        },
+        confidence: 0.7,
+        tags: ["fixture:ci", "fixture:global", "sample:global"],
+        createdBy: "sampledb-generator",
+        actor: "sampledb-generator",
+      },
+      { idFactory: () => record.id, now: FIXTURE_TIME },
+    );
   }
 }
 
-function recordExternalSkillFixture(database: ReturnType<typeof openConnection>): void {
+function recordExternalSkillFixture(
+  database: ReturnType<typeof openConnection>,
+): void {
   const snapshot = sampleSkillSnapshot();
   const requirement = requirementForOfficialSkill(sampleSkillCandidate);
-  assert.ok(requirement, 'The sample skill must remain pinned in the reviewed official catalog');
+  assert.ok(
+    requirement,
+    "The sample skill must remain pinned in the reviewed official catalog",
+  );
   const imported = importSkillSnapshot(
     database,
     snapshot,
@@ -232,79 +296,141 @@ function recordExternalSkillFixture(database: ReturnType<typeof openConnection>)
   assert.equal(imported.imported, SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT);
 }
 
-function canonicalizeGeneratedIdentifiers(database: ReturnType<typeof openConnection>): void {
-  const triggers = database.prepare(`
+function canonicalizeGeneratedIdentifiers(
+  database: ReturnType<typeof openConnection>,
+): void {
+  const triggers = database
+    .prepare(
+      `
     SELECT name, sql
       FROM sqlite_schema
      WHERE type = 'trigger'
        AND name IN ('entry_revisions_immutable_update', 'entry_revision_tags_immutable_update')
      ORDER BY name
-  `).all<{ name: string; sql: string | null }>();
-  assert.equal(triggers.length, 2, 'Expected both immutable memory triggers');
-  assert.ok(triggers.every(({ sql }) => typeof sql === 'string' && sql.length > 0));
+  `,
+    )
+    .all<{ name: string; sql: string | null }>();
+  assert.equal(triggers.length, 2, "Expected both immutable memory triggers");
+  assert.ok(
+    triggers.every(({ sql }) => typeof sql === "string" && sql.length > 0),
+  );
 
-  const externalEntries = database.prepare(`
+  const externalEntries = database
+    .prepare(
+      `
     SELECT entry_id, chunk_index
       FROM external_skill_entries
      WHERE skill_id = ?
      ORDER BY source_path, chunk_index
-  `).all<{ entry_id: string; chunk_index: number }>(SAMPLE_EXTERNAL_SKILL_ID);
+  `,
+    )
+    .all<{ entry_id: string; chunk_index: number }>(SAMPLE_EXTERNAL_SKILL_ID);
   assert.equal(externalEntries.length, FIXTURE_EXTERNAL_ENTRY_IDS.length);
 
-  database.exec('PRAGMA foreign_keys = OFF');
+  database.exec("PRAGMA foreign_keys = OFF");
   try {
-    database.exec('BEGIN IMMEDIATE');
-    for (const trigger of triggers) database.exec(`DROP TRIGGER ${trigger.name}`);
-    database.prepare('UPDATE schema_migrations SET applied_at = ?').run(FIXTURE_TIME);
+    database.exec("BEGIN IMMEDIATE");
+    for (const trigger of triggers)
+      database.exec(`DROP TRIGGER ${trigger.name}`);
+    database
+      .prepare("UPDATE schema_migrations SET applied_at = ?")
+      .run(FIXTURE_TIME);
 
     for (const [index, externalEntry] of externalEntries.entries()) {
       const canonicalId = FIXTURE_EXTERNAL_ENTRY_IDS[index]!;
-      database.prepare('UPDATE entries SET id = ? WHERE id = ?').run(canonicalId, externalEntry.entry_id);
-      for (const table of ['entry_revisions', 'entry_revision_tags', 'audit_events', 'entry_search_signals', 'external_skill_entries']) {
-        database.prepare(`UPDATE ${table} SET entry_id = ? WHERE entry_id = ?`).run(canonicalId, externalEntry.entry_id);
+      database
+        .prepare("UPDATE entries SET id = ? WHERE id = ?")
+        .run(canonicalId, externalEntry.entry_id);
+      for (const table of [
+        "entry_revisions",
+        "entry_revision_tags",
+        "audit_events",
+        "entry_search_signals",
+        "external_skill_entries",
+      ]) {
+        database
+          .prepare(`UPDATE ${table} SET entry_id = ? WHERE entry_id = ?`)
+          .run(canonicalId, externalEntry.entry_id);
       }
     }
 
-    const auditEvents = database.prepare('SELECT event_id FROM audit_events ORDER BY entry_id, event_id')
+    const auditEvents = database
+      .prepare("SELECT event_id FROM audit_events ORDER BY entry_id, event_id")
       .all<{ event_id: string }>();
     for (const [index, auditEvent] of auditEvents.entries()) {
-      const canonicalId = `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
-      database.prepare('UPDATE audit_events SET event_id = ? WHERE event_id = ?').run(canonicalId, auditEvent.event_id);
+      const canonicalId = `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`;
+      database
+        .prepare("UPDATE audit_events SET event_id = ? WHERE event_id = ?")
+        .run(canonicalId, auditEvent.event_id);
     }
 
     for (const trigger of triggers) database.exec(trigger.sql!);
-    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [], 'Canonical fixture IDs must preserve every foreign key');
-    database.exec('COMMIT');
+    assert.deepEqual(
+      database.prepare("PRAGMA foreign_key_check").all(),
+      [],
+      "Canonical fixture IDs must preserve every foreign key",
+    );
+    database.exec("COMMIT");
   } catch (error) {
-    try { database.exec('ROLLBACK'); } catch { /* preserve the canonicalization failure */ }
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      /* preserve the canonicalization failure */
+    }
     throw error;
   } finally {
-    database.exec('PRAGMA foreign_keys = ON');
+    database.exec("PRAGMA foreign_keys = ON");
   }
-  assert.equal(database.prepare('PRAGMA foreign_keys').get<{ foreign_keys: number }>()?.foreign_keys, 1);
-  database.exec('VACUUM');
+  assert.equal(
+    database.prepare("PRAGMA foreign_keys").get<{ foreign_keys: number }>()
+      ?.foreign_keys,
+    1,
+  );
+  database.exec("VACUUM");
 }
 
-function assertBaselineState(database: ReturnType<typeof openConnection>): void {
-  const versions = database.prepare('SELECT version FROM schema_migrations ORDER BY version').all<{ version: number }>();
-  assert.deepEqual(versions.map(({ version }) => version), Array.from({ length: SAMPLE_DATABASE_BASELINE_VERSION }, (_, index) => index + 1));
-  const counts = database.prepare('SELECT workspace, COUNT(*) AS count FROM entries GROUP BY workspace ORDER BY workspace')
+function assertBaselineState(
+  database: ReturnType<typeof openConnection>,
+): void {
+  const versions = database
+    .prepare("SELECT version FROM schema_migrations ORDER BY version")
+    .all<{ version: number }>();
+  assert.deepEqual(
+    versions.map(({ version }) => version),
+    Array.from(
+      { length: SAMPLE_DATABASE_BASELINE_VERSION },
+      (_, index) => index + 1,
+    ),
+  );
+  const counts = database
+    .prepare(
+      "SELECT workspace, COUNT(*) AS count FROM entries GROUP BY workspace ORDER BY workspace",
+    )
     .all<{ workspace: string; count: number }>()
     .map(({ workspace, count }) => ({ workspace, count }));
   assert.deepEqual(counts, [
-    { workspace: SAMPLE_EXTERNAL_SKILL_WORKSPACE, count: SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT },
+    {
+      workspace: SAMPLE_EXTERNAL_SKILL_WORKSPACE,
+      count: SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT,
+    },
     { workspace: SAMPLE_GLOBAL_WORKSPACE, count: SAMPLE_GLOBAL_TITLES.length },
-    { workspace: SAMPLE_PROJECT_WORKSPACE, count: SAMPLE_PROJECT_TITLES.length },
+    {
+      workspace: SAMPLE_PROJECT_WORKSPACE,
+      count: SAMPLE_PROJECT_TITLES.length,
+    },
   ]);
 }
 
 export async function createSampleDatabase(targetPath: string): Promise<void> {
   const absoluteTarget = path.resolve(targetPath);
-  if (!absoluteTarget.endsWith('.sqlite3')) throw new Error('Sample database target must end with .sqlite3');
+  if (!absoluteTarget.endsWith(".sqlite3"))
+    throw new Error("Sample database target must end with .sqlite3");
   await mkdir(path.dirname(absoluteTarget), { recursive: true });
-  const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'kiokuko-sampledb-build-'));
-  const temporaryMigrations = path.join(temporaryRoot, 'migrations');
-  const temporaryDatabase = path.join(temporaryRoot, 'kiokuko.sqlite3');
+  const temporaryRoot = await mkdtemp(
+    path.join(tmpdir(), "kiokuko-sampledb-build-"),
+  );
+  const temporaryMigrations = path.join(temporaryRoot, "migrations");
+  const temporaryDatabase = path.join(temporaryRoot, "kiokuko-dsh.sqlite3");
   await mkdir(temporaryMigrations);
   await copyBaselineMigrations(temporaryMigrations);
 
@@ -313,7 +439,13 @@ export async function createSampleDatabase(targetPath: string): Promise<void> {
   try {
     const migration = migrateDatabase(database, temporaryMigrations);
     assert.equal(migration.currentVersion, SAMPLE_DATABASE_BASELINE_VERSION);
-    assert.deepEqual(migration.applied, Array.from({ length: SAMPLE_DATABASE_BASELINE_VERSION }, (_, index) => index + 1));
+    assert.deepEqual(
+      migration.applied,
+      Array.from(
+        { length: SAMPLE_DATABASE_BASELINE_VERSION },
+        (_, index) => index + 1,
+      ),
+    );
     recordProjectFixtures(database);
     recordGlobalFixtures(database);
     recordExternalSkillFixture(database);
@@ -325,7 +457,11 @@ export async function createSampleDatabase(targetPath: string): Promise<void> {
     completed = true;
   } finally {
     if (!completed) {
-      try { database.close(); } catch { /* preserve the generation failure */ }
+      try {
+        database.close();
+      } catch {
+        /* preserve the generation failure */
+      }
     }
     await rm(temporaryRoot, { recursive: true, force: true });
   }
@@ -334,18 +470,25 @@ export async function createSampleDatabase(targetPath: string): Promise<void> {
 async function main(): Promise<void> {
   const target = process.argv[2];
   if (target === undefined || process.argv.length !== 3) {
-    throw new Error('Usage: node --import tsx tests/fixtures/sample-database.ts <target.sqlite3>');
+    throw new Error(
+      "Usage: node --import tsx tests/fixtures/sample-database.ts <target.sqlite3>",
+    );
   }
   await createSampleDatabase(target);
   process.stdout.write(`${path.resolve(target)}\n`);
 }
 
-const invokedPath = process.argv[1] === undefined ? undefined : pathToFileURL(path.resolve(process.argv[1])).href;
+const invokedPath =
+  process.argv[1] === undefined
+    ? undefined
+    : pathToFileURL(path.resolve(process.argv[1])).href;
 if (invokedPath === import.meta.url) {
   try {
     await main();
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
     process.exitCode = 1;
   }
 }

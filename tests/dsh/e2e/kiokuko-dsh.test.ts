@@ -11,7 +11,7 @@ import { mountDshTools } from '../../../src/dsh/tools.js'
 import { DshRunLifecycle, DshSessionBridge } from '../../../src/dsh/session-bridge.js'
 import { createDshConfirmationAnswerer } from '../../../src/dsh/user-interaction.js'
 
-function hostServices() {
+function hostServices(includeTools = true) {
   const providers: unknown[] = []
   const sections = new Map<string, string>()
   const registeredTools: Array<{ name: string; execute: Function }> = []
@@ -31,16 +31,18 @@ function hostServices() {
         return () => { sections.delete(input.name) }
       },
     },
-    tools: {
-      register(definition: { name: string; execute: Function }) {
-        registeredTools.push(definition)
-        return () => { const index = registeredTools.indexOf(definition); if (index >= 0) registeredTools.splice(index, 1) }
-      },
-      guard(guard: Function) { guards.push(guard); return () => { const index = guards.indexOf(guard); if (index >= 0) guards.splice(index, 1) } },
-    },
     commands: {
       register(name: string, _handler: Function) { return () => undefined },
     },
+    ...(includeTools ? {
+      tools: {
+        register(definition: { name: string; execute: Function }) {
+          registeredTools.push(definition)
+          return () => { const index = registeredTools.indexOf(definition); if (index >= 0) registeredTools.splice(index, 1) }
+        },
+        guard(guard: Function) { guards.push(guard); return () => { const index = guards.indexOf(guard); if (index >= 0) guards.splice(index, 1) } },
+      },
+    } : {}),
   }
   return { providers, sections, registeredTools, guards, services }
 }
@@ -56,7 +58,7 @@ function installHost(root: Context, host: ReturnType<typeof hostServices>) {
 }
 
 test('real Cordis composition mounts and unloads the bundled dsh surfaces', async () => {
-  const host = hostServices()
+  const host = hostServices(false)
   const root = new Context()
   const hostFiber = installHost(root, host)
   await hostFiber
@@ -83,13 +85,14 @@ test('composed host boundaries preserve model, tool, question, ledger, and turn-
   const root = new Context()
   const hostFiber = installHost(root, host)
   await hostFiber
+  const nativeToolServices = host.services.tools!
 
   const policy = new DshToolPolicy({
     phase: 'goki', runId: 'run-e2e', workspace: 'workspace-e2e', orchestrationId: 'orch-e2e', revision: 2,
     routeEpoch: 0, dshSessionId: 'session-e2e', workUnitId: 'unit-e2e', currentWorkUnitId: 'unit-e2e', leaseToken: 'lease-e2e',
   })
-  const disposePolicy = mountDshToolPolicy(host.services, policy)
-  const disposeTools = mountDshTools(host.services, {
+  const disposePolicy = mountDshToolPolicy({ tools: nativeToolServices }, policy)
+  const disposeTools = mountDshTools({ tools: nativeToolServices }, {
     bind: () => ({ runId: 'run-e2e', workspace: 'workspace-e2e', orchestrationId: 'orch-e2e', revision: 2, routeEpoch: 0, workUnitId: 'unit-e2e', leaseToken: 'lease-e2e' }),
     execute: async (operation) => { toolCalls.push(operation); return { ok: true } },
   })

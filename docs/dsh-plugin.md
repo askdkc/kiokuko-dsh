@@ -6,8 +6,8 @@ MCP clients; it does not fork DeepSeek Harness or modify a repository's files.
 
 ## Install
 
-The published `kiokuko-dsh@0.1.0` npm package is the one-shot path because its
-tarball already contains `dist/`:
+The published `kiokuko-dsh` npm package is the one-shot path when a matching
+release is available because its tarball already contains `dist/`:
 
 ```bash
 pnpm dsh plugin --profile web add kiokuko-dsh
@@ -78,6 +78,42 @@ dsh plugin --profile kiokuko-test remove kiokuko-dsh
 rewrite unrelated plugins or settings. The plugin itself never runs `kiokuko
 setup`, changes MCP configuration, or edits `AGENTS.md`.
 
+## STORE contract and permissions
+
+This package intentionally targets the DSH STORE `user-reviewed` track. Its
+source and npm tarball are larger than the STORE automatic-review size bound;
+that bound is a catalog automation limit, not a runtime or npm packaging
+limit. The package is therefore not represented as a small, auto-approved
+plugin.
+
+The manifest declares MIT licensing, the canonical GitHub repository, Node.js
+`>=24.16.0`, DSH `0.1.2-alpha.3`, and the verified `web` profile. Other DSH
+releases and `headless` remain unverified until a matching disposable-profile
+run is recorded.
+
+Runtime effects are explicit:
+
+- local reads and writes are limited to the configured Kiokuko data directory,
+  SQLite state, backups, runtime descriptors, registered project roots, and
+  Kiokuko-managed instruction files;
+- repository-relative verifier and backup subprocesses are restricted and are
+  never an implicit model-facing shell tool;
+- Skill discovery/source retrieval and remote embeddings can use the network,
+  but remote embeddings are disabled by default; and
+- optional GitHub or embedding credentials are supplied by the user and are
+  never bundled or persisted by the plugin.
+
+`prepare` runs only `npm run build`. A Git install must be pinned to one full
+commit and may require this exact pnpm permission in the consuming profile:
+
+```yaml
+allowBuilds:
+  "kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/<commit>": true
+```
+
+The npm tarball already contains `dist/`, so its normal install path does not
+depend on a consumer-side build permission.
+
 ## Runtime contract
 
 The SQLite database remains the semantic authority for Akinator, memory,
@@ -115,23 +151,24 @@ npm run test:e2e:dsh
 
 This builds the package, runs the Cordis composition test with an in-memory
 host adapter, validates model/tool/question/ledger/turn-end boundaries, and
-then runs the pack/install/dump-config/remove flow when a `dsh` executable is
-available. Without that executable the CLI portion is reported as
-`unsupported`; it is not represented as a passing install result.
+then runs the pack/install/dump-config/Web-start/Web-stop/remove flow when a
+`dsh` executable is available. Without that executable the CLI portion is
+reported as `unsupported`; CI sets `KIOKUKO_REQUIRE_DSH_CLI=1` so absence is a
+failure rather than an unverified success.
 
 The current compatibility measurement is:
 
 | Harness profile | Status |
 |---|---|
-| web | contract covered; DeepSeek CLI runtime not available in this checkout |
-| headless | contract covered; DeepSeek CLI runtime not available in this checkout |
+| web | verified by the disposable alpha.3 install/start/uninstall run |
+| headless | unknown; not declared as supported |
 | sdk | unsupported until a real Loader/SDK host is supplied |
 | acp | unsupported until a real Loader/ACP host is supplied |
 | sdk-minimal | unsupported until a real Loader/SDK host is supplied |
 
-The `web` and `headless` labels describe the intended host profiles. They are
-not a claim that an external DeepSeek binary was executed in an environment
-where it is absent.
+The `web` status is evidence-based only after the disposable alpha.3 run. An
+unavailable DeepSeek binary leaves a profile unverified; it is never converted
+into a passing runtime claim.
 
 ## DSH acceptance boundary
 

@@ -2,9 +2,10 @@
 
 [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [한국어](README.ko.md)
 
-`kiokuko-dsh@0.1.0` is an out-of-tree plugin for
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), published
-on [npm](https://www.npmjs.com/package/kiokuko-dsh).
+`kiokuko-dsh` is an out-of-tree plugin for
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Use the
+[npm package](https://www.npmjs.com/package/kiokuko-dsh) when a published
+release is available, or use the source-pinned Git path in the plugin guide.
 
 ## Install
 

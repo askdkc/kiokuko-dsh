@@ -54,3 +54,37 @@ test('host binding rejects injected identity and requires a WorkUnit lease', () 
     runId: 'run-1', workspace: 'workspace-1', orchestrationId: 'orch-1', revision: 2, routeEpoch: 0,
   }), /current host lease/iu)
 })
+
+test('native tool execution binds the authoritative session without inventing a turn', async () => {
+  let seen: any
+  const definitions = createDshToolDefinitions({
+    bind: (execution) => {
+      seen = execution
+      return { runId: 'run-1', dshSessionId: 'session-1', workspace: 'workspace-1', orchestrationId: 'orch-1', revision: 2, routeEpoch: 0 }
+    },
+    execute: async () => ({ ok: true }),
+  })
+  const definition = definitions.find((item) => item.name === 'enno_plan_submit')!
+  await definition.execute({}, {
+    callId: 'native-call', name: 'enno_plan_submit', arguments: {},
+    agent: { id: 'native-agent', session: { id: 'session-1' } }, signal,
+  })
+  assert.equal(seen.agent.dshSessionId, 'session-1')
+  assert.equal(seen.agent.turn, undefined)
+  await assert.rejects(definition.execute({}, {
+    callId: 'missing-session', name: 'enno_plan_submit', arguments: {},
+    agent: { id: 'native-agent' }, signal,
+  } as any), /authoritative session/u)
+  await assert.rejects(definition.execute({ runId: 'forged-run' }, {
+    callId: 'forged-args', name: 'enno_plan_submit', arguments: {},
+    agent: { id: 'native-agent', session: { id: 'session-1' } }, signal,
+  } as any), /host-owned identity/u)
+  await assert.rejects(definition.execute({}, {
+    callId: 'wrong-definition', name: 'enno_ideal_submit', arguments: {},
+    agent: { id: 'native-agent', session: { id: 'session-1' } }, signal,
+  } as any), /definition and execution operation differ/u)
+  await assert.rejects(definition.execute({}, {
+    callId: 'forged-session-field', name: 'enno_plan_submit', arguments: {},
+    agent: { id: 'native-agent', dshSessionId: 'forged-session' }, signal,
+  } as any), /authoritative session/u)
+})

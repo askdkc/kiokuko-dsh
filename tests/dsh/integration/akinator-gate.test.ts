@@ -45,7 +45,7 @@ async function catalog() {
 
 function event(root: string, capabilities: Awaited<ReturnType<typeof catalog>>): DshPreStepEvent {
   return {
-    agent: { id: 'agent-session' }, turn: 1, step: 1, task: 'Please help with this task', cwd: root,
+    agent: { id: 'agent-session' }, sessionId: 'session-real', turn: 1, step: 1, task: 'Please help with this task', cwd: root,
     capabilities, skillDiscoveryMode: 'off', signal: new AbortController().signal,
   }
 }
@@ -99,6 +99,42 @@ test('pre-step rejects unresolved intake without an answerer and rejects changed
     assert.deepEqual(decision, { kind: 'reject' })
     assert.equal(nextCalls, 0)
     assert.throws(() => gate.assertTurnStoppingCatalog(capabilities, { ...capabilities, digest: 'f'.repeat(64) }), /changed/u)
+  } finally {
+    await runtime.close()
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('cached preparation rejects a different native agent or session object', async () => {
+  const fixture = await makeFixture()
+  const runtime = new DshRuntime({
+    repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
+    embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 },
+  })
+  const capabilities = await catalog()
+  const first = event(fixture.root, capabilities)
+  const gate = new DshIntakeGate(runtime)
+  try {
+    assert.deepEqual(await gate.preStep(first, async () => ({ kind: 'enter', messages: [] })), { kind: 'reject' })
+    await assert.rejects(
+      gate.preStep({ ...first, nativeAgent: {} }, async () => ({ kind: 'enter', messages: [] })),
+    )
+  } finally {
+    await runtime.close()
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('pre-step rejects invisible agent identities before preparation', async () => {
+  const fixture = await makeFixture()
+  const runtime = new DshRuntime({
+    repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
+    embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 },
+  })
+  const capabilities = await catalog()
+  const first = event(fixture.root, capabilities)
+  try {
+    await assert.rejects(new DshIntakeGate(runtime).prepare({ ...first, agent: { id: 'agent\u200b' } }), /agent identity is invalid/u)
   } finally {
     await runtime.close()
     await rm(fixture.root, { recursive: true, force: true })

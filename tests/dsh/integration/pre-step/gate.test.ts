@@ -26,6 +26,7 @@ test('pre-step rejects unresolved intake without invoking the downstream model',
   const gate = new DshIntakeGate(runtime)
   const event: DshPreStepEvent = {
     agent: { id: 'agent' },
+    sessionId: 'session',
     turn: 1,
     step: 1,
     task: 'Please help with this task',

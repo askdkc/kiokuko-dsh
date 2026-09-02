@@ -2,8 +2,8 @@
 
 ## Install and configure
 
-Node.js 24.16.0 or newer is required. The published `kiokuko-dsh@0.1.0` npm
-package is the normal install path:
+Node.js 24.16.0 or newer is required. A published `kiokuko-dsh` npm package is
+the normal install path when the desired release is available:
 
 ```bash
 npm install --global kiokuko-dsh

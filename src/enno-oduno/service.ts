@@ -165,7 +165,7 @@ interface PreparedTaskShape {
   skillDiscovery: SkillDiscoverySummary;
 }
 
-function stateForSnapshot(snapshot: EnnoRunSnapshot): EnnoOdunoState {
+export function stateForSnapshot(snapshot: EnnoRunSnapshot): EnnoOdunoState {
   let nextAction: EnnoNextAction;
   if (snapshot.status === 'intake') nextAction = 'answer_intake';
   else if (snapshot.status === 'oduno_ideal') nextAction = 'submit_ideal';
