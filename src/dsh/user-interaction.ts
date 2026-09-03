@@ -69,6 +69,10 @@ export function createDshIntakeAnswerer(service: DshUserQuestions): DshIntakeAns
       const answer = result.answers[0]
       if (answer === undefined || answer.id !== question.id) conflict('User answer does not match the current Akinator question')
       const value = answer.custom?.trim() || answer.selected[0]?.trim()
+      // DSH preserves the Web UI's "Skip this question" action as an empty
+      // single-question answer. Skipping task classification means the user
+      // wants an ordinary conversation, not an invalid task type.
+      if (!value && question.id === 'taskType') return 'chat'
       if (!value) conflict('Akinator requires a non-empty user answer')
       return value
     },

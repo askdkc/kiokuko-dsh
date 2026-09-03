@@ -667,6 +667,7 @@ function isEnnoResponse(value: unknown): value is EnnoOperationResponse {
 }
 
 function stateForRun(database: any, item: TurnRecord): EnnoOdunoState {
+  if (!item.prepared.ennoOduno.applicable) return item.prepared.ennoOduno
   return stateForSnapshot(readEnnoSnapshot(database, { runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId }))
 }
 

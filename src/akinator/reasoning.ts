@@ -8,7 +8,7 @@ import type {
 
 export const AKINATOR_REASONING_POLICY_VERSION = 'reasoning-v1' as const;
 
-const ACTION_FAMILIES: Readonly<Record<TaskType, Omit<ActionHypothesis, 'status'>>> = {
+const ACTION_FAMILIES: Readonly<Record<Exclude<TaskType, 'chat'>, Omit<ActionHypothesis, 'status'>>> = {
   build: {
     id: 'build',
     label: '実装する',
@@ -46,7 +46,14 @@ const ACTION_FAMILIES: Readonly<Record<TaskType, Omit<ActionHypothesis, 'status'
   },
 };
 
+const CHAT_ACTION_FAMILY: Omit<ActionHypothesis, 'status'> = {
+  id: 'chat',
+  label: '通常の会話をする',
+  description: 'タスク実行を開始せず、ユーザーと会話する。',
+};
+
 function actionFor(profile: TaskProfile): string | null {
+  if (profile.taskType === 'chat') return 'ユーザーとの通常会話を続ける。';
   if (profile.taskType === null || profile.target === null || profile.expected === null) return null;
   const family = ACTION_FAMILIES[profile.taskType];
   return `${profile.target}について「${family.label}」を実行し、${profile.expected}を満たす。`;
@@ -58,22 +65,34 @@ function level(level: ReasoningSiloLevel['level'], value: string | null): Reason
 
 export function deriveAkinatorReasoning(task: string, profile: TaskProfile): AkinatorReasoning {
   const selectedAction = actionFor(profile);
-  const hypotheses = (Object.keys(ACTION_FAMILIES) as TaskType[]).map((id): ActionHypothesis => ({
+  const hypotheses: ActionHypothesis[] = (Object.keys(ACTION_FAMILIES) as Array<Exclude<TaskType, 'chat'>>).map((id): ActionHypothesis => ({
     ...ACTION_FAMILIES[id],
     status: profile.taskType === null ? 'possible' : profile.taskType === id ? 'selected' : 'rejected',
   }));
+  if (profile.taskType === null || profile.taskType === 'chat') {
+    hypotheses.push({
+      ...CHAT_ACTION_FAMILY,
+      status: profile.taskType === 'chat' ? 'selected' : 'possible',
+    });
+  }
+  const chat = profile.taskType === 'chat';
   const verification = profile.expected === null ? [] : [`成功条件を現在の対象で確認する: ${profile.expected}`];
   const stopConditions = [
     ...(profile.expected === null ? [] : [`成功条件を満たした時点で停止する: ${profile.expected}`]),
     ...(profile.constraints === null ? [] : [`制約に抵触する場合は停止して確認する: ${profile.constraints}`]),
   ];
+  const actionFamilyLabel = profile.taskType === null
+    ? null
+    : profile.taskType === 'chat'
+      ? CHAT_ACTION_FAMILY.label
+      : ACTION_FAMILIES[profile.taskType].label;
   const levels = [
     level('intent', task.trim() || null),
-    level('action-family', profile.taskType === null ? null : ACTION_FAMILIES[profile.taskType].label),
-    level('target', profile.target),
-    level('success', profile.expected),
+    level('action-family', actionFamilyLabel),
+    level('target', chat ? '会話' : profile.target),
+    level('success', chat ? 'ユーザーへの応答' : profile.expected),
     level('action', selectedAction),
-    level('verification', verification[0] ?? null),
+    level('verification', chat ? 'タスク実行を要求していないことを確認する' : verification[0] ?? null),
   ];
   const resolved = levels.filter((item) => item.status === 'resolved').length;
   const stage = profile.taskType === null
@@ -87,7 +106,7 @@ export function deriveAkinatorReasoning(task: string, profile: TaskProfile): Aki
     hypotheses,
     questions: (['taskType', 'target', 'expected'] as const).map((id) => ({
       id,
-      status: profile[id] === null ? 'pending' : 'answered',
+      status: chat && (id === 'target' || id === 'expected') ? 'answered' : profile[id] === null ? 'pending' : 'answered',
       ...reasoningQuestionGuidance(id),
     })),
     selectedAction,
@@ -107,7 +126,7 @@ export function reasoningQuestionGuidance(questionId: keyof TaskProfile): { purp
   if (questionId === 'taskType') {
     return {
       purpose: '抽象的な依頼を、実装・修正・調査・レビューなどの行動系列へ絞り込みます。',
-      discriminates: Object.keys(ACTION_FAMILIES),
+      discriminates: [...Object.keys(ACTION_FAMILIES), CHAT_ACTION_FAMILY.id],
     };
   }
   if (questionId === 'target') {

@@ -60,9 +60,19 @@ export function detectSkillGap(input: {
   recommendedTags?: string[];
   mode?: 'off' | 'official' | 'community';
 }): SkillGapDecision {
+  const catalog = normalizeCapabilityCatalog(input.capabilities);
+  if (input.profile.taskType === 'chat') {
+    return {
+      requirements: [],
+      available: [],
+      missing: [],
+      catalogAvailability: catalog.availability,
+      shouldDiscover: false,
+      reason: input.mode === 'off' ? 'discovery_disabled' : 'no_supported_technology',
+    };
+  }
   const all = requirementsFromFingerprint(input.fingerprint);
   const requirements = all.filter((requirement) => requirementRelevant(requirement, input.task, input.profile, input.recommendedTags ?? [], all));
-  const catalog = normalizeCapabilityCatalog(input.capabilities);
   if (input.mode === 'off') return { requirements, available: [], missing: [], catalogAvailability: catalog.availability, shouldDiscover: false, reason: 'discovery_disabled' };
   if (requirements.length === 0) return { requirements, available: [], missing: [], catalogAvailability: catalog.availability, shouldDiscover: false, reason: 'no_supported_technology' };
   const available: SkillGapDecision['available'] = [];

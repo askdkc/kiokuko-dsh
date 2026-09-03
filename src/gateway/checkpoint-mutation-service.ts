@@ -31,7 +31,7 @@ const CHECKPOINT_EVENT_TYPES: readonly LedgerEventType[] = [
 const MAX_TEXT = 4_096;
 const MAX_ARRAY = 200;
 const PROFILE_FIELDS = ['taskType', 'target', 'expected', 'constraints'] as const;
-const TASK_TYPES = ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis'] as const;
+const TASK_TYPES = ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis', 'chat'] as const;
 
 type CheckpointRequest = {
   events: LedgerEventInput[];

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { KiokukoError } from '../errors.js';
-import type { TaskProfile } from '../akinator/types.js';
+import { requiredProfileFields, type TaskProfile } from '../akinator/types.js';
 import { COVERAGE_LEVELS, LEDGER_EVENT_TYPES, TASK_TYPES } from './types.js';
 import type { Coverage, CoverageLevel, JsonValue, LedgerEventType } from './types.js';
 import { canonicalJson } from './hash.js';
@@ -48,7 +48,6 @@ const REQUIRED_PROFILE_FIELDS = PROFILE_FIELDS;
 const COVERAGE_FIELDS = ['run', 'tool', 'command', 'file', 'approval'] as const;
 const EVENT_FIELDS = ['eventId', 'sequence', 'eventType', 'outcome', 'payload'] as const;
 const TOP_LEVEL_FIELDS = ['initialProfile', 'intakeStatus', 'coverage', 'throughSequence', 'events'] as const;
-const HIGH_VALUE_FIELDS: readonly MissingProfileField[] = ['taskType', 'target', 'expected'];
 const PASSING_OUTCOMES = new Set(['pass', 'passed', 'success', 'succeeded']);
 const FAILURE_EVENT_TYPES = new Set<LedgerEventType>(['step.failed', 'tool.failed', 'error.recorded']);
 const VERIFICATION_EVENT_TYPES = new Set<LedgerEventType>(['verification.recorded', 'test.completed']);
@@ -274,7 +273,9 @@ function removeIds(ids: string[], toRemove: string[]): string[] {
 
 export function projectLedger(input: unknown): LedgerProjection {
   const parsed = parseInput(input);
-  const missingProfileFields = HIGH_VALUE_FIELDS.filter((field) => parsed.initialProfile[field] === null);
+  const missingProfileFields = requiredProfileFields(parsed.initialProfile)
+    .filter((field): field is MissingProfileField => field !== 'constraints')
+    .filter((field) => parsed.initialProfile[field] === null);
 
   let taskProfile = { ...parsed.initialProfile };
   let latestMutationSequence: number | null = null;

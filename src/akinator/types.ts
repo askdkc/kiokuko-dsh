@@ -1,7 +1,14 @@
 import type { EntryRecord } from '../memory/entries.js';
 
-export const TASK_TYPES = ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis'] as const;
+export const TASK_TYPES = ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis', 'chat'] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
+
+export const STANDARD_REQUIRED_PROFILE_FIELDS = ['taskType', 'target', 'expected'] as const;
+export const CHAT_REQUIRED_PROFILE_FIELDS = ['taskType'] as const;
+
+export function requiredProfileFields(profile: Pick<TaskProfile, 'taskType'>): readonly (keyof TaskProfile)[] {
+  return profile.taskType === 'chat' ? CHAT_REQUIRED_PROFILE_FIELDS : STANDARD_REQUIRED_PROFILE_FIELDS;
+}
 
 export interface TaskProfile {
   taskType: TaskType | null;

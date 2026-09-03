@@ -35,7 +35,7 @@ export const RUN_STATUSES = ['intake', 'active', 'completed', 'failed', 'cancell
 export type RunStatus = (typeof RUN_STATUSES)[number];
 export const TERMINAL_RUN_STATUSES = ['completed', 'failed', 'cancelled', 'interrupted'] as const;
 
-export const TASK_TYPES = ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis'] as const;
+export const TASK_TYPES = ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis', 'chat'] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
 
 export interface Coverage {

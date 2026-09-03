@@ -240,7 +240,7 @@ function isTaskProfile(value: unknown): value is TaskProfile {
   const profile = value as Record<string, unknown>;
   return Object.keys(profile).length === 4
     && ['taskType', 'target', 'expected', 'constraints'].every((field) => Object.hasOwn(profile, field))
-    && (profile.taskType === null || ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis'].includes(String(profile.taskType)))
+    && (profile.taskType === null || ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis', 'chat'].includes(String(profile.taskType)))
     && ['target', 'expected', 'constraints'].every((field) => profile[field] === null || typeof profile[field] === 'string');
 }
 

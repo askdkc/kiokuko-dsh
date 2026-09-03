@@ -1,6 +1,6 @@
 import { KiokukoError } from '../errors.js';
 import { canonicalContentHash } from '../serialization/validate.js';
-import { TASK_TYPES } from './types.js';
+import { requiredProfileFields, TASK_TYPES } from './types.js';
 import type { AkinatorQuestion, TaskProfile, TaskType } from './types.js';
 
 /** Version of the deterministic question/answer policy represented by this module. */
@@ -29,8 +29,6 @@ const STATE_FIELDS = [
   'task', 'profile', 'questionCount', 'status', 'question', 'missingFields', 'recommendedTags', 'profileHash',
 ] as const;
 const ANSWER_FIELDS = ['questionId', 'value'] as const;
-const REQUIRED_FIELDS: Array<keyof TaskProfile> = ['taskType', 'target', 'expected'];
-
 type RequiredQuestionId = 'taskType' | 'target' | 'expected';
 
 type QuestionPolicy = {
@@ -59,14 +57,14 @@ const REQUIRED_QUESTION_POLICY = [
     prompt: '対象のリポジトリ、ファイル、機能、またはサービスは何ですか？',
     options: null,
     required: true,
-    isMissing: (profile) => profile.target === null,
+    isMissing: (profile) => profile.taskType !== 'chat' && profile.target === null,
   },
   {
     id: 'expected',
     prompt: '完了と判断する成功条件は何ですか？',
     options: null,
     required: true,
-    isMissing: (profile) => profile.expected === null,
+    isMissing: (profile) => profile.taskType !== 'chat' && profile.expected === null,
   },
 ] as const satisfies readonly QuestionPolicy[];
 
@@ -98,6 +96,8 @@ function normalizeTaskTypeValue(value: string): TaskType | null {
     devops: 'devops', deploy: 'devops', deployment: 'devops', 運用: 'devops', デプロイ: 'devops',
     writing: 'writing', docs: 'writing', documentation: 'writing', 文書: 'writing', 執筆: 'writing',
     analysis: 'analysis', analyse: 'analysis', 分析: 'analysis',
+    chat: 'chat', chatting: 'chat', conversation: 'chat', talk: 'chat',
+    'just chatting': 'chat', 'casual chat': 'chat', 雑談: 'chat', 会話: 'chat', チャット: 'chat',
   };
   const direct = TASK_TYPES.find((taskType) => taskType === normalized);
   return direct ?? aliases[normalized] ?? null;
@@ -112,6 +112,7 @@ export function normalizeTaskType(value: unknown): TaskType {
 
 function inferTaskType(task: string): TaskType | null {
   const normalized = task.toLowerCase();
+  if (/^(?:just chatting|casual chat|chat|hello|hi|hey|雑談|会話|チャット|こんにちは|こんばんは)[.!?。！？\s]*$/u.test(normalized)) return 'chat';
   if (/debug|bug|fix|修正|不具合|エラー|障害/u.test(normalized)) return 'debug';
   if (/review|audit|レビュー|監査|検証/u.test(normalized)) return 'review';
   if (/research|調査|研究|比較|検索/u.test(normalized)) return 'research';
@@ -170,7 +171,7 @@ export function deriveProfile(task: string, profileHints: unknown = {}): TaskPro
 }
 
 function missingFields(profile: TaskProfile): Array<keyof TaskProfile> {
-  return REQUIRED_FIELDS.filter((field) => profile[field] === null || profile[field] === '');
+  return requiredProfileFields(profile).filter((field) => profile[field] === null || profile[field] === '');
 }
 
 function nextQuestion(profile: TaskProfile, questionCount: number): AkinatorQuestion | null {

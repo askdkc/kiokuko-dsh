@@ -37,7 +37,7 @@ const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const PROFILE_FIELDS = new Set(['taskType', 'target', 'expected', 'constraints']);
 const PROFILE_SOURCES = new Set(['inferred', 'client_supplied', 'user_answer']);
-const TASK_TYPES = new Set(['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis']);
+const TASK_TYPES = new Set(['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis', 'chat']);
 const REDACTION_KINDS = new Set([
   'sensitive_key', 'secret_pattern', 'url', 'home_path', 'preview_truncated', 'environment_value', 'hidden_reasoning',
 ]);
