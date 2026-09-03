@@ -225,6 +225,23 @@ test('a directive from an older revision is rejected before context or steering 
   assert.equal(agent.cancels.length, 1)
 })
 
+test('a changed live capability catalog is rejected before host effects or steering', async () => {
+  const agent = { id: 'catalog-changed', steers: [] as unknown[], cancels: [] as string[] }
+  let injected = false
+  const controller = new DshEnnoController({
+    readState: async () => state('submit_plan'),
+    validateBoundary: async () => { throw new Error('capability catalog changed') },
+    injectNextStepContext: async () => { injected = true },
+  })
+
+  const decision = await controller.handle(event(agent))
+
+  assert.deepEqual(decision, { kind: 'abort', reason: 'catalog_changed' })
+  assert.equal(injected, false)
+  assert.equal(agent.steers.length, 0)
+  assert.equal(agent.cancels.length, 1)
+})
+
 test('the controller mounts at the awaited turn-stopping seam', async () => {
   let listener: ((event: DshTurnStoppingEvent) => Promise<void>) | undefined
   const controller = new DshEnnoController({ readState: async () => state('complete') })

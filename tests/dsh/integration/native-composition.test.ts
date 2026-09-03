@@ -106,6 +106,36 @@ test('native session event contract bridges committed events and deduplicates re
   assert.deepEqual(bridge.observerErrors, [])
 })
 
+test('native bridge retains the pre-binding turn prefix and attaches it to the exact run', async () => {
+  const listeners = new Map<string, (...args: any[]) => void>()
+  const batches: Array<{ runId: string; sequences: number[] }> = []
+  let activeRun: string | undefined
+  const bridge = new DshSessionBridge({
+    runtime: { withDatabase: async <T>() => undefined as T },
+    appendBatch: async (runId, events) => {
+      batches.push({ runId, sequences: events.map((event) => event.sourceSequence!) })
+    },
+  })
+  const dispose = mountDshSessionBridge({
+    on(name, listener) {
+      listeners.set(name, listener)
+      return () => { listeners.delete(name) }
+    },
+  }, bridge, () => activeRun)
+  const session = { id: 'late-bound-session', header: { createdAt: 1 } }
+  listeners.get('session/created')!(session)
+  listeners.get('session/event')!(session, { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } })
+  assert.equal(bridge.pendingCount, 0)
+
+  activeRun = 'late-bound-run'
+  listeners.get('session/event')!(session, { type: 'user/message', seq: 1, time: 1, data: { text: 'task' } })
+  await bridge.flush()
+
+  assert.deepEqual(batches, [{ runId: 'late-bound-run', sequences: [0, 1] }])
+  dispose()
+  await bridge.close()
+})
+
 test('native session observer contains identity conflicts without throwing from session/event', async () => {
   const listeners = new Map<string, (...args: any[]) => void>()
   const bridge = new DshSessionBridge({

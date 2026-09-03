@@ -118,7 +118,6 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     mock.toolCallResponse(`work-${suffix}`, 'enno_work_report', {
       result: { outcome: 'completed', summary: 'Implementation completed.', mutated: false, changedPaths: [] },
     }),
-    mock.textResponse('The approved work is ready for final verification.'),
     mock.toolCallResponse(`finish-${suffix}`, 'enno_finish', {
       advisoryDisposition: finalReviewDispositions,
       review: { decision: 'accept', summary: 'All approved work and final verification passed.' },
@@ -126,7 +125,6 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     mock.toolCallResponse(`meditation-${suffix}`, 'enno_meditation_submit', {
       meditation: { summary: 'No obsolete tests or functions were found.', inspectedPaths: ['src'], deletionCandidates: [] },
     }),
-    mock.textResponse('The run is complete.'),
   ]
   const secondFlow = flowResponses('two')
   const adapterScript = new mock.MockAdapter([
@@ -156,6 +154,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     apply(questionContext: any) {
       return questionContext.provide('userQuestions', {
         async ask(request: any) {
+          assert.equal(request.agent, liveAgent, 'every user question must use the exact live DSH Agent scope')
           const question = request.questions[0]
           if (question.id === 'kiokuko-plan-confirmation') {
             confirmations += 1
@@ -327,6 +326,19 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
       assert.equal(runRows[0]?.runId, seededRunId)
       assert.notEqual(runRows[1]?.runId, seededRunId)
       assert.deepEqual(runRows.map((row) => row.routeEpoch), [0, 0])
+      for (const row of runRows) {
+        const eventTypes = stored.prepare(`
+          SELECT payload_json AS payloadJson
+          FROM ledger_events
+          WHERE run_id = ? AND source_type = 'dsh-session'
+          ORDER BY source_sequence
+        `).all<{ payloadJson: string }>(row.runId).map(({ payloadJson }) => (
+          (JSON.parse(payloadJson) as { event: { type: string } }).event.type
+        ))
+        assert.equal(eventTypes.includes('turn/start'), true, 'the pre-binding turn prefix must reach the exact run ledger')
+        assert.equal(eventTypes.includes('tool/result'), true, 'successful terminal tool results must reach the run ledger')
+        assert.equal(eventTypes.includes('turn/end'), true, 'native session flush must precede terminal ledger close')
+      }
     } finally {
       stored.close()
     }

@@ -6,7 +6,7 @@ Claude Code, or a generic `kiokuko` CLI.
 
 ## Install
 
-DeepSeek Harness `0.1.2-alpha.5` and Node.js 24.16.0 or newer are required.
+DeepSeek Harness `0.1.2-rc.1` and Node.js 24.16.0 or newer are required.
 
 From a DeepSeek Harness checkout:
 

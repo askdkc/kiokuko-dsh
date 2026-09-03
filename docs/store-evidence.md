@@ -12,7 +12,7 @@ permissions, and disposable-profile result independently.
 | Package | `kiokuko-dsh` |
 | Repository | `https://github.com/askdkc/kiokuko-dsh` |
 | Release | `0.1.3` |
-| DSH release | `0.1.2-alpha.5` |
+| DSH release | `0.1.2-rc.1` |
 | Profile | `web` |
 | npm lifecycle | `prepare: npm run build` |
 | Automatic size policy | intentionally exceeded; manual `user-reviewed` track |

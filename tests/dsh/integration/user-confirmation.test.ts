@@ -37,14 +37,22 @@ test('confirmation renders every public item and preserves command/path/timeout 
 
 test('explicit approve is the only path that submits host work', async () => {
   const calls: unknown[] = []
+  const questionAgents: unknown[] = []
+  const nativeAgent = { id: 'live-confirmation-agent' }
   const controller = new DshConfirmationController({
-    answerer: createDshConfirmationAnswerer(service({ selected: ['approve'] })),
+    answerer: createDshConfirmationAnswerer({
+      ask: async (request) => {
+        questionAgents.push(request.agent)
+        return { answers: [{ id: request.questions[0]!.id, selected: ['approve'] }] }
+      },
+    }),
     readRevision: () => 2,
     submit: async (input) => { calls.push(input) },
   })
-  const result = await controller.confirm({ confirmation: confirmation(), expectedRevision: 2 })
+  const result = await controller.confirm({ confirmation: confirmation(), expectedRevision: 2, agent: nativeAgent })
   assert.equal(result.kind, 'submitted')
   assert.deepEqual(calls, [{ action: 'approve', expectedRevision: 2 }])
+  assert.deepEqual(questionAgents, [nativeAgent])
 })
 
 test('revise requires requested changes and stale answers produce no mutation', async () => {

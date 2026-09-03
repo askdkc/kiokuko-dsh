@@ -57,7 +57,10 @@ interface NativeTools {
 }
 
 interface NativeCommands { register(...args: any[]): () => void }
-interface NativeSessions { get(id: string): { id: string; header?: { cwd?: string } } | undefined }
+interface NativeSessions {
+  get(id: string): { id: string; header?: { cwd?: string } } | undefined
+  flush?(session: object): PromiseLike<unknown>
+}
 interface NativeAgents { get(id: string): { id: string; inject?: (message: unknown) => void } | undefined }
 
 export interface DshAdvisoryHost {
@@ -754,6 +757,14 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         || binding.advisoryRoundDigest !== currentState.advisoryRoundDigest) throw new Error('kiokuko-dsh tool binding is not authoritative')
       if (signal?.aborted) throw signal.reason
       const cwd = run.cwd
+      const operationSignal = signal ?? new AbortController().signal
+      const currentCatalog = await capabilityCatalog(skills, tools, {
+        agent: { id: run.agentId },
+        ...(run.nativeAgent === undefined ? {} : { nativeAgent: run.nativeAgent }),
+        cwd,
+        signal: operationSignal,
+      })
+      gate.assertTurnStoppingCatalog(run.catalog, currentCatalog)
       const response = await runtime.withDatabase(async (database) => {
         const input = operationInput(args, binding, cwd, operation, run.catalog)
         if (operation === 'enno_ideal_submit') return submitOdunoIdeal(database, input)
@@ -784,9 +795,32 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     verifyReadOnly: advisory?.verifyReadOnly ?? (() => false),
     execute: advisory?.execute ?? (async () => { throw new Error('kiokuko-dsh advisory host is unavailable') }),
   })
-  const submitAdvisory = async (result: DshAdvisoryRoundResult, input: { readonly event: { readonly agent: { readonly id: string; readonly sessionId?: string; readonly nativeSession?: object; readonly nativeAgent?: object }; readonly turn: number }; readonly state: EnnoOdunoState }): Promise<EnnoOdunoState> => {
-    const item = currentForAgentEvent(input.event.agent.id, input.event.agent.sessionId, input.event.turn, input.event.agent.nativeSession, input.event.agent.nativeAgent)
-    if (item === undefined || item.closed) throw new Error('kiokuko-dsh advisory turn is not bound')
+  const assertTurnBoundary = async (event: {
+    readonly agent: { readonly id: string; readonly sessionId?: string; readonly nativeSession?: object; readonly nativeAgent?: DshUserQuestionAgent }
+    readonly turn: number
+    readonly signal: AbortSignal
+  }): Promise<TurnRecord> => {
+    const item = currentForAgentEvent(
+      event.agent.id,
+      event.agent.sessionId,
+      event.turn,
+      event.agent.nativeSession,
+      event.agent.nativeAgent,
+    )
+    if (item === undefined || item.closed) throw new Error('kiokuko-dsh turn boundary identity is stale')
+    const currentCatalog = await capabilityCatalog(skills, tools, {
+      agent: { id: event.agent.id },
+      ...(event.agent.nativeAgent === undefined ? {} : { nativeAgent: event.agent.nativeAgent }),
+      cwd: item.cwd,
+      signal: event.signal,
+    })
+    gate.assertTurnStoppingCatalog(item.catalog, currentCatalog)
+    return item
+  }
+  const submitAdvisory = async (result: DshAdvisoryRoundResult, input: { readonly event: { readonly agent: { readonly id: string; readonly sessionId?: string; readonly nativeSession?: object; readonly nativeAgent?: DshUserQuestionAgent }; readonly turn: number; readonly signal: AbortSignal }; readonly state: EnnoOdunoState }): Promise<EnnoOdunoState> => {
+    // Advisory execution is asynchronous. Revalidate the live Agent/catalog
+    // after it settles and immediately before committing its contribution.
+    const item = await assertTurnBoundary(input.event)
     const directive = input.state.directive?.advisoryRound
     if (directive === undefined || input.state.contractRevision === null) throw new Error('kiokuko-dsh advisory directive is unavailable')
     const response = await runtime.withDatabase((database) => {
@@ -825,6 +859,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (item === undefined) throw new Error('kiokuko-dsh agent is not bound to a run')
       return runtime.withDatabase((database) => stateForRun(database, item))
     },
+    validateBoundary: async ({ event }) => { await assertTurnBoundary(event) },
     confirmUser: async ({ event, state, confirmation }) => {
       const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
       if (item === undefined || item.closed || state.contractRevision === null) {
@@ -833,11 +868,14 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       let response: EnnoOperationResponse | undefined
       const controller = new DshConfirmationController({
         ...(confirmationAnswerer === undefined ? {} : { answerer: confirmationAnswerer }),
-        readRevision: () => runtime.withDatabase((database) => readEnnoSnapshot(database, {
-          runId: item.runId,
-          workspace: item.workspace,
-          orchestrationId: item.orchestrationId,
-        }).revision),
+        readRevision: async () => {
+          await assertTurnBoundary(event)
+          return runtime.withDatabase((database) => readEnnoSnapshot(database, {
+            runId: item.runId,
+            workspace: item.workspace,
+            orchestrationId: item.orchestrationId,
+          }).revision)
+        },
         submit: async (answer) => {
           response = await runtime.withDatabase((database) => answerEnno(database, {
             runId: item.runId,
@@ -854,6 +892,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         confirmation,
         expectedRevision: state.contractRevision,
         signal: event.signal,
+        ...(event.agent.nativeAgent === undefined ? {} : { agent: event.agent.nativeAgent }),
       })
       if (decision.kind === 'dismissed') return 'dismissed'
       if (decision.kind !== 'submitted' || response === undefined) {

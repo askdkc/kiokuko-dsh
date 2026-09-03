@@ -149,6 +149,7 @@ test('a plan awaiting human review concludes the model turn after its successful
     bind: () => ({
       runId: 'run-1', dshSessionId: 'session-1', workspace: 'workspace-1',
       orchestrationId: 'orch-1', revision: 1, routeEpoch: 0,
+      workUnitId: 'unit-1', leaseToken: 'lease-1',
     }),
     execute: async () => ({ ennoOduno: { nextAction: 'ask_user_confirmation' } }),
   })
@@ -161,4 +162,32 @@ test('a plan awaiting human review concludes the model turn after its successful
   } as any)
 
   assert.equal(conclusions, 1)
+})
+
+test('host-owned and terminal next actions conclude only after their successful tool result', async () => {
+  const nextActions = new Map([
+    ['enno_work_report', 'run_final_verification'],
+    ['enno_meditation_submit', 'complete'],
+    ['enno_ideal_submit', 'submit_plan'],
+  ])
+  const definitions = createDshToolDefinitions({
+    bind: () => ({
+      runId: 'run-1', dshSessionId: 'session-1', workspace: 'workspace-1',
+      orchestrationId: 'orch-1', revision: 1, routeEpoch: 0,
+      workUnitId: 'unit-1', leaseToken: 'lease-1',
+    }),
+    execute: async (operation) => ({ ennoOduno: { nextAction: nextActions.get(operation) } }),
+  })
+  const conclusions: string[] = []
+
+  for (const operation of nextActions.keys()) {
+    const definition = definitions.find((item) => item.name === operation)!
+    await definition.execute({}, {
+      callId: `${operation}-call`, name: operation, arguments: {},
+      agent: { id: 'native-agent', session: { id: 'session-1' } }, signal,
+      concludeTurn: () => { conclusions.push(operation) },
+    } as any)
+  }
+
+  assert.deepEqual(conclusions, ['enno_work_report', 'enno_meditation_submit'])
 })

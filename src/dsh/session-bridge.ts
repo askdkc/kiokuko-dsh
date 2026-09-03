@@ -55,6 +55,7 @@ type DshRunStatus = 'completed' | 'failed' | 'cancelled'
 
 export interface DshRunLifecycleOptions {
   readonly bridge: Pick<DshSessionBridge, 'flush' | 'close'> & {
+    readonly flushRun?: (runId: string, target?: number) => Promise<void>
     readonly quiesceRun?: (runId: string) => number
     readonly sealRun?: (runId: string) => void
   }
@@ -99,7 +100,8 @@ export class DshRunLifecycle {
     })
     this.#closeIntents.set(input.runId, intent)
     const operation = (async () => {
-      await this.#bridge.flush(intent.targetGeneration)
+      if (this.#bridge.flushRun === undefined) await this.#bridge.flush(intent.targetGeneration)
+      else await this.#bridge.flushRun(intent.runId, intent.targetGeneration)
       await this.#closeRun({ runId: intent.runId, status: intent.status })
       this.#bridge.sealRun?.(intent.runId)
       this.#sealedRuns.set(intent.runId, intent.status)
@@ -205,7 +207,7 @@ export class DshSessionBridge {
   readonly #sealedRuns = new Set<string>()
   readonly #pending = new Map<string, DshQueuedSessionEvent>()
   readonly #committed = new Map<string, string>()
-  readonly #observerErrors: unknown[] = []
+  readonly #observerErrors: Array<{ readonly runId?: string; readonly error: unknown }> = []
   #flushTail: Promise<void> = Promise.resolve()
   #backgroundFlush: Promise<void> | undefined
   #closePromise: Promise<void> | undefined
@@ -213,10 +215,10 @@ export class DshSessionBridge {
   #closing = false
   #closed = false
 
-  #recordObserverError(error: unknown): void {
+  #recordObserverError(error: unknown, runId?: string): void {
     // Preserve the first failures for fail-closed reads without allowing a
     // malformed-event storm to grow this long-lived bridge without bound.
-    if (this.#observerErrors.length < MAX_OBSERVER_ERRORS) this.#observerErrors.push(error)
+    if (this.#observerErrors.length < MAX_OBSERVER_ERRORS) this.#observerErrors.push({ ...(runId === undefined ? {} : { runId }), error })
   }
 
   #scheduleBackgroundFlush(): void {
@@ -295,18 +297,20 @@ export class DshSessionBridge {
   }
 
   /** Record a post-commit observer failure without throwing from the host event emitter. */
-  reportObserverError(error: unknown): void {
+  reportObserverError(error: unknown, runId?: string): void {
     if (this.#closed) return
-    this.#recordObserverError(error)
+    this.#recordObserverError(error, runId)
   }
 
   /** Post-commit observer: malformed events are recorded and never veto the session append. */
   observe(input: DshSessionEventInput): void {
     if (this.#closed || this.#closing) return
+    let authoritativeRunId: string | undefined
     try {
       const sessionId = validId(input.sessionId, 'sessionId')
       const binding = this.#runs.get(sessionId)
       if (binding === undefined || binding.runId !== input.runId) validation('dsh session has no matching run binding')
+      authoritativeRunId = binding.runId
       if (this.#sealedRuns.has(binding.runId)) validation('dsh run is sealed')
       if (this.#closingRuns.has(binding.runId)) validation('dsh run is closing')
       const event = validEvent(input.event)
@@ -335,26 +339,26 @@ export class DshSessionBridge {
       const committed = this.#committed.get(sourceEventId)
       const fingerprint = queuedFingerprint(queued)
       if (existing !== undefined) {
-        if (queuedFingerprint(existing) !== fingerprint) this.#recordObserverError(new KiokukoError('CONFLICT', 'Duplicate dsh session event identity has different content'))
+        if (queuedFingerprint(existing) !== fingerprint) this.#recordObserverError(new KiokukoError('CONFLICT', 'Duplicate dsh session event identity has different content'), binding.runId)
         return
       }
       if (committed !== undefined) {
-        if (committed !== fingerprint) this.#recordObserverError(new KiokukoError('CONFLICT', 'Committed dsh session event identity has different content'))
+        if (committed !== fingerprint) this.#recordObserverError(new KiokukoError('CONFLICT', 'Committed dsh session event identity has different content'), binding.runId)
         return
       }
       if (this.#pending.size >= MAX_PENDING_EVENTS) {
-        this.#recordObserverError(new KiokukoError('SERVICE_UNAVAILABLE', 'dsh session event bridge capacity is exhausted'))
+        this.#recordObserverError(new KiokukoError('SERVICE_UNAVAILABLE', 'dsh session event bridge capacity is exhausted'), binding.runId)
         return
       }
       this.#pending.set(sourceEventId, queued)
       if (this.#pending.size >= MAX_BATCH_EVENTS) this.#scheduleBackgroundFlush()
     } catch (error) {
-      this.#recordObserverError(error)
+      this.#recordObserverError(error, authoritativeRunId)
     }
   }
 
   get pendingCount(): number { return this.#pending.size }
-  get observerErrors(): readonly unknown[] { return [...this.#observerErrors] }
+  get observerErrors(): readonly unknown[] { return this.#observerErrors.map((item) => item.error) }
 
   async flush(target = this.#nextGeneration): Promise<void> {
     const operation = this.#flushTail.then(() => this.#flushPending(target))
@@ -362,11 +366,21 @@ export class DshSessionBridge {
     return operation
   }
 
-  async #flushPending(target: number): Promise<void> {
-    while ([...this.#pending.values()].some((item) => item.queueGeneration <= target)) {
+  /** Flush only the exact run crossing a DSH durability or close boundary. */
+  async flushRun(runId: string, target = this.#nextGeneration): Promise<void> {
+    const run = validId(runId, 'runId')
+    const operation = this.#flushTail.then(() => this.#flushPending(target, run))
+    this.#flushTail = operation.catch(() => undefined)
+    return operation
+  }
+
+  async #flushPending(target: number, onlyRunId?: string): Promise<void> {
+    const selected = (item: DshQueuedSessionEvent): boolean => item.queueGeneration <= target
+      && (onlyRunId === undefined || item.runId === onlyRunId)
+    while ([...this.#pending.values()].some(selected)) {
       const grouped = new Map<string, DshQueuedSessionEvent[]>()
       for (const item of this.#pending.values()) {
-        if (item.queueGeneration > target) continue
+        if (!selected(item)) continue
         const group = grouped.get(item.runId) ?? []
         group.push(item)
         grouped.set(item.runId, group)
@@ -397,8 +411,8 @@ export class DshSessionBridge {
       })
       await Promise.all(batches)
     }
-    const observerError = this.#observerErrors[0]
-    if (observerError !== undefined) throw observerError
+    const observerError = this.#observerErrors.find((item) => item.runId === undefined || onlyRunId === undefined || item.runId === onlyRunId)
+    if (observerError !== undefined) throw observerError.error
   }
 
   async close(): Promise<void> {
@@ -428,12 +442,31 @@ export class DshSessionBridge {
 
 /** Install prepend durability barriers around the four model/session boundaries. */
 export function mountDshDurabilityBarriers(ctx: DshDurabilityContext, bridge: DshSessionBridge): () => void {
+  const sessionIdFromAgent = (payload: unknown): string | undefined => {
+    if (typeof payload !== 'object' || payload === null) return undefined
+    const agent = (payload as { agent?: unknown }).agent
+    if (typeof agent !== 'object' || agent === null) return undefined
+    const session = (agent as { session?: unknown }).session
+    if (typeof session === 'object' && session !== null && typeof (session as { id?: unknown }).id === 'string') return (session as { id: string }).id
+    return typeof (agent as { sessionId?: unknown }).sessionId === 'string' ? (agent as { sessionId: string }).sessionId : undefined
+  }
+  const flushSession = async (sessionId: unknown): Promise<void> => {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return
+    const runId = bridge.bindingOf(sessionId)
+    if (runId !== undefined) await bridge.flushRun(runId)
+  }
   const disposers = [
-    ctx.on('session/flush', async (_session: unknown) => { await bridge.flush() }),
-    ctx.on('agent/pre-step', async (_payload: unknown, next: () => Promise<unknown>) => { await bridge.flush(); return next() }, { prepend: true }),
-    ctx.on('tools/execute', async (_payload: { readonly parent?: unknown }, next: () => Promise<unknown>) => { await bridge.flush(); return next() }, { prepend: true }),
+    ctx.on('session/flush', async (session: unknown) => {
+      await flushSession(typeof session === 'object' && session !== null ? (session as { id?: unknown }).id : undefined)
+    }),
+    ctx.on('agent/pre-step', async (payload: unknown, next: () => Promise<unknown>) => { await flushSession(sessionIdFromAgent(payload)); return next() }, { prepend: true }),
+    ctx.on('tools/execute', async (payload: { readonly parent?: unknown }, next: () => Promise<unknown>) => {
+      if (payload.parent === undefined) await flushSession(sessionIdFromAgent(payload))
+      return next()
+    }, { prepend: true }),
     ctx.on('llm/stream', (payload: unknown, next: () => AsyncIterable<unknown>) => (async function* (): AsyncIterable<unknown> {
-      await bridge.flush()
+      const sessionId = typeof payload === 'object' && payload !== null ? (payload as { sessionId?: unknown }).sessionId : undefined
+      await flushSession(sessionId)
       yield* next()
     })(), { prepend: true }),
   ]
@@ -452,6 +485,8 @@ export function mountDshSessionBridge(
 ): () => void {
   const bound = new Map<string, { readonly runId: string; readonly incarnation: string; readonly session: DshNativeSession }>()
   const disposed = new Map<string, DshNativeSession>()
+  const unbound = new Map<string, { readonly session: DshNativeSession; readonly events: DshSessionEvent[] }>()
+  let unboundEventCount = 0
   const incarnationFor = (session: DshNativeSession, runId: string): string => {
     const createdAt = session.header?.createdAt
     return Number.isSafeInteger(createdAt) && (createdAt as number) >= 0 ? `${runId}@${createdAt}` : runId
@@ -485,6 +520,13 @@ export function mountDshSessionBridge(
       throw new KiokukoError('CONFLICT', 'dsh session identity changed while it was active')
     }
     bound.set(session.id, { runId, incarnation, session })
+    const prefix = unbound.get(session.id)
+    if (prefix !== undefined) {
+      if (prefix.session !== session) throw new KiokukoError('CONFLICT', 'dsh deferred session identity changed before run binding')
+      unbound.delete(session.id)
+      unboundEventCount -= prefix.events.length
+      for (const event of prefix.events) bridge.observe({ sessionId: session.id, runId, event })
+    }
     return runId
   }
   const disposers = [
@@ -498,7 +540,19 @@ export function mountDshSessionBridge(
     ctx.on('session/event', (session: DshNativeSession, event: DshSessionEvent) => {
       try {
         const runId = bind(session)
-        if (runId !== undefined) bridge.observe({ sessionId: session.id, runId, event })
+        if (runId !== undefined) {
+          bridge.observe({ sessionId: session.id, runId, event })
+        } else {
+          const prefix = unbound.get(session.id)
+          if (prefix !== undefined && prefix.session !== session) {
+            throw new KiokukoError('CONFLICT', 'dsh deferred session identity changed before run binding')
+          }
+          const events = prefix?.events ?? []
+          if (unboundEventCount >= MAX_PENDING_EVENTS) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh deferred session event capacity is exhausted')
+          events.push(event)
+          unboundEventCount += 1
+          if (prefix === undefined) unbound.set(session.id, { session, events })
+        }
       } catch (error) {
         bridge.reportObserverError(error)
       }
@@ -513,6 +567,11 @@ export function mountDshSessionBridge(
         }
         bound.delete(session.id)
         bridge.unbindSession(session.id)
+        const prefix = unbound.get(session.id)
+        if (prefix?.session === session) {
+          unbound.delete(session.id)
+          unboundEventCount -= prefix.events.length
+        }
         disposed.set(session.id, session)
       } catch (error) {
         bridge.reportObserverError(error)
@@ -523,6 +582,8 @@ export function mountDshSessionBridge(
     for (const dispose of disposers.reverse()) dispose()
     bound.clear()
     disposed.clear()
+    unbound.clear()
+    unboundEventCount = 0
   }
 }
 
@@ -542,11 +603,16 @@ export function mountDshIdleLifecycle(
   ctx: DshIdleLifecycleContext,
   lifecycle: DshRunLifecycle,
   resolveClose: (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object) => { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | PromiseLike<{ readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | undefined> | undefined,
+  flushNativeSession?: (session: DshNativeSession) => void | PromiseLike<void>,
 ): () => void {
   return ctx.on('agent/status', async (event) => {
     try {
       if (event.status !== 'idle') return
       const sessionId = event.agent.session?.id ?? event.agent.sessionId
+      if (flushNativeSession !== undefined) {
+        if (event.agent.session === undefined) throw new KiokukoError('CONFLICT', 'dsh idle checkpoint requires the exact live native session')
+        await flushNativeSession(event.agent.session)
+      }
       const close = await resolveClose(event.agent.id, sessionId, event.agent.session as object | undefined, event.agent as object)
       if (close !== undefined) await lifecycle.closeTurn(close)
     } catch {

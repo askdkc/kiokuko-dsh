@@ -97,7 +97,7 @@ limit. The package is therefore not represented as a small, auto-approved
 plugin.
 
 The manifest declares MIT licensing, the canonical GitHub repository, Node.js
-`>=24.16.0`, DSH `0.1.2-alpha.5`, and the verified `web` profile. Other DSH
+`>=24.16.0`, DSH `0.1.2-rc.1`, and the verified `web` profile. Other DSH
 releases and `headless` remain unverified until a matching disposable-profile
 run is recorded.
 
@@ -158,17 +158,21 @@ The dsh integration provides:
   commands routed to the exact invoking agent and session;
 - revision, route, phase, lease, idempotency, confirmation, verifier, and
   meditation gates through the Kiokuko core;
-- plan submission completes and concludes its model step before DSH opens a
-  dedicated `plan-review` interaction. Approval or cancellation is then
+- a tool result whose next action requires host work (plan confirmation or
+  final verification), or is terminal, calls DSH `concludeTurn()` only after
+  the successful result exists. Plan submission therefore concludes its model
+  step before DSH opens a dedicated `plan-review` interaction. Approval or cancellation is then
   settled at the awaited turn-stopping boundary, so no model tool call remains
   live while the user decides and no stale confirmation directive can race the
   next Goki role. The card offers approve/cancel; **Chat about it** returns the
   normal composer, and the next human message becomes same-run revision
   feedback before Zenki resumes;
-- ordered, idempotent SessionEvent bridging that drains long model streams in
-  bounded batches, preserves every valid source-event reference, and performs a
-  final flush before terminal ledger close, including the tool result and final
-  assistant/turn events after Oduno meditation; and
+- ordered, idempotent SessionEvent bridging that retains the pre-binding turn
+  prefix, drains long model streams in bounded batches, preserves every valid
+  source-event reference, and flushes only the exact bound run at each DSH
+  checkpoint. On every idle boundary, the adapter awaits DSH's exact live
+  `sessions.flush(session)` before any terminal ledger close, including the tool
+  result and final assistant/turn events after Oduno meditation; and
 - bounded turn continuation, exact run/session/workspace/route binding, and
   in-memory plaintext continuation tokens.
 
@@ -206,6 +210,9 @@ revalidated through the core continuation gate, persisted pending advisory evide
 previous ordinary-memory context is not replayed implicitly. Multiple matching
 runs, a continuation limit, a conflicting execution lease, or a changed
 capability catalog still fails closed instead of selecting or advancing a run.
+User questions retain the exact live native Agent object; confirmation answers
+revalidate both that scope and the bound catalog/revision before they can mutate
+the core state machine.
 
 `runId` is required for dsh resume. The plugin never selects a repository-wide
 latest run. Ambiguous, stale, cancelled, aborted, lease-conflicting, or
@@ -239,13 +246,13 @@ The current compatibility measurement is:
 
 | Harness profile | Status |
 |---|---|
-| web | verified by the disposable alpha.5 install/start/uninstall run |
+| web | verified by the disposable rc.1 install/start/uninstall run |
 | headless | unknown; not declared as supported |
 | sdk | unsupported until a real Loader/SDK host is supplied |
 | acp | unsupported until a real Loader/ACP host is supplied |
 | sdk-minimal | unsupported until a real Loader/SDK host is supplied |
 
-The `web` status is evidence-based only after the disposable alpha.5 run. An
+The `web` status is evidence-based only after the disposable rc.1 run. An
 unavailable DeepSeek binary leaves a profile unverified; it is never converted
 into a passing runtime claim.
 
