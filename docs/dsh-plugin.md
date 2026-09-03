@@ -172,6 +172,17 @@ The dsh integration provides:
 - bounded turn continuation, exact run/session/workspace/route binding, and
   in-memory plaintext continuation tokens.
 
+If the model stops while an Enno action is still active, the adapter steers the
+same native turn only once for that unchanged directive. A second stop pauses
+the turn without cancelling or terminalizing the Enno run. The next user turn
+then resumes that exact run and reinjects its current directive. This recovery
+also works when DSH exposes an empty step-local message batch after consuming
+the next-turn inbox item: the adapter uses the last bound task for routing while
+the native conversation still carries the user's new instruction to the model.
+For an unchanged `execute_work_unit` action, the continuation explicitly tells
+the model to inspect the latest Enno tool result and retry the current WorkUnit;
+it must not wait for an invented next WorkUnit.
+
 Ordinary chat remains open while the agent is idle between conversational
 messages. An explicit build, debug, review, research, writing, analysis, or
 DevOps request closes the preceding chat run before starting its task run.

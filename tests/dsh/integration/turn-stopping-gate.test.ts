@@ -63,6 +63,8 @@ test('an incomplete Enno state steers the same turn and injects only current dir
   const decision = await controller.handle(event(agent))
   assert.equal(decision.kind, 'steer')
   assert.equal(agent.steers.length, 1)
+  assert.match(JSON.stringify(agent.steers[0]), /現在の WorkUnit はまだ受理されていません/u)
+  assert.match(JSON.stringify(agent.steers[0]), /同じ WorkUnit の修正または再報告/u)
   assert.deepEqual(injected, [{
     routeSkillNames: ['kiokuko-soul', 'kiokuko-single-purpose-functions'],
     expertRefs: [{ skillName: 'kiokuko-single-purpose-functions', relativePath: 'references/domain-and-types.md' }],
@@ -126,15 +128,16 @@ test('confirmation is settled at turn stopping before the next role is injected'
   assert.deepEqual(agent.cancels, [])
 })
 
-test('same directive is steered once per turn and then cancelled instead of looping', async () => {
+test('same directive pauses the turn after one steer and remains resumable on the next turn', async () => {
   const agent = { id: 'session', steers: [] as unknown[], cancels: [] as string[] }
   const controller = new DshEnnoController({ readState: async () => state('submit_plan') })
   assert.equal((await controller.handle(event(agent, 4))).kind, 'steer')
   const second = await controller.handle(event(agent, 4))
-  assert.deepEqual(second, { kind: 'abort', reason: 'continuation_limit' })
+  assert.deepEqual(second, { kind: 'pause', nextAction: 'submit_plan', reason: 'continuation_limit' })
   assert.equal(agent.steers.length, 1)
-  assert.equal(agent.cancels.length, 1)
+  assert.equal(agent.cancels.length, 0)
   assert.equal((await controller.handle(event(agent, 5))).kind, 'steer')
+  assert.equal(agent.steers.length, 2)
 })
 
 test('concurrent duplicate callbacks share one continuation decision without cancellation', async () => {
