@@ -13,23 +13,10 @@ export const DSH_MODEL_FACING_OPERATIONS = [
   'memory_checkpoint',
 ] as const satisfies readonly ModelToolOperationName[]
 
-export const DSH_HOST_ONLY_OPERATIONS = [
-  'task_prepare',
-  'task_answer',
-  'enno_advice_submit',
-  'enno_advice_read',
-  'enno_answer',
-  'enno_verify_prepare',
-  'curator_globalize',
-] as const satisfies readonly ModelToolOperationName[]
-
 export type DshModelFacingOperation = (typeof DSH_MODEL_FACING_OPERATIONS)[number]
-export type DshHostOnlyOperation = (typeof DSH_HOST_ONLY_OPERATIONS)[number]
 
 const modelFacingSet = new Set<string>(DSH_MODEL_FACING_OPERATIONS)
-const hostOnlySet = new Set<string>(DSH_HOST_ONLY_OPERATIONS)
-
-if (new Set([...DSH_MODEL_FACING_OPERATIONS, ...DSH_HOST_ONLY_OPERATIONS]).size !== MODEL_TOOL_OPERATION_NAMES.length) {
+if (new Set(DSH_MODEL_FACING_OPERATIONS).size !== MODEL_TOOL_OPERATION_NAMES.length) {
   throw new Error('dsh tool ownership must cover the exact Kiokuko operation set once')
 }
 
@@ -234,12 +221,12 @@ function concludesDshTurn(value: unknown): boolean {
     || nextAction === 'complete'
 }
 
-/** Build the exact operation set; only model-facing tools receive wire schemas. */
+/** Build the exact seven-operation model tool set. */
 export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDefinition[] {
   return Object.freeze(MODEL_TOOL_OPERATION_NAMES.map((operation) => Object.freeze({
     name: operation,
     description: descriptionFor(operation),
-    parameters: modelFacingSet.has(operation) ? modelFacingInputSchema(operation) : Object.freeze({ type: 'object', properties: {}, additionalProperties: false }),
+    parameters: modelFacingInputSchema(operation),
     modelFacing: modelFacingSet.has(operation),
     // `{}` is the dsh JSON-schema spelling for any lossless JSON value. The
     // Kiokuko operation registry owns the input/output semantic schemas; this
@@ -269,13 +256,12 @@ export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDef
   })))
 }
 
-/** Register only tools that dsh may expose to the model. Host-only operations
- * remain available to the explicit Kiokuko host adapter, never as model tools. */
+/** Return the exact tools that DSH may expose to the model. */
 export function createDshModelToolDefinitions(host: DshToolHost): readonly DshToolDefinition[] {
   return Object.freeze(createDshToolDefinitions(host).filter((definition) => definition.modelFacing))
 }
 
-/** Register all operations and return a reverse-order disposer. */
+/** Register the exact model tool set and return a reverse-order disposer. */
 export function mountDshTools(ctx: DshToolRegistrationContext, host: DshToolHost): () => void {
   const disposers = createDshToolDefinitions(host).map((definition) => ctx.tools.register(definition))
   return () => { for (const dispose of disposers.reverse()) dispose() }
@@ -289,8 +275,4 @@ export function mountDshModelTools(ctx: DshToolRegistrationContext, host: DshToo
 
 export function isDshModelFacingOperation(name: string): name is DshModelFacingOperation {
   return modelFacingSet.has(name)
-}
-
-export function isDshHostOnlyOperation(name: string): name is DshHostOnlyOperation {
-  return hostOnlySet.has(name)
 }

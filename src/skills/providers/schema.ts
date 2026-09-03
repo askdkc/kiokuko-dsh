@@ -5,7 +5,7 @@ import { SkillSourceError } from '../source/errors.js';
 import { parseGitHubSource } from '../source/snapshot-validator.js';
 import type { SkillAuditResult, SkillCandidate, SkillProviderFailureCode } from '../types.js';
 import { MAX_SEARCH_RESULTS } from '../query-builder.js';
-import { parseStrictJson } from '../../setup/strict-json.js';
+import { parseStrictJson } from '../../dsh/strict-json.js';
 import { KiokukoError } from '../../errors.js';
 
 export class SkillProviderError extends Error {

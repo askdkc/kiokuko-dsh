@@ -49,18 +49,6 @@ export function isTrustedCuratorGlobalMemory(entry: CuratorTrustInput): boolean 
     && entry.verifiedAt === entry.createdAt;
 }
 
-/**
- * Preserve intake compatibility for deterministic Curator rows written before
- * Curator projections became system-verified. A replay through Curator upgrades
- * this exact legacy lifecycle without changing its content revision.
- */
-export function isLegacyCuratorGlobalMemory(entry: CuratorTrustInput): boolean {
-  return hasCuratorProjectionIdentity(entry)
-    && entry.status === 'candidate'
-    && entry.trustLevel === 'untrusted'
-    && entry.verifiedAt === null;
-}
-
 export function isCuratorManagedGlobalMemory(entry: CuratorTrustInput): boolean {
-  return isTrustedCuratorGlobalMemory(entry) || isLegacyCuratorGlobalMemory(entry);
+  return isTrustedCuratorGlobalMemory(entry);
 }

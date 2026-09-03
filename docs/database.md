@@ -1,11 +1,31 @@
-# Embedding database changes
+# DSH database
 
-Migration 022 rebuilds the released semantic projection tables to allow both
-v1 OpenAI-compatible history and v2 local profiles. It adds singleton settings,
-model installation metadata, and durable setup runs. Migration SQL performs no
-network access, model loading, or vector generation.
+SQLite is process-local state owned by the DSH runtime. `migrations/001_baseline.sql`
+is the single immutable schema baseline; a fresh database is created by applying
+it once. Future schema evolution appends new numbered migrations after the
+baseline, and applied history is protected by the migration framework's
+sequence and checksum validation. There is no rollback path (`migrations/down/`
+does not exist), and released migration files are never rewritten.
 
-Old v1 profiles, vectors, jobs, and query cache rows remain available. An old
-active profile is represented as requiring setup while runtime mode remains
-off. The manual down migration requires a backup and refuses to silently
-convert a local v2 profile.
+The baseline binds every ledger run to exactly one authoritative DSH session:
+
+- `ledger_runs.dsh_session_id` (no `client_kind`, `client_version`, or
+  `source_session_id` columns exist)
+- `enno_contracts.dsh_session_id`
+- `enno_dsh_continuations`
+- `enno_resume_tokens.dsh_session_id`
+- `enno_execution_leases.dsh_session_id`
+
+`dsh_intake_idempotency` is the intake idempotency store for run-open and
+intake-answer replays, keyed by DSH-native `dsh.*` scopes. Baseline completion
+requires an empty `PRAGMA foreign_key_check` result.
+
+The hybrid search projection is CJK-capable from the baseline:
+`entry_search_documents` is the canonical text projection, `entries_fts`
+(unicode61) covers word search, and `entries_trigram` (trigram tokenizer)
+covers Japanese substring search without word boundaries.
+
+Optional semantic retrieval stores rebuildable vectors beside durable memory.
+The runtime may continue with lexical retrieval when the optional vector lane
+is unavailable; it never converts an unavailable embedding operation into a
+successful vector result.

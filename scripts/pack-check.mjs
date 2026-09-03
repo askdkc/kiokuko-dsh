@@ -20,7 +20,7 @@ const requiredFiles = [
   'dist/dsh/index.js',
   'dist/dsh/index.d.ts',
 ]
-const requiredDirectories = ['dist/', 'migrations/', 'skills/', 'docs/', 'templates/']
+const requiredDirectories = ['dist/', 'migrations/', 'skills/', 'docs/']
 const forbiddenPrefixes = [
   'src/',
   'tests/',
@@ -31,6 +31,13 @@ const forbiddenPrefixes = [
   '.claude/',
   '.opencode/',
   'PLAN.md',
+  'dist/bin/',
+  'dist/commands/',
+  'dist/client/',
+  'dist/mcp/',
+  'dist/web/',
+  'dist/server/',
+  'dist/setup/',
 ]
 
 function parsePackJson(stdout) {
@@ -127,6 +134,10 @@ try {
   if (metadata?.version === undefined) throw new Error('packed package has no version')
   const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
   if (packageManifest.bin !== undefined) throw new Error('generic CLI binary must not be public')
+  if (paths.has('dist/cli.js')) throw new Error('generic CLI output must not be published')
+  if (packageManifest.dependencies?.commander !== undefined || packageManifest.dependencies?.['@modelcontextprotocol/sdk'] !== undefined) {
+    throw new Error('DSH package must not depend on generic CLI or MCP runtimes')
+  }
   const exportsKeys = Object.keys(packageManifest.exports ?? {})
   if (exportsKeys.length !== 1 || exportsKeys[0] !== './dsh') throw new Error('public exports must contain only ./dsh')
   const smoke = await createAndSmokeTestTarball()

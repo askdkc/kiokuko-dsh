@@ -21,9 +21,7 @@ import {
 interface RunRow extends SqliteRow {
   run_id: string;
   workspace: string;
-  client_kind: string;
-  client_version: string | null;
-  source_session_id: string | null;
+  dsh_session_id: string;
   protocol_version: string;
   capture_profile: RunRecord['captureProfile'];
   coverage_json: string;
@@ -158,11 +156,7 @@ function rowToRun(row: RunRow): RunRecord {
   return {
     runId: row.run_id,
     workspace: row.workspace,
-    client: {
-      kind: row.client_kind,
-      ...(row.client_version === null ? {} : { version: row.client_version }),
-      ...(row.source_session_id === null ? {} : { sessionId: row.source_session_id }),
-    },
+    dshSessionId: row.dsh_session_id,
     protocolVersion: row.protocol_version,
     captureProfile: row.capture_profile,
     coverage: parseJson(row.coverage_json),
@@ -290,10 +284,9 @@ export class LedgerStore {
     now: string;
   } {
     const validated = validateRunInput(input);
-    const client = sanitizeJson(validated.client, this.options).value as unknown as import('./types.js').ClientInput;
     const task = sanitizeTask(validated.task, this.options);
     const metadata = sanitizeRunMetadata(validated.metadata ?? {}, this.options).value;
-    return { input: { ...validated, client }, task, metadata: (metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}) as JsonObject, now };
+    return { input: validated, task, metadata: (metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}) as JsonObject, now };
   }
 
 
@@ -304,16 +297,14 @@ export class LedgerStore {
     const taskTitle = task.value.title;
     this.database.prepare(`
       INSERT INTO ledger_runs (
-        run_id, workspace, client_kind, client_version, source_session_id, parent_run_id,
+        run_id, workspace, dsh_session_id, parent_run_id,
         protocol_version, capture_profile, coverage_json, status, title, task_hash,
         metadata_json, last_sequence, last_source_sequence, started_at, ended_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'intake', ?, ?, ?, 0, NULL, ?, NULL, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'intake', ?, ?, ?, 0, NULL, ?, NULL, ?, ?)
     `).run(
       input.runId,
       input.workspace,
-      input.client.kind,
-      input.client.version ?? null,
-      input.client.sessionId ?? null,
+      input.dshSessionId,
       input.parentRunId ?? null,
       input.protocolVersion,
       input.captureProfile,

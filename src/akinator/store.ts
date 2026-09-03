@@ -1,7 +1,7 @@
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { KiokukoError, type ErrorCode } from '../errors.js';
 import { canonicalJson, requireWorkspace } from '../serialization/validate.js';
-import { parseStrictJson } from '../setup/strict-json.js';
+import { parseStrictJson } from '../dsh/strict-json.js';
 import { evaluateProfile } from './domain.js';
 import { TASK_TYPES, type AkinatorSessionView, type TaskProfile, type TaskType } from './types.js';
 

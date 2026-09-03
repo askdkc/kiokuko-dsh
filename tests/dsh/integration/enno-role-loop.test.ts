@@ -7,7 +7,7 @@ import type { EnnoOdunoState } from '../../../src/enno-oduno/types.js'
 function directive(revision: number) {
   return {
     protocolVersion: 1, runId: 'run', contractRevision: revision, routeEpoch: 0, role: 'zenki',
-    harness: { kind: 'dsh', version: null, continuation: 'turn_stopping_plugin', instructions: [] }, handoff: null,
+    instructions: [], handoff: null,
     objective: 'submit the plan', requiredSkills: ['kiokuko-soul', 'kiokuko-single-purpose-functions'], workUnit: null,
     stopConditions: ['submit one plan'], reportSchema: {},
   } as const
@@ -15,7 +15,7 @@ function directive(revision: number) {
 
 function snapshot(nextAction: EnnoOdunoState['nextAction'], revision = 2): EnnoOdunoState {
   return {
-    applicable: true, status: 'zenki_planning', orchestrationId: 'orch', clientBinding: null,
+    applicable: true, status: 'zenki_planning', orchestrationId: 'orch', dshSessionId: 'dsh-session',
     contractRevision: revision, routeEpoch: 0, ideal: null, meditation: null, currentRole: 'zenki', directive: directive(revision),
     nextAction, advisoryPhaseState: { state: 'not_started' },
   } as unknown as EnnoOdunoState

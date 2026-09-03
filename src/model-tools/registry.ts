@@ -1,7 +1,6 @@
 import * as z from 'zod/v4';
 import {
   MODEL_TOOL_CONTRACTS,
-  MODEL_TOOL_INPUT_SCHEMAS,
   MODEL_TOOL_OPERATION_NAMES,
   type ModelToolContract,
   type ModelToolOperationName,
@@ -75,8 +74,4 @@ export function modelFacingInputSchema(name: ModelToolOperationName): JsonSchema
 /** Strip host-owned fields from a current revision-bound report schema. */
 export function projectModelFacingInputSchema(name: ModelToolOperationName, schema: JsonSchema): JsonSchema {
   return removeHostOwnedFields(schema, modelToolContract(name).hostOwnedFields);
-}
-
-export function mcpInputSchema<Name extends ModelToolOperationName>(name: Name): typeof MODEL_TOOL_INPUT_SCHEMAS[Name] {
-  return MODEL_TOOL_INPUT_SCHEMAS[name];
 }

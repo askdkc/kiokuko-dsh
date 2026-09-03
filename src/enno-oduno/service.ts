@@ -17,7 +17,6 @@ import {
   resolveProjectFingerprint,
 } from '../repository/project-fingerprint.js';
 import { discoverSkills } from '../skills/discovery-service.js';
-import { SkillProviderError } from '../skills/providers/schema.js';
 import type { DiscoverSkillsInput, SkillDiscoverySummary } from '../skills/types.js';
 import { canonicalContentHash, canonicalJson } from '../serialization/validate.js';
 import { sanitizeJson } from '../security/sanitize.js';
@@ -32,7 +31,6 @@ import {
 } from './advisory-store.js';
 import { assertWorkPlanExpertCoverage } from './experts.js';
 import { buildEnnoRequestHandoff } from './handoff.js';
-import { identifyEnnoClientKind } from './harness.js';
 import {
   ennoAnswerSchema,
   adviceReadSchema,
@@ -125,7 +123,7 @@ import {
   STANDARD_FUNCTION_SKILL_NAME,
   STANDARD_SOUL_SKILL_NAME,
   STANDARD_UI_SKILL_NAME,
-} from '../setup/standard-skills.js';
+} from '../dsh/standard-skills.js';
 
 type PlanSubmission = z.infer<typeof planSubmissionSchema>;
 type IdealSubmission = z.infer<typeof idealSubmissionSchema>;
@@ -181,12 +179,7 @@ export function stateForSnapshot(snapshot: EnnoRunSnapshot): EnnoOdunoState {
     applicable: true,
     status: snapshot.status,
     orchestrationId: snapshot.orchestrationId,
-    clientBinding: {
-      status: snapshot.clientSessionId === null ? 'pending' : 'bound',
-      clientKind: snapshot.clientKind,
-      clientVersion: snapshot.clientVersion,
-      identified: snapshot.clientKind !== null,
-    },
+    dshSessionId: snapshot.dshSessionId,
     contractRevision: snapshot.revision,
     routeEpoch: snapshot.routeEpoch ?? 0,
     ideal: snapshot.ideal,
@@ -201,9 +194,7 @@ export function stateForSnapshot(snapshot: EnnoRunSnapshot): EnnoOdunoState {
 function intakeEnnoState(input: {
   runId: string;
   orchestrationId: string;
-  clientKind: EnnoRunSnapshot['clientKind'];
-  clientVersion: string | null;
-  clientSessionId: string | null;
+  dshSessionId: string;
   question: AkinatorQuestion | null;
 }): EnnoOdunoState {
   const directive = directiveForIntake(input);
@@ -211,12 +202,7 @@ function intakeEnnoState(input: {
     applicable: true,
     status: 'intake',
     orchestrationId: input.orchestrationId,
-    clientBinding: {
-      status: input.clientSessionId === null ? 'pending' : 'bound',
-      clientKind: input.clientKind,
-      clientVersion: input.clientVersion,
-      identified: input.clientKind !== null,
-    },
+    dshSessionId: input.dshSessionId,
     contractRevision: null,
     routeEpoch: null,
     ideal: null,
@@ -233,7 +219,7 @@ export function inapplicableEnnoState(): EnnoOdunoState {
     applicable: false,
     status: 'intake',
     orchestrationId: null,
-    clientBinding: null,
+    dshSessionId: null,
     contractRevision: null,
     routeEpoch: null,
     ideal: null,
@@ -248,19 +234,14 @@ export function inapplicableEnnoState(): EnnoOdunoState {
 export function ennoStateForPreparedTask(
   database: SqliteDatabase,
   prepared: PreparedTaskShape,
-  client: { kind: string; version?: string; sessionId?: string } | undefined,
+  dshSessionId: string,
 ): EnnoOdunoState {
   const taskType = prepared.intake.profile.taskType;
-  const clientKind = identifyEnnoClientKind(client?.kind);
-  const clientVersion = clientKind === null ? null : client?.version ?? null;
-  const clientSessionId = clientKind === null ? null : client?.sessionId ?? null;
   if (prepared.intake.status === 'needs_answer' && taskType === null) {
     return intakeEnnoState({
       runId: prepared.run.runId,
       orchestrationId: prepared.intake.sessionId,
-      clientKind,
-      clientVersion,
-      clientSessionId,
+      dshSessionId,
       question: prepared.intake.question,
     });
   }
@@ -271,9 +252,7 @@ export function ennoStateForPreparedTask(
     return intakeEnnoState({
       runId: prepared.run.runId,
       orchestrationId: prepared.intake.sessionId,
-      clientKind,
-      clientVersion,
-      clientSessionId,
+      dshSessionId,
       question: prepared.intake.question,
     });
   }
@@ -288,9 +267,7 @@ export function ennoStateForPreparedTask(
     taskExpected: prepared.intake.profile.expected,
     handoff,
     skillDiscovery: prepared.skillDiscovery,
-    ...(clientKind === null ? {} : { initialClientKind: clientKind }),
-    ...(clientVersion === null ? {} : { initialClientVersion: clientVersion }),
-    ...(clientSessionId === null ? {} : { initialClientSessionId: clientSessionId }),
+    dshSessionId,
   });
   return stateForSnapshot(snapshot);
 }
@@ -304,13 +281,10 @@ function operationIdentity(
     ? Object.fromEntries(Object.entries(input as Record<string, unknown>)
       .filter(([key]) => !['workspace', 'orchestrationId', 'resumeToken', 'idempotencyKey'].includes(key)))
     : input;
-  const requestDigest = canonicalContentHash({ version: 1, operation, input: semanticInput });
-  const legacyRequestDigest = canonicalContentHash({ version: 1, operation, input });
   return {
     operation,
     idempotencyKey,
-    requestDigest,
-    ...(legacyRequestDigest === requestDigest ? {} : { legacyRequestDigests: [legacyRequestDigest] }),
+    requestDigest: canonicalContentHash({ version: 1, operation, input: semanticInput }),
   };
 }
 
@@ -652,10 +626,9 @@ function startFirstReadyUnit(database: SqliteDatabase, snapshot: EnnoRunSnapshot
     workUnitId: next.workUnit.id,
     contractRevision: snapshot.revision,
   });
-  if (snapshot.clientKind === null || snapshot.clientSessionId === null) return undefined;
+  if (snapshot.dshSessionId === null) return undefined;
   return claimExecutionLeaseInTransaction(database, snapshot, next.workUnit.id, {
-    clientKind: snapshot.clientKind,
-    sessionId: snapshot.clientSessionId,
+    dshSessionId: snapshot.dshSessionId,
   });
 }
 
@@ -705,17 +678,6 @@ function emptyDiscovery(mode: SkillDiscoverySummary['mode']): SkillDiscoverySumm
   return { attempted: false, mode, requirements: [], queries: [], cacheHits: 0, candidates: 0, selected: [], failures: [] };
 }
 
-function legacyOptionalDiscoverySummary(
-  mode: SkillDiscoverySummary['mode'],
-  error: unknown,
-): SkillDiscoverySummary | undefined {
-  if (!(error instanceof SkillProviderError) || error.code !== 'registry_invalid_response') return undefined;
-  return {
-    ...emptyDiscovery(mode),
-    failures: [{ stage: 'search', code: error.code }],
-  };
-}
-
 async function discoverZenkiSkills(
   database: SqliteDatabase,
   snapshot: EnnoRunSnapshot,
@@ -739,14 +701,7 @@ async function discoverZenkiSkills(
       skillRequirements: plan.skillRequirements,
     }),
   };
-  let replay: ReturnType<typeof readAgentTaskSkillDiscoveryAttempt>;
-  try {
-    replay = readAgentTaskSkillDiscoveryAttempt(database, attempt);
-  } catch (error) {
-    const legacySummary = legacyOptionalDiscoverySummary(intake.mode, error);
-    if (legacySummary === undefined) throw error;
-    return legacySummary;
-  }
+  const replay = readAgentTaskSkillDiscoveryAttempt(database, attempt);
   if (replay !== undefined) return replay.summary;
   const claimed = claimAgentTaskSkillDiscoveryAttempt(database, attempt, {
     queryBudget: ENNO_MAX_TOTAL_SKILL_QUERIES,
@@ -1283,10 +1238,9 @@ export async function reportEnnoWork(
         terminalizeLedgerRunInTransaction(database, input.runId, 'failed');
       } else {
         const retry = readEnnoSnapshot(database, identity(database, input));
-        if (retry.clientKind !== null && retry.clientSessionId !== null) {
+        if (retry.dshSessionId !== null) {
           executionLease = claimExecutionLeaseInTransaction(database, retry, input.workUnitId, {
-            clientKind: retry.clientKind,
-            sessionId: retry.clientSessionId,
+            dshSessionId: retry.dshSessionId,
           });
         }
       }
@@ -1379,14 +1333,13 @@ export async function reportEnnoWork(
         executionLease = startFirstReadyUnit(database, next);
       }
       next = readEnnoSnapshot(database, identity(database, input));
-    } else if (next.clientKind !== null && next.clientSessionId !== null) {
+    } else if (next.dshSessionId !== null) {
       // A failed focused verifier leaves the same WorkUnit in progress so the
       // host can correct it. The report lease was consumed above; return a
       // fresh lease in the same response or the advertised execute_work_unit
       // continuation can only fail with lease_required.
       executionLease = claimExecutionLeaseInTransaction(database, next, input.workUnitId, {
-        clientKind: next.clientKind,
-        sessionId: next.clientSessionId,
+        dshSessionId: next.dshSessionId,
       });
     }
     const response = {
@@ -1526,7 +1479,7 @@ export async function finishEnno(
       repositoryDigest: currentRepositoryDigest,
     });
     if (results === undefined) {
-      throw new KiokukoError('CONFLICT', 'Final verification evidence is not prepared; call enno_verify_prepare first');
+      throw new KiokukoError('CONFLICT', 'Final verification evidence is not prepared by the DSH host');
     }
     if (results.some((result) => result.repositoryStateDigest !== currentRepositoryDigest
       || result.changedDuringVerification !== false)) {
@@ -1556,7 +1509,6 @@ export async function finishEnno(
     const unsafe = results.some((result) => result.status === 'spawn_failed');
     const attempts = current.attempts + 1;
     const accepted = passed && input.review.decision === 'accept';
-    const completesLegacyRun = accepted && current.ideal === null;
     const mustBlock = unsafe || (!accepted && attempts >= current.contract.maxAttempts);
     const reviewFeedback = accepted || mustBlock
       ? null
@@ -1571,9 +1523,7 @@ export async function finishEnno(
         : 'Final verification reached the attempt limit';
     updateContractInTransaction(database, current, {
       contract: nextContract,
-      status: accepted
-        ? completesLegacyRun ? 'completed' : 'oduno_meditation'
-        : mustBlock ? 'blocked' : 'zenki_planning',
+      status: accepted ? 'oduno_meditation' : mustBlock ? 'blocked' : 'zenki_planning',
       confirmationState: reviewFeedback === null ? current.confirmationState : 'revision_requested',
       attempts,
       blocker: mustBlock ? blockedReason : reviewFeedback,
@@ -1590,14 +1540,6 @@ export async function finishEnno(
         mutationRevision: current.mutationRevision,
         summary: reviewSummary,
       });
-      if (completesLegacyRun) {
-        appendEnnoEventInTransaction(database, input.runId, 'enno.completed', 'enno-oduno', 'completed', {
-          contractRevision: current.revision,
-          mutationRevision: current.mutationRevision,
-          compatibility: 'pre_oduno_ideal_run',
-        });
-        terminalizeLedgerRunInTransaction(database, input.runId, 'completed');
-      }
     } else if (mustBlock) {
       appendEnnoEventInTransaction(database, input.runId, 'enno.blocked', 'enno-oduno', 'blocked', {
         reason: unsafe ? 'spawn_failed' : 'attempt_limit',

@@ -1,6 +1,6 @@
 ---
 name: kiokuko-enno-oduno
-description: Use when Kiokuko task_prepare returns ennoOduno.applicable=true or an Enno-Oduno run is being resumed. Act as 役小角 by controlling intake, exact Akinator questions, Oduno ideal derivation, run-bound identity, role handoffs, confirmation, final review, Oduno meditation, replan, blocking, and completion. Do not perform Zenki planning or Goki implementation.
+description: Use when the admitted DSH context has ennoOduno.applicable=true or a DSH Enno-Oduno run is being resumed. Act as 役小角 over the current directive, Oduno ideal derivation, role handoffs, final review, meditation, replan, blocking, and completion. Do not perform Zenki planning or Goki implementation.
 ---
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-enno-oduno -->
@@ -11,7 +11,7 @@ description: Use when Kiokuko task_prepare returns ennoOduno.applicable=true or 
 
 Control one Kiokuko run from intake to a verified terminal decision while keeping planning, implementation, and state ownership separate.
 
-Enno-Oduno is a role directive for the current client model. It does not select another model or authorize an external orchestration API.
+Enno-Oduno is a role directive for the current DSH model request. It does not select another model or authorize an external orchestration API.
 
 ## MoA advisory rounds
 
@@ -22,10 +22,9 @@ must provide and verify isolated read-only subagents; a prompt instruction is
 not proof of isolation, and a host without that capability reports
 `unavailable` for the slot.
 
-Advisor input is deliberately identity-free: do not pass `runId`, `workspace`,
-`orchestrationId`, contract or mutation revision, or an idempotency key to an
-advisor. The parent aggregator alone calls `enno_advice_submit`, in slot-rank
-order, with one structured result per fixed slot. Provider/model names and raw
+Advisor input is deliberately identity-free: do not pass run, workspace,
+session, revision, or idempotency identity to an advisor. The DSH host alone
+persists one structured result per fixed slot in slot-rank order. Provider/model names and raw
 subagent output are never stored. Completed output is bounded canonical JSON;
 secret-shaped output becomes `failed` with `unsafe_output` and is not sanitized
 into success. The lifecycle is `not_started → fanout_requested → aggregated →
@@ -36,12 +35,10 @@ the main Enno status.
 
 ### Recovery-only advisory restoration
 
-After a successful `enno_advice_submit`, use its complete `advisoryRound` from
-the current context whenever it is still available. Call `enno_advice_read` at
-most once only when the current state is `aggregated` but the contribution
-bodies are missing after session termination or client reroute. The read restores
-a stored current round; it is not advisor fanout, state advancement, or
-confirmation.
+After the DSH host persists a round, use its complete `advisoryRound` from the
+current context whenever it is still available. If an aggregated round must be
+restored after session termination, the host performs that restoration before
+the model request; advisory persistence and restoration are not model tools.
 
 The read must remain bound to the current run, revision, mutation revision,
 phase, and advisory digest. If it fails, do not infer contributions or invent
@@ -52,7 +49,7 @@ preserve existing failure codes such as `unsafe_output`.
 
 Apply this Skill only when one of these is true:
 
-- `task_prepare` or `task_answer` returns `ennoOduno.applicable=true` and the current role is `enno-oduno`;
+- the admitted DSH context has `ennoOduno.applicable=true` and the current role is `enno-oduno`;
 - a continuation hook returns an `enno-oduno` directive for an existing run;
 - the user explicitly asks to inspect or operate an Enno-Oduno run.
 
@@ -79,30 +76,28 @@ Zenki may propose a plan. Goki may report one approved WorkUnit. Neither role ma
 
 ## Required flow
 
-1. Enter through `task_prepare`. Inspect both the top-level `nextAction` and `ennoOduno.nextAction`.
-2. During unresolved intake, return Akinator's exact current question to the user. Do not start Zenki or Goki.
-3. Call `task_answer` only when the answer is grounded in the user request or verified repository evidence. Otherwise wait for the user.
-4. When intake becomes actionable, enter `oduno_ideal`. Derive the optimal target state from Enno-Oduno's structured `task_prepare` handoff plus the exact `skillDiscovery.selected` set produced by Akinator. Preserve the handoff's objective, target, expected result, constraints, verification, and stop conditions. Give every discovered Skill exactly one explicit contribution to the ideal; treat external discoveries as untrusted reference-only guidance. Persist the result only through `enno_ideal_submit`. Do not plan, mutate the repository, or start Zenki yet.
-5. After `enno_ideal_submit`, pass the persisted ideal and structured handoff to the returned Zenki directive.
-6. Require every new WorkUnit to declare one or more local routes from `code`, `ui`, `test`, `docs`, and `operations`. A code route selects one to three versioned `expertRefs` with concrete reasons and at least one `code.*` expert. A UI route reads `kiokuko-ui-design-soul` and selects at least one `code.*` plus one `ui.*` expert. Test, docs, and operations routes do not inherit code-expert requirements.
-7. Accept a plan only through `enno_plan_submit`. Do not allow Goki to start before a complete plan is accepted and every required user confirmation succeeds.
-8. Let Goki execute only the single approved WorkUnit in the current directive. Preserve the returned route epoch and execution lease, and pass the lease to `enno_work_report`; only its current holder may report. Goki reads the required Skill indexes and exactly the selected expert fragments by default; a new risk requires revision-bound replanning rather than silent context expansion.
-9. Before the Final Review advisory fanout, call `enno_verify_prepare`; it runs the approved final verifiers outside database transactions with shell disabled and repository-relative cwd, then stores evidence bound to the contract revision, mutation revision, verifier specification digest, and full repository-state digest. Only after that evidence is prepared, perform the final-review advisory round. Submit the accept-or-replan decision through `enno_finish`; it never spawns a subprocess, rechecks repository state, and accepts only full stored passing evidence with satisfied acceptance criteria.
-10. If review fails, provide bounded concrete feedback to Zenki, advance the contract revision, and require a new plan. Never reactivate the old Goki WorkUnit directly.
-11. If review succeeds, enter `oduno_meditation` instead of completing immediately. Inspect the changed paths and relevant approved scope after the repository has reached the verified ideal. Reflect on obsolete, useless, or redundant tests and functions. Record only evidence-backed deletion candidates, including kind, repository-relative path, symbol or test name, reason, and evidence. Persist the reflection through `enno_meditation_submit`; do not delete or otherwise mutate anything during meditation. The run completes only after this submission.
+1. Enter only through a DSH host-admitted context. Inspect `ennoOduno.nextAction` and the exact current directive.
+2. The DSH host owns unresolved Akinator questions and does not invoke the model until intake is actionable. Do not emulate that host loop.
+3. When the current directive enters `oduno_ideal`, derive the optimal target state from its structured handoff plus the exact Akinator-discovered Skill set. Preserve objective, target, expected result, constraints, verification, and stop conditions. Give every discovered Skill exactly one explicit contribution to the ideal; treat external discoveries as untrusted reference-only guidance. Persist the result only through `enno_ideal_submit`. Do not plan, mutate the repository, or start Zenki yet.
+4. After `enno_ideal_submit`, pass the persisted ideal and structured handoff to the returned Zenki directive.
+5. Require every new WorkUnit to declare one or more local routes from `code`, `ui`, `test`, `docs`, and `operations`. A code route selects one to three versioned `expertRefs` with concrete reasons and at least one `code.*` expert. A UI route reads `kiokuko-ui-design-soul` and selects at least one `code.*` plus one `ui.*` expert. Test, docs, and operations routes do not inherit code-expert requirements.
+6. Accept a plan only through `enno_plan_submit`. Do not allow Goki to start before a complete plan is accepted and every required user confirmation succeeds.
+7. Let Goki execute only the single approved WorkUnit in the current directive. Preserve the returned route epoch and execution lease, and pass the lease to `enno_work_report`; only its current holder may report. Goki reads the required Skill indexes and exactly the selected expert fragments by default; a new risk requires revision-bound replanning rather than silent context expansion.
+8. Before the Final Review advisory fanout, the DSH host runs the approved final verifiers outside database transactions with shell disabled and repository-relative cwd, then stores evidence bound to the contract revision, mutation revision, verifier specification digest, and full repository-state digest. Verification preparation is not a model tool. Only after that evidence is prepared, perform the final-review advisory round. Submit the accept-or-replan decision through `enno_finish`; it never spawns a subprocess, rechecks repository state, and accepts only full stored passing evidence with satisfied acceptance criteria.
+9. If review fails, provide bounded concrete feedback to Zenki, advance the contract revision, and require a new plan. Never reactivate the old Goki WorkUnit directly.
+10. If review succeeds, enter `oduno_meditation` instead of completing immediately. Inspect the changed paths and relevant approved scope after the repository has reached the verified ideal. Reflect on obsolete, useless, or redundant tests and functions. Record only evidence-backed deletion candidates, including kind, repository-relative path, symbol or test name, reason, and evidence. Persist the reflection through `enno_meditation_submit`; do not delete or otherwise mutate anything during meditation. The run completes only after this submission.
 
 ## Identity and revision invariants
 
-Retain and send the exact values returned for the run:
+Run, workspace, DSH session, route, revision, lease, and idempotency identity are
+host-owned. Never supply or reconstruct them in model tool arguments. The DSH
+host binds every call to the exact native session and current directive.
 
-- `run.runId`;
-- `project.workspace`;
-- `ennoOduno.orchestrationId`;
-- `ennoOduno.contractRevision`.
-
-Prefer the returned opaque resume token over reconstructing full identity. It is short-lived and binds the run, canonical repository, client kind, client session, and route epoch. Do not persist it externally or reuse it after rerouting. A route change increments the epoch and invalidates prior tokens. An active WorkUnit execution lease blocks rerouting until release or expiry.
-
-Treat a host client session ID as optional routing metadata, not authorization ownership. Local processes running as the same OS user with access to the canonical repository are trusted to continue its run; do not add PID, process-ancestry, executable, or signing proof. If the current token or route does not match, let the supported adapter atomically reroute only the single unambiguous active run in the canonical repository. Never select a repository-wide latest run or guess between multiple active runs. Reaching one session's continuation limit stops only that session and leaves the run active for another local project client. Reject a mismatched or stale token, lease, epoch, run, workspace, orchestration identity, revision, receipt, or terminal state.
+Opaque resume tokens bind the run, canonical repository, DSH session, and route
+epoch. They remain host-only, rotate on reroute, and are rejected when stale.
+An active WorkUnit lease blocks session rebinding until release or expiry. Never
+guess between multiple active runs or treat a repository-wide latest run as the
+continuation target.
 
 ## User confirmation
 
@@ -110,7 +105,7 @@ Return control to the user before Goki starts when any scope, exclusion, accepta
 
 The `needs_confirmation` response carries `ennoOduno.directive.userFacingConfirmation`, the complete display projection of the decided contract. Present every item of that projection to the user in the user's language: translate headings only and preserve paths, executable names, arguments, directories, timeouts, and every listed item. Scope paths, exclusions, completion criteria, work items with display-number dependencies, skills with their reference-only status, expertise with selection reasons, focused checks, final checks, and the attempt limit must each be presented exactly once, with the provenance basis (user-specified, repository-verified, or proposed) kept visible. Do not expose raw directive JSON, internal field names, WorkUnit IDs, expert IDs, or verifier IDs.
 
-Accept only an explicit approve, revise, or cancel decision passed through `enno_answer` with the current contract revision. Never infer approve from model judgment. A revision request returns to Zenki; cancellation is terminal.
+Accept only an explicit approve, revise, or cancel decision collected and bound by the DSH host at the current contract revision. Confirmation is not a model tool. Never infer approve from model judgment. A revision request returns to Zenki; cancellation is terminal.
 
 ## Plan-start recovery
 
@@ -118,10 +113,10 @@ If plan submission returns `userFacingRecovery`, present only its explanation of
 
 - Continue the same plan by attaching the complete capability catalog retained by the host from task preparation. Never ask the user to locate a catalog or construct JSON.
 - A plan-review choice asks what the user wants changed and starts no implementation.
-- For an active planning attempt, a restart choice first passes the user's explicit cancellation through `enno_answer`, then starts a new `task_prepare` with the current environment. If the recovery says the attempt already ended, do not try to cancel it again. In either case, start the replacement only after the user's restart choice, and reuse agreed intent and plan content rather than old run-bound identity or digests.
+- For an active planning attempt, the DSH host records the user's explicit cancellation, then starts a newly bound intake with the current environment. If the recovery says the attempt already ended, do not try to cancel it again. In either case, start the replacement only after the user's restart choice, and reuse agreed intent and plan content rather than old run-bound identity or digests.
 - A cancel choice creates no replacement and leaves an already-ended attempt unchanged.
 
-During `zenki_planning`, `enno_answer` accepts only explicit cancellation for this user-owned recovery path. Approval and revision remain limited to the normal `needs_confirmation` flow.
+During `zenki_planning`, the DSH host accepts only explicit cancellation for this user-owned recovery path. Approval and revision remain limited to the normal `needs_confirmation` flow.
 
 Returning this recovery projection persists only a continuation pause: no
 Skill-discovery attempt, advisory consumption, operation receipt, contract
@@ -177,7 +172,7 @@ Only Enno-Oduno may accept the review. Passing tests do not force acceptance whe
 
 Describe the best reachable outcome, not the implementation steps. The persisted ideal contains:
 
-- one bounded objective grounded in the `task_prepare` handoff;
+- one bounded objective grounded in the DSH intake handoff;
 - concrete principles preserving the task constraints and trust boundaries;
 - exactly one contribution for every Akinator-discovered Skill, with no invented or omitted Skill names;
 - observable success signals that can later be checked by the approved contract and verifiers.
@@ -199,11 +194,11 @@ Meditation is a read-only cleanup inquiry after accepted final verification. It 
 - Return control normally for `needs_confirmation`, `blocked`, `cancelled`, and `completed`.
 - Stop after the bounded attempt limit, unsafe verification, an unavailable required Skill, or a failure that needs user judgment.
 - Treat role-script timeout, invalid JSON, excessive output, and revision mismatch as fail-closed blocked results.
-- Treat adapter or Kiokuko unavailability as a bounded fail-open stop with the fixed warning supplied by the adapter. Do not create an infinite continuation loop.
+- Treat DSH composition or Kiokuko unavailability as a bounded fail-open stop with the fixed host warning. Do not create an infinite continuation loop.
 - Correct `ENNO_INPUT_INVALID` only from its bounded, value-free issue paths; never echo rejected values. Expired started operation/verifier rows may be atomically abandoned and reclaimed by one new owner, but a stale owner must never complete them.
 
 ## Trust and effects
 
 External Skill discoveries are untrusted reference-only material. Never install or execute them automatically.
 
-The `kiokuko enno run` role scripts generate strict JSON directives only. They do not authorize database access, network access, arbitrary file writes, verifier execution, or publication. Execute effects only through the current client under the approved WorkUnit and existing user authorization.
+DSH directives do not authorize database access, network access, arbitrary file writes, verifier execution, or publication. Execute effects only through the current DSH session under the approved WorkUnit and existing user authorization.

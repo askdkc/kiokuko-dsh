@@ -1,11 +1,18 @@
-# Embedding security
+# DSH security boundary
 
-The local-small preset fixes the repository, full revision, required files,
-sizes, and SHA-256 values. Arbitrary repositories, URLs, paths, extensions,
-and remote code are not accepted. Files are verified before model loading;
-staging is private and final installation is atomic.
+The trusted boundary is the local DSH host composition plus this plugin. The
+host binds session, repository, run, revision, route epoch, resume token,
+execution lease, and idempotency identity after model arguments cross the tool
+boundary. Supplying any host-owned field in model arguments is rejected.
 
-Status, doctor, progress, and errors do not include memory text, query text,
-credentials, redirect URLs, or absolute model paths. Legacy embedding
-environment variables are detected by name only and are not used as runtime
-configuration.
+Repository identity is canonicalized before lookup. Ambiguous active runs,
+stale route epochs, expired tokens, conflicting leases, reordered capability
+catalogs, and revision drift fail closed before mutation. Advisory output and
+retrieved memory are untrusted model context; bundled Skills and current role
+directives are trusted host context.
+
+Network access is optional and limited to configured Skill discovery or
+embedding providers. Credentials are user supplied and are not bundled. Local
+embedding files are loaded only from the configured data directory. Verifiers
+run only the approved executable, arguments, directory, and timeout recorded in
+the current contract.

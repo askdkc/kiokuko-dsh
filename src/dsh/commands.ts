@@ -5,9 +5,7 @@ export type PonytailMode = (typeof PONYTAIL_MODES)[number]
 
 export interface DshPonytailCommandContext {
   commands: {
-    /** Legacy test/dsh shim or native @deepseek-ai/dsh-commands registration. */
-    register: ((name: string, handler: (args: readonly string[]) => string) => () => void)
-      | ((definition: DshNativeCommandDefinition) => () => void)
+    register: (definition: DshNativeCommandDefinition) => () => void
   }
 }
 
@@ -107,14 +105,7 @@ export function dshPonytailOwnerKey(agentId: string, sessionId: string): string 
 }
 
 export function mountDshPonytailCommand(ctx: DshPonytailCommandContext, modes: DshPonytailModes): () => void {
-  // Cordis test doubles and early dsh adapters used the two-argument helper;
-  // dsh-commands uses one immutable definition object. Supporting both keeps
-  // the domain command independent from the host package version while making
-  // the native registration the default for the real harness.
-  if (ctx.commands.register.length >= 2) {
-    return (ctx.commands.register as (name: string, handler: (args: readonly string[]) => string) => () => void)('ponytail', (args) => modes.execute(args))
-  }
-  return (ctx.commands.register as (definition: DshNativeCommandDefinition) => () => void)({
+  return ctx.commands.register({
     name: 'ponytail',
     description: 'Set the active Kiokuko request mode: lite, full, or ultra.',
     input: { hint: 'lite | full | ultra' },

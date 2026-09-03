@@ -1,5 +1,5 @@
 import { TextDecoder } from 'node:util';
-import { parseStrictJson } from '../setup/strict-json.js';
+import { parseStrictJson } from '../dsh/strict-json.js';
 import { findSecret } from '../memory/secrets.js';
 import { KiokukoError } from '../errors.js';
 import { normalizeEmbeddingBaseUrl, requireEnabledEmbeddingConfig } from './config.js';

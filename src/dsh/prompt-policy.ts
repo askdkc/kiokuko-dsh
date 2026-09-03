@@ -1,4 +1,4 @@
-import { loadStandardSkillParity } from './parity.js'
+import { loadStandardSkillParity } from './standard-skill-integrity.js'
 
 export const KIOKUKO_SOUL_PROMPT_SECTION = 'kiokuko:soul'
 export const KIOKUKO_SOUL_PROMPT_ORDER = -100_000

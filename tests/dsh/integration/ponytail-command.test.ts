@@ -5,11 +5,18 @@ import { DshPonytailModes, dshPonytailOwnerKey, executeDshPonytailCommand, mount
 test('Ponytail modes are request-local and command registration uses the active request', () => {
   const modes = new DshPonytailModes()
   modes.begin('request-1')
-  const registered: ((args: readonly string[]) => string)[] = []
-  const dispose = mountDshPonytailCommand({ commands: { register: (_name, handler) => { registered.push(handler); return () => undefined } } }, modes)
-  assert.equal(registered[0]!(['lite']), 'Ponytail mode set to lite for the active request.')
+  const definitions: any[] = []
+  const dispose = mountDshPonytailCommand({ commands: { register: (definition: any) => { definitions.push(definition); return () => undefined } } }, modes)
+  const definition = definitions[0]!
+  assert.equal(definition.name, 'ponytail')
+  const invoke = (args: readonly string[], owner?: string) => definition.handler({
+    rawInput: args.join(' '),
+    agent: owner === undefined ? undefined : { id: 'agent-1', session: { id: owner } },
+    signal: new AbortController().signal,
+  })
+  assert.deepEqual(invoke(['lite']), { kind: 'success', text: 'Ponytail mode set to lite for the active request.' })
   assert.equal(modes.mode('request-1'), 'lite')
-  assert.throws(() => registered[0]!(['broken']), /exactly one mode/u)
+  assert.deepEqual(invoke(['broken', 'full']), { kind: 'error', text: 'ponytail requires exactly one mode: lite, full, or ultra' })
   modes.end('request-1')
   assert.equal(modes.mode('request-1'), undefined)
   assert.throws(() => executeDshPonytailCommand(modes, 'request-1', ['ultra']), /active logical request/u)

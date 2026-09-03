@@ -1,4 +1,4 @@
-import type { PreparedAgentTask } from '../akinator/agent-task.js'
+import type { PreparedAgentTask } from './task-intake.js'
 import { readEntry } from '../memory/entries.js'
 import { isRetrievableEntry } from '../memory/hybrid-retrieval.js'
 import type { DshRuntime } from './runtime.js'
@@ -10,7 +10,7 @@ import {
   STANDARD_FUNCTION_EXPERT_IDS,
   STANDARD_UI_EXPERT_FILES,
   STANDARD_UI_EXPERT_IDS,
-} from '../setup/standard-skills.js'
+} from './standard-skills.js'
 
 export interface DshModelMessage {
   readonly role: 'user'

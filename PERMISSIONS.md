@@ -6,13 +6,13 @@ Kiokuko operation.
 
 ## Local data
 
-- Reads configured Kiokuko SQLite state, runtime descriptors, registered
-  project roots, and repository metadata.
-- Writes the configured Kiokuko database, backups, leases, receipts, runtime
-  descriptors, and Kiokuko-managed project instruction files.
-- Does not rewrite unrelated client configuration or human-managed instruction
-  blocks. Repository identity, run identity, lease, revision, and integrity
-  mismatches fail closed.
+- Reads configured Kiokuko SQLite state, registered project roots, and
+  repository metadata.
+- Writes the configured Kiokuko database and pre-migration backups, including
+  DSH leases, receipts, retrieval state, and embedding state.
+- Does not rewrite host configuration or repository instruction files.
+  Repository identity, run identity, lease, revision, and integrity mismatches
+  fail closed.
 
 ## Processes and network
 

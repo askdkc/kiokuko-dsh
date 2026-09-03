@@ -4,7 +4,6 @@ import { MODEL_TOOL_OPERATION_NAMES } from '../../../src/model-tools/contracts.j
 import { modelFacingInputSchema } from '../../../src/model-tools/registry.js'
 import { projectDshDirective } from '../../../src/dsh/directive-projection.js'
 import {
-  DSH_HOST_ONLY_OPERATIONS,
   DSH_MODEL_FACING_OPERATIONS,
   bindDshToolInvocation,
   createDshToolDefinitions,
@@ -21,10 +20,10 @@ function execution(name: string, args: unknown = {}) {
   return { callId: 'call-1', name, arguments: args, agent: { dshSessionId: 'session-1', turn: 1 }, signal }
 }
 
-test('dsh ownership covers the exact 14 Kiokuko operations once', () => {
-  const owned = [...DSH_MODEL_FACING_OPERATIONS, ...DSH_HOST_ONLY_OPERATIONS]
+test('dsh registry contains exactly the seven model-visible operations', () => {
+  const owned = [...DSH_MODEL_FACING_OPERATIONS]
   assert.deepEqual([...owned].sort(), [...MODEL_TOOL_OPERATION_NAMES].sort())
-  assert.equal(new Set(owned).size, 14)
+  assert.equal(new Set(owned).size, 7)
   const definitions = createDshToolDefinitions(host)
   assert.deepEqual(definitions.map((definition) => definition.name), MODEL_TOOL_OPERATION_NAMES)
   assert.equal(definitions.filter((definition) => definition.modelFacing).length, 7)
@@ -55,7 +54,7 @@ test('projected directives retain current dynamic fields while removing host-own
   for (const [nextAction, operation] of actions) {
     const directive = {
       role: 'enno-oduno',
-      harness: { kind: 'dsh', version: null, continuation: 'turn_stopping_plugin', instructions: [] },
+      instructions: [],
       objective: 'current objective', requiredSkills: [], workUnit: null, stopConditions: [],
       reportSchema: modelFacingInputSchema(operation),
     } as any
@@ -65,7 +64,7 @@ test('projected directives retain current dynamic fields while removing host-own
 
   const directive = {
     role: 'enno-oduno',
-    harness: { kind: 'dsh', version: null, continuation: 'turn_stopping_plugin', instructions: [] },
+    instructions: [],
     objective: 'review', requiredSkills: [], workUnit: null, stopConditions: [],
     reportSchema: {
       properties: {
@@ -164,7 +163,7 @@ test('a plan awaiting human review concludes the model turn after its successful
   assert.equal(conclusions, 1)
 })
 
-test('host-owned and terminal next actions conclude only after their successful tool result', async () => {
+test('boundary and terminal next actions conclude only after their successful tool result', async () => {
   const nextActions = new Map([
     ['enno_work_report', 'run_final_verification'],
     ['enno_meditation_submit', 'complete'],

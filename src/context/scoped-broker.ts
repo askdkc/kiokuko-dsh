@@ -8,7 +8,7 @@ import { federatedEntries, type FederatedOrigin } from '../memory/federated-retr
 import { isRetrievableEntry } from '../memory/hybrid-retrieval.js';
 import { effectiveRetrievalScope, hasExplicitApplicability } from '../memory/structured-memory.js';
 import type { TaskProfile } from '../akinator/types.js';
-import { readContextDelivery, recordContextDeliveryInTransaction, type ContextDeliveryInput, type ContextDeliveryView } from './delivery.js';
+import { readContextDelivery, recordContextDeliveryInTransaction, scopedDeliveryId, type ContextDeliveryInput, type ContextDeliveryView } from './delivery.js';
 import { CONTEXT_SELECTION_REASON_ORDER } from './ranking.js';
 import { withImmediateTransaction } from '../db/transaction.js';
 import { contextFeedbackSignals } from './feedback.js';
@@ -380,32 +380,6 @@ function scopedRunContext(
   };
 }
 
-function scopedDeliveryId(delivery: ScopedDeliveryRequest | ContextDeliveryView): string {
-  return `context-${canonicalContentHash({
-    kind: 'scoped-context-delivery-v1',
-    workspace: delivery.workspace,
-    runId: delivery.runId,
-    throughSequence: delivery.throughSequence,
-    intakeSessionId: delivery.intakeSessionId,
-    taskProfileHash: delivery.taskProfileHash,
-    queryHash: delivery.queryHash,
-    policyVersion: delivery.policyVersion,
-    charBudget: delivery.charBudget,
-    charCount: delivery.charCount,
-    truncated: delivery.truncated,
-    createdAt: delivery.createdAt,
-    scoreSchemaVersion: delivery.scoreSchemaVersion ?? 1,
-    items: delivery.items.map((item) => ({
-      entryId: item.entryId,
-      entryRevision: item.entryRevision,
-      rank: item.rank,
-      scoreComponents: item.scoreComponents,
-      selectionReasons: item.selectionReasons,
-      ...(item.origin === undefined ? {} : { origin: item.origin }),
-    })),
-  })}`;
-}
-
 function assertScopedDeliveryIdentity(delivery: ContextDeliveryView): void {
   if (delivery.deliveryId !== scopedDeliveryId(delivery)) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Stored scoped context character accounting is invalid');
@@ -505,7 +479,6 @@ function storedDeliveryIsRetrievable(
   if (!delivery.items.every((item) => currentRetrievableDeliveryEntry(database, delivery.workspace, item) !== null)) return false;
   return !(delivery.taskProfileHash !== taskProfileHash
     || delivery.policyVersion !== SCOPED_CONTEXT_POLICY_VERSION
-    || delivery.scoreSchemaVersion !== 2
     || delivery.charBudget !== characterBudget
     || delivery.items.length > limit);
 }
@@ -533,9 +506,6 @@ function replayableDelivery(
 }
 
 function storedScopedItems(database: SqliteDatabase, delivery: ContextDeliveryView): ScopedContextItem[] {
-  if (delivery.policyVersion !== SCOPED_CONTEXT_POLICY_VERSION) {
-    throw new KiokukoError('INTEGRITY_ERROR', 'Legacy context delivery cannot be replayed');
-  }
   assertScopedDeliveryIdentity(delivery);
   const fullItems = delivery.items.map((item): ScopedContextItem => {
     const current = currentRetrievableDeliveryEntry(database, delivery.workspace, item);
@@ -603,7 +573,6 @@ function deliveryRequest(
     charCount: fitted.charCount,
     truncated: fitted.truncated,
     createdAt: run.createdAt,
-    scoreSchemaVersion: 2,
     items: deliveryItems(fitted.items),
   };
 }
@@ -826,14 +795,6 @@ function persistPreparedScopedContext(
       truncated: delivery.truncated,
     };
   });
-}
-
-export async function queryScopedContext(
-  database: SqliteDatabase,
-  raw: ScopedContextQuery,
-  runtime: HybridSearchRuntime = {},
-): Promise<ScopedContextResult> {
-  return persistPreparedScopedContext(database, await prepareScopedContext(database, raw, runtime));
 }
 
 export async function queryScopedContextGated<T>(

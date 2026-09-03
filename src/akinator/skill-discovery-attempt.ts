@@ -2,7 +2,7 @@ import type { SqliteDatabase } from '../db/adapter.js';
 import { withImmediateTransaction } from '../db/transaction.js';
 import { KiokukoError, type ErrorCode } from '../errors.js';
 import { canonicalJson } from '../serialization/validate.js';
-import { parseStrictJson } from '../setup/strict-json.js';
+import { parseStrictJson } from '../dsh/strict-json.js';
 import { SkillProviderError } from '../skills/providers/schema.js';
 import { SkillSourceError, type SkillSourceFailureCode } from '../skills/source/errors.js';
 import type { SkillCandidate, SkillDiscoveryMode, SkillDiscoverySummary, SkillProviderFailureCode } from '../skills/types.js';

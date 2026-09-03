@@ -15,7 +15,7 @@ import { KiokukoError } from '../errors.js';
 import type { JsonObject } from '../ledger/types.js';
 import type { ResolvedProjectWorkspace } from '../memory/workspaces.js';
 import { canonicalJson, compareCanonicalStrings } from '../serialization/validate.js';
-import { parseStrictJson } from '../setup/strict-json.js';
+import { parseStrictJson } from '../dsh/strict-json.js';
 
 export interface ProjectFingerprint {
   repositoryId: string;

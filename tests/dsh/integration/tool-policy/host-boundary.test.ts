@@ -14,7 +14,7 @@ function call(name: string, arguments_: unknown, origin?: 'model' | 'host') {
   }
 }
 
-test('host identity cannot be supplied through model arguments and host-only calls require host origin', () => {
+test('host identity cannot be supplied through model arguments and host operations are not tools', () => {
   const policy = new DshToolPolicy(base)
   const injected = policy.decide(call('enno_work_report', { runId: 'attacker-run' }, 'model'))
   assert.deepEqual(injected, {
@@ -24,9 +24,9 @@ test('host identity cannot be supplied through model arguments and host-only cal
   assert.equal(hostField.kind, 'deny')
   if (hostField.kind === 'deny') assert.equal(hostField.code, 'IDENTITY_INJECTION')
 
-  const hostOnly = policy.decide(call('task_answer', {}, 'model'))
-  assert.equal(hostOnly.kind, 'deny')
-  if (hostOnly.kind === 'deny') assert.equal(hostOnly.code, 'HOST_ONLY')
+  const hostOperation = policy.decide(call('task_answer', {}, 'model'))
+  assert.equal(hostOperation.kind, 'deny')
+  if (hostOperation.kind === 'deny') assert.equal(hostOperation.code, 'UNKNOWN_TOOL')
   assert.equal(policy.decide(call('enno_work_report', {}, 'model')).kind, 'allow')
 })
 

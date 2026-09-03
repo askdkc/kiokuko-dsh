@@ -7,7 +7,7 @@ import {
   STANDARD_SOUL_SKILL_NAME,
   STANDARD_UI_EXPERT_IDS,
   STANDARD_UI_SKILL_NAME,
-} from '../setup/standard-skills.js';
+} from '../dsh/standard-skills.js';
 import { findSecret } from '../memory/secrets.js';
 import {
   ADVISORY_FAILURE_CODES,
@@ -102,11 +102,14 @@ export const workUnitSchema = z.object({
   expertRefs: z.array(expertRefSchema).max(3).default([]),
   acceptanceCriteria: z.array(canonicalText(8_192)).min(1).max(128),
   focusedVerifiers: verifierListSchema(),
-  routes: z.array(z.enum(WORK_UNIT_ROUTES)).min(1).max(WORK_UNIT_ROUTES.length).optional(),
+  routes: z.array(z.enum(WORK_UNIT_ROUTES)).min(1).max(WORK_UNIT_ROUTES.length),
 }).strict().superRefine((unit, context) => {
   const ids = unit.expertRefs.map((reference) => reference.id);
   if (new Set(ids).size !== ids.length) {
     context.addIssue({ code: 'custom', message: 'WorkUnit expertRefs must be unique', path: ['expertRefs'] });
+  }
+  if (new Set(unit.routes).size !== unit.routes.length) {
+    context.addIssue({ code: 'custom', message: 'WorkUnit routes must be unique', path: ['routes'] });
   }
 });
 
@@ -248,8 +251,8 @@ const skillSetEntrySchema = z.object({
 }).strict();
 
 const orchestrationIdSchema = canonicalText(256)
-  .describe('Exact ennoOduno.orchestrationId returned by task_prepare or task_answer; this is not a host client session ID');
-const resumeTokenSchema = canonicalText(256).describe('Opaque continuation token returned by the current client adapter route');
+  .describe('Exact host-owned Enno-Oduno orchestration identity; this is not the DSH session ID');
+const resumeTokenSchema = canonicalText(256).describe('Opaque continuation token bound by the current DSH route');
 
 const requireExplicitIdentityOrResumeToken = (
   value: { workspace?: unknown; orchestrationId?: unknown; resumeToken?: unknown },
@@ -518,7 +521,7 @@ export const planSubmissionSchema = z.object({
     'Required only when explicitly resuming a same-run plan-start recovery after the user chose one displayed option.',
   ),
   capabilities: z.array(z.unknown()).optional().describe(
-    'Complete current client capability descriptors. The field remains transport-optional only so omission can return a safe user-facing recovery choice before any plan effect.',
+    'Complete current DSH capability descriptors. The field remains host-optional only so omission can return a safe user-facing recovery choice before any plan effect.',
   ),
 }).strict().superRefine((submission, context) => {
   requireExplicitIdentityOrResumeToken(submission, context);

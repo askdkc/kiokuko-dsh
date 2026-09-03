@@ -1,3 +1,0 @@
-import { runRoleScript } from './role-runner.js';
-
-await runRoleScript('goki');

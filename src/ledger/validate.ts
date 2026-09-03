@@ -10,7 +10,6 @@ import {
   RUN_STATUSES,
   TASK_TYPES,
   type AnswerInput,
-  type ClientInput,
   type CreateRunInput,
   type Coverage,
   type JsonObject,
@@ -113,14 +112,8 @@ export function validateAnswerInput(value: unknown): AnswerInput {
   };
 }
 
-function validateClient(value: unknown): ClientInput {
-  const input = object(value, 'client');
-  knownFields(input, ['kind', 'version', 'sessionId'], 'client');
-  return {
-    kind: nonEmptyString(input.kind, 'client.kind', MAX_ID_LENGTH),
-    ...(input.version === undefined ? {} : { version: nonEmptyString(input.version, 'client.version', MAX_ID_LENGTH) }),
-    ...(input.sessionId === undefined ? {} : { sessionId: nonEmptyString(input.sessionId, 'client.sessionId', MAX_ID_LENGTH) }),
-  };
+function validateDshSessionId(value: unknown): string {
+  return nonEmptyString(value, 'dshSessionId', MAX_ID_LENGTH);
 }
 
 function validateCoverage(value: unknown): Coverage {
@@ -169,7 +162,7 @@ export function validateEventBatch(value: unknown): LedgerEventInput[] {
 
 export function validateRunInput(value: unknown): CreateRunInput {
   const input = object(value, 'run');
-  knownFields(input, ['runId', 'workspace', 'protocolVersion', 'client', 'captureProfile', 'coverage', 'task', 'metadata', 'parentRunId', 'startedAt'], 'run');
+  knownFields(input, ['runId', 'workspace', 'dshSessionId', 'protocolVersion', 'captureProfile', 'coverage', 'task', 'metadata', 'parentRunId', 'startedAt'], 'run');
   const metadata = input.metadata === undefined ? {} : object(input.metadata, 'metadata');
   const metadataJson = jsonValue(metadata, 'metadata');
   if (!isPlainObject(metadataJson)) validation('metadata must be a JSON object');
@@ -179,8 +172,8 @@ export function validateRunInput(value: unknown): CreateRunInput {
   return {
     runId: nonEmptyString(input.runId, 'runId', MAX_ID_LENGTH),
     workspace,
+    dshSessionId: validateDshSessionId(input.dshSessionId),
     protocolVersion: enumValue(input.protocolVersion, ['1'] as const, 'protocolVersion'),
-    client: validateClient(input.client),
     captureProfile: enumValue(input.captureProfile, CAPTURE_PROFILES, 'captureProfile'),
     coverage: validateCoverage(input.coverage),
     task: validateTaskInput(input.task),

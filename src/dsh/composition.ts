@@ -77,8 +77,6 @@ export interface DshCompositionHandle {
   readonly stopIngress: () => void
   /** Finish resource teardown after ingress has been stopped. */
   readonly dispose: () => Promise<void>
-  /** Backward-compatible alias for dispose(). */
-  (): Promise<void>
 }
 
 async function mountRuntime(runtime: DshRuntime): Promise<DshDisposer> {
@@ -237,5 +235,5 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     disposePromise = runCleanup()
     return disposePromise
   }
-  return Object.assign((() => dispose()) as () => Promise<void>, { stopIngress, dispose }) as DshCompositionHandle
+  return { stopIngress, dispose } as DshCompositionHandle
 }

@@ -120,9 +120,8 @@ function refineCheckpointInput(value: CheckpointContent & {
   if (value.evidence !== undefined) addIssue(context, ['evidence'], 'evidence requires runId');
 }
 
-// The MCP SDK only serializes object schemas in tools/list; a union would be
-// advertised as an empty schema. This closed object retains the same runtime
-// cross-field contract while keeping the public property schema visible.
+// Keep the model-facing tool schema as a closed object while enforcing the
+// same runtime cross-field contract as the internal union.
 export const memoryCheckpointInputSchema = z.object({
   cwd: absoluteCwdSchema.optional(),
   memories: z.array(checkpointMemorySchema).max(MAX_CHECKPOINT_MEMORY_ITEMS).optional(),

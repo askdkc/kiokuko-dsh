@@ -23,7 +23,7 @@ import { importSkillSnapshot } from "../../src/skills/store.js";
 import { validateSkillSnapshot } from "../../src/skills/source/snapshot-validator.js";
 import type { SkillCandidate } from "../../src/skills/types.js";
 
-export const SAMPLE_DATABASE_BASELINE_VERSION = 11;
+export const SAMPLE_DATABASE_BASELINE_VERSION = 1;
 export const SAMPLE_PROJECT_WORKSPACE = "project:sampledb-ci";
 export const SAMPLE_GLOBAL_WORKSPACE = "global";
 export const SAMPLE_EXTERNAL_SKILL_ID =
@@ -32,7 +32,7 @@ export const SAMPLE_EXTERNAL_SKILL_WORKSPACE =
   "external-skills:github:sveltejs-ai-tools-d93a72b29bf7a039";
 
 export const SAMPLE_PROJECT_TITLES = [
-  "CI project fixture: migration marker",
+  "CI project fixture: baseline marker",
   "CI project fixture: Unicode decision",
   "CI project fixture: reference",
 ] as const;
@@ -79,7 +79,7 @@ function sampleSkillSnapshot() {
         content: [
           "---",
           "name: svelte-code-writer",
-          "description: Deterministic external-skill fixture for migration and Web API tests.",
+          "description: Deterministic external-skill fixture for baseline and runtime tests.",
           "---",
           "# Sample Svelte skill",
           "",
@@ -105,25 +105,18 @@ export const SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT = documentsFromSkillSnapshot(
 
 async function copyBaselineMigrations(targetDirectory: string): Promise<void> {
   const available = await readdir(migrationsRoot);
-  for (
-    let version = 1;
-    version <= SAMPLE_DATABASE_BASELINE_VERSION;
-    version += 1
-  ) {
-    const prefix = String(version).padStart(3, "0");
-    const matches = available.filter(
-      (name) => name.startsWith(`${prefix}_`) && name.endsWith(".sql"),
-    );
-    assert.equal(
-      matches.length,
-      1,
-      `Expected exactly one migration for version ${version}`,
-    );
-    await copyFile(
-      path.join(migrationsRoot, matches[0]!),
-      path.join(targetDirectory, matches[0]!),
-    );
-  }
+  const baseline = available.filter(
+    (name) => name === "001_baseline.sql",
+  );
+  assert.equal(
+    baseline.length,
+    1,
+    "Expected exactly the single 001_baseline.sql migration",
+  );
+  await copyFile(
+    path.join(migrationsRoot, baseline[0]!),
+    path.join(targetDirectory, baseline[0]!),
+  );
 }
 
 function recordProjectFixtures(
@@ -147,8 +140,8 @@ function recordProjectFixtures(
       status: "verified" as const,
       trustLevel: "source_verified" as const,
       title: SAMPLE_PROJECT_TITLES[0],
-      body: "This deterministic record must survive setup migration unchanged.",
-      tags: ["fixture:ci", "fixture:project", "sample:migration"],
+      body: "This deterministic record must survive runtime startup unchanged.",
+      tags: ["fixture:ci", "fixture:project", "sample:baseline"],
     },
     {
       id: "entry-sampledb-project-decision",
@@ -345,6 +338,7 @@ function canonicalizeGeneratedIdentifiers(
         "entry_revisions",
         "entry_revision_tags",
         "audit_events",
+        "entry_search_documents",
         "entry_search_signals",
         "external_skill_entries",
       ]) {
@@ -395,13 +389,7 @@ function assertBaselineState(
   const versions = database
     .prepare("SELECT version FROM schema_migrations ORDER BY version")
     .all<{ version: number }>();
-  assert.deepEqual(
-    versions.map(({ version }) => version),
-    Array.from(
-      { length: SAMPLE_DATABASE_BASELINE_VERSION },
-      (_, index) => index + 1,
-    ),
-  );
+  assert.deepEqual(versions.map(({ version }) => version), [1]);
   const counts = database
     .prepare(
       "SELECT workspace, COUNT(*) AS count FROM entries GROUP BY workspace ORDER BY workspace",
@@ -439,13 +427,7 @@ export async function createSampleDatabase(targetPath: string): Promise<void> {
   try {
     const migration = migrateDatabase(database, temporaryMigrations);
     assert.equal(migration.currentVersion, SAMPLE_DATABASE_BASELINE_VERSION);
-    assert.deepEqual(
-      migration.applied,
-      Array.from(
-        { length: SAMPLE_DATABASE_BASELINE_VERSION },
-        (_, index) => index + 1,
-      ),
-    );
+    assert.deepEqual(migration.applied, [SAMPLE_DATABASE_BASELINE_VERSION]);
     recordProjectFixtures(database);
     recordGlobalFixtures(database);
     recordExternalSkillFixture(database);

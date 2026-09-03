@@ -62,7 +62,6 @@ const { activateEmbeddingProfile, upsertEntryEmbedding } = await import('../dist
 const { JavaScriptVectorSearchBackend } = await import('../dist/embedding/javascript-backend.js');
 const { hashVector } = await import('../dist/embedding/vector.js');
 const { recordEntry, updateCandidateEntry } = await import('../dist/memory/entries.js');
-const { supersedeEntry } = await import('../dist/memory/lifecycle.js');
 const { buildStructuredScope } = await import('../dist/memory/structured-memory.js');
 const { hybridSearch } = await import('../dist/memory/hybrid-retrieval.js');
 
@@ -140,13 +139,12 @@ try {
         now: '2026-08-31T00:00:01.000Z',
       });
     } else if (memory.state === 'superseded') {
-      supersedeEntry(database, {
-        workspace: memory.workspace,
-        oldEntryId: memory.id,
-        replacementEntryId: memory.supersededBy,
-        expectedRevision: 1,
-        now: '2026-08-31T00:00:01.000Z',
-      });
+      database.prepare(`
+        UPDATE entries
+           SET status = 'superseded', superseded_by = ?, updated_at = ?
+         WHERE id = ? AND workspace = ? AND current_revision = 1
+      `).run(memory.supersededBy, '2026-08-31T00:00:01.000Z', memory.id, memory.workspace);
+      assert.equal(database.prepare('SELECT changes() AS count').get()?.count, 1, `evaluation supersede fixture is invalid: ${memory.id}`);
     }
   }
 

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import * as z from 'zod/v4';
 
-/** Validate one explicitly supplied MCP working directory before filesystem access. */
+/** Validate one explicitly supplied DSH working directory before filesystem access. */
 export const absoluteCwdSchema = z.string()
   .min(1)
   .refine(path.isAbsolute, { message: 'cwd must be an absolute path' })

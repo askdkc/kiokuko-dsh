@@ -6,7 +6,7 @@ import { KiokukoError } from '../errors.js';
 import { LedgerStore } from '../ledger/store.js';
 import type { JsonValue, LedgerEventInput } from '../ledger/types.js';
 import { canonicalContentHash, canonicalJson } from '../serialization/validate.js';
-import { parseStrictJson } from '../setup/strict-json.js';
+import { parseStrictJson } from '../dsh/strict-json.js';
 import {
   parseEnnoContract,
   parseEnnoRequestHandoff,
@@ -20,9 +20,7 @@ import {
   ADVISORY_OUTCOMES,
   ENNO_DEFAULT_MAX_ATTEMPTS,
   ENNO_APPLICABLE_TASK_TYPES,
-  ENNO_CLIENT_KINDS,
   ENNO_STATUSES,
-  type EnnoClientKind,
   type AdvisoryPhaseState,
   type EnnoOdunoContract,
   type EnnoExecutionLease,
@@ -53,9 +51,7 @@ interface ContractRow extends SqliteRow {
   run_id: string;
   workspace: string;
   orchestration_session_id: string;
-  client_kind: EnnoClientKind | null;
-  client_version: string | null;
-  client_session_id: string | null;
+  dsh_session_id: string | null;
   repository_root: string;
   task_type: EnnoRunSnapshot['taskType'];
   status: string;
@@ -194,8 +190,7 @@ export function resolveEnnoIdentity(database: SqliteDatabase, input: {
     SELECT ec.run_id AS runId, ec.workspace, ec.orchestration_session_id AS orchestrationId,
            ec.route_epoch AS routeEpoch, rt.route_epoch AS tokenRouteEpoch,
            rt.repository_root AS tokenRepositoryRoot, ec.repository_root AS repositoryRoot,
-           rt.client_kind AS tokenClientKind, ec.client_kind AS clientKind,
-           rt.client_session_id AS tokenClientSessionId, ec.client_session_id AS clientSessionId,
+           rt.dsh_session_id AS tokenDshSessionId, ec.dsh_session_id AS dshSessionId,
            rt.expires_at AS expiresAt
     FROM enno_resume_tokens AS rt
     JOIN enno_contracts AS ec ON ec.run_id = rt.run_id
@@ -208,16 +203,14 @@ export function resolveEnnoIdentity(database: SqliteDatabase, input: {
     tokenRouteEpoch: number;
     tokenRepositoryRoot: string;
     repositoryRoot: string;
-    tokenClientKind: EnnoClientKind;
-    clientKind: EnnoClientKind | null;
-    tokenClientSessionId: string;
-    clientSessionId: string | null;
+    tokenDshSessionId: string;
+    dshSessionId: string | null;
     expiresAt: string;
   }>(tokenHash, input.runId);
   if (row === undefined) throw new KiokukoError('CONFLICT', 'Enno resume token is invalid or expired');
   const expiresAt = Date.parse(row.expiresAt);
   if (row.routeEpoch !== row.tokenRouteEpoch || row.repositoryRoot !== row.tokenRepositoryRoot
-    || row.clientKind !== row.tokenClientKind || row.clientSessionId !== row.tokenClientSessionId
+    || row.dshSessionId !== row.tokenDshSessionId
     || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
     throw new KiokukoError('CONFLICT', 'Enno resume token is stale');
   }
@@ -228,7 +221,6 @@ export interface OperationIdentity {
   operation: 'ideal_submit' | 'advice_submit' | 'plan_submit' | 'answer' | 'work_report' | 'finish' | 'meditation_submit' | 'verify_prepare';
   idempotencyKey: string;
   requestDigest: string;
-  legacyRequestDigests?: readonly string[] | undefined;
 }
 
 const OPERATION_LEASE_MS = 6 * 60_000;
@@ -359,9 +351,8 @@ export function readEnnoSnapshot(database: SqliteDatabase, identity: EnnoIdentit
   if (row.workspace !== identity.workspace || row.orchestration_session_id !== identity.orchestrationId) {
     throw new KiokukoError('CONFLICT', 'Enno run identity changed');
   }
-  if ((row.client_kind !== null && !ENNO_CLIENT_KINDS.includes(row.client_kind))
-    || ((row.client_version !== null || row.client_session_id !== null) && row.client_kind === null)) {
-    integrity('Stored Enno client routing metadata is invalid');
+  if (row.dsh_session_id !== null && (row.dsh_session_id.length === 0 || row.dsh_session_id.length > 256)) {
+    integrity('Stored Enno DSH session routing metadata is invalid');
   }
   const contract = parseEnnoContract(parseCanonicalJson(row.contract_json, 'Stored Enno contract is invalid'));
   const handoff = parseEnnoRequestHandoff(parseCanonicalJson(row.handoff_json, 'Stored Enno request handoff is invalid'));
@@ -403,9 +394,7 @@ export function readEnnoSnapshot(database: SqliteDatabase, identity: EnnoIdentit
     runId: row.run_id,
     workspace: row.workspace,
     orchestrationId: row.orchestration_session_id,
-    clientKind: row.client_kind,
-    clientVersion: row.client_version,
-    clientSessionId: row.client_session_id,
+    dshSessionId: row.dsh_session_id,
     repositoryRoot: row.repository_root,
     taskType: row.task_type,
     userFacingLanguage: userFacingLanguage(database, row.run_id),
@@ -465,9 +454,7 @@ export function createEnnoDraft(database: SqliteDatabase, input: EnnoIdentity & 
   taskExpected: string | null;
   handoff: EnnoRequestHandoff;
   skillDiscovery: SkillDiscoverySummary;
-  initialClientKind?: string;
-  initialClientVersion?: string;
-  initialClientSessionId?: string;
+  dshSessionId: string;
 }): EnnoRunSnapshot {
   return withImmediateTransaction(database, () => {
     assertLedgerIdentity(database, input);
@@ -496,28 +483,20 @@ export function createEnnoDraft(database: SqliteDatabase, input: EnnoIdentity & 
         maxAttempts: 'inferred',
       },
     };
-    const recognizedClientKind = typeof input.initialClientKind === 'string'
-      && ENNO_CLIENT_KINDS.includes(input.initialClientKind as EnnoClientKind)
-      ? input.initialClientKind as EnnoClientKind
-      : null;
-    const clientVersion = recognizedClientKind === null ? null : input.initialClientVersion ?? null;
-    const clientSessionId = recognizedClientKind === null ? null : input.initialClientSessionId ?? null;
     const now = new Date().toISOString();
     database.prepare(`
       INSERT INTO enno_contracts (
-        run_id, workspace, orchestration_session_id, client_kind, client_version, client_session_id,
+        run_id, workspace, orchestration_session_id, dsh_session_id,
         repository_root, task_type, status, revision,
         confirmation_state, attempts, mutation_revision, contract_json, handoff_json,
         intake_discovery_json, plan_digest, blocker, created_at, updated_at
         , phase, ideal_json, meditation_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'zenki_planning', 1, 'not_required', 0, 0, ?, ?, ?, NULL, NULL, ?, ?, 'oduno_ideal', NULL, NULL)
+      ) VALUES (?, ?, ?, ?, ?, ?, 'zenki_planning', 1, 'not_required', 0, 0, ?, ?, ?, NULL, NULL, ?, ?, 'oduno_ideal', NULL, NULL)
     `).run(
       input.runId,
       input.workspace,
       input.orchestrationId,
-      recognizedClientKind,
-      clientVersion,
-      clientSessionId,
+      input.dshSessionId,
       input.repositoryRoot,
       input.taskType,
       canonicalJson(contract),
@@ -528,8 +507,7 @@ export function createEnnoDraft(database: SqliteDatabase, input: EnnoIdentity & 
     );
     appendEnnoEventInTransaction(database, input.runId, 'enno.started', 'enno-oduno', 'started', {
       contractRevision: 1,
-      harnessKind: recognizedClientKind,
-      clientBinding: clientSessionId === null ? 'pending' : 'bound',
+      dshSessionId: input.dshSessionId,
     });
     return readEnnoSnapshot(database, input);
   });
@@ -651,14 +629,14 @@ export function claimExecutionLeaseInTransaction(
   database: SqliteDatabase,
   snapshot: EnnoRunSnapshot,
   workUnitId: string,
-  owner: { clientKind: EnnoClientKind; sessionId: string },
+  owner: { dshSessionId: string },
 ): EnnoExecutionLease {
   const nowDate = new Date();
   const now = nowDate.toISOString();
   const existing = database.prepare(`
     SELECT contract_revision AS contractRevision, mutation_revision AS mutationRevision,
            work_unit_id AS workUnitId, route_epoch AS routeEpoch,
-           owner_client_kind AS ownerClientKind, owner_session_id AS ownerSessionId,
+           dsh_session_id AS dshSessionId,
            lease_expires_at AS expiresAt
     FROM enno_execution_leases WHERE run_id = ?
   `).get<{
@@ -666,8 +644,7 @@ export function claimExecutionLeaseInTransaction(
     mutationRevision: number;
     workUnitId: string;
     routeEpoch: number;
-    ownerClientKind: EnnoClientKind;
-    ownerSessionId: string;
+    dshSessionId: string;
     expiresAt: string;
   }>(snapshot.runId);
   if (existing !== undefined && existing.expiresAt > now
@@ -675,8 +652,7 @@ export function claimExecutionLeaseInTransaction(
       || existing.mutationRevision !== snapshot.mutationRevision
       || existing.workUnitId !== workUnitId
       || existing.routeEpoch !== (snapshot.routeEpoch ?? 0)
-      || existing.ownerClientKind !== owner.clientKind
-      || existing.ownerSessionId !== owner.sessionId)) {
+      || existing.dshSessionId !== owner.dshSessionId)) {
     throw new KiokukoError('CONFLICT', 'Enno WorkUnit is leased to another current actor');
   }
   const leaseToken = randomUUID();
@@ -685,16 +661,15 @@ export function claimExecutionLeaseInTransaction(
   database.prepare(`
     INSERT INTO enno_execution_leases (
       run_id, contract_revision, mutation_revision, work_unit_id, route_epoch,
-      owner_client_kind, owner_session_id, lease_token_hash, lease_expires_at,
+      dsh_session_id, lease_token_hash, lease_expires_at,
       heartbeat_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(run_id) DO UPDATE SET
       contract_revision = excluded.contract_revision,
       mutation_revision = excluded.mutation_revision,
       work_unit_id = excluded.work_unit_id,
       route_epoch = excluded.route_epoch,
-      owner_client_kind = excluded.owner_client_kind,
-      owner_session_id = excluded.owner_session_id,
+      dsh_session_id = excluded.dsh_session_id,
       lease_token_hash = excluded.lease_token_hash,
       lease_expires_at = excluded.lease_expires_at,
       heartbeat_at = excluded.heartbeat_at,
@@ -705,8 +680,7 @@ export function claimExecutionLeaseInTransaction(
     snapshot.mutationRevision,
     workUnitId,
     snapshot.routeEpoch ?? 0,
-    owner.clientKind,
-    owner.sessionId,
+    owner.dshSessionId,
     tokenHash,
     expiresAt,
     now,
@@ -731,7 +705,7 @@ export function assertExecutionLeaseInTransaction(database: SqliteDatabase, snap
   const row = database.prepare(`
     SELECT contract_revision AS contractRevision, mutation_revision AS mutationRevision,
            work_unit_id AS workUnitId, route_epoch AS routeEpoch,
-           owner_client_kind AS ownerClientKind, owner_session_id AS ownerSessionId,
+           dsh_session_id AS dshSessionId,
            lease_token_hash AS tokenHash, lease_expires_at AS expiresAt
     FROM enno_execution_leases WHERE run_id = ?
   `).get<{
@@ -739,8 +713,7 @@ export function assertExecutionLeaseInTransaction(database: SqliteDatabase, snap
     mutationRevision: number;
     workUnitId: string;
     routeEpoch: number;
-    ownerClientKind: EnnoClientKind;
-    ownerSessionId: string;
+    dshSessionId: string;
     tokenHash: string;
     expiresAt: string;
   }>(snapshot.runId);
@@ -759,8 +732,7 @@ export function assertExecutionLeaseInTransaction(database: SqliteDatabase, snap
     || row.workUnitId !== input.workUnitId
     || row.routeEpoch !== input.routeEpoch
     || row.routeEpoch !== (snapshot.routeEpoch ?? 0)
-    || row.ownerClientKind !== snapshot.clientKind
-    || row.ownerSessionId !== snapshot.clientSessionId
+    || row.dshSessionId !== snapshot.dshSessionId
     || tokenHash !== row.tokenHash) {
     throw new KiokukoError('CONFLICT', 'Enno execution lease is stale or belongs to another actor');
   }
@@ -950,24 +922,8 @@ export function readOperationReceipt<T>(database: SqliteDatabase, runId: string,
     WHERE run_id = ? AND operation = ? AND idempotency_key = ?
   `).get<ReceiptRow>(runId, operation.operation, operation.idempotencyKey);
   if (row === undefined) return undefined;
-  if (row.request_digest !== operation.requestDigest
-    && !operation.legacyRequestDigests?.includes(row.request_digest)) {
-    throw new KiokukoError('CONFLICT', 'Enno idempotency key was reused with different input');
-  }
   if (row.request_digest !== operation.requestDigest) {
-    const normalized = database.prepare(`
-      UPDATE enno_operation_receipts SET request_digest = ?
-      WHERE run_id = ? AND operation = ? AND idempotency_key = ? AND request_digest = ?
-      RETURNING run_id AS runId
-    `).get<{ runId: string }>(
-      operation.requestDigest,
-      runId,
-      operation.operation,
-      operation.idempotencyKey,
-      row.request_digest,
-    );
-    if (normalized?.runId !== runId) throw new KiokukoError('CONFLICT', 'Enno operation receipt changed concurrently');
-    row.request_digest = operation.requestDigest;
+    throw new KiokukoError('CONFLICT', 'Enno idempotency key was reused with different input');
   }
   if (row.state === 'started') {
     if (row.lease_expires_at === null || !Number.isFinite(Date.parse(row.lease_expires_at))) {

@@ -1,33 +1,10 @@
 # Concepts
 
-## RAG and memory lifecycle
+Kiokuko for DSH combines four bounded parts: Akinator turns a request into an
+actionable intake profile; memory retrieval supplies relevant untrusted context;
+Enno-Oduno controls planning, execution, verification, and reflection; the
+ledger records sanitized lifecycle evidence.
 
-Kiokuko uses retrieval-augmented generation (RAG): before work, the MCP server
-searches stored entries and delivers only relevant context; after work, useful
-decisions, results, and lessons can be checkpointed. Retrieval is advisory, so the
-current repository and execution evidence always win.
-
-Entries move through a lifecycle of capture, validation, retrieval, review, and
-optional promotion. Secret-shaped content is rejected. A checkpoint is not proof
-that a memory is correct; it is a candidate for later reuse.
-
-## Scopes
-
-- **Project**: knowledge for one repository.
-- **Ecosystem**: knowledge reusable for matching language, framework, database, or runtime constraints.
-- **Global**: explicitly generalized knowledge that does not depend on one project.
-
-Tags alone do not leak Project memory into another project. Curator reviews a
-candidate before Project knowledge can be promoted to Global.
-
-## Akinator
-
-Akinator is the intake gate. When a request is underspecified, it asks the smallest
-question needed to distinguish plausible goals. While intake needs an answer, the
-agent must not plan, edit, verify, or checkpoint. Once intake is ready or exhausted,
-the normal route can continue and discovered Skills remain reference-only.
-
-## Semantic retrieval
-
-Lexical retrieval is the baseline. Optional local embeddings add semantic signals
-without sending memory to a remote provider. See [Semantic retrieval](semantic-retrieval.md).
+Every active workflow belongs to one canonical repository and one current DSH
+session route. The route epoch changes on session rebinding. Resume tokens and
+execution leases are short-lived credentials bound to that exact route.

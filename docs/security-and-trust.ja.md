@@ -1,21 +1,10 @@
 # Security and trust
 
-## 記憶とsecret
+Kiokuko for DSHはhost identityとmodel contentを別の面として扱います。
+DSH hostがrun routingとcredentialを所有し、model-visible toolは意味上必要な
+report fieldだけを公開します。fail-closed条件は[security boundary](security.md)
+を参照してください。
 
-パスワード、API key、token、秘密鍵などに似た内容は拒否し、会話全文は保存しません。記憶は参考情報であり、現在のコード、設定、実行結果を上書きしません。
-
-## External Skills
-
-外部Skill discoveryは参照専用です。source commitを検証し、boundedな内容をuntrusted candidateとして保存しますが、取得したSkillを自動install・実行・登録しません。
-既定は`official`、`community`は明示opt-in、`off`で無効化します。
-
-DSH packageは汎用の`kiokuko skills` commandを公開しません。Web UIではmapping
-の確認・無効化だけを行い、install、script、MCP登録は行いません。
-
-## MCP extensionと公開エラー
-
-client extensionは成功・エラーMCP resultを検査・置換できるため、trusted computing baseの一部です。extensionが偽造できないoriginal-result identifierとmodified flagなしには、
-end-to-end authenticityを主張できません。重要なresultを変更するextensionと併用しないでください。
-
-通常の公開tool errorは`isError: true`、allowlist済みmessage、`structuredContent.code`、`structuredContent.retryable`だけを返します。`BACKPRESSURE`だけがboundedな`retryAfterSeconds`を追加できます。
-stack、SQL、path、payload、secretはgeneric errorへコピーしません。
+検索memory、外部Skill description、advisory contributionはuntrusted contextです。
+同梱Skill manifestは公開前に検証され、secretは永続ledgerへ書く前に拒否または
+redactされます。

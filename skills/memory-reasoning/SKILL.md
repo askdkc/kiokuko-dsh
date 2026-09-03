@@ -1,6 +1,6 @@
 ---
 name: memory-reasoning
-description: Use before Kiokuko task_prepare for a build or debug task, and whenever Kiokuko returns applicable stored memory. Convert recalled claims into verified premises, invariants, counterexamples, and regression tests before modifying code.
+description: Use on a DSH-admitted build or debug task whenever Kiokuko supplies applicable stored memory. Convert recalled claims into verified premises, invariants, counterexamples, and regression tests before modifying code.
 ---
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: memory-reasoning -->
@@ -15,9 +15,9 @@ repository, runtime, API, or other authoritative evidence before relying on it.
 
 ## Required workflow
 
-Before `task_prepare` for a build or debug task, read this Skill so the client can
-truthfully advertise the exact local `memory-reasoning` capability. Setup
-placement alone is not that proof.
+On an admitted build or debug task, read this Skill before applying supplied
+memory. The DSH host, not the model, owns intake and capability binding. Skill
+placement alone is not proof that this workflow was applied.
 
 When Kiokuko delivers ordinary memory for a build or debug task:
 

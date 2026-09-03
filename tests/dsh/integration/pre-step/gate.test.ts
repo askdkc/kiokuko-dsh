@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { STANDARD_SKILL_MANIFESTS } from '../../../../src/setup/standard-skills.js'
+import { STANDARD_SKILL_MANIFESTS } from '../../../../src/dsh/standard-skills.js'
 import { createDshCapabilityCatalog } from '../../../../src/dsh/capability-catalog.js'
 import { DshIntakeGate, type DshPreStepEvent } from '../../../../src/dsh/intake-gate.js'
 

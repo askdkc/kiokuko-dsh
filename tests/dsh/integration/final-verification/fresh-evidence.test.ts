@@ -5,11 +5,11 @@ import type { EnnoOdunoState } from '../../../../src/enno-oduno/types.js'
 
 function state(): EnnoOdunoState {
   return {
-    applicable: true, status: 'enno_verifying', orchestrationId: 'orch', clientBinding: null,
+    applicable: true, status: 'enno_verifying', orchestrationId: 'orch', dshSessionId: 'dsh-session',
     contractRevision: 2, routeEpoch: 0, ideal: null, meditation: null, currentRole: 'enno-oduno',
     directive: {
       protocolVersion: 1, runId: 'run', contractRevision: 2, routeEpoch: 0, role: 'enno-oduno',
-      harness: { kind: 'dsh', version: null, continuation: 'turn_stopping_plugin', instructions: [] }, handoff: null,
+      instructions: [], handoff: null,
       objective: 'verify', requiredSkills: ['kiokuko-soul'], workUnit: null, stopConditions: ['fresh evidence'], reportSchema: {},
     },
     nextAction: 'run_final_verification', advisoryPhaseState: { state: 'not_started' },

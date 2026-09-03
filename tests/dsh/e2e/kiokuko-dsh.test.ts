@@ -32,7 +32,7 @@ function hostServices(includeTools = true) {
       },
     },
     commands: {
-      register(name: string, _handler: Function) { return () => undefined },
+      register(_definition: unknown) { return () => undefined },
     },
     ...(includeTools ? {
       tools: {
@@ -103,7 +103,7 @@ test('composed host boundaries preserve model, tool, question, ledger, and turn-
   assert.equal(policy.decide(toolExecution).kind, 'allow')
   await tool.execute(toolExecution.arguments, toolExecution)
   assert.deepEqual(toolCalls, ['enno_work_report'])
-  assert.equal(host.registeredTools.length, 14)
+  assert.equal(host.registeredTools.length, 7)
 
   const fakeModel = { async request(messages: readonly unknown[]) { modelMessages.push([...messages]); return 'model-output' } }
   await fakeModel.request([{ role: 'system', source: 'soul', content: await loadSoulPrompt() }])

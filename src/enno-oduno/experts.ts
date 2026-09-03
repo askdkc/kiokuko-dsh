@@ -1,7 +1,7 @@
 import {
   STANDARD_FUNCTION_EXPERT_IDS,
   STANDARD_UI_EXPERT_IDS,
-} from '../setup/standard-skills.js';
+} from '../dsh/standard-skills.js';
 import type { WorkPlan } from './types.js';
 import { ennoValidationError } from './validation-errors.js';
 
@@ -14,15 +14,10 @@ function hasExpert(unit: WorkPlan['units'][number], expertIds: ReadonlySet<strin
 
 export function assertWorkPlanExpertCoverage(
   workPlan: WorkPlan,
-  legacyRequirements?: { includesCodeChanges: boolean; includesUiWork: boolean },
 ): void {
   for (const [index, unit] of workPlan.units.entries()) {
-    const requiresCode = unit.routes === undefined
-      ? legacyRequirements?.includesCodeChanges === true
-      : unit.routes.includes('code') || unit.routes.includes('ui');
-    const requiresUi = unit.routes === undefined
-      ? legacyRequirements?.includesUiWork === true
-      : unit.routes.includes('ui');
+    const requiresCode = unit.routes.includes('code') || unit.routes.includes('ui');
+    const requiresUi = unit.routes.includes('ui');
     if (requiresCode && !hasExpert(unit, functionExpertIds)) {
       throw ennoValidationError('plan_submit', [{
         path: ['workPlan', 'units', index, 'expertRefs'],

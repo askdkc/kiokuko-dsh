@@ -4,7 +4,7 @@ import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
-import { initializeDatabase } from '../../../src/commands/init.js'
+import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { LedgerStore } from '../../../src/ledger/store.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
@@ -23,7 +23,7 @@ test('resume replay is idempotent in the real Kiokuko ledger', async () => {
       canonicalRoot: realpathSync(root), remoteFingerprint: null, bindingSchemaVersion: 1, agentTemplateVersion: 1,
     })
     new LedgerStore(database).createRun({
-      runId: 'run-dsh-bridge', workspace: 'workspace-dsh-bridge', protocolVersion: '1', client: { kind: 'dsh' },
+      runId: 'run-dsh-bridge', workspace: 'workspace-dsh-bridge', dshSessionId: 'dsh-session-bridge', protocolVersion: '1',
       captureProfile: 'minimal', coverage: { run: 'unavailable', tool: 'unavailable', command: 'unavailable', file: 'unavailable', approval: 'unavailable' },
       task: { title: 'bridge', query: 'bridge', profileHints: { taskType: null, target: null, expected: null, constraints: null } },
     })

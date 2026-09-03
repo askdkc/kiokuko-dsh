@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { injectDshContext } from '../../../../src/dsh/context-injection.js'
-import type { PreparedAgentTask } from '../../../../src/akinator/agent-task.js'
+import type { PreparedAgentTask } from '../../../../src/dsh/task-intake.js'
 
 function prepared(memoryPolicy: { memoryReasoningRequired: boolean; contextWithheld: boolean }): PreparedAgentTask {
   return {

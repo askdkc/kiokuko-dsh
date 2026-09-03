@@ -17,9 +17,6 @@ export type EnnoStatus = (typeof ENNO_STATUSES)[number];
 export const ENNO_ROLES = ['enno-oduno', 'zenki', 'goki'] as const;
 export type EnnoRole = (typeof ENNO_ROLES)[number];
 
-export const ENNO_CLIENT_KINDS = ['codex', 'claude', 'opencode', 'dsh'] as const;
-export type EnnoClientKind = (typeof ENNO_CLIENT_KINDS)[number];
-
 export const ENNO_NEXT_ACTIONS = [
   'answer_intake',
   'submit_ideal',
@@ -252,8 +249,7 @@ export interface WorkUnit {
   expertRefs: ExpertRef[];
   acceptanceCriteria: string[];
   focusedVerifiers: VerifierSpec[];
-  /** Optional only while reading v0.2.x stored WorkUnits. New submissions require it. */
-  routes?: WorkUnitRoute[] | undefined;
+  routes: WorkUnitRoute[];
 }
 
 export interface WorkPlan {
@@ -324,13 +320,6 @@ export interface EnnoRequestHandoff {
   stopConditions: string[];
 }
 
-export interface EnnoHarnessDirective {
-  kind: EnnoClientKind | null;
-  version: string | null;
-  continuation: 'stop_hook' | 'session_idle_plugin' | 'turn_stopping_plugin' | 'unidentified';
-  instructions: string[];
-}
-
 export type ConfirmationBasis = 'user' | 'repository' | 'proposal';
 
 export type UserFacingLanguage = 'en' | 'ja';
@@ -390,7 +379,7 @@ export interface RoleDirective {
   contractRevision: number | null;
   routeEpoch: number | null;
   role: EnnoRole;
-  harness: EnnoHarnessDirective;
+  instructions: string[];
   handoff: EnnoRequestHandoff | null;
   objective: string;
   requiredSkills: string[];
@@ -405,13 +394,8 @@ export interface EnnoOdunoState {
   applicable: boolean;
   status: EnnoStatus;
   orchestrationId: string | null;
-  /** Current continuation route only; this is not authorization or run ownership. */
-  clientBinding: {
-    status: 'pending' | 'bound';
-    clientKind: EnnoClientKind | null;
-    clientVersion: string | null;
-    identified: boolean;
-  } | null;
+  /** Current DSH continuation route; this is not authorization or run ownership. */
+  dshSessionId: string | null;
   contractRevision: number | null;
   routeEpoch: number | null;
   ideal: OdunoIdeal | null;
@@ -473,9 +457,7 @@ export interface EnnoRunSnapshot {
   runId: string;
   workspace: string;
   orchestrationId: string;
-  clientKind: EnnoClientKind | null;
-  clientVersion: string | null;
-  clientSessionId: string | null;
+  dshSessionId: string | null;
   repositoryRoot: string;
   taskType: (typeof ENNO_APPLICABLE_TASK_TYPES)[number];
   userFacingLanguage: UserFacingLanguage;

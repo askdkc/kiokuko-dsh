@@ -3,7 +3,7 @@ import { KiokukoError } from '../errors.js';
 import { canonicalContentHash } from '../serialization/validate.js';
 import { normalizeCapabilityCatalog, type CapabilityDescriptor } from './capabilities.js';
 
-export const CAPABILITY_CATALOG_BINDING_VERSION = 1 as const;
+export const CAPABILITY_CATALOG_BINDING_VERSION = 2 as const;
 export const CAPABILITY_CATALOG_BINDING_METADATA_KEY = 'kiokukoCapabilityCatalogBinding' as const;
 
 type CapabilityCatalogBinding = {
@@ -32,7 +32,7 @@ function canonicalDescriptorSet(descriptors: CapabilityDescriptor[]): Capability
  * Hash only the normalized effective catalog. Raw descriptions remain ephemeral,
  * while malformed/omitted catalogs retain distinct fail-closed identities.
  */
-export function capabilityCatalogDigest(capabilities: unknown): string {
+function capabilityDigest(capabilities: unknown): string {
   const normalized = normalizeCapabilityCatalog(capabilities);
   const skills = canonicalDescriptorSet(normalized.skills);
   const tools = canonicalDescriptorSet(normalized.tools);
@@ -54,6 +54,10 @@ export function capabilityCatalogDigest(capabilities: unknown): string {
     skills,
     tools,
   });
+}
+
+export function capabilityCatalogDigest(capabilities: unknown): string {
+  return capabilityDigest(capabilities);
 }
 
 export function bindCapabilityCatalog(
@@ -82,7 +86,8 @@ export function assertCapabilityCatalogBinding(
     || !/^[0-9a-f]{64}$/u.test(value.digest)) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Run capability catalog binding is missing or invalid');
   }
-  if (value.digest !== capabilityCatalogDigest(capabilities)) {
+  const expected = capabilityDigest(capabilities);
+  if (value.digest !== expected) {
     throw new KiokukoError('CONFLICT', 'Capability catalog differs from the catalog bound when the run was opened');
   }
 }
