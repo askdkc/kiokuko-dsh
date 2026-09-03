@@ -73,6 +73,43 @@ test('flush splits one run into ledger-sized event batches without losing order'
   assert.equal(session.pendingCount, 0)
 })
 
+test('long streamed assistant messages retain every valid source event sequence', async () => {
+  const batches: Array<readonly unknown[]> = []
+  const session = bridge((_runId, events) => { batches.push(events) })
+  session.bindSession('long-stream-session', 'long-stream-run')
+  const sourceEventSeqs = Array.from({ length: 4_531 }, (_, index) => index)
+
+  for (const sourceSequence of sourceEventSeqs) {
+    session.observe({
+      sessionId: 'long-stream-session',
+      runId: 'long-stream-run',
+      event: { type: 'assistant/chunk', seq: sourceSequence, time: sourceSequence, data: { text: 'x' } },
+    })
+    if (sourceSequence % 200 === 199) await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+
+  session.observe({
+    sessionId: 'long-stream-session',
+    runId: 'long-stream-run',
+    event: {
+      type: 'assistant/message',
+      seq: 4_531,
+      time: 4_531,
+      data: { turn: 3, step: 16 },
+      sourceEventSeqs,
+      surfaceOp: 'append',
+    },
+  })
+
+  assert.equal(session.observerErrors.length, 0)
+  await session.flush()
+  const bridgedEvents = batches.flat() as Array<{ payload: { event: { type: string; sourceEventSeqs?: number[] } } }>
+  const payload = bridgedEvents.find((event) => event.payload.event.type === 'assistant/message')?.payload
+  assert.equal(bridgedEvents.length, 4_532)
+  assert.ok(payload)
+  assert.deepEqual(payload.event.sourceEventSeqs, sourceEventSeqs)
+})
+
 test('event queue exhaustion fails closed instead of growing without bound', async () => {
   const session = bridge(() => undefined)
   session.bindSession('capacity-session', 'capacity-run')

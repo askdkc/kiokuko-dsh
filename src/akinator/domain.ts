@@ -113,7 +113,9 @@ export function normalizeTaskType(value: unknown): TaskType {
 function inferTaskType(task: string): TaskType | null {
   const normalized = task.toLowerCase();
   if (/^(?:just chatting|casual chat|chat|hello|hi|hey|雑談|会話|チャット|こんにちは|こんばんは)[.!?。！？\s]*$/u.test(normalized)) return 'chat';
-  if (/debug|bug|fix|修正|不具合|エラー|障害/u.test(normalized)) return 'debug';
+  if (/^(?:all|everything|is (?:it|this|that|everything)|are (?:we|you|they))\s+(?:fixed|done|finished|complete|completed|working|green|passing)(?:\s+now)?[.!?。！？\s]*$/u.test(normalized)) return 'analysis';
+  if (/commit\s+message|コミットメッセージ/u.test(normalized)) return 'writing';
+  if (/\b(?:debug|bug|fix)\b|修正|不具合|エラー|障害/u.test(normalized)) return 'debug';
   if (/review|audit|レビュー|監査|検証/u.test(normalized)) return 'review';
   if (/research|調査|研究|比較|検索/u.test(normalized)) return 'research';
   if (/deploy|deployment|devops|運用|デプロイ|サーバー|インフラ/u.test(normalized)) return 'devops';

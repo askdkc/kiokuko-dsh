@@ -27,6 +27,7 @@ import { operationLeaseMsForVerifiers } from '../../src/enno-oduno/store.js';
 import {
   ENNO_INPUT_INVALID_DETAIL_KEY,
   ENNO_MAX_PUBLIC_ISSUES,
+  ennoValidationError,
   publicEnnoValidationErrorSchema,
   type PublicEnnoValidationError,
 } from '../../src/enno-oduno/validation-errors.js';
@@ -146,6 +147,18 @@ test('role scripts reject revision conflicts and generate only the role owning t
   assert.match(ideal.objective, /optimal goal.*task_prepare handoff/iu);
   assert.match(ideal.objective, /external-debug-reference/u);
   assert.deepEqual(ideal.reportSchema.required, ['runId', 'expectedRevision', 'idempotencyKey', 'ideal']);
+  const idealContributionSchema = (((ideal.reportSchema.properties as any).ideal.properties as any).skillContributions);
+  assert.equal(idealContributionSchema.minItems, 1);
+  assert.equal(idealContributionSchema.maxItems, 1);
+  assert.deepEqual(idealContributionSchema.items.properties.skillName.enum, ['external-debug-reference']);
+  const noDiscoveryIdeal = generateRoleDirective('enno-oduno', {
+    ...input,
+    status: 'oduno_ideal',
+  });
+  assert.match(noDiscoveryIdeal.objective, /skillContributions.*exactly \[\]/iu);
+  const noDiscoveryContributionSchema = (((noDiscoveryIdeal.reportSchema.properties as any).ideal.properties as any).skillContributions);
+  assert.equal(noDiscoveryContributionSchema.minItems, 0);
+  assert.equal(noDiscoveryContributionSchema.maxItems, 0);
   const review = generateRoleDirective('enno-oduno', {
     ...input,
     status: 'enno_verifying',
@@ -179,6 +192,18 @@ test('role scripts reject revision conflicts and generate only the role owning t
   assert.ok(meditation.stopConditions.some((condition) => /Do not mutate or delete/iu.test(condition)));
   assert.deepEqual(meditation.reportSchema.required, ['runId', 'expectedRevision', 'idempotencyKey', 'meditation']);
   assert.throws(() => parseRoleJson(Buffer.from('{"x":1,"x":2}')), /strict JSON/iu);
+});
+
+test('Enno validation messages remain value-free while telling DSH how to retry', () => {
+  const error = ennoValidationError('ideal_submit', [{
+    path: ['ideal', 'skillContributions'],
+    reasonCode: 'undeclared_skill',
+    expected: { minItems: 0, maxItems: 0, allowedValues: [] },
+  }]);
+  assert.match(error.message, /ENNO_INPUT_INVALID/iu);
+  assert.match(error.message, /ideal\.skillContributions/iu);
+  assert.match(error.message, /undeclared_skill/iu);
+  assert.match(error.message, /maxItems=0/iu);
 });
 
 test('confirmation directives carry the projection, fixed instruction, and confirmation report schema', () => {

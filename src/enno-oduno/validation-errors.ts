@@ -71,7 +71,7 @@ export interface PublicEnnoValidationError {
 const publicExpectedSchema = z.object({
   minItems: z.number().int().min(0).max(1_000_000).optional(),
   maxItems: z.number().int().min(0).max(1_000_000).optional(),
-  allowedValues: z.array(z.string().min(1).max(100)).max(32).optional(),
+  allowedValues: z.array(z.string().min(1).max(500)).max(32).optional(),
   requiredExpertKinds: z.array(z.enum(['code', 'ui'])).max(2).optional(),
   requiredSlotIds: z.array(z.string().min(1).max(100)).max(3).optional(),
   directoryPolicy: z.literal('repository_relative').optional(),
@@ -179,7 +179,14 @@ export function ennoValidationError(
   };
   const parsed = publicEnnoValidationErrorSchema.safeParse(candidate);
   if (!parsed.success) return new KiokukoError('INTEGRITY_ERROR', 'Public Enno validation projection is invalid');
-  return new KiokukoError('VALIDATION_ERROR', 'Enno input is invalid', {
+  const issueSummary = parsed.data.issues.map((issue) => {
+    const path = issue.path.map((segment, index) => typeof segment === 'number' ? `[${segment}]` : `${index === 0 ? '' : '.'}${segment}`).join('');
+    const expected = issue.expected === undefined
+      ? ''
+      : ` expected=${Object.entries(issue.expected).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(',')}`;
+    return `${path}:${issue.reasonCode}${expected}`;
+  }).join('; ');
+  return new KiokukoError('VALIDATION_ERROR', `Enno input is invalid (ENNO_INPUT_INVALID; operation=${parsed.data.operation}; ${issueSummary}; retry=${parsed.data.retry}; mutationApplied=false)`, {
     [ENNO_INPUT_INVALID_DETAIL_KEY]: parsed.data,
   });
 }
