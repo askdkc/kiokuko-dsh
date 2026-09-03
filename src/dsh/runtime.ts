@@ -134,7 +134,7 @@ export class DshRuntime {
       })
       database = opened.database
       if (this.#options.autoRegisterRepository === true) {
-        const resolved = await resolveProjectWorkspace(database, configuredRepositoryRoot)
+        const resolved = await resolveProjectWorkspace(database, configuredRepositoryRoot, { allowDirectory: true })
         if (resolved !== undefined) repositoryRoot = resolved.repositoryRoot
       }
       const binding = findRepositoryBinding(database, repositoryRoot)

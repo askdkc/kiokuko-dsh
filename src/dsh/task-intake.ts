@@ -418,7 +418,7 @@ interface ResolvedAgentTaskProject {
 
 async function requireProject(database: SqliteDatabase, cwd?: string): Promise<ResolvedAgentTaskProject> {
   const canonicalCwd = canonicalDirectory(cwd ?? process.cwd());
-  const project = await resolveProjectWorkspace(database, canonicalCwd);
+  const project = await resolveProjectWorkspace(database, canonicalCwd, { allowDirectory: true });
   if (!project) throw new KiokukoError('NOT_FOUND', 'No Git repository or .kiokuko.json binding was found for task preparation');
   return { project, executionContext: taskExecutionContext(canonicalCwd, project) };
 }
@@ -446,7 +446,7 @@ async function requireRegisteredProjectReadOnly(
   cwd?: string,
 ): Promise<ResolvedAgentTaskProject> {
   const canonicalCwd = canonicalDirectory(cwd ?? process.cwd());
-  const project = await resolveProjectWorkspaceReadOnly(database, canonicalCwd);
+  const project = await resolveProjectWorkspaceReadOnly(database, canonicalCwd, { allowDirectory: true });
   if (!project) throw new KiokukoError('NOT_FOUND', 'No Git repository or .kiokuko.json binding was found for task answer');
   assertRegisteredProjectLocation(database, project);
   return { project, executionContext: taskExecutionContext(canonicalCwd, project) };

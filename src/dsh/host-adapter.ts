@@ -405,7 +405,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       // work. Revision ordering alone cannot distinguish two same-revision
       // context deliveries that finish out of order.
       const generation = ++prepareGeneration
-      await runtime.withDatabase((database) => resolveProjectWorkspaceReadOnly(database, event.cwd))
+      await runtime.withDatabase((database) => resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true }))
       const cacheKey = `${event.sessionId}\u0000${event.turn}`
       const fingerprint = canonicalContentHash({
         sessionId: event.sessionId,
@@ -586,7 +586,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     return { phase: round.result.phase, contributions: round.result.contributions }
   }
   resumeExistingRun = async (event): Promise<DshIntakeGateResult | undefined> => runtime.withDatabase(async (database) => {
-    const project = await resolveProjectWorkspaceReadOnly(database, event.cwd)
+    const project = await resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true })
     if (project === undefined) return undefined
     const candidates = database.prepare(`
       SELECT ec.run_id AS runId, ec.orchestration_session_id AS orchestrationId

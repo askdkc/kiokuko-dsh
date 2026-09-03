@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -115,6 +115,35 @@ test('runtime rejects an unregistered repository and cleans up initialization fa
   })
   await assert.rejects(failed.start(), /database unavailable/u)
   await failed.close()
+})
+
+test('runtime auto-registers an ordinary directory without writing repository metadata', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-directory-root-'))
+  const databasePath = join(root, 'data.sqlite3')
+  const runtime = new DshRuntime({
+    repositoryRoot: root,
+    databasePath,
+    migrationsDirectory: join(process.cwd(), 'migrations'),
+    embeddingConfig: {
+      mode: 'off',
+      provider: 'openai-compatible',
+      allowRemote: false,
+      vectorBackend: 'auto',
+      timeoutMs: 1000,
+      batchSize: 1,
+    },
+    autoRegisterRepository: true,
+  })
+  try {
+    await runtime.start()
+    const agent = await runtime.openAgent({ dshSessionId: 'ordinary-directory', turn: 1 })
+    assert.match(agent.repositoryId, /^repo_local_[0-9a-f]{12}$/u)
+    assert.equal(agent.workspace.startsWith('project:'), true)
+    await assert.rejects(access(join(root, '.kiokuko.json')))
+  } finally {
+    await runtime.close()
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('runtime HMR-style dispose is idempotent and does not retain a live handle', async () => {

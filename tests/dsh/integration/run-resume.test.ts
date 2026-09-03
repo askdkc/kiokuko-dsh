@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
@@ -37,7 +36,6 @@ test('continuation bindings require exact session, run, workspace, and route epo
 test('runtime resumes the exact dsh route and rejects stale credentials before adapter mutation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-resume-'))
   await mkdir(join(root, 'src'))
-  execFileSync('git', ['init', '-q', root])
   const databasePath = join(root, 'data.sqlite3')
   await initializeDatabase({ databasePath })
   const database = openConnection(databasePath)
@@ -48,6 +46,8 @@ test('runtime resumes the exact dsh route and rejects stale credentials before a
       profileHints: { taskType: 'debug', target: 'src/route.ts', expected: 'route resumes', constraints: null },
       capabilities, dshSessionId: sessionId, skillDiscoveryMode: 'off',
     })
+    assert.equal(prepared.project.repositoryRoot, realpathSync(root))
+    assert.equal(prepared.project.source, 'local-path')
     const identity = { runId: prepared.run.runId, workspace: prepared.project.workspace, orchestrationId: prepared.intake.sessionId }
     submitOdunoIdeal(database, {
       ...identity, expectedRevision: 1, idempotencyKey: 'dsh-resume-ideal',

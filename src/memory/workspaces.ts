@@ -19,6 +19,11 @@ export interface ResolvedProjectWorkspace {
   source: RootSource | 'location' | 'remote' | 'local-path';
 }
 
+export interface ResolveProjectWorkspaceOptions {
+  /** Treat the exact cwd as a local workspace when no binding or Git root exists. */
+  allowDirectory?: boolean;
+}
+
 interface RepositoryRow extends SqliteRow {
   repositoryId: string;
   workspace: string;
@@ -72,10 +77,14 @@ function registerResolved(
 export async function resolveProjectWorkspace(
   database: SqliteDatabase,
   cwd = process.cwd(),
+  options: ResolveProjectWorkspaceOptions = {},
 ): Promise<ResolvedProjectWorkspace | undefined> {
   let detected: ReturnType<typeof detectRepositoryRoot>;
   try {
-    detected = detectRepositoryRoot({ cwd });
+    detected = detectRepositoryRoot({
+      cwd,
+      ...(options.allowDirectory === undefined ? {} : { allowDirectory: options.allowDirectory }),
+    });
   } catch (error) {
     if (error instanceof KiokukoError && error.code === 'NOT_FOUND') return undefined;
     throw error;
@@ -130,10 +139,14 @@ export async function resolveProjectWorkspace(
 export async function resolveProjectWorkspaceReadOnly(
   database: SqliteDatabase,
   cwd = process.cwd(),
+  options: ResolveProjectWorkspaceOptions = {},
 ): Promise<ResolvedProjectWorkspace | undefined> {
   let detected: ReturnType<typeof detectRepositoryRoot>;
   try {
-    detected = detectRepositoryRoot({ cwd });
+    detected = detectRepositoryRoot({
+      cwd,
+      ...(options.allowDirectory === undefined ? {} : { allowDirectory: options.allowDirectory }),
+    });
   } catch (error) {
     if (error instanceof KiokukoError && error.code === 'NOT_FOUND') return undefined;
     throw error;
