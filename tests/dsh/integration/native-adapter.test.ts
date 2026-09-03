@@ -82,7 +82,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       const values: Record<string, string> = { taskType: 'build', target: 'src/index.ts', expected: 'tests pass' }
       return { answers: [{ id, selected: [values[id] ?? 'approve'] }] }
     } },
-    sessions: { get(id?: string) { return id === fallbackSession.id ? fallbackSession : { id: 'native-agent', header: { cwd: f.root } } } },
+    sessions: {
+      get(id?: string) { return id === fallbackSession.id ? fallbackSession : { id: 'native-agent', header: { cwd: f.root } } },
+      async flush() {},
+    },
     agents: { get() { return { id: 'native-agent', inject() {} } } },
   }
   const hostFiber = root.plugin({ name: 'native-test-services', apply(ctx) {
@@ -131,10 +134,16 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     const toolHost = adapter.host.toolHost!
     assert.ok(event.nativeSession)
     const nativeSession = event.nativeSession
-    assert.doesNotThrow(() => toolHost.bind({
+    const currentToolBinding = toolHost.bind({
       callId: 'bound-call', name: 'enno_plan_submit', arguments: {},
       agent: { dshSessionId: 'native-session', nativeSession }, signal: event.signal,
-    }))
+    })
+    soulModelInvocable = false
+    await assert.rejects(toolHost.execute('enno_plan_submit', {}, {
+      ...currentToolBinding,
+      idempotencyKey: 'catalog-change-call',
+    }, event.signal), /mandatory bundled Skill|catalog changed/iu)
+    soulModelInvocable = true
     assert.throws(() => toolHost.bind({
       callId: 'stale-session-call', name: 'enno_plan_submit', arguments: {},
       agent: { dshSessionId: 'native-session', nativeSession: { id: 'native-session' } }, signal: event.signal,

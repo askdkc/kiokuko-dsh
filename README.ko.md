@@ -6,7 +6,7 @@
 
 ## 설치
 
-DeepSeek Harness `0.1.2-alpha.5` 및 Node.js 24.16.0 이상이 필요합니다.
+DeepSeek Harness `0.1.2-rc.1` 및 Node.js 24.16.0 이상이 필요합니다.
 
 공개된 npm 패키지를 설치합니다:
 

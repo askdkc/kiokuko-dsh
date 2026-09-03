@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DshSessionBridge, mountDshDurabilityBarriers, mountDshIdleLifecycle, mountDshSessionLifecycle } from '../../../src/dsh/session-bridge.js'
 
-test('durability barriers flush before session, pre-step, tools, and first model dispatch', async () => {
+test('durability barriers flush the exact run and skip nested tool dispatches', async () => {
   const calls: string[] = []
   const bridge = new DshSessionBridge({
     runtime: { withDatabase: async <T,>(_operation: unknown) => undefined as T },
@@ -18,18 +18,37 @@ test('durability barriers flush before session, pre-step, tools, and first model
   }
   const dispose = mountDshDurabilityBarriers(ctx, bridge)
   bridge.observe({ sessionId: 'barrier-session', runId: 'barrier-run', event: { type: 'session/flush', seq: 0, time: 0, data: null } })
-  await listeners.get('session/flush')?.({})
+  await listeners.get('session/flush')?.({ id: 'barrier-session' })
   calls.push('session-next')
   bridge.observe({ sessionId: 'barrier-session', runId: 'barrier-run', event: { type: 'agent/pre-step', seq: 1, time: 1, data: null } })
-  await listeners.get('agent/pre-step')?.({}, async () => { calls.push('step-next') })
+  await listeners.get('agent/pre-step')?.({ agent: { session: { id: 'barrier-session' } } }, async () => { calls.push('step-next') })
   bridge.observe({ sessionId: 'barrier-session', runId: 'barrier-run', event: { type: 'tools/execute', seq: 2, time: 2, data: null } })
-  await listeners.get('tools/execute')?.({}, async () => { calls.push('tool-next') })
+  await listeners.get('tools/execute')?.({ agent: { session: { id: 'barrier-session' } } }, async () => { calls.push('tool-next') })
+  await listeners.get('tools/execute')?.({ parent: {}, agent: { session: { id: 'barrier-session' } } }, async () => { calls.push('nested-tool-next') })
   bridge.observe({ sessionId: 'barrier-session', runId: 'barrier-run', event: { type: 'llm/stream', seq: 3, time: 3, data: null } })
-  const stream = listeners.get('llm/stream')?.({}, () => (async function* () { calls.push('model-next'); yield 'chunk' })()) as AsyncIterable<string>
+  const stream = listeners.get('llm/stream')?.({ sessionId: 'barrier-session' }, () => (async function* () { calls.push('model-next'); yield 'chunk' })()) as AsyncIterable<string>
   for await (const _chunk of stream) { /* drain */ }
-  assert.deepEqual(calls, ['flush', 'session-next', 'flush', 'step-next', 'flush', 'tool-next', 'flush', 'model-next'])
+  assert.deepEqual(calls, ['flush', 'session-next', 'flush', 'step-next', 'flush', 'tool-next', 'nested-tool-next', 'flush', 'model-next'])
   dispose()
   assert.equal(listeners.size, 0)
+})
+
+test('idle terminalization awaits the exact native session durability checkpoint', async () => {
+  const order: string[] = []
+  let listener: ((event: { agent: { id: string; session: { id: string } }; status: string }) => unknown) | undefined
+  const nativeSession = { id: 'durable-session' }
+  const dispose = mountDshIdleLifecycle({
+    on(_name, next) { listener = next as typeof listener; return () => { listener = undefined } },
+  }, {
+    closeTurn: async () => { order.push('ledger-close') },
+  } as any, async () => ({ runId: 'durable-run', status: 'completed' as const }), async (session) => {
+    assert.equal(session, nativeSession)
+    order.push('native-flush')
+  })
+
+  await listener?.({ agent: { id: 'durable-agent', session: nativeSession }, status: 'idle' })
+  assert.deepEqual(order, ['native-flush', 'ledger-close'])
+  dispose()
 })
 
 test('ordinary idle does not close a non-terminal run', async () => {

@@ -96,3 +96,23 @@ test('turn/end is flushed to the ledger before terminal run close', async () => 
     database.close()
   }
 })
+
+test('terminal close flushes only its own run and is not blocked by another run failure', async () => {
+  const closed: string[] = []
+  const bridge = new DshSessionBridge({
+    runtime: { withDatabase: async <T,>(_operation: unknown) => undefined as T },
+    appendBatch: async (runId) => {
+      if (runId === 'unrelated-run') throw new Error('unrelated durability failure')
+    },
+  })
+  bridge.bindSession('target-session', 'target-run')
+  bridge.bindSession('unrelated-session', 'unrelated-run')
+  bridge.observe({ sessionId: 'target-session', runId: 'target-run', event: { type: 'turn/end', seq: 1, time: 1, data: null } })
+  bridge.observe({ sessionId: 'unrelated-session', runId: 'unrelated-run', event: { type: 'turn/end', seq: 1, time: 1, data: null } })
+  const lifecycle = new DshRunLifecycle({ bridge, closeRun: ({ runId }) => { closed.push(runId) } })
+
+  await lifecycle.closeTurn({ runId: 'target-run', status: 'completed' })
+  assert.deepEqual(closed, ['target-run'])
+  assert.equal(bridge.pendingCount, 1)
+  await assert.rejects(bridge.flush(), /unrelated durability failure/u)
+})

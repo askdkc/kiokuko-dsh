@@ -5,14 +5,14 @@ import {
   type DshDirectiveSourceSelection,
 } from './context-injection.js'
 import type { UserFacingConfirmation } from '../enno-oduno/types.js'
-import type { DshConfirmationAnswer, DshConfirmationAnswerer } from './user-interaction.js'
+import type { DshConfirmationAnswer, DshConfirmationAnswerer, DshUserQuestionAgent } from './user-interaction.js'
 import type { DshAdvisoryRoundResult, DshAdvisoryRunner } from './advisory-runner.js'
 
 export interface DshTurnStoppingAgent {
   readonly id: string
   readonly sessionId?: string
   /** Opaque native Agent object used to reject an ID-reused agent lifecycle. */
-  readonly nativeAgent?: object
+  readonly nativeAgent?: DshUserQuestionAgent
   /** Opaque native Session object used to reject same-ID cross-lifecycle events. */
   readonly nativeSession?: object
   steer(message: DshContinuationMessage): void
@@ -32,6 +32,11 @@ export interface DshContinuationMessage {
 
 export interface DshEnnoControllerDependencies {
   readonly readState: (event: DshTurnStoppingEvent) => Promise<EnnoOdunoState | null>
+  /** Revalidate the exact live Agent capability catalog before host-owned effects. */
+  readonly validateBoundary?: (input: {
+    readonly event: DshTurnStoppingEvent
+    readonly state: EnnoOdunoState
+  }) => void | PromiseLike<void>
   readonly injectNextStepContext?: (input: {
     readonly event: DshTurnStoppingEvent
     readonly selection: DshDirectiveSourceSelection
@@ -86,12 +91,12 @@ export class DshConfirmationController {
     this.#dependencies = dependencies
   }
 
-  async confirm(input: { readonly confirmation: UserFacingConfirmation; readonly expectedRevision: number; readonly signal?: AbortSignal }): Promise<DshConfirmationDecision> {
+  async confirm(input: { readonly confirmation: UserFacingConfirmation; readonly expectedRevision: number; readonly signal?: AbortSignal; readonly agent?: DshUserQuestionAgent }): Promise<DshConfirmationDecision> {
     if (input.signal?.aborted) return { kind: 'blocked', reason: 'aborted' }
     if (this.#dependencies.answerer === undefined) return { kind: 'blocked', reason: 'answerer_unavailable' }
     let answer: DshConfirmationAnswer
     try {
-      answer = await this.#dependencies.answerer.ask(input.confirmation, input.signal)
+      answer = await this.#dependencies.answerer.ask(input.confirmation, input.signal, input.agent)
     } catch (error) {
       if (input.signal?.aborted) return { kind: 'blocked', reason: 'aborted' }
       if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'ASK_CANCELLED') {
@@ -114,7 +119,7 @@ export type DshTurnStoppingDecision =
   | { readonly kind: 'close'; readonly nextAction: EnnoNextAction }
   | { readonly kind: 'steer'; readonly nextAction: EnnoNextAction; readonly selection: DshDirectiveSourceSelection }
   | { readonly kind: 'pause'; readonly nextAction: EnnoNextAction; readonly reason: 'continuation_limit' }
-  | { readonly kind: 'abort'; readonly reason: 'aborted' | 'stale_turn' | 'state_unavailable' | 'directive_missing' | 'stale_directive' | 'verification_failed' | 'context_injection_failed' }
+  | { readonly kind: 'abort'; readonly reason: 'aborted' | 'stale_turn' | 'state_unavailable' | 'catalog_changed' | 'directive_missing' | 'stale_directive' | 'verification_failed' | 'context_injection_failed' }
 
 function continuationText(nextAction: EnnoNextAction): string {
   const currentWork = nextAction === 'execute_work_unit'
@@ -166,6 +171,7 @@ function sameNativeIdentity(
 /** Own the awaited turn boundary and never convert an Enno error into a normal close. */
 export class DshEnnoController {
   readonly #readState: DshEnnoControllerDependencies['readState']
+  readonly #validateBoundary: DshEnnoControllerDependencies['validateBoundary']
   readonly #injectNextStepContext: NonNullable<DshEnnoControllerDependencies['injectNextStepContext']>
   readonly #maxSteersPerDirective: number
   readonly #advisoryRunner: DshAdvisoryRunner | undefined
@@ -176,6 +182,7 @@ export class DshEnnoController {
 
   constructor(dependencies: DshEnnoControllerDependencies) {
     this.#readState = dependencies.readState
+    this.#validateBoundary = dependencies.validateBoundary
     this.#injectNextStepContext = dependencies.injectNextStepContext ?? (() => undefined)
     this.#maxSteersPerDirective = dependencies.maxSteersPerDirective ?? 1
     this.#advisoryRunner = dependencies.advisoryRunner
@@ -252,6 +259,13 @@ export class DshEnnoController {
       || (state.routeEpoch !== null && state.directive.routeEpoch !== state.routeEpoch)) {
       return { kind: 'abort', reason: 'stale_directive' }
     }
+    if (this.#validateBoundary !== undefined) {
+      try {
+        await this.#validateBoundary({ event, state })
+      } catch {
+        return { kind: 'abort', reason: 'catalog_changed' }
+      }
+    }
     let currentState = state
     let selection: DshDirectiveSourceSelection
     try {
@@ -309,6 +323,13 @@ export class DshEnnoController {
         || fresh.nextAction !== currentState.nextAction
         || canonicalContentHash(fresh.directive) !== canonicalContentHash(currentState.directive)) {
         return { kind: 'abort', reason: 'stale_directive' }
+      }
+      if (this.#validateBoundary !== undefined) {
+        try {
+          await this.#validateBoundary({ event, state: fresh })
+        } catch {
+          return { kind: 'abort', reason: 'catalog_changed' }
+        }
       }
       currentState = fresh
       selection = selectDshDirectiveSources(fresh.directive)

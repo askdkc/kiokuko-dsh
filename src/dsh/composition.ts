@@ -103,7 +103,7 @@ function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshE
   return (ctx as unknown as { on(name: 'agent/turn-stopping', listener: (payload: DshNativeTurnStoppingPayload) => Promise<void>, options?: { readonly prepend?: boolean }): () => void }).on('agent/turn-stopping', async (payload: DshNativeTurnStoppingPayload) => {
     const agent: DshTurnStoppingAgent = {
       id: payload.agent.id,
-      nativeAgent: payload.agent as object,
+      nativeAgent: payload.agent,
       ...(payload.agent.session?.id === undefined && payload.agent.sessionId === undefined ? {} : { sessionId: payload.agent.session?.id ?? payload.agent.sessionId }),
       ...(payload.agent.session === undefined ? {} : { nativeSession: payload.agent.session as object }),
       steer: (message) => payload.agent.steer({
@@ -211,7 +211,16 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     if (host.ennoController !== undefined) ingressDisposers.push(mountNativeEnnoController(ctx as unknown as DshTurnStoppingContext, host.ennoController))
     if (host.lifecycle !== undefined) {
       if (host.resolveIdleClose === undefined) throw new Error('kiokuko-dsh idle lifecycle requires a close resolver')
-      ingressDisposers.push(mountDshIdleLifecycle(ctx as unknown as DshIdleLifecycleContext, host.lifecycle, host.resolveIdleClose))
+      const nativeSessions = (ctx as unknown as { get(name: string, strict?: boolean): unknown }).get('sessions', false) as {
+        flush?: (session: unknown) => PromiseLike<unknown>
+      } | undefined
+      if (nativeSessions?.flush === undefined) throw new Error('kiokuko-dsh lifecycle requires the native DSH session flush service')
+      ingressDisposers.push(mountDshIdleLifecycle(
+        ctx as unknown as DshIdleLifecycleContext,
+        host.lifecycle,
+        host.resolveIdleClose,
+        async (session) => { await nativeSessions.flush!(session) },
+      ))
       if (host.resolveSessionClose !== undefined) {
         ingressDisposers.push(mountDshSessionLifecycle(ctx as unknown as DshSessionLifecycleContext, host.lifecycle, host.resolveSessionClose))
       }

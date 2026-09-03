@@ -9,7 +9,7 @@ release is available, or use the source-pinned Git path in the plugin guide.
 
 ## Install
 
-DeepSeek Harness `0.1.2-alpha.5` and Node.js 24.16.0 or newer are required.
+DeepSeek Harness `0.1.2-rc.1` and Node.js 24.16.0 or newer are required.
 
 Install the published package:
 
