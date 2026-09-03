@@ -142,6 +142,7 @@ function snapshot(overrides: {
     clientSessionId: null,
     repositoryRoot: REPOSITORY_ROOT,
     taskType: 'build',
+    userFacingLanguage: 'en',
     status: overrides.status ?? 'oduno_ideal',
     revision: contract.revision,
     confirmationState: 'pending',

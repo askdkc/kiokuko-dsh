@@ -1603,6 +1603,7 @@ test("enno_plan_submit returns the userFacingConfirmation projection over the MC
           objective: string;
           userFacingConfirmation?: {
             presentationVersion: number;
+            language: string;
             summary: { basis: string; text: string };
             scope: { basis: string; paths: string[] };
             workItems: Array<{
@@ -1632,7 +1633,8 @@ test("enno_plan_submit returns the userFacingConfirmation projection over the MC
     );
     const projection = planContent.ennoOduno.directive?.userFacingConfirmation;
     assert.ok(projection !== undefined);
-    assert.equal(projection.presentationVersion, 1);
+    assert.equal(projection.presentationVersion, 2);
+    assert.equal(projection.language, "en");
     assert.equal(projection.summary.basis, "proposal");
     assert.equal(projection.scope.basis, "user");
     assert.equal(projection.workItems[0]?.number, 1);

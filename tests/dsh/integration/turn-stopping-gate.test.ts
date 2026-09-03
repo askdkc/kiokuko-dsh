@@ -92,7 +92,8 @@ test('confirmation is settled at turn stopping before the next role is injected'
     role: 'enno-oduno',
     workUnit: null,
     userFacingConfirmation: {
-      presentationVersion: 1,
+      presentationVersion: 2,
+      language: 'en',
       title: 'Approve plan',
       summary: { basis: 'proposal', text: 'Implement the bounded plan.' },
       scope: { basis: 'user', paths: ['src'] },

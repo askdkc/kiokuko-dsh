@@ -4,7 +4,7 @@ import { createDshConfirmationAnswerer, renderDshConfirmation, type DshUserQuest
 import type { UserFacingConfirmation } from '../../../../src/enno-oduno/types.js'
 
 const confirmation: UserFacingConfirmation = {
-  presentationVersion: 1, title: 'Approve plan',
+  presentationVersion: 2, language: 'en', title: 'Approve plan',
   summary: { basis: 'proposal', text: 'Apply the bounded change.' },
   scope: { basis: 'repository', paths: ['src/dsh/tools.ts'] },
   exclusions: { basis: 'user', paths: ['dist/'] },
@@ -22,7 +22,8 @@ function service(answer: { selected: string[]; custom?: string }): DshUserQuesti
 test('confirmation exposes the public contract while omitting host identity', () => {
   const text = renderDshConfirmation(confirmation)
   assert.match(text, /src\/dsh\/tools\.ts/u)
-  assert.match(text, /Choose approve or cancel here\. Use Chat about it to describe a revision/u)
+  assert.match(text, /^# Approve plan$/mu)
+  assert.match(text, /^## Work items$/mu)
   assert.equal(/runId|resumeToken|leaseToken|expectedRevision/iu.test(text), false)
 })
 

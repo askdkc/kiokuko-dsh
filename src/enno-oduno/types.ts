@@ -333,6 +333,8 @@ export interface EnnoHarnessDirective {
 
 export type ConfirmationBasis = 'user' | 'repository' | 'proposal';
 
+export type UserFacingLanguage = 'en' | 'ja';
+
 export type UserFacingConfirmationAction = 'approve' | 'revise' | 'cancel';
 
 export interface UserFacingVerifier {
@@ -368,7 +370,8 @@ export interface UserFacingWorkItem {
 }
 
 export interface UserFacingConfirmation {
-  presentationVersion: 1;
+  presentationVersion: 2;
+  language: UserFacingLanguage;
   title: string;
   summary: { basis: ConfirmationBasis; text: string };
   scope: { basis: ConfirmationBasis; paths: string[] };
@@ -475,6 +478,7 @@ export interface EnnoRunSnapshot {
   clientSessionId: string | null;
   repositoryRoot: string;
   taskType: (typeof ENNO_APPLICABLE_TASK_TYPES)[number];
+  userFacingLanguage: UserFacingLanguage;
   status: EnnoStatus;
   revision: number;
   confirmationState: 'not_required' | 'pending' | 'approved' | 'revision_requested' | 'cancelled';

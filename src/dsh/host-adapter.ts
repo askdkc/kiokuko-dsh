@@ -8,6 +8,7 @@ import {
   type DshNativePreStepPayload,
 } from './composition.js'
 import { DshRuntime } from './runtime.js'
+import { withImmediateTransaction } from '../db/transaction.js'
 import { DshIntakeGate, type DshCapabilityReadContext, type DshIntakeGateResult, type DshPreStepDecision, type DshPreStepEvent } from './intake-gate.js'
 import { resolveGroundedIntakeProfile } from './intake-profile-resolver.js'
 import type { PreparedAgentTask } from '../akinator/agent-task.js'
@@ -34,13 +35,13 @@ import { KiokukoError } from '../errors.js'
 import { injectDshContext, selectDshDirectiveSources } from './context-injection.js'
 import { projectDshDirective } from './directive-projection.js'
 import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, readPendingEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, type EnnoOperationResponse } from '../enno-oduno/service.js'
-import { readEnnoSnapshot, terminalizeLedgerRunInTransaction } from '../enno-oduno/store.js'
+import { claimExecutionLeaseInTransaction, readEnnoSnapshot, terminalizeLedgerRunInTransaction } from '../enno-oduno/store.js'
 import { decideAdapterContinuation } from '../enno-oduno/adapters.js'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
 import { curateMemoryCandidates } from '../memory/curator.js'
 import { checkpointScopedMemoryWithProvenance, type ScopedCheckpointInput } from '../memory/scoped-memory.js'
 import { LedgerStore } from '../ledger/store.js'
-import { ENNO_APPLICABLE_TASK_TYPES, type EnnoNextAction, type EnnoOdunoState } from '../enno-oduno/types.js'
+import { ENNO_APPLICABLE_TASK_TYPES, type EnnoExecutionLease, type EnnoNextAction, type EnnoOdunoState } from '../enno-oduno/types.js'
 
 interface NativeSkills {
   registerProvider(create: (control: { readonly signal: AbortSignal }) => unknown): () => void
@@ -370,6 +371,40 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     }
   }
 
+  const refreshContinuedWorkLease = async (
+    item: TurnRecord,
+    expected: EnnoOdunoState,
+  ): Promise<{ state: EnnoOdunoState; lease: EnnoExecutionLease } | undefined> => {
+    const expectedWorkUnitId = expected.nextAction === 'execute_work_unit'
+      ? expected.directive?.workUnit?.id
+      : undefined
+    if (expectedWorkUnitId === undefined) return undefined
+    return runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+      const snapshot = readEnnoSnapshot(database, {
+        runId: item.runId,
+        workspace: item.workspace,
+        orchestrationId: item.orchestrationId,
+      })
+      const state = stateForSnapshot(snapshot)
+      const workUnitId = state.nextAction === 'execute_work_unit'
+        ? state.directive?.workUnit?.id
+        : undefined
+      if (state.contractRevision !== expected.contractRevision || workUnitId !== expectedWorkUnitId) {
+        throw new KiokukoError('CONFLICT', 'Enno WorkUnit changed before DSH turn recovery')
+      }
+      if (snapshot.clientKind !== 'dsh' || snapshot.clientSessionId !== item.sessionId) {
+        throw new KiokukoError('CONFLICT', 'Enno DSH route changed before WorkUnit recovery')
+      }
+      return {
+        state,
+        lease: claimExecutionLeaseInTransaction(database, snapshot, workUnitId, {
+          clientKind: 'dsh',
+          sessionId: item.sessionId,
+        }),
+      }
+    }))
+  }
+
   class CapturingGate extends DshIntakeGate {
     override async prepare(event: DshPreStepEvent): Promise<DshIntakeGateResult> {
       // Capture completion ordering before any asynchronous database or intake
@@ -443,6 +478,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             && previousState.nextAction !== 'complete'
         if (continuePrevious) {
           this.assertCatalog(previous.catalog, event.capabilities)
+          const refreshedWork = await refreshContinuedWorkLease(previous, previousState)
+          if (refreshedWork !== undefined) {
+            previous.prepared = { ...previous.prepared, ennoOduno: refreshedWork.state }
+            const next = policyState(refreshedWork.state, previous, previous.sessionId, refreshedWork.lease)
+            states.set(previous.runId, next)
+            policy.setState(next)
+          }
           const continued = { admitted: !event.signal.aborted, prepared: previous.prepared, catalog: event.capabilities }
           if (continued.admitted) {
             continuedTurns.set(cacheKey, {

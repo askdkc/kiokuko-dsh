@@ -15,13 +15,21 @@ has one responsibility, one reason to change, focused checks, and local code/ui/
 docs/operations routes.
 
 Confirmation displays scope, exclusions, completion criteria, skills, expertise,
-commands, and timeouts in user language. It never exposes internal IDs or raw JSON.
+commands, and timeouts as structured Markdown in the original task's English or
+Japanese language. Paths, command arguments, identifiers, and exact timeout values
+remain unchanged. The surrounding card title and buttons use the DSH UI locale;
+Kiokuko owns only the Markdown plan body. Internal IDs and raw JSON remain hidden.
 
 If the plan environment is missing or changed, recovery pauses before discovery,
 plan persistence, or implementation. The user chooses continue, review, restart, or
 cancel. Continuation uses a short-lived route-epoch-bound resume token and one-owner
 execution lease; expired leases can be reclaimed safely. Ambiguous active runs are
 not rerouted.
+
+If a DSH model request fails during WorkUnit execution, Kiokuko does not replay
+the interrupted model or tool action. The next user turn resumes the same run
+only after revalidating its DSH session, revision, and WorkUnit and rotating the
+execution lease, including after the previous lease expired.
 
 Final Review first runs approved verifiers with shell disabled and repository-relative
 paths. Evidence is bound to the contract revision, mutation revision, verifier
