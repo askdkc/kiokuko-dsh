@@ -60,7 +60,13 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
     tools: {
       register(definition: any) { registered.push(definition); return () => undefined },
       guard() { return () => undefined },
-      schemas(scope: unknown) { toolSchemaScopes.push(scope); return DSH_MODEL_FACING_OPERATIONS.map((name) => ({ name })) },
+      schemas(scope: unknown) {
+        toolSchemaScopes.push(scope)
+        return DSH_MODEL_FACING_OPERATIONS.map((name, index) => ({
+          name,
+          ...(index === 0 ? { description: `Native tool summary.\n\n${'Detailed behavior. '.repeat(150)}` } : {}),
+        }))
+      },
     },
     commands: { register() { return () => undefined } },
     userQuestions: { async ask(request: { questions: readonly [{ id: string }] }) {

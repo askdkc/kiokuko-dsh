@@ -1,6 +1,7 @@
 import { KiokukoError } from '../errors.js'
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js'
 import { STANDARD_SKILL_MANIFESTS } from '../setup/standard-skills.js'
+import { MAX_RAW_CAPABILITY_DESCRIPTION_CHARS } from '../akinator/capabilities.js'
 
 export const DSH_CAPABILITY_CATALOG_VERSION = 1 as const
 
@@ -36,6 +37,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null
 }
 
+function hasInvalidDescriptionCharacters(value: string): boolean {
+  return /[\p{Cc}\p{Cf}]/u.test(value.replace(/[\t\n\r]/gu, ''))
+}
+
 function descriptor(kind: 'skill' | 'mcp_tool', value: unknown): DshCapabilityDescriptor {
   if (!isRecord(value)) validation('Capability descriptor must be a plain object')
   const allowed = new Set(['kind', 'name', 'description', 'source', 'provider', 'rank', 'locator', 'resourceBase', 'invocation', 'parameters', 'inputSchema', 'output'])
@@ -44,7 +49,9 @@ function descriptor(kind: 'skill' | 'mcp_tool', value: unknown): DshCapabilityDe
   if (typeof value.name !== 'string' || value.name.length === 0 || value.name.trim() !== value.name || value.name.length > 300 || /[\p{Cc}\p{Cf}]/u.test(value.name)) {
     validation('Capability descriptor name is invalid')
   }
-  if (value.description !== undefined && (typeof value.description !== 'string' || value.description.length > 2_000 || /[\p{Cc}\p{Cf}]/u.test(value.description))) {
+  if (value.description !== undefined && (typeof value.description !== 'string'
+    || value.description.length > MAX_RAW_CAPABILITY_DESCRIPTION_CHARS
+    || hasInvalidDescriptionCharacters(value.description))) {
     validation('Capability descriptor description is invalid')
   }
   return Object.freeze({
