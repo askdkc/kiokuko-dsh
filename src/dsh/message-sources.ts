@@ -26,7 +26,7 @@ export interface DshMessageSourceInput {
     readonly contextWithheld: boolean
   }
   readonly context: Pick<ScopedContextResult, 'items' | 'untrusted'> | null
-  readonly directive?: Pick<RoleDirective, 'role' | 'harness' | 'objective' | 'requiredSkills' | 'workUnit' | 'stopConditions' | 'reportSchema'>
+  readonly directive?: Pick<RoleDirective, 'role' | 'instructions' | 'objective' | 'requiredSkills' | 'workUnit' | 'stopConditions' | 'reportSchema'>
   readonly routeSkillNames?: readonly string[]
   readonly expertRefs?: readonly DshExpertReference[]
   readonly advisoryEvidence?: {
@@ -40,7 +40,7 @@ function directiveSource(directive: DshMessageSourceInput['directive']): DshMess
   if (directive === undefined) return null
   const text = JSON.stringify({
     role: directive.role,
-    harness: directive.harness,
+    instructions: directive.instructions,
     objective: directive.objective,
     requiredSkills: directive.requiredSkills,
     workUnit: directive.workUnit,

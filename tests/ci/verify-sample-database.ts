@@ -1,528 +1,197 @@
-import assert from "node:assert/strict";
-import { execFile, spawn, type ChildProcessByStdio } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import type { Readable } from "node:stream";
-import { promisify } from "node:util";
-import { getGlobalDatabasePath } from "../../src/config/paths.js";
-import { openConnection } from "../../src/db/connection.js";
-import { inspectMigrationSnapshot } from "../../src/db/migrate.js";
+import assert from 'node:assert/strict'
+import { realpathSync } from 'node:fs'
+import { chmod, copyFile, mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { prepareAgentTask } from '../../src/dsh/task-intake.js'
+import { openConnection } from '../../src/db/connection.js'
+import { inspectMigrationSnapshot } from '../../src/db/migrate.js'
+import { initializeDatabase } from '../../src/dsh/database.js'
+import { DshRuntime } from '../../src/dsh/runtime.js'
+import { registerRepositoryAndLocation } from '../../src/repository/binding.js'
 import {
   SAMPLE_DATABASE_BASELINE_VERSION,
   SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT,
   SAMPLE_EXTERNAL_SKILL_ID,
-  SAMPLE_EXTERNAL_SKILL_WORKSPACE,
   SAMPLE_GLOBAL_TITLES,
-  SAMPLE_GLOBAL_WORKSPACE,
   SAMPLE_PROJECT_TITLES,
   SAMPLE_PROJECT_UNICODE_BODY,
   SAMPLE_PROJECT_WORKSPACE,
-} from "../fixtures/sample-database.js";
+} from '../fixtures/sample-database.js'
 import {
   CURRENT_MIGRATION_SNAPSHOT,
   CURRENT_MIGRATION_VERSIONS,
   CURRENT_SCHEMA_VERSION,
   migrationVersionsAfter,
-} from "../fixtures/current-migrations.js";
+} from '../fixtures/current-migrations.js'
 
-const execFileAsync = promisify(execFile);
-const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-// The published DSH package intentionally has no generic `kiokuko` binary.
-// Sample-database verification still exercises the core CLI from source.
-const cliPath = path.join(repositoryRoot, "src/bin/kiokuko.ts");
-const tsxCliPath = path.join(repositoryRoot, "node_modules/tsx/dist/cli.mjs");
-const sampleDatabasePath = path.join(
-  repositoryRoot,
-  "tests/sampledb/kiokuko-dsh.sqlite3",
-);
-
-interface CliEnvelope {
-  apiVersion: string;
-  ok: true;
-  operation: string;
-  data: Record<string, unknown>;
-}
-
-type WebProcess = ChildProcessByStdio<null, Readable, Readable>;
-
-function objectValue(value: unknown, label: string): Record<string, unknown> {
-  assert.equal(typeof value, "object", `${label} must be an object`);
-  assert.notEqual(value, null, `${label} must be an object`);
-  assert.equal(Array.isArray(value), false, `${label} must be an object`);
-  return value as Record<string, unknown>;
-}
-
-function arrayField(value: Record<string, unknown>, field: string): unknown[] {
-  const result = value[field];
-  assert.ok(Array.isArray(result), `${field} must be an array`);
-  return result;
-}
-
-function stringField(value: Record<string, unknown>, field: string): string {
-  const result = value[field];
-  assert.equal(typeof result, "string", `${field} must be a string`);
-  return result as string;
-}
-
-function parseCliEnvelope(stdout: string, operation: string): CliEnvelope {
-  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim().length > 0);
-  assert.equal(lines.length, 1, `${operation} must emit exactly one JSON line`);
-  const envelope = objectValue(
-    JSON.parse(lines[0]!) as unknown,
-    `${operation} envelope`,
-  );
-  assert.equal(envelope.apiVersion, "1");
-  assert.equal(envelope.ok, true);
-  assert.equal(envelope.operation, operation);
-  return {
-    apiVersion: "1",
-    ok: true,
-    operation,
-    data: objectValue(envelope.data, `${operation}.data`),
-  };
-}
-
-async function runCliJson(
-  args: string[],
-  operation: string,
-  environment: NodeJS.ProcessEnv,
-): Promise<CliEnvelope> {
-  const result = await execFileAsync(process.execPath, [tsxCliPath, cliPath, ...args], {
-    cwd: repositoryRoot,
-    env: environment,
-    encoding: "utf8",
-    maxBuffer: 10 * 1024 * 1024,
-    timeout: 30_000,
-  });
-  assert.equal(result.stderr, "", `${operation} wrote unexpected stderr`);
-  return parseCliEnvelope(result.stdout, operation);
-}
+const sourceRoot = path.resolve(import.meta.dirname, '../..')
+const sampleDatabasePath = path.join(sourceRoot, 'tests/sampledb/kiokuko-dsh.sqlite3')
+const migrationsDirectory = path.join(sourceRoot, 'migrations')
+const dshSessionId = 'sampledb-dsh-session'
+const capabilities = [
+  { kind: 'skill' as const, name: 'kiokuko-soul', description: 'Routes work through Kiokuko.' },
+  { kind: 'skill' as const, name: 'kiokuko-single-purpose-functions', description: 'Shapes focused work contracts.' },
+]
 
 function assertLegacyFixture(): void {
-  assert.ok(
-    CURRENT_SCHEMA_VERSION > SAMPLE_DATABASE_BASELINE_VERSION,
-    "The sample database baseline must remain older than the current schema",
-  );
-  const database = openConnection(sampleDatabasePath, { readOnly: true });
+  assert.ok(CURRENT_SCHEMA_VERSION > SAMPLE_DATABASE_BASELINE_VERSION)
+  const database = openConnection(sampleDatabasePath, { readOnly: true })
   try {
-    const versions = database
-      .prepare("SELECT version FROM schema_migrations ORDER BY version")
+    const versions = database.prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all<{ version: number }>()
-      .map(({ version }) => version);
+      .map(({ version }) => version)
     assert.deepEqual(
       versions,
       CURRENT_MIGRATION_VERSIONS.slice(0, SAMPLE_DATABASE_BASELINE_VERSION),
-      "The committed sample database must remain on the legacy baseline",
-    );
-    const stalePath = "%kiokuko.sqlite3%";
-    const staleReferences = database
-      .prepare(
-        `SELECT COUNT(*) AS count
-           FROM entry_revisions
-          WHERE title LIKE ?
-             OR body LIKE ?
-             OR COALESCE(summary, '') LIKE ?
-             OR scope_json LIKE ?
-             OR provenance_json LIKE ?`,
-      )
-      .get<{ count: number }>(
-        stalePath,
-        stalePath,
-        stalePath,
-        stalePath,
-        stalePath,
-      )?.count;
-    assert.equal(
-      staleReferences,
-      0,
-      "The committed sample database must not retain the retired database filename",
-    );
+      'the committed sample database must remain on its legacy baseline',
+    )
   } finally {
-    database.close();
+    database.close()
   }
 }
 
-async function isolatedEnvironment(
-  root: string,
-): Promise<{ env: NodeJS.ProcessEnv; databasePath: string }> {
-  const home = path.join(root, "home");
-  const data = path.join(root, "data");
-  const runtime = path.join(root, "runtime");
-  const emptyBin = path.join(root, "empty-bin");
-  await Promise.all(
-    [home, data, runtime, emptyBin].map((directory) =>
-      mkdir(directory, { recursive: true }),
-    ),
-  );
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    LOCALAPPDATA: data,
-    APPDATA: data,
-    XDG_CONFIG_HOME: path.join(root, "config"),
-    XDG_DATA_HOME: data,
-    XDG_RUNTIME_DIR: runtime,
-    PATH: emptyBin,
-    Path: emptyBin,
-    KIOKUKO_SKILL_DISCOVERY: "off",
-    NO_COLOR: "1",
-  };
-  for (const key of [
-    "CODEX_HOME",
-    "CLAUDE_CONFIG_DIR",
-    "HERMES_CONFIG_PATH",
-    "KIOKUKO_SKILLS_API_URL",
-    "KIOKUKO_SKILLS_V1_TOKEN",
-  ]) {
-    delete env[key];
-  }
-  return {
-    env,
-    databasePath: getGlobalDatabasePath({ platform: process.platform, env }),
-  };
-}
+function assertMigratedFixture(databasePath: string): void {
+  const database = openConnection(databasePath, { readOnly: true })
+  try {
+    const plan = inspectMigrationSnapshot(database, CURRENT_MIGRATION_SNAPSHOT)
+    assert.deepEqual(plan.applied, CURRENT_MIGRATION_VERSIONS)
+    assert.deepEqual(plan.pending, [])
+    assert.equal(plan.currentVersion, CURRENT_SCHEMA_VERSION)
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
 
-function migrationVersions(value: unknown): number[] {
-  assert.ok(Array.isArray(value), "setup appliedMigrations must be an array");
-  for (const version of value)
-    assert.ok(
-      Number.isSafeInteger(version),
-      "applied migration versions must be integers",
-    );
-  return value as number[];
-}
-
-async function verifySetup(
-  environment: NodeJS.ProcessEnv,
-  databasePath: string,
-): Promise<void> {
-  const setup = await runCliJson(
-    ["setup", "--no-standard-skills", "--skill-discovery", "off", "--json"],
-    "setup",
-    environment,
-  );
-  assert.equal(setup.data.databasePath, databasePath);
-  assert.equal(setup.data.databaseAction, "initialized");
-  assert.equal(setup.data.recoveredEntries, 0);
-  const applied = migrationVersions(setup.data.appliedMigrations);
-  assert.deepEqual(
-    applied,
-    migrationVersionsAfter(SAMPLE_DATABASE_BASELINE_VERSION),
-    "setup must apply every migration after the committed sample database baseline",
-  );
-  const backupPath = setup.data.databaseBackupPath;
-  assert.equal(
-    typeof backupPath,
-    "string",
-    "migration must create a pre-migration backup",
-  );
-  assert.ok(
-    (await stat(backupPath as string)).isFile(),
-    "pre-migration backup must exist",
-  );
-}
-
-async function verifyDoctor(environment: NodeJS.ProcessEnv): Promise<void> {
-  const doctor = await runCliJson(["doctor", "--json"], "doctor", environment);
-  assert.equal(doctor.data.ok, true);
-  const currentVersion = doctor.data.currentVersion;
-  assert.ok(Number.isSafeInteger(currentVersion));
-  assert.equal(currentVersion, CURRENT_SCHEMA_VERSION);
-  const checks = objectValue(doctor.data.checks, "doctor.checks");
-  assert.ok(
-    Object.keys(checks).length > 0,
-    "doctor must return integrity checks",
-  );
-  for (const [name, value] of Object.entries(checks)) {
+    const projectRows = database.prepare(`
+      SELECT r.title, r.body
+        FROM entries AS e
+        JOIN entry_revisions AS r
+          ON r.entry_id = e.id AND r.revision = e.current_revision
+       WHERE e.workspace = ?
+       ORDER BY r.title
+    `).all<{ title: string; body: string }>(SAMPLE_PROJECT_WORKSPACE)
+    assert.deepEqual(projectRows.map(({ title }) => title), [...SAMPLE_PROJECT_TITLES].sort())
     assert.equal(
-      objectValue(value, `doctor.checks.${name}`).ok,
-      true,
-      `doctor check failed: ${name}`,
-    );
-  }
-}
+      projectRows.find(({ title }) => title === SAMPLE_PROJECT_TITLES[1])?.body,
+      SAMPLE_PROJECT_UNICODE_BODY,
+    )
 
-function verifyCurrentMigrationHistory(databasePath: string): void {
-  const database = openConnection(databasePath, { readOnly: true });
-  try {
-    const plan = inspectMigrationSnapshot(database, CURRENT_MIGRATION_SNAPSHOT);
-    assert.deepEqual(plan.applied, CURRENT_MIGRATION_VERSIONS);
-    assert.deepEqual(plan.pending, []);
-    assert.equal(plan.databaseVersion, CURRENT_SCHEMA_VERSION);
-    assert.equal(plan.currentVersion, CURRENT_SCHEMA_VERSION);
+    const globalTitles = database.prepare(`
+      SELECT r.title
+        FROM entries AS e
+        JOIN entry_revisions AS r
+          ON r.entry_id = e.id AND r.revision = e.current_revision
+       WHERE e.workspace = 'global'
+       ORDER BY r.title
+    `).all<{ title: string }>().map(({ title }) => title)
+    assert.deepEqual(globalTitles, [...SAMPLE_GLOBAL_TITLES].sort())
+
+    const externalDocuments = database.prepare(
+      'SELECT COUNT(*) AS count FROM external_skill_entries WHERE skill_id = ?',
+    ).get<{ count: number }>(SAMPLE_EXTERNAL_SKILL_ID)?.count
+    assert.equal(externalDocuments, SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT)
   } finally {
-    database.close();
+    database.close()
   }
-}
-
-function waitForWebReady(
-  child: WebProcess,
-): Promise<{ url: string; stderr: () => string }> {
-  return new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
-    const timeout = setTimeout(
-      () =>
-        finish(new Error(`kiokuko web did not become ready; stderr=${stderr}`)),
-      20_000,
-    );
-    const finish = (error?: Error, url?: string) => {
-      clearTimeout(timeout);
-      child.stdout.off("data", onStdout);
-      child.off("exit", onExit);
-      if (error !== undefined) reject(error);
-      else resolve({ url: url!, stderr: () => stderr });
-    };
-    const onStdout = (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-      const newline = stdout.indexOf("\n");
-      if (newline < 0) return;
-      try {
-        const envelope = parseCliEnvelope(stdout.slice(0, newline + 1), "web");
-        finish(undefined, stringField(envelope.data, "url"));
-      } catch (error) {
-        finish(error instanceof Error ? error : new Error(String(error)));
-      }
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      finish(
-        new Error(
-          `kiokuko web exited before readiness: code=${String(code)} signal=${String(signal)} stderr=${stderr}`,
-        ),
-      );
-    };
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.stdout.on("data", onStdout);
-    child.once("exit", onExit);
-  });
-}
-
-async function stopWeb(child: WebProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("kiokuko web did not stop after SIGTERM")),
-      10_000,
-    );
-    child.once("exit", (code, signal) => {
-      clearTimeout(timeout);
-      if (signal === "SIGTERM" || code === 0) resolve();
-      else
-        reject(
-          new Error(
-            `kiokuko web stopped unexpectedly: code=${String(code)} signal=${String(signal)}`,
-          ),
-        );
-    });
-  });
-}
-
-async function jsonResponse(
-  baseUrl: string,
-  pathname: string,
-  cookie?: string,
-): Promise<Record<string, unknown>> {
-  const headers = new Headers();
-  if (cookie !== undefined) headers.set("cookie", cookie);
-  const response = await fetch(`${baseUrl}${pathname}`, { headers });
-  if (response.status !== 200) {
-    assert.fail(
-      `${pathname} returned ${response.status}: ${await response.text()}`,
-    );
-  }
-  return objectValue((await response.json()) as unknown, pathname);
-}
-
-async function verifyWorkspaceEntries(
-  baseUrl: string,
-  workspace: string,
-  expectedTitles: readonly string[],
-  cookie: string,
-): Promise<Record<string, unknown>[]> {
-  const response = await jsonResponse(
-    baseUrl,
-    `/api/entries?workspace=${encodeURIComponent(workspace)}`,
-    cookie,
-  );
-  const entries = arrayField(response, "entries").map((entry, index) =>
-    objectValue(entry, `entries[${index}]`),
-  );
-  assert.deepEqual(
-    entries.map((entry) => stringField(entry, "title")).sort(),
-    [...expectedTitles].sort(),
-  );
-  for (const listed of entries) {
-    const entryId = stringField(listed, "id");
-    assert.equal(listed.workspace, workspace);
-    const detail = await jsonResponse(
-      baseUrl,
-      `/api/entries/${encodeURIComponent(entryId)}?workspace=${encodeURIComponent(workspace)}`,
-      cookie,
-    );
-    const stored = objectValue(detail.entry, `entry ${entryId}`);
-    assert.equal(stored.id, entryId);
-    assert.equal(stored.workspace, workspace);
-    assert.equal(stored.title, listed.title);
-  }
-  return entries;
-}
-
-async function verifyWebApi(baseUrl: string): Promise<void> {
-  const health = await jsonResponse(baseUrl, "/api/health");
-  assert.deepEqual(health, { ok: true });
-
-  const home = await fetch(baseUrl);
-  assert.equal(home.status, 200);
-  const cookie = home.headers.get("set-cookie")?.split(";", 1)[0];
-  assert.ok(
-    cookie !== undefined && cookie.startsWith("kiokuko_ui_session="),
-    "Web UI must issue a session cookie",
-  );
-  assert.match(await home.text(), /<title>Kiokuko Web<\/title>/u);
-
-  const workspaces = await jsonResponse(baseUrl, "/api/workspaces", cookie);
-  const workspaceNames = arrayField(workspaces, "workspaces").map(
-    (workspace, index) =>
-      stringField(objectValue(workspace, `workspaces[${index}]`), "workspace"),
-  );
-  for (const expected of [SAMPLE_PROJECT_WORKSPACE, SAMPLE_GLOBAL_WORKSPACE]) {
-    assert.ok(
-      workspaceNames.includes(expected),
-      `Missing Web workspace: ${expected}`,
-    );
-  }
-  assert.equal(
-    workspaceNames.includes(SAMPLE_EXTERNAL_SKILL_WORKSPACE),
-    false,
-    "Managed external-skill workspaces must not appear in the ordinary workspace selector",
-  );
-
-  const projectEntries = await verifyWorkspaceEntries(
-    baseUrl,
-    SAMPLE_PROJECT_WORKSPACE,
-    SAMPLE_PROJECT_TITLES,
-    cookie,
-  );
-  await verifyWorkspaceEntries(
-    baseUrl,
-    SAMPLE_GLOBAL_WORKSPACE,
-    SAMPLE_GLOBAL_TITLES,
-    cookie,
-  );
-  const unicodeEntry = projectEntries.find(
-    (entry) => entry.title === SAMPLE_PROJECT_TITLES[1],
-  );
-  assert.equal(unicodeEntry?.body, SAMPLE_PROJECT_UNICODE_BODY);
-
-  const projectTags = await jsonResponse(
-    baseUrl,
-    `/api/tags?workspace=${encodeURIComponent(SAMPLE_PROJECT_WORKSPACE)}`,
-    cookie,
-  );
-  const fixtureTag = arrayField(projectTags, "tags")
-    .map((tag, index) => objectValue(tag, `tags[${index}]`))
-    .find((tag) => tag.tag === "fixture:ci");
-  assert.equal(fixtureTag?.count, SAMPLE_PROJECT_TITLES.length);
-
-  const skills = await jsonResponse(baseUrl, "/api/skills", cookie);
-  const skillRows = arrayField(skills, "skills").map((skill, index) =>
-    objectValue(skill, `skills[${index}]`),
-  );
-  assert.equal(skillRows.length, 1);
-  assert.equal(skillRows[0]!.skillId, SAMPLE_EXTERNAL_SKILL_ID);
-  assert.equal(skillRows[0]!.state, "imported");
-  assert.equal(skillRows[0]!.sourceWorkspace, SAMPLE_EXTERNAL_SKILL_WORKSPACE);
-
-  const detail = await jsonResponse(
-    baseUrl,
-    `/api/skills/${encodeURIComponent(SAMPLE_EXTERNAL_SKILL_ID)}`,
-    cookie,
-  );
-  const mappings = arrayField(detail, "entries").map((entry, index) =>
-    objectValue(entry, `skill.entries[${index}]`),
-  );
-  assert.equal(mappings.length, SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT);
-  assert.ok(mappings.every((mapping) => mapping.active === true));
-  const firstEntryId = stringField(mappings[0]!, "entryId");
-  const externalEntry = await jsonResponse(
-    baseUrl,
-    `/api/entries/${encodeURIComponent(firstEntryId)}?workspace=${encodeURIComponent(SAMPLE_EXTERNAL_SKILL_WORKSPACE)}`,
-    cookie,
-  );
-  assert.equal(
-    stringField(
-      objectValue(externalEntry.entry, "external entry"),
-      "workspace",
-    ),
-    SAMPLE_EXTERNAL_SKILL_WORKSPACE,
-  );
-}
-
-async function verifyWeb(environment: NodeJS.ProcessEnv): Promise<void> {
-  const child = spawn(
-    process.execPath,
-    [tsxCliPath, cliPath, "web", "--host", "127.0.0.1", "--port", "0", "--json"],
-    {
-      cwd: repositoryRoot,
-      env: environment,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  const ready = await waitForWebReady(child);
-  let verificationError: unknown;
-  try {
-    await verifyWebApi(ready.url);
-    assert.equal(ready.stderr(), "", "kiokuko web wrote unexpected stderr");
-  } catch (error) {
-    verificationError = error;
-  }
-  try {
-    await stopWeb(child);
-  } catch (stopError) {
-    if (verificationError !== undefined) {
-      throw new AggregateError(
-        [verificationError, stopError],
-        "Web verification and shutdown both failed",
-      );
-    }
-    throw stopError;
-  }
-  if (verificationError !== undefined) throw verificationError;
 }
 
 async function main(): Promise<void> {
-  assertLegacyFixture();
-  const temporaryRoot = await mkdtemp(
-    path.join(tmpdir(), "kiokuko-sampledb-ci-"),
-  );
+  assertLegacyFixture()
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'kiokuko-dsh-sampledb-'))
+  const repositoryRoot = path.join(temporaryRoot, 'repository')
+  const databasePath = path.join(temporaryRoot, 'data', 'kiokuko-dsh.sqlite3')
+  await Promise.all([
+    mkdir(path.dirname(databasePath), { recursive: true }),
+    mkdir(path.join(repositoryRoot, '.git'), { recursive: true }),
+  ])
+  await copyFile(sampleDatabasePath, databasePath)
+  await chmod(databasePath, 0o600)
+  const canonicalRepositoryRoot = realpathSync(repositoryRoot)
+
+  let runtime: DshRuntime | undefined
   try {
-    const isolated = await isolatedEnvironment(temporaryRoot);
-    await mkdir(path.dirname(isolated.databasePath), { recursive: true });
-    await copyFile(sampleDatabasePath, isolated.databasePath);
-    await chmod(isolated.databasePath, 0o600);
-    await verifySetup(isolated.env, isolated.databasePath);
-    verifyCurrentMigrationHistory(isolated.databasePath);
-    await verifyDoctor(isolated.env);
-    await verifyWeb(isolated.env);
-    await verifyDoctor(isolated.env);
-    process.stdout.write(
-      "Sample database migration and Web API verification passed.\n",
-    );
+    const migration = await initializeDatabase({ databasePath, migrationsDirectory })
+    assert.deepEqual(migration.applied, migrationVersionsAfter(SAMPLE_DATABASE_BASELINE_VERSION))
+    assert.equal(migration.currentVersion, CURRENT_SCHEMA_VERSION)
+    assert.ok(migration.backupPath)
+    assert.equal((await stat(migration.backupPath)).isFile(), true)
+    assertMigratedFixture(databasePath)
+
+    const database = openConnection(databasePath)
+    try {
+      registerRepositoryAndLocation(database, {
+        repositoryId: 'repo_sampledb_ci',
+        workspace: SAMPLE_PROJECT_WORKSPACE,
+        displayName: 'sampledb DSH runtime',
+        canonicalRoot: canonicalRepositoryRoot,
+        remoteFingerprint: null,
+        bindingSchemaVersion: 1,
+        agentTemplateVersion: 0,
+      })
+    } finally {
+      database.close()
+    }
+
+    runtime = new DshRuntime({
+      repositoryRoot: canonicalRepositoryRoot,
+      databasePath,
+      migrationsDirectory,
+      embeddingConfig: {
+        mode: 'off',
+        provider: 'openai-compatible',
+        allowRemote: false,
+        vectorBackend: 'auto',
+        timeoutMs: 1_000,
+        batchSize: 1,
+      },
+    })
+    await runtime.start()
+    const agent = await runtime.openAgent({ dshSessionId, turn: 1 })
+    assert.equal(agent.workspace, SAMPLE_PROJECT_WORKSPACE)
+
+    const prepared = await runtime.withDatabase((database) => prepareAgentTask(database, {
+      requestId: 'sampledb-dsh-request',
+      cwd: canonicalRepositoryRoot,
+      task: 'Verify DSH migration and exact continuation',
+      profileHints: {
+        taskType: 'debug',
+        target: 'tests/sampledb/kiokuko-dsh.sqlite3',
+        expected: 'the migrated DSH run resumes through the exact session',
+        constraints: 'preserve every legacy fixture record',
+      },
+      capabilities,
+      dshSessionId,
+      skillDiscoveryMode: 'off',
+    }))
+    assert.equal(prepared.ennoOduno.dshSessionId, dshSessionId)
+
+    const first = await runtime.resume({ dshSessionId, runId: prepared.run.runId })
+    assert.equal(first.continue, true)
+    assert.equal(first.runId, prepared.run.runId)
+    assert.ok(first.resumeToken)
+
+    const second = await runtime.resume({
+      dshSessionId,
+      runId: prepared.run.runId,
+      resumeToken: first.resumeToken!,
+    })
+    assert.equal(second.continue, true)
+    assert.equal(second.runId, prepared.run.runId)
+
+    await runtime.withDatabase((database) => {
+      const row = database.prepare(`
+        SELECT lr.client_kind AS clientKind, ec.dsh_session_id AS dshSessionId
+          FROM ledger_runs AS lr
+          JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
+         WHERE lr.run_id = ?
+      `).get<{ clientKind: string; dshSessionId: string }>(prepared.run.runId)
+      assert.equal(row?.clientKind, 'dsh')
+      assert.equal(row?.dshSessionId, dshSessionId)
+    })
+    assert.equal(runtime.closeAgent({ dshSessionId, turn: 1 }), true)
+    process.stdout.write('Sample database migration and DSH runtime resume verification passed.\n')
   } finally {
-    await rm(temporaryRoot, { recursive: true, force: true });
+    await runtime?.close()
+    await rm(temporaryRoot, { recursive: true, force: true })
   }
 }
 
-try {
-  await main();
-} catch (error) {
-  process.stderr.write(
-    `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-  );
-  process.exitCode = 1;
-}
+await main()

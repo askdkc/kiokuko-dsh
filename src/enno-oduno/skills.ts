@@ -4,7 +4,7 @@ import {
   STANDARD_FUNCTION_SKILL_NAME,
   STANDARD_SOUL_SKILL_NAME,
   STANDARD_UI_SKILL_NAME,
-} from '../setup/standard-skills.js';
+} from '../dsh/standard-skills.js';
 import type { SkillDiscoverySummary } from '../skills/types.js';
 import type { SkillPurpose, SkillSetEntry } from './types.js';
 

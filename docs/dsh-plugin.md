@@ -1,8 +1,8 @@
 # DeepSeek Harness Plugin
 
 Kiokuko provides an out-of-tree DeepSeek Harness bundle at
-`kiokuko-dsh/dsh`. It mounts the same Kiokuko core contracts used by the
-MCP clients; it does not fork DeepSeek Harness or modify a repository's files.
+`kiokuko-dsh/dsh`. It mounts the DSH-only Kiokuko runtime contracts; it does
+not fork DeepSeek Harness or modify a repository's files.
 
 ## Install
 
@@ -85,8 +85,7 @@ dsh plugin --profile kiokuko-test remove kiokuko-dsh
 ```
 
 `kiokuko-dsh` is the single named bundle row. Removal is exact and does not
-rewrite unrelated plugins or settings. The plugin itself never runs `kiokuko
-setup`, changes MCP configuration, or edits `AGENTS.md`.
+rewrite unrelated plugins or settings. The plugin does not edit `AGENTS.md`.
 
 ## STORE contract and permissions
 
@@ -271,11 +270,8 @@ into a passing runtime claim.
 ## DSH acceptance boundary
 
 DSH acceptance is limited to the DSH surface and the directly relevant
-Kiokuko contracts listed by the DSH verifier set. The Core HTTP/Web/TCP suite
-is not silently folded into that acceptance boundary: if the host forbids
-loopback listeners (for example, with `listen EPERM`), that suite remains
-explicitly unverified and is not converted into a skip or a passing result.
-
-The DSH acceptance evidence is therefore reported separately from broader
-Core-suite evidence. An unavailable DeepSeek CLI is likewise reported as
+Kiokuko contracts listed by the DSH verifier set. There is no generic Kiokuko
+HTTP, TCP, or standalone Web product surface in this package. The only Web
+lifecycle checked here is the DeepSeek Harness `web` profile loading and
+unloading this plugin. An unavailable DeepSeek CLI is reported as
 `unsupported`, never as a successful install or runtime execution.

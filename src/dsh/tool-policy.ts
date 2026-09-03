@@ -1,13 +1,11 @@
 import { KiokukoError } from '../errors.js'
 import type { EnnoNextAction } from '../enno-oduno/types.js'
 import {
-  DSH_HOST_ONLY_OPERATIONS,
   DSH_MODEL_FACING_OPERATIONS,
   bindDshToolInvocation,
   type DshToolExecution,
   type DshNativeToolExecution,
   type DshToolHostBinding,
-  isDshHostOnlyOperation,
   isDshModelFacingOperation,
 } from './tools.js'
 
@@ -20,7 +18,7 @@ export interface DshToolPolicyState extends Omit<DshToolHostBinding, 'idempotenc
   readonly nextAction?: EnnoNextAction
 }
 
-export type DshToolPolicyDenyCode = 'UNLOADED' | 'UNKNOWN_TOOL' | 'HOST_ONLY' | 'WRONG_PHASE' | 'WRONG_DIRECTIVE' | 'STALE_STATE' | 'LEASE_REQUIRED' | 'CANCELLED' | 'IDENTITY_INJECTION'
+export type DshToolPolicyDenyCode = 'UNLOADED' | 'UNKNOWN_TOOL' | 'WRONG_PHASE' | 'WRONG_DIRECTIVE' | 'STALE_STATE' | 'LEASE_REQUIRED' | 'CANCELLED' | 'IDENTITY_INJECTION'
 
 export type DshToolPolicyDecision =
   | { readonly kind: 'allow'; readonly binding: DshToolHostBinding }
@@ -108,11 +106,8 @@ export class DshToolPolicy {
       return denied('STALE_STATE', publicReason('STALE_STATE'))
     }
     if (execution.signal.aborted) return denied('CANCELLED', publicReason('CANCELLED'))
-    if (!isDshModelFacingOperation(execution.name) && !isDshHostOnlyOperation(execution.name)) {
+    if (!isDshModelFacingOperation(execution.name)) {
       return denied('UNKNOWN_TOOL', publicReason('UNKNOWN_TOOL'))
-    }
-    if (execution.origin !== 'host' && isDshHostOnlyOperation(execution.name)) {
-      return denied('HOST_ONLY', publicReason('HOST_ONLY'))
     }
     if (state.nextAction !== undefined && execution.origin !== 'host') {
       const expected = directiveOperation[state.nextAction]
@@ -157,7 +152,7 @@ export class DshToolPolicy {
 /** Install a final monotonic guard; later waterfall listeners cannot allow a denied call. */
 export function mountDshToolPolicy(ctx: DshToolPolicyContext, policy: DshToolPolicy): () => void {
   const guardDisposer = ctx.tools.guard((execution) => {
-    if (!isDshModelFacingOperation(execution.name) && !isDshHostOnlyOperation(execution.name)) return undefined
+    if (!isDshModelFacingOperation(execution.name)) return undefined
     try {
       return policy.guardReason(normalizePolicyExecution(execution))
     } catch (error) {
@@ -166,7 +161,7 @@ export function mountDshToolPolicy(ctx: DshToolPolicyContext, policy: DshToolPol
     }
   })
   const preExecuteDisposer = ctx.on?.('tools/pre-execute', async (execution, next) => {
-    if (!isDshModelFacingOperation(execution.name) && !isDshHostOnlyOperation(execution.name)) return next()
+    if (!isDshModelFacingOperation(execution.name)) return next()
     let normalized: DshToolExecution
     try {
       normalized = normalizePolicyExecution(execution)
@@ -208,4 +203,4 @@ export function dshToolPhaseAllowlist(phase: DshToolPhase): readonly string[] {
   return phaseAllowlist[phase]
 }
 
-export const DSH_TOOL_OPERATION_COUNT = DSH_MODEL_FACING_OPERATIONS.length + DSH_HOST_ONLY_OPERATIONS.length
+export const DSH_TOOL_OPERATION_COUNT = DSH_MODEL_FACING_OPERATIONS.length

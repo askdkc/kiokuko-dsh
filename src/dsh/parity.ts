@@ -5,7 +5,7 @@ import {
   loadBundledStandardSkillFiles,
   STANDARD_SKILL_MANIFESTS,
   type BundledStandardSkillFile,
-} from '../setup/standard-skills.js'
+} from './standard-skills.js'
 import { KiokukoError } from '../errors.js'
 
 export interface StandardSkillParity {

@@ -445,22 +445,11 @@ export async function recallScopedMemory(
   }, runtime);
 }
 
-export interface ScopedCheckpointProvenance {
-  readonly clientKind: string;
-  readonly actor: string;
-  readonly reference: string;
-}
-
-const MCP_CHECKPOINT_PROVENANCE: ScopedCheckpointProvenance = Object.freeze({
-  clientKind: 'mcp',
-  actor: 'kiokuko-mcp',
-  reference: 'mcp',
-});
+const DSH_CHECKPOINT_ACTOR = 'dsh';
 
 async function checkpointScopedMemoryInternal(
   database: SqliteDatabase,
   input: ScopedCheckpointInput,
-  provenanceSource: ScopedCheckpointProvenance,
   signal?: AbortSignal,
 ): Promise<ScopedCheckpointResult> {
   if (signal?.aborted) throw signal.reason;
@@ -525,8 +514,8 @@ async function checkpointScopedMemoryInternal(
       trustLevel: 'untrusted',
       confidence: memory.confidence ?? 0.7,
       tags: [...new Set([...(memory.tags ?? []), 'agent-checkpoint'])],
-      createdBy: provenanceSource.actor,
-      actor: provenanceSource.actor,
+      createdBy: DSH_CHECKPOINT_ACTOR,
+      actor: DSH_CHECKPOINT_ACTOR,
     }).record;
     const autoEcosystem = targetScope === 'project'
       && memory.retrievalScope === undefined
@@ -558,14 +547,14 @@ async function checkpointScopedMemoryInternal(
     });
     const provenance = {
       type: 'agent_checkpoint',
-      reference: provenanceSource.reference,
+      reference: 'dsh',
       ...(plannedProject === undefined ? {} : { sourceRepositoryId: plannedProject.repositoryId, sourceWorkspace: plannedProject.workspace }),
       ...(sourceCommit === null ? {} : { sourceCommit }),
       ...(run === undefined ? {} : { runId: run.runId }),
       ...(deliveryId === undefined ? {} : { deliveryId }),
       ...(evidenceIds.length === 0 ? {} : { evidenceIds }),
       ...(evidence.changedPaths.length === 0 ? {} : { sourcePaths: evidence.changedPaths }),
-      clientKind: provenanceSource.clientKind,
+      clientKind: 'dsh',
       timestamp: now,
     };
     return validateNewEntryInput({ ...baseRecord, scope, provenance }).record;
@@ -580,7 +569,7 @@ async function checkpointScopedMemoryInternal(
       comment: value.comment ?? null,
       feedbackId: randomUUID(),
       runId: run!.runId,
-      actor: provenanceSource.actor,
+      actor: DSH_CHECKPOINT_ACTOR,
       idempotencyKey: `checkpoint-feedback-${index}`,
       createdAt: now,
     };
@@ -603,11 +592,11 @@ async function checkpointScopedMemoryInternal(
     ensureGlobalWorkspace(database, now);
     const store = transactionRun === undefined ? undefined : new LedgerStore(database, { workspace: transactionRun.workspace });
     const evidenceEvents = [
-      ...evidence.changedPaths.map((path) => ({ eventId: randomUUID(), eventType: 'file.changed' as const, actor: provenanceSource.actor, occurredAt: now, payload: { path } })),
-      ...evidence.errorSignatures.map((signature) => ({ eventId: randomUUID(), eventType: 'error.recorded' as const, actor: provenanceSource.actor, occurredAt: now, payload: { signature } })),
-      ...evidence.commands.map((command) => ({ eventId: randomUUID(), eventType: 'command.completed' as const, actor: provenanceSource.actor, occurredAt: now, outcome: command.outcome, payload: { executable: command.executable, ...(command.classification === undefined ? {} : { classification: command.classification }), ...(command.exitCode === undefined ? {} : { exitCode: command.exitCode }), ...(command.digest === undefined ? {} : { digest: command.digest }) } })),
-      ...evidence.tests.map((test) => ({ eventId: randomUUID(), eventType: 'test.completed' as const, actor: provenanceSource.actor, occurredAt: now, outcome: test.outcome, payload: { runner: test.runner, ...(test.target === undefined ? {} : { target: test.target }), ...(test.digest === undefined ? {} : { digest: test.digest }) } })),
-      ...(evidence.verification === undefined ? [] : [{ eventId: randomUUID(), eventType: 'verification.recorded' as const, actor: provenanceSource.actor, occurredAt: now, outcome: evidence.verification.outcome, payload: { outcome: evidence.verification.outcome } }]),
+      ...evidence.changedPaths.map((path) => ({ eventId: randomUUID(), eventType: 'file.changed' as const, actor: DSH_CHECKPOINT_ACTOR, occurredAt: now, payload: { path } })),
+      ...evidence.errorSignatures.map((signature) => ({ eventId: randomUUID(), eventType: 'error.recorded' as const, actor: DSH_CHECKPOINT_ACTOR, occurredAt: now, payload: { signature } })),
+      ...evidence.commands.map((command) => ({ eventId: randomUUID(), eventType: 'command.completed' as const, actor: DSH_CHECKPOINT_ACTOR, occurredAt: now, outcome: command.outcome, payload: { executable: command.executable, ...(command.classification === undefined ? {} : { classification: command.classification }), ...(command.exitCode === undefined ? {} : { exitCode: command.exitCode }), ...(command.digest === undefined ? {} : { digest: command.digest }) } })),
+      ...evidence.tests.map((test) => ({ eventId: randomUUID(), eventType: 'test.completed' as const, actor: DSH_CHECKPOINT_ACTOR, occurredAt: now, outcome: test.outcome, payload: { runner: test.runner, ...(test.target === undefined ? {} : { target: test.target }), ...(test.digest === undefined ? {} : { digest: test.digest }) } })),
+      ...(evidence.verification === undefined ? [] : [{ eventId: randomUUID(), eventType: 'verification.recorded' as const, actor: DSH_CHECKPOINT_ACTOR, occurredAt: now, outcome: evidence.verification.outcome, payload: { outcome: evidence.verification.outcome } }]),
     ];
     const evidenceAck = transactionRun === undefined || evidenceEvents.length === 0 ? { eventIds: [] as string[] } : store!.appendBatchInTransaction(transactionRun.runId, { events: evidenceEvents });
     const evidenceRows: Array<{ kind: 'command' | 'test' | 'file' | 'artifact'; locator: string; eventId: string | null; summary: string; digest?: string }> = [
@@ -629,7 +618,7 @@ async function checkpointScopedMemoryInternal(
       }
     }
     const saved = preparedMemories.map((memory) => recordEntryInTransaction(database, memory, { now }));
-    const memoryEvents = saved.map((entry) => ({ eventId: randomUUID(), eventType: 'memory.proposed' as const, actor: provenanceSource.actor, occurredAt: now, payload: { entryId: entry.id, revision: entry.revision } }));
+    const memoryEvents = saved.map((entry) => ({ eventId: randomUUID(), eventType: 'memory.proposed' as const, actor: DSH_CHECKPOINT_ACTOR, occurredAt: now, payload: { entryId: entry.id, revision: entry.revision } }));
     const memoryAck = transactionRun === undefined || memoryEvents.length === 0 ? { eventIds: [] as string[] } : store!.appendBatchInTransaction(transactionRun.runId, { events: memoryEvents });
     const eventId = evidenceAck.eventIds[0] ?? memoryAck.eventIds[0] ?? null;
     if (transactionRun !== undefined) {
@@ -676,17 +665,11 @@ async function checkpointScopedMemoryInternal(
   };
 }
 
-/** Public MCP boundary; transport provenance is fixed and cannot be supplied by model input. */
-export function checkpointScopedMemory(database: SqliteDatabase, input: ScopedCheckpointInput, signal?: AbortSignal): Promise<ScopedCheckpointResult> {
-  return checkpointScopedMemoryInternal(database, input, MCP_CHECKPOINT_PROVENANCE, signal);
-}
-
-/** Internal DSH boundary; provenance is supplied by the trusted host adapter, not model arguments. */
-export function checkpointScopedMemoryWithProvenance(
+/** DSH boundary; provenance is fixed by the trusted host adapter, not model arguments. */
+export function checkpointDshMemory(
   database: SqliteDatabase,
   input: ScopedCheckpointInput,
-  provenance: ScopedCheckpointProvenance,
   signal?: AbortSignal,
 ): Promise<ScopedCheckpointResult> {
-  return checkpointScopedMemoryInternal(database, input, provenance, signal);
+  return checkpointScopedMemoryInternal(database, input, signal);
 }

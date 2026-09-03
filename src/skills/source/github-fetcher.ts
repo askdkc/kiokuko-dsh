@@ -5,7 +5,7 @@ import { parseGitHubSource, validateSkillCandidate, validateSkillSnapshot, valid
 import { isBearerToken, parseRetryAfterSeconds } from '../config.js';
 import { reviewedCatalogSkill } from '../official-catalog.js';
 import { KiokukoError } from '../../errors.js';
-import { parseStrictJson } from '../../setup/strict-json.js';
+import { parseStrictJson } from '../../dsh/strict-json.js';
 import { isExternalFetchFailure } from '../external-transport.js';
 
 export { SkillSourceError } from './errors.js';

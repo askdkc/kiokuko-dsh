@@ -1,4 +1,4 @@
-import { answerAgentTask, prepareAgentTask, type PreparedAgentTask } from '../akinator/agent-task.js'
+import { answerAgentTask, prepareAgentTask, type PreparedAgentTask } from './task-intake.js'
 import type { TaskProfile } from '../akinator/types.js'
 import { KiokukoError } from '../errors.js'
 import { canonicalContentHash } from '../serialization/validate.js'
@@ -150,7 +150,7 @@ export class DshIntakeGate {
         cwd: grounded.cwd,
         profileHints: grounded.profileHints,
         capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
-        client: { kind: 'dsh', sessionId: event.sessionId },
+        dshSessionId: event.sessionId,
         ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
         signal: event.signal,
       }))
@@ -179,6 +179,7 @@ export class DshIntakeGate {
         prepared = await this.#runtime.withDatabase((database) => answerAgentTask(database, {
           sessionId: prepared.intake.sessionId,
           runId: prepared.run.runId,
+          dshSessionId: event.sessionId,
           questionId: prepared.intake.question!.id,
           value,
           cwd: grounded.cwd,

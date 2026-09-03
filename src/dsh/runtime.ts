@@ -1,7 +1,7 @@
 import { realpathSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { initializeDatabase, type InitOptions } from '../commands/init.js'
-import { getGlobalDatabasePath, type PathEnvironment } from '../config/paths.js'
+import { initializeDatabase, type InitOptions } from './database.js'
+import { getDshDatabasePath, type DshPathEnvironment } from './paths.js'
 import { openConnection } from '../db/connection.js'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { KiokukoError } from '../errors.js'
@@ -9,13 +9,13 @@ import { openEmbeddingDatabase, type EmbeddingDatabaseOpener } from '../embeddin
 import { createEmbeddingRuntime } from '../embedding/runtime.js'
 import type { EmbeddingConfig, EmbeddingProvider, EmbeddingRuntime, VectorSearchBackend } from '../embedding/types.js'
 import { createEmbeddingWorker, type EmbeddingWorker } from '../embedding/worker.js'
-import { WriteQueue } from '../server/write-queue.js'
+import { WriteQueue } from './write-queue.js'
 import { DshAgentStateRegistry, type DshAgentIdentity, type DshAgentState } from './agent-state.js'
 import { DshContinuationRegistry, type DshContinuationBinding } from './agent-state.js'
-import { decideAdapterContinuation, type AdapterDecision, type ExactResumeExpectation } from '../enno-oduno/adapters.js'
+import { decideDshContinuation, type DshExactResumeExpectation, type DshResumeDecision } from './continuation.js'
 import { resolveProjectWorkspace } from '../memory/workspaces.js'
 
-export interface DshRuntimeOptions extends PathEnvironment {
+export interface DshRuntimeOptions extends DshPathEnvironment {
   readonly repositoryRoot: string
   readonly databasePath?: string
   readonly migrationsDirectory?: string
@@ -116,7 +116,7 @@ export class DshRuntime {
   async #initialize(): Promise<RuntimeResources> {
     const configuredRepositoryRoot = requireRepositoryRoot(this.#options.repositoryRoot)
     let repositoryRoot = configuredRepositoryRoot
-    const databasePath = this.#options.databasePath ?? getGlobalDatabasePath(this.#options)
+    const databasePath = this.#options.databasePath ?? getDshDatabasePath(this.#options)
     const initialize = this.#options.initializeDatabase ?? initializeDatabase
     let database: SqliteDatabase | undefined
     let embeddingRuntime: EmbeddingRuntime | undefined
@@ -199,39 +199,37 @@ export class DshRuntime {
   }
 
   /** Resume only through the exact dsh session and canonical repository route. */
-  async resume(input: { readonly dshSessionId: string; readonly cwd?: string; readonly runId?: string; readonly resumeToken?: string }): Promise<AdapterDecision> {
+  async resume(input: { readonly dshSessionId: string; readonly cwd?: string; readonly runId?: string; readonly resumeToken?: string }): Promise<DshResumeDecision> {
     const cwd = realpathSync(this.#options.repositoryRoot)
     const runId = input.runId
     if (runId === undefined) throw new KiokukoError('VALIDATION_ERROR', 'runId is required for exact dsh resume')
     const route = await this.withDatabase((database) => {
       const row = database.prepare(`
         SELECT ec.workspace AS workspace, ec.route_epoch AS routeEpoch,
-               ec.client_kind AS clientKind, ec.client_session_id AS clientSessionId
+               ec.dsh_session_id AS dshSessionId
         FROM enno_contracts AS ec
         JOIN ledger_runs AS lr ON lr.run_id = ec.run_id AND lr.workspace = ec.workspace
         WHERE ec.run_id = ? AND ec.repository_root = ?
       `).get<{
         workspace: string
         routeEpoch: number
-        clientKind: string | null
-        clientSessionId: string | null
+        dshSessionId: string | null
       }>(runId, cwd)
       if (row === undefined) throw new KiokukoError('CONFLICT', 'The resume run is not registered for this repository')
       return row
     })
-    const expectedRun: string | ExactResumeExpectation = input.resumeToken === undefined
+    const expectedRun: string | DshExactResumeExpectation = input.resumeToken === undefined
       ? runId
       : {
         runId,
         workspace: route.workspace,
-        clientKind: 'dsh',
-        clientSessionId: input.dshSessionId,
+        dshSessionId: input.dshSessionId,
         routeEpoch: route.routeEpoch,
         resumeToken: input.resumeToken,
         requireExistingBinding: true,
       }
-    const decision = await this.withDatabase((database) => decideAdapterContinuation(database, 'dsh', {
-      session_id: input.dshSessionId,
+    const decision = await this.withDatabase((database) => decideDshContinuation(database, {
+      dshSessionId: input.dshSessionId,
       cwd,
     }, expectedRun))
     if (decision.runId !== null && decision.runId !== runId) throw new KiokukoError('CONFLICT', 'dsh resume resolved a different run')

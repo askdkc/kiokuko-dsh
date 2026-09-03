@@ -3,11 +3,11 @@ import { KiokukoError } from '../errors.js';
 import { canonicalContentHash } from '../serialization/validate.js';
 import { normalizeCapabilityCatalog, type CapabilityDescriptor } from './capabilities.js';
 
-export const CAPABILITY_CATALOG_BINDING_VERSION = 1 as const;
+export const CAPABILITY_CATALOG_BINDING_VERSION = 2 as const;
 export const CAPABILITY_CATALOG_BINDING_METADATA_KEY = 'kiokukoCapabilityCatalogBinding' as const;
 
 type CapabilityCatalogBinding = {
-  version: typeof CAPABILITY_CATALOG_BINDING_VERSION;
+  version: 1 | typeof CAPABILITY_CATALOG_BINDING_VERSION;
   digest: string;
 };
 
@@ -32,10 +32,12 @@ function canonicalDescriptorSet(descriptors: CapabilityDescriptor[]): Capability
  * Hash only the normalized effective catalog. Raw descriptions remain ephemeral,
  * while malformed/omitted catalogs retain distinct fail-closed identities.
  */
-export function capabilityCatalogDigest(capabilities: unknown): string {
+function digestForVersion(capabilities: unknown, version: 1 | 2): string {
   const normalized = normalizeCapabilityCatalog(capabilities);
-  const skills = canonicalDescriptorSet(normalized.skills);
-  const tools = canonicalDescriptorSet(normalized.tools);
+  const skills = canonicalDescriptorSet(normalized.skills).map((item) => version === 1 ? item : item);
+  const tools = canonicalDescriptorSet(normalized.tools).map((item) => version === 1
+    ? { ...item, kind: 'mcp_tool' as const }
+    : item);
   const uniqueCount = skills.length + tools.length;
   const diagnostics = normalized.availability === 'unknown'
     ? normalized.diagnostics
@@ -46,7 +48,7 @@ export function capabilityCatalogDigest(capabilities: unknown): string {
         dropped: 0,
       };
   return canonicalContentHash({
-    version: CAPABILITY_CATALOG_BINDING_VERSION,
+    version,
     supplied: capabilities !== undefined,
     availability: normalized.availability,
     diagnostics,
@@ -54,6 +56,10 @@ export function capabilityCatalogDigest(capabilities: unknown): string {
     skills,
     tools,
   });
+}
+
+export function capabilityCatalogDigest(capabilities: unknown): string {
+  return digestForVersion(capabilities, CAPABILITY_CATALOG_BINDING_VERSION);
 }
 
 export function bindCapabilityCatalog(
@@ -77,12 +83,13 @@ export function assertCapabilityCatalogBinding(
   const value = metadata[CAPABILITY_CATALOG_BINDING_METADATA_KEY];
   if (!isPlainRecord(value)
     || Object.keys(value).length !== 2
-    || value.version !== CAPABILITY_CATALOG_BINDING_VERSION
+    || (value.version !== 1 && value.version !== CAPABILITY_CATALOG_BINDING_VERSION)
     || typeof value.digest !== 'string'
     || !/^[0-9a-f]{64}$/u.test(value.digest)) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Run capability catalog binding is missing or invalid');
   }
-  if (value.digest !== capabilityCatalogDigest(capabilities)) {
+  const expected = digestForVersion(capabilities, value.version as 1 | 2);
+  if (value.digest !== expected) {
     throw new KiokukoError('CONFLICT', 'Capability catalog differs from the catalog bound when the run was opened');
   }
 }

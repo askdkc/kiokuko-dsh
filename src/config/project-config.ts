@@ -7,7 +7,7 @@ import {
   validateWorkspace,
 } from '../repository/identity-value.js';
 import { readRegularFile } from '../agent-file/atomic-write.js';
-import { assertStrictJsonSyntax } from '../setup/strict-json.js';
+import { assertStrictJsonSyntax } from '../dsh/strict-json.js';
 
 export interface ProjectConfig {
   schemaVersion: 1;

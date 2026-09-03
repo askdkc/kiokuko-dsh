@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { withImmediateTransaction } from '../db/transaction.js';
 import { KiokukoError } from '../errors.js';
-import { executeIdempotentInTransaction } from '../server/idempotency.js';
+import { executeIdempotentInTransaction } from '../dsh/intake-idempotency.js';
 import { sanitizeAnswer, sanitizeEvent, sanitizeRunMetadata, sanitizeTask } from '../ledger/redaction.js';
 import { validateEventBatch, validateTimestamp } from '../ledger/validate.js';
 import {

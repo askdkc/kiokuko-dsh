@@ -25,7 +25,7 @@ import { OpenAICompatibleEmbeddingProvider } from './openai-compatible-provider.
 import { normalizeVector } from './vector.js';
 import { readActiveEmbeddingProfile, readEntryEmbedding } from './store.js';
 import { defaultEmbeddingConfig, readPersistedEmbeddingSettings } from './settings.js';
-import { getEmbeddingPresetDirectory } from '../config/paths.js';
+import { getDshEmbeddingPresetDirectory } from '../dsh/paths.js';
 import { LocalTransformersEmbeddingProvider } from './local-transformers-provider.js';
 import type {
   EmbeddingConfig,
@@ -419,7 +419,7 @@ export function createEmbeddingRuntime(
     const localProfile: LocalEmbeddingProfile = { profileId: active.profile.profileId, identity: localIdentity };
     const localProvider = options.provider ?? new LocalTransformersEmbeddingProvider({
       profile: localProfile.identity,
-      modelDirectory: getEmbeddingPresetDirectory(localProfile.identity.presetId, localProfile.identity.modelRevision),
+      modelDirectory: getDshEmbeddingPresetDirectory(localProfile.identity.presetId, localProfile.identity.modelRevision),
     });
     return createEnabledRuntime(database, {
       mode: persisted.mode,

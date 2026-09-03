@@ -8,7 +8,7 @@ build、debug、review、devopsでは、Enno-Odunoがrun-bound loopを管理し�
 intake → ideal → plan → 確認 → WorkUnit実行 → 最終検証 → meditation
 ```
 
-clientを特定し、Akinatorのintakeを解決し、理想の結果を保存してから、revision-bound planをZenkiへ渡します。
+現在のDSH sessionをbindし、Akinatorのintakeを解決し、理想の結果を保存してから、revision-bound planをZenkiへ渡します。
 Zenkiは変更を責務と理由が1つのWorkUnitへ分割し、Gokiは承認済みunitだけを実行します。unitにはcode/ui/test/docs/operationsのローカルrouteがあります。
 
 確認画面にはscope、除外、完了条件、Skill、expertise、command、timeoutを、元の依頼から判定した英語または日本語の構造化Markdownで表示します。

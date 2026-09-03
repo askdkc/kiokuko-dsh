@@ -8,7 +8,7 @@ For build, debug, review, and devops work, Enno-Oduno keeps a run-bound loop:
 intake → ideal → plan → confirmation → WorkUnit execution → final verification → meditation
 ```
 
-The loop identifies the current client, resolves Akinator intake, derives and
+The loop binds the current DSH session, resolves Akinator intake, derives and
 persists an ideal outcome, and hands a revision-bound plan to Zenki. Zenki divides
 changes into cohesive WorkUnits; Goki may execute only approved units. A WorkUnit
 has one responsibility, one reason to change, focused checks, and local code/ui/test/

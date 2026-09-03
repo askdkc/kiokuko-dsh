@@ -7,7 +7,7 @@ import {
   STANDARD_SOUL_SKILL_NAME,
   STANDARD_UI_EXPERT_IDS,
   STANDARD_UI_SKILL_NAME,
-} from '../setup/standard-skills.js';
+} from '../dsh/standard-skills.js';
 import { findSecret } from '../memory/secrets.js';
 import {
   ADVISORY_FAILURE_CODES,
@@ -248,8 +248,8 @@ const skillSetEntrySchema = z.object({
 }).strict();
 
 const orchestrationIdSchema = canonicalText(256)
-  .describe('Exact ennoOduno.orchestrationId returned by task_prepare or task_answer; this is not a host client session ID');
-const resumeTokenSchema = canonicalText(256).describe('Opaque continuation token returned by the current client adapter route');
+  .describe('Exact host-owned Enno-Oduno orchestration identity; this is not the DSH session ID');
+const resumeTokenSchema = canonicalText(256).describe('Opaque continuation token bound by the current DSH route');
 
 const requireExplicitIdentityOrResumeToken = (
   value: { workspace?: unknown; orchestrationId?: unknown; resumeToken?: unknown },
@@ -518,7 +518,7 @@ export const planSubmissionSchema = z.object({
     'Required only when explicitly resuming a same-run plan-start recovery after the user chose one displayed option.',
   ),
   capabilities: z.array(z.unknown()).optional().describe(
-    'Complete current client capability descriptors. The field remains transport-optional only so omission can return a safe user-facing recovery choice before any plan effect.',
+    'Complete current DSH capability descriptors. The field remains host-optional only so omission can return a safe user-facing recovery choice before any plan effect.',
   ),
 }).strict().superRefine((submission, context) => {
   requireExplicitIdentityOrResumeToken(submission, context);

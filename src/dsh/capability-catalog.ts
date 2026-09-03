@@ -1,12 +1,12 @@
 import { KiokukoError } from '../errors.js'
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js'
-import { STANDARD_SKILL_MANIFESTS } from '../setup/standard-skills.js'
+import { STANDARD_SKILL_MANIFESTS } from './standard-skills.js'
 import { MAX_RAW_CAPABILITY_DESCRIPTION_CHARS } from '../akinator/capabilities.js'
 
-export const DSH_CAPABILITY_CATALOG_VERSION = 1 as const
+export const DSH_CAPABILITY_CATALOG_VERSION = 2 as const
 
 export interface DshCapabilityDescriptor {
-  readonly kind: 'skill' | 'mcp_tool'
+  readonly kind: 'skill' | 'tool'
   readonly name: string
   readonly description?: string
 }
@@ -41,7 +41,7 @@ function hasInvalidDescriptionCharacters(value: string): boolean {
   return /[\p{Cc}\p{Cf}]/u.test(value.replace(/[\t\n\r]/gu, ''))
 }
 
-function descriptor(kind: 'skill' | 'mcp_tool', value: unknown): DshCapabilityDescriptor {
+function descriptor(kind: 'skill' | 'tool', value: unknown): DshCapabilityDescriptor {
   if (!isRecord(value)) validation('Capability descriptor must be a plain object')
   const allowed = new Set(['kind', 'name', 'description', 'source', 'provider', 'rank', 'locator', 'resourceBase', 'invocation', 'parameters', 'inputSchema', 'output'])
   if (Object.keys(value).some((key) => !allowed.has(key))) validation('Capability descriptor contains an unknown field')
@@ -99,15 +99,15 @@ export function dshCapabilityCatalogDigest(catalog: Pick<DshCapabilityCatalog, '
 /** Convert one complete dsh skill/tool snapshot into a bound, immutable catalog. */
 export function createDshCapabilityCatalog(snapshot: DshCapabilitySnapshot): DshCapabilityCatalog {
   const lanes = Array.isArray(snapshot)
-    ? snapshot.every((item) => isRecord(item) && (item.kind === undefined || item.kind === 'skill' || item.kind === 'mcp_tool'))
-      ? { skills: snapshot.filter((item) => isRecord(item) && (item.kind === undefined || item.kind === 'skill')), tools: snapshot.filter((item) => isRecord(item) && item.kind === 'mcp_tool') }
+    ? snapshot.every((item) => isRecord(item) && (item.kind === undefined || item.kind === 'skill' || item.kind === 'tool'))
+      ? { skills: snapshot.filter((item) => isRecord(item) && (item.kind === undefined || item.kind === 'skill')), tools: snapshot.filter((item) => isRecord(item) && item.kind === 'tool') }
       : null
     : isRecord(snapshot) && Array.isArray(snapshot.skills) && Array.isArray(snapshot.tools)
       ? snapshot
       : null
   if (lanes === null) validation('Capability snapshot must contain complete skill and tool lanes')
   const skills = lanes.skills.map((item) => descriptor('skill', item))
-  const tools = lanes.tools.map((item) => descriptor('mcp_tool', item))
+  const tools = lanes.tools.map((item) => descriptor('tool', item))
   assertUnique([...skills, ...tools])
   assertStableOrder(skills, tools)
   const catalog = {

@@ -1,7 +1,7 @@
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { KiokukoError } from '../errors.js';
 import { canonicalJson } from '../serialization/validate.js';
-import { parseStrictJson } from '../setup/strict-json.js';
+import { parseStrictJson } from '../dsh/strict-json.js';
 import { parseStoredAdvisoryContribution } from './schemas.js';
 import {
   ADVISORY_PHASES,

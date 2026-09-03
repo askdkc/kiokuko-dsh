@@ -1,7 +1,7 @@
 import {
   STANDARD_FUNCTION_EXPERT_IDS,
   STANDARD_UI_EXPERT_IDS,
-} from '../setup/standard-skills.js';
+} from '../dsh/standard-skills.js';
 import type { WorkPlan } from './types.js';
 import { ennoValidationError } from './validation-errors.js';
 

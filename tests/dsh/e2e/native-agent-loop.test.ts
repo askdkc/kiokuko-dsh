@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
-import { prepareAgentTask } from '../../../src/akinator/agent-task.js'
-import { initializeDatabase } from '../../../src/commands/init.js'
+import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
+import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { createDshCapabilityCatalog } from '../../../src/dsh/capability-catalog.js'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
@@ -15,7 +15,7 @@ import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { submitEnnoAdvice } from '../../../src/enno-oduno/service.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
 import { compareCanonicalStrings } from '../../../src/serialization/validate.js'
-import { STANDARD_SKILL_MANIFESTS } from '../../../src/setup/standard-skills.js'
+import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 
 const dshSourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 
@@ -224,7 +224,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
           return compareCanonicalStrings(left.name, right.name)
         }),
       tools: nativeToolSnapshot
-        .map((tool: any) => ({ kind: 'mcp_tool', name: tool.name, ...(tool.description === undefined ? {} : { description: tool.description }) }))
+        .map((tool: any) => ({ kind: 'tool', name: tool.name, ...(tool.description === undefined ? {} : { description: tool.description }) }))
         .sort((left: any, right: any) => compareCanonicalStrings(left.name, right.name)),
     })
     let seededRunId = ''
@@ -235,7 +235,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
         cwd: fixtureRoot,
         profileHints: { taskType: 'build', target: fixtureRoot, expected: '@PLAN.md を実装' },
         capabilities: [...recoveryCatalog.skills, ...recoveryCatalog.tools],
-        client: { kind: 'dsh', sessionId: liveAgent.session.id },
+        dshSessionId: liveAgent.session.id,
         skillDiscoveryMode: 'off',
         signal,
       })

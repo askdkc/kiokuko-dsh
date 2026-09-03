@@ -32,7 +32,6 @@ import {
 } from './advisory-store.js';
 import { assertWorkPlanExpertCoverage } from './experts.js';
 import { buildEnnoRequestHandoff } from './handoff.js';
-import { identifyEnnoClientKind } from './harness.js';
 import {
   ennoAnswerSchema,
   adviceReadSchema,
@@ -125,7 +124,7 @@ import {
   STANDARD_FUNCTION_SKILL_NAME,
   STANDARD_SOUL_SKILL_NAME,
   STANDARD_UI_SKILL_NAME,
-} from '../setup/standard-skills.js';
+} from '../dsh/standard-skills.js';
 
 type PlanSubmission = z.infer<typeof planSubmissionSchema>;
 type IdealSubmission = z.infer<typeof idealSubmissionSchema>;
@@ -181,12 +180,7 @@ export function stateForSnapshot(snapshot: EnnoRunSnapshot): EnnoOdunoState {
     applicable: true,
     status: snapshot.status,
     orchestrationId: snapshot.orchestrationId,
-    clientBinding: {
-      status: snapshot.clientSessionId === null ? 'pending' : 'bound',
-      clientKind: snapshot.clientKind,
-      clientVersion: snapshot.clientVersion,
-      identified: snapshot.clientKind !== null,
-    },
+    dshSessionId: snapshot.dshSessionId,
     contractRevision: snapshot.revision,
     routeEpoch: snapshot.routeEpoch ?? 0,
     ideal: snapshot.ideal,
@@ -201,9 +195,7 @@ export function stateForSnapshot(snapshot: EnnoRunSnapshot): EnnoOdunoState {
 function intakeEnnoState(input: {
   runId: string;
   orchestrationId: string;
-  clientKind: EnnoRunSnapshot['clientKind'];
-  clientVersion: string | null;
-  clientSessionId: string | null;
+  dshSessionId: string;
   question: AkinatorQuestion | null;
 }): EnnoOdunoState {
   const directive = directiveForIntake(input);
@@ -211,12 +203,7 @@ function intakeEnnoState(input: {
     applicable: true,
     status: 'intake',
     orchestrationId: input.orchestrationId,
-    clientBinding: {
-      status: input.clientSessionId === null ? 'pending' : 'bound',
-      clientKind: input.clientKind,
-      clientVersion: input.clientVersion,
-      identified: input.clientKind !== null,
-    },
+    dshSessionId: input.dshSessionId,
     contractRevision: null,
     routeEpoch: null,
     ideal: null,
@@ -233,7 +220,7 @@ export function inapplicableEnnoState(): EnnoOdunoState {
     applicable: false,
     status: 'intake',
     orchestrationId: null,
-    clientBinding: null,
+    dshSessionId: null,
     contractRevision: null,
     routeEpoch: null,
     ideal: null,
@@ -248,19 +235,14 @@ export function inapplicableEnnoState(): EnnoOdunoState {
 export function ennoStateForPreparedTask(
   database: SqliteDatabase,
   prepared: PreparedTaskShape,
-  client: { kind: string; version?: string; sessionId?: string } | undefined,
+  dshSessionId: string,
 ): EnnoOdunoState {
   const taskType = prepared.intake.profile.taskType;
-  const clientKind = identifyEnnoClientKind(client?.kind);
-  const clientVersion = clientKind === null ? null : client?.version ?? null;
-  const clientSessionId = clientKind === null ? null : client?.sessionId ?? null;
   if (prepared.intake.status === 'needs_answer' && taskType === null) {
     return intakeEnnoState({
       runId: prepared.run.runId,
       orchestrationId: prepared.intake.sessionId,
-      clientKind,
-      clientVersion,
-      clientSessionId,
+      dshSessionId,
       question: prepared.intake.question,
     });
   }
@@ -271,9 +253,7 @@ export function ennoStateForPreparedTask(
     return intakeEnnoState({
       runId: prepared.run.runId,
       orchestrationId: prepared.intake.sessionId,
-      clientKind,
-      clientVersion,
-      clientSessionId,
+      dshSessionId,
       question: prepared.intake.question,
     });
   }
@@ -288,9 +268,7 @@ export function ennoStateForPreparedTask(
     taskExpected: prepared.intake.profile.expected,
     handoff,
     skillDiscovery: prepared.skillDiscovery,
-    ...(clientKind === null ? {} : { initialClientKind: clientKind }),
-    ...(clientVersion === null ? {} : { initialClientVersion: clientVersion }),
-    ...(clientSessionId === null ? {} : { initialClientSessionId: clientSessionId }),
+    dshSessionId,
   });
   return stateForSnapshot(snapshot);
 }
@@ -652,10 +630,9 @@ function startFirstReadyUnit(database: SqliteDatabase, snapshot: EnnoRunSnapshot
     workUnitId: next.workUnit.id,
     contractRevision: snapshot.revision,
   });
-  if (snapshot.clientKind === null || snapshot.clientSessionId === null) return undefined;
+  if (snapshot.dshSessionId === null) return undefined;
   return claimExecutionLeaseInTransaction(database, snapshot, next.workUnit.id, {
-    clientKind: snapshot.clientKind,
-    sessionId: snapshot.clientSessionId,
+    dshSessionId: snapshot.dshSessionId,
   });
 }
 
@@ -1283,10 +1260,9 @@ export async function reportEnnoWork(
         terminalizeLedgerRunInTransaction(database, input.runId, 'failed');
       } else {
         const retry = readEnnoSnapshot(database, identity(database, input));
-        if (retry.clientKind !== null && retry.clientSessionId !== null) {
+        if (retry.dshSessionId !== null) {
           executionLease = claimExecutionLeaseInTransaction(database, retry, input.workUnitId, {
-            clientKind: retry.clientKind,
-            sessionId: retry.clientSessionId,
+            dshSessionId: retry.dshSessionId,
           });
         }
       }
@@ -1379,14 +1355,13 @@ export async function reportEnnoWork(
         executionLease = startFirstReadyUnit(database, next);
       }
       next = readEnnoSnapshot(database, identity(database, input));
-    } else if (next.clientKind !== null && next.clientSessionId !== null) {
+    } else if (next.dshSessionId !== null) {
       // A failed focused verifier leaves the same WorkUnit in progress so the
       // host can correct it. The report lease was consumed above; return a
       // fresh lease in the same response or the advertised execute_work_unit
       // continuation can only fail with lease_required.
       executionLease = claimExecutionLeaseInTransaction(database, next, input.workUnitId, {
-        clientKind: next.clientKind,
-        sessionId: next.clientSessionId,
+        dshSessionId: next.dshSessionId,
       });
     }
     const response = {
@@ -1526,7 +1501,7 @@ export async function finishEnno(
       repositoryDigest: currentRepositoryDigest,
     });
     if (results === undefined) {
-      throw new KiokukoError('CONFLICT', 'Final verification evidence is not prepared; call enno_verify_prepare first');
+      throw new KiokukoError('CONFLICT', 'Final verification evidence is not prepared by the DSH host');
     }
     if (results.some((result) => result.repositoryStateDigest !== currentRepositoryDigest
       || result.changedDuringVerification !== false)) {

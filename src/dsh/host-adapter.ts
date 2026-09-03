@@ -11,7 +11,7 @@ import { DshRuntime } from './runtime.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 import { DshIntakeGate, type DshCapabilityReadContext, type DshIntakeGateResult, type DshPreStepDecision, type DshPreStepEvent } from './intake-gate.js'
 import { resolveGroundedIntakeProfile } from './intake-profile-resolver.js'
-import type { PreparedAgentTask } from '../akinator/agent-task.js'
+import type { PreparedAgentTask } from './task-intake.js'
 import { deriveAkinatorReasoning } from '../akinator/reasoning.js'
 import { resolveCapabilities } from '../akinator/capabilities.js'
 import { readAkinatorSession, readRunIntakeLink } from '../akinator/store.js'
@@ -29,17 +29,17 @@ import { DshAdvisoryRunner, type DshAdvisoryCall, type DshAdvisoryRoundResult } 
 import { DshPonytailModes, dshPonytailOwnerKey } from './commands.js'
 import { createDshIntakeAnswerer, createDshConfirmationAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from './user-interaction.js'
 import { createDshCapabilityCatalog, type DshCapabilityCatalog } from './capability-catalog.js'
-import { STANDARD_SKILL_MANIFESTS } from '../setup/standard-skills.js'
+import { STANDARD_SKILL_MANIFESTS } from './standard-skills.js'
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js'
 import { KiokukoError } from '../errors.js'
 import { injectDshContext, selectDshDirectiveSources } from './context-injection.js'
 import { projectDshDirective } from './directive-projection.js'
 import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, readPendingEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, type EnnoOperationResponse } from '../enno-oduno/service.js'
 import { claimExecutionLeaseInTransaction, readEnnoSnapshot, terminalizeLedgerRunInTransaction } from '../enno-oduno/store.js'
-import { decideAdapterContinuation } from '../enno-oduno/adapters.js'
+import { decideDshContinuation } from './continuation.js'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
 import { curateMemoryCandidates } from '../memory/curator.js'
-import { checkpointScopedMemoryWithProvenance, type ScopedCheckpointInput } from '../memory/scoped-memory.js'
+import { checkpointDshMemory, type ScopedCheckpointInput } from '../memory/scoped-memory.js'
 import { LedgerStore } from '../ledger/store.js'
 import { ENNO_APPLICABLE_TASK_TYPES, type EnnoExecutionLease, type EnnoNextAction, type EnnoOdunoState } from '../enno-oduno/types.js'
 
@@ -213,7 +213,7 @@ async function capabilityCatalog(
       return compareCanonicalStrings(left.name, right.name)
     })
   const toolDescriptors = nativeTools
-    .map((tool) => ({ kind: 'mcp_tool' as const, name: tool.name, ...(tool.description === undefined ? {} : { description: tool.description }) }))
+    .map((tool) => ({ kind: 'tool' as const, name: tool.name, ...(tool.description === undefined ? {} : { description: tool.description }) }))
     .sort((left, right) => compareCanonicalStrings(left.name, right.name))
   return createDshCapabilityCatalog({ skills: skillDescriptors, tools: toolDescriptors })
 }
@@ -392,14 +392,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (state.contractRevision !== expected.contractRevision || workUnitId !== expectedWorkUnitId) {
         throw new KiokukoError('CONFLICT', 'Enno WorkUnit changed before DSH turn recovery')
       }
-      if (snapshot.clientKind !== 'dsh' || snapshot.clientSessionId !== item.sessionId) {
+      if (snapshot.dshSessionId !== item.sessionId) {
         throw new KiokukoError('CONFLICT', 'Enno DSH route changed before WorkUnit recovery')
       }
       return {
         state,
         lease: claimExecutionLeaseInTransaction(database, snapshot, workUnitId, {
-          clientKind: 'dsh',
-          sessionId: item.sessionId,
+          dshSessionId: item.sessionId,
         }),
       }
     }))
@@ -598,8 +597,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       SELECT ec.run_id AS runId, ec.orchestration_session_id AS orchestrationId
       FROM enno_contracts AS ec
       JOIN ledger_runs AS lr ON lr.run_id = ec.run_id AND lr.workspace = ec.workspace
-      WHERE ec.repository_root = ? AND ec.client_kind = 'dsh'
-        AND ec.client_session_id = ? AND lr.status = 'active'
+      WHERE ec.repository_root = ? AND ec.dsh_session_id = ? AND lr.status = 'active'
         AND ec.status NOT IN ('completed', 'cancelled', 'blocked')
       ORDER BY ec.created_at, ec.run_id
       LIMIT 2
@@ -619,8 +617,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       terminalizeLedgerRunInTransaction(database, runId, 'cancelled')
       return undefined
     }
-    const decision = decideAdapterContinuation(database, 'dsh', {
-      session_id: event.sessionId,
+    const decision = decideDshContinuation(database, {
+      dshSessionId: event.sessionId,
       cwd: event.cwd,
     }, runId)
     if (!decision.continue || decision.runId !== runId) {
@@ -820,7 +818,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           return submitOdunoMeditation(database, input, { deferLedgerTerminalization: true })
         }
         if (operation === 'curator_check') return curateMemoryCandidates(database, input)
-        return checkpointScopedMemoryWithProvenance(database, input as unknown as ScopedCheckpointInput, { clientKind: 'dsh', actor: 'dsh', reference: 'dsh' }, signal)
+        return checkpointDshMemory(database, input as unknown as ScopedCheckpointInput, signal)
       }) as EnnoOperationResponse | unknown
       if (run !== undefined && isEnnoResponse(response)) {
         if (binding.advisoryRoundDigest !== undefined) advisoryRounds.delete(run.runId)

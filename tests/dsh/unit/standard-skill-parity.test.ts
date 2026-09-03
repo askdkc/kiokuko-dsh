@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
-import { loadBundledStandardSkillFiles, STANDARD_SKILL_MANIFESTS } from '../../../src/setup/standard-skills.js'
+import { loadBundledStandardSkillFiles, STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 import { loadStandardSkillParity, validateStandardSkillParity } from '../../../src/dsh/parity.js'
 
 test('standard Skill parity is six skills, 21 Markdown files, and 15 references', async () => {

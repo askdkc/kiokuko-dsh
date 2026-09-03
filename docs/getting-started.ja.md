@@ -1,8 +1,7 @@
 # 導入ガイド
 
 `kiokuko-dsh`はDeepSeek Harness向けPluginです。公開パッケージが提供する
-のは`./dsh` Plugin entrypointだけで、Codex、OpenCode、Claude Code、汎用
-`kiokuko` CLIの導入・設定は行いません。
+のは`./dsh` Plugin entrypointだけです。導入、session、lifecycleはDSHが所有します。
 
 ## インストール
 
@@ -52,5 +51,5 @@ dsh plugin --profile web remove kiokuko-dsh
 ```
 
 Pluginが所有するのはDSHのcomposition、ローカルのKiokuko runtime state、
-明示的に登録されたDSH integration seamだけです。clientのMCP設定や
-projectのinstruction fileは変更しません。
+明示的に登録されたDSH integration seamだけです。projectのinstruction fileは
+変更しません。

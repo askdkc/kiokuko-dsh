@@ -5,8 +5,8 @@ import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
-import { prepareAgentTask } from '../../../src/akinator/agent-task.js'
-import { initializeDatabase } from '../../../src/commands/init.js'
+import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
+import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { submitEnnoPlan, submitOdunoIdeal } from '../../../src/enno-oduno/service.js'
 import { DshContinuationRegistry } from '../../../src/dsh/agent-state.js'
@@ -46,7 +46,7 @@ test('runtime resumes the exact dsh route and rejects stale credentials before a
     const prepared = await prepareAgentTask(database, {
       requestId: 'dsh-resume-request', cwd: root, task: 'Repair the dsh route',
       profileHints: { taskType: 'debug', target: 'src/route.ts', expected: 'route resumes', constraints: null },
-      capabilities, client: { kind: 'dsh', sessionId }, skillDiscoveryMode: 'off',
+      capabilities, dshSessionId: sessionId, skillDiscoveryMode: 'off',
     })
     const identity = { runId: prepared.run.runId, workspace: prepared.project.workspace, orchestrationId: prepared.intake.sessionId }
     submitOdunoIdeal(database, {
@@ -83,12 +83,30 @@ test('runtime resumes the exact dsh route and rejects stale credentials before a
       assert.equal(first.continue, true)
       assert.equal(first.runId, prepared.run.runId)
       assert.ok(first.resumeToken)
+      assert.ok(first.executionLease)
+      assert.equal(first.reason?.includes(first.resumeToken!), false)
+      assert.equal(first.reason?.includes(first.executionLease!.leaseToken), false)
       assert.equal(runtime.continuationCount, 1)
 
-      const continuationRows = () => database.prepare('SELECT continuation_count AS count FROM enno_client_continuations WHERE run_id = ? AND client_kind = ? AND source_session_id = ?').get<{ count: number }>(prepared.run.runId, 'dsh', sessionId)?.count
+      await assert.rejects(
+        runtime.resume({ dshSessionId: 'dsh-resume-session-b', runId: prepared.run.runId, cwd: root }),
+        /active Enno WorkUnit lease prevents DSH session rebinding/u,
+      )
+      database.prepare("UPDATE enno_execution_leases SET lease_expires_at = '2000-01-01T00:00:00.000Z' WHERE run_id = ?").run(prepared.run.runId)
+      const rebound = await runtime.resume({ dshSessionId: 'dsh-resume-session-b', runId: prepared.run.runId, cwd: root })
+      assert.equal(rebound.continue, true)
+      assert.equal(rebound.routeEpoch, (first.routeEpoch ?? 0) + 1)
+      assert.ok(rebound.resumeToken)
+      assert.equal(database.prepare('SELECT dsh_session_id AS value FROM enno_contracts WHERE run_id = ?').get<{ value: string }>(prepared.run.runId)?.value, 'dsh-resume-session-b')
+      await assert.rejects(
+        runtime.resume({ dshSessionId: sessionId, runId: prepared.run.runId, resumeToken: first.resumeToken!, cwd: root }),
+        /route (?:epoch is|is) stale|does not match the current DSH route/u,
+      )
+
+      const continuationRows = () => database.prepare('SELECT continuation_count AS count FROM enno_dsh_continuations WHERE run_id = ? AND dsh_session_id = ?').get<{ count: number }>(prepared.run.runId, 'dsh-resume-session-b')?.count
       const beforeStale = continuationRows()
       database.prepare('UPDATE enno_contracts SET route_epoch = route_epoch + 1 WHERE run_id = ?').run(prepared.run.runId)
-      await assert.rejects(runtime.resume({ dshSessionId: sessionId, runId: prepared.run.runId, resumeToken: first.resumeToken!, cwd: root }), /route epoch is stale/u)
+      await assert.rejects(runtime.resume({ dshSessionId: 'dsh-resume-session-b', runId: prepared.run.runId, resumeToken: rebound.resumeToken!, cwd: root }), /route epoch is stale/u)
       assert.equal(continuationRows(), beforeStale)
     } finally {
       await runtime.close()

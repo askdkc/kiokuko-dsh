@@ -4,10 +4,10 @@ import {
   STANDARD_MEMORY_SKILL_NAME,
   STANDARD_SOUL_SKILL_NAME,
   STANDARD_UI_SKILL_NAME,
-} from '../setup/standard-skills.js';
+} from '../dsh/standard-skills.js';
 import { compareCanonicalStrings } from '../serialization/validate.js';
 
-export const CAPABILITY_KINDS = ['skill', 'mcp_tool'] as const;
+export const CAPABILITY_KINDS = ['skill', 'tool'] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
 export const MAX_CAPABILITY_DESCRIPTION_CHARS = 2_000;
@@ -405,7 +405,7 @@ function relevantCatalogCapabilities(
         || aliases.has(STANDARD_UI_SKILL_NAME)
         || aliases.has(STANDARD_FUNCTION_SKILL_NAME)
         || aliases.has(MEMORY_REASONING_SKILL_NAME)) return false;
-      if (candidate.kind === 'mcp_tool') return true;
+      if (candidate.kind === 'tool') return true;
       return ![...aliases].some((alias) => desiredSkillNames.has(alias));
     })
     .map((candidate) => {
@@ -428,7 +428,7 @@ function relevantCatalogCapabilities(
         kind: candidate.kind,
         name: candidate.name,
         availability: 'available',
-        reason: `Available ${candidate.kind === 'skill' ? 'skill' : 'MCP tool'} metadata matches the task${terms.length > 0 ? ` (${terms.join(', ')})` : ''}.`,
+        reason: `Available ${candidate.kind === 'skill' ? 'skill' : 'tool'} metadata matches the task${terms.length > 0 ? ` (${terms.join(', ')})` : ''}.`,
         source: 'catalog_similarity',
       };
     });

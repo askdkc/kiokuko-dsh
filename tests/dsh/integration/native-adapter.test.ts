@@ -6,14 +6,14 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
-import { prepareAgentTask } from '../../../src/akinator/agent-task.js'
-import { initializeDatabase } from '../../../src/commands/init.js'
+import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
+import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { DSH_MODEL_FACING_OPERATIONS } from '../../../src/dsh/tools.js'
-import { STANDARD_SKILL_MANIFESTS } from '../../../src/setup/standard-skills.js'
+import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 
 async function fixture(): Promise<{ root: string; databasePath: string }> {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-native-adapter-'))
@@ -422,7 +422,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
         cwd: f.root,
         profileHints: { taskType: 'debug', target: 'src/index.ts', expected: 'tests pass', constraints: null },
         capabilities: STANDARD_SKILL_MANIFESTS.map(({ name }) => ({ kind: 'skill' as const, name })),
-        client: { kind: 'dsh', sessionId: coldSession.id },
+        dshSessionId: coldSession.id,
         skillDiscoveryMode: 'off',
       })
       coldRun = prepared.run.runId

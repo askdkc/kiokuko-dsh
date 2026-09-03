@@ -1,8 +1,7 @@
 # Getting started
 
 `kiokuko-dsh` is a DeepSeek Harness plugin. The published package contains the
-`./dsh` plugin entrypoint and does not install or configure Codex, OpenCode,
-Claude Code, or a generic `kiokuko` CLI.
+`./dsh` plugin entrypoint. DSH owns installation, sessions, and lifecycle.
 
 ## Install
 
@@ -52,5 +51,5 @@ dsh plugin --profile web remove kiokuko-dsh
 ```
 
 The plugin owns only its DSH composition, local Kiokuko runtime state, and the
-explicitly registered DSH integration seams. It does not modify client MCP
-configuration or project instruction files.
+explicitly registered DSH integration seams. It does not modify project
+instruction files.

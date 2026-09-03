@@ -5,10 +5,10 @@ import type { EnnoOdunoState } from '../../../../src/enno-oduno/types.js'
 
 function snapshot(nextAction: EnnoOdunoState['nextAction'], revision: number, role: 'enno-oduno' | 'zenki'): EnnoOdunoState {
   return {
-    applicable: true, status: role === 'zenki' ? 'zenki_planning' : 'enno_verifying', orchestrationId: 'orch', clientBinding: null,
+    applicable: true, status: role === 'zenki' ? 'zenki_planning' : 'enno_verifying', orchestrationId: 'orch', dshSessionId: 'dsh-session',
     contractRevision: revision, routeEpoch: 0, ideal: null, meditation: null, currentRole: role,
     directive: { protocolVersion: 1, runId: 'run', contractRevision: revision, routeEpoch: 0, role,
-      harness: { kind: 'dsh', version: null, continuation: 'turn_stopping_plugin', instructions: [] }, handoff: null,
+      instructions: [], handoff: null,
       objective: 'replan', requiredSkills: ['kiokuko-soul'], workUnit: null, stopConditions: ['no direct Goki resume'], reportSchema: {} },
     nextAction, advisoryPhaseState: { state: 'not_started' },
   } as unknown as EnnoOdunoState
