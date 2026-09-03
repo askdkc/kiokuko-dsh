@@ -1,7 +1,6 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdir, lstat, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { KiokukoError } from "../errors.js";
@@ -128,15 +127,7 @@ export function getDatabaseLockPath(
 export function getGlobalDatabasePath(options: PathEnvironment = {}): string {
   const { platform } = selectedEnvironment(options);
   const join = platform === "win32" ? path.win32.join : path.posix.join;
-  const directory = getPlatformDataDirectory(options);
-  const current = join(directory, "kiokuko-dsh.sqlite3");
-  const legacy = join(directory, "kiokuko.sqlite3");
-  const currentExists = existsSync(current);
-  const legacyExists = existsSync(legacy);
-  if (currentExists && legacyExists) {
-    throw new KiokukoError('CONFLICT', 'Both current and legacy Kiokuko database files exist; choose one explicitly before continuing');
-  }
-  return legacyExists ? legacy : current;
+  return join(getPlatformDataDirectory(options), "kiokuko-dsh.sqlite3");
 }
 
 function requireHome(options: PathEnvironment): {

@@ -100,9 +100,10 @@
     "verify:prepare": "node scripts/verify-prepare-reproducibility.mjs",
     "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko-dsh.sqlite3",
     "test:sampledb": "npm run build && node --import tsx tests/ci/verify-sample-database.ts",
+    "publint": "publint",
     "pack:check": "node scripts/pack-check.mjs",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run pack:check"
+    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run publint && npm run pack:check"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
@@ -139,6 +140,7 @@
     "@huggingface/transformers": "4.2.0",
     "@types/node": "24.13.3",
     "@types/semver": "7.8.0",
+    "publint": "0.3.24",
     "sqlite-vec": "0.1.9",
     "tsx": "4.23.13",
     "typescript": "5.9.3"

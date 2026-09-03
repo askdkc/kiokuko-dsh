@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -116,6 +116,22 @@ test("uses an explicit isolated Kiokuko data directory for database and runtime 
     getRuntimeDescriptorPath(options),
     "/work/kiokuko/.kiokuko-dev/server.json",
   );
+});
+
+test("does not adopt another package's legacy database", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "kiokuko-dsh-paths-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const options = {
+    platform: "darwin" as const,
+    env: { HOME: "/Users/test", KIOKUKO_DATA_DIR: directory },
+  };
+  const current = path.join(directory, "kiokuko-dsh.sqlite3");
+
+  await writeFile(path.join(directory, "kiokuko.sqlite3"), "foreign database");
+  assert.equal(getGlobalDatabasePath(options), current);
+
+  await writeFile(current, "dsh database");
+  assert.equal(getGlobalDatabasePath(options), current);
 });
 
 test("an explicit Kiokuko data directory overrides Linux XDG data and runtime directories", () => {
