@@ -6,7 +6,7 @@
 
 ## 安装
 
-需要 DeepSeek Harness `0.1.2-alpha.3` 和 Node.js 24.16.0 或更高版本。
+需要 DeepSeek Harness `0.1.2-alpha.5` 和 Node.js 24.16.0 或更高版本。
 
 安装已发布的 npm 包：
 

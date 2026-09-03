@@ -6,7 +6,7 @@
 
 ## 導入
 
-DeepSeek Harness `0.1.2-alpha.3` と Node.js 24.16.0 以上が必要です。
+DeepSeek Harness `0.1.2-alpha.5` と Node.js 24.16.0 以上が必要です。
 
 公開済みパッケージを導入します:
 

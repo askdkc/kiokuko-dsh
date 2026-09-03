@@ -25,7 +25,11 @@ test('model context has a fixed trusted-prefix order and user task last', async 
     expertRefs: [{ skillName: 'kiokuko-single-purpose-functions', relativePath: 'references/problem-shaping-and-language.md' }],
   })
   assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'route-skill', 'expert', 'memory', 'user-task'])
-  assert.equal(messages[0]?.content, await loadSoulPrompt())
+  assert.equal(messages.every((message) => message.role === 'user'), true)
+  assert.ok(messages[0]?.content.startsWith(await loadSoulPrompt()))
+  assert.match(messages[0]?.content ?? '', /DSH host completed the Akinator intake gate/u)
+  assert.match(messages[0]?.content ?? '', /task_prepare.*host-only operations.*intentionally absent/su)
+  assert.match(messages[0]?.content ?? '', /intake status `ready`.*nextAction=proceed/u)
   assert.equal(messages.at(-1)?.role, 'user')
   assert.match(messages.at(-1)?.content ?? '', /Implement src\/index\.ts and make the focused tests pass\.[\s\S]*Finalized intake:[\s\S]*src\/index\.ts[\s\S]*tests pass/u)
 })
@@ -41,7 +45,7 @@ test('ordinary memory remains untrusted and removes path/internal-id material', 
     task: 'Review the repository change.',
   })
   const memory = messages.find((message) => message.source === 'memory')
-  assert.equal(memory?.role, 'system')
+  assert.equal(memory?.role, 'user')
   assert.equal(memory?.content.includes('/Users/dkc'), false)
   assert.equal(memory?.content.includes('abc12345'), false)
 })

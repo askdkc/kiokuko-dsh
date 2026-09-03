@@ -13,7 +13,7 @@ import {
 } from '../setup/standard-skills.js'
 
 export interface DshModelMessage {
-  readonly role: 'system' | 'user'
+  readonly role: 'user'
   readonly content: string
   readonly source: DshMessageSource['kind']
 }
@@ -83,7 +83,7 @@ export async function injectDshContext(input: {
     ...(assertMemoryCurrent === undefined ? {} : { assertMemoryCurrent }),
   })
   return Object.freeze(sources.map((source) => Object.freeze({
-    role: source.kind === 'user-task' ? 'user' : 'system',
+    role: 'user' as const,
     content: source.text,
     source: source.kind,
   })))

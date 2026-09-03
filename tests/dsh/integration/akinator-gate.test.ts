@@ -117,7 +117,7 @@ test('cached preparation rejects a different native agent or session object', as
   try {
     assert.deepEqual(await gate.preStep(first, async () => ({ kind: 'enter', messages: [] })), { kind: 'reject' })
     await assert.rejects(
-      gate.preStep({ ...first, nativeAgent: {} }, async () => ({ kind: 'enter', messages: [] })),
+      gate.preStep({ ...first, nativeAgent: { id: 'replacement-agent' } }, async () => ({ kind: 'enter', messages: [] })),
     )
   } finally {
     await runtime.close()

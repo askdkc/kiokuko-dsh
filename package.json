@@ -45,11 +45,12 @@
       "patch": "./dsh/cordis.patch.yml"
     },
     "compatibility": {
-      "dsh": "0.1.2-alpha.3",
+      "dsh": "0.1.2-alpha.5",
       "dshReleases": {
         "0.1.2-alpha.2": "unknown",
         "0.1.2-alpha.3": "compatible",
-        "0.1.2-alpha.4": "unknown"
+        "0.1.2-alpha.4": "unknown",
+        "0.1.2-alpha.5": "compatible"
       },
       "profiles": [
         "web"

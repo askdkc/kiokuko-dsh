@@ -16,5 +16,6 @@ test('context injection preserves the trusted prefix and places untrusted memory
     routeSkillNames: ['kiokuko-single-purpose-functions'],
   })
   assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'route-skill', 'memory', 'user-task'])
+  assert.equal(messages.every((message) => message.role === 'user'), true)
   assert.match(messages.at(-1)?.content ?? '', /Implement the requested change\.[\s\S]*Finalized intake:[\s\S]*src\/dsh[\s\S]*focused checks pass/u)
 })
