@@ -57,7 +57,7 @@ test('model-facing projections exclude host-owned identity and execution fields'
   );
   assert.deepEqual(
     Object.keys(modelFacingInputSchema('enno_finish').properties as object),
-    ['review'],
+    ['advisoryDisposition', 'review'],
   );
 });
 
@@ -76,4 +76,3 @@ test('host-only operations have no model-facing input properties', () => {
     assert.deepEqual(properties, {}, `${name} must remain host-only`);
   }
 });
-

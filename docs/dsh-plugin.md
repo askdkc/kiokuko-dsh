@@ -147,12 +147,16 @@ The dsh integration provides:
   follow-ups until an explicit actionable request starts a new run;
 - all fourteen Kiokuko operations, with only the seven model-facing operations
   exposed as model tools and host identity injected after argument validation;
+- host-bound capability catalogs are carried into plan submission, while
+  advisory digests remain host-owned and the current model reports only its
+  per-slot advisory dispositions after receiving the bounded advisory evidence;
 - request-scoped Ponytail state for concurrent DSH conversations, with native
   commands routed to the exact invoking agent and session;
 - revision, route, phase, lease, idempotency, confirmation, verifier, and
   meditation gates through the Kiokuko core;
 - ordered, idempotent SessionEvent bridging with a final flush before terminal
-  ledger close; and
+  ledger close, including the tool result and final assistant/turn events after
+  Oduno meditation; and
 - bounded turn continuation, exact run/session/workspace/route binding, and
   in-memory plaintext continuation tokens.
 
@@ -165,6 +169,14 @@ cancelled, and blocked runs are closed before the next independent request
 starts; blocked runs retain their failed ledger outcome rather than lingering
 as unusable active bindings. Disposing the DSH session closes its current run
 after queued events are durable.
+
+After a plugin reload or process restart has cleared in-memory turn state, the
+adapter resumes only the single unambiguous active Enno-Oduno run already bound
+to the same persistent DSH session and canonical repository. The session is
+revalidated through the core continuation gate, persisted pending advisory evidence is restored once, and
+previous ordinary-memory context is not replayed implicitly. Multiple matching
+runs, a continuation limit, a conflicting execution lease, or a changed
+capability catalog still fails closed instead of selecting or advancing a run.
 
 `runId` is required for dsh resume. The plugin never selects a repository-wide
 latest run. Ambiguous, stale, cancelled, aborted, lease-conflicting, or
@@ -181,9 +193,13 @@ npm run test:e2e:dsh
 This builds the package, runs the Cordis composition test with an in-memory
 host adapter, validates model/tool/question/ledger/turn-end boundaries, and
 then runs the pack/install/dump-config/Web-start/Web-stop/remove flow when a
-`dsh` executable is available. Without that executable the CLI portion is
-reported as `unsupported`; CI sets `KIOKUKO_REQUIRE_DSH_CLI=1` so absence is a
-failure rather than an unverified success.
+`dsh` executable is available. When `DSH_BIN` points into a local DeepSeek
+Harness source checkout (or `KIOKUKO_DSH_SOURCE_ROOT` is set), it also resumes a
+persisted pending advisory round and runs two consecutive real agent-loop turns
+through intake, ideal, planning, explicit confirmation, work reporting, final
+verification, advisory disposition, meditation, transcript flush, and terminal close. Without a dsh executable the
+CLI portion is reported as `unsupported`; CI sets `KIOKUKO_REQUIRE_DSH_CLI=1`
+so absence is a failure rather than an unverified success.
 
 The current compatibility measurement is:
 

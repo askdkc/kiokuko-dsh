@@ -34,6 +34,24 @@ test('model context has a fixed trusted-prefix order and user task last', async 
   assert.match(messages.at(-1)?.content ?? '', /Implement src\/index\.ts and make the focused tests pass\.[\s\S]*Finalized intake:[\s\S]*src\/index\.ts[\s\S]*tests pass/u)
 })
 
+test('advisory evidence remains untrusted and precedes memory and the final user task', async () => {
+  const messages = await injectDshContext({
+    prepared: prepared(),
+    task: 'Finish the approved review.',
+    advisoryEvidence: {
+      phase: 'final_review',
+      contributions: [{
+        slotId: 'acceptance_auditor',
+        outcome: 'completed',
+        summary: 'The acceptance criterion is supported by fresh evidence.',
+      }],
+    },
+  })
+  assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'advisory', 'memory', 'user-task'])
+  assert.match(messages.at(-3)?.content ?? '', /acceptance criterion/u)
+  assert.equal(messages.at(-1)?.content, 'Finish the approved review.\n\nFinalized intake:\nsrc/index.ts\ntests pass')
+})
+
 test('ordinary memory remains untrusted and removes path/internal-id material', async () => {
   const messages = await injectDshContext({
     prepared: prepared({

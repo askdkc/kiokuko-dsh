@@ -65,6 +65,7 @@ export async function injectDshContext(input: {
   readonly task: string
   readonly routeSkillNames?: readonly string[]
   readonly expertRefs?: readonly DshExpertReference[]
+  readonly advisoryEvidence?: DshMessageSourceInput['advisoryEvidence']
   readonly directive?: DshMessageSourceInput['directive']
   readonly runtime?: Pick<DshRuntime, 'withDatabase'>
 }): Promise<readonly DshModelMessage[]> {
@@ -80,6 +81,7 @@ export async function injectDshContext(input: {
     }
   const sources = await buildDshMessageSources({
     ...sourceInput(input.prepared, input.task, input.routeSkillNames ?? [], input.expertRefs ?? [], input.directive),
+    ...(input.advisoryEvidence === undefined ? {} : { advisoryEvidence: input.advisoryEvidence }),
     ...(assertMemoryCurrent === undefined ? {} : { assertMemoryCurrent }),
   })
   return Object.freeze(sources.map((source) => Object.freeze({

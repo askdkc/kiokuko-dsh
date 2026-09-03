@@ -37,9 +37,14 @@ test('model-facing schemas exclude every host-owned field', () => {
     const properties = schema.properties as Record<string, unknown>
     assert.deepEqual([...hostFields].filter((field) => Object.hasOwn(properties, field)), [], operation)
   }
+  for (const operation of ['enno_ideal_submit', 'enno_plan_submit', 'enno_finish'] as const) {
+    const properties = modelFacingInputSchema(operation).properties as Record<string, unknown>
+    assert.equal(properties.advisoryRoundDigest, undefined, operation)
+    assert.ok(properties.advisoryDisposition, operation)
+  }
 })
 
-test('projected directives use the schema for the current model-facing action', () => {
+test('projected directives retain current dynamic fields while removing host-owned fields', () => {
   const actions = [
     ['submit_ideal', 'enno_ideal_submit'],
     ['submit_plan', 'enno_plan_submit'],
@@ -52,13 +57,35 @@ test('projected directives use the schema for the current model-facing action', 
       role: 'enno-oduno',
       harness: { kind: 'dsh', version: null, continuation: 'turn_stopping_plugin', instructions: [] },
       objective: 'current objective', requiredSkills: [], workUnit: null, stopConditions: [],
-      reportSchema: { properties: { runId: { type: 'string' } }, required: ['runId'] },
+      reportSchema: modelFacingInputSchema(operation),
     } as any
     const projected = projectDshDirective({ nextAction, directive } as any)
     assert.deepEqual(projected?.reportSchema, modelFacingInputSchema(operation))
-    const properties = projected?.reportSchema?.properties as Record<string, unknown> | undefined
-    assert.equal(properties?.runId, undefined)
   }
+
+  const directive = {
+    role: 'enno-oduno',
+    harness: { kind: 'dsh', version: null, continuation: 'turn_stopping_plugin', instructions: [] },
+    objective: 'review', requiredSkills: [], workUnit: null, stopConditions: [],
+    reportSchema: {
+      properties: {
+        runId: { type: 'string' },
+        advisoryRoundDigest: { type: 'string' },
+        advisoryDisposition: { type: 'array' },
+        review: { type: 'object' },
+      },
+      required: ['runId', 'advisoryRoundDigest', 'advisoryDisposition', 'review'],
+      advisoryConsumption: { requiredSlots: ['slot-a'] },
+    },
+  } as any
+  const projected = projectDshDirective({ nextAction: 'submit_final_review', directive } as any)!
+  const properties = projected.reportSchema.properties as Record<string, unknown>
+  assert.equal(properties.runId, undefined)
+  assert.equal(properties.advisoryRoundDigest, undefined)
+  assert.ok(properties.advisoryDisposition)
+  assert.ok(properties.review)
+  assert.deepEqual(projected.reportSchema.required, ['advisoryDisposition', 'review'])
+  assert.deepEqual(projected.reportSchema.advisoryConsumption, { requiredSlots: ['slot-a'] })
 })
 
 test('idempotency follows the root call for nested PTC and changes for a new call', () => {
@@ -76,6 +103,10 @@ test('host binding rejects injected identity and requires a WorkUnit lease', () 
   assert.throws(() => bindDshToolInvocation(execution('enno_work_report'), {
     runId: 'run-1', workspace: 'workspace-1', orchestrationId: 'orch-1', revision: 2, routeEpoch: 0,
   }), /current host lease/iu)
+  assert.throws(() => bindDshToolInvocation(execution('enno_finish'), {
+    runId: 'run-1', workspace: 'workspace-1', orchestrationId: 'orch-1', revision: 2, routeEpoch: 0,
+    advisoryRoundDigest: 'not-a-digest',
+  }), /advisory round digest/iu)
 })
 
 test('native tool execution binds the authoritative session without inventing a turn', async () => {
@@ -90,8 +121,8 @@ test('native tool execution binds the authoritative session without inventing a 
   const definition = definitions.find((item) => item.name === 'enno_plan_submit')!
   await definition.execute({}, {
     callId: 'native-call', name: 'enno_plan_submit', arguments: {},
-    agent: { id: 'native-agent', session: { id: 'session-1' } }, signal,
-  })
+    agent: { id: 'native-agent', session: { id: 'session-1' }, turn() { throw new Error('native private turn method must not be read') } }, signal,
+  } as any)
   assert.equal(seen.agent.dshSessionId, 'session-1')
   assert.equal(seen.agent.turn, undefined)
   await assert.rejects(definition.execute({}, {

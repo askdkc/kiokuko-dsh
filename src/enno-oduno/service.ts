@@ -1603,6 +1603,7 @@ export async function finishEnno(
 export function submitOdunoMeditation(
   database: SqliteDatabase,
   rawInput: unknown,
+  options: { readonly deferLedgerTerminalization?: boolean } = {},
 ): EnnoOperationResponse {
   const parsedInput = parseMeditationSubmission(rawInput);
   const before = readEnnoSnapshot(database, identity(database, parsedInput));
@@ -1636,7 +1637,9 @@ export function submitOdunoMeditation(
       contractRevision: current.revision,
       mutationRevision: current.mutationRevision,
     });
-    terminalizeLedgerRunInTransaction(database, input.runId, 'completed');
+    if (options.deferLedgerTerminalization !== true) {
+      terminalizeLedgerRunInTransaction(database, input.runId, 'completed');
+    }
     const response = { ennoOduno: stateForSnapshot(readEnnoSnapshot(database, identity(database, input))) };
     completeOperationInTransaction(database, input.runId, operation, operationOwner, response);
     return response;
