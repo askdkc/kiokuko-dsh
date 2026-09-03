@@ -188,6 +188,7 @@ const TASK_AFFINITY: Readonly<Record<TaskType, { kinds: readonly EntryKind[]; ta
   devops: { kinds: ['lesson', 'decision', 'reference'], tags: ['devops', 'skill:wizard', 'skill:server-resource-monitoring'] },
   writing: { kinds: ['preference', 'reference', 'decision'], tags: ['writing', 'writer', 'skill:writing-for-agents', 'skill:writing-plans'] },
   analysis: { kinds: ['fact', 'reference', 'decision'], tags: ['analysis', 'analyst'] },
+  chat: { kinds: ['preference', 'fact', 'reference'], tags: ['chat', 'conversation', 'common'] },
 };
 
 function invalid(): never {

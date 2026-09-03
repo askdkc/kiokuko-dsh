@@ -46,7 +46,7 @@ const COVERAGE_CATEGORIES = ['approval', 'command', 'file', 'run', 'tool'] as co
 const COVERAGE_LEVELS = ['complete', 'best_effort', 'declared', 'unavailable'] as const;
 const MISSING_PROFILE_FIELDS = ['taskType', 'target', 'expected'] as const;
 const EVIDENCE_STATES = ['none', 'failed', 'fresh', 'stale'] as const;
-const TASK_TYPES = ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis'] as const;
+const TASK_TYPES = ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis', 'chat'] as const;
 
 type CoverageCategory = (typeof COVERAGE_CATEGORIES)[number];
 type CoverageLevel = (typeof COVERAGE_LEVELS)[number];

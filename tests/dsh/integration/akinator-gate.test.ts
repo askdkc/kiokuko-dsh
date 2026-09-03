@@ -105,6 +105,54 @@ test('pre-step rejects unresolved intake without an answerer and rejects changed
   }
 })
 
+test('skipping task type enters ordinary chat without creating an Enno/Oduno contract', async () => {
+  const fixture = await makeFixture()
+  const runtime = new DshRuntime({
+    repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
+    embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 },
+  })
+  const asked: string[] = []
+  const answerer = createDshIntakeAnswerer({
+    async ask(request) {
+      const question = request.questions[0]!
+      asked.push(question.id)
+      assert.ok(question.options?.some((option) => option.label === 'chat'))
+      return { answers: [{ id: question.id, selected: [] }] }
+    },
+  })
+  const gate = new DshIntakeGate(runtime, answerer)
+  const capabilities = await catalog()
+  let nextCalls = 0
+  try {
+    const result = await gate.prepare({ ...event(fixture.root, capabilities), task: 'Let us chat about SvelteKit.' })
+    assert.equal(result.admitted, true)
+    assert.equal(result.prepared.intake.profile.taskType, 'chat')
+    assert.equal(result.prepared.intake.status, 'ready')
+    assert.deepEqual(result.prepared.intake.missingFields, [])
+    assert.equal(result.prepared.ennoOduno.applicable, false)
+    assert.equal(result.prepared.ennoOduno.nextAction, 'complete')
+    assert.equal(result.prepared.skillDiscovery.attempted, false)
+    assert.deepEqual(result.prepared.skillDiscovery.requirements, [])
+    assert.deepEqual(asked, ['taskType'])
+    const decision = await gate.preStep({ ...event(fixture.root, capabilities), task: 'Let us chat about SvelteKit.' }, async () => {
+      nextCalls += 1
+      return { kind: 'enter', messages: [] }
+    })
+    assert.equal(decision.kind, 'enter')
+    assert.equal(nextCalls, 1)
+    const database = openConnection(fixture.databasePath)
+    try {
+      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get<{ count: number }>()?.count, 0)
+      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM agent_task_skill_discovery_attempts').get<{ count: number }>()?.count, 0)
+    } finally {
+      database.close()
+    }
+  } finally {
+    await runtime.close()
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test('cached preparation rejects a different native agent or session object', async () => {
   const fixture = await makeFixture()
   const runtime = new DshRuntime({

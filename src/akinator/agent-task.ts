@@ -785,7 +785,8 @@ async function finalizeAgentTask(input: FinalizeAgentTaskInput): Promise<Prepare
   }
 
   const prepared = prepareTaskContextQuery(input, context);
-  const replayedAttempt = input.discoveryMode === 'off'
+  const chat = context.session.profile.taskType === 'chat';
+  const replayedAttempt = input.discoveryMode === 'off' || chat
     ? undefined
     : readAgentTaskSkillDiscoveryAttempt(input.database, prepared.discoveryAttemptIdentity);
   let missingMemoryCapability = memoryCapabilityUnavailableForTask(context, input.capabilities);
@@ -808,14 +809,16 @@ async function finalizeAgentTask(input: FinalizeAgentTaskInput): Promise<Prepare
   }
 
   run = authoritativeTaskRun(input.database, input.runId, context.status);
-  const skillDiscovery = await resolveSkillDiscovery({
-    input,
-    prepared,
-    run,
-    context,
-    preDiscoveryMemoryState,
-    replayedAttempt,
-  });
+  const skillDiscovery = chat
+    ? emptySkillDiscovery(input.discoveryMode)
+    : await resolveSkillDiscovery({
+      input,
+      prepared,
+      run,
+      context,
+      preDiscoveryMemoryState,
+      replayedAttempt,
+    });
   context = currentAgentTaskContext(input.database, input.runId, context);
   run = authoritativeTaskRun(input.database, input.runId, context.status);
   missingMemoryCapability = memoryCapabilityUnavailableForTask(context, input.capabilities);

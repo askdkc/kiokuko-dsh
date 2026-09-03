@@ -44,6 +44,21 @@ test('projects an empty committed ledger without mutating its input', () => {
   assert.deepEqual(input, before);
 });
 
+test('a ready chat profile does not require task-only target or expected fields', () => {
+  const result = projectLedger({
+    ...baseInput(),
+    initialProfile: {
+      taskType: 'chat',
+      target: null,
+      expected: null,
+      constraints: null,
+    },
+  });
+
+  assert.equal(result.intakeIncomplete, false);
+  assert.deepEqual(result.missingProfileFields, []);
+});
+
 test('applies ordered partial task profile revisions and hashes the resulting profile', () => {
   const input = {
     ...baseInput(),

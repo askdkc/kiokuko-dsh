@@ -227,7 +227,7 @@ function profileHints(value: unknown): TaskInput['profileHints'] {
   knownFields(input, PROFILE_FIELDS);
   const taskType = input.taskType === undefined || input.taskType === null
     ? null
-    : enumValue(input.taskType, ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis'] as const);
+    : enumValue(input.taskType, ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis', 'chat'] as const);
   const target = input.target === undefined ? null : nullableString(input.target, 16 * 1024);
   const expected = input.expected === undefined ? null : nullableString(input.expected, 16 * 1024);
   const constraints = input.constraints === undefined ? null : nullableString(input.constraints, 16 * 1024);

@@ -10,7 +10,7 @@ test('narrows abstract action families into one executable action', () => {
     constraints: null,
   });
   assert.equal(abstract.stage, 'exploring');
-  assert.equal(abstract.hypotheses.filter((item) => item.status === 'possible').length, 7);
+  assert.equal(abstract.hypotheses.filter((item) => item.status === 'possible').length, 8);
   assert.equal(abstract.questions.find((item) => item.id === 'taskType')?.status, 'pending');
   assert.equal(abstract.selectedAction, null);
 
@@ -26,6 +26,21 @@ test('narrows abstract action families into one executable action', () => {
   assert.equal(actionable.silo.completeness, 1);
   assert.ok(actionable.questions.every((item) => item.status === 'answered'));
   assert.match(actionable.stopConditions[1] ?? '', /既存レスポンス形式/u);
+});
+
+test('treats chat as actionable without inventing a target or success criterion', () => {
+  const chat = deriveAkinatorReasoning('Tell me something.', {
+    taskType: 'chat',
+    target: null,
+    expected: null,
+    constraints: null,
+  });
+
+  assert.equal(chat.stage, 'actionable');
+  assert.equal(chat.hypotheses.find((item) => item.status === 'selected')?.id, 'chat');
+  assert.match(chat.selectedAction ?? '', /通常会話/u);
+  assert.equal(chat.silo.completeness, 1);
+  assert.ok(chat.questions.every((item) => item.status === 'answered'));
 });
 
 test('documents which decision dimension each Akinator question narrows', () => {

@@ -14,6 +14,21 @@ test('detects a missing relevant skill despite an unrelated available skill', ()
   assert.deepEqual(decision.missing.map((item) => item.id), ['sveltekit']);
 });
 
+test('ordinary chat never discovers repository skills even when technology names are mentioned', () => {
+  const decision = detectSkillGap({
+    fingerprint,
+    task: 'Let us chat about SvelteKit.',
+    profile: { taskType: 'chat', target: null, expected: null, constraints: null },
+    capabilities: [],
+    mode: 'official',
+  });
+
+  assert.deepEqual(decision.requirements, []);
+  assert.deepEqual(decision.missing, []);
+  assert.equal(decision.shouldDiscover, false);
+  assert.equal(decision.reason, 'no_supported_technology');
+});
+
 test('accepts an aliased Svelte skill for a SvelteKit requirement', () => {
   const decision = detectSkillGap({ fingerprint, task: 'Implement a SvelteKit component', profile, capabilities: [{ kind: 'skill', name: 'svelte-code-writer' }], mode: 'official' });
   assert.equal(decision.reason, 'all_relevant_skills_available');

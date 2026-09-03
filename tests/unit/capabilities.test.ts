@@ -129,6 +129,23 @@ test('keeps a valid recommendation when malformed catalog items are adjacent', (
     && item.source === 'akinator_policy'));
 });
 
+test('ordinary chat does not route coding, UI, or catalog-similarity capabilities', () => {
+  const result = resolveCapabilities({
+    task: 'Let us chat about implementing a React UI with GitHub.',
+    profile: { taskType: 'chat', target: null, expected: null, constraints: null },
+    recommendedTags: ['bot:common'],
+    capabilities: [
+      { kind: 'skill', name: STANDARD_SOUL_SKILL_NAME },
+      { kind: 'skill', name: 'kiokuko-ui-design-soul' },
+      { kind: 'skill', name: 'kiokuko-single-purpose-functions' },
+      { kind: 'mcp_tool', name: 'github_search', description: 'Search GitHub repositories.' },
+    ],
+  });
+
+  assert.deepEqual(result.recommendations.map((item) => item.name), [STANDARD_SOUL_SKILL_NAME]);
+  assert.equal(hasBlockingRequiredCapability(result), false);
+});
+
 test('fails closed when catalog items are invalid or omitted at processing boundaries', () => {
   const twoHundred = Array.from({ length: MAX_CAPABILITY_ITEMS }, (_, index) => ({ kind: 'mcp_tool', name: `tool-${index}` }));
   const below = normalizeCapabilityCatalog(twoHundred.slice(0, 199));

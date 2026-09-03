@@ -39,6 +39,8 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
   const skillSnapshotOptions: unknown[] = []
   const toolSchemaScopes: unknown[] = []
   const questionAgents: unknown[] = []
+  const questionIds: string[] = []
+  let skipTaskType = false
   let soulModelInvocable = true
   const fallbackSession = { id: 'native-fallback', header: { cwd: f.root } }
   const root = new Context()
@@ -74,6 +76,8 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
       if (request.agent === undefined) throw new Error('no user-questions answerer accepted the request')
       questionAgents.push(request.agent)
       const id = request.questions[0]!.id
+      questionIds.push(id)
+      if (id === 'taskType' && skipTaskType) return { answers: [{ id, selected: [] }] }
       const values: Record<string, string> = { taskType: 'build', target: 'src/index.ts', expected: 'tests pass' }
       return { answers: [{ id, selected: [values[id] ?? 'approve'] }] }
     } },
@@ -171,6 +175,45 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
     })
     assert.equal(fallbackNextEvent.task, fallbackEvent.task)
     assert.deepEqual(await adapter.host.intakeGate!.preStep(fallbackNextEvent, async () => ({ kind: 'enter', messages: [] })), { kind: 'enter', messages: [] })
+    adapter.host.ponytailModes!.end('dsh:fallback-agent:native-fallback:1')
+    const beforeChat = openConnection(f.databasePath)
+    const ennoContractsBeforeChat = beforeChat.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get<{ count: number }>()!.count
+    beforeChat.close()
+    skipTaskType = true
+    const chatEffects: string[] = []
+    const chatSession = { id: 'chat-session', header: { cwd: f.root } }
+    const chatAgent = {
+      id: 'chat-agent', session: chatSession,
+      steer: () => chatEffects.push('steer'),
+      cancel: (reason: unknown) => chatEffects.push(String(reason)),
+    }
+    const questionsBeforeChat = questionIds.length
+    const chatEvent = await adapter.host.mapPreStep!({
+      agent: chatAgent,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Tell me something.' }] }],
+      turn: 1, step: 1, signal: event.signal,
+    })
+    const chatDecision = await adapter.host.intakeGate!.preStep(chatEvent, async () => ({ kind: 'enter', messages: [] }))
+    assert.equal(chatDecision.kind, 'enter')
+    assert.deepEqual(questionIds.slice(questionsBeforeChat), ['taskType'])
+    assert.equal(questionAgents.at(-1), chatAgent)
+    assert.deepEqual(await adapter.host.ennoController!.handle({
+      agent: { ...chatAgent, sessionId: chatSession.id, nativeAgent: chatAgent, nativeSession: chatSession },
+      turn: 1,
+      signal: event.signal,
+    }), { kind: 'close', nextAction: 'complete' })
+    assert.deepEqual(chatEffects, [])
+    const chatClose = await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent)
+    assert.equal(chatClose?.status, 'completed')
+    await adapter.host.lifecycle!.closeTurn(chatClose!)
+    const afterChat = openConnection(f.databasePath)
+    try {
+      assert.equal(afterChat.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get<{ count: number }>()!.count, ennoContractsBeforeChat)
+      assert.equal(afterChat.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>((chatClose!).runId)?.status, 'completed')
+    } finally {
+      afterChat.close()
+    }
+    assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
     soulModelInvocable = false
     await assert.rejects(Promise.resolve(adapter.host.mapPreStep!({
       agent: event.nativeAgent as any,

@@ -319,6 +319,7 @@ const TASK_TOOL_TERMS: Record<NonNullable<TaskProfile['taskType']>, string[]> = 
   devops: ['cloud', 'deploy', 'docker', 'kubernetes', 'log', 'monitor'],
   writing: ['docs', 'document', 'markdown', 'publish', 'writing'],
   analysis: ['analysis', 'database', 'dataset', 'query', 'spreadsheet', 'sql'],
+  chat: [],
 };
 
 const SKILL_REASONS: Record<string, string> = {
@@ -356,6 +357,7 @@ function tokens(value: string): Set<string> {
 }
 
 function desiredSkills(input: { task: string; profile: TaskProfile; recommendedTags: string[]; memoryUse: MemoryUseSignal }): string[] {
+  if (input.profile.taskType === 'chat') return [STANDARD_SOUL_SKILL_NAME];
   const skillNames = [STANDARD_SOUL_SKILL_NAME, ...input.recommendedTags
     .filter((tag) => tag.startsWith('skill:'))
     .map((tag) => normalizedName(tag.slice('skill:'.length)))
@@ -393,6 +395,7 @@ function relevantCatalogCapabilities(
   catalog: CapabilityDescriptor[],
   desiredSkillNames: Set<string>,
 ): CapabilityRecommendation[] {
+  if (profile.taskType === 'chat') return [];
   const taskTokens = tokens([task, profile.target ?? '', profile.expected ?? '', profile.constraints ?? ''].join(' '));
   const roleTerms = new Set(profile.taskType ? TASK_TOOL_TERMS[profile.taskType] : []);
   return catalog

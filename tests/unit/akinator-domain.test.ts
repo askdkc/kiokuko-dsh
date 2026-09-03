@@ -18,6 +18,8 @@ test('derives task types from Japanese and English task text while preserving ex
     ['Deploy the service with DevOps', 'devops'],
     ['Write project documentation', 'writing'],
     ['ログを分析して集計する', 'analysis'],
+    ['just chatting', 'chat'],
+    ['雑談', 'chat'],
   ] as const;
 
   for (const [task, taskType] of cases) {
@@ -42,7 +44,7 @@ test('asks only missing required fields in taskType, target, expected order', ()
   const taskType = evaluateProfile(empty, 0);
   assert.equal(taskType.question?.id, 'taskType');
   assert.equal(taskType.question?.prompt, 'この作業の主目的はどれですか？');
-  assert.deepEqual(taskType.question?.options, ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis']);
+  assert.deepEqual(taskType.question?.options, ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis', 'chat']);
   assert.equal(taskType.question?.required, true);
   assert.deepEqual(taskType.missingFields, ['taskType', 'target', 'expected']);
 
@@ -149,6 +151,24 @@ test('trims accepted answers, normalizes task type aliases, and rejects invalid 
       return true;
     },
   );
+});
+
+test('accepts ordinary chat as a terminal intake choice without task-only follow-up questions', () => {
+  const state = {
+    task: 'Tell me something.',
+    profile: deriveProfile('Tell me something.'),
+    questionCount: 0,
+  };
+
+  const chat = applyAnswer(state, { questionId: 'taskType', value: ' just chatting ' });
+
+  assert.equal(chat.profile.taskType, 'chat');
+  assert.equal(chat.profile.target, null);
+  assert.equal(chat.profile.expected, null);
+  assert.equal(chat.status, 'ready');
+  assert.equal(chat.question, null);
+  assert.deepEqual(chat.missingFields, []);
+  assert.deepEqual(chat.recommendedTags, ['bot:common']);
 });
 
 test('transitions between needs_answer, ready, and exhausted without inventing a question', () => {

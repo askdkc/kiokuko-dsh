@@ -138,6 +138,10 @@ The dsh integration provides:
   providers;
 - one current Akinator question at a time, with unresolved intake blocking the
   model and tools;
+- an explicit `chat` intake choice (including free-form aliases such as
+  `just chatting` and `雑談`) and the task-type question's **Skip this
+  question** action; both skip target/success follow-ups and never create an
+  Enno-Oduno contract;
 - all fourteen Kiokuko operations, with only the seven model-facing operations
   exposed as model tools and host identity injected after argument validation;
 - revision, route, phase, lease, idempotency, confirmation, verifier, and
