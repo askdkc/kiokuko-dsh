@@ -84,6 +84,11 @@ dsh --profile kiokuko-test --dump-config
 dsh plugin --profile kiokuko-test remove kiokuko-dsh
 ```
 
+A DSH session can use a Git repository, a `.kiokuko.json`-bound project, or an
+ordinary directory as its workspace. For an ordinary directory, Kiokuko keeps
+the path binding in its database and does not create `.git`, `.kiokuko.json`,
+or any other metadata file in the workspace.
+
 `kiokuko-dsh` is the single named bundle row. Removal is exact and does not
 rewrite unrelated plugins or settings. The plugin does not edit `AGENTS.md`.
 

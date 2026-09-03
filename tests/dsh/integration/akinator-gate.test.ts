@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -78,6 +78,33 @@ test('pre-step uses grounded DSH context and asks only the unresolved task type'
     assert.equal(decision.kind, 'enter')
   } finally {
     await runtime.close()
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('pre-step admits a session rooted at an unregistered non-Git directory', async () => {
+  const fixture = await makeFixture()
+  const sessionRoot = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-session-directory-'))
+  const runtime = new DshRuntime({
+    repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
+    embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 },
+  })
+  const capabilities = await catalog()
+  const gate = new DshIntakeGate(runtime)
+  try {
+    const result = await gate.prepare({
+      ...event(sessionRoot, capabilities),
+      task: 'こんにちは',
+      profileHints: { taskType: 'chat' },
+    })
+    assert.equal(result.admitted, true)
+    assert.equal(result.prepared.project.repositoryRoot, realpathSync(sessionRoot))
+    assert.equal(result.prepared.project.source, 'local-path')
+    assert.equal(result.prepared.executionContext.cwdIsRepositoryRoot, true)
+    await assert.rejects(access(join(sessionRoot, '.kiokuko.json')))
+  } finally {
+    await runtime.close()
+    await rm(sessionRoot, { recursive: true, force: true })
     await rm(fixture.root, { recursive: true, force: true })
   }
 })

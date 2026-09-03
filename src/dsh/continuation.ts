@@ -270,7 +270,7 @@ export function decideDshContinuation(
 ): DshResumeDecision {
   const parsed = inputSchema.safeParse(rawInput)
   if (!parsed.success) throw new KiokukoError('VALIDATION_ERROR', 'DSH continuation input is invalid')
-  const repositoryRoot = detectRepositoryRoot({ cwd: parsed.data.cwd }).root
+  const repositoryRoot = detectRepositoryRoot({ cwd: parsed.data.cwd, allowDirectory: true }).root
   const continuation = withImmediateTransaction(database, () => {
     const resolution = typeof expectedRun === 'object'
       ? { kind: 'resolved' as const, candidate: exactResumeCandidate(database, expectedRun, repositoryRoot) }
