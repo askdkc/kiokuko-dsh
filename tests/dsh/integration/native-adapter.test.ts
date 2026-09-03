@@ -203,16 +203,82 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
       signal: event.signal,
     }), { kind: 'close', nextAction: 'complete' })
     assert.deepEqual(chatEffects, [])
-    const chatClose = await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent)
-    assert.equal(chatClose?.status, 'completed')
-    await adapter.host.lifecycle!.closeTurn(chatClose!)
+    const firstChatRun = adapter.host.resolveSessionRunId!(chatSession)!
+    ;(root as any).emit('session/event', chatSession, { type: 'assistant/message', seq: 1, time: 1, data: { text: 'first answer' } })
+    assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
+    const firstChatStep = await adapter.host.mapPreStep!({
+      agent: chatAgent,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Injected first-turn context.' }] }],
+      turn: 1, step: 2, signal: event.signal,
+    })
+    assert.equal(firstChatStep.task, chatEvent.task)
+    assert.equal(firstChatStep.profileHints, undefined)
+    assert.deepEqual(await adapter.host.intakeGate!.preStep(firstChatStep, async () => ({ kind: 'enter', messages: [] })), { kind: 'enter', messages: [] })
+    assert.equal(adapter.host.resolveSessionRunId!(chatSession), firstChatRun)
+
+    const questionsAfterFirstChat = questionIds.length
+    ;(root as any).emit('session/event', chatSession, { type: 'user/message', seq: 2, time: 2, data: { text: 'What do you think about that?' } })
+    const secondChatEvent = await adapter.host.mapPreStep!({
+      agent: chatAgent,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'What do you think about that?' }] }],
+      turn: 2, step: 1, signal: event.signal,
+    })
+    assert.equal(secondChatEvent.profileHints?.taskType, 'chat')
+    const secondChatDecision = await adapter.host.intakeGate!.preStep(secondChatEvent, async () => ({ kind: 'enter', messages: [] }))
+    assert.equal(secondChatDecision.kind, 'enter')
+    assert.equal(questionIds.length, questionsAfterFirstChat)
+    const secondChatRun = adapter.host.resolveSessionRunId!(chatSession)!
+    assert.equal(secondChatRun, firstChatRun)
+    assert.deepEqual(await adapter.host.ennoController!.handle({
+      agent: { ...chatAgent, sessionId: chatSession.id, nativeAgent: chatAgent, nativeSession: chatSession },
+      turn: 2,
+      signal: event.signal,
+    }), { kind: 'close', nextAction: 'complete' })
+    const secondChatStep = await adapter.host.mapPreStep!({
+      agent: chatAgent,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Injected continuation context.' }] }],
+      turn: 2, step: 2, signal: event.signal,
+    })
+    assert.equal(secondChatStep.task, secondChatEvent.task)
+    assert.deepEqual(await adapter.host.intakeGate!.preStep(secondChatStep, async () => ({ kind: 'enter', messages: [] })), { kind: 'enter', messages: [] })
+    assert.equal(adapter.host.resolveSessionRunId!(chatSession), firstChatRun)
+    assert.equal(questionIds.length, questionsAfterFirstChat)
+    ;(root as any).emit('session/event', chatSession, { type: 'assistant/message', seq: 3, time: 3, data: { text: 'second answer' } })
+    assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
+
+    ;(root as any).emit('session/event', chatSession, { type: 'user/message', seq: 4, time: 4, data: { text: 'And one more follow-up.' } })
+    const thirdChatEvent = await adapter.host.mapPreStep!({
+      agent: chatAgent,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'And one more follow-up.' }] }],
+      turn: 3, step: 1, signal: event.signal,
+    })
+    assert.equal(thirdChatEvent.profileHints?.taskType, 'chat')
+    const thirdChatDecision = await adapter.host.intakeGate!.preStep(thirdChatEvent, async () => ({ kind: 'enter', messages: [] }))
+    assert.equal(thirdChatDecision.kind, 'enter')
+    assert.equal(questionIds.length, questionsAfterFirstChat)
+    const thirdChatRun = adapter.host.resolveSessionRunId!(chatSession)!
+    assert.equal(thirdChatRun, secondChatRun)
+    assert.deepEqual(await adapter.host.ennoController!.handle({
+      agent: { ...chatAgent, sessionId: chatSession.id, nativeAgent: chatAgent, nativeSession: chatSession },
+      turn: 3,
+      signal: event.signal,
+    }), { kind: 'close', nextAction: 'complete' })
+    ;(root as any).emit('session/event', chatSession, { type: 'assistant/message', seq: 5, time: 5, data: { text: 'third answer' } })
+    assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
+    await adapter.host.bridge!.flush()
+    assert.deepEqual(adapter.host.bridge!.observerErrors, [])
+
     const afterChat = openConnection(f.databasePath)
     try {
       assert.equal(afterChat.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get<{ count: number }>()!.count, ennoContractsBeforeChat)
-      assert.equal(afterChat.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>((chatClose!).runId)?.status, 'completed')
+      assert.equal(afterChat.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(thirdChatRun)?.status, 'active')
+      assert.equal(afterChat.prepare("SELECT COUNT(*) AS count FROM ledger_events WHERE run_id = ? AND source_type = 'dsh-session'").get<{ count: number }>(thirdChatRun)!.count, 5)
     } finally {
       afterChat.close()
     }
+    const chatClose = await adapter.host.resolveSessionClose!(chatSession.id, chatSession)
+    assert.deepEqual(chatClose, { runId: thirdChatRun, status: 'completed' })
+    await adapter.host.lifecycle!.closeTurn(chatClose!)
     assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
     soulModelInvocable = false
     await assert.rejects(Promise.resolve(adapter.host.mapPreStep!({

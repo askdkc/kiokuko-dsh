@@ -25,6 +25,7 @@ import { createDshIntakeAnswerer, createDshConfirmationAnswerer, type DshUserQue
 import { createDshCapabilityCatalog, type DshCapabilityCatalog } from './capability-catalog.js'
 import { STANDARD_SKILL_MANIFESTS } from '../setup/standard-skills.js'
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js'
+import { KiokukoError } from '../errors.js'
 import { injectDshContext, selectDshDirectiveSources } from './context-injection.js'
 import { projectDshDirective } from './directive-projection.js'
 import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, type EnnoOperationResponse } from '../enno-oduno/service.js'
@@ -89,6 +90,7 @@ interface TurnRecord {
   task: string
   turn: number
   prepared: DshIntakeGateResult['prepared']
+  catalog: DshCapabilityCatalog
   /** Monotonic host generation assigned before each prepare begins. */
   prepareGeneration: number
   contextInjectionKey?: string
@@ -218,6 +220,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const modes = new DshPonytailModes()
   const confirmation = userQuestions === undefined ? undefined : createDshConfirmationAnswerer(userQuestions)
   let prepareGeneration = 0
+  const continuedChatTurns = new Map<string, {
+    readonly fingerprint: string
+    readonly result: DshIntakeGateResult
+    readonly nativeAgent?: object
+    readonly nativeSession?: object
+  }>()
 
   const identityKey = (agentId: string, sessionId: string): string => `${agentId}\u0000${sessionId}`
   const turnKey = (agentId: string, sessionId: string, turn: number): string => `${identityKey(agentId, sessionId)}\u0000${turn}`
@@ -249,6 +257,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       task: event.task,
       turn: event.turn,
       prepared: result.prepared,
+      catalog: result.catalog,
       prepareGeneration: generation,
       failed: false,
       closed: false,
@@ -267,6 +276,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     }
     item.prepareGeneration = generation
     item.task = event.task
+    item.catalog = result.catalog
     turns.set(key, item)
     latestBySession.set(event.sessionId, item)
     const modeRequest = `dsh:${event.agent.id}:${event.sessionId}:${event.turn}`
@@ -300,6 +310,45 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       // context deliveries that finish out of order.
       const generation = ++prepareGeneration
       await runtime.withDatabase((database) => resolveProjectWorkspaceReadOnly(database, event.cwd))
+      const cacheKey = `${event.sessionId}\u0000${event.turn}`
+      const fingerprint = canonicalContentHash({
+        sessionId: event.sessionId,
+        agentId: event.agent.id,
+        turn: event.turn,
+        task: event.task,
+        cwd: event.cwd,
+        profileHints: event.profileHints ?? null,
+        evidence: event.evidence ?? null,
+        skillDiscoveryMode: event.skillDiscoveryMode ?? null,
+        catalogDigest: event.capabilities.digest,
+      })
+      const cached = continuedChatTurns.get(cacheKey)
+      if (cached !== undefined) {
+        if (cached.fingerprint !== fingerprint
+          || cached.nativeAgent !== event.nativeAgent
+          || cached.nativeSession !== event.nativeSession) {
+          throw new KiokukoError('CONFLICT', 'dsh logical chat turn was reused with different bound input')
+        }
+        this.assertCatalog(cached.result.catalog, event.capabilities)
+        return event.signal.aborted ? { ...cached.result, admitted: false } : cached.result
+      }
+      const previous = currentForAgentEvent(event.agent.id, event.sessionId, undefined, event.nativeSession, event.nativeAgent)
+      if (previous !== undefined
+        && previous.turn < event.turn
+        && previous.prepared.intake.profile.taskType === 'chat') {
+        this.assertCatalog(previous.catalog, event.capabilities)
+        const continued = { admitted: !event.signal.aborted, prepared: previous.prepared, catalog: event.capabilities }
+        if (continued.admitted) {
+          continuedChatTurns.set(cacheKey, {
+            fingerprint,
+            result: continued,
+            ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
+            ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
+          })
+          record(event, continued, generation)
+        }
+        return continued
+      }
       const prepared = await super.prepare(event)
       if (prepared.admitted) record(event, prepared, generation)
       return prepared
@@ -311,6 +360,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (decision.kind !== 'enter') return decision
       const messages = await contextMessages(event, result)
       return { ...decision, messages: [...decision.messages, ...messages] }
+    }
+    override clearTurn(sessionId: string, turn: number): void {
+      super.clearTurn(sessionId, turn)
+      continuedChatTurns.delete(`${sessionId}\u0000${turn}`)
     }
   }
 
@@ -360,6 +413,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       signal: payload.signal,
     })
     const bound = currentForAgentEvent(payload.agent.id, sessionId, payload.turn, boundSession as object | undefined, payload.agent as object)
+    const previous = bound === undefined
+      ? currentForAgentEvent(payload.agent.id, sessionId, undefined, boundSession as object | undefined, payload.agent as object)
+      : undefined
     // DSH supplies only the messages claimed for this particular step. After
     // the first step that batch may contain steering/injected context rather
     // than the original user task, so the established logical-turn record is
@@ -374,6 +430,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       step: payload.step,
       task,
       cwd,
+      ...((previous?.prepared.intake.profile.taskType === 'chat'
+        || bound?.prepared.intake.profile.taskType === 'chat' && continuedChatTurns.has(`${sessionId}\u0000${payload.turn}`))
+        ? { profileHints: { taskType: 'chat' as const } }
+        : {}),
       capabilities: catalog,
       signal: payload.signal,
     }
@@ -576,10 +636,25 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
     if (item.failed) return { runId: item.runId, status: 'failed' }
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
+    // A chat run spans the quiet time between user messages. Enno's
+    // inapplicable `complete` means that no orchestration is required for this
+    // turn; it does not mean that the persistent conversation has ended.
+    if (item.prepared.intake.profile.taskType === 'chat') return undefined
     if (state.status === 'completed' || state.nextAction === 'complete') return { runId: item.runId, status: 'completed' }
     // Idle means the driver has no active work, not that Enno reached a
     // terminal state. Keep active, blocked, and verification states open.
     return undefined
+  }
+  const resolveSessionClose = async (sessionId: string, nativeSession: object): Promise<{ runId: string; status: 'completed' | 'failed' | 'cancelled' } | undefined> => {
+    const item = currentSession(sessionId)
+    if (item === undefined || item.closed || item.nativeSession !== nativeSession) return undefined
+    if (item.failed) return { runId: item.runId, status: 'failed' }
+    const state = await runtime.withDatabase((database) => stateForRun(database, item))
+    if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
+    if (item.prepared.intake.profile.taskType === 'chat' || state.status === 'completed' || state.nextAction === 'complete') {
+      return { runId: item.runId, status: 'completed' }
+    }
+    return { runId: item.runId, status: 'cancelled' }
   }
   const closeRun = async (input: { runId: string; status: 'completed' | 'failed' | 'cancelled' }): Promise<void> => {
     await lifecycleClose(runtime)(input)
@@ -631,6 +706,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ennoController,
     lifecycle: bridgeLifecycle,
     resolveIdleClose,
+    resolveSessionClose,
   }
 
   return {
@@ -641,6 +717,14 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       try { policy.dispose() } catch (error) { failures.push(error) }
       try { modes.dispose() } catch (error) { failures.push(error) }
       try { ennoController.dispose() } catch (error) { failures.push(error) }
+      const remainingChats = [...new Map(
+        [...turns.values()]
+          .filter((item) => !item.closed && item.prepared.intake.profile.taskType === 'chat')
+          .map((item) => [item.runId, item]),
+      ).values()]
+      for (const item of remainingChats) {
+        try { await bridgeLifecycle.closeTurn({ runId: item.runId, status: item.failed ? 'failed' : 'completed' }) } catch (error) { failures.push(error) }
+      }
       try { await bridgeLifecycle.dispose() } catch (error) { failures.push(error) }
       // Observer failures are deliberately fail-closed, but must not prevent
       // the database/runtime from being closed and releasing its resources.
