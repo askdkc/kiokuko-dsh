@@ -166,7 +166,12 @@ The dsh integration provides:
   live while the user decides and no stale confirmation directive can race the
   next Goki role. The card offers approve/cancel; **Chat about it** returns the
   normal composer, and the next human message becomes same-run revision
-  feedback before Zenki resumes;
+  feedback before Zenki resumes. DSH defines the card chrome from its own UI
+  locale, while Kiokuko supplies the plan body as Markdown. Kiokuko derives an
+  English or Japanese body language from the original task, instructs Zenki to
+  keep every natural-language plan field in that language, and renders headings,
+  lists, paths, commands, dependencies, checks, and limits without changing the
+  DSH `plan-review` intent or decision labels;
 - ordered, idempotent SessionEvent bridging that retains the pre-binding turn
   prefix, drains long model streams in bounded batches, preserves every valid
   source-event reference, and flushes only the exact bound run at each DSH
@@ -186,6 +191,13 @@ the native conversation still carries the user's new instruction to the model.
 For an unchanged `execute_work_unit` action, the continuation explicitly tells
 the model to inspect the latest Enno tool result and retry the current WorkUnit;
 it must not wait for an invented next WorkUnit.
+
+A DSH model-request failure, including a WebSocket failure, also leaves an
+unfinished Enno run active and does not automatically replay model or tool
+work. When the user continues in a later turn, the adapter revalidates the exact
+DSH session, contract revision, and current WorkUnit, then rotates its execution
+lease before reinjecting the directive. Recovery therefore remains available
+after the old 15-minute lease expires without allowing an older turn to report.
 
 Ordinary chat remains open while the agent is idle between conversational
 messages. An explicit build, debug, review, research, writing, analysis, or

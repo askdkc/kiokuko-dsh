@@ -30,6 +30,7 @@ function snapshot(overrides: {
   expertIds?: string[];
   skillEntries?: EnnoRunSnapshot['contract']['skillSet']['entries'];
   cwd?: string;
+  userFacingLanguage?: EnnoRunSnapshot['userFacingLanguage'];
 } = {}): EnnoRunSnapshot {
   const provenance = overrides.provenance ?? {
     scope: 'inferred', exclusions: 'inferred', acceptanceCriteria: 'inferred',
@@ -92,6 +93,7 @@ function snapshot(overrides: {
     clientSessionId: null,
     repositoryRoot: REPOSITORY_ROOT,
     taskType: 'build',
+    userFacingLanguage: overrides.userFacingLanguage ?? 'en',
     status: overrides.status ?? 'needs_confirmation',
     revision: contract.revision,
     confirmationState: 'pending',
@@ -159,7 +161,8 @@ test('every provenance key maps to exactly its designated display section', () =
 test('projection carries every confirmation section without internal identifiers', () => {
   const projection = buildUserFacingConfirmation(snapshot())!;
   const rendered = canonicalJson(projection);
-  assert.equal(projection.presentationVersion, 1);
+  assert.equal(projection.presentationVersion, 2);
+  assert.equal(projection.language, 'en');
   assert.deepEqual(projection.actions, ['approve', 'revise', 'cancel']);
   assert.deepEqual(projection.scope.paths, ['src/api.ts', 'src/api.test.ts']);
   assert.deepEqual(projection.exclusions.paths, ['docs/']);
@@ -199,6 +202,14 @@ test('expert selections display registered areas with preserved reasons', () => 
   assert.equal(modeling!.area, 'Problem shaping and representation design');
   assert.equal(effects!.reason, 'deterministic mapping rules');
   assert.equal(effects!.basis, 'proposal');
+  const japanese = buildUserFacingConfirmation(snapshot({
+    expertIds: ['code.effects.v1'],
+    userFacingLanguage: 'ja',
+  }))!;
+  assert.equal(japanese.presentationVersion, 2);
+  assert.equal(japanese.language, 'ja');
+  assert.equal(japanese.title, '計画の確認');
+  assert.equal(japanese.workItems[0]!.expertise[0]!.area, 'データベース・ファイルシステム・ネットワーク・プロセスへの作用');
   assert.throws(
     () => buildUserFacingConfirmation(snapshot({ expertIds: ['code.unknown.v9'] })),
     /outside the registered expert set/iu,

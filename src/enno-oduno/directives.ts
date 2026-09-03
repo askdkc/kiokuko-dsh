@@ -16,6 +16,7 @@ import type {
   SkillSetEntry,
   StoredWorkUnit,
   UserFacingConfirmation,
+  UserFacingLanguage,
   WorkUnit,
 } from './types.js';
 import { advisoryDirectiveForSnapshot } from './advisory.js';
@@ -102,6 +103,11 @@ function executionReportSchema(snapshot: EnnoRunSnapshot): Record<string, unknow
 const CONFIRMATION_OBJECTIVE = `Return every item in userFacingConfirmation to the user in the user's language. Translate headings only; preserve paths, executable names, arguments, limits, and every listed item. Do not expose raw directive JSON, internal field names, WorkUnit IDs, expert IDs, or verifier IDs. Wait for explicit approve, revise, or cancel before calling enno_answer.`;
 
 const ZENKI_SINGLE_PURPOSE_PLANNING_CONTRACT = `After ${STANDARD_SOUL_SKILL_NAME} routes the work, read the compact ${STANDARD_FUNCTION_SKILL_NAME} index before decomposing the WorkPlan. Shape every code-changing WorkUnit around one cohesive externally observable function or use-case contract with one responsibility and one reason to change. State its success, expected failures, effect profile, and focused runnable test target. Select one to three versioned expertRefs for its actual risks; a UI unit needs at least one code expert and one UI expert. Compose those units without meaningless micro-functions, unrelated responsibilities, or loading every expert fragment by default.`;
+
+function planLanguageInstruction(language: UserFacingLanguage): string {
+  const name = language === 'ja' ? 'Japanese' : 'English';
+  return `Write every user-facing natural-language plan field in ${name}, matching the original user's language. Keep paths, commands, identifiers, and code symbols unchanged.`;
+}
 
 function boundedObjective(value: string): string {
   return value.slice(0, 16_384);
@@ -235,8 +241,8 @@ export function directiveForRun(snapshot: EnnoRunSnapshot): RoleDirective | null
       harness: harnessDirective(snapshot.clientKind, snapshot.clientVersion, role),
       handoff: snapshot.handoff,
       objective: boundedObjective(snapshot.blocker === null
-        ? `Create a bounded WorkPlan that realizes this Oduno ideal: ${snapshot.ideal?.objective ?? snapshot.handoff.objective}. ${ZENKI_SINGLE_PURPOSE_PLANNING_CONTRACT} Select only available Skills and define focused plus final verifiers. Do not implement changes.`
-        : `Revise the WorkPlan in response to Enno-Oduno review or user feedback: ${snapshot.blocker} ${ZENKI_SINGLE_PURPOSE_PLANNING_CONTRACT}`),
+        ? `Create a bounded WorkPlan that realizes this Oduno ideal: ${snapshot.ideal?.objective ?? snapshot.handoff.objective}. ${planLanguageInstruction(snapshot.userFacingLanguage)} ${ZENKI_SINGLE_PURPOSE_PLANNING_CONTRACT} Select only available Skills and define focused plus final verifiers. Do not implement changes.`
+        : `Revise the WorkPlan in response to Enno-Oduno review or user feedback: ${snapshot.blocker} ${planLanguageInstruction(snapshot.userFacingLanguage)} ${ZENKI_SINGLE_PURPOSE_PLANNING_CONTRACT}`),
       requiredSkills: orderedUniqueSkillNames(
         [STANDARD_SOUL_SKILL_NAME, STANDARD_FUNCTION_SKILL_NAME],
         requiredSkills,

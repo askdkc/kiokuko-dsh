@@ -39,6 +39,7 @@ import {
   type WorkReportResult,
   type WorkUnitStatus,
 } from './types.js';
+import { userFacingLanguageForTask } from './language.js';
 import {
   advisoryContextForSnapshot,
   advisoryInputDigest,
@@ -337,6 +338,19 @@ function assertLedgerIdentity(database: SqliteDatabase, identity: EnnoIdentity, 
   }
 }
 
+function userFacingLanguage(database: SqliteDatabase, runId: string): EnnoRunSnapshot['userFacingLanguage'] {
+  const row = database.prepare(`
+    SELECT s.task_text AS task
+    FROM run_intakes AS ri
+    JOIN akinator_sessions AS s ON s.id = ri.session_id
+    WHERE ri.run_id = ?
+  `).get<{ task: unknown }>(runId);
+  if (row === undefined || typeof row.task !== 'string' || row.task.trim() === '') {
+    return integrity('Stored Enno intake task is invalid');
+  }
+  return userFacingLanguageForTask(row.task);
+}
+
 export function readEnnoSnapshot(database: SqliteDatabase, identity: EnnoIdentity): EnnoRunSnapshot {
   assertLedgerIdentity(database, identity);
   const row = contractRow(database, identity.runId);
@@ -394,6 +408,7 @@ export function readEnnoSnapshot(database: SqliteDatabase, identity: EnnoIdentit
     clientSessionId: row.client_session_id,
     repositoryRoot: row.repository_root,
     taskType: row.task_type,
+    userFacingLanguage: userFacingLanguage(database, row.run_id),
     status,
     revision: row.revision,
     confirmationState: row.confirmation_state,

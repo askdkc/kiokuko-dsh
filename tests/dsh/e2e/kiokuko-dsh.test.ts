@@ -125,9 +125,10 @@ test('composed host boundaries preserve model, tool, question, ledger, and turn-
     },
   })
   const confirmation = {
+    presentationVersion: 2, language: 'en',
     title: 'Confirm', summary: { basis: 'proposal', text: 'Proceed' }, scope: { basis: 'proposal', paths: [] },
     exclusions: { basis: 'proposal', paths: [] }, completion: { basis: 'proposal', items: ['done'] }, skills: [], workItems: [],
-    finalChecks: { checks: [] }, attemptLimit: { basis: 'proposal', maxAttempts: 1 }, actions: ['approve', 'revise', 'cancel'],
+    finalChecks: { basis: 'proposal', checks: [] }, attemptLimit: { basis: 'proposal', maxAttempts: 1 }, actions: ['approve', 'revise', 'cancel'],
   } as never
   assert.equal((await answerer.ask(confirmation)).action, 'approve')
   assert.equal(questionAnswers.length, 1)

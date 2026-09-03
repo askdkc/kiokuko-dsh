@@ -273,6 +273,7 @@ test('Zenki directive binds Akinator, repository, local capability, and referenc
   const discovery = { attempted: false, mode: 'off', requirements: [], queries: [], cacheHits: 0, candidates: 0, selected: [], failures: [] };
   const directive = generateRoleDirective('zenki', {
     runId: 'planning', taskType: 'build', status: 'zenki_planning', contractRevision: 1,
+    userFacingLanguage: 'ja',
     clientKind: 'opencode', clientVersion: '0.13.0',
     contract: {
       revision: 1, scope: ['src/App.tsx'], exclusions: [], acceptanceCriteria: [],
@@ -301,6 +302,7 @@ test('Zenki directive binds Akinator, repository, local capability, and referenc
   assert.match(directive.objective, /focused runnable test target/iu);
   assert.match(directive.objective, /without meaningless micro-functions/iu);
   assert.match(directive.objective, /one to three versioned expertRefs/iu);
+  assert.match(directive.objective, /user-facing natural-language plan field in Japanese/iu);
   assert.deepEqual(directive.requiredSkills, [
     'kiokuko-soul',
     'kiokuko-single-purpose-functions',

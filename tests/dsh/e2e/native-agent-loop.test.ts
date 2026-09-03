@@ -115,17 +115,14 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
   const workResult = {
     result: { outcome: 'completed', summary: 'Implementation completed.', mutated: false, changedPaths: [] },
   }
-  const flowResponses = (suffix: string, longPlanningStep = false, pauseBeforeWork = false, retryWork = false) => [
+  const flowResponses = (suffix: string, longPlanningStep = false, failBeforeWork = false, retryWork = false) => [
     mock.textResponse('The ideal is ready for the host advisory round.'),
     mock.toolCallResponse(`ideal-${suffix}`, 'enno_ideal_submit', { ideal, advisoryDisposition: idealDispositions }),
     mock.textResponse(longPlanningStep
       ? `The plan is ready for the host advisory round. ${'x'.repeat(4_531)}`
       : 'The plan is ready for the host advisory round.'),
     mock.toolCallResponse(`plan-${suffix}`, 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
-    ...(pauseBeforeWork ? [
-      mock.textResponse('I stopped before executing the current WorkUnit.'),
-      mock.textResponse('I am still waiting for another WorkUnit instead of retrying the current one.'),
-    ] : []),
+    ...(failBeforeWork ? [() => { throw new llm.LlmError('WebSocket error', 'PI_AI_ERROR') }] : []),
     mock.toolCallResponse(`work-${suffix}`, 'enno_work_report', workResult),
     ...(retryWork ? [mock.toolCallResponse(`work-${suffix}-retry`, 'enno_work_report', workResult)] : []),
     mock.toolCallResponse(`finish-${suffix}`, 'enno_finish', {
@@ -158,6 +155,8 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
   let confirmations = 0
   const confirmationPresentationKinds: string[] = []
   const confirmationSawCompletedPlanResult: boolean[] = []
+  const confirmationQuestions: string[] = []
+  const confirmationDetails: string[] = []
   let liveAgent: any
   const questionFiber = ctx.plugin({
     name: 'kiokuko-dsh-real-loop-questions',
@@ -169,6 +168,8 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
           if (question.id === 'kiokuko-plan-confirmation') {
             confirmations += 1
             confirmationPresentationKinds.push(question.intent?.kind ?? 'generic')
+            confirmationQuestions.push(question.question)
+            confirmationDetails.push(question.detail)
             const expectedPlanCall = ['plan-one', 'plan-two', 'plan-two-revised'][confirmations - 1]
             confirmationSawCompletedPlanResult.push(liveAgent.session.snapshotEvents().some((event: any) => (
               event.type === 'tool/result'
@@ -283,6 +284,16 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
       if (close !== undefined) await adapter.host.lifecycle!.closeTurn(close)
     }
     await completeTurn('@PLAN.md を実装')
+    const interrupted = openConnection(databasePath)
+    try {
+      interrupted.prepare(`
+        UPDATE enno_execution_leases
+        SET lease_expires_at = '2000-01-01T00:00:00.000Z'
+        WHERE run_id = ?
+      `).run(seededRunId)
+    } finally {
+      interrupted.close()
+    }
     await completeTurn('止まった WorkUnit から再開してください。')
     await completeTurn('@PLAN.md の残りを実装')
     await completeTurn('計画を src のみに絞って再提出してください。')
@@ -304,10 +315,16 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     assert.equal(failedFocusedPayload.executionLease?.workUnitId, 'implement-plan')
     assert.equal(results.some((event: any) => event.data.message.content[0]?.toolCallId === 'work-one-retry'), true)
     assert.equal(turnEnds.length, 6)
-    assert.notEqual(turnEnds[0]?.data.reason.kind, 'aborted')
+    assert.deepEqual(turnEnds[0]?.data.reason, {
+      kind: 'error',
+      error: { message: 'WebSocket error', code: 'PI_AI_ERROR' },
+    })
     assert.equal(confirmations, 3)
     assert.deepEqual(confirmationPresentationKinds, ['plan-review', 'plan-review', 'plan-review'])
     assert.deepEqual(confirmationSawCompletedPlanResult, [true, true, true])
+    assert.deepEqual(confirmationQuestions, Array(3).fill('提案された計画を確認し、操作を選択してください。'))
+    assert.equal(confirmationDetails.every((detail) => /^# 計画の確認$/mu.test(detail)), true)
+    assert.equal(confirmationDetails.every((detail) => /^## 作業項目$/mu.test(detail)), true)
     const injectedTexts = liveAgent.session.snapshotEvents()
       .filter((event: any) => event.type === 'user/message' && event.data.source?.plugin === 'kiokuko-dsh')
       .flatMap((event: any) => event.data.content)

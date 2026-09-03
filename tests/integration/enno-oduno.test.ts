@@ -2407,7 +2407,7 @@ test("a needs_confirmation plan presents a complete user-facing confirmation pro
     const prepared = await prepareAgentTask(database, {
       requestId: "confirmation-projection",
       cwd: root,
-      task: "Repair the add function",
+      task: "add関数を修正する",
       profileHints: {
         taskType: "debug",
         target: "src/add.js",
@@ -2457,7 +2457,9 @@ test("a needs_confirmation plan presents a complete user-facing confirmation pro
     ]);
     const projection = plan.ennoOduno.directive?.userFacingConfirmation;
     assert.ok(projection !== undefined);
-    assert.equal(projection.presentationVersion, 1);
+    assert.equal(projection.presentationVersion, 2);
+    assert.equal(projection.language, "ja");
+    assert.equal(projection.title, "計画の確認");
     assert.deepEqual(projection.actions, ["approve", "revise", "cancel"]);
     assert.deepEqual(projection.summary, {
       basis: "proposal",
@@ -2481,7 +2483,7 @@ test("a needs_confirmation plan presents a complete user-facing confirmation pro
     assert.deepEqual(projection.workItems[0]?.dependsOn, []);
     assert.deepEqual(projection.workItems[0]?.expertise, [
       {
-        area: "Regression prevention and verification design",
+        area: "回帰防止と検証設計",
         basis: "proposal",
         reason: "Prove the add regression with focused tests",
       },
