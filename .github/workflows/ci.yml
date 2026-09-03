@@ -58,6 +58,9 @@ jobs:
       - name: Verify package contents
         run: npm run pack:check
 
+      - name: Lint package publication metadata
+        run: npm run publint
+
       - name: Verify reproducible prepare output
         run: npm run verify:prepare
 
