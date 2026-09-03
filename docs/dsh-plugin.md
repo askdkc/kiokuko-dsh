@@ -158,6 +158,13 @@ The dsh integration provides:
   commands routed to the exact invoking agent and session;
 - revision, route, phase, lease, idempotency, confirmation, verifier, and
   meditation gates through the Kiokuko core;
+- plan submission completes and concludes its model step before DSH opens a
+  dedicated `plan-review` interaction. Approval or cancellation is then
+  settled at the awaited turn-stopping boundary, so no model tool call remains
+  live while the user decides and no stale confirmation directive can race the
+  next Goki role. The card offers approve/cancel; **Chat about it** returns the
+  normal composer, and the next human message becomes same-run revision
+  feedback before Zenki resumes;
 - ordered, idempotent SessionEvent bridging that drains long model streams in
   bounded batches, preserves every valid source-event reference, and performs a
   final flush before terminal ledger close, including the tool result and final
@@ -207,13 +214,15 @@ then runs the pack/install/dump-config/Web-start/Web-stop/remove flow when a
 `dsh` executable is available. When `DSH_BIN` points into a local DeepSeek
 Harness source checkout (or `KIOKUKO_DSH_SOURCE_ROOT` is set), it also resumes a
 persisted pending advisory round and runs two consecutive full Enno agent-loop
-turns through intake, ideal, planning, explicit confirmation, work reporting, final
+flows through intake, ideal, planning, dedicated review, work reporting, final
 verification, advisory disposition, meditation, transcript flush, and terminal
-close. It then handles consecutive `all fixed?` and commit-message turns without
-creating another Enno contract. The first flow includes a streamed response
-large enough to cross the bridge's batching boundary. Without a dsh executable the
-CLI portion is reported as `unsupported`; CI sets `KIOKUKO_REQUIRE_DSH_CLI=1`
-so absence is a failure rather than an unverified success.
+close. The second flow dismisses review, carries revision feedback through the
+next human turn, resubmits, and approves before work starts. It then handles
+consecutive `all fixed?` and commit-message turns without creating another Enno
+contract. The first flow includes a streamed response large enough to cross the
+bridge's batching boundary. Without a dsh executable the CLI portion is reported
+as `unsupported`; CI sets `KIOKUKO_REQUIRE_DSH_CLI=1` so absence is a failure
+rather than an unverified success.
 
 The current compatibility measurement is:
 

@@ -80,6 +80,52 @@ test('completed and blocked states close silently without an extra model request
   }
 })
 
+test('confirmation is settled at turn stopping before the next role is injected', async () => {
+  const agent = { id: 'confirmation', steers: [] as unknown[], cancels: [] as string[] }
+  const waiting = state('ask_user_confirmation', false)
+  waiting.status = 'needs_confirmation'
+  waiting.currentRole = 'enno-oduno'
+  waiting.directive = {
+    ...state('submit_plan').directive!,
+    role: 'enno-oduno',
+    workUnit: null,
+    userFacingConfirmation: {
+      presentationVersion: 1,
+      title: 'Approve plan',
+      summary: { basis: 'proposal', text: 'Implement the bounded plan.' },
+      scope: { basis: 'user', paths: ['src'] },
+      exclusions: { basis: 'user', paths: [] },
+      completion: { basis: 'proposal', items: ['Tests pass'] },
+      skills: [],
+      workItems: [],
+      finalChecks: { basis: 'proposal', checks: [] },
+      attemptLimit: { basis: 'proposal', maxAttempts: 3 },
+      actions: ['approve', 'revise', 'cancel'],
+    },
+  }
+  const executing = state('execute_work_unit', 'work')
+  const reads = [waiting, executing]
+  const injected: EnnoOdunoState[] = []
+  let confirmations = 0
+  const controller = new DshEnnoController({
+    readState: async () => reads.shift() ?? executing,
+    confirmUser: async ({ state: current }): Promise<'submitted'> => {
+      confirmations += 1
+      assert.equal(current.nextAction, 'ask_user_confirmation')
+      return 'submitted'
+    },
+    injectNextStepContext: async ({ state: current }) => { injected.push(current) },
+  })
+
+  const decision = await controller.handle(event(agent))
+
+  assert.equal(confirmations, 1)
+  assert.equal(decision.kind, 'steer')
+  assert.deepEqual(injected.map((current) => current.nextAction), ['execute_work_unit'])
+  assert.equal(agent.steers.length, 1)
+  assert.deepEqual(agent.cancels, [])
+})
+
 test('same directive is steered once per turn and then cancelled instead of looping', async () => {
   const agent = { id: 'session', steers: [] as unknown[], cancels: [] as string[] }
   const controller = new DshEnnoController({ readState: async () => state('submit_plan') })

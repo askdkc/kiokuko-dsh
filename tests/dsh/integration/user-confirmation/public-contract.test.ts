@@ -22,7 +22,7 @@ function service(answer: { selected: string[]; custom?: string }): DshUserQuesti
 test('confirmation exposes the public contract while omitting host identity', () => {
   const text = renderDshConfirmation(confirmation)
   assert.match(text, /src\/dsh\/tools\.ts/u)
-  assert.match(text, /Choose one: approve, revise, cancel/u)
+  assert.match(text, /Choose approve or cancel here\. Use Chat about it to describe a revision/u)
   assert.equal(/runId|resumeToken|leaseToken|expectedRevision/iu.test(text), false)
 })
 
@@ -38,12 +38,16 @@ test('only an explicit revise action may carry requested changes', async () => {
 test('confirmation binds the request to the exact native agent', async () => {
   const agent = { id: 'root-agent' }
   let receivedAgent: object | undefined
+  let receivedQuestion: Parameters<DshUserQuestions['ask']>[0] | undefined
   const answerer = createDshConfirmationAnswerer({
     ask: async (request) => {
       receivedAgent = request.agent
+      receivedQuestion = request
       return { answers: [{ id: request.questions[0]!.id, selected: ['approve'] }] }
     },
   })
   await answerer.ask(confirmation, undefined, agent)
   assert.equal(receivedAgent, agent)
+  assert.deepEqual(receivedQuestion?.questions[0]?.intent, { kind: 'plan-review', approve: 'approve' })
+  assert.deepEqual(receivedQuestion?.questions[0]?.options?.map((option) => option.label), ['approve', 'cancel'])
 })

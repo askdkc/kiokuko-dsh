@@ -41,6 +41,12 @@ export interface DshEnnoControllerDependencies {
   readonly advisoryRunner?: DshAdvisoryRunner
   readonly submitAdvisory?: (result: DshAdvisoryRoundResult, input: { readonly event: DshTurnStoppingEvent; readonly state: EnnoOdunoState }) => void | EnnoOdunoState | PromiseLike<void | EnnoOdunoState>
   readonly runFinalVerification?: (input: { readonly event: DshTurnStoppingEvent; readonly state: EnnoOdunoState }) => void | EnnoOdunoState | PromiseLike<void | EnnoOdunoState>
+  /** Settle plan approval after the model tool and step have fully completed. */
+  readonly confirmUser?: (input: {
+    readonly event: DshTurnStoppingEvent
+    readonly state: EnnoOdunoState
+    readonly confirmation: UserFacingConfirmation
+  }) => 'submitted' | 'dismissed' | PromiseLike<'submitted' | 'dismissed'>
 }
 
 export interface DshConfirmationControllerDependencies {
@@ -51,6 +57,7 @@ export interface DshConfirmationControllerDependencies {
 
 export type DshConfirmationDecision =
   | { readonly kind: 'submitted'; readonly answer: DshConfirmationAnswer }
+  | { readonly kind: 'dismissed' }
   | { readonly kind: 'blocked'; readonly reason: 'answerer_unavailable' | 'stale_revision' | 'aborted' }
 
 export type DshEnnoNextActionHandler =
@@ -82,7 +89,16 @@ export class DshConfirmationController {
   async confirm(input: { readonly confirmation: UserFacingConfirmation; readonly expectedRevision: number; readonly signal?: AbortSignal }): Promise<DshConfirmationDecision> {
     if (input.signal?.aborted) return { kind: 'blocked', reason: 'aborted' }
     if (this.#dependencies.answerer === undefined) return { kind: 'blocked', reason: 'answerer_unavailable' }
-    const answer = await this.#dependencies.answerer.ask(input.confirmation, input.signal)
+    let answer: DshConfirmationAnswer
+    try {
+      answer = await this.#dependencies.answerer.ask(input.confirmation, input.signal)
+    } catch (error) {
+      if (input.signal?.aborted) return { kind: 'blocked', reason: 'aborted' }
+      if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'ASK_CANCELLED') {
+        return { kind: 'dismissed' }
+      }
+      throw error
+    }
     if (input.signal?.aborted) return { kind: 'blocked', reason: 'aborted' }
     if (await this.#dependencies.readRevision() !== input.expectedRevision) return { kind: 'blocked', reason: 'stale_revision' }
     await this.#dependencies.submit({
@@ -149,6 +165,7 @@ export class DshEnnoController {
   readonly #advisoryRunner: DshAdvisoryRunner | undefined
   readonly #submitAdvisory: DshEnnoControllerDependencies['submitAdvisory']
   readonly #runFinalVerification: DshEnnoControllerDependencies['runFinalVerification']
+  readonly #confirmUser: DshEnnoControllerDependencies['confirmUser']
   readonly #replayScopes = new Map<ReplayScopeKey, ReplayScope>()
 
   constructor(dependencies: DshEnnoControllerDependencies) {
@@ -158,6 +175,7 @@ export class DshEnnoController {
     this.#advisoryRunner = dependencies.advisoryRunner
     this.#submitAdvisory = dependencies.submitAdvisory
     this.#runFinalVerification = dependencies.runFinalVerification
+    this.#confirmUser = dependencies.confirmUser
     if (!Number.isSafeInteger(this.#maxSteersPerDirective) || this.#maxSteersPerDirective < 1 || this.#maxSteersPerDirective > 8) {
       throw new Error('maxSteersPerDirective must be between 1 and 8')
     }
@@ -231,7 +249,30 @@ export class DshEnnoController {
     let currentState = state
     let selection: DshDirectiveSourceSelection
     try {
-      selection = selectDshDirectiveSources(state.directive)
+      if (currentState.nextAction === 'ask_user_confirmation') {
+        const confirmation = currentState.directive?.userFacingConfirmation
+        if (confirmation === undefined || this.#confirmUser === undefined) {
+          return { kind: 'abort', reason: 'state_unavailable' }
+        }
+        const outcome = await this.#confirmUser({ event, state: currentState, confirmation })
+        if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
+        if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
+        if (outcome === 'dismissed') return { kind: 'close', nextAction: 'ask_user_confirmation' }
+        const confirmed = await this.#readState(event)
+        if (confirmed === null || !confirmed.applicable) return { kind: 'close', nextAction: 'complete' }
+        const confirmedHandler = DSH_ENNO_NEXT_ACTION_HANDLERS[confirmed.nextAction]
+        if (confirmedHandler === undefined) return { kind: 'abort', reason: 'state_unavailable' }
+        if (confirmedHandler.kind === 'terminal') return { kind: 'close', nextAction: confirmed.nextAction }
+        if (confirmed.directive === null) return { kind: 'abort', reason: 'directive_missing' }
+        if ((confirmed.contractRevision !== null && confirmed.directive.contractRevision !== confirmed.contractRevision)
+          || (confirmed.routeEpoch !== null && confirmed.directive.routeEpoch !== confirmed.routeEpoch)) {
+          return { kind: 'abort', reason: 'stale_directive' }
+        }
+        currentState = confirmed
+      }
+      const currentDirective = currentState.directive
+      if (currentDirective === null) return { kind: 'abort', reason: 'directive_missing' }
+      selection = selectDshDirectiveSources(currentDirective)
       if (currentState.nextAction === 'run_final_verification') {
         if (this.#runFinalVerification === undefined) return { kind: 'abort', reason: 'state_unavailable' }
         try {

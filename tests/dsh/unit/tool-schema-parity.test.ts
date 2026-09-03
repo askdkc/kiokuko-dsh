@@ -142,3 +142,23 @@ test('native tool execution binds the authoritative session without inventing a 
     agent: { id: 'native-agent', dshSessionId: 'forged-session' }, signal,
   } as any), /authoritative session/u)
 })
+
+test('a plan awaiting human review concludes the model turn after its successful result', async () => {
+  let conclusions = 0
+  const definitions = createDshToolDefinitions({
+    bind: () => ({
+      runId: 'run-1', dshSessionId: 'session-1', workspace: 'workspace-1',
+      orchestrationId: 'orch-1', revision: 1, routeEpoch: 0,
+    }),
+    execute: async () => ({ ennoOduno: { nextAction: 'ask_user_confirmation' } }),
+  })
+  const definition = definitions.find((item) => item.name === 'enno_plan_submit')!
+
+  await definition.execute({}, {
+    callId: 'plan-review-call', name: 'enno_plan_submit', arguments: {},
+    agent: { id: 'native-agent', session: { id: 'session-1' } }, signal,
+    concludeTurn: () => { conclusions += 1 },
+  } as any)
+
+  assert.equal(conclusions, 1)
+})

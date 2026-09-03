@@ -124,9 +124,12 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     }),
     mock.textResponse('The run is complete.'),
   ]
+  const secondFlow = flowResponses('two')
   const adapterScript = new mock.MockAdapter([
     ...flowResponses('one', true),
-    ...flowResponses('two'),
+    ...secondFlow.slice(0, 4),
+    mock.toolCallResponse('plan-two-revised', 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
+    ...secondFlow.slice(4),
     mock.textResponse('Yes. The requested implementation and verification are complete.'),
     mock.textResponse('fix(dsh): keep long Enno sessions recoverable'),
   ])
@@ -141,13 +144,28 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
   await ctx.plugin(agentLoop.default, { agents: [] })
   ctx.llm.registerAdapter(['mock'], adapterScript)
   let confirmations = 0
+  const confirmationPresentationKinds: string[] = []
+  const confirmationSawCompletedPlanResult: boolean[] = []
+  let liveAgent: any
   const questionFiber = ctx.plugin({
     name: 'kiokuko-dsh-real-loop-questions',
     apply(questionContext: any) {
       return questionContext.provide('userQuestions', {
         async ask(request: any) {
           const question = request.questions[0]
-          if (question.id === 'kiokuko-plan-confirmation') confirmations += 1
+          if (question.id === 'kiokuko-plan-confirmation') {
+            confirmations += 1
+            confirmationPresentationKinds.push(question.intent?.kind ?? 'generic')
+            const expectedPlanCall = ['plan-one', 'plan-two', 'plan-two-revised'][confirmations - 1]
+            confirmationSawCompletedPlanResult.push(liveAgent.session.snapshotEvents().some((event: any) => (
+              event.type === 'tool/result'
+              && event.data.message.content[0]?.toolCallId === expectedPlanCall
+            )))
+            assert.deepEqual(question.options.map((option: any) => option.label), ['approve', 'cancel'])
+            if (confirmations === 2) {
+              throw Object.assign(new Error('the user chose Chat about it'), { code: 'ASK_CANCELLED' })
+            }
+          }
           return { answers: [{ id: question.id, selected: [question.id === 'kiokuko-plan-confirmation' ? 'approve' : 'build'] }] }
         },
       })
@@ -173,7 +191,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
   })
   const composition = await mountDshComposition(ctx, adapter.host)
   try {
-    const liveAgent = await ctx.agentLoop.create(
+    liveAgent = await ctx.agentLoop.create(
       session.SessionId('real-loop-session'),
       { provider: 'mock', model: 'mock' },
       { cwd: fixtureRoot },
@@ -253,6 +271,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     }
     await completeTurn('@PLAN.md を実装')
     await completeTurn('@PLAN.md の残りを実装')
+    await completeTurn('計画を src のみに絞って再提出してください。')
     await completeTurn('all fixed?')
     await completeTurn('gimme commit message.')
 
@@ -263,9 +282,11 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
       event.type === 'assistant/message' && event.sourceEventSeqs?.length > 2_048
     ))
     assert.ok(longAssistantMessage, 'the real loop must exercise a source sequence list larger than the former bridge limit')
-    assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(10).fill(false), JSON.stringify({ toolEvents, turnEnds }))
-    assert.equal(turnEnds.length, 4)
-    assert.equal(confirmations, 2)
+    assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(11).fill(false), JSON.stringify({ toolEvents, turnEnds }))
+    assert.equal(turnEnds.length, 5)
+    assert.equal(confirmations, 3)
+    assert.deepEqual(confirmationPresentationKinds, ['plan-review', 'plan-review', 'plan-review'])
+    assert.deepEqual(confirmationSawCompletedPlanResult, [true, true, true])
     const injectedTexts = liveAgent.session.snapshotEvents()
       .filter((event: any) => event.type === 'user/message' && event.data.source?.plugin === 'kiokuko-dsh')
       .flatMap((event: any) => event.data.content)
@@ -273,6 +294,11 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     assert.equal(injectedTexts.some((text: string) => text.includes('Current Kiokuko advisory evidence')), true)
     assert.equal(injectedTexts.some((text: string) => text.includes('ideal.skillContributions to exactly []')), true)
     assert.equal(injectedTexts.some((text: string) => text.includes('"maxItems":0')), true)
+    assert.equal(
+      injectedTexts.some((text: string) => text.includes('Return every item in userFacingConfirmation')),
+      false,
+      'DSH must settle confirmation at the host boundary instead of injecting a stale Enno confirmation role',
+    )
     for (const disposition of [...idealDispositions, ...planningDispositions, ...finalReviewDispositions]) {
       assert.equal(injectedTexts.some((text: string) => text.includes(`Checked ${disposition.slotId}.`)), true)
     }
