@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
+import { prepareAgentTask } from '../../../src/akinator/agent-task.js'
 import { initializeDatabase } from '../../../src/commands/init.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
@@ -364,6 +365,60 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       messages: [{ role: 'user', content: [{ type: 'text', text: 'Injected continuation context.' }] }],
       turn: 1, step: 3, signal: event.signal,
     })), /incomplete|mandatory|catalog/u)
+
+    soulModelInvocable = true
+    const writingEvent = await adapter.host.mapPreStep!({
+      agent: event.nativeAgent as any,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'gimme commit message.' }], source: { kind: 'user' } }],
+      turn: 4, step: 1, signal: event.signal,
+    })
+    assert.equal((await adapter.host.intakeGate!.preStep(writingEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+    const writingRun = adapter.host.resolveSessionRunId!(event.nativeSession as { id: string })!
+    assert.notEqual(writingRun, firstActionRun)
+    const afterWritingPivot = openConnection(f.databasePath)
+    try {
+      assert.equal(afterWritingPivot.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(firstActionRun)?.status, 'cancelled')
+      assert.equal(afterWritingPivot.prepare('SELECT COUNT(*) AS count FROM enno_contracts WHERE run_id = ?').get<{ count: number }>(writingRun)?.count, 0)
+    } finally {
+      afterWritingPivot.close()
+    }
+    const writingClose = await adapter.host.resolveIdleClose!('native-agent', 'native-session', event.nativeSession, event.nativeAgent)
+    assert.deepEqual(writingClose, { runId: writingRun, status: 'completed' })
+    await adapter.host.lifecycle!.closeTurn(writingClose!)
+
+    const coldSession = { id: 'cold-pivot-session', header: { cwd: f.root } }
+    const seeded = openConnection(f.databasePath)
+    let coldRun = ''
+    try {
+      const prepared = await prepareAgentTask(seeded, {
+        requestId: 'cold-pivot-request',
+        task: 'Fix the cold-resume defect',
+        cwd: f.root,
+        profileHints: { taskType: 'debug', target: 'src/index.ts', expected: 'tests pass', constraints: null },
+        capabilities: STANDARD_SKILL_MANIFESTS.map(({ name }) => ({ kind: 'skill' as const, name })),
+        client: { kind: 'dsh', sessionId: coldSession.id },
+        skillDiscoveryMode: 'off',
+      })
+      coldRun = prepared.run.runId
+    } finally {
+      seeded.close()
+    }
+    const coldAgent = { id: 'cold-pivot-agent', session: coldSession }
+    const coldWritingEvent = await adapter.host.mapPreStep!({
+      agent: coldAgent,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'gimme commit message.' }], source: { kind: 'user' } }],
+      turn: 1, step: 1, signal: event.signal,
+    })
+    assert.equal((await adapter.host.intakeGate!.preStep(coldWritingEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+    const coldWritingRun = adapter.host.resolveSessionRunId!(coldSession)!
+    assert.notEqual(coldWritingRun, coldRun)
+    const afterColdPivot = openConnection(f.databasePath)
+    try {
+      assert.equal(afterColdPivot.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(coldRun)?.status, 'cancelled')
+      assert.equal(afterColdPivot.prepare('SELECT COUNT(*) AS count FROM enno_contracts WHERE run_id = ?').get<{ count: number }>(coldWritingRun)?.count, 0)
+    } finally {
+      afterColdPivot.close()
+    }
   } finally {
     await disposeComposition()
     await adapter.dispose()

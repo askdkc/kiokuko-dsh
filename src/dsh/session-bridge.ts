@@ -133,17 +133,28 @@ function validId(value: unknown, label: string): string {
   return value
 }
 
+function validSourceEventSeqs(value: unknown, eventSequence: number): readonly number[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) validation('SessionEvent source sequence list is invalid')
+  const seen = new Set<number>()
+  const sequences: number[] = []
+  for (const sourceSequence of value) {
+    if (!Number.isSafeInteger(sourceSequence) || sourceSequence < 0 || sourceSequence >= eventSequence || seen.has(sourceSequence)) {
+      validation('SessionEvent source sequence list is invalid')
+    }
+    seen.add(sourceSequence)
+    sequences.push(sourceSequence)
+  }
+  return Object.freeze(sequences)
+}
+
 function validEvent(value: unknown): DshSessionEvent {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) validation('SessionEvent must be a plain object')
   const event = value as Record<string, unknown>
   if (typeof event.type !== 'string' || event.type.length === 0 || event.type.length > 256 || /[\p{Cc}\p{Cf}]/u.test(event.type)) validation('SessionEvent type is invalid')
   if (!Number.isSafeInteger(event.seq) || (event.seq as number) < 0) validation('SessionEvent sequence is invalid')
   if (!Number.isFinite(event.time)) validation('SessionEvent time is invalid')
-  const sourceEventSeqs = event.sourceEventSeqs === undefined
-    ? undefined
-    : Array.isArray(event.sourceEventSeqs) && event.sourceEventSeqs.length <= MAX_SOURCE_EVENT_SEQS && event.sourceEventSeqs.every((value) => Number.isSafeInteger(value) && value >= 0)
-      ? Object.freeze([...event.sourceEventSeqs] as number[])
-      : (() => { validation('SessionEvent source sequence list is invalid') })()
+  const sourceEventSeqs = validSourceEventSeqs(event.sourceEventSeqs, event.seq as number)
   return {
     type: event.type,
     seq: event.seq as number,
@@ -183,7 +194,6 @@ function ledgerEvent(item: DshQueuedSessionEvent): LedgerEventInput {
 const MAX_COMMITTED_EVENTS = 4_096
 const MAX_PENDING_EVENTS = 4_096
 const MAX_OBSERVER_ERRORS = 64
-const MAX_SOURCE_EVENT_SEQS = 2_048
 
 /** Bridge committed dsh session events into Kiokuko's ordered ledger. */
 export class DshSessionBridge {
@@ -197,6 +207,7 @@ export class DshSessionBridge {
   readonly #committed = new Map<string, string>()
   readonly #observerErrors: unknown[] = []
   #flushTail: Promise<void> = Promise.resolve()
+  #backgroundFlush: Promise<void> | undefined
   #closePromise: Promise<void> | undefined
   #nextGeneration = 0
   #closing = false
@@ -206,6 +217,23 @@ export class DshSessionBridge {
     // Preserve the first failures for fail-closed reads without allowing a
     // malformed-event storm to grow this long-lived bridge without bound.
     if (this.#observerErrors.length < MAX_OBSERVER_ERRORS) this.#observerErrors.push(error)
+  }
+
+  #scheduleBackgroundFlush(): void {
+    if (this.#backgroundFlush !== undefined || this.#closed || this.#closing) return
+    const operation = this.flush()
+    this.#backgroundFlush = operation
+    void operation.then(
+      () => {
+        if (this.#backgroundFlush === operation) this.#backgroundFlush = undefined
+        if (this.#pending.size >= MAX_BATCH_EVENTS) this.#scheduleBackgroundFlush()
+      },
+      () => {
+        // Keep the failed suffix queued. The next awaited durability barrier
+        // retries it and surfaces a persistent storage failure synchronously.
+        if (this.#backgroundFlush === operation) this.#backgroundFlush = undefined
+      },
+    )
   }
 
   constructor(options: DshSessionBridgeOptions) {
@@ -319,6 +347,7 @@ export class DshSessionBridge {
         return
       }
       this.#pending.set(sourceEventId, queued)
+      if (this.#pending.size >= MAX_BATCH_EVENTS) this.#scheduleBackgroundFlush()
     } catch (error) {
       this.#recordObserverError(error)
     }

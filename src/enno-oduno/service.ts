@@ -798,7 +798,7 @@ function assertIdealSkillCoverage(snapshot: EnnoRunSnapshot, ideal: IdealSubmiss
     throw ennoValidationError('ideal_submit', [{
       path: ['ideal', 'skillContributions'],
       reasonCode: actual.length < expected.length ? 'too_few_items' : 'undeclared_skill',
-      ...(actual.length < expected.length ? { expected: { minItems: expected.length } } : {}),
+      expected: { minItems: expected.length, maxItems: expected.length, allowedValues: expected },
     }]);
   }
 }

@@ -39,6 +39,14 @@ test('derives task types from Japanese and English task text while preserving ex
   assert.deepEqual(hints, before);
 });
 
+test('status checks and commit-message requests are not misclassified as implementation fixes', () => {
+  assert.equal(deriveProfile('all fixed?').taskType, 'analysis');
+  assert.equal(deriveProfile('Is everything fixed now?').taskType, 'analysis');
+  assert.equal(deriveProfile('gimme commit message.').taskType, 'writing');
+  assert.equal(deriveProfile('コミットメッセージをください').taskType, 'writing');
+  assert.equal(deriveProfile('Fix the failing test').taskType, 'debug');
+});
+
 test('asks only missing required fields in taskType, target, expected order', () => {
   const empty = { taskType: null, target: null, expected: null, constraints: null } as const;
   const taskType = evaluateProfile(empty, 0);

@@ -40,7 +40,7 @@ import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
 import { curateMemoryCandidates } from '../memory/curator.js'
 import { checkpointScopedMemoryWithProvenance, type ScopedCheckpointInput } from '../memory/scoped-memory.js'
 import { LedgerStore } from '../ledger/store.js'
-import type { EnnoNextAction, EnnoOdunoState } from '../enno-oduno/types.js'
+import { ENNO_APPLICABLE_TASK_TYPES, type EnnoNextAction, type EnnoOdunoState } from '../enno-oduno/types.js'
 
 interface NativeSkills {
   registerProvider(create: (control: { readonly signal: AbortSignal }) => unknown): () => void
@@ -150,6 +150,16 @@ function phaseForState(state: EnnoOdunoState): DshToolPolicyState['phase'] {
   if (state.status === 'blocked') return 'blocked'
   if (state.status === 'cancelled') return 'cancelled'
   return 'completed'
+}
+
+function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState): boolean {
+  if (state.status !== 'oduno_ideal') return false
+  const incomingType = resolveGroundedIntakeProfile({
+    task: event.task,
+    cwd: event.cwd,
+    ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
+  }).profileHints.taskType
+  return incomingType !== null && !ENNO_APPLICABLE_TASK_TYPES.includes(incomingType as (typeof ENNO_APPLICABLE_TASK_TYPES)[number])
 }
 
 function policyState(state: EnnoOdunoState, record: TurnRecord, sessionId: string, lease?: EnnoOperationResponse['executionLease']): DshToolPolicyState {
@@ -381,9 +391,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         if (event.signal.aborted) return { admitted: false, prepared: previous.prepared, catalog: event.capabilities }
         const previousState = await runtime.withDatabase((database) => stateForRun(database, previous))
         const previousWasChat = previous.prepared.intake.profile.taskType === 'chat'
+        const superseded = previous.prepared.ennoOduno.applicable && supersedesUnstartedEnno(event, previousState)
         const continuePrevious = previousWasChat
           ? event.profileHints?.taskType === 'chat'
-          : previousState.status !== 'completed'
+          : !superseded
+            && previousState.status !== 'completed'
             && previousState.status !== 'blocked'
             && previousState.status !== 'cancelled'
             && previousState.nextAction !== 'complete'
@@ -405,7 +417,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         if (retireSupersededRun === undefined) throw new Error('kiokuko-dsh run lifecycle is unavailable')
         await retireSupersededRun(
           previous,
-          previousState.status === 'cancelled' ? 'cancelled' : previousState.status === 'blocked' ? 'failed' : 'completed',
+          superseded || previousState.status === 'cancelled' ? 'cancelled' : previousState.status === 'blocked' ? 'failed' : 'completed',
         )
       }
       const resumed = await resumeExistingRun?.(event)
@@ -514,6 +526,15 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     }
     const candidate = candidates[0]!
     const runId = candidate.runId
+    const snapshot = readEnnoSnapshot(database, {
+      runId,
+      workspace: project.workspace,
+      orchestrationId: candidate.orchestrationId,
+    })
+    if (!event.signal.aborted && supersedesUnstartedEnno(event, stateForSnapshot(snapshot))) {
+      terminalizeLedgerRunInTransaction(database, runId, 'cancelled')
+      return undefined
+    }
     const decision = decideAdapterContinuation(database, 'dsh', {
       session_id: event.sessionId,
       cwd: event.cwd,
@@ -521,11 +542,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     if (!decision.continue || decision.runId !== runId) {
       throw new KiokukoError('CONFLICT', decision.warning ?? 'The active Enno-Oduno run cannot be resumed by this DSH session')
     }
-    const snapshot = readEnnoSnapshot(database, {
-      runId,
-      workspace: project.workspace,
-      orchestrationId: candidate.orchestrationId,
-    })
     const intakeLink = readRunIntakeLink(database, { workspace: project.workspace, runId })
     const intake = readAkinatorSession(database, { workspace: project.workspace, sessionId: intakeLink.sessionId })
     if (intake.status === 'active') throw new KiokukoError('INTEGRITY_ERROR', 'Resumable Enno-Oduno run has unfinished intake')

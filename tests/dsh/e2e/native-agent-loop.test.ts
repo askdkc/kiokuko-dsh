@@ -24,7 +24,7 @@ function dshModule(relativePath: string): string {
   return pathToFileURL(join(dshSourceRoot, relativePath)).href
 }
 
-test('real DSH agent loop resumes persisted advisory state and completes two Enno flows', {
+test('real DSH agent loop resumes persisted state, completes two Enno flows, and handles consecutive lightweight follow-ups', {
   skip: dshSourceRoot === undefined ? 'requires a DeepSeek Harness source checkout' : false,
 }, async () => {
   const [cordis, llm, session, projection, systemPrompt, tools, agentRegistry, agentLoop, skills, mock] = await Promise.all([
@@ -104,10 +104,12 @@ test('real DSH agent loop resumes persisted advisory state and completes two Enn
   const idealDispositions = dispositions(['constraint_guardian', 'skill_trust_analyst', 'success_signal_critic'])
   const planningDispositions = dispositions(['workunit_architect', 'protocol_risk_reviewer', 'verification_designer'])
   const finalReviewDispositions = dispositions(['acceptance_auditor', 'regression_adversary', 'evidence_freshness_reviewer'])
-  const flowResponses = (suffix: string) => [
+  const flowResponses = (suffix: string, longPlanningStep = false) => [
     mock.textResponse('The ideal is ready for the host advisory round.'),
     mock.toolCallResponse(`ideal-${suffix}`, 'enno_ideal_submit', { ideal, advisoryDisposition: idealDispositions }),
-    mock.textResponse('The plan is ready for the host advisory round.'),
+    mock.textResponse(longPlanningStep
+      ? `The plan is ready for the host advisory round. ${'x'.repeat(4_531)}`
+      : 'The plan is ready for the host advisory round.'),
     mock.toolCallResponse(`plan-${suffix}`, 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
     mock.toolCallResponse(`work-${suffix}`, 'enno_work_report', {
       result: { outcome: 'completed', summary: 'Implementation completed.', mutated: false, changedPaths: [] },
@@ -122,7 +124,12 @@ test('real DSH agent loop resumes persisted advisory state and completes two Enn
     }),
     mock.textResponse('The run is complete.'),
   ]
-  const adapterScript = new mock.MockAdapter([...flowResponses('one'), ...flowResponses('two')])
+  const adapterScript = new mock.MockAdapter([
+    ...flowResponses('one', true),
+    ...flowResponses('two'),
+    mock.textResponse('Yes. The requested implementation and verification are complete.'),
+    mock.textResponse('fix(dsh): keep long Enno sessions recoverable'),
+  ])
   const ctx = new cordis.Context()
   await ctx.plugin(llm.default)
   await ctx.plugin(session.default)
@@ -246,21 +253,32 @@ test('real DSH agent loop resumes persisted advisory state and completes two Enn
     }
     await completeTurn('@PLAN.md を実装')
     await completeTurn('@PLAN.md の残りを実装')
+    await completeTurn('all fixed?')
+    await completeTurn('gimme commit message.')
 
     const toolEvents = liveAgent.session.snapshotEvents().filter((event: any) => event.type.startsWith('tool/'))
     const results = toolEvents.filter((event: any) => event.type === 'tool/result')
     const turnEnds = liveAgent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end')
+    const longAssistantMessage = liveAgent.session.snapshotEvents().find((event: any) => (
+      event.type === 'assistant/message' && event.sourceEventSeqs?.length > 2_048
+    ))
+    assert.ok(longAssistantMessage, 'the real loop must exercise a source sequence list larger than the former bridge limit')
     assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(10).fill(false), JSON.stringify({ toolEvents, turnEnds }))
+    assert.equal(turnEnds.length, 4)
     assert.equal(confirmations, 2)
     const injectedTexts = liveAgent.session.snapshotEvents()
       .filter((event: any) => event.type === 'user/message' && event.data.source?.plugin === 'kiokuko-dsh')
       .flatMap((event: any) => event.data.content)
       .flatMap((block: any) => block.type === 'text' ? [block.text] : [])
     assert.equal(injectedTexts.some((text: string) => text.includes('Current Kiokuko advisory evidence')), true)
+    assert.equal(injectedTexts.some((text: string) => text.includes('ideal.skillContributions to exactly []')), true)
+    assert.equal(injectedTexts.some((text: string) => text.includes('"maxItems":0')), true)
     for (const disposition of [...idealDispositions, ...planningDispositions, ...finalReviewDispositions]) {
       assert.equal(injectedTexts.some((text: string) => text.includes(`Checked ${disposition.slotId}.`)), true)
     }
-    assert.match(injectedTexts.at(-1) ?? '', /Finalized intake:[\s\S]*PLAN\.md/u)
+    assert.equal(injectedTexts.some((text: string) => /Finalized intake:[\s\S]*PLAN\.md/u.test(text)), true)
+    assert.equal(injectedTexts.some((text: string) => /Finalized intake:[\s\S]*all fixed\?/u.test(text)), true)
+    assert.match(injectedTexts.at(-1) ?? '', /Finalized intake:[\s\S]*gimme commit message/u)
     const stored = openConnection(databasePath)
     try {
       const rows = stored.prepare('SELECT status, ideal_json, meditation_json FROM enno_contracts ORDER BY created_at').all<{

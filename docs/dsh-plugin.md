@@ -150,13 +150,18 @@ The dsh integration provides:
 - host-bound capability catalogs are carried into plan submission, while
   advisory digests remain host-owned and the current model reports only its
   per-slot advisory dispositions after receiving the bounded advisory evidence;
+- Oduno ideal directives distinguish the mandatory Skill reading list from
+  Akinator-discovered Skill contributions, constrain the latter to the exact
+  selected names (including an exact empty list), and return bounded corrective
+  field diagnostics to DSH when a submission is rejected;
 - request-scoped Ponytail state for concurrent DSH conversations, with native
   commands routed to the exact invoking agent and session;
 - revision, route, phase, lease, idempotency, confirmation, verifier, and
   meditation gates through the Kiokuko core;
-- ordered, idempotent SessionEvent bridging with a final flush before terminal
-  ledger close, including the tool result and final assistant/turn events after
-  Oduno meditation; and
+- ordered, idempotent SessionEvent bridging that drains long model streams in
+  bounded batches, preserves every valid source-event reference, and performs a
+  final flush before terminal ledger close, including the tool result and final
+  assistant/turn events after Oduno meditation; and
 - bounded turn continuation, exact run/session/workspace/route binding, and
   in-memory plaintext continuation tokens.
 
@@ -169,6 +174,12 @@ cancelled, and blocked runs are closed before the next independent request
 starts; blocked runs retain their failed ledger outcome rather than lingering
 as unusable active bindings. Disposing the DSH session closes its current run
 after queued events are durable.
+
+Short status checks such as `all fixed?` are classified as analysis rather than
+as a new fix request, and commit-message requests are classified as writing.
+If either arrives while an earlier Enno run is still at the unstarted Oduno
+ideal boundary, the old run is cancelled and the explicit lightweight request
+starts independently instead of being trapped inside that contract.
 
 After a plugin reload or process restart has cleared in-memory turn state, the
 adapter resumes only the single unambiguous active Enno-Oduno run already bound
@@ -195,9 +206,12 @@ host adapter, validates model/tool/question/ledger/turn-end boundaries, and
 then runs the pack/install/dump-config/Web-start/Web-stop/remove flow when a
 `dsh` executable is available. When `DSH_BIN` points into a local DeepSeek
 Harness source checkout (or `KIOKUKO_DSH_SOURCE_ROOT` is set), it also resumes a
-persisted pending advisory round and runs two consecutive real agent-loop turns
-through intake, ideal, planning, explicit confirmation, work reporting, final
-verification, advisory disposition, meditation, transcript flush, and terminal close. Without a dsh executable the
+persisted pending advisory round and runs two consecutive full Enno agent-loop
+turns through intake, ideal, planning, explicit confirmation, work reporting, final
+verification, advisory disposition, meditation, transcript flush, and terminal
+close. It then handles consecutive `all fixed?` and commit-message turns without
+creating another Enno contract. The first flow includes a streamed response
+large enough to cross the bridge's batching boundary. Without a dsh executable the
 CLI portion is reported as `unsupported`; CI sets `KIOKUKO_REQUIRE_DSH_CLI=1`
 so absence is a failure rather than an unverified success.
 
