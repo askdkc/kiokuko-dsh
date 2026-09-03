@@ -176,6 +176,37 @@ test('events after native session disposal fail closed until a new created event
   dispose()
 })
 
+test('a sealed turn run releases observer bookkeeping before the next persistent-session turn', async () => {
+  const listeners = new Map<string, (...args: any[]) => void>()
+  const batches: string[] = []
+  let activeRun: string | undefined = 'turn-one'
+  const bridge = new DshSessionBridge({
+    runtime: { withDatabase: async <T>() => undefined as T },
+    appendBatch: async (runId) => { batches.push(runId) },
+  })
+  const dispose = mountDshSessionBridge({
+    on(name, listener) {
+      listeners.set(name, listener)
+      return () => { listeners.delete(name) }
+    },
+  }, bridge, () => activeRun)
+  const session = { id: 'persistent-session', header: { createdAt: 1 } }
+  listeners.get('session/created')!(session)
+  listeners.get('session/event')!(session, { type: 'turn/end', seq: 1, time: 1, data: null })
+  await bridge.flush()
+  bridge.sealRun('turn-one')
+  activeRun = undefined
+  listeners.get('session/event')!(session, { type: 'user/message', seq: 2, time: 2, data: { text: 'next turn' } })
+  assert.deepEqual(bridge.observerErrors, [])
+  activeRun = 'turn-two'
+  listeners.get('session/event')!(session, { type: 'assistant/message', seq: 3, time: 3, data: { text: 'continued' } })
+  await bridge.flush()
+  assert.deepEqual(batches, ['turn-one', 'turn-two'])
+  assert.equal(bridge.bindingOf(session.id), 'turn-two')
+  dispose()
+  await bridge.close()
+})
+
 test('a stale native session object cannot be rebound through a current run resolver', async () => {
   const listeners = new Map<string, (...args: any[]) => void>()
   const bridge = new DshSessionBridge({

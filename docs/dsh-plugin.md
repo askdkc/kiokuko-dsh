@@ -141,7 +141,8 @@ The dsh integration provides:
 - an explicit `chat` intake choice (including free-form aliases such as
   `just chatting` and `雑談`) and the task-type question's **Skip this
   question** action; both skip target/success follow-ups and never create an
-  Enno-Oduno contract;
+  Enno-Oduno contract, and the chat choice carries across later messages in
+  the same DSH conversation;
 - all fourteen Kiokuko operations, with only the seven model-facing operations
   exposed as model tools and host identity injected after argument validation;
 - revision, route, phase, lease, idempotency, confirmation, verifier, and
@@ -150,6 +151,11 @@ The dsh integration provides:
   ledger close; and
 - bounded turn continuation, exact run/session/workspace/route binding, and
   in-memory plaintext continuation tokens.
+
+Ordinary chat remains open while the agent is idle between messages. Each
+DSH conversation keeps one intake answer and one ledger run so every later
+message and ordered session event stays bound to the same conversation.
+Disposing the DSH session closes that chat run after its events are durable.
 
 `runId` is required for dsh resume. The plugin never selects a repository-wide
 latest run. Ambiguous, stale, cancelled, aborted, lease-conflicting, or

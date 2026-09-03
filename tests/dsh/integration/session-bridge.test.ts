@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DshSessionBridge, mountDshDurabilityBarriers, mountDshIdleLifecycle } from '../../../src/dsh/session-bridge.js'
+import { DshSessionBridge, mountDshDurabilityBarriers, mountDshIdleLifecycle, mountDshSessionLifecycle } from '../../../src/dsh/session-bridge.js'
 
 test('durability barriers flush before session, pre-step, tools, and first model dispatch', async () => {
   const calls: string[] = []
@@ -61,6 +61,31 @@ test('idle state-read and close failures are contained without a false terminal 
   await assert.doesNotReject(async () => { await listener?.({ agent: { id: 'agent-failed' }, status: 'idle' }) })
   assert.equal(closeCalls, 1)
   dispose()
+})
+
+test('session disposal closes the final conversation run and contains cleanup failures', async () => {
+  let listener: ((session: { id: string }) => unknown) | undefined
+  const closes: unknown[] = []
+  const nativeSession = { id: 'conversation-session' }
+  const dispose = mountDshSessionLifecycle({
+    on(_name, next) { listener = next; return () => { listener = undefined } },
+  }, {
+    closeTurn: async (close: unknown) => { closes.push(close) },
+  } as any, async (sessionId, session) => {
+    assert.equal(sessionId, nativeSession.id)
+    assert.equal(session, nativeSession)
+    return { runId: 'final-chat-run', status: 'completed' as const }
+  })
+  await listener?.(nativeSession)
+  assert.deepEqual(closes, [{ runId: 'final-chat-run', status: 'completed' }])
+  dispose()
+  assert.equal(listener, undefined)
+
+  let failingListener: ((session: { id: string }) => unknown) | undefined
+  mountDshSessionLifecycle({
+    on(_name, next) { failingListener = next; return () => undefined },
+  }, { closeTurn: async () => { throw new Error('close failed') } } as any, async () => ({ runId: 'failed-close', status: 'completed' as const }))
+  await assert.doesNotReject(async () => { await failingListener?.(nativeSession) })
 })
 
 test('session bridge can move to the next turn run without reattributing queued events', async () => {

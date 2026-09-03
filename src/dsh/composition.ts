@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingContext } from './enno-controller.js'
 import { DshIntakeGate, type DshPreStepDecision, type DshPreStepEvent, type DshPreStepContext } from './intake-gate.js'
-import { mountDshDurabilityBarriers, mountDshIdleLifecycle, mountDshSessionBridge, type DshIdleLifecycleContext, type DshRunLifecycle, type DshSessionBridge, type DshSessionBridgeContext, type DshSessionRunResolver } from './session-bridge.js'
+import { mountDshDurabilityBarriers, mountDshIdleLifecycle, mountDshSessionBridge, mountDshSessionLifecycle, type DshIdleLifecycleContext, type DshRunLifecycle, type DshSessionBridge, type DshSessionBridgeContext, type DshSessionLifecycleContext, type DshSessionRunResolver } from './session-bridge.js'
 import { mountDshToolPolicy, type DshToolPolicy } from './tool-policy.js'
 import { mountDshModelTools, type DshToolHost, type DshToolRegistrationContext } from './tools.js'
 import { DshPonytailModes, mountDshPonytailCommand, type DshPonytailCommandContext } from './commands.js'
@@ -60,6 +60,7 @@ export interface DshCompositionHost {
   readonly ennoController?: DshEnnoController
   readonly lifecycle?: DshRunLifecycle
   readonly resolveIdleClose?: (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object) => { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | PromiseLike<{ readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | undefined> | undefined
+  readonly resolveSessionClose?: (sessionId: string, nativeSession: object) => { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | PromiseLike<{ readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | undefined> | undefined
 }
 
 type DshToolHostRegistration = DshToolRegistrationContext['tools']['register']
@@ -211,6 +212,9 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     if (host.lifecycle !== undefined) {
       if (host.resolveIdleClose === undefined) throw new Error('kiokuko-dsh idle lifecycle requires a close resolver')
       ingressDisposers.push(mountDshIdleLifecycle(ctx as unknown as DshIdleLifecycleContext, host.lifecycle, host.resolveIdleClose))
+      if (host.resolveSessionClose !== undefined) {
+        ingressDisposers.push(mountDshSessionLifecycle(ctx as unknown as DshSessionLifecycleContext, host.lifecycle, host.resolveSessionClose))
+      }
     }
   } catch (error) {
     stopIngress()

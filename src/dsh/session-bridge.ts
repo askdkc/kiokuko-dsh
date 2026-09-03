@@ -42,7 +42,7 @@ export interface DshDurabilityContext {
 /** Minimal native dsh session surface used by the post-commit bridge. */
 export interface DshNativeSession {
   readonly id: string
-  readonly header?: { readonly createdAt?: number }
+  readonly header?: { readonly createdAt?: number; readonly cwd?: string }
 }
 
 export interface DshSessionBridgeContext {
@@ -431,7 +431,17 @@ export function mountDshSessionBridge(
     if (!allowDisposed && disposed.has(session.id)) throw new KiokukoError('CONFLICT', 'dsh session emitted an event after disposal')
     const runId = resolveRunId(session)
     if (runId === undefined) {
-      if (bound.has(session.id)) throw new KiokukoError('CONFLICT', 'dsh session no longer has an active run binding')
+      if (bound.has(session.id)) {
+        // A lifecycle close seals the run and releases the bridge binding
+        // before a persistent native session receives its next user turn.
+        // Retire the observer's matching stale bookkeeping as well. If the
+        // bridge still considers the session bound, the resolver disappeared
+        // unexpectedly and must continue to fail closed.
+        if (bridge.bindingOf(session.id) !== undefined) {
+          throw new KiokukoError('CONFLICT', 'dsh session no longer has an active run binding')
+        }
+        bound.delete(session.id)
+      }
       return undefined
     }
     const incarnation = incarnationFor(session, runId)
@@ -494,6 +504,10 @@ export interface DshIdleLifecycleContext {
   }) => unknown): () => void
 }
 
+export interface DshSessionLifecycleContext {
+  on(name: 'session/disposed', listener: (session: DshNativeSession) => unknown): () => void
+}
+
 /** Flush and close a bound run after dsh reports the agent's true idle state. */
 export function mountDshIdleLifecycle(
   ctx: DshIdleLifecycleContext,
@@ -510,6 +524,23 @@ export function mountDshIdleLifecycle(
       // Cordis `emit` does not await async listeners. Contain state-read,
       // durability, and close failures here so an ordinary idle event never
       // becomes an unhandled rejection or a false terminal transition.
+    }
+  })
+}
+
+/** Flush and close the last run when the owning conversation is disposed. */
+export function mountDshSessionLifecycle(
+  ctx: DshSessionLifecycleContext,
+  lifecycle: DshRunLifecycle,
+  resolveClose: (sessionId: string, nativeSession: object) => { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | PromiseLike<{ readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | undefined> | undefined,
+): () => void {
+  return ctx.on('session/disposed', async (session) => {
+    try {
+      const close = await resolveClose(session.id, session)
+      if (close !== undefined) await lifecycle.closeTurn(close)
+    } catch {
+      // Session disposal is post-commit host cleanup. Contain failures here;
+      // the lifecycle retains its close intent so adapter disposal can retry.
     }
   })
 }
