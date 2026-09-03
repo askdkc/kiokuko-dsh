@@ -104,7 +104,7 @@ interface TurnRecord {
   closed: boolean
 }
 
-function textFromMessages(messages: readonly unknown[]): string {
+function textFromMessages(messages: readonly unknown[], fallback?: string): string {
   const userTexts: string[] = []
   const legacyTexts: string[] = []
   for (const value of messages) {
@@ -134,7 +134,10 @@ function textFromMessages(messages: readonly unknown[]): string {
   // text when both are present.
   const texts = userTexts.length > 0 ? userTexts : legacyTexts
   const task = texts.join('\n').trim()
-  if (task.length === 0) throw new Error('dsh pre-step did not contain a user task')
+  if (task.length === 0) {
+    if (fallback !== undefined && fallback.trim().length > 0) return fallback
+    throw new Error('dsh pre-step did not contain a user task')
+  }
   return task
 }
 
@@ -341,7 +344,14 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       activeModeRequests.set(modeKey, modeRequest)
     }
     const existingState = states.get(item.runId)
-    if (sameRevision && existingState !== undefined) {
+    if (existingState !== undefined && existingState.revision === incomingRevision) {
+      // A continued native turn for the same Enno revision must retain the
+      // active WorkUnit lease and route epoch. Rebuilding policy from the
+      // public prepared projection would silently discard those host-only
+      // credentials and make the first report after recovery fail with
+      // lease_required. The operation path already advances this state when
+      // Enno changes phase; at pre-step only the delivery can legitimately be
+      // refreshed without a new contract revision.
       const { deliveryId: _previousDeliveryId, ...withoutDeliveryId } = existingState
       const deliveryId = result.prepared.context?.deliveryId
       const next = deliveryId === null || deliveryId === undefined
@@ -639,7 +649,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     // the first step that batch may contain steering/injected context rather
     // than the original user task, so the established logical-turn record is
     // the authoritative task projection.
-    const task = bound === undefined ? textFromMessages(payload.messages) : bound.task
+    // After a turn was deliberately paused, DSH may consume the next-turn
+    // inbox item before pre-step and expose an empty step-local message batch.
+    // The durable Enno run is still authoritative, so fall back to its last
+    // human task. The native conversation retains the new user message for the
+    // model, while any supplied step-local user text still replaces this
+    // fallback and is recorded as the continuation instruction.
+    const task = bound === undefined ? textFromMessages(payload.messages, previous?.task) : bound.task
     return {
       agent: { id: payload.agent.id },
       nativeAgent: payload.agent,
@@ -911,14 +927,15 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const item = currentForAgentEvent(agentId, sessionId, undefined, nativeSession, nativeAgent)
     if (item === undefined || item.closed) return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
-    if (item.failed) return { runId: item.runId, status: 'failed' }
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
     if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed' }
     // A chat run spans the quiet time between user messages. Enno's
     // inapplicable `complete` means that no orchestration is required for this
     // turn; it does not mean that the persistent conversation has ended.
     if (item.prepared.intake.profile.taskType === 'chat') return undefined
-    if (state.status === 'completed' || state.nextAction === 'complete') return { runId: item.runId, status: 'completed' }
+    if (state.status === 'completed' || state.nextAction === 'complete') {
+      return { runId: item.runId, status: item.failed ? 'failed' : 'completed' }
+    }
     // Idle means the driver has no active work, not that Enno reached a
     // terminal state. Keep only genuinely resumable active states open.
     return undefined

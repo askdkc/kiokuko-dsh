@@ -113,9 +113,15 @@ export class DshConfirmationController {
 export type DshTurnStoppingDecision =
   | { readonly kind: 'close'; readonly nextAction: EnnoNextAction }
   | { readonly kind: 'steer'; readonly nextAction: EnnoNextAction; readonly selection: DshDirectiveSourceSelection }
-  | { readonly kind: 'abort'; readonly reason: 'aborted' | 'stale_turn' | 'state_unavailable' | 'directive_missing' | 'stale_directive' | 'continuation_limit' | 'verification_failed' | 'context_injection_failed' }
+  | { readonly kind: 'pause'; readonly nextAction: EnnoNextAction; readonly reason: 'continuation_limit' }
+  | { readonly kind: 'abort'; readonly reason: 'aborted' | 'stale_turn' | 'state_unavailable' | 'directive_missing' | 'stale_directive' | 'verification_failed' | 'context_injection_failed' }
 
-const continuationText = 'Kiokuko の現在の処理は未完了です。提示された現在の指示に従って次の処理を実行し、完了を先取りしないでください。'
+function continuationText(nextAction: EnnoNextAction): string {
+  const currentWork = nextAction === 'execute_work_unit'
+    ? '新しい WorkUnit が提示されない場合、現在の WorkUnit はまだ受理されていません。直前の Enno tool result にある検証結果を確認し、同じ WorkUnit の修正または再報告を続けてください。'
+    : `現在の nextAction は ${nextAction} です。直前の Enno tool result と現在の指示を確認し、その処理を続けてください。`
+  return `Kiokuko の現在の処理は未完了です。${currentWork} 完了を先取りしないでください。`
+}
 
 type ReplayScopeKey = object | string
 
@@ -320,11 +326,15 @@ export class DshEnnoController {
       return { kind: 'abort', reason: 'state_unavailable' }
     }
     const used = scope.steers.get(key) ?? 0
-    if (used >= this.#maxSteersPerDirective) return { kind: 'abort', reason: 'continuation_limit' }
+    if (used >= this.#maxSteersPerDirective) {
+      return { kind: 'pause', nextAction: currentState.nextAction, reason: 'continuation_limit' }
+    }
     // Keys are scoped to the current native turn and are cleared only after
     // the high-water mark advances. This prevents replay while allowing an
     // unbounded sequence of independent turns.
-    if (used === 0 && scope.steers.size >= 4_096) return { kind: 'abort', reason: 'continuation_limit' }
+    if (used === 0 && scope.steers.size >= 4_096) {
+      return { kind: 'pause', nextAction: currentState.nextAction, reason: 'continuation_limit' }
+    }
     try {
       await this.#injectNextStepContext({ event, selection, state: currentState })
     } catch {
@@ -339,7 +349,7 @@ export class DshEnnoController {
       ...(event.agent.nativeAgent === undefined ? {} : { nativeAgent: event.agent.nativeAgent }),
       ...(event.agent.nativeSession === undefined ? {} : { nativeSession: event.agent.nativeSession }),
     })
-    event.agent.steer({ content: continuationText, source: 'kiokuko-dsh' })
+    event.agent.steer({ content: continuationText(currentState.nextAction), source: 'kiokuko-dsh' })
     return { kind: 'steer', nextAction: currentState.nextAction, selection }
   }
 

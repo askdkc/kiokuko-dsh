@@ -104,13 +104,17 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
   const idealDispositions = dispositions(['constraint_guardian', 'skill_trust_analyst', 'success_signal_critic'])
   const planningDispositions = dispositions(['workunit_architect', 'protocol_risk_reviewer', 'verification_designer'])
   const finalReviewDispositions = dispositions(['acceptance_auditor', 'regression_adversary', 'evidence_freshness_reviewer'])
-  const flowResponses = (suffix: string, longPlanningStep = false) => [
+  const flowResponses = (suffix: string, longPlanningStep = false, pauseBeforeWork = false) => [
     mock.textResponse('The ideal is ready for the host advisory round.'),
     mock.toolCallResponse(`ideal-${suffix}`, 'enno_ideal_submit', { ideal, advisoryDisposition: idealDispositions }),
     mock.textResponse(longPlanningStep
       ? `The plan is ready for the host advisory round. ${'x'.repeat(4_531)}`
       : 'The plan is ready for the host advisory round.'),
     mock.toolCallResponse(`plan-${suffix}`, 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
+    ...(pauseBeforeWork ? [
+      mock.textResponse('I stopped before executing the current WorkUnit.'),
+      mock.textResponse('I am still waiting for another WorkUnit instead of retrying the current one.'),
+    ] : []),
     mock.toolCallResponse(`work-${suffix}`, 'enno_work_report', {
       result: { outcome: 'completed', summary: 'Implementation completed.', mutated: false, changedPaths: [] },
     }),
@@ -126,7 +130,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
   ]
   const secondFlow = flowResponses('two')
   const adapterScript = new mock.MockAdapter([
-    ...flowResponses('one', true),
+    ...flowResponses('one', true, true),
     ...secondFlow.slice(0, 4),
     mock.toolCallResponse('plan-two-revised', 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
     ...secondFlow.slice(4),
@@ -270,6 +274,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
       if (close !== undefined) await adapter.host.lifecycle!.closeTurn(close)
     }
     await completeTurn('@PLAN.md を実装')
+    await completeTurn('止まった WorkUnit から再開してください。')
     await completeTurn('@PLAN.md の残りを実装')
     await completeTurn('計画を src のみに絞って再提出してください。')
     await completeTurn('all fixed?')
@@ -283,7 +288,8 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     ))
     assert.ok(longAssistantMessage, 'the real loop must exercise a source sequence list larger than the former bridge limit')
     assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(11).fill(false), JSON.stringify({ toolEvents, turnEnds }))
-    assert.equal(turnEnds.length, 5)
+    assert.equal(turnEnds.length, 6)
+    assert.notEqual(turnEnds[0]?.data.reason.kind, 'aborted')
     assert.equal(confirmations, 3)
     assert.deepEqual(confirmationPresentationKinds, ['plan-review', 'plan-review', 'plan-review'])
     assert.deepEqual(confirmationSawCompletedPlanResult, [true, true, true])
@@ -303,6 +309,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
       assert.equal(injectedTexts.some((text: string) => text.includes(`Checked ${disposition.slotId}.`)), true)
     }
     assert.equal(injectedTexts.some((text: string) => /Finalized intake:[\s\S]*PLAN\.md/u.test(text)), true)
+    assert.equal(injectedTexts.some((text: string) => /止まった WorkUnit から再開してください/u.test(text)), true)
     assert.equal(injectedTexts.some((text: string) => /Finalized intake:[\s\S]*all fixed\?/u.test(text)), true)
     assert.match(injectedTexts.at(-1) ?? '', /Finalized intake:[\s\S]*gimme commit message/u)
     const stored = openConnection(databasePath)

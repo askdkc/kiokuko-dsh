@@ -191,6 +191,23 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(questionIds.length, actionQuestionCount)
     assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:2'), false)
     assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:3'), true)
+    ;(root as any).emit('agent/error', { agent: event.nativeAgent, error: new Error('recoverable model turn failure') })
+    assert.equal(
+      await adapter.host.resolveIdleClose!('native-agent', 'native-session', event.nativeSession, event.nativeAgent),
+      undefined,
+      'a model-turn error must not terminalize an unfinished Enno run before a user can recover it',
+    )
+    const emptyRecoveryEvent = await adapter.host.mapPreStep!({
+      agent: event.nativeAgent as any,
+      messages: [],
+      turn: 4, step: 1, signal: event.signal,
+    })
+    assert.equal(emptyRecoveryEvent.task, thirdActionEvent.task)
+    assert.equal((await adapter.host.intakeGate!.preStep(emptyRecoveryEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+    assert.equal(adapter.host.resolveSessionRunId!(event.nativeSession as { id: string }), firstActionRun)
+    assert.equal(questionIds.length, actionQuestionCount)
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:3'), false)
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:4'), true)
     const fallbackAgent = { id: 'fallback-agent', sessionId: fallbackSession.id }
     const fallbackEvent = await adapter.host.mapPreStep!({
       agent: fallbackAgent,
@@ -207,7 +224,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     })
     assert.equal(fallbackNextEvent.task, fallbackEvent.task)
     assert.deepEqual(await adapter.host.intakeGate!.preStep(fallbackNextEvent, async () => ({ kind: 'enter', messages: [] })), { kind: 'enter', messages: [] })
-    assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:3'), true)
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:4'), true)
     assert.equal(adapter.host.ponytailModes!.isActive('dsh:fallback-agent:native-fallback:1'), true)
     const fallbackRun = adapter.host.resolveSessionRunId!(fallbackSession)!
     const blocked = openConnection(f.databasePath)
@@ -370,7 +387,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     const writingEvent = await adapter.host.mapPreStep!({
       agent: event.nativeAgent as any,
       messages: [{ role: 'user', content: [{ type: 'text', text: 'gimme commit message.' }], source: { kind: 'user' } }],
-      turn: 4, step: 1, signal: event.signal,
+      turn: 5, step: 1, signal: event.signal,
     })
     assert.equal((await adapter.host.intakeGate!.preStep(writingEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
     const writingRun = adapter.host.resolveSessionRunId!(event.nativeSession as { id: string })!
