@@ -43,10 +43,17 @@ export function resolveGroundedIntakeProfile(input: GroundedIntakeProfileInput):
   const cwd = boundedText(input.cwd, 'cwd', 4_096)
   if (!path.isAbsolute(cwd)) validation('cwd must be absolute')
   const hints = input.profileHints ?? {}
+  const groundedExpected = task.length <= 4_000
+    ? task
+    : 'Complete the requested work and verify the result against the full task.'
   const profile = deriveProfile(task, {
     taskType: hints.taskType ?? null,
-    target: optionalText(hints.target),
-    expected: optionalText(hints.expected),
+    // The native DSH turn is already bound to one canonical workspace and to
+    // the user's exact request.  Those are grounded answers to the generic
+    // target/completion fields; asking the user to repeat them adds no
+    // information and blocks the model before it can inspect referenced files.
+    target: optionalText(hints.target) ?? cwd,
+    expected: optionalText(hints.expected) ?? groundedExpected,
     constraints: optionalText(hints.constraints),
   })
   const evidence = input.evidence ?? []

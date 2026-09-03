@@ -80,6 +80,13 @@ export class DshIntakeGate {
     readonly nativeAgent?: object
     readonly nativeSession?: object
   }>()
+  readonly #preparing = new Map<string, {
+    readonly fingerprint: string
+    readonly agentId: string
+    readonly nativeAgent?: object
+    readonly nativeSession?: object
+    readonly promise: Promise<DshIntakeGateResult>
+  }>()
 
   constructor(
     runtime: Pick<DshRuntime, 'withDatabase'>,
@@ -125,61 +132,86 @@ export class DshIntakeGate {
       assertDshCapabilityCatalogStable(cached.result.catalog, event.capabilities)
       return cached.result
     }
-    let prepared = await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
-      requestId,
-      task: grounded.task,
-      cwd: grounded.cwd,
-      profileHints: grounded.profileHints,
-      capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
-      client: { kind: 'dsh', sessionId: event.sessionId },
-      ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
-      signal: event.signal,
-    }))
-    while (prepared.intake.status === 'needs_answer') {
-      if (this.#answerer === undefined || prepared.intake.question === null) {
-        const result = { admitted: false, prepared, catalog: event.capabilities }
-        this.#prepared.set(cacheKey, {
-          fingerprint,
-          result,
-          agentId: event.agent.id,
-          ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
-          ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
-        })
-        return result
+    const inFlight = this.#preparing.get(cacheKey)
+    if (inFlight !== undefined) {
+      if (inFlight.fingerprint !== fingerprint
+        || inFlight.agentId !== event.agent.id
+        || inFlight.nativeAgent !== event.nativeAgent
+        || inFlight.nativeSession !== event.nativeSession) {
+        conflict('dsh logical turn was reused with different bound input')
       }
-      const value = await this.#answerer.ask(prepared.intake.question, event.signal, event.nativeAgent)
-      const currentCapabilities = this.#readCapabilities === undefined
-        ? event.capabilities
-        : await this.#readCapabilities({
-          agent: event.agent,
-          ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
-          cwd: event.cwd,
-          signal: event.signal,
-        })
-      assertDshCapabilityCatalogStable(event.capabilities, currentCapabilities)
-      prepared = await this.#runtime.withDatabase((database) => answerAgentTask(database, {
-        sessionId: prepared.intake.sessionId,
-        runId: prepared.run.runId,
-        questionId: prepared.intake.question!.id,
-        value,
+      const result = await inFlight.promise
+      return event.signal.aborted ? { ...result, admitted: false } : result
+    }
+    const operation = (async (): Promise<DshIntakeGateResult> => {
+      let prepared = await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
+        requestId,
+        task: grounded.task,
         cwd: grounded.cwd,
+        profileHints: grounded.profileHints,
         capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
+        client: { kind: 'dsh', sessionId: event.sessionId },
         ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
         signal: event.signal,
       }))
-    }
-    const result = prepared.nextAction !== 'proceed'
-      ? { admitted: false, prepared, catalog: event.capabilities }
-      : { admitted: true, prepared, catalog: event.capabilities }
-    this.#prepared.set(cacheKey, {
+      while (prepared.intake.status === 'needs_answer') {
+        if (this.#answerer === undefined || prepared.intake.question === null) {
+          const result = { admitted: false, prepared, catalog: event.capabilities }
+          this.#prepared.set(cacheKey, {
+            fingerprint,
+            result,
+            agentId: event.agent.id,
+            ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
+            ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
+          })
+          return result
+        }
+        const value = await this.#answerer.ask(prepared.intake.question, event.signal, event.nativeAgent)
+        const currentCapabilities = this.#readCapabilities === undefined
+          ? event.capabilities
+          : await this.#readCapabilities({
+            agent: event.agent,
+            ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
+            cwd: event.cwd,
+            signal: event.signal,
+          })
+        assertDshCapabilityCatalogStable(event.capabilities, currentCapabilities)
+        prepared = await this.#runtime.withDatabase((database) => answerAgentTask(database, {
+          sessionId: prepared.intake.sessionId,
+          runId: prepared.run.runId,
+          questionId: prepared.intake.question!.id,
+          value,
+          cwd: grounded.cwd,
+          capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
+          ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
+          signal: event.signal,
+        }))
+      }
+      const result = prepared.nextAction !== 'proceed'
+        ? { admitted: false, prepared, catalog: event.capabilities }
+        : { admitted: true, prepared, catalog: event.capabilities }
+      this.#prepared.set(cacheKey, {
+        fingerprint,
+        result,
+        agentId: event.agent.id,
+        ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
+        ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
+      })
+      if (event.signal.aborted) return { admitted: false, prepared, catalog: event.capabilities }
+      return result
+    })()
+    this.#preparing.set(cacheKey, {
       fingerprint,
-      result,
       agentId: event.agent.id,
       ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
       ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
+      promise: operation,
     })
-    if (event.signal.aborted) return { admitted: false, prepared, catalog: event.capabilities }
-    return result
+    try {
+      return await operation
+    } finally {
+      if (this.#preparing.get(cacheKey)?.promise === operation) this.#preparing.delete(cacheKey)
+    }
   }
 
   async preStep(event: DshPreStepEvent, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> {
@@ -200,7 +232,9 @@ export class DshIntakeGate {
 
   /** Release the cached preparation for a turn once its owning run closes. */
   clearTurn(sessionId: string, turn: number): void {
-    this.#prepared.delete(`${sessionId}\u0000${turn}`)
+    const key = `${sessionId}\u0000${turn}`
+    this.#prepared.delete(key)
+    this.#preparing.delete(key)
   }
 }
 

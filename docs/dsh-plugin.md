@@ -136,15 +136,19 @@ The dsh integration provides:
 
 - the exact bundled `kiokuko-soul` system-prompt section and six standard Skill
   providers;
-- one current Akinator question at a time, with unresolved intake blocking the
-  model and tools;
+- one current Akinator question at a time only when the task type remains
+  ambiguous; the canonical workspace and exact user request ground the target
+  and completion fields without asking the user to repeat known context, and
+  unresolved intake blocks the model and tools;
 - an explicit `chat` intake choice (including free-form aliases such as
   `just chatting` and `雑談`) and the task-type question's **Skip this
   question** action; both skip target/success follow-ups and never create an
-  Enno-Oduno contract, and the chat choice carries across later messages in
-  the same DSH conversation;
+  Enno-Oduno contract, and the chat choice carries across conversational
+  follow-ups until an explicit actionable request starts a new run;
 - all fourteen Kiokuko operations, with only the seven model-facing operations
   exposed as model tools and host identity injected after argument validation;
+- request-scoped Ponytail state for concurrent DSH conversations, with native
+  commands routed to the exact invoking agent and session;
 - revision, route, phase, lease, idempotency, confirmation, verifier, and
   meditation gates through the Kiokuko core;
 - ordered, idempotent SessionEvent bridging with a final flush before terminal
@@ -152,10 +156,15 @@ The dsh integration provides:
 - bounded turn continuation, exact run/session/workspace/route binding, and
   in-memory plaintext continuation tokens.
 
-Ordinary chat remains open while the agent is idle between messages. Each
-DSH conversation keeps one intake answer and one ledger run so every later
-message and ordered session event stays bound to the same conversation.
-Disposing the DSH session closes that chat run after its events are durable.
+Ordinary chat remains open while the agent is idle between conversational
+messages. An explicit build, debug, review, research, writing, analysis, or
+DevOps request closes the preceding chat run before starting its task run.
+An unfinished, resumable non-chat run remains bound across later user turns so
+a follow-up instruction does not orphan the existing plan. Completed,
+cancelled, and blocked runs are closed before the next independent request
+starts; blocked runs retain their failed ledger outcome rather than lingering
+as unusable active bindings. Disposing the DSH session closes its current run
+after queued events are durable.
 
 `runId` is required for dsh resume. The plugin never selects a repository-wide
 latest run. Ambiguous, stale, cancelled, aborted, lease-conflicting, or

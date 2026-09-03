@@ -50,7 +50,10 @@ test('dsh capability descriptions accept native multiline text within the raw ca
 test('grounded profile and dsh turn request identity are deterministic', () => {
   const profile = resolveGroundedIntakeProfile({ task: 'Implement the feature', cwd: '/repo', evidence: ['verified repository root'] })
   assert.equal(profile.profileHints.taskType, 'build')
-  assert.equal(profile.profileHints.target, null)
+  assert.equal(profile.profileHints.target, '/repo')
+  assert.equal(profile.profileHints.expected, 'Implement the feature')
+  const long = resolveGroundedIntakeProfile({ task: `Implement ${'x'.repeat(5_000)}`, cwd: '/repo' })
+  assert.equal(long.profileHints.expected, 'Complete the requested work and verify the result against the full task.')
   assert.equal(dshTurnRequestId({ dshSessionId: 'session', turn: 1 }), dshTurnRequestId({ dshSessionId: 'session', turn: 1 }))
   assert.notEqual(dshTurnRequestId({ dshSessionId: 'session', turn: 1 }), dshTurnRequestId({ dshSessionId: 'session', turn: 2 }))
   assert.throws(() => resolveGroundedIntakeProfile({ task: 'task', cwd: 'relative' }), /absolute/u)
