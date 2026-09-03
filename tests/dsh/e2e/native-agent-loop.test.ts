@@ -66,6 +66,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     skillContributions: [],
     successSignals: ['The requested implementation is verified.'],
   }
+  const focusedRetryMarker = join(fixtureRoot, 'focused-verifier-retry-ready')
   const plan = {
     scope: ['src'],
     exclusions: [],
@@ -81,7 +82,14 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
         skillNames: ['kiokuko-single-purpose-functions'],
         expertRefs: [{ id: 'code.verification.v1', reason: 'Verify the requested behavior.' }],
         acceptanceCriteria: ['The final verifier passes.'],
-        focusedVerifiers: [],
+        focusedVerifiers: [{
+          id: 'focused-fail-once', kind: 'test', executable: process.execPath,
+          args: [
+            '--eval',
+            `const fs = require("node:fs"); const marker = ${JSON.stringify(focusedRetryMarker)}; if (fs.existsSync(marker)) process.exit(0); fs.writeFileSync(marker, "ready"); process.exit(1);`,
+          ],
+          cwd: '.', timeoutMs: 5_000,
+        }],
       }],
     },
     skillRequirements: [],
@@ -104,7 +112,10 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
   const idealDispositions = dispositions(['constraint_guardian', 'skill_trust_analyst', 'success_signal_critic'])
   const planningDispositions = dispositions(['workunit_architect', 'protocol_risk_reviewer', 'verification_designer'])
   const finalReviewDispositions = dispositions(['acceptance_auditor', 'regression_adversary', 'evidence_freshness_reviewer'])
-  const flowResponses = (suffix: string, longPlanningStep = false, pauseBeforeWork = false) => [
+  const workResult = {
+    result: { outcome: 'completed', summary: 'Implementation completed.', mutated: false, changedPaths: [] },
+  }
+  const flowResponses = (suffix: string, longPlanningStep = false, pauseBeforeWork = false, retryWork = false) => [
     mock.textResponse('The ideal is ready for the host advisory round.'),
     mock.toolCallResponse(`ideal-${suffix}`, 'enno_ideal_submit', { ideal, advisoryDisposition: idealDispositions }),
     mock.textResponse(longPlanningStep
@@ -115,9 +126,8 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
       mock.textResponse('I stopped before executing the current WorkUnit.'),
       mock.textResponse('I am still waiting for another WorkUnit instead of retrying the current one.'),
     ] : []),
-    mock.toolCallResponse(`work-${suffix}`, 'enno_work_report', {
-      result: { outcome: 'completed', summary: 'Implementation completed.', mutated: false, changedPaths: [] },
-    }),
+    mock.toolCallResponse(`work-${suffix}`, 'enno_work_report', workResult),
+    ...(retryWork ? [mock.toolCallResponse(`work-${suffix}-retry`, 'enno_work_report', workResult)] : []),
     mock.toolCallResponse(`finish-${suffix}`, 'enno_finish', {
       advisoryDisposition: finalReviewDispositions,
       review: { decision: 'accept', summary: 'All approved work and final verification passed.' },
@@ -128,7 +138,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
   ]
   const secondFlow = flowResponses('two')
   const adapterScript = new mock.MockAdapter([
-    ...flowResponses('one', true, true),
+    ...flowResponses('one', true, true, true),
     ...secondFlow.slice(0, 4),
     mock.toolCallResponse('plan-two-revised', 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
     ...secondFlow.slice(4),
@@ -286,7 +296,13 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
       event.type === 'assistant/message' && event.sourceEventSeqs?.length > 2_048
     ))
     assert.ok(longAssistantMessage, 'the real loop must exercise a source sequence list larger than the former bridge limit')
-    assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(11).fill(false), JSON.stringify({ toolEvents, turnEnds }))
+    assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(12).fill(false), JSON.stringify({ toolEvents, turnEnds }))
+    const failedFocusedReport = results.find((event: any) => event.data.message.content[0]?.toolCallId === 'work-one')
+    const failedFocusedPayload = JSON.parse(failedFocusedReport?.data.message.content[0]?.content[0]?.text ?? '{}')
+    assert.equal(failedFocusedPayload.verifierResults?.[0]?.status, 'failed')
+    assert.equal(failedFocusedPayload.ennoOduno?.nextAction, 'execute_work_unit')
+    assert.equal(failedFocusedPayload.executionLease?.workUnitId, 'implement-plan')
+    assert.equal(results.some((event: any) => event.data.message.content[0]?.toolCallId === 'work-one-retry'), true)
     assert.equal(turnEnds.length, 6)
     assert.notEqual(turnEnds[0]?.data.reason.kind, 'aborted')
     assert.equal(confirmations, 3)

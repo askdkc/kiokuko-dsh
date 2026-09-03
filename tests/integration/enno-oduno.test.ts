@@ -4027,6 +4027,123 @@ test("focused verifier process can write the same database because no transactio
   }
 });
 
+test("failed focused verification reissues the same WorkUnit lease so a corrected report can complete", async () => {
+  const { root, database } = await fixture();
+  try {
+    const retryMarker = path.join(root, "focused-verifier-retry-ready");
+    const failOnceVerifier = {
+      id: "fail-once",
+      kind: "test" as const,
+      executable: process.execPath,
+      args: [
+        "--eval",
+        `const fs = require("node:fs"); const marker = ${JSON.stringify(retryMarker)}; if (fs.existsSync(marker)) process.exit(0); fs.writeFileSync(marker, "ready"); process.exit(1);`,
+      ],
+      cwd: ".",
+      timeoutMs: 5000,
+    };
+    const planned = await plannedExecution(
+      database,
+      root,
+      "focused-verifier-retry",
+      verifier(root, "final"),
+      { focusedVerifiers: [failOnceVerifier] },
+    );
+    const firstLease = executionCredentials(planned);
+    const failed = await reportEnnoWork(database, {
+      ...planned.identity,
+      ...firstLease,
+      expectedRevision: 2,
+      idempotencyKey: "focused-verifier-retry-failed",
+      workUnitId: "repair",
+      result: {
+        outcome: "completed",
+        summary: "First report needs a verifier correction",
+        mutated: false,
+        changedPaths: [],
+      },
+    });
+
+    assert.equal(failed.verifierResults?.[0]?.status, "failed");
+    assert.equal(failed.ennoOduno.status, "goki_executing");
+    assert.equal(failed.ennoOduno.nextAction, "execute_work_unit");
+    assert.equal(failed.ennoOduno.directive?.workUnit?.id, "repair");
+    assert.ok(failed.executionLease);
+    assert.equal(failed.executionLease.workUnitId, "repair");
+    assert.notEqual(failed.executionLease.leaseToken, firstLease.leaseToken);
+
+    const corrected = await reportEnnoWork(database, {
+      ...planned.identity,
+      ...executionCredentials(failed),
+      expectedRevision: 2,
+      idempotencyKey: "focused-verifier-retry-passed",
+      workUnitId: "repair",
+      result: {
+        outcome: "completed",
+        summary: "Corrected report passes the same focused verifier",
+        mutated: false,
+        changedPaths: [],
+      },
+    });
+    assert.equal(corrected.verifierResults?.[0]?.status, "passed");
+    assert.equal(corrected.ennoOduno.status, "enno_verifying");
+    assert.equal(readEnnoSnapshot(database, planned.identity).attempts, 2);
+  } finally {
+    database.close();
+  }
+});
+
+test("a retryable failed WorkUnit report rotates its lease before the same WorkUnit resumes", async () => {
+  const { root, database } = await fixture();
+  try {
+    const planned = await plannedExecution(
+      database,
+      root,
+      "failed-work-retry",
+      verifier(root, "final"),
+    );
+    const firstLease = executionCredentials(planned);
+    const failed = await reportEnnoWork(database, {
+      ...planned.identity,
+      ...firstLease,
+      expectedRevision: 2,
+      idempotencyKey: "failed-work-retry-first",
+      workUnitId: "repair",
+      result: {
+        outcome: "failed",
+        summary: "The first implementation attempt needs correction",
+        mutated: false,
+        changedPaths: [],
+      },
+    });
+
+    assert.equal(failed.ennoOduno.status, "goki_executing");
+    assert.equal(failed.ennoOduno.nextAction, "execute_work_unit");
+    assert.equal(failed.ennoOduno.directive?.workUnit?.id, "repair");
+    assert.ok(failed.executionLease);
+    assert.equal(failed.executionLease.workUnitId, "repair");
+    assert.notEqual(failed.executionLease.leaseToken, firstLease.leaseToken);
+
+    const corrected = await reportEnnoWork(database, {
+      ...planned.identity,
+      ...executionCredentials(failed),
+      expectedRevision: 2,
+      idempotencyKey: "failed-work-retry-corrected",
+      workUnitId: "repair",
+      result: {
+        outcome: "completed",
+        summary: "The corrected implementation passes",
+        mutated: false,
+        changedPaths: [],
+      },
+    });
+    assert.equal(corrected.ennoOduno.status, "enno_verifying");
+    assert.equal(readEnnoSnapshot(database, planned.identity).attempts, 2);
+  } finally {
+    database.close();
+  }
+});
+
 test("concurrent work reports allow only one revision-bound state transition", async () => {
   const { root, database } = await fixture();
   try {

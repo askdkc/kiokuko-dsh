@@ -1274,14 +1274,26 @@ export async function reportEnnoWork(
         workUnitId: input.workUnitId,
         attempt: attempts,
       });
+      let executionLease: EnnoExecutionLease | undefined;
       if (mustBlock) {
         releaseExecutionLeaseInTransaction(database, input.runId);
         appendEnnoEventInTransaction(database, input.runId, 'enno.blocked', 'enno-oduno', 'blocked', {
           reason: input.result.summary,
         });
         terminalizeLedgerRunInTransaction(database, input.runId, 'failed');
+      } else {
+        const retry = readEnnoSnapshot(database, identity(database, input));
+        if (retry.clientKind !== null && retry.clientSessionId !== null) {
+          executionLease = claimExecutionLeaseInTransaction(database, retry, input.workUnitId, {
+            clientKind: retry.clientKind,
+            sessionId: retry.clientSessionId,
+          });
+        }
       }
-      const response = { ennoOduno: stateForSnapshot(readEnnoSnapshot(database, identity(database, input))) };
+      const response = {
+        ennoOduno: stateForSnapshot(readEnnoSnapshot(database, identity(database, input))),
+        ...(executionLease === undefined ? {} : { executionLease }),
+      };
       completeOperationInTransaction(database, input.runId, operation, operationOwner, response);
       return response;
     });
@@ -1367,6 +1379,15 @@ export async function reportEnnoWork(
         executionLease = startFirstReadyUnit(database, next);
       }
       next = readEnnoSnapshot(database, identity(database, input));
+    } else if (next.clientKind !== null && next.clientSessionId !== null) {
+      // A failed focused verifier leaves the same WorkUnit in progress so the
+      // host can correct it. The report lease was consumed above; return a
+      // fresh lease in the same response or the advertised execute_work_unit
+      // continuation can only fail with lease_required.
+      executionLease = claimExecutionLeaseInTransaction(database, next, input.workUnitId, {
+        clientKind: next.clientKind,
+        sessionId: next.clientSessionId,
+      });
     }
     const response = {
       ennoOduno: stateForSnapshot(next),
