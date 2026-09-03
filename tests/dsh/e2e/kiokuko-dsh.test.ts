@@ -32,7 +32,7 @@ function hostServices(includeTools = true) {
       },
     },
     commands: {
-      register(name: string, _handler: Function) { return () => undefined },
+      register(_definition: unknown) { return () => undefined },
     },
     ...(includeTools ? {
       tools: {

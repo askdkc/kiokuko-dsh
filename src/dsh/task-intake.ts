@@ -33,7 +33,7 @@ import {
   readAgentTaskSkillDiscoveryAttempt,
 } from '../akinator/skill-discovery-attempt.js';
 import type { AkinatorContext, AkinatorReasoning, TaskProfile } from '../akinator/types.js';
-import { AgentGatewayService } from '../gateway/agent-service.js';
+import { DshRunIntakeService } from './run-intake-service.js';
 import { canonicalContentHash, type JsonObject } from '../serialization/validate.js';
 import {
   queryScopedContextGated,
@@ -44,7 +44,7 @@ import {
 } from '../context/scoped-broker.js';
 import { contextFeedbackSignals } from '../context/feedback.js';
 import { entryOriginMatchesWorkspace } from '../context/origin.js';
-import { readContextBrokerRunState } from '../context/broker.js';
+import { readContextBrokerRunState } from '../context/run-state.js';
 import { ordinaryContextSelectionStateHash } from '../context/selection-state.js';
 import { deriveAkinatorReasoning } from '../akinator/reasoning.js';
 import {
@@ -894,18 +894,14 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
     expected: hints.expected ?? null,
     constraints: hints.constraints ?? null,
   };
-  const client = { kind: 'dsh', sessionId: input.dshSessionId };
-  // requestId is the logical request identity. The gateway's canonical request
-  // hash owns every bound input, so reusing an ID with changed input conflicts
-  // instead of silently opening another run. The raw opaque ID is never stored.
   const runKey = `dsh-task-prepare-${canonicalContentHash({ version: 1, requestId })}`;
-  const gateway = new AgentGatewayService(database);
-  const opened = gateway.openRun({
+  const intakeService = new DshRunIntakeService(database);
+  const opened = intakeService.openRun({
     idempotencyKey: runKey,
+    dshSessionId: input.dshSessionId,
     request: {
       apiVersion: '1',
       workspace: project.workspace,
-      client,
       task: { title: input.task, query: input.task, profileHints },
       captureProfile: 'minimal',
       coverage: { run: 'unavailable', tool: 'unavailable', command: 'unavailable', file: 'unavailable', approval: 'unavailable' },
@@ -955,12 +951,14 @@ export async function answerAgentTask(database: SqliteDatabase, input: AnswerAge
   const runRow = database.prepare(`SELECT lr.run_id AS runId FROM ledger_runs AS lr JOIN run_intakes AS ri ON ri.run_id = lr.run_id WHERE lr.run_id = ? AND ri.session_id = ? AND lr.workspace = ?`).get<{ runId: string }>(input.runId, input.sessionId, project.workspace);
   if (!runRow) throw new KiokukoError('NOT_FOUND', 'Task run was not found for the intake session');
   authoritativeTaskRun(database, runRow.runId);
-  const gateway = new AgentGatewayService(database);
-  const runMetadata = gateway.readRun({ runId: runRow.runId }).metadata;
+  const intakeService = new DshRunIntakeService(database);
+  const runRecord = new LedgerStore(database).readRun(runRow.runId);
+  if (!runRecord) throw new KiokukoError('NOT_FOUND', 'Task run was not found');
+  const runMetadata = runRecord.metadata;
   assertProjectManifestSnapshotBinding(runMetadata, project, manifestSnapshot);
   assertSkillDiscoveryRequestBinding(runMetadata, discoveryRequest);
   assertTaskContextRequestBinding(runMetadata, maxContextChars);
-  const answered = gateway.answerIntake(
+  const answered = intakeService.answerIntake(
     {
       runId: runRow.runId,
       idempotencyKey: `dsh-task-answer-${canonicalContentHash({ runId: runRow.runId, questionId: input.questionId, value: input.value })}`,

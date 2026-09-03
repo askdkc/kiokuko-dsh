@@ -1,8 +1,8 @@
 # DSH execution ledger
 
 The ledger records one DSH run, its Akinator intake, ordered lifecycle events,
-evidence, context deliveries, and feedback. `ledger_runs.client_kind` remains in
-the historical schema but migration 024 and its guards permit only `dsh` rows.
+evidence, context deliveries, and feedback. Every `ledger_runs` row carries its
+authoritative `dsh_session_id`; the schema baseline has no client-kind column.
 
 DSH session rebinding emits `enno.dsh_session_bound` or
 `enno.dsh_session_rebound` with

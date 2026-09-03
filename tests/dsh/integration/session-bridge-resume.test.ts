@@ -23,7 +23,7 @@ test('resume replay is idempotent in the real Kiokuko ledger', async () => {
       canonicalRoot: realpathSync(root), remoteFingerprint: null, bindingSchemaVersion: 1, agentTemplateVersion: 1,
     })
     new LedgerStore(database).createRun({
-      runId: 'run-dsh-bridge', workspace: 'workspace-dsh-bridge', protocolVersion: '1', client: { kind: 'dsh' },
+      runId: 'run-dsh-bridge', workspace: 'workspace-dsh-bridge', dshSessionId: 'dsh-session-bridge', protocolVersion: '1',
       captureProfile: 'minimal', coverage: { run: 'unavailable', tool: 'unavailable', command: 'unavailable', file: 'unavailable', approval: 'unavailable' },
       task: { title: 'bridge', query: 'bridge', profileHints: { taskType: null, target: null, expected: null, constraints: null } },
     })

@@ -2,17 +2,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { withImmediateTransaction } from '../db/transaction.js';
 import { KiokukoError } from '../errors.js';
-import { executeIdempotentInTransaction } from '../dsh/intake-idempotency.js';
-import { sanitizeAnswer, sanitizeEvent, sanitizeRunMetadata, sanitizeTask } from '../ledger/redaction.js';
-import { validateEventBatch, validateTimestamp } from '../ledger/validate.js';
+import { executeIdempotentInTransaction } from './intake-idempotency.js';
+import { sanitizeAnswer, sanitizeRunMetadata, sanitizeTask } from '../ledger/redaction.js';
+import { validateTimestamp } from '../ledger/validate.js';
 import {
   CAPTURE_PROFILES,
   COVERAGE_LEVELS,
-  MAX_BATCH_EVENTS,
   MAX_ID_LENGTH,
-  type AppendAck,
   type CaptureProfile,
-  type ClientInput,
   type Coverage,
   type JsonObject,
   type JsonValue,
@@ -22,8 +19,7 @@ import {
   type TaskInput,
 } from '../ledger/types.js';
 import { LedgerStore } from '../ledger/store.js';
-import { listLedgerEvents, listLedgerRuns, readLedgerRun } from '../ledger/query.js';
-import { AKINATOR_POLICY_VERSION, evaluateProfile, profileHash } from '../akinator/domain.js';
+import { AKINATOR_POLICY_VERSION, profileHash } from '../akinator/domain.js';
 import {
   answerAkinatorInTransaction,
   startAkinatorInTransaction,
@@ -32,12 +28,10 @@ import {
   finalizeRunIntakeLink,
   insertRunIntakeLink,
   markRunIntakeProfileSource,
-  readAkinatorSession,
   readRunIntakeLink,
   type AkinatorProfileSources,
 } from '../akinator/store.js';
-import type { AkinatorQuestion, AkinatorResult, TaskProfile } from '../akinator/types.js';
-import type { LedgerEventsPage, LedgerRunView, LedgerRunsPage } from '../ledger/query.js';
+import type { TaskProfile } from '../akinator/types.js';
 import type { RunRecord } from '../ledger/types.js';
 import {
   assertCapabilityCatalogBinding,
@@ -46,18 +40,11 @@ import {
 } from '../akinator/capability-binding.js';
 
 const PROFILE_FIELDS = ['taskType', 'target', 'expected', 'constraints'] as const;
-const INTAKE_EVENT_TYPES = new Set<LedgerEventType>([
-  'intake.started', 'intake.answered', 'intake.ready', 'intake.exhausted',
-]);
-const TERMINAL_STATUS_VALUES = ['completed', 'failed', 'cancelled', 'interrupted'] as const;
 const CONTROL_CHARACTERS = /\p{Cc}/u;
 
-type TerminalStatus = (typeof TERMINAL_STATUS_VALUES)[number];
-
-type GatewayOpenRequest = {
+type DshRunOpenRequest = {
   apiVersion: '1';
   workspace: string;
-  client: ClientInput;
   task: TaskInput;
   captureProfile: CaptureProfile;
   coverage: Coverage;
@@ -67,38 +54,13 @@ type GatewayOpenRequest = {
   startedAt?: string;
 };
 
-type GatewayIntakeResponse = {
+export interface DshRunIntakeResponse {
   runId: string;
   runStatus: RunStatus;
   intakeSessionId: string;
-  intakeStatus: AkinatorResult['status'];
-  intake: {
-    status: AkinatorResult['status'];
-    sessionId: string;
-    question: AkinatorQuestion | null;
-  };
-  question: AkinatorQuestion | null;
-  currentQuestion: AkinatorQuestion | null;
-  missingFields: Array<keyof TaskProfile>;
-  recommendedTags: string[];
-  taskProfile: TaskProfile;
-  profileHash: string | null;
-  context: null;
-  untrusted: true;
-};
+}
 
-type GatewayAppendResponse = AppendAck & {
-  runStatus: RunStatus;
-  untrusted: true;
-};
-
-type GatewayCloseResponse = AppendAck & {
-  status: TerminalStatus;
-  runStatus: TerminalStatus;
-  untrusted: true;
-};
-
-export interface AgentGatewayServiceOptions {
+export interface DshRunIntakeServiceOptions {
   readonly now?: () => string;
   readonly home?: string;
   readonly runIdFactory?: () => string;
@@ -106,15 +68,15 @@ export interface AgentGatewayServiceOptions {
   readonly eventIdFactory?: () => string;
 }
 
-interface AgentGatewayAnswerOptions {
+interface DshRunAnswerOptions {
   readonly assertBeforeAnswer?: () => void;
 }
 
 function validation(): never {
-  throw new KiokukoError('VALIDATION_ERROR', 'Invalid gateway request');
+  throw new KiokukoError('VALIDATION_ERROR', 'Invalid DSH run intake request');
 }
 
-function conflict(message = 'Gateway operation conflicts with the current run state'): never {
+function conflict(message = 'DSH run intake operation conflicts with the current run state'): never {
   throw new KiokukoError('CONFLICT', message);
 }
 
@@ -192,7 +154,7 @@ function typedResult<T>(value: JsonValue): T {
   return value as unknown as T;
 }
 
-function executeGateway<T>(database: SqliteDatabase, input: unknown, operation: () => T): T {
+function executeIdempotentDshOperation<T>(database: SqliteDatabase, input: unknown, operation: () => T): T {
   return typedResult<T>(executeIdempotentInTransaction(database, input, () => jsonResult(operation())));
 }
 
@@ -234,20 +196,12 @@ function profileHints(value: unknown): TaskInput['profileHints'] {
   return { taskType, target, expected, constraints };
 }
 
-function normalizeOpenRequest(value: unknown): GatewayOpenRequest {
+function normalizeOpenRequest(value: unknown): DshRunOpenRequest {
   assertJsonValue(value);
   const input = object(value);
-  knownFields(input, ['apiVersion', 'workspace', 'client', 'task', 'captureProfile', 'coverage', 'metadata', 'capabilities', 'parentRunId', 'startedAt']);
+  knownFields(input, ['apiVersion', 'workspace', 'task', 'captureProfile', 'coverage', 'metadata', 'capabilities', 'parentRunId', 'startedAt']);
   if (input.apiVersion !== '1') validation();
   const workspace = boundedString(input.workspace, 16 * 1024);
-
-  const clientInput = object(input.client);
-  knownFields(clientInput, ['kind', 'version', 'sessionId']);
-  const client: ClientInput = {
-    kind: boundedString(clientInput.kind, MAX_ID_LENGTH),
-    ...(clientInput.version === undefined ? {} : { version: boundedString(clientInput.version, MAX_ID_LENGTH) }),
-    ...(clientInput.sessionId === undefined ? {} : { sessionId: boundedString(clientInput.sessionId, MAX_ID_LENGTH) }),
-  };
 
   const taskInput = object(input.task);
   knownFields(taskInput, ['title', 'query', 'profileHints']);
@@ -271,7 +225,6 @@ function normalizeOpenRequest(value: unknown): GatewayOpenRequest {
   return {
     apiVersion: '1',
     workspace,
-    client,
     task,
     captureProfile: enumValue(input.captureProfile, CAPTURE_PROFILES),
     coverage,
@@ -282,12 +235,13 @@ function normalizeOpenRequest(value: unknown): GatewayOpenRequest {
   };
 }
 
-function operationEnvelope(value: unknown): { idempotencyKey: string; request: unknown } {
+function operationEnvelope(value: unknown): { idempotencyKey: string; dshSessionId: string; request: unknown } {
   assertJsonValue(value);
   const input = object(value);
-  knownFields(input, ['idempotencyKey', 'request']);
+  knownFields(input, ['idempotencyKey', 'dshSessionId', 'request']);
   return {
     idempotencyKey: boundedString(input.idempotencyKey, 256),
+    dshSessionId: boundedString(input.dshSessionId, MAX_ID_LENGTH),
     request: input.request,
   };
 }
@@ -301,13 +255,6 @@ function runEnvelope(value: unknown): { runId: string; idempotencyKey: string; r
     idempotencyKey: boundedString(input.idempotencyKey, 256),
     request: input.request,
   };
-}
-
-function readRunInput(value: unknown): { runId: string } {
-  assertJsonValue(value);
-  const input = object(value);
-  knownFields(input, ['runId']);
-  return { runId: boundedString(input.runId, MAX_ID_LENGTH) };
 }
 
 function answerRequest(value: unknown, workspace: string): {
@@ -336,41 +283,7 @@ function answerRequest(value: unknown, workspace: string): {
   };
 }
 
-function sanitizeEventArray(value: unknown, workspace: string): LedgerEventInput[] {
-  if (!Array.isArray(value)) validation();
-  if (value.length === 0 || value.length > MAX_BATCH_EVENTS) validation();
-  const validated = validateEventBatch({ events: value });
-  return validated.map((event) => sanitizeEvent(event, { workspace }).value);
-}
-
-function eventsRequest(value: unknown, workspace: string): { events: LedgerEventInput[]; hashRequest: JsonObject } {
-  assertJsonValue(value);
-  const input = object(value);
-  knownFields(input, ['apiVersion', 'events']);
-  if (input.apiVersion !== '1') validation();
-  const events = sanitizeEventArray(input.events, workspace);
-  return { events, hashRequest: jsonObject({ apiVersion: '1', events }) };
-}
-
-function closeRequest(value: unknown, workspace: string): { status: TerminalStatus; events?: LedgerEventInput[]; hashRequest: JsonObject } {
-  assertJsonValue(value);
-  const input = object(value);
-  knownFields(input, ['apiVersion', 'status', 'events']);
-  if (input.apiVersion !== '1') validation();
-  const status = enumValue(input.status, TERMINAL_STATUS_VALUES);
-  const events = input.events === undefined ? undefined : sanitizeEventArray(input.events, workspace);
-  return {
-    status,
-    ...(events === undefined ? {} : { events }),
-    hashRequest: jsonObject({
-      apiVersion: '1',
-      status,
-      ...(events === undefined ? {} : { events }),
-    }),
-  };
-}
-
-function sourceMap(request: GatewayOpenRequest, profile: TaskProfile): AkinatorProfileSources {
+function sourceMap(request: DshRunOpenRequest, profile: TaskProfile): AkinatorProfileSources {
   const sources: AkinatorProfileSources = {};
   const hints = request.task.profileHints;
   for (const field of PROFILE_FIELDS) {
@@ -384,33 +297,33 @@ function sourceMap(request: GatewayOpenRequest, profile: TaskProfile): AkinatorP
   return sources;
 }
 
-function appendResponse(ack: AppendAck, runStatus: RunStatus): GatewayAppendResponse {
-  return { ...ack, runStatus, untrusted: true };
-}
-
-export class AgentGatewayService {
-  private readonly options: AgentGatewayServiceOptions;
+/**
+ * DSH run intake: opens ledger runs bound to the authoritative DSH session
+ * identity and drives the Akinator intake lifecycle to a ready state.
+ */
+export class DshRunIntakeService {
+  private readonly options: DshRunIntakeServiceOptions;
 
   constructor(
     private readonly database: SqliteDatabase,
-    options: AgentGatewayServiceOptions = {},
+    options: DshRunIntakeServiceOptions = {},
   ) {
     this.options = options;
   }
 
-  openRun(input: unknown): GatewayIntakeResponse {
+  openRun(input: unknown): DshRunIntakeResponse {
     const envelope = operationEnvelope(input);
     const request = normalizeOpenRequest(envelope.request);
+    const dshSessionId = envelope.dshSessionId;
     const task = sanitizeTask(request.task, { workspace: request.workspace, ...(this.options.home === undefined ? {} : { home: this.options.home }) }).value;
     const metadata = sanitizeRunMetadata(
       bindCapabilityCatalog(request.metadata, request.capabilities),
       { workspace: request.workspace, ...(this.options.home === undefined ? {} : { home: this.options.home }) },
     ).value as JsonObject;
-    const client = request.client;
     const hashRequest = jsonObject({
       apiVersion: '1',
       workspace: request.workspace,
-      client,
+      dshSessionId,
       task,
       captureProfile: request.captureProfile,
       coverage: request.coverage,
@@ -419,9 +332,9 @@ export class AgentGatewayService {
       ...(request.startedAt === undefined ? {} : { startedAt: request.startedAt }),
     });
     const now = this.currentTime();
-    return withImmediateTransaction(this.database, () => executeGateway(
+    return withImmediateTransaction(this.database, () => executeIdempotentDshOperation(
       this.database,
-      { scope: 'agent.run.open', key: envelope.idempotencyKey, request: hashRequest, createdAt: now },
+      { scope: 'dsh.run.open', key: envelope.idempotencyKey, request: hashRequest, createdAt: now },
       () => {
         const runId = this.nextRunId();
         const sessionId = this.nextSessionId();
@@ -429,8 +342,8 @@ export class AgentGatewayService {
         const run = store.createRunInTransaction({
           runId,
           workspace: request.workspace,
+          dshSessionId,
           protocolVersion: '1',
-          client,
           captureProfile: request.captureProfile,
           coverage: request.coverage,
           task,
@@ -487,12 +400,12 @@ export class AgentGatewayService {
           });
           finalRun = store.updateRunStatusInTransaction(runId, 'active', now);
         }
-        return this.intakeResponse(runId, finalRun.status, result);
+        return { runId, runStatus: finalRun.status, intakeSessionId: sessionId };
       },
     ));
   }
 
-  answerIntake(input: unknown, options: AgentGatewayAnswerOptions = {}): GatewayIntakeResponse {
+  answerIntake(input: unknown, options: DshRunAnswerOptions = {}): DshRunIntakeResponse {
     const envelope = runEnvelope(input);
     const initialRun = this.requireRun(envelope.runId);
     const request = answerRequest(envelope.request, initialRun.workspace);
@@ -500,7 +413,7 @@ export class AgentGatewayService {
     const now = this.currentTime();
     return withImmediateTransaction(this.database, () => {
       options.assertBeforeAnswer?.();
-      return executeGateway(
+      return executeIdempotentDshOperation(
         this.database,
         { scope: this.scopedOperation('answer', envelope.runId), key: envelope.idempotencyKey, request: request.hashRequest, createdAt: now },
         () => {
@@ -515,7 +428,7 @@ export class AgentGatewayService {
           });
           if (mutation.replayed) {
             const currentRun = this.requireRun(run.runId);
-            return this.intakeResponse(run.runId, currentRun.status, mutation.result);
+            return { runId: run.runId, runStatus: currentRun.status, intakeSessionId: link.sessionId };
           }
           if (run.status !== 'intake') conflict('Run is not waiting for intake');
           markRunIntakeProfileSource(this.database, {
@@ -552,131 +465,17 @@ export class AgentGatewayService {
             });
             finalRun = this.ledgerStore(run.workspace).updateRunStatusInTransaction(run.runId, 'active', now);
           }
-          return this.intakeResponse(run.runId, finalRun.status, mutation.result);
+          return { runId: run.runId, runStatus: finalRun.status, intakeSessionId: link.sessionId };
         },
       );
     });
-  }
-
-  appendEvents(input: unknown): GatewayAppendResponse {
-    const envelope = runEnvelope(input);
-    const initialRun = this.requireRun(envelope.runId);
-    const request = eventsRequest(envelope.request, initialRun.workspace);
-    const now = this.currentTime();
-    return withImmediateTransaction(this.database, () => executeGateway(
-      this.database,
-      { scope: this.scopedOperation('events', envelope.runId), key: envelope.idempotencyKey, request: request.hashRequest, createdAt: now },
-      () => {
-        const run = this.requireRun(envelope.runId);
-        if (TERMINAL_STATUS_VALUES.includes(run.status as TerminalStatus)) {
-          conflict('Cannot append events to a terminal run');
-        }
-        if (run.status === 'intake' && request.events.some((event) => !INTAKE_EVENT_TYPES.has(event.eventType))) {
-          conflict('Work events are not allowed during intake');
-        }
-        const ack = this.ledgerStore(run.workspace).appendBatchInTransaction(run.runId, { events: request.events });
-        return appendResponse(ack, run.status);
-      },
-    ));
-  }
-
-  closeRun(input: unknown): GatewayCloseResponse {
-    const envelope = runEnvelope(input);
-    const initialRun = this.requireRun(envelope.runId);
-    const request = closeRequest(envelope.request, initialRun.workspace);
-    const now = this.currentTime();
-    return withImmediateTransaction(this.database, () => executeGateway(
-      this.database,
-      { scope: this.scopedOperation('close', envelope.runId), key: envelope.idempotencyKey, request: request.hashRequest, createdAt: now },
-      () => {
-        const run = this.requireRun(envelope.runId);
-        if (run.status !== 'active') conflict('Only active runs can be closed');
-        const store = this.ledgerStore(run.workspace);
-        const ack: AppendAck = store.appendBatchInTransaction(run.runId, {
-          events: [
-            ...(request.events ?? []),
-            this.lifecycleEvent('run.closed', { status: request.status }, now),
-          ],
-        });
-        store.updateRunStatusInTransaction(run.runId, request.status, now);
-        return { ...ack, status: request.status, runStatus: request.status, untrusted: true };
-      },
-    ));
-  }
-
-  listRuns(input: unknown): LedgerRunsPage & { untrusted: true } {
-    assertJsonValue(input);
-    const page = listLedgerRuns(this.database, input);
-    return { ...page, untrusted: true };
-  }
-
-  readRun(input: unknown): LedgerRunView {
-    const { runId } = readRunInput(input);
-    const run = this.requireRun(runId);
-    return readLedgerRun(this.database, { workspace: run.workspace, runId });
-  }
-
-  readIntake(input: unknown): GatewayIntakeResponse {
-    const { runId } = readRunInput(input);
-    const run = this.requireRun(runId);
-    const link = readRunIntakeLink(this.database, { workspace: run.workspace, runId });
-    const session = readAkinatorSession(this.database, { workspace: run.workspace, sessionId: link.sessionId });
-    const evaluation = evaluateProfile(session.profile, session.questionCount);
-    const result: AkinatorResult = {
-      status: evaluation.status,
-      session,
-      question: evaluation.question,
-      missingFields: evaluation.missingFields,
-      recommendedTags: evaluation.recommendedTags,
-    };
-    return this.intakeResponse(runId, run.status, result, link.initialProfileHash);
-  }
-
-  listEvents(input: unknown): LedgerEventsPage & { untrusted: true } {
-    assertJsonValue(input);
-    const value = object(input);
-    knownFields(value, ['runId', 'after', 'type', 'limit']);
-    const runId = boundedString(value.runId, MAX_ID_LENGTH);
-    const run = this.requireRun(runId);
-    const page = listLedgerEvents(this.database, {
-      runId,
-      workspace: run.workspace,
-      ...(value.after === undefined ? {} : { after: value.after }),
-      ...(value.type === undefined ? {} : { type: value.type }),
-      ...(value.limit === undefined ? {} : { limit: value.limit }),
-    });
-    return { ...page, untrusted: true };
-  }
-
-  private intakeResponse(runId: string, runStatus: RunStatus, result: AkinatorResult, finalizedHash?: string | null): GatewayIntakeResponse {
-    const finalized = finalizedHash !== undefined
-      ? finalizedHash !== null
-      : (runStatus === 'active' && (result.status === 'ready' || result.status === 'exhausted'));
-    const currentProfileHash = profileHash(result.session.profile);
-    const finalizedProfileHash = finalized ? (finalizedHash ?? currentProfileHash) : null;
-    const question = result.question;
-    return {
-      runId,
-      runStatus,
-      intakeSessionId: result.session.id,
-      intakeStatus: result.status,
-      intake: { status: result.status, sessionId: result.session.id, question },
-      question,
-      currentQuestion: question,
-      missingFields: [...result.missingFields],
-      recommendedTags: [...result.recommendedTags],
-      taskProfile: { ...result.session.profile },
-      profileHash: finalizedProfileHash,
-      context: null,
-      untrusted: true,
-    };
   }
 
   private lifecycleEvent(eventType: LedgerEventType, payload: unknown, occurredAt: string): LedgerEventInput {
     return {
       eventId: this.nextEventId(),
       eventType,
-      actor: 'kiokuko-gateway',
+      actor: 'kiokuko-dsh',
       occurredAt,
       payload: jsonResult(payload),
     };
@@ -698,7 +497,7 @@ export class AgentGatewayService {
 
   private scopedOperation(operation: string, runId: string): string {
     const digest = createHash('sha256').update(runId, 'utf8').digest('hex').slice(0, 32);
-    return `agent.${operation}.${digest}`;
+    return `dsh.${operation}.${digest}`;
   }
 
   private currentTime(): string {
@@ -717,9 +516,3 @@ export class AgentGatewayService {
     return this.options.eventIdFactory?.() ?? randomUUID();
   }
 }
-
-export type {
-  GatewayAppendResponse,
-  GatewayCloseResponse,
-  GatewayIntakeResponse,
-};

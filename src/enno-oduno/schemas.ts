@@ -102,11 +102,14 @@ export const workUnitSchema = z.object({
   expertRefs: z.array(expertRefSchema).max(3).default([]),
   acceptanceCriteria: z.array(canonicalText(8_192)).min(1).max(128),
   focusedVerifiers: verifierListSchema(),
-  routes: z.array(z.enum(WORK_UNIT_ROUTES)).min(1).max(WORK_UNIT_ROUTES.length).optional(),
+  routes: z.array(z.enum(WORK_UNIT_ROUTES)).min(1).max(WORK_UNIT_ROUTES.length),
 }).strict().superRefine((unit, context) => {
   const ids = unit.expertRefs.map((reference) => reference.id);
   if (new Set(ids).size !== ids.length) {
     context.addIssue({ code: 'custom', message: 'WorkUnit expertRefs must be unique', path: ['expertRefs'] });
+  }
+  if (new Set(unit.routes).size !== unit.routes.length) {
+    context.addIssue({ code: 'custom', message: 'WorkUnit routes must be unique', path: ['routes'] });
   }
 });
 

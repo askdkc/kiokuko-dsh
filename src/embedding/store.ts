@@ -478,7 +478,7 @@ export function activateEmbeddingProfileInTransaction(
   options: ActivateEmbeddingProfileOptions,
 ): EmbeddingProfileActivation {
   requireProfile(profile);
-  if (profile.identity.schemaVersion !== 1) invalid('Legacy embedding activation requires a v1 profile identity');
+  if (profile.identity.schemaVersion !== 1) invalid('Remote embedding activation requires a v1 profile identity');
   if (typeof options.replace !== 'boolean') invalid('replace must be a boolean');
   const now = validateTimestamp(options.now ?? new Date().toISOString(), 'now');
   requireEmbeddingSchema(database);

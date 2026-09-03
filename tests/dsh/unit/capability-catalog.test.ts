@@ -61,7 +61,7 @@ test('grounded profile and dsh turn request identity are deterministic', () => {
   assert.throws(() => resolveGroundedIntakeProfile({ task: 'task', cwd: 'relative' }), /absolute/u)
 })
 
-test('new run bindings use v2 while a migrated active DSH run can read its v1 tool digest', () => {
+test('run bindings use version 2 exclusively and reject every other binding version', () => {
   const current = [
     { kind: 'skill' as const, name: 'kiokuko-soul' },
     { kind: 'tool' as const, name: 'enno_plan_submit' },
@@ -70,19 +70,10 @@ test('new run bindings use v2 while a migrated active DSH run can read its v1 to
   assert.equal((bound.kiokukoCapabilityCatalogBinding as { version: number }).version, 2)
   assert.doesNotThrow(() => assertCapabilityCatalogBinding(bound, current))
 
-  const legacyDigest = canonicalContentHash({
-    version: 1,
-    supplied: true,
-    availability: 'known-nonempty',
-    diagnostics: { received: 2, accepted: 2, truncated: 0, dropped: 0 },
-    budgetExceeded: false,
-    skills: [{ kind: 'skill', name: 'kiokuko-soul' }],
-    tools: [{ kind: 'mcp_tool', name: 'enno_plan_submit' }],
-  })
-  const migrated = { kiokukoCapabilityCatalogBinding: { version: 1, digest: legacyDigest } }
-  assert.doesNotThrow(() => assertCapabilityCatalogBinding(migrated, current))
+  const staleVersion = { kiokukoCapabilityCatalogBinding: { version: 1, digest: canonicalContentHash({ version: 1 }) } }
+  assert.throws(() => assertCapabilityCatalogBinding(staleVersion, current), /missing or invalid/u)
   assert.throws(
-    () => assertCapabilityCatalogBinding(migrated, [...current, { kind: 'tool', name: 'enno_finish' }]),
+    () => assertCapabilityCatalogBinding(bound, [...current, { kind: 'tool', name: 'enno_finish' }]),
     /catalog differs/u,
   )
 })

@@ -17,7 +17,6 @@ import {
   resolveProjectFingerprint,
 } from '../repository/project-fingerprint.js';
 import { discoverSkills } from '../skills/discovery-service.js';
-import { SkillProviderError } from '../skills/providers/schema.js';
 import type { DiscoverSkillsInput, SkillDiscoverySummary } from '../skills/types.js';
 import { canonicalContentHash, canonicalJson } from '../serialization/validate.js';
 import { sanitizeJson } from '../security/sanitize.js';
@@ -282,13 +281,10 @@ function operationIdentity(
     ? Object.fromEntries(Object.entries(input as Record<string, unknown>)
       .filter(([key]) => !['workspace', 'orchestrationId', 'resumeToken', 'idempotencyKey'].includes(key)))
     : input;
-  const requestDigest = canonicalContentHash({ version: 1, operation, input: semanticInput });
-  const legacyRequestDigest = canonicalContentHash({ version: 1, operation, input });
   return {
     operation,
     idempotencyKey,
-    requestDigest,
-    ...(legacyRequestDigest === requestDigest ? {} : { legacyRequestDigests: [legacyRequestDigest] }),
+    requestDigest: canonicalContentHash({ version: 1, operation, input: semanticInput }),
   };
 }
 
@@ -682,17 +678,6 @@ function emptyDiscovery(mode: SkillDiscoverySummary['mode']): SkillDiscoverySumm
   return { attempted: false, mode, requirements: [], queries: [], cacheHits: 0, candidates: 0, selected: [], failures: [] };
 }
 
-function legacyOptionalDiscoverySummary(
-  mode: SkillDiscoverySummary['mode'],
-  error: unknown,
-): SkillDiscoverySummary | undefined {
-  if (!(error instanceof SkillProviderError) || error.code !== 'registry_invalid_response') return undefined;
-  return {
-    ...emptyDiscovery(mode),
-    failures: [{ stage: 'search', code: error.code }],
-  };
-}
-
 async function discoverZenkiSkills(
   database: SqliteDatabase,
   snapshot: EnnoRunSnapshot,
@@ -716,14 +701,7 @@ async function discoverZenkiSkills(
       skillRequirements: plan.skillRequirements,
     }),
   };
-  let replay: ReturnType<typeof readAgentTaskSkillDiscoveryAttempt>;
-  try {
-    replay = readAgentTaskSkillDiscoveryAttempt(database, attempt);
-  } catch (error) {
-    const legacySummary = legacyOptionalDiscoverySummary(intake.mode, error);
-    if (legacySummary === undefined) throw error;
-    return legacySummary;
-  }
+  const replay = readAgentTaskSkillDiscoveryAttempt(database, attempt);
   if (replay !== undefined) return replay.summary;
   const claimed = claimAgentTaskSkillDiscoveryAttempt(database, attempt, {
     queryBudget: ENNO_MAX_TOTAL_SKILL_QUERIES,
@@ -1531,7 +1509,6 @@ export async function finishEnno(
     const unsafe = results.some((result) => result.status === 'spawn_failed');
     const attempts = current.attempts + 1;
     const accepted = passed && input.review.decision === 'accept';
-    const completesLegacyRun = accepted && current.ideal === null;
     const mustBlock = unsafe || (!accepted && attempts >= current.contract.maxAttempts);
     const reviewFeedback = accepted || mustBlock
       ? null
@@ -1546,9 +1523,7 @@ export async function finishEnno(
         : 'Final verification reached the attempt limit';
     updateContractInTransaction(database, current, {
       contract: nextContract,
-      status: accepted
-        ? completesLegacyRun ? 'completed' : 'oduno_meditation'
-        : mustBlock ? 'blocked' : 'zenki_planning',
+      status: accepted ? 'oduno_meditation' : mustBlock ? 'blocked' : 'zenki_planning',
       confirmationState: reviewFeedback === null ? current.confirmationState : 'revision_requested',
       attempts,
       blocker: mustBlock ? blockedReason : reviewFeedback,
@@ -1565,14 +1540,6 @@ export async function finishEnno(
         mutationRevision: current.mutationRevision,
         summary: reviewSummary,
       });
-      if (completesLegacyRun) {
-        appendEnnoEventInTransaction(database, input.runId, 'enno.completed', 'enno-oduno', 'completed', {
-          contractRevision: current.revision,
-          mutationRevision: current.mutationRevision,
-          compatibility: 'pre_oduno_ideal_run',
-        });
-        terminalizeLedgerRunInTransaction(database, input.runId, 'completed');
-      }
     } else if (mustBlock) {
       appendEnnoEventInTransaction(database, input.runId, 'enno.blocked', 'enno-oduno', 'blocked', {
         reason: unsafe ? 'spawn_failed' : 'attempt_limit',

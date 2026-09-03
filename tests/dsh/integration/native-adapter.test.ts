@@ -220,7 +220,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     const fallbackAgent = { id: 'fallback-agent', sessionId: fallbackSession.id }
     const fallbackEvent = await adapter.host.mapPreStep!({
       agent: fallbackAgent,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Fallback task.' }] }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Fallback task.' }], source: { kind: 'user' } }],
       turn: 1, step: 1, signal: event.signal,
     })
     assert.equal(fallbackEvent.nativeSession, fallbackSession)
@@ -275,7 +275,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     const questionsBeforeChat = questionIds.length
     const chatEvent = await adapter.host.mapPreStep!({
       agent: chatAgent,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Tell me something.' }] }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Tell me something.' }], source: { kind: 'user' } }],
       turn: 1, step: 1, signal: event.signal,
     })
     const chatDecision = await adapter.host.intakeGate!.preStep(chatEvent, async () => ({ kind: 'enter', messages: [] }))
@@ -306,7 +306,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     ;(root as any).emit('session/event', chatSession, { type: 'user/message', seq: 2, time: 2, data: { text: 'What do you think about that?' } })
     const secondChatEvent = await adapter.host.mapPreStep!({
       agent: chatAgent,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'What do you think about that?' }] }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'What do you think about that?' }], source: { kind: 'user' } }],
       turn: 2, step: 1, signal: event.signal,
     })
     assert.equal(secondChatEvent.profileHints?.taskType, 'chat')
@@ -335,7 +335,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     ;(root as any).emit('session/event', chatSession, { type: 'user/message', seq: 4, time: 4, data: { text: 'And one more follow-up.' } })
     const thirdChatEvent = await adapter.host.mapPreStep!({
       agent: chatAgent,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'And one more follow-up.' }] }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'And one more follow-up.' }], source: { kind: 'user' } }],
       turn: 3, step: 1, signal: event.signal,
     })
     assert.equal(thirdChatEvent.profileHints?.taskType, 'chat')
@@ -446,7 +446,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       afterColdPivot.close()
     }
   } finally {
-    await disposeComposition()
+    await disposeComposition.dispose()
     await adapter.dispose()
     await hostFiber.dispose()
     await rm(f.root, { recursive: true, force: true })

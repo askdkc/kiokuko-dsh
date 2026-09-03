@@ -61,6 +61,26 @@ test('active source has no legacy client branch or generic Enno projection', asy
   assert.deepEqual(violations, [])
 })
 
+test('active source has no legacy compatibility identifiers', async () => {
+  const forbidden = /\blegacy[A-Z_]|\bLegacy[A-Z_]|\bclient_kind\b|\bmcp_tool\b|digestForVersion|legacyRequestDigests|legacyScopedDeliveryId|rebuildLegacyHybridSearch/u
+  const violations: Array<{ file: string; match: string }> = []
+  for (const file of allSources) {
+    const source = await readFile(file, 'utf8')
+    const match = forbidden.exec(source)
+    if (match !== null) violations.push({ file: path.relative(root, file), match: match[0] })
+  }
+  assert.deepEqual(violations, [])
+})
+
+test('migrations are a single immutable baseline with no rollback path', async () => {
+  const entries = await readdir(path.join(root, 'migrations'), { withFileTypes: true })
+  const sqlFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.sql')).map((entry) => entry.name)
+  assert.deepEqual(sqlFiles, ['001_baseline.sql'])
+  assert.equal(entries.some((entry) => entry.name === 'down'), false, 'migrations/down must not exist')
+  const packed = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+  assert.equal(packed.files.includes('migrations/'), true)
+})
+
 test('package and model surfaces are DSH-only', async () => {
   const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
   assert.deepEqual(Object.keys(manifest.exports), ['./dsh'])

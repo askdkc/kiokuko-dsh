@@ -249,8 +249,7 @@ export interface WorkUnit {
   expertRefs: ExpertRef[];
   acceptanceCriteria: string[];
   focusedVerifiers: VerifierSpec[];
-  /** Optional only while reading v0.2.x stored WorkUnits. New submissions require it. */
-  routes?: WorkUnitRoute[] | undefined;
+  routes: WorkUnitRoute[];
 }
 
 export interface WorkPlan {

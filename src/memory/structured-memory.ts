@@ -220,8 +220,6 @@ const REQUIRED_SEARCH_DOCUMENT_TRIGGERS = [
   'entry_search_documents_au',
 ] as const;
 
-type WritableSearchProjection = 'legacy' | 'unified';
-
 function projectionDefinition(database: SqliteDatabase, name: string): { type: string; sql: string | null } | undefined {
   return database.prepare('SELECT type, sql FROM sqlite_master WHERE name = ?')
     .get<{ type: string; sql: string | null }>(name);
@@ -229,47 +227,6 @@ function projectionDefinition(database: SqliteDatabase, name: string): { type: s
 
 function projectionColumns(database: SqliteDatabase, table: string): Set<string> {
   return new Set(database.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>().map((column) => column.name));
-}
-
-function requireLegacyHybridSearchProjectionSchema(database: SqliteDatabase): void {
-  const missing: string[] = [];
-  for (const table of ['entries_fts', 'entries_trigram', 'entry_search_signals']) {
-    const definition = projectionDefinition(database, table);
-    if (definition?.type !== 'table') {
-      missing.push(table);
-      continue;
-    }
-    const expected = table === 'entry_search_signals'
-      ? REQUIRED_PROJECTION_COLUMNS.entry_search_signals
-      : REQUIRED_PROJECTION_COLUMNS.entries_fts;
-    const columns = projectionColumns(database, table);
-    for (const column of expected) if (!columns.has(column)) missing.push(`${table}.${column}`);
-    const sql = definition.sql ?? '';
-    const isFts5 = /CREATE\s+VIRTUAL\s+TABLE[\s\S]+USING\s+fts5\s*\(/iu.test(sql);
-    if (table === 'entries_fts' && (!isFts5 || !/tokenize\s*=\s*'unicode61 remove_diacritics 2'/iu.test(sql))) {
-      missing.push('entries_fts.fts5_unicode61');
-    }
-    if (table === 'entries_trigram' && (!isFts5 || !/tokenize\s*=\s*'trigram'/iu.test(sql))) {
-      missing.push('entries_trigram.fts5_trigram');
-    }
-  }
-  if (missing.length > 0) {
-    throw new KiokukoError('INTEGRITY_ERROR', 'Hybrid search projection schema is incomplete', { missing });
-  }
-}
-
-/** Validate and identify either the released legacy projection or migration 020 projection. */
-export function hybridSearchProjectionSchema(database: SqliteDatabase): WritableSearchProjection {
-  const ftsSql = projectionDefinition(database, 'entries_fts')?.sql ?? '';
-  const hasUnifiedMarker = /content\s*=\s*'entry_search_documents'/iu.test(ftsSql)
-    || projectionDefinition(database, 'entry_search_documents') !== undefined
-    || REQUIRED_SEARCH_DOCUMENT_TRIGGERS.some((trigger) => projectionDefinition(database, trigger) !== undefined);
-  if (hasUnifiedMarker) {
-    requireHybridSearchProjectionSchema(database);
-    return 'unified';
-  }
-  requireLegacyHybridSearchProjectionSchema(database);
-  return 'legacy';
 }
 
 /** Assert the complete search schema consumed by hybridSearch before mutating a projection. */
@@ -307,7 +264,7 @@ export function requireHybridSearchProjectionSchema(database: SqliteDatabase): v
 }
 
 export function syncEntrySearchSignals(database: SqliteDatabase, input: Parameters<typeof extractEntrySearchSignals>[0]): void {
-  hybridSearchProjectionSchema(database);
+  requireHybridSearchProjectionSchema(database);
   database.prepare('DELETE FROM entry_search_signals WHERE entry_id = ?').run(input.entryId);
   for (const signal of extractEntrySearchSignals(input)) {
     database.prepare('INSERT OR IGNORE INTO entry_search_signals (entry_id, signal_type, normalized_value) VALUES (?, ?, ?)').run(input.entryId, signal.type, signal.value);
@@ -316,43 +273,25 @@ export function syncEntrySearchSignals(database: SqliteDatabase, input: Paramete
 
 /** Refresh every search projection for the entry's current revision. */
 export function syncEntrySearchProjection(database: SqliteDatabase, input: Parameters<typeof extractEntrySearchSignals>[0]): void {
-  const projection = hybridSearchProjectionSchema(database);
+  requireHybridSearchProjectionSchema(database);
   const row = database.prepare('SELECT rowid FROM entries WHERE id = ?').get<{ rowid: number }>(input.entryId);
   if (row === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Search projection entry is missing');
   const revision = database.prepare('SELECT current_revision FROM entries WHERE id = ?').get<{ current_revision: number }>(input.entryId);
   if (revision === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Search projection revision is missing');
   const revisionNumber = Number(revision.current_revision);
   const tags = canonicalTagOrder(input.tags);
-  if (projection === 'unified') {
-    database.prepare('DELETE FROM entry_search_documents WHERE entry_id = ?').run(input.entryId);
-    database.prepare(`
-      INSERT INTO entry_search_documents(entry_rowid, entry_id, title, body, summary, tags_text)
-      SELECT e.rowid, e.id, r.title, r.body, COALESCE(r.summary, ''), ?
-        FROM entries AS e
-        JOIN entry_revisions AS r ON r.entry_id = e.id AND r.revision = e.current_revision
-       WHERE e.id = ? AND e.current_revision = ?
-    `).run(tags.join(' '), input.entryId, revisionNumber);
-    const stored = database.prepare('SELECT entry_id FROM entry_search_documents WHERE entry_rowid = ?')
-      .get<{ entry_id: unknown }>(row.rowid);
-    if (stored?.entry_id !== input.entryId) {
-      throw new KiokukoError('INTEGRITY_ERROR', 'Search projection refresh produced an incomplete result');
-    }
-  } else {
-    for (const table of ['entries_fts', 'entries_trigram'] as const) {
-      database.prepare(`DELETE FROM ${table} WHERE rowid = ?`).run(row.rowid);
-      database.prepare(`
-        INSERT INTO ${table}(rowid, title, body, summary, tags_text)
-        SELECT e.rowid, r.title, r.body, COALESCE(r.summary, ''), ?
-          FROM entries AS e
-          JOIN entry_revisions AS r ON r.entry_id = e.id AND r.revision = e.current_revision
-         WHERE e.id = ? AND e.current_revision = ?
-      `).run(tags.join(' '), input.entryId, revisionNumber);
-    }
-    const word = database.prepare('SELECT rowid FROM entries_fts WHERE rowid = ?').get<{ rowid: unknown }>(row.rowid);
-    const trigram = database.prepare('SELECT rowid FROM entries_trigram WHERE rowid = ?').get<{ rowid: unknown }>(row.rowid);
-    if (word?.rowid !== row.rowid || trigram?.rowid !== row.rowid) {
-      throw new KiokukoError('INTEGRITY_ERROR', 'Search projection refresh produced an incomplete result');
-    }
+  database.prepare('DELETE FROM entry_search_documents WHERE entry_id = ?').run(input.entryId);
+  database.prepare(`
+    INSERT INTO entry_search_documents(entry_rowid, entry_id, title, body, summary, tags_text)
+    SELECT e.rowid, e.id, r.title, r.body, COALESCE(r.summary, ''), ?
+      FROM entries AS e
+      JOIN entry_revisions AS r ON r.entry_id = e.id AND r.revision = e.current_revision
+     WHERE e.id = ? AND e.current_revision = ?
+  `).run(tags.join(' '), input.entryId, revisionNumber);
+  const stored = database.prepare('SELECT entry_id FROM entry_search_documents WHERE entry_rowid = ?')
+    .get<{ entry_id: unknown }>(row.rowid);
+  if (stored?.entry_id !== input.entryId) {
+    throw new KiokukoError('INTEGRITY_ERROR', 'Search projection refresh produced an incomplete result');
   }
   syncEntrySearchSignals(database, { ...input, tags });
 }

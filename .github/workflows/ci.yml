@@ -52,7 +52,7 @@ jobs:
         env:
           KIOKUKO_REQUIRE_SQLITE_VEC_SMOKE: "1"
 
-      - name: Verify sample database migration and DSH resume
+      - name: Verify sample database baseline init and DSH resume
         run: npm run test:sampledb
 
       - name: Verify package contents

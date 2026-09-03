@@ -1,12 +1,8 @@
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
-import { withImmediateTransaction } from '../db/transaction.js';
 import { KiokukoError } from '../errors.js';
 import {
-  CONTEXT_RANKING_VERSION,
-  CONTEXT_RANKING_COMPONENTS,
   CONTEXT_RANKING_COMPONENTS_V2,
   CONTEXT_SELECTION_REASON_ORDER,
-  type ContextRankingComponent,
   type ContextRankingV2Component,
 } from './ranking.js';
 import { canonicalContentHash, canonicalJson } from '../serialization/validate.js';
@@ -18,8 +14,6 @@ import { readEntry, type EntryRecord } from '../memory/entries.js';
 import { isRetrievableEntry } from '../memory/hybrid-retrieval.js';
 import { entryOriginMatchesWorkspace, isContextEntryOrigin, type ContextEntryOrigin } from './origin.js';
 import { RUN_STATUSES, type RunStatus } from '../ledger/types.js';
-import { RECOMMENDATION_POLICY_VERSION } from './recommendations.js';
-import { readRunIntakeLink } from '../akinator/store.js';
 import { readContextRunProfileBinding } from './run-state.js';
 
 const MAX_IDENTIFIER_BYTES = 256;
@@ -29,19 +23,8 @@ const MAX_CHAR_BUDGET = 100_000;
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 100;
 const DELIVERY_CURSOR_VERSION = 1 as const;
-// The persisted score schema is the mode discriminant: v1 is the generic
-// broker contract and v2 is the scoped broker contract.
-const GENERIC_DELIVERY_POLICY_VERSION = `${CONTEXT_RANKING_VERSION}+${RECOMMENDATION_POLICY_VERSION}`;
 const SCOPED_DELIVERY_POLICY_VERSION = 'context-ranking-v6';
-// v2/v3 used the legacy identity and intake binding. Retired v4/v5 deliveries
-// retain the strict full identity and profile binding used when they were written,
-// but the scoped broker never reuses them after a policy advance.
-const LEGACY_SCOPED_DELIVERY_POLICY_VERSIONS = new Set(['context-ranking-v2', 'context-ranking-v3']);
-const READABLE_SCOPED_DELIVERY_POLICY_VERSIONS = new Set([
-  ...LEGACY_SCOPED_DELIVERY_POLICY_VERSIONS,
-  'context-ranking-v4',
-  'context-ranking-v5',
-]);
+const DELIVERY_SCORE_SCHEMA_VERSION = 2 as const;
 
 const VALIDATION_MESSAGE = 'Context delivery input is invalid';
 const NOT_FOUND_MESSAGE = 'Context delivery target was not found';
@@ -49,15 +32,13 @@ const CONFLICT_MESSAGE = 'Context delivery conflicts with existing record';
 const DATABASE_MESSAGE = 'Context delivery database operation failed';
 const INTEGRITY_MESSAGE = 'Stored context delivery is invalid';
 
-export type ContextDeliveryScoreComponents = { [Component in ContextRankingComponent]: number };
-export type ContextDeliveryScoreComponentsV2 = { [Component in ContextRankingV2Component]: number };
-export type ContextDeliveryScoreComponentsAny = ContextDeliveryScoreComponents | ContextDeliveryScoreComponentsV2;
+export type ContextDeliveryScoreComponents = { [Component in ContextRankingV2Component]: number };
 
 export interface ContextDeliveryItemInput {
   entryId: string;
   entryRevision: number;
   rank: number;
-  scoreComponents: ContextDeliveryScoreComponentsAny;
+  scoreComponents: ContextDeliveryScoreComponents;
   selectionReasons: string[];
   /** Set only for v2 cross-scope deliveries; project remains the v1 default. */
   origin?: ContextEntryOrigin;
@@ -77,7 +58,6 @@ export interface ContextDeliveryInput {
   truncated: boolean;
   createdAt: string;
   items: ContextDeliveryItemInput[];
-  scoreSchemaVersion?: number;
 }
 
 export interface ContextDeliveryItemView extends ContextDeliveryItemInput {
@@ -315,18 +295,12 @@ function positiveSafeInteger(value: unknown): number {
   return value;
 }
 
-function validatedScoreSchemaVersion(value: unknown, onInvalid: () => never): 1 | 2 {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || (value !== 1 && value !== 2)) onInvalid();
-  return value as 1 | 2;
+function deliveryPolicyVersion(): string {
+  return SCOPED_DELIVERY_POLICY_VERSION;
 }
 
-function deliveryPolicyVersion(version: 1 | 2): string {
-  return version === 1 ? GENERIC_DELIVERY_POLICY_VERSION : SCOPED_DELIVERY_POLICY_VERSION;
-}
-
-function storedDeliveryPolicyMatches(version: 1 | 2, policyVersion: string): boolean {
-  return policyVersion === deliveryPolicyVersion(version)
-    || version === 2 && READABLE_SCOPED_DELIVERY_POLICY_VERSIONS.has(policyVersion);
+function storedDeliveryPolicyMatches(policyVersion: string): boolean {
+  return policyVersion === deliveryPolicyVersion();
 }
 
 function storedNonNegativeSafeInteger(value: unknown): number {
@@ -373,8 +347,8 @@ function storedBoolean(value: unknown): boolean {
   return value === 1;
 }
 
-function scoreComponentsForVersion(value: unknown, version: number): ContextDeliveryScoreComponentsAny {
-  const components = version >= 2 ? CONTEXT_RANKING_COMPONENTS_V2 : CONTEXT_RANKING_COMPONENTS;
+function scoreComponentsForVersion(value: unknown): ContextDeliveryScoreComponents {
+  const components = CONTEXT_RANKING_COMPONENTS_V2;
   const object = objectInput(value, components, true);
   const keys = ownKeys(object);
   if (keys.length !== components.length || components.some((component) => !keys.includes(component))) validation();
@@ -384,12 +358,12 @@ function scoreComponentsForVersion(value: unknown, version: number): ContextDeli
     if (typeof score !== 'number' || !Number.isSafeInteger(score) || !Number.isFinite(score) || score < -MAX_SCORE_COMPONENT || score > MAX_SCORE_COMPONENT) validation();
     result[component] = score;
   }
-  return result as ContextDeliveryScoreComponentsAny;
+  return result as ContextDeliveryScoreComponents;
 }
 
-function storedScoreComponents(value: unknown, version: number): ContextDeliveryScoreComponentsAny {
+function storedScoreComponents(value: unknown): ContextDeliveryScoreComponents {
   try {
-    return scoreComponentsForVersion(value, version);
+    return scoreComponentsForVersion(value);
   } catch {
     integrity();
   }
@@ -418,7 +392,7 @@ function storedSelectionReasons(value: unknown): string[] {
   }
 }
 
-function validateDeliveryItems(value: unknown, scoreSchemaVersion: number): ContextDeliveryItemInput[] {
+function validateDeliveryItems(value: unknown): ContextDeliveryItemInput[] {
   const array = arrayInput(value);
   if (array.length > MAX_ITEMS) validation();
   const entries = new Set<string>();
@@ -435,7 +409,7 @@ function validateDeliveryItems(value: unknown, scoreSchemaVersion: number): Cont
       entryId,
       entryRevision,
       rank,
-      scoreComponents: scoreComponentsForVersion(readField(object, 'scoreComponents'), scoreSchemaVersion),
+      scoreComponents: scoreComponentsForVersion(readField(object, 'scoreComponents')),
       selectionReasons: selectionReasons(readField(object, 'selectionReasons')),
       ...(origin === undefined ? {} : { origin }),
     };
@@ -447,7 +421,7 @@ function validateContextDeliveryInput(value: unknown): ValidatedContextDeliveryI
     const object = objectInput(value, [
       'workspace', 'deliveryId', 'runId', 'throughSequence', 'intakeSessionId', 'taskProfileHash',
       'queryHash', 'policyVersion', 'charBudget', 'charCount', 'truncated',
-      'createdAt', 'items', 'scoreSchemaVersion',
+      'createdAt', 'items',
     ], false);
     for (const field of ['workspace', 'deliveryId', 'runId', 'throughSequence', 'intakeSessionId', 'taskProfileHash', 'queryHash', 'policyVersion', 'charBudget', 'charCount', 'truncated', 'createdAt', 'items']) {
       if (!hasOwn(object, field)) validation();
@@ -467,12 +441,8 @@ function validateContextDeliveryInput(value: unknown): ValidatedContextDeliveryI
     if (typeof charCount !== 'number' || !Number.isSafeInteger(charCount) || charCount < 0 || charCount > charBudget) validation();
     const truncated = booleanValue(readField(object, 'truncated'));
     const createdAt = timestamp(readField(object, 'createdAt'));
-    const parsedScoreSchemaVersion = validatedScoreSchemaVersion(
-      object.scoreSchemaVersion === undefined ? 1 : object.scoreSchemaVersion,
-      validation,
-    );
-    if (policyVersion !== deliveryPolicyVersion(parsedScoreSchemaVersion)) validation();
-    const items = validateDeliveryItems(readField(object, 'items'), parsedScoreSchemaVersion);
+    if (policyVersion !== deliveryPolicyVersion()) validation();
+    const items = validateDeliveryItems(readField(object, 'items'));
     return {
       workspace,
       deliveryId,
@@ -487,7 +457,6 @@ function validateContextDeliveryInput(value: unknown): ValidatedContextDeliveryI
       truncated,
       createdAt,
       items,
-      ...(object.scoreSchemaVersion === undefined ? {} : { scoreSchemaVersion: parsedScoreSchemaVersion }),
     };
   } catch {
     validation();
@@ -569,11 +538,11 @@ function canonicalDeliveryBody(input: ContextDeliveryInput): string {
       selectionReasons: item.selectionReasons,
       ...(item.origin === undefined ? {} : { origin: item.origin }),
     })),
-    scoreSchemaVersion: input.scoreSchemaVersion ?? 1,
+    scoreSchemaVersion: DELIVERY_SCORE_SCHEMA_VERSION,
   });
 }
 
-export function scopedDeliveryId(input: ContextDeliveryInput): string {
+export function scopedDeliveryId(input: Omit<ContextDeliveryInput, 'deliveryId'>): string {
   return `context-${canonicalContentHash({
     kind: 'scoped-context-delivery-v1',
     workspace: input.workspace,
@@ -587,7 +556,7 @@ export function scopedDeliveryId(input: ContextDeliveryInput): string {
     charCount: input.charCount,
     truncated: input.truncated,
     createdAt: input.createdAt,
-    scoreSchemaVersion: input.scoreSchemaVersion ?? 1,
+    scoreSchemaVersion: DELIVERY_SCORE_SCHEMA_VERSION,
     items: input.items.map((item) => ({
       entryId: item.entryId,
       entryRevision: item.entryRevision,
@@ -599,14 +568,7 @@ export function scopedDeliveryId(input: ContextDeliveryInput): string {
   })}`;
 }
 
-export function legacyScopedDeliveryId(input: Pick<ContextDeliveryInput, 'runId' | 'queryHash'>): string {
-  return `context-${canonicalContentHash({ runId: input.runId, queryHash: input.queryHash })}`;
-}
-
 function storedScopedDeliveryIdentityMatches(input: ContextDeliveryInput): boolean {
-  if (LEGACY_SCOPED_DELIVERY_POLICY_VERSIONS.has(input.policyVersion)) {
-    return input.deliveryId === legacyScopedDeliveryId(input);
-  }
   return input.deliveryId === scopedDeliveryId(input);
 }
 
@@ -714,8 +676,7 @@ function validateStoredHeader(row: DeliveryHeaderRow, workspace: string): Contex
   const taskProfileHash = storedHash(row.task_profile_hash);
   const queryHash = storedHash(row.query_hash);
   const policyVersion = boundedStoredIdentifier(row.policy_version);
-  const scoreSchemaVersion = validatedScoreSchemaVersion(row.score_schema_version, integrity);
-  if (!storedDeliveryPolicyMatches(scoreSchemaVersion, policyVersion)) integrity();
+  if (row.score_schema_version !== DELIVERY_SCORE_SCHEMA_VERSION || !storedDeliveryPolicyMatches(policyVersion)) integrity();
   const charBudget = storedPositiveSafeInteger(row.char_budget);
   if (charBudget > MAX_CHAR_BUDGET) integrity();
   const charCount = storedNonNegativeSafeInteger(row.char_count);
@@ -736,7 +697,6 @@ function validateStoredHeader(row: DeliveryHeaderRow, workspace: string): Contex
     truncated,
     createdAt,
     items: [],
-    ...(scoreSchemaVersion > 1 ? { scoreSchemaVersion } : {}),
   };
 }
 
@@ -757,11 +717,7 @@ function selectDeliveryEntries(database: SqliteDatabase, deliveryId: string): De
 function validateStoredEntries(database: SqliteDatabase, header: ContextDeliveryInput): ContextDeliveryItemInput[] {
   const rows = selectDeliveryEntries(database, header.deliveryId);
   if (rows.length > MAX_ITEMS) integrity();
-  // Migration 009 may remove an invalid entry from a released delivery,
-  // leaving a historical rank gap. New writes still require contiguous ranks.
-  const allowsRankGaps = LEGACY_SCOPED_DELIVERY_POLICY_VERSIONS.has(header.policyVersion);
   const entryIds = new Set<string>();
-  let previousRank = 0;
   let expectedRank = 1;
   return rows.map((row) => {
     const deliveryId = boundedStoredIdentifier(row.delivery_id);
@@ -775,12 +731,11 @@ function validateStoredEntries(database: SqliteDatabase, header: ContextDelivery
     const revisionWorkspace = boundedStoredIdentifier(row.revision_workspace);
     if (revisionWorkspace !== entryWorkspace) integrity();
     const rank = storedPositiveSafeInteger(row.rank);
-    if (allowsRankGaps ? rank <= previousRank : rank !== expectedRank) integrity();
-    previousRank = rank;
+    if (rank !== expectedRank) integrity();
     expectedRank += 1;
     const scoreValue = validateStoredJson(row.score_components_json);
     const reasonValue = validateStoredJson(row.selection_reason_json);
-    const score = storedScoreComponents(scoreValue, header.scoreSchemaVersion ?? 1);
+    const score = storedScoreComponents(scoreValue);
     const reasons = storedSelectionReasons(reasonValue);
     if (canonicalJson(score) !== row.score_components_json || canonicalJson(reasons) !== row.selection_reason_json) integrity();
     return { entryId, entryRevision, rank, scoreComponents: score, selectionReasons: reasons, ...(origin === 'project' ? {} : { origin }) };
@@ -800,23 +755,7 @@ function assertStoredProfileBinding(database: SqliteDatabase, header: ContextDel
     || header.taskProfileHash !== binding.profileHash) integrity();
 }
 
-function assertLegacyStoredIntakeBinding(database: SqliteDatabase, header: ContextDeliveryInput): void {
-  if (header.intakeSessionId === null) return;
-  let link: ReturnType<typeof readRunIntakeLink>;
-  try {
-    link = readRunIntakeLink(database, { workspace: header.workspace, runId: header.runId });
-  } catch (error) {
-    if (isKiokukoError(error) && (error.code === 'NOT_FOUND' || error.code === 'INTEGRITY_ERROR')) integrity();
-    throw error;
-  }
-  if (link.workspace !== header.workspace || link.sessionId !== header.intakeSessionId) integrity();
-}
-
 function assertStoredDeliveryBinding(database: SqliteDatabase, header: ContextDeliveryInput): void {
-  if (LEGACY_SCOPED_DELIVERY_POLICY_VERSIONS.has(header.policyVersion)) {
-    assertLegacyStoredIntakeBinding(database, header);
-    return;
-  }
   assertStoredProfileBinding(database, header);
 }
 
@@ -829,7 +768,7 @@ function readStoredDelivery(database: SqliteDatabase, workspace: string, deliver
   assertStoredDeliveryBinding(database, header);
   const items = validateStoredEntries(database, header);
   const complete = { ...header, items };
-  if ((header.scoreSchemaVersion ?? 1) === 2 && !storedScopedDeliveryIdentityMatches(complete)) scopedIdentityIntegrity();
+  if (!storedScopedDeliveryIdentityMatches(complete)) scopedIdentityIntegrity();
   const view: ContextDeliveryView = {
     ...complete,
     items: items.map((item) => ({ ...item, scoreComponents: { ...item.scoreComponents }, selectionReasons: [...item.selectionReasons], untrusted: true })),
@@ -843,7 +782,7 @@ function writeContextDelivery(
   input: ValidatedContextDeliveryInput,
   options: ContextDeliveryWriteOptions = {},
 ): ContextDeliveryView {
-  if ((input.scoreSchemaVersion ?? 1) === 2 && input.deliveryId !== scopedDeliveryId(input)) validation();
+  if (input.deliveryId !== scopedDeliveryId(input)) validation();
   assertRunForWrite(database, input);
   const existing = selectHeaderByDeliveryId(database, input.deliveryId);
   if (existing) {
@@ -874,7 +813,7 @@ function writeContextDelivery(
     input.charCount,
     input.truncated ? 1 : 0,
     input.createdAt,
-    input.scoreSchemaVersion ?? 1,
+    DELIVERY_SCORE_SCHEMA_VERSION,
   );
   for (const item of input.items) {
     database.prepare(`
@@ -903,20 +842,6 @@ export function recordContextDeliveryInTransaction(
   if (options.assertBeforePersist !== undefined && typeof options.assertBeforePersist !== 'function') validation();
   try {
     return writeContextDelivery(database, validated, options);
-  } catch (error) {
-    normalizeDatabaseError(error, DELIVERY_UNIQUENESS_FAILURES);
-  }
-}
-
-export function recordContextDelivery(
-  database: SqliteDatabase,
-  input: unknown,
-  options: ContextDeliveryWriteOptions = {},
-): ContextDeliveryView {
-  const validated = validateContextDeliveryInput(input);
-  if (options.assertBeforePersist !== undefined && typeof options.assertBeforePersist !== 'function') validation();
-  try {
-    return withImmediateTransaction(database, () => writeContextDelivery(database, validated, options));
   } catch (error) {
     normalizeDatabaseError(error, DELIVERY_UNIQUENESS_FAILURES);
   }
@@ -962,7 +887,7 @@ export function listContextDeliveries(database: SqliteDatabase, input: unknown):
       assertStoredDeliveryBinding(database, header);
       const storedItems = validateStoredEntries(database, header);
       const complete = { ...header, items: storedItems };
-      if ((header.scoreSchemaVersion ?? 1) === 2 && !storedScopedDeliveryIdentityMatches(complete)) scopedIdentityIntegrity();
+      if (!storedScopedDeliveryIdentityMatches(complete)) scopedIdentityIntegrity();
       return {
         ...complete,
         items: storedItems.map((item) => ({ ...item, scoreComponents: { ...item.scoreComponents }, selectionReasons: [...item.selectionReasons], untrusted: true as const })),

@@ -449,3 +449,25 @@ export function readContextRunRetrievalState(
     stateHash,
   };
 }
+
+/** Authoritative run/intake/profile snapshot shared by the DSH task intake. */
+export interface ContextBrokerRunState {
+  run: RunRecord;
+  taskProfile: TaskProfile;
+  profileHash: string;
+  recommendedTags: string[];
+  intakeSessionId: string;
+  status: 'needs_answer' | 'ready' | 'exhausted';
+}
+
+export function readContextBrokerRunState(database: SqliteDatabase, runId: string): ContextBrokerRunState {
+  const current = readContextRunRetrievalState(database, runId);
+  return {
+    run: current.run,
+    taskProfile: { ...current.profile },
+    profileHash: current.profileHash,
+    recommendedTags: [...current.recommendedTags],
+    intakeSessionId: current.intakeSessionId,
+    status: current.intakeStatus === 'active' ? 'needs_answer' : current.intakeStatus,
+  };
+}

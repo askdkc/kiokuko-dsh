@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { realpathSync } from 'node:fs'
-import { chmod, copyFile, mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { prepareAgentTask } from '../../src/dsh/task-intake.js'
@@ -22,7 +22,6 @@ import {
   CURRENT_MIGRATION_SNAPSHOT,
   CURRENT_MIGRATION_VERSIONS,
   CURRENT_SCHEMA_VERSION,
-  migrationVersionsAfter,
 } from '../fixtures/current-migrations.js'
 
 const sourceRoot = path.resolve(import.meta.dirname, '../..')
@@ -34,8 +33,9 @@ const capabilities = [
   { kind: 'skill' as const, name: 'kiokuko-single-purpose-functions', description: 'Shapes focused work contracts.' },
 ]
 
-function assertLegacyFixture(): void {
-  assert.ok(CURRENT_SCHEMA_VERSION > SAMPLE_DATABASE_BASELINE_VERSION)
+function assertCommittedBaselineFixture(): void {
+  assert.equal(CURRENT_SCHEMA_VERSION, SAMPLE_DATABASE_BASELINE_VERSION)
+  assert.deepEqual(CURRENT_MIGRATION_VERSIONS, [SAMPLE_DATABASE_BASELINE_VERSION])
   const database = openConnection(sampleDatabasePath, { readOnly: true })
   try {
     const versions = database.prepare('SELECT version FROM schema_migrations ORDER BY version')
@@ -43,15 +43,16 @@ function assertLegacyFixture(): void {
       .map(({ version }) => version)
     assert.deepEqual(
       versions,
-      CURRENT_MIGRATION_VERSIONS.slice(0, SAMPLE_DATABASE_BASELINE_VERSION),
-      'the committed sample database must remain on its legacy baseline',
+      [SAMPLE_DATABASE_BASELINE_VERSION],
+      'the committed sample database must stay on the single schema baseline',
     )
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   } finally {
     database.close()
   }
 }
 
-function assertMigratedFixture(databasePath: string): void {
+function assertBaselineFixture(databasePath: string): void {
   const database = openConnection(databasePath, { readOnly: true })
   try {
     const plan = inspectMigrationSnapshot(database, CURRENT_MIGRATION_SNAPSHOT)
@@ -88,13 +89,18 @@ function assertMigratedFixture(databasePath: string): void {
       'SELECT COUNT(*) AS count FROM external_skill_entries WHERE skill_id = ?',
     ).get<{ count: number }>(SAMPLE_EXTERNAL_SKILL_ID)?.count
     assert.equal(externalDocuments, SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT)
+
+    const searchDocuments = database.prepare(
+      'SELECT COUNT(*) AS count FROM entry_search_documents',
+    ).get<{ count: number }>()?.count
+    assert.equal(searchDocuments, SAMPLE_PROJECT_TITLES.length + SAMPLE_GLOBAL_TITLES.length + SAMPLE_EXTERNAL_SKILL_DOCUMENT_COUNT)
   } finally {
     database.close()
   }
 }
 
 async function main(): Promise<void> {
-  assertLegacyFixture()
+  assertCommittedBaselineFixture()
   const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'kiokuko-dsh-sampledb-'))
   const repositoryRoot = path.join(temporaryRoot, 'repository')
   const databasePath = path.join(temporaryRoot, 'data', 'kiokuko-dsh.sqlite3')
@@ -109,11 +115,10 @@ async function main(): Promise<void> {
   let runtime: DshRuntime | undefined
   try {
     const migration = await initializeDatabase({ databasePath, migrationsDirectory })
-    assert.deepEqual(migration.applied, migrationVersionsAfter(SAMPLE_DATABASE_BASELINE_VERSION))
+    assert.deepEqual(migration.applied, [])
     assert.equal(migration.currentVersion, CURRENT_SCHEMA_VERSION)
-    assert.ok(migration.backupPath)
-    assert.equal((await stat(migration.backupPath)).isFile(), true)
-    assertMigratedFixture(databasePath)
+    assert.equal(migration.backupPath, null)
+    assertBaselineFixture(databasePath)
 
     const database = openConnection(databasePath)
     try {
@@ -150,12 +155,12 @@ async function main(): Promise<void> {
     const prepared = await runtime.withDatabase((database) => prepareAgentTask(database, {
       requestId: 'sampledb-dsh-request',
       cwd: canonicalRepositoryRoot,
-      task: 'Verify DSH migration and exact continuation',
+      task: 'Verify DSH baseline and exact continuation',
       profileHints: {
         taskType: 'debug',
         target: 'tests/sampledb/kiokuko-dsh.sqlite3',
-        expected: 'the migrated DSH run resumes through the exact session',
-        constraints: 'preserve every legacy fixture record',
+        expected: 'the baseline DSH run resumes through the exact session',
+        constraints: 'preserve every baseline fixture record',
       },
       capabilities,
       dshSessionId,
@@ -178,16 +183,16 @@ async function main(): Promise<void> {
 
     await runtime.withDatabase((database) => {
       const row = database.prepare(`
-        SELECT lr.client_kind AS clientKind, ec.dsh_session_id AS dshSessionId
+        SELECT lr.dsh_session_id AS runDshSessionId, ec.dsh_session_id AS dshSessionId
           FROM ledger_runs AS lr
           JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
          WHERE lr.run_id = ?
-      `).get<{ clientKind: string; dshSessionId: string }>(prepared.run.runId)
-      assert.equal(row?.clientKind, 'dsh')
+      `).get<{ runDshSessionId: string; dshSessionId: string }>(prepared.run.runId)
+      assert.equal(row?.runDshSessionId, dshSessionId)
       assert.equal(row?.dshSessionId, dshSessionId)
     })
     assert.equal(runtime.closeAgent({ dshSessionId, turn: 1 }), true)
-    process.stdout.write('Sample database migration and DSH runtime resume verification passed.\n')
+    process.stdout.write('Sample database baseline initialization and DSH runtime resume verification passed.\n')
   } finally {
     await runtime?.close()
     await rm(temporaryRoot, { recursive: true, force: true })

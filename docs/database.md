@@ -1,26 +1,29 @@
 # DSH database
 
-SQLite is process-local state owned by the DSH runtime. Migrations 001–023 are
-immutable upgrade history. Migration 024 is the clean boundary to the DSH-only
-product.
+SQLite is process-local state owned by the DSH runtime. `migrations/001_baseline.sql`
+is the single immutable schema baseline; a fresh database is created by applying
+it once. Future schema evolution appends new numbered migrations after the
+baseline, and applied history is protected by the migration framework's
+sequence and checksum validation. There is no rollback path (`migrations/down/`
+does not exist), and released migration files are never rewritten.
 
-Migration 024 deletes every run whose `ledger_runs.client_kind` is not `dsh`.
-Foreign-key cascades remove its intake, events, evidence, deliveries, feedback,
-Enno contract, WorkUnits, receipts, leases, and advisory graph. Purge-audit rows
-that point at the deleted graph are removed before the cascade. Akinator
-sessions are removed only when no surviving intake owns them. Independent
-memory entries remain; run links disappear with the run graph.
+The baseline binds every ledger run to exactly one authoritative DSH session:
 
-The Enno route tables after migration are DSH-specific:
-
+- `ledger_runs.dsh_session_id` (no `client_kind`, `client_version`, or
+  `source_session_id` columns exist)
 - `enno_contracts.dsh_session_id`
 - `enno_dsh_continuations`
 - `enno_resume_tokens.dsh_session_id`
 - `enno_execution_leases.dsh_session_id`
 
-Triggers reject new or updated ledger runs with any client kind other than
-`dsh`. `dsh_intake_idempotency` replaces the generic gateway table. Migration
-completion requires an empty `PRAGMA foreign_key_check` result.
+`dsh_intake_idempotency` is the intake idempotency store for run-open and
+intake-answer replays, keyed by DSH-native `dsh.*` scopes. Baseline completion
+requires an empty `PRAGMA foreign_key_check` result.
+
+The hybrid search projection is CJK-capable from the baseline:
+`entry_search_documents` is the canonical text projection, `entries_fts`
+(unicode61) covers word search, and `entries_trigram` (trigram tokenizer)
+covers Japanese substring search without word boundaries.
 
 Optional semantic retrieval stores rebuildable vectors beside durable memory.
 The runtime may continue with lexical retrieval when the optional vector lane

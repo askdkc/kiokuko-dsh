@@ -110,7 +110,6 @@ interface TurnRecord {
 
 function textFromMessages(messages: readonly unknown[], fallback?: string): string {
   const userTexts: string[] = []
-  const legacyTexts: string[] = []
   for (const value of messages) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
     const message = value as Record<string, unknown>
@@ -122,22 +121,18 @@ function textFromMessages(messages: readonly unknown[], fallback?: string): stri
     // File/session context and other host instructions may intentionally use
     // the user role so the model sees them. They are still not the human's
     // request and must not influence intake classification or task identity.
-    if (sourceKind !== undefined && sourceKind !== 'user') continue
+    // Only messages carrying explicit user provenance are the human's task.
+    if (sourceKind !== 'user') continue
     const content = message.content
     if (!Array.isArray(content)) continue
     for (const block of content) {
       if (typeof block !== 'object' || block === null || Array.isArray(block)) continue
       const text = (block as Record<string, unknown>).text
       if (typeof text !== 'string' || text.length === 0) continue
-      if (sourceKind === 'user') userTexts.push(text)
-      else legacyTexts.push(text)
+      userTexts.push(text)
     }
   }
-  // Current DSH messages carry provenance. Keep the legacy fallback only for
-  // older host doubles/adapters, and never merge it with authenticated user
-  // text when both are present.
-  const texts = userTexts.length > 0 ? userTexts : legacyTexts
-  const task = texts.join('\n').trim()
+  const task = userTexts.join('\n').trim()
   if (task.length === 0) {
     if (fallback !== undefined && fallback.trim().length > 0) return fallback
     throw new Error('dsh pre-step did not contain a user task')

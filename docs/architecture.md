@@ -16,9 +16,9 @@ The model-visible registry contains exactly seven operations:
 advisory fanout, confirmation, final verification, and globalization are host
 operations and are not published as model tools.
 
-Capability catalogs use version 2 and the native `skill | tool` vocabulary.
-Version 1 digest calculation exists only to verify an already-active DSH run;
-new runs always bind a version 2 digest.
+Capability catalogs use version 2 exclusively, with the native `skill | tool`
+vocabulary. Bindings carrying any other catalog version are rejected as
+integrity errors.
 
 Shutdown stops ingress, drains active database work and the bounded write
 queue, stops the embedding worker, then closes SQLite. Partial native runtime

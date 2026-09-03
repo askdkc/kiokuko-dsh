@@ -1,4 +1,4 @@
-import { loadStandardSkillParity, standardSkillFrontmatter, type StandardSkillParity } from './parity.js'
+import { loadStandardSkillParity, standardSkillFrontmatter, type StandardSkillParity } from './standard-skill-integrity.js'
 
 export const STANDARD_DSH_SKILL_PROVIDER = 'kiokuko-standard'
 export const STANDARD_DSH_SKILL_RANK = 600

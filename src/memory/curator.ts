@@ -21,7 +21,6 @@ import { recordAuditEvent } from './audit.js';
 import {
   CURATOR_DRAFT_VERSION,
   CURATOR_MEMORY_ACTOR,
-  isLegacyCuratorGlobalMemory,
   isTrustedCuratorGlobalMemory,
 } from './curator-trust.js';
 
@@ -709,44 +708,9 @@ function assertGlobalProjection(
     || canonicalJson(global.tags) !== canonicalJson(safeGlobalTags(source))
     || global.revision !== 1
     || global.supersededBy !== null
-    || (!isTrustedCuratorGlobalMemory(global) && !isLegacyCuratorGlobalMemory(global))) {
+    || !isTrustedCuratorGlobalMemory(global)) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Stored curator globalization does not match its deterministic source projection');
   }
-}
-
-function upgradeLegacyGlobalProjection(
-  database: SqliteDatabase,
-  entry: EntryRecord,
-  actor: string,
-  now: string,
-): EntryRecord {
-  if (!isLegacyCuratorGlobalMemory(entry)) return entry;
-  database.prepare(`
-    UPDATE entries
-       SET status = 'verified',
-           trust_level = 'system_verified',
-           verified_at = created_at
-     WHERE id = ?
-       AND workspace = ?
-       AND current_revision = 1
-       AND status = 'candidate'
-       AND trust_level = 'untrusted'
-       AND verified_at IS NULL
-       AND created_by = ?
-  `).run(entry.id, GLOBAL_WORKSPACE, CURATOR_MEMORY_ACTOR);
-  recordAuditEvent(database, {
-    entryId: entry.id,
-    workspace: GLOBAL_WORKSPACE,
-    operation: 'promote',
-    actor,
-    details: { from: 'legacy_curator', trustLevel: 'system_verified' },
-    createdAt: now,
-  });
-  const trusted = readEntry(database, { workspace: GLOBAL_WORKSPACE, entryId: entry.id });
-  if (!isTrustedCuratorGlobalMemory(trusted)) {
-    throw new KiokukoError('INTEGRITY_ERROR', 'Curator trust upgrade did not persist the expected lifecycle');
-  }
-  return trusted;
 }
 
 function existingGlobalEntry(
@@ -783,7 +747,7 @@ export function globalizeCuratorCandidate(database: SqliteDatabase, input: Globa
     const metadata = scoreEntry(source).metadata;
     const existing = existingGlobalEntry(database, source, candidate, metadata);
     if (existing) {
-      return { candidate, global: upgradeLegacyGlobalProjection(database, existing, actor, now), idempotent: true };
+      return { candidate, global: existing, idempotent: true };
     }
     const provenance = expectedGlobalProvenance(source, now);
     const global = recordEntryInTransaction(database, {

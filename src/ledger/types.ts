@@ -18,8 +18,6 @@ export const LEDGER_EVENT_TYPES = [
   'cancellation.recorded', 'context.used', 'context.feedback', 'memory.proposed',
   'memory.promoted', 'task_profile.revised', 'correction.recorded', 'source.event',
   'enno.started',
-  // Legacy DSH event names remain readable for byte-preserving migration.
-  'enno.client_bound', 'enno.client_rebound',
   'enno.dsh_session_bound', 'enno.dsh_session_rebound',
   'enno.advice_submitted', 'enno.advice_disposition', 'oduno.ideal_derived', 'zenki.plan_created', 'enno.plan_confirmed',
   'goki.work_started', 'goki.work_completed', 'goki.work_failed',
@@ -50,12 +48,6 @@ export interface Coverage {
   approval: CoverageLevel;
 }
 
-export interface ClientInput {
-  kind: string;
-  version?: string;
-  sessionId?: string;
-}
-
 export interface ProfileHints {
   taskType: TaskType | null;
   target: string | null;
@@ -78,8 +70,8 @@ export interface AnswerInput {
 export interface CreateRunInput {
   runId: string;
   workspace: string;
+  dshSessionId: string;
   protocolVersion: '1';
-  client: ClientInput;
   captureProfile: CaptureProfile;
   coverage: Coverage;
   task: TaskInput;
@@ -119,7 +111,7 @@ export interface Sanitized<T> {
 export interface RunRecord {
   runId: string;
   workspace: string;
-  client: ClientInput;
+  dshSessionId: string;
   protocolVersion: string;
   captureProfile: CaptureProfile;
   coverage: Coverage;

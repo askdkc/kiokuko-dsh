@@ -221,7 +221,6 @@ export interface OperationIdentity {
   operation: 'ideal_submit' | 'advice_submit' | 'plan_submit' | 'answer' | 'work_report' | 'finish' | 'meditation_submit' | 'verify_prepare';
   idempotencyKey: string;
   requestDigest: string;
-  legacyRequestDigests?: readonly string[] | undefined;
 }
 
 const OPERATION_LEASE_MS = 6 * 60_000;
@@ -923,24 +922,8 @@ export function readOperationReceipt<T>(database: SqliteDatabase, runId: string,
     WHERE run_id = ? AND operation = ? AND idempotency_key = ?
   `).get<ReceiptRow>(runId, operation.operation, operation.idempotencyKey);
   if (row === undefined) return undefined;
-  if (row.request_digest !== operation.requestDigest
-    && !operation.legacyRequestDigests?.includes(row.request_digest)) {
-    throw new KiokukoError('CONFLICT', 'Enno idempotency key was reused with different input');
-  }
   if (row.request_digest !== operation.requestDigest) {
-    const normalized = database.prepare(`
-      UPDATE enno_operation_receipts SET request_digest = ?
-      WHERE run_id = ? AND operation = ? AND idempotency_key = ? AND request_digest = ?
-      RETURNING run_id AS runId
-    `).get<{ runId: string }>(
-      operation.requestDigest,
-      runId,
-      operation.operation,
-      operation.idempotencyKey,
-      row.request_digest,
-    );
-    if (normalized?.runId !== runId) throw new KiokukoError('CONFLICT', 'Enno operation receipt changed concurrently');
-    row.request_digest = operation.requestDigest;
+    throw new KiokukoError('CONFLICT', 'Enno idempotency key was reused with different input');
   }
   if (row.state === 'started') {
     if (row.lease_expires_at === null || !Number.isFinite(Date.parse(row.lease_expires_at))) {

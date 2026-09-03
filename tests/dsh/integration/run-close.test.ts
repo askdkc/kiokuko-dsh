@@ -66,7 +66,7 @@ test('turn/end is flushed to the ledger before terminal run close', async () => 
   migrateDatabase(database, 'migrations')
   const ledger = new LedgerStore(database)
   ledger.createRun({
-    runId: 'run-dsh-close', workspace: 'workspace-dsh-close', protocolVersion: '1', client: { kind: 'dsh' },
+    runId: 'run-dsh-close', workspace: 'workspace-dsh-close', dshSessionId: 'dsh-session-close', protocolVersion: '1',
     captureProfile: 'minimal',
     coverage: { run: 'unavailable', tool: 'unavailable', command: 'unavailable', file: 'unavailable', approval: 'unavailable' },
     task: { title: 'close', query: 'close', profileHints: { taskType: null, target: null, expected: null, constraints: null } },

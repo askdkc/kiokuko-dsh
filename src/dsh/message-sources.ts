@@ -1,6 +1,6 @@
 import { findSecret } from '../memory/secrets.js'
 import type { ScopedContextItem, ScopedContextResult } from '../context/scoped-broker.js'
-import { loadStandardSkillParity } from './parity.js'
+import { loadStandardSkillParity } from './standard-skill-integrity.js'
 import type { AdvisoryContribution, AdvisoryPhase, RoleDirective } from '../enno-oduno/types.js'
 
 export type DshMessageSourceKind = 'soul' | 'directive' | 'memory-reasoning' | 'route-skill' | 'expert' | 'advisory' | 'memory' | 'user-task'

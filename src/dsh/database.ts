@@ -26,10 +26,6 @@ import {
   type PreMigrationBackup,
 } from '../db/upgrade-backup.js';
 import { KiokukoError } from '../errors.js';
-import {
-  rebuildHybridSearchInTransaction,
-  rebuildLegacyHybridSearchInTransaction,
-} from '../memory/rebuild-search.js';
 
 export interface InitOptions {
   databasePath?: string;
@@ -61,7 +57,6 @@ export interface InitResult {
   applied: number[];
   currentVersion: number;
   backupPath: string | null;
-  recoveredEntries: number;
   capabilities: SqliteCapabilities;
 }
 
@@ -636,7 +631,6 @@ export async function initializeDatabase(options: InitOptions = {}, hooks: InitH
         applied: [],
         currentVersion: writablePlan.currentVersion,
         backupPath,
-        recoveredEntries: 0,
         capabilities: detectCapabilities(writableConnection),
       };
     }
@@ -671,18 +665,7 @@ export async function initializeDatabase(options: InitOptions = {}, hooks: InitH
         );
       }
       requireForeignKeyIntegrity(writableConnection, 'before');
-      migration = migrateDatabaseSnapshotInTransaction(writableConnection, migrationSnapshot, {
-        recoverInvalidStoredMemory: true,
-        beforeMarkApplied(database, pending) {
-          if ((pending.version === 5 && pending.name === '005_hybrid_search.sql')
-            || (pending.version === 9 && pending.name === '009_external_skill_discovery.sql')) {
-            rebuildLegacyHybridSearchInTransaction(database);
-          }
-          if (pending.version === 20 && pending.name === '020_cjk_fts.sql') {
-            rebuildHybridSearchInTransaction(database);
-          }
-        },
-      });
+      migration = migrateDatabaseSnapshotInTransaction(writableConnection, migrationSnapshot);
       requireForeignKeyIntegrity(writableConnection, 'after');
       hooks.beforeCommit?.();
       if (expectedDatabaseIdentity !== undefined) {
@@ -703,7 +686,6 @@ export async function initializeDatabase(options: InitOptions = {}, hooks: InitH
       applied: migration.applied,
       currentVersion: migration.currentVersion,
       backupPath,
-      recoveredEntries: migration.recoveredEntries,
       capabilities: detectCapabilities(writableConnection),
     };
   } catch (error) {

@@ -6,7 +6,7 @@ import {
   validateRepositoryId,
   validateWorkspace,
 } from '../repository/identity-value.js';
-import { readRegularFile } from '../agent-file/atomic-write.js';
+import { readRegularFile } from './read-regular-file.js';
 import { assertStrictJsonSyntax } from '../dsh/strict-json.js';
 
 export interface ProjectConfig {

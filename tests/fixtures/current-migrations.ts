@@ -10,7 +10,3 @@ export const CURRENT_MIGRATION_VERSIONS = Object.freeze(
 );
 
 export const CURRENT_SCHEMA_VERSION = CURRENT_MIGRATION_VERSIONS.at(-1)!;
-
-export function migrationVersionsAfter(version: number): readonly number[] {
-  return CURRENT_MIGRATION_VERSIONS.filter((candidate) => candidate > version);
-}
