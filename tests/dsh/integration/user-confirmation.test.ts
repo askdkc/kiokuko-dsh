@@ -69,3 +69,14 @@ test('headless confirmation is blocked before asking or mutating', async () => {
   assert.deepEqual(result, { kind: 'blocked', reason: 'answerer_unavailable' })
   assert.equal(submitted, false)
 })
+
+test('dismissing the dedicated plan review returns the composer without mutating', async () => {
+  let submitted = false
+  const result = await new DshConfirmationController({
+    answerer: { ask: async () => { throw Object.assign(new Error('chat about it'), { code: 'ASK_CANCELLED' }) } },
+    readRevision: () => 2,
+    submit: () => { submitted = true },
+  }).confirm({ confirmation: confirmation(), expectedRevision: 2 })
+  assert.deepEqual(result, { kind: 'dismissed' })
+  assert.equal(submitted, false)
+})

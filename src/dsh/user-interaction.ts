@@ -101,7 +101,7 @@ function confirmationText(confirmation: UserFacingConfirmation): string {
     'Final checks:',
     ...confirmation.finalChecks.checks.map((check) => `  - ${check.executable} ${check.arguments.join(' ')} [directory=${check.directory}, timeoutMs=${check.timeoutMs}]`),
     `Attempt limit [${confirmation.attemptLimit.basis}]: ${confirmation.attemptLimit.maxAttempts}`,
-    'Choose one: approve, revise, cancel.',
+    'Choose approve or cancel here. Use Chat about it to describe a revision.',
   ]
   return lines.join('\n')
 }
@@ -120,12 +120,23 @@ export function renderDshPlanRecovery(recovery: PlanStartRecovery): string {
 export function createDshConfirmationAnswerer(service: DshUserQuestions): DshConfirmationAnswerer {
   return {
     async ask(confirmation, signal, agent) {
+      // DSH's dedicated plan-review surface deliberately accepts a binary
+      // decision. Revision remains available through its "Chat about it"
+      // action, which dismisses this wait and returns the composer to the user.
+      const options = confirmation.actions
+        .filter((action): action is 'approve' | 'cancel' => action === 'approve' || action === 'cancel')
+        .map((label) => ({
+          label,
+          description: label === 'approve'
+            ? 'Approve this exact plan and start the first work item.'
+            : 'Cancel this Enno plan without starting implementation.',
+        }))
       const result = await service.ask({
         questions: [{
           id: 'kiokuko-plan-confirmation',
           question: 'Review the proposed plan and choose an action.',
-           detail: renderDshConfirmation(confirmation),
-          options: confirmation.actions.map((label) => ({ label })),
+          detail: renderDshConfirmation(confirmation),
+          options,
           multiSelect: false,
           intent: { kind: 'plan-review', approve: 'approve' },
         }],

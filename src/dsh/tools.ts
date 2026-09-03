@@ -48,6 +48,8 @@ export interface DshToolExecution {
   readonly parent?: unknown
   readonly origin?: 'model' | 'host'
   readonly signal: AbortSignal
+  /** Native DSH turn boundary marker; absent from direct unit callers. */
+  readonly concludeTurn?: () => void
 }
 
 /**
@@ -63,6 +65,7 @@ export interface DshNativeToolExecution {
   readonly agent?: { readonly id: string; readonly session?: { readonly id: string }; readonly sessionId?: string }
   readonly parent?: unknown
   readonly signal: AbortSignal
+  readonly concludeTurn?: () => void
 }
 
 export interface DshToolHostBinding {
@@ -217,6 +220,13 @@ function descriptionFor(operation: ModelToolOperationName): string {
   return `Kiokuko ${operation} semantic operation. Host identity, routing, lease, and idempotency fields are supplied by the dsh host.`
 }
 
+function awaitsUserConfirmation(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const ennoOduno = (value as { ennoOduno?: unknown }).ennoOduno
+  return typeof ennoOduno === 'object' && ennoOduno !== null && !Array.isArray(ennoOduno)
+    && (ennoOduno as { nextAction?: unknown }).nextAction === 'ask_user_confirmation'
+}
+
 /** Build the exact operation set; only model-facing tools receive wire schemas. */
 export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDefinition[] {
   return Object.freeze(MODEL_TOOL_OPERATION_NAMES.map((operation) => Object.freeze({
@@ -242,7 +252,12 @@ export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDef
       // duplicate metadata copy supplied by the native runtime.
       const execution = Object.freeze({ ...normalized, arguments: args })
       const binding = bindDshToolInvocation(execution, host.bind(execution))
-      return host.execute(operation, args, binding, execution.signal)
+      const value = await host.execute(operation, args, binding, execution.signal)
+      // Human plan review is owned by the awaited turn-stopping boundary.
+      // End the model tool loop only after this successful result is committed,
+      // so no later model call can race the still-pending confirmation.
+      if (operation === 'enno_plan_submit' && awaitsUserConfirmation(value)) rawExecution.concludeTurn?.()
+      return value
     },
   })))
 }

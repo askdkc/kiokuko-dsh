@@ -23,7 +23,7 @@ import {
   type DshToolHost,
 } from './tools.js'
 import { DshSessionBridge, DshRunLifecycle } from './session-bridge.js'
-import { DshEnnoController } from './enno-controller.js'
+import { DshConfirmationController, DshEnnoController } from './enno-controller.js'
 import { DshAdvisoryRunner, type DshAdvisoryCall, type DshAdvisoryRoundResult } from './advisory-runner.js'
 import { DshPonytailModes, dshPonytailOwnerKey } from './commands.js'
 import { createDshIntakeAnswerer, createDshConfirmationAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from './user-interaction.js'
@@ -263,7 +263,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const policy = new DshToolPolicy({ phase: 'intake', runId: 'pending', workspace: 'pending', orchestrationId: 'pending', revision: 1, routeEpoch: 0 })
   const bridge = new DshSessionBridge({ runtime })
   const modes = new DshPonytailModes()
-  const confirmation = userQuestions === undefined ? undefined : createDshConfirmationAnswerer(userQuestions)
+  const confirmationAnswerer = userQuestions === undefined ? undefined : createDshConfirmationAnswerer(userQuestions)
   let prepareGeneration = 0
   const continuedTurns = new Map<string, {
     readonly fingerprint: string
@@ -389,7 +389,36 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const previous = currentForAgentEvent(event.agent.id, event.sessionId, undefined, event.nativeSession, event.nativeAgent)
       if (previous !== undefined && previous.turn < event.turn) {
         if (event.signal.aborted) return { admitted: false, prepared: previous.prepared, catalog: event.capabilities }
-        const previousState = await runtime.withDatabase((database) => stateForRun(database, previous))
+        let previousState = await runtime.withDatabase((database) => stateForRun(database, previous))
+        // DSH's dedicated plan-review card returns the composer to the user
+        // when they choose "Chat about it". The next human message is the
+        // requested plan revision; settle it host-side before Zenki resumes.
+        // This keeps enno_answer host-only and avoids reopening Akinator.
+        if (previousState.nextAction === 'ask_user_confirmation' && previousState.contractRevision !== null) {
+          const expectedRevision = previousState.contractRevision
+          const requestedChanges = event.task.trim()
+          if (requestedChanges.length === 0) throw new KiokukoError('VALIDATION_ERROR', 'Plan revision feedback is empty')
+          const revised = await runtime.withDatabase((database) => answerEnno(database, {
+            runId: previous.runId,
+            workspace: previous.workspace,
+            orchestrationId: previous.orchestrationId,
+            expectedRevision,
+            idempotencyKey: `dsh-confirmation-feedback:${canonicalContentHash({
+              runId: previous.runId,
+              revision: expectedRevision,
+              sessionId: event.sessionId,
+              turn: event.turn,
+              requestedChanges,
+            })}`,
+            action: 'revise',
+            requestedChanges,
+          }))
+          previous.prepared = { ...previous.prepared, ennoOduno: revised.ennoOduno }
+          const next = policyState(revised.ennoOduno, previous, previous.sessionId, revised.executionLease)
+          states.set(previous.runId, next)
+          policy.setState(next)
+          previousState = revised.ennoOduno
+        }
         const previousWasChat = previous.prepared.intake.profile.taskType === 'chat'
         const superseded = previous.prepared.ennoOduno.applicable && supersedesUnstartedEnno(event, previousState)
         const continuePrevious = previousWasChat
@@ -730,22 +759,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         const next = policyState(response.ennoOduno, run, run.sessionId, response.executionLease)
         states.set(run.runId, next)
         policy.setState(next)
-        if (confirmation !== undefined && response.ennoOduno.nextAction === 'ask_user_confirmation' && response.ennoOduno.directive?.userFacingConfirmation !== undefined) {
-          const answer = await confirmation.ask(response.ennoOduno.directive.userFacingConfirmation, signal, run.nativeAgent)
-          const confirmed = await runtime.withDatabase((database) => answerEnno(database, {
-            runId: binding.runId,
-            workspace: binding.workspace,
-            orchestrationId: binding.orchestrationId,
-            expectedRevision: response.ennoOduno.contractRevision ?? binding.revision,
-            idempotencyKey: `dsh-confirm:${canonicalContentHash({ runId: binding.runId, revision: response.ennoOduno.contractRevision, action: answer.action })}`,
-            action: answer.action,
-            ...(answer.requestedChanges === undefined ? {} : { requestedChanges: answer.requestedChanges }),
-          }))
-          const confirmedState = policyState(confirmed.ennoOduno, run, run.sessionId, confirmed.executionLease)
-          states.set(run.runId, confirmedState)
-          policy.setState(confirmedState)
-          return confirmed
-        }
       }
       return response
     },
@@ -795,6 +808,46 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const item = currentForAgentEvent(agent.id, agent.sessionId, event.turn, agent.nativeSession, agent.nativeAgent)
       if (item === undefined) throw new Error('kiokuko-dsh agent is not bound to a run')
       return runtime.withDatabase((database) => stateForRun(database, item))
+    },
+    confirmUser: async ({ event, state, confirmation }) => {
+      const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
+      if (item === undefined || item.closed || state.contractRevision === null) {
+        throw new Error('kiokuko-dsh confirmation turn is not bound')
+      }
+      let response: EnnoOperationResponse | undefined
+      const controller = new DshConfirmationController({
+        ...(confirmationAnswerer === undefined ? {} : { answerer: confirmationAnswerer }),
+        readRevision: () => runtime.withDatabase((database) => readEnnoSnapshot(database, {
+          runId: item.runId,
+          workspace: item.workspace,
+          orchestrationId: item.orchestrationId,
+        }).revision),
+        submit: async (answer) => {
+          response = await runtime.withDatabase((database) => answerEnno(database, {
+            runId: item.runId,
+            workspace: item.workspace,
+            orchestrationId: item.orchestrationId,
+            expectedRevision: answer.expectedRevision,
+            idempotencyKey: `dsh-confirm:${canonicalContentHash({ runId: item.runId, revision: answer.expectedRevision, action: answer.action, requestedChanges: answer.requestedChanges ?? null })}`,
+            action: answer.action,
+            ...(answer.requestedChanges === undefined ? {} : { requestedChanges: answer.requestedChanges }),
+          }))
+        },
+      })
+      const decision = await controller.confirm({
+        confirmation,
+        expectedRevision: state.contractRevision,
+        signal: event.signal,
+      })
+      if (decision.kind === 'dismissed') return 'dismissed'
+      if (decision.kind !== 'submitted' || response === undefined) {
+        throw new Error(`kiokuko-dsh confirmation could not advance: ${decision.kind === 'blocked' ? decision.reason : 'missing_response'}`)
+      }
+      item.prepared = { ...item.prepared, ennoOduno: response.ennoOduno }
+      const next = policyState(response.ennoOduno, item, item.sessionId, response.executionLease)
+      states.set(item.runId, next)
+      policy.setState(next)
+      return 'submitted'
     },
     injectNextStepContext: async ({ event, selection, state }) => {
       const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
