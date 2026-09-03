@@ -25,7 +25,7 @@ jobs:
       - name: Set up pnpm for DSH CLI
         uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 11.7.0
 
       - name: Install dependencies
         run: npm ci
@@ -33,7 +33,7 @@ jobs:
       - name: Install pinned DeepSeek Harness CLI
         run: |
           dsh_cli_dir="$RUNNER_TEMP/dsh-cli"
-          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.2-alpha.3
+          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.2-alpha.5
           echo "$dsh_cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
         env:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
@@ -67,7 +67,7 @@ jobs:
       - name: Verify DeepSeek Harness composition and package lifecycle
         run: npm run test:e2e:dsh
         env:
-          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.2-alpha.3
+          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.2-alpha.5
           KIOKUKO_REQUIRE_DSH_CLI: "1"
           KIOKUKO_DSH_EVIDENCE_PATH: ${{ runner.temp }}/kiokuko-dsh-evidence.json
 
@@ -99,7 +99,7 @@ jobs:
       - name: Set up pnpm for DSH CLI
         uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 11.7.0
 
       - name: Install dependencies
         run: npm ci
@@ -107,7 +107,7 @@ jobs:
       - name: Install pinned DeepSeek Harness CLI
         run: |
           dsh_cli_dir="$RUNNER_TEMP/dsh-cli"
-          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.2-alpha.3
+          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.2-alpha.5
           echo "$dsh_cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
         env:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
@@ -115,7 +115,7 @@ jobs:
       - name: Verify DeepSeek Harness Web lifecycle
         run: npm run test:e2e:dsh
         env:
-          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.2-alpha.3
+          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.2-alpha.5
           KIOKUKO_REQUIRE_DSH_CLI: "1"
           KIOKUKO_DSH_EVIDENCE_PATH: ${{ runner.temp }}/kiokuko-dsh-evidence.json
 

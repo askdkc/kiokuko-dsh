@@ -21,7 +21,7 @@ import { DshSessionBridge, DshRunLifecycle } from './session-bridge.js'
 import { DshEnnoController } from './enno-controller.js'
 import { DshAdvisoryRunner, type DshAdvisoryCall, type DshAdvisoryRoundResult } from './advisory-runner.js'
 import { DshPonytailModes } from './commands.js'
-import { createDshIntakeAnswerer, createDshConfirmationAnswerer, type DshUserQuestions } from './user-interaction.js'
+import { createDshIntakeAnswerer, createDshConfirmationAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from './user-interaction.js'
 import { createDshCapabilityCatalog, type DshCapabilityCatalog } from './capability-catalog.js'
 import { STANDARD_SKILL_MANIFESTS } from '../setup/standard-skills.js'
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js'
@@ -84,7 +84,7 @@ interface TurnRecord {
   readonly orchestrationId: string
   readonly repositoryRoot: string
   readonly cwd: string
-  nativeAgent?: object
+  nativeAgent?: DshUserQuestionAgent
   nativeSession?: object
   task: string
   turn: number
@@ -307,14 +307,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     override async preStep(event: DshPreStepEvent, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> {
       const result = await this.prepare(event)
       if (!result.admitted) return { kind: 'reject' }
-      try {
-        const decision = await next()
-        if (decision.kind !== 'enter') return decision
-        const messages = await contextMessages(event, result)
-        return { ...decision, messages: [...decision.messages, ...messages] }
-      } catch {
-        return { kind: 'reject' }
-      }
+      const decision = await next()
+      if (decision.kind !== 'enter') return decision
+      const messages = await contextMessages(event, result)
+      return { ...decision, messages: [...decision.messages, ...messages] }
     }
   }
 
@@ -359,7 +355,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('kiokuko-dsh native session cwd is unavailable')
     const catalog = await capabilityCatalog(skills, tools, {
       agent: { id: payload.agent.id },
-      nativeAgent: payload.agent as object,
+      nativeAgent: payload.agent,
       cwd,
       signal: payload.signal,
     })
@@ -371,7 +367,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const task = bound === undefined ? textFromMessages(payload.messages) : bound.task
     return {
       agent: { id: payload.agent.id },
-      nativeAgent: payload.agent as object,
+      nativeAgent: payload.agent,
       sessionId,
       ...(boundSession === undefined ? {} : { nativeSession: boundSession as object }),
       turn: payload.turn,
@@ -460,7 +456,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         states.set(run.runId, next)
         policy.setState(next)
         if (confirmation !== undefined && response.ennoOduno.nextAction === 'ask_user_confirmation' && response.ennoOduno.directive?.userFacingConfirmation !== undefined) {
-          const answer = await confirmation.ask(response.ennoOduno.directive.userFacingConfirmation, signal)
+          const answer = await confirmation.ask(response.ennoOduno.directive.userFacingConfirmation, signal, run.nativeAgent)
           const confirmed = await runtime.withDatabase((database) => answerEnno(database, {
             runId: binding.runId,
             workspace: binding.workspace,

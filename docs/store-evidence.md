@@ -11,8 +11,8 @@ permissions, and disposable-profile result independently.
 |---|---|
 | Package | `kiokuko-dsh` |
 | Repository | `https://github.com/askdkc/kiokuko-dsh` |
-| Release | `0.1.0` |
-| DSH release | `0.1.2-alpha.3` |
+| Release | `0.1.3` |
+| DSH release | `0.1.2-alpha.5` |
 | Profile | `web` |
 | npm lifecycle | `prepare: npm run build` |
 | Automatic size policy | intentionally exceeded; manual `user-reviewed` track |
@@ -29,15 +29,18 @@ Evidence run: <fill with CI URL or artifact URL>
 ## Required evidence
 
 The CI evidence must use a disposable `DSH_HOME` and record Node.js version,
-OS, DSH version, package Commit, and these outcomes without credentials:
+OS, DSH version, package version, exact package Commit, clean source state,
+packed-artifact integrity, and these outcomes without credentials:
 
-1. pinned Git install without the exact `allowBuilds` entry is rejected or
-   remains unusable;
-2. adding the exact `allowBuilds` entry permits the fixed source build;
-3. `dump-config` contains exactly one `kiokuko-dsh/dsh` bundle;
-4. the DSH `web` profile cold-starts and reports the plugin loaded;
-5. the profile stops cleanly;
-6. removing the plugin leaves no `kiokuko-dsh` bundle in `dump-config`.
+1. the reproducibility check proves that `prepare` emits the same `dist/` tree
+   from the fixed source;
+2. the package check builds a tarball containing the declared runtime closure
+   and imports `kiokuko-dsh/dsh` from an isolated consumer;
+3. the disposable Profile installs that exact tarball;
+4. `dump-config` contains exactly one `kiokuko-dsh/dsh` bundle;
+5. the DSH `web` profile cold-starts and reports the plugin loaded;
+6. the profile stops cleanly;
+7. removing the plugin leaves no `kiokuko-dsh` bundle in `dump-config`.
 
 The test must fail if the DSH CLI is unavailable. `headless`, SDK, ACP, and
 other DSH releases remain `unknown` until they receive their own evidence.

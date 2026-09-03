@@ -97,7 +97,7 @@ test('Cordis loads and unloads the bootstrap effect without residue', async () =
 })
 
 test('dsh installs and removes the packed bundle in an isolated profile', {
-  skip: !(await hasDshCommand()) ? 'dsh CLI is not installed; set DSH_BIN to dsh 0.1.2-alpha.3' : false,
+  skip: !(await hasDshCommand()) ? 'dsh CLI is not installed; set DSH_BIN to dsh 0.1.2-alpha.5' : false,
 }, async () => {
   const home = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-home-'))
   const packageOutput = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-pack-'))

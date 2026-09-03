@@ -34,3 +34,16 @@ test('only an explicit revise action may carry requested changes', async () => {
     /Only a revision may carry requested changes/u,
   )
 })
+
+test('confirmation binds the request to the exact native agent', async () => {
+  const agent = { id: 'root-agent' }
+  let receivedAgent: object | undefined
+  const answerer = createDshConfirmationAnswerer({
+    ask: async (request) => {
+      receivedAgent = request.agent
+      return { answers: [{ id: request.questions[0]!.id, selected: ['approve'] }] }
+    },
+  })
+  await answerer.ask(confirmation, undefined, agent)
+  assert.equal(receivedAgent, agent)
+})

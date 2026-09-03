@@ -73,6 +73,10 @@ function skillFile(files: Awaited<ReturnType<typeof loadStandardSkillParity>>['f
   return file.content
 }
 
+function admittedSoulText(soul: string, intakeStatus: DshMessageSourceInput['intakeStatus']): string {
+  return `${soul}\n\n## DeepSeek Harness host admission\n\nThe DSH host completed the Akinator intake gate before this model request. \`task_prepare\` and \`task_answer\` are host-only operations and are intentionally absent from the model tool list. Do not call them or stop because they are absent. This request is admitted with intake status \`${intakeStatus}\` and \`nextAction=proceed\`; continue from the current directive and supplied context.`
+}
+
 /** Build the fixed model-visible source order from a prepared, already-gated snapshot. */
 export async function buildDshMessageSources(input: DshMessageSourceInput): Promise<readonly DshMessageSource[]> {
   if ((input.intakeStatus !== 'ready' && input.intakeStatus !== 'exhausted') || input.nextAction !== 'proceed') {
@@ -80,7 +84,12 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
   }
   if (input.context !== null && input.context.untrusted !== true) throw new Error('Dsh context must remain untrusted')
   const parity = await loadStandardSkillParity()
-  const sources: DshMessageSource[] = [{ kind: 'soul', name: 'kiokuko-soul', text: skillFile(parity.files, 'kiokuko-soul'), trust: 'system' }]
+  const sources: DshMessageSource[] = [{
+    kind: 'soul',
+    name: 'kiokuko-soul',
+    text: admittedSoulText(skillFile(parity.files, 'kiokuko-soul'), input.intakeStatus),
+    trust: 'system',
+  }]
   const directive = directiveSource(input.directive)
   if (directive !== null) sources.push(directive)
   if (input.memoryPolicy.memoryReasoningRequired && !input.memoryPolicy.contextWithheld) {

@@ -8,7 +8,7 @@ const exec = promisify(execFile)
 const root = resolve(import.meta.dirname, '..')
 const dsh = process.env.DSH_BIN ?? 'dsh'
 const profile = 'web'
-const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? '0.1.2-alpha.3'
+const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? '0.1.2-alpha.5'
 const requireDshCli = process.env.KIOKUKO_REQUIRE_DSH_CLI === '1'
 
 async function run(command, args, env = {}) {
@@ -107,9 +107,15 @@ async function runCliLifecycle() {
     const version = await run(dsh, ['--version'], env)
     const dshVersion = `${version.stdout}${version.stderr}`.trim()
     if (!dshVersion.includes(expectedDshVersion)) throw new Error(`expected DSH ${expectedDshVersion}, got ${dshVersion}`)
+    const packageCommit = (await run('git', ['rev-parse', 'HEAD'], env)).stdout.trim()
+    if (!/^[0-9a-f]{40}$/u.test(packageCommit)) throw new Error('git did not return an exact package Commit')
+    const workingTreeClean = (await run('git', ['status', '--porcelain'], env)).stdout.trim().length === 0
     const packed = JSON.parse((await run('npm', ['pack', '--json', '--pack-destination', output], env)).stdout)
-    const filename = packed[0]?.filename
+    const packageMetadata = packed[0]
+    const filename = packageMetadata?.filename
     if (typeof filename !== 'string') throw new Error('npm pack did not return a tarball')
+    if (typeof packageMetadata?.version !== 'string' || packageMetadata.version.length === 0) throw new Error('npm pack did not return the package version')
+    if (typeof packageMetadata?.integrity !== 'string' || packageMetadata.integrity.length === 0) throw new Error('npm pack did not return artifact integrity')
     const tarball = join(output, filename)
     await access(tarball)
     await run(dsh, ['plugin', '--profile', profile, 'add', tarball], env)
@@ -133,6 +139,10 @@ async function runCliLifecycle() {
       cli: 'complete',
       profile,
       dshVersion: dshVersion.trim(),
+      packageVersion: packageMetadata.version,
+      packageCommit,
+      workingTreeClean,
+      packageIntegrity: packageMetadata.integrity,
       install: 'complete',
       web: 'started-and-stopped',
       uninstall: 'complete',

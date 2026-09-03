@@ -38,6 +38,7 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
   const sections = new Map<string, string>()
   const skillSnapshotOptions: unknown[] = []
   const toolSchemaScopes: unknown[] = []
+  const questionAgents: unknown[] = []
   let soulModelInvocable = true
   const fallbackSession = { id: 'native-fallback', header: { cwd: f.root } }
   const root = new Context()
@@ -69,7 +70,9 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
       },
     },
     commands: { register() { return () => undefined } },
-    userQuestions: { async ask(request: { questions: readonly [{ id: string }] }) {
+    userQuestions: { async ask(request: { questions: readonly [{ id: string }]; agent?: object }) {
+      if (request.agent === undefined) throw new Error('no user-questions answerer accepted the request')
+      questionAgents.push(request.agent)
       const id = request.questions[0]!.id
       const values: Record<string, string> = { taskType: 'build', target: 'src/index.ts', expected: 'tests pass' }
       return { answers: [{ id, selected: [values[id] ?? 'approve'] }] }
@@ -96,16 +99,23 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
     assert.equal((skillSnapshotOptions[0] as any).signal, event.signal)
     assert.equal(toolSchemaScopes[0], event.nativeAgent)
     let downstreamCalls = 0
+    await assert.rejects(adapter.host.intakeGate!.preStep(event, async () => {
+      downstreamCalls += 1
+      throw new Error('downstream pre-step failed')
+    }), /downstream pre-step failed/u)
     const decision = await adapter.host.intakeGate!.preStep(event, async () => {
       downstreamCalls += 1
       return { kind: 'enter', messages: [] }
     })
     assert.deepEqual(decision.kind, 'enter')
-    assert.equal(downstreamCalls, 1)
+    assert.equal(downstreamCalls, 2)
+    assert.ok(questionAgents.length > 0)
+    assert.equal(questionAgents.every((agent) => agent === event.nativeAgent), true)
     assert.ok(decision.messages.length > 0)
     assert.match(decision.messages.map((message) => JSON.stringify(message)).join('\n'), /kiokuko-soul/u)
     assert.match(decision.messages.map((message) => JSON.stringify(message)).join('\n'), /Implement the requested build change/u)
     assert.equal(decision.messages.every((message: any) => typeof message.id === 'string' && message.id.length > 0), true)
+    assert.equal(decision.messages.every((message: any) => message.role === 'user'), true)
     const toolHost = adapter.host.toolHost!
     assert.ok(event.nativeSession)
     const nativeSession = event.nativeSession
@@ -133,7 +143,7 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
       return { kind: 'enter', messages: [] }
     })
     assert.deepEqual(replay.kind, 'enter')
-    assert.equal(downstreamCalls, 2)
+    assert.equal(downstreamCalls, 3)
     assert.deepEqual(replay.messages, [])
     const nextStepEvent = await adapter.host.mapPreStep!({
       agent: event.nativeAgent as any,

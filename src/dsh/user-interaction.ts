@@ -13,7 +13,13 @@ export interface DshUserQuestionRequest {
     readonly multiSelect?: boolean
     readonly intent?: { readonly kind: 'plan-review'; readonly approve: string }
   }]
+  readonly agent?: DshUserQuestionAgent
   readonly signal?: AbortSignal
+}
+
+/** Exact live DSH agent identity used to route a question to its scoped UI answerer. */
+export interface DshUserQuestionAgent {
+  readonly id: string
 }
 
 /** Native dsh-user-questions option shape. */
@@ -31,7 +37,7 @@ export interface DshUserQuestions {
 }
 
 export interface DshIntakeAnswerer {
-  ask(question: AkinatorQuestion, signal?: AbortSignal): Promise<string>
+  ask(question: AkinatorQuestion, signal?: AbortSignal, agent?: DshUserQuestionAgent): Promise<string>
 }
 
 export interface DshConfirmationAnswer {
@@ -40,7 +46,7 @@ export interface DshConfirmationAnswer {
 }
 
 export interface DshConfirmationAnswerer {
-  ask(confirmation: UserFacingConfirmation, signal?: AbortSignal): Promise<DshConfirmationAnswer>
+  ask(confirmation: UserFacingConfirmation, signal?: AbortSignal, agent?: DshUserQuestionAgent): Promise<DshConfirmationAnswer>
 }
 
 function conflict(message: string): never {
@@ -50,13 +56,14 @@ function conflict(message: string): never {
 /** Adapt the dsh user-question service to one exact Akinator question at a time. */
 export function createDshIntakeAnswerer(service: DshUserQuestions): DshIntakeAnswerer {
   return {
-    async ask(question, signal) {
+    async ask(question, signal, agent) {
       const result = await service.ask({
         questions: [{
           id: question.id,
           question: question.prompt,
           ...(question.options === null ? {} : { options: question.options.map((label) => ({ label })) }),
         }],
+        ...(agent === undefined ? {} : { agent }),
         ...(signal === undefined ? {} : { signal }),
       })
       const answer = result.answers[0]
@@ -108,7 +115,7 @@ export function renderDshPlanRecovery(recovery: PlanStartRecovery): string {
 /** Adapt one explicit confirmation choice to dsh UserQuestions. */
 export function createDshConfirmationAnswerer(service: DshUserQuestions): DshConfirmationAnswerer {
   return {
-    async ask(confirmation, signal) {
+    async ask(confirmation, signal, agent) {
       const result = await service.ask({
         questions: [{
           id: 'kiokuko-plan-confirmation',
@@ -118,6 +125,7 @@ export function createDshConfirmationAnswerer(service: DshUserQuestions): DshCon
           multiSelect: false,
           intent: { kind: 'plan-review', approve: 'approve' },
         }],
+        ...(agent === undefined ? {} : { agent }),
         ...(signal === undefined ? {} : { signal }),
       })
       const answer = result.answers[0]

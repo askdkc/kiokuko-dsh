@@ -97,7 +97,7 @@ limit. The package is therefore not represented as a small, auto-approved
 plugin.
 
 The manifest declares MIT licensing, the canonical GitHub repository, Node.js
-`>=24.16.0`, DSH `0.1.2-alpha.3`, and the verified `web` profile. Other DSH
+`>=24.16.0`, DSH `0.1.2-alpha.5`, and the verified `web` profile. Other DSH
 releases and `headless` remain unverified until a matching disposable-profile
 run is recorded.
 
@@ -170,13 +170,13 @@ The current compatibility measurement is:
 
 | Harness profile | Status |
 |---|---|
-| web | verified by the disposable alpha.3 install/start/uninstall run |
+| web | verified by the disposable alpha.5 install/start/uninstall run |
 | headless | unknown; not declared as supported |
 | sdk | unsupported until a real Loader/SDK host is supplied |
 | acp | unsupported until a real Loader/ACP host is supplied |
 | sdk-minimal | unsupported until a real Loader/SDK host is supplied |
 
-The `web` status is evidence-based only after the disposable alpha.3 run. An
+The `web` status is evidence-based only after the disposable alpha.5 run. An
 unavailable DeepSeek binary leaves a profile unverified; it is never converted
 into a passing runtime claim.
 

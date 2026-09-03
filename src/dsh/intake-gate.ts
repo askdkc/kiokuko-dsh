@@ -9,13 +9,13 @@ import {
   type DshCapabilityCatalog,
 } from './capability-catalog.js'
 import { dshTurnRequestId, resolveGroundedIntakeProfile } from './intake-profile-resolver.js'
-import type { DshIntakeAnswerer } from './user-interaction.js'
+import type { DshIntakeAnswerer, DshUserQuestionAgent } from './user-interaction.js'
 import type { SkillDiscoveryMode } from '../skills/types.js'
 
 export interface DshPreStepEvent {
   readonly agent: { readonly id: string }
   /** Opaque native Agent scope used for capability snapshots. */
-  readonly nativeAgent?: object
+  readonly nativeAgent?: DshUserQuestionAgent
   /** The native DSH session identity; it is distinct from agent.id. */
   readonly sessionId: string
   /** Opaque native Session object, retained only for exact host binding. */
@@ -43,7 +43,7 @@ export interface DshIntakeGateResult {
 
 export interface DshCapabilityReadContext {
   readonly agent: { readonly id: string }
-  readonly nativeAgent?: object
+  readonly nativeAgent?: DshUserQuestionAgent
   readonly cwd: string
   readonly signal: AbortSignal
 }
@@ -147,7 +147,7 @@ export class DshIntakeGate {
         })
         return result
       }
-      const value = await this.#answerer.ask(prepared.intake.question, event.signal)
+      const value = await this.#answerer.ask(prepared.intake.question, event.signal, event.nativeAgent)
       const currentCapabilities = this.#readCapabilities === undefined
         ? event.capabilities
         : await this.#readCapabilities({
