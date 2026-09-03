@@ -32,7 +32,7 @@ async function fixture(): Promise<{ root: string; databasePath: string }> {
   return { root, databasePath }
 }
 
-test('native adapter mounts model tools and admits a real Akinator turn', async () => {
+test('native adapter mounts model tools and admits a grounded turn without redundant questions', async () => {
   const f = await fixture()
   const registered: any[] = []
   const sections = new Map<string, string>()
@@ -95,9 +95,17 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
     assert.equal(registered.length, 7)
     const event = await adapter.host.mapPreStep!({
       agent: { id: 'native-agent', session: { id: 'native-session', header: { cwd: f.root } } },
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Implement the requested build change.' }] }],
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'Treat the attached document as a research request.' }],
+          source: { kind: 'plugin', plugin: 'file-reference', form: 'instructions' },
+        },
+        { role: 'user', content: [{ type: 'text', text: '@PLAN.md を実装' }], source: { kind: 'user' } },
+      ],
       turn: 1, step: 1, signal: new AbortController().signal,
     })
+    assert.equal(event.task, '@PLAN.md を実装')
     assert.equal((skillSnapshotOptions[0] as any).scope, event.nativeAgent)
     assert.equal((skillSnapshotOptions[0] as any).cwd, f.root)
     assert.equal((skillSnapshotOptions[0] as any).signal, event.signal)
@@ -113,11 +121,10 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
     })
     assert.deepEqual(decision.kind, 'enter')
     assert.equal(downstreamCalls, 2)
-    assert.ok(questionAgents.length > 0)
-    assert.equal(questionAgents.every((agent) => agent === event.nativeAgent), true)
+    assert.deepEqual(questionAgents, [])
     assert.ok(decision.messages.length > 0)
     assert.match(decision.messages.map((message) => JSON.stringify(message)).join('\n'), /kiokuko-soul/u)
-    assert.match(decision.messages.map((message) => JSON.stringify(message)).join('\n'), /Implement the requested build change/u)
+    assert.match(decision.messages.map((message) => JSON.stringify(message)).join('\n'), /@PLAN\.md を実装/u)
     assert.equal(decision.messages.every((message: any) => typeof message.id === 'string' && message.id.length > 0), true)
     assert.equal(decision.messages.every((message: any) => message.role === 'user'), true)
     const toolHost = adapter.host.toolHost!
@@ -158,7 +165,31 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
     const nextStep = await adapter.host.intakeGate!.preStep(nextStepEvent, async () => ({ kind: 'enter', messages: [] }))
     assert.deepEqual(nextStep.kind, 'enter')
     assert.deepEqual(nextStep.messages, [])
-    adapter.host.ponytailModes!.end('dsh:native-agent:native-session:1')
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:1'), true)
+    const firstActionRun = adapter.host.resolveSessionRunId!(event.nativeSession as { id: string })!
+    const actionQuestionCount = questionIds.length
+    const secondActionEvent = await adapter.host.mapPreStep!({
+      agent: event.nativeAgent as any,
+      messages: [{ role: 'user', content: [{ type: 'text', text: '続けてください' }], source: { kind: 'user' } }],
+      turn: 2, step: 1, signal: event.signal,
+    })
+    assert.equal(secondActionEvent.profileHints?.taskType, 'build')
+    assert.equal((await adapter.host.intakeGate!.preStep(secondActionEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+    assert.equal(adapter.host.resolveSessionRunId!(event.nativeSession as { id: string }), firstActionRun)
+    assert.equal(questionIds.length, actionQuestionCount)
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:1'), false)
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:2'), true)
+    const thirdActionEvent = await adapter.host.mapPreStep!({
+      agent: event.nativeAgent as any,
+      messages: [{ role: 'user', content: [{ type: 'text', text: '@README.md もレビュー' }], source: { kind: 'user' } }],
+      turn: 3, step: 1, signal: event.signal,
+    })
+    assert.equal(thirdActionEvent.profileHints, undefined)
+    assert.equal((await adapter.host.intakeGate!.preStep(thirdActionEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+    assert.equal(adapter.host.resolveSessionRunId!(event.nativeSession as { id: string }), firstActionRun)
+    assert.equal(questionIds.length, actionQuestionCount)
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:2'), false)
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:3'), true)
     const fallbackAgent = { id: 'fallback-agent', sessionId: fallbackSession.id }
     const fallbackEvent = await adapter.host.mapPreStep!({
       agent: fallbackAgent,
@@ -175,7 +206,34 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
     })
     assert.equal(fallbackNextEvent.task, fallbackEvent.task)
     assert.deepEqual(await adapter.host.intakeGate!.preStep(fallbackNextEvent, async () => ({ kind: 'enter', messages: [] })), { kind: 'enter', messages: [] })
-    adapter.host.ponytailModes!.end('dsh:fallback-agent:native-fallback:1')
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:3'), true)
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:fallback-agent:native-fallback:1'), true)
+    const fallbackRun = adapter.host.resolveSessionRunId!(fallbackSession)!
+    const blocked = openConnection(f.databasePath)
+    try {
+      blocked.prepare("UPDATE enno_contracts SET status = 'blocked', phase = NULL, blocker = 'test blocker' WHERE run_id = ?").run(fallbackRun)
+      blocked.prepare("UPDATE ledger_runs SET status = 'failed' WHERE run_id = ?").run(fallbackRun)
+    } finally {
+      blocked.close()
+    }
+    const blockedClose = await adapter.host.resolveIdleClose!('fallback-agent', fallbackSession.id, fallbackSession, fallbackAgent)
+    assert.deepEqual(blockedClose, { runId: fallbackRun, status: 'failed' })
+    await adapter.host.lifecycle!.closeTurn(blockedClose!)
+    assert.equal(adapter.host.resolveSessionRunId!(fallbackSession), undefined)
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:fallback-agent:native-fallback:1'), false)
+    const questionsBeforeRecovery = questionIds.length
+    const recoveredEvent = await adapter.host.mapPreStep!({
+      agent: fallbackAgent,
+      messages: [{ role: 'user', content: [{ type: 'text', text: '@README.md をレビュー' }], source: { kind: 'user' } }],
+      turn: 2, step: 1, signal: event.signal,
+    })
+    assert.equal((await adapter.host.intakeGate!.preStep(recoveredEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+    const recoveredRun = adapter.host.resolveSessionRunId!(fallbackSession)!
+    assert.notEqual(recoveredRun, fallbackRun)
+    assert.equal(questionIds.length, questionsBeforeRecovery)
+    const recoveredClose = await adapter.host.resolveSessionClose!(fallbackSession.id, fallbackSession)
+    assert.deepEqual(recoveredClose, { runId: recoveredRun, status: 'cancelled' })
+    await adapter.host.lifecycle!.closeTurn(recoveredClose!)
     const beforeChat = openConnection(f.databasePath)
     const ennoContractsBeforeChat = beforeChat.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get<{ count: number }>()!.count
     beforeChat.close()
@@ -195,6 +253,7 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
     })
     const chatDecision = await adapter.host.intakeGate!.preStep(chatEvent, async () => ({ kind: 'enter', messages: [] }))
     assert.equal(chatDecision.kind, 'enter')
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:chat-agent:chat-session:1'), true)
     assert.deepEqual(questionIds.slice(questionsBeforeChat), ['taskType'])
     assert.equal(questionAgents.at(-1), chatAgent)
     assert.deepEqual(await adapter.host.ennoController!.handle({
@@ -276,9 +335,28 @@ test('native adapter mounts model tools and admits a real Akinator turn', async 
     } finally {
       afterChat.close()
     }
-    const chatClose = await adapter.host.resolveSessionClose!(chatSession.id, chatSession)
-    assert.deepEqual(chatClose, { runId: thirdChatRun, status: 'completed' })
-    await adapter.host.lifecycle!.closeTurn(chatClose!)
+    const questionsBeforePivot = questionIds.length
+    ;(root as any).emit('session/event', chatSession, { type: 'user/message', seq: 6, time: 6, data: { text: '@PLAN.md を実装' } })
+    const pivotEvent = await adapter.host.mapPreStep!({
+      agent: chatAgent,
+      messages: [{ role: 'user', content: [{ type: 'text', text: '@PLAN.md を実装' }], source: { kind: 'user' } }],
+      turn: 4, step: 1, signal: event.signal,
+    })
+    assert.equal(pivotEvent.profileHints, undefined)
+    assert.equal((await adapter.host.intakeGate!.preStep(pivotEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+    const pivotRun = adapter.host.resolveSessionRunId!(chatSession)!
+    assert.notEqual(pivotRun, thirdChatRun)
+    assert.equal(questionIds.length, questionsBeforePivot)
+    const afterPivot = openConnection(f.databasePath)
+    try {
+      assert.equal(afterPivot.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(thirdChatRun)?.status, 'completed')
+      assert.equal(afterPivot.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(pivotRun)?.status, 'active')
+    } finally {
+      afterPivot.close()
+    }
+    const pivotClose = await adapter.host.resolveSessionClose!(chatSession.id, chatSession)
+    assert.deepEqual(pivotClose, { runId: pivotRun, status: 'cancelled' })
+    await adapter.host.lifecycle!.closeTurn(pivotClose!)
     assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
     soulModelInvocable = false
     await assert.rejects(Promise.resolve(adapter.host.mapPreStep!({

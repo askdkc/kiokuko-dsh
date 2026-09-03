@@ -50,7 +50,7 @@ function event(root: string, capabilities: Awaited<ReturnType<typeof catalog>>):
   }
 }
 
-test('pre-step asks exact Akinator questions and never enters next while unresolved', async () => {
+test('pre-step uses grounded DSH context and asks only the unresolved task type', async () => {
   const fixture = await makeFixture()
   const runtime = new DshRuntime({
     repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
@@ -61,7 +61,7 @@ test('pre-step asks exact Akinator questions and never enters next while unresol
     async ask(request) {
       const question = request.questions[0]!
       asked.push(question.id)
-      const values: Record<string, string> = { taskType: 'build', target: 'src/index.ts', expected: 'focused tests pass' }
+      const values: Record<string, string> = { taskType: 'build' }
       return { answers: [{ id: question.id, selected: [values[question.id]!] }] }
     },
   })
@@ -73,9 +73,47 @@ test('pre-step asks exact Akinator questions and never enters next while unresol
       nextCalls += 1
       return { kind: 'enter', messages: [] }
     })
-    assert.deepEqual(asked, ['taskType', 'target', 'expected'])
+    assert.deepEqual(asked, ['taskType'])
     assert.equal(nextCalls, 1)
     assert.equal(decision.kind, 'enter')
+  } finally {
+    await runtime.close()
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('concurrent preparation of one turn shares a single question and result', async () => {
+  const fixture = await makeFixture()
+  const runtime = new DshRuntime({
+    repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
+    embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 },
+  })
+  let askCalls = 0
+  let questionShown!: () => void
+  let answerQuestion!: (value: string) => void
+  const shown = new Promise<void>((resolve) => { questionShown = resolve })
+  const answer = new Promise<string>((resolve) => { answerQuestion = resolve })
+  const answerer = createDshIntakeAnswerer({
+    async ask(request) {
+      askCalls += 1
+      assert.equal(request.questions[0]?.id, 'taskType')
+      questionShown()
+      return { answers: [{ id: 'taskType', selected: [await answer] }] }
+    },
+  })
+  const gate = new DshIntakeGate(runtime, answerer)
+  const capabilities = await catalog()
+  const firstEvent = event(fixture.root, capabilities)
+  try {
+    const first = gate.prepare(firstEvent)
+    await shown
+    const replay = gate.prepare({ ...firstEvent, step: 2 })
+    answerQuestion('build')
+    const [firstResult, replayResult] = await Promise.all([first, replay])
+    assert.equal(askCalls, 1)
+    assert.equal(firstResult.admitted, true)
+    assert.equal(replayResult.admitted, true)
+    assert.equal(replayResult.prepared.run.runId, firstResult.prepared.run.runId)
   } finally {
     await runtime.close()
     await rm(fixture.root, { recursive: true, force: true })
@@ -127,6 +165,8 @@ test('skipping task type enters ordinary chat without creating an Enno/Oduno con
     const result = await gate.prepare({ ...event(fixture.root, capabilities), task: 'Let us chat about SvelteKit.' })
     assert.equal(result.admitted, true)
     assert.equal(result.prepared.intake.profile.taskType, 'chat')
+    assert.equal(result.prepared.intake.profile.target, fixture.root)
+    assert.equal(result.prepared.intake.profile.expected, 'Let us chat about SvelteKit.')
     assert.equal(result.prepared.intake.status, 'ready')
     assert.deepEqual(result.prepared.intake.missingFields, [])
     assert.equal(result.prepared.ennoOduno.applicable, false)
