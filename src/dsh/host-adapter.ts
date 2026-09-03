@@ -10,6 +10,10 @@ import {
 import { DshRuntime } from './runtime.js'
 import { DshIntakeGate, type DshCapabilityReadContext, type DshIntakeGateResult, type DshPreStepDecision, type DshPreStepEvent } from './intake-gate.js'
 import { resolveGroundedIntakeProfile } from './intake-profile-resolver.js'
+import type { PreparedAgentTask } from '../akinator/agent-task.js'
+import { deriveAkinatorReasoning } from '../akinator/reasoning.js'
+import { resolveCapabilities } from '../akinator/capabilities.js'
+import { readAkinatorSession, readRunIntakeLink } from '../akinator/store.js'
 import { DshToolPolicy, type DshToolPolicyState } from './tool-policy.js'
 import {
   DSH_MODEL_FACING_OPERATIONS,
@@ -29,8 +33,9 @@ import { canonicalContentHash, compareCanonicalStrings } from '../serialization/
 import { KiokukoError } from '../errors.js'
 import { injectDshContext, selectDshDirectiveSources } from './context-injection.js'
 import { projectDshDirective } from './directive-projection.js'
-import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, type EnnoOperationResponse } from '../enno-oduno/service.js'
+import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, readPendingEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, type EnnoOperationResponse } from '../enno-oduno/service.js'
 import { readEnnoSnapshot, terminalizeLedgerRunInTransaction } from '../enno-oduno/store.js'
+import { decideAdapterContinuation } from '../enno-oduno/adapters.js'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
 import { curateMemoryCandidates } from '../memory/curator.js'
 import { checkpointScopedMemoryWithProvenance, type ScopedCheckpointInput } from '../memory/scoped-memory.js'
@@ -156,6 +161,7 @@ function policyState(state: EnnoOdunoState, record: TurnRecord, sessionId: strin
     ...(record.prepared.context?.deliveryId === null || record.prepared.context?.deliveryId === undefined ? {} : { deliveryId: record.prepared.context.deliveryId }),
     revision: state.contractRevision ?? 1,
     routeEpoch: lease?.routeEpoch ?? state.routeEpoch ?? 0,
+    ...(state.advisoryPhaseState.state === 'aggregated' ? { advisoryRoundDigest: state.advisoryPhaseState.inputDigest } : {}),
     ...(lease === undefined ? {} : { leaseToken: lease.leaseToken, workUnitId: lease.workUnitId, currentWorkUnitId: lease.workUnitId }),
     dshSessionId: sessionId,
     ...(state.nextAction === undefined ? {} : { nextAction: state.nextAction }),
@@ -195,13 +201,21 @@ async function capabilityCatalog(
   return createDshCapabilityCatalog({ skills: skillDescriptors, tools: toolDescriptors })
 }
 
-function operationInput(args: unknown, binding: DshToolHostBinding, cwd: string, operation: string): Record<string, unknown> {
+function operationInput(
+  args: unknown,
+  binding: DshToolHostBinding,
+  cwd: string,
+  operation: string,
+  catalog: DshCapabilityCatalog,
+): Record<string, unknown> {
   const source = typeof args === 'object' && args !== null && !Array.isArray(args) ? args as Record<string, unknown> : {}
   const identity = { runId: binding.runId, workspace: binding.workspace, orchestrationId: binding.orchestrationId, expectedRevision: binding.revision, idempotencyKey: binding.idempotencyKey }
+  const advisory = binding.advisoryRoundDigest === undefined ? {} : { advisoryRoundDigest: binding.advisoryRoundDigest }
   if (operation === 'enno_work_report') return { ...source, ...identity, leaseToken: binding.leaseToken, routeEpoch: binding.routeEpoch, workUnitId: binding.workUnitId }
+  if (operation === 'enno_plan_submit') return { ...source, ...identity, ...advisory, capabilities: [...catalog.skills, ...catalog.tools] }
   if (operation === 'curator_check') return { ...source, cwd, workspace: binding.workspace }
   if (operation === 'memory_checkpoint') return { ...source, cwd, runId: binding.runId, ...(binding.deliveryId === undefined ? {} : { deliveryId: binding.deliveryId }) }
-  return { ...source, ...identity }
+  return { ...source, ...identity, ...advisory }
 }
 
 function operationName(value: string): value is typeof DSH_MODEL_FACING_OPERATIONS[number] {
@@ -231,6 +245,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const latestBySession = new Map<string, TurnRecord>()
   const states = new Map<string, DshToolPolicyState>()
   const activeModeRequests = new Map<string, string>()
+  const advisoryRounds = new Map<string, {
+    readonly stateDigest: string
+    readonly result: DshAdvisoryRoundResult
+  }>()
+  const resumedLeases = new Map<string, NonNullable<EnnoOperationResponse['executionLease']>>()
   const policy = new DshToolPolicy({ phase: 'intake', runId: 'pending', workspace: 'pending', orchestrationId: 'pending', revision: 1, routeEpoch: 0 })
   const bridge = new DshSessionBridge({ runtime })
   const modes = new DshPonytailModes()
@@ -242,7 +261,14 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     readonly nativeAgent?: object
     readonly nativeSession?: object
   }>()
+  const resumedTurns = new Map<string, {
+    readonly fingerprint: string
+    readonly result: DshIntakeGateResult
+    readonly nativeAgent?: object
+    readonly nativeSession?: object
+  }>()
   let retireSupersededRun: ((item: TurnRecord, status: 'completed' | 'failed' | 'cancelled') => Promise<void>) | undefined
+  let resumeExistingRun: ((event: DshPreStepEvent) => Promise<DshIntakeGateResult | undefined>) | undefined
 
   const identityKey = (agentId: string, sessionId: string): string => dshPonytailOwnerKey(agentId, sessionId)
   const turnKey = (agentId: string, sessionId: string, turn: number): string => `${identityKey(agentId, sessionId)}\u0000${turn}`
@@ -314,7 +340,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       states.set(item.runId, next)
       policy.setState(next)
     } else {
-      const next = policyState(result.prepared.ennoOduno, item, event.sessionId)
+      const next = policyState(result.prepared.ennoOduno, item, event.sessionId, resumedLeases.get(run))
+      resumedLeases.delete(run)
       states.set(item.runId, next)
       policy.setState(next)
     }
@@ -339,7 +366,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         skillDiscoveryMode: event.skillDiscoveryMode ?? null,
         catalogDigest: event.capabilities.digest,
       })
-      const cached = continuedTurns.get(cacheKey)
+      const cached = continuedTurns.get(cacheKey) ?? resumedTurns.get(cacheKey)
       if (cached !== undefined) {
         if (cached.fingerprint !== fingerprint
           || cached.nativeAgent !== event.nativeAgent
@@ -381,6 +408,17 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           previousState.status === 'cancelled' ? 'cancelled' : previousState.status === 'blocked' ? 'failed' : 'completed',
         )
       }
+      const resumed = await resumeExistingRun?.(event)
+      if (resumed !== undefined) {
+        resumedTurns.set(cacheKey, {
+          fingerprint,
+          result: resumed,
+          ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
+          ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
+        })
+        record(event, resumed, generation)
+        return resumed
+      }
       const prepared = await super.prepare(event)
       if (prepared.admitted) record(event, prepared, generation)
       return prepared
@@ -396,6 +434,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     override clearTurn(sessionId: string, turn: number): void {
       super.clearTurn(sessionId, turn)
       continuedTurns.delete(`${sessionId}\u0000${turn}`)
+      resumedTurns.delete(`${sessionId}\u0000${turn}`)
     }
   }
 
@@ -425,6 +464,109 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     contractRevision: state.contractRevision,
     nextAction: state.nextAction,
     directiveDigest: state.directive === null ? null : canonicalContentHash(state.directive),
+    advisoryRoundDigest: state.advisoryPhaseState.state === 'aggregated' ? state.advisoryPhaseState.inputDigest : null,
+  })
+  const advisoryEvidenceFor = async (item: TurnRecord, state: EnnoOdunoState): Promise<{
+    readonly phase: DshAdvisoryRoundResult['phase']
+    readonly contributions: DshAdvisoryRoundResult['contributions']
+  } | undefined> => {
+    const advisoryState = state.advisoryPhaseState
+    const contractRevision = state.contractRevision
+    if (advisoryState.state !== 'aggregated' || contractRevision === null) return undefined
+    let round = advisoryRounds.get(item.runId)
+    if (round?.stateDigest !== advisoryState.inputDigest) {
+      const restored = await runtime.withDatabase((database) => readPendingEnnoAdvice(database, {
+        runId: item.runId,
+        workspace: item.workspace,
+        orchestrationId: item.orchestrationId,
+        expectedRevision: contractRevision,
+        advisoryRoundDigest: advisoryState.inputDigest,
+      }))
+      round = {
+        stateDigest: restored.advisoryRound.inputDigest,
+        result: {
+          phase: restored.advisoryRound.phase,
+          inputDigest: restored.advisoryRound.inputDigest,
+          contributions: restored.advisoryRound.contributions,
+          degraded: restored.advisoryRound.degraded,
+        },
+      }
+      advisoryRounds.set(item.runId, round)
+    }
+    return { phase: round.result.phase, contributions: round.result.contributions }
+  }
+  resumeExistingRun = async (event): Promise<DshIntakeGateResult | undefined> => runtime.withDatabase(async (database) => {
+    const project = await resolveProjectWorkspaceReadOnly(database, event.cwd)
+    if (project === undefined) return undefined
+    const candidates = database.prepare(`
+      SELECT ec.run_id AS runId, ec.orchestration_session_id AS orchestrationId
+      FROM enno_contracts AS ec
+      JOIN ledger_runs AS lr ON lr.run_id = ec.run_id AND lr.workspace = ec.workspace
+      WHERE ec.repository_root = ? AND ec.client_kind = 'dsh'
+        AND ec.client_session_id = ? AND lr.status = 'active'
+        AND ec.status NOT IN ('completed', 'cancelled', 'blocked')
+      ORDER BY ec.created_at, ec.run_id
+      LIMIT 2
+    `).all<{ runId: string; orchestrationId: string }>(project.repositoryRoot, event.sessionId)
+    if (candidates.length === 0) return undefined
+    if (candidates.length !== 1) {
+      throw new KiokukoError('CONFLICT', 'Multiple active Enno-Oduno runs match this repository; refusing to guess')
+    }
+    const candidate = candidates[0]!
+    const runId = candidate.runId
+    const decision = decideAdapterContinuation(database, 'dsh', {
+      session_id: event.sessionId,
+      cwd: event.cwd,
+    }, runId)
+    if (!decision.continue || decision.runId !== runId) {
+      throw new KiokukoError('CONFLICT', decision.warning ?? 'The active Enno-Oduno run cannot be resumed by this DSH session')
+    }
+    const snapshot = readEnnoSnapshot(database, {
+      runId,
+      workspace: project.workspace,
+      orchestrationId: candidate.orchestrationId,
+    })
+    const intakeLink = readRunIntakeLink(database, { workspace: project.workspace, runId })
+    const intake = readAkinatorSession(database, { workspace: project.workspace, sessionId: intakeLink.sessionId })
+    if (intake.status === 'active') throw new KiokukoError('INTEGRITY_ERROR', 'Resumable Enno-Oduno run has unfinished intake')
+    const capabilityEntries = [...event.capabilities.skills, ...event.capabilities.tools]
+    const capabilityResolution = resolveCapabilities({
+      task: intake.task,
+      profile: intake.profile,
+      recommendedTags: intakeLink.recommendedTags,
+      capabilities: capabilityEntries,
+      memoryUse: 'none',
+    })
+    const canonicalCwd = realpathSync(event.cwd)
+    const prepared: PreparedAgentTask = {
+      project,
+      executionContext: {
+        canonicalCwd,
+        repositoryRoot: project.repositoryRoot,
+        cwdIsRepositoryRoot: canonicalCwd === project.repositoryRoot,
+        pathPolicy: 'canonical_absolute_under_repository_root',
+      },
+      intake: {
+        status: intake.status,
+        sessionId: intake.id,
+        profile: intake.profile,
+        question: null,
+        missingFields: [],
+        recommendedTags: intakeLink.recommendedTags,
+        reasoning: deriveAkinatorReasoning(intake.task, intake.profile),
+      },
+      capabilities: capabilityResolution,
+      run: { runId, status: 'active' },
+      skillDiscovery: { attempted: false, mode: 'off', requirements: [], queries: [], cacheHits: 0, candidates: 0, selected: [], failures: [] },
+      context: null,
+      memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false, withheldReason: null, deliveryEmpty: true },
+      warnings: capabilityResolution.warnings,
+      nextAction: 'proceed',
+      securityNotice: 'This resumed DSH run uses only current repository evidence and the current host capability catalog; previously delivered ordinary memory is not replayed implicitly.',
+      ennoOduno: stateForSnapshot(snapshot),
+    }
+    if (decision.executionLease !== null) resumedLeases.set(runId, decision.executionLease)
+    return { admitted: !event.signal.aborted, prepared, catalog: event.capabilities }
   })
   const mapPreStep = async (payload: DshNativePreStepPayload): Promise<DshPreStepEvent> => {
     const nativeSession = payload.agent.session
@@ -480,20 +622,27 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       signal: payload.signal,
     }
   }
-  const contextMessages = async (event: DshPreStepEvent, result: DshIntakeGateResult): Promise<readonly unknown[]> => {
+  const contextMessages = async (event: DshPreStepEvent, _result: DshIntakeGateResult): Promise<readonly unknown[]> => {
     const item = currentForAgentEvent(event.agent.id, event.sessionId, event.turn, event.nativeSession, event.nativeAgent)
     if (item === undefined || item.sessionId !== event.sessionId) throw new Error('kiokuko-dsh turn identity is not bound')
     if (event.nativeSession !== undefined && item.nativeSession !== event.nativeSession) throw new Error('kiokuko-dsh native session identity is not bound')
-    const directive = projectDshDirective(result.prepared.ennoOduno)
+    // The intake cache is intentionally stable for the logical turn, while
+    // Enno operations advance item.prepared after each tool result. Always
+    // inject from that current host state instead of replaying the intake-time
+    // directive from the cached gate result.
+    const prepared = item.prepared
+    const directive = projectDshDirective(prepared.ennoOduno)
     const selection = directive === null ? { routeSkillNames: [], expertRefs: [] } : selectDshDirectiveSources(directive)
-    const contextKey = contextInjectionKey(item, event.turn, result.prepared.ennoOduno, selection)
+    const contextKey = contextInjectionKey(item, event.turn, prepared.ennoOduno, selection)
     if (item.contextInjectionKey === contextKey) return []
+    const advisoryEvidence = await advisoryEvidenceFor(item, prepared.ennoOduno)
     const messages = await injectDshContext({
-      prepared: result.prepared,
+      prepared,
       task: event.task,
       routeSkillNames: selection.routeSkillNames,
       expertRefs: selection.expertRefs,
       ...(directive === null ? {} : { directive }),
+      ...(advisoryEvidence === undefined ? {} : { advisoryEvidence }),
       runtime,
     })
     const nativeMessages = messages.map((message) => ({
@@ -524,6 +673,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         ...(state.deliveryId === undefined ? {} : { deliveryId: state.deliveryId }),
         revision: state.revision,
         routeEpoch: state.routeEpoch,
+        ...(state.advisoryRoundDigest === undefined ? {} : { advisoryRoundDigest: state.advisoryRoundDigest }),
         ...(state.leaseToken === undefined ? {} : { leaseToken: state.leaseToken }),
         ...(state.workUnitId === undefined ? {} : { workUnitId: state.workUnitId }),
       }
@@ -539,20 +689,27 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         || binding.orchestrationId !== run.orchestrationId
         || currentState === undefined
         || binding.revision !== currentState.revision
-        || binding.routeEpoch !== currentState.routeEpoch) throw new Error('kiokuko-dsh tool binding is not authoritative')
+        || binding.routeEpoch !== currentState.routeEpoch
+        || binding.advisoryRoundDigest !== currentState.advisoryRoundDigest) throw new Error('kiokuko-dsh tool binding is not authoritative')
       if (signal?.aborted) throw signal.reason
       const cwd = run.cwd
       const response = await runtime.withDatabase(async (database) => {
-        const input = operationInput(args, binding, cwd, operation)
+        const input = operationInput(args, binding, cwd, operation, run.catalog)
         if (operation === 'enno_ideal_submit') return submitOdunoIdeal(database, input)
         if (operation === 'enno_plan_submit') return submitEnnoPlan(database, input)
         if (operation === 'enno_work_report') return reportEnnoWork(database, input)
         if (operation === 'enno_finish') return finishEnno(database, input)
-        if (operation === 'enno_meditation_submit') return submitOdunoMeditation(database, input)
+        if (operation === 'enno_meditation_submit') {
+          // The native DSH turn still has a tool result, final assistant
+          // message, step end, and turn end to commit. Keep the ledger open
+          // until the idle lifecycle flushes that ordered suffix.
+          return submitOdunoMeditation(database, input, { deferLedgerTerminalization: true })
+        }
         if (operation === 'curator_check') return curateMemoryCandidates(database, input)
         return checkpointScopedMemoryWithProvenance(database, input as unknown as ScopedCheckpointInput, { clientKind: 'dsh', actor: 'dsh', reference: 'dsh' }, signal)
       }) as EnnoOperationResponse | unknown
       if (run !== undefined && isEnnoResponse(response)) {
+        if (binding.advisoryRoundDigest !== undefined) advisoryRounds.delete(run.runId)
         run.prepared = { ...run.prepared, ennoOduno: response.ennoOduno }
         const next = policyState(response.ennoOduno, run, run.sessionId, response.executionLease)
         states.set(run.runId, next)
@@ -603,6 +760,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       })
     })
     item.prepared = { ...item.prepared, ennoOduno: response.ennoOduno }
+    if (response.ennoOduno.advisoryPhaseState.state !== 'aggregated') {
+      throw new Error('kiokuko-dsh advisory submission did not produce an aggregated round')
+    }
+    advisoryRounds.set(item.runId, {
+      stateDigest: response.ennoOduno.advisoryPhaseState.inputDigest,
+      result,
+    })
     const next = policyState(response.ennoOduno, item, item.sessionId)
     states.set(item.runId, next)
     policy.setState(next)
@@ -630,6 +794,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const contextKey = contextInjectionKey(item, event.turn, state, selection)
       if (item.contextInjectionKey === contextKey) return
       const projectedDirective = projectDshDirective({ nextAction: state.nextAction, directive: state.directive })
+      const advisoryEvidence = await advisoryEvidenceFor(item, state)
       const messages = await injectDshContext({
         prepared: item.prepared,
         task: item.task,
@@ -638,6 +803,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         ...(projectedDirective === null
           ? {}
           : { directive: projectedDirective }),
+        ...(advisoryEvidence === undefined ? {} : { advisoryEvidence }),
         runtime,
       })
       for (const message of messages) {
@@ -723,6 +889,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (![...turns.values()].some((candidate) => candidate.sessionId === sessionId && !candidate.closed)) policy.clearSession(sessionId)
     }
     if (![...turns.values()].some((candidate) => candidate.runId === input.runId)) states.delete(input.runId)
+    advisoryRounds.delete(input.runId)
+    resumedLeases.delete(input.runId)
   }
   const errorDisposer = (ctx as any).on('agent/error', (event: { agent: { id: string; session?: { id: string }; sessionId?: string } }) => {
     const item = currentForAgentEvent(event.agent.id, event.agent.session?.id ?? event.agent.sessionId, undefined, event.agent.session, event.agent)
@@ -778,6 +946,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       latestBySession.clear()
       states.clear()
       activeModeRequests.clear()
+      advisoryRounds.clear()
+      resumedTurns.clear()
+      resumedLeases.clear()
       if (failures.length === 1) throw failures[0]
       if (failures.length > 1) throw new AggregateError(failures, 'kiokuko-dsh adapter disposal failed')
     },

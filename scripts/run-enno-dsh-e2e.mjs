@@ -2,7 +2,7 @@ import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 
 const exec = promisify(execFile)
 const root = resolve(import.meta.dirname, '..')
@@ -21,8 +21,23 @@ async function run(command, args, env = {}) {
   })
 }
 
+async function localDshSourceRoot() {
+  const candidate = process.env.KIOKUKO_DSH_SOURCE_ROOT
+    ?? (isAbsolute(dsh) ? resolve(dirname(dsh), '../../..') : undefined)
+  if (candidate === undefined) return undefined
+  try {
+    await access(join(candidate, 'packages/core/agent-loop/lib/index.js'))
+    return candidate
+  } catch {
+    return undefined
+  }
+}
+
 async function runCordisComposition() {
-  await run(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/e2e/kiokuko-dsh.test.ts'])
+  const sourceRoot = await localDshSourceRoot()
+  await run(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/e2e'], sourceRoot === undefined
+    ? {}
+    : { KIOKUKO_DSH_SOURCE_ROOT: sourceRoot })
 }
 
 function startWebProfile(env) {

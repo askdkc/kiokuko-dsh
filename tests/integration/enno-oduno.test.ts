@@ -4477,6 +4477,67 @@ test("final verification preparation reuses fresh evidence across keys and finis
   }
 });
 
+test("DSH meditation can defer ledger terminalization until the native transcript suffix is flushed", async () => {
+  const { root, database } = await fixture();
+  try {
+    const planned = await plannedExecution(
+      database,
+      root,
+      "dsh-deferred-terminalization",
+      verifier(root, "dsh-deferred-final"),
+    );
+    await reportEnnoWork(database, {
+      ...planned.identity,
+      ...executionCredentials(planned),
+      expectedRevision: 2,
+      idempotencyKey: "dsh-deferred-work",
+      workUnitId: "repair",
+      result: {
+        outcome: "completed",
+        summary: "Completed before the native turn suffix",
+        mutated: false,
+        changedPaths: [],
+      },
+    });
+    await prepareEnnoVerification(database, {
+      ...planned.identity,
+      expectedRevision: 2,
+      idempotencyKey: "dsh-deferred-verify",
+    });
+    const finished = await finishEnno(database, {
+      ...planned.identity,
+      expectedRevision: 2,
+      idempotencyKey: "dsh-deferred-finish",
+      review: { decision: "accept", summary: "The final verifier passed" },
+    });
+    assert.equal(finished.ennoOduno.status, "oduno_meditation");
+    const meditated = submitOdunoMeditation(database, {
+      ...planned.identity,
+      expectedRevision: 2,
+      idempotencyKey: "dsh-deferred-meditation",
+      meditation: {
+        summary: "No obsolete tests or functions found",
+        inspectedPaths: ["src/add.js"],
+        deletionCandidates: [],
+      },
+    }, { deferLedgerTerminalization: true });
+    assert.equal(meditated.ennoOduno.status, "completed");
+    assert.equal(
+      database.prepare("SELECT status FROM ledger_runs WHERE run_id = ?").get<{ status: string }>(planned.identity.runId)?.status,
+      "active",
+    );
+    withImmediateTransaction(database, () => {
+      terminalizeLedgerRunInTransaction(database, planned.identity.runId, "completed");
+    });
+    assert.equal(
+      database.prepare("SELECT status FROM ledger_runs WHERE run_id = ?").get<{ status: string }>(planned.identity.runId)?.status,
+      "completed",
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("final evidence is invalidated by repository changes after preparation", async () => {
   const { root, database } = await fixture();
   try {

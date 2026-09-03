@@ -69,7 +69,12 @@ export function modelToolContract(name: ModelToolOperationName): ModelToolContra
 
 export function modelFacingInputSchema(name: ModelToolOperationName): JsonSchema {
   const contract = modelToolContract(name);
-  return removeHostOwnedFields(fullJsonSchema(contract), contract.hostOwnedFields);
+  return projectModelFacingInputSchema(name, fullJsonSchema(contract));
+}
+
+/** Strip host-owned fields from a current revision-bound report schema. */
+export function projectModelFacingInputSchema(name: ModelToolOperationName, schema: JsonSchema): JsonSchema {
+  return removeHostOwnedFields(schema, modelToolContract(name).hostOwnedFields);
 }
 
 export function mcpInputSchema<Name extends ModelToolOperationName>(name: Name): typeof MODEL_TOOL_INPUT_SCHEMAS[Name] {

@@ -1,5 +1,5 @@
 import type { EnnoNextAction, EnnoOdunoState, RoleDirective } from '../enno-oduno/types.js'
-import { modelFacingInputSchema, type JsonSchema } from '../model-tools/registry.js'
+import { projectModelFacingInputSchema, type JsonSchema } from '../model-tools/registry.js'
 import type { DshModelFacingOperation } from './tools.js'
 
 const MODEL_OPERATION_BY_NEXT_ACTION: Readonly<Partial<Record<EnnoNextAction, DshModelFacingOperation>>> = Object.freeze({
@@ -28,6 +28,8 @@ export function projectDshDirective(state: Pick<EnnoOdunoState, 'nextAction' | '
   const operation = modelFacingOperationForNextAction(state.nextAction)
   return {
     ...state.directive,
-    reportSchema: operation === undefined ? EMPTY_MODEL_SCHEMA : modelFacingInputSchema(operation),
+    reportSchema: operation === undefined
+      ? EMPTY_MODEL_SCHEMA
+      : projectModelFacingInputSchema(operation, state.directive.reportSchema),
   }
 }

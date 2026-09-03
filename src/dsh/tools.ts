@@ -60,7 +60,7 @@ export interface DshNativeToolExecution {
   readonly rootCallId?: string
   readonly name: string
   readonly arguments: unknown
-  readonly agent?: { readonly id: string; readonly session?: { readonly id: string }; readonly sessionId?: string; readonly turn?: number }
+  readonly agent?: { readonly id: string; readonly session?: { readonly id: string }; readonly sessionId?: string }
   readonly parent?: unknown
   readonly signal: AbortSignal
 }
@@ -74,6 +74,7 @@ export interface DshToolHostBinding {
   readonly deliveryId?: string
   readonly revision: number
   readonly routeEpoch: number
+  readonly advisoryRoundDigest?: string
   readonly leaseToken?: string
   readonly workUnitId?: string
   readonly idempotencyKey: string
@@ -119,7 +120,6 @@ function normalizeExecution(execution: DshToolExecution | DshNativeToolExecution
     arguments: execution.arguments,
     agent: {
       dshSessionId: session.id,
-      ...(execution.agent.turn === undefined ? {} : { turn: execution.agent.turn }),
       nativeSession: session,
     },
     ...(execution.parent === undefined ? {} : { parent: execution.parent }),
@@ -198,6 +198,9 @@ export function bindDshToolInvocation(
   validBindingText(state.workspace, 'workspace')
   validBindingText(state.orchestrationId, 'orchestration identity')
   if (state.deliveryId !== undefined) validBindingText(state.deliveryId, 'delivery identity')
+  if (state.advisoryRoundDigest !== undefined && !/^[0-9a-f]{64}$/u.test(state.advisoryRoundDigest)) {
+    throw new KiokukoError('VALIDATION_ERROR', 'dsh advisory round digest is invalid')
+  }
   if (!Number.isSafeInteger(state.revision) || state.revision < 1
     || !Number.isSafeInteger(state.routeEpoch) || state.routeEpoch < 0) {
     throw new KiokukoError('VALIDATION_ERROR', 'dsh host binding is invalid')

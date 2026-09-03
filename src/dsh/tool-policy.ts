@@ -194,12 +194,11 @@ function normalizePolicyExecution(execution: DshToolExecution | DshNativeToolExe
       callId: execution.callId,
       ...(execution.rootCallId === undefined ? {} : { rootCallId: execution.rootCallId }),
       name: execution.name,
-      arguments: execution.arguments,
-      agent: {
+    arguments: execution.arguments,
+    agent: {
         dshSessionId: session.id,
-        ...(execution.agent.turn === undefined ? {} : { turn: execution.agent.turn }),
         nativeSession: session,
-      },
+    },
       ...(execution.parent === undefined ? {} : { parent: execution.parent }),
       signal: execution.signal,
   }
