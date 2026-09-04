@@ -149,6 +149,13 @@ The dsh integration provides:
   ambiguous; the canonical workspace and exact user request ground the target
   and completion fields without asking the user to repeat known context, and
   unresolved intake blocks the model and tools;
+- Japanese task-type labels with concrete examples and guidance distinguishing
+  file changes from drafting text. Kiokuko's initial Web question supports
+  number keys 1–8 to select and Enter to confirm; digits entered in the custom
+  field (including full-width digits) resolve in the same displayed order.
+  Shift+Enter and IME composition do not submit. Pending drafts survive a
+  Session switch, and other plugins' questions and plan-approval cards retain
+  their native UI;
 - an explicit `chat` intake choice (including free-form aliases such as
   `just chatting` and `雑談`) and the task-type question's **Skip this
   question** action; both skip target/success follow-ups and never create an

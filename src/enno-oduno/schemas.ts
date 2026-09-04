@@ -275,15 +275,28 @@ const requireExplicitIdentityOrResumeToken = (
   }
 };
 
+export const ennoRequestHandoffSchema = z.object({
+  sourceRole: z.literal('enno-oduno'),
+  taskType: z.enum(['build', 'debug', 'review', 'devops']),
+  objective: canonicalMultilineText(16_384),
+  target: canonicalText(4_096).nullable(),
+  expected: canonicalMultilineText(8_192).nullable(),
+  constraints: z.array(canonicalMultilineText(8_192)).max(16),
+  verification: z.array(canonicalMultilineText(8_192)).max(16),
+  stopConditions: z.array(canonicalMultilineText(8_192)).max(16),
+}).strict();
+
 const advisorySlotIds = ADVISORY_SLOT_DEFINITIONS.map((slot) => slot.slotId) as [string, ...string[]];
 const advisorySlotIdSchema = z.string().pipe(z.enum(advisorySlotIds));
 const advisoryContextSchema = z.discriminatedUnion('phase', [
   z.object({
     phase: z.literal('ideal'),
-    objective: canonicalText(16_384),
-    constraints: z.array(canonicalText(8_192)).max(32),
-    expectedOutcome: canonicalText(4_096),
-    successSignals: z.array(canonicalText(8_192)).max(32),
+    // Host projections must accept the exact text accepted by their source.
+    // Do not flatten lines: that changes the request and its advisory digest.
+    objective: ennoRequestHandoffSchema.shape.objective,
+    constraints: z.array(ennoRequestHandoffSchema.shape.constraints.element).max(32),
+    expectedOutcome: ennoRequestHandoffSchema.shape.expected.unwrap().or(z.literal('')),
+    successSignals: z.array(ennoRequestHandoffSchema.shape.verification.element).max(32),
     skillTrust: z.array(z.object({
       name: canonicalText(500),
       source: z.enum(['local', 'imported_fresh', 'external_reference', 'unavailable']),
@@ -293,9 +306,9 @@ const advisoryContextSchema = z.discriminatedUnion('phase', [
   }).strict(),
   z.object({
     phase: z.literal('planning'),
-    idealObjective: canonicalText(16_384),
-    acceptanceCriteria: z.array(canonicalText(8_192)).max(128),
-    planningConstraints: z.array(canonicalText(8_192)).max(32),
+    idealObjective: ennoRequestHandoffSchema.shape.objective,
+    acceptanceCriteria: z.array(acceptanceCriterionSchema.shape.description).max(128),
+    planningConstraints: z.array(ennoRequestHandoffSchema.shape.constraints.element).max(32),
     skillAvailability: z.array(z.object({
       name: canonicalText(500),
       source: z.enum(['local', 'imported_fresh', 'external_reference', 'unavailable']),
@@ -434,17 +447,6 @@ export const ennoContractSchema = z.object({
   finalVerifiers: verifierListSchema(),
   maxAttempts: z.number().int().min(ENNO_MIN_ATTEMPTS).max(ENNO_MAX_ATTEMPTS),
   provenance: contractProvenanceSchema,
-}).strict();
-
-export const ennoRequestHandoffSchema = z.object({
-  sourceRole: z.literal('enno-oduno'),
-  taskType: z.enum(['build', 'debug', 'review', 'devops']),
-  objective: canonicalMultilineText(16_384),
-  target: canonicalText(4_096).nullable(),
-  expected: canonicalMultilineText(8_192).nullable(),
-  constraints: z.array(canonicalMultilineText(8_192)).max(16),
-  verification: z.array(canonicalMultilineText(8_192)).max(16),
-  stopConditions: z.array(canonicalMultilineText(8_192)).max(16),
 }).strict();
 
 export const odunoIdealSchema = z.object({

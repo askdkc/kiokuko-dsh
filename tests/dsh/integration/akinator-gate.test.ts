@@ -61,7 +61,7 @@ test('pre-step uses grounded DSH context and asks only the unresolved task type'
     async ask(request) {
       const question = request.questions[0]!
       asked.push(question.id)
-      const values: Record<string, string> = { taskType: 'build' }
+      const values: Record<string, string> = { taskType: '1' }
       return { answers: [{ id: question.id, selected: [values[question.id]!] }] }
     },
   })
@@ -206,7 +206,7 @@ test('skipping task type enters ordinary chat without creating an Enno/Oduno con
     async ask(request) {
       const question = request.questions[0]!
       asked.push(question.id)
-      assert.ok(question.options?.some((option) => option.label === 'chat'))
+      assert.ok(question.options?.some((option) => option.label === '質問・相談・会話'))
       return { answers: [{ id: question.id, selected: [] }] }
     },
   })

@@ -28,7 +28,7 @@ import { DshMemoryFinalizer, dshTurnBoundarySeq, type DshLlm, type DshLogEvent, 
 import { DshConfirmationController, DshEnnoController } from './enno-controller.js'
 import { DshAdvisoryRunner, type DshAdvisoryCall, type DshAdvisoryRoundResult } from './advisory-runner.js'
 import { DshPonytailModes, dshPonytailOwnerKey } from './commands.js'
-import { createDshIntakeAnswerer, createDshConfirmationAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from './user-interaction.js'
+import { boundaryFailureCopy, createDshIntakeAnswerer, createDshConfirmationAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from './user-interaction.js'
 import { createDshCapabilityCatalog, type DshCapabilityCatalog } from './capability-catalog.js'
 import { STANDARD_SKILL_MANIFESTS } from './standard-skills.js'
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js'
@@ -1289,6 +1289,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     readonly questionId: string
     readonly title: string
     readonly detail: string
+    readonly header?: string
   }): Promise<string | undefined> => {
     const agent = input.item.nativeAgent ?? agents?.get(input.item.agentId)
     const signal = boundarySignals.get(input.item.sessionId) ?? new AbortController().signal
@@ -1297,7 +1298,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const result = await abortable(userQuestions.ask({
         questions: [{
           id: input.questionId,
-          header: 'Kiokuko stopped',
+          header: input.header ?? 'Kiokuko stopped',
           question: input.title,
           detail: input.detail,
         }],
@@ -1316,7 +1317,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       return undefined
     }
   }
-  const loopRecoveryDetail = (snapshot: ReturnType<typeof readEnnoSnapshot>, state: EnnoOdunoState, reason: string): string => {
+  const loopRecoveryDetail = (snapshot: ReturnType<typeof readEnnoSnapshot>, state: EnnoOdunoState, reason: string, recoveryInstruction?: string): string => {
     const workUnitId = state.directive?.workUnit?.id ?? null
     const workUnit = workUnitId === null
       ? null
@@ -1332,7 +1333,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         ? 'Latest verifier: none.'
         : `Latest verifier ${latestVerifier.verifier.id}: ${latestVerifier.status}.`,
       reason,
-      'Enter the actual current handling status and the concrete instruction to execute next. If work should stop, say so explicitly.',
+      recoveryInstruction ?? 'Enter the actual current handling status and the concrete instruction to execute next. If work should stop, say so explicitly.',
     ].join('\n')
   }
   const guardBoundaryEffect = async (item: TurnRecord, job: DshBoundaryJob): Promise<boolean> => {
@@ -1711,14 +1712,17 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const snapshot = await runtime.withDatabase((database) => readEnnoSnapshot(database, {
         runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
       }))
+      const copy = boundaryFailureCopy(snapshot.userFacingLanguage)
       const answer = await askForRecoveryInstruction({
         item,
         questionId: `boundary-${job.jobId.slice(0, 16)}`,
-        title: 'Kiokuko stopped after three boundary-processing failures.',
+        header: copy.header,
+        title: copy.title,
         detail: loopRecoveryDetail(
           snapshot,
           stateForSnapshot(snapshot),
           `Last boundary error: ${(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+          copy.recoveryInstruction,
         ),
       })
       if (answer === undefined) return false
