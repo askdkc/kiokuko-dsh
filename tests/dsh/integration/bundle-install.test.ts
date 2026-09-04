@@ -65,12 +65,19 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   assert.ok(packageManifest.files?.includes('dsh/cordis.patch.yml'))
   assert.equal(packageManifest.peerDependencies?.['@deepseek-ai/cordis'], '^4.0.2')
 
-  const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{ id?: string; name?: string; inject?: string[] }>
-  assert.equal(patch.length, 1)
+  const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{
+    id?: string
+    disabled?: boolean
+    insert?: Array<{ id?: string; name?: string; inject?: string[] }>
+  }>
+  assert.equal(patch.length, 2)
   assert.equal(patch[0]?.id, 'session-log-download')
-  assert.equal(patch[0]?.name, 'kiokuko-dsh')
-  assert.ok(patch[0]?.inject?.includes('connection'))
-  assert.ok(patch[0]?.inject?.includes('attachments'))
+  assert.equal(patch[0]?.disabled, true)
+  assert.equal(patch[1]?.insert?.length, 1)
+  assert.equal(patch[1]?.insert?.[0]?.id, 'kiokuko-dsh')
+  assert.equal(patch[1]?.insert?.[0]?.name, 'kiokuko-dsh')
+  assert.ok(patch[1]?.insert?.[0]?.inject?.includes('connection'))
+  assert.ok(patch[1]?.insert?.[0]?.inject?.includes('attachments'))
   assert.deepEqual(Config.parse({}), { enabled: true })
 
   await run('npm', ['run', 'build'])
@@ -129,24 +136,30 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
 
     const env = { DSH_HOME: home, npm_config_dry_run: 'false' }
     const install = await run(process.env.DSH_BIN ?? 'dsh', [
-      'plugin', '--profile', 'kiokuko-test', 'add', tarball,
+      'plugin', '--profile', 'web', 'add', tarball,
     ], env)
     assert.ok(install.stdout !== undefined)
 
     const dumped = await run(process.env.DSH_BIN ?? 'dsh', [
-      '--profile', 'kiokuko-test', '--dump-config',
+      '--profile', 'web', '--dump-config',
     ], env)
-    assert.equal((dumped.stdout.match(/\bname:\s*['"]?kiokuko-dsh['"]?(?:\s|$)/g) ?? []).length, 1)
+    const installedRows = YAML.parseDocument(dumped.stdout).toJS() as Array<Record<string, unknown>>
+    assert.equal(installedRows.filter(row => row.id === 'kiokuko-dsh' && row.name === 'kiokuko-dsh' && row.disabled !== true).length, 1)
+    assert.equal(installedRows.filter(row => row.id === 'session-log-download'
+      && row.name === '@deepseek-ai/dsh-session-log-export' && row.disabled === true).length, 1)
 
     const remove = await run(process.env.DSH_BIN ?? 'dsh', [
-      'plugin', '--profile', 'kiokuko-test', 'remove', 'kiokuko-dsh',
+      'plugin', '--profile', 'web', 'remove', 'kiokuko-dsh',
     ], env)
     assert.ok(remove.stdout !== undefined)
 
     const afterRemove = await run(process.env.DSH_BIN ?? 'dsh', [
-      '--profile', 'kiokuko-test', '--dump-config',
+      '--profile', 'web', '--dump-config',
     ], env)
-    assert.equal((afterRemove.stdout.match(/\bname:\s*['"]?kiokuko-dsh['"]?(?:\s|$)/g) ?? []).length, 0)
+    const removedRows = YAML.parseDocument(afterRemove.stdout).toJS() as Array<Record<string, unknown>>
+    assert.equal(removedRows.filter(row => row.id === 'kiokuko-dsh' || row.name === 'kiokuko-dsh').length, 0)
+    assert.equal(removedRows.filter(row => row.id === 'session-log-download'
+      && row.name === '@deepseek-ai/dsh-session-log-export' && row.disabled !== true).length, 1)
   } finally {
     await Promise.all([
       rm(home, { recursive: true, force: true }),

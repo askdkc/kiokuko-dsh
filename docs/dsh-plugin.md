@@ -89,10 +89,11 @@ ordinary directory as its workspace. For an ordinary directory, Kiokuko keeps
 the path binding in its database and does not create `.git`, `.kiokuko.json`,
 or any other metadata file in the workspace.
 
-`kiokuko-dsh` replaces the existing `session-log-download` Web bundle row.
-This preserves the stock Header modal and `/export` command while replacing
-the Host route with cursor-backed streaming export. Removal is exact and does
-not rewrite unrelated plugins or settings. The plugin does not edit `AGENTS.md`.
+`kiokuko-dsh` disables the existing `session-log-download` Host row and inserts
+its own row under the stable `kiokuko-dsh` id. Its client delegates to the stock
+Header modal and `/export` command UI while the Host route uses cursor-backed
+streaming export. Removing the bundle restores the stock row without rewriting
+unrelated plugins or settings. The plugin does not edit `AGENTS.md`.
 
 ## STORE contract and permissions
 

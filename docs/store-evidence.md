@@ -37,10 +37,12 @@ packed-artifact integrity, and these outcomes without credentials:
 2. the package check builds a tarball containing the declared runtime closure
    and imports `kiokuko-dsh`, `kiokuko-dsh/client`, and `kiokuko-dsh/dsh` from an isolated consumer;
 3. the disposable Profile installs that exact tarball;
-4. `dump-config` contains exactly one `kiokuko-dsh` replacement for the `session-log-download` row;
+4. `dump-config` contains one active `kiokuko-dsh` row and the stock
+   `session-log-download` row is disabled;
 5. the DSH `web` profile cold-starts and reports the plugin loaded;
 6. the profile stops cleanly;
-7. removing the plugin leaves no `kiokuko-dsh` bundle in `dump-config`.
+7. removing the plugin leaves no `kiokuko-dsh` row and restores the active
+   stock `session-log-download` row.
 
 The test must fail if the DSH CLI is unavailable. `headless`, SDK, ACP, and
 other DSH releases remain `unknown` until they receive their own evidence.

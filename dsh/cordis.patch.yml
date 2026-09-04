@@ -1,8 +1,11 @@
-# Replace the stock Web Session-log export row. DSH applies bundle operations
-# by row id, so this preserves row order while installing the full Kiokuko Host
-# plugin and its streaming export service in the only supported profile.
+# DSH rejects changing the name of an existing row. Disable the stock export
+# host and insert Kiokuko under its own stable id; removing this bundle restores
+# the stock row automatically.
 - id: session-log-download
-  name: 'kiokuko-dsh'
-  inject: [skills, systemPrompt, tools, commands, userQuestions, sessions, sessionQuery, llm, agents, attachments, connection]
-  config:
-    enabled: true
+  disabled: true
+- insert:
+    - id: kiokuko-dsh
+      name: 'kiokuko-dsh'
+      inject: [skills, systemPrompt, tools, commands, userQuestions, sessions, sessionQuery, llm, agents, attachments, connection]
+      config:
+        enabled: true

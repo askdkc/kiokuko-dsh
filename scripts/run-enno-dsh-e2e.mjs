@@ -3,6 +3,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import YAML from 'yaml'
 
 const exec = promisify(execFile)
 const root = resolve(import.meta.dirname, '..')
@@ -19,6 +20,43 @@ async function run(command, args, env = {}) {
     timeout: 180_000,
     killSignal: 'SIGTERM',
   })
+}
+
+function dumpedRows(result, label) {
+  const document = YAML.parseDocument(result.stdout, { strict: true })
+  if (document.errors.length > 0) {
+    throw new Error(`${label} was not valid YAML: ${document.errors.map(String).join('; ')}`)
+  }
+  const rows = document.toJS()
+  if (!Array.isArray(rows)) throw new Error(`${label} did not contain a top-level row array`)
+  return rows
+}
+
+function relevantDump(rows, stderr) {
+  const relevant = rows.filter(row => row !== null && typeof row === 'object'
+    && (row.id === 'session-log-download' || row.id === 'kiokuko-dsh' || row.name === 'kiokuko-dsh'))
+  return `${JSON.stringify(relevant, null, 2)}\nstderr:\n${stderr.trim().slice(-4096)}`
+}
+
+function assertInstalledDump(result) {
+  const rows = dumpedRows(result, 'dsh dump-config after install')
+  const kiokuko = rows.filter(row => row?.id === 'kiokuko-dsh'
+    && row?.name === 'kiokuko-dsh' && row?.disabled !== true)
+  const stock = rows.filter(row => row?.id === 'session-log-download'
+    && row?.name === '@deepseek-ai/dsh-session-log-export' && row?.disabled === true)
+  if (kiokuko.length !== 1 || stock.length !== 1) {
+    throw new Error(`dsh dump-config did not contain one active Kiokuko row and one disabled stock export row\n${relevantDump(rows, result.stderr)}`)
+  }
+}
+
+function assertRemovedDump(result) {
+  const rows = dumpedRows(result, 'dsh dump-config after removal')
+  const kiokuko = rows.filter(row => row?.id === 'kiokuko-dsh' || row?.name === 'kiokuko-dsh')
+  const stock = rows.filter(row => row?.id === 'session-log-download'
+    && row?.name === '@deepseek-ai/dsh-session-log-export' && row?.disabled !== true)
+  if (kiokuko.length !== 0 || stock.length !== 1) {
+    throw new Error(`dsh removal did not restore exactly one active stock export row\n${relevantDump(rows, result.stderr)}`)
+  }
 }
 
 async function localDshSourceRoot() {
@@ -135,18 +173,14 @@ async function runCliLifecycle() {
     await access(tarball)
     await run(dsh, ['plugin', '--profile', profile, 'add', tarball], env)
     const dumped = await run(dsh, ['--profile', profile, '--dump-config'], env)
-    if ((dumped.stdout.match(/\bname:\s*['"]?kiokuko-dsh['"]?(?:\s|$)/g) ?? []).length !== 1) {
-      throw new Error('dsh dump-config did not contain exactly one Kiokuko bundle')
-    }
+    assertInstalledDump(dumped)
     web = startWebProfile(env)
     await web.ready
     if (web.child.exitCode !== null || web.child.signalCode !== null) throw new Error(`DSH web exited immediately after readiness\n${web.getOutput()}`)
     await stopWebProfile(web)
     await run(dsh, ['plugin', '--profile', profile, 'remove', 'kiokuko-dsh'], env)
     const afterRemove = await run(dsh, ['--profile', profile, '--dump-config'], env)
-    if ((afterRemove.stdout.match(/\bname:\s*['"]?kiokuko-dsh['"]?(?:\s|$)/g) ?? []).length !== 0) {
-      throw new Error('dsh bundle remained after removal')
-    }
+    assertRemovedDump(afterRemove)
     const evidence = {
       timestamp: new Date().toISOString(),
       nodeVersion: process.version,
