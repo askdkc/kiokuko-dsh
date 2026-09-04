@@ -19,11 +19,12 @@ Admission records the run's exact DSH `turn/start` sequence in
 `dsh_run_log_boundaries`. On successful terminal close, after the matching
 native `turn/end` has been checkpointed, one SQLite transaction marks
 `ledger_runs` completed and inserts `dsh_memory_finalizations` with the
-immutable inclusive start/end range. A background worker reads the exact
-live-or-persisted DSH session by ID but ignores every later event. Success
+immutable inclusive start/end range. A background worker reads the exact range
+from the local cursor-backed mirror (or the bounded legacy compatibility
+reader) and ignores every later event. Success
 writes self-contained memory entries plus `dsh_memory_finalization_entries`;
 failure updates only the retryable job. The completed run is never rolled back
 because an auxiliary model, session query, validation, or secret check failed.
 Range-bound log and capsule SHA-256 digests, event count, provider/model, and
 cache/input/output token counts provide bounded provenance without copying the
-raw log.
+raw log into Core. The rebuildable mirror owns the raw event copy.

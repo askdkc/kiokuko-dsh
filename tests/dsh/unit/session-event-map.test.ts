@@ -7,7 +7,7 @@ import { DSH_MEMORY_CAPSULE_MAX_BYTES } from '../../../src/dsh/session-memory-fi
 
 const root = path.resolve(import.meta.dirname, '../../..')
 
-test('DSH integration exposes no event-mirroring compatibility bridge', async () => {
+test('the terminal lifecycle exposes no competing event-mirroring bridge', async () => {
   assert.equal('DshSessionBridge' in lifecycle, false)
   assert.equal('mountDshSessionBridge' in lifecycle, false)
   assert.equal('mountDshDurabilityBarriers' in lifecycle, false)

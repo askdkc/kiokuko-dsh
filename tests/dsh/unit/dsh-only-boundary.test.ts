@@ -13,7 +13,7 @@ async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true })
   const nested = await Promise.all(entries.map(async (entry) => {
     const absolute = path.join(directory, entry.name)
-    return entry.isDirectory() ? sourceFiles(absolute) : /\.(?:ts|mts)$/u.test(entry.name) ? [absolute] : []
+    return entry.isDirectory() ? sourceFiles(absolute) : /\.(?:ts|mts)$/u.test(entry.name) && !entry.name.endsWith('.d.ts') ? [absolute] : []
   }))
   return nested.flat()
 }
@@ -35,7 +35,7 @@ function resolveImport(file: string, specifier: string): string | undefined {
 
 const allSources = new Set(await sourceFiles(path.join(root, 'src')))
 
-test('every active source is reachable from the sole DSH entrypoint', async () => {
+test('every active source is reachable from one of the three DSH package entrypoints', async () => {
   const reached = new Set<string>()
   const visit = async (file: string): Promise<void> => {
     if (reached.has(file)) return
@@ -46,7 +46,11 @@ test('every active source is reachable from the sole DSH entrypoint', async () =
       if (target !== undefined) await visit(target)
     }
   }
-  await visit(path.join(root, 'src/dsh/index.ts'))
+  await Promise.all([
+    visit(path.join(root, 'src/index.ts')),
+    visit(path.join(root, 'src/client.ts')),
+    visit(path.join(root, 'src/dsh/index.ts')),
+  ])
   assert.deepEqual([...allSources].filter((file) => !reached.has(file)), [])
 })
 
@@ -61,8 +65,8 @@ test('active source has no legacy client branch or generic Enno projection', asy
   assert.deepEqual(violations, [])
 })
 
-test('active source has no legacy compatibility identifiers', async () => {
-  const forbidden = /\blegacy[A-Z_]|\bLegacy[A-Z_]|\bclient_kind\b|\bmcp_tool\b|digestForVersion|legacyRequestDigests|legacyScopedDeliveryId|rebuildLegacyHybridSearch/u
+test('active source has no retired generic-client compatibility identifiers', async () => {
+  const forbidden = /\bclient_kind\b|\bmcp_tool\b|digestForVersion|legacyRequestDigests|legacyScopedDeliveryId|rebuildLegacyHybridSearch/u
   const violations: Array<{ file: string; match: string }> = []
   for (const file of allSources) {
     const source = await readFile(file, 'utf8')
@@ -75,15 +79,15 @@ test('active source has no legacy compatibility identifiers', async () => {
 test('migrations preserve the immutable baseline and append forward-only evolution', async () => {
   const entries = await readdir(path.join(root, 'migrations'), { withFileTypes: true })
   const sqlFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.sql')).map((entry) => entry.name)
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql'])
   assert.equal(entries.some((entry) => entry.name === 'down'), false, 'migrations/down must not exist')
   const packed = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
   assert.equal(packed.files.includes('migrations/'), true)
 })
 
-test('package and model surfaces are DSH-only', async () => {
+test('package and model surfaces expose only the DSH root, browser client, and plugin entrypoint', async () => {
   const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-  assert.deepEqual(Object.keys(manifest.exports), ['./dsh'])
+  assert.deepEqual(Object.keys(manifest.exports), ['.', './client', './dsh'])
   assert.equal(manifest.bin, undefined)
   assert.equal(manifest.dependencies?.commander, undefined)
   assert.equal(manifest.dependencies?.['@modelcontextprotocol/sdk'], undefined)

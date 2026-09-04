@@ -28,6 +28,14 @@ export * from './tool-policy.js'
 export * from './composition.js'
 export * from './host-adapter.js'
 export * from './session-memory-finalizer.js'
+export * from './session-log-mirror.js'
+export * from './session-log-export.js'
+export * from './session-log-surface.js'
+export * from './turn-process.js'
+export * from './boundary-worker.js'
+export * from './input-claim.js'
+export * from './generated/kgp-dispatch.js'
+export * from './prompt-cache.js'
 
 /** Mount a runtime as a Cordis-owned effect; unload always drains it. */
 export function mountDshRuntime(ctx: Context, runtime: DshRuntime): ReturnType<Context['effect']> {
@@ -53,7 +61,14 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
     const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
       const composition = await mountDshComposition(ctx, host)
-      return () => composition.dispose()
+      const disposeExport = host.sessionExport === undefined
+        ? undefined
+        : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, host.sessionExport)
+      return async () => {
+        composition.stopIngress()
+        await disposeExport?.()
+        await composition.dispose()
+      }
     }
     const runtimeServices = [ctx.get('tools', false), ctx.get('sessions', false), ctx.get('agents', false)]
     // A deliberately minimal composition may expose only the prompt/Skill
@@ -71,9 +86,13 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
     }
     const adapter = createDshHostAdapter(ctx)
     const composition = await mountDshComposition(ctx, adapter.host)
+    const disposeExport = adapter.host.sessionExport === undefined
+      ? undefined
+      : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, adapter.host.sessionExport)
     return async () => {
       composition.stopIngress()
       const failures: unknown[] = []
+      try { await disposeExport?.() } catch (error) { failures.push(error) }
       try { await adapter.dispose() } catch (error) { failures.push(error) }
       try { await composition.dispose() } catch (error) { failures.push(error) }
       if (failures.length === 1) throw failures[0]

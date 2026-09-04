@@ -11,6 +11,9 @@ import { mountSoulPrompt } from './prompt-policy.js'
 import type { DshUserQuestions } from './user-interaction.js'
 import type { DshRuntime } from './runtime.js'
 import type { DshMemoryFinalizer } from './session-memory-finalizer.js'
+import type { DshMirrorCheckpoint } from './session-log-mirror.js'
+import type { DshBoundaryWorker } from './boundary-worker.js'
+import type { DshSessionLogExportService } from './session-log-export.js'
 
 /** The optional, explicit host adapter supplied by a dsh profile. */
 export const KIOKUKO_DSH_HOST_SERVICE = 'kiokukoDsh'
@@ -59,7 +62,13 @@ export interface DshCompositionHost {
   readonly resolveSessionRunId?: (session: { readonly id: string }) => string | undefined
   readonly memoryFinalizer?: Pick<DshMemoryFinalizer, 'start' | 'dispose' | 'whenIdle'>
   readonly memoryFinalizerOwner?: 'composition' | 'host'
+  readonly sessionMirror?: { readonly start: () => Promise<void>; readonly close: () => Promise<void> }
+  readonly sessionMirrorOwner?: 'composition' | 'host'
+  readonly sessionExport?: DshSessionLogExportService
+  readonly checkpointSessionMirror?: (session: DshNativeSession) => PromiseLike<DshMirrorCheckpoint>
   readonly ennoController?: DshEnnoController
+  readonly boundaryWorker?: Pick<DshBoundaryWorker, 'kick' | 'dispose' | 'whenIdle'>
+  readonly boundaryWorkerOwner?: 'composition' | 'host'
   readonly lifecycle?: DshRunLifecycle
   readonly lifecycleOwner?: 'composition' | 'host'
   readonly resolveIdleClose?: (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object) => DshCloseIntent | PromiseLike<DshCloseIntent | undefined> | undefined
@@ -96,8 +105,15 @@ function mountNativeIntakeGate(
   ctx: { on(name: 'agent/pre-step', listener: (payload: DshNativePreStepPayload, next: () => Promise<DshPreStepDecision>) => Promise<DshPreStepDecision>, options?: { readonly prepend?: boolean }): () => void },
   gate: DshIntakeGate,
   mapPreStep: (payload: DshNativePreStepPayload) => DshPreStepEvent | PromiseLike<DshPreStepEvent>,
+  worker?: Pick<DshBoundaryWorker, 'kick'>,
 ): () => void {
-  return ctx.on('agent/pre-step', async (payload: DshNativePreStepPayload, next) => gate.preStep(await mapPreStep(payload), next as () => Promise<DshPreStepDecision>), { prepend: true })
+  return ctx.on('agent/pre-step', async (payload: DshNativePreStepPayload, next) => {
+    const decision = await gate.preStep(await mapPreStep(payload), next as () => Promise<DshPreStepDecision>)
+    // CapturingGate has now applied human-input precedence and stale-outbox
+    // supersession. Only after that point may recovery work be kicked.
+    worker?.kick(payload.agent.session?.id ?? payload.agent.sessionId, payload.agent)
+    return decision
+  }, { prepend: true })
 }
 
 function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshEnnoController): () => void {
@@ -117,6 +133,21 @@ function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshE
     }
     await controller.handle({ agent, turn: payload.turn, signal: payload.signal })
   }, { prepend: true })
+}
+
+function mountNativeBoundaryKick(
+  ctx: { on(name: string, listener: (payload: DshNativeTurnStoppingPayload) => void, options?: { readonly prepend?: boolean }): () => void },
+  worker: Pick<DshBoundaryWorker, 'kick'>,
+): readonly (() => void)[] {
+  const kick = (payload: DshNativeTurnStoppingPayload): void => {
+    // No validation, LLM call, context construction, or delivery is allowed
+    // inside the native turn-stopping callback. The durable worker owns it.
+    worker.kick(payload.agent.session?.id ?? payload.agent.sessionId, payload.agent)
+  }
+  return [
+    ctx.on('agent/turn-stopping', kick, { prepend: true }),
+    ctx.on('agent/idle', kick),
+  ]
 }
 
 /**
@@ -164,11 +195,23 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       setupResourceDisposers.push(disposer)
       if (host.runtimeOwner !== 'host') cleanupDisposers.push(disposer)
     }
+    if (host.sessionMirror !== undefined) {
+      await host.sessionMirror.start()
+      const closeMirror = async () => host.sessionMirror!.close()
+      setupResourceDisposers.push(closeMirror)
+      if (host.sessionMirrorOwner !== 'host') cleanupDisposers.push(closeMirror)
+    }
     if (host.memoryFinalizer !== undefined) {
       await host.memoryFinalizer.start()
       const closeFinalizer = async () => host.memoryFinalizer!.dispose()
       setupResourceDisposers.push(closeFinalizer)
       if (host.memoryFinalizerOwner !== 'host') cleanupDisposers.push(closeFinalizer)
+    }
+    if (host.boundaryWorker !== undefined) {
+      host.boundaryWorker.kick()
+      const closeBoundaryWorker = async () => host.boundaryWorker!.dispose()
+      setupResourceDisposers.push(closeBoundaryWorker)
+      if (host.boundaryWorkerOwner !== 'host') cleanupDisposers.push(closeBoundaryWorker)
     }
     if (host.skills !== undefined) {
       const disposer = mountStandardSkillProvider({ skills: host.skills })
@@ -202,9 +245,16 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     }
     if (host.intakeGate !== undefined) {
       if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')
-      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep))
+      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep, host.boundaryWorker))
     }
-    if (host.ennoController !== undefined) ingressDisposers.push(mountNativeEnnoController(ctx as unknown as DshTurnStoppingContext, host.ennoController))
+    if (host.boundaryWorker !== undefined && host.ennoController !== undefined) {
+      throw new Error('kiokuko-dsh must not mount both the durable boundary worker and the legacy turn-stopping controller')
+    }
+    if (host.boundaryWorker !== undefined) {
+      ingressDisposers.push(...mountNativeBoundaryKick(ctx as unknown as Parameters<typeof mountNativeBoundaryKick>[0], host.boundaryWorker))
+    } else if (host.ennoController !== undefined) {
+      ingressDisposers.push(mountNativeEnnoController(ctx as unknown as DshTurnStoppingContext, host.ennoController))
+    }
     if (host.lifecycle !== undefined) {
       if (host.resolveIdleClose === undefined) throw new Error('kiokuko-dsh idle lifecycle requires a close resolver')
       const nativeSessions = (ctx as unknown as { get(name: string, strict?: boolean): unknown }).get('sessions', false) as {
@@ -215,14 +265,20 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
         ctx as unknown as DshIdleLifecycleContext,
         host.lifecycle,
         host.resolveIdleClose,
-        async (session) => { await nativeSessions.flush!(session) },
+        async (session) => {
+          await nativeSessions.flush!(session)
+          try { await host.checkpointSessionMirror?.(session) } catch { /* cache is non-vetoing */ }
+        },
       ))
       if (host.resolveSessionClose !== undefined) {
         ingressDisposers.push(mountDshSessionLifecycle(
           ctx as unknown as DshSessionLifecycleContext,
           host.lifecycle,
           host.resolveSessionClose,
-          async (session) => { await nativeSessions.flush!(session) },
+          async (session) => {
+            await nativeSessions.flush!(session)
+            try { await host.checkpointSessionMirror?.(session) } catch { /* cache is non-vetoing */ }
+          },
         ))
       }
       if (host.lifecycleOwner !== 'host') cleanupDisposers.push(() => host.lifecycle!.dispose())

@@ -4,6 +4,7 @@ node_modules
 .pnpm-store/
 /dist/
 .kiokuko-dev/
+kgp
 
 # AI assistant local state and configuration
 .codex

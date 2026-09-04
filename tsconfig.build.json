@@ -7,7 +7,7 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "files": ["src/dsh/index.ts"],
+  "files": ["src/index.ts", "src/client.ts", "src/dsh/index.ts"],
   "include": [],
   "exclude": ["node_modules", "dist", "tests"]
 }

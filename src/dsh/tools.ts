@@ -204,21 +204,22 @@ export function bindDshToolInvocation(
 }
 
 function descriptionFor(operation: ModelToolOperationName): string {
-  return `Kiokuko ${operation} semantic operation. Host identity, routing, lease, and idempotency fields are supplied by the dsh host.`
+  return `Kiokuko ${operation} semantic operation. Host identity, routing, lease, and idempotency fields are supplied by the dsh host. The result is a TurnOutcome: applied results carry the business response in value and the next-turn state in handoff; predictable rejections return retry or clarify without a tool transport error. The business payload contract is: ${JSON.stringify(modelFacingInputSchema(operation))}`
 }
 
 function concludesDshTurn(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const ennoOduno = (value as { ennoOduno?: unknown }).ennoOduno
+  const outcome = value as { kind?: unknown }
+  if (outcome.kind === 'retry' || outcome.kind === 'clarify' || outcome.kind === 'waiting_user') return true
+  const businessValue = outcome.kind === 'applied' && 'value' in outcome
+    ? (outcome as { value?: unknown }).value
+    : value
+  const ennoOduno = (businessValue as { ennoOduno?: unknown }).ennoOduno
   if (typeof ennoOduno !== 'object' || ennoOduno === null || Array.isArray(ennoOduno)) return false
   const nextAction = (ennoOduno as { nextAction?: unknown }).nextAction
-  // These states require an awaited host boundary or are terminal. Mark the
-  // successful tool result itself so DSH commits it before turn-stopping and
-  // cannot issue another model request against the pre-boundary state.
-  return nextAction === 'ask_user_confirmation'
-    || nextAction === 'run_final_verification'
-    || nextAction === 'report_blocker'
-    || nextAction === 'complete'
+  // Every successful phase mutation owns one model turn.  The durable seal is
+  // committed with the Enno receipt before this marker is observed.
+  return typeof nextAction === 'string' && nextAction.length > 0
 }
 
 /** Build the exact seven-operation model tool set. */
@@ -226,7 +227,10 @@ export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDef
   return Object.freeze(MODEL_TOOL_OPERATION_NAMES.map((operation) => Object.freeze({
     name: operation,
     description: descriptionFor(operation),
-    parameters: modelFacingInputSchema(operation),
+    // DSH validates this transport schema before invoking the handler. Keep it
+    // intentionally broad so predictable business validation can be returned
+    // as a bounded retry/clarify outcome instead of an uncatchable tool error.
+    parameters: Object.freeze({ type: 'object', additionalProperties: true }),
     modelFacing: modelFacingSet.has(operation),
     // `{}` is the dsh JSON-schema spelling for any lossless JSON value. The
     // Kiokuko operation registry owns the input/output semantic schemas; this

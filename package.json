@@ -32,6 +32,14 @@
     "LICENSE"
   ],
   "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
     "./dsh": {
       "types": "./dist/dsh/index.d.ts",
       "default": "./dist/dsh/index.js"
@@ -40,6 +48,16 @@
   "dsh": {
     "displayName": "Kiokuko DSH",
     "pluginType": "suite",
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-commands",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-session"
+      ],
+      "platform": "web"
+    },
     "bundle": {
       "patch": "./dsh/cordis.patch.yml"
     },
@@ -94,6 +112,8 @@
     "test:sqlite-vec": "node --import tsx tests/ci/sqlite-vec-package-smoke.ts",
     "test:evaluation": "npm run build && node scripts/run-retrieval-evaluation.mjs",
     "test:benchmark": "npm run build && node scripts/run-retrieval-benchmark.mjs",
+    "test:benchmark:dsh-log": "npm run build && node scripts/run-dsh-million-event-benchmark.mjs",
+    "test:kgp": "node scripts/check-kgp.mjs",
     "test:e2e:dsh": "npm run build && node scripts/run-enno-dsh-e2e.mjs",
     "verify:prepare": "node scripts/verify-prepare-reproducibility.mjs",
     "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko-dsh.sqlite3",
@@ -101,7 +121,7 @@
     "publint": "publint",
     "pack:check": "node scripts/pack-check.mjs",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run publint && npm run pack:check"
+    "prepublishOnly": "npm run typecheck && npm run test:kgp && npm test && npm run build && npm run publint && npm run pack:check"
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",
@@ -115,11 +135,15 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-session-log-export": "0.1.2-rc.1",
     "@huggingface/hub": "2.16.1",
     "@huggingface/transformers": "4.2.0",
     "sqlite-vec": "0.1.9"
   },
   "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-session-log-export": {
+      "optional": true
+    },
     "@huggingface/hub": {
       "optional": true
     },

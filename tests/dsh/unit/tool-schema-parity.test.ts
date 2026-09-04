@@ -150,7 +150,11 @@ test('a plan awaiting human review concludes the model turn after its successful
       orchestrationId: 'orch-1', revision: 1, routeEpoch: 0,
       workUnitId: 'unit-1', leaseToken: 'lease-1',
     }),
-    execute: async () => ({ ennoOduno: { nextAction: 'ask_user_confirmation' } }),
+    execute: async () => ({
+      kind: 'applied',
+      value: { ennoOduno: { nextAction: 'ask_user_confirmation' } },
+      handoff: { schemaVersion: 1, runId: 'run-1', phase: 'planning', revision: 1, nextAction: 'ask_user_confirmation' },
+    }),
   })
   const definition = definitions.find((item) => item.name === 'enno_plan_submit')!
 
@@ -163,7 +167,7 @@ test('a plan awaiting human review concludes the model turn after its successful
   assert.equal(conclusions, 1)
 })
 
-test('boundary and terminal next actions conclude only after their successful tool result', async () => {
+test('every successful phase result concludes exactly one model turn', async () => {
   const nextActions = new Map([
     ['enno_work_report', 'run_final_verification'],
     ['enno_meditation_submit', 'complete'],
@@ -175,7 +179,11 @@ test('boundary and terminal next actions conclude only after their successful to
       orchestrationId: 'orch-1', revision: 1, routeEpoch: 0,
       workUnitId: 'unit-1', leaseToken: 'lease-1',
     }),
-    execute: async (operation) => ({ ennoOduno: { nextAction: nextActions.get(operation) } }),
+    execute: async (operation) => ({
+      kind: 'applied',
+      value: { ennoOduno: { nextAction: nextActions.get(operation) } },
+      handoff: { schemaVersion: 1, runId: 'run-1', phase: 'work_unit', revision: 1, nextAction: nextActions.get(operation) },
+    }),
   })
   const conclusions: string[] = []
 
@@ -188,5 +196,5 @@ test('boundary and terminal next actions conclude only after their successful to
     } as any)
   }
 
-  assert.deepEqual(conclusions, ['enno_work_report', 'enno_meditation_submit'])
+  assert.deepEqual(conclusions, ['enno_work_report', 'enno_meditation_submit', 'enno_ideal_submit'])
 })

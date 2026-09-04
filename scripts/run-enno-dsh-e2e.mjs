@@ -135,7 +135,7 @@ async function runCliLifecycle() {
     await access(tarball)
     await run(dsh, ['plugin', '--profile', profile, 'add', tarball], env)
     const dumped = await run(dsh, ['--profile', profile, '--dump-config'], env)
-    if ((dumped.stdout.match(/kiokuko-dsh\/dsh/g) ?? []).length !== 1) {
+    if ((dumped.stdout.match(/\bname:\s*['"]?kiokuko-dsh['"]?(?:\s|$)/g) ?? []).length !== 1) {
       throw new Error('dsh dump-config did not contain exactly one Kiokuko bundle')
     }
     web = startWebProfile(env)
@@ -144,7 +144,7 @@ async function runCliLifecycle() {
     await stopWebProfile(web)
     await run(dsh, ['plugin', '--profile', profile, 'remove', 'kiokuko-dsh'], env)
     const afterRemove = await run(dsh, ['--profile', profile, '--dump-config'], env)
-    if ((afterRemove.stdout.match(/kiokuko-dsh\/dsh/g) ?? []).length !== 0) {
+    if ((afterRemove.stdout.match(/\bname:\s*['"]?kiokuko-dsh['"]?(?:\s|$)/g) ?? []).length !== 0) {
       throw new Error('dsh bundle remained after removal')
     }
     const evidence = {

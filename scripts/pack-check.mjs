@@ -17,6 +17,10 @@ const requiredFiles = [
   'README.ko.md',
   'PERMISSIONS.md',
   'dsh/cordis.patch.yml',
+  'dist/index.js',
+  'dist/index.d.ts',
+  'dist/client.js',
+  'dist/client.d.ts',
   'dist/dsh/index.js',
   'dist/dsh/index.d.ts',
 ]
@@ -33,7 +37,6 @@ const forbiddenPrefixes = [
   'PLAN.md',
   'dist/bin/',
   'dist/commands/',
-  'dist/client/',
   'dist/mcp/',
   'dist/web/',
   'dist/server/',
@@ -104,7 +107,7 @@ async function createAndSmokeTestTarball() {
   await symlink(join(root, 'node_modules'), join(packageRoot, 'node_modules'), 'dir')
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
 
-  const smokeCode = "const plugin = await import('kiokuko-dsh/dsh'); if (plugin.name !== 'kiokuko-dsh') throw new Error('unexpected plugin name'); if ('default' in plugin) throw new Error('unexpected default export');"
+  const smokeCode = "const root = await import('kiokuko-dsh'); const client = await import('kiokuko-dsh/client'); const plugin = await import('kiokuko-dsh/dsh'); if (plugin.name !== 'kiokuko-dsh') throw new Error('unexpected plugin name'); if (typeof root.DshSessionLogExportService !== 'function') throw new Error('missing root export service'); if (typeof client.downloadDshSessionLog !== 'function') throw new Error('missing client export'); if ('default' in plugin) throw new Error('unexpected default export');"
   const smokePath = join(consumerRoot, 'import-smoke.mjs')
   await mkdir(join(consumerRoot, 'node_modules'))
   await symlink(packageRoot, join(consumerRoot, 'node_modules', 'kiokuko-dsh'), 'dir')
@@ -139,7 +142,7 @@ try {
     throw new Error('DSH package must not depend on generic CLI or MCP runtimes')
   }
   const exportsKeys = Object.keys(packageManifest.exports ?? {})
-  if (exportsKeys.length !== 1 || exportsKeys[0] !== './dsh') throw new Error('public exports must contain only ./dsh')
+  if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh'])) throw new Error('public exports must contain ., ./client, and ./dsh')
   const smoke = await createAndSmokeTestTarball()
   process.stdout.write(`${JSON.stringify({
     name: metadata.name,

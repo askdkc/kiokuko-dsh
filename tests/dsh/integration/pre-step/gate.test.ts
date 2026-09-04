@@ -15,7 +15,7 @@ function unresolvedPreparedTask(): unknown {
   }
 }
 
-test('pre-step rejects unresolved intake without invoking the downstream model', async () => {
+test('pre-step preserves the downstream decision when Kiokuko intake is unresolved', async () => {
   const capabilities = createDshCapabilityCatalog({
     skills: STANDARD_SKILL_MANIFESTS.map(({ name }) => ({ kind: 'skill' as const, name })),
     tools: [],
@@ -39,6 +39,6 @@ test('pre-step rejects unresolved intake without invoking the downstream model',
     downstreamCalls += 1
     return { kind: 'enter', messages: [] }
   })
-  assert.deepEqual(decision, { kind: 'reject' })
-  assert.equal(downstreamCalls, 0)
+  assert.deepEqual(decision, { kind: 'enter', messages: [] })
+  assert.equal(downstreamCalls, 1)
 })

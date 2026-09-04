@@ -24,6 +24,8 @@ export interface DshPreStepEvent {
   /** Exact native DSH `turn/start` sequence, bound atomically with a new run. */
   readonly sourceStartSeq?: number
   readonly step: number
+  /** Exact native message batch. Never flattened or reconstructed by intake. */
+  readonly nativeMessages?: readonly unknown[]
   readonly task: string
   readonly cwd: string
   readonly profileHints?: Partial<TaskProfile>
@@ -222,10 +224,17 @@ export class DshIntakeGate {
   }
 
   async preStep(event: DshPreStepEvent, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> {
-    const result = await this.prepare(event)
-    if (event.signal.aborted) return { kind: 'reject' }
-    if (!result.admitted) return { kind: 'reject' }
-    return next()
+    // Preserve the native chain's exact message decision first. Kiokuko
+    // admission augments that decision but never consumes/rejects a prompt
+    // merely because its own intake, cache, or question service is degraded.
+    const decision = await next()
+    if (decision.kind !== 'enter' || event.signal.aborted) return decision
+    try {
+      await this.prepare(event)
+    } catch {
+      return decision
+    }
+    return decision
   }
 
   assertCatalog(expected: DshCapabilityCatalog, current: unknown): void {

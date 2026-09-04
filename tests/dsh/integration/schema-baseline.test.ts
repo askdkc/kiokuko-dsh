@@ -8,18 +8,20 @@ import { loadMigrationSnapshot, migrateDatabase } from '../../../src/db/migrate.
 
 const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migrations')
 
-test('the schema keeps 001 immutable and appends the DSH finalization migration', async () => {
+test('the schema keeps 001 immutable and appends forward-only DSH runtime migrations', async () => {
   const entries = await readdir(migrationsDirectory)
   const sqlFiles = entries.filter((name) => name.endsWith('.sql'))
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql'])
   assert.ok(!entries.some((name) => name === 'down'), 'migrations/down must not exist')
 
   const snapshot = loadMigrationSnapshot(migrationsDirectory)
-  assert.equal(snapshot.migrations.length, 2)
+  assert.equal(snapshot.migrations.length, 3)
   assert.equal(snapshot.migrations[0]!.version, 1)
   assert.equal(snapshot.migrations[0]!.name, '001_baseline.sql')
   assert.equal(snapshot.migrations[1]!.version, 2)
   assert.equal(snapshot.migrations[1]!.name, '002_dsh_memory_finalization.sql')
+  assert.equal(snapshot.migrations[2]!.version, 3)
+  assert.equal(snapshot.migrations[2]!.name, '003_dsh_turn_process.sql')
 })
 
 test('baseline initialization creates the complete DSH schema with clean integrity', async () => {
@@ -29,8 +31,8 @@ test('baseline initialization creates the complete DSH schema with clean integri
     const database = openConnection(databasePath)
     try {
       const migration = migrateDatabase(database, migrationsDirectory)
-      assert.deepEqual(migration.applied, [1, 2])
-      assert.equal(migration.currentVersion, 2)
+      assert.deepEqual(migration.applied, [1, 2, 3])
+      assert.equal(migration.currentVersion, 3)
 
       assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
       assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
@@ -44,10 +46,18 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'context_deliveries',
         'context_delivery_entries',
         'context_feedback',
+        'dsh_boundary_jobs',
+        'dsh_continuation_outbox',
+        'dsh_input_claim_backups',
         'dsh_intake_idempotency',
         'dsh_memory_finalization_entries',
         'dsh_memory_finalizations',
         'dsh_run_log_boundaries',
+        'dsh_session_cache_health',
+        'dsh_temporary_memories',
+        'dsh_turn_handoffs',
+        'dsh_turn_intents',
+        'dsh_turn_receipts',
         'embedding_jobs',
         'embedding_model_installations',
         'embedding_profiles',

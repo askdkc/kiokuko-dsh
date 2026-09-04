@@ -6,6 +6,7 @@ import { recordEntryInTransaction, type EntryRecord } from '../memory/entries.js
 import { buildStructuredScope } from '../memory/structured-memory.js'
 import { canonicalContentHash, canonicalJson, containsDisallowedTextCharacters, normalizeTextLineEndings, type EntryKind, type JsonObject } from '../serialization/validate.js'
 import type { DshRuntime } from './runtime.js'
+import { buildDshPromptCacheLayout, type DshPromptCacheLayout } from './prompt-cache.js'
 
 export const DSH_MEMORY_CAPSULE_MAX_BYTES = 64 * 1024
 const MAX_OUTPUT_TOKENS = 16_384
@@ -32,6 +33,13 @@ export interface DshSessionLogSnapshot {
 
 export interface DshSessionQuery {
   readSession(sessionId: string): PromiseLike<DshSessionLogSnapshot>
+  /** Preferred bounded reader. Legacy DSH adapters may omit it. */
+  streamSession?(sessionId: string): PromiseLike<{
+    readonly session: DshSessionLogSnapshot['session']
+    readonly inheritedEventCount: number
+    readonly events: AsyncIterable<DshLogEvent>
+  }>
+  cachePromptLayout?(layout: DshPromptCacheLayout): PromiseLike<boolean>
 }
 
 export interface DshSessionEventSource {
@@ -61,6 +69,8 @@ export interface DshMemoryFinalizerOptions {
   readonly now?: () => string
   readonly maximumAttempts?: number
   readonly timeoutMs?: number
+  /** Best-effort cache retention transition after the Core commit succeeds. */
+  readonly onFinalized?: (sessionId: string) => void | PromiseLike<void>
 }
 
 export interface ScheduleDshMemoryFinalizationInput {
@@ -130,6 +140,14 @@ interface EvidenceCandidate {
   readonly type: string
   readonly weight: number
   readonly text: string
+}
+
+export interface PreparedFinalizationLog {
+  readonly messages: readonly unknown[]
+  readonly evidence: string
+  readonly envelope: RequestEnvelope
+  readonly digest: string
+  readonly eventCount: number
 }
 
 const ENTRY_KINDS = new Set<EntryKind>(['fact', 'decision', 'lesson', 'preference', 'reference'])
@@ -326,18 +344,22 @@ function selectEvidence(events: readonly DshLogEvent[], currentSurface: Readonly
   const heap: EvidenceCandidate[] = []
   for (const event of events) {
     if (currentSurface.has(event.seq)) continue
-    const weight = evidenceWeight(event)
-    if (heap.length >= MAX_EVIDENCE_CANDIDATES) {
-      const worst = heap[0]!
-      if (weight < worst.weight || weight === worst.weight && event.seq <= worst.seq) continue
-    }
-    const text = eventText(event).trim()
-    if (text.length === 0) continue
-    const candidate = { seq: event.seq, type: event.type, weight, text }
-    if (heap.length < MAX_EVIDENCE_CANDIDATES) heapPush(heap, candidate)
-    else heapReplaceWorst(heap, candidate)
+    considerEvidence(heap, event)
   }
   return heap.sort((left, right) => right.weight - left.weight || right.seq - left.seq)
+}
+
+function considerEvidence(heap: EvidenceCandidate[], event: DshLogEvent): void {
+  const weight = evidenceWeight(event)
+  if (heap.length >= MAX_EVIDENCE_CANDIDATES) {
+    const worst = heap[0]!
+    if (weight < worst.weight || weight === worst.weight && event.seq <= worst.seq) return
+  }
+  const text = eventText(event).trim()
+  if (text.length === 0) return
+  const candidate = { seq: event.seq, type: event.type, weight, text }
+  if (heap.length < MAX_EVIDENCE_CANDIDATES) heapPush(heap, candidate)
+  else heapReplaceWorst(heap, candidate)
 }
 
 function takeUtf8(value: string, maximumBytes: number): string {
@@ -526,6 +548,105 @@ function logDigest(events: readonly DshLogEvent[]): string {
   return hash.digest('hex')
 }
 
+function validStreamEvent(event: DshLogEvent): void {
+  if (typeof event !== 'object' || event === null || typeof event.type !== 'string' || event.type.length === 0
+    || !Number.isSafeInteger(event.seq) || event.seq < 0 || !Number.isFinite(event.time)) {
+    throw new KiokukoError('INTEGRITY_ERROR', 'DSH finalization stream contains an invalid event')
+  }
+}
+
+async function* arrayEvents(events: readonly DshLogEvent[]): AsyncIterable<DshLogEvent> {
+  for (const event of events) yield event
+}
+
+/** One-pass log reduction. Memory is bounded by current surface plus top-K evidence. */
+export async function reduceDshFinalizationLog(
+  events: AsyncIterable<DshLogEvent>,
+  sourceStartSeq: number,
+  sourceEndSeq: number,
+): Promise<PreparedFinalizationLog> {
+  const start = validatedSequence(sourceStartSeq, 'sourceStartSeq')
+  const end = validatedSequence(sourceEndSeq, 'sourceEndSeq')
+  if (end < start) throw new KiokukoError('INTEGRITY_ERROR', 'DSH finalization log range is reversed')
+  const nodes: number[] = []
+  const surfaceEvents = new Map<number, DshLogEvent>()
+  const evidenceHeap: EvidenceCandidate[] = []
+  const digest = createHash('sha256')
+  let latestHeader: DshLogEvent | undefined
+  let latestContext: DshLogEvent | undefined
+  let latestUsage: DshLogEvent | undefined
+  let previousSeq = -1
+  let sawStart = false
+  let sawEnd = false
+  let firstTargetType: string | undefined
+  let lastTargetType: string | undefined
+  let eventCount = 0
+
+  for await (const event of events) {
+    validStreamEvent(event)
+    if (event.seq <= previousSeq) throw new KiokukoError('INTEGRITY_ERROR', 'DSH finalization event sequence is not strictly increasing')
+    previousSeq = event.seq
+    if (event.seq > end) break
+
+    if (event.type === 'request/header') latestHeader = event
+    if (event.type === 'request/context') latestContext = event
+    if (event.type === 'assistant/message' && latestInputUsage([event]) !== undefined) latestUsage = event
+
+    if (event.surfaceOp === 'append') {
+      nodes.push(event.seq)
+      surfaceEvents.set(event.seq, event)
+    } else if (event.surfaceOp !== undefined) {
+      const startIndex = nodes.indexOf(event.surfaceOp.start)
+      const endIndex = nodes.indexOf(event.surfaceOp.end)
+      if (startIndex < 0 || endIndex < startIndex) {
+        throw new KiokukoError('INTEGRITY_ERROR', 'DSH session surface replacement is inconsistent')
+      }
+      for (const sequence of nodes.slice(startIndex, endIndex + 1)) surfaceEvents.delete(sequence)
+      nodes.splice(startIndex, endIndex - startIndex + 1, event.seq)
+      surfaceEvents.set(event.seq, event)
+    }
+
+    if (event.seq < start) continue
+    if (event.seq === start) {
+      if (sawStart) throw new KiokukoError('INTEGRITY_ERROR', 'DSH finalization start sequence is ambiguous')
+      sawStart = true
+      firstTargetType = event.type
+    }
+    if (!sawStart) continue
+    if (sawEnd) throw new KiokukoError('INTEGRITY_ERROR', 'DSH finalization end sequence is ambiguous')
+    digest.update(canonicalJson(event), 'utf8').update('\n')
+    eventCount += 1
+    lastTargetType = event.type
+    considerEvidence(evidenceHeap, event)
+    if (event.seq === end) sawEnd = true
+  }
+
+  if (!sawStart || !sawEnd) throw new KiokukoError('INTEGRITY_ERROR', 'DSH finalization log range is absent')
+  if (firstTargetType !== 'turn/start' || lastTargetType !== 'turn/end') {
+    throw new KiokukoError('INTEGRITY_ERROR', 'DSH finalization range is not bounded by a complete turn sequence')
+  }
+  const metadata = [latestHeader, latestContext, latestUsage]
+    .filter((event): event is DshLogEvent => event !== undefined)
+    .sort((left, right) => left.seq - right.seq)
+  const envelope = latestEnvelope(metadata)
+  const current = new Set(nodes)
+  const messages = nodes.flatMap((sequence) => {
+    const event = surfaceEvents.get(sequence)
+    const message = event === undefined ? undefined : messageForSurfaceEvent(event)
+    return message === undefined ? [] : [message]
+  })
+  const selected = evidenceHeap
+    .filter((candidate) => !current.has(candidate.seq))
+    .sort((left, right) => right.weight - left.weight || right.seq - left.seq)
+  return Object.freeze({
+    messages: Object.freeze(messages),
+    evidence: evidenceDocument(selected, evidenceBudget(envelope, metadata)),
+    envelope,
+    digest: digest.digest('hex'),
+    eventCount,
+  })
+}
+
 function usageFromChunk(chunk: Record<string, unknown>): ModelUsage | undefined {
   if (chunk.type !== 'usage') return undefined
   const usage = record(chunk.usage)
@@ -594,9 +715,9 @@ export function bindDshRunLogStartInTransaction(
 
 /**
  * Durable post-completion memory pipeline. It never observes `session/event`
- * and never registers a `session/flush` listener: DSH owns its canonical log
- * and export path, while this worker reads the complete persisted session only
- * after the run has committed `completed`.
+ * and never registers a `session/flush` listener itself: DSH owns the
+ * canonical log, the separate non-vetoing mirror owns bounded reads, and this
+ * worker consumes that mirror only after the run has committed `completed`.
  */
 export class DshMemoryFinalizer {
   readonly #runtime: DshMemoryFinalizerOptions['runtime']
@@ -605,6 +726,7 @@ export class DshMemoryFinalizer {
   readonly #now: () => string
   readonly #maximumAttempts: number
   readonly #timeoutMs: number
+  readonly #onFinalized: DshMemoryFinalizerOptions['onFinalized']
   #drain: Promise<void> | undefined
   #abort: AbortController | undefined
   #rerunRequested = false
@@ -618,6 +740,7 @@ export class DshMemoryFinalizer {
     this.#now = options.now ?? (() => new Date().toISOString())
     this.#maximumAttempts = options.maximumAttempts ?? MAX_ATTEMPTS
     this.#timeoutMs = options.timeoutMs ?? FINALIZATION_TIMEOUT_MS
+    this.#onFinalized = options.onFinalized
   }
 
   get lastDrainError(): unknown { return this.#lastDrainError }
@@ -741,19 +864,23 @@ export class DshMemoryFinalizer {
     }
   }
 
-  async #summarize(job: FinalizationJob, snapshot: DshSessionLogSnapshot, signal: AbortSignal): Promise<SummaryResult> {
+  async #summarize(job: FinalizationJob, prepared: PreparedFinalizationLog, signal: AbortSignal): Promise<SummaryResult> {
     if (this.#llm === undefined) throw new KiokukoError('SERVICE_UNAVAILABLE', 'DSH LLM service is unavailable for memory finalization')
-    const bounded = boundedSessionEvents(snapshot.events, job.sourceStartSeq, job.sourceEndSeq)
-    const envelope = latestEnvelope(bounded.throughEnd)
-    const nodes = surfaceNodes(bounded.throughEnd)
-    const bySequence = new Map(bounded.throughEnd.map((event) => [event.seq, event]))
-    const messages = nodes.flatMap((sequence) => {
-      const event = bySequence.get(sequence)
-      const message = event === undefined ? undefined : messageForSurfaceEvent(event)
-      return message === undefined ? [] : [message]
+    const { envelope, evidence } = prepared
+    const messages = [...prepared.messages]
+    const cacheLayout = buildDshPromptCacheLayout({
+      provider: envelope.provider,
+      model: envelope.model,
+      ...(envelope.reasoningEffort === undefined ? {} : { reasoning: envelope.reasoningEffort }),
+      toolSchema: envelope.tools ?? [],
+      memoryRevision: String(job.sourceEndSeq),
+      phase: 'compaction',
+      fragments: [
+        { kind: 'system', id: 'dsh-system', value: envelope.system ?? '' },
+        { kind: 'tool_schema', id: 'dsh-tools', value: envelope.tools ?? [] },
+      ],
     })
-    const current = new Set(nodes)
-    const evidence = evidenceDocument(selectEvidence(bounded.target, current), evidenceBudget(envelope, bounded.throughEnd))
+    try { await this.#sessionQuery?.cachePromptLayout?.(cacheLayout) } catch { /* local cache is non-vetoing */ }
     messages.push({
       id: `kiokuko-memory-finalization:${job.runId}`,
       role: 'user',
@@ -796,11 +923,18 @@ export class DshMemoryFinalizer {
     const timer = setTimeout(() => controller.abort(new KiokukoError('SERVICE_UNAVAILABLE', 'DSH memory finalization timed out')), this.#timeoutMs)
     try {
       if (this.#sessionQuery === undefined) throw new KiokukoError('SERVICE_UNAVAILABLE', 'DSH session query service is unavailable for memory finalization')
-      const snapshot = await this.#sessionQuery.readSession(job.dshSessionId)
-      if (snapshot.session.id !== job.dshSessionId) throw new KiokukoError('INTEGRITY_ERROR', 'DSH session query returned another session')
-      const bounded = boundedSessionEvents(snapshot.events, job.sourceStartSeq, job.sourceEndSeq)
-      const digest = logDigest(bounded.target)
-      const result = await this.#summarize(job, snapshot, controller.signal)
+      const streamed = this.#sessionQuery.streamSession === undefined
+        ? undefined
+        : await this.#sessionQuery.streamSession(job.dshSessionId)
+      const snapshot = streamed === undefined ? await this.#sessionQuery.readSession(job.dshSessionId) : undefined
+      const session = streamed?.session ?? snapshot!.session
+      if (session.id !== job.dshSessionId) throw new KiokukoError('INTEGRITY_ERROR', 'DSH session query returned another session')
+      const prepared = await reduceDshFinalizationLog(
+        streamed?.events ?? arrayEvents(snapshot!.events),
+        job.sourceStartSeq,
+        job.sourceEndSeq,
+      )
+      const result = await this.#summarize(job, prepared, controller.signal)
       const now = this.#now()
       await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
         const current = database.prepare('SELECT status FROM dsh_memory_finalizations WHERE run_id = ?')
@@ -813,7 +947,7 @@ export class DshMemoryFinalizer {
         })
         const provenance: JsonObject = {
           type: 'dsh-session-finalization',
-          reference: `dsh-session:${job.dshSessionId}?seq=${job.sourceStartSeq}-${job.sourceEndSeq}#sha256:${digest}`,
+          reference: `dsh-session:${job.dshSessionId}?seq=${job.sourceStartSeq}-${job.sourceEndSeq}#sha256:${prepared.digest}`,
           sourceRepositoryId,
           sourceWorkspace: job.workspace,
           runId: job.runId,
@@ -848,8 +982,8 @@ export class DshMemoryFinalizer {
                  completed_at = ?, updated_at = ?
            WHERE run_id = ? AND status = 'processing'
         `).run(
-          bounded.target.length,
-          digest,
+          prepared.eventCount,
+          prepared.digest,
           canonicalContentHash(result.capsule),
           Buffer.byteLength(result.capsuleJson, 'utf8'),
           result.envelope.provider,
@@ -863,6 +997,7 @@ export class DshMemoryFinalizer {
           job.runId,
         )
       }))
+      try { await this.#onFinalized?.(job.dshSessionId) } catch { /* cache retention is non-vetoing */ }
     } catch (error) {
       if (error instanceof TransactionCommitUncertainError) {
         this.#lastDrainError = error

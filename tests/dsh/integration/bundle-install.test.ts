@@ -42,22 +42,35 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     peerDependencies?: Record<string, string>
     name?: string
     scripts?: Record<string, string>
-    dsh?: { bundle?: { patch?: string } }
+    dsh?: { bundle?: { patch?: string }; client?: { platform?: string; inject?: string[] } }
   }
   assert.equal(packageManifest.name, 'kiokuko-dsh')
   assert.equal(packageManifest.scripts?.prepare, 'npm run build')
+  assert.deepEqual(Object.keys(packageManifest.exports ?? {}), ['.', './client', './dsh'])
+  assert.deepEqual(packageManifest.exports?.['.'], {
+    types: './dist/index.d.ts',
+    default: './dist/index.js',
+  })
+  assert.deepEqual(packageManifest.exports?.['./client'], {
+    types: './dist/client.d.ts',
+    default: './dist/client.js',
+  })
   assert.deepEqual(packageManifest.exports?.['./dsh'], {
     types: './dist/dsh/index.d.ts',
     default: './dist/dsh/index.js',
   })
   assert.equal(packageManifest.dsh?.bundle?.patch, './dsh/cordis.patch.yml')
+  assert.equal(packageManifest.dsh?.client?.platform, 'web')
+  assert.ok(packageManifest.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-session'))
   assert.ok(packageManifest.files?.includes('dsh/cordis.patch.yml'))
   assert.equal(packageManifest.peerDependencies?.['@deepseek-ai/cordis'], '^4.0.2')
 
-  const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{ insert?: Array<{ name?: string }> }>
-  const rows = patch.flatMap((operation) => operation.insert ?? [])
-  assert.equal(rows.length, 1)
-  assert.equal(rows[0]?.name, 'kiokuko-dsh/dsh')
+  const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{ id?: string; name?: string; inject?: string[] }>
+  assert.equal(patch.length, 1)
+  assert.equal(patch[0]?.id, 'session-log-download')
+  assert.equal(patch[0]?.name, 'kiokuko-dsh')
+  assert.ok(patch[0]?.inject?.includes('connection'))
+  assert.ok(patch[0]?.inject?.includes('attachments'))
   assert.deepEqual(Config.parse({}), { enabled: true })
 
   await run('npm', ['run', 'build'])
@@ -78,6 +91,8 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     const archive = await run('tar', ['-tzf', tarball])
     assert.match(archive.stdout, /package\/dist\/dsh\/index\.js\n/)
     assert.match(archive.stdout, /package\/dist\/dsh\/index\.d\.ts\n/)
+    assert.match(archive.stdout, /package\/dist\/index\.js\n/)
+    assert.match(archive.stdout, /package\/dist\/client\.js\n/)
     assert.match(archive.stdout, /package\/dsh\/cordis\.patch\.yml\n/)
   } finally {
     await Promise.all([
@@ -121,7 +136,7 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
     const dumped = await run(process.env.DSH_BIN ?? 'dsh', [
       '--profile', 'kiokuko-test', '--dump-config',
     ], env)
-    assert.equal((dumped.stdout.match(/kiokuko-dsh\/dsh/g) ?? []).length, 1)
+    assert.equal((dumped.stdout.match(/\bname:\s*['"]?kiokuko-dsh['"]?(?:\s|$)/g) ?? []).length, 1)
 
     const remove = await run(process.env.DSH_BIN ?? 'dsh', [
       'plugin', '--profile', 'kiokuko-test', 'remove', 'kiokuko-dsh',
@@ -131,7 +146,7 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
     const afterRemove = await run(process.env.DSH_BIN ?? 'dsh', [
       '--profile', 'kiokuko-test', '--dump-config',
     ], env)
-    assert.equal((afterRemove.stdout.match(/kiokuko-dsh\/dsh/g) ?? []).length, 0)
+    assert.equal((afterRemove.stdout.match(/\bname:\s*['"]?kiokuko-dsh['"]?(?:\s|$)/g) ?? []).length, 0)
   } finally {
     await Promise.all([
       rm(home, { recursive: true, force: true }),

@@ -172,7 +172,7 @@ test('concurrent preparation of one turn shares a single question and result', a
   }
 })
 
-test('pre-step rejects unresolved intake without an answerer and rejects changed catalogs', async () => {
+test('pre-step passes through unresolved intake without an answerer and rejects changed catalogs at the tool boundary', async () => {
   const fixture = await makeFixture()
   const runtime = new DshRuntime({
     repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
@@ -186,8 +186,8 @@ test('pre-step rejects unresolved intake without an answerer and rejects changed
       nextCalls += 1
       return { kind: 'enter', messages: [] }
     })
-    assert.deepEqual(decision, { kind: 'reject' })
-    assert.equal(nextCalls, 0)
+    assert.deepEqual(decision, { kind: 'enter', messages: [] })
+    assert.equal(nextCalls, 1)
     assert.throws(() => gate.assertTurnStoppingCatalog(capabilities, { ...capabilities, digest: 'f'.repeat(64) }), /changed/u)
   } finally {
     await runtime.close()
@@ -245,7 +245,7 @@ test('skipping task type enters ordinary chat without creating an Enno/Oduno con
   }
 })
 
-test('cached preparation rejects a different native agent or session object', async () => {
+test('cached preparation mismatch is fail-open in pre-step but strict at the preparation boundary', async () => {
   const fixture = await makeFixture()
   const runtime = new DshRuntime({
     repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
@@ -255,9 +255,13 @@ test('cached preparation rejects a different native agent or session object', as
   const first = event(fixture.root, capabilities)
   const gate = new DshIntakeGate(runtime)
   try {
-    assert.deepEqual(await gate.preStep(first, async () => ({ kind: 'enter', messages: [] })), { kind: 'reject' })
+    assert.deepEqual(await gate.preStep(first, async () => ({ kind: 'enter', messages: [] })), { kind: 'enter', messages: [] })
+    assert.deepEqual(
+      await gate.preStep({ ...first, nativeAgent: { id: 'replacement-agent' } }, async () => ({ kind: 'enter', messages: ['native'] })),
+      { kind: 'enter', messages: ['native'] },
+    )
     await assert.rejects(
-      gate.preStep({ ...first, nativeAgent: { id: 'replacement-agent' } }, async () => ({ kind: 'enter', messages: [] })),
+      gate.prepare({ ...first, nativeAgent: { id: 'replacement-agent' } }),
     )
   } finally {
     await runtime.close()

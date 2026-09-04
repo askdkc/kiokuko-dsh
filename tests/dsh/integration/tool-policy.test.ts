@@ -80,3 +80,42 @@ test('a native tool cannot use a run-only policy snapshot without a bound sessio
   const decision = policy.decide(call('enno_plan_submit', { signal: new AbortController().signal }))
   assert.deepEqual(decision, { kind: 'deny', code: 'STALE_STATE', reason: 'Kiokuko dsh tool denied (stale_state)' })
 })
+
+test('a committed phase seals every later unstarted tool in the same native turn', () => {
+  const policy = new DshToolPolicy({ ...base, nativeTurn: 7 })
+  policy.sealSession('session-1', 7, 'a'.repeat(64))
+  const signal = new AbortController().signal
+  assert.match(policy.guardReason({
+    callId: 'read-after-phase', name: 'Read', arguments: {},
+    agent: { dshSessionId: 'session-1', turn: 7 }, signal,
+  })!, /turn_sealed/u)
+  assert.match(policy.guardReason({
+    callId: 'plan-after-phase', name: 'enno_plan_submit', arguments: {},
+    agent: { dshSessionId: 'session-1', turn: 7 }, signal,
+  })!, /turn_sealed/u)
+
+  policy.setState({ ...base, nativeTurn: 8 })
+  assert.equal(policy.guardReason({
+    callId: 'read-next-turn', name: 'Read', arguments: {},
+    agent: { dshSessionId: 'session-1', turn: 8 }, signal,
+  }), undefined)
+})
+
+test('the mounted native guard resolves a DSH session to its current turn seal', () => {
+  const policy = new DshToolPolicy({ ...base, nativeTurn: 7 })
+  const guards: Array<(execution: any) => string | undefined> = []
+  const dispose = mountDshToolPolicy({
+    tools: { guard: (guard) => { guards.push(guard); return () => undefined } },
+  }, policy)
+  try {
+    policy.sealSession('session-1', 7, 'b'.repeat(64))
+    const reason = guards[0]!({
+      callId: 'native-read-after-phase', name: 'Read', arguments: {},
+      agent: { id: 'native-agent', session: { id: 'session-1' } },
+      signal: new AbortController().signal,
+    })
+    assert.match(reason!, /turn_sealed/u)
+  } finally {
+    dispose()
+  }
+})

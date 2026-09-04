@@ -1,9 +1,10 @@
 # DSH composition architecture
 
-`src/dsh/index.ts` is the only package entrypoint. Cordis mounts one composition
-that owns the intake gate, model-visible tools, Enno-Oduno controller, run
-ledger, post-completion DSH-log finalizer, memory retrieval, optional embedding
-worker, and shutdown ordering.
+`src/index.ts` is the primary package entrypoint; `./dsh` remains a compatible
+alias and `./client` owns the Web surface. Cordis mounts one composition that
+owns the intake gate, model-visible tools, durable boundary worker, run ledger,
+post-completion DSH-log finalizer, memory retrieval, optional embedding worker,
+and shutdown ordering.
 
 The host supplies the authoritative DSH session object and session ID. Model
 arguments never select a run, repository, route epoch, resume token, lease, or
@@ -20,12 +21,14 @@ Capability catalogs use version 2 exclusively, with the native `skill | tool`
 vocabulary. Bindings carrying any other catalog version are rejected as
 integrity errors.
 
-The DSH session log is the canonical interaction record. Kiokuko does not
-observe and copy `session/event`, and it does not register a `session/flush`
-listener. After Enno reaches a real terminal success, the host waits for DSH's
-own session checkpoint and atomically commits the run close plus a durable
-memory-finalization job. The auxiliary model call runs afterward and cannot
-veto DSH completion or session-log export.
+The DSH session log is the canonical interaction record. Kiokuko observes
+`session/event` into a separate, rebuildable SQLite mirror; it never copies raw
+DSH events into the 64 KiB-bounded execution ledger. Mirror listeners contain
+all failures. A native `sessions.flush()` requested by orchestration remains a
+fail-closed durability barrier, while the subsequent mirror checkpoint is
+non-vetoing. After terminal success, the run close and durable finalization job
+commit atomically. The auxiliary model call runs afterward and cannot veto DSH
+completion or export.
 
 At first admission the adapter durably binds the run to its exact DSH
 `turn/start` sequence. Terminal success is accepted only with the matching
@@ -40,7 +43,18 @@ entries contain their own text; the bounded DSH log digest and session/range
 reference are provenance, not a read dependency, so normal DSH project
 archiving does not break memory retrieval.
 
-Shutdown stops ingress, resolves terminal run commits, aborts or drains the
-restart-safe finalizer, drains active database work and the bounded write queue,
-stops the embedding worker, then closes SQLite. Partial native runtime
-composition fails closed instead of silently mounting a reduced safety plane.
+Phase receipt, handoff, outbox creation, and turn seal are one Core SQLite
+transaction. `agent/turn-stopping` only kicks a leased boundary job. Separate
+jobs classify, confirm, verify, collect advisory evidence, build context, flush,
+and dispatch. Human messages supersede stale plugin continuation IDs without
+changing user, slash-command, file, or session messages.
+
+Every phase tool returns one `TurnOutcome`. Applied results place the existing
+business response under `value` and a bounded next-turn projection under
+`handoff`; expected validation failures return `retry` or `clarify` as a
+successful tool envelope. Infrastructure failures remain actual failures.
+
+Shutdown stops ingress, drains the boundary worker and restart-safe finalizer,
+drains active database work and the bounded write queue, stops the embedding
+worker, then closes both SQLite databases. Partial native runtime composition
+fails closed instead of silently mounting a reduced safety plane.

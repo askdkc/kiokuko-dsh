@@ -1,7 +1,7 @@
 # DeepSeek Harness Plugin
 
-Kiokuko provides an out-of-tree DeepSeek Harness bundle at
-`kiokuko-dsh/dsh`. It mounts the DSH-only Kiokuko runtime contracts; it does
+Kiokuko provides an out-of-tree DeepSeek Harness bundle at `kiokuko-dsh`.
+`kiokuko-dsh/dsh` remains a compatibility import. It mounts the DSH-only Kiokuko runtime contracts; it does
 not fork DeepSeek Harness or modify a repository's files.
 
 ## Install
@@ -74,7 +74,7 @@ DSH profile and enter your task, for example:
 dsh web
 ```
 
-The package exposes the `./dsh` entrypoint and declares
+The package exposes `.`, `./client`, and `./dsh` and declares
 `dsh/cordis.patch.yml` as its bundle patch. Use a profile when testing or when
 you need an isolated configuration:
 
@@ -89,8 +89,10 @@ ordinary directory as its workspace. For an ordinary directory, Kiokuko keeps
 the path binding in its database and does not create `.git`, `.kiokuko.json`,
 or any other metadata file in the workspace.
 
-`kiokuko-dsh` is the single named bundle row. Removal is exact and does not
-rewrite unrelated plugins or settings. The plugin does not edit `AGENTS.md`.
+`kiokuko-dsh` replaces the existing `session-log-download` Web bundle row.
+This preserves the stock Header modal and `/export` command while replacing
+the Host route with cursor-backed streaming export. Removal is exact and does
+not rewrite unrelated plugins or settings. The plugin does not edit `AGENTS.md`.
 
 ## STORE contract and permissions
 
@@ -130,12 +132,13 @@ depend on a consumer-side build permission.
 
 ## Runtime contract
 
-The SQLite database remains the semantic authority for Akinator, memory,
+The Core SQLite database remains the semantic authority for Akinator, memory,
 Enno-Oduno, receipts, leases, and verifier evidence. DeepSeek `SessionEvent`
 is the canonical current-session transcript and tool-evidence boundary.
-Kiokuko does not mirror those events or participate in DSH's `session/flush`;
-model dispatch, tool execution, turn stopping, and the native terminal
-checkpoint remain awaited DSH or policy boundaries.
+Kiokuko copies events and verified attachment bytes into a separate,
+rebuildable cache for bounded export and post-completion finalization. Cache
+listeners contain their own failures; only an orchestration-requested native
+`sessions.flush()` remains an awaited, fail-closed durability boundary.
 
 The dsh integration provides:
 
@@ -166,8 +169,9 @@ The dsh integration provides:
 - a tool result whose next action requires host work (plan confirmation or
   final verification), or is terminal, calls DSH `concludeTurn()` only after
   the successful result exists. Plan submission therefore concludes its model
-  step before DSH opens a dedicated `plan-review` interaction. Approval or cancellation is then
-  settled at the awaited turn-stopping boundary, so no model tool call remains
+  step before DSH opens a dedicated `plan-review` interaction. Receipt,
+  handoff, outbox, and seal commit atomically; a separate durable job then owns
+  approval or cancellation. `agent/turn-stopping` only kicks that worker, so no model tool call remains
   live while the user decides and no stale confirmation directive can race the
   next Goki role. The card offers approve/cancel; **Chat about it** returns the
   normal composer, and the next human message becomes same-run revision
@@ -186,16 +190,11 @@ The dsh integration provides:
 - bounded turn continuation, exact run/session/workspace/route binding, and
   in-memory plaintext continuation tokens.
 
-If the model stops while an Enno action is still active, the adapter steers the
-same native turn only once for that unchanged directive. A second stop pauses
-the turn without cancelling or terminalizing the Enno run. The next user turn
-then resumes that exact run and reinjects its current directive. This recovery
-also works when DSH exposes an empty step-local message batch after consuming
-the next-turn inbox item: the adapter uses the last bound task for routing while
-the native conversation still carries the user's new instruction to the model.
-For an unchanged `execute_work_unit` action, the continuation explicitly tells
-the model to inspect the latest Enno tool result and retry the current WorkUnit;
-it must not wait for an invented next WorkUnit.
+Expected validation or omission failures become bounded retry receipts. The
+first identical failure retries the same phase with temporary evidence; the
+second asks Akinator. A deterministic continuation is delivered only after a
+native flush. Human input supersedes a pending continuation, and plugin delivery
+IDs alone are deduplicated at the next pre-step.
 
 A DSH model-request failure, including a WebSocket failure, also leaves an
 unfinished Enno run active and does not automatically replay model or tool
@@ -256,8 +255,8 @@ dismisses review, carries revision feedback through the
 next human turn, resubmits, and approves before work starts. It then handles
 consecutive `all fixed?` and commit-message turns without creating another Enno
 contract. The first flow includes a long streamed response and verifies that
-no DSH events are copied into the Kiokuko ledger; finalization instead reads the
-canonical DSH log and records cache usage. Without a dsh executable the CLI portion is reported
+no DSH events are copied into the Kiokuko ledger; the rebuildable mirror retains
+them for cursor-backed finalization/export and records cache usage. Without a dsh executable the CLI portion is reported
 as `unsupported`; CI sets `KIOKUKO_REQUIRE_DSH_CLI=1` so absence is a failure
 rather than an unverified success.
 

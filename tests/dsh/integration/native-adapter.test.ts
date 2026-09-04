@@ -14,7 +14,7 @@ import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { DSH_MODEL_FACING_OPERATIONS } from '../../../src/dsh/tools.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
-import { dshTurnBoundarySeq } from '../../../src/dsh/session-memory-finalizer.js'
+import { dshTurnBoundarySeq, type DshLogEvent } from '../../../src/dsh/session-memory-finalizer.js'
 
 async function fixture(): Promise<{ root: string; databasePath: string }> {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-native-adapter-'))
@@ -45,6 +45,11 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   let skipTaskType = false
   let soulModelInvocable = true
   const nativeSessions = new Map<string, ReturnType<typeof createNativeSession>>()
+  const archivedSessions = new Map<string, {
+    readonly id: string
+    readonly header: { readonly cwd: string }
+    readonly snapshotEvents: () => readonly DshLogEvent[]
+  }>()
   function createNativeSession(id: string) {
     const events = Array.from({ length: 12 }, (_, index) => {
       const turn = index + 1
@@ -117,7 +122,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     migrationsDirectory: join(process.cwd(), 'migrations'),
     sessionQuery: {
       async readSession(sessionId) {
-        const source = nativeSessions.get(sessionId)
+        const source = nativeSessions.get(sessionId) ?? archivedSessions.get(sessionId)
         if (source === undefined) throw new Error(`unknown native session ${sessionId}`)
         return {
           session: { id: sessionId, createdAt: 1, cwd: f.root },
@@ -136,6 +141,29 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
     assert.equal(registered.length, 7)
+    const archivedExportSession = createNativeSession('archived-export-session')
+    nativeSessions.delete(archivedExportSession.id)
+    archivedSessions.set(archivedExportSession.id, archivedExportSession)
+    const archivedExport = await adapter.host.sessionExport!.open(archivedExportSession.id)
+    assert.equal(archivedExport.status, 200)
+    const archiveIterator = archivedExport.body[Symbol.asyncIterator]()
+    const firstArchiveChunk = await archiveIterator.next()
+    assert.equal(firstArchiveChunk.done, false)
+    assert.equal(Buffer.from(firstArchiveChunk.value!).readUInt32LE(0), 0x04034b50)
+    await archiveIterator.return?.()
+    const oversizedArchive = {
+      id: 'oversized-archived-export-session',
+      header: { cwd: f.root },
+      snapshotEvents: () => [{
+        type: 'tool/result', seq: 0, time: 1,
+        data: { text: 'x'.repeat(32 * 1024 * 1024) },
+      }],
+    }
+    archivedSessions.set(oversizedArchive.id, oversizedArchive)
+    await assert.rejects(adapter.host.sessionExport!.open(oversizedArchive.id), (error: any) => (
+      error?.status === 413 && error?.code === 'legacy_log_too_large'
+    ))
+
     const slashTask = 'Compare /api/v1 and /api/v2.\n\nDo not reinterpret /not-a-command.'
     const slashSession = createNativeSession('slash-session')
     const slashEvent = await adapter.host.mapPreStep!({
@@ -166,14 +194,41 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     let downstreamCalls = 0
     await assert.rejects(adapter.host.intakeGate!.preStep(event, async () => {
       downstreamCalls += 1
+      const duringNativeFailure = openConnection(f.databasePath)
+      try {
+        assert.equal(duringNativeFailure.prepare(`
+          SELECT COUNT(*) AS count FROM dsh_input_claim_backups
+           WHERE dsh_session_id = ? AND native_turn = ?
+        `).get<{ count: number }>('native-session', 1)?.count, 0)
+      } finally {
+        duringNativeFailure.close()
+      }
       throw new Error('downstream pre-step failed')
     }), /downstream pre-step failed/u)
     const decision = await adapter.host.intakeGate!.preStep(event, async () => {
       downstreamCalls += 1
+      const duringNativeEnter = openConnection(f.databasePath)
+      try {
+        assert.equal(duringNativeEnter.prepare(`
+          SELECT COUNT(*) AS count FROM dsh_input_claim_backups
+           WHERE dsh_session_id = ? AND native_turn = ?
+        `).get<{ count: number }>('native-session', 1)?.count, 0)
+      } finally {
+        duringNativeEnter.close()
+      }
       return { kind: 'enter', messages: [] }
     })
     assert.deepEqual(decision.kind, 'enter')
     assert.equal(downstreamCalls, 2)
+    const afterNativeEnter = openConnection(f.databasePath)
+    try {
+      assert.equal(afterNativeEnter.prepare(`
+        SELECT COUNT(*) AS count FROM dsh_input_claim_backups
+         WHERE dsh_session_id = ? AND native_turn = ?
+      `).get<{ count: number }>('native-session', 1)?.count, 1)
+    } finally {
+      afterNativeEnter.close()
+    }
     assert.deepEqual(questionAgents, [])
     assert.ok(decision.messages.length > 0)
     assert.match(decision.messages.map((message) => JSON.stringify(message)).join('\n'), /kiokuko-soul/u)
@@ -198,16 +253,11 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       agent: { dshSessionId: 'native-session', nativeSession: { id: 'native-session' } }, signal: event.signal,
     }), /native session identity is stale/u)
     const staleStops: string[] = []
-    const staleStop = await adapter.host.ennoController!.handle({
-      agent: {
+    assert.throws(() => adapter.host.boundaryWorker!.kick('native-session', {
         id: 'native-agent', sessionId: 'native-session', nativeSession: { id: 'native-session' },
-        steer: () => staleStops.push('steer'), cancel: (reason) => staleStops.push(reason),
-      },
-      turn: 1,
-      signal: event.signal,
-    })
-    assert.deepEqual(staleStop, { kind: 'abort', reason: 'state_unavailable' })
-    assert.deepEqual(staleStops, ['kiokuko dsh Enno continuation stopped: state_unavailable'])
+        steer: () => staleStops.push('steer'), cancel: (reason: string) => staleStops.push(reason),
+      }), /identity changed/u)
+    assert.deepEqual(staleStops, [])
     const replay = await adapter.host.intakeGate!.preStep(event, async () => {
       downstreamCalls += 1
       return { kind: 'enter', messages: [] }
@@ -332,11 +382,8 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(adapter.host.ponytailModes!.isActive('dsh:chat-agent:chat-session:1'), true)
     assert.deepEqual(questionIds.slice(questionsBeforeChat), ['taskType'])
     assert.equal(questionAgents.at(-1), chatAgent)
-    assert.deepEqual(await adapter.host.ennoController!.handle({
-      agent: { ...chatAgent, sessionId: chatSession.id, nativeAgent: chatAgent, nativeSession: chatSession },
-      turn: 1,
-      signal: event.signal,
-    }), { kind: 'close', nextAction: 'complete' })
+    adapter.host.boundaryWorker!.kick(chatSession.id, chatAgent)
+    await adapter.host.boundaryWorker!.whenIdle()
     assert.deepEqual(chatEffects, [])
     const firstChatRun = adapter.host.resolveSessionRunId!(chatSession)!
     ;(root as any).emit('session/event', chatSession, { type: 'assistant/message', seq: 1, time: 1, data: { text: 'first answer' } })
@@ -364,11 +411,8 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(questionIds.length, questionsAfterFirstChat)
     const secondChatRun = adapter.host.resolveSessionRunId!(chatSession)!
     assert.equal(secondChatRun, firstChatRun)
-    assert.deepEqual(await adapter.host.ennoController!.handle({
-      agent: { ...chatAgent, sessionId: chatSession.id, nativeAgent: chatAgent, nativeSession: chatSession },
-      turn: 2,
-      signal: event.signal,
-    }), { kind: 'close', nextAction: 'complete' })
+    adapter.host.boundaryWorker!.kick(chatSession.id, chatAgent)
+    await adapter.host.boundaryWorker!.whenIdle()
     const secondChatStep = await adapter.host.mapPreStep!({
       agent: chatAgent,
       messages: [{ role: 'user', content: [{ type: 'text', text: 'Injected continuation context.' }] }],
@@ -393,11 +437,8 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(questionIds.length, questionsAfterFirstChat)
     const thirdChatRun = adapter.host.resolveSessionRunId!(chatSession)!
     assert.equal(thirdChatRun, secondChatRun)
-    assert.deepEqual(await adapter.host.ennoController!.handle({
-      agent: { ...chatAgent, sessionId: chatSession.id, nativeAgent: chatAgent, nativeSession: chatSession },
-      turn: 3,
-      signal: event.signal,
-    }), { kind: 'close', nextAction: 'complete' })
+    adapter.host.boundaryWorker!.kick(chatSession.id, chatAgent)
+    await adapter.host.boundaryWorker!.whenIdle()
     ;(root as any).emit('session/event', chatSession, { type: 'assistant/message', seq: 5, time: 5, data: { text: 'third answer' } })
     assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
 

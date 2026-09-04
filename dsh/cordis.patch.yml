@@ -1,8 +1,8 @@
-# Kiokuko's DeepSeek Harness bundle layer. The host Loader owns lifecycle and
-# the package entrypoint owns the Cordis effects.
-- insert:
-    - id: kiokuko-dsh
-      name: 'kiokuko-dsh/dsh'
-      inject: [skills, systemPrompt, tools, commands, userQuestions, sessions, sessionQuery, llm, agents]
-      config:
-        enabled: true
+# Replace the stock Web Session-log export row. DSH applies bundle operations
+# by row id, so this preserves row order while installing the full Kiokuko Host
+# plugin and its streaming export service in the only supported profile.
+- id: session-log-download
+  name: 'kiokuko-dsh'
+  inject: [skills, systemPrompt, tools, commands, userQuestions, sessions, sessionQuery, llm, agents, attachments, connection]
+  config:
+    enabled: true

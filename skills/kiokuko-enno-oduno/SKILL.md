@@ -53,7 +53,7 @@ Apply this Skill only when one of these is true:
 - a continuation hook returns an `enno-oduno` directive for an existing run;
 - the user explicitly asks to inspect or operate an Enno-Oduno run.
 
-Use the returned `ennoOduno.nextAction`, directive, and report schema as the current authority. Do not invent a run, revision, role, WorkUnit, or state transition.
+Successful phase tools return `kind=applied`; use `value.ennoOduno.nextAction`, its directive, and report schema as the current authority. A `retry` or `clarify` outcome ends the turn and must be followed through its handoff rather than treated as a tool failure. Do not invent a run, revision, role, WorkUnit, or state transition.
 
 ## State ownership
 

@@ -34,8 +34,8 @@ const capabilities = [
 ]
 
 function assertCommittedBaselineFixture(): void {
-  assert.equal(CURRENT_SCHEMA_VERSION, 2)
-  assert.deepEqual(CURRENT_MIGRATION_VERSIONS, [SAMPLE_DATABASE_BASELINE_VERSION, 2])
+  assert.equal(CURRENT_SCHEMA_VERSION, 3)
+  assert.deepEqual(CURRENT_MIGRATION_VERSIONS, [SAMPLE_DATABASE_BASELINE_VERSION, 2, 3])
   const database = openConnection(sampleDatabasePath, { readOnly: true })
   try {
     const versions = database.prepare('SELECT version FROM schema_migrations ORDER BY version')
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
   let runtime: DshRuntime | undefined
   try {
     const migration = await initializeDatabase({ databasePath, migrationsDirectory })
-    assert.deepEqual(migration.applied, [2])
+    assert.deepEqual(migration.applied, CURRENT_MIGRATION_VERSIONS.filter(version => version > SAMPLE_DATABASE_BASELINE_VERSION))
     assert.equal(migration.currentVersion, CURRENT_SCHEMA_VERSION)
     assert.notEqual(migration.backupPath, null)
     assertBaselineFixture(databasePath)

@@ -57,6 +57,13 @@ export function getDshDatabasePath(options: DshPathEnvironment = {}): string {
   return join(getDshDataDirectory(options), 'kiokuko-dsh.sqlite3')
 }
 
+/** Disposable, rebuildable cache for full-fidelity DSH session events. */
+export function getDshSessionCachePath(options: DshPathEnvironment = {}): string {
+  const { platform } = selected(options)
+  const join = platform === 'win32' ? path.win32.join : path.posix.join
+  return join(getDshDataDirectory(options), 'kiokuko-dsh-session-cache.sqlite3')
+}
+
 function embeddingCoordinate(value: string, field: 'preset' | 'revision'): string {
   const valid = field === 'preset' ? /^[a-z0-9][a-z0-9-]{0,63}$/u.test(value) : /^[0-9a-f]{40}$/u.test(value)
   if (!valid) throw new KiokukoError('VALIDATION_ERROR', `${field} is invalid`)

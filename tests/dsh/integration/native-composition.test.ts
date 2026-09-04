@@ -4,6 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
 import * as dshPlugin from '../../../src/dsh/index.js'
 import { DshPonytailModes } from '../../../src/dsh/commands.js'
 import { DshToolPolicy } from '../../../src/dsh/tool-policy.js'
+import { mountDshComposition } from '../../../src/dsh/composition.js'
 
 test('explicit host adapter mounts native DSH tools and commands and unloads them', async () => {
   const tools: any[] = []
@@ -58,4 +59,33 @@ test('explicit host adapter mounts native DSH tools and commands and unloads the
   assert.deepEqual(commands, [])
   assert.deepEqual(guards, [])
   await host.dispose()
+})
+
+test('turn-stopping and idle callbacks only kick the durable boundary worker', async () => {
+  const listeners = new Map<string, (payload: any) => void>()
+  const kicks: Array<{ sessionId: string | undefined; agent: object | undefined }> = []
+  let disposed = 0
+  const context = {
+    on(name: string, listener: (payload: any) => void) {
+      listeners.set(name, listener)
+      return () => { listeners.delete(name) }
+    },
+  } as unknown as Context
+  const worker = {
+    kick(sessionId?: string, agent?: object) { kicks.push({ sessionId, agent }) },
+    async whenIdle() {},
+    async dispose() { disposed += 1 },
+  }
+  const composition = await mountDshComposition(context, { boundaryWorker: worker })
+  const agent = { id: 'agent', session: { id: 'session' }, steer() {} }
+  listeners.get('agent/turn-stopping')?.({ agent, turn: 1, signal: new AbortController().signal })
+  listeners.get('agent/idle')?.({ agent, turn: 1, signal: new AbortController().signal })
+  assert.deepEqual(kicks, [
+    { sessionId: undefined, agent: undefined },
+    { sessionId: 'session', agent },
+    { sessionId: 'session', agent },
+  ])
+  await composition.dispose()
+  assert.equal(disposed, 1)
+  assert.equal(listeners.size, 0)
 })

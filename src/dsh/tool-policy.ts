@@ -13,12 +13,13 @@ export type DshToolPhase = 'intake' | 'ideal' | 'planning' | 'confirmation' | 'g
 
 export interface DshToolPolicyState extends Omit<DshToolHostBinding, 'idempotencyKey'> {
   readonly phase: DshToolPhase
+  readonly nativeTurn?: number
   readonly currentWorkUnitId?: string
   readonly dshSessionId?: string
   readonly nextAction?: EnnoNextAction
 }
 
-export type DshToolPolicyDenyCode = 'UNLOADED' | 'UNKNOWN_TOOL' | 'WRONG_PHASE' | 'WRONG_DIRECTIVE' | 'STALE_STATE' | 'LEASE_REQUIRED' | 'CANCELLED' | 'IDENTITY_INJECTION'
+export type DshToolPolicyDenyCode = 'UNLOADED' | 'UNKNOWN_TOOL' | 'WRONG_PHASE' | 'WRONG_DIRECTIVE' | 'STALE_STATE' | 'LEASE_REQUIRED' | 'CANCELLED' | 'IDENTITY_INJECTION' | 'TURN_SEALED'
 
 export type DshToolPolicyDecision =
   | { readonly kind: 'allow'; readonly binding: DshToolHostBinding }
@@ -64,6 +65,7 @@ function publicReason(code: DshToolPolicyDenyCode): string {
 export class DshToolPolicy {
   #state: DshToolPolicyState | undefined
   readonly #states = new Map<string, DshToolPolicyState>()
+  readonly #sealedTurns = new Map<string, { readonly nativeTurn: number; readonly receiptId: string }>()
   #disposed = false
 
   constructor(state: DshToolPolicyState) {
@@ -73,7 +75,10 @@ export class DshToolPolicy {
   #storeState(state: DshToolPolicyState): void {
     const frozen = Object.freeze({ ...state })
     this.#state = frozen
-    if (state.dshSessionId !== undefined) this.#states.set(state.dshSessionId, frozen)
+    if (state.dshSessionId !== undefined) {
+      this.#states.set(state.dshSessionId, frozen)
+      if (state.nativeTurn !== undefined) this.beginTurn(state.dshSessionId, state.nativeTurn)
+    }
   }
 
   setState(state: DshToolPolicyState): void {
@@ -85,12 +90,47 @@ export class DshToolPolicy {
     this.#disposed = true
     this.#state = undefined
     this.#states.clear()
+    this.#sealedTurns.clear()
   }
 
   /** Release the per-session snapshot after its run has reached a terminal state. */
   clearSession(sessionId: string): void {
     this.#states.delete(sessionId)
+    this.#sealedTurns.delete(sessionId)
     if (this.#state?.dshSessionId === sessionId) this.#state = undefined
+  }
+
+  /** A later native turn supersedes an older seal; the same turn never does. */
+  beginTurn(sessionId: string, nativeTurn: number): void {
+    if (!Number.isSafeInteger(nativeTurn) || nativeTurn < 1) throw new KiokukoError('VALIDATION_ERROR', 'native turn is invalid')
+    const current = this.#sealedTurns.get(sessionId)
+    if (current !== undefined && nativeTurn > current.nativeTurn) this.#sealedTurns.delete(sessionId)
+  }
+
+  /** Seal every not-yet-started tool after the first committed phase result. */
+  sealSession(sessionId: string, nativeTurn: number, receiptId: string): void {
+    if (this.#disposed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh tool policy is disposed')
+    if (!Number.isSafeInteger(nativeTurn) || nativeTurn < 1 || !/^[0-9a-f]{64}$/u.test(receiptId)) {
+      throw new KiokukoError('VALIDATION_ERROR', 'turn seal identity is invalid')
+    }
+    const existing = this.#sealedTurns.get(sessionId)
+    if (existing !== undefined) {
+      if (existing.nativeTurn !== nativeTurn || existing.receiptId !== receiptId) {
+        throw new KiokukoError('CONFLICT', 'DSH turn was sealed by another receipt')
+      }
+      return
+    }
+    this.#sealedTurns.set(sessionId, Object.freeze({ nativeTurn, receiptId }))
+  }
+
+  sealedReason(execution: DshToolExecution): string | undefined {
+    const sessionId = execution.agent?.dshSessionId
+    if (sessionId === undefined) return undefined
+    const seal = this.#sealedTurns.get(sessionId)
+    if (seal === undefined) return undefined
+    const stateTurn = this.#states.get(sessionId)?.nativeTurn
+    const executionTurn = execution.agent?.turn ?? stateTurn
+    return executionTurn === seal.nativeTurn ? publicReason('TURN_SEALED') : undefined
   }
 
   decide(execution: DshToolExecution): DshToolPolicyDecision {
@@ -144,6 +184,9 @@ export class DshToolPolicy {
   }
 
   guardReason(execution: DshToolExecution): string | undefined {
+    const sealed = this.sealedReason(execution)
+    if (sealed !== undefined) return sealed
+    if (!isDshModelFacingOperation(execution.name)) return undefined
     const decision = this.decide(execution)
     return decision.kind === 'deny' ? decision.reason : undefined
   }
@@ -152,7 +195,6 @@ export class DshToolPolicy {
 /** Install a final monotonic guard; later waterfall listeners cannot allow a denied call. */
 export function mountDshToolPolicy(ctx: DshToolPolicyContext, policy: DshToolPolicy): () => void {
   const guardDisposer = ctx.tools.guard((execution) => {
-    if (!isDshModelFacingOperation(execution.name)) return undefined
     try {
       return policy.guardReason(normalizePolicyExecution(execution))
     } catch (error) {
@@ -161,7 +203,6 @@ export function mountDshToolPolicy(ctx: DshToolPolicyContext, policy: DshToolPol
     }
   })
   const preExecuteDisposer = ctx.on?.('tools/pre-execute', async (execution, next) => {
-    if (!isDshModelFacingOperation(execution.name)) return next()
     let normalized: DshToolExecution
     try {
       normalized = normalizePolicyExecution(execution)
@@ -169,6 +210,9 @@ export function mountDshToolPolicy(ctx: DshToolPolicyContext, policy: DshToolPol
       if (error instanceof KiokukoError && error.code === 'VALIDATION_ERROR') return { kind: 'deny', reason: publicReason('STALE_STATE') }
       throw error
     }
+    const sealed = policy.sealedReason(normalized)
+    if (sealed !== undefined) return { kind: 'deny', reason: sealed }
+    if (!isDshModelFacingOperation(normalized.name)) return next()
     const decision = policy.decide(normalized)
     if (decision.kind === 'deny') return { kind: 'deny', reason: decision.reason }
     return next()
