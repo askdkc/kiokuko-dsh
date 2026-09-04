@@ -38,6 +38,8 @@ interface DshClientContext {
         readonly name: string
         readonly id?: string
         readonly key?: string
+        readonly priority?: number
+        readonly select?: (props: Record<string, unknown>) => unknown
         readonly locale: string
         readonly inject?: () => Record<string, unknown>
       },
@@ -54,6 +56,9 @@ declare const createSnapshotStore: <T>(initial: T) => SnapshotStore<T>
 declare const jsx: (component: unknown, props: Record<string, unknown>) => unknown
 declare const jsxs: (component: unknown, props: Record<string, unknown>) => unknown
 declare const Fragment: unknown
+declare const useState: <T>(initial: T | (() => T)) => [T, (value: T) => void]
+declare const useRef: <T>(initial: T) => { current: T }
+declare const useEffect: (effect: () => void | (() => void), dependencies: readonly unknown[]) => void
 declare const Modal: unknown
 declare const Button: unknown
 declare const IconDownloadOutline16: unknown
@@ -282,8 +287,153 @@ function CompletionReport(props: Record<string, unknown>): unknown {
     style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', padding: '12px 0' }, children: node.data.text })
 }
 
+interface IntakePending {
+  readonly key: string
+  readonly kind: 'question'
+  readonly questions: readonly [{ id: string; header: string; question: string; detail?: string; options: readonly { label: string; description?: string }[]; multiSelect?: boolean }]
+  answer(value: { answers: [{ id: string; selected: string[]; custom?: string }] }): Promise<void>
+  cancel(): Promise<void>
+}
+
+interface IntakeDraft { selected: number | null; custom: string }
+const intakeDrafts = new WeakMap<object, IntakeDraft>()
+
+function intakePending(props: Record<string, unknown>): IntakePending | null {
+  const pending = props.pendingInteraction as IntakePending | undefined
+  const question = pending?.questions?.[0]
+  return pending?.kind === 'question' && pending.questions.length === 1
+    && question?.id === 'taskType' && question.header === 'Kiokuko · 作業の選択'
+    && question.multiSelect !== true && question.options?.length > 0 && question.options.length <= 9
+    && typeof pending.answer === 'function' && typeof pending.cancel === 'function'
+    ? pending : null
+}
+
+/** Native pending carrier, plugin-only presentation. Other DSH questions remain untouched. */
+function IntakeQuestion(props: Record<string, unknown>): unknown {
+  const pending = props.matched as IntakePending
+  return jsx(IntakeQuestionCard, { key: pending.key, pending })
+}
+
+function IntakeQuestionCard(props: Record<string, unknown>): unknown {
+  const pending = props.pending as IntakePending
+  const question = pending.questions[0]
+  const [draft, setDraft] = useState<IntakeDraft>(() => intakeDrafts.get(pending) ?? { selected: null, custom: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const inFlight = useRef(false)
+  const mounted = useRef(false)
+  const card = useRef<HTMLElement | null>(null)
+  const optionElements = useRef<Array<HTMLElement | null>>([])
+  useEffect(() => {
+    mounted.current = true
+    card.current?.focus()
+    return () => { mounted.current = false }
+  }, [pending])
+  useEffect(() => {
+    if (draft.selected !== null) optionElements.current[draft.selected]?.scrollIntoView({ block: 'nearest' })
+  }, [draft.selected])
+  const update = (value: IntakeDraft) => {
+    intakeDrafts.set(pending, value)
+    setDraft(value)
+    setError('')
+  }
+  const settle = (cancel = false, skip = false) => {
+    if (inFlight.current) return
+    const custom = draft.custom.trim()
+    if (!cancel && !skip && draft.selected === null && custom === '') {
+      setError('選択肢を選ぶか、自由入力してください。')
+      return
+    }
+    if (!cancel && !skip && /^[0-9０-９]+$/u.test(custom)) {
+      const ordinal = Number(custom.normalize('NFKC'))
+      if (ordinal < 1 || ordinal > question.options.length) {
+        setError(`番号は1〜${question.options.length}で入力してください。`)
+        return
+      }
+    }
+    inFlight.current = true
+    setBusy(true)
+    setError('')
+    // Enter is a separate confirmation. Typing, key-repeat and IME cannot submit twice.
+    void Promise.resolve().then(() => cancel ? pending.cancel() : pending.answer({ answers: [{
+      id: question.id,
+      selected: skip || draft.selected === null ? [] : [question.options[draft.selected]!.label],
+      ...(!skip && custom ? { custom } : {}),
+    }] })).then(() => { intakeDrafts.delete(pending) }).catch(cause => {
+      if (!mounted.current) return
+      inFlight.current = false
+      setBusy(false)
+      setError(cause instanceof Error ? cause.message : String(cause))
+    })
+  }
+  const keyDown = (event: {
+    key: string; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; repeat?: boolean;
+    nativeEvent?: { isComposing?: boolean; keyCode?: number }; target?: { tagName?: string; isContentEditable?: boolean };
+    preventDefault(): void; stopPropagation(): void;
+  }) => {
+    if (busy || event.repeat || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229
+      || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+    const editing = event.target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName ?? '')
+    if (!editing && /^[1-9]$/u.test(event.key)) {
+      const index = Number(event.key) - 1
+      if (index >= question.options.length) return
+      event.preventDefault(); event.stopPropagation()
+      update({ selected: index, custom: '' })
+      card.current?.focus()
+    } else if (event.key === 'Enter' && event.target?.tagName !== 'BUTTON') {
+      event.preventDefault(); event.stopPropagation()
+      settle()
+    }
+  }
+  const titleId = `kiokuko-intake-${pending.key}`
+  return jsxs('section', {
+    className: 'kiokuko-intake', tabIndex: 0, ref: (element: HTMLElement | null) => { card.current = element },
+    'aria-labelledby': titleId, 'aria-busy': busy, onKeyDown: keyDown,
+    children: [
+      jsxs('header', { children: [jsx('h2', { id: titleId, children: question.question }),
+        jsx('button', { type: 'button', disabled: busy, onClick: () => settle(true), 'aria-label': '質問を閉じる', children: '閉じる' })] }),
+      jsxs('div', { className: 'kiokuko-intake-body', children: [
+        jsx('p', { children: question.detail }),
+        jsx('p', { children: `1〜${question.options.length}キーで選択、Enterで確定。自由入力中の数字は文字として入力されます。` }),
+        jsx('div', { 'aria-label': '作業の選択肢', children: question.options.map((option, index) => jsxs('button', {
+          key: option.label, type: 'button', className: 'kiokuko-intake-option', disabled: busy,
+          ref: (element: HTMLElement | null) => { optionElements.current[index] = element },
+          'aria-pressed': draft.selected === index, 'aria-keyshortcuts': String(index + 1),
+          onClick: () => update({ selected: index, custom: '' }),
+          onKeyDown: (event: { key: string; repeat?: boolean; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; nativeEvent?: { isComposing?: boolean; keyCode?: number }; preventDefault(): void; stopPropagation(): void }) => {
+            if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || draft.selected !== index) return
+            event.preventDefault(); event.stopPropagation(); settle()
+          },
+          children: [jsx('strong', { children: `${index + 1}. ${option.label}` }), jsx('span', { children: option.description })],
+        })) }),
+        jsx('label', { htmlFor: `${titleId}-custom`, children: '自由入力（番号でも回答できます）' }),
+        jsx('textarea', { id: `${titleId}-custom`, rows: 2, disabled: busy, value: draft.custom,
+          onChange: (event: { target: { value: string } }) => update({ selected: null, custom: event.target.value }),
+        }),
+      ] }),
+      jsxs('footer', { children: [
+        jsx('span', { role: 'status', 'aria-live': 'polite', children: error || (busy ? '送信中…' : draft.selected === null ? '' : `${draft.selected + 1}. ${question.options[draft.selected]!.label}を選択中`) }),
+        jsx('button', { type: 'button', disabled: busy, onClick: () => settle(false, true), children: '作業を始めず会話する' }),
+        jsx('button', { type: 'button', disabled: busy || (draft.selected === null && !draft.custom.trim()), onClick: () => settle(), children: '確定（Enter）' }),
+      ] }),
+    ],
+  })
+}
+
+function installIntakeStyle(): (() => void) | undefined {
+  if (typeof document === 'undefined') return undefined
+  const style = document.createElement('style')
+  style.textContent = '.kiokuko-intake{border:1px solid var(--dsw-alias-border-l4,#bbb);border-radius:16px;padding:16px;background:var(--dsw-alias-background-primary,Canvas);color:var(--dsw-alias-label-primary,CanvasText);display:flex;flex-direction:column;max-height:70dvh;gap:12px}.kiokuko-intake header,.kiokuko-intake footer{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.kiokuko-intake h2{font-size:18px;margin:0;flex:1}.kiokuko-intake-body{overflow:auto;min-height:0}.kiokuko-intake p{white-space:pre-wrap;line-height:1.5}.kiokuko-intake button{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,#bbb);border-radius:8px;padding:10px;min-height:44px;cursor:pointer}.kiokuko-intake button:disabled{cursor:default;opacity:.6}.kiokuko-intake-option{display:flex;width:100%;text-align:left;flex-direction:column;gap:4px;margin-bottom:8px;overflow-wrap:anywhere}.kiokuko-intake-option[aria-pressed=true]{border:2px solid var(--dsw-alias-label-primary,CanvasText);background:var(--dsw-alias-interactive-bg-hover,#eee)}.kiokuko-intake-option span{font-size:13px;line-height:1.5}.kiokuko-intake textarea{box-sizing:border-box;width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,#bbb);padding:8px;border-radius:8px}.kiokuko-intake :focus-visible,.kiokuko-intake:focus-visible{outline:2px solid Highlight;outline-offset:3px}.kiokuko-intake footer [role=status]{flex:1;min-width:120px}'
+  document.head.appendChild(style)
+  return () => style.remove()
+}
+
 /** Register Kiokuko's streaming Session-export browser surface. */
 export function apply(ctx: DshClientContext): void {
+  ctx.slots.inject('conversation.composer', () => ctx.slots.register({
+    name: 'conversation.composer', priority: -10, select: intakePending, locale: LOCALE_NAMESPACE,
+  }, IntakeQuestion))
+  ctx.effect(installIntakeStyle, 'kiokuko-dsh: intake style')
   ctx.uiConversation.events.register(completionReportDefinition)
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
     name: 'conversation.chat.node', key: 'kiokuko-completion-report', locale: LOCALE_NAMESPACE,

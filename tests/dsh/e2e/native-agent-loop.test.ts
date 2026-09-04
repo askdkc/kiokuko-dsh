@@ -78,7 +78,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   const plan = {
     scope: ['src'],
     exclusions: [],
-    acceptanceCriteria: [{ id: 'verified', description: 'The final verifier passes.' }],
+    acceptanceCriteria: [{ id: 'verified', description: 'The final verifier passes.\nNo approved checks are omitted.' }],
     workPlan: {
       objective: 'Implement and verify the requested plan.',
       units: [{
@@ -170,6 +170,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   const confirmationQuestions: string[] = []
   const confirmationDetails: string[] = []
   let liveAgent: any
+  const boundaryFailures: string[] = []
   const questionFiber = ctx.plugin({
     name: 'kiokuko-dsh-real-loop-questions',
     apply(questionContext: any) {
@@ -177,6 +178,10 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         async ask(request: any) {
           assert.equal(request.agent, liveAgent, 'every user question must use the exact live DSH Agent scope')
           const question = request.questions[0]
+          if (question.id.startsWith('boundary-')) {
+            boundaryFailures.push(question.detail)
+            return { answers: [{ id: question.id, selected: [], custom: '' }] }
+          }
           if (question.id.startsWith('loop-')) {
             recoveryQuestions++
             return { answers: [{ id: question.id, selected: [], custom: '' }] }
@@ -266,7 +271,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         requestId: 'pre-reload-active-run',
         task: '@PLAN.md を実装',
         cwd: fixtureRoot,
-        profileHints: { taskType: 'build', target: fixtureRoot, expected: '@PLAN.md を実装' },
+        profileHints: { taskType: 'build', target: fixtureRoot, expected: '@PLAN.md を実装\n変更を検証し、結果を報告してください。', constraints: '変更範囲を守る。\n無関係な変更はしない。' },
         capabilities: [...recoveryCatalog.skills, ...recoveryCatalog.tools],
         dshSessionId: liveAgent.session.id,
         skillDiscoveryMode: 'off',
@@ -320,6 +325,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       return
     }
     await completeTurn('@PLAN.md を実装', () => completed(1))
+    assert.deepEqual(boundaryFailures, [], 'multiline intake must not trigger an internal-error question')
     if (finalMode !== 'text') {
       const reports = () => liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'kiokuko/completion-report')
       assert.equal(reports().length, 1)
@@ -332,9 +338,10 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       assert.equal(report?.status, 'delivered')
       return
     }
-    await completeTurn('@PLAN.md の残りを実装', async () => confirmations === 2 && adapter.host.runtime!.withDatabase(db =>
+    await completeTurn('@PLAN.md の残りを実装\nREADME.org を短くし、use-package vc の導入手順を記載してください。', async () => confirmations === 2 && adapter.host.runtime!.withDatabase(db =>
       !!db.prepare("SELECT job_id FROM dsh_boundary_jobs WHERE status = 'waiting_user'").get()))
     await completeTurn('計画を src のみに絞って再提出してください。', () => completed(2))
+    assert.deepEqual(boundaryFailures, [], 'a new multiline user request must reach planning and completion')
     const hasText = (text: string) => liveAgent.session.snapshotEvents().some((e: any) =>
       e.type === 'assistant/message' && e.data.message.content.some((b: any) => b.type === 'text' && b.text === text))
     await completeTurn('all fixed?', () => hasText('Yes. The requested implementation and verification are complete.'))

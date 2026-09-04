@@ -219,6 +219,7 @@ async function verifyBrowserBundle(tokenUrl) {
   const expected = [
     '@deepseek-ai/dsh-client-store',
     'react/jsx-runtime',
+    'react',
     '@deepseek-ai/dsh-client-ui-primitives',
   ]
   if (JSON.stringify(requested) !== JSON.stringify(expected)) {

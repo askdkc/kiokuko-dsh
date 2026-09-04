@@ -25,6 +25,7 @@ const artifact = `window.__ModuleLoader__.load({
     var exports = module.exports;
     const { createSnapshotStore } = require("@deepseek-ai/dsh-client-store");
     const { jsx, jsxs, Fragment } = require("react/jsx-runtime");
+    const { useState, useRef, useEffect } = require("react");
     const { Modal, Button, IconDownloadOutline16 } = require("@deepseek-ai/dsh-client-ui-primitives");
 ${body.split('\n').map(line => `    ${line}`).join('\n')}
     exports.apply = apply;
