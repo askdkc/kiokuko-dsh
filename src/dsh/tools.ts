@@ -207,19 +207,43 @@ function descriptionFor(operation: ModelToolOperationName): string {
   return `Kiokuko ${operation} semantic operation. Supply nested values as their native JSON types; never encode an object or array as a JSON string. Host identity, routing, lease, and idempotency fields are supplied by the dsh host. The result is a TurnOutcome: applied results carry the business response in value and the next-turn state in handoff; predictable rejections return retry or clarify without a tool transport error. The business payload contract is: ${JSON.stringify(modelFacingInputSchema(operation))}`
 }
 
+function ennoNextAction(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const outcome = value as { kind?: unknown }
+  const businessValue = outcome.kind === 'applied' && 'value' in outcome
+    ? (outcome as { value?: unknown }).value
+    : value
+  if (typeof businessValue !== 'object' || businessValue === null || Array.isArray(businessValue)) return undefined
+  const ennoOduno = (businessValue as { ennoOduno?: unknown }).ennoOduno
+  if (typeof ennoOduno !== 'object' || ennoOduno === null || Array.isArray(ennoOduno)) return undefined
+  const nextAction = (ennoOduno as { nextAction?: unknown }).nextAction
+  return typeof nextAction === 'string' && nextAction.length > 0 ? nextAction : undefined
+}
+
 function concludesDshTurn(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const outcome = value as { kind?: unknown }
   if (outcome.kind === 'retry' || outcome.kind === 'clarify' || outcome.kind === 'waiting_user') return true
-  const businessValue = outcome.kind === 'applied' && 'value' in outcome
-    ? (outcome as { value?: unknown }).value
-    : value
-  const ennoOduno = (businessValue as { ennoOduno?: unknown }).ennoOduno
-  if (typeof ennoOduno !== 'object' || ennoOduno === null || Array.isArray(ennoOduno)) return false
-  const nextAction = (ennoOduno as { nextAction?: unknown }).nextAction
+  const nextAction = ennoNextAction(value)
   // Every successful phase mutation owns one model turn.  The durable seal is
-  // committed with the Enno receipt before this marker is observed.
-  return typeof nextAction === 'string' && nextAction.length > 0
+  // committed with the Enno receipt before this marker is observed. Terminal
+  // states are the exception: the model must consume the successful result and
+  // emit the user-facing completion/blocker report before the native turn ends.
+  return nextAction !== undefined && nextAction !== 'complete' && nextAction !== 'report_blocker'
+}
+
+const TERMINAL_REPORT_INSTRUCTION = "Kiokuko reached a terminal state. Do not call another tool. Return a visible final assistant response in the user's language now. Lead with the outcome; summarize what changed, the verification performed and its results, and any remaining issues or uncertainty. Do not expose internal Enno/DSH identities or protocol fields."
+
+function renderDshToolResult(value: unknown): readonly { readonly type: 'text'; readonly text: string }[] {
+  const blocks = [{
+    type: 'text' as const,
+    text: typeof value === 'string' ? value : JSON.stringify(value),
+  }]
+  const nextAction = ennoNextAction(value)
+  if (nextAction === 'complete' || nextAction === 'report_blocker') {
+    blocks.push({ type: 'text', text: TERMINAL_REPORT_INSTRUCTION })
+  }
+  return Object.freeze(blocks)
 }
 
 /** Build the exact seven-operation model tool set. */
@@ -237,10 +261,7 @@ export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDef
     // declaration only satisfies dsh's native tool registration contract.
     output: {
       schema: Object.freeze({}),
-      render: (_args: unknown, value: unknown) => Object.freeze([{
-        type: 'text' as const,
-        text: typeof value === 'string' ? value : JSON.stringify(value),
-      }]),
+      render: (_args: unknown, value: unknown) => renderDshToolResult(value),
     },
     execute: async (args: unknown, rawExecution: DshToolExecution | DshNativeToolExecution): Promise<unknown> => {
       const normalized = normalizeExecution(rawExecution)
@@ -251,9 +272,10 @@ export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDef
       const execution = Object.freeze({ ...normalized, arguments: args })
       const binding = bindDshToolInvocation(execution, host.bind(execution))
       const value = await host.execute(operation, args, binding, execution.signal)
-      // The result's nextAction, rather than the operation name, owns the
-      // terminal marker. DSH appends this successful tool/result before it
-      // observes concludesTurn and enters the awaited turn-stopping seam.
+      // The result's nextAction, rather than the operation name, owns the turn
+      // boundary. DSH appends successful tool/results before observing
+      // concludeTurn. Terminal results deliberately stay open for one final,
+      // visible assistant response.
       if (concludesDshTurn(value)) rawExecution.concludeTurn?.()
       return value
     },

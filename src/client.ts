@@ -27,6 +27,7 @@ interface SessionLogDownloadState {
 }
 
 interface DshClientContext {
+  readonly uiConversation: { readonly events: { register(definition: unknown): unknown } }
   readonly locale: {
     register(namespace: string, dictionaries: Record<string, Record<string, string>>): unknown
   }
@@ -35,9 +36,10 @@ interface DshClientContext {
     register(
       definition: {
         readonly name: string
-        readonly id: string
+        readonly id?: string
+        readonly key?: string
         readonly locale: string
-        readonly inject: () => Record<string, unknown>
+        readonly inject?: () => Record<string, unknown>
       },
       component: (props: Record<string, unknown>) => unknown,
     ): unknown
@@ -256,10 +258,36 @@ function installStyle(): () => void {
   return () => style.remove()
 }
 
-export const inject = ['slots', 'locale'] as const
+export const inject = ['slots', 'locale', 'uiConversation'] as const
+
+/** A plugin-owned result in chat, never forged as a model assistant message. */
+const completionReportDefinition = {
+  kind: 'kiokuko-completion-report', target: 'chat',
+  match: (event: { type: string; data: { reportId?: string; text?: string } }) =>
+    event.type === 'kiokuko/completion-report' && typeof event.data.reportId === 'string' && typeof event.data.text === 'string'
+      ? { id: event.data.reportId, role: 'start' } : null,
+  start: (_context: unknown, match: { event: { seq: number; data: { text: string } } }) => ({ seq: match.event.seq, text: match.event.data.text }),
+  update: (context: { state: unknown }) => context.state,
+  buildViewNode: (context: { key: string; id: string; state?: { seq: number; text: string }; start?: { location: unknown } }) =>
+    context.state === undefined ? null : {
+      key: context.key, id: context.id, kind: 'kiokuko-completion-report', target: 'chat',
+      anchorSeq: context.state.seq, location: context.start?.location ?? { kind: 'session' },
+      visibility: 'visible', data: { text: context.state.text },
+    },
+}
+
+function CompletionReport(props: Record<string, unknown>): unknown {
+  const node = props.node as { data: { text: string } }
+  return jsx('section', { role: 'status', 'aria-live': 'polite',
+    style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', padding: '12px 0' }, children: node.data.text })
+}
 
 /** Register Kiokuko's streaming Session-export browser surface. */
 export function apply(ctx: DshClientContext): void {
+  ctx.uiConversation.events.register(completionReportDefinition)
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+    name: 'conversation.chat.node', key: 'kiokuko-completion-report', locale: LOCALE_NAMESPACE,
+  }, CompletionReport))
   const controller = new SessionLogDownloadController()
   ctx.effect(() => async () => controller.dispose(), 'kiokuko-dsh: browser download lifecycle')
   ctx.effect(installStyle, 'kiokuko-dsh: browser download style')

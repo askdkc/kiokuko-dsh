@@ -65,6 +65,7 @@ export interface PrepareTurnIntentInput {
   readonly phase: DshTurnPhase
   readonly contractRevision: number
   readonly workUnitId?: string
+  readonly executionAttempt?: number
   readonly inputDigest: string
   readonly operation: DshEnnoReceiptOperation
   readonly idempotencyKey: string
@@ -117,6 +118,7 @@ interface IntentRow extends Record<string, unknown> {
   phase: DshTurnPhase
   contractRevision: number
   workUnitKey: string
+  executionAttempt: number
   inputDigest: string
   operation: DshEnnoReceiptOperation
   idempotencyKey: string
@@ -220,6 +222,8 @@ function checkedIntent(input: PrepareTurnIntentInput): PreparedTurnIntent {
   const inputDigest = digest(input.inputDigest, 'inputDigest')
   if (!OPERATIONS.has(input.operation)) throw new KiokukoError('VALIDATION_ERROR', 'Enno receipt operation is invalid')
   const idempotencyKey = identity(input.idempotencyKey, 'idempotencyKey')
+  const executionAttempt = input.executionAttempt ?? 0
+  if (!Number.isSafeInteger(executionAttempt) || executionAttempt < 0) throw new KiokukoError('VALIDATION_ERROR', 'executionAttempt is invalid')
   const identityDocument = {
     version: 1,
     runId,
@@ -229,6 +233,7 @@ function checkedIntent(input: PrepareTurnIntentInput): PreparedTurnIntent {
     contractRevision,
     workUnitId: workUnitId ?? null,
     inputDigest,
+    ...(executionAttempt === 0 ? {} : { executionAttempt }),
     operation: input.operation,
     idempotencyKey,
   }
@@ -249,25 +254,23 @@ function checkedIntent(input: PrepareTurnIntentInput): PreparedTurnIntent {
 }
 
 function sameIntent(row: IntentRow, intent: PreparedTurnIntent): boolean {
-  return row.receiptId === intent.receiptId
-    && row.runId === intent.runId
+  return row.runId === intent.runId
     && row.dshSessionId === intent.dshSessionId
     && row.nativeTurn === intent.nativeTurn
     && row.phase === intent.phase
     && row.contractRevision === intent.contractRevision
     && row.workUnitKey === (intent.workUnitId ?? '')
+    && row.executionAttempt === (intent.executionAttempt ?? 0)
     && row.inputDigest === intent.inputDigest
     && row.operation === intent.operation
     && row.idempotencyKey === intent.idempotencyKey
-    && row.continuationId === intent.continuationId
-    && row.boundaryJobId === intent.boundaryJobId
 }
 
 function intentForTurn(database: SqliteDatabase, sessionId: string, nativeTurn: number): IntentRow | undefined {
   return database.prepare(`
     SELECT receipt_id AS receiptId, run_id AS runId, dsh_session_id AS dshSessionId,
            native_turn AS nativeTurn, phase, contract_revision AS contractRevision,
-           work_unit_key AS workUnitKey, input_digest AS inputDigest, operation,
+           work_unit_key AS workUnitKey, execution_attempt AS executionAttempt, input_digest AS inputDigest, operation,
            idempotency_key AS idempotencyKey, continuation_id AS continuationId,
            boundary_job_id AS boundaryJobId, created_at AS createdAt
       FROM dsh_turn_intents
@@ -281,15 +284,15 @@ export function prepareTurnIntentInTransaction(database: SqliteDatabase, raw: Pr
   const existing = intentForTurn(database, intent.dshSessionId, intent.nativeTurn)
   if (existing !== undefined) {
     if (!sameIntent(existing, intent)) throw new KiokukoError('CONFLICT', 'DSH native turn was reused for another phase intent')
-    return intent
+    return { ...intent, receiptId: existing.receiptId, continuationId: existing.continuationId, boundaryJobId: existing.boundaryJobId }
   }
   const now = raw.now ?? new Date().toISOString()
   database.prepare(`
     INSERT INTO dsh_turn_intents (
       receipt_id, run_id, dsh_session_id, native_turn, phase,
-      contract_revision, work_unit_key, input_digest, operation,
+      contract_revision, work_unit_key, execution_attempt, input_digest, operation,
       idempotency_key, continuation_id, boundary_job_id, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     intent.receiptId,
     intent.runId,
@@ -298,6 +301,7 @@ export function prepareTurnIntentInTransaction(database: SqliteDatabase, raw: Pr
     intent.phase,
     intent.contractRevision,
     intent.workUnitId ?? '',
+    intent.executionAttempt ?? 0,
     intent.inputDigest,
     intent.operation,
     intent.idempotencyKey,
@@ -310,6 +314,37 @@ export function prepareTurnIntentInTransaction(database: SqliteDatabase, raw: Pr
 
 export function prepareTurnIntent(database: SqliteDatabase, input: PrepareTurnIntentInput): PreparedTurnIntent {
   return withImmediateTransaction(database, () => prepareTurnIntentInTransaction(database, input))
+}
+
+/** A natural model stop is not phase completion. Give it the same durable delivery guard. */
+export function enqueueUnsubmittedTurn(database: SqliteDatabase, input: PrepareTurnIntentInput & { readonly nextAction: string }): void {
+  withImmediateTransaction(database, () => {
+    if (readTurnSeal(database, input.dshSessionId, input.nativeTurn) !== undefined) return
+    if (database.prepare(`SELECT job_id FROM dsh_boundary_jobs WHERE run_id = ?
+      AND status IN ('pending', 'processing', 'failed_retryable', 'waiting_user') LIMIT 1`).get(input.runId)) return
+    const prior = intentForTurn(database, input.dshSessionId, input.nativeTurn)
+    const intent = prior ?? prepareTurnIntentInTransaction(database, input)
+    const now = input.now ?? new Date().toISOString()
+    database.prepare(`INSERT INTO dsh_turn_receipts (
+      receipt_id, run_id, dsh_session_id, native_turn, phase, contract_revision, work_unit_key,
+      input_digest, outcome_kind, next_action, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'retry', ?, ?)`).run(
+      intent.receiptId, input.runId, input.dshSessionId, input.nativeTurn, input.phase, input.contractRevision,
+      input.workUnitId ?? '', input.inputDigest, input.nextAction, now,
+    )
+    database.prepare(`INSERT INTO dsh_turn_handoffs(receipt_id, handoff_json, created_at) VALUES (?, ?, ?)`).run(
+      intent.receiptId, JSON.stringify({ schemaVersion: 1, runId: input.runId, phase: input.phase,
+        revision: input.contractRevision, nextAction: input.nextAction, source: 'unsubmitted_turn' }), now,
+    )
+    database.prepare(`INSERT INTO dsh_boundary_jobs(job_id, receipt_id, run_id, kind, status, available_at, created_at, updated_at)
+      VALUES (?, ?, ?, 'classify_boundary', 'pending', ?, ?, ?)`).run(intent.boundaryJobId, intent.receiptId, input.runId, now, now, now)
+    const message = { id: intent.continuationId, role: 'user', content: [{ type: 'text',
+      text: `The phase has not been submitted. Continue from the current host directive: ${input.nextAction}.` }],
+      source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'continuation', deliveryId: intent.continuationId } }
+    database.prepare(`INSERT INTO dsh_continuation_outbox(continuation_id, receipt_id, run_id, dsh_session_id,
+      causal_revision, message_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
+      .run(intent.continuationId, intent.receiptId, input.runId, input.dshSessionId, input.contractRevision, JSON.stringify(message), now, now)
+  })
 }
 
 export function readTurnSeal(database: SqliteDatabase, dshSessionId: string, nativeTurn: number): DshTurnSeal | undefined {
@@ -534,6 +569,15 @@ export function supersedeBoundaryJobsAtOrBeforeRevisionInTransaction(
 
 function boundaryJobIdentity(receiptId: string, kind: string): string {
   return canonicalContentHash({ receiptId: digest(receiptId, 'receiptId'), kind: identity(kind, 'boundary job kind') })
+}
+
+/** Reconstruct timers from durable state, including a crashed owner's lease. */
+export function nextBoundaryWakeAt(database: SqliteDatabase, sessionId: string): string | undefined {
+  return database.prepare(`SELECT MIN(CASE WHEN job.status = 'processing'
+      THEN MAX(job.available_at, job.lease_expires_at) ELSE job.available_at END) AS wakeAt
+    FROM dsh_boundary_jobs AS job JOIN dsh_turn_receipts AS receipt ON receipt.receipt_id = job.receipt_id
+    WHERE receipt.dsh_session_id = ? AND job.status IN ('pending', 'processing', 'failed_retryable')`)
+    .get<{ wakeAt: string | null }>(sessionId)?.wakeAt ?? undefined
 }
 
 export function claimBoundaryJobInTransaction(

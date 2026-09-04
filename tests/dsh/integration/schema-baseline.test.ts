@@ -5,17 +5,19 @@ import path from 'node:path'
 import test from 'node:test'
 import { openConnection } from '../../../src/db/connection.js'
 import { loadMigrationSnapshot, migrateDatabase } from '../../../src/db/migrate.js'
+import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
+import { prepareTurnIntent } from '../../../src/dsh/turn-process.js'
 
 const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migrations')
 
 test('the schema keeps 001 immutable and appends forward-only DSH runtime migrations', async () => {
   const entries = await readdir(migrationsDirectory)
   const sqlFiles = entries.filter((name) => name.endsWith('.sql'))
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql'])
   assert.ok(!entries.some((name) => name === 'down'), 'migrations/down must not exist')
 
   const snapshot = loadMigrationSnapshot(migrationsDirectory)
-  assert.equal(snapshot.migrations.length, 4)
+  assert.equal(snapshot.migrations.length, 5)
   assert.equal(snapshot.migrations[0]!.version, 1)
   assert.equal(snapshot.migrations[0]!.name, '001_baseline.sql')
   assert.equal(snapshot.migrations[1]!.version, 2)
@@ -24,6 +26,51 @@ test('the schema keeps 001 immutable and appends forward-only DSH runtime migrat
   assert.equal(snapshot.migrations[2]!.name, '003_dsh_turn_process.sql')
   assert.equal(snapshot.migrations[3]!.version, 4)
   assert.equal(snapshot.migrations[3]!.name, '004_dsh_loop_guard.sql')
+  assert.equal(snapshot.migrations[4]!.name, '005_dsh_completion_recovery.sql')
+})
+
+test('version-4 receipt history upgrades with stable replay identities and pending completion output', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kiokuko-completion-migration-'))
+  const version4Directory = path.join(root, 'v4')
+  await mkdir(version4Directory)
+  for (const name of ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql']) {
+    await copyFile(path.join(migrationsDirectory, name), path.join(version4Directory, name))
+  }
+  const database = openConnection(path.join(root, 'data.sqlite3'))
+  try {
+    migrateDatabase(database, version4Directory)
+    const prepared = await prepareAgentTask(database, {
+      requestId: 'v4-upgrade', cwd: root, task: 'Test receipt upgrade',
+      profileHints: { taskType: 'build', target: 'src', expected: 'safe migration', constraints: null },
+      capabilities: [], dshSessionId: 'upgrade-session', skillDiscoveryMode: 'off',
+    })
+    database.prepare("UPDATE ledger_runs SET status = 'active' WHERE run_id = ?").run(prepared.run.runId)
+    for (const turn of [1, 2, 3]) {
+      const id = String(turn).repeat(64)
+      const phase = turn === 3 ? 'meditation' : 'work_unit'
+      const operation = turn === 3 ? 'meditation_submit' : 'work_report'
+      database.prepare(`INSERT INTO dsh_turn_intents (receipt_id, run_id, dsh_session_id, native_turn,
+        phase, contract_revision, work_unit_key, input_digest, operation, idempotency_key,
+        continuation_id, boundary_job_id, created_at) VALUES (?, ?, 'upgrade-session', ?, ?, 1, 'unit', ?, ?, ?, ?, ?, ?)`)
+        .run(id, prepared.run.runId, turn, phase, id, operation, `key-${turn}`, id, id, new Date().toISOString())
+      database.prepare(`INSERT INTO dsh_turn_receipts (receipt_id, run_id, dsh_session_id, native_turn,
+        phase, contract_revision, work_unit_key, input_digest, outcome_kind, next_action, created_at)
+        VALUES (?, ?, 'upgrade-session', ?, ?, 1, 'unit', ?, 'applied', ?, ?)`)
+        .run(id, prepared.run.runId, turn, phase, id, turn === 3 ? 'complete' : 'execute_work_unit', new Date().toISOString())
+    }
+    assert.deepEqual(migrateDatabase(database, migrationsDirectory).applied, [5])
+    assert.deepEqual(database.prepare('SELECT execution_attempt AS attempt FROM dsh_turn_receipts ORDER BY native_turn')
+      .all<{ attempt: number }>().map(row => row.attempt), [0, 1, 0])
+    const replay = prepareTurnIntent(database, {
+      runId: prepared.run.runId, dshSessionId: 'upgrade-session', nativeTurn: 2,
+      phase: 'work_unit', contractRevision: 1, workUnitId: 'unit', executionAttempt: 1,
+      inputDigest: '2'.repeat(64), operation: 'work_report', idempotencyKey: 'key-2',
+    })
+    assert.equal(replay.receiptId, '2'.repeat(64))
+    assert.equal(database.prepare('SELECT status FROM dsh_completion_reports').get<{ status: string }>()?.status, 'pending')
+    assert.throws(() => database.prepare('UPDATE dsh_turn_intents SET execution_attempt = -1').run(), /CHECK/u)
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
+  } finally { database.close(); await rm(root, { recursive: true, force: true }) }
 })
 
 test('baseline initialization creates the complete DSH schema with clean integrity', async () => {
@@ -33,8 +80,8 @@ test('baseline initialization creates the complete DSH schema with clean integri
     const database = openConnection(databasePath)
     try {
       const migration = migrateDatabase(database, migrationsDirectory)
-      assert.deepEqual(migration.applied, [1, 2, 3, 4])
-      assert.equal(migration.currentVersion, 4)
+      assert.deepEqual(migration.applied, [1, 2, 3, 4, 5])
+      assert.equal(migration.currentVersion, 5)
 
       assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
       assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
@@ -49,6 +96,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'context_delivery_entries',
         'context_feedback',
         'dsh_boundary_jobs',
+        'dsh_completion_reports',
         'dsh_continuation_outbox',
         'dsh_input_claim_backups',
         'dsh_intake_idempotency',
@@ -165,8 +213,8 @@ test('an existing version-3 database upgrades forward to the durable loop guard'
     try {
       assert.deepEqual(migrateDatabase(database, version3Directory).applied, [1, 2, 3])
       const upgraded = migrateDatabase(database, migrationsDirectory)
-      assert.deepEqual(upgraded.applied, [4])
-      assert.equal(upgraded.currentVersion, 4)
+      assert.deepEqual(upgraded.applied, [4, 5])
+      assert.equal(upgraded.currentVersion, 5)
       assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
       assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'dsh_loop_guard_states'").get<{ count: number }>()?.count, 1)

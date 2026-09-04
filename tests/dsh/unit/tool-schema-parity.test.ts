@@ -201,10 +201,9 @@ test('a plan awaiting human review concludes the model turn after its successful
   assert.equal(conclusions, 1)
 })
 
-test('every successful phase result concludes exactly one model turn', async () => {
+test('every successful non-terminal phase result concludes exactly one model turn', async () => {
   const nextActions = new Map([
     ['enno_work_report', 'run_final_verification'],
-    ['enno_meditation_submit', 'complete'],
     ['enno_ideal_submit', 'submit_plan'],
   ])
   const definitions = createDshToolDefinitions({
@@ -230,5 +229,36 @@ test('every successful phase result concludes exactly one model turn', async () 
     } as any)
   }
 
-  assert.deepEqual(conclusions, ['enno_work_report', 'enno_meditation_submit', 'enno_ideal_submit'])
+  assert.deepEqual(conclusions, ['enno_work_report', 'enno_ideal_submit'])
+})
+
+test('terminal phase results stay open for a visible final assistant report', async () => {
+  for (const nextAction of ['complete', 'report_blocker']) {
+    let conclusions = 0
+    const value = {
+      kind: 'applied',
+      value: { ennoOduno: { nextAction } },
+      handoff: { schemaVersion: 1, runId: 'run-1', phase: 'meditation', revision: 1, nextAction },
+    }
+    const definition = createDshToolDefinitions({
+      bind: () => ({
+        runId: 'run-1', dshSessionId: 'session-1', workspace: 'workspace-1',
+        orchestrationId: 'orch-1', revision: 1, routeEpoch: 0,
+      }),
+      execute: async () => value,
+    }).find((item) => item.name === 'enno_meditation_submit')!
+
+    const result = await definition.execute({}, {
+      callId: `terminal-${nextAction}`, name: 'enno_meditation_submit', arguments: {},
+      agent: { id: 'native-agent', session: { id: 'session-1' } }, signal,
+      concludeTurn: () => { conclusions += 1 },
+    } as any)
+
+    assert.equal(conclusions, 0)
+    assert.equal(result, value)
+    const rendered = definition.output.render({}, result)
+    assert.equal(rendered.length, 2)
+    assert.match(rendered[1]?.text ?? '', /visible final assistant response/u)
+    assert.match(rendered[1]?.text ?? '', /verification performed/u)
+  }
 })

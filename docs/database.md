@@ -24,6 +24,12 @@ no-progress counters to leased boundary jobs. A fourth unchanged continuation,
 or a fourth stateful host effect without Enno progress, enters `waiting_user`
 before another model request is dispatched.
 
+`migrations/005_dsh_completion_recovery.sql` separates receipt identity by
+authoritative WorkUnit attempt and adds `dsh_completion_reports`. A terminal
+receipt creates its pending report in the same commit. Reports are acknowledged
+only after the native session is flushed; reload checks the deterministic
+report identity before publishing a fallback again.
+
 `dsh_intake_idempotency` is the intake idempotency store for run-open and
 intake-answer replays, keyed by DSH-native `dsh.*` scopes. Baseline completion
 requires an empty `PRAGMA foreign_key_check` result.
