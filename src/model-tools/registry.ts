@@ -71,6 +71,39 @@ export function modelFacingInputSchema(name: ModelToolOperationName): JsonSchema
   return projectModelFacingInputSchema(name, fullJsonSchema(contract));
 }
 
+function transportShape(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(transportShape);
+  if (typeof value !== 'object' || value === null) return value;
+
+  const source = value as Record<string, unknown>;
+  const projected: Record<string, unknown> = {};
+  if (typeof source.type === 'string') projected.type = source.type;
+  if (typeof source.description === 'string') projected.description = source.description;
+  if (typeof source.properties === 'object' && source.properties !== null && !Array.isArray(source.properties)) {
+    projected.properties = Object.fromEntries(
+      Object.entries(source.properties).map(([key, child]) => [key, transportShape(child)]),
+    );
+  }
+  if (source.items !== undefined) projected.items = transportShape(source.items);
+  for (const keyword of ['anyOf', 'oneOf', 'allOf'] as const) {
+    if (Array.isArray(source[keyword])) projected[keyword] = source[keyword].map(transportShape);
+  }
+  // The semantic boundary remains responsible for required fields, closed
+  // objects, enum membership, and value bounds. The native transport only
+  // rejects JSON shape mismatches before they can commit a bounded Enno retry.
+  if (source.type === 'object' || projected.properties !== undefined) projected.additionalProperties = true;
+  return projected;
+}
+
+/**
+ * Publish the real JSON value shape without moving semantic validation into
+ * the native tool transport. This prevents models from encoding nested
+ * objects as strings while preserving host-authored retry/clarify outcomes.
+ */
+export function modelFacingTransportSchema(name: ModelToolOperationName): JsonSchema {
+  return transportShape(modelFacingInputSchema(name)) as JsonSchema;
+}
+
 /** Strip host-owned fields from a current revision-bound report schema. */
 export function projectModelFacingInputSchema(name: ModelToolOperationName, schema: JsonSchema): JsonSchema {
   return removeHostOwnedFields(schema, modelToolContract(name).hostOwnedFields);

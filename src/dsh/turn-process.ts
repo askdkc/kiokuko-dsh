@@ -6,6 +6,7 @@ import type { AkinatorQuestion } from '../akinator/types.js'
 
 export const DSH_TURN_HANDOFF_MAX_BYTES = 32 * 1024
 export const DSH_TURN_FAILURE_MAX_BYTES = 8 * 1024
+export const DSH_BOUNDARY_JOB_MAX_ATTEMPTS = 3
 
 export type DshTurnPhase =
   | 'intake'
@@ -514,6 +515,23 @@ export function supersedeOutboxAtOrBeforeRevisionInTransaction(
   `).run(now, identity(sessionId, 'dshSessionId'), positiveInteger(revision, 'revision'))
 }
 
+export function supersedeBoundaryJobsAtOrBeforeRevisionInTransaction(
+  database: SqliteDatabase,
+  sessionId: string,
+  revision: number,
+  now = new Date().toISOString(),
+): void {
+  database.prepare(`
+    UPDATE dsh_boundary_jobs
+       SET status = 'superseded', owner_nonce = NULL, lease_expires_at = NULL, updated_at = ?
+     WHERE receipt_id IN (
+       SELECT receipt_id FROM dsh_turn_receipts
+        WHERE dsh_session_id = ? AND contract_revision <= ?
+     )
+       AND status IN ('pending', 'processing', 'waiting_user', 'failed_retryable')
+  `).run(now, identity(sessionId, 'dshSessionId'), positiveInteger(revision, 'revision'))
+}
+
 function boundaryJobIdentity(receiptId: string, kind: string): string {
   return canonicalContentHash({ receiptId: digest(receiptId, 'receiptId'), kind: identity(kind, 'boundary job kind') })
 }
@@ -588,10 +606,19 @@ export function failBoundaryJobInTransaction(
   job: DshBoundaryJob,
   error: unknown,
   now = new Date().toISOString(),
-): string {
+): { readonly kind: 'retry'; readonly retryAt: string } | { readonly kind: 'waiting_user' } {
   const item = typeof error === 'object' && error !== null ? error as { code?: unknown } : undefined
   const code = typeof item?.code === 'string' ? item.code.slice(0, 128) : 'BOUNDARY_JOB_FAILED'
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 2_000)
+  if (job.attemptCount >= DSH_BOUNDARY_JOB_MAX_ATTEMPTS) {
+    database.prepare(`
+      UPDATE dsh_boundary_jobs
+         SET status = 'waiting_user', owner_nonce = NULL, lease_expires_at = NULL,
+             last_error_code = ?, last_error_message = ?, updated_at = ?
+       WHERE job_id = ? AND status = 'processing' AND owner_nonce = ?
+    `).run(code, message, now, job.jobId, job.ownerNonce)
+    return Object.freeze({ kind: 'waiting_user' })
+  }
   const retryAt = new Date(Date.parse(now) + Math.min(60_000, 250 * 2 ** Math.min(job.attemptCount, 8))).toISOString()
   database.prepare(`
     UPDATE dsh_boundary_jobs
@@ -599,7 +626,7 @@ export function failBoundaryJobInTransaction(
            lease_expires_at = NULL, last_error_code = ?, last_error_message = ?, updated_at = ?
      WHERE job_id = ? AND status = 'processing' AND owner_nonce = ?
   `).run(retryAt, code, message, now, job.jobId, job.ownerNonce)
-  return retryAt
+  return Object.freeze({ kind: 'retry', retryAt })
 }
 
 export function replacePendingOutboxMessageInTransaction(

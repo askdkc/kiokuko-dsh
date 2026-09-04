@@ -20,6 +20,13 @@ export interface DshBoundaryWorkerOptions {
   readonly flush: (job: DshBoundaryJob) => void | PromiseLike<void>
   /** Enqueue one deterministic plugin-owned message into the native Agent. */
   readonly dispatch: (job: DshBoundaryJob, item: DshContinuationOutboxItem) => void | PromiseLike<void>
+  /** Last durable gate before native delivery. */
+  readonly beforeDelivery?: (
+    job: DshBoundaryJob,
+    item: DshContinuationOutboxItem,
+  ) => 'deliver' | 'waiting_user' | 'superseded' | PromiseLike<'deliver' | 'waiting_user' | 'superseded'>
+  /** Best-effort notification after retries are durably exhausted. Never retried by this worker. */
+  readonly onWaitingUser?: (job: DshBoundaryJob, error: unknown) => boolean | PromiseLike<boolean>
   readonly bindNativeAgent?: (sessionId: string, nativeAgent: object) => void
   readonly now?: () => string
 }
@@ -34,6 +41,8 @@ export class DshBoundaryWorker {
   readonly #process: DshBoundaryWorkerOptions['process']
   readonly #flush: DshBoundaryWorkerOptions['flush']
   readonly #dispatch: DshBoundaryWorkerOptions['dispatch']
+  readonly #beforeDelivery: DshBoundaryWorkerOptions['beforeDelivery']
+  readonly #onWaitingUser: DshBoundaryWorkerOptions['onWaitingUser']
   readonly #now: () => string
   readonly #bindNativeAgent: DshBoundaryWorkerOptions['bindNativeAgent']
   #tail: Promise<void> = Promise.resolve()
@@ -45,6 +54,8 @@ export class DshBoundaryWorker {
     this.#process = options.process
     this.#flush = options.flush
     this.#dispatch = options.dispatch
+    this.#beforeDelivery = options.beforeDelivery
+    this.#onWaitingUser = options.onWaitingUser
     this.#bindNativeAgent = options.bindNativeAgent
     this.#now = options.now ?? (() => new Date().toISOString())
   }
@@ -89,12 +100,26 @@ export class DshBoundaryWorker {
           if (outbox === undefined || outbox.status === 'observed' || outbox.status === 'superseded') {
             completion = { kind: 'superseded' }
           } else {
-            await this.#flush(job)
-            await this.#dispatch(job, outbox)
-            await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-              markOutboxDispatchedInTransaction(database, outbox.continuationId, this.#now())
-            }))
-            completion = { kind: 'completed' }
+            const gate = await this.#beforeDelivery?.(job, outbox) ?? 'deliver'
+            if (gate !== 'deliver') {
+              completion = { kind: gate }
+            } else {
+              const deliveryItem = await this.#runtime.withDatabase((database) => readPendingOutbox(database, job.dshSessionId)
+                .find((item) => item.receiptId === job.receiptId))
+              if (deliveryItem === undefined) {
+                completion = { kind: 'superseded' }
+                await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+                  completeBoundaryJobInTransaction(database, job, completion, this.#now())
+                }))
+                continue
+              }
+              await this.#flush(job)
+              await this.#dispatch(job, deliveryItem)
+              await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+                markOutboxDispatchedInTransaction(database, deliveryItem.continuationId, this.#now())
+              }))
+              completion = { kind: 'completed' }
+            }
           }
         } else {
           completion = await this.#process(job)
@@ -103,16 +128,21 @@ export class DshBoundaryWorker {
           completeBoundaryJobInTransaction(database, job, completion, this.#now())
         }))
       } catch (error) {
-        let retryAt: string | undefined
+        let failure: ReturnType<typeof failBoundaryJobInTransaction> | undefined
         try {
           await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-            retryAt = failBoundaryJobInTransaction(database, job, error, this.#now())
+            failure = failBoundaryJobInTransaction(database, job, error, this.#now())
           }))
         } catch {
           // A Core DB failure cannot be repaired in-memory. The expired lease
           // is the recovery mechanism on the next kick/startup.
         }
-        if (retryAt !== undefined) this.#scheduleRetry(job.dshSessionId, retryAt)
+        if (failure?.kind === 'retry') this.#scheduleRetry(job.dshSessionId, failure.retryAt)
+        if (failure?.kind === 'waiting_user') {
+          try {
+            if (await this.#onWaitingUser?.(job, error)) this.kick(job.dshSessionId)
+          } catch { /* durable wait is authoritative */ }
+        }
         return
       }
     }

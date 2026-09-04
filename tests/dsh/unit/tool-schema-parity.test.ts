@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import * as z from 'zod/v4'
 import { MODEL_TOOL_OPERATION_NAMES } from '../../../src/model-tools/contracts.js'
-import { modelFacingInputSchema } from '../../../src/model-tools/registry.js'
+import { modelFacingInputSchema, modelFacingTransportSchema } from '../../../src/model-tools/registry.js'
 import { projectDshDirective } from '../../../src/dsh/directive-projection.js'
 import {
   DSH_MODEL_FACING_OPERATIONS,
@@ -41,6 +42,39 @@ test('model-facing schemas exclude every host-owned field', () => {
     assert.equal(properties.advisoryRoundDigest, undefined, operation)
     assert.ok(properties.advisoryDisposition, operation)
   }
+})
+
+test('native transport schemas expose JSON shapes without consuming business validation', () => {
+  for (const operation of DSH_MODEL_FACING_OPERATIONS) {
+    const schema = modelFacingTransportSchema(operation)
+    assert.equal(schema.type, 'object', operation)
+    assert.equal(schema.additionalProperties, true, operation)
+    assert.equal(schema.required, undefined, operation)
+  }
+
+  const workReport = modelFacingTransportSchema('enno_work_report')
+  const result = (workReport.properties as Record<string, any>).result
+  assert.equal(result.type, 'object')
+  assert.equal(result.additionalProperties, true)
+  assert.equal(result.required, undefined)
+  assert.equal(result.properties.outcome.type, 'string')
+  assert.equal(result.properties.summary.type, 'string')
+  assert.equal(result.properties.mutated.type, 'boolean')
+  assert.equal(result.properties.changedPaths.type, 'array')
+  assert.equal(result.properties.changedPaths.items.type, 'string')
+
+  const definition = createDshToolDefinitions(host).find((item) => item.name === 'enno_work_report')!
+  assert.deepEqual(definition.parameters, workReport)
+  assert.match(definition.description, /never encode an object or array as a JSON string/u)
+
+  const transportBoundary = z.fromJSONSchema(workReport as z.core.JSONSchema.BaseSchema)
+  assert.equal(transportBoundary.safeParse({}).success, true)
+  assert.equal(transportBoundary.safeParse({ result: JSON.stringify({
+    outcome: 'completed', summary: 'done', mutated: false, changedPaths: [],
+  }) }).success, false)
+  assert.equal(transportBoundary.safeParse({
+    result: { outcome: 'completed', summary: 'done', mutated: false, changedPaths: [] },
+  }).success, true)
 })
 
 test('projected directives retain current dynamic fields while removing host-owned fields', () => {

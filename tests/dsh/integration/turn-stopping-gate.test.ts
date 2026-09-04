@@ -129,7 +129,7 @@ test('confirmation is settled at turn stopping before the next role is injected'
   assert.deepEqual(agent.cancels, [])
 })
 
-test('same directive pauses the turn after one steer and remains resumable on the next turn', async () => {
+test('same directive allows three cross-turn steers and pauses before the fourth', async () => {
   const agent = { id: 'session', steers: [] as unknown[], cancels: [] as string[] }
   const controller = new DshEnnoController({ readState: async () => state('submit_plan') })
   assert.equal((await controller.handle(event(agent, 4))).kind, 'steer')
@@ -138,7 +138,28 @@ test('same directive pauses the turn after one steer and remains resumable on th
   assert.equal(agent.steers.length, 1)
   assert.equal(agent.cancels.length, 0)
   assert.equal((await controller.handle(event(agent, 5))).kind, 'steer')
-  assert.equal(agent.steers.length, 2)
+  assert.equal((await controller.handle(event(agent, 6))).kind, 'steer')
+  assert.deepEqual(await controller.handle(event(agent, 7)), {
+    kind: 'pause', nextAction: 'submit_plan', reason: 'continuation_limit',
+  })
+  assert.equal(agent.steers.length, 3)
+})
+
+test('legacy controller resumes once with an explicit user recovery answer at the limit', async () => {
+  const agent = { id: 'legacy-recovery', steers: [] as any[], cancels: [] as string[] }
+  let questions = 0
+  const controller = new DshEnnoController({
+    readState: async () => state('submit_plan'),
+    requestLoopRecovery: async ({ automaticCount }) => {
+      questions += 1
+      assert.equal(automaticCount, 3)
+      return 'report the corrected plan now'
+    },
+  })
+  for (const turn of [1, 2, 3, 4]) assert.equal((await controller.handle(event(agent, turn))).kind, 'steer')
+  assert.equal(questions, 1)
+  assert.equal(agent.steers.length, 4)
+  assert.match(String(agent.steers[3]?.content), /report the corrected plan now/u)
 })
 
 test('concurrent duplicate callbacks share one continuation decision without cancellation', async () => {
