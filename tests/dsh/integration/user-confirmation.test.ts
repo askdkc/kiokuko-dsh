@@ -53,6 +53,19 @@ test('confirmation renders every public item and preserves command/path/timeout 
   assert.equal(text.includes('code.domain.v1'), false)
 })
 
+test('confirmation keeps multiline natural language inside one visible Markdown item', () => {
+  const value = 'First line\r\n- not a sibling criterion\n## not a heading'
+  const text = renderDshConfirmation({
+    ...confirmation(),
+    completion: { basis: 'user', items: [value] },
+  })
+  const section = text.slice(text.indexOf('## Completion criteria'), text.indexOf('## Skills'))
+
+  assert.match(section, /- First line ↵ - not a sibling criterion ↵ \\#\\# not a heading/u)
+  assert.equal(section.match(/^- /gmu)?.length, 1)
+  assert.doesNotMatch(section, /^## not a heading$/mu)
+})
+
 test('Japanese confirmation renders as structured Markdown without changing exact commands or paths', () => {
   const text = renderDshConfirmation(japaneseConfirmation())
   assert.match(text, /^# 計画の確認$/mu)

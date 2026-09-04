@@ -31,10 +31,15 @@ import {
   ennoZodValidationError,
   type EnnoValidationOperation,
 } from './validation-errors.js';
+import { containsDisallowedTextCharacters } from '../serialization/validate.js';
 
 const canonicalText = (maximum: number) => z.string().min(1).max(maximum).refine(
-  (value) => value.trim() === value && !/[\p{Cc}\p{Cf}]/u.test(value),
+  (value) => value.trim() === value && !containsDisallowedTextCharacters(value),
   'Value must be bounded canonical text',
+);
+const canonicalMultilineText = (maximum: number) => z.string().min(1).max(maximum).refine(
+  (value) => value.trim() === value && !value.includes('\r') && !containsDisallowedTextCharacters(value, true),
+  'Value must be bounded canonical multiline text',
 );
 const identifier = canonicalText(256).refine((value) => value !== '.' && value !== '..' && !/[\\/]/u.test(value));
 const boundedPath = canonicalText(4_096).refine((value) => !value.includes('\0'));
@@ -212,7 +217,7 @@ const contractProvenanceSchema = z.object(Object.fromEntries(
 
 export const acceptanceCriterionSchema = z.object({
   id: identifier,
-  description: canonicalText(8_192),
+  description: canonicalMultilineText(8_192),
 }).strict();
 
 export const skillRequirementSchema = z.object({
@@ -434,12 +439,12 @@ export const ennoContractSchema = z.object({
 export const ennoRequestHandoffSchema = z.object({
   sourceRole: z.literal('enno-oduno'),
   taskType: z.enum(['build', 'debug', 'review', 'devops']),
-  objective: canonicalText(16_384),
+  objective: canonicalMultilineText(16_384),
   target: canonicalText(4_096).nullable(),
-  expected: canonicalText(8_192).nullable(),
-  constraints: z.array(canonicalText(8_192)).max(16),
-  verification: z.array(canonicalText(8_192)).max(16),
-  stopConditions: z.array(canonicalText(8_192)).max(16),
+  expected: canonicalMultilineText(8_192).nullable(),
+  constraints: z.array(canonicalMultilineText(8_192)).max(16),
+  verification: z.array(canonicalMultilineText(8_192)).max(16),
+  stopConditions: z.array(canonicalMultilineText(8_192)).max(16),
 }).strict();
 
 export const odunoIdealSchema = z.object({

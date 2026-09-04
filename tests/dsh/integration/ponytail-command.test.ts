@@ -17,6 +17,11 @@ test('Ponytail modes are request-local and command registration uses the active 
   assert.deepEqual(invoke(['lite']), { kind: 'success', text: 'Ponytail mode set to lite for the active request.' })
   assert.equal(modes.mode('request-1'), 'lite')
   assert.deepEqual(invoke(['broken', 'full']), { kind: 'error', text: 'ponytail requires exactly one mode: lite, full, or ultra' })
+  assert.deepEqual(definition.handler({
+    rawInput: 'full\n@PLAN.md',
+    signal: new AbortController().signal,
+  }), { kind: 'error', text: 'ponytail requires exactly one mode: lite, full, or ultra' })
+  assert.equal(modes.mode('request-1'), 'lite')
   modes.end('request-1')
   assert.equal(modes.mode('request-1'), undefined)
   assert.throws(() => executeDshPonytailCommand(modes, 'request-1', ['ultra']), /active logical request/u)

@@ -38,9 +38,9 @@ import {
   bindCapabilityCatalog,
   capabilityCatalogDigest,
 } from '../akinator/capability-binding.js';
+import { containsDisallowedTextCharacters, normalizeTextLineEndings } from '../serialization/validate.js';
 
 const PROFILE_FIELDS = ['taskType', 'target', 'expected', 'constraints'] as const;
-const CONTROL_CHARACTERS = /\p{Cc}/u;
 
 type DshRunOpenRequest = {
   apiVersion: '1';
@@ -163,9 +163,9 @@ function knownFields(value: Record<string, unknown>, allowed: readonly string[])
   if (Object.keys(value).some((field) => !set.has(field))) validation();
 }
 
-function boundedString(value: unknown, max: number): string {
-  if (typeof value !== 'string' || value.trim().length === 0 || value.length > max || CONTROL_CHARACTERS.test(value)) validation();
-  return value;
+function boundedString(value: unknown, max: number, multiline = false): string {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > max || containsDisallowedTextCharacters(value, multiline)) validation();
+  return multiline ? normalizeTextLineEndings(value) : value;
 }
 
 function enumValue<T extends readonly string[]>(value: unknown, allowed: T): T[number] {
@@ -173,9 +173,9 @@ function enumValue<T extends readonly string[]>(value: unknown, allowed: T): T[n
   return value as T[number];
 }
 
-function nullableString(value: unknown, max: number): string | null {
+function nullableString(value: unknown, max: number, multiline = false): string | null {
   if (value === null) return null;
-  return boundedString(value, max);
+  return boundedString(value, max, multiline);
 }
 
 function optionalString(value: unknown, max: number): string | undefined {
@@ -191,8 +191,8 @@ function profileHints(value: unknown): TaskInput['profileHints'] {
     ? null
     : enumValue(input.taskType, ['build', 'debug', 'research', 'review', 'devops', 'writing', 'analysis', 'chat'] as const);
   const target = input.target === undefined ? null : nullableString(input.target, 16 * 1024);
-  const expected = input.expected === undefined ? null : nullableString(input.expected, 16 * 1024);
-  const constraints = input.constraints === undefined ? null : nullableString(input.constraints, 16 * 1024);
+  const expected = input.expected === undefined ? null : nullableString(input.expected, 16 * 1024, true);
+  const constraints = input.constraints === undefined ? null : nullableString(input.constraints, 16 * 1024, true);
   return { taskType, target, expected, constraints };
 }
 
@@ -206,8 +206,8 @@ function normalizeOpenRequest(value: unknown): DshRunOpenRequest {
   const taskInput = object(input.task);
   knownFields(taskInput, ['title', 'query', 'profileHints']);
   const task: TaskInput = {
-    title: boundedString(taskInput.title, 16 * 1024),
-    query: boundedString(taskInput.query, 16 * 1024),
+    title: boundedString(taskInput.title, 16 * 1024, true),
+    query: boundedString(taskInput.query, 16 * 1024, true),
     profileHints: profileHints(taskInput.profileHints),
   };
 

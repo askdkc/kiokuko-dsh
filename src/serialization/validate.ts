@@ -120,6 +120,18 @@ export function compareCanonicalStrings(left: string, right: string): number {
   return left < right ? -1 : 1;
 }
 
+/** Canonicalize platform and legacy line endings without changing user text otherwise. */
+export function normalizeTextLineEndings(value: string): string {
+  return value.replace(/\r\n?/gu, '\n');
+}
+
+/** Reject control/format characters, optionally retaining ordinary text layout whitespace. */
+export function containsDisallowedTextCharacters(value: string, allowLayoutWhitespace = false): boolean {
+  const normalized = allowLayoutWhitespace ? normalizeTextLineEndings(value) : value;
+  const inspected = allowLayoutWhitespace ? normalized.replace(/[\t\n]/gu, '') : normalized;
+  return /[\p{Cc}\p{Cf}]/u.test(inspected);
+}
+
 /** Return the de-duplicated persisted tag order used by all new revision hashes. */
 export function canonicalTagOrder(tags: readonly string[]): string[] {
   return [...new Set(tags)].sort(compareCanonicalStrings);

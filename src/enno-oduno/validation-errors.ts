@@ -99,7 +99,7 @@ function boundedPath(path: PropertyKey[]): Array<string | number> {
 }
 
 const customReasons: ReadonlyArray<readonly [RegExp, PublicEnnoValidationReason]> = [
-  [/canonical text/iu, 'non_canonical_text'],
+  [/canonical(?: multiline)? text/iu, 'non_canonical_text'],
   [/Verifier IDs must be unique/iu, 'duplicate_verifier_id'],
   [/WorkUnit IDs must be unique/iu, 'duplicate_id'],
   [/invalid dependency/iu, 'unknown_dependency'],

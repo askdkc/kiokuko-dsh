@@ -143,7 +143,13 @@ const CONFIRMATION_LABELS = {
 } as const satisfies Record<UserFacingLanguage, ConfirmationLabels>
 
 function escapeMarkdownText(value: string): string {
-  return value.replace(/([\\`*_[\]<>#])/gu, '\\$1')
+  // Confirmation fields may contain deliberate line breaks. Render those as
+  // visible data inside one Markdown item instead of letting a continuation
+  // line become a sibling bullet, heading, quote, or code block.
+  return value
+    .replace(/\r\n?/gu, '\n')
+    .replace(/\n/gu, ' ↵ ')
+    .replace(/([\\`*_[\]<>#])/gu, '\\$1')
 }
 
 function inlineCode(value: string): string {
