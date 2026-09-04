@@ -1,6 +1,5 @@
 import { KiokukoError } from '../errors.js'
 import type { DshMirroredAttachment, DshSessionLogMirror } from './session-log-mirror.js'
-import { kgpDispatch } from './generated/kgp-dispatch.js'
 
 const MAX_ZIP32_BYTES = 0xffff_ffff
 const MAX_ZIP_ENTRIES = 32_768
@@ -170,9 +169,6 @@ export class DshSessionLogExportService {
       throw new DshSessionExportError(404, 'session_not_found', 'session does not exist')
     }
     if (checkpoint.health === 'archive_unsafe') {
-      if (kgpDispatch('export-decision', 'archive-unsafe-state').action !== 'archive-unsafe') {
-        throw new DshSessionExportError(503, 'cache_unavailable', 'KGP archive export policy is invalid')
-      }
       throw new DshSessionExportError(409, 'archive_unsafe', 'session was archived before its complete log was confirmed')
     }
     if (checkpoint.health === 'catching_up' || checkpoint.confirmedThrough < checkpoint.observedThrough) {

@@ -1,7 +1,6 @@
 import { canonicalContentHash } from '../serialization/validate.js'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { KiokukoError } from '../errors.js'
-import { kgpDispatch } from './generated/kgp-dispatch.js'
 
 export interface DshInputClaim {
   readonly claimId: string
@@ -156,9 +155,6 @@ export function takeRecoverableInputClaimInTransaction(
   nativeTurn: number,
   now = new Date().toISOString(),
 ): DshInputClaim | undefined {
-  if (kgpDispatch('claim-recovery-policy', 'claimed-state').action !== 'recover-once') {
-    throw new KiokukoError('INTEGRITY_ERROR', 'KGP claim recovery policy is invalid')
-  }
   const existing = row(database, dshSessionId, nativeTurn)
   if (existing?.status !== 'recoverable' || existing.recoveryCount !== 0
     || existing.providerStarted !== 0 || existing.sideEffectStarted !== 0) return undefined

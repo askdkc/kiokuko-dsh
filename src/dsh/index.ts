@@ -34,7 +34,6 @@ export * from './session-log-surface.js'
 export * from './turn-process.js'
 export * from './boundary-worker.js'
 export * from './input-claim.js'
-export * from './generated/kgp-dispatch.js'
 export * from './prompt-cache.js'
 
 /** Mount a runtime as a Cordis-owned effect; unload always drains it. */

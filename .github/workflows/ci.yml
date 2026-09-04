@@ -30,9 +30,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install SBCL reference compiler
-        run: sudo apt-get update && sudo apt-get install --yes sbcl
-
       - name: Install pinned DeepSeek Harness CLI
         run: |
           dsh_cli_dir="$RUNNER_TEMP/dsh-cli"
@@ -43,9 +40,6 @@ jobs:
 
       - name: Type-check
         run: npm run typecheck
-
-      - name: Verify KGP CLOS model and generated dispatch
-        run: npm run test:kgp
 
       - name: Run test suite
         run: npm test

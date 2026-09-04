@@ -3,7 +3,6 @@ import type { SqliteDatabase } from '../db/adapter.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 import { KiokukoError, type ErrorCode } from '../errors.js'
 import type { AkinatorQuestion } from '../akinator/types.js'
-import { kgpDispatch } from './generated/kgp-dispatch.js'
 
 export const DSH_TURN_HANDOFF_MAX_BYTES = 32 * 1024
 export const DSH_TURN_FAILURE_MAX_BYTES = 8 * 1024
@@ -54,8 +53,6 @@ export type TurnOutcome<T> =
   | { readonly kind: 'infrastructure_error'; readonly retryAfterMs: number }
 
 export function appliedTurnOutcome<T>(value: T, handoff: TurnHandoff): TurnOutcome<T> {
-  const policy = kgpDispatch('next-action', 'applied-state')
-  if (policy.action !== 'advance') throw new KiokukoError('INTEGRITY_ERROR', 'KGP applied-state policy is invalid')
   boundedJson(handoff, DSH_TURN_HANDOFF_MAX_BYTES, 'turn handoff')
   return Object.freeze({ kind: 'applied', value, handoff })
 }
@@ -391,10 +388,6 @@ export function commitExpectedFailureInTransaction(
   if (count === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Temporary failure memory was not persisted')
   const reason = failureFact(input.error, count)
   const clarify = count >= 2
-  const action = kgpDispatch('next-action', clarify ? 'clarify-state' : 'retry-state').action
-  if (action !== (clarify ? 'ask-akinator' : 'retry-same-phase')) {
-    throw new KiokukoError('INTEGRITY_ERROR', 'KGP expected-failure policy is invalid')
-  }
   const nextAction = clarify ? 'ask_akinator' : `retry_${intent.phase}`
   const handoff: TurnHandoff = Object.freeze({
     schemaVersion: 1,
