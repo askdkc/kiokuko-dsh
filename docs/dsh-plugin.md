@@ -90,7 +90,7 @@ the path binding in its database and does not create `.git`, `.kiokuko.json`,
 or any other metadata file in the workspace.
 
 `kiokuko-dsh` disables the existing `session-log-download` Host row and inserts
-its own row under the stable `kiokuko-dsh` id. Its client delegates to the stock
+its own row under the stable `kiokuko-dsh` id. Its DSH lazy-CJS client owns the
 Header modal and `/export` command UI while the Host route uses cursor-backed
 streaming export. Removing the bundle restores the stock row without rewriting
 unrelated plugins or settings. The plugin does not edit `AGENTS.md`.

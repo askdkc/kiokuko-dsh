@@ -38,7 +38,7 @@
     },
     "./client": {
       "types": "./dist/client.d.ts",
-      "default": "./dist/client.js"
+      "default": "./dist/client.cjs"
     },
     "./dsh": {
       "types": "./dist/dsh/index.d.ts",
@@ -104,7 +104,7 @@
   },
   "scripts": {
     "clean:dist": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
-    "build": "npm run clean:dist && tsc -p tsconfig.build.json",
+    "build": "npm run clean:dist && tsc -p tsconfig.build.json && node scripts/build-dsh-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs tests/dsh",
     "test:unit": "node scripts/run-tests.mjs tests/dsh/unit",
@@ -134,15 +134,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-session-log-export": "0.1.2-rc.1",
     "@huggingface/hub": "2.16.1",
     "@huggingface/transformers": "4.2.0",
     "sqlite-vec": "0.1.9"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-session-log-export": {
-      "optional": true
-    },
     "@huggingface/hub": {
       "optional": true
     },

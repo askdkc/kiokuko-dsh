@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, extname, join, relative, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { Script } from 'node:vm'
 
 const exec = promisify(execFile)
 const root = process.cwd()
@@ -19,7 +20,7 @@ const requiredFiles = [
   'dsh/cordis.patch.yml',
   'dist/index.js',
   'dist/index.d.ts',
-  'dist/client.js',
+  'dist/client.cjs',
   'dist/client.d.ts',
   'dist/dsh/index.js',
   'dist/dsh/index.d.ts',
@@ -89,6 +90,38 @@ async function assertRelativeClosure(packageRoot, files) {
   if (missing.length > 0) throw new Error(JSON.stringify({ missingRelativeImports: missing }, null, 2))
 }
 
+async function assertDshClientArtifact(packageRoot) {
+  const source = await readFile(join(packageRoot, 'dist/client.cjs'), 'utf8')
+  const registrations = []
+  const window = {
+    __ModuleLoader__: {
+      load(handoff) {
+        registrations.push(handoff)
+      },
+    },
+  }
+  new Script(source, { filename: 'dist/client.cjs' }).runInNewContext({ window }, { timeout: 5_000 })
+  if (registrations.length !== 1 || registrations[0]?.id !== 'kiokuko-dsh' || typeof registrations[0]?.factory !== 'function') {
+    throw new Error('dist/client.cjs is not one Kiokuko DSH lazy-CJS registration')
+  }
+  const requested = []
+  const client = registrations[0].factory((specifier) => {
+    requested.push(specifier)
+    return {}
+  })
+  if (typeof client?.apply !== 'function' || typeof client?.downloadDshSessionLog !== 'function') {
+    throw new Error('Kiokuko DSH client factory did not expose its browser surface')
+  }
+  const expected = [
+    '@deepseek-ai/dsh-client-store',
+    'react/jsx-runtime',
+    '@deepseek-ai/dsh-client-ui-primitives',
+  ]
+  if (JSON.stringify(requested) !== JSON.stringify(expected)) {
+    throw new Error(`Kiokuko DSH client factory requested an unexpected module set: ${JSON.stringify(requested)}`)
+  }
+}
+
 async function createAndSmokeTestTarball() {
   const packageOutput = join(work, 'package-output')
   const extractRoot = join(work, 'extract')
@@ -106,8 +139,9 @@ async function createAndSmokeTestTarball() {
   const packageRoot = join(extractRoot, 'package')
   await symlink(join(root, 'node_modules'), join(packageRoot, 'node_modules'), 'dir')
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
+  await assertDshClientArtifact(packageRoot)
 
-  const smokeCode = "const root = await import('kiokuko-dsh'); const client = await import('kiokuko-dsh/client'); const plugin = await import('kiokuko-dsh/dsh'); if (plugin.name !== 'kiokuko-dsh') throw new Error('unexpected plugin name'); if (typeof root.DshSessionLogExportService !== 'function') throw new Error('missing root export service'); if (typeof client.downloadDshSessionLog !== 'function') throw new Error('missing client export'); if ('default' in plugin) throw new Error('unexpected default export');"
+  const smokeCode = "const root = await import('kiokuko-dsh'); const plugin = await import('kiokuko-dsh/dsh'); if (plugin.name !== 'kiokuko-dsh') throw new Error('unexpected plugin name'); if (typeof root.DshSessionLogExportService !== 'function') throw new Error('missing root export service'); if ('default' in plugin) throw new Error('unexpected default export');"
   const smokePath = join(consumerRoot, 'import-smoke.mjs')
   await mkdir(join(consumerRoot, 'node_modules'))
   await symlink(packageRoot, join(consumerRoot, 'node_modules', 'kiokuko-dsh'), 'dir')
@@ -152,6 +186,7 @@ try {
     unpackedSize: metadata.unpackedSize,
     requiredFiles,
     importSmoke: 'passed',
+    dshClientArtifact: 'passed',
     relativeClosure: 'passed',
   }, null, 2)}\n`)
 } catch (error) {

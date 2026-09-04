@@ -53,7 +53,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   })
   assert.deepEqual(packageManifest.exports?.['./client'], {
     types: './dist/client.d.ts',
-    default: './dist/client.js',
+    default: './dist/client.cjs',
   })
   assert.deepEqual(packageManifest.exports?.['./dsh'], {
     types: './dist/dsh/index.d.ts',
@@ -99,7 +99,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     assert.match(archive.stdout, /package\/dist\/dsh\/index\.js\n/)
     assert.match(archive.stdout, /package\/dist\/dsh\/index\.d\.ts\n/)
     assert.match(archive.stdout, /package\/dist\/index\.js\n/)
-    assert.match(archive.stdout, /package\/dist\/client\.js\n/)
+    assert.match(archive.stdout, /package\/dist\/client\.cjs\n/)
     assert.match(archive.stdout, /package\/dsh\/cordis\.patch\.yml\n/)
   } finally {
     await Promise.all([

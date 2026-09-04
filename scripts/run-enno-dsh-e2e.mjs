@@ -3,6 +3,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { Script } from 'node:vm'
 import YAML from 'yaml'
 
 const exec = promisify(execFile)
@@ -99,7 +100,7 @@ function startWebProfile(env) {
     }
     const observe = () => {
       const output = `${stdout}\n${stderr}`
-      const url = output.match(/https?:\/\/127\.0\.0\.1:\d+/)?.[0]
+      const url = output.match(/https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/u)?.[0]
       if (url && output.includes('[kiokuko-dsh] plugin loaded')) finish(null, { url })
     }
     child.stdout.on('data', (chunk) => {
@@ -117,6 +118,80 @@ function startWebProfile(env) {
     timer = setTimeout(() => finish(new Error(`DSH web did not become ready within 30 seconds\n${stdout}\n${stderr}`)), 30_000)
   })
   return { child, ready, getOutput: () => `${stdout}\n${stderr}` }
+}
+
+function readBootManifest(html) {
+  const marker = 'globalThis["__DSH_BOOT__"] = '
+  const start = html.indexOf(marker)
+  if (start < 0) throw new Error('DSH Web root did not contain __DSH_BOOT__')
+  const valueStart = start + marker.length
+  const end = html.indexOf('</script>', valueStart)
+  if (end < 0) throw new Error('DSH Web root contained an unterminated __DSH_BOOT__ payload')
+  const boot = JSON.parse(html.slice(valueStart, end))
+  if (!Array.isArray(boot?.entries) || !Array.isArray(boot?.batches)) {
+    throw new Error('DSH Web root contained an invalid __DSH_BOOT__ payload')
+  }
+  return boot
+}
+
+async function authenticatedWebRoot(tokenUrl) {
+  const authentication = await fetch(tokenUrl, { redirect: 'manual' })
+  if (authentication.status < 300 || authentication.status >= 400) {
+    throw new Error(`DSH Web token exchange returned HTTP ${authentication.status}`)
+  }
+  const setCookie = authentication.headers.get('set-cookie')
+  if (setCookie === null) throw new Error('DSH Web token exchange did not set an authentication cookie')
+  const cookie = setCookie.split(';', 1)[0]
+  const location = authentication.headers.get('location') ?? '/'
+  const rootUrl = new URL(location, tokenUrl)
+  const response = await fetch(rootUrl, { headers: { cookie } })
+  if (!response.ok) throw new Error(`authenticated DSH Web root returned HTTP ${response.status}`)
+  return { rootUrl, cookie, html: await response.text() }
+}
+
+async function verifyBrowserBundle(tokenUrl) {
+  const { rootUrl, cookie, html } = await authenticatedWebRoot(tokenUrl)
+  const boot = readBootManifest(html)
+  const kiokuko = boot.entries.filter(entry => entry?.id === 'kiokuko-dsh')
+  if (kiokuko.length !== 1) throw new Error(`DSH Web manifest contained ${kiokuko.length} Kiokuko client entries`)
+  const application = boot.batches.find(batch => batch?.phase === 'application')
+  if (typeof application?.url !== 'string') throw new Error('DSH Web manifest did not contain an application bundle')
+  const response = await fetch(new URL(application.url, rootUrl), { headers: { cookie } })
+  const source = await response.text()
+  if (!response.ok) {
+    throw new Error(`DSH application client bundle returned HTTP ${response.status}: ${source.slice(0, 4096)}`)
+  }
+  const registrations = new Map()
+  const window = {
+    __ModuleLoader__: {
+      load(handoff) {
+        if (typeof handoff?.id !== 'string' || typeof handoff?.factory !== 'function') {
+          throw new Error('DSH application bundle registered an invalid client handoff')
+        }
+        registrations.set(handoff.id, handoff)
+      },
+    },
+  }
+  new Script(source, { filename: 'dsh-application-client.js' }).runInNewContext({ window }, { timeout: 15_000 })
+  const handoff = registrations.get('kiokuko-dsh')
+  if (handoff === undefined) throw new Error('DSH application bundle did not register the Kiokuko client')
+  const requested = []
+  const client = handoff.factory((specifier) => {
+    requested.push(specifier)
+    return {}
+  })
+  if (typeof client?.apply !== 'function' || typeof client?.downloadDshSessionLog !== 'function') {
+    throw new Error('DSH could not materialize the Kiokuko client factory')
+  }
+  const expected = [
+    '@deepseek-ai/dsh-client-store',
+    'react/jsx-runtime',
+    '@deepseek-ai/dsh-client-ui-primitives',
+  ]
+  if (JSON.stringify(requested) !== JSON.stringify(expected)) {
+    throw new Error(`Kiokuko client requested an unexpected DSH browser module set: ${JSON.stringify(requested)}`)
+  }
+  return { bytes: Buffer.byteLength(source), registrations: registrations.size }
 }
 
 async function stopWebProfile(processHandle) {
@@ -175,8 +250,9 @@ async function runCliLifecycle() {
     const dumped = await run(dsh, ['--profile', profile, '--dump-config'], env)
     assertInstalledDump(dumped)
     web = startWebProfile(env)
-    await web.ready
+    const ready = await web.ready
     if (web.child.exitCode !== null || web.child.signalCode !== null) throw new Error(`DSH web exited immediately after readiness\n${web.getOutput()}`)
+    const browserBundle = await verifyBrowserBundle(ready.url)
     await stopWebProfile(web)
     await run(dsh, ['plugin', '--profile', profile, 'remove', 'kiokuko-dsh'], env)
     const afterRemove = await run(dsh, ['--profile', profile, '--dump-config'], env)
@@ -193,7 +269,8 @@ async function runCliLifecycle() {
       workingTreeClean,
       packageIntegrity: packageMetadata.integrity,
       install: 'complete',
-      web: 'started-and-stopped',
+      web: 'browser-bundle-loaded-and-materialized',
+      browserBundle,
       uninstall: 'complete',
     }
     const evidencePath = process.env.KIOKUKO_DSH_EVIDENCE_PATH

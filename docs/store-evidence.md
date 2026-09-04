@@ -34,12 +34,14 @@ packed-artifact integrity, and these outcomes without credentials:
 
 1. the reproducibility check proves that `prepare` emits the same `dist/` tree
    from the fixed source;
-2. the package check builds a tarball containing the declared runtime closure
-   and imports `kiokuko-dsh`, `kiokuko-dsh/client`, and `kiokuko-dsh/dsh` from an isolated consumer;
+2. the package check builds a tarball containing the declared runtime closure,
+   imports the Host entrypoints from an isolated consumer, and executes and
+   materializes `kiokuko-dsh/client` as a DSH lazy-CJS artifact;
 3. the disposable Profile installs that exact tarball;
 4. `dump-config` contains one active `kiokuko-dsh` row and the stock
    `session-log-download` row is disabled;
-5. the DSH `web` profile cold-starts and reports the plugin loaded;
+5. the DSH `web` profile cold-starts, reports the plugin loaded, authenticates,
+   and executes and materializes Kiokuko from the composed application bundle;
 6. the profile stops cleanly;
 7. removing the plugin leaves no `kiokuko-dsh` row and restores the active
    stock `session-log-download` row.
