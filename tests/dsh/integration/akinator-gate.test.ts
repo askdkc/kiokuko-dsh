@@ -82,6 +82,31 @@ test('pre-step uses grounded DSH context and asks only the unresolved task type'
   }
 })
 
+test('pre-step accepts and canonicalizes a multiline user task through run intake', async () => {
+  const fixture = await makeFixture()
+  const runtime = new DshRuntime({
+    repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
+    embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 },
+  })
+  const capabilities = await catalog()
+  const gate = new DshIntakeGate(runtime)
+  const task = 'ABC\n\nEFG\r\n\tWHAT?'
+  try {
+    const result = await gate.prepare({
+      ...event(fixture.root, capabilities),
+      task,
+      profileHints: { taskType: 'build' },
+    })
+
+    assert.equal(result.admitted, true)
+    assert.equal(result.prepared.intake.profile.expected, 'ABC\n\nEFG\n\tWHAT?')
+    assert.equal(result.prepared.intake.status, 'ready')
+  } finally {
+    await runtime.close()
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test('pre-step admits a session rooted at an unregistered non-Git directory', async () => {
   const fixture = await makeFixture()
   const sessionRoot = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-session-directory-'))

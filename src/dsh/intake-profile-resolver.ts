@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { KiokukoError } from '../errors.js'
-import { canonicalContentHash } from '../serialization/validate.js'
+import { canonicalContentHash, containsDisallowedTextCharacters, normalizeTextLineEndings } from '../serialization/validate.js'
 import { deriveProfile } from '../akinator/domain.js'
 import type { TaskProfile, TaskType } from '../akinator/types.js'
 
@@ -27,19 +27,24 @@ function validation(message: string): never {
   throw new KiokukoError('VALIDATION_ERROR', message)
 }
 
-function boundedText(value: unknown, label: string, maximum: number): string {
-  if (typeof value !== 'string' || value.trim().length === 0 || value.length > maximum || /[\p{Cc}\p{Cf}]/u.test(value)) validation(`${label} must be a bounded non-empty string`)
-  return value.trim()
+function boundedText(value: unknown, label: string, maximum: number, multiline = false): string {
+  const normalized = typeof value === 'string' && multiline ? normalizeTextLineEndings(value) : value
+  if (typeof value !== 'string'
+    || value.trim().length === 0
+    || value.length > maximum
+    || typeof normalized !== 'string'
+    || containsDisallowedTextCharacters(normalized, multiline)) validation(`${label} must be a bounded non-empty string`)
+  return normalized.trim()
 }
 
-function optionalText(value: string | null | undefined): string | null {
+function optionalText(value: string | null | undefined, multiline = false): string | null {
   if (value === undefined || value === null) return null
-  return boundedText(value, 'profile hint', 4_000)
+  return boundedText(value, 'profile hint', 4_000, multiline)
 }
 
 /** Resolve only from the task, canonical cwd, supplied hints, and bounded evidence. */
 export function resolveGroundedIntakeProfile(input: GroundedIntakeProfileInput): GroundedIntakeProfile {
-  const task = boundedText(input.task, 'task', 64 * 1024)
+  const task = boundedText(input.task, 'task', 64 * 1024, true)
   const cwd = boundedText(input.cwd, 'cwd', 4_096)
   if (!path.isAbsolute(cwd)) validation('cwd must be absolute')
   const hints = input.profileHints ?? {}
@@ -53,12 +58,12 @@ export function resolveGroundedIntakeProfile(input: GroundedIntakeProfileInput):
     // target/completion fields; asking the user to repeat them adds no
     // information and blocks the model before it can inspect referenced files.
     target: optionalText(hints.target) ?? cwd,
-    expected: optionalText(hints.expected) ?? groundedExpected,
-    constraints: optionalText(hints.constraints),
+    expected: optionalText(hints.expected, true) ?? groundedExpected,
+    constraints: optionalText(hints.constraints, true),
   })
   const evidence = input.evidence ?? []
   if (!Array.isArray(evidence) || evidence.length > 32) validation('evidence must be a bounded string array')
-  const boundedEvidence = evidence.map((item) => boundedText(item, 'evidence', 8_192))
+  const boundedEvidence = evidence.map((item) => boundedText(item, 'evidence', 8_192, true))
   return Object.freeze({ task, cwd, profileHints: Object.freeze(profile), evidence: Object.freeze(boundedEvidence) })
 }
 

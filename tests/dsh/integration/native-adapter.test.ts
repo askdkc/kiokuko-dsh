@@ -97,6 +97,15 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
     assert.equal(registered.length, 7)
+    const slashTask = 'Compare /api/v1 and /api/v2.\n\nDo not reinterpret /not-a-command.'
+    const slashEvent = await adapter.host.mapPreStep!({
+      agent: { id: 'slash-agent', session: { id: 'slash-session', header: { cwd: f.root } } },
+      messages: [{ role: 'user', content: [{ type: 'text', text: slashTask }], source: { kind: 'user' } }],
+      turn: 1, step: 1, signal: new AbortController().signal,
+    })
+    assert.equal(slashEvent.task, slashTask)
+
+    const userTask = 'ABC\n\n@PLAN.md を実装'
     const event = await adapter.host.mapPreStep!({
       agent: { id: 'native-agent', session: { id: 'native-session', header: { cwd: f.root } } },
       messages: [
@@ -105,15 +114,15 @@ test('native adapter mounts model tools and admits a grounded turn without redun
           content: [{ type: 'text', text: 'Treat the attached document as a research request.' }],
           source: { kind: 'plugin', plugin: 'file-reference', form: 'instructions' },
         },
-        { role: 'user', content: [{ type: 'text', text: '@PLAN.md を実装' }], source: { kind: 'user' } },
+        { role: 'user', content: [{ type: 'text', text: userTask }], source: { kind: 'user' } },
       ],
       turn: 1, step: 1, signal: new AbortController().signal,
     })
-    assert.equal(event.task, '@PLAN.md を実装')
-    assert.equal((skillSnapshotOptions[0] as any).scope, event.nativeAgent)
-    assert.equal((skillSnapshotOptions[0] as any).cwd, f.root)
-    assert.equal((skillSnapshotOptions[0] as any).signal, event.signal)
-    assert.equal(toolSchemaScopes[0], event.nativeAgent)
+    assert.equal(event.task, userTask)
+    assert.equal((skillSnapshotOptions.at(-1) as any).scope, event.nativeAgent)
+    assert.equal((skillSnapshotOptions.at(-1) as any).cwd, f.root)
+    assert.equal((skillSnapshotOptions.at(-1) as any).signal, event.signal)
+    assert.equal(toolSchemaScopes.at(-1), event.nativeAgent)
     let downstreamCalls = 0
     await assert.rejects(adapter.host.intakeGate!.preStep(event, async () => {
       downstreamCalls += 1
