@@ -1,6 +1,6 @@
 import { canonicalContentHash } from '../serialization/validate.js'
 import { MODEL_TOOL_OPERATION_NAMES, type ModelToolOperationName } from '../model-tools/contracts.js'
-import { modelFacingInputSchema, modelToolContract, type JsonSchema } from '../model-tools/registry.js'
+import { modelFacingInputSchema, modelFacingTransportSchema, modelToolContract, type JsonSchema } from '../model-tools/registry.js'
 import { KiokukoError } from '../errors.js'
 
 export const DSH_MODEL_FACING_OPERATIONS = [
@@ -204,7 +204,7 @@ export function bindDshToolInvocation(
 }
 
 function descriptionFor(operation: ModelToolOperationName): string {
-  return `Kiokuko ${operation} semantic operation. Host identity, routing, lease, and idempotency fields are supplied by the dsh host. The result is a TurnOutcome: applied results carry the business response in value and the next-turn state in handoff; predictable rejections return retry or clarify without a tool transport error. The business payload contract is: ${JSON.stringify(modelFacingInputSchema(operation))}`
+  return `Kiokuko ${operation} semantic operation. Supply nested values as their native JSON types; never encode an object or array as a JSON string. Host identity, routing, lease, and idempotency fields are supplied by the dsh host. The result is a TurnOutcome: applied results carry the business response in value and the next-turn state in handoff; predictable rejections return retry or clarify without a tool transport error. The business payload contract is: ${JSON.stringify(modelFacingInputSchema(operation))}`
 }
 
 function concludesDshTurn(value: unknown): boolean {
@@ -227,10 +227,10 @@ export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDef
   return Object.freeze(MODEL_TOOL_OPERATION_NAMES.map((operation) => Object.freeze({
     name: operation,
     description: descriptionFor(operation),
-    // DSH validates this transport schema before invoking the handler. Keep it
-    // intentionally broad so predictable business validation can be returned
-    // as a bounded retry/clarify outcome instead of an uncatchable tool error.
-    parameters: Object.freeze({ type: 'object', additionalProperties: true }),
+    // DSH validates this transport schema before invoking the handler. Publish
+    // the actual JSON shape so a nested object cannot arrive double-encoded as
+    // a string, but leave requiredness and value rules to business validation.
+    parameters: Object.freeze(modelFacingTransportSchema(operation)),
     modelFacing: modelFacingSet.has(operation),
     // `{}` is the dsh JSON-schema spelling for any lossless JSON value. The
     // Kiokuko operation registry owns the input/output semantic schemas; this

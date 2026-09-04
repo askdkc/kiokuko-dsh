@@ -7,6 +7,7 @@ import {
 import type { UserFacingConfirmation } from '../enno-oduno/types.js'
 import type { DshConfirmationAnswer, DshConfirmationAnswerer, DshUserQuestionAgent } from './user-interaction.js'
 import type { DshAdvisoryRoundResult, DshAdvisoryRunner } from './advisory-runner.js'
+import { DSH_AUTOMATIC_CONTINUATION_LIMIT, ennoStateInstructionDigest } from './loop-guard.js'
 
 export interface DshTurnStoppingAgent {
   readonly id: string
@@ -43,6 +44,12 @@ export interface DshEnnoControllerDependencies {
     readonly state: EnnoOdunoState
   }) => void | PromiseLike<void>
   readonly maxSteersPerDirective?: number
+  /** Optional legacy-controller recovery prompt after three unchanged turns. */
+  readonly requestLoopRecovery?: (input: {
+    readonly event: DshTurnStoppingEvent
+    readonly state: EnnoOdunoState
+    readonly automaticCount: number
+  }) => string | undefined | PromiseLike<string | undefined>
   readonly advisoryRunner?: DshAdvisoryRunner
   readonly submitAdvisory?: (result: DshAdvisoryRoundResult, input: { readonly event: DshTurnStoppingEvent; readonly state: EnnoOdunoState }) => void | EnnoOdunoState | PromiseLike<void | EnnoOdunoState>
   readonly runFinalVerification?: (input: { readonly event: DshTurnStoppingEvent; readonly state: EnnoOdunoState }) => void | EnnoOdunoState | PromiseLike<void | EnnoOdunoState>
@@ -133,6 +140,7 @@ type ReplayScopeKey = object | string
 interface ReplayScope {
   latestTurn: number
   readonly steers: Map<string, number>
+  readonly turnSteers: Map<number, string>
   readonly steerIdentities: Map<string, { readonly nativeAgent?: object; readonly nativeSession?: object }>
   readonly turnInFlight: Map<number, {
     readonly nativeAgent?: object
@@ -145,11 +153,7 @@ function directiveKey(event: DshTurnStoppingEvent, state: EnnoOdunoState): strin
   return canonicalContentHash({
     agentId: event.agent.id,
     ...(event.agent.sessionId === undefined ? {} : { sessionId: event.agent.sessionId }),
-    turn: event.turn,
-    nextAction: state.nextAction,
-    directive: state.directive,
-    contractRevision: state.contractRevision,
-    routeEpoch: state.routeEpoch,
+    instructionDigest: ennoStateInstructionDigest(state),
   })
 }
 
@@ -174,6 +178,7 @@ export class DshEnnoController {
   readonly #validateBoundary: DshEnnoControllerDependencies['validateBoundary']
   readonly #injectNextStepContext: NonNullable<DshEnnoControllerDependencies['injectNextStepContext']>
   readonly #maxSteersPerDirective: number
+  readonly #requestLoopRecovery: DshEnnoControllerDependencies['requestLoopRecovery']
   readonly #advisoryRunner: DshAdvisoryRunner | undefined
   readonly #submitAdvisory: DshEnnoControllerDependencies['submitAdvisory']
   readonly #runFinalVerification: DshEnnoControllerDependencies['runFinalVerification']
@@ -184,7 +189,8 @@ export class DshEnnoController {
     this.#readState = dependencies.readState
     this.#validateBoundary = dependencies.validateBoundary
     this.#injectNextStepContext = dependencies.injectNextStepContext ?? (() => undefined)
-    this.#maxSteersPerDirective = dependencies.maxSteersPerDirective ?? 1
+    this.#maxSteersPerDirective = dependencies.maxSteersPerDirective ?? DSH_AUTOMATIC_CONTINUATION_LIMIT
+    this.#requestLoopRecovery = dependencies.requestLoopRecovery
     this.#advisoryRunner = dependencies.advisoryRunner
     this.#submitAdvisory = dependencies.submitAdvisory
     this.#runFinalVerification = dependencies.runFinalVerification
@@ -201,6 +207,7 @@ export class DshEnnoController {
     const scope: ReplayScope = {
       latestTurn: event.turn,
       steers: new Map(),
+      turnSteers: new Map(),
       steerIdentities: new Map(),
       turnInFlight: new Map(),
     }
@@ -217,12 +224,9 @@ export class DshEnnoController {
     const scope = this.#scopeFor(event)
     if (event.turn < scope.latestTurn) return { kind: 'abort', reason: 'stale_turn' }
     if (event.turn > scope.latestTurn) {
-      // Advance the high-water mark before dropping keys from older turns.
-      // The mark is synchronous, so a late older callback cannot re-enter the
-      // state/verification/effect pipeline after this point.
+      // Advance the high-water mark synchronously. Cross-turn continuation
+      // counts remain: otherwise an unchanged directive can steer forever.
       scope.latestTurn = event.turn
-      scope.steers.clear()
-      scope.steerIdentities.clear()
     }
     const existing = scope.turnInFlight.get(event.turn)
     if (existing !== undefined) {
@@ -347,12 +351,38 @@ export class DshEnnoController {
       return { kind: 'abort', reason: 'state_unavailable' }
     }
     const used = scope.steers.get(key) ?? 0
-    if (used >= this.#maxSteersPerDirective) {
+    if (scope.turnSteers.has(event.turn)) {
       return { kind: 'pause', nextAction: currentState.nextAction, reason: 'continuation_limit' }
     }
-    // Keys are scoped to the current native turn and are cleared only after
-    // the high-water mark advances. This prevents replay while allowing an
-    // unbounded sequence of independent turns.
+    if (used >= this.#maxSteersPerDirective) {
+      let recovery: string | undefined
+      try {
+        recovery = (await this.#requestLoopRecovery?.({
+          event,
+          state: currentState,
+          automaticCount: used,
+        }))?.trim().slice(0, 8 * 1024)
+      } catch {
+        recovery = undefined
+      }
+      if (recovery !== undefined && recovery.length > 0) {
+        if (event.signal.aborted) return { kind: 'abort', reason: 'aborted' }
+        if (this.#isStaleTurn(scope, event)) return { kind: 'abort', reason: 'stale_turn' }
+        try {
+          await this.#injectNextStepContext({ event, selection, state: currentState })
+        } catch {
+          return { kind: 'abort', reason: 'context_injection_failed' }
+        }
+        scope.steers.set(key, 0)
+        scope.turnSteers.set(event.turn, key)
+        event.agent.steer({
+          content: `The user reviewed the stopped Kiokuko loop and supplied this recovery instruction:\n\n${recovery}`,
+          source: 'kiokuko-dsh',
+        })
+        return { kind: 'steer', nextAction: currentState.nextAction, selection }
+      }
+      return { kind: 'pause', nextAction: currentState.nextAction, reason: 'continuation_limit' }
+    }
     if (used === 0 && scope.steers.size >= 4_096) {
       return { kind: 'pause', nextAction: currentState.nextAction, reason: 'continuation_limit' }
     }
@@ -366,6 +396,7 @@ export class DshEnnoController {
     // Claim immediately before the irreversible native steer. A throwing
     // steer remains consumed and cannot be retried automatically.
     scope.steers.set(key, used + 1)
+    scope.turnSteers.set(event.turn, key)
     scope.steerIdentities.set(key, {
       ...(event.agent.nativeAgent === undefined ? {} : { nativeAgent: event.agent.nativeAgent }),
       ...(event.agent.nativeSession === undefined ? {} : { nativeSession: event.agent.nativeSession }),

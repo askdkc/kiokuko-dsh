@@ -7,7 +7,7 @@ import { openConnection } from '../../../src/db/connection.js'
 import { migrateDatabase } from '../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { DshBoundaryWorker } from '../../../src/dsh/boundary-worker.js'
-import { prepareTurnIntent } from '../../../src/dsh/turn-process.js'
+import { prepareTurnIntent, replacePendingOutboxMessageInTransaction } from '../../../src/dsh/turn-process.js'
 import { submitOdunoIdeal } from '../../../src/enno-oduno/service.js'
 import { canonicalContentHash } from '../../../src/serialization/validate.js'
 import type { DshDatabaseOperation, DshRuntime } from '../../../src/dsh/runtime.js'
@@ -134,6 +134,101 @@ test('dispatch-before-observed crash survives worker restart with the same deter
   } finally {
     await firstWorker.dispose()
     await restartedWorker?.dispose()
+    await f.cleanup()
+  }
+})
+
+test('a boundary job stops after three failures and does not schedule a fourth automatic attempt', async () => {
+  const f = await fixture()
+  let clock = Date.parse('2099-01-01T00:00:00.000Z')
+  let flushes = 0
+  let waitingNotifications = 0
+  const worker = new DshBoundaryWorker({
+    runtime: f.runtime,
+    now: () => new Date(clock).toISOString(),
+    process: async (job) => job.kind === 'classify_boundary'
+      ? { kind: 'completed', nextKind: 'delivery' }
+      : { kind: 'completed' },
+    flush: async () => { flushes += 1; throw new Error('persistent native failure') },
+    dispatch: async () => undefined,
+    onWaitingUser: async () => { waitingNotifications += 1; return false },
+  })
+  try {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      worker.kick('boundary-session')
+      await worker.whenIdle()
+      clock += 120_000
+    }
+    assert.equal(flushes, 3)
+    assert.equal(waitingNotifications, 1)
+    assert.equal(
+      f.database.prepare("SELECT status FROM dsh_boundary_jobs WHERE kind = 'delivery'").get<{ status: string }>()?.status,
+      'waiting_user',
+    )
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    assert.equal(flushes, 3)
+  } finally {
+    await worker.dispose()
+    await f.cleanup()
+  }
+})
+
+test('the delivery guard can stop before flush and native dispatch', async () => {
+  const f = await fixture()
+  let flushed = false
+  let dispatched = false
+  const worker = new DshBoundaryWorker({
+    runtime: f.runtime,
+    process: async (job) => job.kind === 'classify_boundary'
+      ? { kind: 'completed', nextKind: 'delivery' }
+      : { kind: 'completed' },
+    beforeDelivery: async () => 'waiting_user' as const,
+    flush: async () => { flushed = true },
+    dispatch: async () => { dispatched = true },
+  })
+  try {
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    assert.equal(flushed, false)
+    assert.equal(dispatched, false)
+    assert.equal(
+      f.database.prepare("SELECT status FROM dsh_boundary_jobs WHERE kind = 'delivery'").get<{ status: string }>()?.status,
+      'waiting_user',
+    )
+    assert.equal(f.database.prepare('SELECT status FROM dsh_continuation_outbox').get<{ status: string }>()?.status, 'pending')
+  } finally {
+    await worker.dispose()
+    await f.cleanup()
+  }
+})
+
+test('delivery re-reads a user recovery message written by the guard', async () => {
+  const f = await fixture()
+  let delivered: unknown
+  const worker = new DshBoundaryWorker({
+    runtime: f.runtime,
+    process: async (job) => job.kind === 'classify_boundary'
+      ? { kind: 'completed', nextKind: 'delivery' }
+      : { kind: 'completed' },
+    beforeDelivery: async (job, item) => {
+      replacePendingOutboxMessageInTransaction(f.database, job.receiptId, {
+        id: item.continuationId,
+        role: 'user',
+        content: [{ type: 'text', text: 'explicit recovery instruction' }],
+        source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'loop-recovery', deliveryId: item.continuationId },
+      })
+      return 'deliver' as const
+    },
+    flush: async () => undefined,
+    dispatch: async (_job, item) => { delivered = item.message },
+  })
+  try {
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    assert.match(JSON.stringify(delivered), /explicit recovery instruction/u)
+  } finally {
+    await worker.dispose()
     await f.cleanup()
   }
 })

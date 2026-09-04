@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -11,17 +11,19 @@ const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migratio
 test('the schema keeps 001 immutable and appends forward-only DSH runtime migrations', async () => {
   const entries = await readdir(migrationsDirectory)
   const sqlFiles = entries.filter((name) => name.endsWith('.sql'))
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql'])
   assert.ok(!entries.some((name) => name === 'down'), 'migrations/down must not exist')
 
   const snapshot = loadMigrationSnapshot(migrationsDirectory)
-  assert.equal(snapshot.migrations.length, 3)
+  assert.equal(snapshot.migrations.length, 4)
   assert.equal(snapshot.migrations[0]!.version, 1)
   assert.equal(snapshot.migrations[0]!.name, '001_baseline.sql')
   assert.equal(snapshot.migrations[1]!.version, 2)
   assert.equal(snapshot.migrations[1]!.name, '002_dsh_memory_finalization.sql')
   assert.equal(snapshot.migrations[2]!.version, 3)
   assert.equal(snapshot.migrations[2]!.name, '003_dsh_turn_process.sql')
+  assert.equal(snapshot.migrations[3]!.version, 4)
+  assert.equal(snapshot.migrations[3]!.name, '004_dsh_loop_guard.sql')
 })
 
 test('baseline initialization creates the complete DSH schema with clean integrity', async () => {
@@ -31,8 +33,8 @@ test('baseline initialization creates the complete DSH schema with clean integri
     const database = openConnection(databasePath)
     try {
       const migration = migrateDatabase(database, migrationsDirectory)
-      assert.deepEqual(migration.applied, [1, 2, 3])
-      assert.equal(migration.currentVersion, 3)
+      assert.deepEqual(migration.applied, [1, 2, 3, 4])
+      assert.equal(migration.currentVersion, 4)
 
       assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
       assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
@@ -50,6 +52,8 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_continuation_outbox',
         'dsh_input_claim_backups',
         'dsh_intake_idempotency',
+        'dsh_loop_guard_claims',
+        'dsh_loop_guard_states',
         'dsh_memory_finalization_entries',
         'dsh_memory_finalizations',
         'dsh_run_log_boundaries',
@@ -117,6 +121,12 @@ test('baseline initialization creates the complete DSH schema with clean integri
       assert.ok(!runColumns.includes('client_version'))
       assert.ok(!runColumns.includes('source_session_id'))
 
+      const boundaryColumns = database.prepare('PRAGMA table_info(dsh_boundary_jobs)')
+        .all<{ name: string }>().map(({ name }) => name)
+      for (const name of ['progress_digest', 'progress_count', 'progress_claim_attempt', 'progress_waiting']) {
+        assert.ok(boundaryColumns.includes(name), `missing bounded boundary progress column ${name}`)
+      }
+
       // CJK-capable search projection is present from the baseline.
       const trigramSql = database.prepare(
         "SELECT sql FROM sqlite_master WHERE name = 'entries_trigram'",
@@ -135,6 +145,31 @@ test('baseline initialization creates the complete DSH schema with clean integri
         ).get<{ count: number }>()?.count,
         1,
       )
+    } finally {
+      database.close()
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('an existing version-3 database upgrades forward to the durable loop guard', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kiokuko-loop-migration-'))
+  try {
+    const version3Directory = path.join(root, 'v3')
+    await mkdir(version3Directory)
+    for (const name of ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql']) {
+      await copyFile(path.join(migrationsDirectory, name), path.join(version3Directory, name))
+    }
+    const database = openConnection(path.join(root, 'kiokuko-dsh.sqlite3'))
+    try {
+      assert.deepEqual(migrateDatabase(database, version3Directory).applied, [1, 2, 3])
+      const upgraded = migrateDatabase(database, migrationsDirectory)
+      assert.deepEqual(upgraded.applied, [4])
+      assert.equal(upgraded.currentVersion, 4)
+      assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
+      assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'dsh_loop_guard_states'").get<{ count: number }>()?.count, 1)
     } finally {
       database.close()
     }

@@ -79,7 +79,7 @@ test('active source has no retired generic-client compatibility identifiers', as
 test('migrations preserve the immutable baseline and append forward-only evolution', async () => {
   const entries = await readdir(path.join(root, 'migrations'), { withFileTypes: true })
   const sqlFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.sql')).map((entry) => entry.name)
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql'])
   assert.equal(entries.some((entry) => entry.name === 'down'), false, 'migrations/down must not exist')
   const packed = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
   assert.equal(packed.files.includes('migrations/'), true)

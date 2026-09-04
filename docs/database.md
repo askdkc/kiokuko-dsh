@@ -16,6 +16,14 @@ The baseline binds every ledger run to exactly one authoritative DSH session:
 - `enno_resume_tokens.dsh_session_id`
 - `enno_execution_leases.dsh_session_id`
 
+`migrations/004_dsh_loop_guard.sql` adds the durable automatic-continuation
+boundary. `dsh_loop_guard_states` stores one progress fingerprint and a maximum
+count of three per run/session; `dsh_loop_guard_claims` makes delivery replay
+idempotent and records the single user-question claim. The same migration adds
+no-progress counters to leased boundary jobs. A fourth unchanged continuation,
+or a fourth stateful host effect without Enno progress, enters `waiting_user`
+before another model request is dispatched.
+
 `dsh_intake_idempotency` is the intake idempotency store for run-open and
 intake-answer replays, keyed by DSH-native `dsh.*` scopes. Baseline completion
 requires an empty `PRAGMA foreign_key_check` result.

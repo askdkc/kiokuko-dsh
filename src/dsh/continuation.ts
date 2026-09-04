@@ -17,6 +17,7 @@ import type {
   EnnoOdunoState,
   RoleDirective,
 } from '../enno-oduno/types.js'
+import { claimAutomaticContinuationInTransaction, ennoInstructionDigest } from './loop-guard.js'
 
 export interface DshExactResumeExpectation {
   readonly runId: string
@@ -29,6 +30,7 @@ export interface DshExactResumeExpectation {
 
 export interface DshResumeDecision {
   readonly continue: boolean
+  readonly waitingUser?: boolean
   readonly runId: string | null
   readonly status: EnnoOdunoState['status'] | null
   readonly directive: RoleDirective | null
@@ -42,6 +44,7 @@ export interface DshResumeDecision {
 const inputSchema = z.object({
   dshSessionId: z.string().min(1).max(256),
   cwd: z.string().min(1).max(4_096),
+  claimId: z.string().regex(/^[0-9a-f]{64}$/u).optional(),
 }).strict()
 
 interface CandidateRow extends SqliteRow {
@@ -287,25 +290,37 @@ export function decideDshContinuation(
     }
     const directive = directiveForRun(snapshot)
     if (directive === null) throw new KiokukoError('INTEGRITY_ERROR', 'Enno active run has no role directive')
-    const claimed = claimContinuation(database, snapshot, canonicalContentHash(directive))
+    const loopClaim = parsed.data.claimId !== undefined
+      ? claimAutomaticContinuationInTransaction(database, {
+        claimId: parsed.data.claimId,
+        runId: snapshot.runId,
+        dshSessionId: parsed.data.dshSessionId,
+        instructionDigest: ennoInstructionDigest(snapshot, directive),
+      })
+      : null
+    const legacyClaimed = loopClaim?.decision === 'wait_user' || loopClaim?.replayed === true
+      ? true
+      : claimContinuation(database, snapshot, canonicalContentHash(directive))
+    const claimed = legacyClaimed && (loopClaim === null || loopClaim.decision === 'deliver')
     const resumeToken = claimed ? issueResumeToken(database, snapshot) : null
     const executionLease = claimed && directive.role === 'goki' && directive.workUnit !== null
       ? claimExecutionLeaseInTransaction(database, snapshot, directive.workUnit.id, { dshSessionId: parsed.data.dshSessionId })
       : null
-    return { kind: 'continuation' as const, snapshot, directive, claimed, resumeToken, executionLease }
+    return { kind: 'continuation' as const, snapshot, directive, claimed, loopClaim, resumeToken, executionLease }
   })
   if (continuation.kind === 'none') {
-    return { continue: false, runId: null, status: null, directive: null, reason: null, warning: null, resumeToken: null, routeEpoch: null, executionLease: null }
+    return { continue: false, waitingUser: false, runId: null, status: null, directive: null, reason: null, warning: null, resumeToken: null, routeEpoch: null, executionLease: null }
   }
   if (continuation.kind === 'ambiguous') {
-    return { continue: false, runId: null, status: null, directive: null, reason: null, warning: 'Multiple Enno-Oduno runs match this DSH repository; refusing to guess.', resumeToken: null, routeEpoch: null, executionLease: null }
+    return { continue: false, waitingUser: false, runId: null, status: null, directive: null, reason: null, warning: 'Multiple Enno-Oduno runs match this DSH repository; refusing to guess.', resumeToken: null, routeEpoch: null, executionLease: null }
   }
   const { snapshot } = continuation
   if (!continuation.claimed) {
-    return { continue: false, runId: snapshot.runId, status: snapshot.status, directive: null, reason: null, warning: 'Enno-Oduno continuation limit reached for this DSH session.', resumeToken: null, routeEpoch: snapshot.routeEpoch ?? 0, executionLease: null }
+    return { continue: false, waitingUser: continuation.loopClaim?.decision === 'wait_user', runId: snapshot.runId, status: snapshot.status, directive: null, reason: null, warning: 'Enno-Oduno continuation limit reached for this DSH session.', resumeToken: null, routeEpoch: snapshot.routeEpoch ?? 0, executionLease: null }
   }
   return {
     continue: true,
+    waitingUser: false,
     runId: snapshot.runId,
     status: snapshot.status,
     directive: continuation.directive,

@@ -54,6 +54,7 @@ import {
   markOutboxObservedInTransaction,
   appliedTurnOutcome,
   replacePendingOutboxMessageInTransaction,
+  supersedeBoundaryJobsAtOrBeforeRevisionInTransaction,
   supersedeOutboxAtOrBeforeRevisionInTransaction,
   type DshBoundaryJob,
 } from './turn-process.js'
@@ -66,6 +67,14 @@ import {
 import { DshSessionLogMirror, type DshImageAttachmentRef, type DshMirrorEventSession } from './session-log-mirror.js'
 import { DshBoundaryWorker } from './boundary-worker.js'
 import { DshSessionLogExportService } from './session-log-export.js'
+import {
+  claimAutomaticContinuationInTransaction,
+  claimBoundaryEffectInTransaction,
+  claimLoopRecoveryQuestionInTransaction,
+  ennoInstructionDigest,
+  resetBoundaryEffectGuardInTransaction,
+  resetLoopGuardForUserInTransaction,
+} from './loop-guard.js'
 
 interface NativeSkills {
   registerProvider(create: (control: { readonly signal: AbortSignal }) => unknown): () => void
@@ -207,10 +216,48 @@ function isHumanMessage(value: unknown): boolean {
 function pluginContinuationId(value: unknown): string | undefined {
   const message = objectRecord(value)
   const source = objectRecord(message?.source)
-  if (source?.kind !== 'plugin' || source.plugin !== 'kiokuko-dsh' || source.form !== 'continuation') return undefined
+  if (source?.kind !== 'plugin' || source.plugin !== 'kiokuko-dsh'
+    || (source.form !== 'continuation' && source.form !== 'loop-recovery')) return undefined
   return typeof source.deliveryId === 'string' && /^[0-9a-f]{64}$/u.test(source.deliveryId)
     ? source.deliveryId
     : undefined
+}
+
+function isLoopRecoveryMessage(value: unknown): boolean {
+  const source = objectRecord(objectRecord(value)?.source)
+  return source?.kind === 'plugin' && source.plugin === 'kiokuko-dsh' && source.form === 'loop-recovery'
+}
+
+function recoveryMessage(continuationId: string, answer: string): unknown {
+  return Object.freeze({
+    id: continuationId,
+    role: 'user',
+    content: [{
+      type: 'text',
+      text: `The user reviewed the stopped Kiokuko loop and supplied this recovery instruction:\n\n${answer}`,
+    }],
+    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'loop-recovery', deliveryId: continuationId },
+  })
+}
+
+function boundedMessageText(value: unknown): string | undefined {
+  const content = objectRecord(value)?.content
+  if (!Array.isArray(content)) return undefined
+  const block = content.map(objectRecord).find((candidate) => candidate?.type === 'text' && typeof candidate.text === 'string')
+  return typeof block?.text === 'string' ? block.text.slice(0, 2_000) : undefined
+}
+
+function boundedUtf8Text(value: string, maximumBytes: number): string {
+  if (Buffer.byteLength(value, 'utf8') <= maximumBytes) return value
+  let result = ''
+  let bytes = 0
+  for (const point of value) {
+    const size = Buffer.byteLength(point, 'utf8')
+    if (bytes + size > maximumBytes) break
+    result += point
+    bytes += size
+  }
+  return result
 }
 
 function eventContinuationId(data: unknown): string | undefined {
@@ -753,10 +800,20 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (humanPresent) {
         const previous = currentSession(event.sessionId)
         const state = previous === undefined ? undefined : states.get(previous.runId)
-        if (state !== undefined) {
+        if (previous !== undefined) {
           try {
             await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-              supersedeOutboxAtOrBeforeRevisionInTransaction(database, event.sessionId, state.revision)
+              if (state !== undefined) {
+                const now = options.now?.() ?? new Date().toISOString()
+                supersedeOutboxAtOrBeforeRevisionInTransaction(database, event.sessionId, state.revision, now)
+                supersedeBoundaryJobsAtOrBeforeRevisionInTransaction(database, event.sessionId, state.revision, now)
+              }
+              resetLoopGuardForUserInTransaction(database, {
+                runId: previous.runId,
+                dshSessionId: event.sessionId,
+                resolution: 'manual_user',
+                ...(options.now === undefined ? {} : { now: options.now() }),
+              })
             }))
           } catch {
             // Human input remains authoritative in the current native batch;
@@ -866,9 +923,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       terminalizeLedgerRunInTransaction(database, runId, 'cancelled')
       return undefined
     }
+    const automaticMessage = event.nativeMessages?.find((message) => pluginContinuationId(message) !== undefined && !isLoopRecoveryMessage(message))
+    const automaticClaimId = automaticMessage === undefined ? undefined : pluginContinuationId(automaticMessage)
     const decision = decideDshContinuation(database, {
       dshSessionId: event.sessionId,
       cwd: event.cwd,
+      ...(automaticClaimId === undefined ? {} : { claimId: automaticClaimId }),
     }, runId)
     if (!decision.continue || decision.runId !== runId) {
       throw new KiokukoError('CONFLICT', decision.warning ?? 'The active Enno-Oduno run cannot be resumed by this DSH session')
@@ -1213,6 +1273,93 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const readBoundaryState = async (item: TurnRecord): Promise<EnnoOdunoState> => (
     runtime.withDatabase((database) => stateForRun(database, item))
   )
+  const askForRecoveryInstruction = async (input: {
+    readonly item: TurnRecord
+    readonly questionId: string
+    readonly title: string
+    readonly detail: string
+  }): Promise<string | undefined> => {
+    const agent = input.item.nativeAgent ?? agents?.get(input.item.agentId)
+    if (userQuestions === undefined || agent === undefined) return undefined
+    try {
+      const result = await userQuestions.ask({
+        questions: [{
+          id: input.questionId,
+          header: 'Kiokuko stopped',
+          question: input.title,
+          detail: input.detail,
+        }],
+        agent,
+      })
+      const answer = result.answers[0]
+      if (answer === undefined || answer.id !== input.questionId) return undefined
+      const value = answer.custom?.trim() || answer.selected[0]?.trim()
+      return value === undefined || value.length === 0 ? undefined : boundedUtf8Text(value, 8 * 1024)
+    } catch {
+      // A broken/dismissed question surface must never become another retry
+      // loop. The durable waiting_user state remains the recovery boundary.
+      return undefined
+    }
+  }
+  const loopRecoveryDetail = (snapshot: ReturnType<typeof readEnnoSnapshot>, state: EnnoOdunoState, reason: string): string => {
+    const workUnitId = state.directive?.workUnit?.id ?? null
+    const workUnit = workUnitId === null
+      ? null
+      : snapshot.workUnits.find((candidate) => candidate.workUnit.id === workUnitId) ?? null
+    const latestVerifier = snapshot.finalEvidence.at(-1)
+    return [
+      `Host status: phase=${snapshot.status}; nextAction=${state.nextAction}; role=${state.currentRole ?? 'none'}.`,
+      `Revision=${snapshot.revision}; mutationRevision=${snapshot.mutationRevision}; attempts=${snapshot.attempts}/${snapshot.contract.maxAttempts}.`,
+      workUnit === null
+        ? 'WorkUnit: none.'
+        : `WorkUnit ${workUnit.workUnit.id}: ${workUnit.workUnit.objective} (status=${workUnit.status}, attempts=${workUnit.attemptCount}).`,
+      latestVerifier === undefined
+        ? 'Latest verifier: none.'
+        : `Latest verifier ${latestVerifier.verifier.id}: ${latestVerifier.status}.`,
+      reason,
+      'Enter the actual current handling status and the concrete instruction to execute next. If work should stop, say so explicitly.',
+    ].join('\n')
+  }
+  const guardBoundaryEffect = async (item: TurnRecord, job: DshBoundaryJob): Promise<boolean> => {
+    const guarded = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+      const snapshot = readEnnoSnapshot(database, {
+        runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
+      })
+      const state = stateForSnapshot(snapshot)
+      const claim = claimBoundaryEffectInTransaction(
+        database,
+        job,
+        ennoInstructionDigest(snapshot, state.directive),
+        options.now?.() ?? new Date().toISOString(),
+      )
+      return { snapshot, state, claim }
+    }))
+    if (guarded.claim.decision === 'deliver') return true
+    const answer = await askForRecoveryInstruction({
+      item,
+      questionId: `effect-${job.jobId.slice(0, 16)}`,
+      title: 'Kiokuko stopped before a fourth stateful boundary operation without progress.',
+      detail: loopRecoveryDetail(
+        guarded.snapshot,
+        guarded.state,
+        `${job.kind} completed or was re-entered three times without authoritative Enno progress.`,
+      ),
+    })
+    if (answer === undefined) {
+      await sessionMirror.markWaitingUser(item.sessionId)
+      return false
+    }
+    await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+      resetBoundaryEffectGuardInTransaction(database, job, options.now?.() ?? new Date().toISOString())
+      resetLoopGuardForUserInTransaction(database, {
+        runId: item.runId,
+        dshSessionId: item.sessionId,
+        resolution: 'manual_user',
+        ...(options.now === undefined ? {} : { now: options.now() }),
+      })
+    }))
+    return true
+  }
   const confirmBoundary = async (item: TurnRecord, state: EnnoOdunoState): Promise<'submitted' | 'dismissed'> => {
     const confirmation = state.directive?.userFacingConfirmation
     if (confirmation === undefined || state.contractRevision === null) throw new Error('kiokuko-dsh confirmation directive is unavailable')
@@ -1306,6 +1453,25 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       return readBoundaryState(item)
     },
     validateBoundary: async ({ event }) => { await assertTurnBoundary(event) },
+    requestLoopRecovery: async ({ event, state, automaticCount }) => {
+      const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
+      if (item === undefined) return undefined
+      const snapshot = await runtime.withDatabase((database) => readEnnoSnapshot(database, {
+        runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
+      }))
+      const answer = await askForRecoveryInstruction({
+        item,
+        questionId: `legacy-loop-${item.runId.slice(0, 12)}`,
+        title: 'Kiokuko stopped before a fourth identical automatic continuation.',
+        detail: loopRecoveryDetail(
+          snapshot,
+          state,
+          `The legacy turn controller continued the same instruction ${automaticCount} times without authoritative Enno progress.`,
+        ),
+      })
+      if (answer === undefined) await sessionMirror.markWaitingUser(item.sessionId)
+      return answer
+    },
     confirmUser: async ({ event, state }) => {
       const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
       if (item === undefined) throw new Error('kiokuko-dsh confirmation turn is not bound')
@@ -1341,7 +1507,52 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (item === undefined || item.closed || item.runId !== job.runId || item.turn < job.nativeTurn) {
         throw new Error('kiokuko-dsh boundary job has no exact live run binding')
       }
-      if (job.kind.startsWith('retry_') || job.kind === 'ask_akinator') {
+      if ((job.kind === 'confirmation' || job.kind === 'final_verification' || job.kind === 'advisory')
+        && !await guardBoundaryEffect(item, job)) {
+        return { kind: 'waiting_user' }
+      }
+      if (job.kind.startsWith('retry_')) {
+        return { kind: 'completed', nextKind: 'delivery' }
+      }
+      if (job.kind === 'ask_akinator') {
+        const snapshot = await runtime.withDatabase((database) => readEnnoSnapshot(database, {
+          runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
+        }))
+        const state = stateForSnapshot(snapshot)
+        const pending = await runtime.withDatabase((database) => readPendingOutbox(database, item.sessionId)
+          .find((candidate) => candidate.receiptId === job.receiptId))
+        const validationFact = boundedMessageText(pending?.message)
+        const answer = await askForRecoveryInstruction({
+          item,
+          questionId: `validation-${job.receiptId.slice(0, 16)}`,
+          title: 'Kiokuko validation repeatedly failed and needs your instruction.',
+          detail: loopRecoveryDetail(
+            snapshot,
+            state,
+            validationFact ?? 'The same validation constraint was rejected repeatedly.',
+          ),
+        })
+        if (answer === undefined) {
+          await sessionMirror.markWaitingUser(item.sessionId)
+          return { kind: 'waiting_user' }
+        }
+        await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+          resetLoopGuardForUserInTransaction(database, {
+            runId: item.runId,
+            dshSessionId: item.sessionId,
+            resolution: 'manual_user',
+            ...(options.now === undefined ? {} : { now: options.now() }),
+          })
+          const outbox = readPendingOutbox(database, item.sessionId).find((candidate) => candidate.receiptId === job.receiptId)
+          if (outbox !== undefined) {
+            replacePendingOutboxMessageInTransaction(
+              database,
+              job.receiptId,
+              recoveryMessage(outbox.continuationId, answer),
+              options.now?.() ?? new Date().toISOString(),
+            )
+          }
+        }))
         return { kind: 'completed', nextKind: 'delivery' }
       }
       if (job.kind === 'classify_boundary') {
@@ -1401,6 +1612,69 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       await sessions.flush(nativeSession)
       try { await sessionMirror.checkpointAfterNativeFlush(nativeSession as DshMirrorEventSession) } catch { /* non-vetoing cache */ }
     },
+    beforeDelivery: async (job, outbox) => {
+      if (isLoopRecoveryMessage(outbox.message)) return 'deliver'
+      const item = currentSession(job.dshSessionId)
+      if (item === undefined || item.closed || item.runId !== job.runId) return 'superseded'
+      const guarded = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+        const snapshot = readEnnoSnapshot(database, {
+          runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
+        })
+        const state = stateForSnapshot(snapshot)
+        const claim = claimAutomaticContinuationInTransaction(database, {
+          claimId: outbox.continuationId,
+          runId: item.runId,
+          dshSessionId: item.sessionId,
+          instructionDigest: ennoInstructionDigest(snapshot, state.directive),
+          ...(options.now === undefined ? {} : { now: options.now() }),
+        })
+        const shouldAsk = claim.decision === 'wait_user'
+          && claimLoopRecoveryQuestionInTransaction(
+            database,
+            claim.claimId,
+            options.now?.() ?? new Date().toISOString(),
+          )
+        return { snapshot, state, claim, shouldAsk }
+      }))
+      if (guarded.claim.decision === 'deliver') return 'deliver'
+      if (!guarded.shouldAsk) {
+        await sessionMirror.markWaitingUser(item.sessionId)
+        return 'waiting_user'
+      }
+      const answer = await askForRecoveryInstruction({
+        item,
+        questionId: `loop-${guarded.claim.claimId.slice(0, 16)}`,
+        title: 'Kiokuko stopped before a fourth identical automatic continuation.',
+        detail: loopRecoveryDetail(
+          guarded.snapshot,
+          guarded.state,
+          [
+            `The same instruction was automatically continued ${guarded.claim.ordinal - 1} times without authoritative Enno progress.`,
+            boundedMessageText(outbox.message),
+          ].filter((value): value is string => value !== undefined).join('\n'),
+        ),
+      })
+      if (answer === undefined) {
+        await sessionMirror.markWaitingUser(item.sessionId)
+        return 'waiting_user'
+      }
+      await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+        resetLoopGuardForUserInTransaction(database, {
+          runId: item.runId,
+          dshSessionId: item.sessionId,
+          resolution: 'user_answer',
+          claimId: guarded.claim.claimId,
+          ...(options.now === undefined ? {} : { now: options.now() }),
+        })
+        replacePendingOutboxMessageInTransaction(
+          database,
+          job.receiptId,
+          recoveryMessage(outbox.continuationId, answer),
+          options.now?.() ?? new Date().toISOString(),
+        )
+      }))
+      return 'deliver'
+    },
     dispatch: async (job, outbox) => {
       const item = currentSession(job.dshSessionId)
       const nativeAgent = (boundaryAgents.get(job.dshSessionId) ?? agents?.get(job.dshSessionId)) as { readonly steer?: (message: unknown) => void } | undefined
@@ -1408,6 +1682,49 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         throw new Error('kiokuko-dsh native boundary delivery agent is unavailable')
       }
       nativeAgent.steer(outbox.message)
+    },
+    onWaitingUser: async (job, error) => {
+      const item = currentSession(job.dshSessionId)
+      if (item === undefined || item.closed || item.runId !== job.runId) return false
+      await sessionMirror.markWaitingUser(item.sessionId)
+      const snapshot = await runtime.withDatabase((database) => readEnnoSnapshot(database, {
+        runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
+      }))
+      const answer = await askForRecoveryInstruction({
+        item,
+        questionId: `boundary-${job.jobId.slice(0, 16)}`,
+        title: 'Kiokuko stopped after three boundary-processing failures.',
+        detail: loopRecoveryDetail(
+          snapshot,
+          stateForSnapshot(snapshot),
+          `Last boundary error: ${(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
+        ),
+      })
+      if (answer === undefined) return false
+      await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+        resetLoopGuardForUserInTransaction(database, {
+          runId: item.runId,
+          dshSessionId: item.sessionId,
+          resolution: 'manual_user',
+          ...(options.now === undefined ? {} : { now: options.now() }),
+        })
+        const outbox = readPendingOutbox(database, item.sessionId).find((candidate) => candidate.receiptId === job.receiptId)
+        if (outbox !== undefined) {
+          replacePendingOutboxMessageInTransaction(
+            database,
+            job.receiptId,
+            recoveryMessage(outbox.continuationId, answer),
+            options.now?.() ?? new Date().toISOString(),
+          )
+        }
+        database.prepare(`
+          UPDATE dsh_boundary_jobs
+             SET status = 'pending', attempt_count = 0, available_at = ?,
+                 last_error_code = NULL, last_error_message = NULL, updated_at = ?
+           WHERE job_id = ? AND status = 'waiting_user'
+        `).run(options.now?.() ?? new Date().toISOString(), options.now?.() ?? new Date().toISOString(), job.jobId)
+      }))
+      return true
     },
   })
 
