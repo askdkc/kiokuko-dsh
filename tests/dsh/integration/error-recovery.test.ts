@@ -1,48 +1,33 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DshRunLifecycle, DshSessionBridge } from '../../../src/dsh/session-bridge.js'
+import { DshRunLifecycle } from '../../../src/dsh/session-bridge.js'
 
-test('flush failure leaves the event pending and allows a later maintenance retry', async () => {
-  let appendAttempts = 0
+test('failed terminal commit retains an exact-status retry without involving DSH persistence', async () => {
+  let attempts = 0
   const closed: string[] = []
-  const bridge = new DshSessionBridge({
-    runtime: { withDatabase: async <T,>(_operation: unknown) => undefined as T },
-    appendBatch: async () => {
-      appendAttempts += 1
-      if (appendAttempts === 1) throw new Error('ledger temporarily unavailable')
+  const lifecycle = new DshRunLifecycle({
+    closeRun: ({ status }) => {
+      attempts += 1
+      if (attempts === 1) throw new Error('database temporarily unavailable')
+      closed.push(status)
     },
   })
-  bridge.bindSession('session-dsh-retry', 'run-dsh-retry')
-  bridge.observe({
-    sessionId: 'session-dsh-retry', runId: 'run-dsh-retry',
-    event: { type: 'turn/end', seq: 2, time: 0, data: { reason: 'failed' } },
-  })
-  const lifecycle = new DshRunLifecycle({
-    bridge,
-    closeRun: ({ status }) => { closed.push(status) },
-  })
 
-  await assert.rejects(lifecycle.closeTurn({ runId: 'run-dsh-retry', status: 'failed' }), /temporarily unavailable/u)
-  assert.equal(bridge.pendingCount, 1)
-  assert.deepEqual(closed, [])
-
-  await lifecycle.closeTurn({ runId: 'run-dsh-retry', status: 'failed' })
-  assert.equal(bridge.pendingCount, 0)
-  assert.deepEqual(closed, ['failed'])
+  await assert.rejects(lifecycle.closeTurn({ runId: 'retry-run', status: 'completed' }), /temporarily unavailable/u)
+  await assert.rejects(
+    lifecycle.closeTurn({ runId: 'retry-run', status: 'failed' }),
+    (error: unknown) => error instanceof Error && 'code' in error && error.code === 'CONFLICT',
+  )
+  await lifecycle.closeTurn({ runId: 'retry-run', status: 'completed' })
+  assert.deepEqual(closed, ['completed'])
   await lifecycle.dispose()
 })
 
-test('abort and cancellation are terminal statuses only after a successful flush', async () => {
+test('failed and cancelled closes remain independent terminal statuses', async () => {
   const statuses: string[] = []
-  const bridge = new DshSessionBridge({
-    runtime: { withDatabase: async <T,>(_operation: unknown) => undefined as T },
-  })
-  const lifecycle = new DshRunLifecycle({
-    bridge,
-    closeRun: ({ status }) => { statuses.push(status) },
-  })
-  await lifecycle.closeTurn({ runId: 'run-aborted', status: 'failed' })
-  await lifecycle.closeTurn({ runId: 'run-cancelled', status: 'cancelled' })
+  const lifecycle = new DshRunLifecycle({ closeRun: ({ status }) => { statuses.push(status) } })
+  await lifecycle.closeTurn({ runId: 'failed-run', status: 'failed' })
+  await lifecycle.closeTurn({ runId: 'cancelled-run', status: 'cancelled' })
   assert.deepEqual(statuses, ['failed', 'cancelled'])
   await lifecycle.dispose()
 })

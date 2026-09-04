@@ -21,6 +21,8 @@ export interface DshPreStepEvent {
   /** Opaque native Session object, retained only for exact host binding. */
   readonly nativeSession?: object
   readonly turn: number
+  /** Exact native DSH `turn/start` sequence, bound atomically with a new run. */
+  readonly sourceStartSeq?: number
   readonly step: number
   readonly task: string
   readonly cwd: string
@@ -113,6 +115,7 @@ export class DshIntakeGate {
       sessionId: event.sessionId,
       agentId: event.agent.id,
       turn: event.turn,
+      sourceStartSeq: event.sourceStartSeq ?? null,
       task: grounded.task,
       cwd: grounded.cwd,
       ...(grounded.profileHints === undefined ? {} : { profileHints: grounded.profileHints }),
@@ -151,6 +154,9 @@ export class DshIntakeGate {
         profileHints: grounded.profileHints,
         capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
         dshSessionId: event.sessionId,
+        ...(event.sourceStartSeq === undefined ? {} : {
+          dshLogStart: { sourceStartSeq: event.sourceStartSeq, sourceStartTurn: event.turn },
+        }),
         ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
         signal: event.signal,
       }))

@@ -132,9 +132,10 @@ depend on a consumer-side build permission.
 
 The SQLite database remains the semantic authority for Akinator, memory,
 Enno-Oduno, receipts, leases, and verifier evidence. DeepSeek `SessionEvent`
-is the current-session ordered transcript and tool-evidence boundary. Events
-are observed after the host commit, while session flush, model dispatch, tool
-execution, and turn stopping are awaited durability or policy boundaries.
+is the canonical current-session transcript and tool-evidence boundary.
+Kiokuko does not mirror those events or participate in DSH's `session/flush`;
+model dispatch, tool execution, turn stopping, and the native terminal
+checkpoint remain awaited DSH or policy boundaries.
 
 The dsh integration provides:
 
@@ -176,12 +177,12 @@ The dsh integration provides:
   keep every natural-language plan field in that language, and renders headings,
   lists, paths, commands, dependencies, checks, and limits without changing the
   DSH `plan-review` intent or decision labels;
-- ordered, idempotent SessionEvent bridging that retains the pre-binding turn
-  prefix, drains long model streams in bounded batches, preserves every valid
-  source-event reference, and flushes only the exact bound run at each DSH
-  checkpoint. On every idle boundary, the adapter awaits DSH's exact live
-  `sessions.flush(session)` before any terminal ledger close, including the tool
-  result and final assistant/turn events after Oduno meditation; and
+- a durable run-to-`turn/start` binding and an immutable terminal `turn/end`
+  boundary. On a genuinely terminal idle boundary, the adapter awaits DSH's
+  exact live `sessions.flush(session)` before the ledger close, including the
+  tool result and final assistant/turn events after Oduno meditation. The
+  background finalizer reads only that inclusive range even if the session has
+  already received later turns; and
 - bounded turn continuation, exact run/session/workspace/route binding, and
   in-memory plaintext continuation tokens.
 
@@ -249,12 +250,14 @@ then runs the pack/install/dump-config/Web-start/Web-stop/remove flow when a
 Harness source checkout (or `KIOKUKO_DSH_SOURCE_ROOT` is set), it also resumes a
 persisted pending advisory round and runs two consecutive full Enno agent-loop
 flows through intake, ideal, planning, dedicated review, work reporting, final
-verification, advisory disposition, meditation, transcript flush, and terminal
-close. The second flow dismisses review, carries revision feedback through the
+verification, advisory disposition, meditation, native DSH checkpoint,
+terminal close, and post-completion memory finalization. The second flow
+dismisses review, carries revision feedback through the
 next human turn, resubmits, and approves before work starts. It then handles
 consecutive `all fixed?` and commit-message turns without creating another Enno
-contract. The first flow includes a streamed response large enough to cross the
-bridge's batching boundary. Without a dsh executable the CLI portion is reported
+contract. The first flow includes a long streamed response and verifies that
+no DSH events are copied into the Kiokuko ledger; finalization instead reads the
+canonical DSH log and records cache usage. Without a dsh executable the CLI portion is reported
 as `unsupported`; CI sets `KIOKUKO_REQUIRE_DSH_CLI=1` so absence is a failure
 rather than an unverified success.
 

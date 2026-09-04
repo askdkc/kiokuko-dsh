@@ -8,7 +8,7 @@ import { DshEnnoController } from '../../../src/dsh/enno-controller.js'
 import { DshPonytailModes } from '../../../src/dsh/commands.js'
 import { DshToolPolicy, mountDshToolPolicy } from '../../../src/dsh/tool-policy.js'
 import { mountDshTools } from '../../../src/dsh/tools.js'
-import { DshRunLifecycle, DshSessionBridge } from '../../../src/dsh/session-bridge.js'
+import { DshRunLifecycle } from '../../../src/dsh/session-bridge.js'
 import { createDshConfirmationAnswerer } from '../../../src/dsh/user-interaction.js'
 
 function hostServices(includeTools = true) {
@@ -79,7 +79,7 @@ test('composed host boundaries preserve model, tool, question, ledger, and turn-
   const modelMessages: unknown[][] = []
   const toolCalls: string[] = []
   const questionAnswers: string[] = []
-  const bridgeOutput: string[] = []
+  const lifecycleOutput: string[] = []
   const host = hostServices()
   const root = new Context()
   const hostFiber = installHost(root, host)
@@ -110,7 +110,7 @@ test('composed host boundaries preserve model, tool, question, ledger, and turn-
   const controller = new DshEnnoController({
     readState: async () => ({ applicable: true, nextAction: 'execute_work_unit', contractRevision: 2, routeEpoch: 0,
       directive: { contractRevision: 2, routeEpoch: 0, requiredSkills: ['kiokuko-soul'], workUnit: null } } as never),
-    injectNextStepContext: async ({ selection }) => { bridgeOutput.push(selection.routeSkillNames.join(',')) },
+    injectNextStepContext: async ({ selection }) => { lifecycleOutput.push(selection.routeSkillNames.join(',')) },
   })
   let steers = 0
   const turn = await controller.handle({ agent: { id: 'agent-e2e', steer: () => { steers += 1 } }, turn: 1, signal: new AbortController().signal })
@@ -133,16 +133,10 @@ test('composed host boundaries preserve model, tool, question, ledger, and turn-
   assert.equal((await answerer.ask(confirmation)).action, 'approve')
   assert.equal(questionAnswers.length, 1)
 
-  const bridge = new DshSessionBridge({
-    runtime: { withDatabase: async <T,>(_operation: unknown) => undefined as T },
-    appendBatch: async (_runId, events) => { bridgeOutput.push(`events:${events.length}`) },
-  })
-  bridge.bindSession('session-e2e', 'run-e2e')
-  bridge.observe({ sessionId: 'session-e2e', runId: 'run-e2e', event: { type: 'turn/end', seq: 4, time: 0, data: { reason: 'completed' } } })
   const statuses: string[] = []
-  const lifecycle = new DshRunLifecycle({ bridge, closeRun: ({ status }) => { statuses.push(status) } })
+  const lifecycle = new DshRunLifecycle({ closeRun: ({ status }) => { statuses.push(status) } })
   await lifecycle.closeTurn({ runId: 'run-e2e', status: 'completed' })
-  assert.deepEqual(bridgeOutput, ['kiokuko-soul', 'events:1'])
+  assert.deepEqual(lifecycleOutput, ['kiokuko-soul'])
   assert.deepEqual(statuses, ['completed'])
   await lifecycle.dispose()
 

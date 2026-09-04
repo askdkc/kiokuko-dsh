@@ -72,10 +72,10 @@ test('active source has no legacy compatibility identifiers', async () => {
   assert.deepEqual(violations, [])
 })
 
-test('migrations are a single immutable baseline with no rollback path', async () => {
+test('migrations preserve the immutable baseline and append forward-only evolution', async () => {
   const entries = await readdir(path.join(root, 'migrations'), { withFileTypes: true })
   const sqlFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.sql')).map((entry) => entry.name)
-  assert.deepEqual(sqlFiles, ['001_baseline.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql'])
   assert.equal(entries.some((entry) => entry.name === 'down'), false, 'migrations/down must not exist')
   const packed = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
   assert.equal(packed.files.includes('migrations/'), true)

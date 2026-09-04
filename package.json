@@ -60,7 +60,7 @@
       ],
       "writePaths": [
         "Configured Kiokuko database and pre-migration backups",
-        "DSH run, lease, receipt, retrieval, and embedding state inside that database"
+        "DSH run, lease, receipt, retrieval, post-completion memory-finalization, and embedding state inside that database"
       ],
       "commands": [
         "Restricted repository-relative verifier and backup subprocesses when explicitly requested"
@@ -74,7 +74,8 @@
       ],
       "failureBoundaries": [
         "Repository identity, run identity, lease, revision, and integrity mismatches fail closed",
-        "Remote embedding is disabled by default and unavailable services do not become normal success"
+        "Remote embedding is disabled by default and unavailable services do not become normal success",
+        "Memory finalization failures are retryable and cannot veto DSH completion or session-log export"
       ],
       "lifecycleEvidence": [
         "prepare runs only npm run build",

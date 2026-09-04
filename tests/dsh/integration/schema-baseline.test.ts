@@ -8,16 +8,18 @@ import { loadMigrationSnapshot, migrateDatabase } from '../../../src/db/migrate.
 
 const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migrations')
 
-test('the schema is a single immutable 001_baseline migration', async () => {
+test('the schema keeps 001 immutable and appends the DSH finalization migration', async () => {
   const entries = await readdir(migrationsDirectory)
   const sqlFiles = entries.filter((name) => name.endsWith('.sql'))
-  assert.deepEqual(sqlFiles, ['001_baseline.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql'])
   assert.ok(!entries.some((name) => name === 'down'), 'migrations/down must not exist')
 
   const snapshot = loadMigrationSnapshot(migrationsDirectory)
-  assert.equal(snapshot.migrations.length, 1)
+  assert.equal(snapshot.migrations.length, 2)
   assert.equal(snapshot.migrations[0]!.version, 1)
   assert.equal(snapshot.migrations[0]!.name, '001_baseline.sql')
+  assert.equal(snapshot.migrations[1]!.version, 2)
+  assert.equal(snapshot.migrations[1]!.name, '002_dsh_memory_finalization.sql')
 })
 
 test('baseline initialization creates the complete DSH schema with clean integrity', async () => {
@@ -27,8 +29,8 @@ test('baseline initialization creates the complete DSH schema with clean integri
     const database = openConnection(databasePath)
     try {
       const migration = migrateDatabase(database, migrationsDirectory)
-      assert.deepEqual(migration.applied, [1])
-      assert.equal(migration.currentVersion, 1)
+      assert.deepEqual(migration.applied, [1, 2])
+      assert.equal(migration.currentVersion, 2)
 
       assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
       assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
@@ -43,6 +45,9 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'context_delivery_entries',
         'context_feedback',
         'dsh_intake_idempotency',
+        'dsh_memory_finalization_entries',
+        'dsh_memory_finalizations',
+        'dsh_run_log_boundaries',
         'embedding_jobs',
         'embedding_model_installations',
         'embedding_profiles',
