@@ -534,13 +534,14 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       // public prepared projection would silently discard those host-only
       // credentials and make the first report after recovery fail with
       // lease_required. The operation path already advances this state when
-      // Enno changes phase; at pre-step only the delivery can legitimately be
-      // refreshed without a new contract revision.
+      // Enno changes phase; at pre-step only the delivery and authoritative
+      // native turn can legitimately be refreshed without a new contract
+      // revision.
       const { deliveryId: _previousDeliveryId, ...withoutDeliveryId } = existingState
       const deliveryId = result.prepared.context?.deliveryId
       const next = deliveryId === null || deliveryId === undefined
-        ? withoutDeliveryId
-        : { ...withoutDeliveryId, deliveryId }
+        ? { ...withoutDeliveryId, nativeTurn: event.turn }
+        : { ...withoutDeliveryId, deliveryId, nativeTurn: event.turn }
       states.set(item.runId, next)
       policy.setState(next)
     } else {

@@ -37,6 +37,7 @@ async function fixture(): Promise<{ root: string; databasePath: string }> {
 test('native adapter mounts model tools and admits a grounded turn without redundant questions', async () => {
   const f = await fixture()
   const registered: any[] = []
+  const guards: Array<(execution: any) => string | undefined> = []
   const sections = new Map<string, string>()
   const skillSnapshotOptions: unknown[] = []
   const toolSchemaScopes: unknown[] = []
@@ -86,7 +87,13 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     systemPrompt: { getSectionOrder: () => 0, section(input: { name: string; text: string }) { sections.set(input.name, input.text); return () => sections.delete(input.name) } },
     tools: {
       register(definition: any) { registered.push(definition); return () => undefined },
-      guard() { return () => undefined },
+      guard(guard: (execution: any) => string | undefined) {
+        guards.push(guard)
+        return () => {
+          const index = guards.indexOf(guard)
+          if (index >= 0) guards.splice(index, 1)
+        }
+      },
       schemas(scope: unknown) {
         toolSchemaScopes.push(scope)
         return DSH_MODEL_FACING_OPERATIONS.map((name, index) => ({
@@ -275,6 +282,25 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.deepEqual(nextStep.kind, 'enter')
     assert.deepEqual(nextStep.messages, [])
     assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:1'), true)
+    const idealTool = registered.find((definition) => definition.name === 'enno_ideal_submit')!
+    const guardReason = (execution: any): string | undefined => (
+      guards.map((guard) => guard(execution)).find((reason) => reason !== undefined)
+    )
+    let concludedInvalidIdeal = 0
+    const invalidIdealExecution = {
+      callId: 'invalid-ideal-turn-1',
+      name: 'enno_ideal_submit',
+      arguments: {},
+      agent: event.nativeAgent,
+      signal: event.signal,
+      concludeTurn: () => { concludedInvalidIdeal += 1 },
+    }
+    assert.equal(guardReason(invalidIdealExecution), undefined)
+    const invalidIdeal = await idealTool.execute({}, invalidIdealExecution)
+    assert.equal(invalidIdeal.kind, 'retry')
+    assert.match(invalidIdeal.reason.message, /ideal:missing_required_field/u)
+    assert.equal(concludedInvalidIdeal, 1)
+    assert.match(guardReason({ ...invalidIdealExecution, callId: 'sealed-ideal-turn-1' })!, /turn_sealed/u)
     const firstActionRun = adapter.host.resolveSessionRunId!(event.nativeSession as { id: string })!
     const actionQuestionCount = questionIds.length
     const secondActionEvent = await adapter.host.mapPreStep!({
@@ -284,6 +310,11 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     })
     assert.equal(secondActionEvent.profileHints?.taskType, 'build')
     assert.equal((await adapter.host.intakeGate!.preStep(secondActionEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+    assert.equal(guardReason({
+      ...invalidIdealExecution,
+      callId: 'retry-ideal-turn-2',
+      agent: secondActionEvent.nativeAgent,
+    }), undefined)
     assert.equal(adapter.host.resolveSessionRunId!(event.nativeSession as { id: string }), firstActionRun)
     assert.equal(questionIds.length, actionQuestionCount)
     assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:1'), false)
