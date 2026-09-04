@@ -27,6 +27,7 @@ export * from './tools.js'
 export * from './tool-policy.js'
 export * from './composition.js'
 export * from './host-adapter.js'
+export * from './session-memory-finalizer.js'
 
 /** Mount a runtime as a Cordis-owned effect; unload always drains it. */
 export function mountDshRuntime(ctx: Context, runtime: DshRuntime): ReturnType<Context['effect']> {

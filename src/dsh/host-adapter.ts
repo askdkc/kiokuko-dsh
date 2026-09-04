@@ -23,7 +23,8 @@ import {
   type DshNativeToolExecution,
   type DshToolHost,
 } from './tools.js'
-import { DshSessionBridge, DshRunLifecycle } from './session-bridge.js'
+import { DshRunLifecycle, type DshCloseIntent, type DshRunClose } from './session-bridge.js'
+import { DshMemoryFinalizer, dshTurnBoundarySeq, type DshLlm, type DshSessionEventSource, type DshSessionQuery } from './session-memory-finalizer.js'
 import { DshConfirmationController, DshEnnoController } from './enno-controller.js'
 import { DshAdvisoryRunner, type DshAdvisoryCall, type DshAdvisoryRoundResult } from './advisory-runner.js'
 import { DshPonytailModes, dshPonytailOwnerKey } from './commands.js'
@@ -64,6 +65,14 @@ interface NativeSessions {
 }
 interface NativeAgents { get(id: string): { id: string; inject?: (message: unknown) => void } | undefined }
 
+function sessionEventSource(value: object | undefined): DshSessionEventSource {
+  const source = value as Partial<DshSessionEventSource> | undefined
+  if (typeof source?.snapshotEvents !== 'function') {
+    throw new KiokukoError('INTEGRITY_ERROR', 'The exact native DSH session event source is unavailable')
+  }
+  return source as DshSessionEventSource
+}
+
 export interface DshAdvisoryHost {
   readonly verifyReadOnly: (call: DshAdvisoryCall) => boolean | PromiseLike<boolean>
   readonly execute: (call: DshAdvisoryCall) => Promise<unknown>
@@ -78,6 +87,10 @@ export interface DshHostAdapterOptions {
   readonly migrationsDirectory?: string
   readonly repositoryRoot?: string
   readonly now?: () => string
+  /** Test/custom host override; the normal DSH bundle injects sessionQuery. */
+  readonly sessionQuery?: DshSessionQuery
+  /** Test/custom host override; the normal DSH bundle injects llm. */
+  readonly llm?: DshLlm
   /** Optional host-owned isolated, read-only advisory execution surface. */
   readonly advisory?: DshAdvisoryHost
 }
@@ -243,6 +256,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const userQuestions = native.get('userQuestions', false) as DshUserQuestions | undefined
   const sessions = native.get('sessions', false) as NativeSessions | undefined
   const agents = native.get('agents', false) as NativeAgents | undefined
+  const sessionQuery = options.sessionQuery ?? native.get('sessionQuery', false) as DshSessionQuery | undefined
+  const llm = options.llm ?? native.get('llm', false) as DshLlm | undefined
   const advisory = options.advisory ?? native.get('dshAdvisory', false) as DshAdvisoryHost | undefined
   const root = realpathSync(options.repositoryRoot ?? process.cwd())
   const runtime = new DshRuntime({
@@ -263,7 +278,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }>()
   const resumedLeases = new Map<string, NonNullable<EnnoOperationResponse['executionLease']>>()
   const policy = new DshToolPolicy({ phase: 'intake', runId: 'pending', workspace: 'pending', orchestrationId: 'pending', revision: 1, routeEpoch: 0 })
-  const bridge = new DshSessionBridge({ runtime })
+  const memoryFinalizer = new DshMemoryFinalizer({
+    runtime,
+    ...(sessionQuery === undefined ? {} : { sessionQuery }),
+    ...(llm === undefined ? {} : { llm }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+  })
   const modes = new DshPonytailModes()
   const confirmationAnswerer = userQuestions === undefined ? undefined : createDshConfirmationAnswerer(userQuestions)
   let prepareGeneration = 0
@@ -365,6 +385,18 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       policy.setState(next)
     }
   }
+  const bindAndRecord = async (event: DshPreStepEvent, result: DshIntakeGateResult, generation: number): Promise<void> => {
+    const sourceStartSeq = event.sourceStartSeq
+      ?? dshTurnBoundarySeq(sessionEventSource(event.nativeSession), event.turn, 'start')
+    await memoryFinalizer.bindRunStart({
+      runId: result.prepared.run.runId,
+      workspace: result.prepared.project.workspace,
+      dshSessionId: event.sessionId,
+      sourceStartSeq,
+      sourceStartTurn: event.turn,
+    })
+    record(event, result, generation)
+  }
 
   const refreshContinuedWorkLease = async (
     item: TurnRecord,
@@ -411,6 +443,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         sessionId: event.sessionId,
         agentId: event.agent.id,
         turn: event.turn,
+        sourceStartSeq: event.sourceStartSeq ?? null,
         task: event.task,
         cwd: event.cwd,
         profileHints: event.profileHints ?? null,
@@ -487,7 +520,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
               ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
               ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
             })
-            record(event, continued, generation)
+            await bindAndRecord(event, continued, generation)
           }
           return continued
         }
@@ -506,11 +539,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
           ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
         })
-        record(event, resumed, generation)
+        await bindAndRecord(event, resumed, generation)
         return resumed
       }
       const prepared = await super.prepare(event)
-      if (prepared.admitted) record(event, prepared, generation)
+      if (prepared.admitted) await bindAndRecord(event, prepared, generation)
       return prepared
     }
     override async preStep(event: DshPreStepEvent, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> {
@@ -673,6 +706,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     if (boundSession !== undefined && boundSession.id !== sessionId) throw new Error('kiokuko-dsh native session identity is inconsistent')
     const cwd = boundSession?.header?.cwd
     if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('kiokuko-dsh native session cwd is unavailable')
+    const sourceStartSeq = dshTurnBoundarySeq(sessionEventSource(boundSession as object | undefined), payload.turn, 'start')
     const catalog = await capabilityCatalog(skills, tools, {
       agent: { id: payload.agent.id },
       nativeAgent: payload.agent,
@@ -700,6 +734,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       sessionId,
       ...(boundSession === undefined ? {} : { nativeSession: boundSession as object }),
       turn: payload.turn,
+      sourceStartSeq,
       step: payload.step,
       task,
       cwd,
@@ -992,12 +1027,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     submitAdvisory,
   })
 
-  const resolveSessionRunId = (session: { id: string }): string | undefined => {
-    const item = currentSession(session.id)
-    if (item?.nativeSession !== undefined && item.nativeSession !== session) return undefined
-    return item?.closed === true ? undefined : item?.runId
-  }
-  const resolveIdleClose = async (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object): Promise<{ runId: string; status: 'completed' | 'failed' | 'cancelled' } | undefined> => {
+  const resolveIdleClose = async (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object): Promise<DshCloseIntent | undefined> => {
     const item = currentForAgentEvent(agentId, sessionId, undefined, nativeSession, nativeAgent)
     if (item === undefined || item.closed) return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
@@ -1008,13 +1038,20 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     // turn; it does not mean that the persistent conversation has ended.
     if (item.prepared.intake.profile.taskType === 'chat') return undefined
     if (state.status === 'completed' || state.nextAction === 'complete') {
-      return { runId: item.runId, status: item.failed ? 'failed' : 'completed' }
+      return item.failed
+        ? { runId: item.runId, status: 'failed' }
+        : { runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
     // Idle means the driver has no active work, not that Enno reached a
     // terminal state. Keep only genuinely resumable active states open.
     return undefined
   }
-  const resolveSessionClose = async (sessionId: string, nativeSession: object): Promise<{ runId: string; status: 'completed' | 'failed' | 'cancelled' } | undefined> => {
+  const resolveSessionRunId = (session: { id: string }): string | undefined => {
+    const item = currentSession(session.id)
+    if (item?.nativeSession !== undefined && item.nativeSession !== session) return undefined
+    return item?.closed === true ? undefined : item?.runId
+  }
+  const resolveSessionClose = async (sessionId: string, nativeSession: object): Promise<DshCloseIntent | undefined> => {
     const item = currentSession(sessionId)
     if (item === undefined || item.closed || item.nativeSession !== nativeSession) return undefined
     if (item.failed) return { runId: item.runId, status: 'failed' }
@@ -1022,12 +1059,35 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
     if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed' }
     if (item.prepared.intake.profile.taskType === 'chat' || state.status === 'completed' || state.nextAction === 'complete') {
-      return { runId: item.runId, status: 'completed' }
+      return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
     return { runId: item.runId, status: 'cancelled' }
   }
-  const closeRun = async (input: { runId: string; status: 'completed' | 'failed' | 'cancelled' }): Promise<void> => {
-    await lifecycleClose(runtime)(input)
+  const closeRun = async (input: DshRunClose): Promise<void> => {
+    let scheduled = false
+    await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+      const store = new LedgerStore(database)
+      const before = store.readRun(input.runId)
+      if (before === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Run close target does not exist')
+      if (before.status === 'intake' || before.status === 'active') {
+        terminalizeLedgerRunInTransaction(database, input.runId, input.status)
+      } else if (before.status !== input.status) {
+        throw new KiokukoError('CONFLICT', 'Run close status is immutable')
+      }
+      if (input.status === 'completed') {
+        if (input.sourceEndSeq === undefined) {
+          throw new KiokukoError('INTEGRITY_ERROR', 'Completed DSH run has no checkpointed log end')
+        }
+        memoryFinalizer.scheduleInTransaction(database, {
+          runId: before.runId,
+          workspace: before.workspace,
+          dshSessionId: before.dshSessionId,
+          sourceEndSeq: input.sourceEndSeq,
+        })
+        scheduled = true
+      }
+    }))
+    if (scheduled) memoryFinalizer.kick()
     const items = [...turns.values()].filter((candidate) => candidate.runId === input.runId)
     for (const item of items) {
       ennoController.retire({
@@ -1056,8 +1116,22 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const item = currentForAgentEvent(event.agent.id, event.agent.session?.id ?? event.agent.sessionId, undefined, event.agent.session, event.agent)
     if (item !== undefined) item.failed = true
   })
-  const bridgeLifecycle = new DshRunLifecycle({ bridge, closeRun })
-  retireSupersededRun = (item, status) => bridgeLifecycle.closeTurn({ runId: item.runId, status })
+  const runLifecycle = new DshRunLifecycle({ closeRun })
+  retireSupersededRun = async (item, status) => {
+    if (status !== 'completed') {
+      await runLifecycle.closeTurn({ runId: item.runId, status })
+      return
+    }
+    if (item.nativeSession === undefined || sessions?.flush === undefined) {
+      throw new KiokukoError('CONFLICT', 'Completed DSH run requires its exact native session checkpoint')
+    }
+    await sessions.flush(item.nativeSession)
+    await runLifecycle.closeTurn({
+      runId: item.runId,
+      status,
+      sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end'),
+    })
+  }
 
   const host: DshCompositionHost = {
     ...(skills === undefined ? {} : { skills: skills as any }),
@@ -1073,11 +1147,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       toolPolicy: policy,
     }),
     ...(tools === undefined ? {} : { intakeGate: gate, mapPreStep }),
-    bridge,
-    bridgeOwner: 'host',
+    memoryFinalizer,
+    memoryFinalizerOwner: 'host',
     resolveSessionRunId,
     ennoController,
-    lifecycle: bridgeLifecycle,
+    lifecycle: runLifecycle,
+    lifecycleOwner: 'host',
     resolveIdleClose,
     resolveSessionClose,
   }
@@ -1090,17 +1165,41 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       try { policy.dispose() } catch (error) { failures.push(error) }
       try { modes.dispose() } catch (error) { failures.push(error) }
       try { ennoController.dispose() } catch (error) { failures.push(error) }
-      const remainingChats = [...new Map(
+      const remainingRuns = [...new Map(
         [...turns.values()]
-          .filter((item) => !item.closed && item.prepared.intake.profile.taskType === 'chat')
+          .filter((item) => !item.closed)
           .map((item) => [item.runId, item]),
       ).values()]
-      for (const item of remainingChats) {
-        try { await bridgeLifecycle.closeTurn({ runId: item.runId, status: item.failed ? 'failed' : 'completed' }) } catch (error) { failures.push(error) }
+      for (const item of remainingRuns) {
+        try {
+          let status: 'completed' | 'failed' | 'cancelled'
+          if (item.failed) status = 'failed'
+          else if (item.prepared.intake.profile.taskType === 'chat') status = 'cancelled'
+          else {
+            const state = await runtime.withDatabase((database) => stateForRun(database, item))
+            status = state.status === 'completed' || state.nextAction === 'complete'
+              ? 'completed'
+              : state.status === 'blocked' || state.nextAction === 'report_blocker'
+                ? 'failed'
+                : 'cancelled'
+          }
+          if (status === 'completed') {
+            if (item.nativeSession === undefined || sessions?.flush === undefined) {
+              throw new KiokukoError('CONFLICT', 'Completed DSH run requires its exact native session checkpoint')
+            }
+            await sessions.flush(item.nativeSession)
+          }
+          await runLifecycle.closeTurn({
+            runId: item.runId,
+            status,
+            ...(status !== 'completed' ? {} : {
+              sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end'),
+            }),
+          })
+        } catch (error) { failures.push(error) }
       }
-      try { await bridgeLifecycle.dispose() } catch (error) { failures.push(error) }
-      // Observer failures are deliberately fail-closed, but must not prevent
-      // the database/runtime from being closed and releasing its resources.
+      try { await runLifecycle.dispose() } catch (error) { failures.push(error) }
+      try { await memoryFinalizer.dispose() } catch (error) { failures.push(error) }
       try { await runtime.close() } catch (error) { failures.push(error) }
       turns.clear()
       latestBySession.clear()
@@ -1113,13 +1212,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (failures.length > 1) throw new AggregateError(failures, 'kiokuko-dsh adapter disposal failed')
     },
   }
-}
-
-function lifecycleClose(runtime: DshRuntime) {
-  return ({ runId, status }: { runId: string; status: 'completed' | 'failed' | 'cancelled' }) => runtime.withDatabase((database) => {
-    const row = new LedgerStore(database).readRun(runId)
-    if (row !== undefined && (row.status === 'intake' || row.status === 'active')) terminalizeLedgerRunInTransaction(database, runId, status)
-  })
 }
 
 function isEnnoResponse(value: unknown): value is EnnoOperationResponse {

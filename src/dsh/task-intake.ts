@@ -34,6 +34,7 @@ import {
 } from '../akinator/skill-discovery-attempt.js';
 import type { AkinatorContext, AkinatorReasoning, TaskProfile } from '../akinator/types.js';
 import { DshRunIntakeService } from './run-intake-service.js';
+import { bindDshRunLogStartInTransaction } from './session-memory-finalizer.js';
 import { canonicalContentHash, type JsonObject } from '../serialization/validate.js';
 import {
   queryScopedContextGated,
@@ -76,6 +77,7 @@ export interface PrepareAgentTaskInput {
   capabilities?: unknown;
   maxContextChars?: number;
   dshSessionId: string;
+  dshLogStart?: { readonly sourceStartSeq: number; readonly sourceStartTurn: number };
   skillDiscoveryMode?: SkillDiscoveryMode;
   fetchImpl?: typeof fetch;
   embeddingRuntime?: EmbeddingRuntime;
@@ -895,7 +897,17 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
     constraints: hints.constraints ?? null,
   };
   const runKey = `dsh-task-prepare-${canonicalContentHash({ version: 1, requestId })}`;
-  const intakeService = new DshRunIntakeService(database);
+  const intakeService = new DshRunIntakeService(database, input.dshLogStart === undefined ? {} : {
+    onRunCreatedInTransaction: ({ database: transactionDatabase, runId, workspace, dshSessionId, now }) => {
+      bindDshRunLogStartInTransaction(transactionDatabase, {
+        runId,
+        workspace,
+        dshSessionId,
+        sourceStartSeq: input.dshLogStart!.sourceStartSeq,
+        sourceStartTurn: input.dshLogStart!.sourceStartTurn,
+      }, now);
+    },
+  });
   const opened = intakeService.openRun({
     idempotencyKey: runKey,
     dshSessionId: input.dshSessionId,

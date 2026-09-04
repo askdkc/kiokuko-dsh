@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingContext } from './enno-controller.js'
 import { DshIntakeGate, type DshPreStepDecision, type DshPreStepEvent, type DshPreStepContext } from './intake-gate.js'
-import { mountDshDurabilityBarriers, mountDshIdleLifecycle, mountDshSessionBridge, mountDshSessionLifecycle, type DshIdleLifecycleContext, type DshRunLifecycle, type DshSessionBridge, type DshSessionBridgeContext, type DshSessionLifecycleContext, type DshSessionRunResolver } from './session-bridge.js'
+import { mountDshIdleLifecycle, mountDshSessionLifecycle, type DshCloseIntent, type DshIdleLifecycleContext, type DshNativeSession, type DshRunLifecycle, type DshSessionLifecycleContext } from './session-bridge.js'
 import { mountDshToolPolicy, type DshToolPolicy } from './tool-policy.js'
 import { mountDshModelTools, type DshToolHost, type DshToolRegistrationContext } from './tools.js'
 import { DshPonytailModes, mountDshPonytailCommand, type DshPonytailCommandContext } from './commands.js'
@@ -10,6 +10,7 @@ import { mountStandardSkillProvider, type DshSkillContext } from './standard-ski
 import { mountSoulPrompt } from './prompt-policy.js'
 import type { DshUserQuestions } from './user-interaction.js'
 import type { DshRuntime } from './runtime.js'
+import type { DshMemoryFinalizer } from './session-memory-finalizer.js'
 
 /** The optional, explicit host adapter supplied by a dsh profile. */
 export const KIOKUKO_DSH_HOST_SERVICE = 'kiokukoDsh'
@@ -17,7 +18,7 @@ export const KIOKUKO_DSH_HOST_SERVICE = 'kiokukoDsh'
 export interface DshNativePreStepPayload {
   readonly agent: {
     readonly id: string
-    readonly session?: { readonly id: string; readonly header?: { readonly cwd?: string } }
+    readonly session?: DshNativeSession
     readonly sessionId?: string
   }
   readonly messages: readonly unknown[]
@@ -54,13 +55,15 @@ export interface DshCompositionHost {
   readonly toolPolicy?: DshToolPolicy
   readonly intakeGate?: DshIntakeGate
   readonly mapPreStep?: (payload: DshNativePreStepPayload) => DshPreStepEvent | PromiseLike<DshPreStepEvent>
-  readonly bridge?: DshSessionBridge
-  readonly bridgeOwner?: 'composition' | 'host'
-  readonly resolveSessionRunId?: DshSessionRunResolver
+  /** Read-only exact active run binding; never used to mirror session events. */
+  readonly resolveSessionRunId?: (session: { readonly id: string }) => string | undefined
+  readonly memoryFinalizer?: Pick<DshMemoryFinalizer, 'start' | 'dispose' | 'whenIdle'>
+  readonly memoryFinalizerOwner?: 'composition' | 'host'
   readonly ennoController?: DshEnnoController
   readonly lifecycle?: DshRunLifecycle
-  readonly resolveIdleClose?: (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object) => { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | PromiseLike<{ readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | undefined> | undefined
-  readonly resolveSessionClose?: (sessionId: string, nativeSession: object) => { readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | PromiseLike<{ readonly runId: string; readonly status: 'completed' | 'failed' | 'cancelled' } | undefined> | undefined
+  readonly lifecycleOwner?: 'composition' | 'host'
+  readonly resolveIdleClose?: (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object) => DshCloseIntent | PromiseLike<DshCloseIntent | undefined> | undefined
+  readonly resolveSessionClose?: (sessionId: string, nativeSession: object) => DshCloseIntent | PromiseLike<DshCloseIntent | undefined> | undefined
 }
 
 type DshToolHostRegistration = DshToolRegistrationContext['tools']['register']
@@ -161,6 +164,12 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       setupResourceDisposers.push(disposer)
       if (host.runtimeOwner !== 'host') cleanupDisposers.push(disposer)
     }
+    if (host.memoryFinalizer !== undefined) {
+      await host.memoryFinalizer.start()
+      const closeFinalizer = async () => host.memoryFinalizer!.dispose()
+      setupResourceDisposers.push(closeFinalizer)
+      if (host.memoryFinalizerOwner !== 'host') cleanupDisposers.push(closeFinalizer)
+    }
     if (host.skills !== undefined) {
       const disposer = mountStandardSkillProvider({ skills: host.skills })
       setupResourceDisposers.push(disposer)
@@ -195,17 +204,6 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')
       ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep))
     }
-    if (host.bridge !== undefined) {
-      if (host.resolveSessionRunId === undefined) throw new Error('kiokuko-dsh session bridge requires a run resolver')
-      ingressDisposers.push(mountDshSessionBridge(ctx as unknown as DshSessionBridgeContext, host.bridge, host.resolveSessionRunId))
-      ingressDisposers.push(mountDshDurabilityBarriers(ctx as never, host.bridge))
-      const closeBridge = async () => {
-        if (host.lifecycle !== undefined) await host.lifecycle.dispose()
-        else await host.bridge!.close()
-      }
-      setupResourceDisposers.push(closeBridge)
-      if (host.bridgeOwner !== 'host') cleanupDisposers.push(closeBridge)
-    }
     if (host.ennoController !== undefined) ingressDisposers.push(mountNativeEnnoController(ctx as unknown as DshTurnStoppingContext, host.ennoController))
     if (host.lifecycle !== undefined) {
       if (host.resolveIdleClose === undefined) throw new Error('kiokuko-dsh idle lifecycle requires a close resolver')
@@ -220,8 +218,14 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
         async (session) => { await nativeSessions.flush!(session) },
       ))
       if (host.resolveSessionClose !== undefined) {
-        ingressDisposers.push(mountDshSessionLifecycle(ctx as unknown as DshSessionLifecycleContext, host.lifecycle, host.resolveSessionClose))
+        ingressDisposers.push(mountDshSessionLifecycle(
+          ctx as unknown as DshSessionLifecycleContext,
+          host.lifecycle,
+          host.resolveSessionClose,
+          async (session) => { await nativeSessions.flush!(session) },
+        ))
       }
+      if (host.lifecycleOwner !== 'host') cleanupDisposers.push(() => host.lifecycle!.dispose())
     }
   } catch (error) {
     stopIngress()

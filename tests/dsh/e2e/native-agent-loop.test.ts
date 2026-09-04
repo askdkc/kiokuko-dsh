@@ -16,6 +16,7 @@ import { submitEnnoAdvice } from '../../../src/enno-oduno/service.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
 import { compareCanonicalStrings } from '../../../src/serialization/validate.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
+import { dshTurnBoundarySeq } from '../../../src/dsh/session-memory-finalizer.js'
 
 const dshSourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 
@@ -191,6 +192,23 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     repositoryRoot: fixtureRoot,
     databasePath,
     migrationsDirectory: join(process.cwd(), 'migrations'),
+    sessionQuery: {
+      async readSession(sessionId) {
+        assert.equal(sessionId, liveAgent.session.id)
+        return {
+          session: liveAgent.session.header,
+          inheritedEventCount: liveAgent.session.inheritedEventCount,
+          events: liveAgent.session.snapshotEvents(),
+        }
+      },
+    },
+    llm: {
+      async * stream() {
+        yield { type: 'text-delta', index: 0, text: '{"schemaVersion":1,"memories":[]}' }
+        yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 8 } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    },
     advisory: {
       verifyReadOnly: () => true,
       execute: async (call) => ({
@@ -281,7 +299,10 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
         liveAgent.session,
         liveAgent,
       )
-      if (close !== undefined) await adapter.host.lifecycle!.closeTurn(close)
+      if (close !== undefined) await adapter.host.lifecycle!.closeTurn(close.status !== 'completed' ? close : {
+        ...close,
+        sourceEndSeq: dshTurnBoundarySeq(liveAgent.session, close.terminalTurn!, 'end'),
+      })
     }
     await completeTurn('@PLAN.md を実装')
     const interrupted = openConnection(databasePath)
@@ -344,6 +365,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     assert.equal(injectedTexts.some((text: string) => /止まった WorkUnit から再開してください/u.test(text)), true)
     assert.equal(injectedTexts.some((text: string) => /Finalized intake:[\s\S]*all fixed\?/u.test(text)), true)
     assert.match(injectedTexts.at(-1) ?? '', /Finalized intake:[\s\S]*gimme commit message/u)
+    await adapter.host.memoryFinalizer!.whenIdle()
     const stored = openConnection(databasePath)
     try {
       const rows = stored.prepare('SELECT status, ideal_json, meditation_json FROM enno_contracts ORDER BY created_at').all<{
@@ -359,19 +381,38 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
       assert.equal(runRows[0]?.runId, seededRunId)
       assert.notEqual(runRows[1]?.runId, seededRunId)
       assert.deepEqual(runRows.map((row) => row.routeEpoch), [0, 0])
-      for (const row of runRows) {
-        const eventTypes = stored.prepare(`
-          SELECT payload_json AS payloadJson
-          FROM ledger_events
-          WHERE run_id = ? AND source_type = 'dsh-session'
-          ORDER BY source_sequence
-        `).all<{ payloadJson: string }>(row.runId).map(({ payloadJson }) => (
-          (JSON.parse(payloadJson) as { event: { type: string } }).event.type
-        ))
-        assert.equal(eventTypes.includes('turn/start'), true, 'the pre-binding turn prefix must reach the exact run ledger')
-        assert.equal(eventTypes.includes('tool/result'), true, 'successful terminal tool results must reach the run ledger')
-        assert.equal(eventTypes.includes('turn/end'), true, 'native session flush must precede terminal ledger close')
+      const jobs = stored.prepare(`
+        SELECT run_id AS runId, status, cache_read_tokens AS cacheReadTokens,
+               source_start_seq AS sourceStartSeq, source_end_seq AS sourceEndSeq,
+               log_event_count AS logEventCount
+          FROM dsh_memory_finalizations
+         ORDER BY scheduled_at
+      `).all<{
+        runId: string
+        status: string
+        cacheReadTokens: number
+        sourceStartSeq: number
+        sourceEndSeq: number
+        logEventCount: number
+      }>()
+      const completedRuns = stored.prepare(`
+        SELECT run_id AS runId
+          FROM ledger_runs
+         WHERE status = 'completed'
+      `).all<{ runId: string }>()
+      assert.deepEqual(
+        jobs.map(({ runId }) => runId).sort(),
+        completedRuns.map(({ runId }) => runId).sort(),
+        'every completed run, including lightweight follow-ups, must be finalized from the DSH log',
+      )
+      assert.equal(jobs.every(({ status, cacheReadTokens }) => status === 'completed' && cacheReadTokens === 8), true)
+      assert.equal(jobs.every(({ sourceStartSeq, sourceEndSeq, logEventCount }) => (
+        sourceEndSeq >= sourceStartSeq && logEventCount === sourceEndSeq - sourceStartSeq + 1
+      )), true)
+      for (let index = 1; index < jobs.length; index += 1) {
+        assert.ok(jobs[index]!.sourceStartSeq > jobs[index - 1]!.sourceEndSeq, 'completed run log ranges must not overlap')
       }
+      assert.equal(stored.prepare("SELECT COUNT(*) AS count FROM ledger_events WHERE source_type = 'dsh-session'").get<{ count: number }>()!.count, 0)
     } finally {
       stored.close()
     }

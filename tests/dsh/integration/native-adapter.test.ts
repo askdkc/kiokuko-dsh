@@ -14,6 +14,7 @@ import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { DSH_MODEL_FACING_OPERATIONS } from '../../../src/dsh/tools.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
+import { dshTurnBoundarySeq } from '../../../src/dsh/session-memory-finalizer.js'
 
 async function fixture(): Promise<{ root: string; databasePath: string }> {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-native-adapter-'))
@@ -43,7 +44,24 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   const questionIds: string[] = []
   let skipTaskType = false
   let soulModelInvocable = true
-  const fallbackSession = { id: 'native-fallback', header: { cwd: f.root } }
+  const nativeSessions = new Map<string, ReturnType<typeof createNativeSession>>()
+  function createNativeSession(id: string) {
+    const events = Array.from({ length: 12 }, (_, index) => {
+      const turn = index + 1
+      const start = index * 4
+      return [
+        { type: 'turn/start', seq: start, time: start, data: { turn } },
+        { type: 'user/message', seq: start + 1, time: start + 1, data: { id: `${id}-user-${turn}`, role: 'user', content: [{ type: 'text', text: `turn ${turn}` }], source: { kind: 'user' } }, surfaceOp: 'append' as const },
+        { type: 'request/header', seq: start + 2, time: start + 2, data: { header: { config: { provider: 'test', model: 'test' } }, reason: index === 0 ? 'initial' : 'series' } },
+        { type: 'turn/end', seq: start + 3, time: start + 3, data: { turn, reason: { kind: 'completed' } } },
+      ]
+    }).flat()
+    const session = { id, header: { cwd: f.root }, snapshotEvents: () => events }
+    nativeSessions.set(id, session)
+    return session
+  }
+  const fallbackSession = createNativeSession('native-fallback')
+  const primarySession = createNativeSession('native-session')
   const root = new Context()
   const services = {
     skills: {
@@ -83,7 +101,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       return { answers: [{ id, selected: [values[id] ?? 'approve'] }] }
     } },
     sessions: {
-      get(id?: string) { return id === fallbackSession.id ? fallbackSession : { id: 'native-agent', header: { cwd: f.root } } },
+      get(id?: string) { return id === undefined ? undefined : nativeSessions.get(id) },
       async flush() {},
     },
     agents: { get() { return { id: 'native-agent', inject() {} } } },
@@ -93,13 +111,35 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     return () => { for (const dispose of disposers.reverse()) dispose() }
   } })
   await hostFiber
-  const adapter = createDshHostAdapter(root, { repositoryRoot: f.root, databasePath: f.databasePath, migrationsDirectory: join(process.cwd(), 'migrations') })
+  const adapter = createDshHostAdapter(root, {
+    repositoryRoot: f.root,
+    databasePath: f.databasePath,
+    migrationsDirectory: join(process.cwd(), 'migrations'),
+    sessionQuery: {
+      async readSession(sessionId) {
+        const source = nativeSessions.get(sessionId)
+        if (source === undefined) throw new Error(`unknown native session ${sessionId}`)
+        return {
+          session: { id: sessionId, createdAt: 1, cwd: f.root },
+          inheritedEventCount: 0,
+          events: source.snapshotEvents(),
+        }
+      },
+    },
+    llm: {
+      async * stream() {
+        yield { type: 'text-delta', index: 0, text: '{"schemaVersion":1,"memories":[]}' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    },
+  })
   const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
     assert.equal(registered.length, 7)
     const slashTask = 'Compare /api/v1 and /api/v2.\n\nDo not reinterpret /not-a-command.'
+    const slashSession = createNativeSession('slash-session')
     const slashEvent = await adapter.host.mapPreStep!({
-      agent: { id: 'slash-agent', session: { id: 'slash-session', header: { cwd: f.root } } },
+      agent: { id: 'slash-agent', session: slashSession },
       messages: [{ role: 'user', content: [{ type: 'text', text: slashTask }], source: { kind: 'user' } }],
       turn: 1, step: 1, signal: new AbortController().signal,
     })
@@ -107,7 +147,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
 
     const userTask = 'ABC\n\n@PLAN.md を実装'
     const event = await adapter.host.mapPreStep!({
-      agent: { id: 'native-agent', session: { id: 'native-session', header: { cwd: f.root } } },
+      agent: { id: 'native-agent', session: primarySession },
       messages: [
         {
           role: 'user',
@@ -275,7 +315,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     beforeChat.close()
     skipTaskType = true
     const chatEffects: string[] = []
-    const chatSession = { id: 'chat-session', header: { cwd: f.root } }
+    const chatSession = createNativeSession('chat-session')
     const chatAgent = {
       id: 'chat-agent', session: chatSession,
       steer: () => chatEffects.push('steer'),
@@ -360,14 +400,12 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     }), { kind: 'close', nextAction: 'complete' })
     ;(root as any).emit('session/event', chatSession, { type: 'assistant/message', seq: 5, time: 5, data: { text: 'third answer' } })
     assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
-    await adapter.host.bridge!.flush()
-    assert.deepEqual(adapter.host.bridge!.observerErrors, [])
 
     const afterChat = openConnection(f.databasePath)
     try {
       assert.equal(afterChat.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get<{ count: number }>()!.count, ennoContractsBeforeChat)
       assert.equal(afterChat.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(thirdChatRun)?.status, 'active')
-      assert.equal(afterChat.prepare("SELECT COUNT(*) AS count FROM ledger_events WHERE run_id = ? AND source_type = 'dsh-session'").get<{ count: number }>(thirdChatRun)!.count, 5)
+      assert.equal(afterChat.prepare("SELECT COUNT(*) AS count FROM ledger_events WHERE run_id = ? AND source_type = 'dsh-session'").get<{ count: number }>(thirdChatRun)!.count, 0)
     } finally {
       afterChat.close()
     }
@@ -418,10 +456,20 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       afterWritingPivot.close()
     }
     const writingClose = await adapter.host.resolveIdleClose!('native-agent', 'native-session', event.nativeSession, event.nativeAgent)
-    assert.deepEqual(writingClose, { runId: writingRun, status: 'completed' })
-    await adapter.host.lifecycle!.closeTurn(writingClose!)
+    assert.deepEqual(writingClose, { runId: writingRun, status: 'completed', terminalTurn: 5 })
+    await adapter.host.lifecycle!.closeTurn({
+      ...writingClose!,
+      sourceEndSeq: dshTurnBoundarySeq(primarySession, writingClose!.terminalTurn!, 'end'),
+    })
+    await adapter.host.memoryFinalizer!.whenIdle()
+    const finalizedWriting = openConnection(f.databasePath)
+    try {
+      assert.equal(finalizedWriting.prepare('SELECT status FROM dsh_memory_finalizations WHERE run_id = ?').get<{ status: string }>(writingRun)?.status, 'completed')
+    } finally {
+      finalizedWriting.close()
+    }
 
-    const coldSession = { id: 'cold-pivot-session', header: { cwd: f.root } }
+    const coldSession = createNativeSession('cold-pivot-session')
     const seeded = openConnection(f.databasePath)
     let coldRun = ''
     try {

@@ -66,6 +66,13 @@ export interface DshRunIntakeServiceOptions {
   readonly runIdFactory?: () => string;
   readonly sessionIdFactory?: () => string;
   readonly eventIdFactory?: () => string;
+  readonly onRunCreatedInTransaction?: (input: {
+    readonly database: SqliteDatabase;
+    readonly runId: string;
+    readonly workspace: string;
+    readonly dshSessionId: string;
+    readonly now: string;
+  }) => void;
 }
 
 interface DshRunAnswerOptions {
@@ -351,6 +358,13 @@ export class DshRunIntakeService {
           ...(request.parentRunId === undefined ? {} : { parentRunId: request.parentRunId }),
           ...(request.startedAt === undefined ? {} : { startedAt: request.startedAt }),
         }, now);
+        this.options.onRunCreatedInTransaction?.({
+          database: this.database,
+          runId,
+          workspace: request.workspace,
+          dshSessionId,
+          now,
+        });
         const result = startAkinatorInTransaction(this.database, {
           workspace: request.workspace,
           task: task.query,

@@ -34,8 +34,8 @@ const capabilities = [
 ]
 
 function assertCommittedBaselineFixture(): void {
-  assert.equal(CURRENT_SCHEMA_VERSION, SAMPLE_DATABASE_BASELINE_VERSION)
-  assert.deepEqual(CURRENT_MIGRATION_VERSIONS, [SAMPLE_DATABASE_BASELINE_VERSION])
+  assert.equal(CURRENT_SCHEMA_VERSION, 2)
+  assert.deepEqual(CURRENT_MIGRATION_VERSIONS, [SAMPLE_DATABASE_BASELINE_VERSION, 2])
   const database = openConnection(sampleDatabasePath, { readOnly: true })
   try {
     const versions = database.prepare('SELECT version FROM schema_migrations ORDER BY version')
@@ -44,7 +44,7 @@ function assertCommittedBaselineFixture(): void {
     assert.deepEqual(
       versions,
       [SAMPLE_DATABASE_BASELINE_VERSION],
-      'the committed sample database must stay on the single schema baseline',
+      'the committed sample database must remain a version-1 upgrade fixture',
     )
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   } finally {
@@ -115,9 +115,9 @@ async function main(): Promise<void> {
   let runtime: DshRuntime | undefined
   try {
     const migration = await initializeDatabase({ databasePath, migrationsDirectory })
-    assert.deepEqual(migration.applied, [])
+    assert.deepEqual(migration.applied, [2])
     assert.equal(migration.currentVersion, CURRENT_SCHEMA_VERSION)
-    assert.equal(migration.backupPath, null)
+    assert.notEqual(migration.backupPath, null)
     assertBaselineFixture(databasePath)
 
     const database = openConnection(databasePath)
