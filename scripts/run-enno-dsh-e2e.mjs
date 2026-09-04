@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
@@ -72,11 +72,44 @@ async function localDshSourceRoot() {
   }
 }
 
+async function localDshPackageRoot() {
+  const configured = process.env.KIOKUKO_DSH_PACKAGE_ROOT
+  if (configured !== undefined) {
+    const candidate = resolve(configured)
+    try {
+      await access(join(candidate, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
+      return candidate
+    } catch {
+      return undefined
+    }
+  }
+  try {
+    const binary = isAbsolute(dsh)
+      ? dsh
+      : (await run(process.platform === 'win32' ? 'where.exe' : 'which', [dsh])).stdout.trim().split(/\r?\n/u)[0]
+    if (!binary) return undefined
+    const candidate = resolve(dirname(await realpath(binary)), '../../..')
+    await access(join(candidate, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
+    return candidate
+  } catch {
+    return undefined
+  }
+}
+
 async function runCordisComposition() {
-  const sourceRoot = await localDshSourceRoot()
-  await run(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/e2e'], sourceRoot === undefined
-    ? {}
-    : { KIOKUKO_DSH_SOURCE_ROOT: sourceRoot })
+  const [sourceRoot, packageRoot] = await Promise.all([localDshSourceRoot(), localDshPackageRoot()])
+  if (requireDshCli && sourceRoot === undefined && packageRoot === undefined) {
+    throw new Error('Mandatory native DSH workflow coverage has no pinned runtime')
+  }
+  const result = await run(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/e2e'], {
+    ...(sourceRoot === undefined ? {} : { KIOKUKO_DSH_SOURCE_ROOT: sourceRoot }),
+    ...(packageRoot === undefined ? {} : { KIOKUKO_DSH_PACKAGE_ROOT: packageRoot }),
+    ...(requireDshCli ? { KIOKUKO_REQUIRE_DSH_NATIVE: '1' } : {}),
+  })
+  if (requireDshCli && /\bskipped [1-9]\d*/u.test(result.stdout)) {
+    throw new Error(`Mandatory native workflow tests were skipped:\n${result.stdout}`)
+  }
+  process.stdout.write(result.stdout)
 }
 
 function startWebProfile(env) {

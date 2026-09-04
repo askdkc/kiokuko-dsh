@@ -167,8 +167,8 @@ The dsh integration provides:
   commands routed to the exact invoking agent and session;
 - revision, route, phase, lease, idempotency, confirmation, verifier, and
   meditation gates through the Kiokuko core;
-- a tool result whose next action requires host work (plan confirmation or
-  final verification), or is terminal, calls DSH `concludeTurn()` only after
+- a non-terminal tool result whose next action requires host work (plan confirmation or
+  final verification) calls DSH `concludeTurn()` only after
   the successful result exists. Plan submission therefore concludes its model
   step before DSH opens a dedicated `plan-review` interaction. Receipt,
   handoff, outbox, and seal commit atomically; a separate durable job then owns
@@ -183,13 +183,31 @@ The dsh integration provides:
   lists, paths, commands, dependencies, checks, and limits without changing the
   DSH `plan-review` intent or decision labels;
 - a durable run-to-`turn/start` binding and an immutable terminal `turn/end`
-  boundary. On a genuinely terminal idle boundary, the adapter awaits DSH's
-  exact live `sessions.flush(session)` before the ledger close, including the
-  tool result and final assistant/turn events after Oduno meditation. The
+  boundary. A successful Oduno meditation result deliberately does not call
+  `concludeTurn()`: the same native turn remains open for one visible assistant
+  response summarizing the outcome, changes, verification, and remaining
+  uncertainty. On the resulting genuinely terminal idle boundary, the adapter
+  awaits DSH's exact live `sessions.flush(session)` before the ledger close,
+  including the tool result and that final assistant/turn suffix. The
   background finalizer reads only that inclusive range even if the session has
-  already received later turns; and
+  already received later turns. If the final response is empty or its provider
+  fails, a durable plugin-owned result appears in chat, using recorded work,
+  verification, and remaining issues. It does not impersonate a model message
+  or make another model request. The fallback remains visible after reload;
 - bounded turn continuation, exact run/session/workspace/route binding, and
   in-memory plaintext continuation tokens.
+
+Natural model stops before a required phase submission enter the same durable
+three-delivery loop guard. Boundary workers serialize per session, not across
+unrelated sessions. New human input aborts pending questions and supersedes old
+jobs; delivery rechecks ownership after native flushing. Future retry times and
+expired-owner recovery are scheduled from the database after restart as well
+as during normal operation.
+
+CI requires full native-loop coverage against the pinned published runtime,
+including natural stops, identical work-report retries, approval cancellation,
+and both empty and failed final responses. Package installation alone is not
+treated as proof of workflow completion.
 
 Expected validation or omission failures become bounded retry receipts. The
 first identical failure retries the same phase with temporary evidence; the

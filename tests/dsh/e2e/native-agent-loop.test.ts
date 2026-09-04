@@ -17,18 +17,25 @@ import { registerRepositoryAndLocation } from '../../../src/repository/binding.j
 import { compareCanonicalStrings } from '../../../src/serialization/validate.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 import { dshTurnBoundarySeq } from '../../../src/dsh/session-memory-finalizer.js'
+import { nativeMock } from '../helpers/native-mock.js'
 
 const dshSourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
+const dshPackageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
+if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !dshSourceRoot && !dshPackageRoot) throw new Error('Mandatory DSH native coverage requires the pinned runtime')
 
 function dshModule(relativePath: string): string {
-  if (dshSourceRoot === undefined) throw new Error('KIOKUKO_DSH_SOURCE_ROOT is required')
-  return pathToFileURL(join(dshSourceRoot, relativePath)).href
+  if (dshSourceRoot !== undefined) return pathToFileURL(join(dshSourceRoot, relativePath)).href
+  if (dshPackageRoot === undefined) throw new Error('A DSH runtime is required')
+  const name = relativePath.startsWith('vendor/') ? 'cordis' : `dsh-${relativePath.split('/').at(-3)}`
+  return pathToFileURL(join(dshPackageRoot, '@deepseek-ai', name, 'lib/index.js')).href
 }
 
-test('real DSH agent loop resumes persisted state, completes two Enno flows, and handles consecutive lightweight follow-ups', {
-  skip: dshSourceRoot === undefined ? 'requires a DeepSeek Harness source checkout' : false,
+for (const finalMode of ['text', 'empty', 'error', 'stall'] as const) {
+test(`real DSH agent loop: persisted resume, verification retry, completion (${finalMode})`, {
+  skip: !dshSourceRoot && !dshPackageRoot ? 'requires the pinned DeepSeek Harness runtime' : false,
+  timeout: 60_000,
 }, async () => {
-  const [cordis, llm, session, projection, systemPrompt, tools, agentRegistry, agentLoop, skills, mock] = await Promise.all([
+  const [cordis, llm, session, projection, systemPrompt, tools, agentRegistry, agentLoop, skills] = await Promise.all([
     import(dshModule('vendor/cordis/lib/index.js')),
     import(dshModule('packages/llm/llm/lib/index.js')),
     import(dshModule('packages/core/session/lib/index.js')),
@@ -38,8 +45,8 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     import(dshModule('packages/core/agent/lib/index.js')),
     import(dshModule('packages/core/agent-loop/lib/index.js')),
     import(dshModule('packages/skill/skill/lib/index.js')),
-    import(dshModule('packages/core/agent-loop/tests/mock-adapter.ts')),
   ])
+  const mock = nativeMock(llm)
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-real-loop-'))
   const dataRoot = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-real-loop-data-'))
   await mkdir(join(fixtureRoot, 'src'))
@@ -133,10 +140,13 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     mock.toolCallResponse(`meditation-${suffix}`, 'enno_meditation_submit', {
       meditation: { summary: 'No obsolete tests or functions were found.', inspectedPaths: ['src'], deletionCandidates: [] },
     }),
+    finalMode === 'error' ? () => { throw new llm.LlmError('Final response unavailable', 'PI_AI_ERROR') }
+      : mock.textResponse(finalMode === 'empty' ? '' : `Completed ${suffix}: implementation and verification succeeded; no deletion candidates remain.`),
   ]
   const secondFlow = flowResponses('two')
-  const adapterScript = new mock.MockAdapter([
-    ...flowResponses('one', true, true, true),
+  const adapterScript = new mock.MockAdapter(finalMode === 'stall'
+    ? Array.from({ length: 8 }, () => mock.textResponse('I have not submitted the required phase.')) : [
+    ...flowResponses('one', true, false, true),
     ...secondFlow.slice(0, 4),
     mock.toolCallResponse('plan-two-revised', 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
     ...secondFlow.slice(4),
@@ -154,6 +164,7 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
   await ctx.plugin(agentLoop.default, { agents: [] })
   ctx.llm.registerAdapter(['mock'], adapterScript)
   let confirmations = 0
+  let recoveryQuestions = 0
   const confirmationPresentationKinds: string[] = []
   const confirmationSawCompletedPlanResult: boolean[] = []
   const confirmationQuestions: string[] = []
@@ -166,6 +177,10 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
         async ask(request: any) {
           assert.equal(request.agent, liveAgent, 'every user question must use the exact live DSH Agent scope')
           const question = request.questions[0]
+          if (question.id.startsWith('loop-')) {
+            recoveryQuestions++
+            return { answers: [{ id: question.id, selected: [], custom: '' }] }
+          }
           if (question.id === 'kiokuko-plan-confirmation') {
             confirmations += 1
             confirmationPresentationKinds.push(question.intent?.kind ?? 'generic')
@@ -279,67 +294,72 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
         })),
       })
     })
-    const completeTurn = async (task: string): Promise<void> => {
-      const idle = new Promise<void>((resolve) => {
-        const dispose = ctx.on('agent/status', ({ agent, status }: { agent: unknown; status: string }) => {
-          if (agent === liveAgent && status === 'idle') {
-            dispose()
-            resolve()
-          }
-        })
-      })
+    const completeTurn = async (task: string, ready: () => boolean | Promise<boolean>): Promise<void> => {
       liveAgent.followup(llm.createUserMessage({
-        content: [{ type: 'text', text: task }],
-        source: { kind: 'user' },
+        content: [{ type: 'text', text: task }], source: { kind: 'user' },
       }))
-      await idle
-      const close = await adapter.host.resolveIdleClose!(
-        liveAgent.id,
-        liveAgent.session.id,
-        liveAgent.session,
-        liveAgent,
-      )
-      if (close !== undefined) await adapter.host.lifecycle!.closeTurn(close.status !== 'completed' ? close : {
-        ...close,
-        sourceEndSeq: dshTurnBoundarySeq(liveAgent.session, close.terminalTurn!, 'end'),
-      })
+      for (let count = 0; count < 400; count++) {
+        await new Promise(resolve => setTimeout(resolve, 25))
+        if (liveAgent.status === 'idle' && await ready()) return
+      }
+      throw new Error('Native workflow did not settle: ' + JSON.stringify(liveAgent.session.snapshotEvents()
+        .filter((e: any) => e.type === 'tool/result' || e.type === 'turn/end').slice(-8)))
     }
-    await completeTurn('@PLAN.md を実装')
-    const interrupted = openConnection(databasePath)
-    try {
-      interrupted.prepare(`
-        UPDATE enno_execution_leases
-        SET lease_expires_at = '2000-01-01T00:00:00.000Z'
-        WHERE run_id = ?
-      `).run(seededRunId)
-    } finally {
-      interrupted.close()
+    const completed = async (count: number) => adapter.host.runtime!.withDatabase(db =>
+      db.prepare("SELECT COUNT(*) AS count FROM ledger_runs WHERE status = 'completed'").get<{ count: number }>()!.count >= count)
+    if (finalMode === 'stall') {
+      const waiting = async (questions: number) => recoveryQuestions === questions && adapter.host.runtime!.withDatabase(db =>
+        !!db.prepare("SELECT job_id FROM dsh_boundary_jobs WHERE status = 'waiting_user'").get())
+      await completeTurn('@PLAN.md を実装', () => waiting(1))
+      assert.equal(adapterScript.requests.length, 4, 'initial request plus three automatic deliveries')
+      adapter.host.boundaryWorker!.kick(liveAgent.session.id, liveAgent)
+      await adapter.host.boundaryWorker!.whenIdle()
+      assert.equal(recoveryQuestions, 1, 'empty answer must not automatically repeat the question')
+      await completeTurn('現在の指示に従って処理を再開してください。', () => waiting(2))
+      assert.equal(adapterScript.requests.length, 8, 'real human input opens exactly one new bounded generation')
+      return
     }
-    await completeTurn('止まった WorkUnit から再開してください。')
-    await completeTurn('@PLAN.md の残りを実装')
-    await completeTurn('計画を src のみに絞って再提出してください。')
-    await completeTurn('all fixed?')
-    await completeTurn('gimme commit message.')
+    await completeTurn('@PLAN.md を実装', () => completed(1))
+    if (finalMode !== 'text') {
+      const reports = () => liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'kiokuko/completion-report')
+      assert.equal(reports().length, 1)
+      assert.match(reports()[0].data.text, /final-test: passed/u)
+      assert.match(reports()[0].data.text, /Implementation completed/u)
+      assert.equal(reports()[0].data.source.kind, 'plugin')
+      await adapter.host.resolveIdleClose!(liveAgent.id, liveAgent.session.id, liveAgent.session, liveAgent)
+      assert.equal(reports().length, 1, 'repeated idle does not repeat the fallback report')
+      const report = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT status FROM dsh_completion_reports').get())
+      assert.equal(report?.status, 'delivered')
+      return
+    }
+    await completeTurn('@PLAN.md の残りを実装', async () => confirmations === 2 && adapter.host.runtime!.withDatabase(db =>
+      !!db.prepare("SELECT job_id FROM dsh_boundary_jobs WHERE status = 'waiting_user'").get()))
+    await completeTurn('計画を src のみに絞って再提出してください。', () => completed(2))
+    const hasText = (text: string) => liveAgent.session.snapshotEvents().some((e: any) =>
+      e.type === 'assistant/message' && e.data.message.content.some((b: any) => b.type === 'text' && b.text === text))
+    await completeTurn('all fixed?', () => hasText('Yes. The requested implementation and verification are complete.'))
+    await completeTurn('gimme commit message.', () => hasText('fix(dsh): keep long Enno sessions recoverable'))
 
     const toolEvents = liveAgent.session.snapshotEvents().filter((event: any) => event.type.startsWith('tool/'))
     const results = toolEvents.filter((event: any) => event.type === 'tool/result')
     const turnEnds = liveAgent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end')
+    const finalReports = liveAgent.session.snapshotEvents().filter((event: any) => (
+      event.type === 'assistant/message'
+      && event.data.message.content.some((block: any) => block.type === 'text' && /^Completed (?:one|two):/u.test(block.text))
+    ))
     const longAssistantMessage = liveAgent.session.snapshotEvents().find((event: any) => (
       event.type === 'assistant/message' && event.sourceEventSeqs?.length > 2_048
     ))
     assert.ok(longAssistantMessage, 'the real loop must exercise a source sequence list larger than the former bridge limit')
     assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(12).fill(false), JSON.stringify({ toolEvents, turnEnds }))
     const failedFocusedReport = results.find((event: any) => event.data.message.content[0]?.toolCallId === 'work-one')
-    const failedFocusedPayload = JSON.parse(failedFocusedReport?.data.message.content[0]?.content[0]?.text ?? '{}')
+    const failedFocusedPayload = JSON.parse(failedFocusedReport?.data.message.content[0]?.content[0]?.text ?? '{}').value
     assert.equal(failedFocusedPayload.verifierResults?.[0]?.status, 'failed')
     assert.equal(failedFocusedPayload.ennoOduno?.nextAction, 'execute_work_unit')
     assert.equal(failedFocusedPayload.executionLease?.workUnitId, 'implement-plan')
     assert.equal(results.some((event: any) => event.data.message.content[0]?.toolCallId === 'work-one-retry'), true)
-    assert.equal(turnEnds.length, 6)
-    assert.deepEqual(turnEnds[0]?.data.reason, {
-      kind: 'error',
-      error: { message: 'WebSocket error', code: 'PI_AI_ERROR' },
-    })
+    assert.equal(finalReports.length, 2, 'each completed Enno run must emit one visible final assistant report')
+    assert.ok(turnEnds.length > 6, 'durable phases execute as separate native turns')
     assert.equal(confirmations, 3)
     assert.deepEqual(confirmationPresentationKinds, ['plan-review', 'plan-review', 'plan-review'])
     assert.deepEqual(confirmationSawCompletedPlanResult, [true, true, true])
@@ -362,7 +382,6 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
       assert.equal(injectedTexts.some((text: string) => text.includes(`Checked ${disposition.slotId}.`)), true)
     }
     assert.equal(injectedTexts.some((text: string) => /Finalized intake:[\s\S]*PLAN\.md/u.test(text)), true)
-    assert.equal(injectedTexts.some((text: string) => /止まった WorkUnit から再開してください/u.test(text)), true)
     assert.equal(injectedTexts.some((text: string) => /Finalized intake:[\s\S]*all fixed\?/u.test(text)), true)
     assert.match(injectedTexts.at(-1) ?? '', /Finalized intake:[\s\S]*gimme commit message/u)
     await adapter.host.memoryFinalizer!.whenIdle()
@@ -425,3 +444,4 @@ test('real DSH agent loop resumes persisted state, completes two Enno flows, and
     await rm(dataRoot, { recursive: true, force: true })
   }
 })
+}

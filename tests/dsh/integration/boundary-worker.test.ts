@@ -76,6 +76,135 @@ test('one kick drains classified context and durable delivery as separate exactl
   }
 })
 
+test('disposal during an in-flight claim does not start a new job', async () => {
+  const f = await fixture()
+  let signalClaimed!: () => void
+  let releaseClaim!: () => void
+  const claimed = new Promise<void>(resolve => { signalClaimed = resolve })
+  const release = new Promise<void>(resolve => { releaseClaim = resolve })
+  let processed = 0
+  const worker = new DshBoundaryWorker({
+    runtime: {
+      withDatabase: async <T>(operation: DshDatabaseOperation<T>) => {
+        const value = await f.runtime.withDatabase(operation)
+        signalClaimed()
+        await release
+        return value
+      },
+    },
+    process: () => { processed++; return { kind: 'completed' } },
+    flush: () => undefined,
+    dispatch: () => undefined,
+  })
+  try {
+    worker.kick('boundary-session')
+    await claimed
+    const disposed = worker.dispose()
+    releaseClaim()
+    await disposed
+    assert.equal(processed, 0)
+    assert.equal(f.database.prepare('SELECT status FROM dsh_boundary_jobs').get<{ status: string }>()?.status, 'processing')
+  } finally { releaseClaim(); await worker.dispose(); await f.cleanup() }
+})
+
+test('a delivery superseded during flush never reaches native enqueue', async () => {
+  const f = await fixture()
+  let dispatched = 0
+  const worker = new DshBoundaryWorker({
+    runtime: f.runtime,
+    process: async () => ({ kind: 'completed', nextKind: 'delivery' }),
+    flush: async () => {
+      f.database.prepare("UPDATE dsh_continuation_outbox SET status = 'superseded'").run()
+      f.database.prepare("UPDATE dsh_boundary_jobs SET status = 'superseded'").run()
+    },
+    dispatch: () => { dispatched++ },
+  })
+  try {
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    assert.equal(dispatched, 0)
+  } finally { await worker.dispose(); await f.cleanup() }
+})
+
+test('an early kick retains the durable retry wake-up', async () => {
+  const f = await fixture()
+  let attempts = 0
+  const worker = new DshBoundaryWorker({
+    runtime: f.runtime,
+    process: async () => { if (++attempts === 1) throw new Error('transient'); return { kind: 'completed' } },
+    flush: () => undefined, dispatch: () => undefined,
+  })
+  try {
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    await new Promise(resolve => setTimeout(resolve, 750))
+    await worker.whenIdle()
+    assert.equal(attempts, 2)
+  } finally { await worker.dispose(); await f.cleanup() }
+})
+
+test('startup schedules a future retry instead of waiting for more user input', async () => {
+  const f = await fixture()
+  f.database.prepare("UPDATE dsh_boundary_jobs SET status = 'failed_retryable', available_at = ?")
+    .run(new Date(Date.now() + 150).toISOString())
+  let attempts = 0
+  const worker = new DshBoundaryWorker({
+    runtime: f.runtime, process: () => { attempts++; return { kind: 'completed' } },
+    flush: () => undefined, dispatch: () => undefined,
+  })
+  try {
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    await new Promise(resolve => setTimeout(resolve, 350))
+    await worker.whenIdle()
+    assert.equal(attempts, 1)
+  } finally { await worker.dispose(); await f.cleanup() }
+})
+
+test('questions are isolated per session and cancellation drains an uncooperative answerer', async () => {
+  const f = await fixture()
+  const prepared = await prepareAgentTask(f.database, {
+    requestId: 'other-request', cwd: f.root, task: 'Other independent work',
+    profileHints: { taskType: 'build', target: 'src/other.ts', expected: 'other', constraints: null },
+    capabilities, dshSessionId: 'other-session', skillDiscoveryMode: 'off',
+  })
+  prepareTurnIntent(f.database, {
+    runId: prepared.run.runId, dshSessionId: 'other-session', nativeTurn: 1,
+    phase: 'ideal', contractRevision: 1, inputDigest: canonicalContentHash({ ideal: 2 }),
+    operation: 'ideal_submit', idempotencyKey: 'other-ideal',
+  })
+  submitOdunoIdeal(f.database, {
+    runId: prepared.run.runId, workspace: prepared.project.workspace, orchestrationId: prepared.intake.sessionId,
+    expectedRevision: 1, idempotencyKey: 'other-ideal',
+    ideal: { objective: 'Independent', principles: ['Independent'], skillContributions: [], successSignals: ['Independent'] },
+  })
+  let entered!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  let completed!: () => void
+  const other = new Promise<void>(resolve => { completed = resolve })
+  let questionSignal: AbortSignal | undefined
+  const worker = new DshBoundaryWorker({
+    runtime: f.runtime,
+    process: async (job, signal) => {
+      if (job.dshSessionId === 'boundary-session') {
+        questionSignal = signal; entered(); await new Promise(() => undefined)
+      }
+      completed(); return { kind: 'completed' }
+    },
+    flush: () => undefined, dispatch: () => undefined,
+  })
+  try {
+    worker.kick('boundary-session'); await started
+    worker.kick('other-session'); await other
+    worker.cancelSession('boundary-session')
+    await worker.whenIdle()
+    assert.equal(questionSignal?.aborted, true)
+    assert.equal(f.database.prepare("SELECT status FROM dsh_boundary_jobs WHERE run_id = ?").get(prepared.run.runId)?.status, 'completed')
+  } finally { await worker.dispose(); await f.cleanup() }
+})
+
 test('native durability failure prevents continuation dispatch and leaves a retryable delivery job', async () => {
   const f = await fixture()
   let dispatched = false

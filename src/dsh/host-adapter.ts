@@ -46,6 +46,7 @@ import { ENNO_APPLICABLE_TASK_TYPES, type EnnoExecutionLease, type EnnoNextActio
 import {
   commitExpectedFailure,
   ennoReceiptOperation,
+  enqueueUnsubmittedTurn,
   isExpectedTurnFailure,
   phaseForOperation,
   prepareTurnIntent,
@@ -65,8 +66,9 @@ import {
   takeRecoverableInputClaimInTransaction,
 } from './input-claim.js'
 import { DshSessionLogMirror, type DshImageAttachmentRef, type DshMirrorEventSession } from './session-log-mirror.js'
-import { DshBoundaryWorker } from './boundary-worker.js'
+import { abortable, DshBoundaryWorker } from './boundary-worker.js'
 import { DshSessionLogExportService } from './session-log-export.js'
+import { DshCompletionReporter } from './completion-report.js'
 import {
   claimAutomaticContinuationInTransaction,
   claimBoundaryEffectInTransaction,
@@ -97,6 +99,7 @@ interface NativeSessions {
 }
 interface NativeAgent {
   readonly id: string
+  readonly status?: string
   readonly session?: { readonly id: string; readonly header?: { readonly cwd?: string }; snapshotEvents?: () => readonly DshLogEvent[] }
   readonly inject?: (message: unknown) => void
   readonly steer?: (message: unknown) => void
@@ -798,6 +801,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         }),
       }
       if (humanPresent) {
+        boundaryWorker.cancelSession(event.sessionId)
         const previous = currentSession(event.sessionId)
         const state = previous === undefined ? undefined : states.get(previous.runId)
         if (previous !== undefined) {
@@ -1127,12 +1131,18 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         workUnitId: binding.workUnitId ?? null,
       })
       if (phase !== undefined && receiptOperation !== undefined) {
+        const executionAttempt = operation === 'enno_work_report'
+          ? await runtime.withDatabase(database => readEnnoSnapshot(database, {
+            runId: run.runId, workspace: run.workspace, orchestrationId: run.orchestrationId,
+          }).workUnits.find(unit => unit.workUnit.id === binding.workUnitId)?.attemptCount ?? 0)
+          : 0
         await runtime.withDatabase((database) => prepareTurnIntent(database, {
           runId: run.runId,
           dshSessionId: run.sessionId,
           nativeTurn: run.turn,
           phase,
           contractRevision: binding.revision,
+          executionAttempt,
           ...(binding.workUnitId === undefined ? {} : { workUnitId: binding.workUnitId }),
           inputDigest,
           operation: receiptOperation,
@@ -1259,7 +1269,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }
 
   const boundaryAgents = new Map<string, object>()
-  const boundaryEvent = (item: TurnRecord, signal = new AbortController().signal) => ({
+  const boundarySignals = new Map<string, AbortSignal>()
+  const boundaryEvent = (item: TurnRecord, signal = boundarySignals.get(item.sessionId) ?? new AbortController().signal) => ({
     agent: {
       id: item.agentId,
       sessionId: item.sessionId,
@@ -1280,9 +1291,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     readonly detail: string
   }): Promise<string | undefined> => {
     const agent = input.item.nativeAgent ?? agents?.get(input.item.agentId)
+    const signal = boundarySignals.get(input.item.sessionId) ?? new AbortController().signal
     if (userQuestions === undefined || agent === undefined) return undefined
     try {
-      const result = await userQuestions.ask({
+      const result = await abortable(userQuestions.ask({
         questions: [{
           id: input.questionId,
           header: 'Kiokuko stopped',
@@ -1290,12 +1302,15 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           detail: input.detail,
         }],
         agent,
-      })
+        signal,
+      }), signal)
+      signal.throwIfAborted()
       const answer = result.answers[0]
       if (answer === undefined || answer.id !== input.questionId) return undefined
       const value = answer.custom?.trim() || answer.selected[0]?.trim()
       return value === undefined || value.length === 0 ? undefined : boundedUtf8Text(value, 8 * 1024)
     } catch {
+      signal.throwIfAborted()
       // A broken/dismissed question surface must never become another retry
       // loop. The durable waiting_user state remains the recovery boundary.
       return undefined
@@ -1374,6 +1389,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         }).revision)
       },
       submit: async (answer) => {
+        event.signal.throwIfAborted()
         response = await runtime.withDatabase((database) => answerEnno(database, {
           runId: item.runId,
           workspace: item.workspace,
@@ -1422,6 +1438,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       ...(advisoryEvidence === undefined ? {} : { advisoryEvidence }),
       runtime,
     })
+    event.signal.throwIfAborted()
     for (const message of messages) {
       agent.inject({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: message.content }], source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' } })
     }
@@ -1502,7 +1519,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       }
       boundaryAgents.set(sessionId, nativeAgent)
     },
-    process: async (job: DshBoundaryJob) => {
+    process: async (job: DshBoundaryJob, signal) => {
+      boundarySignals.set(job.dshSessionId, signal)
       const item = currentSession(job.dshSessionId)
       if (item === undefined || item.closed || item.runId !== job.runId || item.turn < job.nativeTurn) {
         throw new Error('kiokuko-dsh boundary job has no exact live run binding')
@@ -1588,7 +1606,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         const state = await readBoundaryState(item)
         const directive = state.directive?.advisoryRound
         if (directive === undefined) return { kind: 'completed', nextKind: 'classify_boundary' }
-        const result = await advisoryRunner.run({ directive, signal: new AbortController().signal })
+        const result = await advisoryRunner.run({ directive, signal })
+        signal.throwIfAborted()
         await submitAdvisory(result, { event: boundaryEvent(item), state })
         return { kind: 'completed', nextKind: 'classify_boundary' }
       }
@@ -1612,7 +1631,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       await sessions.flush(nativeSession)
       try { await sessionMirror.checkpointAfterNativeFlush(nativeSession as DshMirrorEventSession) } catch { /* non-vetoing cache */ }
     },
-    beforeDelivery: async (job, outbox) => {
+    beforeDelivery: async (job, outbox, signal) => {
+      boundarySignals.set(job.dshSessionId, signal)
       if (isLoopRecoveryMessage(outbox.message)) return 'deliver'
       const item = currentSession(job.dshSessionId)
       if (item === undefined || item.closed || item.runId !== job.runId) return 'superseded'
@@ -1683,7 +1703,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       }
       nativeAgent.steer(outbox.message)
     },
-    onWaitingUser: async (job, error) => {
+    onWaitingUser: async (job, error, signal) => {
+      boundarySignals.set(job.dshSessionId, signal)
       const item = currentSession(job.dshSessionId)
       if (item === undefined || item.closed || item.runId !== job.runId) return false
       await sessionMirror.markWaitingUser(item.sessionId)
@@ -1728,11 +1749,38 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     },
   })
 
+  const completionReporter = new DshCompletionReporter(runtime, async session => {
+    if (sessions?.flush === undefined) throw new Error('Native report flush is unavailable')
+    await sessions.flush(session)
+  })
+  const deliverCompletionReport = async (session: object | undefined): Promise<void> => {
+    if (session !== undefined && typeof (session as { append?: unknown }).append === 'function') {
+      await completionReporter.deliver(session as Parameters<DshCompletionReporter['deliver']>[0])
+    }
+  }
   const rehydrateBoundarySession = async (nativeAgent: NativeAgent): Promise<void> => {
     const nativeSession = nativeAgent.session ?? sessions?.get(nativeAgent.id)
     const sessionId = nativeSession?.id
     const cwd = nativeSession?.header?.cwd
     if (sessionId === undefined || cwd === undefined || typeof nativeSession?.snapshotEvents !== 'function') return
+    if (nativeAgent.status === 'running') return
+    await deliverCompletionReport(nativeSession)
+    const terminal = await runtime.withDatabase(database => database.prepare(`
+      SELECT report.run_id AS runId, report.native_turn AS nativeTurn, contract.status
+      FROM dsh_completion_reports AS report JOIN ledger_runs AS run ON run.run_id = report.run_id
+      JOIN enno_contracts AS contract ON contract.run_id = report.run_id
+      WHERE report.dsh_session_id = ? AND report.status = 'delivered' AND run.status = 'active'
+        AND contract.status IN ('completed', 'blocked', 'cancelled')
+    `).all<{ runId: string; nativeTurn: number; status: string }>(sessionId))
+    for (const restored of terminal) {
+      if (currentSession(sessionId)?.runId === restored.runId) continue
+      const end = dshTurnBoundarySeq(nativeSession as DshSessionEventSource, restored.nativeTurn, 'end')
+      if (end === undefined) continue
+      await runLifecycle.closeTurn({ runId: restored.runId,
+        status: restored.status === 'completed' ? 'completed' : restored.status === 'cancelled' ? 'cancelled' : 'failed',
+        sourceEndSeq: end,
+      })
+    }
     const pending = await runtime.withDatabase((database) => database.prepare(`
       SELECT receipt.run_id AS runId, receipt.native_turn AS nativeTurn,
              intake.task_text AS task
@@ -1773,6 +1821,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }
 
   const resolveIdleClose = async (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object): Promise<DshCloseIntent | undefined> => {
+    await deliverCompletionReport(nativeSession)
     const item = currentForAgentEvent(agentId, sessionId, undefined, nativeSession, nativeAgent)
     if (item === undefined || item.closed) return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
@@ -1783,9 +1832,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     // turn; it does not mean that the persistent conversation has ended.
     if (item.prepared.intake.profile.taskType === 'chat') return undefined
     if (state.status === 'completed' || state.nextAction === 'complete') {
-      return item.failed
-        ? { runId: item.runId, status: 'failed' }
-        : { runId: item.runId, status: 'completed', terminalTurn: item.turn }
+      // A provider failure while wording the final response cannot undo
+      // already verified completion. The durable host report covers it.
+      return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
     // Idle means the driver has no active work, not that Enno reached a
     // terminal state. Keep only genuinely resumable active states open.
@@ -1799,11 +1848,15 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const resolveSessionClose = async (sessionId: string, nativeSession: object): Promise<DshCloseIntent | undefined> => {
     const item = currentSession(sessionId)
     if (item === undefined || item.closed || item.nativeSession !== nativeSession) return undefined
-    if (item.failed) return { runId: item.runId, status: 'failed' }
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
+    if (state.status === 'completed') {
+      await deliverCompletionReport(nativeSession)
+      return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
+    }
+    if (item.failed) return { runId: item.runId, status: 'failed' }
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
     if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed' }
-    if (item.prepared.intake.profile.taskType === 'chat' || state.status === 'completed' || state.nextAction === 'complete') {
+    if (item.prepared.intake.profile.taskType === 'chat' || state.nextAction === 'complete') {
       return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
     return { runId: item.runId, status: 'cancelled' }
@@ -1958,6 +2011,26 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         }
       }
       if (!turnEndedWithError || (!durableRecoverable && !locallyRecoverable)) inMemoryClaims.delete(claimKey)
+      if (reason?.kind === 'completed' && item.prepared.ennoOduno.applicable) {
+        await runtime.withDatabase(database => {
+          const state = stateForRun(database, item)
+          if (state.nextAction === 'complete' || state.nextAction === 'report_blocker'
+            || state.status === 'cancelled' || state.contractRevision === null) return
+          const phase = state.nextAction === 'submit_ideal' ? 'ideal'
+            : state.nextAction === 'submit_plan' || state.nextAction === 'ask_user_confirmation' ? 'planning'
+            : state.nextAction === 'execute_work_unit' ? 'work_unit'
+            : state.nextAction === 'submit_meditation' ? 'meditation' : 'final_review'
+          const operation = phase === 'ideal' ? 'ideal_submit' : phase === 'planning' ? 'plan_submit'
+            : phase === 'work_unit' ? 'work_report' : phase === 'meditation' ? 'meditation_submit' : 'finish'
+          enqueueUnsubmittedTurn(database, {
+            runId: item.runId, dshSessionId: item.sessionId, nativeTurn: item.turn,
+            phase, operation, contractRevision: state.contractRevision,
+            ...(state.directive?.workUnit?.id === undefined ? {} : { workUnitId: state.directive.workUnit.id }),
+            inputDigest: canonicalContentHash({ nextAction: state.nextAction, source: 'unsubmitted_turn' }),
+            idempotencyKey: `dsh-unsubmitted:${item.turn}`, nextAction: state.nextAction,
+          })
+        })
+      }
       boundaryWorker.kick(item.sessionId, item.nativeAgent)
     })().catch(() => {
       // Observe-only DSH listeners must never veto the native event.
@@ -2029,17 +2102,17 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       for (const item of remainingRuns) {
         try {
           let status: 'completed' | 'failed' | 'cancelled'
-          if (item.failed) status = 'failed'
-          else if (item.prepared.intake.profile.taskType === 'chat') status = 'cancelled'
+          if (item.prepared.intake.profile.taskType === 'chat') status = item.failed ? 'failed' : 'cancelled'
           else {
             const state = await runtime.withDatabase((database) => stateForRun(database, item))
             status = state.status === 'completed' || state.nextAction === 'complete'
               ? 'completed'
-              : state.status === 'blocked' || state.nextAction === 'report_blocker'
+              : item.failed || state.status === 'blocked' || state.nextAction === 'report_blocker'
                 ? 'failed'
                 : 'cancelled'
           }
           if (status === 'completed') {
+            await deliverCompletionReport(item.nativeSession)
             if (item.nativeSession === undefined || sessions?.flush === undefined) {
               throw new KiokukoError('CONFLICT', 'Completed DSH run requires its exact native session checkpoint')
             }
@@ -2065,6 +2138,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       activeModeRequests.clear()
       advisoryRounds.clear()
       boundaryAgents.clear()
+      boundarySignals.clear()
       resumedTurns.clear()
       resumedLeases.clear()
       inMemoryClaims.clear()

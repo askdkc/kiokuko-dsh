@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { downloadDshSessionLog } from '../../../src/client.js'
+import { apply, downloadDshSessionLog } from '../../../src/client.js'
 
 test('client streams to File System Access API and falls back to browser navigation', async () => {
   const written: number[] = []
@@ -54,4 +54,38 @@ test('client rejects a non-success export response before opening a writable fil
     },
   }), /HTTP 404.*not_found/u)
   assert.equal(writableOpened, false)
+})
+
+test('durable completion reports project into a visible accessible chat node', () => {
+  const globals = globalThis as unknown as Record<string, unknown>
+  const previousStore = globals.createSnapshotStore
+  const previousJsx = globals.jsx
+  globals.createSnapshotStore = (initial: unknown) => ({ getSnapshot: () => initial, update: () => undefined })
+  globals.jsx = (component: unknown, props: unknown) => ({ component, props })
+  let definition: any
+  let render: any
+  try {
+    apply({
+      uiConversation: { events: { register(value) { definition = value } } },
+      locale: { register: () => undefined }, effect: () => undefined, on: () => undefined,
+      slots: { inject: (_name, register) => register(), register: (descriptor, component) => {
+        if (descriptor.key === 'kiokuko-completion-report') render = component
+      } },
+    })
+    const event = { type: 'kiokuko/completion-report', seq: 42, data: { reportId: 'report-a', text: 'Completed. Tests: passed.' } }
+    assert.deepEqual(definition.match(event), { id: 'report-a', role: 'start' })
+    assert.equal(definition.match({ type: 'other', data: {} }), null)
+    const state = definition.start({}, { event })
+    const node = definition.buildViewNode({ key: 'report-a', id: 'report-a', state, start: { location: { kind: 'session' } } })
+    assert.equal(node.target, 'chat')
+    assert.equal(node.visibility, 'visible')
+    assert.equal(node.anchorSeq, 42)
+    const view = render({ node })
+    assert.equal(view.component, 'section')
+    assert.equal(view.props.role, 'status')
+    assert.equal(view.props.children, event.data.text)
+  } finally {
+    if (previousStore === undefined) delete globals.createSnapshotStore; else globals.createSnapshotStore = previousStore
+    if (previousJsx === undefined) delete globals.jsx; else globals.jsx = previousJsx
+  }
 })
