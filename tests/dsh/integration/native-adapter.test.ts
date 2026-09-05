@@ -68,6 +68,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   }
   const fallbackSession = createNativeSession('native-fallback')
   const primarySession = createNativeSession('native-session')
+  function commitContext(session: ReturnType<typeof createNativeSession>, messages: readonly unknown[]) {
+    const events = session.snapshotEvents() as DshLogEvent[]
+    for (const data of messages) events.push({ type: 'user/message', seq: events.length, time: events.length, data, surfaceOp: 'append' })
+  }
   const root = new Context()
   const services = {
     skills: {
@@ -238,6 +242,9 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     }
     assert.deepEqual(questionAgents, [])
     assert.ok(decision.messages.length > 0)
+    // The host proposes messages; only the native loop's durable append proves delivery.
+    commitContext(primarySession, decision.messages)
+    assert.equal(decision.messages.some(message => JSON.stringify(message).includes('# Kiokuko SOUL router')), false)
     assert.match(decision.messages.map((message) => JSON.stringify(message)).join('\n'), /kiokuko-soul/u)
     assert.match(decision.messages.map((message) => JSON.stringify(message)).join('\n'), /@PLAN\.md を実装/u)
     assert.equal(decision.messages.every((message: any) => typeof message.id === 'string' && message.id.length > 0), true)
@@ -309,7 +316,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       turn: 2, step: 1, signal: event.signal,
     })
     assert.equal(secondActionEvent.profileHints?.taskType, 'build')
-    assert.equal((await adapter.host.intakeGate!.preStep(secondActionEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+    const secondActionDecision = await adapter.host.intakeGate!.preStep(secondActionEvent, async () => ({ kind: 'enter', messages: [] }))
+    assert.equal(secondActionDecision.kind, 'enter')
+    assert.equal(secondActionDecision.messages.some(message => JSON.stringify(message).includes('DSH host completed the Akinator intake gate')), false,
+      'a new turn must not resend unchanged context')
     assert.equal(guardReason({
       ...invalidIdealExecution,
       callId: 'retry-ideal-turn-2',
@@ -356,6 +366,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(fallbackEvent.nativeSession, fallbackSession)
     const fallbackDecision = await adapter.host.intakeGate!.preStep(fallbackEvent, async () => ({ kind: 'enter', messages: [] }))
     assert.equal(fallbackDecision.kind, 'enter')
+    commitContext(fallbackSession, fallbackDecision.messages)
     const fallbackNextEvent = await adapter.host.mapPreStep!({
       agent: fallbackAgent,
       messages: [{ role: 'user', content: [{ type: 'text', text: 'Injected fallback context.' }] }],
@@ -410,6 +421,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     })
     const chatDecision = await adapter.host.intakeGate!.preStep(chatEvent, async () => ({ kind: 'enter', messages: [] }))
     assert.equal(chatDecision.kind, 'enter')
+    commitContext(chatSession, chatDecision.messages)
     assert.equal(adapter.host.ponytailModes!.isActive('dsh:chat-agent:chat-session:1'), true)
     assert.deepEqual(questionIds.slice(questionsBeforeChat), ['taskType'])
     assert.equal(questionAgents.at(-1), chatAgent)
@@ -439,6 +451,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(secondChatEvent.profileHints?.taskType, 'chat')
     const secondChatDecision = await adapter.host.intakeGate!.preStep(secondChatEvent, async () => ({ kind: 'enter', messages: [] }))
     assert.equal(secondChatDecision.kind, 'enter')
+    commitContext(chatSession, secondChatDecision.messages)
     assert.equal(questionIds.length, questionsAfterFirstChat)
     const secondChatRun = adapter.host.resolveSessionRunId!(chatSession)!
     assert.equal(secondChatRun, firstChatRun)

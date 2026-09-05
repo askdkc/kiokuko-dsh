@@ -80,3 +80,20 @@ test('explicit current directive wins over a stale prepared directive', async ()
   assert.match(directive?.content ?? '', /current objective/u)
   assert.doesNotMatch(directive?.content ?? '', /stale objective/u)
 })
+
+test('native task prefixes are omitted without dropping additional or different intake requirements', async () => {
+  const task = 'Review this file.\nPreserve the code.'
+  const messages = await injectDshContext({
+    task, userTaskInConversation: true,
+    prepared: prepared({ intake: { status: 'ready', profile: {
+      target: task, expected: `${task}\r\nReport the test results.`, constraints: 'Do not review another file.',
+    } } }),
+  })
+  assert.equal(messages.find(message => message.source === 'user-task')?.content,
+    'Finalized intake:\nReport the test results.\nDo not review another file.')
+  const noAdditionalFacts = await injectDshContext({
+    task, userTaskInConversation: true,
+    prepared: prepared({ intake: { status: 'ready', profile: { target: task, expected: task, constraints: null } } }),
+  })
+  assert.equal(noAdditionalFacts.some(message => message.source === 'user-task'), false)
+})

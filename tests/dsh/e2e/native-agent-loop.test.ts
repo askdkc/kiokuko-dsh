@@ -431,6 +431,11 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       .filter((event: any) => event.type === 'user/message' && event.data.source?.plugin === 'kiokuko-dsh')
       .flatMap((event: any) => event.data.content)
       .flatMap((block: any) => block.type === 'text' ? [block.text] : [])
+    assert.equal(injectedTexts.some((text: string) => text.includes('# Kiokuko SOUL router')), false,
+      'SOUL is already carried by the system prompt')
+    const skillTexts = injectedTexts.filter((text: string) => text.startsWith('---\nname:') || text.startsWith('<!-- KIOKUKO MANAGED STANDARD SKILL:'))
+    assert.equal(new Set(skillTexts).size, skillTexts.length,
+      'phase changes and persisted resume must not append identical Skill bodies')
     assert.equal(injectedTexts.some((text: string) => text.includes('Current Kiokuko advisory evidence')), true)
     assert.equal(injectedTexts.some((text: string) => text.includes('ideal.skillContributions to exactly []')), true)
     assert.equal(injectedTexts.some((text: string) => text.includes('"maxItems":0')), true)
@@ -442,9 +447,22 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     for (const disposition of [...idealDispositions, ...planningDispositions, ...finalReviewDispositions]) {
       assert.equal(injectedTexts.some((text: string) => text.includes(`Checked ${disposition.slotId}.`)), true)
     }
-    assert.equal(injectedTexts.some((text: string) => /Finalized intake:[\s\S]*PLAN\.md/u.test(text)), true)
-    assert.equal(injectedTexts.some((text: string) => /Finalized intake:[\s\S]*all fixed\?/u.test(text)), true)
-    assert.match(injectedTexts.at(-1) ?? '', /Finalized intake:[\s\S]*gimme commit message/u)
+    const taskContexts = liveAgent.session.snapshotEvents()
+      .filter((event: any) => event.type === 'user/message' && event.data.source?.plugin === 'kiokuko-dsh'
+        && event.data.source.sections?.[0]?.name === 'user-task:user-task')
+      .map((event: any) => event.data.content[0].text as string)
+    assert.ok(taskContexts.some((text: string) => text.includes('変更を検証し、結果を報告してください。')),
+      'additional intake requirements remain available')
+    for (const task of ['@PLAN.md を実装', 'all fixed?', 'gimme commit message.']) {
+      const humanEvents = liveAgent.session.snapshotEvents().filter((event: any) => event.type === 'user/message'
+        && event.data.source?.kind === 'user' && event.data.content.some((block: any) => block.text === task))
+      assert.equal(humanEvents.length, 1, 'the native loop retains each original request once')
+      assert.equal(taskContexts.some((text: string) => text.includes(task)), false,
+        'the plugin must not copy the native request into task context')
+      assert.ok(adapterScript.requests.some((request: any) => request.messages.some((message: any) =>
+        message.source?.kind === 'user' && message.content.some((block: any) => block.text === task))),
+      'the original request reaches the model')
+    }
     await adapter.host.memoryFinalizer!.whenIdle()
     const stored = openConnection(databasePath)
     try {

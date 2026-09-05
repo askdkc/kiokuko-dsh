@@ -145,6 +145,14 @@ The dsh integration provides:
 
 - the exact bundled `kiokuko-soul` system-prompt section and six standard Skill
   providers;
+- named context fragments deduplicated against the retained native conversation
+  and current message batch. Turns and phase changes append only changed
+  fragments; the SOUL body stays in the system prompt. Compaction, session resume,
+  and plugin reload restore missing fragments from current host state. A proposed
+  message is not treated as delivered until the native loop retains or queues it;
+- the original human request and attachments remain native messages. Kiokuko's
+  task context contains only additional intake facts, omitting exact request
+  copies and request prefixes in those fields;
 - one current Akinator question at a time only when the task type remains
   ambiguous; the canonical workspace and exact user request ground the target
   and completion fields without asking the user to repeat known context, and
