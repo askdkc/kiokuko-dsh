@@ -493,6 +493,7 @@ export const odunoMeditationSchema = z.object({
 });
 
 export const idealSubmissionSchema = z.object({
+  executionHints: z.unknown().optional().describe('Optional task-condition proposals: [{field, text, quote}]. Invalid proposals are ignored without retrying the phase.'),
   runId: identifier,
   workspace: canonicalText(256).optional(),
   orchestrationId: orchestrationIdSchema.optional(),
@@ -508,6 +509,7 @@ export const idealSubmissionSchema = z.object({
 });
 
 export const planSubmissionSchema = z.object({
+  executionHints: z.unknown().optional().describe('Optional task-condition proposals: [{field: readPaths|writePaths|excludedPaths|constraints|completion, text, quote}]. Exact user quote; proposals require plan approval.'),
   runId: identifier,
   workspace: canonicalText(256).optional(),
   orchestrationId: orchestrationIdSchema.optional(),

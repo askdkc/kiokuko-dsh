@@ -60,7 +60,7 @@ policy into DSH's system prompt automatically. After installation, start the
 dsh web
 ```
 
-See [the DeepSeek Harness Plugin guide](docs/dsh-plugin.md) for runtime details.
+See [the DeepSeek Harness Plugin guide](docs/dsh-plugin.md) for runtime details and [execution support (Japanese)](docs/execution-support.md) for task conditions, resumable exploration pauses, and evidence coverage.
 
 ## License
 

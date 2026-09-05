@@ -359,6 +359,7 @@ export interface UserFacingWorkItem {
 }
 
 export interface UserFacingConfirmation {
+  executionConditions?: string[];
   presentationVersion: 2;
   language: UserFacingLanguage;
   title: string;

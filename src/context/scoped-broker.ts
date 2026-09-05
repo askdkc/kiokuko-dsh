@@ -1,3 +1,4 @@
+import { boundTaskRetrievalQuery } from '../memory/retrieval-query.js';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { KiokukoError } from '../errors.js';
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js';
@@ -213,7 +214,7 @@ function takeCharacters(value: string, limit: number): string {
 }
 
 function textFor(query: ScopedContextQuery): string {
-  return [
+  return boundTaskRetrievalQuery([
     query.task,
     query.taskProfile.taskType ?? '',
     query.taskProfile.target ?? '',
@@ -222,7 +223,7 @@ function textFor(query: ScopedContextQuery): string {
     ...(query.recommendedTags ?? []),
     ...(query.changedPaths ?? []),
     ...(query.errorSignatures ?? []),
-  ].join('\n');
+  ].join('\n'));
 }
 
 function scopeObject(entry: EntryRecord): Record<string, unknown> {

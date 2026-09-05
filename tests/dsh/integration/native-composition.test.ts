@@ -89,3 +89,22 @@ test('turn-stopping and idle callbacks only kick the durable boundary worker', a
   assert.equal(disposed, 1)
   assert.equal(listeners.size, 0)
 })
+
+test('failed optional native task mapping preserves the original step and calls downstream once', async () => {
+  const listeners = new Map<string, Function>()
+  const context = { on(name: string, fn: Function) { listeners.set(name, fn); return () => listeners.delete(name) } } as unknown as Context
+  const composition = await mountDshComposition(context, {
+    intakeGate: { preStep() { throw new Error('mapping did not succeed') } } as any,
+    mapPreStep: () => { throw new Error('optional DB or task projection unavailable') },
+  })
+  try {
+    const input = { kind: 'enter', messages: [{ role: 'user', content: [{ type: 'text', text: '原文\n日本語と添付' }, { type: 'image', url: 'fixture' }], source: { kind: 'user' } }] }
+    let calls = 0
+    const run = listeners.get('agent/pre-step')!
+    assert.equal(await run({}, async () => { calls++; return input }), input)
+    assert.equal(calls, 1)
+    const nativeFailure = new Error('native downstream failure')
+    await assert.rejects(run({}, async () => { calls++; throw nativeFailure }), nativeFailure)
+    assert.equal(calls, 2, 'a downstream failure must not cause a second execution')
+  } finally { await composition.dispose() }
+})

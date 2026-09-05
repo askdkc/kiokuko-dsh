@@ -1432,6 +1432,39 @@ export async function prepareEnnoVerification(
       postDigest: postRepositoryState.digest,
       changedDuringVerification,
     });
+    const verified = readEnnoSnapshot(database, identity(database, input));
+    if (!verified.finalEvidenceReady) {
+      // Finishing a process is not the same as preparing admissible evidence.
+      // In particular, compilers can create artifacts and invalidate the tree
+      // they just checked. Preserve the evidence, but hand repair to planning
+      // instead of replaying this completed receipt in a host-only loop.
+      const attempts = current.attempts + 1;
+      const mustBlock = attempts >= current.contract.maxAttempts;
+      const reason = changedDuringVerification
+        ? 'Repository changes were observed during final verification (including possible build artifacts). Exit codes do not establish fresh evidence. Revise the verifier to avoid modifying the repository; do not bypass freshness checks or delete user files.'
+        : 'Final verification evidence no longer matches the current repository. Reconcile the changes and revise the verification plan before retrying.';
+      updateContractInTransaction(database, current, {
+        contract: mustBlock ? current.contract : { ...current.contract, revision: current.revision + 1 },
+        status: mustBlock ? 'blocked' : 'zenki_planning',
+        confirmationState: mustBlock ? current.confirmationState : 'revision_requested',
+        attempts,
+        blocker: reason,
+      });
+      appendEnnoEventInTransaction(database, input.runId, 'enno.verification_failed', 'enno-oduno', 'failed', {
+        contractRevision: current.revision,
+        mutationRevision: current.mutationRevision,
+        reason: changedDuringVerification ? 'repository_changed_during_verification' : 'stale_verification_evidence',
+        statuses: results.map(result => ({ verifierId: result.verifier.id, status: result.status })),
+      });
+      if (mustBlock) {
+        appendEnnoEventInTransaction(database, input.runId, 'enno.blocked', 'enno-oduno', 'blocked', { reason: 'attempt_limit' });
+        terminalizeLedgerRunInTransaction(database, input.runId, 'failed');
+      } else {
+        appendEnnoEventInTransaction(database, input.runId, 'enno.replan_requested', 'enno-oduno', 'requested', {
+          fromContractRevision: current.revision, toContractRevision: current.revision + 1, reason,
+        });
+      }
+    }
     const response: EnnoOperationResponse = {
       ennoOduno: stateForSnapshot(readEnnoSnapshot(database, identity(database, input))),
       verifierResults: results,

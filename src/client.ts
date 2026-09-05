@@ -269,7 +269,7 @@ export const inject = ['slots', 'locale', 'uiConversation'] as const
 const completionReportDefinition = {
   kind: 'kiokuko-completion-report', target: 'chat',
   match: (event: { type: string; data: { reportId?: string; text?: string } }) =>
-    event.type === 'kiokuko/completion-report' && typeof event.data.reportId === 'string' && typeof event.data.text === 'string'
+    (event.type === 'kiokuko/completion-report' || event.type === 'kiokuko/execution-status') && typeof event.data.reportId === 'string' && typeof event.data.text === 'string'
       ? { id: event.data.reportId, role: 'start' } : null,
   start: (_context: unknown, match: { event: { seq: number; data: { text: string } } }) => ({ seq: match.event.seq, text: match.event.data.text }),
   update: (context: { state: unknown }) => context.state,

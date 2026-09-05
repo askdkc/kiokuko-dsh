@@ -30,7 +30,7 @@ function dshModule(relativePath: string): string {
   return pathToFileURL(join(dshPackageRoot, '@deepseek-ai', name, 'lib/index.js')).href
 }
 
-for (const finalMode of ['text', 'empty', 'error', 'stall'] as const) {
+for (const finalMode of ['text', 'empty', 'error', 'stall', 'pause', 'verifier_mutation'] as const) {
 test(`real DSH agent loop: persisted resume, verification retry, completion (${finalMode})`, {
   skip: !dshSourceRoot && !dshPackageRoot ? 'requires the pinned DeepSeek Harness runtime' : false,
   timeout: 60_000,
@@ -76,6 +76,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   }
   const focusedRetryMarker = join(fixtureRoot, 'focused-verifier-retry-ready')
   const plan = {
+    executionHints: [{ field: 'constraints', text: 'Keep the native workflow recoverable.', quote: '@PLAN.md を実装' }],
     scope: ['src'],
     exclusions: [],
     acceptanceCriteria: [{ id: 'verified', description: 'The final verifier passes.\nNo approved checks are omitted.' }],
@@ -103,9 +104,10 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     skillRequirements: [],
     finalVerifiers: [{
       id: 'final-test', kind: 'test', executable: process.execPath,
-      args: ['--eval', 'process.exit(0)'], cwd: '.', timeoutMs: 5_000,
+      args: ['--eval', finalMode === 'verifier_mutation'
+        ? 'require("node:fs").writeFileSync("compiled.elc", "artifact")' : 'process.exit(0)'], cwd: '.', timeoutMs: 5_000,
     }],
-    maxAttempts: 3,
+    maxAttempts: finalMode === 'verifier_mutation' ? 8 : 3,
     provenance: {
       scope: 'explicit_user', exclusions: 'explicit_user', acceptanceCriteria: 'explicit_user',
       workPlan: 'inferred', skillSet: 'repository_evidence', finalVerifiers: 'repository_evidence',
@@ -130,9 +132,17 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       ? `The plan is ready for the host advisory round. ${'x'.repeat(4_531)}`
       : 'The plan is ready for the host advisory round.'),
     mock.toolCallResponse(`plan-${suffix}`, 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
+    ...(finalMode === 'pause' && suffix === 'one' ? [1, 2, 3, 4].map(index => mock.toolCallResponse(`repeated-${index}`, 'read', { file_path: 'src/fixture.ts' })) : []),
     ...(failBeforeWork ? [() => { throw new llm.LlmError('WebSocket error', 'PI_AI_ERROR') }] : []),
     mock.toolCallResponse(`work-${suffix}`, 'enno_work_report', workResult),
     ...(retryWork ? [mock.toolCallResponse(`work-${suffix}-retry`, 'enno_work_report', workResult)] : []),
+    ...(finalMode === 'verifier_mutation' ? [
+      mock.toolCallResponse(`plan-${suffix}-repair`, 'enno_plan_submit', {
+        ...plan, advisoryDisposition: planningDispositions,
+        finalVerifiers: [{ ...plan.finalVerifiers[0], args: ['--eval', 'process.exit(0)'] }],
+      }),
+      mock.toolCallResponse(`work-${suffix}-repair`, 'enno_work_report', workResult),
+    ] : []),
     mock.toolCallResponse(`finish-${suffix}`, 'enno_finish', {
       advisoryDisposition: finalReviewDispositions,
       review: { decision: 'accept', summary: 'All approved work and final verification passed.' },
@@ -163,6 +173,12 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   await ctx.plugin(skills.default)
   await ctx.plugin(agentLoop.default, { agents: [] })
   ctx.llm.registerAdapter(['mock'], adapterScript)
+  let exploratoryReads = 0
+  const readDisposer = finalMode === 'pause' ? ctx.tools.register({ name: 'read', description: 'Read fixed source evidence.',
+    parameters: { file_path: { type: 'string', required: true } },
+    output: { schema: { type: 'string' }, render: (_args: unknown, text: string) => [{ type: 'text', text }] },
+    execute: () => { exploratoryReads++; return 'unchanged source evidence' },
+  }) : undefined
   let confirmations = 0
   let recoveryQuestions = 0
   const confirmationPresentationKinds: string[] = []
@@ -182,7 +198,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
             boundaryFailures.push(question.detail)
             return { answers: [{ id: question.id, selected: [], custom: '' }] }
           }
-          if (question.id.startsWith('loop-')) {
+          if (question.id.startsWith('loop-') || question.id.startsWith('effect-')) {
             recoveryQuestions++
             return { answers: [{ id: question.id, selected: [], custom: '' }] }
           }
@@ -191,13 +207,14 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
             confirmationPresentationKinds.push(question.intent?.kind ?? 'generic')
             confirmationQuestions.push(question.question)
             confirmationDetails.push(question.detail)
-            const expectedPlanCall = ['plan-one', 'plan-two', 'plan-two-revised'][confirmations - 1]
+            const expectedPlanCall = (finalMode === 'verifier_mutation'
+              ? ['plan-one', 'plan-one-repair'] : ['plan-one', 'plan-two', 'plan-two-revised'])[confirmations - 1]
             confirmationSawCompletedPlanResult.push(liveAgent.session.snapshotEvents().some((event: any) => (
               event.type === 'tool/result'
               && event.data.message.content[0]?.toolCallId === expectedPlanCall
             )))
             assert.deepEqual(question.options.map((option: any) => option.label), ['approve', 'cancel'])
-            if (confirmations === 2) {
+            if (confirmations === 2 && finalMode !== 'verifier_mutation') {
               throw Object.assign(new Error('the user chose Chat about it'), { code: 'ASK_CANCELLED' })
             }
           }
@@ -307,8 +324,11 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         await new Promise(resolve => setTimeout(resolve, 25))
         if (liveAgent.status === 'idle' && await ready()) return
       }
-      throw new Error('Native workflow did not settle: ' + JSON.stringify(liveAgent.session.snapshotEvents()
-        .filter((e: any) => e.type === 'tool/result' || e.type === 'turn/end').slice(-8)))
+      const state = await adapter.host.runtime!.withDatabase(db => Object.fromEntries([
+        'enno_contracts', 'dsh_turn_receipts', 'dsh_boundary_jobs', 'dsh_exploration_states', 'dsh_execution_evidence',
+      ].map(table => [table, db.prepare(`SELECT * FROM ${table}`).all().map((row: any) => Object.fromEntries(Object.entries(row).filter(([key]) => !['contract_json', 'handoff_json', 'ideal_json', 'intake_discovery_json', 'meditation_json', 'payload_json'].includes(key))))])))
+      throw new Error('Native workflow did not settle: ' + JSON.stringify({ state, events: liveAgent.session.snapshotEvents()
+        .filter((e: any) => e.type === 'tool/result' || e.type === 'turn/end').slice(-8) }))
     }
     const completed = async (count: number) => adapter.host.runtime!.withDatabase(db =>
       db.prepare("SELECT COUNT(*) AS count FROM ledger_runs WHERE status = 'completed'").get<{ count: number }>()!.count >= count)
@@ -324,8 +344,42 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       assert.equal(adapterScript.requests.length, 8, 'real human input opens exactly one new bounded generation')
       return
     }
+    if (finalMode === 'pause') {
+      await completeTurn('@PLAN.md を実装', () => adapter.host.runtime!.withDatabase(db =>
+        !!db.prepare("SELECT run_id FROM dsh_exploration_states WHERE json_extract(state_json, '$.paused') = 1").get()))
+      assert.equal(exploratoryReads, 4)
+      const count = adapterScript.requests.length
+      const receipts = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM dsh_turn_receipts').get<{ n: number }>()!.n)
+      adapter.host.boundaryWorker!.kick(liveAgent.session.id, liveAgent)
+      await adapter.host.boundaryWorker!.whenIdle()
+      assert.equal(adapterScript.requests.length, count, 'intentional pause must not enqueue an unsubmitted-turn retry')
+      assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM dsh_turn_receipts').get<{ n: number }>()!.n), receipts)
+      assert.equal(liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'kiokuko/execution-status').length, 1)
+      await completeTurn('記録済みの根拠を使って作業を再開してください。', () => completed(1))
+      assert.equal(exploratoryReads, 4, 'resuming does not replay the read side effects')
+      assert.match(JSON.stringify(liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'assistant/message').at(-1)), /Completed one/)
+      assert.deepEqual(boundaryFailures, [])
+      return
+    }
     await completeTurn('@PLAN.md を実装', () => completed(1))
     assert.deepEqual(boundaryFailures, [], 'multiline intake must not trigger an internal-error question')
+    assert.match(confirmationDetails[0]!, /Keep the native workflow recoverable/)
+    if (finalMode === 'verifier_mutation') {
+      assert.equal(recoveryQuestions, 0, 'invalid verifier evidence must not loop until the no-progress modal')
+      assert.equal(confirmations, 2, 'the repaired verifier requires approval')
+      assert.deepEqual(confirmationSawCompletedPlanResult, [true, true])
+      const finalEvidence = await adapter.host.runtime!.withDatabase(db => db.prepare(`
+        SELECT contract_revision, changed_during_verification FROM enno_verifier_runs
+        WHERE work_unit_id IS NULL ORDER BY contract_revision
+      `).all())
+      assert.deepEqual(finalEvidence.map(row => ({ ...row })), [
+        { contract_revision: 2, changed_during_verification: 1 },
+        { contract_revision: 4, changed_during_verification: 0 },
+      ])
+      assert.equal(liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'tool/result')
+        .some((e: any) => e.data.message.content[0]?.isError), false)
+      return
+    }
     if (finalMode !== 'text') {
       const reports = () => liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'kiokuko/completion-report')
       assert.equal(reports().length, 1)
@@ -447,6 +501,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     await adapter.dispose()
     await composition.dispose()
     await questionFiber.dispose()
+    readDisposer?.()
     await rm(fixtureRoot, { recursive: true, force: true })
     await rm(dataRoot, { recursive: true, force: true })
   }
