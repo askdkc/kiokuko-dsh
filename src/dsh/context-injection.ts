@@ -16,6 +16,7 @@ export interface DshModelMessage {
   readonly role: 'user'
   readonly content: string
   readonly source: DshMessageSource['kind']
+  readonly name: string
 }
 
 export interface DshDirectiveSourceSelection {
@@ -42,13 +43,27 @@ export function selectDshDirectiveSources(directive: Pick<RoleDirective, 'requir
   })
 }
 
-function sourceInput(prepared: PreparedAgentTask, fallbackTask: string, routeSkillNames: readonly string[], expertRefs: readonly DshExpertReference[], directive: DshMessageSourceInput['directive']): DshMessageSourceInput {
+function sourceInput(prepared: PreparedAgentTask, fallbackTask: string, routeSkillNames: readonly string[], expertRefs: readonly DshExpertReference[], directive: DshMessageSourceInput['directive'], userTaskInConversation: boolean): DshMessageSourceInput {
   if (prepared.intake.status !== 'ready' && prepared.intake.status !== 'exhausted') throw new Error('Cannot inject context before intake is finalized')
   if (prepared.nextAction !== 'proceed') throw new Error('Cannot inject context when the host gate did not permit proceeding')
   const profile = prepared.intake.profile
-  const finalized = [profile.target, profile.expected, profile.constraints].filter((value): value is string => value !== null && value.length > 0).join('\n')
+  const fields = [profile.target, profile.expected, profile.constraints].filter((value): value is string => value !== null && value.length > 0)
+  // Native DSH owns the original human message, including its attachments.
+  // Only additional intake facts belong in the plugin's context snapshot.
+  const original = fallbackTask.trim()
+  const additional = userTaskInConversation ? [...new Set(fields.map(value => {
+    const text = value.trim()
+    if (original.length === 0) return text
+    if (text === original) return ''
+    if (text.startsWith(`${original}\n`) || text.startsWith(`${original}\r\n`)) return text.slice(original.length).trimStart()
+    return text
+  }).filter(Boolean))] : fields
+  const finalized = additional.join('\n')
+  const task = userTaskInConversation
+    ? (finalized.length === 0 ? '' : `Finalized intake:\n${finalized}`)
+    : (finalized.length === 0 || finalized === fallbackTask ? fallbackTask : `${fallbackTask}\n\nFinalized intake:\n${finalized}`)
   return {
-    task: finalized.length === 0 || finalized === fallbackTask ? fallbackTask : `${fallbackTask}\n\nFinalized intake:\n${finalized}`,
+    task,
     intakeStatus: prepared.intake.status,
     nextAction: 'proceed',
     memoryPolicy: prepared.memoryPolicy,
@@ -68,6 +83,9 @@ export async function injectDshContext(input: {
   readonly advisoryEvidence?: DshMessageSourceInput['advisoryEvidence']
   readonly directive?: DshMessageSourceInput['directive']
   readonly runtime?: Pick<DshRuntime, 'withDatabase'>
+  readonly soulInSystemPrompt?: boolean
+  /** Native DSH already carries the human message; emit only additional intake facts. */
+  readonly userTaskInConversation?: boolean
 }): Promise<readonly DshModelMessage[]> {
   const assertMemoryCurrent = input.runtime === undefined || input.prepared.context === null
     ? undefined
@@ -80,7 +98,8 @@ export async function injectDshContext(input: {
       })
     }
   const sources = await buildDshMessageSources({
-    ...sourceInput(input.prepared, input.task, input.routeSkillNames ?? [], input.expertRefs ?? [], input.directive),
+    ...sourceInput(input.prepared, input.task, input.routeSkillNames ?? [], input.expertRefs ?? [], input.directive, input.userTaskInConversation === true),
+    ...(input.soulInSystemPrompt === undefined ? {} : { soulInSystemPrompt: input.soulInSystemPrompt }),
     ...(input.advisoryEvidence === undefined ? {} : { advisoryEvidence: input.advisoryEvidence }),
     ...(assertMemoryCurrent === undefined ? {} : { assertMemoryCurrent }),
   })
@@ -88,5 +107,6 @@ export async function injectDshContext(input: {
     role: 'user' as const,
     content: source.text,
     source: source.kind,
+    name: source.name,
   })))
 }

@@ -19,6 +19,8 @@ export interface DshExpertReference {
 
 export interface DshMessageSourceInput {
   readonly task: string
+  /** The native composition already includes the complete SOUL as a system section. */
+  readonly soulInSystemPrompt?: boolean
   readonly intakeStatus: 'ready' | 'exhausted'
   readonly nextAction: 'proceed'
   readonly memoryPolicy: {
@@ -68,7 +70,7 @@ function memorySource(item: ScopedContextItem): DshMessageSource | null {
   const text = sourceText([item.title, item.summary ?? '', item.bodyPreview].filter(Boolean).join('\n'))
   if (text === null) return null
   const title = sourceText(item.title) ?? 'item'
-  return { kind: 'memory', name: `memory:${title}`, text, trust: 'untrusted' }
+  return { kind: 'memory', name: `memory:${item.entryId ?? title}`, text, trust: 'untrusted' }
 }
 
 function advisorySource(evidence: NonNullable<DshMessageSourceInput['advisoryEvidence']>): DshMessageSource {
@@ -102,7 +104,7 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
   const sources: DshMessageSource[] = [{
     kind: 'soul',
     name: 'kiokuko-soul',
-    text: admittedSoulText(skillFile(parity.files, 'kiokuko-soul'), input.intakeStatus),
+    text: admittedSoulText(input.soulInSystemPrompt ? '' : skillFile(parity.files, 'kiokuko-soul'), input.intakeStatus).trimStart(),
     trust: 'system',
   }]
   const directive = directiveSource(input.directive)
@@ -126,6 +128,6 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
       if (source !== null) sources.push(source)
     }
   }
-  sources.push({ kind: 'user-task', name: 'user-task', text: input.task, trust: 'user' })
+  if (input.task.length > 0) sources.push({ kind: 'user-task', name: 'user-task', text: input.task, trust: 'user' })
   return Object.freeze(sources.map((source) => Object.freeze(source)))
 }
