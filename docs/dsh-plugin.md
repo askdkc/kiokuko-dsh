@@ -182,6 +182,12 @@ The dsh integration provides:
   commands routed to the exact invoking agent and session;
 - revision, route, phase, lease, idempotency, confirmation, verifier, and
   meditation gates through the Kiokuko core;
+- final verification compares the workspace at verification start, so completed
+  implementation edits are allowed. Git and ordinary directories use the same
+  file selection as their repository snapshots; unchanged content and ignored
+  build output do not trigger plan approval. Actual source changes still
+  invalidate evidence, while an unavailable mutation audit stops with a host
+  error instead of requesting another plan or repeating completed work;
 - a non-terminal tool result whose next action requires host work (plan confirmation or
   final verification) calls DSH `concludeTurn()` only after
   the successful result exists. Plan submission therefore concludes its model

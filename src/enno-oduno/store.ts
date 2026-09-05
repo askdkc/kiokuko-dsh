@@ -875,7 +875,8 @@ export function readFreshFinalVerifierResults(database: SqliteDatabase, input: {
     const row = byId.get(verifier.id)!;
     const storedVerifier = parseVerifierSpec(parseCanonicalJson(row.verifier_json, 'Stored Enno verifier is invalid'));
     if (canonicalJson(storedVerifier) !== canonicalJson(verifier)) return undefined;
-    if (row.changed_during_verification === 1) return undefined;
+    // Missing audit evidence is unknown, never proof of an unchanged tree.
+    if (row.changed_during_verification !== 0) return undefined;
     if (input.repositoryDigest !== undefined
       && (row.pre_repository_digest !== input.repositoryDigest
         || row.post_repository_digest !== input.repositoryDigest
