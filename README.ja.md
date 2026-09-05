@@ -56,7 +56,7 @@ dsh plugin --profile web remove kiokuko-dsh
 dsh web
 ```
 
-詳細は[DeepSeek Harness Pluginガイド](docs/dsh-plugin.md)を参照してください。
+詳細は[DeepSeek Harness Pluginガイド](docs/dsh-plugin.md)を参照してください。作業条件の指定、探索の一時停止と再開、証拠の扱いは[対話を継続する作業支援](docs/execution-support.md)にまとめています。
 
 ## License
 

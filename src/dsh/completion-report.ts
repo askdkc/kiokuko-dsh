@@ -17,7 +17,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** Recorded facts only; a missing model response is never interpreted as failed implementation. */
-export function completionReportText(snapshot: EnnoRunSnapshot): string {
+export function completionReportText(snapshot: EnnoRunSnapshot, evidenceSummary?: string): string {
   const ja = snapshot.userFacingLanguage === 'ja'
   const done = snapshot.status === 'completed'
   const heading = ja ? (done ? '依頼された作業は完了しました。' : '作業は未完了のまま停止しました。')
@@ -30,6 +30,7 @@ export function completionReportText(snapshot: EnnoRunSnapshot): string {
   lines.push('', ja ? '最終検証:' : 'Final verification:')
   for (const check of snapshot.finalEvidence) lines.push(`- ${check.verifier.id}: ${check.status}`)
   if (!snapshot.finalEvidence.length) lines.push(ja ? '- 記録なし。検証成功とは判定していません。' : '- No recorded results; verification success is not assumed.')
+  if (evidenceSummary) lines.push('', evidenceSummary)
   if (snapshot.blocker) lines.push('', snapshot.blocker)
   if (snapshot.meditation) lines.push('', snapshot.meditation.summary)
   lines.push('', ja ? '最終回答が表示されなかったため、ホストの記録から結果を表示しています。' : 'The final response was missing; this report is provided from host records.')
@@ -74,10 +75,25 @@ export class DshCompletionReporter {
       let seq = delivered?.seq
       if (seq === undefined) {
         const snapshot = await this.runtime.withDatabase(database => readEnnoSnapshot(database, item))
+        let evidenceSummary: string | undefined
+        try {
+          evidenceSummary = await this.runtime.withDatabase(database => {
+            const rows = database.prepare('SELECT evidence_json AS json FROM dsh_execution_evidence WHERE run_id = ? ORDER BY rowid DESC LIMIT 16')
+              .all<{ json: string }>(item.runId)
+            if (!rows.length) return undefined
+            const heading = snapshot.userFacingLanguage === 'ja'
+              ? '補助証拠の提示範囲（理解・正しさ・文書全体の確認を保証するものではありません）:'
+              : 'Auxiliary evidence presentation (not proof of understanding, correctness, or whole-document coverage):'
+            return [heading, ...rows.map(row => {
+              const evidence = JSON.parse(row.json)
+              return `- ${evidence.operation.paths.join(', ')} ${JSON.stringify(evidence.operation.range)}: ${evidence.presentation ?? 'unknown'}`
+            })].join('\n')
+          })
+        } catch { evidenceSummary = 'Auxiliary evidence: unknown. Recorded verification results remain authoritative.' }
         // Re-read after the DB await: another native callback may have published the same report.
         const replay = session.snapshotEvents().find(event => event.type === DSH_COMPLETION_REPORT_EVENT && record(event.data)?.reportId === id)
         seq = replay?.seq ?? session.append(DSH_COMPLETION_REPORT_EVENT, {
-          reportId: id, text: completionReportText(snapshot), source: { kind: 'plugin', plugin: 'kiokuko-dsh' },
+          reportId: id, text: completionReportText(snapshot, evidenceSummary), source: { kind: 'plugin', plugin: 'kiokuko-dsh' },
         }, { ignorable: true }).seq
       }
       await this.flush(session)

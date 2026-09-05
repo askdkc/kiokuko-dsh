@@ -1,4 +1,6 @@
+import { boundTaskRetrievalQuery } from '../memory/retrieval-query.js';
 import type { SqliteDatabase } from '../db/adapter.js';
+import { readExecutionFrame, saveExecutionFrame, updateExecutionFrame, type TaskExecutionFrame } from './execution-frame.js';
 import { KiokukoError } from '../errors.js';
 import { LedgerStore } from '../ledger/store.js';
 import type { RunRecord } from '../ledger/types.js';
@@ -100,6 +102,7 @@ export interface AnswerAgentTaskInput {
 }
 
 export interface PreparedAgentTask {
+  executionFrame?: TaskExecutionFrame;
   project: ResolvedProjectWorkspace;
   executionContext: AgentTaskExecutionContext;
   intake: {
@@ -548,14 +551,14 @@ interface PreparedTaskContextQuery {
 type TaskContextQuery = ReturnType<PreparedTaskContextQuery['queryFor']>;
 
 function embeddingQueryText(query: TaskContextQuery): string {
-  return [
+  return boundTaskRetrievalQuery([
     query.task,
     query.taskProfile.taskType ?? '',
     query.taskProfile.target ?? '',
     query.taskProfile.expected ?? '',
     query.taskProfile.constraints ?? '',
     ...query.recommendedTags,
-  ].join('\n');
+  ].join('\n'));
 }
 
 async function searchRuntime(
@@ -933,7 +936,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
     sessionId: opened.intakeSessionId,
   });
   try {
-    return await finalizeAgentTask({
+    const prepared = await finalizeAgentTask({
       database,
       project,
       executionContext,
@@ -947,6 +950,14 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
       ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     }, input.dshSessionId);
+    if (prepared.intake.profile.taskType !== 'chat') {
+      try {
+        const frame = updateExecutionFrame(readExecutionFrame(database, opened.runId), executionContext.canonicalCwd, input.task);
+        saveExecutionFrame(database, opened.runId, frame);
+        prepared.executionFrame = frame;
+      } catch { /* optional support cannot veto intake, including old schemas */ }
+    }
+    return prepared;
   } catch (error) {
     if (input.signal?.aborted) return failTaskRunAfterAbort(database, opened.runId, error);
     throw error;

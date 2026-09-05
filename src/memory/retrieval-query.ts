@@ -1,6 +1,6 @@
 import { KiokukoError } from '../errors.js';
 
-const MAX_QUERY_BYTES = 16 * 1024;
+export const MAX_QUERY_BYTES = 16 * 1024;
 const MAX_TERMS = 64;
 const MAX_TERM_LENGTH = 512;
 const MAX_CJK_SUBSTRING_TERMS = 24;
@@ -144,6 +144,18 @@ function cjkSubstringTerms(runs: readonly string[], mixedRuns: readonly string[]
     seen,
   );
   return [...primary, ...mixed, ...auxiliary];
+}
+
+/** Bound a derived task query without truncating the task or splitting Unicode. */
+export function boundTaskRetrievalQuery(source: string): string {
+  if (Buffer.byteLength(source, 'utf8') <= MAX_QUERY_BYTES) return source;
+  let query = ''; let bytes = 0;
+  for (const char of source) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (bytes + size > MAX_QUERY_BYTES) break;
+    query += char; bytes += size;
+  }
+  return query;
 }
 
 export function parseRetrievalQuery(input: unknown): ParsedRetrievalQuery {

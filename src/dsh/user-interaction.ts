@@ -299,6 +299,10 @@ function confirmationText(confirmation: UserFacingConfirmation): string {
     '',
     `- **${labels.maximumAttempts}:** ${confirmation.attemptLimit.maxAttempts}`,
   )
+  if (confirmation.executionConditions?.length) {
+    lines.push('', confirmation.language === 'ja' ? '## 追加の作業条件（承認対象）' : '## Additional task conditions (included in this approval)', '',
+      ...bulletList(confirmation.executionConditions, labels))
+  }
   return lines.join('\n')
 }
 

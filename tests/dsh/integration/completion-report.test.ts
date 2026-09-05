@@ -68,3 +68,15 @@ test('a nonempty model final response suppresses the host fallback', async () =>
     assert.equal(f.database.prepare('SELECT delivered_seq AS seq FROM dsh_completion_reports').get()?.seq, 1)
   } finally { await f.cleanup() }
 })
+
+test('corrupt or unavailable auxiliary evidence cannot prevent the durable final report', async () => {
+  const f = await fixture()
+  try {
+    f.database.prepare('DROP TABLE dsh_execution_evidence').run()
+    await new DshCompletionReporter(f.runtime, async () => undefined).deliver(f.session)
+    assert.equal(f.database.prepare('SELECT status FROM dsh_completion_reports').get()?.status, 'delivered')
+    assert.equal(f.database.prepare('SELECT status FROM enno_contracts').get()?.status, 'completed')
+    assert.match((f.events[1]?.data as { text: string }).text, /Auxiliary evidence: unknown/)
+    assert.match((f.events[1]?.data as { text: string }).text, /No recorded results/)
+  } finally { await f.cleanup() }
+})

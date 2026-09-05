@@ -1,3 +1,4 @@
+import { boundTaskRetrievalQuery } from '../memory/retrieval-query.js';
 import { randomUUID } from 'node:crypto';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { withImmediateTransaction } from '../db/transaction.js';
@@ -179,9 +180,9 @@ function sameCanonicalAnswer(existing: unknown, value: string): boolean {
 }
 
 function queryText(session: AkinatorSessionView): string {
-  return [session.task, session.profile.target, session.profile.expected, session.profile.constraints]
-    .filter((value): value is string => typeof value === 'string' && value.length > 0)
-    .join(' ');
+  const source = [session.task, session.profile.target, session.profile.expected, session.profile.constraints]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0).join(' ');
+  return boundTaskRetrievalQuery(source);
 }
 
 function taggedEntries(database: SqliteDatabase, workspace: string, tags: string[], limit = 12): EntryRecord[] {

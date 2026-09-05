@@ -35,7 +35,7 @@ import { canonicalContentHash, compareCanonicalStrings } from '../serialization/
 import { KiokukoError } from '../errors.js'
 import { injectDshContext, selectDshDirectiveSources } from './context-injection.js'
 import { projectDshDirective } from './directive-projection.js'
-import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, readPendingEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, type EnnoOperationResponse } from '../enno-oduno/service.js'
+import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, readPendingEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, inapplicableEnnoState, type EnnoOperationResponse } from '../enno-oduno/service.js'
 import { claimExecutionLeaseInTransaction, readEnnoSnapshot, terminalizeLedgerRunInTransaction } from '../enno-oduno/store.js'
 import { decideDshContinuation } from './continuation.js'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
@@ -69,6 +69,8 @@ import { DshSessionLogMirror, type DshImageAttachmentRef, type DshMirrorEventSes
 import { abortable, DshBoundaryWorker } from './boundary-worker.js'
 import { DshSessionLogExportService } from './session-log-export.js'
 import { DshCompletionReporter } from './completion-report.js'
+import { verificationBoundaryKey } from './verification-identity.js'
+import { DshExecutionSupport, EXECUTION_STATUS_EVENT, type ExecutionBinding } from './execution-support.js'
 import {
   claimAutomaticContinuationInTransaction,
   claimBoundaryEffectInTransaction,
@@ -486,6 +488,19 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }>()
   const resumedLeases = new Map<string, NonNullable<EnnoOperationResponse['executionLease']>>()
   const policy = new DshToolPolicy({ phase: 'intake', runId: 'pending', workspace: 'pending', orchestrationId: 'pending', revision: 1, routeEpoch: 0 })
+  const executionSupport = new DshExecutionSupport(runtime)
+  executionSupport.mount({ on: (name, listener, options) => (ctx as any).on(name, listener, options),
+    ...(tools === undefined ? {} : { tools: { guard: tools.guard.bind(tools) } }) })
+  const executionBinding = (item: TurnRecord): ExecutionBinding => ({
+    runId: item.runId, sessionId: item.sessionId, nativeAgent: item.nativeAgent, nativeSession: item.nativeSession,
+    cwd: item.cwd, task: item.task, turn: item.turn,
+    chat: item.prepared.intake.profile.taskType === 'chat',
+    terminal: item.closed || ['complete', 'report_blocker'].includes(item.prepared.ennoOduno.nextAction)
+      && item.prepared.ennoOduno.applicable,
+    generation: canonicalContentHash({ revision: item.prepared.ennoOduno.contractRevision,
+      route: item.prepared.ennoOduno.routeEpoch ?? null, action: item.prepared.ennoOduno.nextAction,
+      lease: states.get(item.runId)?.leaseToken ?? null }),
+  })
   const memoryFinalizer = new DshMemoryFinalizer({
     runtime,
     sessionQuery: finalizationQuery,
@@ -498,12 +513,14 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   let prepareGeneration = 0
   const continuedTurns = new Map<string, {
     readonly fingerprint: string
+    readonly profileHints?: DshPreStepEvent['profileHints']
     readonly result: DshIntakeGateResult
     readonly nativeAgent?: object
     readonly nativeSession?: object
   }>()
   const resumedTurns = new Map<string, {
     readonly fingerprint: string
+    readonly profileHints?: DshPreStepEvent['profileHints']
     readonly result: DshIntakeGateResult
     readonly nativeAgent?: object
     readonly nativeSession?: object
@@ -718,7 +735,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             && previousState.status !== 'completed'
             && previousState.status !== 'blocked'
             && previousState.status !== 'cancelled'
-            && previousState.nextAction !== 'complete'
+            && (previousState.nextAction !== 'complete' || executionSupport.paused(previous.sessionId))
         if (continuePrevious) {
           this.assertCatalog(previous.catalog, event.capabilities)
           const refreshedWork = await refreshContinuedWorkLease(previous, previousState)
@@ -733,6 +750,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             continuedTurns.set(cacheKey, {
               fingerprint,
               result: continued,
+              ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
               ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
               ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
             })
@@ -752,6 +770,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         resumedTurns.set(cacheKey, {
           fingerprint,
           result: resumed,
+          ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
           ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
           ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
         })
@@ -828,8 +847,41 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       try {
         const result = await this.prepare(event)
         if (!result.admitted) return nativeDecision
+        const item = currentSession(event.sessionId)
+        if (item !== undefined) {
+          const humanMessages = [...new Map([...nativeMessages, ...nativeDecision.messages].filter(isHumanMessage)
+            .map(message => [objectRecord(message)?.id ?? canonicalContentHash(message), message])).values()]
+          const humanTask = humanPresent ? textFromMessages(humanMessages, event.task) : undefined
+          await executionSupport.refresh({ ...executionBinding(item), ...(humanTask === undefined ? {} : {
+            // Steering within a native turn must update optional conditions,
+            // without changing the logical-turn intake/receipt identity.
+            task: humanTask, humanInput: canonicalContentHash({ turn: event.turn, messages: humanMessages }),
+          }) }, humanPresent)
+          // Only an empty, automatic step can be deliberately paused. Human,
+          // attachment and other pending inputs must never be consumed here.
+          if (!humanPresent && event.nativeMessages?.length === 0 && nativeDecision.messages.every(message => {
+            const source = objectRecord(objectRecord(message)?.source)
+            return source?.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt' && source.form === 'snapshot'
+          })) {
+            const paused = await executionSupport.pauseAtBoundary(event.sessionId, async (id, text) => {
+              const session = event.nativeSession as { snapshotEvents?: () => readonly DshLogEvent[]; append?: Function } | undefined
+              if (!session?.snapshotEvents || !session.append || !sessions?.flush) throw new Error('Pause notice delivery unavailable')
+              if (!session.snapshotEvents().some(entry => entry.type === EXECUTION_STATUS_EVENT && objectRecord(entry.data)?.reportId === id)) {
+                session.append(EXECUTION_STATUS_EVENT, { reportId: id, text }, { ignorable: true })
+              }
+              await sessions.flush(session)
+              event.signal.throwIfAborted()
+              // A human can arrive while the native log flush is in flight.
+              const inbox = (event.nativeAgent as any)?.inbox
+              if ([...(inbox?.nextStep ?? []), ...(inbox?.nextTurn ?? [])].some(isHumanMessage)) {
+                throw new Error('Human input takes priority over exploration pause')
+              }
+            })
+            if (paused) return { kind: 'reject' }
+          }
+        }
         const messages = await contextMessages(event, result)
-        return { ...nativeDecision, messages: [...nativeDecision.messages, ...messages] }
+        return { ...nativeDecision, messages: [...executionSupport.projectMessages(event.sessionId, nativeDecision.messages), ...messages] }
       } catch {
         // The native message array is authoritative. Kiokuko degradation must
         // not turn a claimed user prompt into a rejected/empty DSH step.
@@ -904,38 +956,34 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const project = await resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true })
     if (project === undefined) return undefined
     const candidates = database.prepare(`
-      SELECT ec.run_id AS runId, ec.orchestration_session_id AS orchestrationId
-      FROM enno_contracts AS ec
-      JOIN ledger_runs AS lr ON lr.run_id = ec.run_id AND lr.workspace = ec.workspace
-      WHERE ec.repository_root = ? AND ec.dsh_session_id = ? AND lr.status = 'active'
-        AND ec.status NOT IN ('completed', 'cancelled', 'blocked')
-      ORDER BY ec.created_at, ec.run_id
-      LIMIT 2
-    `).all<{ runId: string; orchestrationId: string }>(project.repositoryRoot, event.sessionId)
+      SELECT lr.run_id AS runId, ec.orchestration_session_id AS orchestrationId
+      FROM ledger_runs AS lr
+      LEFT JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
+      LEFT JOIN dsh_exploration_states AS es ON es.run_id = lr.run_id
+      WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active'
+        AND ((ec.repository_root = ? AND ec.status NOT IN ('completed', 'cancelled', 'blocked'))
+          OR (ec.run_id IS NULL AND json_extract(es.state_json, '$.paused') = 1))
+      ORDER BY lr.created_at, lr.run_id LIMIT 2
+    `).all<{ runId: string; orchestrationId: string | null }>(project.workspace, event.sessionId, project.repositoryRoot)
     if (candidates.length === 0) return undefined
-    if (candidates.length !== 1) {
-      throw new KiokukoError('CONFLICT', 'Multiple active Enno-Oduno runs match this repository; refusing to guess')
-    }
+    if (candidates.length !== 1) throw new KiokukoError('CONFLICT', 'Multiple active runs match this session; refusing to guess')
     const candidate = candidates[0]!
     const runId = candidate.runId
-    const snapshot = readEnnoSnapshot(database, {
-      runId,
-      workspace: project.workspace,
-      orchestrationId: candidate.orchestrationId,
+    const snapshot = candidate.orchestrationId === null ? undefined : readEnnoSnapshot(database, {
+      runId, workspace: project.workspace, orchestrationId: candidate.orchestrationId,
     })
-    if (!event.signal.aborted && supersedesUnstartedEnno(event, stateForSnapshot(snapshot))) {
+    if (snapshot && !event.signal.aborted && supersedesUnstartedEnno(event, stateForSnapshot(snapshot))) {
       terminalizeLedgerRunInTransaction(database, runId, 'cancelled')
       return undefined
     }
     const automaticMessage = event.nativeMessages?.find((message) => pluginContinuationId(message) !== undefined && !isLoopRecoveryMessage(message))
     const automaticClaimId = automaticMessage === undefined ? undefined : pluginContinuationId(automaticMessage)
-    const decision = decideDshContinuation(database, {
-      dshSessionId: event.sessionId,
-      cwd: event.cwd,
+    const decision = snapshot ? decideDshContinuation(database, {
+      dshSessionId: event.sessionId, cwd: event.cwd,
       ...(automaticClaimId === undefined ? {} : { claimId: automaticClaimId }),
-    }, runId)
-    if (!decision.continue || decision.runId !== runId) {
-      throw new KiokukoError('CONFLICT', decision.warning ?? 'The active Enno-Oduno run cannot be resumed by this DSH session')
+    }, runId) : undefined
+    if (decision && (!decision.continue || decision.runId !== runId)) {
+      throw new KiokukoError('CONFLICT', decision.warning ?? 'The active run cannot be resumed by this DSH session')
     }
     const intakeLink = readRunIntakeLink(database, { workspace: project.workspace, runId })
     const intake = readAkinatorSession(database, { workspace: project.workspace, sessionId: intakeLink.sessionId })
@@ -974,9 +1022,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       warnings: capabilityResolution.warnings,
       nextAction: 'proceed',
       securityNotice: 'This resumed DSH run uses only current repository evidence and the current host capability catalog; previously delivered ordinary memory is not replayed implicitly.',
-      ennoOduno: stateForSnapshot(snapshot),
+      ennoOduno: snapshot ? stateForSnapshot(snapshot) : inapplicableEnnoState(),
     }
-    if (decision.executionLease !== null) resumedLeases.set(runId, decision.executionLease)
+    if (decision?.executionLease) resumedLeases.set(runId, decision.executionLease)
     return { admitted: !event.signal.aborted, prepared, catalog: event.capabilities }
   })
   const mapPreStep = async (payload: DshNativePreStepPayload): Promise<DshPreStepEvent> => {
@@ -1026,9 +1074,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       cwd,
       ...(() => {
         if (bound !== undefined) {
-          return continuedTurns.has(`${sessionId}\u0000${payload.turn}`)
-            ? { profileHints: { taskType: bound.prepared.intake.profile.taskType } }
-            : {}
+          // Reuse the actual initial projection for this logical turn. Inferring
+          // new hints after its first tool makes the intake fingerprint conflict.
+          const cached = continuedTurns.get(`${sessionId}\u0000${payload.turn}`) ?? resumedTurns.get(`${sessionId}\u0000${payload.turn}`)
+          return cached?.profileHints === undefined ? {} : { profileHints: cached.profileHints }
         }
         if (previous === undefined) return {}
         const inferred = resolveGroundedIntakeProfile({ task, cwd }).profileHints.taskType
@@ -1188,6 +1237,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         const next = policyState(ennoResponse.ennoOduno, run, run.sessionId, ennoResponse.executionLease)
         states.set(run.runId, next)
         policy.setState(next)
+        await executionSupport.refresh(executionBinding(run), false)
+        if (operation === 'enno_ideal_submit' || operation === 'enno_plan_submit') {
+          await executionSupport.proposals(run.sessionId, objectRecord(args)?.executionHints,
+            ennoResponse.ennoOduno.contractRevision ?? binding.revision)
+        }
       }
       if (phase !== undefined && isEnnoResponse(ennoResponse) && !isTurnOutcome(response)) {
         response = appliedTurnOutcome(ennoResponse, {
@@ -1377,7 +1431,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     return true
   }
   const confirmBoundary = async (item: TurnRecord, state: EnnoOdunoState): Promise<'submitted' | 'dismissed'> => {
-    const confirmation = state.directive?.userFacingConfirmation
+    const originalConfirmation = state.directive?.userFacingConfirmation
+    const conditions = executionSupport.confirmation(item.sessionId, state.contractRevision ?? 0)
+    const confirmation = originalConfirmation === undefined ? undefined : {
+      ...originalConfirmation, ...(conditions.length ? { executionConditions: conditions } : {}),
+    }
     if (confirmation === undefined || state.contractRevision === null) throw new Error('kiokuko-dsh confirmation directive is unavailable')
     const event = boundaryEvent(item)
     let response: EnnoOperationResponse | undefined
@@ -1400,6 +1458,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           action: answer.action,
           ...(answer.requestedChanges === undefined ? {} : { requestedChanges: answer.requestedChanges }),
         }))
+        if (answer.action === 'approve') await executionSupport.approve(item.sessionId, answer.expectedRevision)
       },
     })
     const decision = await controller.confirm({
@@ -1449,13 +1508,18 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     await assertTurnBoundary(boundaryEvent(item))
     const state = await readBoundaryState(item)
     if (state.contractRevision === null) throw new Error('kiokuko-dsh verification revision is unavailable')
-    const response = await runtime.withDatabase((database) => prepareEnnoVerification(database, {
-      runId: item.runId,
-      workspace: item.workspace,
-      orchestrationId: item.orchestrationId,
-      expectedRevision: state.contractRevision,
-      idempotencyKey: `dsh-verify:${canonicalContentHash({ runId: item.runId, revision: state.contractRevision })}`,
-    }))
+    const response = await runtime.withDatabase((database) => {
+      const snapshot = readEnnoSnapshot(database, {
+        runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
+      })
+      return prepareEnnoVerification(database, {
+        runId: item.runId,
+        workspace: item.workspace,
+        orchestrationId: item.orchestrationId,
+        expectedRevision: snapshot.revision,
+        idempotencyKey: verificationBoundaryKey(snapshot),
+      })
+    })
     item.prepared = { ...item.prepared, ennoOduno: response.ennoOduno }
     const next = policyState(response.ennoOduno, item, item.sessionId)
     states.set(item.runId, next)
@@ -1637,6 +1701,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (isLoopRecoveryMessage(outbox.message)) return 'deliver'
       const item = currentSession(job.dshSessionId)
       if (item === undefined || item.closed || item.runId !== job.runId) return 'superseded'
+      if (executionSupport.paused(item.sessionId)) return 'waiting_user'
       const guarded = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
         const snapshot = readEnnoSnapshot(database, {
           runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
@@ -1827,7 +1892,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const resolveIdleClose = async (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object): Promise<DshCloseIntent | undefined> => {
     await deliverCompletionReport(nativeSession)
     const item = currentForAgentEvent(agentId, sessionId, undefined, nativeSession, nativeAgent)
-    if (item === undefined || item.closed) return undefined
+    if (item === undefined || item.closed || executionSupport.paused(item.sessionId)) return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
     if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed' }
@@ -1851,7 +1916,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }
   const resolveSessionClose = async (sessionId: string, nativeSession: object): Promise<DshCloseIntent | undefined> => {
     const item = currentSession(sessionId)
-    if (item === undefined || item.closed || item.nativeSession !== nativeSession) return undefined
+    if (item === undefined || item.closed || item.nativeSession !== nativeSession || executionSupport.paused(item.sessionId)) return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
     if (state.status === 'completed') {
       await deliverCompletionReport(nativeSession)
@@ -1903,6 +1968,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         ...(item.nativeSession === undefined ? {} : { nativeSession: item.nativeSession }),
       })
       item.closed = true
+      executionSupport.clear(item.sessionId)
       gate.clearTurn(item.sessionId, item.turn)
       const modeKey = identityKey(item.agentId, item.sessionId)
       const modeRequest = `dsh:${item.agentId}:${item.sessionId}:${item.turn}`
@@ -2015,7 +2081,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         }
       }
       if (!turnEndedWithError || (!durableRecoverable && !locallyRecoverable)) inMemoryClaims.delete(claimKey)
-      if (reason?.kind === 'completed' && item.prepared.ennoOduno.applicable) {
+      if (reason?.kind === 'completed' && item.prepared.ennoOduno.applicable && !executionSupport.paused(item.sessionId)) {
         await runtime.withDatabase(database => {
           const state = stateForRun(database, item)
           if (state.nextAction === 'complete' || state.nextAction === 'report_blocker'
@@ -2091,6 +2157,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     host,
     dispose: async () => {
       const failures: unknown[] = []
+      const pausedSessions = new Set([...latestBySession.keys()].filter(id => executionSupport.paused(id)))
+      executionSupport.dispose()
       try { errorDisposer?.() } catch (error) { failures.push(error) }
       try { sessionEventDisposer?.() } catch (error) { failures.push(error) }
       try { boundarySessionStartDisposer?.() } catch (error) { failures.push(error) }
@@ -2100,7 +2168,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       try { await boundaryWorker.dispose() } catch (error) { failures.push(error) }
       const remainingRuns = [...new Map(
         [...turns.values()]
-          .filter((item) => !item.closed)
+          .filter((item) => !item.closed && !pausedSessions.has(item.sessionId))
           .map((item) => [item.runId, item]),
       ).values()]
       for (const item of remainingRuns) {

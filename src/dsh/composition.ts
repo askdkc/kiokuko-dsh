@@ -108,7 +108,13 @@ function mountNativeIntakeGate(
   worker?: Pick<DshBoundaryWorker, 'kick'>,
 ): () => void {
   return ctx.on('agent/pre-step', async (payload: DshNativePreStepPayload, next) => {
-    const decision = await gate.preStep(await mapPreStep(payload), next as () => Promise<DshPreStepDecision>)
+    let mapped: DshPreStepEvent
+    try { mapped = await mapPreStep(payload) } catch {
+      // Mapping is optional host preparation. In particular, an earlier
+      // degraded first step must not break the next native tool/model step.
+      return next()
+    }
+    const decision = await gate.preStep(mapped, next as () => Promise<DshPreStepDecision>)
     // CapturingGate has now applied human-input precedence and stale-outbox
     // supersession. Only after that point may recovery work be kicked.
     worker?.kick(payload.agent.session?.id ?? payload.agent.sessionId, payload.agent)
