@@ -34,6 +34,7 @@ import { STANDARD_SKILL_MANIFESTS } from './standard-skills.js'
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js'
 import { KiokukoError } from '../errors.js'
 import { injectDshContext, selectDshDirectiveSources } from './context-injection.js'
+import { projectDshContext } from './context-projection.js'
 import { projectDshDirective } from './directive-projection.js'
 import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, readPendingEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, inapplicableEnnoState, type EnnoOperationResponse } from '../enno-oduno/service.js'
 import { claimExecutionLeaseInTransaction, readEnnoSnapshot, terminalizeLedgerRunInTransaction } from '../enno-oduno/store.js'
@@ -169,7 +170,6 @@ interface TurnRecord {
   catalog: DshCapabilityCatalog
   /** Monotonic host generation assigned before each prepare begins. */
   prepareGeneration: number
-  contextInjectionKey?: string
   failed: boolean
   closed: boolean
 }
@@ -880,7 +880,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             if (paused) return { kind: 'reject' }
           }
         }
-        const messages = await contextMessages(event, result)
+        const messages = await contextMessages(event, nativeDecision.messages)
         return { ...nativeDecision, messages: [...executionSupport.projectMessages(event.sessionId, nativeDecision.messages), ...messages] }
       } catch {
         // The native message array is authoritative. Kiokuko degradation must
@@ -913,16 +913,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const item = currentSession(sessionId)
     return item?.agentId === agentId && (turn === undefined || item.turn === turn) && matchesNativeIdentity(item) ? item : undefined
   }
-  const contextInjectionKey = (item: TurnRecord, turn: number, state: EnnoOdunoState, selection: { readonly routeSkillNames: readonly string[]; readonly expertRefs: readonly unknown[] }): string => canonicalContentHash({
-    sessionId: item.sessionId,
-    turn,
-    routeSkillNames: selection.routeSkillNames,
-    expertRefs: selection.expertRefs,
-    contractRevision: state.contractRevision,
-    nextAction: state.nextAction,
-    directiveDigest: state.directive === null ? null : canonicalContentHash(state.directive),
-    advisoryRoundDigest: state.advisoryPhaseState.state === 'aggregated' ? state.advisoryPhaseState.inputDigest : null,
-  })
   const advisoryEvidenceFor = async (item: TurnRecord, state: EnnoOdunoState): Promise<{
     readonly phase: DshAdvisoryRoundResult['phase']
     readonly contributions: DshAdvisoryRoundResult['contributions']
@@ -1091,7 +1081,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       signal: payload.signal,
     }
   }
-  const contextMessages = async (event: DshPreStepEvent, _result: DshIntakeGateResult): Promise<readonly unknown[]> => {
+  const contextMessages = async (event: DshPreStepEvent, pending: readonly unknown[]): Promise<readonly unknown[]> => {
     const item = currentForAgentEvent(event.agent.id, event.sessionId, event.turn, event.nativeSession, event.nativeAgent)
     if (item === undefined || item.sessionId !== event.sessionId) throw new Error('kiokuko-dsh turn identity is not bound')
     if (event.nativeSession !== undefined && item.nativeSession !== event.nativeSession) throw new Error('kiokuko-dsh native session identity is not bound')
@@ -1102,8 +1092,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const prepared = item.prepared
     const directive = projectDshDirective(prepared.ennoOduno)
     const selection = directive === null ? { routeSkillNames: [], expertRefs: [] } : selectDshDirectiveSources(directive)
-    const contextKey = contextInjectionKey(item, event.turn, prepared.ennoOduno, selection)
-    if (item.contextInjectionKey === contextKey) return []
     const advisoryEvidence = await advisoryEvidenceFor(item, prepared.ennoOduno)
     const messages = await injectDshContext({
       prepared,
@@ -1113,15 +1101,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       ...(directive === null ? {} : { directive }),
       ...(advisoryEvidence === undefined ? {} : { advisoryEvidence }),
       runtime,
+      soulInSystemPrompt: ctx.get('systemPrompt', false) !== undefined,
+      userTaskInConversation: true,
     })
-    const nativeMessages = messages.map((message) => ({
-        id: randomUUID(),
-        role: message.role,
-        content: [{ type: 'text', text: message.content }],
-        source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
-      }))
-    item.contextInjectionKey = contextKey
-    return Object.freeze(nativeMessages)
+    return projectDshContext(messages, sessionEventSource(event.nativeSession), pending)
   }
 
   const toolHost: DshToolHost = {
@@ -1485,8 +1468,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const exactNativeAgent = item.nativeAgent as { readonly inject?: (message: unknown) => void } | undefined
     const agent = exactNativeAgent === undefined ? agents?.get(item.agentId) : exactNativeAgent
     if (agent?.inject === undefined) throw new Error('kiokuko-dsh native agent injection is unavailable')
-    const contextKey = contextInjectionKey(item, item.turn, state, selection)
-    if (item.contextInjectionKey === contextKey) return
     const projectedDirective = projectDshDirective({ nextAction: state.nextAction, directive: state.directive })
     const advisoryEvidence = await advisoryEvidenceFor(item, state)
     const messages = await injectDshContext({
@@ -1497,12 +1478,14 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       ...(projectedDirective === null ? {} : { directive: projectedDirective }),
       ...(advisoryEvidence === undefined ? {} : { advisoryEvidence }),
       runtime,
+      soulInSystemPrompt: ctx.get('systemPrompt', false) !== undefined,
+      userTaskInConversation: true,
     })
     event.signal.throwIfAborted()
-    for (const message of messages) {
-      agent.inject({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: message.content }], source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' } })
+    const pending = (agent as { readonly inbox?: { readonly nextStep?: readonly unknown[] } }).inbox?.nextStep ?? []
+    for (const message of projectDshContext(messages, sessionEventSource(item.nativeSession), pending)) {
+      agent.inject(message)
     }
-    item.contextInjectionKey = contextKey
   }
   const runFinalVerificationBoundary = async (item: TurnRecord): Promise<void> => {
     await assertTurnBoundary(boundaryEvent(item))
