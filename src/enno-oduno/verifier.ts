@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
-import { execFileSync, spawn, type ChildProcessByStdio } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { unwatchFile, watchFile, type Stats } from 'node:fs';
 import type { Readable } from 'node:stream';
 import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 import { canonicalDirectory } from '../repository/detect-root.js';
-import { captureRepositoryState } from './repository-state.js';
+import { captureRepositoryState, repositoryStatePaths, repositoryPathDigest } from './repository-state.js';
 import { assertVerifierCwd, parseVerifierSpec } from './schemas.js';
 import type { VerifierRunResult, VerifierSpec } from './types.js';
 
@@ -16,59 +16,82 @@ export interface VerifierDependencies {
   spawn?: typeof spawn;
   now?: () => number;
   descendantSettleMs?: number;
+  captureRepositoryState?: typeof captureRepositoryState;
 }
 
-function repositoryMutationAudit(repositoryRoot: string): { close: () => void; observed: () => boolean } {
+export class RepositoryAuditError extends Error {
+  constructor(readonly results: VerifierRunResult[] = []) {
+    super('Repository verification audit is unavailable. Check filesystem access and workspace stability; no repository mutation has been established.');
+    this.name = 'RepositoryAuditError';
+  }
+}
+
+function repositoryMutationAudit(
+  repositoryRoot: string,
+  capture = captureRepositoryState,
+): { close: () => void; observed: () => boolean } {
   let changed = false;
+  let unavailable = false;
   let baselineDigest: string | undefined;
   const watched: Array<{ target: string; listener: (current: Stats, previous: Stats) => void }> = [];
   try {
-    baselineDigest = captureRepositoryState(repositoryRoot).digest;
+    baselineDigest = capture(repositoryRoot).digest;
   } catch {
-    changed = true;
+    unavailable = true;
   }
   const observeRepositoryState = (): void => {
-    if (changed || baselineDigest === undefined) return;
+    if (changed || unavailable || baselineDigest === undefined) return;
     try {
-      if (captureRepositoryState(repositoryRoot).digest !== baselineDigest) changed = true;
+      if (capture(repositoryRoot).digest !== baselineDigest) changed = true;
     } catch {
-      changed = true;
+      unavailable = true;
     }
   };
   try {
-    const paths = execFileSync('git', [
-      '-C', repositoryRoot, 'ls-files', '--cached', '--others', '--exclude-standard', '-z',
-    ], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }).split('\0').filter(Boolean);
+    // Match the snapshot's Git/non-Git boundary and ignored-file policy.
     const targets = new Set([repositoryRoot]);
-    const trackedFiles = new Set<string>();
-    for (const candidate of paths) {
+    const files = new Map<string, { relativePath: string; digest: string }>();
+    for (const candidate of repositoryStatePaths(repositoryRoot)) {
       const target = path.resolve(repositoryRoot, candidate);
-      if (target !== repositoryRoot && !target.startsWith(`${repositoryRoot}${path.sep}`)) throw new Error('invalid Git path');
+      if (target !== repositoryRoot && !target.startsWith(`${repositoryRoot}${path.sep}`)) throw new Error('invalid repository path');
       targets.add(target);
-      trackedFiles.add(target);
-      targets.add(path.dirname(target));
+      files.set(target, { relativePath: candidate, digest: repositoryPathDigest(repositoryRoot, candidate) });
+      for (let parent = path.dirname(target); parent !== repositoryRoot; parent = path.dirname(parent)) {
+        targets.add(parent);
+      }
     }
     for (const target of targets) {
       const listener = (current: Stats, previous: Stats): void => {
         if (current.mtimeMs !== previous.mtimeMs || current.ctimeMs !== previous.ctimeMs
           || current.size !== previous.size || current.ino !== previous.ino) {
-          if (trackedFiles.has(target)) changed = true;
-          else observeRepositoryState();
+          // Metadata is a signal to check content, not proof of changed input.
+          const file = files.get(target);
+          if (file !== undefined) {
+            try {
+              // Read the changed file before expensive Git-wide snapshots, so
+              // short-lived edits are not lost while collecting metadata.
+              if (repositoryPathDigest(repositoryRoot, file.relativePath) !== file.digest) changed = true;
+            } catch {
+              unavailable = true;
+            }
+          } else observeRepositoryState();
         }
       };
       watchFile(target, { persistent: false, interval: 20 }, listener);
       watched.push({ target, listener });
     }
   } catch {
-    // Evidence cannot be called mutation-free when the audit boundary is unavailable.
-    changed = true;
+    unavailable = true;
+  }
+  if (unavailable) {
+    watched.forEach(({ target, listener }) => unwatchFile(target, listener));
+    throw new RepositoryAuditError();
   }
   return {
     close: () => watched.forEach(({ target, listener }) => unwatchFile(target, listener)),
     observed: () => {
-      // File notifications are an optimization, not the completeness boundary:
-      // a detached descendant can finish between polling callbacks.
       observeRepositoryState();
+      if (unavailable) throw new RepositoryAuditError();
       return changed;
     },
   };
@@ -205,7 +228,7 @@ export async function runVerifiers(
   repositoryRoot: string,
   dependencies: VerifierDependencies = {},
 ): Promise<VerifierRunResult[]> {
-  const audit = repositoryMutationAudit(repositoryRoot);
+  const audit = repositoryMutationAudit(repositoryRoot, dependencies.captureRepositoryState);
   const results: VerifierRunResult[] = [];
   try {
     for (const verifier of verifiers) results.push(await runVerifier(verifier, repositoryRoot, dependencies));
@@ -213,6 +236,9 @@ export async function runVerifiers(
     if (settleMs > 0) await new Promise((resolve) => setTimeout(resolve, settleMs));
     const changedDuringVerification = audit.observed();
     return results.map((result) => ({ ...result, changedDuringVerification }));
+  } catch (error) {
+    if (error instanceof RepositoryAuditError) throw new RepositoryAuditError(results);
+    throw error;
   } finally {
     audit.close();
   }

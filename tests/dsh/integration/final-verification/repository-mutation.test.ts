@@ -9,6 +9,7 @@ import { migrateDatabase } from '../../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../../src/dsh/task-intake.js'
 import { verificationBoundaryKey } from '../../../../src/dsh/verification-identity.js'
 import { answerEnno, finishEnno, prepareEnnoVerification, reportEnnoWork, submitEnnoPlan, submitOdunoIdeal, submitOdunoMeditation } from '../../../../src/enno-oduno/service.js'
+import { captureRepositoryState } from '../../../../src/enno-oduno/repository-state.js'
 import { readEnnoSnapshot } from '../../../../src/enno-oduno/store.js'
 
 const capabilities = [
@@ -16,12 +17,12 @@ const capabilities = [
   { kind: 'skill', name: 'kiokuko-single-purpose-functions', description: 'Focuses functions.' },
 ]
 
-async function fixture(command: string, maxAttempts = 8) {
+async function fixture(command: string, maxAttempts = 8, git = true) {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-final-evidence-'))
   const repository = join(root, 'repo')
   await mkdir(repository)
   await writeFile(join(repository, 'source.txt'), 'original')
-  execFileSync('git', ['init', '-q', repository])
+  if (git) execFileSync('git', ['init', '-q', repository])
   // Keep Kiokuko's own DB outside the repository under verification.
   const database = openConnection(join(root, 'state.sqlite3'))
   const cleanup = async () => { database.close(); await rm(root, { recursive: true, force: true }) }
@@ -165,5 +166,88 @@ test('a corrected verifier proceeds through plan approval, work, review and medi
     })
     assert.equal(completed.ennoOduno.status, 'completed')
     assert.equal(await readFile(join(f.repository, 'source.elc'), 'utf8'), 'compiled')
+  } finally { await f.cleanup() }
+})
+
+for (const git of [false, true]) {
+  test(`read-only final verification accepts existing edits (git=${git})`, async () => {
+    const f = await fixture('require("node:fs").statSync("source.txt")', 8, git)
+    try {
+      if (git) execFileSync('git', ['-C', f.repository, 'add', 'source.txt'])
+      await writeFile(join(f.repository, 'source.txt'), 'completed implementation')
+      const response = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 50 })
+      assert.equal(response.verifierResults?.[0]?.status, 'passed')
+      assert.equal(response.verifierResults?.[0]?.changedDuringVerification, false)
+      assert.equal(response.ennoOduno.nextAction, 'submit_final_review')
+      assert.equal(f.snapshot().revision, 2)
+      assert.equal(f.snapshot().finalEvidenceReady, true)
+    } finally { await f.cleanup() }
+  })
+
+  test(`same-content rewrites do not invalidate final evidence (git=${git})`, async () => {
+    const f = await fixture('const fs = require("node:fs"); fs.writeFileSync("source.txt", "original"); setTimeout(() => {}, 150)', 8, git)
+    try {
+      if (git) execFileSync('git', ['-C', f.repository, 'add', 'source.txt'])
+      const response = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 50 })
+      assert.equal(response.verifierResults?.[0]?.changedDuringVerification, false)
+      assert.equal(response.ennoOduno.nextAction, 'submit_final_review')
+    } finally { await f.cleanup() }
+  })
+}
+
+test('non-Git verification still detects temporary source changes restored before exit', async () => {
+  const f = await fixture('const fs = require("node:fs"); fs.writeFileSync("source.txt", "changed"); setTimeout(() => fs.writeFileSync("source.txt", "original"), 200)', 8, false)
+  try {
+    const response = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 50 })
+    assert.equal(response.verifierResults?.[0]?.changedDuringVerification, true)
+    assert.equal(response.ennoOduno.nextAction, 'submit_plan')
+  } finally { await f.cleanup() }
+})
+
+test('Git-ignored build output does not require another plan approval', async () => {
+  const f = await fixture('const fs = require("node:fs"); fs.mkdirSync("dist", { recursive: true }); fs.writeFileSync("dist/output.js", "compiled")')
+  try {
+    await writeFile(join(f.repository, '.gitignore'), '/dist/\n')
+    const response = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 50 })
+    assert.equal(response.verifierResults?.[0]?.changedDuringVerification, false)
+    assert.equal(response.ennoOduno.nextAction, 'submit_final_review')
+    assert.equal(await readFile(join(f.repository, 'dist/output.js'), 'utf8'), 'compiled')
+  } finally { await f.cleanup() }
+})
+
+test('unavailable audit blocks with a host error instead of falsely blaming changes or requesting approval', async () => {
+  const f = await fixture('require("node:fs").statSync("source.txt")')
+  try {
+    const input = f.input()
+    const response = await prepareEnnoVerification(f.database, input, {
+      descendantSettleMs: 0,
+      captureRepositoryState: () => { throw new Error('audit read failure') },
+    })
+    assert.equal(response.ennoOduno.status, 'blocked')
+    assert.equal(f.snapshot().revision, 2)
+    assert.equal(response.verifierResults?.[0]?.changedDuringVerification, undefined)
+    assert.equal(f.snapshot().finalEvidenceReady, false)
+    assert.match(f.snapshot().blocker ?? '', /audit is unavailable/)
+    assert.doesNotMatch(f.snapshot().blocker ?? '', /Repository changes were observed/)
+    assert.deepEqual(await prepareEnnoVerification(f.database, input), response)
+  } finally { await f.cleanup() }
+})
+
+test('audit failure after a successful process preserves its result but cannot become reusable evidence', async () => {
+  const f = await fixture('require("node:fs").statSync("source.txt")')
+  try {
+    let captures = 0
+    const response = await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 0,
+      captureRepositoryState: root => {
+        if (++captures > 1) throw new Error('audit became unavailable')
+        return captureRepositoryState(root)
+      },
+    })
+    assert.equal(response.verifierResults?.[0]?.status, 'passed')
+    assert.equal(response.verifierResults?.[0]?.changedDuringVerification, undefined)
+    assert.equal(response.ennoOduno.status, 'blocked')
+    assert.equal(f.snapshot().finalEvidenceReady, false)
+    assert.equal(f.snapshot().revision, 2)
   } finally { await f.cleanup() }
 })

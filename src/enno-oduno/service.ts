@@ -101,7 +101,7 @@ import {
   type VerifierSpec,
   type VerifierRunResult,
 } from './types.js';
-import { runVerifiers, type VerifierDependencies } from './verifier.js';
+import { RepositoryAuditError, runVerifiers, type VerifierDependencies } from './verifier.js';
 import {
   planStartRecoveryBlocker,
   planStartRecoveryError,
@@ -1404,6 +1404,7 @@ export async function prepareEnnoVerification(
     });
   });
   let results: VerifierRunResult[];
+  let auditUnavailable = false;
   if (cachedResults !== undefined) {
     results = cachedResults;
   } else {
@@ -1412,14 +1413,17 @@ export async function prepareEnnoVerification(
         await runVerifiers(before.contract.finalVerifiers, before.repositoryRoot, dependencies),
         before.repositoryRoot,
       );
-    } catch {
-      results = spawnFailedVerifierResults(before.contract.finalVerifiers);
+    } catch (error) {
+      auditUnavailable = error instanceof RepositoryAuditError;
+      results = error instanceof RepositoryAuditError && error.results.length === before.contract.finalVerifiers.length
+        ? sanitizedVerifierResults(error.results, before.repositoryRoot)
+        : spawnFailedVerifierResults(before.contract.finalVerifiers);
     }
   }
   const postRepositoryState = captureRepositoryState(before.repositoryRoot);
   const changedDuringVerification = postRepositoryState.digest !== preRepositoryState.digest
     || results.some((result) => result.changedDuringVerification === true);
-  results = results.map((result) => ({
+  results = auditUnavailable ? results : results.map((result) => ({
     ...result,
     repositoryStatePolicyVersion: postRepositoryState.policyVersion,
     repositoryStateDigest: postRepositoryState.digest,
@@ -1428,20 +1432,21 @@ export async function prepareEnnoVerification(
   return withImmediateTransaction(database, () => {
     const current = readEnnoSnapshot(database, identity(database, input));
     assertExpected(current, input.expectedRevision, ['enno_verifying']);
-    if (verifierRunIds.length > 0) finishVerifierRunsInTransaction(database, verifierRunIds, results, {
+    if (verifierRunIds.length > 0) finishVerifierRunsInTransaction(database, verifierRunIds, results, auditUnavailable ? undefined : {
       postDigest: postRepositoryState.digest,
       changedDuringVerification,
     });
     const verified = readEnnoSnapshot(database, identity(database, input));
-    if (!verified.finalEvidenceReady) {
+    if (auditUnavailable || !verified.finalEvidenceReady) {
       // Finishing a process is not the same as preparing admissible evidence.
-      // In particular, compilers can create artifacts and invalidate the tree
-      // they just checked. Preserve the evidence, but hand repair to planning
-      // instead of replaying this completed receipt in a host-only loop.
+      // Actual input changes require fresh evidence. An unavailable audit is
+      // a host failure, not a reason to revise the plan or repeat completed work.
       const attempts = current.attempts + 1;
-      const mustBlock = attempts >= current.contract.maxAttempts;
-      const reason = changedDuringVerification
-        ? 'Repository changes were observed during final verification (including possible build artifacts). Exit codes do not establish fresh evidence. Revise the verifier to avoid modifying the repository; do not bypass freshness checks or delete user files.'
+      const mustBlock = auditUnavailable || attempts >= current.contract.maxAttempts;
+      const reason = auditUnavailable
+        ? 'Repository verification audit is unavailable. Check filesystem access and workspace stability. This is not evidence of repository changes; do not rewrite the verifier, repeat completed work, or request plan approval to repair this host audit failure.'
+        : changedDuringVerification
+        ? 'Repository changes were observed during final verification. Identify the affected inputs and whether the verifier or concurrent activity changed them before revising the plan. Preserve meaningful checks; do not replace them with existence-only checks, bypass freshness checks, or delete user files.'
         : 'Final verification evidence no longer matches the current repository. Reconcile the changes and revise the verification plan before retrying.';
       updateContractInTransaction(database, current, {
         contract: mustBlock ? current.contract : { ...current.contract, revision: current.revision + 1 },
@@ -1453,11 +1458,11 @@ export async function prepareEnnoVerification(
       appendEnnoEventInTransaction(database, input.runId, 'enno.verification_failed', 'enno-oduno', 'failed', {
         contractRevision: current.revision,
         mutationRevision: current.mutationRevision,
-        reason: changedDuringVerification ? 'repository_changed_during_verification' : 'stale_verification_evidence',
+        reason: auditUnavailable ? 'repository_audit_unavailable' : changedDuringVerification ? 'repository_changed_during_verification' : 'stale_verification_evidence',
         statuses: results.map(result => ({ verifierId: result.verifier.id, status: result.status })),
       });
       if (mustBlock) {
-        appendEnnoEventInTransaction(database, input.runId, 'enno.blocked', 'enno-oduno', 'blocked', { reason: 'attempt_limit' });
+        appendEnnoEventInTransaction(database, input.runId, 'enno.blocked', 'enno-oduno', 'blocked', { reason: auditUnavailable ? 'repository_audit_unavailable' : 'attempt_limit' });
         terminalizeLedgerRunInTransaction(database, input.runId, 'failed');
       } else {
         appendEnnoEventInTransaction(database, input.runId, 'enno.replan_requested', 'enno-oduno', 'requested', {
