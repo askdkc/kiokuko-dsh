@@ -218,14 +218,19 @@ function isHumanMessage(value: unknown): boolean {
   return source?.kind === 'user'
 }
 
-function pluginContinuationId(value: unknown): string | undefined {
+const CONTINUATION_ID = /^[0-9a-f]{64}$/u
+
+export function pluginContinuationId(value: unknown): string | undefined {
   const message = objectRecord(value)
   const source = objectRecord(message?.source)
-  if (source?.kind !== 'plugin' || source.plugin !== 'kiokuko-dsh'
-    || (source.form !== 'continuation' && source.form !== 'loop-recovery')) return undefined
-  return typeof source.deliveryId === 'string' && /^[0-9a-f]{64}$/u.test(source.deliveryId)
-    ? source.deliveryId
-    : undefined
+  if (source?.kind !== 'plugin' || source.plugin !== 'kiokuko-dsh') return undefined
+  const messageId = message?.id
+  if (source.form === 'instructions' && typeof messageId === 'string' && CONTINUATION_ID.test(messageId)) {
+    return messageId
+  }
+  if ((source.form !== 'continuation' && source.form !== 'loop-recovery' && source.form !== 'instructions')
+    || typeof source.deliveryId !== 'string' || !CONTINUATION_ID.test(source.deliveryId)) return undefined
+  return source.deliveryId
 }
 
 function isLoopRecoveryMessage(value: unknown): boolean {
@@ -233,7 +238,7 @@ function isLoopRecoveryMessage(value: unknown): boolean {
   return source?.kind === 'plugin' && source.plugin === 'kiokuko-dsh' && source.form === 'loop-recovery'
 }
 
-function recoveryMessage(continuationId: string, answer: string): unknown {
+export function recoveryMessage(continuationId: string, answer: string): unknown {
   return Object.freeze({
     id: continuationId,
     role: 'user',
@@ -241,7 +246,7 @@ function recoveryMessage(continuationId: string, answer: string): unknown {
       type: 'text',
       text: `The user reviewed the stopped Kiokuko loop and supplied this recovery instruction:\n\n${answer}`,
     }],
-    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'loop-recovery', deliveryId: continuationId },
+    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
   })
 }
 
@@ -265,14 +270,14 @@ function boundedUtf8Text(value: string, maximumBytes: number): string {
   return result
 }
 
-function eventContinuationId(data: unknown): string | undefined {
+export function eventContinuationId(data: unknown): string | undefined {
   const direct = pluginContinuationId(data)
   if (direct !== undefined) return direct
   const record = objectRecord(data)
   return pluginContinuationId(record?.message)
 }
 
-function continuationMessage(continuationId: string, nextAction: EnnoNextAction): unknown {
+export function continuationMessage(continuationId: string, nextAction: EnnoNextAction): unknown {
   const work = nextAction === 'execute_work_unit'
     ? 'The current WorkUnit is not accepted unless the latest Enno result says so. Correct or report only that WorkUnit.'
     : `Continue only the current Kiokuko phase for nextAction=${nextAction}. Do not skip ahead.`
@@ -280,7 +285,7 @@ function continuationMessage(continuationId: string, nextAction: EnnoNextAction)
     id: continuationId,
     role: 'user',
     content: [{ type: 'text', text: work }],
-    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'continuation', deliveryId: continuationId },
+    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
   })
 }
 
@@ -966,7 +971,16 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       terminalizeLedgerRunInTransaction(database, runId, 'cancelled')
       return undefined
     }
-    const automaticMessage = event.nativeMessages?.find((message) => pluginContinuationId(message) !== undefined && !isLoopRecoveryMessage(message))
+    const automaticMessage = event.nativeMessages?.find((message) => {
+      const continuationId = pluginContinuationId(message)
+      if (continuationId === undefined) return false
+      const outbox = database.prepare(`
+        SELECT message_form AS messageForm
+          FROM dsh_continuation_outbox
+         WHERE continuation_id = ?
+      `).get<{ messageForm: 'continuation' | 'loop-recovery' }>(continuationId)
+      return outbox === undefined ? !isLoopRecoveryMessage(message) : outbox.messageForm !== 'loop-recovery'
+    })
     const automaticClaimId = automaticMessage === undefined ? undefined : pluginContinuationId(automaticMessage)
     const decision = snapshot ? decideDshContinuation(database, {
       dshSessionId: event.sessionId, cwd: event.cwd,
@@ -1615,6 +1629,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
               database,
               job.receiptId,
               recoveryMessage(outbox.continuationId, answer),
+              'loop-recovery',
               options.now?.() ?? new Date().toISOString(),
             )
           }
@@ -1664,7 +1679,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         await injectBoundaryContext(item, state)
         await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
           const outbox = readPendingOutbox(database, item.sessionId).find((candidate) => candidate.receiptId === job.receiptId)
-          if (outbox !== undefined) replacePendingOutboxMessageInTransaction(database, job.receiptId, continuationMessage(outbox.continuationId, state.nextAction))
+          if (outbox !== undefined) replacePendingOutboxMessageInTransaction(
+            database,
+            job.receiptId,
+            continuationMessage(outbox.continuationId, state.nextAction),
+            'continuation',
+          )
         }))
         return { kind: 'completed', nextKind: 'delivery' }
       }
@@ -1681,7 +1701,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     },
     beforeDelivery: async (job, outbox, signal) => {
       boundarySignals.set(job.dshSessionId, signal)
-      if (isLoopRecoveryMessage(outbox.message)) return 'deliver'
+      if (outbox.messageForm === 'loop-recovery') return 'deliver'
       const item = currentSession(job.dshSessionId)
       if (item === undefined || item.closed || item.runId !== job.runId) return 'superseded'
       if (executionSupport.paused(item.sessionId)) return 'waiting_user'
@@ -1739,6 +1759,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           database,
           job.receiptId,
           recoveryMessage(outbox.continuationId, answer),
+          'loop-recovery',
           options.now?.() ?? new Date().toISOString(),
         )
       }))
@@ -1787,6 +1808,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             database,
             job.receiptId,
             recoveryMessage(outbox.continuationId, answer),
+            'loop-recovery',
             options.now?.() ?? new Date().toISOString(),
           )
         }

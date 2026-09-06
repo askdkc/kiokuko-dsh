@@ -345,8 +345,8 @@ test('delivery re-reads a user recovery message written by the guard', async () 
         id: item.continuationId,
         role: 'user',
         content: [{ type: 'text', text: 'explicit recovery instruction' }],
-        source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'loop-recovery', deliveryId: item.continuationId },
-      })
+        source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
+      }, 'loop-recovery')
       return 'deliver' as const
     },
     flush: async () => undefined,
@@ -356,6 +356,7 @@ test('delivery re-reads a user recovery message written by the guard', async () 
     worker.kick('boundary-session')
     await worker.whenIdle()
     assert.match(JSON.stringify(delivered), /explicit recovery instruction/u)
+    assert.equal(f.database.prepare('SELECT message_form AS messageForm FROM dsh_continuation_outbox').get<{ messageForm: string }>()?.messageForm, 'loop-recovery')
   } finally {
     await worker.dispose()
     await f.cleanup()
