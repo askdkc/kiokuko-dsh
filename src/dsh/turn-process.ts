@@ -96,6 +96,7 @@ export interface DshContinuationOutboxItem {
   readonly dshSessionId: string
   readonly causalRevision: number
   readonly message: unknown
+  readonly messageForm: 'continuation' | 'loop-recovery'
   readonly status: 'pending' | 'dispatched' | 'observed' | 'superseded'
 }
 
@@ -145,6 +146,7 @@ interface OutboxRow extends Record<string, unknown> {
   dshSessionId: string
   causalRevision: number
   messageJson: string
+  messageForm: DshContinuationOutboxItem['messageForm']
   status: DshContinuationOutboxItem['status']
 }
 
@@ -340,7 +342,7 @@ export function enqueueUnsubmittedTurn(database: SqliteDatabase, input: PrepareT
       VALUES (?, ?, ?, 'classify_boundary', 'pending', ?, ?, ?)`).run(intent.boundaryJobId, intent.receiptId, input.runId, now, now, now)
     const message = { id: intent.continuationId, role: 'user', content: [{ type: 'text',
       text: `The phase has not been submitted. Continue from the current host directive: ${input.nextAction}.` }],
-      source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'continuation', deliveryId: intent.continuationId } }
+      source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' } }
     database.prepare(`INSERT INTO dsh_continuation_outbox(continuation_id, receipt_id, run_id, dsh_session_id,
       causal_revision, message_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
       .run(intent.continuationId, intent.receiptId, input.runId, input.dshSessionId, input.contractRevision, JSON.stringify(message), now, now)
@@ -462,7 +464,7 @@ export function commitExpectedFailureInTransaction(
     content: [{ type: 'text', text: clarify
       ? `Kiokuko needs clarification after repeated ${intent.phase} validation: ${reason.message}`
       : `Retry Kiokuko ${intent.phase} using the recorded validation fact: ${reason.message}` }],
-    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'continuation', deliveryId: intent.continuationId },
+    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
   }
   database.prepare(`
     INSERT INTO dsh_continuation_outbox (
@@ -495,7 +497,8 @@ export function readPendingOutbox(database: SqliteDatabase, sessionId: string): 
   const rows = database.prepare(`
     SELECT continuation_id AS continuationId, receipt_id AS receiptId,
            run_id AS runId, dsh_session_id AS dshSessionId,
-           causal_revision AS causalRevision, message_json AS messageJson, status
+           causal_revision AS causalRevision, message_json AS messageJson,
+           message_form AS messageForm, status
       FROM dsh_continuation_outbox
      WHERE dsh_session_id = ? AND status IN ('pending', 'dispatched')
      ORDER BY created_at, continuation_id
@@ -507,6 +510,7 @@ export function readPendingOutbox(database: SqliteDatabase, sessionId: string): 
     dshSessionId: row.dshSessionId,
     causalRevision: row.causalRevision,
     message: JSON.parse(row.messageJson) as unknown,
+    messageForm: row.messageForm,
     status: row.status,
   })))
 }
@@ -677,13 +681,14 @@ export function replacePendingOutboxMessageInTransaction(
   database: SqliteDatabase,
   receiptIdValue: string,
   message: unknown,
+  messageForm: DshContinuationOutboxItem['messageForm'],
   now = new Date().toISOString(),
 ): void {
   const messageJson = boundedJson(message, DSH_TURN_HANDOFF_MAX_BYTES, 'continuation message')
   database.prepare(`
-    UPDATE dsh_continuation_outbox SET message_json = ?, updated_at = ?
+    UPDATE dsh_continuation_outbox SET message_json = ?, message_form = ?, updated_at = ?
      WHERE receipt_id = ? AND status = 'pending'
-  `).run(messageJson, now, digest(receiptIdValue, 'receiptId'))
+  `).run(messageJson, messageForm, now, digest(receiptIdValue, 'receiptId'))
 }
 
 export function phaseForOperation(operation: string): DshTurnPhase | undefined {
