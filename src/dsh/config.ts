@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ModelRouteSchema } from './model-configuration.js'
 
 const limit = (value: number) => z.number().int().positive().max(Number.MAX_SAFE_INTEGER).default(value)
 export const OrcaConfig = z.object({
@@ -25,6 +26,7 @@ export type OrcaConfig = z.infer<typeof OrcaConfig>
 /** Runtime configuration accepted by the dsh bundle entrypoint. */
 export const Config = z.object({
   enabled: z.boolean().default(true),
+  modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),
   orca: OrcaConfig.prefault({}),
 })
 export type Config = z.input<typeof Config>

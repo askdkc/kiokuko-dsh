@@ -1,0 +1,209 @@
+import type { DshUserQuestionAgent, DshUserQuestions } from './user-interaction.js'
+import { explicitExecutionMode, type StoredExecutionSelection, type ExecutionSelection } from './execution-selection.js'
+import { MODEL_ROLES, MODEL_TEMPLATES, ROLE_LABELS, ModelConfigurationSchema, configurationProblems, readModelCatalog, templateBindings,
+  type DshModelCatalog, type DshModelCompatibility, type ModelBinding, type ModelCatalogSnapshot, type ModelConfigurationDraft, type ModelRole, type ModelRoute, type ModelTemplate } from './model-configuration.js'
+
+export class ExecutionSelectionPending extends Error {
+  constructor() { super('実行方式・モデル構成の選択待ちです。依頼と完了済みの作業は保持されています。') }
+}
+interface SelectionUiInput {
+  readonly task: string
+  readonly agent?: DshUserQuestionAgent
+  readonly signal: AbortSignal
+  readonly questions?: DshUserQuestions
+  readonly llm?: DshModelCatalog
+  readonly routes: readonly ModelRoute[]
+  readonly compatibility?: DshModelCompatibility
+  readonly stored: StoredExecutionSelection
+  readonly save: (revision: number, value: ExecutionSelection) => Promise<StoredExecutionSelection>
+}
+const BACK = '戻る', CANCEL = '取消・作業を保持', NEXT_PAGE = '次のページ', PREVIOUS_PAGE = '前のページ'
+async function ask(input: SelectionUiInput, id: string, question: string, choices: readonly string[], detail?: string): Promise<string> {
+  if (!input.questions || input.signal.aborted) throw new ExecutionSelectionPending()
+  try {
+    const response = await input.questions.ask({
+      questions: [{ id, header: '実行方式とモデル', question, options: [...choices, CANCEL].map(label => ({ label })), ...(detail ? { detail } : {}) }],
+      ...(input.agent ? { agent: input.agent } : {}), signal: input.signal,
+    })
+    input.signal.throwIfAborted()
+    const answer = response.answers[0]
+    if (answer?.id !== id) throw new ExecutionSelectionPending()
+    const value = answer.custom?.trim() || answer.selected[0]
+    if (!value || value === CANCEL) throw new ExecutionSelectionPending()
+    const index = /^\d+$/u.test(value) ? Number(value) - 1 : -1
+    const resolved = index >= 0 ? [...choices, CANCEL][index] ?? value : value
+    if (resolved === CANCEL) throw new ExecutionSelectionPending()
+    return resolved
+  } catch (error) {
+    if (error instanceof ExecutionSelectionPending) throw error
+    // Native cancellation, missing UI and abort all leave the durable draft intact.
+    throw new ExecutionSelectionPending()
+  }
+}
+function modelLabel(catalog: ModelCatalogSnapshot, binding: ModelBinding): string {
+  const provider = catalog.providers.find(p => p.id === binding.provider)
+  const model = catalog.models.find(m => m.provider === binding.provider && m.id === binding.model)
+  return `${provider?.name ?? binding.provider} [${binding.provider}] / ${model?.name ?? binding.model} [${binding.model}]`
+}
+async function pickModel(input: SelectionUiInput, catalog: ModelCatalogSnapshot, draft: ModelConfigurationDraft, role: ModelRole): Promise<ModelBinding | undefined> {
+  let query = ''
+  let providerPage = 0
+  while (true) {
+    const filteredProviders = catalog.providers.filter(p => !query || `${p.name} ${p.id}`.toLowerCase().includes(query))
+    const providers = filteredProviders.slice(providerPage * 20, (providerPage + 1) * 20)
+    const labels = providers.map(p => `${p.name} [${p.id}]`)
+    const copies = MODEL_ROLES.filter(r => r !== role && draft.roles[r]).map(r => ({ role: r, label: `${ROLE_LABELS[r]}からコピー` }))
+    const choice = await ask(input, `enno-provider-${role}`, `${ROLE_LABELS[role]}の接続を選択`, [...labels, ...(filteredProviders.length > (providerPage + 1) * 20 ? [NEXT_PAGE] : []), ...(providerPage ? [PREVIOUS_PAGE] : []), ...copies.map(c => c.label), BACK],
+      '自由入力で接続名を検索できます。同名モデルも接続IDとモデルIDで区別します。')
+    if (choice === BACK) return undefined
+    if (choice === NEXT_PAGE) { providerPage++; continue }
+    if (choice === PREVIOUS_PAGE) { providerPage--; continue }
+    const copy = copies.find(c => c.label === choice)
+    if (copy) return { ...draft.roles[copy.role]! }
+    const provider = providers[labels.indexOf(choice)]
+    if (!provider) { query = choice.toLowerCase(); providerPage = 0; continue }
+    let search = ''
+    let modelPage = 0
+    while (true) {
+      const filteredModels = catalog.models.filter(m => m.provider === provider.id && `${m.id} ${m.name}`.toLowerCase().includes(search))
+      const models = filteredModels.slice(modelPage * 20, (modelPage + 1) * 20)
+      const displayed = models.map(m => `${m.name} [${m.id}]`)
+      const model = await ask(input, `enno-model-${role}`, `${provider.name}: ${ROLE_LABELS[role]}のモデル`, [...displayed, ...(filteredModels.length > (modelPage + 1) * 20 ? [NEXT_PAGE] : []), ...(modelPage ? [PREVIOUS_PAGE] : []), BACK],
+        catalog.failures.includes(provider.id) ? 'この接続のモデル一覧を取得できません。戻って再取得してください。' : '自由入力でモデルを検索できます。未登録モデルの入力や自動ダウンロードは行いません。')
+      if (model === BACK) break
+      if (model === NEXT_PAGE) { modelPage++; continue }
+      if (model === PREVIOUS_PAGE) { modelPage--; continue }
+      const selected = models[displayed.indexOf(model)]
+      if (selected) return { provider: provider.id, model: selected.id }
+      search = model.toLowerCase(); modelPage = 0
+    }
+  }
+}
+async function templateStatus(input: SelectionUiInput, template: ModelTemplate, catalog: ModelCatalogSnapshot): Promise<string> {
+  const routes = input.routes.filter(r => r.family === template.family && catalog.providers.some(p => p.id === r.provider))
+  if (!routes.length) return '接続未設定'
+  let complete = false
+  for (const route of routes) {
+    const configuration = ModelConfigurationSchema.safeParse({ roles: templateBindings(template, route.provider, catalog), custom: false, maxConcurrentChildren: template.maxConcurrentChildren })
+    if (!configuration.success) continue
+    complete = true
+    if (!(await configurationProblems(configuration.data, catalog, input.routes, input.compatibility)).length) return '適用可能'
+  }
+  return complete ? '互換性の確認が必要' : 'モデル不足'
+}
+async function declareRoute(input: SelectionUiInput, provider: string, family?: ModelRoute['family']): Promise<ModelRoute | undefined> {
+  const families: ModelRoute['family'][] = ['openai', 'opencode-go', 'opencode-zen', 'openrouter', 'ollama', 'other']
+  const names = ['OpenAI', 'OpenCode Go', 'OpenCode Zen', 'OpenRouter', 'Ollama', 'その他']
+  if (!family) {
+    const answer = await ask(input, 'enno-route-family', `${provider}の実際の接続先`, [...names, BACK], 'DSHの接続設定と同じ種類を選んでください。GoとZenを自動変更しません。')
+    if (answer === BACK) return undefined
+    family = families[names.indexOf(answer)]
+    if (!family) return undefined
+  }
+  let connection: ModelRoute['connection'] = family === 'ollama' ? 'local' : 'api'
+  if (family === 'openai') {
+    const answer = await ask(input, 'enno-route-auth', `${provider}のOpenAI接続`, ['OpenAI API', 'Codex認証', BACK])
+    if (answer === BACK) return undefined
+    connection = answer === 'Codex認証' ? 'codex' : 'api'
+  }
+  const protocols = ['Responses', 'Chat Completions', 'Messages', '不明']
+  const answer = await ask(input, 'enno-route-protocol', `${provider}にDSHが設定している通信方式`, [...protocols, BACK], 'これは設定値の確認です。通信テストや契約の確認は実施しません。Astraのツール利用にはResponsesが必要です。')
+  if (answer === BACK) return undefined
+  const protocol = (['responses', 'chat-completions', 'messages', 'unknown'] as const)[protocols.indexOf(answer)]
+  return protocol ? { provider, family, connection, protocol } : undefined
+}
+/** Native question cards keep keyboard, cancellation and answer routing owned by DSH. */
+export async function selectExecution(input: SelectionUiInput): Promise<StoredExecutionSelection> {
+  let stored = input.stored
+  const save = async (value: ExecutionSelection) => { stored = await input.save(stored.revision, value) }
+  if (stored.value.status === 'ready') return stored
+  if (stored.value.mode === 'pending') {
+    const explicit = explicitExecutionMode(input.task)
+    const mode = explicit ?? await ask(input, 'enno-execution-mode', 'この作業をどう実行しますか？', ['通常実行', '役小角を使う'], '通常実行は現在のDSHモデルで進めます。記憶・Skill・権限判定・検証は維持します。')
+    if (mode === 'normal' || mode === '通常実行') { await save({ mode: 'normal', status: 'ready' }); return stored }
+    if (mode !== 'enno' && mode !== '役小角を使う') throw new ExecutionSelectionPending()
+    await save({ mode: 'enno', status: 'selecting' })
+  }
+  let draft: ModelConfigurationDraft = structuredClone(stored.value.draft ?? stored.value.configuration ?? { roles: {}, custom: true, maxConcurrentChildren: 4 })
+  let screen: 'source' | 'templates' | 'review' = Object.keys(draft.roles).length ? 'review' : 'source'
+  while (true) {
+    let catalog: ModelCatalogSnapshot
+    try {
+      if (!input.llm) throw new Error('Unavailable')
+      catalog = await readModelCatalog(input.llm)
+    } catch {
+      await ask(input, 'enno-catalog-retry', 'DSHのモデル一覧を取得できません。作業を保持しています。', ['再取得'])
+      continue
+    }
+    if (screen === 'source') {
+      const source = await ask(input, 'enno-model-source', 'モデル構成の設定方法', ['おすすめテンプレートから選ぶ', 'DSHに設定済みのモデルから選ぶ', BACK], stored.value.problem)
+      if (source === BACK && stored.value.status !== 'reselect') { await save({ mode: 'pending', status: 'selecting', draft }); return selectExecution({ ...input, stored }) }
+      screen = source === 'おすすめテンプレートから選ぶ' ? 'templates' : 'review'
+      continue
+    }
+    if (screen === 'templates') {
+      const statusRoutes = [...input.routes, ...(draft.routeBindings ?? []).filter(r => !input.routes.some(k => k.provider === r.provider))]
+      const statuses = await Promise.all(MODEL_TEMPLATES.map(t => templateStatus({ ...input, routes: statusRoutes }, t, catalog)))
+      const labels = MODEL_TEMPLATES.map((t, i) => `${t.name} — ${statuses[i]}`)
+      const picked = await ask(input, 'enno-template', 'おすすめテンプレート', [...labels, BACK], 'OpenAI / OpenCode Go / OpenCode Zen / OpenRouter / Ollama。接続・認証はDSHが管理します。')
+      if (picked === BACK) { screen = 'source'; continue }
+      const template = MODEL_TEMPLATES[labels.indexOf(picked)]
+      if (!template) continue
+      const knownRoutes = [...input.routes, ...(draft.routeBindings ?? []).filter(r => !input.routes.some(k => k.provider === r.provider))]
+      const routes = knownRoutes.filter(r => r.family === template.family && catalog.providers.some(p => p.id === r.provider))
+      let route = routes.length === 1 ? routes[0] : undefined
+      if (routes.length > 1) {
+        const names = routes.map(r => `${catalog.providers.find(p => p.id === r.provider)?.name ?? r.provider} [${r.provider}] (${r.connection}, ${r.protocol})`)
+        const routeChoice = await ask(input, 'enno-template-provider', 'このテンプレートで使うDSH接続', [...names, BACK])
+        if (routeChoice === BACK) continue
+        route = routes[names.indexOf(routeChoice)]
+        if (!route) continue
+      }
+      if (!route) {
+        const unbound = catalog.providers.filter(p => !knownRoutes.some(r => r.provider === p.id))
+        const labels = unbound.map(p => `${p.name} [${p.id}]`)
+        const answer = await ask(input, 'enno-bind-provider', `${template.group}に対応する設定済み接続`, [...labels, BACK], '接続IDから提供元を推測しません。実際に設定した接続先と一致するものを選択してください。')
+        if (answer === BACK) continue
+        const provider = unbound[labels.indexOf(answer)]
+        if (!provider) continue
+        route = await declareRoute(input, provider.id, template.family)
+        if (!route) continue
+      }
+      draft = { roles: templateBindings(template, route.provider, catalog), routeBindings: [...knownRoutes.filter(r => r.provider !== route.provider), route], template: { id: template.id, version: template.version }, custom: false, maxConcurrentChildren: template.maxConcurrentChildren }
+      await save({ ...stored.value, draft })
+      screen = 'review'
+      continue
+    }
+    const complete = ModelConfigurationSchema.safeParse(draft)
+    const problems = complete.success ? await configurationProblems(complete.data, catalog, input.routes, input.compatibility) : ['未設定の役割を選択してください。']
+    const detail = [draft.custom ? 'カスタム' : MODEL_TEMPLATES.find(t => t.id === draft.template?.id)?.name ?? 'カスタム',
+      ...MODEL_ROLES.map(role => `${ROLE_LABELS[role]}: ${draft.roles[role] ? modelLabel(catalog, draft.roles[role]!) : '未設定'}`),
+      ...problems, ...(catalog.failures.length ? [`一覧取得失敗: ${catalog.failures.join(', ')}`] : []),
+      'reasoningはモデルの既定値。カタログへの登録は契約上の利用成功を保証しません。',
+    ].join('\n')
+    const roleLabels = MODEL_ROLES.map(role => `${ROLE_LABELS[role]}を変更`)
+    const selected = await ask(input, 'enno-model-review', '構成を確認して開始', [...(complete.success && !problems.length ? ['この構成で開始'] : []), ...roleLabels, '一覧を再取得', BACK], detail)
+    if (selected === BACK) { screen = 'source'; continue }
+    if (selected === 'この構成で開始' && complete.success && !problems.length) {
+      // Revalidate immediately before adoption. No provider defaults or credentials are written.
+      const latest = await readModelCatalog(input.llm!)
+      if ((await configurationProblems(complete.data, latest, input.routes, input.compatibility)).length) continue
+      const usesOllama = MODEL_ROLES.some(role => [...input.routes, ...(complete.data.routeBindings ?? [])].some(r => r.provider === complete.data.roles[role].provider && r.family === 'ollama'))
+      await save({ mode: 'enno', status: 'ready', ...(stored.value.ordinaryModel ? { ordinaryModel: stored.value.ordinaryModel } : {}), configuration: { ...complete.data, maxConcurrentChildren: usesOllama ? 1 : complete.data.maxConcurrentChildren } })
+      return stored
+    }
+    const role = MODEL_ROLES[roleLabels.indexOf(selected)]
+    if (role) {
+      const binding = await pickModel(input, catalog, draft, role)
+      if (binding) {
+        if (![...input.routes, ...(draft.routeBindings ?? [])].some(r => r.provider === binding.provider)) {
+          const route = await declareRoute(input, binding.provider)
+          if (!route) continue
+          draft = { ...draft, routeBindings: [...(draft.routeBindings ?? []), route] }
+        }
+        draft = { ...draft, custom: true, roles: { ...draft.roles, [role]: binding } }
+        await save({ ...stored.value, draft })
+      }
+    }
+  }
+}

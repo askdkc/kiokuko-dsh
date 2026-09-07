@@ -5,6 +5,8 @@
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)에 프로젝트 기억, 작업 계획, 검증 지원을 추가합니다.
 선택 기능인 OrcaReplay 기록을 켜면 모델과 도구의 동작을 확인하고 HTML로 내보낼 수 있습니다.
 
+
+새 변경 작업에서는 일반 실행 또는 役小角(enno-oduno)를 선택할 수 있습니다. 역할별 모델은 추천 템플릿이나 DSH에 설정된 모델에서 선택합니다. [모델 선택과 연결 제한](docs/model-selection.md).
 ## 설치 및 사용
 
 DSH `0.1.2-rc.1`과 [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1)을 지원합니다.

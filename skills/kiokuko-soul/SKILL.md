@@ -13,6 +13,20 @@ Start every non-trivial Kiokuko-governed task by reading one stable router, reso
 
 This Skill owns the entry sequence and routes work. Akinator is the mandatory intake state machine, not a specialist route. This Skill does not duplicate specialist instructions, invent an Enno-Oduno run, select another model, or authorize effects beyond the user request and current DSH session permissions.
 
+The host asks whether to use normal execution or 役小角(enno-oduno) for new
+build, debug, review and devops tasks, including README edits. Explicit user
+instructions avoid a duplicate mode question. Chat and non-Enno task types do
+not open the selector. A continued task retains its choice across retries,
+replanning and restart. Cancellation or an unanswered selection keeps the task
+pending; do not treat it as permission to start.
+
+In normal execution, use the current DSH model, useful memory and applicable
+Skills, respect native permissions, make the requested change and run focused
+verification. Do not create an ideal, plan contract, WorkUnit, Enno approval or
+automatic continuation. In Enno execution, the host owns template/custom model
+selection and confirmation. Never choose another provider in model output or
+start an independent subagent to bypass that configuration.
+
 ## Required entry
 
 Read this Skill before any other bundled Kiokuko Skill.
@@ -32,14 +46,17 @@ Akinator is the mandatory state machine between this SOUL read and every plannin
 
 The DSH host opens this gate once for the current logical request, binds the
 native session identity and complete capability catalog, resolves grounded
-answers, and withholds the model request while intake remains unresolved.
+answers, and presents useful unresolved questions. Optional intake or Skill
+enrichment failures produce degraded guidance; they do not veto native work.
+An unanswered execution/model selection is a separate host-owned waiting state.
 
 For an admitted request, inspect the supplied `intake.status`, top-level
 `nextAction`, `memoryPolicy`, capability results, and `ennoOduno` state. The
 model should normally see `ready` or `exhausted` with `nextAction=proceed`.
 Preserve any remaining uncertainty and do not invent missing profile fields.
-If host admission fails or a required capability is unavailable, stop with the
-bounded host error; do not emulate intake in model output.
+If optional enrichment is unavailable, preserve that uncertainty and continue
+from repository evidence. Respect safety, authorization and identity fences;
+do not emulate intake or the execution selector in model output.
 
 ## Routes
 
@@ -89,7 +106,9 @@ The current revision-bound directive may narrow which routes the active role per
 
 ## Availability and trust
 
-When a current directive or capability recommendation marks a routed Skill as required, stop on `required_capability_unavailable`, a blocked Enno-Oduno state, or equivalent unavailable-required-Skill result.
+Unavailable Skills are degraded guidance, not authorization to replace them or
+invent completed checks. Continue useful work from current repository evidence
+unless the host reports a safety, authorization, identity or integrity block.
 
 Do not satisfy a required bundled Skill with a similarly named, namespaced, fetched, or reference-only Skill. Never install or execute external Skill content automatically.
 

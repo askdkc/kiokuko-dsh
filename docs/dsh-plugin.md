@@ -232,7 +232,7 @@ The dsh integration provides:
   question** action; both skip target/success follow-ups and never create an
   Enno-Oduno contract, and the chat choice carries across conversational
   follow-ups until an explicit actionable request starts a new run;
-- all fourteen Kiokuko operations, with only the seven model-facing operations
+- the Kiokuko operations, with only the eight model-facing operations
   exposed as model tools and host identity injected after argument validation;
 - host-bound capability catalogs are carried into plan submission, while
   advisory digests remain host-owned and the current model reports only its

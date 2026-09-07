@@ -12,3 +12,5 @@ Implementation references: [architecture](architecture.md), [database](database.
 [execution ledger](execution-ledger.md), and [retrieval evaluation](retrieval-evaluation.md).
 
 The Japanese user guides are available from the [日本語目次](README.ja.md).
+
+- [Execution and model selection](model-selection.md)

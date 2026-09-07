@@ -13,11 +13,11 @@ const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migratio
 test('the schema keeps 001 immutable and appends forward-only DSH runtime migrations', async () => {
   const entries = await readdir(migrationsDirectory)
   const sqlFiles = entries.filter((name) => name.endsWith('.sql'))
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql'])
   assert.ok(!entries.some((name) => name === 'down'), 'migrations/down must not exist')
 
   const snapshot = loadMigrationSnapshot(migrationsDirectory)
-  assert.equal(snapshot.migrations.length, 8)
+  assert.equal(snapshot.migrations.length, 9)
   assert.equal(snapshot.migrations[0]!.version, 1)
   assert.equal(snapshot.migrations[0]!.name, '001_baseline.sql')
   assert.equal(snapshot.migrations[1]!.version, 2)
@@ -58,7 +58,7 @@ test('version-4 receipt history upgrades with stable replay identities and pendi
         VALUES (?, ?, 'upgrade-session', ?, ?, 1, 'unit', ?, 'applied', ?, ?)`)
         .run(id, prepared.run.runId, turn, phase, id, turn === 3 ? 'complete' : 'execute_work_unit', new Date().toISOString())
     }
-    assert.deepEqual(migrateDatabase(database, migrationsDirectory).applied, [5, 6, 7, 8])
+    assert.deepEqual(migrateDatabase(database, migrationsDirectory).applied, [5, 6, 7, 8, 9])
     assert.deepEqual(database.prepare('SELECT execution_attempt AS attempt FROM dsh_turn_receipts ORDER BY native_turn')
       .all<{ attempt: number }>().map(row => row.attempt), [0, 1, 0])
     const replay = prepareTurnIntent(database, {
@@ -80,8 +80,8 @@ test('baseline initialization creates the complete DSH schema with clean integri
     const database = openConnection(databasePath)
     try {
       const migration = migrateDatabase(database, migrationsDirectory)
-      assert.deepEqual(migration.applied, [1, 2, 3, 4, 5, 6, 7, 8])
-      assert.equal(migration.currentVersion, 8)
+      assert.deepEqual(migration.applied, [1, 2, 3, 4, 5, 6, 7, 8, 9])
+      assert.equal(migration.currentVersion, 9)
 
       assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
       assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
@@ -98,8 +98,10 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_boundary_jobs',
         'dsh_completion_reports',
         'dsh_continuation_outbox',
+        'dsh_enno_delegations',
         'dsh_execution_evidence',
         'dsh_execution_frames',
+        'dsh_execution_selections',
         'dsh_exploration_states',
         'dsh_input_claim_backups',
         'dsh_intake_idempotency',
@@ -218,8 +220,8 @@ test('an existing version-3 database upgrades forward to the durable loop guard'
     try {
       assert.deepEqual(migrateDatabase(database, version3Directory).applied, [1, 2, 3])
       const upgraded = migrateDatabase(database, migrationsDirectory)
-      assert.deepEqual(upgraded.applied, [4, 5, 6, 7, 8])
-      assert.equal(upgraded.currentVersion, 8)
+      assert.deepEqual(upgraded.applied, [4, 5, 6, 7, 8, 9])
+      assert.equal(upgraded.currentVersion, 9)
       assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
       assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'dsh_loop_guard_states'").get<{ count: number }>()?.count, 1)

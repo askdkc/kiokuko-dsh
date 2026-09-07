@@ -96,6 +96,7 @@ export class DshIntakeGate {
     runtime: Pick<DshRuntime, 'withDatabase'>,
     answerer?: DshIntakeAnswerer,
     readCapabilities?: (context: DshCapabilityReadContext) => DshCapabilityCatalog | PromiseLike<DshCapabilityCatalog>,
+    private readonly executionSelection = false,
   ) {
     this.#runtime = runtime
     this.#answerer = answerer
@@ -151,6 +152,7 @@ export class DshIntakeGate {
     const operation = (async (): Promise<DshIntakeGateResult> => {
       let prepared = await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
         requestId,
+        executionSelection: this.executionSelection,
         task: grounded.task,
         cwd: grounded.cwd,
         profileHints: grounded.profileHints,

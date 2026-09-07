@@ -6,6 +6,8 @@ Kiokuko adds project memory, planning, and verification support to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 Optional OrcaReplay recording lets you inspect model/tool activity and export HTML.
 
+
+For new coding tasks, choose normal execution or 役小角(enno-oduno). Enno offers model templates and role assignments from configured DSH models. [Model selection and connection limits](docs/model-selection.md).
 ## Install and use
 
 Supports DSH `0.1.2-rc.1` and [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1).

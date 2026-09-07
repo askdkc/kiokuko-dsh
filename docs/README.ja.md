@@ -11,3 +11,5 @@
 実装者向けは[architecture](architecture.md)、[database](database.md)、[execution ledger](execution-ledger.md)、
 [retrieval evaluation](retrieval-evaluation.md)を参照してください。
 英語目次は[こちら](README.md)です。
+
+- [実行方式とモデル構成](model-selection.ja.md)
