@@ -4,6 +4,7 @@ import { dirname, extname, join, relative, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Script } from 'node:vm'
+import { satisfies } from 'semver'
 
 const exec = promisify(execFile)
 const root = process.cwd()
@@ -175,6 +176,20 @@ try {
   if (paths.has('dist/cli.js')) throw new Error('generic CLI output must not be published')
   if (packageManifest.dependencies?.commander !== undefined || packageManifest.dependencies?.['@modelcontextprotocol/sdk'] !== undefined) {
     throw new Error('DSH package must not depend on generic CLI or MCP runtimes')
+  }
+  const npmLock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'))
+  const { parse } = await import('yaml')
+  const pnpmLock = parse(await readFile(join(root, 'pnpm-lock.yaml'), 'utf8'))
+  for (const name of ['@orcareplay/core', '@orcareplay/schema', '@orcareplay/viewer']) {
+    const range = packageManifest.dependencies?.[name]
+    if (range !== '>=0.2.1') throw new Error(`${name} must allow ordinary runtime releases >=0.2.1`)
+    const entry = npmLock.packages[`node_modules/${name}`]
+    const pnpmEntry = pnpmLock.importers['.'].dependencies[name]
+    if (npmLock.packages[''].dependencies[name] !== range || pnpmEntry?.specifier !== range ||
+        typeof entry?.version !== 'string' || !satisfies(entry.version, range) || pnpmEntry.version !== entry.version ||
+        typeof entry.integrity !== 'string' || entry.integrity !== pnpmLock.packages[`${name}@${entry.version}`]?.resolution?.integrity) {
+      throw new Error(`${name} lockfile tarball integrity mismatch`)
+    }
   }
   const exportsKeys = Object.keys(packageManifest.exports ?? {})
   if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh'])) throw new Error('public exports must contain ., ./client, and ./dsh')

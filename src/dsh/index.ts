@@ -1,3 +1,4 @@
+import { mountDshOrcaCommand } from './orca-command-surface.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { Config, type Config as DshConfig } from './config.js'
 import type { DshRuntime } from './runtime.js'
@@ -53,21 +54,33 @@ export function mountDshRuntime(ctx: Context, runtime: DshRuntime): ReturnType<C
  * the bundled provider and SOUL prompt without a second plugin.
  */
 export async function apply(ctx: Context, config: DshConfig): Promise<void> {
-  if (!config.enabled) return
+  const resolvedConfig = Config.parse(config)
+  if (!resolvedConfig.enabled) return
 
   console.info('[kiokuko-dsh] plugin loaded')
   await ctx.effect(async () => {
     const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
-      const composition = await mountDshComposition(ctx, host)
-      const disposeExport = host.sessionExport === undefined
-        ? undefined
-        : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, host.sessionExport)
-      return async () => {
-        composition.stopIngress()
-        await disposeExport?.()
-        await composition.dispose()
-      }
+      let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
+      let disposeOrcaCommand: (() => void) | undefined
+      let disposeExport: (() => Promise<void>) | undefined
+      let shutdown: Promise<void> | undefined
+      const cleanup = () => shutdown ??= (async () => {
+        composition?.stopIngress()
+        disposeOrcaCommand?.()
+        const failures: unknown[] = []
+        try { await host.orca?.shutdown() } catch (error) { failures.push(error) }
+        try { await disposeExport?.() } catch (error) { failures.push(error) }
+        try { await composition?.dispose() } catch (error) { failures.push(error) }
+        if (failures.length) throw new AggregateError(failures, 'kiokuko-dsh explicit host unload failed')
+      })()
+      try {
+        composition = await mountDshComposition(ctx, host)
+        disposeOrcaCommand = host.commands === undefined ? undefined : mountDshOrcaCommand({ commands: host.commands }, resolvedConfig.orca.enabled, host.orca)
+        disposeExport = host.sessionExport === undefined ? undefined
+          : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, host.sessionExport)
+        return cleanup
+      } catch (error) { await cleanup(); throw error }
     }
     const runtimeServices = [ctx.get('tools', false), ctx.get('sessions', false), ctx.get('agents', false)]
     // A deliberately minimal composition may expose only the prompt/Skill
@@ -78,24 +91,38 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
         ...(ctx.get('skills', false) === undefined ? {} : { skills: ctx.get('skills', false) as DshCompositionHost['skills'] }),
         ...(ctx.get('systemPrompt', false) === undefined ? {} : { systemPrompt: ctx.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] }),
       } as DshCompositionHost)
-      return () => composition.dispose()
+      const commands = ctx.get('commands', false) as DshCompositionHost['commands']
+      const disposeCommand = commands === undefined ? undefined : mountDshOrcaCommand({ commands }, resolvedConfig.orca.enabled)
+      return () => { disposeCommand?.(); return composition.dispose() }
     }
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx)
-    const composition = await mountDshComposition(ctx, adapter.host)
-    const disposeExport = adapter.host.sessionExport === undefined
-      ? undefined
-      : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, adapter.host.sessionExport)
-    return async () => {
-      composition.stopIngress()
+    const adapter = createDshHostAdapter(ctx, { orca: resolvedConfig.orca })
+    let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
+    let disposeOrcaCommand: (() => void) | undefined
+    let disposeExport: (() => Promise<void>) | undefined
+    let shutdown: Promise<void> | undefined
+    const cleanup = () => shutdown ??= (async () => {
+      composition?.stopIngress()
+      disposeOrcaCommand?.()
       const failures: unknown[] = []
       try { await disposeExport?.() } catch (error) { failures.push(error) }
       try { await adapter.dispose() } catch (error) { failures.push(error) }
-      try { await composition.dispose() } catch (error) { failures.push(error) }
+      try { await composition?.dispose() } catch (error) { failures.push(error) }
       if (failures.length === 1) throw failures[0]
       if (failures.length > 1) throw new AggregateError(failures, 'kiokuko-dsh unload failed')
-    }
+    })()
+    try {
+      composition = await mountDshComposition(ctx, adapter.host)
+      disposeOrcaCommand = adapter.host.commands === undefined ? undefined : mountDshOrcaCommand({ commands: adapter.host.commands }, resolvedConfig.orca.enabled, adapter.host.orca)
+      disposeExport = adapter.host.sessionExport === undefined ? undefined
+        : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, adapter.host.sessionExport)
+      return cleanup
+    } catch (error) { await cleanup(); throw error }
   }, 'kiokuko-dsh composition')
 }
+
+export type * from './orca-types.js'
+export { DshOrcaRecorder } from './orca-recorder.js'
+export { DshOrcaStore } from './orca-store.js'

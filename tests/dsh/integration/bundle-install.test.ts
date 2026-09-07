@@ -78,7 +78,8 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   assert.equal(patch[1]?.insert?.[0]?.name, 'kiokuko-dsh')
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('connection'))
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('attachments'))
-  assert.deepEqual(Config.parse({}), { enabled: true })
+  assert.equal(Config.parse({}).enabled, true)
+  assert.equal(Config.parse({}).orca.enabled, false)
 
   await run('npm', ['run', 'build'])
   await access(join(repositoryRoot, 'dist/dsh/index.js'))
