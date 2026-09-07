@@ -64,6 +64,9 @@ jobs:
       - name: Verify reproducible prepare output
         run: npm run verify:prepare
 
+      - name: Verify automatic Orca dependencies in an empty consumer
+        run: npm run test:orca:package
+
       - name: Verify DeepSeek Harness composition and package lifecycle
         run: npm run test:e2e:dsh
         env:
@@ -111,6 +114,9 @@ jobs:
           echo "$dsh_cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
         env:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
+
+      - name: Verify automatic Orca dependencies in an empty consumer
+        run: npm run test:orca:package
 
       - name: Verify DeepSeek Harness Web lifecycle
         run: npm run test:e2e:dsh

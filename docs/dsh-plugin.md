@@ -64,6 +64,69 @@ pnpm dsh --profile web --dump-config
 
 With an installed dsh CLI, use the same commands without the `pnpm` launcher.
 
+### Local checkout
+
+Build in the Kiokuko checkout before installing it:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run build
+```
+
+Then install the built directory using the installed DSH CLI (prefix `dsh` with
+`pnpm` when running from a DSH checkout):
+
+```bash
+dsh plugin --profile web add /absolute/path/to/kiokuko-dsh
+dsh --profile web --dump-config
+```
+
+## Update
+
+Finish active tasks and stop DSH before changing installed packages. Kiokuko has
+no standalone setup/update CLI: [DSH plugin management](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md)
+forwards package commands to pnpm in the selected profile. The commands below use
+an installed `dsh`; prefix them with `pnpm` when running from a DSH checkout.
+
+For an npm-installed Kiokuko, update the plugin itself:
+
+```bash
+dsh plugin --profile web update kiokuko-dsh --latest
+```
+
+For Orca dependency updates, the installed Kiokuko must contain the `>=0.2.1`
+ranges for `@orcareplay/core`, `@orcareplay/schema`, and `@orcareplay/viewer`.
+An older Kiokuko that pins 0.2.1 must be updated first. After a new Orca release
+is published, refresh the Orca dependency graph and inspect the resolved versions:
+
+```bash
+dsh plugin --profile web update --depth Infinity '@orcareplay/*'
+dsh plugin --profile web why @orcareplay/core
+dsh plugin --profile web why @orcareplay/schema
+dsh plugin --profile web why @orcareplay/viewer
+dsh web
+```
+
+The quoted pattern selects Orca packages; `--depth Infinity` includes indirect
+dependencies. This is an explicit [pnpm update](https://pnpm.io/11.x/cli/update),
+not an update on every startup. `>=0.2.1` permits stable 0.3.0 and later releases
+but excludes prereleases such as `0.3.0-rc.1`. Existing lockfiles retain their
+previous resolutions until updated. Future API compatibility is not guaranteed;
+after restarting, check a new recording with `/kioku-orca list`, `show`, and
+`export` as described in the [Orca guide](orca-recording.md).
+
+For a commit-pinned Git install, use the source-pinned installation procedure
+above with the intended new commit; updating a fixed source reference does not
+move it to a newer commit. For a local checkout, update/build that checkout and
+install its built path again. These profile commands do not update the lockfiles
+in a separate Kiokuko development checkout.
+
+## Remove
+
+```bash
+dsh plugin --profile web remove kiokuko-dsh
+```
+
 ## Usage
 
 Do not run `/kiokuko-soul`. The plugin mounts the bundled `kiokuko-soul` content
@@ -322,3 +385,13 @@ HTTP, TCP, or standalone Web product surface in this package. The only Web
 lifecycle checked here is the DeepSeek Harness `web` profile loading and
 unloading this plugin. An unavailable DeepSeek CLI is reported as
 `unsupported`, never as a successful install or runtime execution.
+
+## Optional OrcaReplay recording
+
+Orca dependencies are installed automatically with this package; recording is
+**disabled by default**. Set `config.orca.enabled: true` and reload to record
+session-scoped observations. `/kioku-orca stop`, `list`, `show <run ID>` and
+`export <run ID>` finalize and inspect the selected session's trace. This records
+DSH internal events, not a complete replayable HTTP/filesystem capture.
+See [Orca recording](orca-recording.md) for configuration, limits, sensitive data,
+storage, disabling and removal.

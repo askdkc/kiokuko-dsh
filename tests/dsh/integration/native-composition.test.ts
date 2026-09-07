@@ -40,7 +40,8 @@ test('explicit host adapter mounts native DSH tools and commands and unloads the
   await plugin
 
   assert.equal(tools.length, 7)
-  assert.equal(commands.length, 1)
+  assert.equal(commands.length, 2)
+  assert.ok(commands.some(command => command.name === 'kioku-orca'))
   assert.deepEqual(await commands[0].handler({ rawInput: 'ultra', signal: new AbortController().signal }), {
     kind: 'success', text: 'Ponytail mode set to ultra for the active request.',
   })

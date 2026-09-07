@@ -34,8 +34,8 @@ const capabilities = [
 ]
 
 function assertCommittedBaselineFixture(): void {
-  assert.equal(CURRENT_SCHEMA_VERSION, 7)
-  assert.deepEqual(CURRENT_MIGRATION_VERSIONS, [SAMPLE_DATABASE_BASELINE_VERSION, 2, 3, 4, 5, 6, 7])
+  assert.equal(CURRENT_SCHEMA_VERSION, 8)
+  assert.deepEqual(CURRENT_MIGRATION_VERSIONS, [SAMPLE_DATABASE_BASELINE_VERSION, 2, 3, 4, 5, 6, 7, 8])
   const database = openConnection(sampleDatabasePath, { readOnly: true })
   try {
     const versions = database.prepare('SELECT version FROM schema_migrations ORDER BY version')

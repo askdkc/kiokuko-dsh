@@ -9,3 +9,9 @@
       inject: [skills, systemPrompt, tools, commands, userQuestions, sessions, sessionQuery, llm, agents, attachments, connection]
       config:
         enabled: true
+        orca:
+          enabled: false
+          storage: project
+          capture:
+            content: redacted
+            reasoning: false

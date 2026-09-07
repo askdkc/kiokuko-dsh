@@ -1,63 +1,48 @@
-# Kiokuko DeepSeek Harness Plugin
+# Kiokuko(記憶庫) DeepSeek Harness Plugin
 
 [English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | 한국어
 
-`kiokuko-dsh`은 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)를 위한 out-of-tree Plugin입니다. 공개된 release가 있으면 [npm 패키지](https://www.npmjs.com/package/kiokuko-dsh)를 사용하고, 소스를 고정하는 Git 설치는 Plugin 안내를 사용하십시오.
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)에 프로젝트 기억, 작업 계획, 검증 지원을 추가합니다.
+선택 기능인 OrcaReplay 기록을 켜면 모델과 도구의 동작을 확인하고 HTML로 내보낼 수 있습니다.
 
-## 설치
+## 설치 및 사용
 
-DeepSeek Harness `0.1.2-rc.1` 및 Node.js 24.16.0 이상이 필요합니다.
-
-공개된 npm 패키지를 설치합니다:
-
-DeepSeek Harness checkout에서 설치:
-
-```bash
-pnpm dsh plugin --profile web add kiokuko-dsh
-pnpm dsh --profile web --dump-config
-```
-
-GitHub를 직접 지정하려면 DeepSeek Harness checkout에서 실행하십시오:
+DSH `0.1.2-rc.1`과 [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1)을 지원합니다.
+Node.js **24.16.0 이상**과 pnpm이 필요합니다.
+설치된 `dsh` CLI로 공개된 npm 패키지를 설치하고 시작합니다.
 
 ```bash
-pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
-pnpm dsh --profile web --dump-config
-```
-
-commit을 고정하는 Git 설치는 [Plugin 안내](docs/dsh-plugin.md)의 fallback을 사용하십시오.
-
-로컬 checkout을 사용할 때는 먼저 빌드한 뒤 경로를 지정합니다:
-
-```bash
-# 다음 두 명령은 Kiokuko checkout에서 실행합니다.
-pnpm install --frozen-lockfile
-pnpm run build
-```
-
-그 다음 DeepSeek Harness checkout에서 빌드된 경로를 설치합니다:
-
-```bash
-dsh plugin --profile web add /absolute/path/to/kiokuko-dsh
-```
-
-설치된 `dsh` CLI를 사용할 때는 앞의 `pnpm`만 생략합니다. 삭제:
-
-```bash
-dsh plugin --profile web remove kiokuko-dsh
-```
-
-## 사용법
-
-`/kiokuko-soul`을 실행할 필요가 없습니다. 플러그인이 내장된 `kiokuko-soul`
-정책을 DSH system prompt에 자동으로 주입합니다. 설치 후 `web` 프로필을
-시작하고 바로 작업을 입력하면 됩니다:
-
-```bash
+dsh plugin --profile web add kiokuko-dsh
 dsh web
 ```
 
-자세한 내용은 [DeepSeek Harness Plugin 안내](docs/dsh-plugin.md)를 참조하십시오.
+DSH 소스 디렉터리에서 실행한다면 각 `dsh` 명령 앞에 `pnpm`을 붙입니다.
+시작 후 평소처럼 작업을 입력하면 됩니다. Kiokuko 전용 setup 작업은 필요하지 않습니다.
+GitHub 및 로컬 설치 방법은 [플러그인 안내](docs/dsh-plugin.md)를 참고하세요.
 
-## License
+Orca 의존 패키지는 자동 설치되며 기록은 **기본적으로 꺼져 있습니다**.
+플러그인 설정의 `orca.enabled`를 `true`로 바꾸고 다시 로드하면 활성화됩니다.
+`/kioku-orca list`, `/kioku-orca show <run ID>`, `/kioku-orca export <run ID>`로 기록을 확인하고 내보낼 수 있습니다.
+자세한 내용은 [기록 설정과 명령](docs/orca-recording.md)을 참고하세요.
 
-MIT
+## 업데이트
+
+진행 중인 작업을 마치고 DSH를 종료한 뒤 업데이트합니다. npm으로 설치한 Kiokuko 업데이트:
+
+```bash
+dsh plugin --profile web update kiokuko-dsh --latest
+```
+
+Orca 0.3.0 등 새 버전이 공개된 후 Orca 관련 의존 패키지를 업데이트하려면:
+
+```bash
+dsh plugin --profile web update --depth Infinity '@orcareplay/*'
+dsh plugin --profile web why @orcareplay/core
+dsh web
+```
+
+설치된 Kiokuko에 `>=0.2.1` 의존 범위가 포함되어 있어야 합니다. 이 범위는 정식 0.3.0 이후 버전을
+허용하지만 기존 설치를 자동으로 업데이트하지는 않습니다. 업데이트 후 기록과 HTML 내보내기를 확인하세요.
+[업데이트 상세 안내](docs/dsh-plugin.md#update)
+
+[문서](docs/README.md) · [권한](PERMISSIONS.md) · [MIT 라이선스](LICENSE)

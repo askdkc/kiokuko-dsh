@@ -42,7 +42,7 @@ function relevantDump(rows, stderr) {
 function assertInstalledDump(result) {
   const rows = dumpedRows(result, 'dsh dump-config after install')
   const kiokuko = rows.filter(row => row?.id === 'kiokuko-dsh'
-    && row?.name === 'kiokuko-dsh' && row?.disabled !== true)
+    && row?.name === 'kiokuko-dsh' && row?.disabled !== true && row?.config?.orca?.enabled === true)
   const stock = rows.filter(row => row?.id === 'session-log-download'
     && row?.name === '@deepseek-ai/dsh-session-log-export' && row?.disabled === true)
   if (kiokuko.length !== 1 || stock.length !== 1) {
@@ -113,7 +113,7 @@ async function runCordisComposition() {
 }
 
 function startWebProfile(env) {
-  const child = spawn(dsh, ['--profile', profile, '--no-open', '--port', '0'], {
+  const child = spawn(dsh, ['--profile', profile, '--patch', env.KIOKUKO_ORCA_E2E_PATCH, '--no-open', '--port', '0'], {
     cwd: root,
     env: { ...process.env, ...env },
     shell: false,
@@ -253,7 +253,7 @@ async function runCliLifecycle() {
   const output = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-pack-'))
   const cache = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-cache-'))
   const dataDirectory = join(home, 'kiokuko-data')
-  const env = { DSH_HOME: home, KIOKUKO_DATA_DIR: dataDirectory, npm_config_cache: cache }
+  const env = { DSH_HOME: home, KIOKUKO_DATA_DIR: dataDirectory, npm_config_cache: cache, KIOKUKO_ORCA_E2E_PATCH: join(home, 'orca-test.patch.yml') }
   let web
   try {
     try {
@@ -281,7 +281,8 @@ async function runCliLifecycle() {
     const tarball = join(output, filename)
     await access(tarball)
     await run(dsh, ['plugin', '--profile', profile, 'add', tarball], env)
-    const dumped = await run(dsh, ['--profile', profile, '--dump-config'], env)
+    await writeFile(env.KIOKUKO_ORCA_E2E_PATCH, '- id: kiokuko-dsh\n  config:\n    enabled: true\n    orca:\n      enabled: true\n', { mode: 0o600 })
+    const dumped = await run(dsh, ['--profile', profile, '--patch', env.KIOKUKO_ORCA_E2E_PATCH, '--dump-config'], env)
     assertInstalledDump(dumped)
     web = startWebProfile(env)
     const ready = await web.ready
@@ -303,6 +304,7 @@ async function runCliLifecycle() {
       workingTreeClean,
       packageIntegrity: packageMetadata.integrity,
       install: 'complete',
+      orca: 'enabled-native-scenarios-no-skips',
       web: 'browser-bundle-loaded-and-materialized',
       browserBundle,
       uninstall: 'complete',

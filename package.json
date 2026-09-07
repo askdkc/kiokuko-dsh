@@ -74,11 +74,13 @@
       "summary": "Local Kiokuko state and managed project files, optional network-backed Skill or embedding features, and restricted verifier or backup subprocesses.",
       "readPaths": [
         "Configured Kiokuko SQLite database and embedding assets",
-        "Registered project roots and their repository metadata"
+        "Registered project roots and their repository metadata",
+        "Opt-in Orca traces belonging to the exact native DSH session"
       ],
       "writePaths": [
         "Configured Kiokuko database and pre-migration backups",
-        "DSH run, lease, receipt, retrieval, post-completion memory-finalization, and embedding state inside that database"
+        "DSH run, lease, receipt, retrieval, post-completion memory-finalization, and embedding state inside that database",
+        "Opt-in .orca/runs and .orca/exports inside verified session workspaces, or the configured Kiokuko data directory"
       ],
       "commands": [
         "Restricted repository-relative verifier and backup subprocesses when explicitly requested"
@@ -93,7 +95,8 @@
       "failureBoundaries": [
         "Repository identity, run identity, lease, revision, and integrity mismatches fail closed",
         "Remote embedding is disabled by default and unavailable services do not become normal success",
-        "Memory finalization failures are retryable and cannot veto DSH completion or session-log export"
+        "Memory finalization failures are retryable and cannot veto DSH completion or session-log export",
+        "Orca recording is disabled by default, adds no network transmission, and recording failures cannot veto native outcomes"
       ],
       "lifecycleEvidence": [
         "prepare runs only npm run build",
@@ -120,9 +123,13 @@
     "publint": "publint",
     "pack:check": "node scripts/pack-check.mjs",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run publint && npm run pack:check"
+    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run publint && npm run pack:check",
+    "test:orca:package": "npm run build && node scripts/verify-orca-consumer.mjs"
   },
   "dependencies": {
+    "@orcareplay/core": ">=0.2.1",
+    "@orcareplay/schema": ">=0.2.1",
+    "@orcareplay/viewer": ">=0.2.1",
     "jsonc-parser": "3.3.1",
     "semver": "7.8.5",
     "yaml": "2.9.0",

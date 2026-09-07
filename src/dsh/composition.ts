@@ -43,6 +43,7 @@ export interface DshNativeTurnStoppingPayload {
 }
 
 export interface DshCompositionHost {
+  readonly orca?: import('./orca-types.js').DshOrcaHostServices
   readonly skills?: DshSkillContext['skills']
   readonly systemPrompt?: Parameters<typeof mountSoulPrompt>[0]['systemPrompt']
   readonly runtime?: DshRuntime
@@ -291,7 +292,10 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     }
   } catch (error) {
     stopIngress()
-    try { await runSetupCleanup() } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'kiokuko-dsh composition setup failed') }
+    const setupFailures = [error]
+    try { await host.orca?.shutdown() } catch (cleanupError) { setupFailures.push(cleanupError) }
+    try { await runSetupCleanup() } catch (cleanupError) { setupFailures.push(cleanupError) }
+    if (setupFailures.length > 1) throw new AggregateError(setupFailures, 'kiokuko-dsh composition setup failed')
     throw error
   }
 

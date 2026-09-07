@@ -2,66 +2,48 @@
 
 [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [한국어](README.ko.md)
 
-`kiokuko-dsh` is an out-of-tree plugin for
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Use the
-[npm package](https://www.npmjs.com/package/kiokuko-dsh) when a published
-release is available, or use the source-pinned Git path in the plugin guide.
+Kiokuko adds project memory, planning, and verification support to
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+Optional OrcaReplay recording lets you inspect model/tool activity and export HTML.
 
-## Install
+## Install and use
 
-DeepSeek Harness `0.1.2-rc.1` and Node.js 24.16.0 or newer are required.
-
-Install the published package:
-
-From a DeepSeek Harness checkout:
+Supports DSH `0.1.2-rc.1` and [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1).
+Requires Node.js **24.16.0+** and pnpm.
+With an installed `dsh` CLI, install the published npm package and start:
 
 ```bash
-pnpm dsh plugin --profile web add kiokuko-dsh
-pnpm dsh --profile web --dump-config
-```
-
-For a source-pinned Git install, use the fallback in
-[the plugin guide](docs/dsh-plugin.md).
-
-For a direct GitHub install from a DeepSeek Harness checkout:
-
-```bash
-pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
-pnpm dsh --profile web --dump-config
-```
-
-For a local checkout, build it first and pass its path:
-
-```bash
-# Run these two commands in the Kiokuko checkout.
-pnpm install --frozen-lockfile
-pnpm run build
-```
-
-Then, from a DeepSeek Harness checkout, install the built path:
-
-```bash
-dsh plugin --profile web add /absolute/path/to/kiokuko-dsh
-```
-
-With an installed `dsh` CLI, omit the `pnpm` launcher. Remove the plugin with:
-
-```bash
-dsh plugin --profile web remove kiokuko-dsh
-```
-
-## Usage
-
-Do not run `/kiokuko-soul`. The plugin injects the bundled `kiokuko-soul`
-policy into DSH's system prompt automatically. After installation, start the
-`web` profile and enter your task:
-
-```bash
+dsh plugin --profile web add kiokuko-dsh
 dsh web
 ```
 
-See [the DeepSeek Harness Plugin guide](docs/dsh-plugin.md) for runtime details and [execution support (Japanese)](docs/execution-support.md) for task conditions, resumable exploration pauses, and evidence coverage.
+From a DSH checkout, prefix each `dsh` command with `pnpm`.
+Enter your task normally; no Kiokuko setup command is needed.
+For GitHub/local installation, see the [plugin guide](docs/dsh-plugin.md).
 
-## License
+Orca dependencies install automatically; recording is **off by default**.
+Set `orca.enabled: true` in the plugin configuration and reload to enable it.
+Use `/kioku-orca list`, `/kioku-orca show <run ID>`, or `/kioku-orca export <run ID>`.
+See [recording settings and commands](docs/orca-recording.md).
 
-MIT
+## Update
+
+Finish active tasks and stop DSH before updating. Update the npm-installed plugin:
+
+```bash
+dsh plugin --profile web update kiokuko-dsh --latest
+```
+
+To update Orca dependencies after a release such as 0.3.0:
+
+```bash
+dsh plugin --profile web update --depth Infinity '@orcareplay/*'
+dsh plugin --profile web why @orcareplay/core
+dsh web
+```
+
+The installed Kiokuko must include the `>=0.2.1` dependency range. It permits
+stable 0.3.0 and later releases; it does not automatically update existing installs.
+Verify recording and export after updating. See [update details](docs/dsh-plugin.md#update).
+
+[Documentation](docs/README.md) · [Permissions](PERMISSIONS.md) · [MIT license](LICENSE)

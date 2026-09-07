@@ -56,3 +56,29 @@ ambiguous run state, failed verifier processes, and integrity or ownership
 conflicts are reported as failures or unavailable states. They are never
 converted into normal success or silently redirected to another repository or
 run.
+
+## Optional Orca recordings
+
+`orca.enabled` defaults to `false`. The runtime dependencies
+`@orcareplay/core`, `@orcareplay/schema`, and `@orcareplay/viewer` with range `>=0.2.1`
+are installed automatically by npm/pnpm with this package. No extra installer,
+startup subprocess, automatic package repair, or network transmission is added.
+The dependencies are Apache-2.0; the [upstream license](docs/ORCAREPLAY-LICENSE.txt)
+and viewer credit are retained. Disabled recording never initializes Orca or creates trace files.
+
+With explicit configuration, projected model content and tool final results are
+written to `<verified workspace>/.orca/runs`, or under
+`<Kiokuko data directory>/traces/projects/<workspace hash>/.orca/runs`.
+The main database holds only the session/run index. `show` and `export` require
+the exact native command agent/session; no Orca HTTP API or model tool exists.
+Offline HTML is written only to `.orca/exports/<run ID>.html`.
+
+Traces and HTML can contain sensitive source and conversations. Known secret
+patterns and credential-shaped fields are removed before writing, but arbitrary
+secrets cannot all be recognized. Use `capture.content: metadata` to omit bodies,
+arguments and result content. Reasoning is excluded unless separately enabled;
+environment variables, replayState, image bytes and attachments are excluded.
+New directories/files use 0700/0600 and unsafe existing modes/symlinks are refused.
+`.orca/.gitignore` excludes new stores from Git. Exports are never published or
+uploaded automatically. Deletion and disabling instructions are in
+[Orca recording](docs/orca-recording.md).

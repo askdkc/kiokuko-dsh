@@ -1,3 +1,5 @@
+import { OrcaConfig } from './config.js'
+import { createDshOrcaHost } from './orca-host.js'
 import { fileURLToPath } from 'node:url'
 import { realpathSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -136,6 +138,7 @@ interface AdapterContext extends Context {
 }
 
 export interface DshHostAdapterOptions {
+  readonly orca?: import('zod').z.input<typeof OrcaConfig>
   readonly databasePath?: string
   readonly migrationsDirectory?: string
   readonly repositoryRoot?: string
@@ -2129,7 +2132,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     })
   }
 
+  const orcaConfig = OrcaConfig.parse(options.orca ?? {})
+  const orca = !orcaConfig.enabled ? undefined : createDshOrcaHost(ctx, orcaConfig, runtime, {
+    session: id => sessions?.get(id), agent: id => agents?.get(id), logicalRun: resolveSessionRunId,
+  })
+  let disposePromise: Promise<void> | undefined
   const host: DshCompositionHost = {
+    ...(orca === undefined ? {} : { orca }),
     ...(skills === undefined ? {} : { skills: skills as any }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
     runtime,
@@ -2160,8 +2169,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
 
   return {
     host,
-    dispose: async () => {
+    dispose: () => disposePromise ??= (async () => {
       const failures: unknown[] = []
+      try { await orca?.shutdown() } catch (error) { failures.push(error) }
       const pausedSessions = new Set([...latestBySession.keys()].filter(id => executionSupport.paused(id)))
       executionSupport.dispose()
       try { errorDisposer?.() } catch (error) { failures.push(error) }
@@ -2221,7 +2231,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       inMemoryClaims.clear()
       if (failures.length === 1) throw failures[0]
       if (failures.length > 1) throw new AggregateError(failures, 'kiokuko-dsh adapter disposal failed')
-    },
+    })(),
   }
 }
 
