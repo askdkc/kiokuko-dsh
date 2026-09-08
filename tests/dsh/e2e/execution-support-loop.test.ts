@@ -8,6 +8,7 @@ import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { nativeMock } from '../helpers/native-mock.js'
+import type { DshUserQuestionRequest } from '../../../src/dsh/user-interaction.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
@@ -47,7 +48,8 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     read('read-resumed'), mock.textResponse('記録済みの根拠を使い、調査と文章作成を完了しました。'),
   ])
   ctx.llm.registerAdapter(['execution-mock'], model)
-  let writes = 0; let reads = 0; let questions = 0
+  let writes = 0; let reads = 0
+  const questions: { id: string; agentId: string | undefined }[] = []
   const localFiber = ctx.plugin(fsLocal.default, { cwd: root }); fibers.push(localFiber); await localFiber
   const fsFiber = ctx.plugin(fsTools); fibers.push(fsFiber); await fsFiber
   const observeTools = ctx.on('tools/execute', (execution: any, next: () => unknown) => {
@@ -56,9 +58,11 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     return next()
   })
   const questionFiber = ctx.plugin({ name: 'execution-test-questions', apply(context: any) {
-    return context.provide('userQuestions', { async ask(request: any) {
-      questions++
-      return { answers: request.questions.map((q: any) => ({ id: q.id, selected: [mode] })) }
+    return context.provide('userQuestions', { async ask(request: DshUserQuestionRequest) {
+      return { answers: request.questions.map(q => {
+        questions.push({ id: q.id, agentId: request.agent?.id })
+        return { id: q.id, selected: [q.id === 'kioku-orca-recording' ? '記録しない' : mode] }
+      }) }
     } })
   } }); await questionFiber
   const options = { repositoryRoot: root, databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
@@ -82,6 +86,8 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
         events: target.session.snapshotEvents().filter((event: any) => ['turn/end', 'tool/result'].includes(event.type)).slice(-5), requests: model.requests.length, reads, writes }))
     }
     await settle(agent, 'こんにちは', () => model.requests.length === 1)
+    const expectedQuestions = [{ id: 'kioku-orca-recording', agentId: agent.id }]
+    assert.deepEqual(questions, expectedQuestions, 'first chat asks only for the session recording choice')
     await settle(agent, '雑談を続けよう', () => model.requests.length === 2)
     const task = (mode === 'research' ? '資料を調査して根拠を報告してください。' : '資料を参照して記事を書いてください。')
       + '\nread paths: src\nwrite paths: src\n完了条件: 日本語の最終報告\n> write paths: .\n{{user_braces}}\n' + '補足の文。'.repeat(1500)
@@ -98,6 +104,8 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     assert.ok(running)
     const other = await ctx.agentLoop.create(session.SessionId('other-session'), { provider: 'execution-mock', model: 'mock' }, { cwd: root })
     await settle(other, 'こんにちは', () => model.requests.length === 8)
+    expectedQuestions.push({ id: 'kioku-orca-recording', agentId: other.id })
+    assert.deepEqual(questions, expectedQuestions, 'each session asks once, without task clarification or approval')
     assert.equal(await paused(), true, 'another session cannot clear the pause')
     composition.stopIngress(); await adapter.dispose(); await composition.dispose()
     const stored = openConnection(databasePath)
@@ -119,7 +127,8 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     assert.equal(notices().length, 1)
     assert.equal(model.requests.length, 10)
     assert.match(JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'assistant/message').at(-1)), /完了しました/)
-    assert.equal(questions, 0, 'no new clarification or approval for grounded research/writing')
+    assert.deepEqual(questions, expectedQuestions,
+      'reload preserves the recording choice and grounded research/writing adds no clarification or approval')
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM dsh_turn_receipts').get<{ n: number }>()!.n), 0,
       'pause never fabricates Enno receipts or turn seals')
   } finally {
