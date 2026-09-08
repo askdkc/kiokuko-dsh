@@ -135,8 +135,18 @@ function repairRecord(value) {
 function validateCatalog(catalog, records) {
   const header = records[0]
   if (header === undefined) throw new Error('session log has no header record')
-  const decoded = catalog.decodeRecoverableArtifact(header, records.slice(1))
-  catalog.migrate(decoded)
+  if (typeof catalog?.createRestore === 'function') {
+    const restore = catalog.createRestore(header, { recovery: 'strict', validation: 'current' })
+    for (const row of records.slice(1)) restore.decodeRow(row)
+    restore.finish()
+    return
+  }
+  if (typeof catalog?.decodeRecoverableArtifact === 'function' && typeof catalog?.migrate === 'function') {
+    const decoded = catalog.decodeRecoverableArtifact(header, records.slice(1))
+    catalog.migrate(decoded)
+    return
+  }
+  throw new Error('Unsupported session-format catalog API: expected createRestore or decodeRecoverableArtifact and migrate')
 }
 
 function catalogCandidates(configured) {
