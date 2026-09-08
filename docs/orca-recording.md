@@ -52,6 +52,7 @@ Use the native session's human command interface:
 
 ```text
 /kioku-orca status
+/kioku-orca status --json
 /kioku-orca stop
 /kioku-orca list
 /kioku-orca show run_<id>
@@ -67,7 +68,11 @@ generation; it never reopens old events. `show`/`export` accept only
 completed traces from that native session and workspace. Cursors expire when the
 plugin reloads. Lists contain the most recent 200 generations.
 
-`status` distinguishes disabled, available and unavailable capability, trace
+`status` shows a compact summary: recording state first, then the next command,
+storage location and any missing observations. Internal diagnostics are omitted
+from the default display. Use `status --json` for the full diagnostic snapshot.
+
+The JSON snapshot distinguishes disabled, available and unavailable capability, trace
 state, missing/unresolved observations and index persistence failure.
 `sessionRecording` is `awaiting_choice`, `enabled` or `disabled`; `selectionError`
 reports unavailable questions or failed preference persistence. Feature capability

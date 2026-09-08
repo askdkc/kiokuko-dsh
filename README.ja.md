@@ -11,14 +11,14 @@ OrcaReplay でモデル・ツールの動作を記録し、内容の確認と HT
 
 対応 DSH: `0.1.2-rc.1` / [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1) / [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2)。
 Node.js **24.16.0 以上**と pnpm が必要です。
-インストール済みの `dsh` CLI で、公開済み npm パッケージを導入して起動します。
+DSH のソースディレクトリで、公開済み npm パッケージを導入して起動します。
 
 ```bash
-dsh plugin --profile web add kiokuko-dsh
-dsh web
+pnpm dsh plugin --profile web add kiokuko-dsh
+pnpm dsh web
 ```
 
-DSH の checkout から使う場合は、各 `dsh` コマンドの先頭に `pnpm` を付けます。
+グローバルにインストールした `dsh` CLI を使う場合は、各コマンドから `pnpm` を外してください。
 起動後は普通に依頼を入力します。Kiokuko 専用の setup 操作は不要です。
 GitHub・ローカルからの導入は [プラグインガイド](docs/dsh-plugin.md) を参照してください。
 
@@ -26,7 +26,7 @@ OrcaReplay の機能設定は自動導入され、**手動設定は不要**で�
 「記録する」を選ぶと、その後のモデル応答やツール実行結果を作業プロジェクトの `.orca/runs/` に保存します。選択はセッションごとに保持され、スキップ・取消時は記録せず続行します。
 
 - `/kioku-orca start`: 手動で記録を開始、または停止後に再開します。最初に「記録する」を選んだ場合は実行不要です。過去の動作は記録されません。
-- `/kioku-orca status`: 機能の有効・無効、セッションの記録選択、記録状態・エラーを確認します。
+- `/kioku-orca status`: 記録状態・保存先・次の操作を短く表示します。診断用の詳細情報は `/kioku-orca status --json` で確認できます。
 
 `/kioku-orca stop` でログを確定後、`list` で run ID を確認し、`show <run ID>` で内容を表示、`export <run ID>` で HTML を出力できます（いずれも `/kioku-orca` に続けて入力）。
 無効にする場合は `orca.enabled: false` を設定して再読み込みします。詳細は [記録設定とコマンド](docs/orca-recording.md) を参照してください。
@@ -36,15 +36,15 @@ OrcaReplay の機能設定は自動導入され、**手動設定は不要**で�
 作業中のタスクを終えて DSH を停止してから更新します。npm 版の Kiokuko 本体の更新:
 
 ```bash
-dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh plugin --profile web update kiokuko-dsh --latest
 ```
 
 Orca の 0.3.0 などが公開された後、Orca 関連の依存を更新する場合:
 
 ```bash
-dsh plugin --profile web update --depth Infinity '@orcareplay/*'
-dsh plugin --profile web why @orcareplay/core
-dsh web
+pnpm dsh plugin --profile web update --depth Infinity '@orcareplay/*'
+pnpm dsh plugin --profile web why @orcareplay/core
+pnpm dsh web
 ```
 
 導入済みの Kiokuko に `>=0.2.1` の依存指定が含まれていることが前提です。

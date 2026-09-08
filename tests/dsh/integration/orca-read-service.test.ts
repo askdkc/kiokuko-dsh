@@ -85,6 +85,21 @@ test('native command requires exact agent/session before every operation, includ
     }
     const result = await definition.handler({ rawInput: `show ${row.orca_run_id}`, signal, agent })
     assert.equal(result.kind, 'success')
+    const status = await definition.handler({ rawInput: 'status', signal, agent })
+    assert.equal(status.kind, 'success')
+    assert.match(status.text!, /^OrcaReplay: 記録完了\n/u)
+    const json = await definition.handler({ rawInput: 'status --json', signal, agent })
+    assert.equal(json.kind, 'success')
+    assert.deepEqual(JSON.parse(json.text!), JSON.parse(JSON.stringify({ ...f.recorder.status(session.id), sessionRecording: 'enabled' })))
+    for (const rawInput of ['status --verbose', 'status --json extra', 'start --json', 'stop --json']) {
+      assert.deepEqual(await definition.handler({ rawInput, signal, agent }), { kind: 'error', text: 'invalid_command' })
+    }
+    assert.deepEqual(await definition.handler({ rawInput: 'status --json', signal, agent: { ...agent } }),
+      { kind: 'error', text: 'session_required' })
+    assert.equal(f.recorder.status(session.id).trace?.orca_run_id, row.orca_run_id, 'status and invalid options do not start another recording')
+    mountDshOrcaCommand({ commands: { register: def => { definition = def; return () => {} } } }, false)
+    assert.match((await definition.handler({ rawInput: 'status', signal, agent })).text!, /^OrcaReplay: 機能が無効です\n/u)
+    assert.deepEqual(JSON.parse((await definition.handler({ rawInput: 'status --json', signal, agent })).text!), { capability: 'disabled' })
   } finally { await f.dispose() }
 })
 test('crash reconciliation never changes live owners or reopens trace files', async () => {

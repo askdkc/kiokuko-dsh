@@ -12,14 +12,14 @@ For new coding tasks, choose normal execution or 役小角(enno-oduno). Enno off
 
 Supports DSH `0.1.2-rc.1`, [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1), and [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2).
 Requires Node.js **24.16.0+** and pnpm.
-With an installed `dsh` CLI, install the published npm package and start:
+Run these commands from the DSH source directory to install the published npm package and start:
 
 ```bash
-dsh plugin --profile web add kiokuko-dsh
-dsh web
+pnpm dsh plugin --profile web add kiokuko-dsh
+pnpm dsh web
 ```
 
-From a DSH checkout, prefix each `dsh` command with `pnpm`.
+If you use a globally installed `dsh` CLI, omit `pnpm` from the commands.
 Enter your task normally; no Kiokuko setup command is needed.
 For GitHub/local installation, see the [plugin guide](docs/dsh-plugin.md).
 
@@ -27,7 +27,7 @@ OrcaReplay is configured automatically; **no manual setup is required**. At the 
 Choosing to record saves subsequent model responses and tool results to `.orca/runs/` in the session workspace. The choice is remembered per session; skipped or cancelled questions continue without recording.
 
 - `/kioku-orca start`: start recording manually or resume after stopping. Not needed if you chose to record at the start; past activity is not captured.
-- `/kioku-orca status`: check feature availability, the session recording choice, recording state, and errors.
+- `/kioku-orca status`: briefly show the recording state, storage location, and next action. Use `/kioku-orca status --json` for diagnostic details.
 
 Use `/kioku-orca stop` to finalize the log, `list` to find its run ID, `show <run ID>` to inspect it, and `export <run ID>` to create HTML (all under `/kioku-orca`).
 To disable recording, set `orca.enabled: false` and reload. See [recording settings and commands](docs/orca-recording.md).
@@ -37,15 +37,15 @@ To disable recording, set `orca.enabled: false` and reload. See [recording setti
 Finish active tasks and stop DSH before updating. Update the npm-installed plugin:
 
 ```bash
-dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh plugin --profile web update kiokuko-dsh --latest
 ```
 
 To update Orca dependencies after a release such as 0.3.0:
 
 ```bash
-dsh plugin --profile web update --depth Infinity '@orcareplay/*'
-dsh plugin --profile web why @orcareplay/core
-dsh web
+pnpm dsh plugin --profile web update --depth Infinity '@orcareplay/*'
+pnpm dsh plugin --profile web why @orcareplay/core
+pnpm dsh web
 ```
 
 The installed Kiokuko must include the `>=0.2.1` dependency range. It permits

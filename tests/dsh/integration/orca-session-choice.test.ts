@@ -68,7 +68,7 @@ test('first-step recording choice gates early model/tool observations, deduplica
     assert.equal(await duplicate, 'native-decision')
     await f.step()
     assert.equal(asked, 1)
-    assert.equal((await f.command('status')).sessionRecording, 'enabled')
+    assert.equal((await f.command('status --json')).sessionRecording, 'enabled')
     await f.stream()
     await f.reload()
     await f.step()
@@ -87,7 +87,7 @@ test('declining persists without traces, commands override the choice, and stop 
   try {
     await f.step(); await f.stream(); await f.reload(); await f.step(); await f.stream()
     assert.equal(asked, 1)
-    assert.equal((await f.command('status')).sessionRecording, 'disabled')
+    assert.equal((await f.command('status --json')).sessionRecording, 'disabled')
     await assert.rejects(access(join(f.root, '.orca')))
     await f.command('start'); await f.stream(); await f.command('stop')
     const rows = await f.reader.list(f.binding)
@@ -95,7 +95,7 @@ test('declining persists without traces, commands override the choice, and stop 
     assert.equal(rows[0]?.state, 'completed')
     await f.reload(); await f.step(); await f.stream()
     assert.equal(asked, 1)
-    assert.equal((await f.command('status')).sessionRecording, 'disabled')
+    assert.equal((await f.command('status --json')).sessionRecording, 'disabled')
     assert.equal((await f.reader.list(f.binding)).length, 1)
   } finally { await f.dispose() }
 })
@@ -111,7 +111,7 @@ for (const mode of ['missing', 'rejected', 'skipped', 'wrong-id', 'invalid'] as 
     assert.equal(await f.step(), 'native-decision')
     await f.step(); await f.stream()
     assert.equal(asked, mode === 'missing' ? 0 : 1)
-    assert.equal((await f.command('status')).sessionRecording, 'awaiting_choice')
+    assert.equal((await f.command('status --json')).sessionRecording, 'awaiting_choice')
     await assert.rejects(access(join(f.root, '.orca')))
     await f.command('start'); await f.stream(); await f.command('stop')
     assert.equal((await f.reader.list(f.binding)).length, 1)
@@ -133,7 +133,7 @@ for (const action of ['start', 'stop', 'abort', 'shutdown'] as const) test(`${ac
     await Promise.resolve()
     if (action !== 'shutdown') {
       await f.stream()
-      assert.equal((await f.command('status')).sessionRecording, action === 'start' ? 'enabled' : action === 'stop' ? 'disabled' : 'awaiting_choice')
+      assert.equal((await f.command('status --json')).sessionRecording, action === 'start' ? 'enabled' : action === 'stop' ? 'disabled' : 'awaiting_choice')
     }
     await f.host.shutdown()
     assert.equal((await f.reader.list(f.binding)).length, action === 'start' ? 1 : 0)
@@ -201,6 +201,6 @@ test('managed children do not interrupt work with recording questions or inherit
     await assert.rejects(access(join(f.root, '.orca')))
     await f.command('start'); await f.stream(); await f.reload(); await f.step(); await f.stream()
     assert.equal(asked, 0)
-    assert.equal((await f.command('status')).sessionRecording, 'enabled')
+    assert.equal((await f.command('status --json')).sessionRecording, 'enabled')
   } finally { await f.dispose() }
 })
