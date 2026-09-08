@@ -16,7 +16,7 @@ export async function orcaFixture(input: z.input<typeof OrcaConfig> = {}, depend
   migrateDatabase(database, join(process.cwd(), 'migrations'))
   const store = new DshOrcaStore(database)
   const withIndex: WithOrcaIndex = async operation => await operation(store)
-  const config = OrcaConfig.parse({ enabled: true, shutdownDrainTimeoutMs: 20, ...input })
+  const config = OrcaConfig.parse({ shutdownDrainTimeoutMs: 20, ...input })
   const binding: DshOrcaBinding = { sessionId: 'session-a', workspaceRoot: root, sessionCwd: root, storeRoot: root }
   const recorder = new DshOrcaRecorder(config, withIndex, dependencies)
   const reader = new DshOrcaReadService(config, withIndex)

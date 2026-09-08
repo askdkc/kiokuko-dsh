@@ -6,12 +6,16 @@ export function mountDshOrcaHooks(ctx: Context, services: DshOrcaHostServices): 
   const disposers: (() => void)[] = []
   const on = (name: string, listener: (...args: any[]) => any) => disposers.push((ctx as any).on(name, listener, { global: true }))
   const binding = (exec: OrcaToolExecution) => {
-    try { return exec.agent?.session ? services.resolveSessionBinding(exec.agent, exec.agent.session) : undefined } catch { return undefined }
+    try {
+      const resolved = exec.agent?.session ? services.resolveSessionBinding(exec.agent, exec.agent.session) : undefined
+      return resolved && services.canRecord(resolved) ? resolved : undefined
+    } catch { return undefined }
   }
   try {
     on('llm/stream', (options: Record<string, any>, next: () => AsyncIterable<unknown>) => {
       let resolved
       try { if (typeof options.sessionId === 'string') resolved = services.resolveModelBinding(options.sessionId) } catch { /* no guessed attribution */ }
+      if (resolved && !services.canRecord(resolved)) return next()
       return services.recorder.stream(resolved, options, next)
     })
     on('tools/pre-execute', async (exec: OrcaToolExecution, next: () => Promise<unknown>) => {

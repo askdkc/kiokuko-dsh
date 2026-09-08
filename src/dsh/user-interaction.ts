@@ -4,30 +4,37 @@ import type { ConfirmationBasis, UserFacingConfirmation, UserFacingConfirmationA
 import { renderPlanStartRecovery, type PlanStartRecovery } from '../enno-oduno/plan-recovery.js'
 import type { TaskType } from '../akinator/types.js'
 
-const INTAKE_CHOICES: Record<TaskType, DshUserQuestionOption> = {
-  build: { label: '実装・変更', description: 'ファイルを変更してほしい。例：「検索機能を追加して」「READMEを短くして」' },
-  debug: { label: '不具合の調査・修正', description: '動かない原因や直し方を扱う。例：「起動エラーを直して」「テスト失敗の原因を調べて」' },
-  research: { label: '情報を調べる', description: '情報収集や比較をしてほしい。例：「このライブラリの使い方を調べて」' },
-  review: { label: 'レビュー', description: '変更せずに問題点を確認してほしい。例：「この差分のバグや危険な点を指摘して」' },
-  devops: { label: '環境・運用', description: '実行環境や配備の作業。例：「CIを設定して」「デプロイ失敗を調べて」' },
-  writing: { label: '文章を作る', description: '文章そのものを回答してほしい。例：「メールの下書きを書いて」「この文を翻訳して」' },
-  analysis: { label: '分析する', description: 'データやログから傾向・意味を読み取る。例：「このCSVの売上傾向を分析して」' },
-  chat: { label: '質問・相談・会話', description: '作業を開始せずに話したい。例：「このコードを説明して」「方針を相談したい」' },
+const INTAKE_CHOICES: readonly { types: readonly TaskType[]; label: string }[] = [
+  { types: ['build'], label: '実装・変更' },
+  { types: ['research', 'debug', 'review', 'devops', 'analysis'], label: '不具合調査、情報調査' },
+  { types: ['writing'], label: '文章作成' },
+  { types: ['chat'], label: '質問、相談、会話' },
+]
+
+function intakeOptions(question: AkinatorQuestion) {
+  if (question.options === null) return undefined
+  if (question.id !== 'taskType') return question.options.map(value => ({ value, label: value }))
+  return INTAKE_CHOICES.flatMap(choice => {
+    // Group the UI without changing stored task types or returning a disallowed answer.
+    const value = choice.types.find(type => question.options!.includes(type))
+    return value === undefined ? [] : [{ value, label: choice.label }]
+  })
 }
 
 function intakePresentation(question: AkinatorQuestion) {
+  const choices = intakeOptions(question)
+  const options = choices === undefined ? {} : { options: choices.map(({ label }) => ({ label })) }
   if (question.id === 'taskType') return {
     header: 'Kiokuko · 作業の選択',
     question: '今回は何をしてほしいですか？',
-    detail: '各選択肢の例を参考に、いちばん近いものを1つ選んでください。迷う場合は「質問・相談・会話」で相談できます。ファイルを編集する依頼は「実装・変更」、回答として文章を受け取る依頼は「文章を作る」が目安です。\n\n番号を自由入力してEnterでも回答できます。選択肢にない場合は、してほしいことを自由に入力してください。',
-    ...(question.options === null ? {} : { options: question.options.map(label => INTAKE_CHOICES[label as TaskType] ?? { label }) }),
+    ...options,
   }
   return {
     question: question.prompt,
     detail: question.id === 'target'
       ? '例：「このリポジトリ全体」「src/login.ts」「ログイン画面」「本番API」。分かる範囲で対象の名前やパスを入力してください。'
       : '例：「ログインに成功し、関連テストが通る」「READMEが導入手順だけになる」「原因と修正案が分かる」。作業がどうなれば完了かを入力してください。',
-    ...(question.options === null ? {} : { options: question.options.map(label => ({ label })) }),
+    ...options,
   }
 }
 
@@ -118,12 +125,12 @@ export function createDshIntakeAnswerer(service: DshUserQuestions): DshIntakeAns
       if (question.options !== null) {
         const normalized = value.normalize('NFKC')
         if (/^\d+$/u.test(normalized)) {
-          const option = question.options[Number(normalized) - 1]
-          if (option === undefined) conflict(`選択肢の番号は1〜${question.options.length}で入力してください。`)
+          const option = intakeOptions(question)?.[Number(normalized) - 1]?.value
+          if (option === undefined) conflict(`選択肢の番号は1〜${presentation.options?.length ?? 0}で入力してください。`)
           return option
         }
         const displayIndex = presentation.options?.findIndex(option => option.label === value) ?? -1
-        if (displayIndex >= 0) return question.options[displayIndex]!
+        if (displayIndex >= 0) return intakeOptions(question)![displayIndex]!.value
       }
       return value
     },

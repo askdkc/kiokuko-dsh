@@ -386,11 +386,15 @@ lifecycle checked here is the DeepSeek Harness `web` profile loading and
 unloading this plugin. An unavailable DeepSeek CLI is reported as
 `unsupported`, never as a successful install or runtime execution.
 
-## Optional OrcaReplay recording
+## OrcaReplay recording
 
-Orca dependencies are installed automatically with this package; recording is
-**disabled by default**. Set `config.orca.enabled: true` and reload to record
-session-scoped observations. `/kioku-orca stop`, `list`, `show <run ID>` and
+Orca dependencies and recording configuration are installed automatically with
+this package; the feature is **enabled by default**. At the first native step,
+a session-scoped question asks whether to record. Only an affirmative choice
+starts capture; skipping or an unavailable question UI continues without recording.
+The choice survives reloads. The first subsequent model/tool observation creates
+`.orca/runs/` in the verified session workspace. Set `config.orca.enabled: false` and reload to disable
+recording. `/kioku-orca stop`, `list`, `show <run ID>` and
 `export <run ID>` finalize and inspect the selected session's trace. This records
 DSH internal events, not a complete replayable HTTP/filesystem capture.
 See [Orca recording](orca-recording.md) for configuration, limits, sensitive data,

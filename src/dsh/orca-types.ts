@@ -34,6 +34,9 @@ export interface DshOrcaHostServices {
   readonly config: OrcaConfig
   resolveSessionBinding(agent: object, session: object): DshOrcaBinding | undefined
   resolveModelBinding(sessionId: string): DshOrcaBinding | undefined
+  canRecord(binding: DshOrcaBinding): boolean
+  sessionRecordingStatus(binding: DshOrcaBinding): Promise<{ sessionRecording: string; selectionError?: string }>
+  setSessionRecording(binding: DshOrcaBinding, enabled: boolean): Promise<void>
   readonly withIndex: WithOrcaIndex
   readonly recorder: DshOrcaRecorder
   closeSessionRecording(sessionId: string, reason: string): Promise<void>

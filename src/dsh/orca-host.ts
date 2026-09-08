@@ -7,6 +7,8 @@ import { mountDshOrcaHooks } from './orca-hooks.js'
 import { getDshOrcaStoreRoot } from './paths.js'
 import { workspaceKey } from './orca-security.js'
 import { record } from './orca-event-mapper.js'
+import { DshOrcaSessionChoices } from './orca-session-choice.js'
+import type { DshUserQuestions } from './user-interaction.js'
 import type { DshRuntime } from './runtime.js'
 import type { DshOrcaBinding, DshOrcaHostServices, WithOrcaIndex } from './orca-types.js'
 
@@ -14,6 +16,8 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
   session(id: string): object | undefined
   agent(id: string): object | undefined
   logicalRun(session: { id: string }): string | undefined
+  questions?: DshUserQuestions
+  interactive?(agent: { id: string }): boolean
 }): DshOrcaHostServices {
   // Cordis releases plugin-owned listeners before its async effect cleanup.
   // Root-owned observers are explicitly released only after recorder drain.
@@ -22,6 +26,8 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
   let accepting = true
   const withIndex: WithOrcaIndex = operation => runtime.withDatabase(async db => await operation(new DshOrcaStore(db)))
   const recorder = new DshOrcaRecorder(config, withIndex)
+  const choices = new DshOrcaSessionChoices(withIndex, native.questions)
+  const operations = new Map<string, Promise<void>>()
   let shutdown: Promise<void> | undefined
   const disposers: (() => void)[] = []
   function enrich(entry: { session: object; binding: DshOrcaBinding }): DshOrcaBinding {
@@ -30,6 +36,19 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
   }
   const services: DshOrcaHostServices = {
     config, recorder, withIndex,
+    canRecord: binding => accepting && choices.allows(binding),
+    sessionRecordingStatus: binding => choices.status(binding),
+    setSessionRecording(binding, enabled) {
+      const pending = (operations.get(binding.sessionId) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+        if (!accepting) throw new Error('Orca host closed')
+        try { await choices.set(binding, enabled) }
+        finally { if (!enabled) await recorder.closeSessionRecording(binding.sessionId, 'manual') }
+        if (enabled && accepting && choices.allows(binding)) recorder.start(binding)
+      })
+      operations.set(binding.sessionId, pending)
+      void pending.finally(() => { if (operations.get(binding.sessionId) === pending) operations.delete(binding.sessionId) }).catch(() => undefined)
+      return pending
+    },
     resolveSessionBinding(agent, session) {
       if (!accepting) return undefined
       const a = record(agent), s = record(session)
@@ -59,15 +78,24 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
       if (shutdown) return shutdown
       accepting = false
       recorder.stopAccepting()
-      shutdown = recorder.shutdown().finally(() => { for (const dispose of disposers.reverse()) dispose(); bindings.clear() })
+      shutdown = Promise.all([choices.shutdown(), ...[...operations.values()].map(p => p.catch(() => undefined)), recorder.shutdown()])
+        .then(() => undefined).finally(() => { for (const dispose of disposers.reverse()) dispose(); bindings.clear() })
       return shutdown
     },
   }
   try {
     // On hot reload, an existing agent will not emit session-start again.
     // The next pre-step carries its exact native pair; do not scan the registry.
-    disposers.push((observerContext as any).on('agent/pre-step', (payload: { agent?: { session?: object } }, next: () => unknown) => {
-      try { if (payload.agent?.session) services.resolveSessionBinding(payload.agent, payload.agent.session) } catch { /* attribution unavailable */ }
+    disposers.push((observerContext as any).on('agent/pre-step', async (payload: { agent?: { id: string; session?: object }; signal?: AbortSignal }, next: () => unknown) => {
+      try {
+        const agent = payload.agent, session = agent?.session
+        const binding = agent && session ? services.resolveSessionBinding(agent, session) : undefined
+        if (binding && agent && session) {
+          if (native.interactive?.(agent) === false) await choices.status(binding)
+          else await choices.prepare(binding, agent, payload.signal ?? new AbortController().signal,
+            () => services.resolveSessionBinding(agent, session) !== undefined)
+        }
+      } catch { /* Optional recording cannot veto the native step. */ }
       return next()
     }, { global: true }))
     disposers.push((observerContext as any).on('agent/session-start', (payload: { agent?: { session?: object } }) => {
@@ -77,6 +105,7 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
       const id = record(session).id
       const entry = bindings.get(id)
       if (!entry || entry.session !== session) return
+      choices.forget(entry.binding)
       void recorder.closeSessionRecording(id, 'session_disposed').finally(() => { bindings.delete(id); recorder.forgetSession(id) }).catch(() => undefined)
     }, { global: true }))
     disposers.push(mountDshOrcaHooks(observerContext, services))

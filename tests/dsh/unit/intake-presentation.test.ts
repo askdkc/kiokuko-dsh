@@ -5,31 +5,41 @@ import { createDshIntakeAnswerer, type DshUserQuestionRequest } from '../../../s
 
 const question: AkinatorQuestion = { id: 'taskType', prompt: 'どれですか？', options: [...TASK_TYPES], required: true }
 
-test('intake choices explain all eight task types and map display labels back to canonical answers', async () => {
-  for (const [index, value] of TASK_TYPES.entries()) {
+const displayed = ['実装・変更', '不具合調査、情報調査', '文章作成', '質問、相談、会話']
+const values = ['build', 'research', 'writing', 'chat']
+
+test('four concise intake choices map their labels to the corresponding task categories', async () => {
+  for (const [index, value] of values.entries()) {
     const answerer = createDshIntakeAnswerer({ async ask(request) {
       const display = request.questions[0]
       assert.equal(display.header, 'Kiokuko · 作業の選択')
-      assert.match(display.detail!, /ファイルを編集/u)
-      assert.equal(display.options?.length, 8)
-      for (const option of display.options!) assert.match(option.description!, /例：/u)
+      assert.equal(display.detail, undefined)
+      assert.deepEqual(display.options?.map(option => option.label), displayed)
       return { answers: [{ id: question.id, selected: [display.options![index]!.label] }] }
     } })
     assert.equal(await answerer.ask(question), value)
   }
 })
 
-test('numeric and full-width answers use exactly the displayed option order', async () => {
-  for (const [index, value] of TASK_TYPES.entries()) {
+test('numeric and full-width answers use exactly the four displayed choices, not the old eight-type order', async () => {
+  for (const [index, value] of values.entries()) {
     for (const custom of [String(index + 1), String.fromCharCode(0xff11 + index)]) {
       const answerer = createDshIntakeAnswerer({ async ask() { return { answers: [{ id: question.id, selected: [], custom }] } } })
       assert.equal(await answerer.ask(question), value)
     }
   }
-  for (const custom of ['0', '9', '9999999999999999999999999']) {
+  for (const custom of ['0', '5', '8', '9', '9999999999999999999999999']) {
     const answerer = createDshIntakeAnswerer({ async ask() { return { answers: [{ id: question.id, selected: [], custom }] } } })
-    await assert.rejects(answerer.ask(question), /番号は1〜8/u)
+    await assert.rejects(answerer.ask(question), /番号は1〜4/u)
   }
+})
+
+test('restricted task-type questions return only allowed types in their displayed order', async () => {
+  const answerer = createDshIntakeAnswerer({ async ask(request) {
+    assert.deepEqual(request.questions[0].options?.map(option => option.label), displayed.slice(0, 2))
+    return { answers: [{ id: question.id, selected: [], custom: '2' }] }
+  } })
+  assert.equal(await answerer.ask({ ...question, options: ['debug', 'build'] }), 'debug')
 })
 
 test('free-form answers, skip-to-chat, question identity, cancellation, and optionless examples remain intact', async () => {

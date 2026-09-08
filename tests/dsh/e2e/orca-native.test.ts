@@ -61,6 +61,10 @@ for (const owner of ['normal', 'explicit'] as const) test(`Orca enabled real DSH
     // Exact native agents/sessions are available before a Kiokuko logical run exists.
     const status = await command(a, 'status')
     assert.equal(status.capability, 'available')
+    assert.equal(status.sessionRecording, 'awaiting_choice')
+    // This fixture has no human question service; explicit commands authorize both sessions.
+    await command(a, 'start')
+    await command(b, 'start')
     await Promise.all([a, b].map(agent => collect(agent.ctx.llm.stream({ provider: 'mock', model: 'mock', sessionId: agent.session.id, messages: [], signal }))))
     ctx.tools.register({ name: 'orca_test_tool', description: 'fixture', parameters: {},
       output: { schema: { type: 'string' }, render: (_: unknown, text: string) => [{ type: 'text', text }] }, execute: () => 'body-success' })

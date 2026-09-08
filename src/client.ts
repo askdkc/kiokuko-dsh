@@ -337,14 +337,14 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
     setDraft(value)
     setError('')
   }
-  const settle = (cancel = false, skip = false) => {
+  const settle = (cancel = false) => {
     if (inFlight.current) return
     const custom = draft.custom.trim()
-    if (!cancel && !skip && draft.selected === null && custom === '') {
+    if (!cancel && draft.selected === null && custom === '') {
       setError('選択肢を選ぶか、自由入力してください。')
       return
     }
-    if (!cancel && !skip && /^[0-9０-９]+$/u.test(custom)) {
+    if (!cancel && /^[0-9０-９]+$/u.test(custom)) {
       const ordinal = Number(custom.normalize('NFKC'))
       if (ordinal < 1 || ordinal > question.options.length) {
         setError(`番号は1〜${question.options.length}で入力してください。`)
@@ -357,8 +357,8 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
     // Enter is a separate confirmation. Typing, key-repeat and IME cannot submit twice.
     void Promise.resolve().then(() => cancel ? pending.cancel() : pending.answer({ answers: [{
       id: question.id,
-      selected: skip || draft.selected === null ? [] : [question.options[draft.selected]!.label],
-      ...(!skip && custom ? { custom } : {}),
+      selected: draft.selected === null ? [] : [question.options[draft.selected]!.label],
+      ...(custom ? { custom } : {}),
     }] })).then(() => { intakeDrafts.delete(pending) }).catch(cause => {
       if (!mounted.current) return
       inFlight.current = false
@@ -393,8 +393,8 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
       jsxs('header', { children: [jsx('h2', { id: titleId, children: question.question }),
         jsx('button', { type: 'button', disabled: busy, onClick: () => settle(true), 'aria-label': '質問を閉じる', children: '閉じる' })] }),
       jsxs('div', { className: 'kiokuko-intake-body', children: [
-        jsx('p', { children: question.detail }),
-        jsx('p', { children: `1〜${question.options.length}キーで選択、Enterで確定。自由入力中の数字は文字として入力されます。` }),
+        question.detail ? jsx('p', { children: question.detail }) : null,
+        jsx('p', { children: `1〜${question.options.length}キーで選択、Enterで確定。` }),
         jsx('div', { 'aria-label': '作業の選択肢', children: question.options.map((option, index) => jsxs('button', {
           key: option.label, type: 'button', className: 'kiokuko-intake-option', disabled: busy,
           ref: (element: HTMLElement | null) => { optionElements.current[index] = element },
@@ -404,16 +404,15 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
             if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || draft.selected !== index) return
             event.preventDefault(); event.stopPropagation(); settle()
           },
-          children: [jsx('strong', { children: `${index + 1}. ${option.label}` }), jsx('span', { children: option.description })],
+          children: [jsx('strong', { children: `${index + 1}. ${option.label}` }), option.description ? jsx('span', { children: option.description }) : null],
         })) }),
-        jsx('label', { htmlFor: `${titleId}-custom`, children: '自由入力（番号でも回答できます）' }),
-        jsx('textarea', { id: `${titleId}-custom`, rows: 2, disabled: busy, value: draft.custom,
+        jsx('label', { htmlFor: `${titleId}-custom`, children: '自由入力（任意）' }),
+        jsx('textarea', { id: `${titleId}-custom`, rows: 1, disabled: busy, value: draft.custom,
           onChange: (event: { target: { value: string } }) => update({ selected: null, custom: event.target.value }),
         }),
       ] }),
       jsxs('footer', { children: [
         jsx('span', { role: 'status', 'aria-live': 'polite', children: error || (busy ? '送信中…' : draft.selected === null ? '' : `${draft.selected + 1}. ${question.options[draft.selected]!.label}を選択中`) }),
-        jsx('button', { type: 'button', disabled: busy, onClick: () => settle(false, true), children: '作業を始めず会話する' }),
         jsx('button', { type: 'button', disabled: busy || (draft.selected === null && !draft.custom.trim()), onClick: () => settle(), children: '確定（Enter）' }),
       ] }),
     ],
@@ -423,7 +422,23 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
 function installIntakeStyle(): (() => void) | undefined {
   if (typeof document === 'undefined') return undefined
   const style = document.createElement('style')
-  style.textContent = '.kiokuko-intake{border:1px solid var(--dsw-alias-border-l4,#bbb);border-radius:16px;padding:16px;background:var(--dsw-alias-background-primary,Canvas);color:var(--dsw-alias-label-primary,CanvasText);display:flex;flex-direction:column;max-height:70dvh;gap:12px}.kiokuko-intake header,.kiokuko-intake footer{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.kiokuko-intake h2{font-size:18px;margin:0;flex:1}.kiokuko-intake-body{overflow:auto;min-height:0}.kiokuko-intake p{white-space:pre-wrap;line-height:1.5}.kiokuko-intake button{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,#bbb);border-radius:8px;padding:10px;min-height:44px;cursor:pointer}.kiokuko-intake button:disabled{cursor:default;opacity:.6}.kiokuko-intake-option{display:flex;width:100%;text-align:left;flex-direction:column;gap:4px;margin-bottom:8px;overflow-wrap:anywhere}.kiokuko-intake-option[aria-pressed=true]{border:2px solid var(--dsw-alias-label-primary,CanvasText);background:var(--dsw-alias-interactive-bg-hover,#eee)}.kiokuko-intake-option span{font-size:13px;line-height:1.5}.kiokuko-intake textarea{box-sizing:border-box;width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,#bbb);padding:8px;border-radius:8px}.kiokuko-intake :focus-visible,.kiokuko-intake:focus-visible{outline:2px solid Highlight;outline-offset:3px}.kiokuko-intake footer [role=status]{flex:1;min-width:120px}'
+  style.textContent = `
+.kiokuko-intake{box-sizing:border-box;width:100%;max-width:680px;align-self:center;margin-inline:auto;border:1px solid var(--dsw-alias-border-l4,#bbb);border-radius:12px;padding:12px;background:var(--dsw-alias-background-primary,Canvas);color:var(--dsw-alias-label-primary,CanvasText);display:flex;flex-direction:column;min-height:0;max-height:min(480px,70dvh);gap:8px;font-size:14px}
+.kiokuko-intake header,.kiokuko-intake footer{display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex-shrink:0}
+.kiokuko-intake h2{font-size:16px;line-height:1.4;margin:0;flex:1}
+.kiokuko-intake-body{overflow:auto;min-height:0;display:flex;flex-direction:column;gap:8px}
+.kiokuko-intake p{margin:0;white-space:pre-wrap;line-height:1.4;font-size:12px}
+.kiokuko-intake button{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,#bbb);border-radius:8px;padding:8px 10px;min-height:40px;cursor:pointer}
+.kiokuko-intake button:disabled{cursor:default;opacity:.6}
+.kiokuko-intake-option{display:flex;width:100%;text-align:left;flex-direction:column;gap:4px;margin-bottom:6px;overflow-wrap:anywhere}
+.kiokuko-intake-option:last-child{margin-bottom:0}
+.kiokuko-intake-option[aria-pressed=true]{border-color:var(--dsw-alias-label-primary,CanvasText);box-shadow:inset 0 0 0 1px currentColor;background:var(--dsw-alias-interactive-bg-hover,#eee)}
+.kiokuko-intake-option span{font-size:12px;line-height:1.4}
+.kiokuko-intake label{font-size:12px}
+.kiokuko-intake textarea{box-sizing:border-box;width:100%;min-height:36px;max-height:96px;resize:vertical;font:inherit;line-height:1.4;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,#bbb);padding:8px;border-radius:8px}
+.kiokuko-intake :focus-visible,.kiokuko-intake:focus-visible{outline:2px solid Highlight;outline-offset:2px}
+.kiokuko-intake footer [role=status]{flex:1;min-width:0;font-size:12px;overflow-wrap:anywhere}
+`
   document.head.appendChild(style)
   return () => style.remove()
 }
