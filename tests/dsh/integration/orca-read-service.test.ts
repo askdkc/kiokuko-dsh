@@ -73,6 +73,8 @@ test('native command requires exact agent/session before every operation, includ
     const session = { id: f.binding.sessionId }, agent = { id: 'agent-a', session }
     const services: DshOrcaHostServices = { config: f.config, recorder: f.recorder, withIndex: f.withIndex,
       resolveSessionBinding: (a, s) => a === agent && s === session ? f.binding : undefined,
+      canRecord: () => true, sessionRecordingStatus: async () => ({ sessionRecording: 'enabled' }),
+      setSessionRecording: async (binding, enabled) => { if (enabled) f.recorder.start(binding); else await f.recorder.closeSessionRecording(binding.sessionId, 'manual') },
       resolveModelBinding: () => undefined, closeSessionRecording: (id, reason) => f.recorder.closeSessionRecording(id, reason), shutdown: () => f.recorder.shutdown() }
     let definition!: DshNativeCommandDefinition
     mountDshOrcaCommand({ commands: { register: def => { definition = def; return () => {} } } }, true, services)
@@ -141,7 +143,7 @@ test('hot reload binds an existing session at exact pre-step without scanning or
     assert.equal(services.resolveModelBinding(session.id), undefined)
     const decision = Object.freeze({ kind: 'enter', messages: [] })
     let calls = 0
-    assert.equal(listeners.get('agent/pre-step')!({ agent }, () => { calls++; return decision }), decision)
+    assert.equal(await listeners.get('agent/pre-step')!({ agent }, () => { calls++; return decision }), decision)
     assert.equal(calls, 1)
     assert.equal(services.resolveModelBinding(session.id)?.sessionCwd, f.root)
     assert.equal(services.resolveSessionBinding({ ...agent }, session), undefined)

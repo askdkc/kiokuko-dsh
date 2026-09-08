@@ -206,7 +206,7 @@ test('skipping task type enters ordinary chat without creating an Enno/Oduno con
     async ask(request) {
       const question = request.questions[0]!
       asked.push(question.id)
-      assert.ok(question.options?.some((option) => option.label === '質問・相談・会話'))
+      assert.ok(question.options?.some((option) => option.label === '質問、相談、会話'))
       return { answers: [{ id: question.id, selected: [] }] }
     },
   })

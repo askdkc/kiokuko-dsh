@@ -20,12 +20,13 @@ export function mountDshOrcaCommand(ctx: DshPonytailCommandContext, enabled: boo
         if (!services || !reader) return { kind: 'error', text: 'Orca recording: unavailable (native session/index/shutdown services required).' }
         const binding = services.resolveSessionBinding(agent, session)
         if (!binding || binding.sessionId !== session.id) throw new OrcaError('session_required')
+        const status = async () => ({ ...services.recorder.status(binding.sessionId), ...await services.sessionRecordingStatus(binding) })
         let result: unknown
         switch (action) {
-          case 'status': result = services.recorder.status(binding.sessionId); break
+          case 'status': result = await status(); break
           case 'list': result = await reader.list(binding); break
-          case 'start': services.recorder.start(binding); result = { ...services.recorder.status(binding.sessionId), note: 'New observations only; past calls are not captured.' }; break
-          case 'stop': await services.closeSessionRecording(binding.sessionId, 'manual'); result = services.recorder.status(binding.sessionId); break
+          case 'start': await services.setSessionRecording(binding, true); result = { ...await status(), note: 'New observations only; past calls are not captured.' }; break
+          case 'stop': await services.setSessionRecording(binding, false); result = await status(); break
           case 'show': result = await reader.show(binding, runId!, cursor); break
           case 'export': result = { path: await reader.export(binding, runId!), exactReplay: false }; break
         }

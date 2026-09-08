@@ -23,7 +23,7 @@ test('intake keyboard is scoped, confirms once, preserves drafts, and leaves edi
   let cancellations = 0
   const pending = {
     kind: 'question', key: 'intake-one',
-    questions: [{ id: 'taskType', header: 'Kiokuko · 作業の選択', question: '選んでください', options: [{ label: '実装・変更' }, { label: '不具合の調査・修正' }] }],
+    questions: [{ id: 'taskType', header: 'Kiokuko · 作業の選択', question: '選んでください', options: [{ label: '実装・変更' }, { label: '不具合調査、情報調査' }, { label: '文章作成' }, { label: '質問、相談、会話' }] }],
     async answer(answer: unknown) { responses.push(answer) },
     async cancel() { cancellations++ },
   }
@@ -47,6 +47,9 @@ test('intake keyboard is scoped, confirms once, preserves drafts, and leaves edi
       tree = render()
       assert.equal(descendants(tree).some(node => node.props?.['aria-pressed'] === true), false)
     }
+    tree.props.onKeyDown(key('5'))
+    tree = render()
+    assert.equal(descendants(tree).some(node => node.props?.['aria-pressed'] === true), false)
     tree.props.onKeyDown(key('2'))
     tree = render()
     assert.equal(descendants(tree).filter(node => node.props?.['aria-pressed'] === true).length, 1)
@@ -59,7 +62,7 @@ test('intake keyboard is scoped, confirms once, preserves drafts, and leaves edi
     assert.equal(responses.length, 0, 'IME and close/skip button Enter must not confirm the selection')
     tree.props.onKeyDown(key('Enter')); tree.props.onKeyDown(key('Enter'))
     await Promise.resolve(); await Promise.resolve()
-    assert.deepEqual(responses, [{ answers: [{ id: 'taskType', selected: ['不具合の調査・修正'] }] }])
+    assert.deepEqual(responses, [{ answers: [{ id: 'taskType', selected: ['不具合調査、情報調査'] }] }])
     assert.equal(cancellations, 0)
     slots = []
     const next = { ...pending, key: 'intake-two' }
@@ -70,7 +73,7 @@ test('intake keyboard is scoped, confirms once, preserves drafts, and leaves edi
     cursor = 0; tree = nextWrapper.component(nextWrapper.props)
     tree.props.onKeyDown(key('Enter', { target: { tagName: 'TEXTAREA' } }))
     cursor = 0; tree = nextWrapper.component(nextWrapper.props)
-    assert.match(descendants(tree).find(node => node.props?.role === 'status').props.children, /番号は1〜2/u)
+    assert.match(descendants(tree).find(node => node.props?.role === 'status').props.children, /番号は1〜4/u)
     assert.equal(responses.length, 1)
     descendants(tree).find(node => node.props?.['aria-label'] === '質問を閉じる').props.onClick()
     await Promise.resolve(); await Promise.resolve()

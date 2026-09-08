@@ -13,9 +13,13 @@ installed package versions before executing. The trace labels that version as
 `verifiedDshVersion`; it does not invent an actual host version when the host
 does not expose one. See the bundled [Apache-2.0 license](ORCAREPLAY-LICENSE.txt).
 
-## Enable and use
+## Automatic setup and use
 
-In the existing Kiokuko loader row's `config`, set:
+Installing the Kiokuko bundle configures the recording feature automatically.
+At the first native step of a chat, a native question asks whether to record
+detailed logs. Choosing to record admits subsequent observations; choosing not
+to record leaves the chat running without Orca trace files. The bundled loader
+row supplies these defaults:
 
 ```yaml
 enabled: true
@@ -27,8 +31,23 @@ orca:
     reasoning: false
 ```
 
-Reload the plugin. Omitted `orca` settings default to disabled. Recording starts
-on the next attributable model/tool observation. Past calls are not captured.
+Omitted `orca` settings also enable the feature, but do not approve recording for
+a session. The yes/no choice is saved in Kiokuko SQLite, scoped to the session ID,
+workspace, session cwd and storage root; reloads do not ask again after a saved
+choice. While a question is pending, no observations are recorded. Skipped,
+invalid, cancelled or unavailable questions continue without capture. An unanswered question is not repeated
+on each step; use `/kioku-orca start` later (or answer after reloading). Hosts
+without a question UI also require an explicit start command.
+Managed Enno worker sessions do not prompt or inherit the parent session's choice;
+each session needs its own explicit recording choice.
+
+After approval, the next attributable model/tool observation creates the trace
+directory, not package installation. Past calls are not captured.
+
+After updating an older installation, restart DSH to load the new bundle defaults.
+An explicit `orca.enabled: false` in a profile, home, or launch patch still takes
+precedence: remove that override or change it to `true` and reload. Preserve other
+plugin settings when editing a patch because DSH replaces the whole row config.
 Use the native session's human command interface:
 
 ```text
@@ -42,13 +61,17 @@ Use the native session's human command interface:
 ```
 
 Replace `run_<id>` with the exact ID returned by `list`. Stop finalizes recording
-without stopping the task or closing the shared database. Start opens a new
-recording generation; it never reopens old events. `show`/`export` accept only
+without stopping the task or closing the shared database, and saves the session
+choice as disabled. Start saves the choice as enabled and opens a new recording
+generation; it never reopens old events. `show`/`export` accept only
 completed traces from that native session and workspace. Cursors expire when the
 plugin reloads. Lists contain the most recent 200 generations.
 
 `status` distinguishes disabled, available and unavailable capability, trace
-state, missing/unresolved observations and index persistence failure. An empty
+state, missing/unresolved observations and index persistence failure.
+`sessionRecording` is `awaiting_choice`, `enabled` or `disabled`; `selectionError`
+reports unavailable questions or failed preference persistence. Feature capability
+`available` alone does not mean this session has opted into recording. An empty
 trace means no attributable observation has started. `completed` means the chosen
 recording scope was persisted without known missing events; it does not mean the
 task succeeded. Unknown usage is not measured zero. Process exit codes are absent.

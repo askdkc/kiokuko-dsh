@@ -3,13 +3,13 @@
 [English](README.md) | [日本語](README.ja.md) | 简体中文 | [한국어](README.ko.md)
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 添加项目记忆、任务规划和验证支持。
-可选的 OrcaReplay 记录功能可用于查看模型和工具活动，并导出 HTML。
+OrcaReplay 可记录模型和工具活动，查看记录并导出 HTML。
 
 
 新的修改任务可以选择普通执行或役小角(enno-oduno)。役小角支持推荐模板，也可从DSH已配置的模型中为各角色选择模型。[模型选择与连接限制](docs/model-selection.md)。
 ## 安装与使用
 
-支持 DSH `0.1.2-rc.1` 和 [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1)。
+支持 DSH `0.1.2-rc.1`、[0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1) 和 [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2)。
 需要 Node.js **24.16.0 以上**和 pnpm。
 使用已安装的 `dsh` CLI 安装已发布的 npm 包并启动：
 
@@ -22,10 +22,14 @@ dsh web
 启动后直接输入任务，无需额外的 Kiokuko setup 操作。
 GitHub 和本地安装方式见[插件指南](docs/dsh-plugin.md)。
 
-Orca 依赖会自动安装，记录功能**默认关闭**。
-将插件配置中的 `orca.enabled` 设为 `true` 并重新加载即可启用。
-使用 `/kioku-orca list`、`/kioku-orca show <run ID>` 和 `/kioku-orca export <run ID>` 查看或导出记录。
-详见[记录设置与命令](docs/orca-recording.md)。
+OrcaReplay 的功能配置会自动安装，**无需手动设置**。聊天开始时，可选择是否记录详细日志。
+选择记录后，后续模型回复和工具执行结果将保存到会话工作目录的 `.orca/runs/`。选择按会话保存；跳过或取消时，不记录并继续聊天。
+
+- `/kioku-orca start`：手动开始记录，或在停止后重新开始。如果开始时已选择记录，则无需执行。不会补录过去的活动。
+- `/kioku-orca status`：查看功能是否启用、会话的记录选择、记录状态和错误。
+
+用 `/kioku-orca stop` 完成日志记录后，用 `list` 查看 run ID、`show <run ID>` 查看内容、`export <run ID>` 导出 HTML（均在 `/kioku-orca` 后输入）。
+要禁用记录，请设置 `orca.enabled: false` 并重新加载。详见[记录设置与命令](docs/orca-recording.md)。
 
 ## 更新
 

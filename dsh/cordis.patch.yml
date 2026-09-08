@@ -10,7 +10,7 @@
       config:
         enabled: true
         orca:
-          enabled: false
+          enabled: true
           storage: project
           capture:
             content: redacted

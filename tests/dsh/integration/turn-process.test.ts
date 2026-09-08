@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
 import { openConnection } from '../../../src/db/connection.js'
+import { CURRENT_MIGRATION_VERSIONS } from '../../fixtures/current-migrations.js'
 import { migrateDatabase } from '../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { submitOdunoIdeal } from '../../../src/enno-oduno/service.js'
@@ -175,7 +176,7 @@ test('outbox migration normalizes pending legacy messages and preserves dispatch
     database.prepare(`UPDATE dsh_continuation_outbox SET message_json = ?, status = 'pending'
       WHERE continuation_id = ?`).run(legacyMessage(pendingRow.continuationId, 'loop-recovery'), pendingRow.continuationId)
 
-    assert.deepEqual(migrateDatabase(database, join(process.cwd(), 'migrations')).applied, [7, 8, 9])
+    assert.deepEqual(migrateDatabase(database, join(process.cwd(), 'migrations')).applied, CURRENT_MIGRATION_VERSIONS.filter(version => version > 6))
     const pending = database.prepare(`
       SELECT message_form AS messageForm, message_json AS messageJson
         FROM dsh_continuation_outbox WHERE continuation_id = ?

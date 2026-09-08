@@ -3,7 +3,7 @@ import { ModelRouteSchema } from './model-configuration.js'
 
 const limit = (value: number) => z.number().int().positive().max(Number.MAX_SAFE_INTEGER).default(value)
 export const OrcaConfig = z.object({
-  enabled: z.boolean().default(false),
+  enabled: z.boolean().default(true),
   storage: z.enum(['project', 'data-dir']).default('project'),
   includeAuxiliary: z.boolean().default(false),
   capture: z.object({

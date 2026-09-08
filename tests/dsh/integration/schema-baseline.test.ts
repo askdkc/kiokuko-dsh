@@ -6,6 +6,7 @@ import test from 'node:test'
 import { openConnection } from '../../../src/db/connection.js'
 import { loadMigrationSnapshot, migrateDatabase } from '../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
+import { CURRENT_MIGRATION_VERSIONS, CURRENT_SCHEMA_VERSION } from '../../fixtures/current-migrations.js'
 import { prepareTurnIntent } from '../../../src/dsh/turn-process.js'
 
 const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migrations')
@@ -13,11 +14,11 @@ const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migratio
 test('the schema keeps 001 immutable and appends forward-only DSH runtime migrations', async () => {
   const entries = await readdir(migrationsDirectory)
   const sqlFiles = entries.filter((name) => name.endsWith('.sql'))
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql'])
   assert.ok(!entries.some((name) => name === 'down'), 'migrations/down must not exist')
 
   const snapshot = loadMigrationSnapshot(migrationsDirectory)
-  assert.equal(snapshot.migrations.length, 9)
+  assert.equal(snapshot.migrations.length, 10)
   assert.equal(snapshot.migrations[0]!.version, 1)
   assert.equal(snapshot.migrations[0]!.name, '001_baseline.sql')
   assert.equal(snapshot.migrations[1]!.version, 2)
@@ -58,7 +59,7 @@ test('version-4 receipt history upgrades with stable replay identities and pendi
         VALUES (?, ?, 'upgrade-session', ?, ?, 1, 'unit', ?, 'applied', ?, ?)`)
         .run(id, prepared.run.runId, turn, phase, id, turn === 3 ? 'complete' : 'execute_work_unit', new Date().toISOString())
     }
-    assert.deepEqual(migrateDatabase(database, migrationsDirectory).applied, [5, 6, 7, 8, 9])
+    assert.deepEqual(migrateDatabase(database, migrationsDirectory).applied, CURRENT_MIGRATION_VERSIONS.filter(version => version > 4))
     assert.deepEqual(database.prepare('SELECT execution_attempt AS attempt FROM dsh_turn_receipts ORDER BY native_turn')
       .all<{ attempt: number }>().map(row => row.attempt), [0, 1, 0])
     const replay = prepareTurnIntent(database, {
@@ -80,8 +81,8 @@ test('baseline initialization creates the complete DSH schema with clean integri
     const database = openConnection(databasePath)
     try {
       const migration = migrateDatabase(database, migrationsDirectory)
-      assert.deepEqual(migration.applied, [1, 2, 3, 4, 5, 6, 7, 8, 9])
-      assert.equal(migration.currentVersion, 9)
+      assert.deepEqual(migration.applied, CURRENT_MIGRATION_VERSIONS)
+      assert.equal(migration.currentVersion, CURRENT_SCHEMA_VERSION)
 
       assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
       assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
@@ -109,6 +110,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_loop_guard_states',
         'dsh_memory_finalization_entries',
         'dsh_memory_finalizations',
+        'dsh_orca_session_choices',
         'dsh_orca_trace_run_links',
         'dsh_orca_traces',
         'dsh_run_log_boundaries',
@@ -220,8 +222,8 @@ test('an existing version-3 database upgrades forward to the durable loop guard'
     try {
       assert.deepEqual(migrateDatabase(database, version3Directory).applied, [1, 2, 3])
       const upgraded = migrateDatabase(database, migrationsDirectory)
-      assert.deepEqual(upgraded.applied, [4, 5, 6, 7, 8, 9])
-      assert.equal(upgraded.currentVersion, 9)
+      assert.deepEqual(upgraded.applied, CURRENT_MIGRATION_VERSIONS.filter(version => version > 3))
+      assert.equal(upgraded.currentVersion, CURRENT_SCHEMA_VERSION)
       assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
       assert.equal(database.prepare('PRAGMA integrity_check').get()?.integrity_check, 'ok')
       assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'dsh_loop_guard_states'").get<{ count: number }>()?.count, 1)

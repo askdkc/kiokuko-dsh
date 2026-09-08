@@ -68,7 +68,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{
     id?: string
     disabled?: boolean
-    insert?: Array<{ id?: string; name?: string; inject?: string[] }>
+    insert?: Array<{ id?: string; name?: string; inject?: string[]; config?: Config }>
   }>
   assert.equal(patch.length, 2)
   assert.equal(patch[0]?.id, 'session-log-download')
@@ -79,7 +79,10 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('connection'))
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('attachments'))
   assert.equal(Config.parse({}).enabled, true)
-  assert.equal(Config.parse({}).orca.enabled, false)
+  assert.equal(Config.parse({}).orca.enabled, true)
+  const bundledConfig = patch[1]?.insert?.[0]?.config
+  assert.equal(bundledConfig?.orca?.enabled, true)
+  assert.equal(Config.parse(bundledConfig).orca.storage, 'project')
 
   await run('npm', ['run', 'build'])
   await access(join(repositoryRoot, 'dist/dsh/index.js'))
@@ -102,6 +105,8 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     assert.match(archive.stdout, /package\/dist\/index\.js\n/)
     assert.match(archive.stdout, /package\/dist\/client\.cjs\n/)
     assert.match(archive.stdout, /package\/dsh\/cordis\.patch\.yml\n/)
+    const installedPatch = YAML.parse((await run('tar', ['-xOzf', tarball, 'package/dsh/cordis.patch.yml'])).stdout) as typeof patch
+    assert.equal(installedPatch[1]?.insert?.[0]?.config?.orca?.enabled, true)
   } finally {
     await Promise.all([
       rm(packageOutput, { recursive: true, force: true }),

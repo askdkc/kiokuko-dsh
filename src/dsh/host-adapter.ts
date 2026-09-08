@@ -2319,6 +2319,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const orcaConfig = OrcaConfig.parse(options.orca ?? {})
   const orca = !orcaConfig.enabled ? undefined : createDshOrcaHost(ctx, orcaConfig, runtime, {
     session: id => sessions?.get(id), agent: id => agents?.get(id), logicalRun: resolveSessionRunId,
+    ...(userQuestions ? { questions: userQuestions } : {}),
+    interactive: agent => !delegation.isChild(agent),
   })
   let disposePromise: Promise<void> | undefined
   const host: DshCompositionHost = {

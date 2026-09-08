@@ -27,7 +27,7 @@ const root = join(process.cwd(), 'workspace'); await mkdir(root);
 const runtime = new DshRuntime({ repositoryRoot: root, databasePath: join(process.cwd(), 'index.sqlite3'), autoRegisterRepository: true,
   embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 } });
 await runtime.start();
-const recorder = new DshOrcaRecorder(Config.parse({ orca: { enabled: true } }).orca, op => runtime.withDatabase(async db => await op(new DshOrcaStore(db))));
+const recorder = new DshOrcaRecorder(Config.parse({}).orca, op => runtime.withDatabase(async db => await op(new DshOrcaStore(db))));
 const binding = { sessionId: 'clean-consumer', workspaceRoot: root, sessionCwd: root, storeRoot: root };
 try {
   for await (const chunk of recorder.stream(binding, { provider: 'fixture', model: 'fixture', messages: [] }, async function* () {

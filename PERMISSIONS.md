@@ -57,19 +57,23 @@ conflicts are reported as failures or unavailable states. They are never
 converted into normal success or silently redirected to another repository or
 run.
 
-## Optional Orca recordings
+## Orca recordings
 
-`orca.enabled` defaults to `false`. The runtime dependencies
+`orca.enabled` defaults to `true`, including in the installed bundle configuration.
+This enables the feature; a native question asks whether to record each session.
+Only affirmative choices or `/kioku-orca start` authorize capture. Choices are
+saved in SQLite; skip/cancel or unavailable UI continues without recording.
+Set it to `false` and reload to disable the feature. The runtime dependencies
 `@orcareplay/core`, `@orcareplay/schema`, and `@orcareplay/viewer` with range `>=0.2.1`
 are installed automatically by npm/pnpm with this package. No extra installer,
 startup subprocess, automatic package repair, or network transmission is added.
 The dependencies are Apache-2.0; the [upstream license](docs/ORCAREPLAY-LICENSE.txt)
 and viewer credit are retained. Disabled recording never initializes Orca or creates trace files.
 
-With explicit configuration, projected model content and tool final results are
+After an affirmative session choice or start command, projected model content and tool final results are
 written to `<verified workspace>/.orca/runs`, or under
 `<Kiokuko data directory>/traces/projects/<workspace hash>/.orca/runs`.
-The main database holds only the session/run index. `show` and `export` require
+For Orca, the main database holds the session/run index and recording choices, not log bodies. `show` and `export` require
 the exact native command agent/session; no Orca HTTP API or model tool exists.
 Offline HTML is written only to `.orca/exports/<run ID>.html`.
 
