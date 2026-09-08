@@ -27,6 +27,20 @@ automatic continuation. In Enno execution, the host owns template/custom model
 selection and confirmation. Never choose another provider in model output or
 start an independent subagent to bypass that configuration.
 
+## Instruction priority
+
+Explicit user instructions take precedence over advisory design, style,
+workflow, and implementation preferences in Kiokuko Skills.
+
+They do not override host-enforced safety, authorization, identity,
+state-machine, revision, lease, or integrity invariants.
+
+Do not pause, request confirmation, or leave requested work unfinished merely
+because a Skill preference requires interpretation. Use repository evidence
+and existing user authorization to resolve routine choices. Ask only when an
+unresolved assumption materially changes the intended result or permitted
+effects, or an applicable host invariant requires confirmation.
+
 ## Required entry
 
 Read this Skill before any other bundled Kiokuko Skill.

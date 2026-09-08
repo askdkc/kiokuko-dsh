@@ -102,7 +102,11 @@ continuation target.
 
 ## User confirmation
 
-Return control to the user before Goki starts when any scope, exclusion, acceptance criterion, WorkPlan, Skill requirement, verifier, or attempt limit is inferred rather than explicitly supplied by the user.
+Request user confirmation before Goki starts only when an unresolved assumption could materially change user intent, destructive effects, security or authorization boundaries, public API compatibility, data migration, irreversible effects, or the acceptance target.
+
+Routine implementation details, focused verifier selection, bounded scope inference, and reasonable defaults do not independently require confirmation when they can be established from repository evidence and existing user authorization. Record the basis honestly; never relabel an inference or repository evidence as explicit user approval.
+
+These criteria limit model-initiated confirmation requests; they do not override host-enforced approval or state transitions. If the host returns `needs_confirmation`, follow the confirmation flow below before Goki starts.
 
 The `needs_confirmation` response carries `ennoOduno.directive.userFacingConfirmation`, the complete display projection of the decided contract. Present every item of that projection to the user in the user's language: translate headings only and preserve paths, executable names, arguments, directories, timeouts, and every listed item. Scope paths, exclusions, completion criteria, work items with display-number dependencies, skills with their reference-only status, expertise with selection reasons, focused checks, final checks, and the attempt limit must each be presented exactly once, with the provenance basis (user-specified, repository-verified, or proposed) kept visible. Do not expose raw directive JSON, internal field names, WorkUnit IDs, expert IDs, or verifier IDs.
 

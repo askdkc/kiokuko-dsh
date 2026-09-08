@@ -39,11 +39,12 @@ touches first, trace the real flow end to end, then climb. Two rungs work →
 take the higher one and move on. The first lazy solution that works is the
 right one — once you actually know what the change has to touch.
 
-**Bug fix = root cause, not symptom.** A report names a symptom. Before you
-edit, grep every caller of the function you're about to touch. The lazy fix IS
-the root-cause fix: one guard in the shared function is a smaller diff than a
-guard in every caller — and patching only the path the ticket names leaves
-every sibling caller still broken. Fix it once, where all callers route through.
+**Bug fix = root cause, not symptom.** A report names a symptom. Before editing
+shared behavior, inspect its callers far enough to establish the affected
+boundary and root cause. Exhaustively enumerate callers only when compatibility
+or blast radius requires it. Fix a shared cause at the shared boundary when
+the evidence supports that contract; do not patch only the reported path or
+change unrelated caller behavior.
 
 ## Rules
 
@@ -86,11 +87,11 @@ that prevents data loss, security measures, accessibility basics, anything
 explicitly requested. User insists on the full version → build it, no
 re-arguing.
 
-Never lazy about understanding the problem. The ladder shortens the
-solution, never the reading. Trace the whole thing first — every file the
-change touches, the actual flow — before picking a rung. Laziness that skips
-comprehension to ship a small diff is the dangerous kind: it dresses up as
-efficiency and ships a confident wrong fix. Read fully, then be lazy.
+Never lazy about understanding the problem. Trace the relevant execution flow
+end to end before picking a rung. Read enough to establish the changed contract,
+its affected boundaries, and the root cause; expand the investigation when
+evidence exposes another relevant path. A small diff does not excuse an
+unverified understanding of the problem.
 
 Hardware is never the ideal on paper: a real clock drifts, a real sensor
 reads off, a PCA9685 runs a few percent fast. Leave the calibration knob, not
