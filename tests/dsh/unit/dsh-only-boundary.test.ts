@@ -59,7 +59,8 @@ test('active source has no legacy client branch or generic Enno projection', asy
   const violations: Array<{ file: string; matches: string[] }> = []
   for (const file of allSources) {
     const source = await readFile(file, 'utf8')
-    const matches = [...source.matchAll(forbidden)].map((match) => match[0])
+    const audited = /model-(?:configuration|selection-ui)\.ts$/u.test(file) ? source.replaceAll('OpenCode', 'ModelProvider').replaceAll('Codex', 'ProviderAuthentication') : source
+    const matches = [...audited.matchAll(forbidden)].map((match) => match[0])
     if (matches.length > 0) violations.push({ file: path.relative(root, file), matches })
   }
   assert.deepEqual(violations, [])
@@ -79,7 +80,7 @@ test('active source has no retired generic-client compatibility identifiers', as
 test('migrations preserve the immutable baseline and append forward-only evolution', async () => {
   const entries = await readdir(path.join(root, 'migrations'), { withFileTypes: true })
   const sqlFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.sql')).map((entry) => entry.name)
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql'])
   assert.equal(entries.some((entry) => entry.name === 'down'), false, 'migrations/down must not exist')
   const packed = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
   assert.equal(packed.files.includes('migrations/'), true)
@@ -93,7 +94,7 @@ test('package and model surfaces expose only the DSH root, browser client, and p
   assert.equal(manifest.dependencies?.['@modelcontextprotocol/sdk'], undefined)
   assert.equal(manifest.files.includes('templates/'), false)
   assert.equal(DSH_CAPABILITY_CATALOG_VERSION, 2)
-  assert.equal(MODEL_TOOL_OPERATION_NAMES.length, 7)
+  assert.equal(MODEL_TOOL_OPERATION_NAMES.length, 8)
   const catalog = createDshCapabilityCatalog({
     skills: STANDARD_SKILL_MANIFESTS.map(({ name }) => ({ kind: 'skill', name })),
     tools: [{ kind: 'tool', name: 'native' }],

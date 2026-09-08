@@ -1,3 +1,4 @@
+import { readExecutionSelection } from '../dsh/execution-selection.js';
 import { createHash } from 'node:crypto';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { withImmediateTransaction } from '../db/transaction.js';
@@ -236,6 +237,8 @@ export function ennoStateForPreparedTask(
   prepared: PreparedTaskShape,
   dshSessionId: string,
 ): EnnoOdunoState {
+  const execution = readExecutionSelection(database, prepared.run.runId)?.value;
+  if (execution && (execution.mode !== 'enno' || execution.status !== 'ready')) return inapplicableEnnoState();
   const taskType = prepared.intake.profile.taskType;
   if (prepared.intake.status === 'needs_answer' && taskType === null) {
     return intakeEnnoState({

@@ -7,6 +7,7 @@ export const DSH_MODEL_FACING_OPERATIONS = [
   'enno_plan_submit',
   'enno_ideal_submit',
   'enno_work_report',
+  'enno_delegate',
   'enno_finish',
   'enno_meditation_submit',
   'curator_check',
@@ -204,6 +205,7 @@ export function bindDshToolInvocation(
 }
 
 function descriptionFor(operation: ModelToolOperationName): string {
+  if (operation === 'enno_delegate') return 'Delegate a bounded part of the CURRENT approved WorkUnit to a native DSH spawn child. Supply instruction only. The host chooses the approved worker model and scope. No grandchildren. Review the returned evidence, run focused verification, then submit enno_work_report yourself. Child completion does not accept the WorkUnit.'
   return `Kiokuko ${operation} semantic operation. Supply nested values as their native JSON types; never encode an object or array as a JSON string. Host identity, routing, lease, and idempotency fields are supplied by the dsh host. The result is a TurnOutcome: applied results carry the business response in value and the next-turn state in handoff; predictable rejections return retry or clarify without a tool transport error. The business payload contract is: ${JSON.stringify(modelFacingInputSchema(operation))}`
 }
 
@@ -246,7 +248,7 @@ function renderDshToolResult(value: unknown): readonly { readonly type: 'text'; 
   return Object.freeze(blocks)
 }
 
-/** Build the exact seven-operation model tool set. */
+/** Build the exact eight-operation model tool set. */
 export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDefinition[] {
   return Object.freeze(MODEL_TOOL_OPERATION_NAMES.map((operation) => Object.freeze({
     name: operation,

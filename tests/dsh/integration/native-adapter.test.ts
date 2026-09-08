@@ -13,6 +13,7 @@ import { registerRepositoryAndLocation } from '../../../src/repository/binding.j
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { DSH_MODEL_FACING_OPERATIONS } from '../../../src/dsh/tools.js'
+import { mockModelRoutes, modelSelectionAnswer, openaiModels } from '../helpers/model-selection.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 import { dshTurnBoundarySeq, type DshLogEvent } from '../../../src/dsh/session-memory-finalizer.js'
 
@@ -43,6 +44,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   const toolSchemaScopes: unknown[] = []
   const questionAgents: unknown[] = []
   const questionIds: string[] = []
+  const selectionQuestions: string[] = []
   let skipTaskType = false
   let soulModelInvocable = true
   const nativeSessions = new Map<string, ReturnType<typeof createNativeSession>>()
@@ -74,6 +76,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   }
   const root = new Context()
   const services = {
+    llm: { listProviders: () => [{ id: 'mock', name: 'Mock' }], listModels: async (provider: string) => openaiModels.map(id => ({ provider, id, name: id })) },
     skills: {
       registerProvider(create: (control: { signal: AbortSignal }) => unknown) { create({ signal: new AbortController().signal }); return () => undefined },
       async snapshot(options: unknown) {
@@ -107,8 +110,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       },
     },
     commands: { register() { return () => undefined } },
-    userQuestions: { async ask(request: { questions: readonly [{ id: string }]; agent?: object }) {
+    userQuestions: { async ask(request: { questions: readonly [{ id: string; options?: { label: string }[] }]; agent?: object }) {
       if (request.agent === undefined) throw new Error('no user-questions answerer accepted the request')
+      const selection = modelSelectionAnswer(request.questions[0])
+      if (selection) { selectionQuestions.push(request.questions[0].id); return { answers: [{ id: request.questions[0].id, selected: [selection] }] } }
       questionAgents.push(request.agent)
       const id = request.questions[0]!.id
       questionIds.push(id)
@@ -128,6 +133,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   } })
   await hostFiber
   const adapter = createDshHostAdapter(root, {
+    modelRoutes: mockModelRoutes,
     repositoryRoot: f.root,
     databasePath: f.databasePath,
     migrationsDirectory: join(process.cwd(), 'migrations'),
@@ -151,7 +157,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   })
   const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
-    assert.equal(registered.length, 7)
+    assert.equal(registered.length, 8)
     const archivedExportSession = createNativeSession('archived-export-session')
     nativeSessions.delete(archivedExportSession.id)
     archivedSessions.set(archivedExportSession.id, archivedExportSession)
@@ -241,6 +247,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       afterNativeEnter.close()
     }
     assert.deepEqual(questionAgents, [])
+    assert.deepEqual(selectionQuestions, ['enno-execution-mode', 'enno-model-source', 'enno-template', 'enno-model-review'])
     assert.ok(decision.messages.length > 0)
     // The host proposes messages; only the native loop's durable append proves delivery.
     commitContext(primarySession, decision.messages)

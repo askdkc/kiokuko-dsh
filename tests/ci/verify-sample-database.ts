@@ -34,8 +34,12 @@ const capabilities = [
 ]
 
 function assertCommittedBaselineFixture(): void {
-  assert.equal(CURRENT_SCHEMA_VERSION, 8)
-  assert.deepEqual(CURRENT_MIGRATION_VERSIONS, [SAMPLE_DATABASE_BASELINE_VERSION, 2, 3, 4, 5, 6, 7, 8])
+  // Keep the committed baseline fixed, but derive the upgrade target from SQL.
+  // Pinning the latest version here duplicates the migration loader's contract.
+  assert.ok(
+    CURRENT_SCHEMA_VERSION > SAMPLE_DATABASE_BASELINE_VERSION,
+    'the committed sample database must exercise a forward upgrade',
+  )
   const database = openConnection(sampleDatabasePath, { readOnly: true })
   try {
     const versions = database.prepare('SELECT version FROM schema_migrations ORDER BY version')

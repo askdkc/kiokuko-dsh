@@ -5,6 +5,8 @@
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) に、プロジェクトの記憶・作業計画・検証支援を追加するプラグインです。
 任意の OrcaReplay 記録を有効にすると、モデル・ツールの動作確認と HTML 出力もできます。
 
+
+新しい変更作業では、通常実行か役小角(enno-oduno)を選べます。役小角ではおすすめテンプレート、またはDSH設定済みモデルから役割ごとの構成を選択します。[モデル選択と接続上の制約](docs/model-selection.ja.md)
 ## 導入と使い方
 
 対応 DSH: `0.1.2-rc.1` / [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1)。

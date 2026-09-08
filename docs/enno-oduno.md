@@ -2,7 +2,9 @@
 
 ![役小角(enno-oduno)](../skills/kiokuko-enno-oduno/enno-oduno.png)
 
-For build, debug, review, and devops work, Enno-Oduno keeps a run-bound loop:
+For build, debug, review, and devops work, select normal execution or Enno-Oduno
+at task entry. See [execution and model selection](model-selection.md).
+When selected, Enno-Oduno keeps a run-bound loop:
 
 ```text
 intake → ideal → plan → confirmation → WorkUnit execution → final verification → meditation

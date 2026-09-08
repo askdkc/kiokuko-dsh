@@ -1,4 +1,5 @@
 import { boundTaskRetrievalQuery } from '../memory/retrieval-query.js';
+import { initializeExecutionSelection } from './execution-selection.js';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { readExecutionFrame, saveExecutionFrame, updateExecutionFrame, type TaskExecutionFrame } from './execution-frame.js';
 import { KiokukoError } from '../errors.js';
@@ -72,6 +73,8 @@ import {
 } from '../enno-oduno/types.js';
 
 export interface PrepareAgentTaskInput {
+  /** Native host owns the explicit choice; old direct callers retain legacy behavior. */
+  executionSelection?: boolean;
   requestId: string;
   task: string;
   cwd?: string;
@@ -900,8 +903,10 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
     constraints: hints.constraints ?? null,
   };
   const runKey = `dsh-task-prepare-${canonicalContentHash({ version: 1, requestId })}`;
-  const intakeService = new DshRunIntakeService(database, input.dshLogStart === undefined ? {} : {
+  const intakeService = new DshRunIntakeService(database, {
     onRunCreatedInTransaction: ({ database: transactionDatabase, runId, workspace, dshSessionId, now }) => {
+      if (input.executionSelection) initializeExecutionSelection(transactionDatabase, runId);
+      if (input.dshLogStart === undefined) return;
       bindDshRunLogStartInTransaction(transactionDatabase, {
         runId,
         workspace,

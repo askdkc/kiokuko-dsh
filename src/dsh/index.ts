@@ -98,7 +98,7 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx, { orca: resolvedConfig.orca })
+    const adapter = createDshHostAdapter(ctx, { orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined
     let disposeExport: (() => Promise<void>) | undefined

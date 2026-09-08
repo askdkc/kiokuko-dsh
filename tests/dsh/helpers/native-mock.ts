@@ -17,7 +17,8 @@ export function nativeMock(llm: any) {
   }
   class MockAdapter extends llm.LlmAdapter {
     readonly requests: any[] = []
-    constructor(private readonly script: any[]) { super() }
+    constructor(private readonly script: any[], private readonly modelIds: readonly string[] = ['mock']) { super() }
+    async listModels(provider: string) { return this.modelIds.map(id => ({ provider, id, name: id })) }
     async resolveModel(provider: string, model: string) { return { provider, id: model, name: model } }
     async *stream(options: any) {
       this.requests.push(options)

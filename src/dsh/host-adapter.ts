@@ -1,4 +1,10 @@
 import { OrcaConfig } from './config.js'
+import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
+import { selectExecution, ExecutionSelectionPending } from './model-selection-ui.js'
+import { installDshModelRouting, modelRoleForState, isModelAvailabilityFailure, type RoutableAgent } from './model-routing.js'
+import type { ModelRoute, DshModelCatalog, DshModelCompatibility } from './model-configuration.js'
+import { ennoStateForPreparedTask } from '../enno-oduno/service.js'
+import { DshEnnoDelegation, type DshSpawnBackend } from './enno-delegation.js'
 import { createDshOrcaHost } from './orca-host.js'
 import { fileURLToPath } from 'node:url'
 import { realpathSync } from 'node:fs'
@@ -67,6 +73,7 @@ import {
   markClaimProgressInTransaction,
   settleInputClaimInTransaction,
   takeRecoverableInputClaimInTransaction,
+  unexecutedRunInput,
 } from './input-claim.js'
 import { DshSessionLogMirror, type DshImageAttachmentRef, type DshMirrorEventSession } from './session-log-mirror.js'
 import { abortable, DshBoundaryWorker } from './boundary-worker.js'
@@ -138,6 +145,8 @@ interface AdapterContext extends Context {
 }
 
 export interface DshHostAdapterOptions {
+  readonly modelRoutes?: readonly ModelRoute[]
+  readonly modelCompatibility?: DshModelCompatibility
   readonly orca?: import('zod').z.input<typeof OrcaConfig>
   readonly databasePath?: string
   readonly migrationsDirectory?: string
@@ -400,6 +409,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const sessionQuery = options.sessionQuery ?? native.get('sessionQuery', false) as DshSessionQuery | undefined
   const llm = options.llm ?? native.get('llm', false) as DshLlm | undefined
   const advisory = options.advisory ?? native.get('dshAdvisory', false) as DshAdvisoryHost | undefined
+  const modelCatalog = native.get('llm', false) as DshModelCatalog | undefined
+  const modelCompatibility = options.modelCompatibility ?? native.get('dshModelCompatibility', false) as DshModelCompatibility | undefined
+  const selections = new Map<string, StoredExecutionSelection>()
+  const selectionFailures = new Map<string, Promise<void>>()
+  const selectionBlocked = new WeakSet<object>()
   const root = realpathSync(options.repositoryRoot ?? process.cwd())
   const runtime = new DshRuntime({
     repositoryRoot: root,
@@ -409,6 +423,19 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     autoRegisterRepository: true,
     ...(options.now === undefined ? {} : { now: options.now }),
   })
+  const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
+  const childGuardDisposer = tools?.guard((value) => {
+    const execution = value as { agent?: object; name?: string; arguments?: unknown }
+    return execution.agent ? delegation.toolDenial(execution.agent, execution.name ?? '', execution.arguments) : undefined
+  })
+  const childExecutionDisposer = (ctx as any).on('tools/execute', async (execution: { agent?: object; name: string; arguments: unknown }, next: () => Promise<unknown>) => {
+    if (execution.agent && delegation.isChild(execution.agent)) {
+      await delegation.assertCurrent(execution.agent)
+      const denial = delegation.toolDenial(execution.agent, execution.name, execution.arguments)
+      if (denial) throw new KiokukoError('CONFLICT', denial)
+    }
+    return next()
+  }, { prepend: true })
   const sessionCachePath = options.sessionCachePath
     ?? (options.databasePath === undefined ? undefined : `${options.databasePath}.session-cache`)
   const sessionMirror = new DshSessionLogMirror({
@@ -581,6 +608,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     if (event.nativeSession !== undefined) item.nativeSession = event.nativeSession
     item.turn = event.turn
     const sameRevision = previous !== undefined && incomingRevision === previousRevision
+      && previous.prepared.ennoOduno.applicable === result.prepared.ennoOduno.applicable
     if (sameRevision) {
       // A newer prepare may carry a newer context delivery while Enno has not
       // advanced its revision. Preserve the active lease and other policy
@@ -603,7 +631,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       activeModeRequests.set(modeKey, modeRequest)
     }
     const existingState = states.get(item.runId)
-    if (existingState !== undefined && existingState.revision === incomingRevision) {
+    if (existingState !== undefined && existingState.revision === incomingRevision
+      && existingState.phase === phaseForState(result.prepared.ennoOduno)) {
       // A continued native turn for the same Enno revision must retain the
       // active WorkUnit lease and route epoch. Rebuilding policy from the
       // public prepared projection would silently discard those host-only
@@ -622,6 +651,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     } else {
       const next = policyState(result.prepared.ennoOduno, item, event.sessionId, resumedLeases.get(run))
       resumedLeases.delete(run)
+      states.set(item.runId, next)
+      policy.setState(next)
+    }
+    if (selections.get(item.runId)?.value.mode === 'normal') {
+      const { nextAction: _unused, ...ordinaryState } = states.get(item.runId)!
+      const next: DshToolPolicyState = { ...ordinaryState, phase: 'normal' }
       states.set(item.runId, next)
       policy.setState(next)
     }
@@ -673,6 +708,31 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }
 
   class CapturingGate extends DshIntakeGate {
+    async choose(event: DshPreStepEvent, result: DshIntakeGateResult): Promise<DshIntakeGateResult> {
+      const runId = result.prepared.run.runId
+      const stored = await runtime.withDatabase(db => readExecutionSelection(db, runId))
+      if (!stored) return result
+      if (!ENNO_APPLICABLE_TASK_TYPES.includes(result.prepared.intake.profile.taskType as typeof ENNO_APPLICABLE_TASK_TYPES[number])) {
+        if (stored.value.mode === 'pending') await runtime.withDatabase(db => db.prepare('DELETE FROM dsh_execution_selections WHERE run_id = ? AND revision = ?').run(runId, stored.revision))
+        return result
+      }
+      selections.set(runId, stored)
+      const selected = await selectExecution({
+        task: event.task, signal: event.signal, stored, routes: options.modelRoutes ?? [],
+        ...(event.nativeAgent ? { agent: event.nativeAgent } : {}),
+        ...(userQuestions ? { questions: userQuestions } : {}),
+        ...(modelCatalog ? { llm: modelCatalog } : {}),
+        ...(modelCompatibility ? { compatibility: modelCompatibility } : {}),
+        save: async (revision, value) => {
+          const saved = await runtime.withDatabase(db => writeExecutionSelection(db, runId, revision, value))
+          selections.set(runId, saved)
+          return saved
+        },
+      })
+      selections.set(runId, selected)
+      const ennoOduno = await runtime.withDatabase(db => ennoStateForPreparedTask(db, result.prepared, event.sessionId))
+      return { ...result, prepared: { ...result.prepared, ennoOduno } }
+    }
     override async prepare(event: DshPreStepEvent): Promise<DshIntakeGateResult> {
       // Capture completion ordering before any asynchronous database or intake
       // work. Revision ordering alone cannot distinguish two same-revision
@@ -700,7 +760,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           throw new KiokukoError('CONFLICT', 'dsh continued turn was reused with different bound input')
         }
         this.assertCatalog(cached.result.catalog, event.capabilities)
-        return event.signal.aborted ? { ...cached.result, admitted: false } : cached.result
+        return event.signal.aborted ? { ...cached.result, admitted: false } : this.choose(event, cached.result)
       }
       const previous = currentForAgentEvent(event.agent.id, event.sessionId, undefined, event.nativeSession, event.nativeAgent)
       if (previous !== undefined && previous.turn < event.turn) {
@@ -737,7 +797,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         }
         const previousWasChat = previous.prepared.intake.profile.taskType === 'chat'
         const superseded = previous.prepared.ennoOduno.applicable && supersedesUnstartedEnno(event, previousState)
-        const continuePrevious = previousWasChat
+        const selection = selections.get(previous.runId)?.value
+        const continuePrevious = selection && (selection.status !== 'ready' || selection.mode === 'normal' && previous.failed)
+          ? true : previousWasChat
           ? event.profileHints?.taskType === 'chat'
           : !superseded
             && previousState.status !== 'completed'
@@ -753,7 +815,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             states.set(previous.runId, next)
             policy.setState(next)
           }
-          const continued = { admitted: !event.signal.aborted, prepared: previous.prepared, catalog: event.capabilities }
+          const continued = await this.choose(event, { admitted: !event.signal.aborted, prepared: previous.prepared, catalog: event.capabilities })
           if (continued.admitted) {
             continuedTurns.set(cacheKey, {
               fingerprint,
@@ -783,18 +845,25 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
         })
         await bindAndRecord(event, resumed, generation)
-        return resumed
+        const selected = await this.choose(event, resumed)
+        await bindAndRecord(event, selected, ++prepareGeneration)
+        return selected
       }
       const prepared = await super.prepare(event)
-      if (prepared.admitted) await bindAndRecord(event, prepared, generation)
-      return prepared
+      if (!prepared.admitted) return prepared
+      await bindAndRecord(event, prepared, generation)
+      const selected = await this.choose(event, prepared)
+      await bindAndRecord(event, selected, ++prepareGeneration)
+      return selected
     }
     override async preStep(event: DshPreStepEvent, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> {
+      if (event.nativeAgent && delegation.isChild(event.nativeAgent)) return next()
       // The native chain owns admission and the original message ordering.
       // Run it before any Kiokuko storage or classification work so an
       // auxiliary database failure cannot delay or rewrite its decision.
       const downstream = await next()
       if (downstream.kind !== 'enter') return downstream
+      if (event.nativeAgent && selectionBlocked.has(event.nativeAgent)) return { kind: 'reject' }
       const claimKey = `${event.sessionId}\u0000${event.turn}`
       const nativeMessages = Object.freeze([...(event.nativeMessages ?? [])])
       inMemoryClaims.set(claimKey, {
@@ -817,7 +886,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       }
       const humanPresent = nativeMessages.some(isHumanMessage) || downstream.messages.some(isHumanMessage)
       const seenContinuations = new Set<string>()
-      const nativeDecision: DshPreStepDecision = {
+      let nativeDecision: DshPreStepDecision = {
         ...downstream,
         messages: downstream.messages.filter((message) => {
           const deliveryId = pluginContinuationId(message)
@@ -857,6 +926,17 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         if (!result.admitted) return nativeDecision
         const item = currentSession(event.sessionId)
         if (item !== undefined) {
+          if (selections.get(item.runId)?.value.status === 'ready') {
+            const original = await runtime.withDatabase(db => unexecutedRunInput(db, item.runId, item.sessionId))
+            const deliveredIds = new Set(sessionEventSource(event.nativeSession).snapshotEvents()
+              .filter(e => e.type === 'user/message').map(e => objectRecord(e.data)?.id))
+            const currentIds = new Set(nativeDecision.messages.map(m => objectRecord(m)?.id))
+            const missing = original.filter(m => {
+              const id = objectRecord(m)?.id
+              return typeof id === 'string' && !deliveredIds.has(id) && !currentIds.has(id)
+            })
+            if (missing.length) nativeDecision = { ...nativeDecision, messages: [...missing, ...nativeDecision.messages] }
+          }
           const humanMessages = [...new Map([...nativeMessages, ...nativeDecision.messages].filter(isHumanMessage)
             .map(message => [objectRecord(message)?.id ?? canonicalContentHash(message), message])).values()]
           const humanTask = humanPresent ? textFromMessages(humanMessages, event.task) : undefined
@@ -890,7 +970,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         }
         const messages = await contextMessages(event, nativeDecision.messages)
         return { ...nativeDecision, messages: [...executionSupport.projectMessages(event.sessionId, nativeDecision.messages), ...messages] }
-      } catch {
+      } catch (error) {
+        if (error instanceof ExecutionSelectionPending) return { kind: 'reject' }
         // The native message array is authoritative. Kiokuko degradation must
         // not turn a claimed user prompt into a rejected/empty DSH step.
         return nativeDecision
@@ -907,6 +988,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     runtime,
     userQuestions === undefined ? undefined : createDshIntakeAnswerer(userQuestions),
     (context) => capabilityCatalog(skills, tools, context),
+    true,
   )
   const currentSession = (sessionId: string): TurnRecord | undefined => latestBySession.get(sessionId)
   const currentForAgentEvent = (agentId: string, sessionId?: string, turn?: number, nativeSession?: object, nativeAgent?: object): TurnRecord | undefined => {
@@ -958,9 +1040,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       FROM ledger_runs AS lr
       LEFT JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
       LEFT JOIN dsh_exploration_states AS es ON es.run_id = lr.run_id
+      LEFT JOIN dsh_execution_selections AS xs ON xs.run_id = lr.run_id
       WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active'
         AND ((ec.repository_root = ? AND ec.status NOT IN ('completed', 'cancelled', 'blocked'))
-          OR (ec.run_id IS NULL AND json_extract(es.state_json, '$.paused') = 1))
+          OR (ec.run_id IS NULL AND (json_extract(es.state_json, '$.paused') = 1 OR xs.run_id IS NOT NULL)))
       ORDER BY lr.created_at, lr.run_id LIMIT 2
     `).all<{ runId: string; orchestrationId: string | null }>(project.workspace, event.sessionId, project.repositoryRoot)
     if (candidates.length === 0) return undefined
@@ -1098,6 +1181,96 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       signal: payload.signal,
     }
   }
+  const assemblyClaims = new WeakMap<object, { turn: number; messages: unknown[] }>()
+  const markModelUnavailable = (agent: RoutableAgent): Promise<void> => {
+    const owner = delegation.parent(agent) ?? agent
+    const item = owner.session ? currentSession(owner.session.id) : undefined
+    if (!item || selections.get(item.runId)?.value.mode !== 'enno' || !modelRoleForState(item.prepared.ennoOduno)) return Promise.resolve()
+    const existing = selectionFailures.get(item.runId)
+    if (existing) return existing
+    const current = selections.get(item.runId)!
+    const value = { ...current.value, status: 'reselect' as const, problem: '選択したモデルで認証・利用上限・モデル利用可否のエラーが発生しました。完了済みの作業を保持しています。次の要求に使う構成を選び直してください。' }
+    selections.set(item.runId, { ...current, value })
+    const pending = runtime.withDatabase(db => {
+      const stored = readExecutionSelection(db, item.runId)
+      if (!stored) throw new KiokukoError('INTEGRITY_ERROR', 'Model selection disappeared')
+      selections.set(item.runId, writeExecutionSelection(db, item.runId, stored.revision, { ...stored.value, status: 'reselect', problem: value.problem }))
+    }).finally(() => selectionFailures.delete(item.runId))
+    selectionFailures.set(item.runId, pending)
+    return pending
+  }
+  const routingDisposers = new Map<object, () => void>()
+  const installRouting = (agent: RoutableAgent) => {
+    if (routingDisposers.has(agent) || !agent.ctx) return
+    routingDisposers.set(agent, installDshModelRouting(agent, async signal => {
+      const childModel = await delegation.restoreOrPersist(agent)
+      if (childModel) { await delegation.assertCurrent(agent); return childModel }
+      selectionBlocked.delete(agent)
+      const claim = assemblyClaims.get(agent)
+      assemblyClaims.delete(agent)
+      const current = agent.session ? currentSession(agent.session.id) : undefined
+      if (current) await selectionFailures.get(current.runId)
+      const turn = claim?.turn ?? current?.turn
+      if (turn === undefined) return undefined
+      const messages = claim?.messages ?? []
+      // DSH claims input before assembly. Persist it before showing any UI so
+      // cancellation and restart cannot lose a prompt before the native log append.
+      if (agent.session && messages.length) {
+        await runtime.withDatabase(db => withImmediateTransaction(db, () => backupInputClaimInTransaction(db, {
+          dshSessionId: agent.session!.id, nativeTurn: turn, messages,
+        })))
+      }
+      try {
+        const event = await mapPreStep({ agent, messages, turn, step: 0, signal })
+        await gate.prepare(event)
+      } catch (error) {
+        if (error instanceof ExecutionSelectionPending) selectionBlocked.add(agent)
+        else {
+          const existing = agent.session ? currentSession(agent.session.id) : undefined
+          if (existing && selections.has(existing.runId)) throw error
+          // Optional intake enrichment retains its existing degraded behavior.
+        }
+      }
+      const item = agent.session ? currentSession(agent.session.id) : undefined
+      if (!item || item.closed) return undefined
+      const selection = selections.get(item.runId)?.value
+      if (selection && selection.status !== 'ready' && item.prepared.intake.profile.taskType !== 'chat') selectionBlocked.add(agent)
+      const role = modelRoleForState(item.prepared.ennoOduno)
+      return selection?.mode === 'enno' && selection.status === 'ready' && role ? selection.configuration?.roles[role] : undefined
+    }, {
+      load: () => {
+        const runId = agent.session ? currentSession(agent.session.id)?.runId : undefined
+        return runId ? selections.get(runId)?.value.ordinaryModel : undefined
+      },
+      save: async ordinaryModel => {
+        const runId = agent.session ? currentSession(agent.session.id)?.runId : undefined
+        if (!runId || delegation.isChild(agent)) return
+        await runtime.withDatabase(db => {
+          const stored = readExecutionSelection(db, runId)
+          if (stored && !stored.value.ordinaryModel) selections.set(runId, writeExecutionSelection(db, runId, stored.revision, { ...stored.value, ordinaryModel }))
+        })
+      },
+    }))
+  }
+  const routingCreatedDisposer = (ctx as any).on('agent/created', (event: { agent: RoutableAgent }) => {
+    delegation.created(event.agent)
+    installRouting(event.agent)
+  })
+  const modelErrorDisposer = (ctx as any).on('agent/request-error', async (event: { agent: RoutableAgent; failure: unknown }, next: () => Promise<unknown>) => {
+    if (!isModelAvailabilityFailure(event.failure)) return next()
+    const owner = delegation.parent(event.agent) ?? event.agent
+    const item = owner.session ? currentSession(owner.session.id) : undefined
+    if (!item || selections.get(item.runId)?.value.mode !== 'enno' || !modelRoleForState(item.prepared.ennoOduno)) return next()
+    await markModelUnavailable(event.agent)
+    return undefined // No native automatic retry or provider substitution.
+  }, { prepend: true })
+  const routingClaimDisposer = (ctx as any).on('agent/inbox/claimed', (event: { agent: RoutableAgent; turn: number; message: unknown }) => {
+    installRouting(event.agent)
+    const previous = assemblyClaims.get(event.agent)
+    if (previous?.turn === event.turn) previous.messages.push(event.message)
+    else assemblyClaims.set(event.agent, { turn: event.turn, messages: [event.message] })
+  })
+  for (const agent of agents?.list?.() ?? []) installRouting(agent)
   const contextMessages = async (event: DshPreStepEvent, pending: readonly unknown[]): Promise<readonly unknown[]> => {
     const item = currentForAgentEvent(event.agent.id, event.sessionId, event.turn, event.nativeSession, event.nativeAgent)
     if (item === undefined || item.sessionId !== event.sessionId) throw new Error('kiokuko-dsh turn identity is not bound')
@@ -1170,6 +1343,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         signal: operationSignal,
       })
       gate.assertTurnStoppingCatalog(run.catalog, currentCatalog)
+      if (operation === 'enno_delegate') {
+        if (!run.nativeAgent) throw new KiokukoError('INTEGRITY_ERROR', 'Native parent is unavailable')
+        return delegation.execute(run.nativeAgent, args, binding, currentCatalog.tools.map(tool => tool.name), operationSignal)
+      }
       const phase = phaseForOperation(operation)
       const receiptOperation = ennoReceiptOperation(operation)
       const inputDigest = canonicalContentHash({
@@ -1888,6 +2065,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     boundaryWorker.kick(sessionId, nativeAgent)
   }
   const boundarySessionStartDisposer = (ctx as any).on('agent/session-start', (payload: { agent: NativeAgent }) => {
+    if (delegation.isChild(payload.agent)) return
     void rehydrateBoundarySession(payload.agent).catch(() => {
       // Durable jobs remain retryable. A later pre-step/status kick retries
       // once the exact live Agent and its capabilities are available.
@@ -1901,6 +2079,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     await deliverCompletionReport(nativeSession)
     const item = currentForAgentEvent(agentId, sessionId, undefined, nativeSession, nativeAgent)
     if (item === undefined || item.closed || executionSupport.paused(item.sessionId)) return undefined
+    const selection = selections.get(item.runId)?.value
+    if (selection && (selection.status !== 'ready' && item.prepared.intake.profile.taskType !== 'chat' || item.failed && selection.mode === 'normal')) return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
     if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed' }
@@ -1925,6 +2105,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const resolveSessionClose = async (sessionId: string, nativeSession: object): Promise<DshCloseIntent | undefined> => {
     const item = currentSession(sessionId)
     if (item === undefined || item.closed || item.nativeSession !== nativeSession || executionSupport.paused(item.sessionId)) return undefined
+    if (selections.get(item.runId)?.value.status !== undefined && selections.get(item.runId)?.value.status !== 'ready') return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
     if (state.status === 'completed') {
       await deliverCompletionReport(nativeSession)
@@ -1994,9 +2175,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     advisoryRounds.delete(input.runId)
     resumedLeases.delete(input.runId)
   }
-  const errorDisposer = (ctx as any).on('agent/error', (event: { agent: { id: string; session?: { id: string }; sessionId?: string } }) => {
+  const errorDisposer = (ctx as any).on('agent/error', (event: { agent: { id: string; session?: { id: string }; sessionId?: string }; error?: unknown }) => {
     const item = currentForAgentEvent(event.agent.id, event.agent.session?.id ?? event.agent.sessionId, undefined, event.agent.session, event.agent)
     if (item !== undefined) item.failed = true
+    if (isModelAvailabilityFailure(event.error)) void markModelUnavailable(event.agent).catch(() => {
+      // Keep the in-memory reselect fence if durable storage is unavailable.
+    })
   })
   const sessionEventDisposer = (ctx as any).on('session/event', (session: { id: string }, event: { type?: unknown; seq?: unknown; data?: unknown }) => {
     // This observer is deliberately fire-and-contain. DSH persistence and the
@@ -2170,6 +2354,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   return {
     host,
     dispose: () => disposePromise ??= (async () => {
+      routingCreatedDisposer()
+      routingClaimDisposer()
+      modelErrorDisposer()
+      childGuardDisposer?.()
+      childExecutionDisposer()
+      for (const dispose of routingDisposers.values()) dispose()
+      routingDisposers.clear()
       const failures: unknown[] = []
       try { await orca?.shutdown() } catch (error) { failures.push(error) }
       const pausedSessions = new Set([...latestBySession.keys()].filter(id => executionSupport.paused(id)))
@@ -2188,6 +2379,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       ).values()]
       for (const item of remainingRuns) {
         try {
+          const selected = selections.get(item.runId)?.value
+          if (selected) {
+            const state = await runtime.withDatabase(db => stateForRun(db, item))
+            if (selected.status !== 'ready'
+              || selected.mode === 'enno' && !['completed', 'blocked', 'cancelled'].includes(state.status ?? '')
+              || selected.mode === 'normal' && (item.failed || (item.nativeAgent as NativeAgent | undefined)?.status === 'running')) continue
+          }
           let status: 'completed' | 'failed' | 'cancelled'
           if (item.prepared.intake.profile.taskType === 'chat') status = item.failed ? 'failed' : 'cancelled'
           else {

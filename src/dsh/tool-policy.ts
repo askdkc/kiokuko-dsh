@@ -9,7 +9,7 @@ import {
   isDshModelFacingOperation,
 } from './tools.js'
 
-export type DshToolPhase = 'intake' | 'ideal' | 'planning' | 'confirmation' | 'goki' | 'verifying' | 'meditation' | 'completed' | 'blocked' | 'cancelled'
+export type DshToolPhase = 'normal' | 'intake' | 'ideal' | 'planning' | 'confirmation' | 'goki' | 'verifying' | 'meditation' | 'completed' | 'blocked' | 'cancelled'
 
 export interface DshToolPolicyState extends Omit<DshToolHostBinding, 'idempotencyKey'> {
   readonly phase: DshToolPhase
@@ -33,11 +33,12 @@ export interface DshToolPolicyContext {
 }
 
 const phaseAllowlist: Readonly<Record<DshToolPhase, readonly string[]>> = Object.freeze({
+  normal: ['curator_check', 'memory_checkpoint'],
   intake: [],
   ideal: ['enno_ideal_submit'],
   planning: ['enno_plan_submit'],
   confirmation: [],
-  goki: ['enno_work_report', 'curator_check', 'memory_checkpoint'],
+  goki: ['enno_work_report', 'enno_delegate', 'curator_check', 'memory_checkpoint'],
   verifying: ['enno_finish', 'curator_check', 'memory_checkpoint'],
   meditation: ['enno_meditation_submit'],
   completed: [],
@@ -152,14 +153,14 @@ export class DshToolPolicy {
     if (state.nextAction !== undefined && execution.origin !== 'host') {
       const expected = directiveOperation[state.nextAction]
       if (expected === undefined) return denied('STALE_STATE', publicReason('STALE_STATE'))
-      if (expected !== execution.name) return denied('WRONG_DIRECTIVE', publicReason('WRONG_DIRECTIVE'))
+      if (expected !== execution.name && !(expected === 'enno_work_report' && execution.name === 'enno_delegate')) return denied('WRONG_DIRECTIVE', publicReason('WRONG_DIRECTIVE'))
     }
     const allowedOperations = phaseAllowlist[state.phase]
     if (allowedOperations === undefined) return denied('STALE_STATE', publicReason('STALE_STATE'))
     if (!allowedOperations.includes(execution.name)) {
       return denied('WRONG_PHASE', publicReason('WRONG_PHASE'))
     }
-    if (execution.name === 'enno_work_report'
+    if ((execution.name === 'enno_work_report' || execution.name === 'enno_delegate')
       && (state.currentWorkUnitId === undefined || state.workUnitId !== state.currentWorkUnitId || state.leaseToken === undefined)) {
       return denied('LEASE_REQUIRED', publicReason('LEASE_REQUIRED'))
     }

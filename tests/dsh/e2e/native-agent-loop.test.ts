@@ -18,6 +18,7 @@ import { compareCanonicalStrings } from '../../../src/serialization/validate.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 import { dshTurnBoundarySeq } from '../../../src/dsh/session-memory-finalizer.js'
 import { nativeMock } from '../helpers/native-mock.js'
+import { mockModelRoutes, modelSelectionAnswer, openaiModels } from '../helpers/model-selection.js'
 
 const dshSourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 const dshPackageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
@@ -159,7 +160,11 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     ...flowResponses('one', true, false, true),
     ...secondFlow.slice(0, 4),
     mock.toolCallResponse('plan-two-revised', 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
-    ...secondFlow.slice(4),
+    mock.toolCallResponse('delegate-two', 'enno_delegate', { instruction: 'Inspect the current WorkUnit and return verification evidence. Do not edit files.' }),
+    (request: any) => { assert.equal(request.model, 'gpt-5.6-luna'); assert.notEqual(request.sessionId, 'real-loop-session'); return mock.textResponse('Child evidence: no additional changes are required.') },
+    ...secondFlow.slice(4, 5),
+    () => { throw new llm.LlmError('Selected model is unavailable', 'MODEL_NOT_FOUND') },
+    ...secondFlow.slice(5),
     mock.textResponse('Yes. The requested implementation and verification are complete.'),
     mock.textResponse('fix(dsh): keep long Enno sessions recoverable'),
   ])
@@ -172,7 +177,17 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   await ctx.plugin(agentRegistry.default)
   await ctx.plugin(skills.default)
   await ctx.plugin(agentLoop.default, { agents: [] })
+  const subagents = await import(dshModule('packages/subagent/subagent/lib/index.js'))
+  const spawn = await import(dshModule('packages/subagent/subagent-spawn-in-process/lib/index.js'))
+  await ctx.plugin(subagents.default)
+  await ctx.plugin(spawn, { providerName: 'spawn' })
   ctx.llm.registerAdapter(['mock'], adapterScript)
+  const routedTools: { callId: string; name: string; model: string }[] = []
+  const observeRouting = ctx.on('tools/execute', (execution: any, next: () => unknown) => {
+    routedTools.push({ callId: execution.callId, name: execution.name, model: execution.agent.session.requestHeader()?.config.model })
+    return next()
+  })
+  adapterScript.listModels = async (provider: string) => ['mock', ...openaiModels].map(id => ({ provider, id, name: id }))
   let exploratoryReads = 0
   const readDisposer = finalMode === 'pause' ? ctx.tools.register({ name: 'read', description: 'Read fixed source evidence.',
     parameters: { file_path: { type: 'string', required: true } },
@@ -194,6 +209,8 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         async ask(request: any) {
           assert.equal(request.agent, liveAgent, 'every user question must use the exact live DSH Agent scope')
           const question = request.questions[0]
+          const selection = modelSelectionAnswer(question)
+          if (selection) return { answers: [{ id: question.id, selected: [selection] }] }
           if (question.id.startsWith('boundary-')) {
             boundaryFailures.push(question.detail)
             return { answers: [{ id: question.id, selected: [], custom: '' }] }
@@ -225,7 +242,8 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   })
   await questionFiber
 
-  const adapter = createDshHostAdapter(ctx, {
+  const createAdapter = () => createDshHostAdapter(ctx, {
+    modelRoutes: mockModelRoutes,
     repositoryRoot: fixtureRoot,
     databasePath,
     migrationsDirectory: join(process.cwd(), 'migrations'),
@@ -258,7 +276,8 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       }),
     },
   })
-  const composition = await mountDshComposition(ctx, adapter.host)
+  let adapter = createAdapter()
+  let composition = await mountDshComposition(ctx, adapter.host)
   try {
     liveAgent = await ctx.agentLoop.create(
       session.SessionId('real-loop-session'),
@@ -394,7 +413,11 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     }
     await completeTurn('@PLAN.md の残りを実装\nREADME.org を短くし、use-package vc の導入手順を記載してください。', async () => confirmations === 2 && adapter.host.runtime!.withDatabase(db =>
       !!db.prepare("SELECT job_id FROM dsh_boundary_jobs WHERE status = 'waiting_user'").get()))
-    await completeTurn('計画を src のみに絞って再提出してください。', () => completed(2))
+    await completeTurn('計画を src のみに絞って再提出してください。', () => adapter.host.runtime!.withDatabase(db =>
+      !!db.prepare("SELECT run_id FROM dsh_execution_selections WHERE json_extract(state_json, '$.status') = 'reselect'").get()))
+    await composition.dispose(); await adapter.dispose()
+    adapter = createAdapter(); composition = await mountDshComposition(ctx, adapter.host)
+    await completeTurn('モデル構成を確認して続行してください。', () => completed(2))
     assert.deepEqual(boundaryFailures, [], 'a new multiline user request must reach planning and completion')
     const hasText = (text: string) => liveAgent.session.snapshotEvents().some((e: any) =>
       e.type === 'assistant/message' && e.data.message.content.some((b: any) => b.type === 'text' && b.text === text))
@@ -412,7 +435,15 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       event.type === 'assistant/message' && event.sourceEventSeqs?.length > 2_048
     ))
     assert.ok(longAssistantMessage, 'the real loop must exercise a source sequence list larger than the former bridge limit')
-    assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(12).fill(false), JSON.stringify({ toolEvents, turnEnds }))
+    assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(13).fill(false), JSON.stringify({ toolEvents, turnEnds }))
+    const delegation = results.find((event: any) => event.data.message.content[0]?.toolCallId === 'delegate-two')
+    const delegated = JSON.parse(delegation.data.message.content[0].content[0].text)
+    assert.equal(delegated.accepted, false)
+    assert.equal(delegated.stopReason, 'completed')
+    for (const [callId, model] of [['ideal-two', 'gpt-6-astra'], ['plan-two', 'gpt-6-astra'], ['delegate-two', 'gpt-5.6-sol'], ['work-two', 'gpt-5.6-sol'], ['finish-two', 'gpt-6-astra'], ['meditation-two', 'gpt-6-astra']]) {
+      assert.deepEqual(routedTools.filter(t => t.callId === callId).map(t => t.model), [model], 'Reselection must not replay completed tools')
+    }
+    assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS n FROM ledger_runs WHERE dsh_session_id = ?').get<{ n: number }>(delegated.childSessionId)?.n), 0)
     const failedFocusedReport = results.find((event: any) => event.data.message.content[0]?.toolCallId === 'work-one')
     const failedFocusedPayload = JSON.parse(failedFocusedReport?.data.message.content[0]?.content[0]?.text ?? '{}').value
     assert.equal(failedFocusedPayload.verifierResults?.[0]?.status, 'failed')
@@ -515,6 +546,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       stored.close()
     }
   } finally {
+    observeRouting()
     composition.stopIngress()
     await adapter.dispose()
     await composition.dispose()

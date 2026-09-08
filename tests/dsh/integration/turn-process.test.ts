@@ -175,7 +175,7 @@ test('outbox migration normalizes pending legacy messages and preserves dispatch
     database.prepare(`UPDATE dsh_continuation_outbox SET message_json = ?, status = 'pending'
       WHERE continuation_id = ?`).run(legacyMessage(pendingRow.continuationId, 'loop-recovery'), pendingRow.continuationId)
 
-    assert.deepEqual(migrateDatabase(database, join(process.cwd(), 'migrations')).applied, [7, 8])
+    assert.deepEqual(migrateDatabase(database, join(process.cwd(), 'migrations')).applied, [7, 8, 9])
     const pending = database.prepare(`
       SELECT message_form AS messageForm, message_json AS messageJson
         FROM dsh_continuation_outbox WHERE continuation_id = ?

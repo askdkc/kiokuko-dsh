@@ -23,6 +23,16 @@ interface ClaimRow extends Record<string, unknown> {
   recoveryCount: number
   status: DshInputClaim['status']
 }
+/** A cancelled selection may precede the first native user/message append.
+ * Read only the original, never-executed claim for this exact logical run.
+ * The caller deduplicates against the native log before projecting it. */
+export function unexecutedRunInput(database: SqliteDatabase, runId: string, dshSessionId: string): readonly unknown[] {
+  const boundary = database.prepare('SELECT source_start_turn FROM dsh_run_log_boundaries WHERE run_id = ? AND dsh_session_id = ?')
+    .get<{ source_start_turn: number }>(runId, dshSessionId)
+  if (!boundary) return []
+  const claim = row(database, dshSessionId, boundary.source_start_turn)
+  return claim && claim.providerStarted === 0 && claim.sideEffectStarted === 0 ? decode(claim.messagePayload) : []
+}
 
 function sessionId(value: string): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > 256 || /[\p{Cc}\p{Cf}]/u.test(value)) {
