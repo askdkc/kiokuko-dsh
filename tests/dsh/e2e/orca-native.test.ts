@@ -59,7 +59,11 @@ for (const owner of ['normal', 'explicit'] as const) test(`Orca enabled real DSH
       return JSON.parse(execution.result.text)
     }
     // Exact native agents/sessions are available before a Kiokuko logical run exists.
-    const status = await command(a, 'status')
+    const readableStatus = await ctx.commands.execute(a, '/kioku-orca status', [], signal)
+    assert.equal(readableStatus.result.kind, 'success')
+    assert.match(readableStatus.result.text, /^OrcaReplay: 未開始/u)
+    assert.match(readableStatus.result.text, /\/kioku-orca start/u)
+    const status = await command(a, 'status --json')
     assert.equal(status.capability, 'available')
     assert.equal(status.sessionRecording, 'awaiting_choice')
     // This fixture has no human question service; explicit commands authorize both sessions.
