@@ -17,8 +17,12 @@ test('stable prompt fragments are canonical while variable model state is exclud
   ] })
   assert.equal(left.fragmentJson, right.fragmentJson)
   assert.equal(left.cacheKey, right.cacheKey)
+  assert.notEqual(left.cacheKey, buildDshPromptCacheLayout({ ...common, fragments: [
+    { kind: 'memory', id: 'b', value: { text: 'memory' } },
+    { kind: 'system', id: 'a', value: 'changed-system' },
+  ] }).cacheKey, 'same route/revision must not alias different prompt contents')
   assert.notEqual(left.cacheKey, buildDshPromptCacheLayout({ ...common, memoryRevision: '43', fragments: [] }).cacheKey)
   assert.deepEqual(dshProviderCacheTelemetry({ inputTokens: 100, cacheReadTokens: 75, cacheWriteTokens: 4 }), {
-    providerCacheHitRate: 0.75, cacheReadTokens: 75, cacheWriteTokens: 4,
+    providerCacheHitRate: 75 / 179, cacheReadTokens: 75, cacheWriteTokens: 4,
   })
 })

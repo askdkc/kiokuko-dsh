@@ -116,6 +116,7 @@
     "test:evaluation": "npm run build && node scripts/run-retrieval-evaluation.mjs",
     "test:benchmark": "npm run build && node scripts/run-retrieval-benchmark.mjs",
     "test:benchmark:dsh-log": "npm run build && node scripts/run-dsh-million-event-benchmark.mjs",
+    "test:efficiency": "node --import tsx scripts/run-token-efficiency-evaluation.mjs",
     "test:e2e:dsh": "npm run build && node scripts/run-enno-dsh-e2e.mjs",
     "verify:prepare": "node scripts/verify-prepare-reproducibility.mjs",
     "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko-dsh.sqlite3",

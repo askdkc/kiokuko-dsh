@@ -1,4 +1,5 @@
 import { canonicalContentHash, canonicalJson, compareCanonicalStrings } from '../serialization/validate.js'
+import { normalizeDshUsage } from './efficiency.js'
 
 export type DshStablePromptFragmentKind = 'system' | 'tool_schema' | 'skill' | 'memory'
 
@@ -69,6 +70,7 @@ export function buildDshPromptCacheLayout(input: {
     toolSchemaDigest,
     memoryRevision,
     phase,
+    fragmentDigest: canonicalContentHash(fragments),
   })
   return Object.freeze({
     cacheKey,
@@ -87,12 +89,13 @@ export function dshProviderCacheTelemetry(usage: {
   readonly inputTokens?: number
   readonly cacheReadTokens?: number
   readonly cacheWriteTokens?: number
-}): { readonly providerCacheHitRate: number | null; readonly cacheReadTokens: number; readonly cacheWriteTokens: number } {
-  const input = usage.inputTokens ?? 0
-  const read = usage.cacheReadTokens ?? 0
-  const write = usage.cacheWriteTokens ?? 0
+}): { readonly providerCacheHitRate: number | null; readonly cacheReadTokens: number | null; readonly cacheWriteTokens: number | null } {
+  const normalized = normalizeDshUsage(usage)
+  const input = normalized.logicalInputTokens
+  const read = normalized.cacheReadTokens
+  const write = normalized.cacheWriteTokens
   return Object.freeze({
-    providerCacheHitRate: input <= 0 ? null : Math.min(1, read / input),
+    providerCacheHitRate: input === null || input <= 0 || read === null ? null : read / input,
     cacheReadTokens: read,
     cacheWriteTokens: write,
   })

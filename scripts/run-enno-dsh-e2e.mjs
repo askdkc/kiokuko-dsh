@@ -42,7 +42,8 @@ function relevantDump(rows, stderr) {
 function assertInstalledDump(result) {
   const rows = dumpedRows(result, 'dsh dump-config after install')
   const kiokuko = rows.filter(row => row?.id === 'kiokuko-dsh'
-    && row?.name === 'kiokuko-dsh' && row?.disabled !== true && row?.config?.orca?.enabled === true)
+    && row?.name === 'kiokuko-dsh' && row?.disabled !== true && row?.config?.orca?.enabled === true
+    && row?.config?.efficiency?.observe === true && row?.config?.finalization?.inputMode === 'bounded_evidence')
   const stock = rows.filter(row => row?.id === 'session-log-download'
     && row?.name === '@deepseek-ai/dsh-session-log-export' && row?.disabled === true)
   if (kiokuko.length !== 1 || stock.length !== 1) {
@@ -281,7 +282,7 @@ async function runCliLifecycle() {
     const tarball = join(output, filename)
     await access(tarball)
     await run(dsh, ['plugin', '--profile', profile, 'add', tarball], env)
-    await writeFile(env.KIOKUKO_ORCA_E2E_PATCH, '- id: kiokuko-dsh\n  config:\n    enabled: true\n    orca:\n      enabled: true\n', { mode: 0o600 })
+    await writeFile(env.KIOKUKO_ORCA_E2E_PATCH, '- id: kiokuko-dsh\n  config:\n    enabled: true\n    orca:\n      enabled: true\n    efficiency:\n      observe: true\n    finalization:\n      inputMode: bounded_evidence\n', { mode: 0o600 })
     const dumped = await run(dsh, ['--profile', profile, '--patch', env.KIOKUKO_ORCA_E2E_PATCH, '--dump-config'], env)
     assertInstalledDump(dumped)
     web = startWebProfile(env)

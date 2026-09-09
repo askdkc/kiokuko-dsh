@@ -36,6 +36,8 @@ export * from './turn-process.js'
 export * from './boundary-worker.js'
 export * from './input-claim.js'
 export * from './prompt-cache.js'
+export * from './efficiency.js'
+export * from './finalization-request.js'
 
 /** Mount a runtime as a Cordis-owned effect; unload always drains it. */
 export function mountDshRuntime(ctx: Context, runtime: DshRuntime): ReturnType<Context['effect']> {
@@ -61,6 +63,10 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
   await ctx.effect(async () => {
     const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
+      if (host.configureEfficiency !== undefined) host.configureEfficiency({ observe: resolvedConfig.efficiency.observe, inputMode: resolvedConfig.finalization.inputMode })
+      else if (resolvedConfig.efficiency.observe || resolvedConfig.finalization.inputMode !== 'prefix_reuse') {
+        throw new Error('The explicit Kiokuko host does not support efficiency/finalization configuration')
+      }
       let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
       let disposeOrcaCommand: (() => void) | undefined
       let disposeExport: (() => Promise<void>) | undefined
@@ -98,7 +104,8 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx, { orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes })
+    const adapter = createDshHostAdapter(ctx, { orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
+      efficiency: resolvedConfig.efficiency, finalization: resolvedConfig.finalization })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined
     let disposeExport: (() => Promise<void>) | undefined

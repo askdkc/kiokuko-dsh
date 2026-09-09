@@ -206,7 +206,7 @@ export function bindDshToolInvocation(
 
 function descriptionFor(operation: ModelToolOperationName): string {
   if (operation === 'enno_delegate') return 'Delegate a bounded part of the CURRENT approved WorkUnit to a native DSH spawn child. Supply instruction only. The host chooses the approved worker model and scope. No grandchildren. Review the returned evidence, run focused verification, then submit enno_work_report yourself. Child completion does not accept the WorkUnit.'
-  return `Kiokuko ${operation} semantic operation. Supply nested values as their native JSON types; never encode an object or array as a JSON string. Host identity, routing, lease, and idempotency fields are supplied by the dsh host. The result is a TurnOutcome: applied results carry the business response in value and the next-turn state in handoff; predictable rejections return retry or clarify without a tool transport error. The business payload contract is: ${JSON.stringify(modelFacingInputSchema(operation))}`
+  return `Use native JSON types; never encode an object or array as a JSON string. The host supplies identity, routing, lease and idempotency. Returns TurnOutcome: applied.value is the business response; applied.handoff is next-turn state. Predictable rejections return retry or clarify, not transport errors. Business payload: ${JSON.stringify(modelFacingInputSchema(operation))}`
 }
 
 function ennoNextAction(value: unknown): string | undefined {

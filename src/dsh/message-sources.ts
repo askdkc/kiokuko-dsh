@@ -56,7 +56,7 @@ const INTERNAL_ID = /\b(?:run|entry|delivery|session|work[_-]?unit|orchestration
 const LONG_HEX_ID = /\b[0-9a-f]{32,}\b/giu
 const ABSOLUTE_PATH = /(?:^|[\s(])(?:\/(?:Users|private|tmp|var|opt|home)\/[^\s)]+|[A-Za-z]:\\[^\s)]+)/gu
 
-function sourceText(value: string): string | null {
+export function redactDshSourceText(value: string): string | null {
   if (findSecret(value) !== undefined) return null
   const redacted = value
     .replace(INTERNAL_ID, '[internal id redacted]')
@@ -67,9 +67,14 @@ function sourceText(value: string): string | null {
 }
 
 function memorySource(item: ScopedContextItem): DshMessageSource | null {
-  const text = sourceText([item.title, item.summary ?? '', item.bodyPreview].filter(Boolean).join('\n'))
+  const fields = [item.title, item.summary ?? '', item.bodyPreview].filter(Boolean)
+  // Inspect the full original candidate before deduplication; split secrets must not evade detection.
+  if (redactDshSourceText(fields.join('\n')) === null) return null
+  // Preserve indentation and field boundaries. Different paths that redact to the same
+  // placeholder are not duplicate facts; only identical original fields may collapse.
+  const text = redactDshSourceText([...new Set(fields)].join('\n'))
   if (text === null) return null
-  const title = sourceText(item.title) ?? 'item'
+  const title = redactDshSourceText(item.title) ?? 'item'
   return { kind: 'memory', name: `memory:${item.entryId ?? title}`, text, trust: 'untrusted' }
 }
 

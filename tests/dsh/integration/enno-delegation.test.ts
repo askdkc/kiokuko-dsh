@@ -72,6 +72,8 @@ test('delegation requires the live lease, limits Ollama concurrency, preserves c
     const restored = new DshEnnoDelegation(runtime, undefined)
     assert.deepEqual(await restored.restoreOrPersist(child), model)
     assert.equal(restored.isChild(child), true)
+    assert.deepEqual(restored.observationBinding(child), { runId: binding.runId, parentSessionId: 'parent' })
+    assert.equal(restored.observationBinding(parent), undefined)
     await assert.rejects(restored.assertCurrent(child), /no longer active/u)
     assert.match(restored.toolDenial(child, 'enno_delegate', {})!, /scope/u)
     assert.equal(readExecutionSelection(db, identity.runId)?.value.configuration?.template?.version, 1)

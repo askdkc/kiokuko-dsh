@@ -14,11 +14,11 @@ const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migratio
 test('the schema keeps 001 immutable and appends forward-only DSH runtime migrations', async () => {
   const entries = await readdir(migrationsDirectory)
   const sqlFiles = entries.filter((name) => name.endsWith('.sql'))
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql', '011_dsh_finalization_input_mode.sql'])
   assert.ok(!entries.some((name) => name === 'down'), 'migrations/down must not exist')
 
   const snapshot = loadMigrationSnapshot(migrationsDirectory)
-  assert.equal(snapshot.migrations.length, 10)
+  assert.equal(snapshot.migrations.length, 11)
   assert.equal(snapshot.migrations[0]!.version, 1)
   assert.equal(snapshot.migrations[0]!.name, '001_baseline.sql')
   assert.equal(snapshot.migrations[1]!.version, 2)

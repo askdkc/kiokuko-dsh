@@ -1,0 +1,60 @@
+{
+  "format": "kiokuko-dsh.efficiency-fixtures.v1",
+  "baseline": "6395f464 display contract; current business schemas",
+  "evidence": "synthetic serialized inputs only",
+  "providerCalls": 0,
+  "tokenizer": null,
+  "tokensSaved": null,
+  "costSaved": null,
+  "schemas": {
+    "baselineBytes": 28117,
+    "currentBytes": 27130,
+    "savedBytes": 987
+  },
+  "memory": [
+    {
+      "name": "none",
+      "baselineBytes": 0,
+      "currentBytes": 0,
+      "savedBytes": 0
+    },
+    {
+      "name": "identical-summary-body",
+      "baselineBytes": 174,
+      "currentBytes": 93,
+      "savedBytes": 81
+    },
+    {
+      "name": "distinct-exception",
+      "baselineBytes": 104,
+      "currentBytes": 104,
+      "savedBytes": 0
+    }
+  ],
+  "finalization": [
+    {
+      "toolOutputChars": 0,
+      "inputMode": "bounded_evidence",
+      "fallback": null,
+      "baselineBytes": 28896,
+      "currentBytes": 1767,
+      "savedBytes": 27129
+    },
+    {
+      "toolOutputChars": 70000,
+      "inputMode": "bounded_evidence",
+      "fallback": null,
+      "baselineBytes": 98896,
+      "currentBytes": 5780,
+      "savedBytes": 93116
+    },
+    {
+      "toolOutputChars": 250000,
+      "inputMode": "bounded_evidence",
+      "fallback": null,
+      "baselineBytes": 278896,
+      "currentBytes": 5780,
+      "savedBytes": 273116
+    }
+  ]
+}
