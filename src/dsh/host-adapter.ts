@@ -1,4 +1,5 @@
-import { OrcaConfig } from './config.js'
+import { OrcaConfig, EfficiencyConfig, FinalizationConfig } from './config.js'
+import { DshEfficiencyObserver, mountDshEfficiencyObserver, type FinalizationInputMode } from './efficiency.js'
 import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
 import { selectExecution, ExecutionSelectionPending } from './model-selection-ui.js'
 import { installDshModelRouting, modelRoleForState, isModelAvailabilityFailure, type RoutableAgent } from './model-routing.js'
@@ -145,6 +146,8 @@ interface AdapterContext extends Context {
 }
 
 export interface DshHostAdapterOptions {
+  readonly efficiency?: import('zod').z.input<typeof EfficiencyConfig>
+  readonly finalization?: import('zod').z.input<typeof FinalizationConfig>
   readonly modelRoutes?: readonly ModelRoute[]
   readonly modelCompatibility?: DshModelCompatibility
   readonly orca?: import('zod').z.input<typeof OrcaConfig>
@@ -397,6 +400,8 @@ function operationName(value: string): value is typeof DSH_MODEL_FACING_OPERATIO
 }
 
 export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOptions = {}): DshHostAdapter {
+  const efficiencyConfig = EfficiencyConfig.parse(options.efficiency ?? {})
+  const finalizationConfig = FinalizationConfig.parse(options.finalization ?? {})
   const native = ctx as unknown as AdapterContext
   const skills = native.get('skills', false) as NativeSkills | undefined
   const systemPrompt = native.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] | undefined
@@ -2323,7 +2328,50 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     interactive: agent => !delegation.isChild(agent),
   })
   let disposePromise: Promise<void> | undefined
+  let efficiency: DshEfficiencyObserver | undefined
+  let efficiencyDisposers: (() => void)[] = []
+  const closeEfficiency = () => {
+    for (const dispose of efficiencyDisposers.reverse()) { try { dispose() } catch { efficiency?.unavailable() } }
+    efficiencyDisposers = []
+    efficiency?.close()
+  }
+  const configureEfficiency = (config: { observe: boolean; inputMode: FinalizationInputMode }) => {
+    const observer = config.observe ? new DshEfficiencyObserver() : undefined
+    memoryFinalizer.configure(config.inputMode, observer === undefined ? undefined : observation => observer.record(observation))
+    closeEfficiency()
+    efficiency = observer
+    if (observer === undefined) return
+    const scope = (ctx.root ?? ctx) as any
+    const observedAgents = new Map<string, NativeAgent>()
+    const bind = (agent: NativeAgent | undefined) => {
+      if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session) return
+      if (observedAgents.size >= 2048 && !observedAgents.has(agent.session.id)) observedAgents.delete(observedAgents.keys().next().value!)
+      observedAgents.set(agent.session.id, agent)
+    }
+    try {
+      efficiencyDisposers.push(scope.on('agent/pre-step', (payload: { agent?: NativeAgent }, next: () => unknown) => {
+        try { bind(payload.agent) } catch { /* optional attribution */ }
+        return next()
+      }, { global: true }))
+      efficiencyDisposers.push(scope.on('agent/session-start', (payload: { agent?: NativeAgent }) => { try { bind(payload.agent) } catch { /* optional attribution */ } }, { global: true }))
+      efficiencyDisposers.push(scope.on('session/disposed', (session: { id: string }) => {
+        if (observedAgents.get(session.id)?.session === session) observedAgents.delete(session.id)
+      }, { global: true }))
+      efficiencyDisposers.push(mountDshEfficiencyObserver(scope, observer, (sessionId, request) => {
+        const agent = observedAgents.get(sessionId)
+        if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(sessionId) !== agent.session) return undefined
+        const child = delegation.observationBinding(agent)
+        if (child !== undefined) return { sessionId, ...child, task: 'child' }
+        const owner = currentSession(sessionId)
+        if (owner === undefined || owner.nativeSession !== agent.session) return undefined
+        return { sessionId, runId: owner.runId, task: request.purpose === undefined ? 'main' : 'auxiliary' }
+      }))
+    } catch { observer.unavailable(); closeEfficiency() }
+  }
+  configureEfficiency({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
   const host: DshCompositionHost = {
+    get efficiency() { return efficiency },
+    configureEfficiency,
     ...(orca === undefined ? {} : { orca }),
     ...(skills === undefined ? {} : { skills: skills as any }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
@@ -2417,6 +2465,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       }
       try { await runLifecycle.dispose() } catch (error) { failures.push(error) }
       try { await memoryFinalizer.dispose() } catch (error) { failures.push(error) }
+      closeEfficiency()
       try { await sessionMirror.close() } catch (error) { failures.push(error) }
       try { await runtime.close() } catch (error) { failures.push(error) }
       turns.clear()

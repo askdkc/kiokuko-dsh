@@ -23,10 +23,14 @@ export const OrcaConfig = z.object({
   maxHtmlExportOutputBytes: limit(67_108_864),
 })
 export type OrcaConfig = z.infer<typeof OrcaConfig>
+export const EfficiencyConfig = z.object({ observe: z.boolean().default(false) }).strict()
+export const FinalizationConfig = z.object({ inputMode: z.enum(['prefix_reuse', 'bounded_evidence']).default('prefix_reuse') }).strict()
 /** Runtime configuration accepted by the dsh bundle entrypoint. */
 export const Config = z.object({
   enabled: z.boolean().default(true),
   modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),
   orca: OrcaConfig.prefault({}),
+  efficiency: EfficiencyConfig.prefault({}),
+  finalization: FinalizationConfig.prefault({}),
 })
 export type Config = z.input<typeof Config>

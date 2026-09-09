@@ -17,6 +17,7 @@ import { registerRepositoryAndLocation } from '../../../src/repository/binding.j
 import { compareCanonicalStrings } from '../../../src/serialization/validate.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 import { dshTurnBoundarySeq } from '../../../src/dsh/session-memory-finalizer.js'
+import type { EfficiencyObservation } from '../../../src/dsh/efficiency.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { mockModelRoutes, modelSelectionAnswer, openaiModels } from '../helpers/model-selection.js'
 
@@ -244,6 +245,8 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
 
   const createAdapter = () => createDshHostAdapter(ctx, {
     modelRoutes: mockModelRoutes,
+    efficiency: { observe: true },
+    finalization: { inputMode: finalMode === 'text' ? 'bounded_evidence' : 'prefix_reuse' },
     repositoryRoot: fixtureRoot,
     databasePath,
     migrationsDirectory: join(process.cwd(), 'migrations'),
@@ -277,6 +280,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     },
   })
   let adapter = createAdapter()
+  const priorObservations: EfficiencyObservation[] = []
   let composition = await mountDshComposition(ctx, adapter.host)
   try {
     liveAgent = await ctx.agentLoop.create(
@@ -416,6 +420,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     await completeTurn('計画を src のみに絞って再提出してください。', () => adapter.host.runtime!.withDatabase(db =>
       !!db.prepare("SELECT run_id FROM dsh_execution_selections WHERE json_extract(state_json, '$.status') = 'reselect'").get()))
     await composition.dispose(); await adapter.dispose()
+    priorObservations.push(...adapter.host.efficiency!.snapshot().observations)
     adapter = createAdapter(); composition = await mountDshComposition(ctx, adapter.host)
     await completeTurn('モデル構成を確認して続行してください。', () => completed(2))
     assert.deepEqual(boundaryFailures, [], 'a new multiline user request must reach planning and completion')
@@ -495,6 +500,11 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       'the original request reaches the model')
     }
     await adapter.host.memoryFinalizer!.whenIdle()
+    const observations = [...priorObservations, ...adapter.host.efficiency!.snapshot().observations]
+    assert.ok(observations.some(item => item.task === 'main'), 'native model requests are observed')
+    assert.ok(observations.some(item => item.task === 'child' && item.parentSessionId === liveAgent.session.id && item.runId), 'delegated native usage retains its parent run binding')
+    assert.ok(observations.some(item => item.task === 'memory-finalization' && item.status === 'completed'), 'post-completion auxiliary work is observed')
+    assert.equal(new Set(observations.map(item => item.callId)).size, observations.length)
     const stored = openConnection(databasePath)
     try {
       const rows = stored.prepare('SELECT status, ideal_json, meditation_json FROM enno_contracts ORDER BY created_at').all<{

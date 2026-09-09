@@ -19,7 +19,7 @@ export interface DshSpawnBackend {
     agentOptions: ModelBinding; maxDepth: number; toolFilter: { allow: readonly string[] }; label: string;
   }): Promise<{ readonly id: string; readonly localAgent?: RoutableAgent; result: Promise<{ output: unknown; stopReason: string }>; dispose(): Promise<void> }>
 }
-interface ChildBinding { readonly parent?: RoutableAgent; readonly parentSessionId: string; readonly model: ModelBinding; readonly toolNames: readonly string[]; readonly root: string; readonly scope: readonly string[]; readonly delegationId: string; child?: RoutableAgent }
+interface ChildBinding { readonly runId: string; readonly parent?: RoutableAgent; readonly parentSessionId: string; readonly model: ModelBinding; readonly toolNames: readonly string[]; readonly root: string; readonly scope: readonly string[]; readonly delegationId: string; child?: RoutableAgent }
 const CHILD_FILE_TOOLS = new Set(['read', 'write', 'edit', 'multiedit', 'str_replace_editor', 'glob', 'grep', 'skill'])
 /** Child shells/custom execution tools cannot enforce a WorkUnit file boundary.
  * The Goki head owns commands and final focused verification in this version. */
@@ -62,6 +62,10 @@ export class DshEnnoDelegation {
   model(agent: object): ModelBinding | undefined { return this.#children.get(agent)?.model }
   isChild(agent: object): boolean { return this.#children.has(agent) }
   parent(agent: object): RoutableAgent | undefined { return this.#children.get(agent)?.parent }
+  observationBinding(agent: object): { runId: string; parentSessionId: string } | undefined {
+    const binding = this.#children.get(agent)
+    return binding === undefined ? undefined : { runId: binding.runId, parentSessionId: binding.parentSessionId }
+  }
   allows(agent: object, tool: string): boolean { return this.#children.get(agent)?.toolNames.includes(tool) ?? true }
   toolDenial(agent: object, name: string, args: unknown): string | undefined {
     const binding = this.#children.get(agent)
@@ -93,12 +97,12 @@ export class DshEnnoDelegation {
         .run(agent.session?.id ?? agent.id, live.delegationId, agent.session?.id ?? agent.id))
       return live.model
     }
-    const stored = await this.runtime.withDatabase(db => db.prepare('SELECT delegation_id, parent_session_id, model_json, tools_json, repository_root, scope_json FROM dsh_enno_delegations WHERE child_session_id = ?')
-      .get<{ delegation_id: string; parent_session_id: string; model_json: string; tools_json: string; repository_root: string; scope_json: string }>(agent.session?.id ?? agent.id))
+    const stored = await this.runtime.withDatabase(db => db.prepare('SELECT delegation_id, run_id, parent_session_id, model_json, tools_json, repository_root, scope_json FROM dsh_enno_delegations WHERE child_session_id = ?')
+      .get<{ delegation_id: string; run_id: string; parent_session_id: string; model_json: string; tools_json: string; repository_root: string; scope_json: string }>(agent.session?.id ?? agent.id))
     if (!stored) return undefined
     const model = ModelBindingSchema.parse(JSON.parse(stored.model_json))
     const toolNames = z.array(z.string()).parse(JSON.parse(stored.tools_json))
-    this.#children.set(agent, { model, toolNames, root: stored.repository_root, scope: z.array(z.string()).parse(JSON.parse(stored.scope_json)), delegationId: stored.delegation_id, parentSessionId: stored.parent_session_id, child: agent })
+    this.#children.set(agent, { runId: stored.run_id, model, toolNames, root: stored.repository_root, scope: z.array(z.string()).parse(JSON.parse(stored.scope_json)), delegationId: stored.delegation_id, parentSessionId: stored.parent_session_id, child: agent })
     return model
   }
   async execute(parent: RoutableAgent, args: unknown, binding: DshToolHostBinding, toolNames: readonly string[], signal: AbortSignal): Promise<unknown> {
@@ -129,7 +133,7 @@ export class DshEnnoDelegation {
       return { model: selection.configuration.roles.worker, unit, root: snapshot.repositoryRoot }
     }))
     if ('replay' in admitted) return admitted.replay
-    const childBinding: ChildBinding = { parent, parentSessionId: parent.session!.id, toolNames: allowedTools, root: admitted.root, scope: admitted.unit.scope, model: admitted.model, delegationId: binding.idempotencyKey }
+    const childBinding: ChildBinding = { runId: binding.runId, parent, parentSessionId: parent.session!.id, toolNames: allowedTools, root: admitted.root, scope: admitted.unit.scope, model: admitted.model, delegationId: binding.idempotencyKey }
     let run: Awaited<ReturnType<DshSpawnBackend['start']>> | undefined
     try {
       run = await this.#pending.run(childBinding, () => this.backend!.start('spawn', {

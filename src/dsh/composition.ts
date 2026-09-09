@@ -43,6 +43,8 @@ export interface DshNativeTurnStoppingPayload {
 }
 
 export interface DshCompositionHost {
+  readonly efficiency?: import('./efficiency.js').DshEfficiencyObserver | undefined
+  readonly configureEfficiency?: (config: { observe: boolean; inputMode: import('./efficiency.js').FinalizationInputMode }) => void
   readonly orca?: import('./orca-types.js').DshOrcaHostServices
   readonly skills?: DshSkillContext['skills']
   readonly systemPrompt?: Parameters<typeof mountSoulPrompt>[0]['systemPrompt']

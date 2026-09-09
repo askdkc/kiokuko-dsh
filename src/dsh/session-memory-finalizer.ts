@@ -7,6 +7,9 @@ import { buildStructuredScope } from '../memory/structured-memory.js'
 import { canonicalContentHash, canonicalJson, containsDisallowedTextCharacters, normalizeTextLineEndings, type EntryKind, type JsonObject } from '../serialization/validate.js'
 import type { DshRuntime } from './runtime.js'
 import { buildDshPromptCacheLayout, type DshPromptCacheLayout } from './prompt-cache.js'
+import { redactDshSourceText } from './message-sources.js'
+import { buildFinalizationRequest, FINALIZATION_EVIDENCE_MAX_BYTES, FINALIZATION_STREAM_MAX_BYTES } from './finalization-request.js'
+import { finalizationObservationScope, normalizeDshUsage, requestSize, modelLabel, type FinalizationInputMode, type EfficiencyObservation } from './efficiency.js'
 
 export const DSH_MEMORY_CAPSULE_MAX_BYTES = 64 * 1024
 const MAX_OUTPUT_TOKENS = 16_384
@@ -63,6 +66,8 @@ export interface DshLlm {
 }
 
 export interface DshMemoryFinalizerOptions {
+  readonly inputMode?: FinalizationInputMode
+  readonly onObservation?: (observation: EfficiencyObservation) => void | PromiseLike<void>
   readonly runtime: Pick<DshRuntime, 'withDatabase'>
   readonly sessionQuery?: DshSessionQuery
   readonly llm?: DshLlm
@@ -103,6 +108,7 @@ export interface DshMemoryCapsule {
 }
 
 interface FinalizationJob extends Record<string, unknown> {
+  readonly inputMode: FinalizationInputMode
   readonly runId: string
   readonly workspace: string
   readonly dshSessionId: string
@@ -122,10 +128,16 @@ interface RequestEnvelope {
 }
 
 interface ModelUsage {
+  reasoningTokens?: number
   inputTokens?: number
   outputTokens?: number
   cacheReadTokens?: number
   cacheWriteTokens?: number
+}
+
+interface FinalizationAttempt {
+  observation?: EfficiencyObservation
+  usage: ModelUsage
 }
 
 interface SummaryResult {
@@ -148,6 +160,8 @@ export interface PreparedFinalizationLog {
   readonly envelope: RequestEnvelope
   readonly digest: string
   readonly eventCount: number
+  /** Target-run surface AND off-surface evidence, only collected for the opt-in mode. */
+  readonly boundedEvidence?: string
 }
 
 const ENTRY_KINDS = new Set<EntryKind>(['fact', 'decision', 'lesson', 'preference', 'reference'])
@@ -444,24 +458,6 @@ function evidenceBudget(envelope: RequestEnvelope, events: readonly DshLogEvent[
   return Math.min(MAX_EVIDENCE_BYTES, remainingTokens * 2)
 }
 
-function finalizationPrompt(evidence: string, job: FinalizationJob): string {
-  const evidenceSection = evidence.length === 0
-    ? 'No additional off-surface evidence was selected; use the conversation prefix.'
-    : `<weighted-dsh-log-evidence>\n${evidence}\n</weighted-dsh-log-evidence>`
-  return [
-    'The DSH task is complete. Produce its durable Kiokuko Memory Capsule.',
-    `The target run is exactly DSH event seq ${job.sourceStartSeq} through ${job.sourceEndSeq}, inclusive.`,
-    'Use the conversation prefix only as context. Store only durable information established, changed, verified, or learned inside the target run.',
-    'Use the weighted target-run evidence below as the authoritative extraction window. Never store facts solely because they appear in an earlier conversation prefix.',
-    'Do not call tools. Do not include hidden reasoning, credentials, raw file dumps, transient chatter, or facts not supported by the log.',
-    'Keep decisions, user preferences, verified outcomes, reusable lessons, important references, failure causes, and recovery constraints.',
-    'Return JSON only, with this exact shape:',
-    '{"schemaVersion":1,"memories":[{"kind":"fact|decision|lesson|preference|reference","title":"...","body":"...","summary":"... or null","confidence":0.0,"tags":["..."]}]}',
-    'The canonical UTF-8 JSON for the entire object must be at most 65536 bytes. Use at most 20 memories. Empty memories are allowed when nothing is durable.',
-    evidenceSection,
-  ].join('\n\n')
-}
-
 function boundedSessionEvents(
   events: readonly DshLogEvent[],
   sourceStartSeq: number,
@@ -564,6 +560,7 @@ export async function reduceDshFinalizationLog(
   events: AsyncIterable<DshLogEvent>,
   sourceStartSeq: number,
   sourceEndSeq: number,
+  inputMode: FinalizationInputMode = 'prefix_reuse',
 ): Promise<PreparedFinalizationLog> {
   const start = validatedSequence(sourceStartSeq, 'sourceStartSeq')
   const end = validatedSequence(sourceEndSeq, 'sourceEndSeq')
@@ -571,6 +568,8 @@ export async function reduceDshFinalizationLog(
   const nodes: number[] = []
   const surfaceEvents = new Map<number, DshLogEvent>()
   const evidenceHeap: EvidenceCandidate[] = []
+  const boundedHeap: EvidenceCandidate[] = []
+  const boundedLatest = new Map<string, EvidenceCandidate>()
   const digest = createHash('sha256')
   let latestHeader: DshLogEvent | undefined
   let latestContext: DshLogEvent | undefined
@@ -618,6 +617,17 @@ export async function reduceDshFinalizationLog(
     eventCount += 1
     lastTargetType = event.type
     considerEvidence(evidenceHeap, event)
+    if (inputMode === 'bounded_evidence' && boundedEvidenceEvent(event)) {
+      const text = redactDshSourceText(eventText(event))
+      if (text !== null) {
+        const candidate = { seq: event.seq, type: event.type, weight: evidenceWeight(event),
+          text: Buffer.byteLength(text, 'utf8') <= 4096 ? text : `${takeUtf8(text, 4000)}\n[evidence excerpt truncated]` }
+        boundedLatest.set(event.type, candidate)
+        if (event.type === 'tool/result' && record(record(event.data)?.error) !== undefined) boundedLatest.set('last-tool-error', candidate)
+        if (boundedHeap.length < MAX_EVIDENCE_CANDIDATES) heapPush(boundedHeap, candidate)
+        else if (worseThan(boundedHeap[0]!, candidate)) heapReplaceWorst(boundedHeap, candidate)
+      }
+    }
     if (event.seq === end) sawEnd = true
   }
 
@@ -644,7 +654,25 @@ export async function reduceDshFinalizationLog(
     envelope,
     digest: digest.digest('hex'),
     eventCount,
+    ...(inputMode === 'bounded_evidence' ? { boundedEvidence: evidenceDocument(
+      [...new Map([
+        ...boundedLatest.values(),
+        ...boundedHeap.sort((left, right) => right.weight - left.weight || right.seq - left.seq),
+      ].map(candidate => [candidate.seq, candidate])).values()],
+      Math.min(FINALIZATION_EVIDENCE_MAX_BYTES, Math.max(0, (envelope.contextWindow ?? 0) - MAX_OUTPUT_TOKENS - 4096)),
+    ) } : {}),
   })
+}
+
+function checkedInputMode(value: unknown): FinalizationInputMode {
+  if (value !== 'prefix_reuse' && value !== 'bounded_evidence') throw new KiokukoError('VALIDATION_ERROR', 'Unsupported finalization input mode')
+  return value
+}
+
+function boundedEvidenceEvent(event: DshLogEvent): boolean {
+  // Plugin snapshots and cross-run compaction summaries can contain earlier tasks.
+  if (event.type === 'user/message') return record(record(event.data)?.source)?.kind !== 'plugin'
+  return ['assistant/message', 'tool/call', 'tool/result', 'goal/change', 'todo/write', 'turn/end'].includes(event.type)
 }
 
 function usageFromChunk(chunk: Record<string, unknown>): ModelUsage | undefined {
@@ -652,7 +680,7 @@ function usageFromChunk(chunk: Record<string, unknown>): ModelUsage | undefined 
   const usage = record(chunk.usage)
   if (usage === undefined) return undefined
   const result: ModelUsage = {}
-  for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
+  for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens'] as const) {
     const value = usage[key]
     if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) result[key] = value
   }
@@ -727,6 +755,9 @@ export class DshMemoryFinalizer {
   readonly #maximumAttempts: number
   readonly #timeoutMs: number
   readonly #onFinalized: DshMemoryFinalizerOptions['onFinalized']
+  #inputMode: FinalizationInputMode
+  #onObservation: DshMemoryFinalizerOptions['onObservation']
+  #configured = false
   #drain: Promise<void> | undefined
   #abort: AbortController | undefined
   #rerunRequested = false
@@ -741,12 +772,22 @@ export class DshMemoryFinalizer {
     this.#maximumAttempts = options.maximumAttempts ?? MAX_ATTEMPTS
     this.#timeoutMs = options.timeoutMs ?? FINALIZATION_TIMEOUT_MS
     this.#onFinalized = options.onFinalized
+    this.#inputMode = checkedInputMode(options.inputMode ?? 'prefix_reuse')
+    this.#onObservation = options.onObservation
+  }
+
+  /** Composition may configure a supplied host only before scheduling or starting it. */
+  configure(inputMode: FinalizationInputMode, onObservation?: DshMemoryFinalizerOptions['onObservation']): void {
+    if (this.#configured) throw new KiokukoError('CONFLICT', 'Memory finalizer configuration is already bound')
+    this.#inputMode = checkedInputMode(inputMode)
+    this.#onObservation = onObservation
   }
 
   get lastDrainError(): unknown { return this.#lastDrainError }
 
   /** Recover a process-interrupted job once, then drain pending work in background. */
   async start(): Promise<void> {
+    this.#configured = true
     if (this.#closed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'DSH memory finalizer is closed')
     await this.#runtime.withDatabase((database) => {
       database.prepare(`
@@ -768,6 +809,7 @@ export class DshMemoryFinalizer {
 
   /** Must be called inside the same transaction that terminalizes the run. */
   scheduleInTransaction(database: SqliteDatabase, input: ScheduleDshMemoryFinalizationInput): void {
+    this.#configured = true
     const runId = validateIdentity(input.runId, 'runId')
     const workspace = validateIdentity(input.workspace, 'workspace')
     const sessionId = validateIdentity(input.dshSessionId, 'dshSessionId')
@@ -786,10 +828,10 @@ export class DshMemoryFinalizer {
     database.prepare(`
       INSERT INTO dsh_memory_finalizations (
         run_id, workspace, dsh_session_id, source_start_seq, source_end_seq,
-        status, attempt_count,
+        status, attempt_count, input_mode,
         scheduled_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?)
-    `).run(runId, workspace, sessionId, boundary.sourceStartSeq, sourceEndSeq, now, now)
+      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+    `).run(runId, workspace, sessionId, boundary.sourceStartSeq, sourceEndSeq, this.#inputMode, now, now)
   }
 
   /** Schedule a background drain after the enclosing transaction commits. */
@@ -837,7 +879,7 @@ export class DshMemoryFinalizer {
       const row = database.prepare(`
         SELECT run_id AS runId, workspace, dsh_session_id AS dshSessionId,
                source_start_seq AS sourceStartSeq, source_end_seq AS sourceEndSeq,
-               attempt_count AS attemptCount, scheduled_at AS scheduledAt
+               attempt_count AS attemptCount, scheduled_at AS scheduledAt, input_mode AS inputMode
           FROM dsh_memory_finalizations
          WHERE status = 'pending' AND attempt_count < ?
          ORDER BY scheduled_at, run_id
@@ -864,50 +906,44 @@ export class DshMemoryFinalizer {
     }
   }
 
-  async #summarize(job: FinalizationJob, prepared: PreparedFinalizationLog, signal: AbortSignal): Promise<SummaryResult> {
+  async #summarize(job: FinalizationJob, prepared: PreparedFinalizationLog, signal: AbortSignal, attempt: FinalizationAttempt): Promise<SummaryResult> {
     if (this.#llm === undefined) throw new KiokukoError('SERVICE_UNAVAILABLE', 'DSH LLM service is unavailable for memory finalization')
-    const { envelope, evidence } = prepared
-    const messages = [...prepared.messages]
+    const { envelope } = prepared
+    const built = buildFinalizationRequest(job, prepared, signal)
+    const request = built.request
+    try { if (this.#onObservation !== undefined) attempt.observation = {
+      callId: `finalization:${job.runId}:${job.attemptCount}`, sessionId: job.dshSessionId, runId: job.runId,
+      task: 'memory-finalization', attempt: job.attemptCount, provider: modelLabel(envelope.provider), model: modelLabel(envelope.model),
+      request: requestSize(request), usage: normalizeDshUsage(undefined), status: 'unknown', durationMs: 0,
+      inputMode: built.inputMode, ...(built.fallback === undefined ? {} : { fallback: built.fallback }),
+    } } catch { /* Optional request measurement cannot reject extraction. */ }
     const cacheLayout = buildDshPromptCacheLayout({
       provider: envelope.provider,
       model: envelope.model,
       ...(envelope.reasoningEffort === undefined ? {} : { reasoning: envelope.reasoningEffort }),
-      toolSchema: envelope.tools ?? [],
+      toolSchema: request.tools ?? [],
       memoryRevision: String(job.sourceEndSeq),
       phase: 'compaction',
       fragments: [
-        { kind: 'system', id: 'dsh-system', value: envelope.system ?? '' },
-        { kind: 'tool_schema', id: 'dsh-tools', value: envelope.tools ?? [] },
+        { kind: 'system', id: 'dsh-system', value: request.system ?? '' },
+        { kind: 'tool_schema', id: 'dsh-tools', value: request.tools ?? [] },
       ],
     })
     try { await this.#sessionQuery?.cachePromptLayout?.(cacheLayout) } catch { /* local cache is non-vetoing */ }
-    messages.push({
-      id: `kiokuko-memory-finalization:${job.runId}`,
-      role: 'user',
-      content: [{ type: 'text', text: finalizationPrompt(evidence, job) }],
-      source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
-    })
     let text = ''
+    let textBytes = 0
     let usage: ModelUsage = {}
     let finish: Record<string, unknown> | undefined
-    for await (const value of this.#llm.stream({
-      provider: envelope.provider,
-      model: envelope.model,
-      ...(envelope.reasoningEffort === undefined ? {} : { reasoningEffort: envelope.reasoningEffort }),
-      messages,
-      ...(envelope.system === undefined ? {} : { system: envelope.system }),
-      ...(envelope.tools === undefined ? {} : { tools: envelope.tools }),
-      temperature: 0,
-      maxTokens: MAX_OUTPUT_TOKENS,
-      signal,
-      sessionId: job.dshSessionId,
-      purpose: 'compaction',
-    })) {
+    for await (const value of this.#llm.stream(request)) {
       const chunk = record(value)
       if (chunk === undefined) continue
-      if (chunk.type === 'text-delta' && typeof chunk.text === 'string') text += chunk.text
+      if (chunk.type === 'text-delta' && typeof chunk.text === 'string') {
+        textBytes += Buffer.byteLength(chunk.text, 'utf8')
+        if (textBytes > FINALIZATION_STREAM_MAX_BYTES) throw new KiokukoError('VALIDATION_ERROR', 'DSH memory finalization stream exceeds its byte limit')
+        text += chunk.text
+      }
       const measured = usageFromChunk(chunk)
-      if (measured !== undefined) usage = measured
+      if (measured !== undefined) { usage = measured; attempt.usage = measured }
       if (chunk.type === 'finish') finish = chunk
     }
     const reason = record(finish?.reason)
@@ -919,6 +955,10 @@ export class DshMemoryFinalizer {
 
   async #process(job: FinalizationJob): Promise<void> {
     const controller = new AbortController()
+    const attempt: FinalizationAttempt = { usage: {} }
+    const started = performance.now()
+    let completed = false
+    let commitUncertain = false
     this.#abort = controller
     const timer = setTimeout(() => controller.abort(new KiokukoError('SERVICE_UNAVAILABLE', 'DSH memory finalization timed out')), this.#timeoutMs)
     try {
@@ -933,8 +973,9 @@ export class DshMemoryFinalizer {
         streamed?.events ?? arrayEvents(snapshot!.events),
         job.sourceStartSeq,
         job.sourceEndSeq,
+        job.inputMode,
       )
-      const result = await this.#summarize(job, prepared, controller.signal)
+      const result = await finalizationObservationScope.run(true, () => this.#summarize(job, prepared, controller.signal, attempt))
       const now = this.#now()
       await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
         const current = database.prepare('SELECT status FROM dsh_memory_finalizations WHERE run_id = ?')
@@ -997,9 +1038,11 @@ export class DshMemoryFinalizer {
           job.runId,
         )
       }))
+      completed = true
       try { await this.#onFinalized?.(job.dshSessionId) } catch { /* cache retention is non-vetoing */ }
     } catch (error) {
       if (error instanceof TransactionCommitUncertainError) {
+        commitUncertain = true
         this.#lastDrainError = error
         return
       }
@@ -1017,6 +1060,13 @@ export class DshMemoryFinalizer {
       }
     } finally {
       clearTimeout(timer)
+      if (attempt.observation !== undefined) {
+        const observation = { ...attempt.observation, usage: normalizeDshUsage(attempt.usage),
+          status: completed ? 'completed' as const : commitUncertain ? 'unknown' as const : controller.signal.aborted ? 'cancelled' as const : 'failed' as const,
+          durationMs: performance.now() - started }
+        // Do not await optional sinks: telemetry must not delay native shutdown or retry.
+        try { void Promise.resolve(this.#onObservation?.(observation)).catch(() => undefined) } catch { /* non-vetoing */ }
+      }
       if (this.#abort === controller) this.#abort = undefined
     }
   }
