@@ -43,3 +43,9 @@ Optional semantic retrieval stores rebuildable vectors beside durable memory.
 The runtime may continue with lexical retrieval when the optional vector lane
 is unavailable; it never converts an unavailable embedding operation into a
 successful vector result.
+
+`migrations/012_memory_evolution.sql` adds versioned episodes, derivation manifests,
+fenced generation jobs and UTC-day call accounting. Search text stays in existing
+entries/revisions. Legacy finalization jobs retain extraction version 1; new
+version 2 jobs can also bind exactly closed failed runs. No historical replay or
+backfill is performed. See [episode/evolution](memory-evolution.md).

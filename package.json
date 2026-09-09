@@ -125,7 +125,9 @@
     "pack:check": "node scripts/pack-check.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run publint && npm run pack:check",
-    "test:orca:package": "npm run build && node scripts/verify-orca-consumer.mjs"
+    "test:orca:package": "npm run build && node scripts/verify-orca-consumer.mjs",
+    "test:evolution": "node scripts/run-tests.mjs tests/dsh/unit/evolution tests/dsh/integration/evolution",
+    "test:evaluation:evolution": "node --import tsx scripts/run-evolution-evaluation.mjs"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

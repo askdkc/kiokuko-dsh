@@ -63,6 +63,7 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
   await ctx.effect(async () => {
     const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
+      host.memoryEvolution?.configure(resolvedConfig.memoryEvolution)
       if (host.configureEfficiency !== undefined) host.configureEfficiency({ observe: resolvedConfig.efficiency.observe, inputMode: resolvedConfig.finalization.inputMode })
       else if (resolvedConfig.efficiency.observe || resolvedConfig.finalization.inputMode !== 'prefix_reuse') {
         throw new Error('The explicit Kiokuko host does not support efficiency/finalization configuration')
@@ -105,7 +106,7 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
     const adapter = createDshHostAdapter(ctx, { orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
-      efficiency: resolvedConfig.efficiency, finalization: resolvedConfig.finalization })
+      efficiency: resolvedConfig.efficiency, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined
     let disposeExport: (() => Promise<void>) | undefined
@@ -133,3 +134,5 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
 export type * from './orca-types.js'
 export { DshOrcaRecorder } from './orca-recorder.js'
 export { DshOrcaStore } from './orca-store.js'
+
+export * from '../memory/evolution/contracts.js'

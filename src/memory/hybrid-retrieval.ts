@@ -1,3 +1,4 @@
+import { evolutionEntryState } from './evolution/store.js';
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import type { PreparedSemanticQuery, VectorSearchBackend } from '../embedding/types.js';
 import { KiokukoError } from '../errors.js';
@@ -57,6 +58,7 @@ interface ExternalMappingRow extends SqliteRow {
 
 /** Decide eligibility only after the entry and the complete parent snapshot decode. */
 export function isRetrievableEntry(database: SqliteDatabase, entry: EntryRecord): boolean {
+  if (!evolutionEntryState(database, entry).eligible) return false;
   const mappingRows = database.prepare(`
     SELECT skill_id
       FROM external_skill_entries

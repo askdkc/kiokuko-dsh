@@ -1,3 +1,7 @@
+import { EVOLUTION_OBSERVATION_EVENT, observationMatchesResult, type EvolutionObservation, type EvolutionObservationBinding } from './evolution-observation.js'
+import { MemoryEvolutionConfig, evidenceReferences, supportingEvidenceDigest, episodeSignature, episodeSignals, parseEpisodeDraft, type EpisodeEvidence, type EpisodeDraft, type EvolutionConfig } from '../memory/evolution/contracts.js'
+import { configureEvolution, saveEpisode, scheduleEvolution, evolutionSettings } from '../memory/evolution/store.js'
+import { EvolutionWorker } from '../memory/evolution/worker.js'
 import { createHash } from 'node:crypto'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { TransactionCommitUncertainError, withImmediateTransaction } from '../db/transaction.js'
@@ -66,6 +70,7 @@ export interface DshLlm {
 }
 
 export interface DshMemoryFinalizerOptions {
+  readonly memoryEvolution?: EvolutionConfig
   readonly inputMode?: FinalizationInputMode
   readonly onObservation?: (observation: EfficiencyObservation) => void | PromiseLike<void>
   readonly runtime: Pick<DshRuntime, 'withDatabase'>
@@ -108,6 +113,8 @@ export interface DshMemoryCapsule {
 }
 
 interface FinalizationJob extends Record<string, unknown> {
+  readonly extractionVersion: 1 | 2
+  readonly outcome: 'completed' | 'failed'
   readonly inputMode: FinalizationInputMode
   readonly runId: string
   readonly workspace: string
@@ -145,6 +152,7 @@ interface SummaryResult {
   readonly capsuleJson: string
   readonly usage: ModelUsage
   readonly envelope: RequestEnvelope
+  readonly episode?: unknown
 }
 
 interface EvidenceCandidate {
@@ -161,6 +169,7 @@ export interface PreparedFinalizationLog {
   readonly digest: string
   readonly eventCount: number
   /** Target-run surface AND off-surface evidence, only collected for the opt-in mode. */
+  readonly episodeEvidence?: readonly EpisodeEvidence[]
   readonly boundedEvidence?: string
 }
 
@@ -300,6 +309,7 @@ function eventText(event: DshLogEvent): string {
   if (event.type === 'compaction/summary') {
     return typeof data?.summary === 'string' ? data.summary : contentText(data?.summary)
   }
+  if (event.type === EVOLUTION_OBSERVATION_EVENT) return ''
   if (event.type === 'turn/end') return genericText(data?.reason)
   if (event.type === 'goal/change') return genericText(data)
   if (/^(?:turn|step)\/(?:start|end)$/u.test(event.type)
@@ -484,7 +494,7 @@ function boundedSessionEvents(
   return { throughEnd: events.slice(0, endIndex + 1), target }
 }
 
-function parseCapsule(raw: string): { capsule: DshMemoryCapsule; capsuleJson: string } {
+export function parseCapsule(raw: string): { capsule: DshMemoryCapsule; capsuleJson: string; episode?: unknown } {
   const trimmed = raw.trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '')
   let parsed: unknown
   try { parsed = JSON.parse(trimmed) } catch (cause) {
@@ -493,10 +503,11 @@ function parseCapsule(raw: string): { capsule: DshMemoryCapsule; capsuleJson: st
     throw error
   }
   const root = record(parsed)
-  if (root?.schemaVersion !== 1 || !Array.isArray(root.memories) || root.memories.length > 20
-    || Object.keys(root).some((key) => key !== 'schemaVersion' && key !== 'memories')) {
+  if ((root?.schemaVersion !== 1 && root?.schemaVersion !== 2) || !Array.isArray(root.memories) || root.memories.length > 20
+    || Object.keys(root).some((key) => key !== 'schemaVersion' && key !== 'memories' && !(root.schemaVersion === 2 && key === 'episode'))) {
     throw new KiokukoError('VALIDATION_ERROR', 'DSH memory finalizer returned an invalid capsule envelope')
   }
+  if (Buffer.byteLength(canonicalJson(root), 'utf8') > DSH_MEMORY_CAPSULE_MAX_BYTES) throw new KiokukoError('VALIDATION_ERROR', 'DSH memory capsule exceeds 65536 UTF-8 bytes')
   const memories = root.memories.map((value, index): DshMemoryCapsuleItem => {
     const item = record(value)
     if (item === undefined || typeof item.kind !== 'string' || !ENTRY_KINDS.has(item.kind as EntryKind)) {
@@ -535,7 +546,7 @@ function parseCapsule(raw: string): { capsule: DshMemoryCapsule; capsuleJson: st
   if (Buffer.byteLength(capsuleJson, 'utf8') > DSH_MEMORY_CAPSULE_MAX_BYTES) {
     throw new KiokukoError('VALIDATION_ERROR', 'DSH memory capsule exceeds 65536 UTF-8 bytes')
   }
-  return { capsule, capsuleJson }
+  return { capsule, capsuleJson, ...(root.schemaVersion === 2 && root.episode !== undefined ? { episode: root.episode } : {}) }
 }
 
 function logDigest(events: readonly DshLogEvent[]): string {
@@ -561,6 +572,7 @@ export async function reduceDshFinalizationLog(
   sourceStartSeq: number,
   sourceEndSeq: number,
   inputMode: FinalizationInputMode = 'prefix_reuse',
+  identity?: EvolutionObservationBinding,
 ): Promise<PreparedFinalizationLog> {
   const start = validatedSequence(sourceStartSeq, 'sourceStartSeq')
   const end = validatedSequence(sourceEndSeq, 'sourceEndSeq')
@@ -570,6 +582,9 @@ export async function reduceDshFinalizationLog(
   const evidenceHeap: EvidenceCandidate[] = []
   const boundedHeap: EvidenceCandidate[] = []
   const boundedLatest = new Map<string, EvidenceCandidate>()
+  const episodeEvidence: EpisodeEvidence[] = []
+  const nativeCalls = new Map<string, {name:string;seq:number}>()
+  const nativeProofs = new Map<string, EvolutionObservation>()
   const digest = createHash('sha256')
   let latestHeader: DshLogEvent | undefined
   let latestContext: DshLogEvent | undefined
@@ -617,6 +632,28 @@ export async function reduceDshFinalizationLog(
     eventCount += 1
     lastTargetType = event.type
     considerEvidence(evidenceHeap, event)
+    const nativeData = record(event.data)
+    if (event.type === 'tool/call' && typeof nativeData?.callId === 'string' && typeof nativeData.name === 'string') {
+      nativeCalls.set(nativeData.callId, {name:nativeData.name,seq:event.seq})
+      if (nativeCalls.size > 256) nativeCalls.delete(nativeCalls.keys().next().value!)
+    }
+    if (event.type === EVOLUTION_OBSERVATION_EVENT && identity && nativeData?.schemaVersion === 1 &&
+      nativeData.runId === identity.runId && nativeData.workspace === identity.workspace && nativeData.sessionId === identity.sessionId &&
+      typeof nativeData.callId === 'string' && nativeCalls.get(nativeData.callId)?.seq === nativeData.callSeq &&
+      (Number.isSafeInteger(nativeData.exitCode) || nativeData.exitCode === null && nativeData.failed === true) && typeof nativeData.failed === 'boolean' && (nativeData.failed || nativeData.exitCode === 0) && typeof nativeData.presentationHash === 'string') {
+      nativeProofs.set(nativeData.callId, nativeData as unknown as EvolutionObservation)
+      if (nativeProofs.size > 256) nativeProofs.delete(nativeProofs.keys().next().value!)
+    }
+    const resultCallId = record(record(nativeData?.message)?.source)?.callId ?? nativeData?.callId
+    const toolName = typeof resultCallId === 'string' ? nativeCalls.get(resultCallId)?.name : undefined
+    const proof = typeof resultCallId === 'string' ? nativeProofs.get(resultCallId) : undefined
+    const observation = episodeEvidenceForEvent(event, toolName, proof && observationMatchesResult(proof,event.data) ? proof : undefined)
+    if (event.type === 'tool/result' && typeof resultCallId === 'string') { nativeCalls.delete(resultCallId); nativeProofs.delete(resultCallId) }
+    if (observation) {
+      episodeEvidence.push(observation)
+      // Retain a bounded tail of native observations. Truncation is explicit in the prompt.
+      while (episodeEvidence.length > 64 || Buffer.byteLength(JSON.stringify(episodeEvidence)) > 24000) episodeEvidence.shift()
+    }
     if (inputMode === 'bounded_evidence' && boundedEvidenceEvent(event)) {
       const text = redactDshSourceText(eventText(event))
       if (text !== null) {
@@ -654,6 +691,7 @@ export async function reduceDshFinalizationLog(
     envelope,
     digest: digest.digest('hex'),
     eventCount,
+    episodeEvidence: Object.freeze(episodeEvidence),
     ...(inputMode === 'bounded_evidence' ? { boundedEvidence: evidenceDocument(
       [...new Map([
         ...boundedLatest.values(),
@@ -757,6 +795,9 @@ export class DshMemoryFinalizer {
   readonly #onFinalized: DshMemoryFinalizerOptions['onFinalized']
   #inputMode: FinalizationInputMode
   #onObservation: DshMemoryFinalizerOptions['onObservation']
+  #evolutionConfig: EvolutionConfig
+  #evolutionWorker: EvolutionWorker | undefined
+  #startup: Promise<void> | undefined
   #configured = false
   #drain: Promise<void> | undefined
   #abort: AbortController | undefined
@@ -765,6 +806,7 @@ export class DshMemoryFinalizer {
   #lastDrainError: unknown
 
   constructor(options: DshMemoryFinalizerOptions) {
+    this.#evolutionConfig = options.memoryEvolution ?? MemoryEvolutionConfig.parse({})
     this.#runtime = options.runtime
     this.#sessionQuery = options.sessionQuery
     this.#llm = options.llm
@@ -783,10 +825,21 @@ export class DshMemoryFinalizer {
     this.#onObservation = onObservation
   }
 
+  configureMemoryEvolution(config: EvolutionConfig): void {
+    if (this.#configured) throw new KiokukoError('CONFLICT', 'Evolution configuration already started')
+    this.#evolutionConfig = config
+  }
+
   get lastDrainError(): unknown { return this.#lastDrainError }
 
   /** Recover a process-interrupted job once, then drain pending work in background. */
   async start(): Promise<void> {
+    if (this.#closed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'DSH memory finalizer is closed')
+    this.#startup ??= this.#startOnce()
+    await this.#startup
+  }
+
+  async #startOnce(): Promise<void> {
     this.#configured = true
     if (this.#closed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'DSH memory finalizer is closed')
     await this.#runtime.withDatabase((database) => {
@@ -796,6 +849,11 @@ export class DshMemoryFinalizer {
          WHERE status IN ('processing', 'failed') AND attempt_count < ?
       `).run(this.#now(), this.#maximumAttempts)
     })
+    await this.#runtime.withDatabase(database => configureEvolution(database, this.#evolutionConfig.mode))
+    if (this.#closed) return
+    this.#evolutionWorker = new EvolutionWorker({ runtime: this.#runtime, config: this.#evolutionConfig,
+      ...(this.#llm === undefined ? {} : { llm: this.#llm }), now: this.#now })
+    this.#evolutionWorker.kick()
     this.kick()
   }
 
@@ -828,10 +886,10 @@ export class DshMemoryFinalizer {
     database.prepare(`
       INSERT INTO dsh_memory_finalizations (
         run_id, workspace, dsh_session_id, source_start_seq, source_end_seq,
-        status, attempt_count, input_mode,
+        status, attempt_count, input_mode, extraction_version,
         scheduled_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
-    `).run(runId, workspace, sessionId, boundary.sourceStartSeq, sourceEndSeq, this.#inputMode, now, now)
+      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+    `).run(runId, workspace, sessionId, boundary.sourceStartSeq, sourceEndSeq, this.#inputMode, this.#evolutionConfig.mode === 'off' ? 1 : 2, now, now)
   }
 
   /** Schedule a background drain after the enclosing transaction commits. */
@@ -859,6 +917,7 @@ export class DshMemoryFinalizer {
       await drain
       await Promise.resolve()
     }
+    await this.#evolutionWorker?.whenIdle()
   }
 
   /** Explicitly retry one contained failure without changing DSH session state. */
@@ -879,7 +938,8 @@ export class DshMemoryFinalizer {
       const row = database.prepare(`
         SELECT run_id AS runId, workspace, dsh_session_id AS dshSessionId,
                source_start_seq AS sourceStartSeq, source_end_seq AS sourceEndSeq,
-               attempt_count AS attemptCount, scheduled_at AS scheduledAt, input_mode AS inputMode
+               attempt_count AS attemptCount, scheduled_at AS scheduledAt, input_mode AS inputMode, extraction_version AS extractionVersion,
+               (SELECT status FROM ledger_runs r WHERE r.run_id=dsh_memory_finalizations.run_id) AS outcome
           FROM dsh_memory_finalizations
          WHERE status = 'pending' AND attempt_count < ?
          ORDER BY scheduled_at, run_id
@@ -974,8 +1034,17 @@ export class DshMemoryFinalizer {
         job.sourceStartSeq,
         job.sourceEndSeq,
         job.inputMode,
+        {runId:job.runId,workspace:job.workspace,sessionId:job.dshSessionId},
       )
-      const result = await finalizationObservationScope.run(true, () => this.#summarize(job, prepared, controller.signal, attempt))
+      const extractEpisode = job.extractionVersion === 2 && await this.#runtime.withDatabase(database => evolutionSettings(database).mode !== 'off')
+      const requestJob = extractEpisode ? job : { ...job, extractionVersion: 1 as const }
+      const result = await finalizationObservationScope.run(true, () => this.#summarize(requestJob, prepared, controller.signal, attempt))
+      let episode: EpisodeDraft | undefined
+      let episodeError: string | undefined
+      if (extractEpisode) {
+        try { episode = parseEpisodeDraft(result.episode, prepared.episodeEvidence ?? []) }
+        catch { episodeError = 'invalid_or_missing_episode' }
+      }
       const now = this.#now()
       await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
         const current = database.prepare('SELECT status FROM dsh_memory_finalizations WHERE run_id = ?')
@@ -1015,6 +1084,27 @@ export class DshMemoryFinalizer {
           VALUES (?, ?, ?, ?)
         `)
         saved.forEach((entry, ordinal) => link.run(job.runId, entry.id, ordinal, now))
+        if (episode && evolutionSettings(database).mode !== 'off') {
+          database.exec('SAVEPOINT evolution_episode')
+          try {
+            const evidence = [...(prepared.episodeEvidence ?? [])]
+            saveEpisode(database, {
+              runId: job.runId, workspace: job.workspace, sessionId: job.dshSessionId,
+              start: job.sourceStartSeq, end: job.sourceEndSeq, logDigest: prepared.digest, outcome: job.outcome,
+              evidenceDigest: supportingEvidenceDigest(episode, evidence),
+              signature: episodeSignature(job.workspace, episode), draft: episode, evidence: evidenceReferences(evidence),
+              sources: saved.map(e => ({ entryId: e.id, revision: e.revision, hash: e.contentHash })),
+              ...episodeSignals(episode, evidence),
+            }, now, evidence)
+            scheduleEvolution(database, job.runId, { ...result.envelope, sessionId: job.dshSessionId }, now)
+            database.exec('RELEASE evolution_episode')
+          } catch {
+            database.exec('ROLLBACK TO evolution_episode')
+            database.exec('RELEASE evolution_episode')
+            episodeError = 'episode_persistence_rejected'
+          }
+        }
+        if (episodeError) database.prepare('UPDATE dsh_memory_finalizations SET episode_error=? WHERE run_id=?').run(episodeError, job.runId)
         database.prepare(`
           UPDATE dsh_memory_finalizations
              SET status = 'completed', log_event_count = ?,
@@ -1039,6 +1129,7 @@ export class DshMemoryFinalizer {
         )
       }))
       completed = true
+      this.#evolutionWorker?.kick()
       try { await this.#onFinalized?.(job.dshSessionId) } catch { /* cache retention is non-vetoing */ }
     } catch (error) {
       if (error instanceof TransactionCommitUncertainError) {
@@ -1077,5 +1168,25 @@ export class DshMemoryFinalizer {
     this.#closed = true
     this.#abort?.abort(new KiokukoError('SERVICE_UNAVAILABLE', 'DSH memory finalizer is closing'))
     await this.#drain
+    await this.#evolutionWorker?.dispose()
   }
+}
+
+/** Only native evidence is eligible; plugin snapshots and assistant assertions are excluded. */
+export function episodeEvidenceForEvent(event: DshLogEvent, boundToolName?: string, proof?: EvolutionObservation): EpisodeEvidence | undefined {
+  const data = record(event.data)
+  if (!data || record(data.source)?.kind === 'plugin' || record(record(data.message)?.source)?.kind === 'plugin') return undefined
+  const kind = event.type === 'user/message' ? 'user' : event.type === 'tool/call' ? 'action' : event.type === 'tool/result' ? 'result' : undefined
+  if (!kind || kind === 'result' && boundToolName === undefined) return undefined
+  // Memory/control tools must not recycle previous knowledge into new supporting evidence.
+  if (/kiok|memory|recall|enno|memos|curator|task_prepare|task_context_read/i.test(String(boundToolName ?? data.name ?? ''))) return undefined
+  const text = redactDshSourceText(eventText(event))
+  if (!text || text.length > 4000) return undefined
+  const execution = record(data.result) ?? record(data.meta) ?? record(record(data.message)?.output) ?? data
+  const exitCode = execution.exitCode ?? execution.exit_code
+  const content = record(data.message)?.content
+  const toolError = Array.isArray(content) && content.some(block => record(block)?.type === 'tool-result' && record(block)?.isError === true)
+  const outcome = kind !== 'result' ? 'unknown' : proof ? proof.failed ? 'failed' : 'passed' : toolError || record(data.error) !== undefined || execution.timedOut === true || execution.aborted === true || execution.signal !== undefined && execution.signal !== null || Number.isSafeInteger(exitCode) && exitCode !== 0
+    ? 'failed' : exitCode === 0 ? 'passed' : 'unknown'
+  return { seq: event.seq, kind, text, outcome }
 }

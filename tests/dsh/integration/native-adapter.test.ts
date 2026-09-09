@@ -392,7 +392,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       blocked.close()
     }
     const blockedClose = await adapter.host.resolveIdleClose!('fallback-agent', fallbackSession.id, fallbackSession, fallbackAgent)
-    assert.deepEqual(blockedClose, { runId: fallbackRun, status: 'failed' })
+    assert.deepEqual(blockedClose, { runId: fallbackRun, status: 'failed', terminalTurn: 1 })
     await adapter.host.lifecycle!.closeTurn(blockedClose!)
     assert.equal(adapter.host.resolveSessionRunId!(fallbackSession), undefined)
     assert.equal(adapter.host.ponytailModes!.isActive('dsh:fallback-agent:native-fallback:1'), false)

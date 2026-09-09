@@ -1,3 +1,5 @@
+import { MemoryEvolutionConfig } from '../memory/evolution/contracts.js'
+export { MemoryEvolutionConfig }
 import { z } from 'zod'
 import { ModelRouteSchema } from './model-configuration.js'
 
@@ -32,5 +34,6 @@ export const Config = z.object({
   orca: OrcaConfig.prefault({}),
   efficiency: EfficiencyConfig.prefault({}),
   finalization: FinalizationConfig.prefault({}),
+  memoryEvolution: MemoryEvolutionConfig.prefault({}),
 })
 export type Config = z.input<typeof Config>

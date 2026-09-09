@@ -1,3 +1,4 @@
+import { formatEvolutionStatus } from '../memory/evolution/status.js'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingContext } from './enno-controller.js'
@@ -43,6 +44,7 @@ export interface DshNativeTurnStoppingPayload {
 }
 
 export interface DshCompositionHost {
+  readonly memoryEvolution?: { configure: (config: import('../memory/evolution/contracts.js').EvolutionConfig) => void; status: (sessionId: string) => Promise<Record<string, unknown>> }
   readonly efficiency?: import('./efficiency.js').DshEfficiencyObserver | undefined
   readonly configureEfficiency?: (config: { observe: boolean; inputMode: import('./efficiency.js').FinalizationInputMode }) => void
   readonly orca?: import('./orca-types.js').DshOrcaHostServices
@@ -215,6 +217,19 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       const closeFinalizer = async () => host.memoryFinalizer!.dispose()
       setupResourceDisposers.push(closeFinalizer)
       if (host.memoryFinalizerOwner !== 'host') cleanupDisposers.push(closeFinalizer)
+    }
+    if (host.memoryEvolution && host.commands) {
+      ingressDisposers.push(host.commands.register({ name: 'kioku-evolution', description: 'Memory evolution status for this project',
+        handler: async invocation => {
+          const sessionId = invocation.agent?.session?.id ?? invocation.agent?.sessionId
+          if (!sessionId || !['', 'status', 'status --json'].includes(invocation.rawInput.trim())) return { kind: 'error', text: 'Use /kioku-evolution status [--json] in the current session.' }
+          try {
+            const status = await host.memoryEvolution!.status(sessionId)
+            return { kind: 'success', text: invocation.rawInput.includes('--json') ? JSON.stringify(status) :
+              formatEvolutionStatus(status) }
+          } catch { return { kind: 'error', text: 'このセッションの記憶学習状態を取得できません。' } }
+        },
+      }))
     }
     if (host.boundaryWorker !== undefined) {
       host.boundaryWorker.kick()

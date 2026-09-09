@@ -1,3 +1,4 @@
+import { diversifyEpisodes } from '../memory/evolution/store.js';
 import { boundTaskRetrievalQuery } from '../memory/retrieval-query.js';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { KiokukoError } from '../errors.js';
@@ -696,7 +697,7 @@ async function prepareScopedContext(
     if (previous === undefined || item.score > previous.score) candidates.set(item.entryId, item);
   }
   const ordered = [...candidates.values()].sort((left, right) => right.score - left.score || compareCanonicalStrings(left.entryId, right.entryId));
-  const fitted = fitScopedItems(ordered, limit, characterBudget);
+  const fitted = fitScopedItems(diversifyEpisodes(database, ordered), limit, characterBudget);
   return {
     result: {
       project: project ?? null,

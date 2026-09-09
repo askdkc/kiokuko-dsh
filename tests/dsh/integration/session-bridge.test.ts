@@ -71,3 +71,18 @@ test('checkpoint failure is contained and prevents a false Kiokuko close', async
   assert.equal(closes, 0)
   await lifecycle.dispose()
 })
+
+test('failed native idle closes after checkpoint with exact end seq, or without guessing a missing boundary', async () => {
+  for (const hasEnd of [true,false]) {
+    const order:string[]=[]
+    let listener:((event:any)=>unknown)|undefined
+    const session={id:'failed-native',snapshotEvents:()=>hasEnd?[{type:'turn/end',seq:12,time:1,data:{turn:3,reason:{kind:'failed'}}}]:[]}
+    const lifecycle=new DshRunLifecycle({closeRun:close=>{
+      order.push('close');assert.equal(close.status,'failed');assert.equal(close.sourceEndSeq,hasEnd?12:undefined)
+    }})
+    const dispose=mountDshIdleLifecycle({on(_name,next){listener=next;return()=>{listener=undefined}}},lifecycle,
+      async()=>({runId:'failed-run',status:'failed',terminalTurn:3}),async native=>{assert.equal(native,session);order.push('flush')})
+    await listener?.({agent:{id:'agent',session},status:'idle'})
+    assert.deepEqual(order,['flush','close']);dispose();await lifecycle.dispose()
+  }
+})
