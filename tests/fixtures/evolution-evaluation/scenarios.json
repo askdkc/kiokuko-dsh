@@ -1,0 +1,2117 @@
+{
+  "schemaVersion": 1,
+  "provenance": "Hand-authored synthetic scenarios; not live user history. Splits fixed before evaluation.",
+  "scenarios": [
+    {
+      "id": "sqlite-lock",
+      "split": "development",
+      "anchors": {
+        "error": "SQLITE_BUSY",
+        "tool": "sqlite",
+        "target": "migration",
+        "version": "3.46"
+      },
+      "goal": "書き込みロックを解放して再実行する",
+      "procedure": "Close the outstanding write transaction before retrying migration.",
+      "verification": "Run migration and verify schema version.",
+      "boundary": "Do not use for corrupt databases.",
+      "episodes": [
+        {
+          "case": "sqlite-lock-input-0",
+          "observation": "migration fixture empty input: SQLITE_BUSY; Close the outstanding write transaction before retrying migration.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "sqlite-lock-input-1",
+          "observation": "migration fixture existing record: SQLITE_BUSY; Close the outstanding write transaction before retrying migration.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "sqlite-lock-input-2",
+          "observation": "migration fixture concurrent request: SQLITE_BUSY; Close the outstanding write transaction before retrying migration.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "書き込みロックを解放して再実行する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "sqlite-lock"
+          ]
+        },
+        {
+          "text": "SQLITE_BUSY sqlite migration",
+          "exact": true,
+          "relevantScenarioIds": [
+            "sqlite-lock"
+          ]
+        },
+        {
+          "text": "Close the outstanding write transaction before retrying migration.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "sqlite-lock"
+          ]
+        },
+        {
+          "text": "migration の作業で SQLITE_BUSY が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "sqlite-lock"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "node-esm",
+      "split": "development",
+      "anchors": {
+        "error": "ERR_REQUIRE_ESM",
+        "tool": "node",
+        "target": "loader",
+        "version": "24"
+      },
+      "goal": "ESM を dynamic import で読み込む",
+      "procedure": "Use dynamic import for the ESM module.",
+      "verification": "Execute the import smoke test.",
+      "boundary": "Do not rewrite unrelated CommonJS consumers.",
+      "episodes": [
+        {
+          "case": "node-esm-input-0",
+          "observation": "loader fixture empty input: ERR_REQUIRE_ESM; Use dynamic import for the ESM module.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "node-esm-input-1",
+          "observation": "loader fixture existing record: ERR_REQUIRE_ESM; Use dynamic import for the ESM module.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "node-esm-input-2",
+          "observation": "loader fixture concurrent request: ERR_REQUIRE_ESM; Use dynamic import for the ESM module.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "ESM を dynamic import で読み込む",
+          "exact": false,
+          "relevantScenarioIds": [
+            "node-esm"
+          ]
+        },
+        {
+          "text": "ERR_REQUIRE_ESM node loader",
+          "exact": true,
+          "relevantScenarioIds": [
+            "node-esm"
+          ]
+        },
+        {
+          "text": "Use dynamic import for the ESM module.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "node-esm"
+          ]
+        },
+        {
+          "text": "loader の作業で ERR_REQUIRE_ESM が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "node-esm"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "ts-path",
+      "split": "development",
+      "anchors": {
+        "error": "TS2307",
+        "tool": "typescript",
+        "target": "resolver",
+        "version": "5.9"
+      },
+      "goal": "ビルド時のモジュール解決を確認する",
+      "procedure": "Correct the configured module resolution path.",
+      "verification": "Run the focused typecheck.",
+      "boundary": "Do not conceal missing runtime packages with declarations.",
+      "episodes": [
+        {
+          "case": "ts-path-input-0",
+          "observation": "resolver fixture empty input: TS2307; Correct the configured module resolution path.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "ts-path-input-1",
+          "observation": "resolver fixture existing record: TS2307; Correct the configured module resolution path.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "ts-path-input-2",
+          "observation": "resolver fixture concurrent request: TS2307; Correct the configured module resolution path.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "ビルド時のモジュール解決を確認する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "ts-path"
+          ]
+        },
+        {
+          "text": "TS2307 typescript resolver",
+          "exact": true,
+          "relevantScenarioIds": [
+            "ts-path"
+          ]
+        },
+        {
+          "text": "Correct the configured module resolution path.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "ts-path"
+          ]
+        },
+        {
+          "text": "resolver の作業で TS2307 が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "ts-path"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "http-retry",
+      "split": "development",
+      "anchors": {
+        "error": "HTTP_429",
+        "tool": "http",
+        "target": "retry",
+        "version": "1"
+      },
+      "goal": "レート制限時の待機を尊重する",
+      "procedure": "Honor Retry-After before a bounded retry.",
+      "verification": "Check the next response status.",
+      "boundary": "Do not retry non-idempotent writes automatically.",
+      "episodes": [
+        {
+          "case": "http-retry-input-0",
+          "observation": "retry fixture empty input: HTTP_429; Honor Retry-After before a bounded retry.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "http-retry-input-1",
+          "observation": "retry fixture existing record: HTTP_429; Honor Retry-After before a bounded retry.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "http-retry-input-2",
+          "observation": "retry fixture concurrent request: HTTP_429; Honor Retry-After before a bounded retry.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "レート制限時の待機を尊重する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "http-retry"
+          ]
+        },
+        {
+          "text": "HTTP_429 http retry",
+          "exact": true,
+          "relevantScenarioIds": [
+            "http-retry"
+          ]
+        },
+        {
+          "text": "Honor Retry-After before a bounded retry.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "http-retry"
+          ]
+        },
+        {
+          "text": "retry の作業で HTTP_429 が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "http-retry"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "utf8",
+      "split": "development",
+      "anchors": {
+        "error": "INVALID_UTF8",
+        "tool": "decoder",
+        "target": "import",
+        "version": "1"
+      },
+      "goal": "壊れた入力を置換せず拒否する",
+      "procedure": "Reject malformed UTF-8 before import.",
+      "verification": "Check that no records were written.",
+      "boundary": "Do not substitute replacement characters.",
+      "episodes": [
+        {
+          "case": "utf8-input-0",
+          "observation": "import fixture empty input: INVALID_UTF8; Reject malformed UTF-8 before import.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "utf8-input-1",
+          "observation": "import fixture existing record: INVALID_UTF8; Reject malformed UTF-8 before import.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "utf8-input-2",
+          "observation": "import fixture concurrent request: INVALID_UTF8; Reject malformed UTF-8 before import.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "壊れた入力を置換せず拒否する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "utf8"
+          ]
+        },
+        {
+          "text": "INVALID_UTF8 decoder import",
+          "exact": true,
+          "relevantScenarioIds": [
+            "utf8"
+          ]
+        },
+        {
+          "text": "Reject malformed UTF-8 before import.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "utf8"
+          ]
+        },
+        {
+          "text": "import の作業で INVALID_UTF8 が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "utf8"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "checksum",
+      "split": "development",
+      "anchors": {
+        "error": "HASH_MISMATCH",
+        "tool": "migrator",
+        "target": "schema",
+        "version": "12"
+      },
+      "goal": "変更されたマイグレーションを検出する",
+      "procedure": "Compare the installed checksum before applying migration.",
+      "verification": "Verify the original database is unchanged.",
+      "boundary": "Do not overwrite the stored checksum.",
+      "episodes": [
+        {
+          "case": "checksum-input-0",
+          "observation": "schema fixture empty input: HASH_MISMATCH; Compare the installed checksum before applying migration.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "checksum-input-1",
+          "observation": "schema fixture existing record: HASH_MISMATCH; Compare the installed checksum before applying migration.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "checksum-input-2",
+          "observation": "schema fixture concurrent request: HASH_MISMATCH; Compare the installed checksum before applying migration.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "変更されたマイグレーションを検出する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "checksum"
+          ]
+        },
+        {
+          "text": "HASH_MISMATCH migrator schema",
+          "exact": true,
+          "relevantScenarioIds": [
+            "checksum"
+          ]
+        },
+        {
+          "text": "Compare the installed checksum before applying migration.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "checksum"
+          ]
+        },
+        {
+          "text": "schema の作業で HASH_MISMATCH が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "checksum"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "stale",
+      "split": "development",
+      "anchors": {
+        "error": "STALE_REVISION",
+        "tool": "store",
+        "target": "entry",
+        "version": "2"
+      },
+      "goal": "古い更新要求を排除する",
+      "procedure": "Reload the current revision and prepare a new update.",
+      "verification": "Assert that the stale write was rejected.",
+      "boundary": "Do not force an overwrite.",
+      "episodes": [
+        {
+          "case": "stale-input-0",
+          "observation": "entry fixture empty input: STALE_REVISION; Reload the current revision and prepare a new update.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "stale-input-1",
+          "observation": "entry fixture existing record: STALE_REVISION; Reload the current revision and prepare a new update.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "stale-input-2",
+          "observation": "entry fixture concurrent request: STALE_REVISION; Reload the current revision and prepare a new update.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "古い更新要求を排除する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "stale"
+          ]
+        },
+        {
+          "text": "STALE_REVISION store entry",
+          "exact": true,
+          "relevantScenarioIds": [
+            "stale"
+          ]
+        },
+        {
+          "text": "Reload the current revision and prepare a new update.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "stale"
+          ]
+        },
+        {
+          "text": "entry の作業で STALE_REVISION が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "stale"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "lease",
+      "split": "development",
+      "anchors": {
+        "error": "LEASE_EXPIRED",
+        "tool": "worker",
+        "target": "job",
+        "version": "1"
+      },
+      "goal": "期限切れワーカーの結果を拒否する",
+      "procedure": "Reject the result from the expired claim.",
+      "verification": "Check the current claim owns the result.",
+      "boundary": "Do not reuse the previous claim token.",
+      "episodes": [
+        {
+          "case": "lease-input-0",
+          "observation": "job fixture empty input: LEASE_EXPIRED; Reject the result from the expired claim.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "lease-input-1",
+          "observation": "job fixture existing record: LEASE_EXPIRED; Reject the result from the expired claim.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "lease-input-2",
+          "observation": "job fixture concurrent request: LEASE_EXPIRED; Reject the result from the expired claim.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "期限切れワーカーの結果を拒否する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "lease"
+          ]
+        },
+        {
+          "text": "LEASE_EXPIRED worker job",
+          "exact": true,
+          "relevantScenarioIds": [
+            "lease"
+          ]
+        },
+        {
+          "text": "Reject the result from the expired claim.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "lease"
+          ]
+        },
+        {
+          "text": "job の作業で LEASE_EXPIRED が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "lease"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "json",
+      "split": "development",
+      "anchors": {
+        "error": "INVALID_JSON",
+        "tool": "parser",
+        "target": "capsule",
+        "version": "2"
+      },
+      "goal": "不正な要約結果を分離する",
+      "procedure": "Reject the malformed episode while preserving valid ordinary memories.",
+      "verification": "Read the saved ordinary entries.",
+      "boundary": "Do not infer missing episode fields.",
+      "episodes": [
+        {
+          "case": "json-input-0",
+          "observation": "capsule fixture empty input: INVALID_JSON; Reject the malformed episode while preserving valid ordinary memories.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "json-input-1",
+          "observation": "capsule fixture existing record: INVALID_JSON; Reject the malformed episode while preserving valid ordinary memories.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "json-input-2",
+          "observation": "capsule fixture concurrent request: INVALID_JSON; Reject the malformed episode while preserving valid ordinary memories.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "不正な要約結果を分離する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "json"
+          ]
+        },
+        {
+          "text": "INVALID_JSON parser capsule",
+          "exact": true,
+          "relevantScenarioIds": [
+            "json"
+          ]
+        },
+        {
+          "text": "Reject the malformed episode while preserving valid ordinary memories.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "json"
+          ]
+        },
+        {
+          "text": "capsule の作業で INVALID_JSON が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "json"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "cjk",
+      "split": "development",
+      "anchors": {
+        "error": "FTS_EMPTY",
+        "tool": "fts",
+        "target": "query",
+        "version": "5"
+      },
+      "goal": "日本語の部分一致を扱う",
+      "procedure": "Use the bounded CJK substring retrieval lane.",
+      "verification": "Search the Japanese error phrase.",
+      "boundary": "Do not turn the query into an unrestricted scan.",
+      "episodes": [
+        {
+          "case": "cjk-input-0",
+          "observation": "query fixture empty input: FTS_EMPTY; Use the bounded CJK substring retrieval lane.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "cjk-input-1",
+          "observation": "query fixture existing record: FTS_EMPTY; Use the bounded CJK substring retrieval lane.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "cjk-input-2",
+          "observation": "query fixture concurrent request: FTS_EMPTY; Use the bounded CJK substring retrieval lane.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "日本語の部分一致を扱う",
+          "exact": false,
+          "relevantScenarioIds": [
+            "cjk"
+          ]
+        },
+        {
+          "text": "FTS_EMPTY fts query",
+          "exact": true,
+          "relevantScenarioIds": [
+            "cjk"
+          ]
+        },
+        {
+          "text": "Use the bounded CJK substring retrieval lane.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "cjk"
+          ]
+        },
+        {
+          "text": "query の作業で FTS_EMPTY が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "cjk"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "permissions",
+      "split": "heldout",
+      "anchors": {
+        "error": "EACCES",
+        "tool": "fs",
+        "target": "writer",
+        "version": "1"
+      },
+      "goal": "権限拒否を実装修正と混同しない",
+      "procedure": "Report the denied path and keep the source unchanged.",
+      "verification": "Verify that the write did not occur.",
+      "boundary": "Do not broaden filesystem permissions automatically.",
+      "episodes": [
+        {
+          "case": "permissions-input-0",
+          "observation": "writer fixture empty input: EACCES; Report the denied path and keep the source unchanged.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "permissions-input-1",
+          "observation": "writer fixture existing record: EACCES; Report the denied path and keep the source unchanged.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "permissions-input-2",
+          "observation": "writer fixture concurrent request: EACCES; Report the denied path and keep the source unchanged.",
+          "outcome": "failed",
+          "verification": "unknown"
+        }
+      ],
+      "queries": [
+        {
+          "text": "権限拒否を実装修正と混同しない",
+          "exact": false,
+          "relevantScenarioIds": [
+            "permissions"
+          ]
+        },
+        {
+          "text": "EACCES fs writer",
+          "exact": true,
+          "relevantScenarioIds": [
+            "permissions"
+          ]
+        },
+        {
+          "text": "Report the denied path and keep the source unchanged.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "permissions"
+          ]
+        },
+        {
+          "text": "writer の作業で EACCES が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "permissions"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      },
+      "failureClass": "environment_or_transport_not_proven_code_defect"
+    },
+    {
+      "id": "dns",
+      "split": "heldout",
+      "anchors": {
+        "error": "ENOTFOUND",
+        "tool": "http",
+        "target": "connection",
+        "version": "1"
+      },
+      "goal": "DNS 障害を製品の不具合と断定しない",
+      "procedure": "Record the unavailable endpoint and retain retryable state.",
+      "verification": "Check connection availability separately.",
+      "boundary": "Do not switch providers silently.",
+      "episodes": [
+        {
+          "case": "dns-input-0",
+          "observation": "connection fixture empty input: ENOTFOUND; Record the unavailable endpoint and retain retryable state.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "dns-input-1",
+          "observation": "connection fixture existing record: ENOTFOUND; Record the unavailable endpoint and retain retryable state.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "dns-input-2",
+          "observation": "connection fixture concurrent request: ENOTFOUND; Record the unavailable endpoint and retain retryable state.",
+          "outcome": "failed",
+          "verification": "unknown"
+        }
+      ],
+      "queries": [
+        {
+          "text": "DNS 障害を製品の不具合と断定しない",
+          "exact": false,
+          "relevantScenarioIds": [
+            "dns"
+          ]
+        },
+        {
+          "text": "ENOTFOUND http connection",
+          "exact": true,
+          "relevantScenarioIds": [
+            "dns"
+          ]
+        },
+        {
+          "text": "Record the unavailable endpoint and retain retryable state.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "dns"
+          ]
+        },
+        {
+          "text": "connection の作業で ENOTFOUND が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "dns"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      },
+      "failureClass": "environment_or_transport_not_proven_code_defect"
+    },
+    {
+      "id": "dedup",
+      "split": "heldout",
+      "anchors": {
+        "error": "DUPLICATE_EVENT",
+        "tool": "ledger",
+        "target": "ingest",
+        "version": "1"
+      },
+      "goal": "再送イベントを二重記録しない",
+      "procedure": "Reuse the original idempotency identity.",
+      "verification": "Check that the event count stays constant.",
+      "boundary": "Do not allocate a new identity for transport retries.",
+      "episodes": [
+        {
+          "case": "dedup-input-0",
+          "observation": "ingest fixture empty input: DUPLICATE_EVENT; Reuse the original idempotency identity.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "dedup-input-1",
+          "observation": "ingest fixture empty input: DUPLICATE_EVENT; Reuse the original idempotency identity.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "dedup-input-2",
+          "observation": "ingest fixture empty input: DUPLICATE_EVENT; Reuse the original idempotency identity.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "再送イベントを二重記録しない",
+          "exact": false,
+          "relevantScenarioIds": [
+            "dedup"
+          ]
+        },
+        {
+          "text": "DUPLICATE_EVENT ledger ingest",
+          "exact": true,
+          "relevantScenarioIds": [
+            "dedup"
+          ]
+        },
+        {
+          "text": "Reuse the original idempotency identity.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "dedup"
+          ]
+        },
+        {
+          "text": "ingest の作業で DUPLICATE_EVENT が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "dedup"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "foreign-key",
+      "split": "heldout",
+      "anchors": {
+        "error": "FOREIGN_KEY",
+        "tool": "sqlite",
+        "target": "delete",
+        "version": "3.46"
+      },
+      "goal": "参照関係を保持して削除する",
+      "procedure": "Inspect references before deleting the parent row.",
+      "verification": "Run foreign_key_check.",
+      "boundary": "Do not disable foreign keys to make deletion succeed.",
+      "episodes": [
+        {
+          "case": "foreign-key-input-0",
+          "observation": "delete fixture empty input: FOREIGN_KEY; Inspect references before deleting the parent row.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "foreign-key-input-1",
+          "observation": "delete fixture existing record: FOREIGN_KEY; Inspect references before deleting the parent row.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "foreign-key-input-2",
+          "observation": "delete fixture concurrent request: FOREIGN_KEY; Inspect references before deleting the parent row.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "参照関係を保持して削除する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "foreign-key"
+          ]
+        },
+        {
+          "text": "FOREIGN_KEY sqlite delete",
+          "exact": true,
+          "relevantScenarioIds": [
+            "foreign-key"
+          ]
+        },
+        {
+          "text": "Inspect references before deleting the parent row.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "foreign-key"
+          ]
+        },
+        {
+          "text": "delete の作業で FOREIGN_KEY が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "foreign-key"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "redirect",
+      "split": "heldout",
+      "anchors": {
+        "error": "HTTP_302",
+        "tool": "http",
+        "target": "session",
+        "version": "1"
+      },
+      "goal": "認証後のリダイレクトを追跡する",
+      "procedure": "Follow the redirect using the issued session cookie.",
+      "verification": "Verify the authenticated page response.",
+      "boundary": "Do not put session cookies in logs.",
+      "episodes": [
+        {
+          "case": "redirect-input-0",
+          "observation": "session fixture empty input: HTTP_302; Follow the redirect using the issued session cookie.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "redirect-input-1",
+          "observation": "session fixture existing record: HTTP_302; Follow the redirect using the issued session cookie.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "redirect-input-2",
+          "observation": "session fixture concurrent request: HTTP_302; Follow the redirect using the issued session cookie.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "認証後のリダイレクトを追跡する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "redirect"
+          ]
+        },
+        {
+          "text": "HTTP_302 http session",
+          "exact": true,
+          "relevantScenarioIds": [
+            "redirect"
+          ]
+        },
+        {
+          "text": "Follow the redirect using the issued session cookie.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "redirect"
+          ]
+        },
+        {
+          "text": "session の作業で HTTP_302 が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "redirect"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "pack",
+      "split": "heldout",
+      "anchors": {
+        "error": "MISSING_EXPORT",
+        "tool": "npm",
+        "target": "package",
+        "version": "10"
+      },
+      "goal": "配布物の import を検証する",
+      "procedure": "Test the import from the packed tarball in an isolated consumer.",
+      "verification": "Execute the consumer import.",
+      "boundary": "A source build alone is insufficient.",
+      "episodes": [
+        {
+          "case": "pack-input-0",
+          "observation": "package fixture empty input: MISSING_EXPORT; Test the import from the packed tarball in an isolated consumer.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "pack-input-1",
+          "observation": "package fixture existing record: MISSING_EXPORT; Test the import from the packed tarball in an isolated consumer.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "pack-input-2",
+          "observation": "package fixture concurrent request: MISSING_EXPORT; Test the import from the packed tarball in an isolated consumer.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "配布物の import を検証する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "pack"
+          ]
+        },
+        {
+          "text": "MISSING_EXPORT npm package",
+          "exact": true,
+          "relevantScenarioIds": [
+            "pack"
+          ]
+        },
+        {
+          "text": "Test the import from the packed tarball in an isolated consumer.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "pack"
+          ]
+        },
+        {
+          "text": "package の作業で MISSING_EXPORT が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "pack"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "cancel",
+      "split": "heldout",
+      "anchors": {
+        "error": "ABORT_ERR",
+        "tool": "fetch",
+        "target": "request",
+        "version": "1"
+      },
+      "goal": "中断された要求を成功にしない",
+      "procedure": "Preserve the cancellation result.",
+      "verification": "Confirm no result was adopted.",
+      "boundary": "Do not turn cancellation into a verified fix.",
+      "episodes": [
+        {
+          "case": "cancel-input-0",
+          "observation": "request fixture empty input: ABORT_ERR; Preserve the cancellation result.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "cancel-input-1",
+          "observation": "request fixture existing record: ABORT_ERR; Preserve the cancellation result.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "cancel-input-2",
+          "observation": "request fixture concurrent request: ABORT_ERR; Preserve the cancellation result.",
+          "outcome": "failed",
+          "verification": "unknown"
+        }
+      ],
+      "queries": [
+        {
+          "text": "中断された要求を成功にしない",
+          "exact": false,
+          "relevantScenarioIds": [
+            "cancel"
+          ]
+        },
+        {
+          "text": "ABORT_ERR fetch request",
+          "exact": true,
+          "relevantScenarioIds": [
+            "cancel"
+          ]
+        },
+        {
+          "text": "Preserve the cancellation result.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "cancel"
+          ]
+        },
+        {
+          "text": "request の作業で ABORT_ERR が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "cancel"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "version",
+      "split": "heldout",
+      "anchors": {
+        "error": "VERSION_MISMATCH",
+        "tool": "runtime",
+        "target": "api",
+        "version": "2"
+      },
+      "goal": "別バージョンの手順を混ぜない",
+      "procedure": "Use the API contract for the installed version.",
+      "verification": "Run its compatibility test.",
+      "boundary": "Do not apply version 1 instructions to version 2.",
+      "episodes": [
+        {
+          "case": "version-input-0",
+          "observation": "api fixture empty input: VERSION_MISMATCH; Use the API contract for the installed version.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "version-input-1",
+          "observation": "api fixture existing record: VERSION_MISMATCH; Use the API contract for the installed version.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "version-input-2",
+          "observation": "api fixture concurrent request: VERSION_MISMATCH; Use the API contract for the installed version.",
+          "outcome": "completed",
+          "verification": "passed",
+          "anchors": {
+            "error": "VERSION_MISMATCH",
+            "tool": "runtime",
+            "target": "api",
+            "version": "next-major"
+          }
+        }
+      ],
+      "queries": [
+        {
+          "text": "別バージョンの手順を混ぜない",
+          "exact": false,
+          "relevantScenarioIds": [
+            "version"
+          ]
+        },
+        {
+          "text": "VERSION_MISMATCH runtime api",
+          "exact": true,
+          "relevantScenarioIds": [
+            "version"
+          ]
+        },
+        {
+          "text": "Use the API contract for the installed version.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "version"
+          ]
+        },
+        {
+          "text": "api の作業で VERSION_MISMATCH が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "version"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "race",
+      "split": "heldout",
+      "anchors": {
+        "error": "STALE_SNAPSHOT",
+        "tool": "context",
+        "target": "delivery",
+        "version": "2"
+      },
+      "goal": "選択後に変化した記憶を再確認する",
+      "procedure": "Validate the selection digest before delivery.",
+      "verification": "Reject the old context snapshot.",
+      "boundary": "Do not reuse an already invalidated cache entry.",
+      "episodes": [
+        {
+          "case": "race-input-0",
+          "observation": "delivery fixture empty input: STALE_SNAPSHOT; Validate the selection digest before delivery.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "race-input-1",
+          "observation": "delivery fixture existing record: STALE_SNAPSHOT; Validate the selection digest before delivery.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "race-input-2",
+          "observation": "delivery fixture concurrent request: STALE_SNAPSHOT; Validate the selection digest before delivery.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "選択後に変化した記憶を再確認する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "race"
+          ]
+        },
+        {
+          "text": "STALE_SNAPSHOT context delivery",
+          "exact": true,
+          "relevantScenarioIds": [
+            "race"
+          ]
+        },
+        {
+          "text": "Validate the selection digest before delivery.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "race"
+          ]
+        },
+        {
+          "text": "delivery の作業で STALE_SNAPSHOT が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "race"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "large",
+      "split": "heldout",
+      "anchors": {
+        "error": "OUTPUT_LIMIT",
+        "tool": "llm",
+        "target": "summary",
+        "version": "1"
+      },
+      "goal": "過大な要約出力を止める",
+      "procedure": "Abort the stream at the byte limit.",
+      "verification": "Check no partial capsule was saved.",
+      "boundary": "Do not truncate JSON into an apparently valid result.",
+      "episodes": [
+        {
+          "case": "large-input-0",
+          "observation": "summary fixture empty input: OUTPUT_LIMIT; Abort the stream at the byte limit.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "large-input-1",
+          "observation": "summary fixture existing record: OUTPUT_LIMIT; Abort the stream at the byte limit.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "large-input-2",
+          "observation": "summary fixture concurrent request: OUTPUT_LIMIT; Abort the stream at the byte limit.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "過大な要約出力を止める",
+          "exact": false,
+          "relevantScenarioIds": [
+            "large"
+          ]
+        },
+        {
+          "text": "OUTPUT_LIMIT llm summary",
+          "exact": true,
+          "relevantScenarioIds": [
+            "large"
+          ]
+        },
+        {
+          "text": "Abort the stream at the byte limit.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "large"
+          ]
+        },
+        {
+          "text": "summary の作業で OUTPUT_LIMIT が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "large"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "timeout",
+      "split": "heldout",
+      "anchors": {
+        "error": "ETIMEDOUT",
+        "tool": "worker",
+        "target": "generation",
+        "version": "1"
+      },
+      "goal": "応答不明の推論を二重送信しない",
+      "procedure": "Retain the uncertain dispatched attempt without automatic resend.",
+      "verification": "Check the model call count.",
+      "boundary": "Do not assume the provider did no work.",
+      "episodes": [
+        {
+          "case": "timeout-input-0",
+          "observation": "generation fixture empty input: ETIMEDOUT; Retain the uncertain dispatched attempt without automatic resend.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "timeout-input-1",
+          "observation": "generation fixture existing record: ETIMEDOUT; Retain the uncertain dispatched attempt without automatic resend.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "timeout-input-2",
+          "observation": "generation fixture concurrent request: ETIMEDOUT; Retain the uncertain dispatched attempt without automatic resend.",
+          "outcome": "failed",
+          "verification": "unknown"
+        }
+      ],
+      "queries": [
+        {
+          "text": "応答不明の推論を二重送信しない",
+          "exact": false,
+          "relevantScenarioIds": [
+            "timeout"
+          ]
+        },
+        {
+          "text": "ETIMEDOUT worker generation",
+          "exact": true,
+          "relevantScenarioIds": [
+            "timeout"
+          ]
+        },
+        {
+          "text": "Retain the uncertain dispatched attempt without automatic resend.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "timeout"
+          ]
+        },
+        {
+          "text": "generation の作業で ETIMEDOUT が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "timeout"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      },
+      "failureClass": "environment_or_transport_not_proven_code_defect"
+    },
+    {
+      "id": "rollback",
+      "split": "heldout",
+      "anchors": {
+        "error": "COMMIT_FAILED",
+        "tool": "sqlite",
+        "target": "transaction",
+        "version": "3.46"
+      },
+      "goal": "保存途中の失敗を原子的に処理する",
+      "procedure": "Roll back the entry and its source links together.",
+      "verification": "Check that neither partial record remains.",
+      "boundary": "Do not report successful persistence before commit.",
+      "episodes": [
+        {
+          "case": "rollback-input-0",
+          "observation": "transaction fixture empty input: COMMIT_FAILED; Roll back the entry and its source links together.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "rollback-input-1",
+          "observation": "transaction fixture existing record: COMMIT_FAILED; Roll back the entry and its source links together.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "rollback-input-2",
+          "observation": "transaction fixture concurrent request: COMMIT_FAILED; Roll back the entry and its source links together.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "保存途中の失敗を原子的に処理する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "rollback"
+          ]
+        },
+        {
+          "text": "COMMIT_FAILED sqlite transaction",
+          "exact": true,
+          "relevantScenarioIds": [
+            "rollback"
+          ]
+        },
+        {
+          "text": "Roll back the entry and its source links together.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "rollback"
+          ]
+        },
+        {
+          "text": "transaction の作業で COMMIT_FAILED が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "rollback"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "source",
+      "split": "heldout",
+      "anchors": {
+        "error": "SOURCE_REMOVED",
+        "tool": "memory",
+        "target": "lesson",
+        "version": "1"
+      },
+      "goal": "削除された根拠からの教訓を保留する",
+      "procedure": "Exclude the derived lesson whose source is absent.",
+      "verification": "Query through both explicit search and context injection.",
+      "boundary": "Do not delete unrelated source entries.",
+      "episodes": [
+        {
+          "case": "source-input-0",
+          "observation": "lesson fixture empty input: SOURCE_REMOVED; Exclude the derived lesson whose source is absent.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "source-input-1",
+          "observation": "lesson fixture existing record: SOURCE_REMOVED; Exclude the derived lesson whose source is absent.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "source-input-2",
+          "observation": "lesson fixture concurrent request: SOURCE_REMOVED; Exclude the derived lesson whose source is absent.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "削除された根拠からの教訓を保留する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "source"
+          ]
+        },
+        {
+          "text": "SOURCE_REMOVED memory lesson",
+          "exact": true,
+          "relevantScenarioIds": [
+            "source"
+          ]
+        },
+        {
+          "text": "Exclude the derived lesson whose source is absent.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "source"
+          ]
+        },
+        {
+          "text": "lesson の作業で SOURCE_REMOVED が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "source"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "signature",
+      "split": "heldout",
+      "anchors": {
+        "error": "ERROR_ALIAS",
+        "tool": "memory",
+        "target": "cluster",
+        "version": "1"
+      },
+      "goal": "似たエラーを誤って統合しない",
+      "procedure": "Match the exact error and applicability anchors.",
+      "verification": "Check the unrelated episode remains separate.",
+      "boundary": "Semantic similarity alone does not establish compatibility.",
+      "episodes": [
+        {
+          "case": "signature-input-0",
+          "observation": "cluster fixture empty input: ERROR_ALIAS; Match the exact error and applicability anchors.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "signature-input-1",
+          "observation": "cluster fixture existing record: ERROR_ALIAS; Match the exact error and applicability anchors.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "signature-input-2",
+          "observation": "cluster fixture concurrent request: ERROR_ALIAS; Match the exact error and applicability anchors.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "似たエラーを誤って統合しない",
+          "exact": false,
+          "relevantScenarioIds": [
+            "signature"
+          ]
+        },
+        {
+          "text": "ERROR_ALIAS memory cluster",
+          "exact": true,
+          "relevantScenarioIds": [
+            "signature"
+          ]
+        },
+        {
+          "text": "Match the exact error and applicability anchors.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "signature"
+          ]
+        },
+        {
+          "text": "cluster の作業で ERROR_ALIAS が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "signature"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "verification",
+      "split": "heldout",
+      "anchors": {
+        "error": "UNKNOWN_RESULT",
+        "tool": "runner",
+        "target": "test",
+        "version": "1"
+      },
+      "goal": "未実施テストを成功として数えない",
+      "procedure": "Keep verification unknown without an observed tool result.",
+      "verification": "Check the successful-support count is zero.",
+      "boundary": "Assistant prose is not a test result.",
+      "episodes": [
+        {
+          "case": "verification-input-0",
+          "observation": "test fixture empty input: UNKNOWN_RESULT; Keep verification unknown without an observed tool result.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "verification-input-1",
+          "observation": "test fixture existing record: UNKNOWN_RESULT; Keep verification unknown without an observed tool result.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "verification-input-2",
+          "observation": "test fixture concurrent request: UNKNOWN_RESULT; Keep verification unknown without an observed tool result.",
+          "outcome": "failed",
+          "verification": "unknown"
+        }
+      ],
+      "queries": [
+        {
+          "text": "未実施テストを成功として数えない",
+          "exact": false,
+          "relevantScenarioIds": [
+            "verification"
+          ]
+        },
+        {
+          "text": "UNKNOWN_RESULT runner test",
+          "exact": true,
+          "relevantScenarioIds": [
+            "verification"
+          ]
+        },
+        {
+          "text": "Keep verification unknown without an observed tool result.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "verification"
+          ]
+        },
+        {
+          "text": "test の作業で UNKNOWN_RESULT が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "verification"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "observation",
+      "split": "heldout",
+      "anchors": {
+        "error": "INSUFFICIENT_SUPPORT",
+        "tool": "memory",
+        "target": "policy",
+        "version": "1"
+      },
+      "goal": "支持する独立経験が足りない場合に待つ",
+      "procedure": "Wait for independent supporting episodes.",
+      "verification": "Check no generation call was made.",
+      "boundary": "Repeated logs of one run do not add support.",
+      "episodes": [
+        {
+          "case": "observation-input-0",
+          "observation": "policy fixture empty input: INSUFFICIENT_SUPPORT; Wait for independent supporting episodes.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "observation-input-1",
+          "observation": "policy fixture existing record: INSUFFICIENT_SUPPORT; Wait for independent supporting episodes.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "observation-input-2",
+          "observation": "policy fixture concurrent request: INSUFFICIENT_SUPPORT; Wait for independent supporting episodes.",
+          "outcome": "failed",
+          "verification": "unknown"
+        }
+      ],
+      "queries": [
+        {
+          "text": "支持する独立経験が足りない場合に待つ",
+          "exact": false,
+          "relevantScenarioIds": [
+            "observation"
+          ]
+        },
+        {
+          "text": "INSUFFICIENT_SUPPORT memory policy",
+          "exact": true,
+          "relevantScenarioIds": [
+            "observation"
+          ]
+        },
+        {
+          "text": "Wait for independent supporting episodes.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "observation"
+          ]
+        },
+        {
+          "text": "policy の作業で INSUFFICIENT_SUPPORT が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "observation"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "recovery",
+      "split": "heldout",
+      "anchors": {
+        "error": "BROKEN_INDEX",
+        "tool": "search",
+        "target": "projection",
+        "version": "1"
+      },
+      "goal": "正本と検索索引の不一致を検出する",
+      "procedure": "Revalidate the canonical entry after indexed retrieval.",
+      "verification": "Reject the invalid indexed hit.",
+      "boundary": "Do not treat index contents as the source of truth.",
+      "episodes": [
+        {
+          "case": "recovery-input-0",
+          "observation": "projection fixture empty input: BROKEN_INDEX; Revalidate the canonical entry after indexed retrieval.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "recovery-input-1",
+          "observation": "projection fixture existing record: BROKEN_INDEX; Revalidate the canonical entry after indexed retrieval.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "recovery-input-2",
+          "observation": "projection fixture concurrent request: BROKEN_INDEX; Revalidate the canonical entry after indexed retrieval.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "正本と検索索引の不一致を検出する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "recovery"
+          ]
+        },
+        {
+          "text": "BROKEN_INDEX search projection",
+          "exact": true,
+          "relevantScenarioIds": [
+            "recovery"
+          ]
+        },
+        {
+          "text": "Revalidate the canonical entry after indexed retrieval.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "recovery"
+          ]
+        },
+        {
+          "text": "projection の作業で BROKEN_INDEX が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "recovery"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "scope",
+      "split": "heldout",
+      "anchors": {
+        "error": "WORKSPACE_MISMATCH",
+        "tool": "memory",
+        "target": "retrieval",
+        "version": "1"
+      },
+      "goal": "別案件の記憶を自動流用しない",
+      "procedure": "Restrict the derived lesson to its source workspace.",
+      "verification": "Search from another workspace and expect no hit.",
+      "boundary": "Do not globalize the lesson automatically.",
+      "episodes": [
+        {
+          "case": "scope-input-0",
+          "observation": "retrieval fixture empty input: WORKSPACE_MISMATCH; Restrict the derived lesson to its source workspace.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "scope-input-1",
+          "observation": "retrieval fixture existing record: WORKSPACE_MISMATCH; Restrict the derived lesson to its source workspace.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "scope-input-2",
+          "observation": "retrieval fixture concurrent request: WORKSPACE_MISMATCH; Restrict the derived lesson to its source workspace.",
+          "outcome": "completed",
+          "verification": "passed",
+          "workspace": "project:unrelated-evaluation"
+        }
+      ],
+      "queries": [
+        {
+          "text": "別案件の記憶を自動流用しない",
+          "exact": false,
+          "relevantScenarioIds": [
+            "scope"
+          ]
+        },
+        {
+          "text": "WORKSPACE_MISMATCH memory retrieval",
+          "exact": true,
+          "relevantScenarioIds": [
+            "scope"
+          ]
+        },
+        {
+          "text": "Restrict the derived lesson to its source workspace.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "scope"
+          ]
+        },
+        {
+          "text": "retrieval の作業で WORKSPACE_MISMATCH が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "scope"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "order",
+      "split": "heldout",
+      "anchors": {
+        "error": "REVERSED_RANGE",
+        "tool": "session",
+        "target": "log",
+        "version": "1"
+      },
+      "goal": "開始終了が逆のログを拒否する",
+      "procedure": "Reject the reversed native event range.",
+      "verification": "Check no episode was persisted.",
+      "boundary": "Do not guess the intended end sequence.",
+      "episodes": [
+        {
+          "case": "order-input-0",
+          "observation": "log fixture empty input: REVERSED_RANGE; Reject the reversed native event range.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "order-input-1",
+          "observation": "log fixture existing record: REVERSED_RANGE; Reject the reversed native event range.",
+          "outcome": "completed",
+          "verification": "passed"
+        },
+        {
+          "case": "order-input-2",
+          "observation": "log fixture concurrent request: REVERSED_RANGE; Reject the reversed native event range.",
+          "outcome": "completed",
+          "verification": "passed"
+        }
+      ],
+      "queries": [
+        {
+          "text": "開始終了が逆のログを拒否する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "order"
+          ]
+        },
+        {
+          "text": "REVERSED_RANGE session log",
+          "exact": true,
+          "relevantScenarioIds": [
+            "order"
+          ]
+        },
+        {
+          "text": "Reject the reversed native event range.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "order"
+          ]
+        },
+        {
+          "text": "log の作業で REVERSED_RANGE が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "order"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    },
+    {
+      "id": "conflict",
+      "split": "heldout",
+      "anchors": {
+        "error": "CONFLICTING_GUIDANCE",
+        "tool": "memory",
+        "target": "synthesis",
+        "version": "1"
+      },
+      "goal": "矛盾する手順の採用を保留する",
+      "procedure": "Hold the newly synthesized lesson and retain source episodes.",
+      "verification": "Verify no conflicting lesson is injected.",
+      "boundary": "Do not automatically overwrite verified knowledge.",
+      "episodes": [
+        {
+          "case": "conflict-input-0",
+          "observation": "synthesis fixture empty input: CONFLICTING_GUIDANCE; Hold the newly synthesized lesson and retain source episodes.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "conflict-input-1",
+          "observation": "synthesis fixture existing record: CONFLICTING_GUIDANCE; Hold the newly synthesized lesson and retain source episodes.",
+          "outcome": "completed",
+          "verification": "unknown"
+        },
+        {
+          "case": "conflict-input-2",
+          "observation": "synthesis fixture concurrent request: CONFLICTING_GUIDANCE; Hold the newly synthesized lesson and retain source episodes.",
+          "outcome": "failed",
+          "verification": "unknown",
+          "procedure": "Keep the existing selection and do not reroute."
+        }
+      ],
+      "queries": [
+        {
+          "text": "矛盾する手順の採用を保留する",
+          "exact": false,
+          "relevantScenarioIds": [
+            "conflict"
+          ]
+        },
+        {
+          "text": "CONFLICTING_GUIDANCE memory synthesis",
+          "exact": true,
+          "relevantScenarioIds": [
+            "conflict"
+          ]
+        },
+        {
+          "text": "Hold the newly synthesized lesson and retain source episodes.",
+          "exact": false,
+          "relevantScenarioIds": [
+            "conflict"
+          ]
+        },
+        {
+          "text": "synthesis の作業で CONFLICTING_GUIDANCE が出た。以前の対応と適用条件は？",
+          "exact": false,
+          "relevantScenarioIds": [
+            "conflict"
+          ]
+        }
+      ],
+      "workspace": "project:evolution-evaluation",
+      "expectedSafety": {
+        "foreignWorkspace": false,
+        "unsupportedSuccess": false,
+        "staleInjection": false
+      }
+    }
+  ]
+}

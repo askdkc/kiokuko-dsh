@@ -1,0 +1,8 @@
+{
+  "sha256": "886259e1a14d105f1e9628e02128b137e76d8aeb81cd86ef63a25494a6088e32",
+  "scenarios": 30,
+  "episodes": 90,
+  "queries": 120,
+  "developmentScenarios": 10,
+  "heldoutScenarios": 20
+}

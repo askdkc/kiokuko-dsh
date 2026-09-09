@@ -33,6 +33,10 @@ function sameClose(left: DshCloseIntent, right: DshCloseIntent): boolean {
 }
 
 function checkpointedClose(close: DshCloseIntent, session: DshNativeSession): DshCloseIntent {
+  if (close.status === 'failed') {
+    if (close.terminalTurn === undefined || typeof session.snapshotEvents !== 'function') return close
+    try { return { ...close, sourceEndSeq: dshTurnBoundarySeq(session as DshSessionEventSource, close.terminalTurn, 'end') } } catch { return close }
+  }
   if (close.status !== 'completed') return close
   if (close.terminalTurn === undefined) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Completed DSH close has no terminal turn boundary')

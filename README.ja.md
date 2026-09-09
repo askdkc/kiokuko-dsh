@@ -31,6 +31,8 @@ OrcaReplay の機能設定は自動導入され、**手動設定は不要**で�
 `/kioku-orca stop` でログを確定後、`list` で run ID を確認し、`show <run ID>` で内容を表示、`export <run ID>` で HTML を出力できます（いずれも `/kioku-orca` に続けて入力）。
 無効にする場合は `orca.enabled: false` を設定して再読み込みします。詳細は [記録設定とコマンド](docs/orca-recording.md) を参照してください。
 
+終了した作業から episode と教訓候補を生成します。初期設定の `active` では、根拠が有効な候補を次のセッションの検索・自動注入に使います。候補生成だけにする場合は `observe`、停止する場合は `off` を指定します。状態は `/kioku-evolution status`、詳細は [記憶学習の設定・検証](docs/memory-evolution.md) を参照してください。
+
 ## 更新
 
 作業中のタスクを終えて DSH を停止してから更新します。npm 版の Kiokuko 本体の更新:

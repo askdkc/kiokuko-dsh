@@ -1,3 +1,4 @@
+import { evolutionEntryState, evolutionInstalled, evolutionSettings } from '../memory/evolution/store.js';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { KiokukoError } from '../errors.js';
 import { readEntry } from '../memory/entries.js';
@@ -254,6 +255,7 @@ function selectionEntrySnapshot(
     searchSignals: searchSignalSnapshot(database, entry.id),
     ...(external === null ? {} : { external }),
     feedback: contextFeedbackSignals(database, entry.id),
+    evolution: evolutionEntryState(database, entry).snapshot,
     ...(semanticState === null ? {} : { semantic: semanticProjectionSnapshotForState(database, entry, semanticState) }),
   };
 }
@@ -420,6 +422,7 @@ export function ordinaryContextSelectionStateHash(
     includeSemantic: false,
   });
   return canonicalContentHash({
+    evolution: evolutionInstalled(database) ? evolutionSettings(database) : null,
     workspaces: state.workspaces,
     includeEcosystem: options.includeEcosystem === true,
     entries: state.entries,
@@ -445,6 +448,7 @@ export function contextRetrievalStateHash(
     includeSemantic: true,
   });
   return canonicalContentHash({
+    evolution: evolutionInstalled(database) ? evolutionSettings(database) : null,
     workspaces: state.workspaces,
     includeEcosystem,
     semantic: state.semantic,

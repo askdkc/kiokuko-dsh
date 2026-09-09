@@ -1,3 +1,6 @@
+import { executionObservation, EVOLUTION_OBSERVATION_EVENT } from './evolution-observation.js'
+import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution/contracts.js'
+import { evolutionStatus } from '../memory/evolution/store.js'
 import { OrcaConfig, EfficiencyConfig, FinalizationConfig } from './config.js'
 import { DshEfficiencyObserver, mountDshEfficiencyObserver, type FinalizationInputMode } from './efficiency.js'
 import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
@@ -147,6 +150,7 @@ interface AdapterContext extends Context {
 
 export interface DshHostAdapterOptions {
   readonly efficiency?: import('zod').z.input<typeof EfficiencyConfig>
+  readonly memoryEvolution?: import('zod').z.input<typeof MemoryEvolutionConfig>
   readonly finalization?: import('zod').z.input<typeof FinalizationConfig>
   readonly modelRoutes?: readonly ModelRoute[]
   readonly modelCompatibility?: DshModelCompatibility
@@ -401,6 +405,7 @@ function operationName(value: string): value is typeof DSH_MODEL_FACING_OPERATIO
 
 export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOptions = {}): DshHostAdapter {
   const efficiencyConfig = EfficiencyConfig.parse(options.efficiency ?? {})
+  const evolutionConfig = MemoryEvolutionConfig.parse(options.memoryEvolution ?? {})
   const finalizationConfig = FinalizationConfig.parse(options.finalization ?? {})
   const native = ctx as unknown as AdapterContext
   const skills = native.get('skills', false) as NativeSkills | undefined
@@ -542,6 +547,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       lease: states.get(item.runId)?.leaseToken ?? null }),
   })
   const memoryFinalizer = new DshMemoryFinalizer({
+    memoryEvolution: evolutionConfig,
     runtime,
     sessionQuery: finalizationQuery,
     onFinalized: (sessionId) => sessionMirror.markFinalized(sessionId),
@@ -2088,7 +2094,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     if (selection && (selection.status !== 'ready' && item.prepared.intake.profile.taskType !== 'chat' || item.failed && selection.mode === 'normal')) return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
-    if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed' }
+    if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
     // A chat run spans the quiet time between user messages. Enno's
     // inapplicable `complete` means that no orchestration is required for this
     // turn; it does not mean that the persistent conversation has ended.
@@ -2116,9 +2122,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       await deliverCompletionReport(nativeSession)
       return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
-    if (item.failed) return { runId: item.runId, status: 'failed' }
+    if (item.failed) return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
-    if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed' }
+    if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
     if (item.prepared.intake.profile.taskType === 'chat' || state.nextAction === 'complete') {
       return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
@@ -2136,7 +2142,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       } else if (before.status !== input.status) {
         throw new KiokukoError('CONFLICT', 'Run close status is immutable')
       }
-      if (input.status === 'completed') {
+      const failedExtractable = input.status === 'failed' && evolutionConfig.mode !== 'off' && input.sourceEndSeq !== undefined &&
+        database.prepare('SELECT 1 FROM dsh_run_log_boundaries WHERE run_id=? AND workspace=? AND dsh_session_id=?').get(before.runId, before.workspace, before.dshSessionId) !== undefined
+      if (input.status === 'failed' && !failedExtractable) database.prepare('INSERT OR IGNORE INTO memory_evolution_skips(run_id,workspace,reason) VALUES(?,?,?)')
+        .run(before.runId, before.workspace, evolutionConfig.mode === 'off' ? 'disabled' : 'missing_log_boundary')
+      if (input.status === 'completed' || failedExtractable) {
         if (input.sourceEndSeq === undefined) {
           throw new KiokukoError('INTEGRITY_ERROR', 'Completed DSH run has no checkpointed log end')
         }
@@ -2180,6 +2190,22 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     advisoryRounds.delete(input.runId)
     resumedLeases.delete(input.runId)
   }
+  const observationDisposer = (ctx as any).on('tools/result', (execution: any, result: unknown) => {
+    try {
+      if (evolutionConfig.mode === 'off' || execution.parent !== undefined) return
+      const agent = execution.agent, session = agent?.session, item = session ? currentSession(session.id) : undefined
+      if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || typeof session.append !== 'function' || typeof session.eventAt !== 'function' || !Number.isSafeInteger(session.seq)) return
+      let call: any
+      // Bound lookup even in million-event sessions. Missing correlation stays unknown.
+      for (let seq=session.seq-1;seq>=Math.max(0,session.seq-4096);seq--) {
+        const event=session.eventAt(seq)
+        if (event?.type==='tool/call' && event.data?.callId===execution.callId) {call=event;break}
+      }
+      if (!call || call.data.name !== execution.name || call.data.turn !== item.turn) return
+      const observation = executionObservation({runId:item.runId,workspace:item.workspace,sessionId:item.sessionId},execution.callId,call.seq,result)
+      if (observation) session.append(EVOLUTION_OBSERVATION_EVENT,observation)
+    } catch { /* optional evidence never changes native tool completion */ }
+  })
   const errorDisposer = (ctx as any).on('agent/error', (event: { agent: { id: string; session?: { id: string }; sessionId?: string }; error?: unknown }) => {
     const item = currentForAgentEvent(event.agent.id, event.agent.session?.id ?? event.agent.sessionId, undefined, event.agent.session, event.agent)
     if (item !== undefined) item.failed = true
@@ -2304,9 +2330,17 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     })
   })
   const runLifecycle = new DshRunLifecycle({ closeRun })
+  const failedBoundary = async (item: TurnRecord): Promise<{ sourceEndSeq?: number }> => {
+    try {
+      if (item.nativeSession === undefined || sessions?.flush === undefined) return {}
+      await sessions.flush(item.nativeSession)
+      await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession)
+      return { sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end') }
+    } catch { return {} }
+  }
   retireSupersededRun = async (item, status) => {
     if (status !== 'completed') {
-      await runLifecycle.closeTurn({ runId: item.runId, status })
+      await runLifecycle.closeTurn({ runId: item.runId, status, ...(status === 'failed' ? await failedBoundary(item) : {}) })
       return
     }
     if (item.nativeSession === undefined || sessions?.flush === undefined) {
@@ -2372,6 +2406,16 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const host: DshCompositionHost = {
     get efficiency() { return efficiency },
     configureEfficiency,
+    memoryEvolution: {
+      configure(config: EvolutionConfig) { memoryFinalizer.configureMemoryEvolution(config); Object.assign(evolutionConfig, config) },
+      async status(sessionId: string) {
+        return runtime.withDatabase(db => {
+          const workspaces = db.prepare('SELECT DISTINCT workspace FROM ledger_runs WHERE dsh_session_id=? LIMIT 2').all<{ workspace: string }>(sessionId)
+          if (workspaces.length !== 1) throw new Error('Evolution status requires an unambiguous session workspace')
+          return evolutionStatus(db, workspaces[0]!.workspace)
+        })
+      },
+    },
     ...(orca === undefined ? {} : { orca }),
     ...(skills === undefined ? {} : { skills: skills as any }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
@@ -2457,7 +2501,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           await runLifecycle.closeTurn({
             runId: item.runId,
             status,
-            ...(status !== 'completed' ? {} : {
+            ...(status !== 'completed' ? status === 'failed' ? await failedBoundary(item) : {} : {
               sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end'),
             }),
           })
@@ -2466,6 +2510,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       try { await runLifecycle.dispose() } catch (error) { failures.push(error) }
       try { await memoryFinalizer.dispose() } catch (error) { failures.push(error) }
       closeEfficiency()
+      try { observationDisposer() } catch (error) { failures.push(error) }
       try { await sessionMirror.close() } catch (error) { failures.push(error) }
       try { await runtime.close() } catch (error) { failures.push(error) }
       turns.clear()
