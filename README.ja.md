@@ -14,7 +14,7 @@ DeepSeek・Kimi・GLM・Qwen・HY/Hunyuan・MiMo・MiniMaxのAgentには、日�
 
 ## 導入と使い方
 
-対応 DSH: [0.1.5-rc.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.5-rc.1) / `0.1.2-rc.1` / [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1) / [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2)。
+対応 DSH: [0.1.5-rc.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.5-rc.1) / [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1) / [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2)。
 Node.js **24.16.0 以上**と pnpm が必要です。
 DSH のソースディレクトリで、公開済み npm パッケージを導入して起動します。
 

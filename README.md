@@ -15,7 +15,7 @@ DeepSeek, Kimi, GLM, Qwen, HY/Hunyuan, MiMo and MiniMax agents automatically rec
 
 ## Install and use
 
-Supports DSH [0.1.5-rc.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.5-rc.1), `0.1.2-rc.1`, [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1), and [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2).
+Supports DSH [0.1.5-rc.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.5-rc.1), [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1), and [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2).
 Requires Node.js **24.16.0+** and pnpm.
 Run these commands from the DSH source directory to install the published npm package and start:
 
