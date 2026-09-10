@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # CPU binaries are bundled. Avoid the unpatched adm-zip extraction path
+  # used by ONNX Runtime's optional accelerator download installer.
+  ONNXRUNTIME_NODE_INSTALL: skip
+
 jobs:
   verify:
     runs-on: ubuntu-latest
