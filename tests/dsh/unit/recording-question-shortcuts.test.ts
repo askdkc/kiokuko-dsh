@@ -94,10 +94,10 @@ test('recording question uses the numbered option card and falls through for eve
     assert.ok(descendants(tree).some(node => node.props?.children === recordingQuestion.detail),
       'the question detail stays visible')
 
-    // Guards: key repeat, modifiers, IME composition, and editing fields never select.
+    // Guards: key repeat, unsupported modifiers, IME, and plain digits in editing fields never select.
     for (const event of [
       key('2', { repeat: true }),
-      key('2', { ctrlKey: true }),
+      key('2', { ctrlKey: true, altKey: true }),
       key('2', { nativeEvent: { isComposing: true } }),
       key('2', { nativeEvent: { keyCode: 229 } }),
       key('2', { target: { tagName: 'TEXTAREA' } }),
@@ -113,7 +113,7 @@ test('recording question uses the numbered option card and falls through for eve
     tree = render()
     const selected = optionButtons(tree).filter(node => node.props?.['aria-pressed'] === true)
     assert.equal(selected.length, 1)
-    assert.equal(selected[0].props['aria-keyshortcuts'], '2')
+    assert.match(selected[0].props['aria-keyshortcuts'], /^2 (Control|Meta)\+2$/u)
 
     // Enter confirms exactly once; a repeated or IME Enter adds nothing.
     tree.props.onKeyDown(key('Enter', { nativeEvent: { keyCode: 229 } }))

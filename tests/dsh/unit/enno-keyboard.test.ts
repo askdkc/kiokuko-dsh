@@ -14,10 +14,22 @@ const question = (id = 'enno-model-zenki', count = 24) => ({
   options: Array.from({ length: count }, (_, i) => ({ label: `Option ${i + 1}` })),
 })
 
-function clientHarness() {
+function clientHarness(platform = 'Linux x86_64') {
   const globals = globalThis as unknown as Record<string, any>
   const names = ['createSnapshotStore', 'jsx', 'jsxs', 'useState', 'useRef', 'useEffect']
   const previous = names.map(name => globals[name])
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { platform } })
+  const listeners = new Set<(event: any) => void>()
+  let visible = true
+  const ownerDocument = {
+    addEventListener(type: string, listener: (event: any) => void, capture: boolean) {
+      assert.equal(type, 'keydown'); assert.equal(capture, true); listeners.add(listener)
+    },
+    removeEventListener(type: string, listener: (event: any) => void, capture: boolean) {
+      assert.equal(type, 'keydown'); assert.equal(capture, true); listeners.delete(listener)
+    },
+  }
   let slots: any[] = [], cursor = 0
   let effects: Array<() => void> = []
   const hook = (initial: () => any) => { const index = cursor++; if (!(index in slots)) slots[index] = initial(); return index }
@@ -43,7 +55,10 @@ function clientHarness() {
   const entry = registered.find(item => item.definition.name === 'conversation.composer')
   const unmount = () => { for (const value of slots) value?.cleanup?.(); slots = []; effects = [] }
   return {
-    entry,
+    entry, unmount,
+    documentKey(event: any) { for (const listener of listeners) listener(event) },
+    get listenerCount() { return listeners.size },
+    set visible(value: boolean) { visible = value },
     mount(pending: any) {
       unmount()
       assert.equal(entry.definition.select({ pendingInteraction: pending }), pending)
@@ -53,6 +68,7 @@ function clientHarness() {
         cursor = 0
         const tree = wrapper.component(wrapper.props)
         for (const node of descendants(tree)) if (typeof node.props?.ref === 'function') node.props.ref({
+          ownerDocument, isConnected: true, getClientRects: () => visible ? [{}] : [],
           focus() { focused = node.component }, scrollIntoView() { scrolls++ },
         })
         for (const effect of effects.splice(0)) effect()
@@ -63,6 +79,8 @@ function clientHarness() {
     restore() {
       unmount()
       names.forEach((name, index) => { if (previous[index] === undefined) delete globals[name]; else globals[name] = previous[index] })
+      if (previousNavigator) Object.defineProperty(globalThis, 'navigator', previousNavigator)
+      else delete globals.navigator
     },
   }
 }
@@ -84,6 +102,72 @@ test('all Enno selection cards use numbered keyboard controls, including lists l
     for (const id of ['enno-provider-unknown', 'enno-model-not-a-role', 'enno-other']) {
       assert.equal(h.entry.definition.select({ pendingInteraction: { kind: 'question', questions: [question(id)], answer() {}, cancel() {} } }), null)
     }
+  } finally { h.restore() }
+})
+
+test('platform shortcuts select from outside the card, show matching hints, and confirm once', async () => {
+  for (const platform of ['MacIntel', 'Win32', 'Linux x86_64']) {
+    const mac = platform === 'MacIntel', modifier = mac ? { metaKey: true } : { ctrlKey: true }
+    const h = clientHarness(platform), responses: unknown[] = []
+    try {
+      const q = { ...question('taskType', 4), header: 'Kiokuko · 作業の選択' }
+      const card = h.mount({ kind: 'question', key: `shortcut-${platform}`, questions: [q],
+        async answer(value: unknown) { responses.push(value) }, async cancel() {} })
+      let tree = card.render()
+      assert.equal(h.listenerCount, 1)
+      const hints = descendants(tree).filter(node => node.component === 'kbd')
+      assert.deepEqual(hints.map(node => node.props.children), [1, 2, 3, 4].map(n => `${mac ? 'Cmd' : 'Ctrl'}+${n}`))
+      assert.ok(hints.every(node => node.props['aria-hidden'] === true))
+      let prevented = 0, stopped = 0
+      // The host may keep focus in an editor outside this card. Plain digits remain text.
+      h.documentKey(key('2', { target: { tagName: 'TEXTAREA' } }))
+      assert.equal(descendants(card.render()).some(node => node.props?.['aria-pressed']), false)
+      const shortcut = key('2', { ...modifier, target: { tagName: 'TEXTAREA' },
+        preventDefault() { prevented++ }, stopPropagation() { stopped++ } })
+      h.documentKey(shortcut)
+      assert.equal(prevented, 1); assert.equal(stopped, 1)
+      assert.equal(card.focused, 'section')
+      tree = card.render()
+      const chosen = descendants(tree).filter(node => node.props?.['aria-pressed'])
+      assert.equal(chosen.length, 1)
+      assert.equal(chosen[0].props['aria-keyshortcuts'], `2 ${mac ? 'Meta' : 'Control'}+2`)
+      assert.equal(responses.length, 0)
+      tree.props.onKeyDown(key('Enter')); tree.props.onKeyDown(key('Enter'))
+      h.documentKey(key('3', modifier))
+      await flush()
+      assert.deepEqual(responses, [{ answers: [{ id: 'taskType', selected: ['Option 2'] }] }])
+      h.unmount()
+      assert.equal(h.listenerCount, 0, 'unmount releases the document shortcut listener')
+    } finally { h.restore() }
+  }
+})
+
+test('modified shortcuts reject IME and unsupported keys, reset long ordinals, and ignore hidden cards', async () => {
+  const h = clientHarness('MacIntel'), responses: unknown[] = []
+  try {
+    const card = h.mount({ kind: 'question', key: 'shortcut-guards', questions: [question()],
+      async answer(value: unknown) { responses.push(value) }, async cancel() {} })
+    let tree = card.render()
+    for (const extra of [{ ctrlKey: true }, { repeat: true }, { altKey: true }, { shiftKey: true },
+      { isComposing: true }, { keyCode: 229 }, { nativeEvent: { isComposing: true } }, { nativeEvent: { keyCode: 229 } }]) {
+      h.documentKey(key('2', { metaKey: true, ...extra, preventDefault() { assert.fail('must not intercept') } }))
+    }
+    for (const value of ['0', 'Enter', 'Backspace']) {
+      h.documentKey(key(value, { metaKey: true, preventDefault() { assert.fail('must not intercept') } }))
+    }
+    h.visible = false
+    h.documentKey(key('2', { metaKey: true, preventDefault() { assert.fail('hidden card') } }))
+    assert.equal(descendants(card.render()).some(node => node.props?.['aria-pressed']), false)
+    h.visible = true
+    tree.props.onKeyDown(key('1')); tree.props.onKeyDown(key('2'))
+    h.documentKey(key('2', { metaKey: true, code: 'Numpad2' }))
+    tree = card.render()
+    const chosen = descendants(tree).filter(node => node.props?.['aria-pressed'])
+    assert.equal(chosen[0].props.children[0].props.children, '2. Option 2', 'shortcut replaces a buffered ordinal')
+    assert.equal(chosen[0].props['aria-keyshortcuts'], 'Meta+2')
+    assert.equal(descendants(tree).filter(node => node.component === 'kbd')[11].props.children, '12 → Enter')
+    tree.props.onKeyDown(key('Enter')); await flush()
+    assert.deepEqual(responses, [{ answers: [{ id: 'enno-model-zenki', selected: ['Option 2'] }] }])
   } finally { h.restore() }
 })
 
@@ -130,14 +214,14 @@ test('numeric search input stays literal while fixed menus accept full-width opt
   } finally { h.restore() }
 })
 
-test('invalid numbers, IME, modifiers and repeated keys cannot submit; failures retain the selected option', async () => {
+test('invalid numbers, IME, unsupported modifiers and repeated keys cannot submit; failures retain the selected option', async () => {
   const h = clientHarness(), responses: unknown[] = []
   let fail = true
   try {
     const card = h.mount({ kind: 'question', key: 'guards', questions: [question()],
       async answer(value: unknown) { if (fail) { fail = false; throw new Error('Retry delivery') }; responses.push(value) }, async cancel() {} })
     let tree = card.render()
-    for (const extra of [{ repeat: true }, { ctrlKey: true }, { altKey: true }, { metaKey: true }, { shiftKey: true }, { nativeEvent: { isComposing: true } }, { nativeEvent: { keyCode: 229 } }]) {
+    for (const extra of [{ repeat: true }, { ctrlKey: true, metaKey: true }, { altKey: true }, { metaKey: true }, { shiftKey: true }, { nativeEvent: { isComposing: true } }, { nativeEvent: { keyCode: 229 } }]) {
       tree.props.onKeyDown(key('2', extra)); tree.props.onKeyDown(key('Enter', extra))
     }
     tree.props.onKeyDown(key('9')); tree.props.onKeyDown(key('9')); tree.props.onKeyDown(key('Enter'))

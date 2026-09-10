@@ -42,7 +42,7 @@ test('intake keyboard is scoped, confirms once, preserves drafts, and leaves edi
     const wrapper = entry.component({ matched: pending })
     const render = () => { cursor = 0; return wrapper.component(wrapper.props) }
     let tree = render()
-    for (const event of [key('2', { repeat: true }), key('2', { ctrlKey: true }), key('2', { nativeEvent: { isComposing: true } }), key('2', { target: { tagName: 'TEXTAREA' } })]) {
+    for (const event of [key('2', { repeat: true }), key('2', { ctrlKey: true, altKey: true }), key('2', { nativeEvent: { isComposing: true } }), key('2', { target: { tagName: 'TEXTAREA' } })]) {
       tree.props.onKeyDown(event)
       tree = render()
       assert.equal(descendants(tree).some(node => node.props?.['aria-pressed'] === true), false)
