@@ -229,10 +229,13 @@ test('Deep native: completed Deep returns the next input to ordinary routing wit
   const f=await deepNativeFixture(mock=>[
     mock.textResponse('{"kind":"leaf","reason":"bounded"}'),mock.textResponse('{"kind":"candidate","answer":"Distinct saved plan","evidence":[],"assumptions":[],"unresolved":[]}'),mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),mock.textResponse('{"schemaVersion":1,"memories":[]}'),mock.textResponse('Hello.'),mock.textResponse('{"schemaVersion":1,"memories":[]}')])
   try {
+    const errors: string[] = []
+    f.ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
     await f.command('/deep-planning Design a process');await f.complete()
     f.parent.followup({id:'after-deep',role:'user',content:[{type:'text',text:'hello'}],source:{kind:'user'}})
     await f.parent.whenIdle()
     const request=f.provider.requests.find((r:any)=>r.sessionId===f.parent.session.id&&!r.purpose)
+    assert.deepEqual(errors, [])
     assert.ok(request);assert.match(JSON.stringify(request.messages),/Distinct saved plan/u)
     assert.equal(await f.deep.store.database(db=>db.prepare('SELECT count(*) AS count FROM dsh_deep_runs').get<{count:number}>()!.count),1)
   }finally{await f.close()}

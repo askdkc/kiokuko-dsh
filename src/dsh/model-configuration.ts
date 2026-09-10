@@ -31,6 +31,8 @@ export interface ModelTemplate {
   readonly name: string
   readonly group: string
   readonly family: ModelRoute['family']
+  /** Exact connection contract of an explicitly selected plugin template. */
+  readonly route?: ModelRoute
   readonly models: Readonly<Record<ModelRole, readonly string[]>>
   readonly maxConcurrentChildren: number
 }
@@ -42,6 +44,11 @@ function template(id: string, name: string, group: string, family: ModelRoute['f
 /** Provider-owned exact identifiers only. Display names never select a model. */
 export const MODEL_TEMPLATES: readonly ModelTemplate[] = [
   template('openai', 'OpenAI', 'OpenAI', 'openai', 'gpt-6-astra', 'gpt-5.6-luna', 'gpt-5.6-sol'),
+  Object.freeze({
+    ...template('openai-codex', 'OpenAI Codex・推奨（dsh-codex）', 'OpenAI', 'openai', 'gpt-6-astra', 'gpt-5.6-luna', 'gpt-5.6-sol'),
+    // askdkc/dsh-codex e2e61b6 registers this exact route with the Codex Responses adapter.
+    route: { provider: 'openai-codex', family: 'openai', connection: 'codex', protocol: 'responses' } as const,
+  }),
   template('go-glm', 'OpenCode Go・GLM', 'OpenCode Go', 'opencode-go', 'glm-5.3', 'glm-5.3-flash'),
   template('go-qwen', 'OpenCode Go・Qwen', 'OpenCode Go', 'opencode-go', 'qwen3.8-max', 'qwen3.8-flash'),
   template('zen-glm', 'OpenCode Zen', 'OpenCode Zen', 'opencode-zen', 'glm-5.3', 'glm-5.3-flash'),

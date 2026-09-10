@@ -33,7 +33,9 @@ jobs:
       - name: Install pinned DeepSeek Harness CLI
         run: |
           dsh_cli_dir="$RUNNER_TEMP/dsh-cli"
-          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.5-rc.1
+          mkdir -p "$dsh_cli_dir"
+          cp tests/fixtures/dsh-runtime/package*.json "$dsh_cli_dir/"
+          npm ci --prefix "$dsh_cli_dir"
           echo "$dsh_cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
         env:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
@@ -110,7 +112,9 @@ jobs:
       - name: Install pinned DeepSeek Harness CLI
         run: |
           dsh_cli_dir="$RUNNER_TEMP/dsh-cli"
-          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.5-rc.1
+          mkdir -p "$dsh_cli_dir"
+          cp tests/fixtures/dsh-runtime/package*.json "$dsh_cli_dir/"
+          npm ci --prefix "$dsh_cli_dir"
           echo "$dsh_cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
         env:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh

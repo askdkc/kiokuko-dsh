@@ -59,11 +59,11 @@ export class EvolutionWorker {
       if (settings.mode === 'off') return undefined
       const now = this.#now()
       // A dispatched request with uncertain completion is never silently resent.
-      db.prepare(`UPDATE memory_evolution_jobs SET state='held',reason='expired_dispatched_claim',updated_at=?
+      db.prepare(`UPDATE memory_evolution_jobs SET state='held',reason='expired_dispatched_claim',claim_token=NULL,lease_until=NULL,updated_at=?
         WHERE state='processing' AND lease_until<=? AND EXISTS(SELECT 1 FROM memory_evolution_calls c WHERE c.job_id=memory_evolution_jobs.id)`).run(now, now)
       db.prepare(`UPDATE memory_evolution_jobs SET state='pending',claim_token=NULL,lease_until=NULL,updated_at=?
         WHERE state='processing' AND lease_until<=? AND attempts<2`).run(now, now)
-      db.prepare(`UPDATE memory_evolution_jobs SET state='held',reason='attempt_limit',updated_at=?
+      db.prepare(`UPDATE memory_evolution_jobs SET state='held',reason='attempt_limit',claim_token=NULL,lease_until=NULL,updated_at=?
         WHERE (state='processing' AND lease_until<=? OR state='pending') AND attempts>=2`).run(now, now)
       const job = db.prepare("SELECT * FROM memory_evolution_jobs WHERE state='pending' AND attempts<2 ORDER BY created_at,id LIMIT 1").get<Job>()
       if (!job) return undefined
@@ -154,7 +154,7 @@ export class EvolutionWorker {
       await this.options.runtime.withDatabase(db => withImmediateTransaction(db, () => {
         this.#assertClaim(db, job)
         saveLesson(db, episodes, job.kind, draft, this.#now())
-        db.prepare("UPDATE memory_evolution_jobs SET state='completed',reason=NULL,updated_at=? WHERE id=? AND claim_token=?")
+        db.prepare("UPDATE memory_evolution_jobs SET state='completed',reason=NULL,claim_token=NULL,lease_until=NULL,updated_at=? WHERE id=? AND claim_token=?")
           .run(this.#now(), job.id, job.claim_token)
       }))
       resultState = 'completed'
@@ -165,7 +165,7 @@ export class EvolutionWorker {
       resultState = controller.signal.aborted ? 'failed' : 'held'
       if (controller.signal.aborted) reason = 'timeout_or_closed'
       await this.options.runtime.withDatabase(db => {
-        db.prepare("UPDATE memory_evolution_jobs SET state=?,reason=?,updated_at=? WHERE id=? AND state='processing' AND claim_token=?")
+        db.prepare("UPDATE memory_evolution_jobs SET state=?,reason=?,claim_token=NULL,lease_until=NULL,updated_at=? WHERE id=? AND state='processing' AND claim_token=?")
           .run(resultState, reason, this.#now(), job.id, job.claim_token)
       })
     } finally {

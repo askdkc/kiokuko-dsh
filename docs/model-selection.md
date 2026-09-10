@@ -11,7 +11,12 @@ Normal execution uses the current DSH model, memory, applicable Skills, native
 permissions and focused verification. It creates no Enno contract, WorkUnit,
 plan approval or automatic Enno continuation.
 
-Enno offers seven versioned templates across **OpenAI, OpenCode Go, OpenCode Zen,
+On selection cards, type an option number and press Enter to submit. For options
+above nine, type consecutive digits (`1`, `2`, Enter selects option 12); Backspace
+corrects the number. Digits typed in the search field remain search text, and Enter
+submits the search. IME composition and repeated key events do not select or submit.
+
+Enno offers eight versioned templates across **OpenAI, OpenCode Go, OpenCode Zen,
 OpenRouter and Ollama**, plus a custom configured-model selector. The complete
 [template table and configuration reference](model-selection.ja.md) lists exact
 model IDs. OpenAI assigns Astra to ideal/Zenki/check, Sol to the Goki head and
@@ -19,7 +24,19 @@ Luna to workers. Go and OpenRouter provide GLM and Qwen variants; Zen uses GLM.
 Ollama uses `qwen3-coder:30b` for every role, limits children to one, and never
 downloads models. Reasoning uses model defaults; reflection uses the check model.
 
-Bind templates to actual configured DSH providers; route IDs are not assumed.
+For [dsh-codex](https://github.com/askdkc/dsh-codex), choose **OpenAI Codex・推奨（dsh-codex）**
+from the template menu, then confirm the configuration. It assigns Astra to
+ideal/planning/check, Sol to the Goki head and Luna to workers, following the
+[OpenAI model guide](https://developers.openai.com/api/docs/models). This is a
+quality/workload recommendation, not a measured per-task latency or quota optimum.
+The plugin-specific template binds the exact `openai-codex` / `codex` / `responses`
+contract from [dsh-codex's implementation](https://github.com/askdkc/dsh-codex/blob/e2e61b6d8f3b511cf2dac99688e97b8728cb122c/src/index.ts)
+without asking for the connection again. Conflicting `modelRoutes` declarations
+remain untouched. Recommended models must exist in the current DSH catalog;
+missing models leave roles unset and prevent starting. The catalog is rechecked
+immediately before adoption.
+
+Bind generic templates to actual configured DSH providers; route IDs are not assumed.
 Distinguish OpenAI API from Codex authentication and Go from Zen. The selector
 supports provider/model search, pagination, copying roles, editing, back and
 cancel. Exact IDs or declared aliases resolve models; similar display names
@@ -27,6 +44,14 @@ never authorize substitutions. Edited templates are custom but retain their
 original template ID/version. Configuration confirmation shows every role's
 provider and model. Provider-catalog failure, missing routes/models and required
 compatibility verification have distinct presentations.
+Unset roles start with enno-ideal's provider and go straight to model selection;
+editing an assigned role keeps its own provider. Use “接続を変更” (change connection)
+on the model card to choose another provider. If the preferred provider is unset
+or no longer registered, the selector opens the provider list.
+Use “検索をクリア” to clear an empty search and “一覧を再取得” to retry a failed list.
+Free-text digits remain search terms. Back in route declaration returns to the
+previous step. Confirmed models survive route cancellation; “接続設定を確認” resumes
+unfinished declarations or corrects draft connection settings without reselecting models.
 
 Optional plugin `modelRoutes` entries declare `provider`, `family`, `connection`
 and `protocol`; the native cards can also bind previously unclassified routes.

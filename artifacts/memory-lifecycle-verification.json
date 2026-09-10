@@ -1,0 +1,5757 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-09-10T14:01:15.537Z",
+  "status": "passed",
+  "scope": "Specified deterministic native scenarios; no general fault-free guarantee",
+  "baseCommit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+  "workingTreeClean": false,
+  "sourceManifest": [
+    {
+      "path": "migrations/014_memory_projection_evidence.sql",
+      "sha256": "0fe2197858125a67f4a72ae01afc8e440cdec39bfa1f5e1e427236c388e434d0"
+    },
+    {
+      "path": "scripts/evolution-evaluation-metrics.mjs",
+      "sha256": "a20d6c1e6333ab84daad375d186376e0d5df7e8f71f2b2bf61133947aadfcebe"
+    },
+    {
+      "path": "scripts/repeated-memory-scenarios.mjs",
+      "sha256": "55ea63c91910df7f4e2c2ae3cd0f59f4c482915be70cdcc9546201e99dfec0bd"
+    },
+    {
+      "path": "scripts/run-enno-dsh-e2e.mjs",
+      "sha256": "8fa98f03710616482e5ab1995548ae3bf36f79ad9bbbb0b194da886c58bf9033"
+    },
+    {
+      "path": "scripts/run-evolution-evaluation.mjs",
+      "sha256": "86d8e071f33aca5e868dc3869bd56ca03c9dd1fe8cfe72ed357ddeb919d516da"
+    },
+    {
+      "path": "scripts/run-selection-state-benchmark.mjs",
+      "sha256": "b04510f05f7b77ccbffcf8f2421cea8c157f336e011d233435d213d54932b543"
+    },
+    {
+      "path": "scripts/run-tests.mjs",
+      "sha256": "bb53aa47db876f10cac76aa4afaaea3646ccae049769f5553d4c6cf60287a598"
+    },
+    {
+      "path": "src/context/delivery.ts",
+      "sha256": "a70f9b4cfab411a33480a84380167d983b4bc87f246e7ef144c24155309dfd24"
+    },
+    {
+      "path": "src/context/memory-projection.ts",
+      "sha256": "1faad69a78851ac3fc86e51c82d6e24d84028192e6b6d6136c342aa6de76ec76"
+    },
+    {
+      "path": "src/context/read-snapshot.ts",
+      "sha256": "40abff9bcd3042ecca526667ba3e6ab0c731f96c5265fdbea18def0202fe9747"
+    },
+    {
+      "path": "src/context/scoped-broker.ts",
+      "sha256": "87e774cad358c9e73efece9c57cdf22e1c1a83022ce53962089188176baab29b"
+    },
+    {
+      "path": "src/context/selection-state.ts",
+      "sha256": "6570816587ff05a58229608407f678affe01228e306e5e03089c1f21c0a7091c"
+    },
+    {
+      "path": "src/dsh/context-projection.ts",
+      "sha256": "15107447b48fa831c6b38b90d2e29c274d5d7b4e748e9f13e91a9e0a52a35fac"
+    },
+    {
+      "path": "src/dsh/evidence-selection.ts",
+      "sha256": "c528fc78bd76607532c93ca711b9f2f4910a79581e46e4687410fcf4651d786c"
+    },
+    {
+      "path": "src/dsh/host-adapter.ts",
+      "sha256": "00892277246483a5972905834f0ca7ead8f4201ab294271b44aafff088d53955"
+    },
+    {
+      "path": "src/dsh/message-sources.ts",
+      "sha256": "3be6b439f7d06d1adf3ef5aed6338b9a70b3837de152c4193b9dd4e1be14d24f"
+    },
+    {
+      "path": "src/dsh/request-memory.ts",
+      "sha256": "9b30b341429b14cacde18b7b1d1d2067f082eddec63e962a5a4be9c9ee2b02e5"
+    },
+    {
+      "path": "src/dsh/session-memory-finalizer.ts",
+      "sha256": "544bda936c5404811975ac298e4c6b9a259b8cecfa5cb2aa9d900a43460a625d"
+    },
+    {
+      "path": "src/dsh/surface-range.ts",
+      "sha256": "0cbdf6e3b2b774b34c1d7b31ef991a3dad8fd7c4819ea2ee35dbedbd2e2b7d51"
+    },
+    {
+      "path": "src/memory/evolution/contracts.ts",
+      "sha256": "942ce1952dfb883e063f0439941a0eb376037b694ee710d4f91fb5fd2d8b7298"
+    },
+    {
+      "path": "src/memory/evolution/store.ts",
+      "sha256": "1f4ec0b79243669f446473ca6a876ff13aaf5d92c0775ede3419fa3a274feb94"
+    },
+    {
+      "path": "src/memory/evolution/worker.ts",
+      "sha256": "a0a4df7591800dbac6bb817936cdeae5898012817ea3b2cb9e4d9e57ca535b26"
+    },
+    {
+      "path": "tests/dsh/e2e/deep-planning-native.test.ts",
+      "sha256": "615c6825c8aee36dcb3e1781c4d1265f692abd491f545b14115cb7f321dbf947"
+    },
+    {
+      "path": "tests/dsh/e2e/repeated-memory-lifecycle.test.ts",
+      "sha256": "2eac16ed1ad7f36b53a7af2aca693e4a96de28b41d0169e132564c7b59188f4f"
+    },
+    {
+      "path": "tests/dsh/helpers/deep-native-fixture.ts",
+      "sha256": "461433a7ab4610057545595dcacc8b6febae0640eec92641641f81e1090b4d3f"
+    },
+    {
+      "path": "tests/dsh/helpers/repeated-deep-native.ts",
+      "sha256": "26376f1152cbac21ce867bfe0308377b9ad0e5164275e1331f371b010da63c39"
+    },
+    {
+      "path": "tests/dsh/helpers/repeated-deep-process.ts",
+      "sha256": "4d93fdd4d2e0a3868697ea67de91e6e969f31945c6aaa0c560c83335c5055884"
+    },
+    {
+      "path": "tests/dsh/helpers/repeated-interruption-process.ts",
+      "sha256": "26b8c8f55060c95883974433664ea8b467b9eb4df94766236b8ff3684c99c3d5"
+    },
+    {
+      "path": "tests/dsh/helpers/repeated-memory-native.ts",
+      "sha256": "25c779e4db8cfb8237d4cdf8399ab9fc883031cac9e72993a4c329aec6247020"
+    },
+    {
+      "path": "tests/dsh/helpers/repeated-memory-process.ts",
+      "sha256": "43993f593c0c6918ec23b027fa5c4c65a89dbd07cb3541b9b791306486bf618c"
+    },
+    {
+      "path": "tests/dsh/helpers/repeated-memory-report.ts",
+      "sha256": "fc8d68e3fadeaeecd759232ac0e4866feff66c8a39d0a6a9e909f045ae756ce6"
+    },
+    {
+      "path": "tests/dsh/helpers/repeated-memory-upgrade.ts",
+      "sha256": "6ec5767e7ae05a4ad17f8c0b1f4158509d5f8fa9eef0547d36da1e2025737ddd"
+    },
+    {
+      "path": "tests/dsh/integration/memory-projection.test.ts",
+      "sha256": "7309885a73d4f94b6b5fa93d675c0f325db79c40d37308f52ba773b02a201466"
+    },
+    {
+      "path": "tests/dsh/integration/schema-baseline.test.ts",
+      "sha256": "d47109a5d07b087d91e61edb4c42adac51c377fe2af7f80981009ca60c5d6447"
+    },
+    {
+      "path": "tests/dsh/integration/selection-snapshot.test.ts",
+      "sha256": "7cb67a1d1e4a2d1b5925f87a480ad3470ea13e0732efd2047b681e762f46efe5"
+    },
+    {
+      "path": "tests/dsh/integration/session-bridge-resume.test.ts",
+      "sha256": "6c8bac39472445bc98f0fd8862fa440ee7c3ec352dc8a7702b1131471e9dd28f"
+    },
+    {
+      "path": "tests/dsh/unit/dsh-only-boundary.test.ts",
+      "sha256": "81f7e0c7262a7fc430a3f04bd6679204f109e13bd990409b6cfdc2c95fc4a2b1"
+    },
+    {
+      "path": "tests/dsh/unit/evidence-selection.test.ts",
+      "sha256": "0d4ca4b27581e3419c67fd99cd713c31f22ff9037f8269a9eedc1b98a144e848"
+    },
+    {
+      "path": "tests/dsh/unit/evolution/evaluation-metrics.test.ts",
+      "sha256": "ad0a249b52d7234008fea7b4ff35a882e071a7faea392cbfe1b6ac8b19fbbf8d"
+    }
+  ],
+  "sourceDigest": "db76e0981c51e843815fda1ca57cbf91e44722fa2c20ef51bbfccb4d6806b323",
+  "checks": [
+    {
+      "command": "npm run typecheck",
+      "status": "passed"
+    },
+    {
+      "command": "npm test",
+      "status": "passed",
+      "tests": 517,
+      "passed": 517,
+      "failed": 0,
+      "skipped": 0,
+      "cancelled": 0
+    },
+    {
+      "command": "npm run test:evaluation",
+      "status": "passed",
+      "metrics": {
+        "queryCount": 110,
+        "positiveQueryCount": 100,
+        "recallAt1": 0.93,
+        "recallAt5": 0.99,
+        "mrr": 0.955,
+        "exactIdentifierRecallAt1": 1,
+        "semanticOnlyRecallAt5": 0.95,
+        "semanticOnlyBaselineRecallAt5": 0.35,
+        "semanticOnlyImprovement": 0.6,
+        "scopeLeakageCount": 0,
+        "falseNegativeDeliveryCount": 0
+      }
+    },
+    {
+      "command": "npm run test:efficiency",
+      "status": "passed",
+      "providerCalls": 0,
+      "realTokens": "unmeasured",
+      "realCost": "unmeasured"
+    },
+    {
+      "command": "npm run test:evolution",
+      "status": "passed",
+      "tests": 32,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "npm run test:evaluation:evolution",
+      "status": "passed",
+      "quality": "unmeasured",
+      "reason": "Provide --config with pinned real LLM and embedding identities. No model calls were made."
+    },
+    {
+      "command": "npm run build",
+      "status": "passed"
+    },
+    {
+      "command": "npm run publint",
+      "status": "passed"
+    },
+    {
+      "command": "npm run pack:check",
+      "status": "passed"
+    },
+    {
+      "command": "KIOKUKO_REQUIRE_DSH_CLI=1 KIOKUKO_EXPECTED_DSH_VERSION=0.1.5-rc.1 npm run test:e2e:dsh",
+      "status": "passed",
+      "nativeTests": 71,
+      "existingNativeTests": 36,
+      "repeatedSeries": 35,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    }
+  ],
+  "environment": {
+    "node": "v26.5.0",
+    "dsh": "0.1.5-rc.1",
+    "platform": "darwin",
+    "modelProvider": "scripted",
+    "network": "Public package dependencies fetched with network access",
+    "web": "Disposable localhost profile; local listen permission granted"
+  },
+  "defaultFinalizationInputMode": "prefix_reuse",
+  "realModelQuality": "unmeasured",
+  "benchmark": {
+    "version": 1,
+    "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+    "nodeVersion": "v26.5.0",
+    "runs": 31,
+    "results": [
+      {
+        "size": 20,
+        "fixtureDigest": "ed31e610103b43980b85b1185401163d648ca3a7d75ec1275bb97945134f9635",
+        "hashes": [
+          "dd4a48589ada661c5e921ab978b76c6b4935709a6e451143157eaa2c607fc575",
+          "f954a8429babf77923811ae42d0923f5c98456f6512ab7a235c5116f6aae1ac5"
+        ],
+        "baseline": {
+          "p95Ms": 12.334082999999964,
+          "sqlCalls": 457,
+          "entryRowsRead": 80
+        },
+        "prototype": {
+          "p95Ms": 8.749625000000037,
+          "sqlCalls": 152,
+          "entryRowsRead": 60
+        },
+        "collectionThroughSupply": {
+          "milliseconds": 41.660582999999974,
+          "sqlCalls": 863,
+          "entryRowsRead": 438,
+          "packedIds": [
+            "state-00000",
+            "state-00001",
+            "state-00002",
+            "state-00003",
+            "state-00004",
+            "state-00005",
+            "state-00006",
+            "state-00007",
+            "state-00008",
+            "state-00009",
+            "state-00010",
+            "state-00011",
+            "state-00012"
+          ],
+          "suppliedBytes": 3971,
+          "omissions": 7,
+          "modelRequest": "unmeasured"
+        },
+        "p95ImprovementPercent": 29.061406510722666
+      },
+      {
+        "size": 1000,
+        "fixtureDigest": "86ed0eb74742412fda7ac8e857e691757d5398fa6a7bfd3d5b4a9a1a777f7455",
+        "hashes": [
+          "de6a7493ab3da4299ef4d3f1136801eea6747cefda5d8c6f7021938db7bcd470",
+          "15e0a8b59788fdd7178736743debe1afad074f1ba3dfa1971e712291c33b9849"
+        ],
+        "baseline": {
+          "p95Ms": 853.1631670000024,
+          "sqlCalls": 22017,
+          "entryRowsRead": 4000
+        },
+        "prototype": {
+          "p95Ms": 579.5932909999974,
+          "sqlCalls": 7012,
+          "entryRowsRead": 3000
+        },
+        "collectionThroughSupply": {
+          "milliseconds": 1667.508334000002,
+          "sqlCalls": 20179,
+          "entryRowsRead": 6954,
+          "packedIds": [
+            "state-00000",
+            "state-00001",
+            "state-00002",
+            "state-00003",
+            "state-00004",
+            "state-00005",
+            "state-00006",
+            "state-00007",
+            "state-00008",
+            "state-00009",
+            "state-00010",
+            "state-00011",
+            "state-00012"
+          ],
+          "suppliedBytes": 3971,
+          "omissions": 87,
+          "modelRequest": "unmeasured"
+        },
+        "p95ImprovementPercent": 32.06536411574883
+      }
+    ],
+    "performanceGate": true,
+    "adoption": "adopted",
+    "reason": "Timing gate and selection/hash/replay/currentness tests passed.",
+    "realTokens": "unmeasured",
+    "realCost": "unmeasured"
+  },
+  "packageLifecycle": {
+    "timestamp": "2026-09-10T13:59:24.592Z",
+    "nodeVersion": "v26.5.0",
+    "platform": "darwin",
+    "cli": "complete",
+    "profile": "web",
+    "dshVersion": "0.1.5-rc.1",
+    "nativeDependencies": {
+      "@deepseek-ai/cordis": "4.0.2",
+      "@deepseek-ai/dsh": "0.1.5-rc.1",
+      "@deepseek-ai/dsh-agent": "0.1.5-rc.1",
+      "@deepseek-ai/dsh-agent-loop": "0.1.5-rc.1",
+      "@deepseek-ai/dsh-commands": "0.1.5-rc.1",
+      "@deepseek-ai/dsh-llm": "0.1.5-rc.1",
+      "@deepseek-ai/dsh-session": "0.1.5-rc.1",
+      "@deepseek-ai/dsh-system-prompt": "0.1.5-rc.1",
+      "@deepseek-ai/dsh-tools": "0.1.5-rc.1",
+      "@deepseek-ai/dsh-subagent": "0.1.5-rc.1",
+      "@deepseek-ai/dsh-subagent-spawn-in-process": "0.1.5-rc.1"
+    },
+    "packageVersion": "0.1.35",
+    "packageCommit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+    "workingTreeClean": false,
+    "packageIntegrity": "sha512-iuY3+7UMGLLXm/isp/EBXzvKqcWbWAh5nH0T7i8wgL94ydj6V8W8i4L74Qwf/PmdDZUrqxr8C6qjgxv56wpY9Q==",
+    "install": "complete",
+    "orca": "enabled-native-scenarios-no-skips",
+    "web": "browser-bundle-loaded-and-materialized",
+    "browserBundle": {
+      "bytes": 11112695,
+      "registrations": 52,
+      "reportAndExportHttpRoutes": "complete"
+    },
+    "reload": "browser-bundle-loaded-and-materialized",
+    "uninstall": "complete"
+  },
+  "scenarios": [
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/same-session",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "feab6d71-3c44-4832-b146-a6f32fdb29d8",
+          "session": "repeated-session",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "cbd35b44-6f7b-49f9-bbeb-efdacf16e810",
+          "session": "repeated-session",
+          "start": 21,
+          "end": 37,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "574edbe6-14d3-49dc-be9a-f374bd94e51f",
+            "073ab1f9-3d96-4df8-91ea-233d6ad0ad14"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "d4572855-0c34-4da4-abee-c998274e3160",
+          "session": "repeated-session",
+          "start": 39,
+          "end": 55,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "574edbe6-14d3-49dc-be9a-f374bd94e51f",
+            "073ab1f9-3d96-4df8-91ea-233d6ad0ad14",
+            "00c6cfe5-cb61-44f7-bb3d-45af1152593d",
+            "ac57ead4-3a2d-4fc3-9dda-7fa5ba9fd3e0"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "9991d9c5-b020-45ec-b113-098cf84a10e4",
+          "session": "repeated-session",
+          "start": 57,
+          "end": 71,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "574edbe6-14d3-49dc-be9a-f374bd94e51f",
+            "00c6cfe5-cb61-44f7-bb3d-45af1152593d",
+            "bdbadaf3-5784-4c51-ba0c-a5f61c902113",
+            "e893aca0-59c5-445d-a6bb-dbf01612bfbc"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 5,
+          "runId": "b35bd478-785c-4632-98e2-4fcdb20f4e32",
+          "session": "repeated-session",
+          "start": 73,
+          "end": 84,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "574edbe6-14d3-49dc-be9a-f374bd94e51f",
+            "00c6cfe5-cb61-44f7-bb3d-45af1152593d",
+            "bdbadaf3-5784-4c51-ba0c-a5f61c902113",
+            "0b01623b-5aa7-41bc-b411-a436442a9418"
+          ],
+          "finalizations": 5,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 6,
+          "runId": "4a331a6b-8e2a-4f50-9e84-ddfe5f84f0e3",
+          "session": "repeated-session",
+          "start": 86,
+          "end": 95,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "574edbe6-14d3-49dc-be9a-f374bd94e51f",
+            "00c6cfe5-cb61-44f7-bb3d-45af1152593d",
+            "bdbadaf3-5784-4c51-ba0c-a5f61c902113",
+            "0b01623b-5aa7-41bc-b411-a436442a9418",
+            "cf9d742f-0a42-4fb8-a7cb-b165e83f8895"
+          ],
+          "finalizations": 6,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/new-session",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "5484789c-4102-42d4-8016-7eb6d123f6bd",
+          "session": "repeated-1",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "6337a26b-552d-4eee-95a3-3d2446b13623",
+          "session": "repeated-2",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "4283448f-6ebc-44dc-b4eb-8c6ac6f53661",
+            "62012a7c-98c6-4a19-b105-ee82487ee124"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "46236ee1-32c6-46f0-83e2-a960199253f2",
+          "session": "repeated-3",
+          "start": 1,
+          "end": 23,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "4283448f-6ebc-44dc-b4eb-8c6ac6f53661",
+            "9ec89a32-64d0-4aae-ab47-8705f870ea50",
+            "62012a7c-98c6-4a19-b105-ee82487ee124",
+            "7b4b073a-827c-4773-8cd5-8608789963f6"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "1caef691-c53b-49f4-8ac6-586c1c0d8bac",
+          "session": "repeated-4",
+          "start": 1,
+          "end": 18,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "4283448f-6ebc-44dc-b4eb-8c6ac6f53661",
+            "9ec89a32-64d0-4aae-ab47-8705f870ea50",
+            "af8d3199-3afc-4373-aaa8-63a190b40a48",
+            "e1bebd39-3e0b-4eda-8ea3-89b25a9d4b2f"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 5,
+          "runId": "ec14c167-0920-4650-b326-47fe7a97bc2c",
+          "session": "negative-observe",
+          "start": 1,
+          "end": 18,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "4283448f-6ebc-44dc-b4eb-8c6ac6f53661",
+            "9ec89a32-64d0-4aae-ab47-8705f870ea50",
+            "af8d3199-3afc-4373-aaa8-63a190b40a48",
+            "904bd40f-d981-4951-92b2-54e4e419cc53"
+          ],
+          "finalizations": 5,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 6,
+          "runId": "ae87aeeb-4412-45f0-8990-3aaa1fa02f71",
+          "session": "negative-off",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "4283448f-6ebc-44dc-b4eb-8c6ac6f53661",
+            "9ec89a32-64d0-4aae-ab47-8705f870ea50",
+            "af8d3199-3afc-4373-aaa8-63a190b40a48",
+            "e5aaaf65-f944-425a-82f1-5157b656cfdc",
+            "904bd40f-d981-4951-92b2-54e4e419cc53"
+          ],
+          "finalizations": 6,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/restart",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "a8ffd53d-f16d-4bd4-9880-402b9a9b3ed3",
+          "session": "process-session-1",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "a51398ed-3cf2-416f-9c47-522caa7acd07",
+          "session": "process-session-2",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "61ce0408-42fb-4bdc-a061-e715557f9560",
+            "3e76400d-5e2b-4fa2-82b8-cf7bf0b4ba2d"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "e0b591f3-b408-4205-8e18-97106048abeb",
+          "session": "process-session-3",
+          "start": 1,
+          "end": 23,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "61ce0408-42fb-4bdc-a061-e715557f9560",
+            "eba83ba8-353c-4c0e-a9d2-2cacd95a9fd4",
+            "3e76400d-5e2b-4fa2-82b8-cf7bf0b4ba2d",
+            "ab95454b-74ed-4036-9a2a-79265dfc37c3"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "883ccd30-5606-48b0-aa0b-091b373f56c5",
+          "session": "process-session-4",
+          "start": 1,
+          "end": 18,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "61ce0408-42fb-4bdc-a061-e715557f9560",
+            "eba83ba8-353c-4c0e-a9d2-2cacd95a9fd4",
+            "8b0ee372-b312-4a71-85f7-a4dc7285ba7f",
+            "4f000cd6-c536-4f22-b61e-b91574d1c22b"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/same-session",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "b4e479ab-e6a7-4cad-8eda-851caaef8bf1",
+          "session": "repeated-session",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "5bddb3b2-4ddd-47d9-8bf7-0bc7c33c67f9",
+          "session": "repeated-session",
+          "start": 21,
+          "end": 37,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "dc968c57-3015-430b-94f1-e973151df9a3",
+            "13b2c00e-cbb7-4ff4-9098-dda6ef647c68"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "95197a3a-7d6b-4a4e-bdd0-04dd991c7091",
+          "session": "repeated-session",
+          "start": 39,
+          "end": 55,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "dc968c57-3015-430b-94f1-e973151df9a3",
+            "13b2c00e-cbb7-4ff4-9098-dda6ef647c68",
+            "464e9b31-ba63-49e6-b78c-1eb6b9e5aaa2",
+            "5b87e358-2e8e-44e9-a489-c5cebdda439b"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "4c836c1f-bb48-492c-9e7f-f5e2aa9a45bb",
+          "session": "repeated-session",
+          "start": 57,
+          "end": 71,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "dc968c57-3015-430b-94f1-e973151df9a3",
+            "464e9b31-ba63-49e6-b78c-1eb6b9e5aaa2",
+            "92c3d663-114f-4651-b34e-938939e42ff2",
+            "bbfe7a39-cdbd-4dc8-b11b-3beb826ff69f"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 5,
+          "runId": "fc287e95-a8cc-44d8-ae1e-a99b4cbce989",
+          "session": "repeated-session",
+          "start": 73,
+          "end": 84,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "dc968c57-3015-430b-94f1-e973151df9a3",
+            "464e9b31-ba63-49e6-b78c-1eb6b9e5aaa2",
+            "92c3d663-114f-4651-b34e-938939e42ff2",
+            "27228015-351d-4f86-9df5-50010dfb7894"
+          ],
+          "finalizations": 5,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 6,
+          "runId": "5efbe49b-2080-4aa0-9d68-367e6f82a753",
+          "session": "repeated-session",
+          "start": 86,
+          "end": 95,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "dc968c57-3015-430b-94f1-e973151df9a3",
+            "464e9b31-ba63-49e6-b78c-1eb6b9e5aaa2",
+            "92c3d663-114f-4651-b34e-938939e42ff2",
+            "27228015-351d-4f86-9df5-50010dfb7894",
+            "d13641e0-d5a7-4406-877d-e3050a5a1e18"
+          ],
+          "finalizations": 6,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/new-session",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "8ef94008-4508-45e6-a7a3-1eebc8c277b6",
+          "session": "repeated-1",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "6ee15905-a104-427e-87e4-9cb4500466c9",
+          "session": "repeated-2",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "b59fd432-4cb7-4d3e-b90a-7adce293e1dc",
+            "ff2d9ad9-868b-4362-8aa1-d8dc7da807c4"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "df1fea16-bac7-47a1-a335-1ccc14b29423",
+          "session": "repeated-3",
+          "start": 1,
+          "end": 23,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "b59fd432-4cb7-4d3e-b90a-7adce293e1dc",
+            "3028fb9d-f77b-42a7-9472-b98c1842d113",
+            "ff2d9ad9-868b-4362-8aa1-d8dc7da807c4",
+            "ff1b3cf4-009a-43dc-b42f-f2bf8ad8512d"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "b875c934-8b3a-453c-8580-0910525e9e76",
+          "session": "repeated-4",
+          "start": 1,
+          "end": 18,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "b59fd432-4cb7-4d3e-b90a-7adce293e1dc",
+            "3028fb9d-f77b-42a7-9472-b98c1842d113",
+            "47e1047d-80ea-4dc9-b8c1-467a47f7866c",
+            "dc0ff7c3-f6b2-49e2-8ef6-0a537b12bfc1"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 5,
+          "runId": "3681c608-bfc0-441b-a757-557dddc943ec",
+          "session": "negative-observe",
+          "start": 1,
+          "end": 18,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "b59fd432-4cb7-4d3e-b90a-7adce293e1dc",
+            "3028fb9d-f77b-42a7-9472-b98c1842d113",
+            "47e1047d-80ea-4dc9-b8c1-467a47f7866c",
+            "898ef7a1-30cf-4348-8439-70ab190b1421"
+          ],
+          "finalizations": 5,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 6,
+          "runId": "32837d34-389b-4217-a2a9-05db68ceb33d",
+          "session": "negative-off",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "b59fd432-4cb7-4d3e-b90a-7adce293e1dc",
+            "3028fb9d-f77b-42a7-9472-b98c1842d113",
+            "47e1047d-80ea-4dc9-b8c1-467a47f7866c",
+            "1e811af3-af95-47e1-9e8f-182a33ec6c11",
+            "898ef7a1-30cf-4348-8439-70ab190b1421"
+          ],
+          "finalizations": 6,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/restart",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "08d58d6e-7bc8-4edf-aa83-c2ba48ab745c",
+          "session": "process-session-1",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "1c6821ee-3ac4-4e03-ab0e-0a75cd4abe72",
+          "session": "process-session-2",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "a197bc2b-8b5b-4aef-a676-9519cc2580eb",
+            "c8e8c60e-29d8-490f-a8cd-d40765bb4667"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "2c32b38e-91e5-465a-add5-7d44f1aa7a8b",
+          "session": "process-session-3",
+          "start": 1,
+          "end": 23,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "a197bc2b-8b5b-4aef-a676-9519cc2580eb",
+            "56b38496-626d-4457-9dba-c130b283f200",
+            "c8e8c60e-29d8-490f-a8cd-d40765bb4667",
+            "7ba543b6-2c5e-4052-9888-791a0eb032a2"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "1002f2cc-139f-4b7e-b095-4fdb0c198b3c",
+          "session": "process-session-4",
+          "start": 1,
+          "end": 18,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "a197bc2b-8b5b-4aef-a676-9519cc2580eb",
+            "56b38496-626d-4457-9dba-c130b283f200",
+            "6ef426d2-26e2-4202-8661-9608086d83ac",
+            "eb597030-9285-4bc3-82e1-091d601310cc"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "enno/prefix_reuse/same-session",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "bda1fb20-7f55-4f3f-9e54-480db31a60ab",
+          "session": "repeated-session",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "bba0f6f7-ed0a-4fea-88fb-a41a0391645b",
+          "session": "repeated-session",
+          "start": 111,
+          "end": 214,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "1d1687a9-492e-403c-b73c-f8e7bdc29b75",
+            "8ceb30f2-fc57-4d04-b56f-6db18e960ee6"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "893b9ea9-c60d-4c10-bf0c-7482ad24bb01",
+          "session": "repeated-session",
+          "start": 216,
+          "end": 319,
+          "mainCalls": 9,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "1d1687a9-492e-403c-b73c-f8e7bdc29b75",
+            "8ceb30f2-fc57-4d04-b56f-6db18e960ee6",
+            "d7a49fcc-5a43-41c1-8992-1b15d92c3f97",
+            "bddd2731-724d-403f-9124-d31edb3b1713"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "9a3bfe0b-f304-47fe-b697-c0d0c964d2a2",
+          "session": "repeated-session",
+          "start": 321,
+          "end": 421,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "1d1687a9-492e-403c-b73c-f8e7bdc29b75",
+            "d7a49fcc-5a43-41c1-8992-1b15d92c3f97",
+            "9ba1c4e8-87b1-4fab-be42-264ed8bc85af",
+            "881e82d1-44fa-4746-8783-8c94d8d039e5"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 5,
+          "runId": "e627153f-5ba8-48cd-aec2-02a33a14d624",
+          "session": "repeated-session",
+          "start": 423,
+          "end": 520,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "1d1687a9-492e-403c-b73c-f8e7bdc29b75",
+            "d7a49fcc-5a43-41c1-8992-1b15d92c3f97",
+            "9ba1c4e8-87b1-4fab-be42-264ed8bc85af",
+            "8250f59e-0ba4-41e8-b27d-e548c4f73f04"
+          ],
+          "finalizations": 5,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 6,
+          "runId": "0799ba1f-b674-4fe5-a192-6f4780db5827",
+          "session": "repeated-session",
+          "start": 522,
+          "end": 618,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "1d1687a9-492e-403c-b73c-f8e7bdc29b75",
+            "d7a49fcc-5a43-41c1-8992-1b15d92c3f97",
+            "9ba1c4e8-87b1-4fab-be42-264ed8bc85af",
+            "8250f59e-0ba4-41e8-b27d-e548c4f73f04",
+            "941b855c-1e12-47c2-ad85-62f832d36298"
+          ],
+          "finalizations": 6,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "enno",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "enno/prefix_reuse/new-session",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "3a8cd047-f323-4e2f-b2b0-2c4ed33314dd",
+          "session": "repeated-1",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "19de121a-5576-4c93-bdca-768cf6030ca1",
+          "session": "repeated-2",
+          "start": 1,
+          "end": 111,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "eadf6d62-bec9-46d4-a429-ce8809f1ef83",
+            "1ab4b11b-2dd5-4ae0-bc88-8058d32873b9"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "c9dd7179-60db-4440-9f85-6ddf6c8efbfd",
+          "session": "repeated-3",
+          "start": 1,
+          "end": 113,
+          "mainCalls": 9,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "eadf6d62-bec9-46d4-a429-ce8809f1ef83",
+            "79d9250c-332e-4ef3-a12c-6bd686d5b8d7",
+            "1ab4b11b-2dd5-4ae0-bc88-8058d32873b9",
+            "d817b2f6-099c-4380-9381-c5cadb9082d3"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "330265dd-7012-4fc5-87a6-d972c78d5a8e",
+          "session": "repeated-4",
+          "start": 1,
+          "end": 108,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "eadf6d62-bec9-46d4-a429-ce8809f1ef83",
+            "79d9250c-332e-4ef3-a12c-6bd686d5b8d7",
+            "e2ba27a6-854e-4e0e-8fcf-3f12e6765425",
+            "27471fbb-8fce-4400-8465-277ebed974f3"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 5,
+          "runId": "7ad2fdbf-8ba6-40df-81cf-1463b7e80ee6",
+          "session": "negative-observe",
+          "start": 1,
+          "end": 108,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "eadf6d62-bec9-46d4-a429-ce8809f1ef83",
+            "79d9250c-332e-4ef3-a12c-6bd686d5b8d7",
+            "e2ba27a6-854e-4e0e-8fcf-3f12e6765425",
+            "55c263f7-aae9-414d-9df3-4bea8ef16831"
+          ],
+          "finalizations": 5,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 6,
+          "runId": "f4b4243f-c7d8-4884-8c99-9baf6bf88f39",
+          "session": "negative-off",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "eadf6d62-bec9-46d4-a429-ce8809f1ef83",
+            "79d9250c-332e-4ef3-a12c-6bd686d5b8d7",
+            "e2ba27a6-854e-4e0e-8fcf-3f12e6765425",
+            "8bb271bc-2eef-4d47-baab-ba131a601bae",
+            "55c263f7-aae9-414d-9df3-4bea8ef16831"
+          ],
+          "finalizations": 6,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "enno",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "enno/prefix_reuse/restart",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "47ec1908-4dee-447a-8e48-acc6a9c8b908",
+          "session": "process-session-1",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "aaefb138-9095-4502-8308-cf0e7d20f5f9",
+          "session": "process-session-2",
+          "start": 1,
+          "end": 111,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "79ce0830-dbd6-4cf4-99a7-3072f4e3786d",
+            "428ff58d-fc3d-4217-bb9c-279966731ef4"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "383fbd1e-f203-45ef-ae25-10515fbda1eb",
+          "session": "process-session-3",
+          "start": 1,
+          "end": 113,
+          "mainCalls": 9,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "79ce0830-dbd6-4cf4-99a7-3072f4e3786d",
+            "2331a411-c83e-4293-aa06-89ccde247eeb",
+            "428ff58d-fc3d-4217-bb9c-279966731ef4",
+            "02d3d510-2fbb-473d-9382-e77d66bfa857"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "4ecdcc36-7da1-4c5e-b2f8-38dcbe8aeca9",
+          "session": "process-session-4",
+          "start": 1,
+          "end": 108,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "79ce0830-dbd6-4cf4-99a7-3072f4e3786d",
+            "2331a411-c83e-4293-aa06-89ccde247eeb",
+            "0d647758-e127-4fad-869d-c3b7217e52e2",
+            "ced604be-18c7-4fdb-841f-8de27325c604"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "enno",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "enno/bounded_evidence/same-session",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "d330bec2-21bb-4f4c-a0d7-08eecf3cf760",
+          "session": "repeated-session",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "18a4a2a4-a43c-4234-8338-7698365f08ab",
+          "session": "repeated-session",
+          "start": 111,
+          "end": 214,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "47c1f275-0ed6-41d7-8b0d-88e8176c0b84",
+            "68d01b12-9845-4dca-b9b1-567ec99844b7"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "25e3eab7-3043-4405-85c0-e1f0d6534d19",
+          "session": "repeated-session",
+          "start": 216,
+          "end": 319,
+          "mainCalls": 9,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "47c1f275-0ed6-41d7-8b0d-88e8176c0b84",
+            "68d01b12-9845-4dca-b9b1-567ec99844b7",
+            "da7d43a9-42ea-4988-94ea-8107cb2b13a5",
+            "dd41f033-84d4-4cb9-89af-18019c3309e3"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "a24402ef-2efb-42b3-b6e4-7137fb9720ef",
+          "session": "repeated-session",
+          "start": 321,
+          "end": 421,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "47c1f275-0ed6-41d7-8b0d-88e8176c0b84",
+            "da7d43a9-42ea-4988-94ea-8107cb2b13a5",
+            "47e9e58f-1b7d-4c9d-b7da-f9b3c7c38933",
+            "f155db7f-bbf1-4c75-ad50-38cc59f5a900"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 5,
+          "runId": "feb41152-29b3-4e96-828e-b081b5d521ef",
+          "session": "repeated-session",
+          "start": 423,
+          "end": 520,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "47c1f275-0ed6-41d7-8b0d-88e8176c0b84",
+            "da7d43a9-42ea-4988-94ea-8107cb2b13a5",
+            "47e9e58f-1b7d-4c9d-b7da-f9b3c7c38933",
+            "695c7d98-0b2a-4041-9bda-cad0962c97ee"
+          ],
+          "finalizations": 5,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 6,
+          "runId": "411de484-4de1-4ded-85cc-d1fe7c5c899e",
+          "session": "repeated-session",
+          "start": 522,
+          "end": 618,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "47c1f275-0ed6-41d7-8b0d-88e8176c0b84",
+            "da7d43a9-42ea-4988-94ea-8107cb2b13a5",
+            "47e9e58f-1b7d-4c9d-b7da-f9b3c7c38933",
+            "695c7d98-0b2a-4041-9bda-cad0962c97ee",
+            "961c1bb3-8144-4d65-8ba9-9320ec20d42e"
+          ],
+          "finalizations": 6,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "enno",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "enno/bounded_evidence/new-session",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "9cfe77da-3148-45d1-9ef1-0237cec38018",
+          "session": "repeated-1",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "ccaa5bdf-5606-41ab-a977-831b70e133df",
+          "session": "repeated-2",
+          "start": 1,
+          "end": 111,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "478a53ea-cf18-4e89-a89b-7fcac4af6c65",
+            "3dbc424e-b9fe-4277-afcb-3b0a120e3ec6"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "45c88daf-6dfe-406b-9eb5-4f4993a20cac",
+          "session": "repeated-3",
+          "start": 1,
+          "end": 113,
+          "mainCalls": 9,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "478a53ea-cf18-4e89-a89b-7fcac4af6c65",
+            "3ed9ef02-ca8a-4718-b25b-f0d7783b2a0d",
+            "3dbc424e-b9fe-4277-afcb-3b0a120e3ec6",
+            "3ecfcf44-35a7-4513-978c-f2907882543e"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "512a8a4d-865d-474d-8b2e-4ae32a23c40c",
+          "session": "repeated-4",
+          "start": 1,
+          "end": 108,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "478a53ea-cf18-4e89-a89b-7fcac4af6c65",
+            "3ed9ef02-ca8a-4718-b25b-f0d7783b2a0d",
+            "10419be8-3787-476d-aca9-a09b19354860",
+            "b4c66f7f-2298-4821-9179-40a94d9c8164"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 5,
+          "runId": "320aaa43-52d1-4a23-944e-8b908fefca02",
+          "session": "negative-observe",
+          "start": 1,
+          "end": 108,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "478a53ea-cf18-4e89-a89b-7fcac4af6c65",
+            "3ed9ef02-ca8a-4718-b25b-f0d7783b2a0d",
+            "10419be8-3787-476d-aca9-a09b19354860",
+            "a382122c-0826-41ff-9e7b-a4b296faf486"
+          ],
+          "finalizations": 5,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 6,
+          "runId": "a56251ad-5cc2-4b51-83ad-8e4f72dadcfe",
+          "session": "negative-off",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "478a53ea-cf18-4e89-a89b-7fcac4af6c65",
+            "3ed9ef02-ca8a-4718-b25b-f0d7783b2a0d",
+            "10419be8-3787-476d-aca9-a09b19354860",
+            "733f9e6a-7d49-4339-81b0-2cf2162fda7a",
+            "a382122c-0826-41ff-9e7b-a4b296faf486"
+          ],
+          "finalizations": 6,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "enno",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "enno/bounded_evidence/restart",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "2fc29b27-f347-4d16-b4d5-2b2f2e117a57",
+          "session": "process-session-1",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "88aa6bf1-c309-410b-ab3a-4b424ae05b0b",
+          "session": "process-session-2",
+          "start": 1,
+          "end": 111,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "576565c8-dd8b-4f41-aa44-d601b5186370",
+            "d27bb6d4-f073-4df4-99cf-5d499e6a53d4"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "cfe9525a-4654-466f-ad5d-2bc4229fc85e",
+          "session": "process-session-3",
+          "start": 1,
+          "end": 113,
+          "mainCalls": 9,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "576565c8-dd8b-4f41-aa44-d601b5186370",
+            "d292a7ba-017c-48f1-b112-b95b5171e296",
+            "d27bb6d4-f073-4df4-99cf-5d499e6a53d4",
+            "807075cc-8ac5-41ad-8fc9-c481fea6e71e"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "836231dd-3fa7-49a5-9b95-5b3c9b2a9604",
+          "session": "process-session-4",
+          "start": 1,
+          "end": 108,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "576565c8-dd8b-4f41-aa44-d601b5186370",
+            "d292a7ba-017c-48f1-b112-b95b5171e296",
+            "54302a40-c14e-4d18-bf7c-3bed050cda2d",
+            "07c07949-dd87-4fd9-a0d2-ba29df36feaa"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "enno",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/duplicate-completion",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "103417bf-ed1a-49ec-bb66-a4d8db49ab02",
+          "session": "fault-session",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "9c001d20-a6f1-486c-8ec6-8616786cb24c",
+          "session": "fault-session",
+          "start": 21,
+          "end": 37,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "9c3fab97-a3f4-4491-bcad-57bf3827948b",
+            "2bac4757-67c7-4131-b824-ec278eee092f"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "0360a092-1f11-426b-a740-a7bc09bd9c37",
+          "session": "fault-session",
+          "start": 39,
+          "end": 55,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "9c3fab97-a3f4-4491-bcad-57bf3827948b",
+            "2bac4757-67c7-4131-b824-ec278eee092f",
+            "d14d23f1-5a88-4586-a3be-f799e8ef8238",
+            "929e22dd-8afd-499b-a04b-33dce34b6fc2"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "c163c413-4329-4fa3-9e35-4d12b4904866",
+          "session": "fault-session",
+          "start": 57,
+          "end": 71,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "9c3fab97-a3f4-4491-bcad-57bf3827948b",
+            "d14d23f1-5a88-4586-a3be-f799e8ef8238",
+            "bbe67e16-81c3-4a27-af17-6820074f47ca",
+            "5a18c1ef-119b-4971-af7a-f3d61f118386"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/save-failure",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "b8d1a70a-5af6-4ad0-b01d-4fe05e64e0f9",
+          "session": "fault-session",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "330ace00-0703-47cd-a90e-7119ed51e187",
+          "session": "fault-session",
+          "start": 21,
+          "end": 37,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "1ae0b33e-52de-469a-b587-d5fd39b55100",
+            "98b75a92-bbc1-459f-9b33-b952113e2beb"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "6bfb93ed-f75a-4409-828b-29d3fc9485cf",
+          "session": "fault-session",
+          "start": 39,
+          "end": 55,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "1ae0b33e-52de-469a-b587-d5fd39b55100",
+            "98b75a92-bbc1-459f-9b33-b952113e2beb",
+            "c9b86f4f-e0b2-409e-b53e-24cb3c924053",
+            "6f22b399-6b1e-4124-ac7f-f9b55f7be36d"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "a2dcb401-e8c0-4718-bcb6-2795473ba60f",
+          "session": "fault-session",
+          "start": 57,
+          "end": 71,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "1ae0b33e-52de-469a-b587-d5fd39b55100",
+            "c9b86f4f-e0b2-409e-b53e-24cb3c924053",
+            "371201fa-6c98-4451-a36f-de9f79883c18",
+            "676d0105-64a7-403b-872a-cd2548ef8cd2"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/correction",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "49cbf924-0f77-4c9c-9ce3-fb861f24ebe0",
+          "session": "correction-prelude",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "35d88bf6-6b48-477e-9d5f-48a527049682",
+          "session": "correction-prelude",
+          "start": 21,
+          "end": 37,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "7c379027-5001-4793-926a-5bda82d6b853",
+            "56023442-23a1-48d4-b41b-ecfb7b9188a2"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "c72673e8-3a20-43d1-ace6-46704b44dfbd",
+          "session": "correction-prelude",
+          "start": 39,
+          "end": 55,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "7c379027-5001-4793-926a-5bda82d6b853",
+            "56023442-23a1-48d4-b41b-ecfb7b9188a2",
+            "8d940701-44b9-4f6f-aa85-0603214bd5ef",
+            "14b3b64e-9f53-4ab0-9c2c-e028af747c1a"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "b8613998-85fb-42c3-a193-6124ebe9b270",
+          "session": "correction-probe",
+          "start": 1,
+          "end": 18,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "7c379027-5001-4793-926a-5bda82d6b853",
+            "8d940701-44b9-4f6f-aa85-0603214bd5ef",
+            "a9826d21-b548-4799-80df-034387c4920c",
+            "ef05e58d-5ce1-4b61-a57b-a4cf85cab3e1"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 5,
+          "runId": "b4125773-6195-46b5-a55b-a676f6fd3622",
+          "session": "fault-session",
+          "start": 1,
+          "end": 25,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "7c379027-5001-4793-926a-5bda82d6b853",
+            "8d940701-44b9-4f6f-aa85-0603214bd5ef",
+            "a9826d21-b548-4799-80df-034387c4920c",
+            "38a71328-0e79-44b0-9b65-065a2029d4ce",
+            "ef05e58d-5ce1-4b61-a57b-a4cf85cab3e1",
+            "d2080e6f-95f5-416d-a098-5e185de8f24b"
+          ],
+          "finalizations": 5,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 6,
+          "runId": "a15e6e48-ce89-43f8-970b-2259537f80c5",
+          "session": "fault-session",
+          "start": 27,
+          "end": 49,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "8d940701-44b9-4f6f-aa85-0603214bd5ef",
+            "a9826d21-b548-4799-80df-034387c4920c",
+            "38a71328-0e79-44b0-9b65-065a2029d4ce",
+            "d2080e6f-95f5-416d-a098-5e185de8f24b",
+            "038bd7a0-b135-4f72-812a-b371670cb1bc",
+            "7c379027-5001-4793-926a-5bda82d6b853",
+            "d72dcde8-232e-4ea4-b2d8-4a773d404c69",
+            "14b3b64e-9f53-4ab0-9c2c-e028af747c1a",
+            "2a3378ac-612f-45c2-9c92-15d5eb3779c6"
+          ],
+          "finalizations": 6,
+          "episodes": 6,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 7,
+          "runId": "54a9e3fc-42f7-4546-94c3-ee10e5122e60",
+          "session": "fault-session",
+          "start": 51,
+          "end": 67,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "8d940701-44b9-4f6f-aa85-0603214bd5ef",
+            "a9826d21-b548-4799-80df-034387c4920c",
+            "38a71328-0e79-44b0-9b65-065a2029d4ce",
+            "d2080e6f-95f5-416d-a098-5e185de8f24b",
+            "038bd7a0-b135-4f72-812a-b371670cb1bc",
+            "7c379027-5001-4793-926a-5bda82d6b853",
+            "d72dcde8-232e-4ea4-b2d8-4a773d404c69",
+            "14b3b64e-9f53-4ab0-9c2c-e028af747c1a",
+            "2a3378ac-612f-45c2-9c92-15d5eb3779c6",
+            "66a0315f-1412-48e5-b44e-f10b2310c4b1",
+            "b6424dc3-6446-4f62-8a6f-e8f433f04005"
+          ],
+          "finalizations": 7,
+          "episodes": 7,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 8,
+          "runId": "93c05f51-93ef-4959-aedc-fe3d4a0e707c",
+          "session": "fault-session",
+          "start": 69,
+          "end": 80,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "8d940701-44b9-4f6f-aa85-0603214bd5ef",
+            "a9826d21-b548-4799-80df-034387c4920c",
+            "38a71328-0e79-44b0-9b65-065a2029d4ce",
+            "d2080e6f-95f5-416d-a098-5e185de8f24b",
+            "038bd7a0-b135-4f72-812a-b371670cb1bc",
+            "7c379027-5001-4793-926a-5bda82d6b853",
+            "d72dcde8-232e-4ea4-b2d8-4a773d404c69",
+            "14b3b64e-9f53-4ab0-9c2c-e028af747c1a",
+            "2a3378ac-612f-45c2-9c92-15d5eb3779c6",
+            "66a0315f-1412-48e5-b44e-f10b2310c4b1",
+            "b6424dc3-6446-4f62-8a6f-e8f433f04005",
+            "2261c67a-03e7-40e6-a316-6856b48c25ad",
+            "dfd08237-162b-449d-8cec-5fa5fae82532"
+          ],
+          "finalizations": 8,
+          "episodes": 8,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/adoption-source",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "c6bf4784-4208-4d8d-8a5f-19391cad835e",
+          "session": "adoption-prelude",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "698a1702-a3e4-442a-993b-da5e9ba5da6f",
+          "session": "fault-session",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "fb6826e3-75e7-4beb-9192-4354023e87ec",
+            "12ba4024-5d33-46cd-8645-3dbdd69766e6"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "8c930e97-b968-46f8-840d-d50109dfee0c",
+          "session": "fault-session",
+          "start": 23,
+          "end": 39,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "fb6826e3-75e7-4beb-9192-4354023e87ec",
+            "12ba4024-5d33-46cd-8645-3dbdd69766e6",
+            "4113c603-2e58-469c-8e1a-59b3892a1fd3",
+            "d60c1ed2-b0ef-44d9-b481-bc8dcceca131"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "40c0eb8d-d3c0-44cb-955a-a3fb144488b6",
+          "session": "fault-session",
+          "start": 41,
+          "end": 61,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "4113c603-2e58-469c-8e1a-59b3892a1fd3",
+            "d60c1ed2-b0ef-44d9-b481-bc8dcceca131",
+            "1ad302b2-b2a8-47b7-ae95-ced5917b488c",
+            "fb6826e3-75e7-4beb-9192-4354023e87ec",
+            "da16877e-5498-499f-965f-403c93b68eba"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/adoption-mode",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "a53e14e2-a228-47ec-8b81-5ccc3fd685e8",
+          "session": "adoption-prelude",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "baaf829e-7409-47bb-98c6-369ad46b9643",
+          "session": "fault-session",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "c768d54e-5a7f-450c-93a9-31861b5c023e",
+            "748ed398-dca1-4489-a9f8-8a9e28ae0e51"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "9065ceef-a972-45b2-9afc-6b359b90d1cb",
+          "session": "fault-session",
+          "start": 23,
+          "end": 39,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "c768d54e-5a7f-450c-93a9-31861b5c023e",
+            "748ed398-dca1-4489-a9f8-8a9e28ae0e51",
+            "8509f2b5-3460-4862-b0dd-b0d8832adfcb",
+            "f18cba35-9c42-4558-bca7-235ade713eb8"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "c9a01d9e-d464-416b-9a99-805ff3b4dd87",
+          "session": "fault-session",
+          "start": 41,
+          "end": 57,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "c768d54e-5a7f-450c-93a9-31861b5c023e",
+            "748ed398-dca1-4489-a9f8-8a9e28ae0e51",
+            "8509f2b5-3460-4862-b0dd-b0d8832adfcb",
+            "f18cba35-9c42-4558-bca7-235ade713eb8",
+            "a64179bc-d72a-43f5-8416-81242955e629",
+            "407f341c-0432-440e-9038-2d879c44a5f4"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/adoption-lease",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "f05718b9-107e-40c9-ad7e-b8262d93aa01",
+          "session": "adoption-prelude",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "695ab2ae-bcf5-4854-840e-afc34a85701e",
+          "session": "fault-session",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "052913d7-1080-4c76-8fa2-5a475d0dbc3b",
+            "0f461620-05cd-42a2-a761-8ca16eb03f9f"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "9bb1e9c1-be4d-4a44-9e3a-4724c749a3bc",
+          "session": "fault-session",
+          "start": 23,
+          "end": 39,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "052913d7-1080-4c76-8fa2-5a475d0dbc3b",
+            "0f461620-05cd-42a2-a761-8ca16eb03f9f",
+            "17264272-e181-458d-ab73-32cd59087564",
+            "d281c262-c745-428e-bb15-3eba297ea340"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "995bf49d-46a5-41ee-94b0-b867eef49052",
+          "session": "fault-session",
+          "start": 41,
+          "end": 57,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "052913d7-1080-4c76-8fa2-5a475d0dbc3b",
+            "0f461620-05cd-42a2-a761-8ca16eb03f9f",
+            "17264272-e181-458d-ab73-32cd59087564",
+            "d281c262-c745-428e-bb15-3eba297ea340",
+            "eb893e3e-b7ca-45ac-8910-2dec69eee94f",
+            "dcbf78e7-c0d7-469a-9944-7efe13211000"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/dispatched-interruption",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 2,
+          "runId": "e89153d5-f063-499c-8d8a-d2ecaa1c01ac",
+          "session": "interrupted-session-1",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "035bc9ba-01b1-4b11-827c-a6702708f67b",
+            "14d3d91b-b022-4a70-b6e3-c2c4f503e201"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "stage": "durable-dispatch-before-kill",
+          "actual": "processing",
+          "expected": "processing",
+          "runId": "e8a62453-89d9-46f7-9745-d733d3eae47d"
+        },
+        {
+          "round": 4,
+          "runId": "7e037dd1-9ff9-4e28-8955-3a3ef7cb44a8",
+          "session": "interrupted-session-3",
+          "start": 1,
+          "end": 25,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "035bc9ba-01b1-4b11-827c-a6702708f67b",
+            "d3809d50-44db-4dcd-ae76-522a0d430929",
+            "d029f36e-1204-4a91-9439-13534302aead",
+            "14d3d91b-b022-4a70-b6e3-c2c4f503e201",
+            "70af6de6-45d1-4323-a5f4-aa155b88623d",
+            "567e01ad-c426-499b-9569-495fd255bb07"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "stage": "restart-recovery",
+          "actual": "held",
+          "expected": "held",
+          "reason": "expired_dispatched_claim",
+          "automaticResends": 0
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/prefix_reuse/upgrade",
+      "status": "passed",
+      "observations": [
+        {
+          "stage": "legacy-upgrade",
+          "expected": {
+            "policy": "context-ranking-v6",
+            "selectionVersion": 1,
+            "inputMode": "prefix_reuse"
+          },
+          "actual": {
+            "policy": "context-ranking-v6",
+            "selectionVersion": 1,
+            "inputMode": "prefix_reuse",
+            "job": "completed"
+          },
+          "migration": 14
+        },
+        {
+          "round": 1,
+          "runId": "9fcecd11-08aa-4888-bf18-4691ba006b79",
+          "session": "upgraded-session",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 2,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "184095df-96a1-4f66-8628-7090f047fc31",
+          "session": "upgraded-session",
+          "start": 21,
+          "end": 37,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "3dccc5ce-5a5c-42c1-9fee-0b1beba05c14",
+            "7fe0ba20-7788-456e-af67-9372c374a8a0"
+          ],
+          "finalizations": 3,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "9faca711-ca63-4bba-937f-d489bc6e751f",
+          "session": "upgraded-session",
+          "start": 39,
+          "end": 55,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "3dccc5ce-5a5c-42c1-9fee-0b1beba05c14",
+            "7fe0ba20-7788-456e-af67-9372c374a8a0",
+            "e0fbd241-7225-41ad-86d4-4d91411192c8",
+            "82c659ee-b095-4e3e-8951-4b20b77eb00a"
+          ],
+          "finalizations": 4,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "a346f7f6-c855-4df1-a3ab-b921f9a7f637",
+          "session": "upgraded-session",
+          "start": 57,
+          "end": 71,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "3dccc5ce-5a5c-42c1-9fee-0b1beba05c14",
+            "e0fbd241-7225-41ad-86d4-4d91411192c8",
+            "d0dcaec9-ffdb-4445-a9b1-548917f69e9c",
+            "b5a8130b-b648-43aa-9844-8eed0de30e6f"
+          ],
+          "finalizations": 5,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/duplicate-completion",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "cbd47933-5d8d-4a9f-b577-5338ad035357",
+          "session": "fault-session",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "2b6ae035-b8b8-4077-955a-8fc7648ebf22",
+          "session": "fault-session",
+          "start": 21,
+          "end": 37,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "51bbf57d-9f26-432f-a8ca-a36cdebb79d9",
+            "660e51c5-7313-4586-9b54-f28608440fb1"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "e5dc6866-8b68-4abd-b44c-7bfe704996b2",
+          "session": "fault-session",
+          "start": 39,
+          "end": 55,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "51bbf57d-9f26-432f-a8ca-a36cdebb79d9",
+            "660e51c5-7313-4586-9b54-f28608440fb1",
+            "a3f3681c-bc2e-4a2c-8d3e-94f1a54867ce",
+            "308be7af-f837-42c0-a4f5-652827277f54"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "f2b5d101-a8a9-4388-afd5-702570534ff6",
+          "session": "fault-session",
+          "start": 57,
+          "end": 71,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "51bbf57d-9f26-432f-a8ca-a36cdebb79d9",
+            "a3f3681c-bc2e-4a2c-8d3e-94f1a54867ce",
+            "d4bf426d-4de3-4eb8-a4ee-18e7008e08fb",
+            "221e80a8-5372-4904-958d-4b327c05d982"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/save-failure",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "ee969712-acd5-4bc9-a45b-8a32afb0ed11",
+          "session": "fault-session",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "1ebfbef6-8f58-486a-8d9d-5f0eb7be390d",
+          "session": "fault-session",
+          "start": 21,
+          "end": 37,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "8694403c-9a96-4484-881e-3c5c4db7b568",
+            "4262cecb-c503-4fe9-b0e6-0bade684e07a"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "b7f434fb-d20a-481a-b73d-033c96944f1d",
+          "session": "fault-session",
+          "start": 39,
+          "end": 55,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "8694403c-9a96-4484-881e-3c5c4db7b568",
+            "4262cecb-c503-4fe9-b0e6-0bade684e07a",
+            "0ac1b9a7-85d6-4337-ba29-e5c329351cb1",
+            "cd3a337a-534f-4ff1-8b19-1666bca7c0c5"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "300d91cb-aa9f-4d94-ac32-83a5c6ef327e",
+          "session": "fault-session",
+          "start": 57,
+          "end": 71,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "8694403c-9a96-4484-881e-3c5c4db7b568",
+            "0ac1b9a7-85d6-4337-ba29-e5c329351cb1",
+            "7a8f5ac7-1146-41a5-ae84-a455d0e1fde9",
+            "d91ed388-8297-48dc-bf39-30a87b88d5b3"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/correction",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "339f6bf3-5f21-481c-b179-1144aa2b7f26",
+          "session": "correction-prelude",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "d36eec8d-5629-4a34-82e3-2dd19466193d",
+          "session": "correction-prelude",
+          "start": 21,
+          "end": 37,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "ae225f29-60cb-4471-99c1-70394ebbeb0e",
+            "e227fd9e-78b9-4542-9e5c-536327df2922"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "0b48109e-d2d8-4d59-9f93-d8ec55596e6d",
+          "session": "correction-prelude",
+          "start": 39,
+          "end": 55,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "ae225f29-60cb-4471-99c1-70394ebbeb0e",
+            "e227fd9e-78b9-4542-9e5c-536327df2922",
+            "4b6eb219-7a97-480f-8b5c-fab040c860b1",
+            "fcc82863-de3c-43cd-8506-caf575b7ee68"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "f15f6a7a-952d-4699-a8db-2de64ba31067",
+          "session": "correction-probe",
+          "start": 1,
+          "end": 18,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "ae225f29-60cb-4471-99c1-70394ebbeb0e",
+            "4b6eb219-7a97-480f-8b5c-fab040c860b1",
+            "c0287ceb-a27d-4276-9655-03e5dd80e583",
+            "eedb3dfd-b292-49be-811e-1d20ff67915b"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 5,
+          "runId": "2c06deba-cbb6-4679-8411-bc296be2adf6",
+          "session": "fault-session",
+          "start": 1,
+          "end": 25,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "ae225f29-60cb-4471-99c1-70394ebbeb0e",
+            "4b6eb219-7a97-480f-8b5c-fab040c860b1",
+            "c0287ceb-a27d-4276-9655-03e5dd80e583",
+            "7d6de45a-8e2c-4cba-968b-9e0da8ac5c9e",
+            "eedb3dfd-b292-49be-811e-1d20ff67915b",
+            "c928c750-7652-4368-8ade-df89eaeb7bd6"
+          ],
+          "finalizations": 5,
+          "episodes": 5,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 6,
+          "runId": "e2d3b904-029b-4fb6-9ee9-fb7978829fac",
+          "session": "fault-session",
+          "start": 27,
+          "end": 49,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "4b6eb219-7a97-480f-8b5c-fab040c860b1",
+            "c0287ceb-a27d-4276-9655-03e5dd80e583",
+            "7d6de45a-8e2c-4cba-968b-9e0da8ac5c9e",
+            "c928c750-7652-4368-8ade-df89eaeb7bd6",
+            "15516d21-7912-4b85-ac94-7e27cf99c350",
+            "ae225f29-60cb-4471-99c1-70394ebbeb0e",
+            "12a24d84-754b-4d9a-914a-a663b7cc6124",
+            "fcc82863-de3c-43cd-8506-caf575b7ee68",
+            "6ad694c4-6a57-46b5-94ac-3dd3215bd4de"
+          ],
+          "finalizations": 6,
+          "episodes": 6,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 7,
+          "runId": "1593de83-0412-43cb-a7ad-274cde9e0c9a",
+          "session": "fault-session",
+          "start": 51,
+          "end": 67,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "4b6eb219-7a97-480f-8b5c-fab040c860b1",
+            "c0287ceb-a27d-4276-9655-03e5dd80e583",
+            "7d6de45a-8e2c-4cba-968b-9e0da8ac5c9e",
+            "c928c750-7652-4368-8ade-df89eaeb7bd6",
+            "15516d21-7912-4b85-ac94-7e27cf99c350",
+            "ae225f29-60cb-4471-99c1-70394ebbeb0e",
+            "12a24d84-754b-4d9a-914a-a663b7cc6124",
+            "fcc82863-de3c-43cd-8506-caf575b7ee68",
+            "6ad694c4-6a57-46b5-94ac-3dd3215bd4de",
+            "ad1ac85d-03d7-46ae-a416-f7bc0bc571fd",
+            "6c64a423-7fd3-4bd3-8978-c713063ab4bc"
+          ],
+          "finalizations": 7,
+          "episodes": 7,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 8,
+          "runId": "41ebeb6b-f0b0-40fc-b461-099555bf9488",
+          "session": "fault-session",
+          "start": 69,
+          "end": 80,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "4b6eb219-7a97-480f-8b5c-fab040c860b1",
+            "c0287ceb-a27d-4276-9655-03e5dd80e583",
+            "7d6de45a-8e2c-4cba-968b-9e0da8ac5c9e",
+            "c928c750-7652-4368-8ade-df89eaeb7bd6",
+            "15516d21-7912-4b85-ac94-7e27cf99c350",
+            "ae225f29-60cb-4471-99c1-70394ebbeb0e",
+            "12a24d84-754b-4d9a-914a-a663b7cc6124",
+            "fcc82863-de3c-43cd-8506-caf575b7ee68",
+            "6ad694c4-6a57-46b5-94ac-3dd3215bd4de",
+            "ad1ac85d-03d7-46ae-a416-f7bc0bc571fd",
+            "6c64a423-7fd3-4bd3-8978-c713063ab4bc",
+            "672f239e-2bb2-4e57-9297-79be756de2d1",
+            "d92f3d47-9997-422e-b74f-acd910ff19b8"
+          ],
+          "finalizations": 8,
+          "episodes": 8,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/adoption-source",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "f2db3202-d9f0-4823-af61-4943238d041a",
+          "session": "adoption-prelude",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "d43fda65-4ab6-4c52-a3bb-5f65040d0285",
+          "session": "fault-session",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "8094284b-7309-495a-9642-e6cb41f23619",
+            "ddd2c6e9-88f4-4896-89b0-c186c8760457"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "deca68b8-c662-4d9d-9e9c-bc443d1ada49",
+          "session": "fault-session",
+          "start": 23,
+          "end": 39,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "8094284b-7309-495a-9642-e6cb41f23619",
+            "ddd2c6e9-88f4-4896-89b0-c186c8760457",
+            "f8fe6571-caff-485a-85a6-7e4671b44d2c",
+            "d4e54cb9-9867-43e5-9390-c827da6588e5"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "96b49d73-2b6a-447c-a91f-3a4abaf5391a",
+          "session": "fault-session",
+          "start": 41,
+          "end": 61,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "f8fe6571-caff-485a-85a6-7e4671b44d2c",
+            "d4e54cb9-9867-43e5-9390-c827da6588e5",
+            "cd9f8da1-3b3e-43f8-bcbc-6a11568045cc",
+            "8094284b-7309-495a-9642-e6cb41f23619",
+            "4e29b856-102b-48d1-a998-a9f3405db823"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/adoption-mode",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "56e38c4d-a519-44ab-907e-8d37605994ee",
+          "session": "adoption-prelude",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "408efc05-11b5-4d04-8e47-dbfaa916f00f",
+          "session": "fault-session",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "af56496f-6bd7-4001-861b-130cc9311349",
+            "d6532028-3dc6-417c-aced-93a492a9c379"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "f8d5f122-5a5e-473c-9384-dbfb15838cf3",
+          "session": "fault-session",
+          "start": 23,
+          "end": 39,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "af56496f-6bd7-4001-861b-130cc9311349",
+            "d6532028-3dc6-417c-aced-93a492a9c379",
+            "3595ae5c-9b32-48f8-8111-51b8cc800092",
+            "638c9364-d7df-46b5-9540-ec56bb3fdebc"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "ca33bc93-d156-4515-972d-24ad93f5c0e7",
+          "session": "fault-session",
+          "start": 41,
+          "end": 57,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "af56496f-6bd7-4001-861b-130cc9311349",
+            "d6532028-3dc6-417c-aced-93a492a9c379",
+            "3595ae5c-9b32-48f8-8111-51b8cc800092",
+            "638c9364-d7df-46b5-9540-ec56bb3fdebc",
+            "4f4101f2-5603-4416-bf9a-f62baa62ee9a",
+            "1e76cf6f-ba2c-4eea-a7a5-359c35e5cf44"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/adoption-lease",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "a662ac1c-31b8-4022-ad56-c3428d04a8fb",
+          "session": "adoption-prelude",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "f87ee906-2b6f-4391-baf2-740878f9c244",
+          "session": "fault-session",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "1642fff1-5af5-4aa9-9a98-c5afbb72fcd8",
+            "e70a79a0-6057-4e34-b2db-6ee38b5d0b65"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "77be2b94-bb30-4da9-ab58-8afdf609a20d",
+          "session": "fault-session",
+          "start": 23,
+          "end": 39,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "1642fff1-5af5-4aa9-9a98-c5afbb72fcd8",
+            "e70a79a0-6057-4e34-b2db-6ee38b5d0b65",
+            "de46ee17-3a0d-46f6-9943-dd6b6f910700",
+            "0a53f611-f432-4578-9c48-f8d615a1ab80"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "f6412234-28bf-4496-a5b0-e47501399411",
+          "session": "fault-session",
+          "start": 41,
+          "end": 57,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "1642fff1-5af5-4aa9-9a98-c5afbb72fcd8",
+            "e70a79a0-6057-4e34-b2db-6ee38b5d0b65",
+            "de46ee17-3a0d-46f6-9943-dd6b6f910700",
+            "0a53f611-f432-4578-9c48-f8d615a1ab80",
+            "2835dc09-7d13-4c24-9798-9b6b58d72a53",
+            "eee3140f-1a30-45b3-90c0-3f19990f6ad7"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/dispatched-interruption",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 2,
+          "runId": "601b77bb-39f4-4c0c-946b-a5c45b2ce399",
+          "session": "interrupted-session-1",
+          "start": 1,
+          "end": 21,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "430be203-a0fa-4343-8338-a7bf3ac437e7",
+            "8dc0b4fe-cf4c-4ebd-b6db-94e28780a1f7"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "stage": "durable-dispatch-before-kill",
+          "actual": "processing",
+          "expected": "processing",
+          "runId": "d95262e2-c867-4913-bee7-f7d177d22243"
+        },
+        {
+          "round": 4,
+          "runId": "ecaf6844-e68b-4b8d-998a-6ed15278a807",
+          "session": "interrupted-session-3",
+          "start": 1,
+          "end": 25,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "430be203-a0fa-4343-8338-a7bf3ac437e7",
+            "6a32d60d-6b6e-4e68-be1d-bbe980911447",
+            "3d7a5274-35d3-4a84-9276-ec548b50155f",
+            "8dc0b4fe-cf4c-4ebd-b6db-94e28780a1f7",
+            "a824bc8f-728a-420c-8df2-007512d53f7f",
+            "af737581-4ad6-47f0-9c6f-20f7a20265bd"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "stage": "restart-recovery",
+          "actual": "held",
+          "expected": "held",
+          "reason": "expired_dispatched_claim",
+          "automaticResends": 0
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "normal/bounded_evidence/upgrade",
+      "status": "passed",
+      "observations": [
+        {
+          "stage": "legacy-upgrade",
+          "expected": {
+            "policy": "context-ranking-v6",
+            "selectionVersion": 1,
+            "inputMode": "bounded_evidence"
+          },
+          "actual": {
+            "policy": "context-ranking-v6",
+            "selectionVersion": 1,
+            "inputMode": "bounded_evidence",
+            "job": "completed"
+          },
+          "migration": 14
+        },
+        {
+          "round": 1,
+          "runId": "9c2331d1-fdd4-45c5-b2d1-00a711615b5e",
+          "session": "upgraded-session",
+          "start": 1,
+          "end": 19,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 2,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "121aa22c-044b-4c65-944c-90cac24e0659",
+          "session": "upgraded-session",
+          "start": 21,
+          "end": 37,
+          "mainCalls": 2,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "c4e8d8a7-21c9-4a5e-b2bc-4a2b01bd2324",
+            "db45f80b-e8bf-4ee7-b273-b8b521e45177"
+          ],
+          "finalizations": 3,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "75e5f0cd-3ec6-461c-b915-6f88e5450849",
+          "session": "upgraded-session",
+          "start": 39,
+          "end": 55,
+          "mainCalls": 2,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "c4e8d8a7-21c9-4a5e-b2bc-4a2b01bd2324",
+            "db45f80b-e8bf-4ee7-b273-b8b521e45177",
+            "57fa9c58-ed73-4ae5-bca1-586a4cfcfca8",
+            "ec7ae611-f3d1-4b40-ba31-4f856e5a18c9"
+          ],
+          "finalizations": 4,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "9afffdb6-bc11-455e-917e-79476f9ba7b2",
+          "session": "upgraded-session",
+          "start": 57,
+          "end": 71,
+          "mainCalls": 1,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "c4e8d8a7-21c9-4a5e-b2bc-4a2b01bd2324",
+            "57fa9c58-ed73-4ae5-bca1-586a4cfcfca8",
+            "5c5ddaf8-820f-4eef-8941-1c439b749fc9",
+            "06d5af67-1d53-49ea-8a1c-91d95d83c8a8"
+          ],
+          "finalizations": 5,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "normal",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "enno/prefix_reuse/stale-revision",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "6491a902-380b-4da1-8a28-6b070e8a69e8",
+          "session": "enno-fence-session",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "stage": "enno-stale-revision",
+          "expected": "rejected-without-mutation",
+          "actual": "rejected-without-mutation",
+          "extraVerifierCalls": 0
+        },
+        {
+          "round": 2,
+          "runId": "47de6829-d250-4d03-ac92-d4d7e6330d40",
+          "session": "enno-fence-session",
+          "start": 111,
+          "end": 214,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "0c85eefc-6343-48f2-84d5-685e4d7391f2",
+            "ccb17e65-a57a-41f3-b6b1-7f5905ac2e0a"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "7ee1036e-7ac8-4895-8f24-ca6b53052632",
+          "session": "enno-fence-session",
+          "start": 216,
+          "end": 319,
+          "mainCalls": 9,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "0c85eefc-6343-48f2-84d5-685e4d7391f2",
+            "ccb17e65-a57a-41f3-b6b1-7f5905ac2e0a",
+            "53df5671-f709-4538-bce8-d22dcf2a8bb0",
+            "7f58a99b-3968-4f21-8f9f-200f65e40688"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "cbec8f2e-b887-4d9a-b2bb-40b0e2c682b3",
+          "session": "enno-fence-session",
+          "start": 321,
+          "end": 421,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "0c85eefc-6343-48f2-84d5-685e4d7391f2",
+            "53df5671-f709-4538-bce8-d22dcf2a8bb0",
+            "53d88c17-1ef6-47e1-b54a-ed55d645f7dd",
+            "59c8f04d-d282-4fca-8600-c1e98fc5c2c4"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "enno",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "enno/prefix_reuse/stale-lease",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "d3160b2e-97c6-4635-a34e-ea0d59b0f9ea",
+          "session": "enno-fence-session",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "stage": "enno-stale-lease",
+          "expected": "rejected-without-mutation",
+          "actual": "rejected-without-mutation",
+          "extraVerifierCalls": 0
+        },
+        {
+          "round": 2,
+          "runId": "d19ea58f-e7b9-4698-a61c-fa81f2b19aac",
+          "session": "enno-fence-session",
+          "start": 111,
+          "end": 214,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "9fbedc06-40b5-457b-a56d-a4e9e4093a37",
+            "44270acc-8e7c-4a8d-b305-8bf17b14bec3"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "71b523ea-0663-4273-90bf-56bf243ed094",
+          "session": "enno-fence-session",
+          "start": 216,
+          "end": 319,
+          "mainCalls": 9,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "9fbedc06-40b5-457b-a56d-a4e9e4093a37",
+            "44270acc-8e7c-4a8d-b305-8bf17b14bec3",
+            "5b119d39-f36e-45b7-8da6-5a0fb09dc359",
+            "24344b98-208b-4c8a-9bce-cf1dfacd33f0"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "efea7569-d288-43ad-b280-886a5a5900cf",
+          "session": "enno-fence-session",
+          "start": 321,
+          "end": 421,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "9fbedc06-40b5-457b-a56d-a4e9e4093a37",
+            "5b119d39-f36e-45b7-8da6-5a0fb09dc359",
+            "a7fe0b0e-c254-4c8f-9f6f-ab21ef4bb24a",
+            "82a16269-6b37-4fe2-8fc7-15fc51c5ee09"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "enno",
+        "inputMode": "prefix_reuse"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "enno/bounded_evidence/stale-revision",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "ac928fd9-e671-45ce-9343-53512d6791e2",
+          "session": "enno-fence-session",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "stage": "enno-stale-revision",
+          "expected": "rejected-without-mutation",
+          "actual": "rejected-without-mutation",
+          "extraVerifierCalls": 0
+        },
+        {
+          "round": 2,
+          "runId": "9e77ad52-9ab0-49df-a105-59239e2481ca",
+          "session": "enno-fence-session",
+          "start": 111,
+          "end": 214,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "cb598bf5-2b10-49dc-9220-d0de24f930c1",
+            "843c2364-a295-4e38-895f-8d3f1921c8a5"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "b6fac55c-63ca-4157-a6b3-c862cf2547fc",
+          "session": "enno-fence-session",
+          "start": 216,
+          "end": 319,
+          "mainCalls": 9,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "cb598bf5-2b10-49dc-9220-d0de24f930c1",
+            "843c2364-a295-4e38-895f-8d3f1921c8a5",
+            "5737473e-6bf1-439f-b40c-4b837c2f85af",
+            "7485f9a0-130b-4068-9967-e099e1894a9f"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "d8f24000-424c-48fb-870f-d094bb5123f7",
+          "session": "enno-fence-session",
+          "start": 321,
+          "end": 421,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "cb598bf5-2b10-49dc-9220-d0de24f930c1",
+            "5737473e-6bf1-439f-b40c-4b837c2f85af",
+            "b3a8969a-c3a5-41cd-8104-13f6aa52d971",
+            "c2fa8058-2e79-4c6a-ae29-660d0c19ac09"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "enno",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "enno/bounded_evidence/stale-lease",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "ff224bf0-46ba-461f-a0d7-0f8165c745c3",
+          "session": "enno-fence-session",
+          "start": 1,
+          "end": 109,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [],
+          "finalizations": 1,
+          "episodes": 1,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 2,
+          "stage": "enno-stale-lease",
+          "expected": "rejected-without-mutation",
+          "actual": "rejected-without-mutation",
+          "extraVerifierCalls": 0
+        },
+        {
+          "round": 2,
+          "runId": "bdae2bf4-b968-4f5e-b711-32ba91db57ba",
+          "session": "enno-fence-session",
+          "start": 111,
+          "end": 214,
+          "mainCalls": 9,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "e905044c-f49c-4764-b6fe-0b89d7f39202",
+            "884ac58d-3418-4308-920f-97002ad54f89"
+          ],
+          "finalizations": 2,
+          "episodes": 2,
+          "lessons": 0,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "cc911319-f6d3-4db5-9e2d-82775674fd62",
+          "session": "enno-fence-session",
+          "start": 216,
+          "end": 319,
+          "mainCalls": 9,
+          "auxiliaryCalls": 2,
+          "toolExecutions": 1,
+          "suppliedIds": [
+            "e905044c-f49c-4764-b6fe-0b89d7f39202",
+            "884ac58d-3418-4308-920f-97002ad54f89",
+            "d96eb5f4-1eb4-4cdc-8b57-da2287fabbd2",
+            "9a693495-92b9-473d-9bb6-498b693b2164"
+          ],
+          "finalizations": 3,
+          "episodes": 3,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        },
+        {
+          "round": 4,
+          "runId": "42cd9e6a-ba5e-4f13-9a28-5a790b21758b",
+          "session": "enno-fence-session",
+          "start": 321,
+          "end": 421,
+          "mainCalls": 8,
+          "auxiliaryCalls": 1,
+          "toolExecutions": 0,
+          "suppliedIds": [
+            "e905044c-f49c-4764-b6fe-0b89d7f39202",
+            "d96eb5f4-1eb4-4cdc-8b57-da2287fabbd2",
+            "d019a90a-5abc-4e08-8f7a-5659a64c8c70",
+            "c815e9fe-b330-4c45-b5c0-4c8a03b30fe3"
+          ],
+          "finalizations": 4,
+          "episodes": 4,
+          "lessons": 1,
+          "stages": [
+            "admission",
+            "native-execution",
+            "final-response",
+            "log-flush",
+            "memory-finalization",
+            "episode/evolution",
+            "durable-state",
+            "model-request"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "normal series plus correction/duplicate/retry cases",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "enno",
+        "inputMode": "bounded_evidence"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "deep/same-session",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "b6558e03-8dd6-41fe-9834-7c1b13160e99",
+          "session": "deep-repeated-session",
+          "finalization": "completed",
+          "memory": "ce43635a-f368-4152-9d0e-cbd1261fd4d4",
+          "modelCalls": 4,
+          "stages": [
+            "admission",
+            "planning",
+            "execution",
+            "verification",
+            "report",
+            "memory-finalization",
+            "durable-state"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "743bdb10-da2c-4bf7-8277-38764336e2fd",
+          "session": "deep-repeated-session",
+          "finalization": "completed",
+          "memory": "2c2095cb-1b25-4a01-adf8-a87f57cdeb73",
+          "modelCalls": 4,
+          "stages": [
+            "admission",
+            "planning",
+            "execution",
+            "verification",
+            "report",
+            "memory-finalization",
+            "durable-state"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "ab4feb5f-cf8e-4c76-8036-1a0393e85b23",
+          "session": "deep-repeated-session",
+          "finalization": "completed",
+          "memory": "9b6d9626-b1a5-4993-aac8-6faa38a250bc",
+          "modelCalls": 4,
+          "stages": [
+            "admission",
+            "planning",
+            "execution",
+            "verification",
+            "report",
+            "memory-finalization",
+            "durable-state"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "dedicated Deep finalization contract",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "deep",
+        "inputMode": "same-session"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "deep/restart",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "349f6765-af11-4862-8925-00e2d42b06f1",
+          "session": "deep-process-1",
+          "finalization": "completed",
+          "memory": "5aaa28c3-fece-452f-9265-c2cdf9361b5f",
+          "modelCalls": 4,
+          "stages": [
+            "admission",
+            "planning",
+            "execution",
+            "verification",
+            "report",
+            "memory-finalization",
+            "durable-state"
+          ]
+        },
+        {
+          "round": 2,
+          "runId": "1e5dd496-9d6f-4ef7-86b8-fd8d129dc539",
+          "session": "deep-process-2",
+          "finalization": "completed",
+          "memory": "acf8a137-e35c-4f2e-aaff-fd2f17f4c754",
+          "modelCalls": 4,
+          "stages": [
+            "admission",
+            "planning",
+            "execution",
+            "verification",
+            "report",
+            "memory-finalization",
+            "durable-state"
+          ]
+        },
+        {
+          "round": 3,
+          "runId": "0426ba3b-0a35-4777-a1b0-f57322cc0980",
+          "session": "deep-process-3",
+          "finalization": "completed",
+          "memory": "2526cd6e-4d40-4f65-b4ba-81c1d174b794",
+          "modelCalls": 4,
+          "stages": [
+            "admission",
+            "planning",
+            "execution",
+            "verification",
+            "report",
+            "memory-finalization",
+            "durable-state"
+          ]
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "dedicated Deep finalization contract",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "deep",
+        "inputMode": "restart"
+      },
+      "realModelQuality": "unmeasured"
+    },
+    {
+      "version": 2,
+      "scenario": "deep/dispatched-interruption",
+      "status": "passed",
+      "observations": [
+        {
+          "round": 1,
+          "runId": "d486f984-4d52-4742-a205-052f2226aa8c",
+          "session": "deep-interrupted-1",
+          "finalization": "completed",
+          "memory": "033334d1-3ef1-44f4-808a-26d2f577d788",
+          "modelCalls": 4,
+          "stages": [
+            "admission",
+            "planning",
+            "execution",
+            "verification",
+            "report",
+            "memory-finalization",
+            "durable-state"
+          ]
+        },
+        {
+          "round": 2,
+          "stage": "durable-dispatch-before-kill",
+          "actual": "processing",
+          "expected": "processing",
+          "runId": "2ee51e9d-5679-483f-ae4b-868de14cfec0"
+        },
+        {
+          "round": 3,
+          "runId": "a82dc217-ef6d-4eaf-8d05-36587869ead4",
+          "session": "deep-interrupted-3",
+          "finalization": "completed",
+          "memory": "6b4d2b1c-3af2-4bd1-a0d1-12867a507043",
+          "modelCalls": 4,
+          "stages": [
+            "admission",
+            "planning",
+            "execution",
+            "verification",
+            "report",
+            "memory-finalization",
+            "durable-state"
+          ]
+        },
+        {
+          "round": 2,
+          "stage": "restart-recovery",
+          "actual": "uncertain",
+          "expected": "uncertain",
+          "automaticResends": 0
+        }
+      ],
+      "expected": {
+        "lifecycleRounds": 3,
+        "subsequentLessonProbe": "dedicated Deep finalization contract",
+        "stageTimeoutMs": 60000,
+        "seriesTimeoutMs": 300000
+      },
+      "actual": {
+        "allAssertionsPassed": true
+      },
+      "skipped": 0,
+      "failureReason": null,
+      "commit": "e9af6be8bed137e96fb015ed1ec230dec5539ab5",
+      "workingTreeClean": false,
+      "nodeVersion": "v26.5.0",
+      "dshVersion": "0.1.5-rc.1",
+      "fixtureDigest": "a51c97527fa26a323f48407bb3a9acba33c7f1fa9b3b33c64663952d02871c7d",
+      "settings": {
+        "route": "deep",
+        "inputMode": "dispatched-interruption"
+      },
+      "realModelQuality": "unmeasured"
+    }
+  ],
+  "cancellation": {
+    "status": "passed",
+    "descendantsRemaining": 0
+  },
+  "evidenceBoundary": "Requests were inspected by native fixture assertions. Their bodies are not retained in this report. Fixture usage and bytes are not real token/cost measurements."
+}

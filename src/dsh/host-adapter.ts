@@ -47,6 +47,7 @@ import { canonicalContentHash, compareCanonicalStrings } from '../serialization/
 import { KiokukoError } from '../errors.js'
 import { injectDshContext, selectDshDirectiveSources } from './context-injection.js'
 import { projectDshContext } from './context-projection.js'
+import { currentRequestMemory, pruneDshMemorySurface, filterRequestMemory } from './request-memory.js'
 import { projectDshDirective } from './directive-projection.js'
 import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, readPendingEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, inapplicableEnnoState, type EnnoOperationResponse } from '../enno-oduno/service.js'
 import { claimExecutionLeaseInTransaction, readEnnoSnapshot, terminalizeLedgerRunInTransaction } from '../enno-oduno/store.js'
@@ -635,7 +636,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       // A newer prepare may carry a newer context delivery while Enno has not
       // advanced its revision. Preserve the active lease and other policy
       // state; only replace the authoritative prepared context and delivery.
-      item.prepared = { ...item.prepared, context: result.prepared.context }
+      item.prepared = { ...item.prepared, context: result.prepared.context, memoryPolicy: result.prepared.memoryPolicy }
     } else {
       item.prepared = result.prepared
     }
@@ -785,6 +786,16 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         return event.signal.aborted ? { ...cached.result, admitted: false } : this.choose(event, cached.result)
       }
       const previous = currentForAgentEvent(event.agent.id, event.sessionId, undefined, event.nativeSession, event.nativeAgent)
+      if (previous !== undefined && previous.turn === event.turn && !previous.closed) {
+        // Model routing prepares before native pre-step. Reuse that exact
+        // intake result instead of treating its newly active run as a cold
+        // resume (which deliberately starts without historical context).
+        const prepared = await super.prepare(event)
+        if (prepared.prepared.run.runId !== previous.runId) throw new KiokukoError('CONFLICT', 'The prepared native turn changed run identity')
+        const selected = await this.choose(event, prepared)
+        if (selected.admitted) await bindAndRecord(event, selected, generation)
+        return selected
+      }
       if (previous !== undefined && previous.turn < event.turn) {
         if (event.signal.aborted) return { admitted: false, prepared: previous.prepared, catalog: event.capabilities }
         let previousState = await runtime.withDatabase((database) => stateForRun(database, previous))
@@ -1224,7 +1235,19 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const routingDisposers = new Map<object, () => void>()
   const installRouting = (agent: RoutableAgent) => {
     if (routingDisposers.has(agent) || !agent.ctx) return
-    routingDisposers.set(agent, installDshModelRouting(agent, async signal => {
+    const disposeMemory = agent.ctx.on('agent/request', async (_event: unknown, next: () => Promise<any>) => {
+      const request = await next()
+      if (delegation.isChild(agent)) return request
+      const prepared = agent.session ? currentSession(agent.session.id)?.prepared : undefined
+      if (!prepared || !agent.session) return request
+      // A unavailable memory catalog degrades to no owned memory, never to a
+      // stale snapshot retained by the native session's historical surface.
+      let allowed: ReadonlyMap<string, string> = new Map()
+      try { allowed = await runtime.withDatabase(db => currentRequestMemory(db, prepared)) } catch { /* no memory is safer than stale memory */ }
+      pruneDshMemorySurface(agent.session, allowed)
+      return request
+    }, { prepend: true })
+    const disposeRouting = installDshModelRouting(agent, async signal => {
       const deep = await deepPlanning.beforeAssembly(agent, signal)
       if (deep.owned) { assemblyClaims.delete(agent); return deep.model }
       const childModel = await delegation.restoreOrPersist(agent)
@@ -1274,7 +1297,20 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           if (stored && !stored.value.ordinaryModel) selections.set(runId, writeExecutionSelection(db, runId, stored.revision, { ...stored.value, ordinaryModel }))
         })
       },
-    }))
+    })
+    const disposeMemoryFence = agent.ctx.on('llm/stream', (request: any, next: () => AsyncIterable<any>) => (async function* () {
+      const item = agent.session ? currentSession(agent.session.id) : undefined
+      if (item && !item.closed && !delegation.isChild(agent) && request.sessionId === agent.session?.id && request.purpose !== 'compaction') {
+        let allowed: ReadonlyMap<string,string> = new Map()
+        try { allowed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared)) } catch { /* fail closed for owned memory */ }
+        if (filterRequestMemory(request.messages, allowed).length !== request.messages.length) {
+          pruneDshMemorySurface(agent.session!, allowed)
+          throw new KiokukoError('CONFLICT', 'Memory changed after native request assembly; rebuild the request')
+        }
+      }
+      yield* next()
+    })())
+    routingDisposers.set(agent, () => { disposeRouting(); disposeMemory(); disposeMemoryFence() })
   }
   const routingCreatedDisposer = (ctx as any).on('agent/created', (event: { agent: RoutableAgent }) => {
     delegation.created(event.agent)

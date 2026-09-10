@@ -53,10 +53,31 @@ function runNodeTests(testFiles, testTempRoot) {
       cwd: process.cwd(),
       env: childEnvironment,
       stdio: 'inherit',
+      // A timed-out series must also stop its native fixture subprocesses.
+      detached: process.platform !== 'win32',
     });
-
-    child.once('error', reject);
+    let killTimer;
+    const stopGroup = (signal) => {
+      try {
+        if (process.platform === 'win32') child.kill(signal);
+        else if (child.pid !== undefined) process.kill(-child.pid, signal);
+      } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    };
+    const interrupt = () => {
+      stopGroup('SIGTERM');
+      killTimer ??= setTimeout(() => stopGroup('SIGKILL'), 5_000);
+    };
+    const cleanup = () => {
+      clearTimeout(killTimer);
+      process.off('SIGTERM', interrupt); process.off('SIGINT', interrupt);
+    };
+    process.on('SIGTERM', interrupt); process.on('SIGINT', interrupt);
+    child.once('error', error => { cleanup(); reject(error); });
     child.once('exit', (code, signal) => {
+      // A descendant may outlive the test runner even when its direct child
+      // has exited. Kill only the dedicated fixture process group.
+      if (killTimer !== undefined) stopGroup('SIGKILL');
+      cleanup();
       if (signal !== null) {
         reject(new Error(`Test process terminated by ${signal}`));
         return;

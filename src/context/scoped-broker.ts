@@ -22,12 +22,13 @@ import {
 import { entryOriginMatchesWorkspace } from './origin.js';
 import type { RunStatus } from '../ledger/types.js';
 import { isExternalSkillReference } from '../skills/store.js';
-import { contextRetrievalStateHash, ordinaryContextSelectionStateHash } from './selection-state.js';
+import { contextRetrievalStateHash, contextSelectionStateHashes } from './selection-state.js';
 import { readContextRunRetrievalState } from './run-state.js';
 import type { PreparedSemanticQuery } from '../embedding/types.js';
 import type { HybridSearchRuntime } from '../memory/hybrid-retrieval.js';
+import { projectMemoryEntry, type MemoryProjectionReceipt } from './memory-projection.js';
 
-export const SCOPED_CONTEXT_POLICY_VERSION = 'context-ranking-v6' as const;
+export const SCOPED_CONTEXT_POLICY_VERSION = 'context-ranking-v7' as const;
 export const SCOPED_CONTEXT_DEFAULT_CHARACTER_BUDGET = 8_000;
 export const SCOPED_CONTEXT_MAX_CHARACTER_BUDGET = 100_000;
 
@@ -52,6 +53,7 @@ export interface ScopedContextItem {
   title: string;
   summary: string | null;
   bodyPreview: string;
+  projection?: MemoryProjectionReceipt;
   score: number;
   scoreComponents: {
     status: number;
@@ -86,6 +88,7 @@ export interface ScopedContextResult {
   deliveryId: string | null;
   truncated: boolean;
   untrusted: true;
+  omissions?: Array<{ entryId: string; reason: 'budget' | 'limit' | 'diversified' | 'secret' }>;
 }
 
 export interface ScopedContextGateDecision<T> {
@@ -325,7 +328,7 @@ function assertScopedSelectionState(
   }
 }
 
-function fitScopedItems(ordered: ScopedContextItem[], limit: number, characterBudget: number): FittedScopedItems {
+function fitLegacyScopedItems(ordered: ScopedContextItem[], limit: number, characterBudget: number): FittedScopedItems {
   const items: ScopedContextItem[] = [];
   let remaining = characterBudget;
   let truncated = false;
@@ -354,6 +357,22 @@ function fitScopedItems(ordered: ScopedContextItem[], limit: number, characterBu
     remaining -= cost;
   }
   return { items, charCount: characterBudget - remaining, truncated };
+}
+
+/** Never split a procedure from its conditions. Exact hits reserve space first. */
+function fitScopedItems(ordered: ScopedContextItem[], limit: number, characterBudget: number): FittedScopedItems {
+  const selected = new Set<string>();
+  let charCount = 0;
+  const prioritized = [...ordered.filter(item => item.selectionReasons.includes('exact_signal_match')),
+    ...ordered.filter(item => !item.selectionReasons.includes('exact_signal_match'))];
+  for (const item of prioritized) {
+    const cost = item.projection?.characters;
+    if (cost === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'New context requires a complete memory projection');
+    if (selected.size >= limit || cost + charCount > characterBudget) continue;
+    selected.add(item.entryId);
+    charCount += cost;
+  }
+  return { items: ordered.filter(item => selected.has(item.entryId)), charCount, truncated: selected.size < ordered.length };
 }
 
 function scopedRunContext(
@@ -518,6 +537,10 @@ function storedScopedItems(database: SqliteDatabase, delivery: ContextDeliveryVi
       revision: item.entryRevision,
     });
     const scoreComponents = item.scoreComponents as ScopedContextItem['scoreComponents'];
+    const projection = delivery.policyVersion === 'context-ranking-v6' ? null : projectMemoryEntry(database, current);
+    if (delivery.policyVersion !== 'context-ranking-v6' && (projection === null || canonicalContentHash(projection.projection) !== canonicalContentHash(item.projection))) {
+      throw new KiokukoError('INTEGRITY_ERROR', 'Stored scoped memory projection no longer matches');
+    }
     return {
       entryId: item.entryId,
       revision: item.entryRevision,
@@ -525,13 +548,14 @@ function storedScopedItems(database: SqliteDatabase, delivery: ContextDeliveryVi
       title: revision.title,
       summary: revision.summary,
       bodyPreview: revision.body,
+      ...(projection ?? {}),
       score: Object.values(scoreComponents).reduce((total, component) => total + component, 0),
       scoreComponents: { ...scoreComponents },
       selectionReasons: [...item.selectionReasons],
       metadata: { storedData: true, untrusted: true, instructions: false },
     };
   });
-  const fitted = fitScopedItems(fullItems, fullItems.length || 1, delivery.charBudget);
+  const fitted = (delivery.policyVersion === 'context-ranking-v6' ? fitLegacyScopedItems : fitScopedItems)(fullItems, fullItems.length || 1, delivery.charBudget);
   if (fitted.charCount !== delivery.charCount
     || fitted.items.length !== delivery.items.length
     || (fitted.truncated && !delivery.truncated)) {
@@ -546,6 +570,7 @@ function deliveryItems(items: ScopedContextItem[]): ContextDeliveryInput['items'
     entryId: item.entryId,
     entryRevision: item.revision,
     rank: index + 1,
+    ...(item.projection === undefined ? {} : { projection: item.projection }),
     scoreComponents: { ...item.scoreComponents },
     selectionReasons: [...new Set([
       ...item.selectionReasons.filter((reason) => allowedReasons.has(reason)),
@@ -622,10 +647,7 @@ async function prepareScopedContext(
   }
   const queryText = textFor(raw);
   const selectionWorkspaces = project === undefined ? [] : [project.workspace, GLOBAL_WORKSPACE];
-  const selectionStateHash = ordinaryContextSelectionStateHash(database, selectionWorkspaces, {
-    includeEcosystem: project !== undefined,
-  });
-  const retrievalStateHash = contextRetrievalStateHash(database, selectionWorkspaces, {
+  const { ordinary: selectionStateHash, retrieval: retrievalStateHash } = contextSelectionStateHashes(database, selectionWorkspaces, {
     includeEcosystem: project !== undefined,
   });
   const queryHash = canonicalContentHash({
@@ -665,6 +687,7 @@ async function prepareScopedContext(
         items: storedScopedItems(database, replay),
         deliveryId: replay.deliveryId,
         truncated: replay.truncated,
+        omissions: database.prepare('SELECT entry_id AS entryId,reason FROM context_delivery_omissions WHERE delivery_id=? ORDER BY entry_id').all<NonNullable<ScopedContextResult['omissions']>[number]>(replay.deliveryId).map(row => ({ ...row })),
         untrusted: true,
       },
       replayDelivery: replay,
@@ -677,6 +700,7 @@ async function prepareScopedContext(
     };
   }
   const candidates = new Map<string, ScopedContextItem>();
+  const omissions: NonNullable<ScopedContextResult['omissions']> = [];
   const federated = project === undefined ? [] : await federatedEntries(database, {
     project,
     ...(fingerprint === undefined ? {} : { fingerprint }),
@@ -686,6 +710,9 @@ async function prepareScopedContext(
   for (const hit of federated) {
     const entry = hit.entry;
     const item = entryScore(entry, hit.origin, hit.score, hit.selectionReasons.includes('exact_signal_match'), queryText);
+    const projection = projectMemoryEntry(database, entry);
+    if (projection === null) { omissions.push({ entryId: entry.id, reason: 'secret' }); continue; }
+    Object.assign(item, projection);
     item.selectionReasons.push(...hit.selectionReasons);
     item.selectionReasons = [...new Set(item.selectionReasons)];
     const feedback = feedbackScore(database, entry.id);
@@ -697,7 +724,18 @@ async function prepareScopedContext(
     if (previous === undefined || item.score > previous.score) candidates.set(item.entryId, item);
   }
   const ordered = [...candidates.values()].sort((left, right) => right.score - left.score || compareCanonicalStrings(left.entryId, right.entryId));
-  const fitted = fitScopedItems(diversifyEpisodes(database, ordered), limit, characterBudget);
+  const initial = fitScopedItems(diversifyEpisodes(database, ordered), limit, characterBudget);
+  const selected = new Set(initial.items.map(item => item.entryId));
+  // Only packed lessons may suppress their source overviews. Retain the first
+  // pass's choices while reconsidering complete, affordable fallback units.
+  const reconsidered = diversifyEpisodes(database, [...initial.items, ...ordered.filter(item => !selected.has(item.entryId))], selected);
+  const fitted = fitScopedItems(reconsidered, limit, characterBudget);
+  const retained = new Set(fitted.items.map(item => item.entryId));
+  fitted.items = ordered.filter(item => retained.has(item.entryId));
+  fitted.truncated = retained.size < ordered.length || omissions.length > 0;
+  for (const item of ordered.filter(item => !retained.has(item.entryId))) {
+    omissions.push({ entryId: item.entryId, reason: (item.projection?.characters ?? 0) > characterBudget ? 'budget' : !reconsidered.some(candidate => candidate.entryId === item.entryId) ? 'diversified' : fitted.items.length >= limit ? 'limit' : 'budget' });
+  }
   return {
     result: {
       project: project ?? null,
@@ -705,6 +743,7 @@ async function prepareScopedContext(
       queryHash,
       policyVersion: SCOPED_CONTEXT_POLICY_VERSION,
       items: fitted.items,
+      omissions,
       deliveryId: null,
       truncated: fitted.truncated,
       untrusted: true,
@@ -790,6 +829,11 @@ function persistPreparedScopedContext(
       database,
       { ...request, deliveryId: scopedDeliveryId(request) },
     );
+    for (const omission of prepared.result.omissions ?? []) {
+      const existing = database.prepare('SELECT reason FROM context_delivery_omissions WHERE delivery_id=? AND entry_id=?').get<{reason:string}>(delivery.deliveryId, omission.entryId);
+      if (existing && existing.reason !== omission.reason) throw new KiokukoError('INTEGRITY_ERROR', 'Context omission reason changed on replay');
+      if (!existing) database.prepare('INSERT INTO context_delivery_omissions(delivery_id,entry_id,reason) VALUES(?,?,?)').run(delivery.deliveryId, omission.entryId, omission.reason);
+    }
     return {
       ...prepared.result,
       items: storedScopedItems(database, delivery),

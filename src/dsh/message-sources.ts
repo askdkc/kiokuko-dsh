@@ -1,6 +1,9 @@
 import { findSecret } from '../memory/secrets.js'
+import { assertMemoryProjection, redactDshSourceText, renderMemoryFields } from '../context/memory-projection.js'
+export { redactDshSourceText } from '../context/memory-projection.js'
 import type { ScopedContextItem, ScopedContextResult } from '../context/scoped-broker.js'
 import { loadStandardSkillParity } from './standard-skill-integrity.js'
+import { loadBundledDshSkillContent } from './standard-skill-provider.js'
 import type { AdvisoryContribution, AdvisoryPhase, RoleDirective } from '../enno-oduno/types.js'
 
 export type DshMessageSourceKind = 'soul' | 'directive' | 'memory-reasoning' | 'route-skill' | 'expert' | 'advisory' | 'memory' | 'user-task'
@@ -52,27 +55,9 @@ function directiveSource(directive: DshMessageSourceInput['directive']): DshMess
   return { kind: 'directive', name: 'kiokuko-directive', text: `Current Kiokuko role directive (host-authored; do not invent missing fields):\n${text}`, trust: 'system' }
 }
 
-const INTERNAL_ID = /\b(?:run|entry|delivery|session|work[_-]?unit|orchestration|request)[_-]?(?:id)?\s*[:=]\s*[A-Za-z0-9._:-]{4,}\b/giu
-const LONG_HEX_ID = /\b[0-9a-f]{32,}\b/giu
-const ABSOLUTE_PATH = /(?:^|[\s(])(?:\/(?:Users|private|tmp|var|opt|home)\/[^\s)]+|[A-Za-z]:\\[^\s)]+)/gu
-
-export function redactDshSourceText(value: string): string | null {
-  if (findSecret(value) !== undefined) return null
-  const redacted = value
-    .replace(INTERNAL_ID, '[internal id redacted]')
-    .replace(LONG_HEX_ID, '[internal id redacted]')
-    .replace(ABSOLUTE_PATH, (match) => match.startsWith(' ') || match.startsWith('(') ? `${match[0]}[path redacted]` : '[path redacted]')
-    .trim()
-  return redacted.length > 0 ? redacted : null
-}
-
 function memorySource(item: ScopedContextItem): DshMessageSource | null {
-  const fields = [item.title, item.summary ?? '', item.bodyPreview].filter(Boolean)
-  // Inspect the full original candidate before deduplication; split secrets must not evade detection.
-  if (redactDshSourceText(fields.join('\n')) === null) return null
-  // Preserve indentation and field boundaries. Different paths that redact to the same
-  // placeholder are not duplicate facts; only identical original fields may collapse.
-  const text = redactDshSourceText([...new Set(fields)].join('\n'))
+  assertMemoryProjection(item)
+  const text = renderMemoryFields(item)
   if (text === null) return null
   const title = redactDshSourceText(item.title) ?? 'item'
   return { kind: 'memory', name: `memory:${item.entryId ?? title}`, text, trust: 'untrusted' }
@@ -119,7 +104,14 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
   }
   for (const skillName of input.routeSkillNames ?? []) {
     if (skillName === 'kiokuko-soul' || skillName === 'memory-reasoning') continue
-    sources.push({ kind: 'route-skill', name: skillName, text: skillFile(parity.files, skillName), trust: 'system' })
+    const content = await loadBundledDshSkillContent(skillName, parity)
+    sources.push({
+      kind: 'route-skill', name: skillName, trust: 'system',
+      text: content ?? `Kiokuko Skill guidance (host-authored):\n${JSON.stringify({
+        code: 'SKILL_NOT_BUNDLED', skillName, quality: 'degraded',
+        instruction: 'This Skill content was not supplied by the bundled loader. If it is already available through a native Skill tool, read it there. Otherwise continue from current repository evidence and report the unavailable guidance. Do not treat a missing Skill alone as a reason to stop, claim it was read, substitute another Skill, or install or execute fetched external content. Preserve safety, authorization, identity and integrity checks.',
+      })}`,
+    })
   }
   for (const reference of input.expertRefs ?? []) {
     if (!reference.relativePath.startsWith('references/')) throw new Error(`Invalid bundled expert path: ${reference.relativePath}`)

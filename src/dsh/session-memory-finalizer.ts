@@ -16,6 +16,8 @@ import { buildDshPromptCacheLayout, type DshPromptCacheLayout } from './prompt-c
 import { redactDshSourceText } from './message-sources.js'
 import { buildFinalizationRequest, FINALIZATION_EVIDENCE_MAX_BYTES, FINALIZATION_STREAM_MAX_BYTES } from './finalization-request.js'
 import { finalizationObservationScope, normalizeDshUsage, requestSize, modelLabel, type FinalizationInputMode, type EfficiencyObservation } from './efficiency.js'
+import { EvidenceSelection } from './evidence-selection.js'
+import { surfaceRange, type DshSurfaceReplacement } from './surface-range.js'
 
 export const DSH_MEMORY_CAPSULE_MAX_BYTES = 64 * 1024
 const MAX_OUTPUT_TOKENS = 16_384
@@ -31,7 +33,7 @@ export interface DshLogEvent {
   readonly seq: number
   readonly time: number
   readonly data?: unknown
-  readonly surfaceOp?: 'append' | { readonly op: 'replace'; readonly start: number; readonly end: number }
+  readonly surfaceOp?: 'append' | DshSurfaceReplacement
 }
 
 export interface DshSessionLogSnapshot {
@@ -116,6 +118,7 @@ export interface DshMemoryCapsule {
 }
 
 interface FinalizationJob extends Record<string, unknown> {
+  readonly evidenceSelectionVersion: 1 | 2
   readonly extractionVersion: 1 | 2
   readonly outcome: 'completed' | 'failed'
   readonly inputMode: FinalizationInputMode
@@ -236,8 +239,9 @@ function surfaceNodes(events: readonly DshLogEvent[]): number[] {
       nodes.push(event.seq)
       continue
     }
-    const start = nodes.indexOf(event.surfaceOp.start)
-    const end = nodes.indexOf(event.surfaceOp.end)
+    const bounds = surfaceRange(event.surfaceOp)
+    const start = nodes.indexOf(bounds.start)
+    const end = nodes.indexOf(bounds.end)
     if (start < 0 || end < start) {
       throw new KiokukoError('INTEGRITY_ERROR', 'DSH session surface replacement is inconsistent')
     }
@@ -576,7 +580,9 @@ export async function reduceDshFinalizationLog(
   sourceEndSeq: number,
   inputMode: FinalizationInputMode = 'prefix_reuse',
   identity?: EvolutionObservationBinding,
+  evidenceSelectionVersion: 1 | 2 = 1,
 ): Promise<PreparedFinalizationLog> {
+  if (evidenceSelectionVersion !== 1 && evidenceSelectionVersion !== 2) throw new KiokukoError('INTEGRITY_ERROR', 'Unknown evidence selection version')
   const start = validatedSequence(sourceStartSeq, 'sourceStartSeq')
   const end = validatedSequence(sourceEndSeq, 'sourceEndSeq')
   if (end < start) throw new KiokukoError('INTEGRITY_ERROR', 'DSH finalization log range is reversed')
@@ -586,6 +592,11 @@ export async function reduceDshFinalizationLog(
   const boundedHeap: EvidenceCandidate[] = []
   const boundedLatest = new Map<string, EvidenceCandidate>()
   const episodeEvidence: EpisodeEvidence[] = []
+  const episodeGroups = new EvidenceSelection<EpisodeEvidence>(64, 24000)
+  const renderGroups = (items: readonly EvidenceCandidate[]): string => [...items].sort((a,b) => a.seq - b.seq)
+    .map(item => `[weight=${item.weight} seq=${item.seq} type=${item.type}]\n${item.text}`).join('\n\n')
+  const boundedGroups = new EvidenceSelection<EvidenceCandidate>(MAX_EVIDENCE_CANDIDATES, FINALIZATION_EVIDENCE_MAX_BYTES, renderGroups)
+  const pendingGroups = new Map<string, { episode?: EpisodeEvidence; bounded?: EvidenceCandidate }>()
   const nativeCalls = new Map<string, {name:string;seq:number}>()
   const nativeProofs = new Map<string, EvolutionObservation>()
   const digest = createHash('sha256')
@@ -613,8 +624,9 @@ export async function reduceDshFinalizationLog(
       nodes.push(event.seq)
       surfaceEvents.set(event.seq, event)
     } else if (event.surfaceOp !== undefined) {
-      const startIndex = nodes.indexOf(event.surfaceOp.start)
-      const endIndex = nodes.indexOf(event.surfaceOp.end)
+      const bounds = surfaceRange(event.surfaceOp)
+      const startIndex = nodes.indexOf(bounds.start)
+      const endIndex = nodes.indexOf(bounds.end)
       if (startIndex < 0 || endIndex < startIndex) {
         throw new KiokukoError('INTEGRITY_ERROR', 'DSH session surface replacement is inconsistent')
       }
@@ -651,13 +663,43 @@ export async function reduceDshFinalizationLog(
     const toolName = typeof resultCallId === 'string' ? nativeCalls.get(resultCallId)?.name : undefined
     const proof = typeof resultCallId === 'string' ? nativeProofs.get(resultCallId) : undefined
     const observation = episodeEvidenceForEvent(event, toolName, proof && observationMatchesResult(proof,event.data) ? proof : undefined)
+    if (evidenceSelectionVersion === 2) {
+      const callId = event.type === 'tool/call' ? nativeData?.callId : resultCallId
+      const text = boundedEvidenceEvent(event) ? redactDshSourceText(eventText(event)) : null
+      const bounded = text === null ? undefined : { seq: event.seq, type: event.type, weight: evidenceWeight(event), text }
+      if (observation) {
+        observation.selectionVersion = 2
+        if (typeof callId === 'string') observation.callId = callId
+      }
+      if (event.type === 'tool/call' && typeof callId === 'string') {
+        // Incomplete calls have no successful result. Bound pending storage too.
+        pendingGroups.set(callId, { ...(observation ? { episode: observation } : {}),
+          ...(bounded && Buffer.byteLength(bounded.text) <= FINALIZATION_EVIDENCE_MAX_BYTES ? { bounded } : {}) })
+        if (pendingGroups.size > 256) pendingGroups.delete(pendingGroups.keys().next().value!)
+      } else if (event.type === 'tool/result' && typeof callId === 'string') {
+        const action = pendingGroups.get(callId)
+        if (observation) {
+          if (action?.episode) {
+            observation.actionSeq = action.episode.seq
+            observation.resultHash = canonicalContentHash(event.data)
+            episodeGroups.add({ items: [action.episode, observation], seq: event.seq, kind: observation.outcome === 'failed' ? 'failed' : 'pair' })
+          } else if (observation.outcome === 'failed') episodeGroups.add({ items: [observation], seq: event.seq, kind: 'failed' })
+        }
+        if (bounded && action?.bounded) boundedGroups.add({ items: [action.bounded, bounded], seq: event.seq, kind: observation?.outcome === 'failed' ? 'failed' : 'pair' })
+        else if (bounded && observation?.outcome === 'failed') boundedGroups.add({ items: [bounded], seq: event.seq, kind: 'failed' })
+        pendingGroups.delete(callId)
+      } else {
+        if (observation) episodeGroups.add({ items: [observation], seq: event.seq, kind: observation.kind === 'user' ? 'user' : 'other' })
+        if (bounded) boundedGroups.add({ items: [bounded], seq: event.seq, kind: event.type === 'user/message' ? 'user' : 'other' })
+      }
+    }
     if (event.type === 'tool/result' && typeof resultCallId === 'string') { nativeCalls.delete(resultCallId); nativeProofs.delete(resultCallId) }
-    if (observation) {
+    if (observation && evidenceSelectionVersion === 1) {
       episodeEvidence.push(observation)
       // Retain a bounded tail of native observations. Truncation is explicit in the prompt.
       while (episodeEvidence.length > 64 || Buffer.byteLength(JSON.stringify(episodeEvidence)) > 24000) episodeEvidence.shift()
     }
-    if (inputMode === 'bounded_evidence' && boundedEvidenceEvent(event)) {
+    if (evidenceSelectionVersion === 1 && inputMode === 'bounded_evidence' && boundedEvidenceEvent(event)) {
       const text = redactDshSourceText(eventText(event))
       if (text !== null) {
         const candidate = { seq: event.seq, type: event.type, weight: evidenceWeight(event),
@@ -688,14 +730,21 @@ export async function reduceDshFinalizationLog(
   const selected = evidenceHeap
     .filter((candidate) => !current.has(candidate.seq))
     .sort((left, right) => right.weight - left.weight || right.seq - left.seq)
+  // Repack complete groups against the model's actual remaining budget; never
+  // use evidenceDocument's legacy prefix truncation on a v2 action/result pair.
+  const boundedBudget = Math.min(FINALIZATION_EVIDENCE_MAX_BYTES, Math.max(0, (envelope.contextWindow ?? 0) - MAX_OUTPUT_TOKENS - 4096))
+  const boundedText = evidenceSelectionVersion === 2 ? (() => {
+    const items = boundedGroups.items()
+    return renderGroups(items).length === 0 ? '' : boundedGroups.document(boundedBudget)
+  })() : undefined
   return Object.freeze({
     messages: Object.freeze(messages),
-    evidence: evidenceDocument(selected, evidenceBudget(envelope, metadata)),
+    evidence: evidenceSelectionVersion === 2 ? boundedGroups.document(evidenceBudget(envelope, metadata)) : evidenceDocument(selected, evidenceBudget(envelope, metadata)),
     envelope,
     digest: digest.digest('hex'),
     eventCount,
-    episodeEvidence: Object.freeze(episodeEvidence),
-    ...(inputMode === 'bounded_evidence' ? { boundedEvidence: evidenceDocument(
+    episodeEvidence: Object.freeze(evidenceSelectionVersion === 2 ? episodeGroups.items().sort((a,b) => a.seq - b.seq) : episodeEvidence),
+    ...(inputMode === 'bounded_evidence' ? { boundedEvidence: boundedText ?? evidenceDocument(
       [...new Map([
         ...boundedLatest.values(),
         ...boundedHeap.sort((left, right) => right.weight - left.weight || right.seq - left.seq),
@@ -891,9 +940,9 @@ export class DshMemoryFinalizer {
     database.prepare(`
       INSERT INTO dsh_memory_finalizations (
         run_id, workspace, dsh_session_id, source_start_seq, source_end_seq,
-        status, attempt_count, input_mode, extraction_version,
+        status, attempt_count, input_mode, extraction_version, evidence_selection_version,
         scheduled_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, 2, ?, ?)
     `).run(runId, workspace, sessionId, boundary.sourceStartSeq, sourceEndSeq, this.#inputMode, this.#evolutionConfig.mode === 'off' ? 1 : 2, now, now)
   }
 
@@ -943,7 +992,7 @@ export class DshMemoryFinalizer {
       const row = database.prepare(`
         SELECT run_id AS runId, workspace, dsh_session_id AS dshSessionId,
                source_start_seq AS sourceStartSeq, source_end_seq AS sourceEndSeq,
-               attempt_count AS attemptCount, scheduled_at AS scheduledAt, input_mode AS inputMode, extraction_version AS extractionVersion,
+               attempt_count AS attemptCount, scheduled_at AS scheduledAt, input_mode AS inputMode, extraction_version AS extractionVersion, evidence_selection_version AS evidenceSelectionVersion,
                (SELECT status FROM ledger_runs r WHERE r.run_id=dsh_memory_finalizations.run_id) AS outcome
           FROM dsh_memory_finalizations
          WHERE status = 'pending' AND attempt_count < ?
@@ -1040,6 +1089,7 @@ export class DshMemoryFinalizer {
         job.sourceEndSeq,
         job.inputMode,
         {runId:job.runId,workspace:job.workspace,sessionId:job.dshSessionId},
+        job.evidenceSelectionVersion,
       )
       const extractEpisode = job.extractionVersion === 2 && await this.#runtime.withDatabase(database => evolutionSettings(database).mode !== 'off')
       const requestJob = extractEpisode ? job : { ...job, extractionVersion: 1 as const }

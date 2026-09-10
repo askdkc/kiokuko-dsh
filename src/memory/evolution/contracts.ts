@@ -42,6 +42,10 @@ export interface EpisodeEvidence {
   kind: 'user' | 'action' | 'result'
   text: string
   outcome: 'passed' | 'failed' | 'unknown'
+  selectionVersion?: 2
+  callId?: string
+  actionSeq?: number
+  resultHash?: string
 }
 export type EpisodeEvidenceRef = Omit<EpisodeEvidence, 'text'> & { contentHash: string }
 export const evidenceReferences = (evidence: readonly EpisodeEvidence[]): EpisodeEvidenceRef[] => evidence.map(({ text, ...ref }) => ({ ...ref, contentHash: digest(normalize(text)) }))
@@ -94,11 +98,18 @@ export function parseEpisodeDraft(value: unknown, evidence: readonly EpisodeEvid
 
 export function episodeSignals(draft: EpisodeDraft, evidence: readonly EpisodeEvidence[]): Pick<Episode, 'successful' | 'procedureSupported' | 'failed' | 'corrective' | 'alternativeObserved' | 'recovered'> {
   const bySeq = new Map(evidence.map(e => [e.seq, e]))
+  const linked = (actionSeq: number, resultSeq: number): boolean => {
+    const action = bySeq.get(actionSeq), result = bySeq.get(resultSeq)
+    if (!action || !result || action.kind !== 'action' || result.kind !== 'result' || actionSeq >= resultSeq) return false
+    if (action.selectionVersion !== 2 && result.selectionVersion !== 2) return true // Historical evidence contract.
+    return action.selectionVersion === 2 && result.selectionVersion === 2 && action.callId !== undefined &&
+      action.callId === result.callId && result.actionSeq === actionSeq && /^[a-f0-9]{64}$/u.test(result.resultHash ?? '')
+  }
   const actionSeqs = draft.events.filter(e => e.kind === 'action').flatMap(e => e.evidence)
   const successful = draft.events.some(e => e.kind === 'verification' && e.evidence.some(seq =>
-    bySeq.get(seq)?.outcome === 'passed' && actionSeqs.some(action => action < seq)))
+    bySeq.get(seq)?.outcome === 'passed' && actionSeqs.some(action => linked(action, seq))))
   const procedureSupported = evidence.some(action => action.kind === 'action' && actionSeqs.includes(action.seq) && normalize(action.text).includes(normalize(draft.procedure)) &&
-    draft.events.some(item => item.kind === 'verification' && item.evidence.some(seq => seq > action.seq && bySeq.get(seq)?.outcome === 'passed')))
+    draft.events.some(item => item.kind === 'verification' && item.evidence.some(seq => linked(action.seq, seq) && bySeq.get(seq)?.outcome === 'passed')))
   const failed = draft.events.some(e => e.kind === 'failure')
   const corrective = draft.events.some(e => e.kind === 'correction')
   const a = draft.avoidance
@@ -106,7 +117,9 @@ export function episodeSignals(draft: EpisodeDraft, evidence: readonly EpisodeEv
   const correctiveEvidence = draft.events.filter(item => item.kind === 'correction').flatMap(item => item.evidence)
   const alternativeObserved = alternatives.some(item => item.kind === 'action' || item.kind === 'user' && correctiveEvidence.includes(item.seq))
   const failures = draft.events.filter(item => item.kind === 'failure').flatMap(item => item.evidence)
-  const recovered = alternatives.some(action => action.kind === 'action' && failures.some(seq => seq < action.seq) &&
+  // Native logs establish action/result identity, not that a later success
+  // resolved an earlier failure. v2 does not manufacture a causal recovery edge.
+  const recovered = !evidence.some(item => item.selectionVersion === 2) && alternatives.some(action => action.kind === 'action' && failures.some(seq => seq < action.seq) &&
     draft.events.some(item => item.kind === 'verification' && item.evidence.some(seq => seq > action.seq && bySeq.get(seq)?.outcome === 'passed')))
   return { successful, procedureSupported, failed, corrective, alternativeObserved, recovered }
 }

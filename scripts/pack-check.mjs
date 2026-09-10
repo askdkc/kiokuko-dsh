@@ -154,6 +154,23 @@ async function createAndSmokeTestTarball() {
     const skill = await japanese.loadJapaneseOutputSkill();
     const prompt = await japanese.applyJapaneseOutputSkill({sections:[],variables:{model:'qwen3-coder'}});
     if (skill.name !== 'natural-japanese-output' || !prompt.variables.kiokuko_natural_japanese_output.includes(skill.content)) throw new Error('packed Japanese Skill delivery failed');
+    const { createStandardSkillProvider } = await import(new URL('./standard-skill-provider.js', import.meta.resolve('kiokuko-dsh/dsh')));
+    const { buildDshMessageSources } = await import(new URL('./message-sources.js', import.meta.resolve('kiokuko-dsh/dsh')));
+    const provider = createStandardSkillProvider();
+    try {
+      const { candidates } = await provider.list({});
+      const sources = await buildDshMessageSources({
+        task: 'Continue the approved plan.', intakeStatus: 'ready', nextAction: 'proceed', context: null,
+        memoryPolicy: { memoryReasoningRequired: true, contextWithheld: false },
+        routeSkillNames: candidates.map(candidate => candidate.name),
+      });
+      for (const candidate of candidates) {
+        const definition = await provider.get(candidate, {});
+        if (!definition || !sources.some(source => source.name === candidate.name && source.text.includes(definition.content))) {
+          throw new Error('packed Skill route delivery failed: ' + candidate.name);
+        }
+      }
+    } finally { provider.dispose(); }
   `
   const smokePath = join(consumerRoot, 'import-smoke.mjs')
   await mkdir(join(consumerRoot, 'node_modules'))
