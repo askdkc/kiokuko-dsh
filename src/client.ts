@@ -363,15 +363,41 @@ interface IntakePending {
   cancel(): Promise<void>
 }
 
-interface IntakeDraft { selected: number | null; custom: string }
+interface IntakeDraft { selected: number | null; custom: string; ordinal?: string }
 const intakeDrafts = new WeakMap<object, IntakeDraft>()
+
+/**
+ * Small intake questions this plugin renders as a numbered option card. The identity
+ * pair is matched exactly: another plugin's question that happens to share one
+ * half falls through to the native composer. `supported` keeps the option count
+ * inside the 1-9 range the number-key shortcut can address.
+ */
+const INTAKE_QUESTIONS: readonly { readonly id: string; readonly header: string }[] = [
+  { id: 'taskType', header: 'Kiokuko · 作業の選択' },
+  { id: 'kioku-orca-recording', header: 'OrcaReplay · 詳細ログ' },
+]
+const ENNO_SELECTION_QUESTIONS = [
+  'enno-execution-mode', 'enno-model-source', 'enno-template', 'enno-template-provider',
+  'enno-template-unavailable', 'enno-bind-provider', 'enno-model-review', 'enno-catalog-retry',
+  'enno-route-provider', 'enno-route-family', 'enno-route-auth', 'enno-route-protocol',
+]
+function isEnnoSearchQuestion(question: IntakePending['questions'][0]): boolean {
+  return question.header === '実行方式とモデル' && /^enno-(?:provider|model)-(?:ideal|zenki|goki|worker|check)$/u.test(question.id)
+}
+
+function isSupportedQuestion(question: IntakePending['questions'][0] | undefined): boolean {
+  if (question === undefined || question.multiSelect === true) return false
+  const options = question.options?.length ?? 0
+  if (options < 1) return false
+  if (question.header === '実行方式とモデル' && (ENNO_SELECTION_QUESTIONS.includes(question.id) || isEnnoSearchQuestion(question))) return true
+  if (options > 9) return false
+  return INTAKE_QUESTIONS.some(kind => kind.id === question.id && kind.header === question.header)
+}
 
 function intakePending(props: Record<string, unknown>): IntakePending | null {
   const pending = props.pendingInteraction as IntakePending | undefined
-  const question = pending?.questions?.[0]
   return pending?.kind === 'question' && pending.questions.length === 1
-    && question?.id === 'taskType' && question.header === 'Kiokuko · 作業の選択'
-    && question.multiSelect !== true && question.options?.length > 0 && question.options.length <= 9
+    && isSupportedQuestion(pending.questions[0])
     && typeof pending.answer === 'function' && typeof pending.cancel === 'function'
     ? pending : null
 }
@@ -385,6 +411,7 @@ function IntakeQuestion(props: Record<string, unknown>): unknown {
 function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const pending = props.pending as IntakePending
   const question = pending.questions[0]
+  const searchable = isEnnoSearchQuestion(question)
   const [draft, setDraft] = useState<IntakeDraft>(() => intakeDrafts.get(pending) ?? { selected: null, custom: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -401,23 +428,29 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
     if (draft.selected !== null) optionElements.current[draft.selected]?.scrollIntoView({ block: 'nearest' })
   }, [draft.selected])
   const update = (value: IntakeDraft) => {
+    if (inFlight.current) return
     intakeDrafts.set(pending, value)
     setDraft(value)
     setError('')
   }
   const settle = (cancel = false) => {
     if (inFlight.current) return
-    const custom = draft.custom.trim()
-    if (!cancel && draft.selected === null && custom === '') {
+    // Read the synchronous draft: a digit and Enter can arrive before React rerenders.
+    const current = intakeDrafts.get(pending) ?? draft
+    let custom = current.custom.trim()
+    let selected = current.selected
+    if (!cancel && selected === null && custom === '') {
       setError('選択肢を選ぶか、自由入力してください。')
       return
     }
-    if (!cancel && /^[0-9０-９]+$/u.test(custom)) {
+    if (!cancel && !searchable && /^[0-9０-９]+$/u.test(custom)) {
       const ordinal = Number(custom.normalize('NFKC'))
       if (ordinal < 1 || ordinal > question.options.length) {
         setError(`番号は1〜${question.options.length}で入力してください。`)
         return
       }
+      selected = ordinal - 1
+      custom = ''
     }
     inFlight.current = true
     setBusy(true)
@@ -425,7 +458,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
     // Enter is a separate confirmation. Typing, key-repeat and IME cannot submit twice.
     void Promise.resolve().then(() => cancel ? pending.cancel() : pending.answer({ answers: [{
       id: question.id,
-      selected: draft.selected === null ? [] : [question.options[draft.selected]!.label],
+      selected: selected === null ? [] : [question.options[selected]!.label],
       ...(custom ? { custom } : {}),
     }] })).then(() => { intakeDrafts.delete(pending) }).catch(cause => {
       if (!mounted.current) return
@@ -439,16 +472,21 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
     nativeEvent?: { isComposing?: boolean; keyCode?: number }; target?: { tagName?: string; isContentEditable?: boolean };
     preventDefault(): void; stopPropagation(): void;
   }) => {
-    if (busy || event.repeat || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229
+    if (busy || inFlight.current || event.repeat || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229
       || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
     const editing = event.target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName ?? '')
-    if (!editing && /^[1-9]$/u.test(event.key)) {
-      const index = Number(event.key) - 1
-      if (index >= question.options.length) return
+    const current = intakeDrafts.get(pending) ?? draft
+    if (!editing && (/^[0-9]$/u.test(event.key) || (event.key === 'Backspace' && current.ordinal))) {
+      const multipleDigits = question.options.length > 9
+      if (!multipleDigits && (!/^[1-9]$/u.test(event.key) || Number(event.key) > question.options.length)) return
       event.preventDefault(); event.stopPropagation()
-      update({ selected: index, custom: '' })
+      const ordinal = event.key === 'Backspace' ? current.ordinal!.slice(0, -1) : multipleDigits ? (current.ordinal ?? '') + event.key : event.key
+      const index = Number(ordinal) - 1
+      const valid = ordinal !== '' && index >= 0 && index < question.options.length
+      update({ selected: valid ? index : null, custom: '', ordinal })
+      if (ordinal && !valid) setError(`番号「${ordinal}」は範囲外です。1〜${question.options.length}で入力してください。Backspaceで訂正できます。`)
       card.current?.focus()
-    } else if (event.key === 'Enter' && event.target?.tagName !== 'BUTTON') {
+    } else if (event.key === 'Enter' && event.target?.tagName !== 'BUTTON' && !event.target?.isContentEditable) {
       event.preventDefault(); event.stopPropagation()
       settle()
     }
@@ -462,19 +500,21 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
         jsx('button', { type: 'button', disabled: busy, onClick: () => settle(true), 'aria-label': '質問を閉じる', children: '閉じる' })] }),
       jsxs('div', { className: 'kiokuko-intake-body', children: [
         question.detail ? jsx('p', { children: question.detail }) : null,
-        jsx('p', { children: `1〜${question.options.length}キーで選択、Enterで確定。` }),
-        jsx('div', { 'aria-label': '作業の選択肢', children: question.options.map((option, index) => jsxs('button', {
+        jsx('p', { children: question.options.length > 9
+          ? `番号（1〜${question.options.length}）を入力し、Enterで確定。10以上は数字を続けて入力、Backspaceで訂正できます。`
+          : `1〜${question.options.length}キーで選択、Enterで確定。` }),
+        jsx('div', { 'aria-label': '選択肢', children: question.options.map((option, index) => jsxs('button', {
           key: option.label, type: 'button', className: 'kiokuko-intake-option', disabled: busy,
           ref: (element: HTMLElement | null) => { optionElements.current[index] = element },
-          'aria-pressed': draft.selected === index, 'aria-keyshortcuts': String(index + 1),
+          'aria-pressed': draft.selected === index, ...(question.options.length <= 9 ? { 'aria-keyshortcuts': String(index + 1) } : {}),
           onClick: () => update({ selected: index, custom: '' }),
           onKeyDown: (event: { key: string; repeat?: boolean; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; nativeEvent?: { isComposing?: boolean; keyCode?: number }; preventDefault(): void; stopPropagation(): void }) => {
-            if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || draft.selected !== index) return
+            if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || (intakeDrafts.get(pending) ?? draft).selected !== index) return
             event.preventDefault(); event.stopPropagation(); settle()
           },
           children: [jsx('strong', { children: `${index + 1}. ${option.label}` }), option.description ? jsx('span', { children: option.description }) : null],
         })) }),
-        jsx('label', { htmlFor: `${titleId}-custom`, children: '自由入力（任意）' }),
+        jsx('label', { htmlFor: `${titleId}-custom`, children: searchable ? '検索（Enterで検索・数字も検索語として入力できます）' : '自由入力（任意）' }),
         jsx('textarea', { id: `${titleId}-custom`, rows: 1, disabled: busy, value: draft.custom,
           onChange: (event: { target: { value: string } }) => update({ selected: null, custom: event.target.value }),
         }),

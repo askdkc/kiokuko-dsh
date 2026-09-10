@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { MODEL_ROLES, MODEL_TEMPLATES, ModelBindingSchema, configurationProblems, readModelCatalog, templateBindings, type ModelConfiguration, type ModelRoute } from '../../../src/dsh/model-configuration.js'
+import { MODEL_ROLES, MODEL_TEMPLATES, ROLE_LABELS, ModelBindingSchema, configurationProblems, readModelCatalog, templateBindings, type ModelConfiguration, type ModelRoute } from '../../../src/dsh/model-configuration.js'
 import { explicitExecutionMode, type StoredExecutionSelection } from '../../../src/dsh/execution-selection.js'
 import { ExecutionSelectionPending, selectExecution } from '../../../src/dsh/model-selection-ui.js'
 import { isModelAvailabilityFailure } from '../../../src/dsh/model-routing.js'
@@ -12,8 +12,91 @@ const catalog = {
 }
 const llm = { listProviders: () => catalog.providers, listModels: async (provider: string) => catalog.models.filter(m => m.provider === provider) }
 const routes: ModelRoute[] = ['api-one', 'oauth-two'].map(provider => ({ provider, family: 'openai', connection: provider === 'api-one' ? 'api' : 'codex', protocol: 'responses' }))
-test('seven versioned templates cover all five families with exact IDs and conservative local concurrency', () => {
-  assert.equal(MODEL_TEMPLATES.length, 7)
+
+async function selectWithAnswers(initial: StoredExecutionSelection, steps: readonly (readonly [string, string])[]) {
+  let stored = initial
+  const seen: string[] = []
+  const saved: StoredExecutionSelection[] = []
+  const result = await selectExecution({ task: 'Fix model selection', signal, routes, stored, llm,
+    save: async (revision, value) => {
+      assert.equal(revision, stored.revision)
+      stored = { revision: revision + 1, value }
+      saved.push(stored)
+      return stored
+    },
+    questions: { ask: async request => {
+      const question = request.questions[0]
+      const step = steps[seen.length]
+      seen.push(question.id)
+      return { answers: [{ id: question.id, selected: [step?.[0] === question.id ? step[1] : '取消・作業を保持'] }] }
+    } },
+  }).catch(error => {
+    if (!(error instanceof ExecutionSelectionPending)) throw error
+    return undefined
+  })
+  // Assert outside ask: native question errors intentionally become cancellation.
+  assert.deepEqual(seen, steps.map(([id]) => id))
+  return { stored, result, saved }
+}
+
+test('custom configuration chooses the provider once and only models for subsequent roles', async () => {
+  const { result } = await selectWithAnswers({ revision: 0, value: { mode: 'enno', status: 'selecting' } }, [
+    ['enno-model-source', 'DSHに設定済みのモデルから選ぶ'],
+    ['enno-model-review', 'enno-idealを変更'],
+    ['enno-provider-ideal', 'Same name [oauth-two]'],
+    ['enno-model-ideal', 'Same model [gpt-6-astra]'],
+    ...MODEL_ROLES.filter(role => role !== 'ideal').flatMap(role => [
+      ['enno-model-review', `${ROLE_LABELS[role]}を変更`] as const,
+      [`enno-model-${role}`, 'Same model [gpt-5.6-luna]'] as const,
+    ]),
+    ['enno-model-review', 'この構成で開始'],
+  ])
+  assert.equal(result?.value.status, 'ready')
+  for (const role of MODEL_ROLES) assert.deepEqual(result?.value.configuration?.roles[role], {
+    provider: 'oauth-two', model: role === 'ideal' ? 'gpt-6-astra' : 'gpt-5.6-luna',
+  })
+})
+
+test('editing uses the role connection, supports explicit connection changes and preserves drafts on back and cancel', async () => {
+  const initial: StoredExecutionSelection = { revision: 3, value: { mode: 'enno', status: 'selecting', draft: {
+    roles: { ideal: { provider: 'api-one', model: 'gpt-6-astra' }, zenki: { provider: 'oauth-two', model: 'gpt-5.6-sol' } },
+    custom: true, maxConcurrentChildren: 4,
+  } } }
+  const { stored, saved } = await selectWithAnswers(initial, [
+    ['enno-model-review', '前鬼 (Zenki)を変更'],
+    ['enno-model-zenki', 'Same model [gpt-5.6-luna]'],
+    ['enno-model-review', '前鬼 (Zenki)を変更'],
+    ['enno-model-zenki', '接続を変更'],
+    ['enno-provider-zenki', 'Same name [api-one]'],
+    ['enno-model-zenki', 'Same model [gpt-5.6-sol]'],
+    ['enno-model-review', '前鬼 (Zenki)を変更'],
+    ['enno-model-zenki', '戻る'],
+    ['enno-model-review', '後鬼 (Goki) ヘッドを変更'],
+    ['enno-model-goki', '取消・作業を保持'],
+  ])
+  assert.deepEqual(saved[0]?.value.draft?.roles.zenki, { provider: 'oauth-two', model: 'gpt-5.6-luna' })
+  assert.deepEqual(stored.value.draft?.roles, { ...initial.value.draft!.roles, zenki: { provider: 'api-one', model: 'gpt-5.6-sol' } })
+  assert.equal(stored.revision, 5)
+  assert.equal(initial.value.draft?.roles.zenki?.provider, 'oauth-two')
+})
+
+test('a removed role connection opens provider selection without silently adopting enno-ideal', async () => {
+  const initial: StoredExecutionSelection = { revision: 1, value: { mode: 'enno', status: 'reselect', draft: {
+    roles: { ideal: { provider: 'api-one', model: 'gpt-6-astra' }, zenki: { provider: 'removed', model: 'old-model' } },
+    custom: true, maxConcurrentChildren: 4,
+  } } }
+  const { stored, saved } = await selectWithAnswers(initial, [
+    ['enno-model-review', '前鬼 (Zenki)を変更'],
+    ['enno-provider-zenki', 'Same name [oauth-two]'],
+    ['enno-model-zenki', '戻る'],
+    ['enno-provider-zenki', '戻る'],
+    ['enno-model-review', '取消・作業を保持'],
+  ])
+  assert.equal(saved.length, 0)
+  assert.deepEqual(stored, initial)
+})
+test('eight versioned templates cover all five families with exact IDs and conservative local concurrency', () => {
+  assert.equal(MODEL_TEMPLATES.length, 8)
   assert.equal(new Set(MODEL_TEMPLATES.map(t => t.group)).size, 5)
   for (const t of MODEL_TEMPLATES) { assert.equal(t.version, 1); assert.deepEqual(Object.keys(t.models), [...MODEL_ROLES]) }
   const local = MODEL_TEMPLATES.at(-1)!
@@ -53,11 +136,11 @@ test('native cards show unavailable templates, resolve ambiguous providers, pres
       let selected = ''
       if (q.id === 'enno-model-source') selected = 'おすすめテンプレートから選ぶ'
       else if (q.id === 'enno-template') {
-        assert.equal(q.options.filter((o: any) => /接続未設定/u.test(o.label)).length, 6)
+        assert.equal(q.options.filter((o: any) => /接続未設定/u.test(o.label)).length, 7)
         selected = q.options[0].label
       } else if (q.id === 'enno-template-provider') { assert.match(q.options[1].label, /oauth-two.*codex/u); selected = q.options[1].label }
       else if (q.id === 'enno-model-review') selected = reviewCount++ === 0 ? '後鬼 (Goki) ヘッドを変更' : '取消・作業を保持'
-      else if (q.id === 'enno-provider-goki') selected = 'enno-idealからコピー'
+      else if (q.id === 'enno-model-goki') selected = 'enno-idealからコピー'
       return { answers: [{ id: q.id, selected: [selected] }] } as any
     } },
   }

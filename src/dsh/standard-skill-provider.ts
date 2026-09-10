@@ -34,6 +34,12 @@ function abortIfRequested(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw signal.reason ?? new Error('Skill lookup aborted')
 }
 
+/** Resolve public Skill identities through their validated package loaders, never as paths. */
+export async function loadBundledDshSkillContent(skillName: string, parity: StandardSkillParity): Promise<string | undefined> {
+  if (skillName === JAPANESE_OUTPUT_SKILL_NAME) return (await loadJapaneseOutputSkill()).content
+  return parity.files.find(file => file.skillName === skillName && file.relativePath === 'SKILL.md')?.content
+}
+
 async function candidates(parity: StandardSkillParity): Promise<DshSkillCandidate[]> {
   const japanese = await loadJapaneseOutputSkill()
   return [...parity.skills, japanese.name].map((skillName) => {
@@ -70,13 +76,11 @@ export function createStandardSkillProvider(): DshSkillProvider & { dispose(): v
     async get(candidate: DshSkillCandidate, options: { readonly signal?: AbortSignal }): Promise<DshSkillDefinition | undefined> {
       abortIfRequested(options.signal)
       if (disposed || candidate.provider !== STANDARD_DSH_SKILL_PROVIDER || candidate.source !== 'bundled') return undefined
-      const result = await parity()
-      const file = candidate.locator.skillName === JAPANESE_OUTPUT_SKILL_NAME
-        ? { skillName: JAPANESE_OUTPUT_SKILL_NAME, content: (await loadJapaneseOutputSkill()).content }
-        : result.files.find((item) => item.skillName === candidate.locator.skillName && item.relativePath === 'SKILL.md')
-      if (file === undefined || candidate.name !== file.skillName) return undefined
+      if (candidate.name !== candidate.locator.skillName) return undefined
+      const content = await loadBundledDshSkillContent(candidate.name, await parity())
+      if (content === undefined) return undefined
       abortIfRequested(options.signal)
-      return { ...candidate, content: file.content }
+      return { ...candidate, content }
     },
     dispose(): void {
       disposed = true
