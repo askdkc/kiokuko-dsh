@@ -33,7 +33,7 @@ jobs:
       - name: Install pinned DeepSeek Harness CLI
         run: |
           dsh_cli_dir="$RUNNER_TEMP/dsh-cli"
-          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.2-rc.1
+          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.5-rc.1
           echo "$dsh_cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
         env:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
@@ -70,7 +70,7 @@ jobs:
       - name: Verify DeepSeek Harness composition and package lifecycle
         run: npm run test:e2e:dsh
         env:
-          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.2-rc.1
+          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.5-rc.1
           KIOKUKO_REQUIRE_DSH_CLI: "1"
           KIOKUKO_DSH_EVIDENCE_PATH: ${{ runner.temp }}/kiokuko-dsh-evidence.json
 
@@ -110,7 +110,7 @@ jobs:
       - name: Install pinned DeepSeek Harness CLI
         run: |
           dsh_cli_dir="$RUNNER_TEMP/dsh-cli"
-          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.2-rc.1
+          npm install --prefix "$dsh_cli_dir" --no-save @deepseek-ai/dsh@0.1.5-rc.1
           echo "$dsh_cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
         env:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
@@ -121,7 +121,7 @@ jobs:
       - name: Verify DeepSeek Harness Web lifecycle
         run: npm run test:e2e:dsh
         env:
-          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.2-rc.1
+          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.5-rc.1
           KIOKUKO_REQUIRE_DSH_CLI: "1"
           KIOKUKO_DSH_EVIDENCE_PATH: ${{ runner.temp }}/kiokuko-dsh-evidence.json
 

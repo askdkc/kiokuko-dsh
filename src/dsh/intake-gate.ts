@@ -153,6 +153,7 @@ export class DshIntakeGate {
       let prepared = await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
         requestId,
         executionSelection: this.executionSelection,
+        sessionOwnership: true,
         task: grounded.task,
         cwd: grounded.cwd,
         profileHints: grounded.profileHints,

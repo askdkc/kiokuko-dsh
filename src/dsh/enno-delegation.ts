@@ -1,4 +1,5 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
+import { ManagedAgentExecutor, type DshSpawnBackend } from './orchestration/managed-agent-executor.js'
+export type { DshSpawnBackend } from './orchestration/managed-agent-executor.js'
 import { realpathSync } from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
@@ -13,12 +14,6 @@ import { assertExecutionLeaseInTransaction, readEnnoSnapshot } from '../enno-odu
 import { readExecutionSelection } from './execution-selection.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 
-export interface DshSpawnBackend {
-  start(name: 'spawn', request: {
-    parent: RoutableAgent; prompt: { type: 'text'; text: string }[]; signal: AbortSignal;
-    agentOptions: ModelBinding; maxDepth: number; toolFilter: { allow: readonly string[] }; label: string;
-  }): Promise<{ readonly id: string; readonly localAgent?: RoutableAgent; result: Promise<{ output: unknown; stopReason: string }>; dispose(): Promise<void> }>
-}
 interface ChildBinding { readonly runId: string; readonly parent?: RoutableAgent; readonly parentSessionId: string; readonly model: ModelBinding; readonly toolNames: readonly string[]; readonly root: string; readonly scope: readonly string[]; readonly delegationId: string; child?: RoutableAgent }
 const CHILD_FILE_TOOLS = new Set(['read', 'write', 'edit', 'multiedit', 'str_replace_editor', 'glob', 'grep', 'skill'])
 /** Child shells/custom execution tools cannot enforce a WorkUnit file boundary.
@@ -49,26 +44,23 @@ const authoritySchema = z.object({
   revision: z.number().int(), routeEpoch: z.number().int(), leaseToken: z.string(), workUnitId: z.string(),
 }).strict()
 export class DshEnnoDelegation {
-  readonly #pending = new AsyncLocalStorage<ChildBinding>()
-  readonly #children = new WeakMap<object, ChildBinding>()
-  constructor(private readonly runtime: Pick<DshRuntime, 'withDatabase'>, private readonly backend: DshSpawnBackend | undefined) {}
+  readonly #managed: ManagedAgentExecutor<ChildBinding>
+  constructor(private readonly runtime: Pick<DshRuntime, 'withDatabase'>, private readonly backend: DshSpawnBackend | undefined) { this.#managed = new ManagedAgentExecutor(backend) }
   /** Called synchronously at agent/created, before session-start and followup. */
   created(agent: RoutableAgent): void {
-    const binding = this.#pending.getStore()
-    if (!binding || binding.child) return
-    binding.child = agent
-    this.#children.set(agent, binding)
+    const binding = this.#managed.created(agent)
+    if (binding) binding.child = agent
   }
-  model(agent: object): ModelBinding | undefined { return this.#children.get(agent)?.model }
-  isChild(agent: object): boolean { return this.#children.has(agent) }
-  parent(agent: object): RoutableAgent | undefined { return this.#children.get(agent)?.parent }
+  model(agent: object): ModelBinding | undefined { return this.#managed.binding(agent)?.model }
+  isChild(agent: object): boolean { return this.#managed.binding(agent) !== undefined }
+  parent(agent: object): RoutableAgent | undefined { return this.#managed.binding(agent)?.parent }
   observationBinding(agent: object): { runId: string; parentSessionId: string } | undefined {
-    const binding = this.#children.get(agent)
+    const binding = this.#managed.binding(agent)
     return binding === undefined ? undefined : { runId: binding.runId, parentSessionId: binding.parentSessionId }
   }
-  allows(agent: object, tool: string): boolean { return this.#children.get(agent)?.toolNames.includes(tool) ?? true }
+  allows(agent: object, tool: string): boolean { return this.#managed.binding(agent)?.toolNames.includes(tool) ?? true }
   toolDenial(agent: object, name: string, args: unknown): string | undefined {
-    const binding = this.#children.get(agent)
+    const binding = this.#managed.binding(agent)
     if (!binding) return undefined
     if (!binding.toolNames.includes(name)) return 'Tool is outside the delegated scope'
     return childFileScopeDenial(binding.root, binding.scope, name, args)
@@ -76,7 +68,7 @@ export class DshEnnoDelegation {
   /** Durable ownership is checked again before every child request and tool,
    * including after reload. Completing or replacing a lease revokes the child. */
   async assertCurrent(agent: object): Promise<void> {
-    const binding = this.#children.get(agent)
+    const binding = this.#managed.binding(agent)
     if (!binding) return
     await this.runtime.withDatabase(db => {
       const row = db.prepare('SELECT authority_json, status FROM dsh_enno_delegations WHERE delegation_id = ?')
@@ -91,7 +83,7 @@ export class DshEnnoDelegation {
   /** Persist the created binding before the child's first request; restore only
    * by its exact durable child id, never by origin/parent metadata alone. */
   async restoreOrPersist(agent: RoutableAgent): Promise<ModelBinding | undefined> {
-    const live = this.#children.get(agent)
+    const live = this.#managed.binding(agent)
     if (live) {
       await this.runtime.withDatabase(db => db.prepare('UPDATE dsh_enno_delegations SET child_session_id = ? WHERE delegation_id = ? AND (child_session_id IS NULL OR child_session_id = ?)')
         .run(agent.session?.id ?? agent.id, live.delegationId, agent.session?.id ?? agent.id))
@@ -102,7 +94,7 @@ export class DshEnnoDelegation {
     if (!stored) return undefined
     const model = ModelBindingSchema.parse(JSON.parse(stored.model_json))
     const toolNames = z.array(z.string()).parse(JSON.parse(stored.tools_json))
-    this.#children.set(agent, { runId: stored.run_id, model, toolNames, root: stored.repository_root, scope: z.array(z.string()).parse(JSON.parse(stored.scope_json)), delegationId: stored.delegation_id, parentSessionId: stored.parent_session_id, child: agent })
+    this.#managed.bind(agent, { runId: stored.run_id, model, toolNames, root: stored.repository_root, scope: z.array(z.string()).parse(JSON.parse(stored.scope_json)), delegationId: stored.delegation_id, parentSessionId: stored.parent_session_id, child: agent })
     return model
   }
   async execute(parent: RoutableAgent, args: unknown, binding: DshToolHostBinding, toolNames: readonly string[], signal: AbortSignal): Promise<unknown> {
@@ -134,30 +126,26 @@ export class DshEnnoDelegation {
     }))
     if ('replay' in admitted) return admitted.replay
     const childBinding: ChildBinding = { runId: binding.runId, parent, parentSessionId: parent.session!.id, toolNames: allowedTools, root: admitted.root, scope: admitted.unit.scope, model: admitted.model, delegationId: binding.idempotencyKey }
-    let run: Awaited<ReturnType<DshSpawnBackend['start']>> | undefined
     try {
-      run = await this.#pending.run(childBinding, () => this.backend!.start('spawn', {
+      return await this.#managed.execute(childBinding, {
         parent, signal, agentOptions: { ...admitted.model }, maxDepth: 1, label: 'Goki worker',
         toolFilter: { allow: allowedTools },
         prompt: [{ type: 'text', text: [
           'You are the Goki worker for one approved WorkUnit. Do not start Kiokuko intake, ask for orchestration selection, delegate, or report acceptance. You have no parent run or lease authority. Preserve other work. Stay within the declared scope. Return changed paths, verification evidence and unresolved issues to Goki.',
           JSON.stringify({ objective: admitted.unit.objective, scope: admitted.unit.scope, acceptanceCriteria: admitted.unit.acceptanceCriteria, instruction: input.instruction }),
         ].join('\n') }],
-      }))
-      if (!run.localAgent || childBinding.child !== run.localAgent || !this.isChild(run.localAgent)) throw new KiokukoError('INTEGRITY_ERROR', 'Spawn did not establish the exact managed child before first execution')
-      const child = await run.result
-      if (findSecretInValue(child.output) !== undefined) throw new KiokukoError('SECURITY_REJECTION', 'Child output contains secret-shaped content and was not persisted or forwarded')
-      const result = { childSessionId: run.id, stopReason: child.stopReason, output: child.output, accepted: false,
-        instruction: 'Goki must review this evidence and run the WorkUnit verifier before enno_work_report.' }
-      const json = JSON.stringify(result)
-      if (Buffer.byteLength(json) > 256 * 1024) throw new KiokukoError('VALIDATION_ERROR', 'Child output exceeds the delegation result limit; inspect the native child session')
-      await this.runtime.withDatabase(db => db.prepare("UPDATE dsh_enno_delegations SET status = 'completed', result_json = ? WHERE delegation_id = ?").run(json, binding.idempotencyKey))
-      return result
+      }, async (child, agent) => {
+        if (findSecretInValue(child.output) !== undefined) throw new KiokukoError('SECURITY_REJECTION', 'Child output contains secret-shaped content and was not persisted or forwarded')
+        const result = { childSessionId: agent.session?.id ?? agent.id, stopReason: child.stopReason, output: child.output, accepted: false,
+          instruction: 'Goki must review this evidence and run the WorkUnit verifier before enno_work_report.' }
+        const json = JSON.stringify(result)
+        if (Buffer.byteLength(json) > 256 * 1024) throw new KiokukoError('VALIDATION_ERROR', 'Child output exceeds the delegation result limit; inspect the native child session')
+        await this.runtime.withDatabase(db => db.prepare("UPDATE dsh_enno_delegations SET status = 'completed', result_json = ? WHERE delegation_id = ?").run(json, binding.idempotencyKey))
+        return result
+      })
     } catch (error) {
       await this.runtime.withDatabase(db => db.prepare("UPDATE dsh_enno_delegations SET status = 'uncertain' WHERE delegation_id = ? AND status = 'started'").run(binding.idempotencyKey))
       throw error
-    } finally {
-      await run?.dispose()
     }
   }
 }

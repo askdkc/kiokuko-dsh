@@ -83,13 +83,15 @@ export interface DshModelCompatibility {
   }>
 }
 export async function configurationProblems(configuration: ModelConfiguration, catalog: ModelCatalogSnapshot, routes: readonly ModelRoute[], compatibility?: DshModelCompatibility): Promise<string[]> {
+  return modelBindingProblems(MODEL_ROLES.map(role => ({ label: ROLE_LABELS[role], binding: configuration.roles[role] })), catalog,
+    [...routes, ...(configuration.routeBindings ?? []).filter(route => !routes.some(r => r.provider === route.provider))], compatibility)
+}
+export async function modelBindingProblems(bindings: readonly { label: string; binding: ModelBinding }[], catalog: ModelCatalogSnapshot, routes: readonly ModelRoute[], compatibility?: DshModelCompatibility): Promise<string[]> {
   const problems: string[] = []
-  for (const role of MODEL_ROLES) {
-    const binding = configuration.roles[role]
-    const label = ROLE_LABELS[role]
+  for (const { label, binding } of bindings) {
     if (catalog.failures.includes(binding.provider)) { problems.push(`${label}: 接続のモデル一覧を取得できません (${binding.provider})`); continue }
     if (!catalog.models.some(m => m.provider === binding.provider && m.id === binding.model)) { problems.push(`${label}: 設定済みモデルがありません (${binding.provider} / ${binding.model})`); continue }
-    const route = routes.find(r => r.provider === binding.provider) ?? configuration.routeBindings?.find(r => r.provider === binding.provider)
+    const route = routes.find(r => r.provider === binding.provider)
     // Unknown routes must be classified before use, including the custom path.
     if (!route) { problems.push(`${label}: 接続先の種類・通信方式をプラグイン設定の modelRoutes に登録してください (${binding.provider})`); continue }
     let evidence: Awaited<ReturnType<DshModelCompatibility['inspect']>> | undefined

@@ -13,11 +13,11 @@ import { collect } from '../helpers/orca-fixture.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
-if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packageRoot && !sourceRoot) throw new Error('Orca native E2E requires pinned DSH 0.1.2-rc.1')
+if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packageRoot && !sourceRoot) throw new Error('Orca native E2E requires pinned DSH 0.1.5-rc.1')
 async function load(name: string, source: string) {
   const base = packageRoot ? join(packageRoot, '@deepseek-ai', name) : join(sourceRoot!, source)
   const meta = JSON.parse(await readFile(join(base, 'package.json'), 'utf8'))
-  if (name !== 'cordis') assert.equal(meta.version, '0.1.2-rc.1', `native Orca fixture rejects mismatched ${name}`)
+  if (name !== 'cordis') assert.equal(meta.version, '0.1.5-rc.1', `native Orca fixture rejects mismatched ${name}`)
   return import(pathToFileURL(join(base, 'lib/index.js')).href)
 }
 for (const owner of ['normal', 'explicit'] as const) test(`Orca enabled real DSH ${owner} apply, scoped events, final result, stop/show/export and unload`, {

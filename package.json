@@ -62,9 +62,10 @@
       "patch": "./dsh/cordis.patch.yml"
     },
     "compatibility": {
-      "dsh": "0.1.2-rc.1",
+      "dsh": "0.1.5-rc.1",
       "dshReleases": {
-        "0.1.2-rc.1": "compatible"
+        "0.1.2-rc.1": "compatible",
+        "0.1.5-rc.1": "compatible"
       },
       "profiles": [
         "web"
@@ -79,7 +80,7 @@
       ],
       "writePaths": [
         "Configured Kiokuko database and pre-migration backups",
-        "DSH run, lease, receipt, retrieval, post-completion memory-finalization, and embedding state inside that database",
+        "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",
         ".orca/runs and .orca/exports inside verified session workspaces, or the configured Kiokuko data directory"
       ],
       "commands": [
@@ -87,7 +88,8 @@
       ],
       "externalServices": [
         "GitHub or skills.sh for optional Skill discovery and source retrieval",
-        "User-configured embedding endpoint when remote embeddings are enabled"
+        "User-configured embedding endpoint when remote embeddings are enabled",
+        "DSH-configured model providers for explicitly started Deep planning and its budgeted memory extraction"
       ],
       "credentials": [
         "Optional user-provided GitHub or embedding credentials; never bundled or persisted by the plugin"
@@ -95,7 +97,7 @@
       "failureBoundaries": [
         "Repository identity, run identity, lease, revision, and integrity mismatches fail closed",
         "Remote embedding is disabled by default and unavailable services do not become normal success",
-        "Memory finalization failures are retryable and cannot veto DSH completion or session-log export",
+        "Ordinary memory finalization failures are retryable; uncertain Deep requests are never automatically resent. Neither can veto completion or session-log export",
         "Orca is configured by default; capture requires a session choice or start command, adds no network transmission, and cannot veto native outcomes"
       ],
       "lifecycleEvidence": [

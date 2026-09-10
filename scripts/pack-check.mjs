@@ -25,6 +25,7 @@ const requiredFiles = [
   'dist/client.d.ts',
   'dist/dsh/index.js',
   'dist/dsh/index.d.ts',
+  'skills/japanese-translation-for-oss-models/SKILL.md',
 ]
 const requiredDirectories = ['dist/', 'migrations/', 'skills/', 'docs/']
 const forbiddenPrefixes = [
@@ -143,7 +144,17 @@ async function createAndSmokeTestTarball() {
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
   await assertDshClientArtifact(packageRoot)
 
-  const smokeCode = "const root = await import('kiokuko-dsh'); const plugin = await import('kiokuko-dsh/dsh'); if (plugin.name !== 'kiokuko-dsh') throw new Error('unexpected plugin name'); if (typeof root.DshSessionLogExportService !== 'function') throw new Error('missing root export service'); if ('default' in plugin) throw new Error('unexpected default export');"
+  const smokeCode = `
+    const root = await import('kiokuko-dsh');
+    const plugin = await import('kiokuko-dsh/dsh');
+    if (plugin.name !== 'kiokuko-dsh') throw new Error('unexpected plugin name');
+    if (typeof root.DshSessionLogExportService !== 'function') throw new Error('missing root export service');
+    if ('default' in plugin) throw new Error('unexpected default export');
+    const japanese = await import(new URL('./japanese-output-skill.js', import.meta.resolve('kiokuko-dsh/dsh')));
+    const skill = await japanese.loadJapaneseOutputSkill();
+    const prompt = await japanese.applyJapaneseOutputSkill({sections:[],variables:{model:'qwen3-coder'}});
+    if (skill.name !== 'natural-japanese-output' || !prompt.variables.kiokuko_natural_japanese_output.includes(skill.content)) throw new Error('packed Japanese Skill delivery failed');
+  `
   const smokePath = join(consumerRoot, 'import-smoke.mjs')
   await mkdir(join(consumerRoot, 'node_modules'))
   await symlink(packageRoot, join(consumerRoot, 'node_modules', 'kiokuko-dsh'), 'dir')

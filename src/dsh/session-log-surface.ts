@@ -15,6 +15,7 @@ interface FetchRegistry {
   register(route: {
     readonly path: string
     readonly methods: readonly ('GET' | 'HEAD')[]
+    readonly requestBody: 'buffered'
     readonly fetch: (request: Request) => Promise<Response>
   }): () => unknown
 }
@@ -77,6 +78,7 @@ export function mountDshSessionExportSurface(ctx: Context, service: DshSessionLo
   const disposeRoute = connection.fetch.register({
     path: DSH_SESSION_EXPORT_PATH,
     methods: ['GET', 'HEAD'],
+    requestBody: 'buffered',
     fetch: request => dshSessionExportResponse(service, request),
   })
   let disposed = false

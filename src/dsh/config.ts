@@ -2,6 +2,7 @@ import { MemoryEvolutionConfig } from '../memory/evolution/contracts.js'
 export { MemoryEvolutionConfig }
 import { z } from 'zod'
 import { ModelRouteSchema } from './model-configuration.js'
+import { DeepThinkerConfigSchema } from '../deep-thinker/core/contracts.js'
 
 const limit = (value: number) => z.number().int().positive().max(Number.MAX_SAFE_INTEGER).default(value)
 export const OrcaConfig = z.object({
@@ -30,6 +31,7 @@ export const FinalizationConfig = z.object({ inputMode: z.enum(['prefix_reuse', 
 /** Runtime configuration accepted by the dsh bundle entrypoint. */
 export const Config = z.object({
   enabled: z.boolean().default(true),
+  deepPlanning: DeepThinkerConfigSchema.prefault({}),
   modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),
   orca: OrcaConfig.prefault({}),
   efficiency: EfficiencyConfig.prefault({}),

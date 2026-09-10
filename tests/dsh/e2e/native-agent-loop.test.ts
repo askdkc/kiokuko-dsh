@@ -437,9 +437,13 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       && event.data.message.content.some((block: any) => block.type === 'text' && /^Completed (?:one|two):/u.test(block.text))
     ))
     const longAssistantMessage = liveAgent.session.snapshotEvents().find((event: any) => (
-      event.type === 'assistant/message' && event.sourceEventSeqs?.length > 2_048
+      event.type === 'assistant/message' && event.data.message.content.some((block: any) => block.type === 'text' && block.text.endsWith('x'.repeat(4_531)))
     ))
-    assert.ok(longAssistantMessage, 'the real loop must exercise a source sequence list larger than the former bridge limit')
+    assert.ok(longAssistantMessage, 'settlement must preserve the complete long response')
+    if (liveAgent.session.header.version >= 3) {
+      assert.ok(longAssistantMessage.data.stream?.length, 'V3 keeps the compacted stream in the settlement')
+      assert.equal(longAssistantMessage.sourceEventSeqs, undefined, 'V3 forbids legacy chunk references on assistant messages')
+    } else assert.ok(longAssistantMessage.sourceEventSeqs?.length > 2_048, 'legacy logs exercise the former bridge source-reference limit')
     assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(13).fill(false), JSON.stringify({ toolEvents, turnEnds }))
     const delegation = results.find((event: any) => event.data.message.content[0]?.toolCallId === 'delegate-two')
     const delegated = JSON.parse(delegation.data.message.content[0].content[0].text)

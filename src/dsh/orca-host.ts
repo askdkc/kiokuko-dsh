@@ -18,6 +18,8 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
   logicalRun(session: { id: string }): string | undefined
   questions?: DshUserQuestions
   interactive?(agent: { id: string }): boolean
+  recordingRun?(agent: object): string | undefined
+  recordingParent?(agent: object): { agent: object; session: object } | undefined
 }): DshOrcaHostServices {
   // Cordis releases plugin-owned listeners before its async effect cleanup.
   // Root-owned observers are explicitly released only after recorder drain.
@@ -30,14 +32,20 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
   const operations = new Map<string, Promise<void>>()
   let shutdown: Promise<void> | undefined
   const disposers: (() => void)[] = []
-  function enrich(entry: { session: object; binding: DshOrcaBinding }): DshOrcaBinding {
-    const runId = native.logicalRun(entry.session as { id: string })
+  function enrich(entry: { agent: object; session: object; binding: DshOrcaBinding }): DshOrcaBinding {
+    const runId = native.recordingRun?.(entry.agent) ?? native.logicalRun(entry.session as { id: string })
     return Object.freeze({ ...entry.binding, ...(runId === undefined ? {} : { kiokukoRunId: runId }) })
+  }
+  function recordingAuthority(binding: DshOrcaBinding): DshOrcaBinding | undefined {
+    const entry = bindings.get(binding.sessionId), parent = entry && native.recordingParent?.(entry.agent)
+    if (!parent) return binding
+    const inherited = services.resolveSessionBinding(parent.agent, parent.session)
+    return inherited && inherited.workspaceRoot === binding.workspaceRoot && inherited.storeRoot === binding.storeRoot ? inherited : undefined
   }
   const services: DshOrcaHostServices = {
     config, recorder, withIndex,
-    canRecord: binding => accepting && choices.allows(binding),
-    sessionRecordingStatus: binding => choices.status(binding),
+    canRecord: binding => { const authority = recordingAuthority(binding); return accepting && !!authority && choices.allows(authority) },
+    sessionRecordingStatus: binding => { const authority = recordingAuthority(binding); return authority ? choices.status(authority) : Promise.resolve({sessionRecording:'unavailable'}) },
     setSessionRecording(binding, enabled) {
       const pending = (operations.get(binding.sessionId) ?? Promise.resolve()).catch(() => undefined).then(async () => {
         if (!accepting) throw new Error('Orca host closed')
@@ -91,7 +99,7 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
         const agent = payload.agent, session = agent?.session
         const binding = agent && session ? services.resolveSessionBinding(agent, session) : undefined
         if (binding && agent && session) {
-          if (native.interactive?.(agent) === false) await choices.status(binding)
+          if (native.interactive?.(agent) === false) await services.sessionRecordingStatus(binding)
           else await choices.prepare(binding, agent, payload.signal ?? new AbortController().signal,
             () => services.resolveSessionBinding(agent, session) !== undefined)
         }

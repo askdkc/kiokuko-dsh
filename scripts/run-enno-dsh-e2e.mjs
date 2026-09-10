@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
@@ -10,7 +10,7 @@ const exec = promisify(execFile)
 const root = resolve(import.meta.dirname, '..')
 const dsh = process.env.DSH_BIN ?? 'dsh'
 const profile = 'web'
-const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? '0.1.2-rc.1'
+const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? '0.1.5-rc.1'
 const requireDshCli = process.env.KIOKUKO_REQUIRE_DSH_CLI === '1'
 
 async function run(command, args, env = {}) {
@@ -111,6 +111,14 @@ async function runCordisComposition() {
     throw new Error(`Mandatory native workflow tests were skipped:\n${result.stdout}`)
   }
   process.stdout.write(result.stdout)
+  if (!packageRoot) return null
+  const versions = {}
+  for (const name of ['cordis', 'dsh', 'dsh-agent', 'dsh-agent-loop', 'dsh-commands', 'dsh-llm', 'dsh-session', 'dsh-system-prompt', 'dsh-tools', 'dsh-subagent', 'dsh-subagent-spawn-in-process']) {
+    const pkg = JSON.parse(await readFile(join(packageRoot, '@deepseek-ai', name, 'package.json'), 'utf8'))
+    versions[pkg.name] = pkg.version
+    if (requireDshCli && name !== 'cordis' && pkg.version !== expectedDshVersion) throw new Error(`Native dependency ${pkg.name} is ${pkg.version}; expected ${expectedDshVersion}`)
+  }
+  return versions
 }
 
 function startWebProfile(env) {
@@ -185,6 +193,12 @@ async function authenticatedWebRoot(tokenUrl) {
 
 async function verifyBrowserBundle(tokenUrl) {
   const { rootUrl, cookie, html } = await authenticatedWebRoot(tokenUrl)
+  // Exercise the actual HTTP bridge as well as the browser bundle. Native
+  // 0.1.5 requires an explicit buffered body mode even for exact GET routes.
+  const reports = await fetch(new URL('/api/kiokuko.deep?sessionId=package-lifecycle-unused-session', rootUrl), { headers: { cookie } })
+  if (reports.status !== 200 || JSON.stringify(await reports.json()) !== '{"items":[]}') throw new Error('Deep report HTTP route failed through the native bridge')
+  const exported = await fetch(new URL('/api/session.export', rootUrl), { headers: { cookie } })
+  if (exported.status !== 400 || (await exported.json()).code !== 'invalid_request') throw new Error('Session export HTTP route failed through the native bridge')
   const boot = readBootManifest(html)
   const kiokuko = boot.entries.filter(entry => entry?.id === 'kiokuko-dsh')
   if (kiokuko.length !== 1) throw new Error(`DSH Web manifest contained ${kiokuko.length} Kiokuko client entries`)
@@ -226,7 +240,7 @@ async function verifyBrowserBundle(tokenUrl) {
   if (JSON.stringify(requested) !== JSON.stringify(expected)) {
     throw new Error(`Kiokuko client requested an unexpected DSH browser module set: ${JSON.stringify(requested)}`)
   }
-  return { bytes: Buffer.byteLength(source), registrations: registrations.size }
+  return { bytes: Buffer.byteLength(source), registrations: registrations.size, reportAndExportHttpRoutes: 'complete' }
 }
 
 async function stopWebProfile(processHandle) {
@@ -249,12 +263,25 @@ async function stopWebProfile(processHandle) {
   if (result.code !== 0) throw new Error(`DSH web stopped unsuccessfully (code=${result.code}, signal=${result.signal})\n${processHandle.getOutput()}`)
 }
 
-async function runCliLifecycle() {
-  const home = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-home-'))
+/** Optional bounded rendezvous for operating the disposable Web UI before removal. */
+async function awaitUiVerification(url, profileDirectory, patch, stage) {
+  const path = process.env.KIOKUKO_DSH_UI_RENDEZVOUS
+  if (!path) return
+  await writeFile(path, JSON.stringify({url, profileDirectory, patch, stage}), {mode:0o600})
+  const deadline = Date.now() + 20 * 60_000
+  while (Date.now() < deadline) {
+    try { await access(`${path}.${stage}.continue`); return } catch { /* UI work continues independently. */ }
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+  throw new Error('Disposable Web UI verification did not finish within 20 minutes')
+}
+
+async function runCliLifecycle(nativeDependencies) {
+  const profileDirectory = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-home-'))
   const output = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-pack-'))
   const cache = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-cache-'))
-  const dataDirectory = join(home, 'kiokuko-data')
-  const env = { DSH_HOME: home, KIOKUKO_DATA_DIR: dataDirectory, npm_config_cache: cache, KIOKUKO_ORCA_E2E_PATCH: join(home, 'orca-test.patch.yml') }
+  const dataDirectory = join(profileDirectory, 'kiokuko-data')
+  const env = { DSH_HOME: profileDirectory, KIOKUKO_DATA_DIR: dataDirectory, npm_config_cache: cache, KIOKUKO_ORCA_E2E_PATCH: join(profileDirectory, 'orca-test.patch.yml') }
   let web
   try {
     try {
@@ -289,6 +316,12 @@ async function runCliLifecycle() {
     const ready = await web.ready
     if (web.child.exitCode !== null || web.child.signalCode !== null) throw new Error(`DSH web exited immediately after readiness\n${web.getOutput()}`)
     const browserBundle = await verifyBrowserBundle(ready.url)
+    await awaitUiVerification(ready.url, profileDirectory, env.KIOKUKO_ORCA_E2E_PATCH, 'installed')
+    await stopWebProfile(web)
+    web = startWebProfile(env)
+    const reloaded = await web.ready
+    await verifyBrowserBundle(reloaded.url)
+    await awaitUiVerification(reloaded.url, profileDirectory, env.KIOKUKO_ORCA_E2E_PATCH, 'reloaded')
     await stopWebProfile(web)
     await run(dsh, ['plugin', '--profile', profile, 'remove', 'kiokuko-dsh'], env)
     const afterRemove = await run(dsh, ['--profile', profile, '--dump-config'], env)
@@ -300,6 +333,7 @@ async function runCliLifecycle() {
       cli: 'complete',
       profile,
       dshVersion: dshVersion.trim(),
+      nativeDependencies,
       packageVersion: packageMetadata.version,
       packageCommit,
       workingTreeClean,
@@ -308,6 +342,7 @@ async function runCliLifecycle() {
       orca: 'enabled-native-scenarios-no-skips',
       web: 'browser-bundle-loaded-and-materialized',
       browserBundle,
+      reload: 'browser-bundle-loaded-and-materialized',
       uninstall: 'complete',
     }
     const evidencePath = process.env.KIOKUKO_DSH_EVIDENCE_PATH
@@ -325,7 +360,7 @@ async function runCliLifecycle() {
       }
     }
     await Promise.all([
-      rm(home, { recursive: true, force: true }),
+      rm(profileDirectory, { recursive: true, force: true }),
       rm(output, { recursive: true, force: true }),
       rm(cache, { recursive: true, force: true }),
     ])
@@ -334,5 +369,5 @@ async function runCliLifecycle() {
 
 await access(join(root, 'dist/dsh/index.js'))
 await access(join(root, 'dsh/cordis.patch.yml'))
-await runCordisComposition()
-await runCliLifecycle()
+const nativeDependencies = await runCordisComposition()
+await runCliLifecycle(nativeDependencies)

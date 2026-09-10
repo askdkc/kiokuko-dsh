@@ -36,7 +36,7 @@ export function seed(db: SqliteDatabase, id: string, options: { draft?: EpisodeD
   db.prepare('UPDATE ledger_runs SET status=? WHERE run_id=?').run(outcome,id)
   db.prepare(`INSERT INTO dsh_memory_finalizations(run_id,workspace,dsh_session_id,source_start_seq,source_end_seq,status,attempt_count,scheduled_at,updated_at,extraction_version)
     VALUES(?,?,?,1,5,'completed',1,?,?,2)`).run(id,workspace,`session-${id}`,NOW,NOW)
-  const original = recordEntry(db,{ workspace,kind:'lesson',title:`SQLITE_BUSY ${id}`,body:`Release writer ${id}`,createdBy:'fixture',scope:{ visibility:'project' } })
+  const original = recordEntry(db,{ workspace,kind:'lesson',title:`SQLITE_BUSY ${id}`,body:`Release writer ${id}`,createdBy:'fixture',scope:{ visibility:'project' } }, { now: NOW })
   db.prepare('INSERT INTO dsh_memory_finalization_entries(run_id,entry_id,ordinal,created_at) VALUES(?,?,0,?)').run(id,original.id,NOW)
   const d = options.draft ?? draft(); const observations = options.evidence ?? evidence(id)
   const e: Episode = { runId:id,workspace,sessionId:`session-${id}`,start:1,end:5,logDigest:digest(id),evidenceDigest:supportingEvidenceDigest(d,observations),signature:episodeSignature(workspace,d),outcome,

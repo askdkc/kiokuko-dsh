@@ -269,22 +269,90 @@ export const inject = ['slots', 'locale', 'uiConversation'] as const
 const completionReportDefinition = {
   kind: 'kiokuko-completion-report', target: 'chat',
   match: (event: { type: string; data: { reportId?: string; text?: string } }) =>
-    (event.type === 'kiokuko/completion-report' || event.type === 'kiokuko/execution-status') && typeof event.data.reportId === 'string' && typeof event.data.text === 'string'
+    ['kiokuko/completion-report', 'kiokuko/execution-status', 'kiokuko/deep-report', 'kiokuko/deep-status'].includes(event.type) && typeof event.data.reportId === 'string' && typeof event.data.text === 'string'
       ? { id: event.data.reportId, role: 'start' } : null,
-  start: (_context: unknown, match: { event: { seq: number; data: { text: string } } }) => ({ seq: match.event.seq, text: match.event.data.text }),
+  start: (_context: unknown, match: { event: { type: string; seq: number; data: { text: string } } }) => ({ seq: match.event.seq, text: match.event.data.text, status: match.event.type.endsWith('status') }),
   update: (context: { state: unknown }) => context.state,
-  buildViewNode: (context: { key: string; id: string; state?: { seq: number; text: string }; start?: { location: unknown } }) =>
+  buildViewNode: (context: { key: string; id: string; state?: { seq: number; text: string; status: boolean }; start?: { location: unknown } }) =>
     context.state === undefined ? null : {
       key: context.key, id: context.id, kind: 'kiokuko-completion-report', target: 'chat',
       anchorSeq: context.state.seq, location: context.start?.location ?? { kind: 'session' },
-      visibility: 'visible', data: { text: context.state.text },
+      visibility: 'visible', data: { text: context.state.text, status: context.state.status },
     },
 }
 
 function CompletionReport(props: Record<string, unknown>): unknown {
-  const node = props.node as { data: { text: string } }
-  return jsx('section', { role: 'status', 'aria-live': 'polite',
-    style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', padding: '12px 0' }, children: node.data.text })
+  const node = props.node as { data: { text: string; status?: boolean } }
+  return jsx('section', { ...(node.data.status ? { role: 'status', 'aria-live': 'polite', 'aria-atomic': true } : { 'aria-label': '保存済みの回答', tabIndex: 0 }),
+    style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: '100%', minWidth: 0, padding: '12px 0', lineHeight: 1.65 }, children: node.data.text })
+}
+
+interface DeepDisplayItem { id: string; kind: 'report' | 'status'; text: string; delivered: boolean }
+/** Read-only, Session-bound display with explicit delivery acknowledgement after render. */
+function DeepSessionReports(props: Record<string, unknown>): unknown {
+  const sessionId = String(props.sessionId)
+  const [items, setItems] = useState<DeepDisplayItem[]>([])
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState('')
+  const seen = useRef(new Set<string>())
+  const dialog = useRef<HTMLDialogElement | null>(null)
+  const trigger = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    if (open && dialog.current && !dialog.current.open) dialog.current.showModal()
+    else if (!open && dialog.current?.open) { dialog.current.close(); trigger.current?.focus() }
+  }, [open])
+  useEffect(() => {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let etag = ''
+    setItems([]); setOpen(false); seen.current = new Set()
+    const refresh = async () => {
+      try {
+        const url = new URL('/api/kiokuko.deep', hostBase()); url.searchParams.set('sessionId', sessionId)
+        const response = await fetch(url, { signal: controller.signal, headers: etag ? {'if-none-match':etag} : {} })
+        if (response.status === 304) { setError(''); return }
+        if (!response.ok) throw new Error('Deepの状態を再確認できません。接続を確認してください。')
+        etag = response.headers.get('etag') ?? ''
+        const data = await response.json() as {items:DeepDisplayItem[]}
+        if (!Array.isArray(data.items) || data.items.some(item => typeof item.id !== 'string' || typeof item.text !== 'string')) throw new Error('Deepの応答を読み取れません。')
+        if (controller.signal.aborted) return
+        setItems(data.items); setError('')
+        for (const item of data.items) if (item.kind === 'report' && !item.delivered && !seen.current.has(item.id)) { seen.current.add(item.id); setOpen(true) }
+      } catch (failure) { if (!controller.signal.aborted) setError(messageOf(failure)) }
+      finally { if (!controller.signal.aborted) timer = setTimeout(() => void refresh(), document.hidden ? 10_000 : 2_000) }
+    }
+    void refresh()
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [sessionId])
+  useEffect(() => {
+    const unread = items.filter(item => !item.delivered && (item.kind === 'status' || open))
+    if (!unread.length) return
+    const controller = new AbortController()
+    const url = new URL('/api/kiokuko.deep', hostBase()); url.searchParams.set('sessionId', sessionId)
+    for (const item of unread) url.searchParams.append('id', item.id)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const acknowledge = async () => {
+      try {
+        const response = await fetch(url, {method:'POST', signal:controller.signal})
+        if (!response.ok) throw new Error('Deepの受領確認を再試行しています。回答は保持されています。')
+      } catch (failure) {
+        if (!controller.signal.aborted) { setError(messageOf(failure)); timer = setTimeout(() => void acknowledge(), 5_000) }
+      }
+    }
+    void acknowledge()
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [sessionId, items, open])
+  if (!items.length && !error) return null
+  const status = items.find(item => item.kind === 'status')?.text ?? 'Deepの保存済み回答'
+  return jsxs(Fragment, { children: [
+    jsx('button', {ref:trigger,type:'button', className:'kiokuko-session-log-button', onClick:()=>setOpen(true), 'aria-label':`Deep planning: ${status}`, children: items.some(item=>item.kind==='report') ? 'Deepの回答' : 'Deepの状態'}),
+    jsx('span', {role:'status', 'aria-live':'polite', style:{position:'absolute',width:1,height:1,overflow:'hidden',clipPath:'inset(50%)'}, children:error || status.slice(0,200)}),
+    jsxs('dialog', {ref:dialog,'aria-label':'Deep planning',onCancel:()=>setOpen(false),onClose:()=>{setOpen(false);trigger.current?.focus()},
+      style:{width:'min(48rem, calc(100vw - 2rem))',maxHeight:'calc(100dvh - 2rem)',boxSizing:'border-box',margin:'auto',padding:'20px',border:'1px solid var(--dsw-alias-border-l4, #ddd)',borderRadius:'16px',background:'var(--dsw-alias-background-primary, Canvas)',color:'var(--dsw-alias-label-primary, CanvasText)',overflow:'auto'},
+      children:[jsxs('div',{style:{display:'flex',justifyContent:'space-between',gap:'16px',alignItems:'center'},children:[jsx('h2',{style:{fontSize:'20px',margin:0},children:'Deep planning'}),jsx('button',{type:'button',className:'kiokuko-session-log-button',onClick:()=>setOpen(false),children:'閉じる'})]}),
+        jsx('p',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'},children:error || status}),
+        ...items.filter(item=>item.kind==='report').map(item=>jsx('section', {key:item.id,'aria-label':'保存済みの回答',tabIndex:0,style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxWidth:'100%',padding:'12px 0',lineHeight:1.65},children:item.text}))]}),
+  ] })
 }
 
 interface IntakePending {
@@ -449,6 +517,9 @@ export function apply(ctx: DshClientContext): void {
     name: 'conversation.composer', priority: -10, select: intakePending, locale: LOCALE_NAMESPACE,
   }, IntakeQuestion))
   ctx.effect(installIntakeStyle, 'kiokuko-dsh: intake style')
+  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
+    name: 'conversation.session.header.utilities', id: 'kiokuko-deep-reports', locale: LOCALE_NAMESPACE,
+  }, DeepSessionReports))
   ctx.uiConversation.events.register(completionReportDefinition)
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
     name: 'conversation.chat.node', key: 'kiokuko-completion-report', locale: LOCALE_NAMESPACE,

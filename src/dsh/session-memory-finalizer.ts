@@ -2,6 +2,8 @@ import { EVOLUTION_OBSERVATION_EVENT, observationMatchesResult, type EvolutionOb
 import { MemoryEvolutionConfig, evidenceReferences, supportingEvidenceDigest, episodeSignature, episodeSignals, parseEpisodeDraft, type EpisodeEvidence, type EpisodeDraft, type EvolutionConfig } from '../memory/evolution/contracts.js'
 import { configureEvolution, saveEpisode, scheduleEvolution, evolutionSettings } from '../memory/evolution/store.js'
 import { EvolutionWorker } from '../memory/evolution/worker.js'
+import { DeepMemoryFinalizer } from '../deep-thinker/memory-finalizer.js'
+import { DeepStore } from '../deep-thinker/store.js'
 import { createHash } from 'node:crypto'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { TransactionCommitUncertainError, withImmediateTransaction } from '../db/transaction.js'
@@ -70,6 +72,7 @@ export interface DshLlm {
 }
 
 export interface DshMemoryFinalizerOptions {
+  readonly onDeepFinalized?: (sessionId: string) => PromiseLike<unknown>
   readonly memoryEvolution?: EvolutionConfig
   readonly inputMode?: FinalizationInputMode
   readonly onObservation?: (observation: EfficiencyObservation) => void | PromiseLike<void>
@@ -786,6 +789,7 @@ export function bindDshRunLogStartInTransaction(
  * worker consumes that mirror only after the run has committed `completed`.
  */
 export class DshMemoryFinalizer {
+  readonly #deep: DeepMemoryFinalizer
   readonly #runtime: DshMemoryFinalizerOptions['runtime']
   readonly #sessionQuery: DshSessionQuery | undefined
   readonly #llm: DshLlm | undefined
@@ -806,6 +810,7 @@ export class DshMemoryFinalizer {
   #lastDrainError: unknown
 
   constructor(options: DshMemoryFinalizerOptions) {
+    this.#deep = new DeepMemoryFinalizer(new DeepStore(options.runtime), options.llm, options.onDeepFinalized)
     this.#evolutionConfig = options.memoryEvolution ?? MemoryEvolutionConfig.parse({})
     this.#runtime = options.runtime
     this.#sessionQuery = options.sessionQuery
@@ -961,7 +966,7 @@ export class DshMemoryFinalizer {
   async #drainPending(): Promise<void> {
     while (!this.#closed) {
       const job = await this.#claim()
-      if (job === undefined) return
+      if (job === undefined) { if (await this.#deep.processNext()) continue; return }
       await this.#process(job)
     }
   }
@@ -1164,6 +1169,7 @@ export class DshMemoryFinalizer {
 
   /** Stop accepting work, abort the current auxiliary call, and drain cleanup. */
   async dispose(): Promise<void> {
+    this.#deep.abort()
     if (this.#closed) return
     this.#closed = true
     this.#abort?.abort(new KiokukoError('SERVICE_UNAVAILABLE', 'DSH memory finalizer is closing'))

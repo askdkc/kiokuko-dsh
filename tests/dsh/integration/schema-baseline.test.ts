@@ -14,11 +14,11 @@ const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migratio
 test('the schema keeps 001 immutable and appends forward-only DSH runtime migrations', async () => {
   const entries = await readdir(migrationsDirectory)
   const sqlFiles = entries.filter((name) => name.endsWith('.sql'))
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql', '011_dsh_finalization_input_mode.sql', '012_memory_evolution.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql', '011_dsh_finalization_input_mode.sql', '012_memory_evolution.sql', '013_dsh_deep_thinker.sql'])
   assert.ok(!entries.some((name) => name === 'down'), 'migrations/down must not exist')
 
   const snapshot = loadMigrationSnapshot(migrationsDirectory)
-  assert.equal(snapshot.migrations.length, 12)
+  assert.equal(snapshot.migrations.length, 13)
   assert.equal(snapshot.migrations[0]!.version, 1)
   assert.equal(snapshot.migrations[0]!.name, '001_baseline.sql')
   assert.equal(snapshot.migrations[1]!.version, 2)
@@ -99,9 +99,21 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_boundary_jobs',
         'dsh_completion_reports',
         'dsh_continuation_outbox',
+        'dsh_deep_artifacts',
+        'dsh_deep_attempts',
+        'dsh_deep_budget_reservations',
+        'dsh_deep_edges',
+        'dsh_deep_evidence',
+        'dsh_deep_finalizations',
+        'dsh_deep_intents',
+        'dsh_deep_nodes',
+        'dsh_deep_outbox',
+        'dsh_deep_preferences',
+        'dsh_deep_runs',
         'dsh_enno_delegations',
         'dsh_execution_evidence',
         'dsh_execution_frames',
+        'dsh_execution_owners',
         'dsh_execution_selections',
         'dsh_exploration_states',
         'dsh_input_claim_backups',

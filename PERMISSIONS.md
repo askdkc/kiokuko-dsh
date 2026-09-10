@@ -51,6 +51,16 @@ with pnpm `allowBuilds`; the npm tarball already contains `dist/`.
 
 ## Failure boundaries
 
+`/deep-planning` creates native read-only child agents using explicitly selected
+DSH model connections. It stores input, configuration snapshots, bounded source
+excerpts, attempts, estimated usage and answers in the configured database.
+Source excerpts and the problem are sent to those configured model providers.
+It offers no shell, mutation, arbitrary MCP or further child-spawn capability.
+Deep memory extraction shares the request budget. Unknown Deep calls and memory
+extractions are not automatically resent after a crash. Deep children inherit
+only their exact parent's existing Orca recording choice. See
+[Deep planning](docs/deep-planning.md) for limits and recovery behavior.
+
 Missing optional dependencies, unavailable external services, stale or
 ambiguous run state, failed verifier processes, and integrity or ownership
 conflicts are reported as failures or unavailable states. They are never

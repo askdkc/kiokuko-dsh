@@ -1,5 +1,6 @@
 import { boundTaskRetrievalQuery } from '../memory/retrieval-query.js';
-import { initializeExecutionSelection } from './execution-selection.js';
+import { initializeExecutionSelection, writeExecutionSelection } from './execution-selection.js';
+import { claimExecutionOwner } from './orchestration/execution-owner.js';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { readExecutionFrame, saveExecutionFrame, updateExecutionFrame, type TaskExecutionFrame } from './execution-frame.js';
 import { KiokukoError } from '../errors.js';
@@ -75,6 +76,8 @@ import {
 export interface PrepareAgentTaskInput {
   /** Native host owns the explicit choice; old direct callers retain legacy behavior. */
   executionSelection?: boolean;
+  sessionOwnership?: boolean;
+  deepSelection?: { startId: string; configuration: import('../deep-thinker/core/contracts.js').DeepConfiguration };
   requestId: string;
   task: string;
   cwd?: string;
@@ -906,6 +909,14 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
   const intakeService = new DshRunIntakeService(database, {
     onRunCreatedInTransaction: ({ database: transactionDatabase, runId, workspace, dshSessionId, now }) => {
       if (input.executionSelection) initializeExecutionSelection(transactionDatabase, runId);
+      if (input.sessionOwnership || input.deepSelection) claimExecutionOwner(transactionDatabase, {
+        sessionId: dshSessionId, workspace, mode: input.deepSelection ? 'deep-thinker' : 'normal',
+        startId: input.deepSelection?.startId ?? requestId, runId,
+      });
+      if (input.deepSelection) {
+        initializeExecutionSelection(transactionDatabase, runId);
+        writeExecutionSelection(transactionDatabase, runId, 0, { mode: 'deep-thinker', status: 'ready', deepConfiguration: input.deepSelection.configuration });
+      }
       if (input.dshLogStart === undefined) return;
       bindDshRunLogStartInTransaction(transactionDatabase, {
         runId,

@@ -82,7 +82,8 @@ test('durable completion reports project into a visible accessible chat node', (
     assert.equal(node.anchorSeq, 42)
     const view = render({ node })
     assert.equal(view.component, 'section')
-    assert.equal(view.props.role, 'status')
+    assert.equal(view.props.role, undefined)
+    assert.equal(view.props.tabIndex, 0)
     assert.equal(view.props.children, event.data.text)
   } finally {
     if (previousStore === undefined) delete globals.createSnapshotStore; else globals.createSnapshotStore = previousStore
