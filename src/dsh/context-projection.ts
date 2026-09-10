@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { DshModelMessage } from './context-injection.js'
 import type { DshLogEvent } from './session-memory-finalizer.js'
+import { surfaceRange } from './surface-range.js'
 
 interface ContextSession {
   readonly surface?: { readonly nodes: readonly number[] }
@@ -14,7 +15,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** Read retained messages, excluding chunk history and compacted-away instructions. */
-function retainedEvents(session: ContextSession): readonly DshLogEvent[] {
+export function retainedEvents(session: ContextSession): readonly DshLogEvent[] {
   if (session.surface !== undefined && session.eventAt !== undefined) {
     return session.surface.nodes.flatMap(seq => {
       const event = session.eventAt!(seq)
@@ -25,7 +26,7 @@ function retainedEvents(session: ContextSession): readonly DshLogEvent[] {
   for (const event of session.snapshotEvents?.() ?? []) {
     if (event.surfaceOp === 'append') nodes.push(event)
     else if (event.surfaceOp !== undefined) {
-      const replacement = event.surfaceOp
+      const replacement = surfaceRange(event.surfaceOp)
       const start = nodes.findIndex(node => node.seq === replacement.start)
       const end = nodes.findIndex(node => node.seq === replacement.end)
       if (start < 0 || end < start) throw new Error('Kiokuko context projection encountered an invalid session replacement')

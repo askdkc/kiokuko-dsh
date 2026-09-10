@@ -175,14 +175,14 @@ export function saveLesson(db: SqliteDatabase, episodes: Episode[], kind: 'posit
     body: `未検証の教訓候補 / Unverified lesson\nApplicability: ${draft.applicability}\n${avoided}Procedure: ${draft.procedure}\nVerification: ${draft.verification}\nBoundary: ${draft.boundary}\nSupport: ${basis}\nEvidence: ${episodes.map(e => `${e.runId} seq ${e.start}-${e.end}`).join('; ')}` })
 }
 
-export function diversifyEpisodes<T extends { entryId: string; selectionReasons: string[] }>(db: SqliteDatabase, items: T[]): T[] {
+export function diversifyEpisodes<T extends { entryId: string; selectionReasons: string[] }>(db: SqliteDatabase, items: T[], packedIds?: ReadonlySet<string>): T[] {
   if (!evolutionInstalled(db) || evolutionSettings(db).mode !== 'active') return items
   const membership = new Map(items.map(item => [item.entryId,
     db.prepare('SELECT run_id AS id FROM memory_episode_entries WHERE entry_id=?').all<{ id: string }>(item.entryId)]))
   const kinds = new Map(items.map(item => [item.entryId,
     db.prepare(`SELECT d.kind FROM memory_derivations d JOIN entries e ON e.id=d.entry_id AND e.current_revision=d.revision
       WHERE d.entry_id=?`).get<{ kind: string }>(item.entryId)?.kind]))
-  const lessonRuns = new Set(items.filter(item => ['positive', 'avoidance'].includes(kinds.get(item.entryId) ?? ''))
+  const lessonRuns = new Set(items.filter(item => (packedIds === undefined || packedIds.has(item.entryId)) && ['positive', 'avoidance'].includes(kinds.get(item.entryId) ?? ''))
     .flatMap(item => membership.get(item.entryId)!.map(run => run.id)))
   const counts = new Map<string, number>()
   return items.filter(item => {

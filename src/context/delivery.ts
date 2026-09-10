@@ -15,6 +15,7 @@ import { isRetrievableEntry } from '../memory/hybrid-retrieval.js';
 import { entryOriginMatchesWorkspace, isContextEntryOrigin, type ContextEntryOrigin } from './origin.js';
 import { RUN_STATUSES, type RunStatus } from '../ledger/types.js';
 import { readContextRunProfileBinding } from './run-state.js';
+import { MemoryProjectionReceipt, projectMemoryEntry } from './memory-projection.js';
 
 const MAX_IDENTIFIER_BYTES = 256;
 const MAX_ITEMS = 100;
@@ -23,7 +24,7 @@ const MAX_CHAR_BUDGET = 100_000;
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 100;
 const DELIVERY_CURSOR_VERSION = 1 as const;
-const SCOPED_DELIVERY_POLICY_VERSION = 'context-ranking-v6';
+const SCOPED_DELIVERY_POLICY_VERSION = 'context-ranking-v7';
 const DELIVERY_SCORE_SCHEMA_VERSION = 2 as const;
 
 const VALIDATION_MESSAGE = 'Context delivery input is invalid';
@@ -42,6 +43,7 @@ export interface ContextDeliveryItemInput {
   selectionReasons: string[];
   /** Set only for v2 cross-scope deliveries; project remains the v1 default. */
   origin?: ContextEntryOrigin;
+  projection?: MemoryProjectionReceipt;
 }
 
 export interface ContextDeliveryInput {
@@ -106,6 +108,7 @@ interface DeliveryHeaderRow extends SqliteRow {
 }
 
 interface DeliveryEntryRow extends SqliteRow {
+  projection_json: unknown;
   delivery_id: unknown;
   entry_id: unknown;
   entry_revision: unknown;
@@ -300,7 +303,7 @@ function deliveryPolicyVersion(): string {
 }
 
 function storedDeliveryPolicyMatches(policyVersion: string): boolean {
-  return policyVersion === deliveryPolicyVersion();
+  return policyVersion === deliveryPolicyVersion() || policyVersion === 'context-ranking-v6';
 }
 
 function storedNonNegativeSafeInteger(value: unknown): number {
@@ -397,7 +400,7 @@ function validateDeliveryItems(value: unknown): ContextDeliveryItemInput[] {
   if (array.length > MAX_ITEMS) validation();
   const entries = new Set<string>();
   return array.map((item, index) => {
-    const object = objectInput(item, ['entryId', 'entryRevision', 'rank', 'scoreComponents', 'selectionReasons', 'origin'], false);
+    const object = objectInput(item, ['entryId', 'entryRevision', 'rank', 'scoreComponents', 'selectionReasons', 'origin', 'projection'], false);
     const entryId = boundedIdentifier(readField(object, 'entryId'));
     if (entries.has(entryId)) validation();
     entries.add(entryId);
@@ -412,6 +415,7 @@ function validateDeliveryItems(value: unknown): ContextDeliveryItemInput[] {
       scoreComponents: scoreComponentsForVersion(readField(object, 'scoreComponents')),
       selectionReasons: selectionReasons(readField(object, 'selectionReasons')),
       ...(origin === undefined ? {} : { origin }),
+      ...(object.projection === undefined ? {} : { projection: MemoryProjectionReceipt.parse(object.projection) }),
     };
   });
 }
@@ -441,8 +445,10 @@ function validateContextDeliveryInput(value: unknown): ValidatedContextDeliveryI
     if (typeof charCount !== 'number' || !Number.isSafeInteger(charCount) || charCount < 0 || charCount > charBudget) validation();
     const truncated = booleanValue(readField(object, 'truncated'));
     const createdAt = timestamp(readField(object, 'createdAt'));
-    if (policyVersion !== deliveryPolicyVersion()) validation();
+    if (!storedDeliveryPolicyMatches(policyVersion)) validation();
     const items = validateDeliveryItems(readField(object, 'items'));
+    if (policyVersion === deliveryPolicyVersion() && (items.some(item => !item.projection || item.projection.sourceRevision !== item.entryRevision) || items.reduce((sum,item) => sum + item.projection!.characters, 0) !== charCount)) validation();
+    if (policyVersion === 'context-ranking-v6' && items.some(item => item.projection !== undefined)) validation();
     return {
       workspace,
       deliveryId,
@@ -537,6 +543,7 @@ function canonicalDeliveryBody(input: ContextDeliveryInput): string {
       scoreComponents: item.scoreComponents,
       selectionReasons: item.selectionReasons,
       ...(item.origin === undefined ? {} : { origin: item.origin }),
+      ...(item.projection === undefined ? {} : { projection: item.projection }),
     })),
     scoreSchemaVersion: DELIVERY_SCORE_SCHEMA_VERSION,
   });
@@ -564,6 +571,7 @@ export function scopedDeliveryId(input: Omit<ContextDeliveryInput, 'deliveryId'>
       scoreComponents: item.scoreComponents,
       selectionReasons: item.selectionReasons,
       ...(item.origin === undefined ? {} : { origin: item.origin }),
+      ...(item.projection === undefined ? {} : { projection: item.projection }),
     })),
   })}`;
 }
@@ -630,6 +638,7 @@ function assertRunForWrite(database: SqliteDatabase, input: ValidatedContextDeli
     if (candidate.revision_workspace !== entryWorkspace) integrity();
     const entry = strictCurrentEntry(database, entryWorkspace, item.entryId, origin !== 'project');
     if (entry.revision !== item.entryRevision) conflict();
+    if (input.policyVersion === deliveryPolicyVersion() && canonicalJson(projectMemoryEntry(database, entry)?.projection ?? null) !== canonicalJson(item.projection ?? null)) conflict();
     if (!isRetrievableEntry(database, entry) || entry.status === 'superseded') conflict();
     if (!entryOriginMatchesWorkspace({ origin, runWorkspace: input.workspace, entryWorkspace: entry.workspace })) notFound();
     if (origin === 'global') {
@@ -703,7 +712,7 @@ function validateStoredHeader(row: DeliveryHeaderRow, workspace: string): Contex
 function selectDeliveryEntries(database: SqliteDatabase, deliveryId: string): DeliveryEntryRow[] {
   return database.prepare(`
     SELECT cde.delivery_id, cde.entry_id, cde.entry_revision, cde.rank,
-           cde.score_components_json, cde.selection_reason_json, cde.origin_scope,
+           cde.score_components_json, cde.selection_reason_json, cde.origin_scope, cde.projection_json,
            e.workspace AS entry_workspace, r.workspace AS revision_workspace
       FROM context_delivery_entries AS cde
       LEFT JOIN entry_revisions AS r
@@ -738,7 +747,13 @@ function validateStoredEntries(database: SqliteDatabase, header: ContextDelivery
     const score = storedScoreComponents(scoreValue);
     const reasons = storedSelectionReasons(reasonValue);
     if (canonicalJson(score) !== row.score_components_json || canonicalJson(reasons) !== row.selection_reason_json) integrity();
-    return { entryId, entryRevision, rank, scoreComponents: score, selectionReasons: reasons, ...(origin === 'project' ? {} : { origin }) };
+    let projection: MemoryProjectionReceipt | undefined;
+    if (row.projection_json !== null) {
+      try { projection = MemoryProjectionReceipt.parse(validateStoredJson(row.projection_json)); } catch { integrity(); }
+    }
+    if (header.policyVersion === deliveryPolicyVersion() && (!projection || projection.sourceRevision !== entryRevision)) integrity();
+    if (header.policyVersion === 'context-ranking-v6' && projection !== undefined) integrity();
+    return { entryId, entryRevision, rank, scoreComponents: score, selectionReasons: reasons, ...(origin === 'project' ? {} : { origin }), ...(projection === undefined ? {} : { projection }) };
   });
 }
 
@@ -767,6 +782,7 @@ function readStoredDelivery(database: SqliteDatabase, workspace: string, deliver
   const header = validateStoredHeader(row, workspace);
   assertStoredDeliveryBinding(database, header);
   const items = validateStoredEntries(database, header);
+  if (header.policyVersion === deliveryPolicyVersion() && items.reduce((sum,item) => sum + item.projection!.characters, 0) !== header.charCount) integrity();
   const complete = { ...header, items };
   if (!storedScopedDeliveryIdentityMatches(complete)) scopedIdentityIntegrity();
   const view: ContextDeliveryView = {
@@ -818,8 +834,8 @@ function writeContextDelivery(
   for (const item of input.items) {
     database.prepare(`
       INSERT INTO context_delivery_entries (
-        delivery_id, entry_id, entry_revision, rank, score_components_json, selection_reason_json, origin_scope
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        delivery_id, entry_id, entry_revision, rank, score_components_json, selection_reason_json, origin_scope, projection_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.deliveryId,
       item.entryId,
@@ -828,6 +844,7 @@ function writeContextDelivery(
       canonicalJson(item.scoreComponents),
       canonicalJson(item.selectionReasons),
       item.origin ?? 'project',
+      item.projection === undefined ? null : canonicalJson(item.projection),
     );
   }
   return readStoredDelivery(database, input.workspace, input.deliveryId);

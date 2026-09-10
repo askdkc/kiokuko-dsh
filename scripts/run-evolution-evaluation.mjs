@@ -19,6 +19,12 @@ import { createEmbeddingProfile } from '../src/embedding/profile.ts'
 import { activateEmbeddingProfile, upsertEntryEmbedding } from '../src/embedding/store.ts'
 import { JavaScriptVectorSearchBackend } from '../src/embedding/javascript-backend.ts'
 import { hashVector, normalizeVector } from '../src/embedding/vector.ts'
+import { isRetrievableEntry } from '../src/memory/hybrid-retrieval.ts'
+import { buildDshMessageSources } from '../src/dsh/message-sources.ts'
+import { retrievalMetrics, measureDatabase } from './evolution-evaluation-metrics.mjs'
+import { execFileSync } from 'node:child_process'
+
+const REPORT_VERSION = 2
 
 const option = name => { const i=process.argv.indexOf(name);return i<0?undefined:process.argv[i+1] }
 const hash = value => createHash('sha256').update(value).digest('hex')
@@ -30,6 +36,7 @@ const scenarios=JSON.parse(fixtureText).scenarios
 const reportPath=option('--report')
 if(reportPath) {
   const report=JSON.parse(await readFile(reportPath,'utf8'))
+  assert.equal(report.reportVersion,REPORT_VERSION,'Re-run evaluation: legacy Top-K metrics cannot be approved')
   const candidates=await readFile(path.join(path.dirname(reportPath),'candidates.json'),'utf8')
   const review=JSON.parse(await readFile(option('--review'),'utf8'))
   assert.equal(report.fixture.sha256,manifest.sha256)
@@ -45,7 +52,7 @@ if(reportPath) {
 }
 const configPath=option('--config')
 if(!configPath) {
-  process.stdout.write(JSON.stringify({status:'unmeasured',fixture:manifest,reason:'Provide --config with pinned real LLM and embedding identities. No model calls were made.',evaluationMode:'observe'},null,2)+'\n')
+  process.stdout.write(JSON.stringify({reportVersion:REPORT_VERSION,status:'unmeasured',fixture:manifest,reason:'Provide --config with pinned real LLM and embedding identities. No model calls were made.',evaluationMode:'observe'},null,2)+'\n')
   process.exit(0)
 }
 const config=JSON.parse(await readFile(configPath,'utf8'))
@@ -149,49 +156,64 @@ try {
       artifacts.push({condition:db===baseline?'baseline':'evolved',...entry})
     }
   }
-  const links=evolved.prepare('SELECT * FROM memory_episode_entries').all()
-  const metrics=[],exactRanks=new Map()
+  // Each ablation starts with the identical post-generation snapshot.
+  const conditions={baseline,full:evolved}
+  for(const condition of ['episode','lesson']) {
+    const file=path.join(root,`${condition}.sqlite3`)
+    await writeFile(file,evolved.serializeDatabase())
+    conditions[condition]=openConnection(file);databases.push(conditions[condition])
+  }
+  const metrics=[],exactRanks=new Map(),queryResults=[]
   for(const condition of ['baseline','episode','lesson','full']) {
-    const db=condition==='baseline'?baseline:evolved
-    // Evaluation-only ablations in an in-memory database; never alter the installed corpus.
-    if(db===evolved) {
-      db.prepare("UPDATE memory_evolution_settings SET mode='active',generation=generation+1").run()
-      db.prepare("UPDATE memory_derivations SET state=CASE WHEN ?='episode' AND kind<>'episode' THEN 'held' ELSE 'ready' END").run(condition)
-      db.prepare('DELETE FROM memory_episode_entries').run()
-      if(condition==='full')for(const l of links)db.prepare('INSERT INTO memory_episode_entries VALUES(?,?)').run(l.run_id,l.entry_id)
+    const source=conditions[condition]
+    if(condition!=='baseline') {
+      source.prepare("UPDATE memory_evolution_settings SET mode='active',generation=generation+1").run()
+      source.prepare("UPDATE memory_derivations SET state=CASE WHEN ?='episode' AND kind<>'episode' OR ?='lesson' AND kind='episode' THEN 'held' ELSE 'ready' END").run(condition,condition)
+      if(condition!=='full')source.prepare('DELETE FROM memory_episode_entries').run()
     }
     for(const split of ['development','heldout']) {
-      const stats={condition,split,queries:0,recallHits:0,exactCount:0,exactHits:0,exactRegressions:0,duplicateChars:0,injectionChars:0,scopeLeaks:0,staleInjections:0,searchMs:0}
+      const measured=measureDatabase(source),db=measured.database
+      const stats={condition,split,queries:0,recallHits:0,recallSum:0,recallQueries:0,reciprocalRankSum:0,reciprocalRankAt5Sum:0,exactCount:0,exactHits:0,exactRegressions:0,duplicateChars:0,injectionChars:0,injectionBytes:0,injectedItems:0,falseInjections:0,scopeLeaks:0,staleInjections:0,searchMs:0}
       for(const s of scenarios.filter(s=>s.split===split))for(const q of s.queries) {
         const vector=await embed(q.text),semantic={semantic:{backend,query:{profileId:profile.profileId,dimensions:config.embedding.dimensions,vector,vectorHash:hashVector(vector),backendId:backend.id,distanceCeiling:config.distanceCeiling??0.5}}}
-        const before=counters.llmCalls,start=performance.now()
-        const hits=hybridSearch(db,{workspace:s.workspace,query:q.text,limit:5},semantic)
-        const relevant=hit=>{
-          const entry=readEntry(db,{workspace:s.workspace,entryId:hit.entryId})
+        const relevant=entry=>{
           const r=entry.provenance.runId
           return q.relevantScenarioIds.includes(runScenario.get(r))&&runVersion.get(r)===s.anchors.version
         }
-        const hit=hits.some(relevant);stats.queries++;stats.recallHits+=Number(hit)
+        // Ground truth is the whole eligible corpus, not just retrieved candidates.
+        const relevantIds=new Set(source.prepare('SELECT id FROM entries WHERE workspace=?').all(s.workspace).map(row=>readEntry(source,{workspace:s.workspace,entryId:row.id})).filter(entry=>isRetrievableEntry(source,entry)&&relevant(entry)).map(entry=>entry.id))
+        const before=counters.llmCalls,start=performance.now()
+        const hits=hybridSearch(db,{workspace:s.workspace,query:q.text,limit:5},semantic)
+        const metric=retrievalMetrics(hits,relevantIds,5)
+        stats.queries++;stats.recallHits+=metric.hitAtK
+        if(metric.recallAtK!==null){stats.recallSum+=metric.recallAtK;stats.recallQueries++}
+        stats.reciprocalRankSum+=metric.reciprocalRank;stats.reciprocalRankAt5Sum+=metric.reciprocalRankAtK
         if(q.exact){
-          stats.exactCount++;stats.exactHits+=Number(hit)
-          const rank=hits.findIndex(relevant),key=JSON.stringify([s.id,q.text])
-          if(condition==='baseline')exactRanks.set(key,rank<0?Infinity:rank)
-          if(condition==='full'&&s.split==='heldout'&&(rank<0?Infinity:rank)>(exactRanks.get(key)??Infinity)) stats.exactRegressions++
+          stats.exactCount++;stats.exactHits+=metric.hitAtK
+          const rank=metric.exactRank??Infinity,key=JSON.stringify([s.id,q.text])
+          if(condition==='baseline')exactRanks.set(key,rank)
+          if(condition==='full'&&s.split==='heldout'&&rank>(exactRanks.get(key)??Infinity)) stats.exactRegressions++
         }
         const result=await queryScopedContextGated(db,{project:{workspace:s.workspace,repositoryId:s.workspace,repositoryRoot:root,source:'local-path'},task:q.text,taskProfile:{taskType:'debug',target:s.anchors.target,expected:s.goal,constraints:null},limit:20,characterBudget:8000},candidate=>({persist:false,value:candidate}),semantic)
+        const sources=await buildDshMessageSources({task:q.text,intakeStatus:'ready',nextAction:'proceed',memoryPolicy:{memoryReasoningRequired:false,contextWithheld:false},context:result.value})
+        const supplied=sources.filter(item=>item.kind==='memory')
         const counts=new Map()
         for(const item of result.value.items) {
           const entry=readEntry(db,{workspace:s.workspace,entryId:item.entryId})
           if(entry.workspace!==s.workspace)stats.scopeLeaks++
-          const origin=entry.provenance.runId,size=Array.from(item.title+item.bodyPreview).length
+          const text=supplied.find(source=>source.name===`memory:${item.entryId}`)?.text
+          if(text===undefined)continue
+          const origin=entry.provenance.runId,size=Array.from(text).length
           stats.injectionChars+=size
+          stats.injectionBytes+=Buffer.byteLength(text);stats.injectedItems++;stats.falseInjections+=Number(!relevant(entry))
           if((counts.get(origin)??0)>=2)stats.duplicateChars+=size
           counts.set(origin,(counts.get(origin)??0)+1)
         }
         stats.searchMs+=performance.now()-start
+        queryResults.push({condition,split,queryDigest:hash(q.text),...metric,packedIds:result.value.items.map(item=>item.entryId),suppliedIds:supplied.map(item=>item.name.slice(7)),modelRequest:'unmeasured'})
         assert.equal(counters.llmCalls,before,'Retrieval must not call an LLM')
       }
-      metrics.push({...stats,recallAt5:stats.recallHits/stats.queries,exactRecall:stats.exactHits/stats.exactCount})
+      metrics.push({...stats,...measured.counters,hitRateAt5:stats.recallHits/stats.queries,recallAt5:stats.recallQueries===0?null:stats.recallSum/stats.recallQueries,mrr:stats.reciprocalRankSum/stats.queries,mrrAt5:stats.reciprocalRankAt5Sum/stats.queries,exactHitRateAt5:stats.exactCount===0?null:stats.exactHits/stats.exactCount,falseInjectionRate:stats.injectedItems===0?null:stats.falseInjections/stats.injectedItems})
     }
   }
   const evolutionBeforeInvalidation=evolutionStatus(evolved,'project:evolution-evaluation')
@@ -216,8 +238,9 @@ try {
   const semanticSafetyReviewed=review?.artifactHash===artifactHash&&review?.fixtureHash===manifest.sha256&&review?.reviewedEntries===artifacts.length&&review?.unsupportedSuccessClaims===0
   const base=metrics.find(m=>m.condition==='baseline'&&m.split==='heldout'),full=metrics.find(m=>m.condition==='full'&&m.split==='heldout')
   const reduction=base.duplicateChars===0?null:1-full.duplicateChars/base.duplicateChars
-  const gates={recall:full.recallAt5-base.recallAt5>=0.05,exact:full.exactRegressions===0,duplicateChars:reduction!==null&&reduction>=0.3,scope:metrics.every(m=>m.scopeLeaks===0),stale:staleInjections===0,semanticSafetyReviewed}
+  const gates={hitRateAt5:full.hitRateAt5-base.hitRateAt5>=0.05,exact:full.exactRegressions===0,duplicateChars:reduction!==null&&reduction>=0.3,scope:metrics.every(m=>m.scopeLeaks===0),stale:staleInjections===0,semanticSafetyReviewed}
   const report={status:'measured',fixture:manifest,models:{llm:{model:config.llm.model,revision:config.llm.revision},embedding:{model:config.embedding.model,revision:config.embedding.revision}},settings:{characterBudget:8000,distanceCeiling:config.distanceCeiling??0.5,maxDailyExtraCalls:8},metrics,counters,duplicateCharacterReduction:reduction,staleInjections,artifactHash,gates,eligibleForActive:Object.values(gates).every(Boolean),evolution:evolutionBeforeInvalidation,notes:['Candidate text requires human review; a valid reference does not prove entailment.','The production UTC-day call cap is retained, including failed calls.','Model revision is operator-attested; the provider response model is checked exactly.']}
+  Object.assign(report,{reportVersion:REPORT_VERSION,commit:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),nodeVersion:process.version,dshVersion:process.env.KIOKUKO_EXPECTED_DSH_VERSION??'unmeasured',queryResults,pairedTaskQuality:{status:'unmeasured',reason:'This runner measures retrieval; native model requests and paired task outcomes require the lifecycle evaluation.'},skipped:0})
   await writeFile(path.join(output,'report.json'),JSON.stringify(report,null,2)+'\n')
   process.stdout.write(JSON.stringify(report,null,2)+'\n')
 } finally {for(const db of databases)db.close();await rm(root,{recursive:true,force:true})}

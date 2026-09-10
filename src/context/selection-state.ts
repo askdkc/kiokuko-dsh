@@ -1,5 +1,6 @@
 import { evolutionEntryState, evolutionInstalled, evolutionSettings } from '../memory/evolution/store.js';
 import type { SqliteDatabase } from '../db/adapter.js';
+import { withContextReadSnapshot } from './read-snapshot.js';
 import { KiokukoError } from '../errors.js';
 import { readEntry } from '../memory/entries.js';
 import {
@@ -15,6 +16,13 @@ import { contextFeedbackSignals } from './feedback.js';
 import { readActiveEmbeddingProfile, readEmbeddingRuntimeState, readEntryEmbedding, type ActiveEmbeddingProfile } from '../embedding/store.js';
 
 export const CONTEXT_SELECTION_STATE_MAX_ENTRIES = 10_000;
+
+export function contextSelectionStateHashes(database: SqliteDatabase, workspaces: readonly string[], options: { includeEcosystem?: boolean } = {}): { ordinary: string; retrieval: string } {
+  return withContextReadSnapshot(database, snapshot => ({
+    ordinary: ordinaryContextSelectionStateHash(snapshot, workspaces, options),
+    retrieval: contextRetrievalStateHash(snapshot, workspaces, options),
+  }));
+}
 const MAX_SELECTION_WORKSPACES = 2;
 const MAX_WORKSPACE_BYTES = 256;
 const CONTROL_CHARACTERS = /\p{C}/u;

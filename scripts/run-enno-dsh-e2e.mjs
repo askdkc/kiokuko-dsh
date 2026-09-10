@@ -1,10 +1,11 @@
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { Script } from 'node:vm'
 import YAML from 'yaml'
+import { repeatedMemoryScenarios } from './repeated-memory-scenarios.mjs'
 
 const exec = promisify(execFile)
 const root = resolve(import.meta.dirname, '..')
@@ -13,12 +14,12 @@ const profile = 'web'
 const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? '0.1.5-rc.1'
 const requireDshCli = process.env.KIOKUKO_REQUIRE_DSH_CLI === '1'
 
-async function run(command, args, env = {}) {
+async function run(command, args, env = {}, timeout = 180_000) {
   return exec(command, args, {
     cwd: root,
     env: { ...process.env, ...env },
     maxBuffer: 8 * 1024 * 1024,
-    timeout: 180_000,
+    timeout,
     killSignal: 'SIGTERM',
   })
 }
@@ -102,15 +103,42 @@ async function runCordisComposition() {
   if (requireDshCli && sourceRoot === undefined && packageRoot === undefined) {
     throw new Error('Mandatory native DSH workflow coverage has no pinned runtime')
   }
-  const result = await run(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/e2e'], {
+  const nativeEnvironment = {
     ...(sourceRoot === undefined ? {} : { KIOKUKO_DSH_SOURCE_ROOT: sourceRoot }),
     ...(packageRoot === undefined ? {} : { KIOKUKO_DSH_PACKAGE_ROOT: packageRoot }),
     ...(requireDshCli ? { KIOKUKO_REQUIRE_DSH_NATIVE: '1' } : {}),
-  })
+  }
+  const baseTests = (await readdir(join(root, 'tests/dsh/e2e'))).filter(name => name.endsWith('.test.ts') && name !== 'repeated-memory-lifecycle.test.ts').map(name => `tests/dsh/e2e/${name}`)
+  const result = await run(process.execPath, ['scripts/run-tests.mjs', ...baseTests], nativeEnvironment)
   if (requireDshCli && /\bskipped [1-9]\d*/u.test(result.stdout)) {
     throw new Error(`Mandatory native workflow tests were skipped:\n${result.stdout}`)
   }
   process.stdout.write(result.stdout)
+  const temporaryReports = !process.env.KIOKUKO_REPEATED_REPORT_DIR
+  const reports = process.env.KIOKUKO_REPEATED_REPORT_DIR ?? await mkdtemp(join(tmpdir(), 'kiokuko-repeated-reports-'))
+  const outcomes = []
+  try {
+    for (const scenario of repeatedMemoryScenarios) {
+      const reportPath = join(reports, `${scenario.replaceAll('/', '-')}.json`)
+      await rm(reportPath, { force: true }) // A previous passing artifact cannot satisfy this run.
+      try {
+        const result = await run(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/e2e/repeated-memory-lifecycle.test.ts'], {
+          ...nativeEnvironment, KIOKUKO_REPEATED_SCENARIO: scenario, KIOKUKO_REPEATED_REPORT_DIR: reports,
+        }, 300_000)
+        process.stdout.write(result.stdout)
+        const report = JSON.parse(await readFile(reportPath, 'utf8'))
+        if (report.status !== 'passed' || report.skipped !== 0 || report.scenario !== scenario
+          || !/\btests 1\b/u.test(result.stdout) || !/\bpass 1\b/u.test(result.stdout) || !/\bskipped 0\b/u.test(result.stdout)) throw new Error('Missing, skipped or incomplete lifecycle series')
+        outcomes.push({ scenario, status: 'passed', report: reportPath })
+      } catch (error) {
+        outcomes.push({ scenario, status: 'failed', reason: error.killed ? 'series_deadline_exceeded' : 'test_or_report_failed' })
+        process.stderr.write(`Lifecycle series failed: ${scenario}\n${error.stdout ?? ''}\n${error.stderr ?? ''}\n`)
+      }
+    }
+    await mkdir(reports, { recursive: true })
+    await writeFile(join(reports, 'summary.json'), JSON.stringify({ version: 1, expected: repeatedMemoryScenarios.length, outcomes, skipped: 0 }, null, 2) + '\n')
+    if (outcomes.some(result => result.status !== 'passed')) throw new Error('Required repeated lifecycle series failed; see scenario results')
+  } finally { if (temporaryReports) await rm(reports, { recursive: true, force: true }) }
   if (!packageRoot) return null
   const versions = {}
   for (const name of ['cordis', 'dsh', 'dsh-agent', 'dsh-agent-loop', 'dsh-commands', 'dsh-llm', 'dsh-session', 'dsh-system-prompt', 'dsh-tools', 'dsh-subagent', 'dsh-subagent-spawn-in-process']) {
