@@ -1,4 +1,5 @@
 import { formatEvolutionStatus } from '../memory/evolution/status.js'
+import { mountDeepReportSurface } from '../deep-thinker/report-surface.js'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingContext } from './enno-controller.js'
@@ -44,6 +45,7 @@ export interface DshNativeTurnStoppingPayload {
 }
 
 export interface DshCompositionHost {
+  readonly deepPlanning?: import('../deep-thinker/controller.js').DeepPlanningController
   readonly memoryEvolution?: { configure: (config: import('../memory/evolution/contracts.js').EvolutionConfig) => void; status: (sessionId: string) => Promise<Record<string, unknown>> }
   readonly efficiency?: import('./efficiency.js').DshEfficiencyObserver | undefined
   readonly configureEfficiency?: (config: { observe: boolean; inputMode: import('./efficiency.js').FinalizationInputMode }) => void
@@ -111,8 +113,14 @@ function mountNativeIntakeGate(
   gate: DshIntakeGate,
   mapPreStep: (payload: DshNativePreStepPayload) => DshPreStepEvent | PromiseLike<DshPreStepEvent>,
   worker?: Pick<DshBoundaryWorker, 'kick'>,
+  deep?: import('../deep-thinker/controller.js').DeepPlanningController,
 ): () => void {
   return ctx.on('agent/pre-step', async (payload: DshNativePreStepPayload, next) => {
+    if (deep?.executor.isChild(payload.agent)) return next()
+    if (await deep?.preStep(payload)) {
+      void deep!.kick(payload.agent).catch(() => {})
+      return { kind: 'reject', reason: 'Deep owns and has preserved this input.' }
+    }
     let mapped: DshPreStepEvent
     try { mapped = await mapPreStep(payload) } catch {
       // Mapping is optional host preparation. In particular, an earlier
@@ -201,6 +209,8 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   }
 
   try {
+    if (host.deepPlanning && host.commands) ingressDisposers.push(host.commands.register(host.deepPlanning.command()))
+    if (host.deepPlanning) ingressDisposers.push(mountDeepReportSurface(ctx, host.deepPlanning))
     if (host.runtime !== undefined) {
       const disposer = await mountRuntime(host.runtime)
       setupResourceDisposers.push(disposer)
@@ -269,7 +279,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     }
     if (host.intakeGate !== undefined) {
       if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')
-      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep, host.boundaryWorker))
+      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep, host.boundaryWorker, host.deepPlanning))
     }
     if (host.boundaryWorker !== undefined && host.ennoController !== undefined) {
       throw new Error('kiokuko-dsh must not mount both the durable boundary worker and the legacy turn-stopping controller')

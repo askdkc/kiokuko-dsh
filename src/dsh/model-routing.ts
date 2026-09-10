@@ -1,6 +1,7 @@
 import type { ModelBinding, ModelRole } from './model-configuration.js'
 import type { EnnoOdunoState } from '../enno-oduno/types.js'
 import type { DshNativeSession } from './session-bridge.js'
+import { applyJapaneseOutputSkill } from './japanese-output-skill.js'
 
 export function modelRoleForState(state: EnnoOdunoState): Exclude<ModelRole, 'worker'> | undefined {
   switch (state.status) {
@@ -39,7 +40,7 @@ export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (si
       assembled = selected ? Object.freeze({ ...selected }) : routed ? ordinary : undefined
       routed = selected !== undefined
       const result = await next()
-      return !assembled ? result : { ...result, variables: { ...result.variables, provider: assembled.provider, model: assembled.model } }
+      return applyJapaneseOutputSkill(!assembled ? result : { ...result, variables: { ...result.variables, provider: assembled.provider, model: assembled.model } })
     }, { prepend: true }),
     agent.ctx.on('agent/request', async (_payload: unknown, next: () => Promise<any>) => {
       const resolved = await next()

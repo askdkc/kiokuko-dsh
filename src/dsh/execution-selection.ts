@@ -1,16 +1,20 @@
 import { z } from 'zod'
+import { DeepConfigurationSchema } from '../deep-thinker/core/contracts.js'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { KiokukoError } from '../errors.js'
 import { ModelConfigurationSchema, ModelConfigurationDraftSchema, ModelBindingSchema } from './model-configuration.js'
 
 export const ExecutionSelectionSchema = z.object({
-  mode: z.enum(['pending', 'normal', 'enno']),
+  mode: z.enum(['pending', 'normal', 'enno', 'deep-thinker']),
   status: z.enum(['selecting', 'ready', 'reselect']),
   configuration: ModelConfigurationSchema.optional(),
+  deepConfiguration: DeepConfigurationSchema.optional(),
   ordinaryModel: ModelBindingSchema.optional(),
   draft: ModelConfigurationDraftSchema.optional(),
   problem: z.string().max(1024).optional(),
 }).strict().superRefine((value, ctx) => {
+  if (value.mode === 'deep-thinker' && (!value.deepConfiguration || value.configuration || value.draft)) ctx.addIssue({ code: 'custom', message: 'Deep requires its independent configuration' })
+  if (value.mode !== 'deep-thinker' && value.deepConfiguration) ctx.addIssue({ code: 'custom', message: 'Deep configuration requires Deep ownership' })
   if (value.mode === 'enno' && value.status === 'ready' && !value.configuration) ctx.addIssue({ code: 'custom', message: 'Enno requires a complete model configuration' })
   if (value.mode === 'pending' && value.status === 'ready') ctx.addIssue({ code: 'custom', message: 'Pending selection cannot be ready' })
 })
@@ -31,6 +35,7 @@ export function writeExecutionSelection(database: SqliteDatabase, runId: string,
   database.prepare('UPDATE dsh_execution_selections SET state_json = ?, revision = revision + 1, updated_at = ? WHERE run_id = ? AND revision = ?')
     .run(JSON.stringify(parsed), new Date().toISOString(), runId, expectedRevision)
   if (database.prepare('SELECT changes() AS count').get<{ count: number }>()?.count !== 1) throw new KiokukoError('CONFLICT', 'Execution selection changed; reload the exact task before choosing again')
+  if (parsed.mode === 'enno' || parsed.mode === 'normal') database.prepare('UPDATE dsh_execution_owners SET mode=? WHERE run_id=?').run(parsed.mode, runId)
   return { revision: expectedRevision + 1, value: parsed }
 }
 /** Only explicit, affirmative instructions count; negative clauses win. */

@@ -8,9 +8,14 @@ OrcaReplay records model/tool activity for inspection and HTML export.
 
 
 For new coding tasks, choose normal execution or 役小角(enno-oduno). Enno offers model templates and role assignments from configured DSH models. [Model selection and connection limits](docs/model-selection.md).
+
+Use `/deep-planning <problem>` for bounded, read-only investigation and planning with four agent roles. It preserves inputs, supports pause/recovery, and returns partial answers when its estimated budget is exhausted. [Commands, budgets and recovery](docs/deep-planning.md).
+
+DeepSeek, Kimi, GLM, Qwen, HY/Hunyuan, MiMo and MiniMax agents automatically receive the bundled Japanese writing Skill. [Application rules and model identification](docs/japanese-output.md).
+
 ## Install and use
 
-Supports DSH `0.1.2-rc.1`, [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1), and [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2).
+Supports DSH [0.1.5-rc.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.5-rc.1), `0.1.2-rc.1`, [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1), and [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2).
 Requires Node.js **24.16.0+** and pnpm.
 Run these commands from the DSH source directory to install the published npm package and start:
 

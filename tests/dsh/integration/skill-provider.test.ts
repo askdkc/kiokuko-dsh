@@ -2,13 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mountSoulPrompt } from '../../../src/dsh/prompt-policy.js'
 import { createStandardSkillProvider, mountStandardSkillProvider } from '../../../src/dsh/standard-skill-provider.js'
+import { loadJapaneseOutputSkill } from '../../../src/dsh/japanese-output-skill.js'
 
 test('bundled provider exposes complete model/user-invocable definitions and disposes cleanly', async () => {
   const provider = createStandardSkillProvider()
   const result = await provider.list({})
   const listed = 'complete' in result ? result : { candidates: result, complete: true as const }
   assert.equal(listed.complete, true)
-  assert.equal(listed.candidates.length, 6)
+  assert.equal(listed.candidates.length, 7)
   assert.deepEqual(listed.candidates.map((candidate) => candidate.name), [
     'kiokuko-ui-design-soul',
     'kiokuko-simple-work',
@@ -16,11 +17,15 @@ test('bundled provider exposes complete model/user-invocable definitions and dis
     'kiokuko-enno-oduno',
     'memory-reasoning',
     'kiokuko-soul',
+    'natural-japanese-output',
   ])
   assert.ok(listed.candidates.every((candidate) => candidate.invocation.modelInvocable && candidate.invocation.userInvocable))
   const soul = listed.candidates.find((candidate) => candidate.name === 'kiokuko-soul')!
   const definition = await provider.get(soul, {})
   assert.match(definition?.content ?? '', /name: kiokuko-soul/u)
+  const japanese = listed.candidates.find(candidate => candidate.name === 'natural-japanese-output')!
+  assert.equal((await provider.get(japanese, {}))?.content, (await loadJapaneseOutputSkill()).content)
+  assert.equal(await provider.get({...japanese, name:'forged-japanese'}, {}),undefined)
   provider.dispose()
   assert.deepEqual(await provider.list({}), { candidates: [], complete: true })
   assert.equal(await provider.get(soul, {}), undefined)

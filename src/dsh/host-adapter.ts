@@ -52,6 +52,7 @@ import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, readPendingEnnoAdvi
 import { claimExecutionLeaseInTransaction, readEnnoSnapshot, terminalizeLedgerRunInTransaction } from '../enno-oduno/store.js'
 import { decideDshContinuation } from './continuation.js'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
+import { DeepPlanningController } from '../deep-thinker/controller.js'
 import { curateMemoryCandidates } from '../memory/curator.js'
 import { checkpointDshMemory, type ScopedCheckpointInput } from '../memory/scoped-memory.js'
 import { LedgerStore } from '../ledger/store.js'
@@ -149,6 +150,7 @@ interface AdapterContext extends Context {
 }
 
 export interface DshHostAdapterOptions {
+  readonly deepPlanning?: unknown
   readonly efficiency?: import('zod').z.input<typeof EfficiencyConfig>
   readonly memoryEvolution?: import('zod').z.input<typeof MemoryEvolutionConfig>
   readonly finalization?: import('zod').z.input<typeof FinalizationConfig>
@@ -434,6 +436,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ...(options.now === undefined ? {} : { now: options.now }),
   })
   const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
+  const deepPlanning = new DeepPlanningController({ runtime, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
+    sessions, agents, catalog: modelCatalog, questions: userQuestions, routes: options.modelRoutes ?? [], compatibility: modelCompatibility, sessionQuery, config: options.deepPlanning,
+    capabilities: async (agent, signal) => {
+      const catalog = await capabilityCatalog(skills, tools, { cwd: root, signal, agent, nativeAgent: agent })
+      return [...catalog.skills, ...catalog.tools]
+    },
+  })
   const childGuardDisposer = tools?.guard((value) => {
     const execution = value as { agent?: object; name?: string; arguments?: unknown }
     return execution.agent ? delegation.toolDenial(execution.agent, execution.name ?? '', execution.arguments) : undefined
@@ -547,6 +556,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       lease: states.get(item.runId)?.leaseToken ?? null }),
   })
   const memoryFinalizer = new DshMemoryFinalizer({
+    onDeepFinalized: sessionId => deepPlanning.deliver(sessionId),
     memoryEvolution: evolutionConfig,
     runtime,
     sessionQuery: finalizationQuery,
@@ -554,6 +564,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ...(llm === undefined ? {} : { llm }),
     ...(options.now === undefined ? {} : { now: options.now }),
   })
+  deepPlanning.attachFinalizer(() => memoryFinalizer.kick())
   const modes = new DshPonytailModes()
   const confirmationAnswerer = userQuestions === undefined ? undefined : createDshConfirmationAnswerer(userQuestions)
   let prepareGeneration = 0
@@ -1214,6 +1225,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const installRouting = (agent: RoutableAgent) => {
     if (routingDisposers.has(agent) || !agent.ctx) return
     routingDisposers.set(agent, installDshModelRouting(agent, async signal => {
+      const deep = await deepPlanning.beforeAssembly(agent, signal)
+      if (deep.owned) { assemblyClaims.delete(agent); return deep.model }
       const childModel = await delegation.restoreOrPersist(agent)
       if (childModel) { await delegation.assertCurrent(agent); return childModel }
       selectionBlocked.delete(agent)
@@ -1305,7 +1318,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       soulInSystemPrompt: ctx.get('systemPrompt', false) !== undefined,
       userTaskInConversation: true,
     })
-    return projectDshContext(messages, sessionEventSource(event.nativeSession), pending)
+    return projectDshContext([...messages, ...await deepPlanning.previousReport(event.sessionId)], sessionEventSource(event.nativeSession), pending)
   }
 
   const toolHost: DshToolHost = {
@@ -2359,7 +2372,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const orca = !orcaConfig.enabled ? undefined : createDshOrcaHost(ctx, orcaConfig, runtime, {
     session: id => sessions?.get(id), agent: id => agents?.get(id), logicalRun: resolveSessionRunId,
     ...(userQuestions ? { questions: userQuestions } : {}),
-    interactive: agent => !delegation.isChild(agent),
+    interactive: agent => !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent),
+    recordingRun: agent => deepPlanning.executor.recordingRun(agent),
+    recordingParent: agent => deepPlanning.executor.recordingParent(agent),
   })
   let disposePromise: Promise<void> | undefined
   let efficiency: DshEfficiencyObserver | undefined
@@ -2394,7 +2409,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       efficiencyDisposers.push(mountDshEfficiencyObserver(scope, observer, (sessionId, request) => {
         const agent = observedAgents.get(sessionId)
         if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(sessionId) !== agent.session) return undefined
-        const child = delegation.observationBinding(agent)
+        const child = delegation.observationBinding(agent) ?? deepPlanning.executor.observationBinding(agent)
         if (child !== undefined) return { sessionId, ...child, task: 'child' }
         const owner = currentSession(sessionId)
         if (owner === undefined || owner.nativeSession !== agent.session) return undefined
@@ -2404,6 +2419,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }
   configureEfficiency({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
   const host: DshCompositionHost = {
+    deepPlanning,
     get efficiency() { return efficiency },
     configureEfficiency,
     memoryEvolution: {
@@ -2448,6 +2464,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   return {
     host,
     dispose: () => disposePromise ??= (async () => {
+      await deepPlanning.stop()
+      await memoryFinalizer.dispose()
+      await deepPlanning.dispose()
       routingCreatedDisposer()
       routingClaimDisposer()
       modelErrorDisposer()

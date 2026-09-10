@@ -1,4 +1,5 @@
 import { loadStandardSkillParity, standardSkillFrontmatter, type StandardSkillParity } from './standard-skill-integrity.js'
+import { JAPANESE_OUTPUT_SKILL_NAME, loadJapaneseOutputSkill } from './japanese-output-skill.js'
 
 export const STANDARD_DSH_SKILL_PROVIDER = 'kiokuko-standard'
 export const STANDARD_DSH_SKILL_RANK = 600
@@ -33,10 +34,11 @@ function abortIfRequested(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw signal.reason ?? new Error('Skill lookup aborted')
 }
 
-function candidates(parity: StandardSkillParity): DshSkillCandidate[] {
-  return parity.skills.map((skillName) => {
+async function candidates(parity: StandardSkillParity): Promise<DshSkillCandidate[]> {
+  const japanese = await loadJapaneseOutputSkill()
+  return [...parity.skills, japanese.name].map((skillName) => {
     const primary = parity.files.find((file) => file.skillName === skillName && file.relativePath === 'SKILL.md')!
-    const description = standardSkillFrontmatter(primary.content).description
+    const description = skillName === japanese.name ? japanese.description : standardSkillFrontmatter(primary.content).description
     if (description === null || description.length === 0) throw new Error(`Missing standard Skill description: ${skillName}`)
     return {
       name: skillName,
@@ -61,7 +63,7 @@ export function createStandardSkillProvider(): DshSkillProvider & { dispose(): v
     async list(options: { readonly signal?: AbortSignal }) {
       abortIfRequested(options.signal)
       if (disposed) return { candidates: [], complete: true as const }
-      const result = { candidates: candidates(await parity()), complete: true as const }
+      const result = { candidates: await candidates(await parity()), complete: true as const }
       abortIfRequested(options.signal)
       return result
     },
@@ -69,7 +71,9 @@ export function createStandardSkillProvider(): DshSkillProvider & { dispose(): v
       abortIfRequested(options.signal)
       if (disposed || candidate.provider !== STANDARD_DSH_SKILL_PROVIDER || candidate.source !== 'bundled') return undefined
       const result = await parity()
-      const file = result.files.find((item) => item.skillName === candidate.locator.skillName && item.relativePath === 'SKILL.md')
+      const file = candidate.locator.skillName === JAPANESE_OUTPUT_SKILL_NAME
+        ? { skillName: JAPANESE_OUTPUT_SKILL_NAME, content: (await loadJapaneseOutputSkill()).content }
+        : result.files.find((item) => item.skillName === candidate.locator.skillName && item.relativePath === 'SKILL.md')
       if (file === undefined || candidate.name !== file.skillName) return undefined
       abortIfRequested(options.signal)
       return { ...candidate, content: file.content }

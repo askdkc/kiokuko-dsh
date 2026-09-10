@@ -7,9 +7,14 @@ OrcaReplay でモデル・ツールの動作を記録し、内容の確認と HT
 
 
 新しい変更作業では、通常実行か役小角(enno-oduno)を選べます。役小角ではおすすめテンプレート、またはDSH設定済みモデルから役割ごとの構成を選択します。[モデル選択と接続上の制約](docs/model-selection.ja.md)
+
+`/deep-planning <問題>` は、四つの役割による読み取り専用の調査・分析・計画作成です。入力を保持し、一時停止・復旧に対応します。推定予算に達した場合も部分回答を返します。[操作・予算・復旧の仕様](docs/deep-planning.md)
+
+DeepSeek・Kimi・GLM・Qwen・HY/Hunyuan・MiMo・MiniMaxのAgentには、日本語を自然に整える同梱Skillを自動で渡します。[適用条件とモデル判定](docs/japanese-output.md)
+
 ## 導入と使い方
 
-対応 DSH: `0.1.2-rc.1` / [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1) / [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2)。
+対応 DSH: [0.1.5-rc.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.5-rc.1) / `0.1.2-rc.1` / [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1) / [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2)。
 Node.js **24.16.0 以上**と pnpm が必要です。
 DSH のソースディレクトリで、公開済み npm パッケージを導入して起動します。
 

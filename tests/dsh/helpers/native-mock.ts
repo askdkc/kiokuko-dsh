@@ -24,7 +24,7 @@ export function nativeMock(llm: any) {
       this.requests.push(options)
       const entry = this.script.shift()
       if (entry === undefined) throw new Error('Native mock script exhausted')
-      for (const chunk of typeof entry === 'function' ? entry(options) : entry) {
+      for await (const chunk of await (typeof entry === 'function' ? entry(options) : entry)) {
         options.signal?.throwIfAborted()
         yield chunk
       }

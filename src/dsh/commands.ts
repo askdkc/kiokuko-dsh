@@ -12,12 +12,14 @@ export interface DshPonytailCommandContext {
 export interface DshNativeCommandDefinition {
   readonly name: string
   readonly description: string
-  readonly input?: { readonly hint: string }
+  readonly input?: { readonly hint: string; readonly images?: boolean; readonly attachments?: boolean }
   readonly recordInput?: boolean
   readonly handler: (invocation: DshNativeCommandInvocation) => DshNativeCommandResult | Promise<DshNativeCommandResult>
 }
 
 export interface DshNativeCommandInvocation {
+  readonly commandId?: string
+  readonly attachments?: readonly unknown[]
   readonly rawInput: string
   readonly signal: AbortSignal
   readonly agent?: {

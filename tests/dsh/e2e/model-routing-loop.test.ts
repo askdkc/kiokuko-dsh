@@ -9,6 +9,7 @@ import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { installDshModelRouting } from '../../../src/dsh/model-routing.js'
 import { MODEL_ROLES, MODEL_TEMPLATES, type ModelBinding } from '../../../src/dsh/model-configuration.js'
 import { nativeMock } from '../helpers/native-mock.js'
+import { loadJapaneseOutputSkill } from '../../../src/dsh/japanese-output-skill.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
@@ -36,6 +37,35 @@ async function turn(h: Awaited<ReturnType<typeof harness>>, agent: any, text: st
   agent.followup(h.llm.createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
   await agent.whenIdle()
 }
+test('native routing delivers the full Japanese Skill to selected OSS models and removes it on model changes', {
+  skip: !packageRoot && !sourceRoot, timeout: 30_000,
+}, async () => {
+  const h = await harness(), skill = await loadJapaneseOutputSkill()
+  const models = ['deepseek-chat','moonshotai/kimi-k2','z-ai/glm-4.6','qwen3-coder:30b','tencent/HY3-preview','xiaomi/MiMo-V2','MiniMaxAI/MiniMax-M2']
+  const provider = new h.mock.MockAdapter([...models,'gpt-4.1'].map(()=>h.mock.textResponse('確認しました。')))
+  h.ctx.llm.registerAdapter(['gateway'],provider)
+  const agent = await h.ctx.agentLoop.create(h.session.SessionId('japanese-routing'), {provider:'gateway',model:'gpt-4.1'}, {cwd:h.root})
+  let selection: ModelBinding | undefined
+  const dispose = installDshModelRouting(agent, async()=>selection)
+  const systemText = (request:any) => request.system ?? request.messages.filter((m:any)=>m.role==='system').flatMap((m:any)=>m.content).map((block:any)=>block.text??'').join('\n')
+  try {
+    for(const model of models) {
+      selection={provider:'gateway',model}
+      const input='この設計を説明してください。`max_threads` は変更しないでください。'
+      await turn(h,agent,input)
+      const request=provider.requests.at(-1)!
+      assert.equal(request.model,model)
+      const prompt=systemText(request)
+      assert.ok(prompt.includes(skill.content),model)
+      assert.equal(prompt.split(skill.content).length,2,model)
+      assert.ok(request.messages.some((m:any)=>m.role==='user'&&m.content.some((b:any)=>b.type==='text'&&b.text===input)))
+    }
+    selection=undefined;await turn(h,agent,'Answer in English.')
+    assert.equal(provider.requests.length,8)
+    assert.equal(provider.requests.at(-1)!.model,'gpt-4.1')
+    assert.equal(systemText(provider.requests.at(-1)).includes(skill.content),false)
+  } finally {dispose();await h.dispose()}
+})
 test('native README normal execution: cancel, plugin reload, original input recovery, write, verification and fresh next-task choice', {
   skip: !packageRoot && !sourceRoot, timeout: 30_000,
 }, async () => {

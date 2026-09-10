@@ -67,7 +67,7 @@ test('real Cordis composition mounts and unloads the bundled dsh surfaces', asyn
   const provider = host.providers[0] as ReturnType<typeof createStandardSkillProvider>
   const listed = await provider.list({})
   assert.equal('complete' in listed ? listed.complete : false, true)
-  assert.equal('complete' in listed ? listed.candidates.length : listed.length, 6)
+  assert.equal('complete' in listed ? listed.candidates.length : listed.length, 7)
   assert.equal(host.sections.get('kiokuko:soul'), await loadSoulPrompt())
   await pluginFiber.dispose()
   assert.deepEqual(host.providers, [])
