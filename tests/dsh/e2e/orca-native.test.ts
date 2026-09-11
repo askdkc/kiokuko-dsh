@@ -1,3 +1,4 @@
+import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
 import { readFile, mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -117,3 +118,6 @@ for (const owner of ['normal', 'explicit'] as const) test(`Orca enabled real DSH
     await rm(root, { recursive: true, force: true })
   }
 })
+
+// Isolate the plugin's startup deployment from the user's Skill directory.
+isolateSkillHome()

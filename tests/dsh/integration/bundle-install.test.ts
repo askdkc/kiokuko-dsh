@@ -1,3 +1,4 @@
+import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -176,3 +177,6 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
     ])
   }
 })
+
+// Isolate the plugin's startup deployment from the user's Skill directory.
+isolateSkillHome()

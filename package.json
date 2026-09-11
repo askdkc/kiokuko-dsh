@@ -84,6 +84,7 @@
         "Stored native DSH session IDs and histories for startup validation and legacy Kiokuko compatibility"
       ],
       "writePaths": [
+        "Six bundled managed standard Skills and references under ~/.agents/skills on enabled plugin load",
         "Configured Kiokuko database and pre-migration backups",
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",
         ".orca/runs and .orca/exports inside verified session workspaces, or the configured Kiokuko data directory",

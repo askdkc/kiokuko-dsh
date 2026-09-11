@@ -1,3 +1,4 @@
+import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
@@ -119,3 +120,6 @@ test('failed optional native task mapping preserves the original step and calls 
     assert.equal(calls, 2, 'a downstream failure must not cause a second execution')
   } finally { await composition.dispose() }
 })
+
+// Isolate the plugin's startup deployment from the user's Skill directory.
+isolateSkillHome()

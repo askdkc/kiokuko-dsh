@@ -171,6 +171,34 @@ async function createAndSmokeTestTarball() {
         }
       }
     } finally { provider.dispose(); }
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const os = (await import('node:os')).default;
+    const { createRequire } = await import('node:module');
+    const require = createRequire(import.meta.resolve('kiokuko-dsh/dsh'));
+    const { Context } = await import(require.resolve('@deepseek-ai/cordis'));
+    const { loadStandardSkillParity } = await import(new URL('./standard-skill-integrity.js', import.meta.resolve('kiokuko-dsh/dsh')));
+    const parity = await loadStandardSkillParity();
+    const home = path.join(process.cwd(), 'skill-home');
+    const deployed = path.join(home, '.agents', 'skills');
+    const soul = parity.files.find(file => file.skillName === 'kiokuko-soul');
+    const soulPath = path.join(deployed, soul.skillName, soul.relativePath);
+    await fs.mkdir(path.dirname(soulPath), { recursive: true });
+    await fs.writeFile(soulPath, soul.managedMarker + '\\nold soulRead requestId contract');
+    const homedir = os.homedir;
+    os.homedir = () => home;
+    try {
+      const context = new Context();
+      const fiber = context.plugin(plugin, {});
+      await fiber;
+      try {
+        for (const file of parity.files) {
+          if (await fs.readFile(path.join(deployed, file.skillName, file.relativePath), 'utf8') !== file.content) {
+            throw new Error('packed startup Skill deployment failed: ' + file.skillName + '/' + file.relativePath);
+          }
+        }
+      } finally { await fiber.dispose(); }
+    } finally { os.homedir = homedir; }
   `
   const smokePath = join(consumerRoot, 'import-smoke.mjs')
   await mkdir(join(consumerRoot, 'node_modules'))

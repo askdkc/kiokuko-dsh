@@ -44,7 +44,10 @@ OrcaReplay の機能設定は自動導入され、**手動設定は不要**で�
 
 ```bash
 pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh web
 ```
+
+起動時に、標準6 Skillと参照ファイルを `~/.agents/skills/` へ同期します。不足分を作成し、管理対象の旧版を更新します。非管理ファイルは上書きしません。他のエージェントではSkillカタログの再読み込みが必要です。
 
 Orca の 0.3.0 などが公開された後、Orca 関連の依存を更新する場合:
 

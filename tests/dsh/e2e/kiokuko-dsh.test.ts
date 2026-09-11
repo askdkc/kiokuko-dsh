@@ -1,3 +1,4 @@
+import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
@@ -151,3 +152,6 @@ test('composed host boundaries preserve model, tool, question, ledger, and turn-
   assert.equal(host.guards.length, 0)
   await hostFiber.dispose()
 })
+
+// Isolate the plugin's startup deployment from the user's Skill directory.
+isolateSkillHome()

@@ -150,7 +150,7 @@ export function renderStandardSkillFile(
     const target = destinationPath ?? `${bundled.skillName}/${bundled.relativePath}`;
     throw new KiokukoError(
       'CONFLICT',
-      `Refusing to overwrite an unmanaged standard skill file: ${target}. Inspect and back up or rename that file, then rerun kiokuko setup.`,
+      `Refusing to overwrite an unmanaged standard skill file: ${target}. Inspect and back up or rename that file, then reload the DSH plugin.`,
       { path: target },
     );
   }

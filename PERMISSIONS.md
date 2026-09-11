@@ -10,6 +10,13 @@ Kiokuko operation.
   repository metadata.
 - Writes the configured Kiokuko database and pre-migration backups, including
   DSH leases, receipts, retrieval state, and embedding state.
+- On enabled plugin load, synchronizes the six bundled standard Skills and their
+  references to `~/.agents/skills/` before registering the DSH surfaces. Creates
+  missing files and atomically replaces files carrying their exact Kiokuko
+  management marker. Leaves unrelated files untouched and refuses unmanaged
+  collisions, symbolic links, and unsafe parent directories. A synchronization
+  failure warns that deployed copies may be stale; the bundled DSH provider
+  remains available. Interrupted synchronization resumes on the next load.
 - On plugin load, enumerates stored DSH session IDs and validates each history.
   When DSH rejects a v3 history containing legacy Kiokuko informational
   events, reads that exact native session file and marks the five supported
@@ -61,6 +68,13 @@ It builds the package from the fixed source checkout. It does not modify a DSH
 profile, contact an external service, or edit user configuration. A Git source
 install must pin a full commit and authorize the exact generated archive key
 with pnpm `allowBuilds`; the npm tarball already contains `dist/`.
+
+After `pnpm dsh plugin --profile web update kiokuko-dsh --latest`, reload the DSH
+plugin or restart DSH. The newly loaded package synchronizes the standard Skills
+before the first conversation; npm installation itself does not write them.
+Other agents that cache `~/.agents/skills/` must reload their Skill catalog.
+`natural-japanese-output` remains a separate bundled DSH Skill and is not part
+of the six managed directories.
 
 ## Failure boundaries
 

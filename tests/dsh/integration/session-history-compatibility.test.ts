@@ -1,3 +1,4 @@
+import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { access, mkdtemp, readFile, readdir, rm, writeFile, symlink, rename } from 'node:fs/promises'
@@ -457,3 +458,6 @@ for (const defect of ['unknown', 'surface', 'false-marker', 'sequence', 'wrong-i
     } finally { await f.close() }
   })
 }
+
+// Isolate the plugin's startup deployment from the user's Skill directory.
+isolateSkillHome()
