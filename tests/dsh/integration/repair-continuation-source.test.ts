@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 
-const catalogPath = join(process.cwd(), '..', 'deepseek-harness', 'packages/session/session-format-catalog/lib/index.js')
+const catalogPath = join(process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules'), '@deepseek-ai/dsh-session-format-catalog/lib/index.js')
 
 function frame(value: string | Buffer): Buffer {
   return zstdCompressSync(typeof value === 'string' ? Buffer.from(value, 'utf8') : value, {
@@ -221,3 +221,73 @@ for (const [name, implementation, expectedError] of [
     }
   })
 }
+
+
+for (const version of [0, 3]) test(`handles optional Kiokuko events in v${version} without losing content or sequence`, async (t) => {
+  const catalog = await loadCatalog() as any
+  if (!catalog) { t.skip('pinned DSH catalog unavailable'); return }
+  const root = await mkdtemp(join(tmpdir(), 'kiokuko-repair-events-'))
+  try {
+    const path = join(root, 'session.jsonl.zstd')
+    const types = ['kiokuko/evolution-observation', 'kiokuko/completion-report', 'kiokuko/execution-status', 'kiokuko/deep-report', 'kiokuko/deep-status']
+    const events = types.map((type, seq) => ({ type, seq, time: seq + 1, data: { preserved: '情報を消さない', nested: { callSeq: 21 } } }))
+    const header = { ...(version === 0 ? { type: 'session' } : { isSeeded: false }), version, id: 'historical-events', createdAt: 1, delegationDepth: 0 }
+    const physicalHeader = version === 3 ? catalog.encodeCurrentHeader(header, 0) : header
+    const rows = version === 3 ? events.map(event => catalog.encodeCurrentEvent(event)) : events
+    const original = frame(`${[physicalHeader, ...rows].map(row => JSON.stringify(row)).join('\n')}\n`)
+    await writeFile(path, original)
+    const run = (extra: string[] = []) => spawnSync(process.execPath, [join(process.cwd(), 'scripts/repair-session-log.mjs'), path, '--catalog', catalogPath, ...extra], { encoding: 'utf8' })
+    assert.throws(() => validate(catalog, physicalHeader, rows), /unknown|unsupported|unrecognized/i)
+    const dry = run(['--dry-run'])
+    if (version === 0) {
+      assert.equal(dry.status, 1)
+      assert.match(dry.stderr, /migration refuses unknown historical events even when ignorable/)
+      assert.deepEqual(await readFile(path), original)
+      assert.deepEqual(await readdir(root), ['session.jsonl.zstd'])
+      return
+    }
+    assert.equal(dry.status, 0, dry.stderr)
+    assert.match(dry.stdout, /no files changed/)
+    assert.deepEqual(await readFile(path), original)
+    assert.deepEqual(await readdir(root), ['session.jsonl.zstd'])
+    const result = run()
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(await readFile(`${path}.bak`), original)
+    const repairModule = await import(pathToFileURL(join(process.cwd(), 'scripts/repair-continuation-source.mjs')).href)
+    const repaired = repairModule.parseJsonl(repairModule.decodeSessionLog(await readFile(path)))
+    assert.deepEqual(repaired.records, [physicalHeader, ...rows.map((row: object) => ({ ...row, ignorable: true }))])
+    assert.doesNotThrow(() => validate(catalog, repaired.records[0], repaired.records.slice(1)))
+    const bytes = await readFile(path)
+    assert.equal(run().status, 0)
+    assert.deepEqual(await readFile(path), bytes)
+    assert.deepEqual(await readFile(`${path}.bak`), original)
+
+    for (const extra of [{ type: 'another-plugin/required' }, { type: 'kiokuko/future-required' },
+      { type: types[0], surfaceOp: 'append' }, { type: types[0], ignorable: false }]) {
+      const bad = frame(`${JSON.stringify(physicalHeader)}\n${JSON.stringify({ ...rows[0], ...extra })}\n`)
+      const badPath = join(root, 'bad.jsonl.zstd')
+      await writeFile(badPath, bad)
+      const rejected = spawnSync(process.execPath, [join(process.cwd(), 'scripts/repair-session-log.mjs'), badPath, '--catalog', catalogPath], { encoding: 'utf8' })
+      assert.equal(rejected.status, 1)
+      assert.deepEqual(await readFile(badPath), bad)
+      await assert.rejects(access(`${badPath}.bak`))
+    }
+
+    for (const [name, bytes] of [['truncated', original.subarray(0, original.length - 1)], ['trailing', Buffer.concat([original, Buffer.from('bad')])]] as const) {
+      const invalidPath = join(root, `${name}.jsonl.zstd`)
+      await writeFile(invalidPath, bytes)
+      const rejected = spawnSync(process.execPath, [join(process.cwd(), 'scripts/repair-session-log.mjs'), invalidPath, '--catalog', catalogPath], { encoding: 'utf8' })
+      assert.equal(rejected.status, 1)
+      assert.deepEqual(await readFile(invalidPath), bytes)
+      await assert.rejects(access(`${invalidPath}.bak`))
+    }
+    const conflictPath = join(root, 'conflict.jsonl.zstd')
+    await writeFile(conflictPath, original)
+    await writeFile(`${conflictPath}.bak`, 'user backup')
+    const conflict = spawnSync(process.execPath, [join(process.cwd(), 'scripts/repair-session-log.mjs'), conflictPath, '--catalog', catalogPath], { encoding: 'utf8' })
+    assert.equal(conflict.status, 1)
+    assert.match(conflict.stderr, /existing session backup does not match/)
+    assert.deepEqual(await readFile(conflictPath), original)
+    assert.equal(await readFile(`${conflictPath}.bak`, 'utf8'), 'user backup')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

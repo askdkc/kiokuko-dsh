@@ -377,7 +377,9 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       await adapter.host.boundaryWorker!.whenIdle()
       assert.equal(adapterScript.requests.length, count, 'intentional pause must not enqueue an unsubmitted-turn retry')
       assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM dsh_turn_receipts').get<{ n: number }>()!.n), receipts)
-      assert.equal(liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'kiokuko/execution-status').length, 1)
+      assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT count(*) AS n FROM dsh_session_notices WHERE kind='status'").get<{n:number}>()!.n), 1)
+      const persistence = await import(dshModule('packages/session/session-persistence/lib/index.js'))
+      assert.doesNotThrow(() => persistence.validateStoredEvents(liveAgent.session.header, structuredClone(liveAgent.session.snapshotEvents())))
       await completeTurn('記録済みの根拠を使って作業を再開してください。', () => completed(1))
       assert.equal(exploratoryReads, 4, 'resuming does not replay the read side effects')
       assert.match(JSON.stringify(liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'assistant/message').at(-1)), /Completed one/)
@@ -404,13 +406,15 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       return
     }
     if (finalMode !== 'text') {
-      const reports = () => liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'kiokuko/completion-report')
-      assert.equal(reports().length, 1)
-      assert.match(reports()[0].data.text, /final-test: passed/u)
-      assert.match(reports()[0].data.text, /Implementation completed/u)
-      assert.equal(reports()[0].data.source.kind, 'plugin')
+      const reports = () => adapter.host.runtime!.withDatabase(db => db.prepare("SELECT text FROM dsh_session_notices WHERE kind='report'").all<{text:string}>())
+      assert.equal((await reports()).length, 1)
+      assert.match((await reports())[0]!.text, /final-test: passed/u)
+      assert.match((await reports())[0]!.text, /Implementation completed/u)
+      assert.equal(liveAgent.session.snapshotEvents().some((e: any) => e.type.startsWith('kiokuko/')), false)
+      const persistence = await import(dshModule('packages/session/session-persistence/lib/index.js'))
+      assert.doesNotThrow(() => persistence.validateStoredEvents(liveAgent.session.header, structuredClone(liveAgent.session.snapshotEvents())))
       await adapter.host.resolveIdleClose!(liveAgent.id, liveAgent.session.id, liveAgent.session, liveAgent)
-      assert.equal(reports().length, 1, 'repeated idle does not repeat the fallback report')
+      assert.equal((await reports()).length, 1, 'repeated idle does not repeat the fallback report')
       const report = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT status FROM dsh_completion_reports').get())
       assert.equal(report?.status, 'delivered')
       return

@@ -1,4 +1,5 @@
-import { executionObservation, EVOLUTION_OBSERVATION_EVENT } from './evolution-observation.js'
+import { executionObservation } from './evolution-observation.js'
+import { saveEvolutionObservation, saveSessionNotice } from './plugin-records.js'
 import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution/contracts.js'
 import { evolutionStatus } from '../memory/evolution/store.js'
 import { OrcaConfig, EfficiencyConfig, FinalizationConfig } from './config.js'
@@ -86,7 +87,7 @@ import { abortable, DshBoundaryWorker } from './boundary-worker.js'
 import { DshSessionLogExportService } from './session-log-export.js'
 import { DshCompletionReporter } from './completion-report.js'
 import { verificationBoundaryKey } from './verification-identity.js'
-import { DshExecutionSupport, EXECUTION_STATUS_EVENT, type ExecutionBinding } from './execution-support.js'
+import { DshExecutionSupport, type ExecutionBinding } from './execution-support.js'
 import {
   claimAutomaticContinuationInTransaction,
   claimBoundaryEffectInTransaction,
@@ -985,11 +986,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             return source?.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt' && source.form === 'snapshot'
           })) {
             const paused = await executionSupport.pauseAtBoundary(event.sessionId, async (id, text) => {
-              const session = event.nativeSession as { snapshotEvents?: () => readonly DshLogEvent[]; append?: Function } | undefined
-              if (!session?.snapshotEvents || !session.append || !sessions?.flush) throw new Error('Pause notice delivery unavailable')
-              if (!session.snapshotEvents().some(entry => entry.type === EXECUTION_STATUS_EVENT && objectRecord(entry.data)?.reportId === id)) {
-                session.append(EXECUTION_STATUS_EVENT, { reportId: id, text }, { ignorable: true })
-              }
+              const session = event.nativeSession as { snapshotEvents?: () => readonly DshLogEvent[] } | undefined
+              if (!session?.snapshotEvents || !sessions?.flush) throw new Error('Pause notice delivery unavailable')
+              await runtime.withDatabase(db => saveSessionNotice(db, { id, runId: item.runId, sessionId: item.sessionId,
+                rootPath: item.cwd, kind: 'status', text, anchorSeq: session.snapshotEvents!().at(-1)?.seq ?? 0 }))
               await sessions.flush(session)
               event.signal.throwIfAborted()
               // A human can arrive while the native log flush is in flight.
@@ -2243,7 +2243,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     try {
       if (evolutionConfig.mode === 'off' || execution.parent !== undefined) return
       const agent = execution.agent, session = agent?.session, item = session ? currentSession(session.id) : undefined
-      if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || typeof session.append !== 'function' || typeof session.eventAt !== 'function' || !Number.isSafeInteger(session.seq)) return
+      if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || typeof session.eventAt !== 'function' || !Number.isSafeInteger(session.seq)) return
       let call: any
       // Bound lookup even in million-event sessions. Missing correlation stays unknown.
       for (let seq=session.seq-1;seq>=Math.max(0,session.seq-4096);seq--) {
@@ -2252,7 +2252,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       }
       if (!call || call.data.name !== execution.name || call.data.turn !== item.turn) return
       const observation = executionObservation({runId:item.runId,workspace:item.workspace,sessionId:item.sessionId},execution.callId,call.seq,result)
-      if (observation) session.append(EVOLUTION_OBSERVATION_EVENT,observation)
+      // Enqueued before turn completion; the finalizer reads the same queue.
+      // Native logs cannot safely carry external event types on supported DSH.
+      if (observation) void runtime.withDatabase(db => saveEvolutionObservation(db, observation)).catch(() => {
+        // Missing proof remains unknown and cannot veto native tool completion.
+      })
     } catch { /* optional evidence never changes native tool completion */ }
   })
   const errorDisposer = (ctx as any).on('agent/error', (event: { agent: { id: string; session?: { id: string }; sessionId?: string }; error?: unknown }) => {

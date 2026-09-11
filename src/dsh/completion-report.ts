@@ -3,13 +3,14 @@ import type { DshLogEvent } from './session-memory-finalizer.js'
 import type { EnnoRunSnapshot } from '../enno-oduno/types.js'
 import { readEnnoSnapshot } from '../enno-oduno/store.js'
 import { canonicalContentHash } from '../serialization/validate.js'
+import { saveSessionNotice } from './plugin-records.js'
 
 export const DSH_COMPLETION_REPORT_EVENT = 'kiokuko/completion-report'
 
 interface ReportSession {
   readonly id: string
+  readonly header?: { readonly cwd?: string }
   snapshotEvents(): readonly DshLogEvent[]
-  append(type: string, data: unknown, options: { ignorable: true }): { seq: number }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -37,7 +38,7 @@ export function completionReportText(snapshot: EnnoRunSnapshot, evidenceSummary?
   return lines.join('\n').slice(0, 32_768)
 }
 
-/** Flush-before-ack outbox. Native event identity makes crash replay harmless. */
+/** Save the notice and flush native history before settling the outbox. Stable IDs deduplicate crash replay. */
 export class DshCompletionReporter {
   readonly #active = new Map<string, Promise<void>>()
   constructor(private readonly runtime: Pick<DshRuntime, 'withDatabase'>, private readonly flush: (session: object) => PromiseLike<unknown>) {}
@@ -73,6 +74,9 @@ export class DshCompletionReporter {
           })
       })
       let seq = delivered?.seq
+      const stored = await this.runtime.withDatabase(db => db.prepare('SELECT anchor_seq AS seq FROM dsh_session_notices WHERE id=? AND dsh_session_id=?')
+        .get<{ seq: number }>(id, session.id))
+      seq ??= stored?.seq
       if (seq === undefined) {
         const snapshot = await this.runtime.withDatabase(database => readEnnoSnapshot(database, item))
         let evidenceSummary: string | undefined
@@ -92,9 +96,12 @@ export class DshCompletionReporter {
         } catch { evidenceSummary = 'Auxiliary evidence: unknown. Recorded verification results remain authoritative.' }
         // Re-read after the DB await: another native callback may have published the same report.
         const replay = session.snapshotEvents().find(event => event.type === DSH_COMPLETION_REPORT_EVENT && record(event.data)?.reportId === id)
-        seq = replay?.seq ?? session.append(DSH_COMPLETION_REPORT_EVENT, {
-          reportId: id, text: completionReportText(snapshot, evidenceSummary), source: { kind: 'plugin', plugin: 'kiokuko-dsh' },
-        }, { ignorable: true }).seq
+        seq = replay?.seq ?? session.snapshotEvents().at(-1)?.seq ?? 0
+        if (!replay) {
+          if (!session.header?.cwd) throw new Error('Report requires the exact Session workspace')
+          await this.runtime.withDatabase(db => saveSessionNotice(db, { id, runId: item.runId, sessionId: session.id,
+            rootPath: session.header!.cwd!, kind: 'report', text: completionReportText(snapshot, evidenceSummary), anchorSeq: seq! }))
+        }
       }
       await this.flush(session)
       await this.runtime.withDatabase(database => {

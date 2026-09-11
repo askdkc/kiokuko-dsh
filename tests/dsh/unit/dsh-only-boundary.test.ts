@@ -80,7 +80,7 @@ test('active source has no retired generic-client compatibility identifiers', as
 test('migrations preserve the immutable baseline and append forward-only evolution', async () => {
   const entries = await readdir(path.join(root, 'migrations'), { withFileTypes: true })
   const sqlFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.sql')).map((entry) => entry.name)
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql', '011_dsh_finalization_input_mode.sql', '012_memory_evolution.sql', '013_dsh_deep_thinker.sql', '014_memory_projection_evidence.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql', '011_dsh_finalization_input_mode.sql', '012_memory_evolution.sql', '013_dsh_deep_thinker.sql', '014_memory_projection_evidence.sql', '015_dsh_plugin_records.sql'])
   assert.equal(entries.some((entry) => entry.name === 'down'), false, 'migrations/down must not exist')
   const packed = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
   assert.equal(packed.files.includes('migrations/'), true)

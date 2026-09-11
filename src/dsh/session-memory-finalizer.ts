@@ -1,4 +1,5 @@
 import { EVOLUTION_OBSERVATION_EVENT, observationMatchesResult, type EvolutionObservation, type EvolutionObservationBinding } from './evolution-observation.js'
+import { readEvolutionObservation } from './plugin-records.js'
 import { MemoryEvolutionConfig, evidenceReferences, supportingEvidenceDigest, episodeSignature, episodeSignals, parseEpisodeDraft, type EpisodeEvidence, type EpisodeDraft, type EvolutionConfig } from '../memory/evolution/contracts.js'
 import { configureEvolution, saveEpisode, scheduleEvolution, evolutionSettings } from '../memory/evolution/store.js'
 import { EvolutionWorker } from '../memory/evolution/worker.js'
@@ -581,6 +582,7 @@ export async function reduceDshFinalizationLog(
   inputMode: FinalizationInputMode = 'prefix_reuse',
   identity?: EvolutionObservationBinding,
   evidenceSelectionVersion: 1 | 2 = 1,
+  readObservation?: (callSeq: number) => Promise<unknown>,
 ): Promise<PreparedFinalizationLog> {
   if (evidenceSelectionVersion !== 1 && evidenceSelectionVersion !== 2) throw new KiokukoError('INTEGRITY_ERROR', 'Unknown evidence selection version')
   const start = validatedSequence(sourceStartSeq, 'sourceStartSeq')
@@ -652,11 +654,14 @@ export async function reduceDshFinalizationLog(
       nativeCalls.set(nativeData.callId, {name:nativeData.name,seq:event.seq})
       if (nativeCalls.size > 256) nativeCalls.delete(nativeCalls.keys().next().value!)
     }
-    if (event.type === EVOLUTION_OBSERVATION_EVENT && identity && nativeData?.schemaVersion === 1 &&
-      nativeData.runId === identity.runId && nativeData.workspace === identity.workspace && nativeData.sessionId === identity.sessionId &&
-      typeof nativeData.callId === 'string' && nativeCalls.get(nativeData.callId)?.seq === nativeData.callSeq &&
-      (Number.isSafeInteger(nativeData.exitCode) || nativeData.exitCode === null && nativeData.failed === true) && typeof nativeData.failed === 'boolean' && (nativeData.failed || nativeData.exitCode === 0) && typeof nativeData.presentationHash === 'string') {
-      nativeProofs.set(nativeData.callId, nativeData as unknown as EvolutionObservation)
+    const proofData = event.type === EVOLUTION_OBSERVATION_EVENT ? nativeData
+      : event.type === 'tool/call' && readObservation ? record(await readObservation(event.seq)) : undefined
+    if (identity && proofData?.schemaVersion === 1 &&
+      proofData.runId === identity.runId && proofData.workspace === identity.workspace && proofData.sessionId === identity.sessionId &&
+      typeof proofData.callId === 'string' && nativeCalls.get(proofData.callId)?.seq === proofData.callSeq &&
+      (Number.isSafeInteger(proofData.exitCode) || proofData.exitCode === null && proofData.failed === true) && typeof proofData.failed === 'boolean' && (proofData.failed || proofData.exitCode === 0) && typeof proofData.presentationHash === 'string') {
+      nativeProofs.set(proofData.callId, proofData as unknown as EvolutionObservation)
+      if (event.type === 'tool/call') digest.update(canonicalJson(proofData), 'utf8').update('\n')
       if (nativeProofs.size > 256) nativeProofs.delete(nativeProofs.keys().next().value!)
     }
     const resultCallId = record(record(nativeData?.message)?.source)?.callId ?? nativeData?.callId
@@ -1090,6 +1095,8 @@ export class DshMemoryFinalizer {
         job.inputMode,
         {runId:job.runId,workspace:job.workspace,sessionId:job.dshSessionId},
         job.evidenceSelectionVersion,
+        callSeq => this.#runtime.withDatabase(db => readEvolutionObservation(db,
+          { runId: job.runId, workspace: job.workspace, sessionId: job.dshSessionId }, callSeq)),
       )
       const extractEpisode = job.extractionVersion === 2 && await this.#runtime.withDatabase(database => evolutionSettings(database).mode !== 'off')
       const requestJob = extractEpisode ? job : { ...job, extractionVersion: 1 as const }

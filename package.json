@@ -24,6 +24,8 @@
     "skills/",
     "dsh/cordis.patch.yml",
     "docs/",
+    "scripts/repair-session-log.mjs",
+    "scripts/repair-continuation-source.mjs",
     "README.md",
     "README.ja.md",
     "README.zh-CN.md",

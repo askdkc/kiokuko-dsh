@@ -96,8 +96,8 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     assert.equal(writes, 0, 'structured outside write never executed')
     assert.equal(reads, 4)
     assert.equal(model.requests.length, 7, 'pause does not issue another model request')
-    const notices = () => agent.session.snapshotEvents().filter((event: any) => event.type === 'kiokuko/execution-status')
-    assert.equal(notices().length, 1)
+    const notices = () => adapter.host.runtime!.withDatabase(db => db.prepare("SELECT * FROM dsh_session_notices WHERE kind='status'").all())
+    assert.equal((await notices()).length, 1)
     assert.equal(agent.session.snapshotEvents().some((event: any) => event.type === 'user/message' && event.data?.content?.some((block: any) => block.text === task)), true)
     assert.match(JSON.stringify(model.requests[6]), /three times/)
     const running = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status = 'active' AND dsh_session_id = 'execution-session'").get<{ id: string }>())
@@ -124,7 +124,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
       assert.equal(item.acquiredRange.lastLine, 2)
     }
     assert.equal(writes, 0)
-    assert.equal(notices().length, 1)
+    assert.equal((await notices()).length, 1)
     assert.equal(model.requests.length, 10)
     assert.match(JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'assistant/message').at(-1)), /完了しました/)
     assert.deepEqual(questions, expectedQuestions,

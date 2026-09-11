@@ -40,7 +40,7 @@ test('native result DTOs survive text-only log rendering as identity-bound episo
       yield {type:'finish',reason:{kind:'stop'}}
     }}})
     composition=await mountDshComposition(ctx,adapter.host)
-    const agent=await ctx.agentLoop.create(session.SessionId('evolution-native'),{provider:'evolution-test',model:'mock'},{cwd:root})
+    const agent=await ctx.agentLoop.create(session.SessionId('evolution-native'),{provider:'evolution-test',model:'mock'},{cwd:root,delegationDepth:0})
     agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'こんにちは'}]}))
     const deadline=Date.now()+15000
     while(Date.now()<deadline) {
@@ -54,9 +54,40 @@ test('native result DTOs survive text-only log rendering as identity-bound episo
     const end=agent.session.snapshotEvents().findLast((e:any)=>e.type==='turn/end')
     await adapter.host.lifecycle!.closeTurn({...close,sourceEndSeq:end.seq})
     await adapter.host.memoryFinalizer!.whenIdle()
-    const events=agent.session.snapshotEvents(),proofs=events.filter((e:any)=>e.type===EVOLUTION_OBSERVATION_EVENT)
+    const events=agent.session.snapshotEvents()
+    assert.equal(events.filter((e:any)=>e.type===EVOLUTION_OBSERVATION_EVENT).length,0)
+    const proofs=await adapter.host.runtime!.withDatabase(db=>db.prepare('SELECT observation_json FROM dsh_evolution_observations ORDER BY call_seq').all<{observation_json:string}>().map(row=>JSON.parse(row.observation_json)))
+    const persistence = await import(pathToFileURL(packageRoot ? join(packageRoot, '@deepseek-ai/dsh-session-persistence/lib/index.js') : join(sourceRoot!, 'packages/session/session-persistence/lib/index.js')).href)
+    assert.doesNotThrow(() => persistence.validateStoredEvents(agent.session.header, structuredClone(events)), 'the native cold reader must accept every event written by Kiokuko')
+    const reopened = session.Session.fromRestore(agent.session.id, structuredClone(events), structuredClone(agent.session.header), 0, 'detached')
+    assert.deepEqual(reopened.snapshotEvents().slice(0,events.length), events)
+    // Exercise DSH's actual disk writer and a fresh backend reader. A repair
+    // script or an in-memory Session alone cannot prove normal chat reopen.
+    const { default: jsonl } = await import(pathToFileURL(packageRoot
+      ? join(packageRoot, '@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js')
+      : join(sourceRoot!, 'packages/session/session-persistence-jsonl/lib/index.js')).href)
+    const storageConfig = { root: join(root, 'native-history'), compression: 'zstd' }
+    const writerContext = new cordis.Context()
+    const writerFiber = writerContext.plugin(jsonl, storageConfig)
+    await writerFiber
+    try {
+      const handle = await writerContext.sessionPersistence.create(agent.session.header)
+      try { await handle.append(events); await handle.flush() } finally { await handle.close() }
+    } finally { await writerFiber.dispose() }
+    const readerContext = new cordis.Context()
+    const readerFiber = readerContext.plugin(jsonl, storageConfig)
+    await readerFiber
+    try {
+      const handle = await readerContext.sessionPersistence.open(agent.session.id, 'read')
+      try {
+        const restored = await handle.read()
+        assert.deepEqual(restored.events, events, 'normal history reopen needs no repair command')
+        const loaded = session.Session.fromRestore(handle.id, restored.events, handle.header, handle.inheritedEventCount, restored.eventState)
+        assert.deepEqual(loaded.snapshotEvents().slice(0, events.length), events)
+      } finally { await handle.close() }
+    } finally { await readerFiber.dispose() }
     assert.equal(proofs.length,2,JSON.stringify({requests:model.requests.length,nativeResults,events:events.map((e:any)=>({type:e.type,seq:e.seq}))}))
-    assert.deepEqual(proofs.map((e:any)=>e.data.exitCode),[1,0])
+    assert.deepEqual(proofs.map((e:any)=>e.exitCode),[1,0])
     const rows=await adapter.host.runtime!.withDatabase(db=>db.prepare('SELECT episode_json FROM memory_episodes').all<{episode_json:string}>())
     assert.equal(rows.length,1)
     const episode=JSON.parse(rows[0]!.episode_json)
