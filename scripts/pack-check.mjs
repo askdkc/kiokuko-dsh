@@ -192,6 +192,9 @@ async function createAndSmokeTestTarball() {
       const fiber = context.plugin(plugin, {});
       await fiber;
       try {
+        if (await fs.readFile(path.join(deployed, 'japanese-translation-for-oss-models', 'SKILL.md'), 'utf8') !== skill.content) {
+          throw new Error('packed startup Japanese Skill deployment failed');
+        }
         for (const file of parity.files) {
           if (await fs.readFile(path.join(deployed, file.skillName, file.relativePath), 'utf8') !== file.content) {
             throw new Error('packed startup Skill deployment failed: ' + file.skillName + '/' + file.relativePath);

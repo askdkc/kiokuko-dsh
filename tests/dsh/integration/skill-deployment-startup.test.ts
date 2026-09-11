@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import * as plugin from '../../../src/dsh/index.js'
+import { loadJapaneseOutputSkill } from '../../../src/dsh/japanese-output-skill.js'
 import { loadStandardSkillParity } from '../../../src/dsh/standard-skill-integrity.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 
@@ -12,6 +13,7 @@ const home = isolateSkillHome()
 
 test('plugin startup synchronizes before provider registration and repeats after a package reload', async t => {
   const parity = await loadStandardSkillParity()
+  const japanese = await loadJapaneseOutputSkill()
   const soul = parity.files.find(file => file.skillName === 'kiokuko-soul')!
   const root = path.join(home(), '.agents', 'skills')
   const soulPath = path.join(root, soul.skillName, soul.relativePath)
@@ -23,6 +25,7 @@ test('plugin startup synchronizes before provider registration and repeats after
   const host = await ctx.plugin({ name: 'skill-deployment-fixture', apply(context: Context) {
     return context.provide('kiokukoDsh', { skills: { registerProvider() {
       for (const file of parity.files) assert.equal(readFileSync(path.join(root, file.skillName, file.relativePath), 'utf8'), file.content)
+      assert.equal(readFileSync(path.join(root, 'japanese-translation-for-oss-models', 'SKILL.md'), 'utf8'), japanese.content)
       registrations++
       return () => {}
     } } })

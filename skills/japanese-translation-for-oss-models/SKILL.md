@@ -8,6 +8,8 @@ description: >
   like original Japanese, not translated English.
 ---
 
+<!-- KIOKUKO MANAGED STANDARD SKILL: natural-japanese-output -->
+
 # Natural Japanese Output
 
 ## Purpose

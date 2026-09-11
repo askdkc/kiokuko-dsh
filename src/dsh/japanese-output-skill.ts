@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises'
 import { standardSkillFrontmatter } from './standard-skill-integrity.js'
 
 export const JAPANESE_OUTPUT_SKILL_NAME = 'natural-japanese-output'
+export const JAPANESE_OUTPUT_SKILL_DIRECTORY = 'japanese-translation-for-oss-models'
+export const JAPANESE_OUTPUT_SKILL_MANAGED_MARKER = '<!-- KIOKUKO MANAGED STANDARD SKILL: natural-japanese-output -->'
 export const JAPANESE_OUTPUT_SECTION = 'kiokuko:natural-japanese-output'
 const PROMPT_VARIABLE = 'kiokuko_natural_japanese_output'
 
@@ -16,11 +18,14 @@ let bundled: Promise<BundledJapaneseSkill> | undefined
 /** Load the user-supplied bundled file verbatim once; no network or translation call. */
 export function loadJapaneseOutputSkill(): Promise<BundledJapaneseSkill> {
   return bundled ??= (async () => {
-    const content = await readFile(new URL('../../skills/japanese-translation-for-oss-models/SKILL.md', import.meta.url), 'utf8')
+    const content = await readFile(new URL(`../../skills/${JAPANESE_OUTPUT_SKILL_DIRECTORY}/SKILL.md`, import.meta.url), 'utf8')
     if (Buffer.byteLength(content) > 65_536) throw new Error('Bundled Japanese output Skill exceeds 64 KiB')
     const metadata = standardSkillFrontmatter(content)
     if (metadata.name !== JAPANESE_OUTPUT_SKILL_NAME || !metadata.description || metadata.disableModelInvocation) {
       throw new Error('Bundled Japanese output Skill identity is invalid')
+    }
+    if (content.split(JAPANESE_OUTPUT_SKILL_MANAGED_MARKER).length !== 2) {
+      throw new Error('Bundled Japanese output Skill management marker is invalid')
     }
     return Object.freeze({ name: metadata.name, description: metadata.description, content })
   })()

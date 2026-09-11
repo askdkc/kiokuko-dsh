@@ -40,7 +40,7 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
 ```
 
-启动时会将内置的6个标准 Skill 及其引用文件同步到 `~/.agents/skills/`，创建缺失文件并更新受管理的副本，不覆盖非受管理文件。其他代理需要重新加载 Skill 目录。
+启动时会将包括日语输出在内的全部7个内置 Skill 及其引用文件同步到 `~/.agents/skills/`，创建缺失文件并更新受管理的副本，不覆盖非受管理文件。其他代理需要重新加载 Skill 目录。
 
 Orca 发布 0.3.0 等新版本后，更新 Orca 相关依赖：
 

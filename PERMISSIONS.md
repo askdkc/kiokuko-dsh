@@ -10,7 +10,7 @@ Kiokuko operation.
   repository metadata.
 - Writes the configured Kiokuko database and pre-migration backups, including
   DSH leases, receipts, retrieval state, and embedding state.
-- On enabled plugin load, synchronizes the six bundled standard Skills and their
+- On enabled plugin load, synchronizes all seven bundled Skills and their
   references to `~/.agents/skills/` before registering the DSH surfaces. Creates
   missing files and atomically replaces files carrying their exact Kiokuko
   management marker. Leaves unrelated files untouched and refuses unmanaged
@@ -73,8 +73,8 @@ After `pnpm dsh plugin --profile web update kiokuko-dsh --latest`, reload the DS
 plugin or restart DSH. The newly loaded package synchronizes the standard Skills
 before the first conversation; npm installation itself does not write them.
 Other agents that cache `~/.agents/skills/` must reload their Skill catalog.
-`natural-japanese-output` remains a separate bundled DSH Skill and is not part
-of the six managed directories.
+`natural-japanese-output` is deployed under `japanese-translation-for-oss-models/`,
+matching its bundled directory; its public Skill name remains unchanged.
 
 ## Failure boundaries
 

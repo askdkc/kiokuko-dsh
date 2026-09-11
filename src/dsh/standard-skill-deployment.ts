@@ -5,6 +5,7 @@ import { readRegularFile, type RegularFileSnapshot } from '../config/read-regula
 import { KiokukoError } from '../errors.js'
 import { loadStandardSkillParity } from './standard-skill-integrity.js'
 import { renderStandardSkillFile } from './standard-skills.js'
+import { JAPANESE_OUTPUT_SKILL_DIRECTORY, JAPANESE_OUTPUT_SKILL_MANAGED_MARKER, loadJapaneseOutputSkill } from './japanese-output-skill.js'
 
 interface DeploymentFile {
   readonly target: string
@@ -77,7 +78,7 @@ async function publishFile(home: string, file: DeploymentFile): Promise<'created
   }
 }
 
-/** Sync only the fixed, validated six-Skill manifest. Unlisted user files are never removed. */
+/** Sync the six standard Skills plus Japanese output. Unlisted user files are never removed. */
 export async function synchronizeStandardSkills(homeDirectory: string = os.homedir()): Promise<StandardSkillDeployment> {
   if (!path.isAbsolute(homeDirectory) || homeDirectory.includes('\0') || path.resolve(homeDirectory) === path.parse(homeDirectory).root) {
     throw new KiokukoError('VALIDATION_ERROR', 'Standard Skill deployment requires an absolute user home')
@@ -85,10 +86,16 @@ export async function synchronizeStandardSkills(homeDirectory: string = os.homed
   const home = await realpath(homeDirectory)
   const directory = path.join(home, '.agents', 'skills')
   const parity = await loadStandardSkillParity()
+  const japanese = await loadJapaneseOutputSkill()
+  const bundledFiles = [
+    ...parity.files.map(file => ({ ...file, directoryName: file.skillName })),
+    { skillName: japanese.name, directoryName: JAPANESE_OUTPUT_SKILL_DIRECTORY,
+      managedMarker: JAPANESE_OUTPUT_SKILL_MANAGED_MARKER, relativePath: 'SKILL.md', content: japanese.content },
+  ]
   const files: DeploymentFile[] = []
   // Preflight the complete manifest before creating or replacing any deployed file.
-  for (const bundled of parity.files) {
-    const target = path.join(directory, bundled.skillName, bundled.relativePath)
+  for (const bundled of bundledFiles) {
+    const target = path.join(directory, bundled.directoryName, bundled.relativePath)
     await deploymentParent(home, target, false)
     const previous = await readRegularFile(target, { containmentRoot: home })
     const rendered = renderStandardSkillFile(previous?.content, bundled, target)

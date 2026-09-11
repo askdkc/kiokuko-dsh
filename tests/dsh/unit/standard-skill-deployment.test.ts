@@ -12,12 +12,19 @@ async function fixture(t: TestContext): Promise<string> {
   return realpath(directory)
 }
 
-test('deployment creates all six Skills and references, updates managed copies, and preserves user files', async t => {
+test('deployment creates all seven bundled Skills and references, updates managed copies, and preserves user files', async t => {
   const home = await fixture(t)
   const parity = await loadStandardSkillParity()
   const initial = await synchronizeStandardSkills(home)
-  assert.deepEqual(initial, { directory: path.join(home, '.agents', 'skills'), created: 21, updated: 0, unchanged: 0 })
+  assert.deepEqual(initial, { directory: path.join(home, '.agents', 'skills'), created: 22, updated: 0, unchanged: 0 })
   const root = initial.directory
+  const sourceRoot = new URL('../../../skills/', import.meta.url)
+  const sourceDirectories = (await readdir(sourceRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name).sort()
+  assert.deepEqual((await readdir(root)).sort(), sourceDirectories)
+  for (const name of sourceDirectories) assert.equal(await readFile(path.join(root, name, 'SKILL.md'), 'utf8'), await readFile(new URL(`${name}/SKILL.md`, sourceRoot), 'utf8'))
+  const japanesePath = path.join(root, 'japanese-translation-for-oss-models', 'SKILL.md')
+  const japaneseContent = await readFile(japanesePath, 'utf8')
+  await writeFile(japanesePath, japaneseContent.replace('# Natural Japanese Output', '# Older Japanese output guidance'))
   for (const file of parity.files) assert.equal(await readFile(path.join(root, file.skillName, file.relativePath), 'utf8'), file.content)
   const soul = parity.files.find(file => file.skillName === 'kiokuko-soul')!
   const soulPath = path.join(root, soul.skillName, soul.relativePath)
@@ -26,13 +33,14 @@ test('deployment creates all six Skills and references, updates managed copies, 
   await writeFile(path.join(root, 'notes.txt'), 'user notes')
   await writeFile(path.join(root, 'kiokuko-simple-work', 'custom.md'), 'user extension')
   const updated = await synchronizeStandardSkills(home)
-  assert.equal(updated.updated, 1)
+  assert.equal(updated.updated, 2)
+  assert.equal(await readFile(japanesePath, 'utf8'), japaneseContent)
   assert.equal(updated.created, 1)
   assert.equal(await readFile(soulPath, 'utf8'), soul.content)
   assert.equal(await readFile(path.join(root, 'notes.txt'), 'utf8'), 'user notes')
   assert.equal(await readFile(path.join(root, 'kiokuko-simple-work', 'custom.md'), 'utf8'), 'user extension')
   const before = await lstat(soulPath)
-  assert.deepEqual(await synchronizeStandardSkills(home), { directory: root, created: 0, updated: 0, unchanged: 21 })
+  assert.deepEqual(await synchronizeStandardSkills(home), { directory: root, created: 0, updated: 0, unchanged: 22 })
   assert.equal((await lstat(soulPath)).mtimeMs, before.mtimeMs)
 })
 
@@ -52,7 +60,7 @@ test('unmanaged conflict is detected before any managed file is changed', async 
 })
 
 test('deployment refuses linked ancestors, Skill directories, references and files without touching the target', async t => {
-  for (const relative of ['.agents', '.agents/skills', '.agents/skills/kiokuko-soul', '.agents/skills/kiokuko-single-purpose-functions/references', '.agents/skills/kiokuko-soul/SKILL.md']) {
+  for (const relative of ['.agents', '.agents/skills', '.agents/skills/kiokuko-soul', '.agents/skills/kiokuko-single-purpose-functions/references', '.agents/skills/kiokuko-soul/SKILL.md', '.agents/skills/japanese-translation-for-oss-models', '.agents/skills/japanese-translation-for-oss-models/SKILL.md']) {
     const home = await fixture(t)
     const outside = await fixture(t)
     const linked = path.join(home, relative)
@@ -77,4 +85,15 @@ test('concurrent synchronizations publish complete files without temporary resid
     assert.equal(await readFile(target, 'utf8'), file.content)
     assert.ok((await readdir(path.dirname(target))).every(name => !name.startsWith('.kiokuko-skill-')))
   }
+})
+
+test('Japanese Skill without a management marker is preserved even with the correct public name', async t => {
+  const home = await fixture(t)
+  const target = path.join(home, '.agents', 'skills', 'japanese-translation-for-oss-models', 'SKILL.md')
+  await mkdir(path.dirname(target), { recursive: true })
+  const userContent = '---\nname: natural-japanese-output\ndescription: User-owned Japanese instructions\n---\nMy instructions'
+  await writeFile(target, userContent)
+  await assert.rejects(synchronizeStandardSkills(home), { code: 'CONFLICT' })
+  assert.equal(await readFile(target, 'utf8'), userContent)
+  assert.deepEqual(await readdir(path.join(home, '.agents', 'skills')), ['japanese-translation-for-oss-models'])
 })

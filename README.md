@@ -46,7 +46,7 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
 ```
 
-At startup, the six bundled standard Skills and their references are synchronized to `~/.agents/skills/`. Missing files are created and managed copies are updated; unmanaged files are preserved. Other agents must reload their Skill catalog.
+At startup, all seven bundled Skills (including Japanese output) and their references are synchronized to `~/.agents/skills/`. Missing files are created and managed copies are updated; unmanaged files are preserved. Other agents must reload their Skill catalog.
 
 To update Orca dependencies after a release such as 0.3.0:
 
