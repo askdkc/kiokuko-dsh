@@ -46,7 +46,7 @@ export async function upgradeRepeatedWorkspace(root: string, mode: FinalizationI
       VALUES(?,?,?,0,4,'pending',0,?,?,?,1)`).run(run.runId,run.workspace,'legacy-session',now,now,mode)
   } finally { db.close() }
   const migrated = await initializeDatabase({ databasePath })
-  assert.deepEqual(migrated.applied, [14]); assert.ok(migrated.backupPath)
+  assert.deepEqual(migrated.applied, [14, 15]); assert.ok(migrated.backupPath)
   const current = openConnection(databasePath)
   const finalizer = new DshMemoryFinalizer({ runtime: { withDatabase: async operation => operation(current, undefined as never) }, inputMode: mode === 'prefix_reuse' ? 'bounded_evidence' : 'prefix_reuse',
     sessionQuery: { async readSession() { return { session: { id: 'legacy-session' }, inheritedEventCount: 0, events: [

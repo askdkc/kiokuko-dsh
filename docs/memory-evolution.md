@@ -35,7 +35,7 @@ DSH の Kiokuko プラグイン設定に追加します。設定変更後は DSH
 - 対象は `completed` と、native checkpoint 後の開始・終了 seq が確定した `failed`。`cancelled` / `interrupted` は対象外です。failed の範囲が欠けるときは理由を残して見送ります。
 - capsule v2 は通常記憶と episode を同じ要約呼び出しで返します。全体64 KiB、重要な出来事は最大6件です。既存の v1 ジョブは v1 のまま処理します。episode だけが不正なら、通常記憶の保存は続行します。
 - 証拠は対象 run の native ログからホストが提示した seq のみに限定します。ツール結果は同じ範囲内の call ID と結び付けます。plugin 由来メッセージ、記憶・制御ツール、assistant の成功宣言を根拠にしません。
-- 成功の判定には、操作後に観測されたツール結果の明示的な数値 `exitCode` / `exit_code = 0` が必要です。標準 bash のように表示本文へ終了コードを出さないツールでは、ホストが最終 `tools/result` の構造化値を読み、本文を含まない `kiokuko/evolution-observation` イベントを native ログへ追加します。run・workspace・session・call seq・最終表示内容 hash を照合し、timeout / abort を成功扱いしません。汎用の自然言語出力だけのツールは成功未確認になります。ツールごとの結果形式を広げる場合は、その native 形式を固定したテストを追加してください。
+- 成功の判定には、操作後に観測されたツール結果の明示的な数値 `exitCode` / `exit_code = 0` が必要です。標準 bash のように表示本文へ終了コードを出さないツールでは、ホストが最終 `tools/result` の構造化値を読み、本文を含まない観測記録を Kiokuko の SQLite に保存します。独自イベントは native ログに追加しません。run・workspace・session・call seq・最終表示内容 hash を照合し、timeout / abort を成功扱いしません。汎用の自然言語出力だけのツールは成功未確認になります。ツールごとの結果形式を広げる場合は、その native 形式を固定したテストを追加してください。
 - 永続化する証拠は seq・種類・結果区分・正規化内容 hash です。観測本文は抽出時だけ使い、別の詳細ログとして複製しません。構造化 episode と短い検索概要は残ります。
 - signature は workspace とエラー・ツール・対象・バージョンの正規化値で決定します。`unknown` を含むものは教訓生成へ進めません。同じ run、同一 session の重複範囲、同じ正規化根拠は独立した支持に数えません。
 - 通常の教訓には独立した3 episode と、うち2件以上の観測された成功が必要です。生成を予約した後は、新しい独立 episode がさらに3件増えるまで再生成しません。

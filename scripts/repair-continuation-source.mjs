@@ -3,6 +3,9 @@ import {
   copyFileSync,
   existsSync,
   lstatSync,
+  openSync,
+  closeSync,
+  fsyncSync,
   readFileSync,
   renameSync,
   unlinkSync,
@@ -15,6 +18,8 @@ import { TextDecoder } from 'node:util'
 
 const ZSTD_MAGIC = 0xFD2FB528
 const CONTINUATION_FORMS = new Set(['continuation', 'loop-recovery'])
+const INFORMATIONAL_TYPES = new Set(['kiokuko/evolution-observation', 'kiokuko/completion-report',
+  'kiokuko/execution-status', 'kiokuko/deep-report', 'kiokuko/deep-status'])
 const fatalUtf8Decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
 function scanZstdFrames(buffer) {
@@ -116,6 +121,17 @@ function repairedSource(value) {
 function repairRecord(value) {
   const record = objectRecord(value)
   const data = objectRecord(record?.data)
+  // These exact historical producers contain optional information only.
+  // Never weaken the unknown-event guard for a prefix or an unrelated plugin.
+  if (INFORMATIONAL_TYPES.has(record?.type)) {
+    if (Object.hasOwn(record, 'ignorable') && record.ignorable !== true) {
+      throw new Error('refusing to replace an invalid ignorable marker')
+    }
+    if (Object.hasOwn(record, 'surfaceOp') || Object.hasOwn(record, 'sourceEventSeqs')) {
+      throw new Error('refusing to mark a surface-changing event ignorable')
+    }
+    return record.ignorable === true ? value : { ...record, ignorable: true }
+  }
   if (record?.type === 'user/message') {
     const source = repairedSource(data?.source)
     return source === undefined ? value : { ...record, data: { ...data, source } }
@@ -158,25 +174,33 @@ function catalogCandidates(configured) {
       join(path, '@deepseek-ai/dsh-session-format-catalog/lib/index.js'),
       join(path, 'packages/session/session-format-catalog/lib/index.js'),
     )
+    return [...new Set(candidates)]
   }
   const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
   if (packageRoot !== undefined) {
     candidates.push(join(resolve(packageRoot), '@deepseek-ai/dsh-session-format-catalog/lib/index.js'))
   }
   const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-  candidates.push(resolve(repositoryRoot, '..', 'deepseek-harness/packages/session/session-format-catalog/lib/index.js'))
+  candidates.push(resolve(repositoryRoot, 'tests/fixtures/dsh-runtime/node_modules/@deepseek-ai/dsh-session-format-catalog/lib/index.js'))
   return [...new Set(candidates)]
 }
 
 async function loadCatalog(configured) {
   const errors = []
+  // An explicit catalog must not be silently replaced by another installation.
+  const explicit = configured ?? process.env.KIOKUKO_SESSION_FORMAT_CATALOG
+  if (explicit !== undefined) {
+    const candidate = catalogCandidates(explicit).find(path => existsSync(path))
+    if (!candidate) throw new Error('configured session-format catalog does not exist')
+    const module = await import(pathToFileURL(candidate).href)
+    if (!module.sessionFormatCatalog) throw new Error('catalog module has no sessionFormatCatalog export')
+    return module.sessionFormatCatalog
+  }
   try {
     const module = await import('@deepseek-ai/dsh-session-format-catalog')
-    if (module.sessionFormatCatalog !== undefined) return module.sessionFormatCatalog
-  } catch (error) {
-    errors.push(error)
-  }
-  for (const candidate of catalogCandidates(configured ?? process.env.KIOKUKO_SESSION_FORMAT_CATALOG)) {
+    if (module.sessionFormatCatalog) return module.sessionFormatCatalog
+  } catch (error) { errors.push(error) }
+  for (const candidate of catalogCandidates()) {
     if (!existsSync(candidate)) continue
     try {
       const module = await import(pathToFileURL(candidate).href)
@@ -225,7 +249,7 @@ function encodeSessionLog(plaintext) {
   return Buffer.concat([headerFrame, bodyFrame])
 }
 
-async function repair(path, catalog) {
+async function repair(path, catalog, dryRun = false) {
   const original = readFileSync(path)
   const plaintext = decodeSessionLog(original)
   const parsed = parseJsonl(plaintext)
@@ -241,14 +265,21 @@ async function repair(path, catalog) {
   const repairedPlaintext = Buffer.from(`${outputLines.join('\n')}\n`, 'utf8')
   validateCatalog(catalog, repairedRecords)
   if (changedRecords === 0) return { changedRecords: 0, backup: undefined }
+  if (dryRun) return { changedRecords, backup: undefined }
 
   if (!readFileSync(path).equals(original)) throw new Error('session log changed during repair preparation')
   const backup = ensureBackup(path, original)
   const temporary = `${path}.new`
-  if (existsSync(temporary)) throw new Error(`temporary repair output already exists: ${temporary}`)
+  const mode = lstatSync(path).mode & 0o777
+  // Own the temporary file before entering cleanup; EEXIST never deletes it.
+  const descriptor = openSync(temporary, 'wx', mode)
   try {
-    const mode = lstatSync(path).mode & 0o777
-    writeFileSync(temporary, encodeSessionLog(repairedPlaintext), { mode })
+    try {
+      writeFileSync(descriptor, encodeSessionLog(repairedPlaintext))
+      fsyncSync(descriptor)
+    } finally { closeSync(descriptor) }
+    requireRegularFile(path, 'session log')
+    if (!readFileSync(path).equals(original)) throw new Error('session log changed before replacement; stop DSH before repair')
     renameSync(temporary, path)
   } catch (error) {
     if (existsSync(temporary)) unlinkSync(temporary)
@@ -259,31 +290,35 @@ async function repair(path, catalog) {
 
 function parseArguments(args) {
   if (args.length === 0 || args[0] === '--help') {
-    throw new Error('Usage: node scripts/repair-continuation-source.mjs <session.jsonl.zstd> [--catalog <module-or-package-root>]')
+    throw new Error('Usage: node scripts/repair-session-log.mjs <session.jsonl.zstd> [--dry-run] [--catalog <module-or-package-directory>]')
   }
   const path = resolve(args[0])
   let catalog
+  let dryRun = false
   for (let index = 1; index < args.length; index += 1) {
+    if (args[index] === '--dry-run') { dryRun = true; continue }
     if (args[index] !== '--catalog' || typeof args[index + 1] !== 'string') throw new Error('unknown or incomplete repair option')
     catalog = args[index + 1]
     index += 1
   }
-  return { path, catalog }
+  return { path, catalog, dryRun }
 }
 
 async function main() {
   const options = parseArguments(process.argv.slice(2))
   requireRegularFile(options.path, 'session log')
   const catalog = await loadCatalog(options.catalog)
-  const result = await repair(options.path, catalog)
+  const result = await repair(options.path, catalog, options.dryRun)
   if (result.changedRecords === 0) {
-    console.log(`No legacy continuation sources found in ${options.path}`)
+    console.log(`No repairs needed in ${options.path}`)
+  } else if (options.dryRun) {
+    console.log(`Validated repair of ${result.changedRecords} session record(s); no files changed`)
   } else {
     console.log(`Repaired ${result.changedRecords} session record(s) in ${options.path}; backup: ${result.backup}`)
   }
 }
 
-export { decodeSessionLog, parseJsonl }
+export { decodeSessionLog, parseJsonl, main }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {

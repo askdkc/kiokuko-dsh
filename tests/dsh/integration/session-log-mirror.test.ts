@@ -261,3 +261,18 @@ test('retention never evicts active, waiting, or unfinalized sessions and flags 
     await f.cleanup()
   }
 })
+
+
+test('a native flush refreshes the cache after an ignorable-only legacy log repair', async () => {
+  const f = await fixture()
+  try {
+    const event = { type: 'kiokuko/evolution-observation', seq: 0, time: 1, data: { callSeq: 21, exitCode: 0 } }
+    await f.mirror.checkpointAfterNativeFlush({ id: 'repaired', snapshotEvents: () => [event] })
+    const repaired = { ...event, ignorable: true }
+    // Reimport can first observe a changed envelope; the native flush repairs that cache conflict.
+    assert.equal((await f.mirror.observe('repaired', repaired)).health, 'degraded')
+    const checkpoint = await f.mirror.checkpointAfterNativeFlush({ id: 'repaired', snapshotEvents: () => [repaired] })
+    assert.equal(checkpoint.health, 'healthy')
+    assert.deepEqual((await f.mirror.readSession('repaired')).events, [repaired])
+  } finally { await f.cleanup() }
+})

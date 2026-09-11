@@ -58,4 +58,6 @@ pnpm dsh web
 正式版 0.3.0 以降も許可する指定ですが、既存環境が自動更新されるわけではありません。
 更新後は記録・HTML 出力を確認してください。[更新の詳細](docs/dsh-plugin.md#update)
 
+既存チャットが `unknown ... not marked ignorable` で開けない場合は、[履歴の修復手順](docs/session-history-repair.md)を参照してください。
+
 [ドキュメント](docs/README.ja.md) · [権限](PERMISSIONS.md) · [MIT ライセンス](LICENSE)

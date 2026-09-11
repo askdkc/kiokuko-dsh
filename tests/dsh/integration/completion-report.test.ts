@@ -37,24 +37,27 @@ async function fixture() {
   database.prepare('INSERT INTO dsh_completion_reports(run_id, receipt_id, dsh_session_id, native_turn) VALUES (?, ?, ?, 1)')
     .run(prepared.run.runId, intent.receiptId, 'report-session')
   const events: DshLogEvent[] = [{ type: 'tool/result', seq: 0, time: 0, data: { turn: 1, ennoOduno: { nextAction: 'complete' } } }]
-  const session = { id: 'report-session', snapshotEvents: () => events,
+  const session = { id: 'report-session', header: { cwd: root }, snapshotEvents: () => events,
     append(type: string, data: unknown) { const event = { type, data, seq: events.length, time: 0 }; events.push(event); return event } }
   const runtime: Pick<DshRuntime, 'withDatabase'> = { withDatabase: async <T>(operation: DshDatabaseOperation<T>) => operation(database, undefined as never) }
-  return { database, events, session, runtime, cleanup: async () => { database.close(); await rm(root, { recursive: true, force: true }) } }
+  const notices = () => database.prepare('SELECT * FROM dsh_session_notices').all<{text:string;kind:string;delivered:number}>()
+  return { database, events, session, runtime, notices, cleanup: async () => { database.close(); await rm(root, { recursive: true, force: true }) } }
 }
 
 test('completion fallback flushes before ack and deduplicates a crash replay', async () => {
   const f = await fixture()
   try {
     await assert.rejects(new DshCompletionReporter(f.runtime, async () => { throw new Error('flush failed') }).deliver(f.session), /flush failed/u)
-    assert.equal(f.events.length, 2)
+    assert.equal(f.events.length, 1)
     assert.equal(f.database.prepare('SELECT status FROM dsh_completion_reports').get()?.status, 'pending')
     const recovered = new DshCompletionReporter(f.runtime, async () => undefined)
     await Promise.all([recovered.deliver(f.session), recovered.deliver(f.session)])
-    assert.equal(f.events.length, 2)
-    assert.equal(f.events[1]?.type, 'kiokuko/completion-report')
+    assert.equal(f.events.length, 1)
+    assert.equal(f.notices().length, 1)
+    assert.equal(f.notices()[0]?.kind, 'report')
+    assert.equal(f.notices()[0]?.delivered, 0)
     assert.equal(f.database.prepare('SELECT status FROM dsh_completion_reports').get()?.status, 'delivered')
-    assert.match((f.events[1]?.data as { text: string }).text, /No recorded results/u)
+    assert.match(f.notices()[0]!.text, /No recorded results/u)
   } finally { await f.cleanup() }
 })
 
@@ -76,7 +79,7 @@ test('corrupt or unavailable auxiliary evidence cannot prevent the durable final
     await new DshCompletionReporter(f.runtime, async () => undefined).deliver(f.session)
     assert.equal(f.database.prepare('SELECT status FROM dsh_completion_reports').get()?.status, 'delivered')
     assert.equal(f.database.prepare('SELECT status FROM enno_contracts').get()?.status, 'completed')
-    assert.match((f.events[1]?.data as { text: string }).text, /Auxiliary evidence: unknown/)
-    assert.match((f.events[1]?.data as { text: string }).text, /No recorded results/)
+    assert.match(f.notices()[0]!.text, /Auxiliary evidence: unknown/)
+    assert.match(f.notices()[0]!.text, /No recorded results/)
   } finally { await f.cleanup() }
 })

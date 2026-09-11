@@ -34,3 +34,27 @@ test('native proof requires exact run, workspace, call event and final rendered 
     assert.equal(prepared.episodeEvidence!.find(e=>e.seq===6)?.outcome,Object.keys(changed).length?'unknown':'passed')
   }
 })
+
+
+test('sidecar proof uses the same result binding and missing proof stays unknown', async () => {
+  const identity = { runId: 'r', workspace: 'project:p', sessionId: 's' }
+  const result = { isError: false, content: [{ type: 'text', text: 'Output' }], value: { exitCode: 0 } }
+  const proof = executionObservation(identity, 'c', 4, result)!
+  for (const value of [undefined, proof, { ...proof, sessionId: 'other' }, { ...proof, presentationHash: 'changed' }]) {
+    async function* events(): AsyncIterable<DshLogEvent> {
+      yield { seq: 1, time: 1, type: 'turn/start' }
+      yield { seq: 2, time: 2, type: 'request/header', data: { header: { config: { provider: 'p', model: 'm' } } } }
+      yield { seq: 3, time: 3, type: 'request/context', data: { contextWindow: 100000 } }
+      yield { seq: 4, time: 4, type: 'tool/call', data: { callId: 'c', name: 'bash', arguments: 'test' } }
+      yield { seq: 5, time: 5, type: 'tool/result', data: { message: { role: 'user', source: { kind: 'tool', callId: 'c' }, content: [
+        { type: 'tool-result', toolCallId: 'c', content: result.content, isError: false },
+      ] } } }
+      yield { seq: 6, time: 6, type: 'turn/end' }
+    }
+    const prepared = await reduceDshFinalizationLog(events(), 1, 6, 'prefix_reuse', identity, 2, async seq => {
+      assert.equal(seq, 4)
+      return value
+    })
+    assert.equal(prepared.episodeEvidence!.find(e => e.seq === 5)?.outcome, value === proof ? 'passed' : 'unknown')
+  }
+})

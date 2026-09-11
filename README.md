@@ -57,4 +57,6 @@ The installed Kiokuko must include the `>=0.2.1` dependency range. It permits
 stable 0.3.0 and later releases; it does not automatically update existing installs.
 Verify recording and export after updating. See [update details](docs/dsh-plugin.md#update).
 
+If existing chats fail with an unknown `kiokuko/` event, see [history repair](docs/session-history-repair.md).
+
 [Documentation](docs/README.md) · [Permissions](PERMISSIONS.md) · [MIT license](LICENSE)

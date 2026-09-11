@@ -291,6 +291,9 @@ interface DeepDisplayItem { id: string; kind: 'report' | 'status'; text: string;
 /** Read-only, Session-bound display with explicit delivery acknowledgement after render. */
 function DeepSessionReports(props: Record<string, unknown>): unknown {
   const sessionId = String(props.sessionId)
+  const notices = props.notices === true
+  const label = notices ? 'Kiokuko' : 'Deep'
+  const endpoint = notices ? '/api/kiokuko.notices' : '/api/kiokuko.deep'
   const [items, setItems] = useState<DeepDisplayItem[]>([])
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
@@ -308,48 +311,48 @@ function DeepSessionReports(props: Record<string, unknown>): unknown {
     setItems([]); setOpen(false); seen.current = new Set()
     const refresh = async () => {
       try {
-        const url = new URL('/api/kiokuko.deep', hostBase()); url.searchParams.set('sessionId', sessionId)
+        const url = new URL(endpoint, hostBase()); url.searchParams.set('sessionId', sessionId)
         const response = await fetch(url, { signal: controller.signal, headers: etag ? {'if-none-match':etag} : {} })
         if (response.status === 304) { setError(''); return }
-        if (!response.ok) throw new Error('Deepの状態を再確認できません。接続を確認してください。')
+        if (!response.ok) throw new Error(`${label}の状態を再確認できません。接続を確認してください。`)
         etag = response.headers.get('etag') ?? ''
         const data = await response.json() as {items:DeepDisplayItem[]}
-        if (!Array.isArray(data.items) || data.items.some(item => typeof item.id !== 'string' || typeof item.text !== 'string')) throw new Error('Deepの応答を読み取れません。')
+        if (!Array.isArray(data.items) || data.items.some(item => typeof item.id !== 'string' || typeof item.text !== 'string')) throw new Error(`${label}の応答を読み取れません。`)
         if (controller.signal.aborted) return
         setItems(data.items); setError('')
-        for (const item of data.items) if (item.kind === 'report' && !item.delivered && !seen.current.has(item.id)) { seen.current.add(item.id); setOpen(true) }
+        for (const item of data.items) if ((item.kind === 'report' || notices) && !item.delivered && !seen.current.has(item.id)) { seen.current.add(item.id); setOpen(true) }
       } catch (failure) { if (!controller.signal.aborted) setError(messageOf(failure)) }
       finally { if (!controller.signal.aborted) timer = setTimeout(() => void refresh(), document.hidden ? 10_000 : 2_000) }
     }
     void refresh()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [sessionId])
+  }, [sessionId, endpoint, label, notices])
   useEffect(() => {
-    const unread = items.filter(item => !item.delivered && (item.kind === 'status' || open))
+    const unread = items.filter(item => !item.delivered && (open || !notices && item.kind === 'status'))
     if (!unread.length) return
     const controller = new AbortController()
-    const url = new URL('/api/kiokuko.deep', hostBase()); url.searchParams.set('sessionId', sessionId)
+    const url = new URL(endpoint, hostBase()); url.searchParams.set('sessionId', sessionId)
     for (const item of unread) url.searchParams.append('id', item.id)
     let timer: ReturnType<typeof setTimeout> | undefined
     const acknowledge = async () => {
       try {
         const response = await fetch(url, {method:'POST', signal:controller.signal})
-        if (!response.ok) throw new Error('Deepの受領確認を再試行しています。回答は保持されています。')
+        if (!response.ok) throw new Error(`${label}の受領確認を再試行しています。回答は保持されています。`)
       } catch (failure) {
         if (!controller.signal.aborted) { setError(messageOf(failure)); timer = setTimeout(() => void acknowledge(), 5_000) }
       }
     }
     void acknowledge()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [sessionId, items, open])
+  }, [sessionId, items, open, endpoint, label, notices])
   if (!items.length && !error) return null
-  const status = items.find(item => item.kind === 'status')?.text ?? 'Deepの保存済み回答'
+  const status = items.find(item => item.kind === 'status')?.text ?? `${label}の保存済み回答`
   return jsxs(Fragment, { children: [
-    jsx('button', {ref:trigger,type:'button', className:'kiokuko-session-log-button', onClick:()=>setOpen(true), 'aria-label':`Deep planning: ${status}`, children: items.some(item=>item.kind==='report') ? 'Deepの回答' : 'Deepの状態'}),
+    jsx('button', {ref:trigger,type:'button', className:'kiokuko-session-log-button', onClick:()=>setOpen(true), 'aria-label':`${label}: ${status}`, children: items.some(item=>item.kind==='report') ? `${label}の回答` : `${label}の状態`}),
     jsx('span', {role:'status', 'aria-live':'polite', style:{position:'absolute',width:1,height:1,overflow:'hidden',clipPath:'inset(50%)'}, children:error || status.slice(0,200)}),
-    jsxs('dialog', {ref:dialog,'aria-label':'Deep planning',onCancel:()=>setOpen(false),onClose:()=>{setOpen(false);trigger.current?.focus()},
+    jsxs('dialog', {ref:dialog,'aria-label':label,onCancel:()=>setOpen(false),onClose:()=>{setOpen(false);trigger.current?.focus()},
       style:{width:'min(48rem, calc(100vw - 2rem))',maxHeight:'calc(100dvh - 2rem)',boxSizing:'border-box',margin:'auto',padding:'20px',border:'1px solid var(--dsw-alias-border-l4, #ddd)',borderRadius:'16px',background:'var(--dsw-alias-background-primary, Canvas)',color:'var(--dsw-alias-label-primary, CanvasText)',overflow:'auto'},
-      children:[jsxs('div',{style:{display:'flex',justifyContent:'space-between',gap:'16px',alignItems:'center'},children:[jsx('h2',{style:{fontSize:'20px',margin:0},children:'Deep planning'}),jsx('button',{type:'button',className:'kiokuko-session-log-button',onClick:()=>setOpen(false),children:'閉じる'})]}),
+      children:[jsxs('div',{style:{display:'flex',justifyContent:'space-between',gap:'16px',alignItems:'center'},children:[jsx('h2',{style:{fontSize:'20px',margin:0},children:label}),jsx('button',{type:'button',className:'kiokuko-session-log-button',onClick:()=>setOpen(false),children:'閉じる'})]}),
         jsx('p',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'},children:error || status}),
         ...items.filter(item=>item.kind==='report').map(item=>jsx('section', {key:item.id,'aria-label':'保存済みの回答',tabIndex:0,style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxWidth:'100%',padding:'12px 0',lineHeight:1.65},children:item.text}))]}),
   ] })
@@ -592,6 +595,9 @@ export function apply(ctx: DshClientContext): void {
   ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
     name: 'conversation.session.header.utilities', id: 'kiokuko-deep-reports', locale: LOCALE_NAMESPACE,
   }, DeepSessionReports))
+  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
+    name: 'conversation.session.header.utilities', id: 'kiokuko-session-notices', locale: LOCALE_NAMESPACE,
+  }, (props: Record<string, unknown>) => jsx(DeepSessionReports, { ...props, notices: true })))
   ctx.uiConversation.events.register(completionReportDefinition)
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
     name: 'conversation.chat.node', key: 'kiokuko-completion-report', locale: LOCALE_NAMESPACE,
