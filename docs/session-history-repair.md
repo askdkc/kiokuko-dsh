@@ -18,6 +18,10 @@ Affected v3 chats have the five historical informational types below marked
 ignorable before users need to open them individually. The startup log reports
 checked/repaired/failed counts and the IDs of failures (up to 20 diagnostics).
 A failed history does not prevent the remaining IDs from being checked.
+Output labels distinguish `[info]` progress and summaries, `[warn]` individual
+histories left unrepaired, `[error]` failure to enumerate the session store,
+and `[crit]` failure to start the Kiokuko plugin. A session warning means DSH
+can continue running, but that session still failed validation.
 No manual repair command or separate setup step is required. The installed
 bundle loads the public plugin entrypoint, which mounts the compatibility
 adapter and starts the scan automatically. The adapter uses that profile's

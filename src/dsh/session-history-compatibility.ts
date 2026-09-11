@@ -141,7 +141,7 @@ async function repairHistory(backend: Persistence, id: string, rejectedPath: str
       return JSON.stringify(compatible)
     })
     if (!changed) return false
-    console.info(`[kiokuko-dsh] Repairing history for ${JSON.stringify(id)}`)
+    console.info(`[kiokuko-dsh] [info] Repairing history for ${JSON.stringify(id)}`)
     const plaintext = Buffer.from(`${lines.join('\n')}\n`)
     const candidate = await validateCandidate(backend, snapshot.header, compressed ? encodeSessionLog(plaintext) : plaintext, compressed ? 'zstd' : 'none', version, signal)
     signal?.throwIfAborted()
@@ -167,7 +167,7 @@ async function repairHistory(backend: Persistence, id: string, rejectedPath: str
         try { await directory.sync() } finally { await directory.close() }
       }
     } finally { await rm(temporary, { force: true }) }
-    console.info(`[kiokuko-dsh] Repaired history for ${JSON.stringify(id)}`)
+    console.info(`[kiokuko-dsh] [info] Repaired history for ${JSON.stringify(id)}`)
     return true
   } finally { await lease.release() }
 }
@@ -176,7 +176,7 @@ async function repairHistory(backend: Persistence, id: string, rejectedPath: str
 async function checkStoredSessionIds(backend: Persistence, repairedIds: ReadonlySet<string>, signal: AbortSignal): Promise<SessionHistoryCheck> {
   const result = { supported: true, listed: 0, checked: 0, repaired: 0, failed: 0, cancelled: false,
     failures: [] as { id: string; error: string }[], enumerationError: undefined as string | undefined }
-  console.info('[kiokuko-dsh] Checking stored session IDs')
+  console.info('[kiokuko-dsh] [info] Checking stored session IDs')
   try {
     const snapshots = await backend.list({ signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]) })
     const ids = [...new Set(snapshots.map(snapshot => snapshot.header.id))]
@@ -200,9 +200,9 @@ async function checkStoredSessionIds(backend: Persistence, repairedIds: Readonly
     if (!signal.aborted) result.enumerationError = error instanceof Error ? error.message : String(error)
   }
   result.cancelled = signal.aborted
-  console.info(`[kiokuko-dsh] Session ID check: ${result.checked}/${result.listed} checked, ${result.repaired} repaired, ${result.failed} failed${result.cancelled ? ', cancelled' : ''}`)
-  if (result.enumerationError) console.warn('[kiokuko-dsh] Session ID enumeration failed:', result.enumerationError)
-  for (const failure of result.failures) console.warn(`[kiokuko-dsh] Session ID check failed for ${JSON.stringify(failure.id)}: ${failure.error}`)
+  console.info(`[kiokuko-dsh] [info] Session ID check: ${result.checked}/${result.listed} checked, ${result.repaired} repaired, ${result.failed} failed${result.cancelled ? ', cancelled' : ''}`)
+  if (result.enumerationError) console.error('[kiokuko-dsh] [error] Session ID enumeration failed:', result.enumerationError)
+  for (const failure of result.failures) console.warn(`[kiokuko-dsh] [warn] Session ID check failed for ${JSON.stringify(failure.id)}: ${failure.error}`)
   const { enumerationError, ...summary } = result
   return { ...summary, ...(enumerationError === undefined ? {} : { enumerationError }) }
 }

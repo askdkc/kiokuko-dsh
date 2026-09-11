@@ -6,6 +6,16 @@ import { DshPonytailModes } from '../../../src/dsh/commands.js'
 import { DshToolPolicy } from '../../../src/dsh/tool-policy.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 
+test('plugin startup reports critical failure and preserves the original rejection', async (t) => {
+  const failure = new Error('native startup unavailable')
+  const errors = t.mock.method(console, 'error', () => {})
+  const ctx = { effect: async () => { throw failure } } as unknown as Context
+  await assert.rejects(dshPlugin.apply(ctx, { enabled: true }), error => error === failure)
+  assert.deepEqual(errors.mock.calls.map(call => call.arguments), [
+    ['[kiokuko-dsh] [crit] Plugin startup failed:', failure.message],
+  ])
+})
+
 test('explicit host adapter mounts native DSH tools and commands and unloads them', async () => {
   const tools: any[] = []
   const commands: any[] = []

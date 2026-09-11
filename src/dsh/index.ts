@@ -56,10 +56,17 @@ export function mountDshRuntime(ctx: Context, runtime: DshRuntime): ReturnType<C
  * the bundled provider and SOUL prompt without a second plugin.
  */
 export async function apply(ctx: Context, config: DshConfig): Promise<void> {
+  try { await startDshPlugin(ctx, config) } catch (error) {
+    console.error('[kiokuko-dsh] [crit] Plugin startup failed:', error instanceof Error ? error.message : String(error))
+    throw error
+  }
+}
+
+async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
   const resolvedConfig = Config.parse(config)
   if (!resolvedConfig.enabled) return
 
-  console.info('[kiokuko-dsh] plugin loaded')
+  console.info('[kiokuko-dsh] [info] plugin loaded')
   await ctx.effect(async () => {
     const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {

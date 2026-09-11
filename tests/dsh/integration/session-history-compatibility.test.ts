@@ -244,7 +244,7 @@ test('public plugin startup repairs unopened histories on first load and reload'
   const info = console.info.bind(console)
   t.mock.method(console, 'info', (...args: unknown[]) => {
     info(...args)
-    if (typeof args[0] === 'string' && args[0].startsWith('[kiokuko-dsh] Session ID check:')) resolveScan(args[0])
+    if (typeof args[0] === 'string' && args[0].startsWith('[kiokuko-dsh] [info] Session ID check:')) resolveScan(args[0])
   })
   try {
     const legacy = await f.legacy('first-load-v0')

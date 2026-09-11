@@ -171,7 +171,7 @@ function startWebProfile(env) {
     const observe = () => {
       const output = `${stdout}\n${stderr}`
       const url = output.match(/https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/u)?.[0]
-      if (url && output.includes('[kiokuko-dsh] plugin loaded')) finish(null, { url })
+      if (url && output.includes('[kiokuko-dsh] [info] plugin loaded')) finish(null, { url })
     }
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString()
