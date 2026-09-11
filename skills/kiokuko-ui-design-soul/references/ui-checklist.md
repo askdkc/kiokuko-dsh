@@ -6,6 +6,8 @@ Last reviewed against the official sources: 2026-08-22.
 
 This checklist paraphrases decision principles. It does not reproduce Apple text or require Apple-styled visuals.
 
+Read this file for detailed implementation review or final verification of affected interactions. For a single visible change inside one expert's contract, the selected `ui.*` fragment and its universal-core checks are sufficient.
+
 ## Eight-principle map
 
 | Principle | Practical question |

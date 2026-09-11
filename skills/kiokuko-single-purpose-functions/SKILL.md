@@ -75,7 +75,7 @@ Typical selections:
 
 ## Escalation references
 
-Read [kiokuko-patterns.md](references/kiokuko-patterns.md) only when a selected fragment needs a fuller TypeScript example. Read [review-checklist.md](references/review-checklist.md) for comprehensive code review or final verification, not for every function edit.
+Read [kiokuko-patterns.md](references/kiokuko-patterns.md) only when a selected fragment needs a fuller example. Read [review-checklist.md](references/review-checklist.md) for comprehensive code review or final verification — a change that crosses several code contracts, or the last check before accepting — and not for an ordinary edit inside one cohesive contract; that case uses the focused `verification.md` sequence owned by the selected expert.
 
 ## Completion report
 

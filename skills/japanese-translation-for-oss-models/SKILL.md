@@ -52,6 +52,12 @@ Do not translate sentence by sentence.
 
 Translate meaning, then rewrite.
 
+Scope: these rules govern wording, not block order. When a response must follow a
+fixed schema, a required report section, or an established heading order, that
+structure takes precedence over the sentence-level preferences below; apply them
+inside each block instead of reordering the blocks. If you cannot tell whether a
+rule applies to wording or to structure, treat it as wording-only.
+
 Bad:
 
 > この設計は複数の利点を提供します。第一に、それは依存関係を明確にします。第二に、それはテスト可能性を改善します。
@@ -339,7 +345,22 @@ Example:
 
 ---
 
-## 12. Replace vague translated adjectives with concrete effects
+## 12. Bilingual pairs stay in sync
+
+For a file that exists in two languages — a translation produced beside its
+source, such as `README.md` and `README.ja.md` — mirror the source structure
+instead of re-authoring it. This is the one place where reconstructing the
+sentence flow does not extend to reordering the document.
+
+- Keep the same sections, in the same order, and the same headings. Do not add,
+  merge, split, or drop a section because the Japanese reads better that way.
+- Keep code blocks, commands, paths, configuration keys, and identifiers
+  byte-identical; translate only the prose around them.
+- Do not add explanations, caveats, or examples the source does not contain.
+- When the source changes, update the pair in the same change rather than
+  leaving the two versions describing different behavior.
+
+## 13. Replace vague translated adjectives with concrete effects
 
 Avoid unsupported words such as:
 
@@ -361,7 +382,7 @@ Explain the mechanism.
 
 ---
 
-## 13. Preserve modality precisely
+## 14. Preserve modality precisely
 
 Do not flatten these English distinctions:
 

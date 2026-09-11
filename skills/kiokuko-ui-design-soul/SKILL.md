@@ -72,6 +72,6 @@ Typical selections:
 
 ## Verification
 
-For new or behaviorally changed actions, do not review screenshots alone: trace the affected activation, processing, success, failure, recovery, focus, and responsive behavior. For purely visual changes, use focused visual and accessibility checks appropriate to the change. Read [ui-checklist.md](references/ui-checklist.md) only for detailed implementation review or final verification of affected interactions.
+For new or behaviorally changed actions, do not review screenshots alone: trace the affected activation, processing, success, failure, recovery, focus, and responsive behavior. For purely visual changes, use focused visual and accessibility checks appropriate to the change. Read [ui-checklist.md](references/ui-checklist.md) for detailed implementation review or final verification of affected interactions — a change that crosses several `ui.*` risks, or the last check before accepting — and not for a single visible change inside one expert's contract.
 
 Report what was exercised in a running interface, what was inferred from source, and what remains unverified. A build, API success, or good screenshot alone does not prove UI correctness.

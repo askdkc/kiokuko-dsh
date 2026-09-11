@@ -37,7 +37,10 @@ OrcaReplay 기능은 자동으로 설정되며 **수동 설정이 필요 없습�
 
 ```bash
 pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh web
 ```
+
+시작 시 번들 표준 Skill 6개와 참조 파일을 `~/.agents/skills/`에 동기화합니다. 누락된 파일을 만들고 관리 대상 복사본을 업데이트하며, 비관리 파일은 덮어쓰지 않습니다. 다른 에이전트에서는 Skill 카탈로그를 다시 로드해야 합니다.
 
 Orca 0.3.0 등 새 버전이 공개된 후 Orca 관련 의존 패키지를 업데이트하려면:
 

@@ -4,6 +4,8 @@
 
 Use this checklist while implementing, debugging, refactoring, or reviewing code in any language or repository. Apply only the sections relevant to the change.
 
+Read this file for a comprehensive code review or final verification, especially when the change crosses several code contracts. For an ordinary edit inside one cohesive contract, use the focused `verification.md` sequence instead: that file owns the evidence procedure, this one owns the review dimensions to sweep.
+
 ## Scope
 
 - [ ] The change addresses one stated behavior.
