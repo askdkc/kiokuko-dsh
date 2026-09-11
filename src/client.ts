@@ -366,6 +366,12 @@ interface IntakePending {
 interface IntakeDraft { selected: number | null; custom: string; ordinal?: string }
 const intakeDrafts = new WeakMap<object, IntakeDraft>()
 
+interface IntakeKeyEvent {
+  key: string; code?: string; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; repeat?: boolean;
+  isComposing?: boolean; keyCode?: number; nativeEvent?: { isComposing?: boolean; keyCode?: number };
+  preventDefault(): void; stopPropagation(): void;
+}
+
 /**
  * Small intake questions this plugin renders as a numbered option card. The identity
  * pair is matched exactly: another plugin's question that happens to share one
@@ -412,6 +418,8 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const pending = props.pending as IntakePending
   const question = pending.questions[0]
   const searchable = isEnnoSearchQuestion(question)
+  const mac = /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? '')
+  const shortcutModifier = mac ? 'Cmd' : 'Ctrl'
   const [draft, setDraft] = useState<IntakeDraft>(() => intakeDrafts.get(pending) ?? { selected: null, custom: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -467,11 +475,31 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
       setError(cause instanceof Error ? cause.message : String(cause))
     })
   }
-  const keyDown = (event: {
-    key: string; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; repeat?: boolean;
-    nativeEvent?: { isComposing?: boolean; keyCode?: number }; target?: { tagName?: string; isContentEditable?: boolean };
-    preventDefault(): void; stopPropagation(): void;
-  }) => {
+  const selectShortcut = (event: IntakeKeyEvent) => {
+    if (busy || inFlight.current || event.repeat || event.isComposing || event.keyCode === 229
+      || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || event.altKey || event.shiftKey
+      || !(mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return false
+    const digit = /^(?:Digit|Numpad)([1-9])$/u.exec(event.code ?? '')?.[1] ?? event.key
+    if (!/^[1-9]$/u.test(digit) || Number(digit) > question.options.length) return false
+    event.preventDefault(); event.stopPropagation()
+    update({ selected: Number(digit) - 1, custom: '' })
+    card.current?.focus()
+    return true
+  }
+  useEffect(() => {
+    const element = card.current
+    const owner = element?.ownerDocument
+    if (!owner) return
+    // Capture before the host's composer handlers, even if it has moved focus.
+    // Only the visible, mounted question owns these modified shortcuts.
+    const listener = (event: KeyboardEvent) => {
+      if (element.isConnected && element.getClientRects().length > 0) selectShortcut(event)
+    }
+    owner.addEventListener('keydown', listener, true)
+    return () => owner.removeEventListener('keydown', listener, true)
+  }, [pending, busy, mac])
+  const keyDown = (event: IntakeKeyEvent & { target?: { tagName?: string; isContentEditable?: boolean } }) => {
+    if (selectShortcut(event)) return
     if (busy || inFlight.current || event.repeat || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229
       || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
     const editing = event.target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName ?? '')
@@ -501,18 +529,20 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
       jsxs('div', { className: 'kiokuko-intake-body', children: [
         question.detail ? jsx('p', { children: question.detail }) : null,
         jsx('p', { children: question.options.length > 9
-          ? `番号（1〜${question.options.length}）を入力し、Enterで確定。10以上は数字を続けて入力、Backspaceで訂正できます。`
-          : `1〜${question.options.length}キーで選択、Enterで確定。` }),
+          ? `${shortcutModifier}+1〜9で選択、Enterで確定。10以上は番号（1〜${question.options.length}）を数字で続けて入力、Backspaceで訂正できます。`
+          : `${shortcutModifier}+1〜${question.options.length}で選択、Enterで確定。` }),
         jsx('div', { 'aria-label': '選択肢', children: question.options.map((option, index) => jsxs('button', {
           key: option.label, type: 'button', className: 'kiokuko-intake-option', disabled: busy,
           ref: (element: HTMLElement | null) => { optionElements.current[index] = element },
-          'aria-pressed': draft.selected === index, ...(question.options.length <= 9 ? { 'aria-keyshortcuts': String(index + 1) } : {}),
+          'aria-pressed': draft.selected === index,
+          ...(index < 9 ? { 'aria-keyshortcuts': `${question.options.length <= 9 ? `${index + 1} ` : ''}${mac ? 'Meta' : 'Control'}+${index + 1}` } : {}),
           onClick: () => update({ selected: index, custom: '' }),
-          onKeyDown: (event: { key: string; repeat?: boolean; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; nativeEvent?: { isComposing?: boolean; keyCode?: number }; preventDefault(): void; stopPropagation(): void }) => {
+          onKeyDown: (event: IntakeKeyEvent) => {
             if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || (intakeDrafts.get(pending) ?? draft).selected !== index) return
             event.preventDefault(); event.stopPropagation(); settle()
           },
-          children: [jsx('strong', { children: `${index + 1}. ${option.label}` }), option.description ? jsx('span', { children: option.description }) : null],
+          children: [jsx('strong', { children: `${index + 1}. ${option.label}` }), option.description ? jsx('span', { children: option.description }) : null,
+            jsx('kbd', { className: 'kiokuko-intake-shortcut', 'aria-hidden': true, children: index < 9 ? `${shortcutModifier}+${index + 1}` : `${index + 1} → Enter` })],
         })) }),
         jsx('label', { htmlFor: `${titleId}-custom`, children: searchable ? '検索（Enterで検索・数字も検索語として入力できます）' : '自由入力（任意）' }),
         jsx('textarea', { id: `${titleId}-custom`, rows: 1, disabled: busy, value: draft.custom,
@@ -538,7 +568,9 @@ function installIntakeStyle(): (() => void) | undefined {
 .kiokuko-intake p{margin:0;white-space:pre-wrap;line-height:1.4;font-size:12px}
 .kiokuko-intake button{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,#bbb);border-radius:8px;padding:8px 10px;min-height:40px;cursor:pointer}
 .kiokuko-intake button:disabled{cursor:default;opacity:.6}
-.kiokuko-intake-option{display:flex;width:100%;text-align:left;flex-direction:column;gap:4px;margin-bottom:6px;overflow-wrap:anywhere}
+.kiokuko-intake-option{display:grid;grid-template-columns:minmax(0,1fr) max-content;width:100%;text-align:left;gap:4px 12px;margin-bottom:6px;overflow-wrap:anywhere}
+.kiokuko-intake-option strong,.kiokuko-intake-option span{grid-column:1}
+.kiokuko-intake-shortcut{grid-column:2;grid-row:1 / span 2;align-self:center;font-family:inherit;font-size:11px;line-height:1.4;white-space:nowrap}
 .kiokuko-intake-option:last-child{margin-bottom:0}
 .kiokuko-intake-option[aria-pressed=true]{border-color:var(--dsw-alias-label-primary,CanvasText);box-shadow:inset 0 0 0 1px currentColor;background:var(--dsw-alias-interactive-bg-hover,#eee)}
 .kiokuko-intake-option span{font-size:12px;line-height:1.4}
