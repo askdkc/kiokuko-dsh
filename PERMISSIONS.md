@@ -10,11 +10,13 @@ Kiokuko operation.
   repository metadata.
 - Writes the configured Kiokuko database and pre-migration backups, including
   DSH leases, receipts, retrieval state, and embedding state.
-- When DSH rejects a requested v3 history containing legacy Kiokuko informational
+- On plugin load, enumerates stored DSH session IDs and validates each history.
+  When DSH rejects a v3 history containing legacy Kiokuko informational
   events, reads that exact native session file and marks the five supported
   types ignorable under DSH's write lease. Retains a byte-for-byte `.bak`, validates
-  in a disposable local directory, and replaces the source atomically. It does
-  not scan and repair other sessions; invalid or unrelated records remain errors.
+  in a disposable local directory, and replaces the source atomically. It
+  reports failed IDs without exposing message contents; invalid or unrelated
+  records remain errors. The same check applies when a chat is opened later.
 - Does not rewrite host configuration or repository instruction files.
   Repository identity, run identity, lease, revision, and integrity mismatches
   fail closed.

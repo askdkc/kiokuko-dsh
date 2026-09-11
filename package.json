@@ -81,7 +81,7 @@
         "Configured Kiokuko SQLite database and embedding assets",
         "Registered project roots and their repository metadata",
         "Orca traces belonging to the exact native DSH session",
-        "The exact native v3 session history rejected for legacy Kiokuko informational events"
+        "Stored native DSH session IDs and histories for startup validation and legacy Kiokuko compatibility"
       ],
       "writePaths": [
         "Configured Kiokuko database and pre-migration backups",

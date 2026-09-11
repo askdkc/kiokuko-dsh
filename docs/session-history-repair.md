@@ -12,11 +12,18 @@ header's **Kiokukoの回答 / Kiokukoの状態** action displays saved notices; 
 notices open automatically and are acknowledged after display. Old custom
 notice events remain renderable after their log has been repaired.
 
-Once the updated plugin is loaded, opening an affected v3 chat automatically
-marks the five historical informational types below as ignorable and retries
-DSH's normal reader. This applies to both viewing history and resuming a chat.
-It handles the requested session only; installation does not scan or rewrite
-other chats. New observations and notices continue to use Kiokuko's database.
+Every plugin load enumerates DSH's stored session IDs and validates their
+histories, including the first load after installation or a package update.
+Affected v3 chats have the five historical informational types below marked
+ignorable before users need to open them individually. The startup log reports
+checked/repaired/failed counts and the IDs of failures (up to 20 diagnostics).
+A failed history does not prevent the remaining IDs from being checked.
+
+Opening or resuming a chat also retries DSH's normal reader through the same
+compatibility adapter, covering sessions added after the startup check. New
+observations and notices continue to use Kiokuko's database. Checks run when
+DSH loads the package, not inside npm's installation hooks: a package update
+must actually be loaded by the running DSH process to take effect.
 
 The compatibility adapter acquires DSH's native session write lease, validates
 the complete candidate with the running JSONL backend, retains an identical
@@ -24,8 +31,21 @@ the complete candidate with the running JSONL backend, retains an identical
 timestamps and fork boundaries are preserved. It refuses active writers,
 conflicting backups, symbolic-link artifacts, damaged logs and unrelated
 required event types. Automatic repair is limited to v3 JSONL/Zstandard files
-up to 64 MiB on disk and 256 MiB expanded. Unloading Kiokuko restores the native
-reader and waits for any repair already in progress.
+up to 64 MiB on disk and 256 MiB expanded. Startup enumeration has a 60-second
+deadline and each session check a 30-second deadline. Unloading Kiokuko cancels
+and drains its startup check, restores the native reader, and waits for any
+repair already in progress. Healthy histories and existing backups are not
+rewritten on subsequent loads.
+
+For a current harness checkout, run the compatibility tests against its source
+and workspace module mappings (missing native modules fail the check):
+
+```sh
+export KIOKUKO_DSH_SOURCE_ROOT=/path/to/deepseek-harness
+TSX_TSCONFIG_PATH="$KIOKUKO_DSH_SOURCE_ROOT/tsconfig.json" \
+  KIOKUKO_REQUIRE_DSH_NATIVE=1 \
+  node scripts/run-tests.mjs tests/dsh/integration/session-history-compatibility.test.ts
+```
 
 ## Explicit diagnostic repair
 

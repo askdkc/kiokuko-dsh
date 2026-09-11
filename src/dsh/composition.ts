@@ -1,7 +1,7 @@
 import { formatEvolutionStatus } from '../memory/evolution/status.js'
 import { mountDeepReportSurface } from '../deep-thinker/report-surface.js'
 import { mountDshNoticeSurface } from './session-notice-surface.js'
-import { mountSessionHistoryCompatibility } from './session-history-compatibility.js'
+import { mountSessionHistoryCompatibility, type SessionHistoryCheck } from './session-history-compatibility.js'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingContext } from './enno-controller.js'
@@ -94,6 +94,8 @@ function toolRegistration(host: DshCompositionHost): { register: (definition: an
 type DshDisposer = () => unknown
 
 export interface DshCompositionHandle {
+  /** Startup validation of all persisted session IDs, also run after plugin reload/update. */
+  readonly historyCheck: Promise<SessionHistoryCheck>
   /** Stop all event, command, tool, and session ingress synchronously. */
   readonly stopIngress: () => void
   /** Finish resource teardown after ingress has been stopped. */
@@ -183,6 +185,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   const stopErrors: unknown[] = []
   let ingressStopped = false
   let disposePromise: Promise<void> | undefined
+  let historyCheck: Promise<SessionHistoryCheck>
 
   const stopIngress = (): void => {
     if (ingressStopped) return
@@ -212,6 +215,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
 
   try {
     const historyCompatibility = mountSessionHistoryCompatibility(ctx)
+    historyCheck = historyCompatibility.ready
     ingressDisposers.push(historyCompatibility.stop)
     setupResourceDisposers.push(historyCompatibility.dispose)
     cleanupDisposers.push(historyCompatibility.dispose)
@@ -339,5 +343,5 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     disposePromise = runCleanup()
     return disposePromise
   }
-  return { stopIngress, dispose } as DshCompositionHandle
+  return { stopIngress, dispose, historyCheck } as DshCompositionHandle
 }

@@ -10,10 +10,14 @@ import { mountSessionHistoryCompatibility } from '../../../src/dsh/session-histo
 import { decodeSessionLog, encodeSessionLog, parseJsonl } from '../../../scripts/session-history-codec.mjs'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
-const jsonlPath = join(packageRoot, '@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js')
+const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
+const sourceModules: Record<string, string> = { cordis: 'vendor/cordis', 'dsh-session': 'packages/core/session',
+  'dsh-session-persistence-jsonl': 'packages/session/session-persistence-jsonl', 'dsh-session-query': 'packages/session-query/session-query' }
+const modulePath = (name: string) => sourceRoot ? join(sourceRoot, sourceModules[name]!, 'src/index.ts') : join(packageRoot, '@deepseek-ai', name, 'lib/index.js')
+const jsonlPath = modulePath('dsh-session-persistence-jsonl')
 const available = await access(jsonlPath).then(() => true, () => false)
-if (!available && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Native history compatibility requires the pinned DSH runtime')
-const options = { skip: available ? false : 'requires pinned DSH runtime', timeout: 30_000 }
+if (!available && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Native history compatibility requires the selected DSH runtime')
+const options = { skip: available ? false : 'requires selected DSH runtime', timeout: 30_000 }
 const types = ['kiokuko/evolution-observation', 'kiokuko/completion-report', 'kiokuko/execution-status', 'kiokuko/deep-report', 'kiokuko/deep-status']
 
 test('compressed compatibility input is bounded across all frames', () => {
@@ -31,7 +35,7 @@ function rows() {
 }
 
 async function fixture(compression: 'zstd' | 'none' = 'zstd') {
-  const [cordis, { default: jsonl }, session] = await Promise.all(['cordis', 'dsh-session-persistence-jsonl', 'dsh-session'].map(name => import(pathToFileURL(join(packageRoot, '@deepseek-ai', name, 'lib/index.js')).href)))
+  const [cordis, { default: jsonl }, session] = await Promise.all(['cordis', 'dsh-session-persistence-jsonl', 'dsh-session'].map(name => import(pathToFileURL(modulePath(name)).href)))
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-legacy-history-'))
   const ctx = new cordis.Context()
   const fiber = ctx.plugin(jsonl, { root: join(root, 'history'), compression })
@@ -53,6 +57,7 @@ async function fixture(compression: 'zstd' | 'none' = 'zstd') {
     async mount() {
       const handle = await mountDshComposition(ctx, {})
       disposers.push(handle.dispose)
+      await handle.historyCheck
       return handle
     },
     async close() {
@@ -73,7 +78,8 @@ for (const compression of ['zstd', 'none'] as const) test(`normal history open r
   try {
     const first = await f.old('legacy-first'), second = await f.old('legacy-second'), untouched = await f.old('legacy-unopened')
     await assert.rejects(() => restored(f.backend, first.id), /unknown to this harness/)
-    await f.mount()
+    const composition = await f.mount()
+    assert.deepEqual(await composition.historyCheck, { supported: true, listed: 3, checked: 3, repaired: 3, failed: 0, cancelled: false, failures: [] })
     for (const old of [first, second]) {
       const loaded = await restored(f.ctx.sessionPersistence, old.id)
       const expected = old.events.map(row => types.includes(row.type) ? { ...row, ignorable: true } : row)
@@ -89,7 +95,7 @@ for (const compression of ['zstd', 'none'] as const) test(`normal history open r
         await writer.flush()
       } finally { await writer.close() }
     }
-    assert.deepEqual(await readFile(untouched.path), untouched.original, 'opening a chat does not scan and rewrite other chats')
+    assert.deepEqual(await readFile(`${untouched.path}.bak`), untouched.original, 'startup checks and repairs IDs before the user opens those chats')
     const cold = new f.cordis.Context(), coldFiber = cold.plugin(f.jsonl, { root: join(f.root, 'history'), compression })
     await coldFiber
     try {
@@ -102,11 +108,11 @@ for (const compression of ['zstd', 'none'] as const) test(`normal history open r
 test('concurrent reads share a safe repair and seeded histories retain their inherited boundary', options, async () => {
   const f = await fixture()
   try {
+    await f.mount()
     const events = rows()
     events.splice(1, 0, { type: 'session/end-seed', seq: 1, time: 2, data: { inherited: true } } as any)
     events.forEach((row, index) => { row.seq = index })
     const old = await f.old('legacy-fork', events, { isSeeded: true, parentSession: 'parent' })
-    await f.mount()
     const loaded = await Promise.all([restored(f.backend, old.id), restored(f.backend, old.id)])
     assert.deepEqual(loaded[0], loaded[1])
     assert.equal(loaded[0]!.inherited, 1)
@@ -117,7 +123,7 @@ test('concurrent reads share a safe repair and seeded histories retain their inh
 test('normal plugin loading restores the session query used by the chat page', options, async () => {
   const f = await fixture()
   try {
-    const query = await import(pathToFileURL(join(packageRoot, '@deepseek-ai/dsh-session-query/lib/index.js')).href)
+    const query = await import(pathToFileURL(modulePath('dsh-session-query')).href)
     for (const plugin of [f.session.default, query.default]) {
       const fiber = f.ctx.plugin(plugin)
       await fiber
@@ -149,9 +155,10 @@ test('native write lease prevents repair while another owner holds the session',
   const f = await fixture()
   try {
     const old = await f.old('legacy-locked')
-    await f.mount()
     const lease = await f.backend.acquireWriteLease(old.header)
     try {
+      const composition = await f.mount()
+      assert.equal((await composition.historyCheck).failed, 1)
       await assert.rejects(() => restored(f.backend, old.id), /legacy history compatibility failed/)
       assert.deepEqual(await readFile(old.path), old.original)
       await assert.rejects(access(`${old.path}.bak`), { code: 'ENOENT' })
@@ -160,11 +167,78 @@ test('native write lease prevents repair while another owner holds the session',
   } finally { await f.close() }
 })
 
+test('startup continues past a failed ID and runs again on plugin reload', options, async () => {
+  const f = await fixture()
+  try {
+    const failed = await f.old('startup-unsupported', [...rows(), { type: 'other/required', seq: 6, time: 8, data: {} }])
+    const healthy = await f.old('startup-healthy', rows().slice(0, 1))
+    const legacy = await f.old('startup-legacy')
+    const first = await f.mount(), result = await first.historyCheck
+    assert.equal(result.checked, 3)
+    assert.equal(result.repaired, 1)
+    assert.equal(result.failed, 1)
+    assert.equal(result.failures[0]?.id, failed.id)
+    assert.deepEqual(await readFile(failed.path), failed.original)
+    assert.deepEqual(await readFile(healthy.path), healthy.original)
+    await assert.rejects(access(`${healthy.path}.bak`), { code: 'ENOENT' })
+    assert.deepEqual(await readFile(`${legacy.path}.bak`), legacy.original)
+    await first.dispose()
+    const next = await f.old('startup-after-update')
+    const second = await f.mount(), reloaded = await second.historyCheck
+    assert.equal(reloaded.checked, 4)
+    assert.equal(reloaded.repaired, 1)
+    assert.deepEqual(await readFile(`${next.path}.bak`), next.original)
+    assert.deepEqual(await readFile(`${legacy.path}.bak`), legacy.original)
+  } finally { await f.close() }
+})
+
+test('unload cancels and drains the startup check before any repair writes', options, async () => {
+  const f = await fixture()
+  const originalOpen = f.backend.open
+  try {
+    const old = await f.old('startup-cancelled')
+    let signalStarted!: () => void
+    const started = new Promise<void>(resolve => { signalStarted = resolve })
+    f.backend.open = async (_id: string, _access: string, options: { signal: AbortSignal }) => {
+      signalStarted()
+      await new Promise<void>((_resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
+    }
+    const handle = mountSessionHistoryCompatibility(f.ctx)
+    f.disposers.push(handle.dispose)
+    await started
+    await handle.dispose()
+    const result = await handle.ready
+    assert.equal(result.cancelled, true)
+    assert.equal(result.checked, 0)
+    assert.deepEqual(await readFile(old.path), old.original)
+    await assert.rejects(access(`${old.path}.bak`), { code: 'ENOENT' })
+  } finally { f.backend.open = originalOpen; await f.close() }
+})
+
+test('unsupported older generations retain the original native migration error', options, async () => {
+  const f = await fixture(), originalOpen = f.backend.open
+  try {
+    await f.old('unsupported-v0')
+    const error = Object.assign(new Error('Native v0 migration refuses an unsupported source field'), {
+      name: 'SessionFormatUnsupportedError', location: { kind: 'jsonl', path: join(f.root, 'session.jsonl.zstd') },
+    })
+    f.backend.open = async () => { throw error }
+    const adapter = mountSessionHistoryCompatibility(f.ctx)
+    f.disposers.push(adapter.dispose)
+    const result = await adapter.ready
+    assert.equal(result.failed, 1)
+    assert.equal(result.failures[0]?.error, error.message)
+    await assert.rejects(f.backend.open('unsupported-v0', 'read'), cause => cause === error)
+  } finally { f.backend.open = originalOpen; await f.close() }
+})
+
 test('unload restores the original reader and duplicate mounts retain the remaining owner', options, async () => {
   const f = await fixture()
   try {
     const first = mountSessionHistoryCompatibility(f.ctx), second = mountSessionHistoryCompatibility(f.ctx)
     f.disposers.push(first.dispose, second.dispose)
+    assert.equal(first.ready, second.ready, 'one startup check is shared by duplicate owners')
+    await first.ready
     await first.dispose()
     await restored(f.backend, (await f.old('legacy-one-owner')).id)
     await second.dispose()
@@ -177,8 +251,8 @@ test('unload restores the original reader and duplicate mounts retain the remain
 test('abort before replacement leaves original bytes and releases the native lease', options, async () => {
   const f = await fixture()
   try {
-    const old = await f.old('legacy-aborted'), controller = new AbortController()
     await f.mount()
+    const old = await f.old('legacy-aborted'), controller = new AbortController()
     const prototype = f.jsonl.prototype, originalRead = prototype.readStoredLog
     prototype.readStoredLog = async function (...args: any[]) {
       const value = await originalRead.apply(this, args)

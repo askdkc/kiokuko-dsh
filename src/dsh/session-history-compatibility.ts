@@ -10,7 +10,8 @@ import { decodeSessionLog, encodeSessionLog, parseJsonl, repairInformationalReco
 interface Header { readonly id: string; readonly version: number; readonly cwd?: string }
 interface Options { readonly signal?: AbortSignal }
 interface Persistence {
-  open(id: string, access: 'read' | 'write', options?: Options): Promise<unknown>
+  open(id: string, access: 'read' | 'write', options?: Options): Promise<{ close(): Promise<void> }>
+  list(options?: Options): Promise<readonly { header: Header }[]>
   stat(id: string, options?: Options): Promise<{ header: Header } | undefined>
   resolveCurrentLog(id: string, signal?: AbortSignal): Promise<string | undefined>
   acquireWriteLease(header: Header): Promise<{ release(): Promise<void> }>
@@ -23,18 +24,31 @@ interface Persistence {
 const MAX_COMPRESSED_BYTES = 64 * 1024 * 1024
 const MAX_EXPANDED_BYTES = 256 * 1024 * 1024
 const ownership = Symbol.for('kiokuko-dsh.session-history-compatibility.v1')
-interface Installation { owners: number; stop(): void; drain(): Promise<void> }
+export interface SessionHistoryCheck {
+  readonly supported: boolean
+  readonly listed: number
+  readonly checked: number
+  readonly repaired: number
+  readonly failed: number
+  readonly cancelled: boolean
+  /** Bounded diagnostics contain session IDs and errors, never message bodies. */
+  readonly failures: readonly { id: string; error: string }[]
+  readonly enumerationError?: string
+}
+interface Installation { owners: number; ready: Promise<SessionHistoryCheck>; stop(): void; drain(): Promise<void> }
+const unsupportedCheck: SessionHistoryCheck = { supported: false, listed: 0, checked: 0, repaired: 0, failed: 0, cancelled: false, failures: [] }
 
 function nativeBackend(value: unknown): value is Persistence {
   if (!value || typeof value !== 'object') return false
-  return ['open', 'stat', 'resolveCurrentLog', 'acquireWriteLease', 'persistHeader', 'readStoredLog']
+  return ['open', 'list', 'stat', 'resolveCurrentLog', 'acquireWriteLease', 'persistHeader', 'readStoredLog']
     .every(key => typeof (value as Record<string, unknown>)[key] === 'function')
 }
 
 function refusalPath(error: unknown): string | undefined {
   const refusal = error as { name?: string; location?: { kind?: string; path?: unknown } } | undefined
   return refusal?.name === 'SessionFormatUnsupportedError' && refusal.location?.kind === 'jsonl'
-    && typeof refusal.location.path === 'string' ? refusal.location.path : undefined
+    && typeof refusal.location.path === 'string'
+    && ['session.v3.jsonl.zstd', 'session.v3.jsonl'].includes(basename(refusal.location.path)) ? refusal.location.path : undefined
 }
 
 /** Validate with the running backend implementation, including its current codec and identity checks. */
@@ -81,7 +95,7 @@ async function retainBackup(path: string, original: Buffer, mode: number): Promi
 }
 
 /** Only the exact rejected current-generation artifact may change, under DSH's own kernel lock. */
-async function repairHistory(backend: Persistence, id: string, rejectedPath: string, signal?: AbortSignal): Promise<void> {
+async function repairHistory(backend: Persistence, id: string, rejectedPath: string, signal?: AbortSignal): Promise<boolean> {
   signal?.throwIfAborted()
   const path = await backend.resolveCurrentLog(id, signal)
   if (path !== rejectedPath || !['session.v3.jsonl.zstd', 'session.v3.jsonl'].includes(basename(path))) {
@@ -111,7 +125,7 @@ async function repairHistory(backend: Persistence, id: string, rejectedPath: str
       changed = true
       return JSON.stringify(compatible)
     })
-    if (!changed) return
+    if (!changed) return false
     const plaintext = Buffer.from(`${lines.join('\n')}\n`)
     const candidate = compressed ? encodeSessionLog(plaintext) : plaintext
     await validateCandidate(backend, snapshot.header, candidate, compressed ? 'zstd' : 'none', signal)
@@ -133,19 +147,57 @@ async function repairHistory(backend: Persistence, id: string, rejectedPath: str
         try { await directory.sync() } finally { await directory.close() }
       }
     } finally { await rm(temporary, { force: true }) }
+    return true
   } finally { await lease.release() }
 }
 
-/** Reversible adapter around the native open boundary; no startup scan or alternative reader. */
-export function mountSessionHistoryCompatibility(ctx: Context): { stop(): void; dispose(): Promise<void> } {
-  if (typeof ctx.get !== 'function') return { stop() {}, async dispose() {} }
+/** Check every native session ID once per plugin load, including first load after an update. */
+async function checkStoredSessionIds(backend: Persistence, repairedIds: ReadonlySet<string>, signal: AbortSignal): Promise<SessionHistoryCheck> {
+  const result = { supported: true, listed: 0, checked: 0, repaired: 0, failed: 0, cancelled: false,
+    failures: [] as { id: string; error: string }[], enumerationError: undefined as string | undefined }
+  console.info('[kiokuko-dsh] Checking stored session IDs')
+  try {
+    const snapshots = await backend.list({ signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]) })
+    const ids = [...new Set(snapshots.map(snapshot => snapshot.header.id))]
+    result.listed = ids.length
+    for (const id of ids) {
+      if (signal.aborted) break
+      try {
+        const handle = await backend.open(id, 'read', { signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) })
+        // Native open validates the complete stored history. No message content
+        // is rendered, exported, or added to a model's context by this check.
+        await handle.close()
+        if (repairedIds.has(id)) result.repaired++
+      } catch (error) {
+        if (signal.aborted) break
+        result.failed++
+        if (result.failures.length < 20) result.failures.push({ id, error: error instanceof Error ? error.message : String(error) })
+      }
+      result.checked++
+    }
+  } catch (error) {
+    if (!signal.aborted) result.enumerationError = error instanceof Error ? error.message : String(error)
+  }
+  result.cancelled = signal.aborted
+  console.info(`[kiokuko-dsh] Session ID check: ${result.checked}/${result.listed} checked, ${result.repaired} repaired, ${result.failed} failed${result.cancelled ? ', cancelled' : ''}`)
+  if (result.enumerationError) console.warn('[kiokuko-dsh] Session ID enumeration failed:', result.enumerationError)
+  for (const failure of result.failures) console.warn(`[kiokuko-dsh] Session ID check failed for ${JSON.stringify(failure.id)}: ${failure.error}`)
+  const { enumerationError, ...summary } = result
+  return { ...summary, ...(enumerationError === undefined ? {} : { enumerationError }) }
+}
+
+/** Own startup validation and the reversible native-open adapter until plugin unload. */
+export function mountSessionHistoryCompatibility(ctx: Context): { ready: Promise<SessionHistoryCheck>; stop(): void; dispose(): Promise<void> } {
+  if (typeof ctx.get !== 'function') return { ready: Promise.resolve(unsupportedCheck), stop() {}, async dispose() {} }
   const backend = ctx.get('sessionPersistence', false) as Persistence & { [ownership]?: Installation }
-  if (!nativeBackend(backend)) return { stop() {}, async dispose() {} }
+  if (!nativeBackend(backend)) return { ready: Promise.resolve(unsupportedCheck), stop() {}, async dispose() {} }
   let installation = backend[ownership]
   if (!installation) {
     const original = backend.open
     const descriptor = Object.getOwnPropertyDescriptor(backend, 'open')
     const pending = new Map<string, Promise<void>>()
+    const repairedIds = new Set<string>()
+    const startup = new AbortController()
     let active = true
     const wrapped: Persistence['open'] = async function (this: Persistence, id, access, options) {
       try { return await original.call(this, id, access, options) } catch (error) {
@@ -154,7 +206,7 @@ export function mountSessionHistoryCompatibility(ctx: Context): { stop(): void; 
         options?.signal?.throwIfAborted()
         const operation = (pending.get(id) ?? Promise.resolve()).catch(() => {}).then(() => {
           if (!active) throw error
-          return repairHistory(backend, id, path, options?.signal)
+          return repairHistory(backend, id, path, options?.signal).then(changed => { if (changed) repairedIds.add(id) })
         })
         pending.set(id, operation)
         try { await operation } catch (cause) {
@@ -166,14 +218,17 @@ export function mountSessionHistoryCompatibility(ctx: Context): { stop(): void; 
         return original.call(this, id, access, options)
       }
     }
-    installation = { owners: 0, stop() {
+    // The microtask begins only after the adapter and shared owner are installed.
+    const ready = Promise.resolve().then(() => checkStoredSessionIds(backend, repairedIds, startup.signal))
+    installation = { owners: 0, ready, stop() {
       active = false
+      startup.abort(new Error('Kiokuko history check stopped on plugin unload'))
       if (Object.getOwnPropertyDescriptor(backend, 'open')?.value === wrapped) {
         if (descriptor) Object.defineProperty(backend, 'open', descriptor)
         else delete (backend as Partial<Persistence>).open
       }
       delete backend[ownership]
-    }, async drain() { await Promise.allSettled([...pending.values()]) } }
+    }, async drain() { await ready; await Promise.allSettled([...pending.values()]) } }
     Object.defineProperty(backend, 'open', { configurable: true, writable: true, value: wrapped })
     backend[ownership] = installation
   }
@@ -181,5 +236,5 @@ export function mountSessionHistoryCompatibility(ctx: Context): { stop(): void; 
   owned.owners++
   let stopped = false
   const stop = () => { if (!stopped) { stopped = true; if (--owned.owners === 0) owned.stop() } }
-  return { stop, async dispose() { stop(); if (owned.owners === 0) await owned.drain() } }
+  return { ready: owned.ready, stop, async dispose() { stop(); if (owned.owners === 0) await owned.drain() } }
 }
