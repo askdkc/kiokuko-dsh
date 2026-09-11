@@ -94,9 +94,8 @@ just less code, the physical world needs tuning a minimal model can't see.
 
 Lazy code without its check is unfinished. Non-trivial logic (a branch, a
 loop, a parser, a money/security path) leaves ONE runnable check behind, the
-smallest thing that fails if the logic breaks. Use the project's existing test
-placement, runner, and commands; in this repository that means a single
-`node:test` case under `tests/dsh/unit/`, run with `npm run test:unit`. Do not
+smallest thing that fails if the logic breaks. Use the target project's existing
+test placement, runner, and commands. Do not
 introduce a new framework, fixture layer, or language-specific test convention.
 Trivial one-liners need no test, YAGNI applies to tests too.
 
