@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { modelBindingProblems, readModelCatalog, type DshModelCatalog, type DshModelCompatibility, type ModelCatalogSnapshot, type ModelRoute } from '../dsh/model-configuration.js'
+import { modelBindingProblems, modelRoutesForCatalog, readModelCatalog, type DshModelCatalog, type DshModelCompatibility, type ModelCatalogSnapshot, type ModelRoute } from '../dsh/model-configuration.js'
 import type { DshUserQuestions } from '../dsh/user-interaction.js'
 import { DeepBudgetSchema, DeepConfigurationSchema, DEEP_ROLES, type DeepConfiguration, type DeepModel, type DeepBudget } from './core/contracts.js'
 import { currentDeepModel } from './current-model.js'
@@ -19,7 +19,7 @@ export async function deepQuestion(questions: DshUserQuestions | undefined, agen
   if (!answer) throw new DeepInteractionDismissed()
   if (answer.id !== id) throw new DeepConfigurationPending()
   const value = answer.custom?.trim() || answer.selected[0]
-  const resolved = value && !answer.custom?.trim() && /^\d+$/u.test(value) ? [...choices, CLOSED][Number(value) - 1] : value
+  const resolved = value && !choices.includes(value) && !answer.custom?.trim() && /^\d+$/u.test(value) ? [...choices, CLOSED][Number(value) - 1] : value
   if (!resolved || resolved === CLOSED) throw new DeepInteractionDismissed()
   return resolved
 }
@@ -32,16 +32,18 @@ export class DeepConfigurationUI {
     readonly routes: readonly ModelRoute[], readonly compatibility: DshModelCompatibility | undefined, readonly budget: DeepBudget) {}
   async problems(configuration: DeepConfiguration): Promise<string[]> {
     if (!this.catalog) return ['DSHのモデル一覧がありません']
-    return modelBindingProblems(DEEP_ROLES.map(role => ({ label: labels[role], binding: configuration.roles[role] })), await readModelCatalog(this.catalog),
-      [...this.routes, ...configuration.routeBindings.filter(r => !this.routes.some(known => known.provider === r.provider))], this.compatibility)
+    const catalog = await readModelCatalog(this.catalog)
+    return modelBindingProblems(DEEP_ROLES.map(role => ({ label: labels[role], binding: configuration.roles[role] })), catalog,
+      modelRoutesForCatalog(catalog, [...this.routes, ...configuration.routeBindings.filter(r => !this.routes.some(known => known.provider === r.provider))]), this.compatibility)
   }
   async resolve(workspace: string, agent: DeepNativeAgent): Promise<DeepConfiguration | null> {
     const saved = await this.store.database(db => db.prepare('SELECT configuration_json FROM dsh_deep_preferences WHERE workspace=?').get<{configuration_json:string|null}>(workspace))
     if (saved?.configuration_json) return DeepConfigurationSchema.parse(JSON.parse(saved.configuration_json))
     const binding = currentDeepModel(agent)
     if (!binding) return null
+    const routes = this.catalog ? modelRoutesForCatalog(await readModelCatalog(this.catalog), this.routes) : this.routes
     const configuration = DeepConfigurationSchema.parse({ roles: Object.fromEntries(DEEP_ROLES.map(role => [role, binding])), budget: this.budget,
-      routeBindings: this.routes, localProviders: this.routes.filter(route => route.connection === 'local').map(route => route.provider) })
+      routeBindings: routes, localProviders: routes.filter(route => route.connection === 'local').map(route => route.provider) })
     return (await this.problems(configuration)).length ? null : configuration
   }
   async #save(workspace: string, revision: number, draft: Draft, apply: boolean): Promise<number> {
@@ -66,8 +68,8 @@ export class DeepConfigurationUI {
       const choice = await deepQuestion(this.questions, agent, signal, 'deep-configuration', 'Deepのモデルと予算', [...roleChoices, '予算を編集', ...(complete.success && !problems.length ? ['保存'] : [])],
         `同じworkspaceの今後の開始に適用します。予約・実行中の構成は自動変更しません。\n${problems.join('\n')}\n${(Object.keys(budgetLabels) as (keyof DeepBudget)[]).map(key => `${budgetLabels[key]}: ${draft.budget[key]}`).join('\n')}\nトークン数は推定を含みます。provider内部の再送や料金の厳密な上限は保証しません。`)
       if (choice === '保存' && complete.success && !(await this.problems(complete.data)).length) {
-        const routes = [...this.routes, ...complete.data.routeBindings]
-        draft = { ...complete.data, localProviders: routes.filter(r => r.connection === 'local').map(r => r.provider) }
+        const routes = modelRoutesForCatalog(catalog, [...this.routes, ...complete.data.routeBindings])
+        draft = { ...complete.data, routeBindings: routes, localProviders: routes.filter(r => r.connection === 'local').map(r => r.provider) }
         revision = await this.#save(workspace, revision, draft, true)
         return DeepConfigurationSchema.parse(draft)
       }
@@ -84,17 +86,8 @@ export class DeepConfigurationUI {
         if (!role) continue
         const selected = await this.#pickModel(agent, signal, catalog, labels[role], Object.values(draft.roles)[0])
         if (!selected) continue
-        if (![...this.routes, ...draft.routeBindings].some(r => r.provider === selected.provider)) {
-          const families = ['openai','deepseek','opencode-go','opencode-zen','openrouter','orcarouter','ollama','other'] as const
-          const family = await deepQuestion(this.questions, agent, signal, 'deep-route-family', `${selected.provider}の実際の接続先`, families)
-          if (!families.includes(family as typeof families[number])) continue
-          const protocols = ['responses','chat-completions','messages','unknown'] as const
-          const protocol = await deepQuestion(this.questions, agent, signal, 'deep-route-protocol', 'DSH設定の通信方式', protocols)
-          if (!protocols.includes(protocol as typeof protocols[number])) continue
-          const connection = await deepQuestion(this.questions, agent, signal, 'deep-route-connection', 'DSH設定の接続方式', ['api','codex','local'])
-          const route = { provider: selected.provider, family, protocol, connection }
-          draft = DraftSchema.parse({ ...draft, routeBindings: [...draft.routeBindings, route] })
-        }
+        // The catalog selection already contains the exact native provider/model.
+        // DSH owns its transport and authentication; do not ask the user to restate them.
         draft = { ...draft, roles: { ...draft.roles, [role]: selected } }
       }
       revision = await this.#save(workspace, revision, draft, false)

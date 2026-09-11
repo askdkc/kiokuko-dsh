@@ -12,6 +12,7 @@ const modelIds = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-luna']
 const codexCatalog: DshModelCatalog = {
   listProviders: () => [codexProvider],
   listModels: async provider => modelIds.map(id => ({ provider, id, name: id })),
+  resolveCallConfig: async binding => ({ ...binding }),
 }
 const codexRoute: ModelRoute = { provider: 'openai-codex', family: 'openai', connection: 'codex', protocol: 'responses' }
 const roleDraft: ModelConfigurationDraft = { roles: { ideal: { provider: 'openai-codex', model: 'gpt-6-astra' } }, custom: true, maxConcurrentChildren: 4 }
@@ -79,29 +80,25 @@ test('numeric free-text remains a model search and empty results can be cleared'
   assert.equal(stored.value.draft?.roles.ideal?.model, 'gpt-5.6-sol')
 })
 
-test('route back walks protocol, authentication and family without discarding the selected model', async () => {
+test('one provider/model selection returns directly to review and survives cancellation', async () => {
   const { stored } = await navigate([
     ['enno-model-source', 'DSHに設定済みのモデルから選ぶ'],
     ['enno-model-review', 'enno-idealを変更'],
     ['enno-provider-ideal', 'OpenAI Codex [openai-codex]'],
     ['enno-model-ideal', 'gpt-6-astra [gpt-6-astra]'],
-    ['enno-route-family', 'OpenAI'], ['enno-route-auth', 'Codex認証'],
-    ['enno-route-protocol', '戻る'], ['enno-route-auth', '戻る'],
-    ['enno-route-family', null],
+    ['enno-model-review', null],
   ], { routes: [] })
   assert.deepEqual(stored.value.draft?.roles.ideal, roleDraft.roles.ideal)
-  assert.equal(stored.value.draft?.routeBindings?.length ?? 0, 0)
 })
 
-test('an incomplete route can be resumed without choosing the model again', async () => {
+
+test('an existing model draft resumes without asking for provider type or protocol', async () => {
   const { stored } = await navigate([
-    ['enno-model-review', '接続設定を確認', hasChoice('接続設定を確認')],
-    ['enno-route-family', 'OpenAI'], ['enno-route-auth', 'Codex認証'],
-    ['enno-route-protocol', 'Responses'], ['enno-model-review', null],
+    ['enno-model-review', null, q => assert.equal(q.options?.some(o => o.label === '接続設定を確認'), false)],
   ], { stored: initial(roleDraft), routes: [] })
   assert.deepEqual(stored.value.draft?.roles, roleDraft.roles)
-  assert.deepEqual(stored.value.draft?.routeBindings, [codexRoute])
 })
+
 
 test('dsh-codex recommendation binds its exact plugin route and starts without redundant route questions', async () => {
   const { result } = await navigate([
@@ -117,15 +114,17 @@ test('dsh-codex recommendation binds its exact plugin route and starts without r
   })
 })
 
-test('dsh-codex template does not override conflicting declared routes', async () => {
-  const { saved } = await navigate([
+test('native model validation owns transport even when a legacy declaration is stale', async () => {
+  const declared = { ...codexRoute, protocol: 'chat-completions' as const }
+  const { result } = await navigate([
     ['enno-model-source', 'おすすめテンプレートから選ぶ'],
-    ['enno-template', 'OpenAI Codex・推奨（dsh-codex） — 接続設定が不一致', hasChoice('OpenAI Codex・推奨（dsh-codex） — 接続設定が不一致')],
-    ['enno-template-unavailable', '戻る', q => assert.match(q.detail ?? '', /openai-codex/u)],
-    ['enno-template', null],
-  ], { routes: [{ ...codexRoute, protocol: 'chat-completions' }] })
-  assert.equal(saved.length, 0)
+    ['enno-template', 'OpenAI Codex・推奨（dsh-codex） — 適用可能'],
+    ['enno-model-review', 'この構成で開始'],
+  ], { routes: [declared] })
+  assert.equal(result?.value.status, 'ready')
+  assert.equal(declared.protocol, 'chat-completions', 'caller configuration remains untouched')
 })
+
 
 test('model-list failure can be refreshed inside the picker', async () => {
   let reads = 0
@@ -178,20 +177,18 @@ test('unavailable page controls cannot move outside list bounds', async () => {
   ], { stored: initial(roleDraft) })
 })
 
-test('template route back returns to the selected template provider step', async () => {
+test('template connection selection proceeds directly to confirmation using DSH settings', async () => {
   const { result } = await navigate([
     ['enno-model-source', 'おすすめテンプレートから選ぶ'],
     ['enno-template', 'OpenAI — 接続未設定'],
+    ['enno-bind-provider', '戻る'],
+    ['enno-template', 'OpenAI — 接続未設定'],
     ['enno-bind-provider', 'OpenAI Codex [openai-codex]'],
-    ['enno-route-auth', '戻る'],
-    ['enno-bind-provider', 'OpenAI Codex [openai-codex]'],
-    ['enno-route-auth', { custom: 'invalid auth' }],
-    ['enno-route-auth', 'Codex認証', q => assert.match(q.detail ?? '', /選択肢/u)],
-    ['enno-route-protocol', 'Responses'],
     ['enno-model-review', 'この構成で開始'],
   ], { routes: [] })
-  assert.deepEqual(result?.value.configuration?.routeBindings, [codexRoute])
+  assert.equal(result?.value.configuration?.roles.ideal.provider, 'openai-codex')
 })
+
 
 test('missing provider templates explain recovery and retain an existing draft', async () => {
   const { stored, saved } = await navigate([
@@ -213,18 +210,14 @@ test('provider-catalog failure retries explicitly and does not repeat mode or so
   assert.equal(reads, 2)
 })
 
-test('an incorrect draft protocol can be repaired without reselecting any model', async () => {
+test('a saved model configuration uses current DSH validation without reselecting models or protocol', async () => {
   const template = MODEL_TEMPLATES.find(t => t.id === 'openai-codex')!
   const roles = Object.fromEntries(Object.entries(template.models).map(([role, ids]) => [role, { provider: 'openai-codex', model: ids[0]! }]))
   const draft: ModelConfigurationDraft = { ...roleDraft, roles, routeBindings: [{ ...codexRoute, protocol: 'unknown' }] }
-  const { result } = await navigate([
-    ['enno-model-review', '接続設定を確認', q => assert.equal(q.options?.some(o => o.label === 'この構成で開始'), false)],
-    ['enno-route-family', 'OpenAI'], ['enno-route-auth', 'Codex認証'], ['enno-route-protocol', 'Responses'],
-    ['enno-model-review', 'この構成で開始'],
-  ], { stored: initial(draft), routes: [] })
+  const { result } = await navigate([['enno-model-review', 'この構成で開始']], { stored: initial(draft), routes: [] })
   assert.deepEqual(result?.value.configuration?.roles, roles)
-  assert.deepEqual(result?.value.configuration?.routeBindings, [codexRoute])
 })
+
 
 test('a live Codex catalog missing a recommended model cannot silently substitute or start', async () => {
   const { stored } = await navigate([
@@ -261,7 +254,8 @@ test('Go, Zen, OpenRouter, Ollama and OrcaRouter models are searchable by name a
     { id: 'orca-account', name: 'OrcaRouter', family: 'orcarouter', model: 'deepseek/deepseek-v4.1-flash', modelName: 'DeepSeek V4.1 Flash' },
   ] as const
   const llm: DshModelCatalog = {
-    listProviders: () => connections.map(({ id, name }) => ({ id, name })),
+    listProviders: () => connections.map(({ id, name, family }) => ({ id, name, route: { provider: id, family, connection: family === 'ollama' ? 'local' : 'api', protocol: 'chat-completions' } })),
+    resolveCallConfig: async binding => ({ ...binding }),
     listModels: async provider => {
       const connection = connections.find(c => c.id === provider)!
       return [{ provider, id: connection.model, name: connection.modelName }, { provider, id: 'unrelated', name: 'Unrelated model' }]
@@ -281,8 +275,6 @@ test('Go, Zen, OpenRouter, Ollama and OrcaRouter models are searchable by name a
       [`enno-model-${role}`, `${connection.modelName} [${connection.model}]`, q => {
         assert.deepEqual((q.options ?? []).filter(o => o.label.includes('[')).map(o => o.label), [`${connection.modelName} [${connection.model}]`])
       }],
-      ['enno-route-family', connection.name],
-      ['enno-route-protocol', 'Chat Completions'],
     )
   }
   steps.push(['enno-model-review', 'この構成で開始'])
@@ -290,7 +282,7 @@ test('Go, Zen, OpenRouter, Ollama and OrcaRouter models are searchable by name a
   const { result } = await navigate(steps, { llm, routes: [], compatibility: { inspect: async () => ({ protocol: 'chat-completions', goSessionHeaders: true }) } })
   assert.equal(result?.value.status, 'ready')
   assert.deepEqual(result?.value.configuration?.roles, Object.fromEntries(MODEL_ROLES.map((role, index) => [role, { provider: connections[index]!.id, model: connections[index]!.model }])))
-  assert.deepEqual(result?.value.configuration?.routeBindings, connections.map(c => ({ provider: c.id, family: c.family, connection: c.family === 'ollama' ? 'local' : 'api', protocol: 'chat-completions' })))
+  assert.equal(result?.value.configuration?.routeBindings, undefined, 'custom selection does not duplicate DSH connection settings')
   assert.equal(result?.value.configuration?.maxConcurrentChildren, 1)
   const resumed = await navigate([], { stored: result!, llm, routes: [] })
   assert.deepEqual(resumed.result, result)

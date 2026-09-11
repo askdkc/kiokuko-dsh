@@ -1,6 +1,6 @@
 import type { DshUserQuestionAgent, DshUserQuestions } from './user-interaction.js'
 import { explicitExecutionMode, type StoredExecutionSelection, type ExecutionSelection } from './execution-selection.js'
-import { MODEL_ROLES, MODEL_TEMPLATES, ROLE_LABELS, ModelConfigurationSchema, configurationProblems, readModelCatalog, templateBindings,
+import { MODEL_ROLES, MODEL_TEMPLATES, ROLE_LABELS, ModelConfigurationSchema, configurationProblems, modelRoutesForCatalog, readModelCatalog, templateBindings,
   type DshModelCatalog, type DshModelCompatibility, type ModelBinding, type ModelCatalogSnapshot, type ModelConfigurationDraft, type ModelRole, type ModelRoute, type ModelTemplate } from './model-configuration.js'
 
 export class ExecutionSelectionPending extends Error {
@@ -18,7 +18,7 @@ interface SelectionUiInput {
   readonly save: (revision: number, value: ExecutionSelection) => Promise<StoredExecutionSelection>
 }
 const BACK = '戻る', CANCEL = '取消・作業を保持', NEXT_PAGE = '次のページ', PREVIOUS_PAGE = '前のページ', CHANGE_PROVIDER = '接続を変更'
-const CLEAR_SEARCH = '検索をクリア', RELOAD = '一覧を再取得', CONFIGURE_ROUTES = '接続設定を確認'
+const CLEAR_SEARCH = '検索をクリア', RELOAD = '一覧を再取得'
 async function ask(input: SelectionUiInput, id: string, question: string, choices: readonly string[], detail = '', searchable = false): Promise<string> {
   let validation = ''
   while (true) {
@@ -118,7 +118,7 @@ function templateRoutes(template: ModelTemplate, catalog: ModelCatalogSnapshot, 
   if (!required) return known.filter(r => r.family === template.family && catalog.providers.some(p => p.id === r.provider))
   if (!catalog.providers.some(p => p.id === required.provider)) return []
   const declared = known.find(r => r.provider === required.provider)
-  if (declared && (declared.family !== required.family || declared.connection !== required.connection || declared.protocol !== required.protocol)) return []
+  if (!catalog.resolveCallConfig && declared && (declared.family !== required.family || declared.connection !== required.connection || declared.protocol !== required.protocol)) return []
   return [declared ?? required]
 }
 async function templateStatus(input: SelectionUiInput, template: ModelTemplate, catalog: ModelCatalogSnapshot): Promise<string> {
@@ -134,39 +134,6 @@ async function templateStatus(input: SelectionUiInput, template: ModelTemplate, 
     if (!(await configurationProblems(configuration.data, catalog, routes, input.compatibility)).length) return '適用可能'
   }
   return complete ? '互換性の確認が必要' : 'モデル不足'
-}
-async function declareRoute(input: SelectionUiInput, provider: string, family?: ModelRoute['family']): Promise<ModelRoute | undefined> {
-  const families: ModelRoute['family'][] = ['openai', 'deepseek', 'opencode-go', 'opencode-zen', 'openrouter', 'orcarouter', 'ollama', 'other']
-  const names = ['OpenAI', 'DeepSeek', 'OpenCode Go', 'OpenCode Zen', 'OpenRouter', 'OrcaRouter', 'Ollama', 'その他']
-  const fixedFamily = family !== undefined
-  let screen: 'family' | 'auth' | 'protocol' = !family ? 'family' : family === 'openai' ? 'auth' : 'protocol'
-  let connection: ModelRoute['connection'] = family === 'ollama' ? 'local' : 'api'
-  while (true) {
-    if (screen === 'family') {
-      const answer = await ask(input, 'enno-route-family', `${provider}の実際の接続先`, [...names, BACK], 'DSHの接続設定と同じ種類を選んでください。GoとZenを自動変更しません。')
-      if (answer === BACK) return undefined
-      family = families[names.indexOf(answer)]!
-      connection = family === 'ollama' ? 'local' : 'api'
-      screen = family === 'openai' ? 'auth' : 'protocol'
-    }
-    if (screen === 'auth') {
-      const answer = await ask(input, 'enno-route-auth', `${provider}のOpenAI接続`, ['OpenAI API', 'Codex認証', BACK])
-      if (answer === BACK) {
-        if (fixedFamily) return undefined
-        screen = 'family'; continue
-      }
-      connection = answer === 'Codex認証' ? 'codex' : 'api'
-      screen = 'protocol'
-    }
-    const protocols = ['Responses', 'Chat Completions', 'Messages', '不明']
-    const answer = await ask(input, 'enno-route-protocol', `${provider}にDSHが設定している通信方式`, [...protocols, BACK], 'これは設定値の確認です。通信テストや契約の確認は実施しません。Astraのツール利用にはResponsesが必要です。')
-    if (answer === BACK) {
-      if (family === 'openai') { screen = 'auth'; continue }
-      if (fixedFamily) return undefined
-      screen = 'family'; continue
-    }
-    return { provider, family: family!, connection, protocol: (['responses', 'chat-completions', 'messages', 'unknown'] as const)[protocols.indexOf(answer)]! }
-  }
 }
 /** Native question cards keep keyboard, cancellation and answer routing owned by DSH. */
 export async function selectExecution(input: SelectionUiInput): Promise<StoredExecutionSelection> {
@@ -197,27 +164,26 @@ export async function selectExecution(input: SelectionUiInput): Promise<StoredEx
     }
     const catalog = await selectionCatalog(input)
     if (screen === 'templates') {
-      const statusRoutes = [...input.routes, ...(draft.routeBindings ?? []).filter(r => !input.routes.some(k => k.provider === r.provider))]
+      const statusRoutes = modelRoutesForCatalog(catalog, [...input.routes, ...(draft.routeBindings ?? []).filter(r => !input.routes.some(k => k.provider === r.provider))])
       const statuses = await Promise.all(MODEL_TEMPLATES.map(t => templateStatus({ ...input, routes: statusRoutes }, t, catalog)))
       const labels = MODEL_TEMPLATES.map((t, i) => `${t.name} — ${statuses[i]}`)
       const picked = await ask(input, 'enno-template', 'おすすめテンプレート', [...labels, BACK], 'OpenAI / DeepSeek / OpenCode Go / OpenCode Zen / OpenRouter / OrcaRouter / Ollama。接続・認証はDSHが管理します。')
       if (picked === BACK) { screen = 'source'; continue }
       const template = MODEL_TEMPLATES[labels.indexOf(picked)]
       if (!template) continue
-      const knownRoutes = [...input.routes, ...(draft.routeBindings ?? []).filter(r => !input.routes.some(k => k.provider === r.provider))]
+      const knownRoutes = statusRoutes
       const routes = templateRoutes(template, catalog, knownRoutes)
       if (template.route && !routes.length) {
         await ask(input, 'enno-template-unavailable', 'このテンプレートの接続を利用できません。', [RELOAD, BACK],
-          `${template.group}の接続 ${template.route.provider} が必要です。対象DSHプロファイルで接続を読み込み、modelRoutesに競合する設定がないか確認してください。`)
+          `${template.group}の接続 ${template.route.provider} が必要です。対象DSHプロファイルで接続を有効にし、一覧を再取得してください。`)
         continue
       }
       let route = routes.length === 1 ? routes[0] : undefined
       if (routes.length > 1) {
-        const names = routes.map(r => `${catalog.providers.find(p => p.id === r.provider)?.name ?? r.provider} [${r.provider}] (${r.connection}, ${r.protocol})`)
+        const names = routes.map(r => `${catalog.providers.find(p => p.id === r.provider)?.name ?? r.provider} [${r.provider}]`)
         const routeChoice = await ask(input, 'enno-template-provider', 'このテンプレートで使うDSH接続', [...names, BACK])
         if (routeChoice === BACK) continue
         route = routes[names.indexOf(routeChoice)]
-        if (!route) continue
       }
       if (!route) {
         const unbound = catalog.providers.filter(p => !knownRoutes.some(r => r.provider === p.id))
@@ -227,22 +193,16 @@ export async function selectExecution(input: SelectionUiInput): Promise<StoredEx
           continue
         }
         const labels = unbound.map(p => `${p.name} [${p.id}]`)
-        while (!route) {
-          const answer = await ask(input, 'enno-bind-provider', `${template.group}に対応する設定済み接続`, [...labels, BACK], '接続IDから提供元を推測しません。実際に設定した接続先と一致するものを選択してください。')
-          if (answer === BACK) break
-          const provider = unbound[labels.indexOf(answer)]!
-          route = await declareRoute(input, provider.id, template.family)
-        }
-        if (!route) continue
+        const answer = await ask(input, 'enno-bind-provider', `${template.group}で使う設定済み接続`, [...labels, BACK], '認証・通信方式は、選択したDSH接続の設定を使います。')
+        if (answer === BACK) continue
+        const provider = unbound[labels.indexOf(answer)]!
+        route = { provider: provider.id, family: template.family, connection: template.family === 'ollama' ? 'local' : 'api', protocol: 'unknown' }
       }
       draft = { roles: templateBindings(template, route.provider, catalog), routeBindings: [...knownRoutes.filter(r => r.provider !== route.provider), route], template: { id: template.id, version: template.version }, custom: false, maxConcurrentChildren: template.maxConcurrentChildren }
       await save({ ...stored.value, draft })
       screen = 'review'
       continue
     }
-    const knownRoutes = [...input.routes, ...(draft.routeBindings ?? []).filter(r => !input.routes.some(k => k.provider === r.provider))]
-    const missingRoutes = [...new Set(Object.values(draft.roles).flatMap(binding => binding && !knownRoutes.some(r => r.provider === binding.provider) ? [binding.provider] : []))]
-    const editableRoutes = [...new Set([...missingRoutes, ...(draft.routeBindings ?? []).filter(r => !input.routes.some(k => k.provider === r.provider)).map(r => r.provider)])]
     const complete = ModelConfigurationSchema.safeParse(draft)
     const problems = complete.success ? await configurationProblems(complete.data, catalog, input.routes, input.compatibility) : ['未設定の役割を選択してください。']
     const detail = [draft.custom ? 'カスタム' : MODEL_TEMPLATES.find(t => t.id === draft.template?.id)?.name ?? 'カスタム',
@@ -251,24 +211,14 @@ export async function selectExecution(input: SelectionUiInput): Promise<StoredEx
       'reasoningはモデルの既定値。カタログへの登録は契約上の利用成功を保証しません。',
     ].join('\n')
     const roleLabels = MODEL_ROLES.map(role => `${ROLE_LABELS[role]}を変更`)
-    const selected = await ask(input, 'enno-model-review', '構成を確認して開始', [...(complete.success && !problems.length ? ['この構成で開始'] : []), ...roleLabels, ...(editableRoutes.length ? [CONFIGURE_ROUTES] : []), RELOAD, BACK], detail)
+    const selected = await ask(input, 'enno-model-review', '構成を確認して開始', [...(complete.success && !problems.length ? ['この構成で開始'] : []), ...roleLabels, RELOAD, BACK], detail)
     if (selected === BACK) { screen = 'source'; continue }
-    if (selected === CONFIGURE_ROUTES) {
-      const labels = editableRoutes.map(id => `${catalog.providers.find(p => p.id === id)?.name ?? id} [${id}]`)
-      const answer = editableRoutes.length === 1 ? labels[0]! : await ask(input, 'enno-route-provider', '確認・変更する接続を選択', [...labels, BACK])
-      if (answer === BACK) continue
-      const route = await declareRoute(input, editableRoutes[labels.indexOf(answer)]!)
-      if (route) {
-        draft = { ...draft, custom: true, routeBindings: [...(draft.routeBindings ?? []).filter(r => r.provider !== route.provider), route] }
-        await save({ ...stored.value, draft })
-      }
-      continue
-    }
     if (selected === 'この構成で開始' && complete.success && !problems.length) {
       // Revalidate immediately before adoption. No provider defaults or credentials are written.
       const latest = await selectionCatalog(input)
       if ((await configurationProblems(complete.data, latest, input.routes, input.compatibility)).length) continue
-      const usesOllama = MODEL_ROLES.some(role => [...input.routes, ...(complete.data.routeBindings ?? [])].some(r => r.provider === complete.data.roles[role].provider && r.family === 'ollama'))
+      const routes = modelRoutesForCatalog(latest, [...input.routes, ...(complete.data.routeBindings ?? [])])
+      const usesOllama = MODEL_ROLES.some(role => routes.some(r => r.provider === complete.data.roles[role].provider && (r.family === 'ollama' || r.connection === 'local')))
       await save({ mode: 'enno', status: 'ready', ...(stored.value.ordinaryModel ? { ordinaryModel: stored.value.ordinaryModel } : {}), configuration: { ...complete.data, maxConcurrentChildren: usesOllama ? 1 : complete.data.maxConcurrentChildren } })
       return stored
     }
@@ -276,15 +226,9 @@ export async function selectExecution(input: SelectionUiInput): Promise<StoredEx
     if (role) {
       const binding = await pickModel(input, catalog, draft, role)
       if (binding) {
-        // Preserve a confirmed model even if route declaration is cancelled.
+        // The selected model already identifies its configured DSH provider.
         draft = { ...draft, custom: true, roles: { ...draft.roles, [role]: binding } }
         await save({ ...stored.value, draft })
-        if (![...input.routes, ...(draft.routeBindings ?? [])].some(r => r.provider === binding.provider)) {
-          const route = await declareRoute(input, binding.provider)
-          if (!route) continue
-          draft = { ...draft, routeBindings: [...(draft.routeBindings ?? []), route] }
-          await save({ ...stored.value, draft })
-        }
       }
     }
   }

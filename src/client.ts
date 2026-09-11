@@ -390,8 +390,17 @@ const ENNO_SELECTION_QUESTIONS = [
   'enno-template-unavailable', 'enno-bind-provider', 'enno-model-review', 'enno-catalog-retry',
   'enno-route-provider', 'enno-route-family', 'enno-route-auth', 'enno-route-protocol',
 ]
+const DEEP_SELECTION_QUESTIONS = [
+  'deep-configuration', 'deep-budget-field', 'deep-budget-value', 'deep-role-model',
+  'deep-apply-configuration', 'deep-pending-input', 'deep-uncertain',
+]
 function isEnnoSearchQuestion(question: IntakePending['questions'][0]): boolean {
   return question.header === '実行方式とモデル' && /^enno-(?:provider|model)-(?:ideal|zenki|goki|worker|check)$/u.test(question.id)
+}
+function questionInputKind(question: IntakePending['questions'][0]): 'choice' | 'search' | 'value' {
+  if (isEnnoSearchQuestion(question) || (question.header === 'Deep planning' && question.id === 'deep-role-model')) return 'search'
+  if (question.header === 'Deep planning' && question.id === 'deep-budget-value') return 'value'
+  return 'choice'
 }
 
 function isSupportedQuestion(question: IntakePending['questions'][0] | undefined): boolean {
@@ -399,6 +408,7 @@ function isSupportedQuestion(question: IntakePending['questions'][0] | undefined
   const options = question.options?.length ?? 0
   if (options < 1) return false
   if (question.header === '実行方式とモデル' && (ENNO_SELECTION_QUESTIONS.includes(question.id) || isEnnoSearchQuestion(question))) return true
+  if (question.header === 'Deep planning' && DEEP_SELECTION_QUESTIONS.includes(question.id)) return true
   if (options > 9) return false
   return INTAKE_QUESTIONS.some(kind => kind.id === question.id && kind.header === question.header)
 }
@@ -420,7 +430,7 @@ function IntakeQuestion(props: Record<string, unknown>): unknown {
 function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const pending = props.pending as IntakePending
   const question = pending.questions[0]
-  const searchable = isEnnoSearchQuestion(question)
+  const inputKind = questionInputKind(question)
   const mac = /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? '')
   const shortcutModifier = mac ? 'Cmd' : 'Ctrl'
   const [draft, setDraft] = useState<IntakeDraft>(() => intakeDrafts.get(pending) ?? { selected: null, custom: '' })
@@ -454,7 +464,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
       setError('選択肢を選ぶか、自由入力してください。')
       return
     }
-    if (!cancel && !searchable && /^[0-9０-９]+$/u.test(custom)) {
+    if (!cancel && inputKind === 'choice' && /^[0-9０-９]+$/u.test(custom)) {
       const ordinal = Number(custom.normalize('NFKC'))
       if (ordinal < 1 || ordinal > question.options.length) {
         setError(`番号は1〜${question.options.length}で入力してください。`)
@@ -547,7 +557,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
           children: [jsx('strong', { children: `${index + 1}. ${option.label}` }), option.description ? jsx('span', { children: option.description }) : null,
             jsx('kbd', { className: 'kiokuko-intake-shortcut', 'aria-hidden': true, children: index < 9 ? `${shortcutModifier}+${index + 1}` : `${index + 1} → Enter` })],
         })) }),
-        jsx('label', { htmlFor: `${titleId}-custom`, children: searchable ? '検索（Enterで検索・数字も検索語として入力できます）' : '自由入力（任意）' }),
+        jsx('label', { htmlFor: `${titleId}-custom`, children: inputKind === 'search' ? '検索（Enterで検索・数字も検索語として入力できます）' : inputKind === 'value' ? '値を入力（Enterで確定）' : '自由入力（任意）' }),
         jsx('textarea', { id: `${titleId}-custom`, rows: 1, disabled: busy, value: draft.custom,
           onChange: (event: { target: { value: string } }) => update({ selected: null, custom: event.target.value }),
         }),

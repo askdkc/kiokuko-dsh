@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DeepConfigurationUI } from '../../../src/deep-thinker/configuration.js'
+import { DeepConfigurationUI, deepQuestion } from '../../../src/deep-thinker/configuration.js'
 import { DEEP_ROLES } from '../../../src/deep-thinker/core/contracts.js'
 import type { DshModelCatalog, ModelRoute } from '../../../src/dsh/model-configuration.js'
 import type { DshUserQuestions } from '../../../src/dsh/user-interaction.js'
 import { deepFixture } from '../helpers/deep-fixture.js'
+
+test('Deep budget option labels remain exact numbers instead of being reinterpreted as ordinals', async () => {
+  for (const value of ['0', '1', '120000']) {
+    const result = await deepQuestion({ ask: async request => ({ answers: [{ id: request.questions[0].id, selected: [value] }] }) },
+      { id: 'parent' }, new AbortController().signal, 'deep-budget-value', '予算', [value])
+    assert.equal(result, value)
+  }
+})
 
 for (const family of ['deepseek', 'orcarouter'] as const) test(`Deep configuration accepts, saves and reloads the shared ${family} route`, async () => {
   const f = await deepFixture()

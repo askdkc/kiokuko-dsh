@@ -64,15 +64,18 @@ export const MODEL_TEMPLATES: readonly ModelTemplate[] = [
   template('ollama', 'Ollama・ローカル標準', 'Ollama', 'ollama', 'qwen3-coder:30b', 'qwen3-coder:30b'),
 ]
 export interface ConfiguredModel { readonly provider: string; readonly id: string; readonly name: string }
-export interface ConfiguredProvider { readonly id: string; readonly name: string }
+export interface ConfiguredProvider { readonly id: string; readonly name: string; readonly route?: ModelRoute }
 export interface DshModelCatalog {
   listProviders(): readonly ConfiguredProvider[] | PromiseLike<readonly ConfiguredProvider[]>
   listModels(provider: string): PromiseLike<readonly ConfiguredModel[]>
+  /** Native adapter validation; protocol and authentication remain owned by DSH. */
+  resolveCallConfig?(binding: ModelBinding): PromiseLike<ModelBinding>
 }
 export interface ModelCatalogSnapshot {
   readonly providers: readonly ConfiguredProvider[]
   readonly models: readonly ConfiguredModel[]
   readonly failures: readonly string[]
+  readonly resolveCallConfig?: (binding: ModelBinding) => PromiseLike<ModelBinding>
 }
 export async function readModelCatalog(llm: DshModelCatalog): Promise<ModelCatalogSnapshot> {
   const providers = await llm.listProviders()
@@ -87,7 +90,17 @@ export async function readModelCatalog(llm: DshModelCatalog): Promise<ModelCatal
       seen.add(model.id); models.push({ provider: provider.id, id: model.id, name: model.name })
     }
   })
-  return { providers: providers.map(p => ({ id: p.id, name: p.name })), models, failures }
+  return { providers: providers.map(p => {
+    const route = ModelRouteSchema.safeParse(p.route)
+    return { id: p.id, name: p.name, ...(route.success && route.data.provider === p.id ? { route: route.data } : {}) }
+  }), models, failures,
+    ...(llm.resolveCallConfig ? { resolveCallConfig: (binding: ModelBinding) => llm.resolveCallConfig!(binding) } : {}),
+  }
+}
+/** Native connection metadata takes precedence over old duplicate declarations. */
+export function modelRoutesForCatalog(catalog: ModelCatalogSnapshot, declared: readonly ModelRoute[]): ModelRoute[] {
+  const native = catalog.providers.flatMap(provider => provider.route ? [provider.route] : [])
+  return [...native, ...declared.filter(route => !native.some(current => current.provider === route.provider))]
 }
 /** A host adapter may supply transport evidence; a UI answer cannot assert it. */
 export interface DshModelCompatibility {
@@ -98,16 +111,28 @@ export interface DshModelCompatibility {
 }
 export async function configurationProblems(configuration: ModelConfiguration, catalog: ModelCatalogSnapshot, routes: readonly ModelRoute[], compatibility?: DshModelCompatibility): Promise<string[]> {
   return modelBindingProblems(MODEL_ROLES.map(role => ({ label: ROLE_LABELS[role], binding: configuration.roles[role] })), catalog,
-    [...routes, ...(configuration.routeBindings ?? []).filter(route => !routes.some(r => r.provider === route.provider))], compatibility)
+    modelRoutesForCatalog(catalog, [...routes, ...(configuration.routeBindings ?? []).filter(route => !routes.some(r => r.provider === route.provider))]), compatibility)
 }
 export async function modelBindingProblems(bindings: readonly { label: string; binding: ModelBinding }[], catalog: ModelCatalogSnapshot, routes: readonly ModelRoute[], compatibility?: DshModelCompatibility): Promise<string[]> {
   const problems: string[] = []
+  const validations = new Map<string, PromiseLike<ModelBinding>>()
   for (const { label, binding } of bindings) {
     if (catalog.failures.includes(binding.provider)) { problems.push(`${label}: 接続のモデル一覧を取得できません (${binding.provider})`); continue }
     if (!catalog.models.some(m => m.provider === binding.provider && m.id === binding.model)) { problems.push(`${label}: 設定済みモデルがありません (${binding.provider} / ${binding.model})`); continue }
+    if (catalog.resolveCallConfig) {
+      try {
+        const key = JSON.stringify(binding)
+        let validation = validations.get(key)
+        if (!validation) { validation = catalog.resolveCallConfig({ ...binding }); validations.set(key, validation) }
+        const resolved = await validation
+        if (resolved.provider !== binding.provider || resolved.model !== binding.model) throw new Error('DSH returned a different provider/model')
+      } catch (error) { problems.push(`${label}: DSHのモデル設定を確認してください (${binding.provider} / ${binding.model}): ${error instanceof Error ? error.message : String(error)}`) }
+      continue
+    }
     const route = routes.find(r => r.provider === binding.provider)
-    // Unknown routes must be classified before use, including the custom path.
-    if (!route) { problems.push(`${label}: 接続先の種類・通信方式をプラグイン設定の modelRoutes に登録してください (${binding.provider})`); continue }
+    // Older hosts still route registered models themselves. Optional legacy
+    // declarations can supply compatibility checks, but are not a second setup.
+    if (!route) continue
     let evidence: Awaited<ReturnType<DshModelCompatibility['inspect']>> | undefined
     try { evidence = await compatibility?.inspect(binding, route) } catch { /* unverified */ }
     if (binding.model === 'gpt-6-astra' && (evidence?.protocol ?? route.protocol) !== 'responses') problems.push(`${label}: AstraにはResponses接続が必要です`)

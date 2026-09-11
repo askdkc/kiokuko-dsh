@@ -24,6 +24,11 @@ retained but rejected for analysis; cancel and provide text instead.
 Deep uses its saved workspace configuration, or the exactly resolvable current
 DSH connection for all four roles. Otherwise it opens a configuration card.
 Models come from DSH's registered catalog; there is no provider substitution.
+Choose a provider/model row once, then return directly to role review and save.
+DSH supplies authentication and transport; the card never asks you to re-enter
+provider family, protocol or connection type. Use the displayed Cmd+1–9 (macOS)
+or Ctrl+1–9 (Windows/Linux) shortcuts, then Enter to confirm. Search text and
+numeric budget values remain literal.
 Configuration drafts are saved after each submitted change. Closing a card or
 disconnecting the UI does not cancel the work or discard its problem.
 

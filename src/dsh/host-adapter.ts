@@ -8,6 +8,7 @@ import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSe
 import { selectExecution, ExecutionSelectionPending } from './model-selection-ui.js'
 import { installDshModelRouting, modelRoleForState, isModelAvailabilityFailure, type RoutableAgent } from './model-routing.js'
 import type { ModelRoute, DshModelCatalog, DshModelCompatibility } from './model-configuration.js'
+import { nativeModelCatalog } from './native-model-catalog.js'
 import { ennoStateForPreparedTask } from '../enno-oduno/service.js'
 import { DshEnnoDelegation, type DshSpawnBackend } from './enno-delegation.js'
 import { createDshOrcaHost } from './orca-host.js'
@@ -423,7 +424,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const sessionQuery = options.sessionQuery ?? native.get('sessionQuery', false) as DshSessionQuery | undefined
   const llm = options.llm ?? native.get('llm', false) as DshLlm | undefined
   const advisory = options.advisory ?? native.get('dshAdvisory', false) as DshAdvisoryHost | undefined
-  const modelCatalog = native.get('llm', false) as DshModelCatalog | undefined
+  const modelCatalog = nativeModelCatalog(native.get('llm', false) as DshModelCatalog | undefined,
+    native.get('settings', false) as { get(namespace: string): unknown } | undefined)
   const modelCompatibility = options.modelCompatibility ?? native.get('dshModelCompatibility', false) as DshModelCompatibility | undefined
   const selections = new Map<string, StoredExecutionSelection>()
   const selectionFailures = new Map<string, Promise<void>>()

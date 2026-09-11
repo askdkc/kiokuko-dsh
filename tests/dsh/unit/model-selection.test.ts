@@ -159,7 +159,7 @@ test('native cards show unavailable templates, resolve ambiguous providers, pres
       else if (q.id === 'enno-template') {
         assert.equal(q.options.filter((o: any) => /接続未設定/u.test(o.label)).length, MODEL_TEMPLATES.length - 1)
         selected = q.options[0].label
-      } else if (q.id === 'enno-template-provider') { assert.match(q.options[1].label, /oauth-two.*codex/u); selected = q.options[1].label }
+      } else if (q.id === 'enno-template-provider') { assert.match(q.options[1].label, /oauth-two/u); selected = q.options[1].label }
       else if (q.id === 'enno-model-review') selected = reviewCount++ === 0 ? '後鬼 (Goki) ヘッドを変更' : '取消・作業を保持'
       else if (q.id === 'enno-model-goki') selected = 'enno-idealからコピー'
       return { answers: [{ id: q.id, selected: [selected] }] } as any

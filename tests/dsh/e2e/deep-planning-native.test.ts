@@ -82,6 +82,55 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
 })
 
 const nativeOptions = { skip: packages ? false : 'requires the pinned DSH package runtime', timeout: 30_000 }
+for (const [providerId, modelId] of [['orcarouter', 'deepseek/deepseek-v4.1-flash'], ['deepseek-official', 'deepseek-flash']]) {
+  test(`Deep native: select ${providerId} once per role, save, reopen and dispatch without connection questions`, nativeOptions, async () => {
+    const steps = ['分解', '解決', '検証', '集約'].flatMap(role => [
+      { id: 'deep-configuration', prefix: `${role}:` },
+      { id: 'deep-role-model', prefix: `${providerId} /` },
+    ])
+    steps.push({ id: 'deep-configuration', prefix: '閉じる・下書きを保持' }, { id: 'deep-configuration', prefix: '保存' })
+    const observed: string[] = []
+    const f = await deepNativeFixture(() => [], { questions: async request => {
+      const q = request.questions[0], step = steps.shift()
+      assert.ok(step, `unexpected extra question: ${q.id}`)
+      assert.equal(q.id, step.id, 'a selected model must return directly to role review')
+      observed.push(q.id)
+      const option = q.options.find((o: any) => o.label.startsWith(step.prefix))
+      assert.ok(option, JSON.stringify(q))
+      return { answers: [{ id: q.id, selected: [option.label] }] }
+    } })
+    const selected = new f.mock.MockAdapter([
+      f.mock.textResponse('{"kind":"leaf","reason":"bounded"}'),
+      f.mock.textResponse('{"kind":"candidate","answer":"Use the configured provider.","evidence":[],"assumptions":[],"unresolved":[]}'),
+      f.mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),
+      f.mock.textResponse('{"schemaVersion":1,"memories":[]}'),
+    ], [modelId!])
+    const unregister = f.ctx.llm.registerAdapter([providerId], selected)
+    try {
+      // The parent model is absent: all four roles must be explicitly selected.
+      f.parent.options.provider = 'unregistered-parent'
+      assert.equal((await f.command('/deep-planning --configure')).result.kind, 'success')
+      assert.equal(await f.deep.configuration.resolve('deep-cases', f.parent), null, 'closing saves only a draft')
+      assert.equal((await f.command('/deep-planning --configure')).result.kind, 'success')
+      const saved = await f.deep.configuration.resolve('deep-cases', f.parent)
+      assert.ok(saved)
+      for (const role of Object.values(saved.roles)) assert.deepEqual(role, { provider: providerId, model: modelId })
+      assert.deepEqual(steps, [])
+      assert.equal(selected.requests.length, 0, 'configuration does not send model requests')
+      assert.equal((await f.command('/deep-planning Verify the configured route')).result.kind, 'success')
+      const intent = await f.complete()
+      const state = await f.deep.store.read(intent!.runId!)
+      assert.equal(state.phase, 'answered', state.reason ?? '')
+      assert.deepEqual(state.configuration.roles, saved.roles)
+      assert.equal(selected.requests.length, 4)
+      for (const request of selected.requests) {
+        assert.equal(request.provider, providerId); assert.equal(request.model, modelId)
+      }
+      assert.equal(f.provider.requests.length, 0, 'the original provider is never substituted')
+      assert.equal(observed.length, 10, 'reopening and execution do not repeat model or connection selection')
+    } finally { unregister(); await f.close() }
+  })
+}
 test('Deep native: Japanese Skill reaches all OSS workers without tool access and is included in budget reservations', nativeOptions, async () => {
   const f=await deepNativeFixture(mock=>[
     mock.textResponse('{"kind":"leaf","reason":"一つの質問"}'),

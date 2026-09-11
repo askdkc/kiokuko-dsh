@@ -11,7 +11,9 @@ Normal execution uses the current DSH model, memory, applicable Skills, native
 permissions and focused verification. It creates no Enno contract, WorkUnit,
 plan approval or automatic Enno continuation.
 
-On selection cards, type an option number and press Enter to submit. For options
+On Enno and Deep selection cards, use the displayed **Cmd+1–9** shortcuts on macOS
+or **Ctrl+1–9** on Windows/Linux, then press Enter to confirm. With the card
+focused, you can also type an option number and press Enter to submit. For options
 above nine, type consecutive digits (`1`, `2`, Enter selects option 12); Backspace
 corrects the number. Digits typed in the search field remain search text, and Enter
 submits the search. IME composition and repeated key events do not select or submit.
@@ -44,8 +46,9 @@ ideal/planning/check, Sol to the Goki head and Luna to workers, following the
 quality/workload recommendation, not a measured per-task latency or quota optimum.
 The plugin-specific template binds the exact `openai-codex` / `codex` / `responses`
 contract from [dsh-codex's implementation](https://github.com/askdkc/dsh-codex/blob/e2e61b6d8f3b511cf2dac99688e97b8728cb122c/src/index.ts)
-without asking for the connection again. Conflicting `modelRoutes` declarations
-remain untouched. Recommended models must exist in the current DSH catalog;
+without asking for the connection again. Native DSH model validation takes
+precedence over legacy `modelRoutes` declarations; the plugin configuration file
+remains untouched. Recommended models must exist in the current DSH catalog;
 missing models leave roles unset and prevent starting. The catalog is rechecked
 immediately before adoption.
 
@@ -62,9 +65,9 @@ editing an assigned role keeps its own provider. Use “接続を変更” (chan
 on the model card to choose another provider. If the preferred provider is unset
 or no longer registered, the selector opens the provider list.
 Use “検索をクリア” to clear an empty search and “一覧を再取得” to retry a failed list.
-Free-text digits remain search terms. Back in route declaration returns to the
-previous step. Confirmed models survive route cancellation; “接続設定を確認” resumes
-unfinished declarations or corrects draft connection settings without reselecting models.
+Free-text digits remain search terms. Selecting a model returns directly to role
+review. Provider family, authentication and protocol are taken from DSH rather
+than requested again. Back and cancel retain confirmed model assignments.
 
 To choose by model name, select **DSHに設定済みのモデルから選ぶ**, edit a role,
 select its connection, then search or select a model name and confirm the configuration.
@@ -75,23 +78,19 @@ Register a missing connection in DSH and select **一覧を再取得** to refres
 The public registry is a recommendation reference; it does not register models in
 DSH. Its `ollama-cloud` catalog is separate from a local Ollama installation.
 
-Optional plugin `modelRoutes` entries declare `provider`, `family`, `connection`
-and `protocol`; the native cards can also bind previously unclassified routes.
-The `family` values are `openai`, `deepseek`, `opencode-go`, `opencode-zen`,
-`openrouter`, `orcarouter`, `ollama` and `other`.
-These declarations do not change DSH authentication and do not prove a successful
-wire request. Astra requires a Responses declaration. An incorrect declaration
-can still fail at runtime. Authentication, quota and unavailable-model failures
-retain completed work and require reselection rather than automatic fallback.
+DSH owns provider authentication, transport and model validation. Kiokuko passes
+exact provider/model IDs to the native adapter and uses DSH's configurable-provider
+directory for template matching and local concurrency. Unknown provider metadata
+is not a reason to ask for connection details again. Authentication, quota and
+unavailable-model failures retain completed work and require reselection rather
+than automatic fallback.
 
-**Go remains pending on the standard 0.1.2-rc.1 pi-ai Chat Completions route.**
-A recording HTTP fixture with the actual adapter observes no
-`x-deepseek-harness-session-id` for parent, child or auxiliary calls. Custom
-selection applies the same compatibility check and does not switch to Zen.
-A host managing a separately verified adapter may supply the optional
-`dshModelCompatibility.inspect(binding, route)` service with protocol and Go
-parent/child/auxiliary header evidence. DSH does not supply this plugin-specific
-extension by default, and a user-question answer cannot mark transport verified.
+Optional legacy `modelRoutes` entries remain readable for older hosts and provider
+plugins without directory metadata. Current native metadata takes precedence;
+these entries never override DSH's wire settings. On hosts without native model
+validation, existing Astra/Go declarations retain their compatibility checks.
+Local validation and recording-adapter tests do not prove paid account access
+or provider acceptance of a request.
 
 Resolved configuration and the ordinary model are persisted per logical run.
 Template updates do not rewrite active tasks. Agent-scoped assembly/request hooks

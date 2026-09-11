@@ -4,6 +4,7 @@ import { apply } from '../../../src/client.js'
 import { MODEL_ROLES } from '../../../src/dsh/model-configuration.js'
 import { selectExecution } from '../../../src/dsh/model-selection-ui.js'
 import type { StoredExecutionSelection } from '../../../src/dsh/execution-selection.js'
+import { deepQuestion } from '../../../src/deep-thinker/configuration.js'
 
 const descendants = (node: any): any[] => node && typeof node === 'object'
   ? [node, ...[node.props?.children].flat().flatMap(descendants)] : []
@@ -105,12 +106,45 @@ test('all Enno selection cards use numbered keyboard controls, including lists l
   } finally { h.restore() }
 })
 
+test('Deep cards use the shortcut renderer while unrelated and multi-select questions stay native', () => {
+  const h = clientHarness()
+  try {
+    for (const id of ['deep-configuration', 'deep-budget-field', 'deep-budget-value', 'deep-role-model', 'deep-apply-configuration', 'deep-pending-input', 'deep-uncertain']) {
+      const q = { ...question(id), header: 'Deep planning' }
+      const pending = { kind: 'question', key: id, questions: [q], answer: async () => {}, cancel: async () => {} }
+      const card = h.mount(pending)
+      assert.equal(descendants(card.render()).filter(node => node.component === 'kbd').length, 24, id)
+      for (const rejected of [{ ...q, header: 'Other plugin' }, { ...q, id: 'deep-unrelated' }, { ...q, multiSelect: true }]) {
+        assert.equal(h.entry.definition.select({ pendingInteraction: { ...pending, questions: [rejected] } }), null)
+      }
+    }
+  } finally { h.restore() }
+})
+
+test('Deep model search and budget values keep free-text digits literal through the native answer adapter', async () => {
+  const h = clientHarness('MacIntel')
+  try {
+    for (const [id, value] of [['deep-role-model', '4.1'], ['deep-role-model', '2'], ['deep-budget-value', '120000']] as const) {
+      const answered = await deepQuestion({ ask: request => new Promise(resolve => {
+        const card = h.mount({ kind: 'question', key: id, questions: request.questions,
+          answer: async (response: any) => resolve(response), cancel: async () => assert.fail('unexpected cancellation') })
+        const tree = card.render()
+        descendants(tree).find(node => node.component === 'textarea').props.onChange({ target: { value } })
+        card.render().props.onKeyDown(key('Enter', { target: { tagName: 'TEXTAREA' } }))
+      }) }, { id: 'deep-parent' }, new AbortController().signal, id, 'Deepの設定', ['current value'])
+      assert.equal(answered, value)
+    }
+  } finally { h.restore() }
+})
+
 test('platform shortcuts select from outside the card, show matching hints, and confirm once', async () => {
-  for (const platform of ['MacIntel', 'Win32', 'Linux x86_64']) {
+  for (const platform of ['MacIntel', 'Win32', 'Linux x86_64']) for (const [id, header] of [
+    ['taskType', 'Kiokuko · 作業の選択'], ['enno-model-zenki', '実行方式とモデル'], ['deep-role-model', 'Deep planning'],
+  ]) {
     const mac = platform === 'MacIntel', modifier = mac ? { metaKey: true } : { ctrlKey: true }
     const h = clientHarness(platform), responses: unknown[] = []
     try {
-      const q = { ...question('taskType', 4), header: 'Kiokuko · 作業の選択' }
+      const q = { ...question(id, 4), header }
       const card = h.mount({ kind: 'question', key: `shortcut-${platform}`, questions: [q],
         async answer(value: unknown) { responses.push(value) }, async cancel() {} })
       let tree = card.render()
@@ -135,7 +169,7 @@ test('platform shortcuts select from outside the card, show matching hints, and 
       tree.props.onKeyDown(key('Enter')); tree.props.onKeyDown(key('Enter'))
       h.documentKey(key('3', modifier))
       await flush()
-      assert.deepEqual(responses, [{ answers: [{ id: 'taskType', selected: ['Option 2'] }] }])
+      assert.deepEqual(responses, [{ answers: [{ id, selected: ['Option 2'] }] }])
       h.unmount()
       assert.equal(h.listenerCount, 0, 'unmount releases the document shortcut listener')
     } finally { h.restore() }
