@@ -1,6 +1,6 @@
 {
   "name": "kiokuko-dsh",
-  "version": "0.1.41",
+  "version": "0.1.42",
   "description": "Kiokuko plugin for DeepSeek Harness",
   "type": "module",
   "license": "MIT",
