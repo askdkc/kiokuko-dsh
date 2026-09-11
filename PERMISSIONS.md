@@ -17,6 +17,11 @@ Kiokuko operation.
   in a disposable local directory, and replaces the source atomically. It
   reports failed IDs without exposing message contents; invalid or unrelated
   records remain errors. The same check applies when a chat is opened later.
+- For v0 histories, normalizes Kiokuko continuation sources and diagnostic
+  stack fields in supported abort causes, validates the native migration in
+  isolation, and publishes a new v3 generation under the same native lease.
+  Retains the original v0 file and an identical `.bak`; never overwrites an
+  existing successor or reconstructs missing turn-ending events.
 - Does not rewrite host configuration or repository instruction files.
   Repository identity, run identity, lease, revision, and integrity mismatches
   fail closed.

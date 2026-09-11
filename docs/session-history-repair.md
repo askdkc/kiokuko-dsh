@@ -18,6 +18,21 @@ Affected v3 chats have the five historical informational types below marked
 ignorable before users need to open them individually. The startup log reports
 checked/repaired/failed counts and the IDs of failures (up to 20 diagnostics).
 A failed history does not prevent the remaining IDs from being checked.
+No manual repair command or separate setup step is required. The installed
+bundle loads the public plugin entrypoint, which mounts the compatibility
+adapter and starts the scan automatically. The adapter uses that profile's
+native session store, format implementation, and write leases; npm installation
+hooks do not provide those running services.
+
+For historical v0 logs, the checker also normalizes Kiokuko's old
+`continuation` / `loop-recovery` message sources and serialized diagnostic
+stacks in supported abort causes. It runs the complete native migration in
+isolation, validates the resulting v3 history, then publishes that new
+generation under DSH's write lease. The original v0 file remains unchanged,
+with a byte-for-byte `.bak`; existing successors are never overwritten.
+The log distinguishes `Repairing history` from `Repaired history`. Missing
+turn-ending events and unrelated invalid records remain explicit failures;
+the checker does not invent completed turns or discard messages.
 
 Opening or resuming a chat also retries DSH's normal reader through the same
 compatibility adapter, covering sessions added after the startup check. New
@@ -30,7 +45,7 @@ the complete candidate with the running JSONL backend, retains an identical
 `.bak`, and replaces the file atomically. Event bodies, sequence numbers,
 timestamps and fork boundaries are preserved. It refuses active writers,
 conflicting backups, symbolic-link artifacts, damaged logs and unrelated
-required event types. Automatic repair is limited to v3 JSONL/Zstandard files
+required event types. Automatic repair accepts v0 and v3 JSONL/Zstandard files
 up to 64 MiB on disk and 256 MiB expanded. Startup enumeration has a 60-second
 deadline and each session check a 30-second deadline. Unloading Kiokuko cancels
 and drains its startup check, restores the native reader, and waits for any

@@ -13,42 +13,10 @@ import {
 } from 'node:fs'
 import { dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { decodeSessionLog, parseJsonl, encodeSessionLog, repairInformationalRecord } from './session-history-codec.mjs'
-
-const CONTINUATION_FORMS = new Set(['continuation', 'loop-recovery'])
-
-function objectRecord(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value : undefined
-}
-
-function repairedSource(value) {
-  const source = objectRecord(value)
-  if (source?.kind !== 'plugin' || source.plugin !== 'kiokuko-dsh') return undefined
-  if (!Object.hasOwn(source, 'deliveryId') && !CONTINUATION_FORMS.has(source.form)) return undefined
-  const repaired = { ...source, form: 'instructions' }
-  delete repaired.deliveryId
-  return repaired
-}
+import { decodeSessionLog, parseJsonl, encodeSessionLog, repairInformationalRecord, repairContinuationRecord } from './session-history-codec.mjs'
 
 function repairRecord(value) {
-  const record = objectRecord(value)
-  const data = objectRecord(record?.data)
-  const informational = repairInformationalRecord(value)
-  if (informational !== value) return informational
-  if (record?.type === 'user/message') {
-    const source = repairedSource(data?.source)
-    return source === undefined ? value : { ...record, data: { ...data, source } }
-  }
-  if (record?.type !== 'agent/inbox/spliced' || !Array.isArray(data?.inserted)) return value
-  let changed = false
-  const inserted = data.inserted.map((candidate) => {
-    const message = objectRecord(candidate)
-    const source = repairedSource(message?.source)
-    if (source === undefined) return candidate
-    changed = true
-    return { ...message, source }
-  })
-  return changed ? { ...record, data: { ...data, inserted } } : value
+  return repairContinuationRecord(repairInformationalRecord(value))
 }
 
 function validateCatalog(catalog, records) {

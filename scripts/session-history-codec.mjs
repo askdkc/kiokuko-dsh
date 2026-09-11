@@ -118,4 +118,47 @@ function repairInformationalRecord(value) {
   return record.ignorable === true ? value : { ...record, ignorable: true }
 }
 
-export { decodeSessionLog, parseJsonl, encodeSessionLog, repairInformationalRecord }
+function objectRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value : undefined
+}
+
+function repairContinuationSource(value) {
+  const source = objectRecord(value)
+  if (source?.kind !== 'plugin' || source.plugin !== 'kiokuko-dsh') return undefined
+  if (!Object.hasOwn(source, 'deliveryId') && !['continuation', 'loop-recovery'].includes(source.form)) return undefined
+  if (Object.hasOwn(source, 'deliveryId') && typeof source.deliveryId !== 'string') return undefined
+  if (source.form !== undefined && !['instructions', 'continuation', 'loop-recovery'].includes(source.form)) return undefined
+  const repaired = { ...source, form: 'instructions' }
+  delete repaired.deliveryId
+  return repaired
+}
+
+/** Normalize only Kiokuko's historical continuation source representation. */
+function repairContinuationRecord(value) {
+  const record = objectRecord(value), data = objectRecord(record?.data)
+  if (record?.type === 'user/message') {
+    const source = repairContinuationSource(data?.source)
+    return source === undefined ? value : { ...record, data: { ...data, source } }
+  }
+  if (record?.type !== 'agent/inbox/spliced' || !Array.isArray(data?.inserted)) return value
+  let changed = false
+  const inserted = data.inserted.map(candidate => {
+    const message = objectRecord(candidate), source = repairContinuationSource(message?.source)
+    if (source === undefined) return candidate
+    changed = true
+    return { ...message, source }
+  })
+  return changed ? { ...record, data: { ...data, inserted } } : value
+}
+
+/** A serialized stack is diagnostic metadata; retain the original abort cause. */
+function repairLegacyAbortRecord(value) {
+  const record = objectRecord(value), data = objectRecord(record?.data)
+  const reason = objectRecord(data?.reason), cause = objectRecord(reason?.reason)
+  if (record?.type !== 'turn/end' || reason?.kind !== 'aborted' || typeof cause?.stack !== 'string'
+    || !['user', 'parent', 'disposed', 'legacy', 'hook'].includes(cause.kind)) return value
+  const { stack: _stack, ...compatibleCause } = cause
+  return { ...record, data: { ...data, reason: { ...reason, reason: compatibleCause } } }
+}
+
+export { decodeSessionLog, parseJsonl, encodeSessionLog, repairInformationalRecord, repairContinuationRecord, repairLegacyAbortRecord }

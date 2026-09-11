@@ -54,6 +54,17 @@ async function fixture(compression: 'zstd' | 'none' = 'zstd') {
       await writeFile(path, original)
       return { id, path, original, header, events }
     },
+    async legacy(id: string, events: any[] = legacyRows()) {
+      const header = { version: 3, id, createdAt: 1, delegationDepth: 0, isSeeded: false, cwd: root }
+      await backend.persistHeader(header, 0)
+      const currentPath = await backend.resolveCurrentLog(id)
+      const path = currentPath.replace('session.v3.', 'session.')
+      const { isSeeded: _seeded, ...physical } = header
+      const original = encode(Buffer.from([{ ...physical, type: 'session', version: 0 }, ...events].map(row => JSON.stringify(row)).join('\n') + '\n'))
+      await rm(currentPath)
+      await writeFile(path, original)
+      return { id, path, currentPath, original, header, events }
+    },
     async mount() {
       const handle = await mountDshComposition(ctx, {})
       disposers.push(handle.dispose)
@@ -67,6 +78,110 @@ async function fixture(compression: 'zstd' | 'none' = 'zstd') {
     },
   }
 }
+
+function legacyRows() {
+  const message = (id: string) => ({ id, role: 'user', content: [{ type: 'text', text: 'Original continuation' }],
+    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'continuation', deliveryId: 'old-delivery' } })
+  return [
+    { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
+    { type: 'step/start', seq: 1, time: 2, data: { turn: 1, step: 1 } },
+    { type: 'agent/inbox/spliced', seq: 2, time: 3, data: { target: 'next-step', start: 0, inserted: [message('queued')] } },
+    { type: 'user/message', seq: 3, time: 4, data: message('delivered'), surfaceOp: 'append' },
+    { type: 'step/end', seq: 4, time: 5, data: { turn: 1, step: 1 } },
+    { type: 'turn/end', seq: 5, time: 6, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'parent', stack: 'Original diagnostic stack' } } } },
+  ]
+}
+
+for (const compression of ['zstd', 'none'] as const) test(`startup migrates legacy ${compression} sources and retains the original generation`, options, async () => {
+  const f = await fixture(compression)
+  try {
+    const old = await f.legacy('legacy-source')
+    await assert.rejects(() => restored(f.backend, old.id), /source.*deliveryId/)
+    const composition = await f.mount()
+    assert.equal((await composition.historyCheck).repaired, 1)
+    const result = await restored(f.backend, old.id)
+    assert.equal(result.header.version, 3)
+    const message = result.state.events.find((event: any) => event.type === 'user/message')
+    assert.deepEqual(message.data.content, [{ type: 'text', text: 'Original continuation' }])
+    assert.deepEqual(message.data.source, { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' })
+    assert.deepEqual(result.state.events.at(-1).data.reason, { kind: 'aborted', reason: { kind: 'parent' } })
+    assert.deepEqual(await readFile(old.path), old.original)
+    assert.deepEqual(await readFile(`${old.path}.bak`), old.original)
+    const migrated = await readFile(old.currentPath)
+    const writer = await f.backend.open(old.id, 'write')
+    try { await writer.append([{ type: 'session/title', seq: result.state.events.length, time: 20, data: { title: 'Resume migrated history' } }]); await writer.flush() }
+    finally { await writer.close() }
+    await composition.dispose()
+    const reloaded = await f.mount()
+    assert.equal((await reloaded.historyCheck).repaired, 0)
+    assert.deepEqual(await readFile(old.path), old.original)
+    assert.deepEqual(await readFile(`${old.path}.bak`), old.original)
+    assert.notDeepEqual(await readFile(old.currentPath), migrated)
+  } finally { await f.close() }
+})
+
+for (const defect of ['foreign-plugin', 'unexpected-source-field', 'invalid-stack', 'missing-turn-end'] as const) {
+  test(`legacy migration refuses ${defect} before backup or publication`, options, async () => {
+    const f = await fixture()
+    try {
+      const events: any[] = legacyRows()
+      if (defect === 'foreign-plugin') events[3].data.source.plugin = 'other-plugin'
+      if (defect === 'unexpected-source-field') events[3].data.source.unrecognized = true
+      if (defect === 'invalid-stack') events.at(-1).data.reason.reason.stack = 42
+      if (defect === 'missing-turn-end') events[5] = { type: 'turn/start', seq: 5, time: 6, data: { turn: 2 } }
+      const old = await f.legacy(`refused-${defect}`, events)
+      const handle = await f.mount(), result = await handle.historyCheck
+      assert.equal(result.failed, 1)
+      assert.equal(result.repaired, 0)
+      assert.match(result.failures[0]!.error, defect === 'missing-turn-end' ? /does not close the prior turn/ : /unexpected member/)
+      assert.deepEqual(await readFile(old.path), old.original)
+      await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+      await assert.rejects(access(`${old.path}.bak`), { code: 'ENOENT' })
+    } finally { await f.close() }
+  })
+}
+
+test('legacy migration respects the native write lease and never overwrites an existing successor', options, async () => {
+  const f = await fixture()
+  try {
+    const old = await f.legacy('legacy-lease')
+    const lease = await f.backend.acquireWriteLease(old.header)
+    try {
+      const mounted = await f.mount()
+      assert.equal((await mounted.historyCheck).failed, 1)
+      assert.deepEqual(await readFile(old.path), old.original)
+      await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+      await assert.rejects(access(`${old.path}.bak`), { code: 'ENOENT' })
+    } finally { await lease.release() }
+    await restored(f.backend, old.id)
+    const successor = await readFile(old.currentPath)
+    await restored(f.backend, old.id)
+    assert.deepEqual(await readFile(old.currentPath), successor)
+    assert.deepEqual(await readFile(old.path), old.original)
+  } finally { await f.close() }
+})
+
+test('a successor created during legacy publication is never overwritten', options, async () => {
+  const f = await fixture(), originalStat = f.backend.stat
+  try {
+    const old = await f.legacy('legacy-publication-race')
+    const concurrent = Buffer.from('a concurrently created successor')
+    let reads = 0
+    f.backend.stat = async (...args: any[]) => {
+      const snapshot = await originalStat.apply(f.backend, args)
+      if (++reads === 2) await writeFile(old.currentPath, concurrent, { flag: 'wx' })
+      return snapshot
+    }
+    const handle = await f.mount(), result = await handle.historyCheck
+    assert.equal(result.failed, 1)
+    assert.equal(result.repaired, 0)
+    assert.match(result.failures[0]!.error, /EEXIST/)
+    assert.deepEqual(await readFile(old.currentPath), concurrent)
+    assert.deepEqual(await readFile(old.path), old.original)
+    assert.deepEqual(await readFile(`${old.path}.bak`), old.original)
+    assert.equal((await readdir(dirname(old.path))).some(name => name.includes('.kiokuko-')), false)
+  } finally { f.backend.stat = originalStat; await f.close() }
+})
 
 async function restored(backend: any, id: string, access = 'read') {
   const handle = await backend.open(id, access)
@@ -118,6 +233,51 @@ test('concurrent reads share a safe repair and seeded histories retain their inh
     assert.equal(loaded[0]!.inherited, 1)
     assert.deepEqual(await readFile(`${old.path}.bak`), old.original)
   } finally { await f.close() }
+})
+
+test('public plugin startup repairs unopened histories on first load and reload', options, async (t) => {
+  const f = await fixture()
+  let resolveScan!: (value: string) => void, rejectScan!: (reason: unknown) => void
+  let scan = new Promise<string>((resolve, reject) => { resolveScan = resolve; rejectScan = reject })
+  const cancel = () => rejectScan(t.signal.reason)
+  t.signal.addEventListener('abort', cancel, { once: true })
+  const info = console.info.bind(console)
+  t.mock.method(console, 'info', (...args: unknown[]) => {
+    info(...args)
+    if (typeof args[0] === 'string' && args[0].startsWith('[kiokuko-dsh] Session ID check:')) resolveScan(args[0])
+  })
+  try {
+    const legacy = await f.legacy('first-load-v0')
+    const current = await f.old('first-load-v3')
+    const healthy = await f.old('first-load-healthy', rows().slice(0, 1))
+    const plugin = f.ctx.plugin(dshPlugin, { enabled: true })
+    f.disposers.push(() => plugin.dispose())
+    await plugin
+    assert.match(await scan, /3\/3 checked, 2 repaired, 0 failed$/)
+    // No chat open, composition mount, or repair command triggers these writes.
+    for (const old of [legacy, current]) assert.deepEqual(await readFile(`${old.path}.bak`), old.original)
+    assert.deepEqual(await readFile(legacy.path), legacy.original)
+    const migrated = await readFile(legacy.currentPath)
+    const repaired = await readFile(current.path)
+    assert.deepEqual(await readFile(healthy.path), healthy.original)
+    await assert.rejects(access(`${healthy.path}.bak`), { code: 'ENOENT' })
+
+    await plugin.dispose()
+    const next = await f.legacy('next-package-load-v0')
+    scan = new Promise<string>((resolve, reject) => { resolveScan = resolve; rejectScan = reject })
+    const reloaded = f.ctx.plugin(dshPlugin, { enabled: true })
+    f.disposers.push(() => reloaded.dispose())
+    await reloaded
+    assert.match(await scan, /4\/4 checked, 1 repaired, 0 failed$/)
+    assert.deepEqual(await readFile(`${next.path}.bak`), next.original)
+    assert.deepEqual(await readFile(next.path), next.original)
+    assert.deepEqual(await readFile(legacy.currentPath), migrated)
+    assert.deepEqual(await readFile(current.path), repaired)
+    assert.equal((await restored(f.backend, next.id)).header.version, 3)
+  } finally {
+    t.signal.removeEventListener('abort', cancel)
+    await f.close()
+  }
 })
 
 test('normal plugin loading restores the session query used by the chat page', options, async () => {
@@ -218,9 +378,9 @@ test('unload cancels and drains the startup check before any repair writes', opt
 test('unsupported older generations retain the original native migration error', options, async () => {
   const f = await fixture(), originalOpen = f.backend.open
   try {
-    await f.old('unsupported-v0')
+    const old = await f.legacy('unsupported-v0', [{ type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } }])
     const error = Object.assign(new Error('Native v0 migration refuses an unsupported source field'), {
-      name: 'SessionFormatUnsupportedError', location: { kind: 'jsonl', path: join(f.root, 'session.jsonl.zstd') },
+      name: 'SessionFormatUnsupportedError', location: { kind: 'jsonl', path: old.path },
     })
     f.backend.open = async () => { throw error }
     const adapter = mountSessionHistoryCompatibility(f.ctx)
