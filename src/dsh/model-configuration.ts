@@ -8,7 +8,7 @@ export const ROLE_LABELS: Record<ModelRole, string> = {
 }
 export const ModelRouteSchema = z.object({
   provider: identity,
-  family: z.enum(['openai', 'opencode-go', 'opencode-zen', 'openrouter', 'ollama', 'other']),
+  family: z.enum(['openai', 'deepseek', 'opencode-go', 'opencode-zen', 'openrouter', 'orcarouter', 'ollama', 'other']),
   connection: z.enum(['api', 'codex', 'local']).default('api'),
   protocol: z.enum(['responses', 'chat-completions', 'messages', 'unknown']).default('unknown'),
 }).strict()
@@ -49,11 +49,18 @@ export const MODEL_TEMPLATES: readonly ModelTemplate[] = [
     // askdkc/dsh-codex e2e61b6 registers this exact route with the Codex Responses adapter.
     route: { provider: 'openai-codex', family: 'openai', connection: 'codex', protocol: 'responses' } as const,
   }),
+  Object.freeze({
+    ...template('deepseek-flash', 'DeepSeek・V4.1 Flash', 'DeepSeek', 'deepseek', 'deepseek-flash', 'deepseek-flash'),
+    route: { provider: 'deepseek-official', family: 'deepseek', connection: 'api', protocol: 'chat-completions' } as const,
+  }),
+  template('go-deepseek-flash', 'OpenCode Go・DeepSeek V4.1 Flash', 'OpenCode Go', 'opencode-go', 'deepseek-v4.1-flash', 'deepseek-v4.1-flash'),
   template('go-glm', 'OpenCode Go・GLM', 'OpenCode Go', 'opencode-go', 'glm-5.3', 'glm-5.3-flash'),
   template('go-qwen', 'OpenCode Go・Qwen', 'OpenCode Go', 'opencode-go', 'qwen3.8-max', 'qwen3.8-flash'),
   template('zen-glm', 'OpenCode Zen', 'OpenCode Zen', 'opencode-zen', 'glm-5.3', 'glm-5.3-flash'),
+  template('router-deepseek-flash', 'OpenRouter・DeepSeek V4.1 Flash', 'OpenRouter', 'openrouter', 'deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash'),
   template('router-glm', 'OpenRouter・GLM', 'OpenRouter', 'openrouter', 'z-ai/glm-5.3', 'z-ai/glm-5.3-flash'),
   template('router-qwen', 'OpenRouter・Qwen', 'OpenRouter', 'openrouter', 'qwen/qwen3.8-max-0902', 'qwen/qwen3.8-flash'),
+  template('orca-deepseek-flash', 'OrcaRouter・DeepSeek V4.1 Flash', 'OrcaRouter', 'orcarouter', 'deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash'),
   template('ollama', 'Ollama・ローカル標準', 'Ollama', 'ollama', 'qwen3-coder:30b', 'qwen3-coder:30b'),
 ]
 export interface ConfiguredModel { readonly provider: string; readonly id: string; readonly name: string }

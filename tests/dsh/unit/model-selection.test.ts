@@ -95,9 +95,9 @@ test('a removed role connection opens provider selection without silently adopti
   assert.equal(saved.length, 0)
   assert.deepEqual(stored, initial)
 })
-test('eight versioned templates cover all five families with exact IDs and conservative local concurrency', () => {
-  assert.equal(MODEL_TEMPLATES.length, 8)
-  assert.equal(new Set(MODEL_TEMPLATES.map(t => t.group)).size, 5)
+test('twelve versioned templates cover seven families with exact IDs and conservative local concurrency', () => {
+  assert.equal(MODEL_TEMPLATES.length, 12)
+  assert.equal(new Set(MODEL_TEMPLATES.map(t => t.group)).size, 7)
   for (const t of MODEL_TEMPLATES) { assert.equal(t.version, 1); assert.deepEqual(Object.keys(t.models), [...MODEL_ROLES]) }
   const local = MODEL_TEMPLATES.at(-1)!
   assert.equal(local.maxConcurrentChildren, 1)
@@ -105,6 +105,27 @@ test('eight versioned templates cover all five families with exact IDs and conse
   assert.deepEqual(templateBindings(MODEL_TEMPLATES[0]!, 'not-configured', catalog), {})
   assert.deepEqual(templateBindings(MODEL_TEMPLATES[0]!, 'api-one', { ...catalog, models: [{ provider: 'api-one', id: 'gpt-6-astra-similar', name: 'gpt-6-astra' }] }), {})
   assert.equal(ModelBindingSchema.safeParse({ provider: 'api-one', model: ' gpt-6-astra' }).success, false)
+})
+test('DeepSeek recommendations bind every role to the provider-specific V4.1 Flash ID without legacy substitution', () => {
+  const recommendations = [
+    ['deepseek-flash', 'deepseek-flash'],
+    ['go-deepseek-flash', 'deepseek-v4.1-flash'],
+    ['router-deepseek-flash', 'deepseek/deepseek-v4.1-flash'],
+    ['orca-deepseek-flash', 'deepseek/deepseek-v4.1-flash'],
+  ] as const
+  for (const [templateId, model] of recommendations) {
+    const t = MODEL_TEMPLATES.find(t => t.id === templateId)!
+    const provider = t.route?.provider ?? `configured-${templateId}`
+    const models = [{ provider, id: model, name: 'DeepSeek V4.1 Flash' }]
+    const available = { providers: [{ id: provider, name: t.group }], models, failures: [] }
+    for (const role of MODEL_ROLES) {
+      assert.deepEqual(t.models[role], [model])
+      assert.deepEqual(templateBindings(t, provider, available)[role], { provider, model })
+    }
+    const legacy = ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek/deepseek-v4-pro'].map(id => ({ provider, id, name: 'DeepSeek V4.1 Flash' }))
+    assert.deepEqual(templateBindings(t, provider, { ...available, models: legacy }), {})
+    assert.deepEqual(templateBindings(t, provider, { ...available, models: models.map(m => ({ ...m, provider: 'another-route' })) }), {})
+  }
 })
 test('catalog failures are distinct from empty models and duplicate names never collapse route identity', async () => {
   const read = await readModelCatalog(llm)
@@ -136,7 +157,7 @@ test('native cards show unavailable templates, resolve ambiguous providers, pres
       let selected = ''
       if (q.id === 'enno-model-source') selected = 'おすすめテンプレートから選ぶ'
       else if (q.id === 'enno-template') {
-        assert.equal(q.options.filter((o: any) => /接続未設定/u.test(o.label)).length, 7)
+        assert.equal(q.options.filter((o: any) => /接続未設定/u.test(o.label)).length, MODEL_TEMPLATES.length - 1)
         selected = q.options[0].label
       } else if (q.id === 'enno-template-provider') { assert.match(q.options[1].label, /oauth-two.*codex/u); selected = q.options[1].label }
       else if (q.id === 'enno-model-review') selected = reviewCount++ === 0 ? '後鬼 (Goki) ヘッドを変更' : '取消・作業を保持'

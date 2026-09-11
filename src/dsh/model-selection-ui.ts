@@ -75,7 +75,7 @@ async function pickModel(input: SelectionUiInput, catalog: ModelCatalogSnapshot,
       const providers = filteredProviders.slice(providerPage * 20, (providerPage + 1) * 20)
       const labels = providers.map(p => `${p.name} [${p.id}]`)
       const choice = await ask(input, `enno-provider-${role}`, `${ROLE_LABELS[role]}の接続を選択`, [...labels, ...(filteredProviders.length > (providerPage + 1) * 20 ? [NEXT_PAGE] : []), ...(providerPage ? [PREVIOUS_PAGE] : []), ...(query ? [CLEAR_SEARCH] : []), RELOAD, ...copies.map(c => c.label), BACK],
-        `${filteredProviders.length ? '' : '該当する接続がありません。'}自由入力で接続名を検索できます。同名モデルも接続IDとモデルIDで区別します。`, true)
+        `${filteredProviders.length ? '' : '該当する接続がありません。DSHに接続を登録して「一覧を再取得」してください。'}自由入力で接続名を検索できます。同名モデルも接続IDとモデルIDで区別します。`, true)
       if (choice === BACK) return undefined
       if (choice === CLEAR_SEARCH) { query = ''; providerPage = 0; continue }
       if (choice === RELOAD) { catalog = await selectionCatalog(input); providerPage = 0; continue }
@@ -136,8 +136,8 @@ async function templateStatus(input: SelectionUiInput, template: ModelTemplate, 
   return complete ? '互換性の確認が必要' : 'モデル不足'
 }
 async function declareRoute(input: SelectionUiInput, provider: string, family?: ModelRoute['family']): Promise<ModelRoute | undefined> {
-  const families: ModelRoute['family'][] = ['openai', 'opencode-go', 'opencode-zen', 'openrouter', 'ollama', 'other']
-  const names = ['OpenAI', 'OpenCode Go', 'OpenCode Zen', 'OpenRouter', 'Ollama', 'その他']
+  const families: ModelRoute['family'][] = ['openai', 'deepseek', 'opencode-go', 'opencode-zen', 'openrouter', 'orcarouter', 'ollama', 'other']
+  const names = ['OpenAI', 'DeepSeek', 'OpenCode Go', 'OpenCode Zen', 'OpenRouter', 'OrcaRouter', 'Ollama', 'その他']
   const fixedFamily = family !== undefined
   let screen: 'family' | 'auth' | 'protocol' = !family ? 'family' : family === 'openai' ? 'auth' : 'protocol'
   let connection: ModelRoute['connection'] = family === 'ollama' ? 'local' : 'api'
@@ -189,7 +189,8 @@ export async function selectExecution(input: SelectionUiInput): Promise<StoredEx
       continue
     }
     if (screen === 'source') {
-      const source = await ask(input, 'enno-model-source', 'モデル構成の設定方法', ['おすすめテンプレートから選ぶ', 'DSHに設定済みのモデルから選ぶ', BACK], stored.value.problem)
+      const source = await ask(input, 'enno-model-source', 'モデル構成の設定方法', ['おすすめテンプレートから選ぶ', 'DSHに設定済みのモデルから選ぶ', BACK],
+        [stored.value.problem, 'モデル名から選ぶ場合は「DSHに設定済みのモデルから選ぶ」。OpenCode Go / Zen、OpenRouter、Ollama、OrcaRouterなど、登録した接続の一覧を使えます。'].filter(Boolean).join('\n'))
       if (source === BACK) { screen = stored.value.status === 'reselect' ? 'review' : 'mode'; continue }
       screen = source === 'おすすめテンプレートから選ぶ' ? 'templates' : 'review'
       continue
@@ -199,7 +200,7 @@ export async function selectExecution(input: SelectionUiInput): Promise<StoredEx
       const statusRoutes = [...input.routes, ...(draft.routeBindings ?? []).filter(r => !input.routes.some(k => k.provider === r.provider))]
       const statuses = await Promise.all(MODEL_TEMPLATES.map(t => templateStatus({ ...input, routes: statusRoutes }, t, catalog)))
       const labels = MODEL_TEMPLATES.map((t, i) => `${t.name} — ${statuses[i]}`)
-      const picked = await ask(input, 'enno-template', 'おすすめテンプレート', [...labels, BACK], 'OpenAI / OpenCode Go / OpenCode Zen / OpenRouter / Ollama。接続・認証はDSHが管理します。')
+      const picked = await ask(input, 'enno-template', 'おすすめテンプレート', [...labels, BACK], 'OpenAI / DeepSeek / OpenCode Go / OpenCode Zen / OpenRouter / OrcaRouter / Ollama。接続・認証はDSHが管理します。')
       if (picked === BACK) { screen = 'source'; continue }
       const template = MODEL_TEMPLATES[labels.indexOf(picked)]
       if (!template) continue
@@ -207,7 +208,7 @@ export async function selectExecution(input: SelectionUiInput): Promise<StoredEx
       const routes = templateRoutes(template, catalog, knownRoutes)
       if (template.route && !routes.length) {
         await ask(input, 'enno-template-unavailable', 'このテンプレートの接続を利用できません。', [RELOAD, BACK],
-          `dsh-codexの接続 ${template.route.provider} が必要です。対象DSHプロファイルでプラグインを読み込み、modelRoutesに競合する設定がないか確認してください。`)
+          `${template.group}の接続 ${template.route.provider} が必要です。対象DSHプロファイルで接続を読み込み、modelRoutesに競合する設定がないか確認してください。`)
         continue
       }
       let route = routes.length === 1 ? routes[0] : undefined

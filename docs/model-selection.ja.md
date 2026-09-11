@@ -21,16 +21,32 @@ DSHの権限判定、必要な検証を維持し、役小角の契約・WorkUnit
 | --- | --- | --- | --- | --- |
 | OpenAI | `gpt-6-astra` | `gpt-5.6-sol` | `gpt-5.6-luna` | `gpt-6-astra` |
 | OpenAI Codex・推奨（dsh-codex） | `gpt-6-astra` | `gpt-5.6-sol` | `gpt-5.6-luna` | `gpt-6-astra` |
+| DeepSeek・V4.1 Flash | `deepseek-flash` | `deepseek-flash` | `deepseek-flash` | `deepseek-flash` |
+| OpenCode Go・DeepSeek V4.1 Flash | `deepseek-v4.1-flash` | `deepseek-v4.1-flash` | `deepseek-v4.1-flash` | `deepseek-v4.1-flash` |
 | OpenCode Go・GLM | `glm-5.3` | `glm-5.3` | `glm-5.3-flash` | `glm-5.3` |
 | OpenCode Go・Qwen | `qwen3.8-max` | `qwen3.8-max` | `qwen3.8-flash` | `qwen3.8-max` |
 | OpenCode Zen | `glm-5.3` | `glm-5.3` | `glm-5.3-flash` | `glm-5.3` |
+| OpenRouter・DeepSeek V4.1 Flash | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` |
 | OpenRouter・GLM | `z-ai/glm-5.3` | `z-ai/glm-5.3` | `z-ai/glm-5.3-flash` | `z-ai/glm-5.3` |
 | OpenRouter・Qwen | `qwen/qwen3.8-max-0902` | `qwen/qwen3.8-max-0902` | `qwen/qwen3.8-flash` | `qwen/qwen3.8-max-0902` |
+| OrcaRouter・DeepSeek V4.1 Flash | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` |
 | Ollama・ローカル標準 | `qwen3-coder:30b` | `qwen3-coder:30b` | `qwen3-coder:30b` | `qwen3-coder:30b` |
 
 これらは版1の構成候補です。適用時にDSHの登録モデルと正確なIDで照合します。
 表示名の部分一致による代用はありません。全テンプレートを表示し、適用可能、
 接続未設定、接続設定が不一致、一覧取得失敗、モデル不足、互換性の確認が必要、を区別します。
+
+DeepSeek系の推奨は全5役を **V4.1 Flash** に統一しています。IDは提供元ごとに、
+[DeepSeek公式API](https://www.deepseek.com/en/news/deepseek-v4-1-flash/)、
+[OpenCode Go](https://opencode.ai/docs/go/)、
+[OpenRouter](https://openrouter.ai/deepseek/deepseek-v4.1-flash)、
+[OrcaRouter](https://www.orcarouter.ai/models/deepseek/deepseek-v4.1-flash)で確認しています。
+公式APIの専用テンプレートはDSHの`deepseek-official`接続を使います。
+V4.1 Flashが未登録の場合、V4 Proや旧FlashのIDには置き換えません。
+2026-09-11に[OpenCodeのモデル一覧](https://models.opencode.ai/api.json)も確認しています。
+`opencode-go`にはV4.1 Flashが掲載されていますが、Zenに相当する`opencode`にはありません。
+この一覧のOrcaRouter欄にも未掲載で、OrcaRouter公式モデルページの更新と差があります。
+Zen・Ollamaで推奨テンプレートにないモデルを使う場合は、以下の登録済みモデル選択を使います。
 
 [dsh-codex](https://github.com/askdkc/dsh-codex)を使う場合は、
 「おすすめテンプレートから選ぶ」→「OpenAI Codex・推奨（dsh-codex）」→
@@ -51,9 +67,16 @@ OpenAI APIとCodex認証、OpenCode GoとZenは別の接続として扱います
 接続先の種類・通信方式が未登録なら、DSHに設定した内容を質問画面で確認します。
 Kiokukoは認証情報を取得・変更しません。
 
-「DSHに設定済みのモデルから選ぶ」経路では、接続別一覧、自由入力による検索、
-ページ送り、他の役割からのコピーを使えます。DeepSeek Flashなども登録済みなら
-選択できます。テンプレート採用後の変更は「カスタム」と表示し、元テンプレートの
+モデル名から選ぶ場合は、**「DSHに設定済みのモデルから選ぶ」→役割を変更→接続を選択→
+モデル名で検索・選択→構成を確認して開始**と進みます。
+**OpenCode Go、OpenCode Zen、OpenRouter、Ollama、OrcaRouter**の登録済み接続を選べます。
+一覧は現在のDSHプロファイルから取得し、接続名・モデル名と正確なIDを表示します。
+同じモデル名でもOpenRouterとOrcaRouterの割り当ては別々に保持します。
+接続が表示されない場合はDSHに登録し、「一覧を再取得」で更新してください。
+公開モデル一覧は推奨IDの参照元で、DSHへのモデル登録は行いません。
+公開一覧の`ollama-cloud`と、ローカルOllamaのインストール済みモデルは別の一覧です。
+自由入力による検索、ページ送り、他の役割からのコピーを使えます。
+テンプレート採用後の変更は「カスタム」と表示し、元テンプレートの
 IDと版を保持します。戻る・取消でも設定途中の構成は保持されます。
 未設定の役割ではenno-idealの接続を引き継ぎ、モデル選択から始まります。
 設定済みの役割ではその役割の接続を使います。別の接続を使う場合はモデル画面の
@@ -79,14 +102,18 @@ modelRoutes:
     family: openai
     connection: api
     protocol: responses
+  - provider: my-orcarouter
+    family: orcarouter
+    connection: api
+    protocol: chat-completions
   - provider: my-local-models
     family: ollama
     connection: local
     protocol: chat-completions
 ```
 
-`family` は `openai` / `opencode-go` / `opencode-zen` / `openrouter` /
-`ollama` / `other`、`connection` は `api` / `codex` / `local`、
+`family` は `openai` / `deepseek` / `opencode-go` / `opencode-zen` / `openrouter` /
+`orcarouter` / `ollama` / `other`、`connection` は `api` / `codex` / `local`、
 `protocol` は `responses` / `chat-completions` / `messages` / `unknown` です。
 設定と画面による申告は通信成功の証明ではありません。AstraはResponsesと確認された
 接続だけに割り当てられます。設定が実際の通信方式と違えば実行時に失敗します。

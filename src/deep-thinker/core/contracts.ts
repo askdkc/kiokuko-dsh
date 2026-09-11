@@ -21,7 +21,7 @@ export const DeepBudgetSchema = z.object({
   maxActiveSeconds: z.number().int().min(1).max(7_200).default(600),
 }).strict()
 export type DeepBudget = z.infer<typeof DeepBudgetSchema>
-export const DeepRouteSchema = z.object({ provider: id, family: z.enum(['openai', 'opencode-go', 'opencode-zen', 'openrouter', 'ollama', 'other']),
+export const DeepRouteSchema = z.object({ provider: id, family: z.enum(['openai', 'deepseek', 'opencode-go', 'opencode-zen', 'openrouter', 'orcarouter', 'ollama', 'other']),
   connection: z.enum(['api', 'codex', 'local']), protocol: z.enum(['responses', 'chat-completions', 'messages', 'unknown']) }).strict()
 export const DeepConfigurationSchema = z.object({
   roles: z.object({ planner: DeepModelSchema, solver: DeepModelSchema, critic: DeepModelSchema, synthesizer: DeepModelSchema }).strict(),

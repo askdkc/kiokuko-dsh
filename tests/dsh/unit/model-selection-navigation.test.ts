@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { ExecutionSelectionPending, selectExecution } from '../../../src/dsh/model-selection-ui.js'
 import type { StoredExecutionSelection } from '../../../src/dsh/execution-selection.js'
-import { MODEL_TEMPLATES, templateBindings, type DshModelCatalog, type DshModelCompatibility, type ModelConfigurationDraft, type ModelRoute } from '../../../src/dsh/model-configuration.js'
+import { MODEL_ROLES, MODEL_TEMPLATES, ROLE_LABELS, templateBindings, type DshModelCatalog, type DshModelCompatibility, type ModelConfigurationDraft, type ModelRoute } from '../../../src/dsh/model-configuration.js'
 import type { DshUserQuestionRequest } from '../../../src/dsh/user-interaction.js'
 
 type Question = DshUserQuestionRequest['questions'][0]
@@ -250,6 +250,50 @@ test('catalog changes at final adoption return to review with no ready selection
   } } })
   assert.equal(result, undefined)
   assert.equal(saved.some(s => s.value.status === 'ready'), false)
+})
+
+test('Go, Zen, OpenRouter, Ollama and OrcaRouter models are searchable by name and retain distinct connections', async () => {
+  const connections = [
+    { id: 'go-account', name: 'OpenCode Go', family: 'opencode-go', model: 'deepseek-v4.1-flash', modelName: 'DeepSeek V4.1 Flash' },
+    { id: 'zen-account', name: 'OpenCode Zen', family: 'opencode-zen', model: 'configured-zen-model', modelName: 'Zen configured model' },
+    { id: 'router-account', name: 'OpenRouter', family: 'openrouter', model: 'deepseek/deepseek-v4.1-flash', modelName: 'DeepSeek V4.1 Flash' },
+    { id: 'local-account', name: 'Ollama', family: 'ollama', model: 'qwen3-coder:30b', modelName: 'Qwen Coder' },
+    { id: 'orca-account', name: 'OrcaRouter', family: 'orcarouter', model: 'deepseek/deepseek-v4.1-flash', modelName: 'DeepSeek V4.1 Flash' },
+  ] as const
+  const llm: DshModelCatalog = {
+    listProviders: () => connections.map(({ id, name }) => ({ id, name })),
+    listModels: async provider => {
+      const connection = connections.find(c => c.id === provider)!
+      return [{ provider, id: connection.model, name: connection.modelName }, { provider, id: 'unrelated', name: 'Unrelated model' }]
+    },
+  }
+  const steps: Step[] = [['enno-model-source', 'DSHに設定済みのモデルから選ぶ']]
+  for (const [index, role] of MODEL_ROLES.entries()) {
+    const connection = connections[index]!
+    steps.push(['enno-model-review', `${ROLE_LABELS[role]}を変更`])
+    if (index > 0) steps.push([`enno-model-${role}`, '接続を変更'])
+    steps.push(
+      [`enno-provider-${role}`, { custom: connection.name }],
+      [`enno-provider-${role}`, `${connection.name} [${connection.id}]`, q => {
+        assert.deepEqual((q.options ?? []).filter(o => o.label.includes('[')).map(o => o.label), [`${connection.name} [${connection.id}]`])
+      }],
+      [`enno-model-${role}`, { custom: connection.modelName }],
+      [`enno-model-${role}`, `${connection.modelName} [${connection.model}]`, q => {
+        assert.deepEqual((q.options ?? []).filter(o => o.label.includes('[')).map(o => o.label), [`${connection.modelName} [${connection.model}]`])
+      }],
+      ['enno-route-family', connection.name],
+      ['enno-route-protocol', 'Chat Completions'],
+    )
+  }
+  steps.push(['enno-model-review', 'この構成で開始'])
+  // Synthetic catalog and explicit fixture evidence do not claim live Go/account access.
+  const { result } = await navigate(steps, { llm, routes: [], compatibility: { inspect: async () => ({ protocol: 'chat-completions', goSessionHeaders: true }) } })
+  assert.equal(result?.value.status, 'ready')
+  assert.deepEqual(result?.value.configuration?.roles, Object.fromEntries(MODEL_ROLES.map((role, index) => [role, { provider: connections[index]!.id, model: connections[index]!.model }])))
+  assert.deepEqual(result?.value.configuration?.routeBindings, connections.map(c => ({ provider: c.id, family: c.family, connection: c.family === 'ollama' ? 'local' : 'api', protocol: 'chat-completions' })))
+  assert.equal(result?.value.configuration?.maxConcurrentChildren, 1)
+  const resumed = await navigate([], { stored: result!, llm, routes: [] })
+  assert.deepEqual(resumed.result, result)
 })
 
 for (const template of MODEL_TEMPLATES) test(`${template.id}: template adoption, cancellation and restart retain exact roles and route`, async () => {

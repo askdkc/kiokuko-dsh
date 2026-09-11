@@ -16,13 +16,26 @@ above nine, type consecutive digits (`1`, `2`, Enter selects option 12); Backspa
 corrects the number. Digits typed in the search field remain search text, and Enter
 submits the search. IME composition and repeated key events do not select or submit.
 
-Enno offers eight versioned templates across **OpenAI, OpenCode Go, OpenCode Zen,
-OpenRouter and Ollama**, plus a custom configured-model selector. The complete
+Enno offers twelve versioned templates across **OpenAI, DeepSeek, OpenCode Go,
+OpenCode Zen, OpenRouter, OrcaRouter and Ollama**, plus a custom configured-model selector. The complete
 [template table and configuration reference](model-selection.ja.md) lists exact
 model IDs. OpenAI assigns Astra to ideal/Zenki/check, Sol to the Goki head and
 Luna to workers. Go and OpenRouter provide GLM and Qwen variants; Zen uses GLM.
 Ollama uses `qwen3-coder:30b` for every role, limits children to one, and never
 downloads models. Reasoning uses model defaults; reflection uses the check model.
+
+All DeepSeek recommendations use **V4.1 Flash for all five roles**. Exact IDs differ:
+`deepseek-flash` on [DeepSeek's API](https://www.deepseek.com/en/news/deepseek-v4-1-flash/),
+`deepseek-v4.1-flash` on [OpenCode Go](https://opencode.ai/docs/go/), and
+`deepseek/deepseek-v4.1-flash` on [OpenRouter](https://openrouter.ai/deepseek/deepseek-v4.1-flash)
+and [OrcaRouter](https://www.orcarouter.ai/models/deepseek/deepseek-v4.1-flash).
+The direct DeepSeek template uses DSH's `deepseek-official` connection. These templates
+never substitute V4 Pro or an older Flash ID when V4.1 Flash is unavailable.
+The [OpenCode model registry](https://models.opencode.ai/api.json) was also checked
+on 2026-09-11. Its `opencode-go` entry includes V4.1 Flash; its Zen entry (`opencode`)
+does not. Its OrcaRouter entry also lacks V4.1 Flash, although OrcaRouter's own model
+page lists the ID above. Registry entries can lag provider changes. Zen and Ollama
+use the configured-model selector for models without a verified template ID.
 
 For [dsh-codex](https://github.com/askdkc/dsh-codex), choose **OpenAI Codex・推奨（dsh-codex）**
 from the template menu, then confirm the configuration. It assigns Astra to
@@ -53,8 +66,19 @@ Free-text digits remain search terms. Back in route declaration returns to the
 previous step. Confirmed models survive route cancellation; “接続設定を確認” resumes
 unfinished declarations or corrects draft connection settings without reselecting models.
 
+To choose by model name, select **DSHに設定済みのモデルから選ぶ**, edit a role,
+select its connection, then search or select a model name and confirm the configuration.
+This works with configured **OpenCode Go, OpenCode Zen, OpenRouter, Ollama and OrcaRouter**
+connections. Every entry displays its name and exact ID; the same model on OpenRouter
+and OrcaRouter remains a distinct binding. Lists come from the current DSH profile.
+Register a missing connection in DSH and select **一覧を再取得** to refresh it.
+The public registry is a recommendation reference; it does not register models in
+DSH. Its `ollama-cloud` catalog is separate from a local Ollama installation.
+
 Optional plugin `modelRoutes` entries declare `provider`, `family`, `connection`
 and `protocol`; the native cards can also bind previously unclassified routes.
+The `family` values are `openai`, `deepseek`, `opencode-go`, `opencode-zen`,
+`openrouter`, `orcarouter`, `ollama` and `other`.
 These declarations do not change DSH authentication and do not prove a successful
 wire request. Astra requires a Responses declaration. An incorrect declaration
 can still fail at runtime. Authentication, quota and unavailable-model failures

@@ -85,7 +85,7 @@ export class DeepConfigurationUI {
         const selected = await this.#pickModel(agent, signal, catalog, labels[role], Object.values(draft.roles)[0])
         if (!selected) continue
         if (![...this.routes, ...draft.routeBindings].some(r => r.provider === selected.provider)) {
-          const families = ['openai','opencode-go','opencode-zen','openrouter','ollama','other'] as const
+          const families = ['openai','deepseek','opencode-go','opencode-zen','openrouter','orcarouter','ollama','other'] as const
           const family = await deepQuestion(this.questions, agent, signal, 'deep-route-family', `${selected.provider}の実際の接続先`, families)
           if (!families.includes(family as typeof families[number])) continue
           const protocols = ['responses','chat-completions','messages','unknown'] as const

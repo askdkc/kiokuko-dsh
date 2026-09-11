@@ -112,7 +112,7 @@ test('native loop and spawn route every template role, freeze assembly, isolate 
 }, async () => {
   const h = await harness()
   let active: ModelBinding | undefined
-  const script = new h.mock.MockAdapter(Array.from({ length: 60 }, () => h.mock.textResponse('verified')))
+  const script = new h.mock.MockAdapter(Array.from({ length: MODEL_TEMPLATES.length * MODEL_ROLES.length + 2 }, () => h.mock.textResponse('verified')))
   const providers = ['ordinary', ...MODEL_TEMPLATES.map(t => `route-${t.id}`)]
   h.ctx.llm.registerAdapter(providers, script)
   const parent = await h.ctx.agentLoop.create(h.session.SessionId('matrix-parent'), { provider: 'ordinary', model: 'ordinary' }, { cwd: h.root })
