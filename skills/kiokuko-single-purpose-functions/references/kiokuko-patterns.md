@@ -2,7 +2,7 @@
 
 # Single-purpose implementation patterns
 
-These patterns are repository- and language-agnostic contracts illustrated with TypeScript for concreteness. Translate them into the project’s language, framework, error model, persistence layer, and test tools. Reuse existing project helpers before creating substitutes.
+These patterns are repository- and language-agnostic contracts illustrated with TypeScript for concreteness. Translate them into the project's language, framework, error model, persistence layer, and test tools, and reuse existing project helpers before creating substitutes.
 
 ## 1. Hostile boundary, constrained private core
 
@@ -41,23 +41,22 @@ export function endOfWindow(value: unknown): number {
 }
 ```
 
-Use the project’s error type and validation library where available. Do not make `calculateEnd` accept `unknown` or repeat transport validation throughout the domain.
+Use the project's error type and validation library where available. Do not make `calculateEnd` accept `unknown` or repeat transport validation throughout the domain.
 
 ## 2. Closed schema at a request boundary
 
-Use bounded schemas and reject unknown fields when the protocol is closed.
+Use a schema library the project already depends on; do not add one for a boundary the standard library can guard. The schema is the boundary: reject unknown fields when the protocol is closed, bound every collection and string, and require an explicit default for optional inputs. Internal helpers consume the validated output or a narrower domain value, never the raw transport shape.
 
 ```ts
-import * as z from 'zod/v4';
-
-const requestSchema = z.object({
-  requestId: z.string().trim().min(1).max(256),
-  paths: z.array(z.string().trim().min(1).max(1_024)).max(100),
-  limit: z.number().int().min(1).max(100).default(20),
-}).strict();
+const parseRequest: (value: unknown) => Request = (value) => {
+  if (!isPlainRecord(value)) throw new Error('request must be an object');
+  return {
+    requestId: requireBoundedString(value.requestId, 1, 256),
+    paths: requirePathArray(value.paths, 100),
+    limit: optionalInt(value.limit, 1, 100) ?? 20,
+  };
+};
 ```
-
-A schema is the boundary. Internal helpers should consume its validated output or a narrower domain value.
 
 ## 3. Exact optional values
 
@@ -79,34 +78,9 @@ function candidate(id: string, description: string | undefined): Candidate {
 
 Use the equivalent convention in languages that distinguish missing, null, and empty values.
 
-## 4. Immutable transformation and mutation test
+## 4. Immutable transformation
 
-```ts
-interface Profile {
-  readonly mode: 'build' | 'debug' | null;
-  readonly target: string | null;
-}
-
-function withTarget(profile: Profile, target: string): Profile {
-  return { ...profile, target: target.trim() };
-}
-```
-
-```ts
-import assert from 'node:assert/strict';
-import test from 'node:test';
-
-test('returns a new profile without mutating the input', () => {
-  const input = { mode: 'build' as const, target: null };
-  const before = structuredClone(input);
-
-  const result = withTarget(input, ' src/index.ts ');
-
-  assert.deepEqual(result, { mode: 'build', target: 'src/index.ts' });
-  assert.deepEqual(input, before);
-  assert.notEqual(result, input);
-});
-```
+Return a new value and leave the caller's input untouched, unless mutation is the explicit API contract. When the transformation is the change being made, prove it with a check that compares the input before and after and asserts the result is a different object.
 
 ## 5. Explicit variable dependencies
 
@@ -138,32 +112,16 @@ Production composition supplies real dependencies; tests supply deterministic on
 The store performs persistence. The service or use case owns the atomic operation.
 
 ```ts
-interface Transaction {
-  execute(sql: string, parameters: readonly unknown[]): void;
+type Transaction = { execute(sql: string, parameters: readonly unknown[]): void };
+
+function insertItem(transaction: Transaction, id: string, value: string): void {
+  transaction.execute('INSERT INTO items (id, value) VALUES (?, ?)', [id, value]);
 }
 
-interface NewItem {
-  readonly id: string;
-  readonly value: string;
-}
-
-function insertItem(transaction: Transaction, item: NewItem): void {
-  transaction.execute(
-    'INSERT INTO items (id, value) VALUES (?, ?)',
-    [item.id, item.value],
-  );
-}
-
-function createItem(
-  runTransaction: (operation: (transaction: Transaction) => void) => void,
-  item: NewItem,
-): void {
+function createItem(runTransaction: (operation: (t: Transaction) => void) => void, id: string): void {
   runTransaction((transaction) => {
-    insertItem(transaction, item);
-    transaction.execute(
-      'INSERT INTO audit_events (event_type, target_id) VALUES (?, ?)',
-      ['item_created', item.id],
-    );
+    insertItem(transaction, id, 'value');
+    transaction.execute('INSERT INTO audit_events (event_type, target_id) VALUES (?, ?)', ['item_created', id]);
   });
 }
 ```
@@ -227,60 +185,34 @@ Do not copy unknown exception messages, submitted values, credentials, URLs with
 When both fail, retain both failures without replacing the primary one.
 
 ```ts
-async function useResource<T>(
-  open: () => Promise<{ close: () => Promise<void> }>,
-  operation: (resource: { close: () => Promise<void> }) => Promise<T>,
-): Promise<T> {
+async function useResource<T>(open: () => Promise<Resource>, operation: (r: Resource) => Promise<T>): Promise<T> {
   const resource = await open();
-  let operationFailure: unknown;
-  let result: { value: T } | undefined;
-
   try {
-    result = { value: await operation(resource) };
-  } catch (error) {
-    operationFailure = error;
-  }
-
-  try {
-    await resource.close();
-  } catch (cleanupFailure) {
-    if (operationFailure !== undefined) {
-      throw new AggregateError(
-        [operationFailure, cleanupFailure],
-        'Resource operation and cleanup failed',
-      );
+    return await operation(resource);
+  } catch (operationFailure) {
+    try {
+      await resource.close();
+    } catch (cleanupFailure) {
+      throw new AggregateError([operationFailure, cleanupFailure], 'operation and cleanup failed');
     }
-    throw cleanupFailure;
+    throw operationFailure;
   }
-
-  if (operationFailure !== undefined) throw operationFailure;
-  if (result === undefined) throw new Error('Resource operation produced no result');
-  return result.value;
 }
 ```
 
-Use the language’s structured multi-error or error-chaining mechanism where possible.
+Use the language's structured multi-error or error-chaining mechanism where possible.
 
 ## 10. Classify failures by structured fields
 
-Prefer error types, codes, status values, or discriminated variants over message matching.
+Prefer error types, codes, status values, or discriminated variants over message matching. A guard should check the structured field and its value, never a substring of the message: an unrelated exception containing "busy" or "timeout" is not retryable.
 
 ```ts
-interface RetryableFailure extends Error {
-  readonly code: 'temporarily_unavailable';
-  readonly retryAfterSeconds: number;
-}
-
 function isRetryableFailure(error: unknown): error is RetryableFailure {
   return error instanceof Error
-    && 'code' in error
-    && error.code === 'temporarily_unavailable'
-    && 'retryAfterSeconds' in error
-    && typeof error.retryAfterSeconds === 'number';
+    && 'code' in error && error.code === 'temporarily_unavailable'
+    && 'retryAfterSeconds' in error && typeof error.retryAfterSeconds === 'number';
 }
 ```
-
-Do not treat an unrelated exception containing “busy” or “timeout” as retryable.
 
 ## 11. Immutable replay identity
 
@@ -306,28 +238,13 @@ Reusing an identity with changed bound input is a conflict, not a second mutatio
 
 ## 12. Compare-and-swap filesystem changes
 
-For managed files, the contract may include expected content, expected file identity, expected parent-directory identity, alternate paths that must remain absent, restrictive mode, reverse-order rollback, and explicit ambiguous-cleanup failure.
+When concurrent changes or independently owned files must be protected, a plain write, rename, or delete is insufficient. Use the project's atomic compare-and-swap helper, and make the contract explicit about expected content, expected file and parent-directory identity, alternate paths that must remain absent, restrictive mode, reverse-order rollback, and an explicit ambiguous-cleanup failure.
 
-Use the project’s atomic compare-and-swap helpers where available. Plain write, rename, or delete calls are insufficient when concurrent changes or independently owned files must be protected.
+## 13. Secret non-echo
 
-## 13. Test secret non-echo
+Assert that rejected input is not echoed: submit a sentinel value, trigger the validation failure, and assert the error message does not contain the sentinel.
 
-```ts
-test('rejects invalid input without echoing it', () => {
-  const submitted = 'secret-sentinel-value';
-
-  assert.throws(
-    () => parseWindow({ start: submitted, limit: 10 }),
-    (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.equal(error.message.includes(submitted), false);
-      return true;
-    },
-  );
-});
-```
-
-## 14. Test deterministic output
+## 14. Deterministic output
 
 For canonical order, hashes, manifests, and rankings, construct semantically equivalent inputs with different insertion order and assert identical output.
 

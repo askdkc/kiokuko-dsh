@@ -158,6 +158,45 @@ Header modal and `/export` command UI while the Host route uses cursor-backed
 streaming export. Removing the bundle restores the stock row without rewriting
 unrelated plugins or settings. The plugin does not edit `AGENTS.md`.
 
+## Bundled standard Skills: canonical source and refresh
+
+The repository's `skills/<name>/` directories are the single canonical source
+for the six standard Skills and for the bundled Japanese output Skill.
+`src/dsh/standard-skills.ts` resolves them relative to the built module
+(`dist/dsh/` → `../../skills/<name>`), and `src/dsh/standard-skill-integrity.ts`
+refuses to load a tree that breaks the manifest: exactly one management marker
+per file, frontmatter `name` equal to the manifest name with a non-empty
+description and no `disable-model-invocation`, every local Markdown link
+resolvable inside its own Skill, and exactly 6 Skills with 21 Markdown files and
+15 reference files.
+
+Because the package ships that tree, a plugin upgrade is what refreshes a
+deployed copy: bump the package version and reinstall the plugin
+(`pnpm dsh plugin --profile web add kiokuko-dsh` after publishing, or the
+GitHub/commit-pinned install from **Install**). A working directory that keeps an
+independent copy of these Skills, such as an agent-level Skills directory, is
+*not* written by this repository and drifts independently; after changing a
+Skill, refresh that copy from this tree and confirm it matches, or delete it so
+only the plugin's bundled content is used.
+
+Vocabulary is fixed by the implementation: `task_prepare` and `task_answer` are
+host operations performed by the DSH host before the model request, not model
+tools, and no model-side attestation field is required. Skill text that asks the
+model to call those tools, or to create its own `requestId`, belongs to an older
+deployment and must not be reintroduced.
+
+### Regenerate and verify
+
+```bash
+npm run build
+node scripts/verify-standard-skills.mjs
+```
+
+The script loads the parity from `dist/` and fails unless the counts are 6
+Skills, 21 Markdown files, and 15 reference files; it prints the Skill names,
+counts, and the content digest that changes on every Skill edit. Compare the
+digest before and after a Skill change to confirm which deployment is stale.
+
 ## STORE contract and permissions
 
 This package intentionally targets the DSH STORE `user-reviewed` track. Its
