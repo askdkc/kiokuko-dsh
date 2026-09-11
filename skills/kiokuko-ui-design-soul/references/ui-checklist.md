@@ -50,16 +50,7 @@ For each primary action, verify the applicable states:
 - Keep time limits adjustable or avoid them unless the task itself requires one.
 - On the web, apply the existing design system and WCAG 2.2; do not imitate iOS merely because these principles originated in Apple HIG.
 
-## Async-action spot check
-
-For a save, upload, generation, import, or other asynchronous action, confirm:
-
-1. Press or focus feedback is immediate.
-2. The busy state names the ongoing action and blocks accidental duplicates.
-3. Progress type matches what the system can measure.
-4. Cancellation has defined semantics and leaves data consistent.
-5. Success and failure are announced in the same task context.
-6. A failure keeps user input and provides a tested recovery path.
+For an asynchronous action, run the `ui.async.v1` state, processing, and recovery contract in [async-recovery.md](async-recovery.md) against the flow.
 
 ## Official sources
 

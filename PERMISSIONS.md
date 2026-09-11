@@ -97,9 +97,15 @@ run.
 ## Orca recordings
 
 `orca.enabled` defaults to `true`, including in the installed bundle configuration.
-This enables the feature; a native question asks whether to record each session.
-Only affirmative choices or `/kioku-orca start` authorize capture. Choices are
-saved in SQLite; skip/cancel or unavailable UI continues without recording.
+This enables the feature, and configuration also approves it: each interactive
+session is recorded without a question, and delegated or managed child sessions
+follow the same default without ever being asked. `orca.askOnStart: true`
+restores the per-session question instead, and child sessions then need an
+explicit `/kioku-orca start`. Default recording, an affirmative answer or
+`/kioku-orca start` authorize capture. Choices are
+saved in SQLite and outrank the default, so a saved refusal keeps that session
+unrecorded; with `askOnStart: true`, skip/cancel or unavailable UI continues
+without recording.
 Set it to `false` and reload to disable the feature. The runtime dependencies
 `@orcareplay/core`, `@orcareplay/schema`, and `@orcareplay/viewer` with range `>=0.2.1`
 are installed automatically by npm/pnpm with this package. No extra installer,

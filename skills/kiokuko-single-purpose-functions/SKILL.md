@@ -1,6 +1,6 @@
 ---
 name: kiokuko-single-purpose-functions
-description: Use whenever writing, modifying, reviewing, debugging, or refactoring code. Apply compact function and problem-shaping contracts, then route each function or WorkUnit to one to three versioned expert fragments for its actual risks.
+description: Use for any code work — writing, changing, reviewing, or debugging. Apply the function contract, then read only the expert fragments the change's actual risks select.
 ---
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-single-purpose-functions -->
@@ -9,43 +9,31 @@ description: Use whenever writing, modifying, reviewing, debugging, or refactori
 
 ## Outcome
 
-Create code whose functions each own one cohesive externally observable responsibility, with explicit concepts, representation boundaries, effects, failures, and focused verification across languages, frameworks, and repositories.
+Create code whose functions each own one cohesive, externally observable responsibility, with explicit concepts, representation boundaries, effects, failures, and focused verification — in any language, framework, or repository.
 
-This file is the mandatory compact index for code work. It is not a request to read every reference. Read this index completely, select the smallest sufficient expert set, and then read only those expert files.
+This index is the execution envelope for code work. Read it completely, select the smallest sufficient expert set, then read only those expert files.
 
 ## Universal core
 
-Apply these invariants to every created or changed function:
+Applies to every created or changed function:
 
-1. State one contract: input, success, expected failures, effects, and observable result.
-2. Before choosing a storage, framework, transport, or UI representation, name the user-visible or domain concept, its input and output, and information that must remain private. Keep this proportional; representation-preserving mechanical changes do not need a separate design artifact.
-3. Give it one responsibility and one reason to change. Do not create meaningless micro-functions.
+1. State one contract: input, success, expected failures, effects, observable result.
+2. Name the user-visible or domain concept, its input and output, and what must stay private before choosing a storage, framework, transport, or UI representation. Keep this proportional; a representation-preserving mechanical change needs no separate design artifact.
+3. One responsibility, one reason to change. No meaningless micro-functions.
 4. Validate hostile input at the boundary; keep the private core constrained by types or validated values.
 5. Do not mutate caller-owned input unless mutation is the explicit API contract.
-6. Make domain decisions deterministic. Keep persistence, network, filesystem, process, clock, randomness, UI, and logging effects explicit.
-7. Return or throw failures intentionally. Do not silently swallow, partially succeed, or leak lower-layer accidents as the public contract.
-8. Verify the changed behavior with the smallest meaningful runnable check. Add or modify a test when it protects a material behavior, failure boundary, or regression; reuse existing coverage when sufficient. Do not add implementation-mirroring tests for trivial, reversible, low-impact changes.
+6. Keep domain decisions deterministic; make persistence, network, filesystem, process, clock, randomness, UI, and logging effects explicit.
+7. Return or throw failures intentionally. Never swallow, partially succeed, or leak a lower-layer accident as the public contract.
+8. Verify changed behavior with the smallest meaningful runnable check. Add or modify a test when it protects a material behavior, failure boundary, or regression, reuse existing coverage when that suffices, and skip implementation-mirroring tests for trivial, reversible, low-impact changes.
 9. Preserve unrelated code and existing public behavior unless the task explicitly changes it.
 
-Small is not the objective. Cohesion is. Keep operations together when splitting them would hide sequencing, duplicate policy, or weaken a transaction.
+Cohesion is the objective, not smallness. Keep operations together when splitting them would hide sequencing, duplicate policy, or weaken a transaction.
 
-## MoE selection contract
+## Expert selection
 
-For each new or materially changed function, or for the smallest WorkUnit that owns a cohesive use case:
+For each new or materially changed function, or for the smallest WorkUnit owning one cohesive use case: classify the dominant risk, select one expert below, add at most two more only when the same contract genuinely crosses those risks, record a concrete reason for each, and read the selected files before implementation or review. A different expert set or reason to change means a separate WorkUnit or a separate function contract inside it.
 
-1. classify the dominant risk;
-2. select one expert ID from the table below;
-3. add at most two more only when the same contract genuinely crosses those risks;
-4. record a concrete reason for every selection;
-5. read the selected files before implementation or review.
-
-Do not make a new Skill per function. The function contract is the execution envelope; `expertRefs` are its mixture-of-experts dispatch. If two functions need materially different expert sets or reasons to change, split the WorkUnit or record separate function contracts inside it.
-
-In Enno-Oduno plans, every new WorkUnit declares one or more local routes from
-`code`, `ui`, `test`, `docs`, and `operations`. `expertRefs` is revision-bound:
-a code route requires `code.*`; a UI route requires both `code.*` and `ui.*`;
-test, docs, and operations routes do not inherit code experts. Outside
-Enno-Oduno, keep the same mapping in the working plan or review notes:
+Enno-Oduno plans bind `expertRefs` to the WorkUnit revision: a `code` route requires at least one `code.*`, a `ui` route requires `code.*` and `ui.*`, and `test`, `docs`, and `operations` routes inherit neither. Outside Enno-Oduno, keep the same mapping in the working plan or review notes:
 
 ```text
 target -> responsibility -> expert IDs -> focused verifier
@@ -64,19 +52,12 @@ Do not load unselected fragments “just in case.” If repository evidence expo
 | `code.verification.v1` | regression repair, test design, review, compatibility or failure evidence | [verification.md](references/verification.md) |
 | `code.modeling.v1` | problem shaping, public data design, domain vocabulary, or translation between storage, API, serialization, and UI representations | [problem-shaping-and-language.md](references/problem-shaping-and-language.md) |
 
-Typical selections:
-
-- pure calculation: `code.domain.v1`;
-- public response, DTO, or ViewModel design: `code.modeling.v1` + `code.boundary.v1`;
-- domain concept or state representation: `code.modeling.v1` + `code.domain.v1`;
-- request parser: `code.boundary.v1` + `code.verification.v1`;
-- transactional write: `code.effects.v1` + `code.protocol.v1`;
-- public API repair: `code.boundary.v1` + `code.protocol.v1` + `code.verification.v1`.
+Common selections: pure calculation → `code.domain.v1`; request parser → `code.boundary.v1` + `code.verification.v1`; transactional write → `code.effects.v1` + `code.protocol.v1`; public response or API repair → `code.boundary.v1` + `code.protocol.v1` + `code.verification.v1`.
 
 ## Escalation references
 
-Read [kiokuko-patterns.md](references/kiokuko-patterns.md) only when a selected fragment needs a fuller example. Read [review-checklist.md](references/review-checklist.md) for comprehensive code review or final verification — a change that crosses several code contracts, or the last check before accepting — and not for an ordinary edit inside one cohesive contract; that case uses the focused `verification.md` sequence owned by the selected expert.
+Read [kiokuko-patterns.md](references/kiokuko-patterns.md) only when a selected fragment needs a fuller example. Read [review-checklist.md](references/review-checklist.md) for comprehensive review or final verification — a change crossing several code contracts, or the last check before accepting — not for an ordinary edit inside one cohesive contract, which uses the focused `verification.md` sequence.
 
 ## Completion report
 
-Report the function or WorkUnit contracts changed, selected expert IDs, focused verifier results, and anything not verified. A build alone does not prove boundary, failure, or interaction behavior.
+Report the function or WorkUnit contracts changed, the selected expert IDs, the focused verifier results, and anything left unverified. A build alone does not prove boundary, failure, or interaction behavior.

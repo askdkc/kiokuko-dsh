@@ -28,7 +28,7 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
   let accepting = true
   const withIndex: WithOrcaIndex = operation => runtime.withDatabase(async db => await operation(new DshOrcaStore(db)))
   const recorder = new DshOrcaRecorder(config, withIndex)
-  const choices = new DshOrcaSessionChoices(withIndex, native.questions)
+  const choices = new DshOrcaSessionChoices(withIndex, native.questions, config.askOnStart)
   const operations = new Map<string, Promise<void>>()
   let shutdown: Promise<void> | undefined
   const disposers: (() => void)[] = []
@@ -99,9 +99,11 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
         const agent = payload.agent, session = agent?.session
         const binding = agent && session ? services.resolveSessionBinding(agent, session) : undefined
         if (binding && agent && session) {
-          if (native.interactive?.(agent) === false) await services.sessionRecordingStatus(binding)
-          else await choices.prepare(binding, agent, payload.signal ?? new AbortController().signal,
+          // Managed children are never asked, so only the configured default can authorize them.
+          const interactive = native.interactive?.(agent) !== false
+          if (interactive || !config.askOnStart) await choices.prepare(binding, agent, payload.signal ?? new AbortController().signal,
             () => services.resolveSessionBinding(agent, session) !== undefined)
+          else await services.sessionRecordingStatus(binding)
         }
       } catch { /* Optional recording cannot veto the native step. */ }
       return next()

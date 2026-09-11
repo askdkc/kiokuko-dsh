@@ -264,8 +264,14 @@ The dsh integration provides:
   number keys 1–8 to select and Enter to confirm; digits entered in the custom
   field (including full-width digits) resolve in the same displayed order.
   Shift+Enter and IME composition do not submit. Pending drafts survive a
-  Session switch, and other plugins' questions and plan-approval cards retain
-  their native UI;
+  Session switch. Every single-select question carrying one to nine options uses
+  the same numbered card — Kiokuko's own intake, the Enno and Deep selection
+  questions, an agent-composed choice such as a release step, and another
+  plugin's question alike — so a shortcut is never missing from a question this
+  composer shows. Carriers a single number key cannot address — multi-select
+  batches, optionless prompts, several questions in one request, and catalogs
+  larger than nine options outside the Enno and Deep flows — retain their native
+  UI, as do plan-approval cards;
 - an explicit `chat` intake choice (including free-form aliases such as
   `just chatting` and `雑談`) and the task-type question's **Skip this
   question** action; both skip target/success follow-ups and never create an
@@ -428,10 +434,11 @@ unloading this plugin. An unavailable DeepSeek CLI is reported as
 ## OrcaReplay recording
 
 Orca dependencies and recording configuration are installed automatically with
-this package; the feature is **enabled by default**. At the first native step,
-a session-scoped question asks whether to record. Only an affirmative choice
-starts capture; skipping or an unavailable question UI continues without recording.
-The choice survives reloads. The first subsequent model/tool observation creates
+this package; the feature is **enabled by default** and records each chat without
+asking, including delegated and managed child sessions. Set `orca.askOnStart: true` to ask once per chat instead; only an
+affirmative choice then starts capture, while skipping or an unavailable question
+UI continues without recording and child sessions need an explicit start. The decision survives reloads, and a saved
+refusal outranks the recording default. The first recorded model/tool observation creates
 `.orca/runs/` in the verified session workspace. Set `config.orca.enabled: false` and reload to disable
 recording. `/kioku-orca stop`, `list`, `show <run ID>` and
 `export <run ID>` finalize and inspect the selected session's trace. This records

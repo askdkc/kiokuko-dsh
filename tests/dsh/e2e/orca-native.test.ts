@@ -46,10 +46,10 @@ for (const owner of ['normal', 'explicit'] as const) test(`Orca enabled real DSH
     const mock = nativeMock(llm)
     ctx.llm.registerAdapter(['mock'], new mock.MockAdapter([mock.textResponse('A'), mock.textResponse('B')]))
     if (owner === 'explicit') {
-      adapter = createDshHostAdapter(ctx, { repositoryRoot: root, orca: { enabled: true, shutdownDrainTimeoutMs: 1000 } })
+      adapter = createDshHostAdapter(ctx, { repositoryRoot: root, orca: { enabled: true, askOnStart: true, shutdownDrainTimeoutMs: 1000 } })
       ctx.provide('kiokukoDsh', adapter.host)
     }
-    plugin = ctx.plugin({ name: 'orca-fixture-plugin', apply: (context: any) => apply(context, { efficiency: { observe: true }, finalization: { inputMode: 'bounded_evidence' }, orca: { enabled: true, shutdownDrainTimeoutMs: 1000 } }) })
+    plugin = ctx.plugin({ name: 'orca-fixture-plugin', apply: (context: any) => apply(context, { efficiency: { observe: true }, finalization: { inputMode: 'bounded_evidence' }, orca: { enabled: true, askOnStart: true, shutdownDrainTimeoutMs: 1000 } }) })
     await plugin
     const a = await ctx.agentLoop.create(sessions.SessionId('orca-a'), { provider: 'mock', model: 'mock' }, { cwd: join(root, 'project-a') })
     const b = await ctx.agentLoop.create(sessions.SessionId('orca-b'), { provider: 'mock', model: 'mock' }, { cwd: join(root, 'project-b') })

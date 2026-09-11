@@ -11,6 +11,8 @@
         enabled: true
         orca:
           enabled: true
+          # Record each chat without asking; set true to be asked once per chat.
+          askOnStart: false
           storage: project
           capture:
             content: redacted

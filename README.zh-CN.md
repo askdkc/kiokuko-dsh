@@ -22,10 +22,10 @@ pnpm dsh web
 启动后直接输入任务，无需额外的 Kiokuko setup 操作。
 GitHub 和本地安装方式见[插件指南](docs/dsh-plugin.md)。
 
-OrcaReplay 的功能配置会自动安装，**无需手动设置**。聊天开始时，可选择是否记录详细日志。
-选择记录后，后续模型回复和工具执行结果将保存到会话工作目录的 `.orca/runs/`。选择按会话保存；跳过或取消时，不记录并继续聊天。
+OrcaReplay 的功能配置会自动安装，**无需手动设置**。每次聊天都会在无需确认的情况下记录详细日志。
+记录后，后续模型回复和工具执行结果将保存到会话工作目录的 `.orca/runs/`。决定按会话保存，因此执行过 `/kioku-orca stop` 的聊天保持不记录。若想在聊天开始时确认，请设置 `orca.askOnStart: true`。
 
-- `/kioku-orca start`：手动开始记录，或在停止后重新开始。如果开始时已选择记录，则无需执行。不会补录过去的活动。
+- `/kioku-orca start`：手动开始记录，或在停止后重新开始。若该聊天未被停止，则无需执行。不会补录过去的活动。
 - `/kioku-orca status`：简要显示记录状态、保存位置和下一步操作。诊断详情可用 `/kioku-orca status --json` 查看。
 
 用 `/kioku-orca stop` 完成日志记录后，用 `list` 查看 run ID、`show <run ID>` 查看内容、`export <run ID>` 导出 HTML（均在 `/kioku-orca` 后输入）。
