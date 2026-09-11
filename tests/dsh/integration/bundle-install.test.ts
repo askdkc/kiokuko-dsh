@@ -20,6 +20,7 @@ async function run(command: string, args: readonly string[], env?: NodeJS.Proces
     cwd: repositoryRoot,
     env: { ...process.env, ...env },
     maxBuffer: 1024 * 1024 * 8,
+    timeout: 60_000,
   })
 }
 
@@ -78,6 +79,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   assert.equal(patch[1]?.insert?.[0]?.name, 'kiokuko-dsh')
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('connection'))
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('attachments'))
+  assert.ok(patch[1]?.insert?.[0]?.inject?.includes('sessionPersistence'))
   assert.equal(Config.parse({}).enabled, true)
   assert.equal(Config.parse({}).orca.enabled, true)
   const bundledConfig = patch[1]?.insert?.[0]?.config

@@ -1,6 +1,7 @@
 import { formatEvolutionStatus } from '../memory/evolution/status.js'
 import { mountDeepReportSurface } from '../deep-thinker/report-surface.js'
 import { mountDshNoticeSurface } from './session-notice-surface.js'
+import { mountSessionHistoryCompatibility } from './session-history-compatibility.js'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingContext } from './enno-controller.js'
@@ -210,6 +211,10 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   }
 
   try {
+    const historyCompatibility = mountSessionHistoryCompatibility(ctx)
+    ingressDisposers.push(historyCompatibility.stop)
+    setupResourceDisposers.push(historyCompatibility.dispose)
+    cleanupDisposers.push(historyCompatibility.dispose)
     if (host.deepPlanning && host.commands) ingressDisposers.push(host.commands.register(host.deepPlanning.command()))
     if (host.deepPlanning) ingressDisposers.push(mountDeepReportSurface(ctx, host.deepPlanning))
     if (host.deepPlanning) ingressDisposers.push(mountDshNoticeSurface(ctx, host.deepPlanning))

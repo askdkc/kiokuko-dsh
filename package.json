@@ -26,6 +26,8 @@
     "docs/",
     "scripts/repair-session-log.mjs",
     "scripts/repair-continuation-source.mjs",
+    "scripts/session-history-codec.mjs",
+    "scripts/session-history-codec.d.mts",
     "README.md",
     "README.ja.md",
     "README.zh-CN.md",
@@ -78,12 +80,14 @@
       "readPaths": [
         "Configured Kiokuko SQLite database and embedding assets",
         "Registered project roots and their repository metadata",
-        "Orca traces belonging to the exact native DSH session"
+        "Orca traces belonging to the exact native DSH session",
+        "The exact native v3 session history rejected for legacy Kiokuko informational events"
       ],
       "writePaths": [
         "Configured Kiokuko database and pre-migration backups",
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",
-        ".orca/runs and .orca/exports inside verified session workspaces, or the configured Kiokuko data directory"
+        ".orca/runs and .orca/exports inside verified session workspaces, or the configured Kiokuko data directory",
+        "Legacy Kiokuko history compatibility under DSH's native write lease: exact rejected file, retained .bak, and disposable validation artifacts"
       ],
       "commands": [
         "Restricted repository-relative verifier and backup subprocesses when explicitly requested"
