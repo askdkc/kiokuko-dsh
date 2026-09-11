@@ -10,6 +10,11 @@ Kiokuko operation.
   repository metadata.
 - Writes the configured Kiokuko database and pre-migration backups, including
   DSH leases, receipts, retrieval state, and embedding state.
+- When DSH rejects a requested v3 history containing legacy Kiokuko informational
+  events, reads that exact native session file and marks the five supported
+  types ignorable under DSH's write lease. Retains a byte-for-byte `.bak`, validates
+  in a disposable local directory, and replaces the source atomically. It does
+  not scan and repair other sessions; invalid or unrelated records remain errors.
 - Does not rewrite host configuration or repository instruction files.
   Repository identity, run identity, lease, revision, and integrity mismatches
   fail closed.
@@ -33,8 +38,9 @@ Kiokuko operation.
 - `@huggingface/hub`, `@huggingface/transformers`, and `sqlite-vec` are optional
   peer capabilities. They are not silently installed by the minimal package
   path and are required only by the feature that explicitly uses them.
-- `@deepseek-ai/cordis` is the host peer dependency. The package does not
-  replace or patch the host runtime outside its declared DSH bundle patch.
+- `@deepseek-ai/cordis` is the host peer dependency. The loaded plugin temporarily
+  wraps the JSONL service's `open` method for legacy-history compatibility and
+  restores it on unload. It does not change DSH's installed code or event catalog.
 
 ## Installation lifecycle
 

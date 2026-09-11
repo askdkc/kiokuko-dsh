@@ -12,9 +12,26 @@ header's **Kiokukoの回答 / Kiokukoの状態** action displays saved notices; 
 notices open automatically and are acknowledged after display. Old custom
 notice events remain renderable after their log has been repaired.
 
-Updating the plugin prevents new affected events. Existing affected files need
-repair separately. Finish active tasks, stop every DSH process using the file,
-and install the corrected plugin before reopening it.
+Once the updated plugin is loaded, opening an affected v3 chat automatically
+marks the five historical informational types below as ignorable and retries
+DSH's normal reader. This applies to both viewing history and resuming a chat.
+It handles the requested session only; installation does not scan or rewrite
+other chats. New observations and notices continue to use Kiokuko's database.
+
+The compatibility adapter acquires DSH's native session write lease, validates
+the complete candidate with the running JSONL backend, retains an identical
+`.bak`, and replaces the file atomically. Event bodies, sequence numbers,
+timestamps and fork boundaries are preserved. It refuses active writers,
+conflicting backups, symbolic-link artifacts, damaged logs and unrelated
+required event types. Automatic repair is limited to v3 JSONL/Zstandard files
+up to 64 MiB on disk and 256 MiB expanded. Unloading Kiokuko restores the native
+reader and waits for any repair already in progress.
+
+## Explicit diagnostic repair
+
+The scripts remain available for inspecting a particular artifact, older
+continuation-source issues, or hosts without the automatic adapter. Finish
+active tasks and stop every DSH process using the file before running them.
 
 From this Kiokuko checkout, set the exact `raw log:` path printed in the error
 and a built Session format catalog matching the DSH installation that will read

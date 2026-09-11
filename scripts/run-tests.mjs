@@ -76,7 +76,7 @@ function runNodeTests(testFiles, testTempRoot) {
     child.once('exit', (code, signal) => {
       // A descendant may outlive the test runner even when its direct child
       // has exited. Kill only the dedicated fixture process group.
-      if (killTimer !== undefined) stopGroup('SIGKILL');
+      if (process.platform !== 'win32' || killTimer !== undefined) stopGroup('SIGKILL');
       cleanup();
       if (signal !== null) {
         reject(new Error(`Test process terminated by ${signal}`));
