@@ -243,3 +243,39 @@ test('managed children record without asking when the configuration records by d
     assert.equal(rows[0]?.state, 'completed')
   } finally { await f.dispose() }
 })
+
+test('a delegated child records through its parent choice and stores no decision of its own', async () => {
+  let asked = 0
+  const f = await orcaFixture({ askOnStart: false })
+  const parentSession = { id: 'deep-case-parent', header: { cwd: f.root } }
+  const childSession = { id: 'deep-case-worker', header: { cwd: f.root } }
+  const parent = { id: 'parent-agent', session: parentSession }
+  const child = { id: 'child-agent', session: childSession }
+  const listeners = new Map<string, (...args: any[]) => any>()
+  const ctx = { on: (name: string, listener: (...args: any[]) => any) => { listeners.set(name, listener); return () => listeners.delete(name) } }
+  const host = createDshOrcaHost(ctx as never, f.config, { withDatabase: async (op: any) => op(f.database) } as never, {
+    session: id => [parentSession, childSession].find(session => session.id === id),
+    agent: id => [parent, child].find(candidate => candidate.id === id),
+    logicalRun: () => undefined,
+    questions: { ask: async () => { asked++; throw new Error('Children must not ask') } },
+    interactive: agent => agent === parent,
+    recordingParent: agent => agent === child ? { agent: parent, session: parentSession } : undefined,
+  })
+  const step = (agent: any) => listeners.get('agent/pre-step')!({ agent, signal: new AbortController().signal }, () => 'native-decision')
+  const childBinding = { sessionId: childSession.id, workspaceRoot: f.root, sessionCwd: f.root, storeRoot: f.root }
+  try {
+    assert.equal(await step(parent), 'native-decision')
+    assert.equal(await step(child), 'native-decision')
+    assert.equal(asked, 0, 'the default configuration asks no session, and a child never inherits the question')
+    // The child's recording authority is the parent, so only the parent stores a decision.
+    const decisions = f.database.prepare('SELECT dsh_session_id FROM dsh_orca_session_choices').all<{ dsh_session_id: string }>()
+    assert.deepEqual(decisions.map(row => row.dsh_session_id), [parentSession.id])
+    // The child still records, because it inherits that exact parent decision.
+    await collect(listeners.get('llm/stream')!({ ...request, sessionId: childSession.id }, () => chunks(response())))
+    await host.closeSessionRecording(childSession.id, 'manual')
+    const traces = await f.reader.list(childBinding)
+    assert.equal(traces.length, 1)
+    assert.equal(traces[0]?.dsh_session_id, childSession.id)
+    assert.equal(traces[0]?.state, 'completed')
+  } finally { await host.shutdown(); await f.dispose() }
+})

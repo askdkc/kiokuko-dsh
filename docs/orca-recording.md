@@ -44,11 +44,13 @@ session explicitly. Skipped, invalid, cancelled or unavailable questions continu
 without capture. An unanswered question is not repeated on each step; use
 `/kioku-orca start` later (or answer after reloading). With `askOnStart: true`,
 hosts without a question UI also require an explicit start command.
-Managed Enno worker and delegated child sessions are never prompted. With
-`askOnStart: false` they record under the same configuration default, each as its
-own generation, so their work appears in `.orca/runs/`; with `askOnStart: true`
-each such session needs its own explicit recording choice, because a question
-would interrupt managed work.
+Managed Enno worker and delegated child sessions are never prompted. A child
+follows the exact decision of the session that owns it: with `askOnStart: false`
+it records under that parent's default, and with `askOnStart: true` it records
+only when the parent approved, because a question would interrupt managed work.
+A child stores no decision of its own, so its work still appears in `.orca/runs/`
+as its own generation, and a managed session without an owning parent records
+under the configured default or needs its own explicit `/kioku-orca start`.
 
 Once a session is approved, the next attributable model/tool observation creates
 the trace directory, not package installation. Past calls are not captured.
