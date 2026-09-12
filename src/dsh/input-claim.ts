@@ -70,6 +70,9 @@ function row(database: SqliteDatabase, id: string, nativeTurn: number): ClaimRow
 }
 
 function claimFromRow(value: ClaimRow): DshInputClaim {
+  if (value.claimId !== canonicalContentHash({ version: 1, dshSessionId: sessionId(value.dshSessionId), nativeTurn: turn(value.nativeTurn) })) {
+    throw new KiokukoError('INTEGRITY_ERROR', 'stored DSH claim identity is invalid')
+  }
   if ((value.providerStarted !== 0 && value.providerStarted !== 1)
     || (value.sideEffectStarted !== 0 && value.sideEffectStarted !== 1)
     || (value.recoveryCount !== 0 && value.recoveryCount !== 1)) {
@@ -85,6 +88,12 @@ function claimFromRow(value: ClaimRow): DshInputClaim {
     recoveryCount: value.recoveryCount as 0 | 1,
     status: value.status,
   })
+}
+
+/** Read the first input of a turn; subsequent steps can claim different batches. */
+export function readInputClaim(database: SqliteDatabase, dshSessionId: string, nativeTurn: number): DshInputClaim | undefined {
+  const existing = row(database, dshSessionId, nativeTurn)
+  return existing === undefined ? undefined : claimFromRow(existing)
 }
 
 /** Store the exact native message array outside the bounded ledger. */

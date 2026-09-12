@@ -8,6 +8,7 @@ import { migrateDatabase } from '../../../src/db/migrate.js'
 import { withImmediateTransaction } from '../../../src/db/transaction.js'
 import {
   backupInputClaimInTransaction,
+  readInputClaim,
   markClaimProgressInTransaction,
   settleInputClaimInTransaction,
   takeRecoverableInputClaimInTransaction,
@@ -43,6 +44,11 @@ test('claim backup preserves multiline, slash, file, session, order, and content
       dshSessionId: 'input-session', nativeTurn: 1, messages: exactMessages,
     }))
     assert.equal(replay.claimId, claim.claimId)
+    assert.throws(() => withImmediateTransaction(f.database, () => backupInputClaimInTransaction(f.database, {
+      dshSessionId: 'input-session', nativeTurn: 1, messages: [{ role: 'user', content: 'different step' }],
+    })), /claim changed after backup/u)
+    assert.deepEqual(readInputClaim(f.database, 'input-session', 1)?.messages, exactMessages)
+    assert.equal(readInputClaim(f.database, 'another-session', 1), undefined)
   } finally {
     await f.cleanup()
   }

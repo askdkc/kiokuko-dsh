@@ -78,6 +78,7 @@ import {
 } from './turn-process.js'
 import {
   backupInputClaimInTransaction,
+  readInputClaim,
   markClaimProgressInTransaction,
   settleInputClaimInTransaction,
   takeRecoverableInputClaimInTransaction,
@@ -587,11 +588,37 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     readonly nativeSession?: object
   }>()
   const inMemoryClaims = new Map<string, {
-    readonly messages: readonly unknown[]
+    messages: readonly unknown[]
     providerStarted: boolean
     sideEffectStarted: boolean
     recovered: boolean
   }>()
+  const captureInitialInput = async (sessionId: string, turn: number, messages: readonly unknown[]): Promise<void> => {
+    const key = `${sessionId}\u0000${turn}`
+    let initial = inMemoryClaims.get(key)
+    if (!initial) {
+      if (messages.length === 0) return
+      initial = { messages: Object.freeze([...messages]), providerStarted: false, sideEffectStarted: false, recovered: false }
+      inMemoryClaims.set(key, initial)
+    }
+    // Inbox claims are step-local. Preserve the first turn input and monotonic
+    // execution flags across assembly, pre-step, steering, and plugin reload.
+    const snapshot = initial
+    try {
+      const stored = await runtime.withDatabase(database => withImmediateTransaction(database, () => (
+        readInputClaim(database, sessionId, turn) ?? backupInputClaimInTransaction(database, {
+          dshSessionId: sessionId, nativeTurn: turn, messages: snapshot.messages,
+        })
+      )))
+      snapshot.messages = stored.messages
+      snapshot.providerStarted ||= stored.providerStarted
+      snapshot.sideEffectStarted ||= stored.sideEffectStarted
+      snapshot.recovered ||= stored.recoveryCount !== 0 || (stored.status !== 'claimed' && stored.status !== 'recoverable')
+    } catch {
+      // Auxiliary persistence cannot veto native assembly or admission. The
+      // original process-local snapshot still covers a pre-provider failure.
+    }
+  }
   let retireSupersededRun: ((item: TurnRecord, status: 'completed' | 'failed' | 'cancelled') => Promise<void>) | undefined
   let resumeExistingRun: ((event: DshPreStepEvent) => Promise<DshIntakeGateResult | undefined>) | undefined
 
@@ -900,26 +927,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const downstream = await next()
       if (downstream.kind !== 'enter') return downstream
       if (event.nativeAgent && selectionBlocked.has(event.nativeAgent)) return { kind: 'reject' }
-      const claimKey = `${event.sessionId}\u0000${event.turn}`
       const nativeMessages = Object.freeze([...(event.nativeMessages ?? [])])
-      inMemoryClaims.set(claimKey, {
-        messages: nativeMessages,
-        providerStarted: false,
-        sideEffectStarted: false,
-        recovered: false,
-      })
-      try {
-        await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-          backupInputClaimInTransaction(database, {
-            dshSessionId: event.sessionId,
-            nativeTurn: event.turn,
-            messages: nativeMessages,
-          })
-        }))
-      } catch {
-        // The in-memory copy still protects a pre-provider failure in this
-        // process. Durable backup failure cannot veto the native decision.
-      }
+      await captureInitialInput(event.sessionId, event.turn, nativeMessages)
       const humanPresent = nativeMessages.some(isHumanMessage) || downstream.messages.some(isHumanMessage)
       const seenContinuations = new Set<string>()
       let nativeDecision: DshPreStepDecision = {
@@ -1265,9 +1274,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       // DSH claims input before assembly. Persist it before showing any UI so
       // cancellation and restart cannot lose a prompt before the native log append.
       if (agent.session && messages.length) {
-        await runtime.withDatabase(db => withImmediateTransaction(db, () => backupInputClaimInTransaction(db, {
-          dshSessionId: agent.session!.id, nativeTurn: turn, messages,
-        })))
+        await captureInitialInput(agent.session.id, turn, messages)
       }
       try {
         const event = await mapPreStep({ agent, messages, turn, step: 0, signal })
@@ -2269,11 +2276,26 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     })
   })
   const sessionEventDisposer = (ctx as any).on('session/event', (session: { id: string }, event: { type?: unknown; seq?: unknown; data?: unknown }) => {
+    const item = currentSession(session.id)
+    const data = objectRecord(event.data)
+    const eventTurn = typeof data?.turn === 'number' && Number.isSafeInteger(data.turn) ? data.turn : item?.turn
+    const ownsTurn = item !== undefined && !item.closed && eventTurn === item.turn && typeof event.type === 'string'
+    const claimKey = `${session.id}\u0000${eventTurn}`
+    const fallback = ownsTurn ? inMemoryClaims.get(claimKey) : undefined
+    const providerStarted = event.type === 'request/header' || event.type === 'request/context'
+      || event.type === 'assistant/chunk' || event.type === 'assistant/message'
+    const sideEffectStarted = event.type === 'tool/call'
+    // Observe execution synchronously, before the mirror can yield or fail.
+    // A later step/end callback must never see an earlier execution as unstarted.
+    if (fallback) {
+      fallback.providerStarted ||= providerStarted
+      fallback.sideEffectStarted ||= sideEffectStarted
+    }
     // This observer is deliberately fire-and-contain. DSH persistence and the
     // model turn must never depend on Kiokuko claim bookkeeping.
     void (async () => {
       if (typeof event.type === 'string' && typeof event.seq === 'number') {
-        await sessionMirror.observe(session.id, event as DshLogEvent)
+        try { await sessionMirror.observe(session.id, event as DshLogEvent) } catch { /* claim bookkeeping remains independent */ }
         const continuationId = eventContinuationId(event.data)
         if (continuationId !== undefined) {
           try {
@@ -2286,24 +2308,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           }
         }
       }
-      const item = currentSession(session.id)
-      if (item === undefined || item.closed || typeof event.type !== 'string') return
-      const data = objectRecord(event.data)
-      const eventTurn = typeof data?.turn === 'number' && Number.isSafeInteger(data.turn)
-        ? data.turn
-        : item.turn
-      if (eventTurn !== item.turn) return
-      const claimKey = `${item.sessionId}\u0000${item.turn}`
-      const fallback = inMemoryClaims.get(claimKey)
-      const providerStarted = event.type === 'request/header'
-        || event.type === 'request/context'
-        || event.type === 'assistant/chunk'
-        || event.type === 'assistant/message'
-      const sideEffectStarted = event.type === 'tool/call'
-      if (fallback !== undefined) {
-        fallback.providerStarted ||= providerStarted
-        fallback.sideEffectStarted ||= sideEffectStarted
-      }
+      if (!ownsTurn || item === undefined) return
       if (providerStarted || sideEffectStarted) {
         try {
           await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
@@ -2322,15 +2327,23 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const reason = objectRecord(data?.reason)
       const turnEndedWithError = reason?.kind === 'error'
       let durableRecoverable = false
+      let durableUnavailable = true
       try {
-        const settled = await runtime.withDatabase((database) => withImmediateTransaction(database, () => (
-          settleInputClaimInTransaction(database, {
+        const settled = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+          // Earlier observer writes may still be pending. Persist all execution
+          // already observed locally before deciding whether replay is safe.
+          markClaimProgressInTransaction(database, {
+            dshSessionId: item.sessionId, nativeTurn: item.turn,
+            providerStarted: fallback?.providerStarted === true, sideEffectStarted: fallback?.sideEffectStarted === true,
+          })
+          return settleInputClaimInTransaction(database, {
             dshSessionId: item.sessionId,
             nativeTurn: item.turn,
             turnEndedWithError,
           })
-        )))
+        }))
         durableRecoverable = settled?.status === 'recoverable'
+        durableUnavailable = settled === undefined
       } catch {
         // Fall through to the process-local decision.
       }
@@ -2340,8 +2353,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         && !fallback.sideEffectStarted
         && !fallback.recovered
       const steer = (item.nativeAgent as { steer?: (message: unknown) => void } | undefined)?.steer
-      if ((durableRecoverable || locallyRecoverable) && steer !== undefined) {
+      const recoveryAllowed = (fallback === undefined || locallyRecoverable)
+        && (durableRecoverable || durableUnavailable && locallyRecoverable)
+      if (recoveryAllowed && steer !== undefined) {
         let messages: readonly unknown[] | undefined
+        // Reserve locally before awaiting the durable consumer; duplicate end
+        // notifications cannot enqueue the same input again.
+        if (fallback) fallback.recovered = true
         if (durableRecoverable) {
           try {
             const claim = await runtime.withDatabase((database) => withImmediateTransaction(database, () => (
@@ -2350,15 +2368,16 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             messages = claim?.messages
           } catch {
             // Use the exact in-memory batch if the durable consumer failed.
+            messages = fallback?.messages
           }
+        } else {
+          messages = fallback?.messages
         }
-        messages ??= fallback?.messages
         if (messages !== undefined && messages.length > 0) {
-          if (fallback !== undefined) fallback.recovered = true
           for (const message of messages) steer(message)
         }
       }
-      if (!turnEndedWithError || (!durableRecoverable && !locallyRecoverable)) inMemoryClaims.delete(claimKey)
+      if (!turnEndedWithError || !recoveryAllowed) inMemoryClaims.delete(claimKey)
       if (reason?.kind === 'completed' && item.prepared.ennoOduno.applicable && !executionSupport.paused(item.sessionId)) {
         await runtime.withDatabase(database => {
           const state = stateForRun(database, item)

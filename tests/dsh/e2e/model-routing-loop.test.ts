@@ -37,6 +37,102 @@ async function turn(h: Awaited<ReturnType<typeof harness>>, agent: any, text: st
   agent.followup(h.llm.createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
   await agent.whenIdle()
 }
+test('native turn accepts steering after a tool without replacing its initial recovery input', {
+  skip: !packageRoot && !sourceRoot, timeout: 30_000,
+}, async () => {
+  const h = await harness()
+  const questions = h.ctx.plugin({ name: 'claim-test-ui', apply(ctx: any) {
+    return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: ['通常実行'] })) }) })
+  } }); await questions
+  const adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
+    migrationsDirectory: join(process.cwd(), 'migrations'), llm: { async *stream() { throw new Error('Optional memory backend unavailable') } } })
+  const composition = await mountDshComposition(h.ctx, adapter.host)
+  const model = new h.mock.MockAdapter([h.mock.toolCallResponse('edit-1', 'edit_once', {}), h.mock.textResponse('verified')])
+  h.ctx.llm.registerAdapter(['ordinary'], model)
+  const agent = await h.ctx.agentLoop.create(h.session.SessionId('steering-claim'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+  let writes = 0
+  const errors: unknown[] = []
+  const observeError = h.ctx.on('agent/error', (event: any) => { errors.push(event.error) })
+  const edit = h.ctx.tools.register({ name: 'edit_once', description: 'Apply one edit.', parameters: { type: 'object', properties: {} },
+    output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
+    execute: async () => { writes++; agent.steer(h.llm.createUserMessage({ content: [{ type: 'text', text: '追記は不要です。検証してください。' }], source: { kind: 'user' } })); return 'edited' },
+  })
+  try {
+    await turn(h, agent, 'README.mdを修正してください。')
+    assert.deepEqual(errors, [])
+    assert.equal(writes, 1)
+    assert.equal(model.requests.length, 2)
+    assert.ok(JSON.stringify(model.requests[1]!.messages).includes('追記は不要です。検証してください。'))
+    const claims = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT native_turn, message_payload, provider_started, side_effect_started FROM dsh_input_claim_backups').all())
+    assert.equal(claims.length, 1)
+    const messages = JSON.parse(Buffer.from(claims[0]!.message_payload as Uint8Array).toString('utf8'))
+    assert.equal(messages.length, 1)
+    assert.equal(messages[0].content[0].text, 'README.mdを修正してください。')
+    assert.equal(claims[0]!.provider_started, 1)
+    assert.equal(claims[0]!.side_effect_started, 1)
+  } finally { observeError(); edit(); await composition.dispose(); await adapter.dispose(); await questions.dispose(); await h.dispose() }
+})
+for (const failure of ['insert', 'first-request', 'late-request', 'late-request-and-update'] as const) {
+  test(`native input recovery tolerates ${failure} failure without interrupting or replaying executed work`, {
+    skip: !packageRoot && !sourceRoot, timeout: 30_000,
+  }, async () => {
+    const h = await harness()
+    const questions = h.ctx.plugin({ name: 'claim-failure-test-ui', apply(ctx: any) {
+      return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: ['通常実行'] })) }) })
+    } }); await questions
+    const adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
+      migrationsDirectory: join(process.cwd(), 'migrations'), llm: { async *stream() { throw new Error('Optional memory backend unavailable') } } })
+    const composition = await mountDshComposition(h.ctx, adapter.host)
+    const model = new h.mock.MockAdapter(failure === 'insert' || failure === 'first-request' ? [h.mock.textResponse('verified')]
+      : [h.mock.toolCallResponse('edit-1', 'edit_once', {}), h.mock.textResponse('unexpected replay')])
+    h.ctx.llm.registerAdapter(['ordinary'], model)
+    const agent = await h.ctx.agentLoop.create(h.session.SessionId(`claim-failure-${failure}`), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+    const replayed: unknown[] = [], errors: unknown[] = []
+    const steer = agent.steer.bind(agent)
+    agent.steer = (message: unknown) => { replayed.push(message); steer(message) }
+    const observeError = h.ctx.on('agent/error', (event: any) => { errors.push(event.error) })
+    let requests = 0, writes = 0
+    const failRequest = agent.ctx.on('agent/request', async (_event: unknown, next: () => Promise<unknown>) => {
+      if (++requests === (failure === 'first-request' ? 1 : 2)) throw new Error('injected request failure')
+      return next()
+    }, { prepend: true })
+    const edit = h.ctx.tools.register({ name: 'edit_once', description: 'Apply one edit.', parameters: { type: 'object', properties: {} },
+      output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
+      execute: async () => { writes++; return 'edited' },
+    })
+    try {
+      if (failure === 'insert' || failure === 'late-request-and-update') await adapter.host.runtime!.withDatabase(db => db.exec(`
+        CREATE TRIGGER unavailable_claim_storage BEFORE ${failure === 'insert' ? 'INSERT' : 'UPDATE'} ON dsh_input_claim_backups
+        BEGIN SELECT RAISE(FAIL, 'injected input claim storage failure'); END;
+      `))
+      await turn(h, agent, 'README.mdを修正してください。')
+      // session/event is fire-and-contain; let end bookkeeping finish before
+      // checking that it did not schedule another native turn.
+      await new Promise(resolve => setTimeout(resolve, 50))
+      await agent.whenIdle()
+      if (failure === 'first-request') {
+        assert.equal(replayed.length, 1)
+        assert.equal((replayed[0] as any).content[0].text, 'README.mdを修正してください。')
+        assert.ok(JSON.stringify(model.requests[0]!.messages).includes('README.mdを修正してください。'))
+      } else assert.deepEqual(replayed, [])
+      assert.equal(model.requests.length, 1)
+      assert.equal(writes, failure === 'insert' || failure === 'first-request' ? 0 : 1)
+      assert.deepEqual(errors.map(error => (error as Error).message), failure === 'insert' ? [] : ['injected request failure'])
+      const claims = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT recovery_count, status FROM dsh_input_claim_backups ORDER BY native_turn').all())
+      if (failure === 'insert') assert.deepEqual(claims, [])
+      else if (failure === 'first-request') {
+        assert.equal(claims.length, 2)
+        assert.equal(claims[0]!.recovery_count, 1)
+        assert.equal(claims[1]!.recovery_count, 0)
+      }
+      else {
+        assert.equal(claims.length, 1)
+        assert.equal(claims[0]!.recovery_count, 0)
+        if (failure === 'late-request') assert.equal(claims[0]!.status, 'unsafe')
+      }
+    } finally { observeError(); failRequest(); edit(); await composition.dispose(); await adapter.dispose(); await questions.dispose(); await h.dispose() }
+  })
+}
 test('native routing delivers the full Japanese Skill to selected OSS models and removes it on model changes', {
   skip: !packageRoot && !sourceRoot, timeout: 30_000,
 }, async () => {

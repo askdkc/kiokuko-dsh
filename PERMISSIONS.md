@@ -10,6 +10,11 @@ Kiokuko operation.
   repository metadata.
 - Writes the configured Kiokuko database and pre-migration backups, including
   DSH leases, receipts, retrieval state, and embedding state.
+- Stores the first native input batch of each governed turn in that database
+  for recovery before model or tool execution. This is an input-message copy,
+  not a backup of the workspace or whole session. Later step inputs do not
+  replace it. Storage failure cannot veto the native turn; observed model or
+  tool execution prevents automatic input replay.
 - On enabled plugin load, synchronizes all eight bundled Skills and their
   references to `~/.agents/skills/` before registering the DSH surfaces. Creates
   missing files and atomically replaces files carrying their exact Kiokuko
