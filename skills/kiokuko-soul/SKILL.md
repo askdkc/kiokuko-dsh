@@ -24,6 +24,7 @@ Read the complete `SKILL.md` index of every applicable route before planning, im
 | Route | Read | When it applies |
 | --- | --- | --- |
 | Enno-Oduno control | `kiokuko-enno-oduno` | The admitted context has `ennoOduno.applicable=true`; a continuation directive resumes that role; or the user asks to inspect or operate a run. |
+| Workflow completeness | `veteran-programmer-skill` | Changes span setup, delivery, persisted state, or runtime handoffs; check the relevant flow before and after implementation. |
 | Simple code work | `kiokuko-simple-work` | The change is bounded, has a clear target and expected result, and adds no architecture, dependency, data migration, public protocol, security or authorization policy, or cross-system orchestration — or the user explicitly asks for the simplest, minimal, YAGNI, or dependency-free solution. |
 | Code work | `kiokuko-single-purpose-functions` | Code will be written, modified, debugged, refactored, or reviewed. |
 | Interactive UI work | `kiokuko-ui-design-soul` | A user-facing interface will be designed, implemented, modified, debugged, or reviewed. |

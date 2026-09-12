@@ -6,12 +6,19 @@ import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import * as plugin from '../../../src/dsh/index.js'
 import { loadJapaneseOutputSkill } from '../../../src/dsh/japanese-output-skill.js'
+import { DSH_MANAGED_BLOCK } from '../../../src/dsh/setup.js'
 import { loadStandardSkillParity } from '../../../src/dsh/standard-skill-integrity.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 
 const home = isolateSkillHome()
 
 test('plugin startup synchronizes before provider registration and repeats after a package reload', async t => {
+  const workspace = path.join(home(), 'workspace')
+  await mkdir(workspace)
+  t.mock.method(process, 'cwd', () => workspace)
+  const agentsPath = path.join(workspace, 'AGENTS.md')
+  const oldAgents = 'User instructions\n<!-- BEGIN KIOKUKO MANAGED BLOCK -->\nsoulRead: true; create requestId; call task_prepare\n<!-- END KIOKUKO MANAGED BLOCK -->\nKeep this too\n'
+  await writeFile(agentsPath, oldAgents)
   const parity = await loadStandardSkillParity()
   const japanese = await loadJapaneseOutputSkill()
   const soul = parity.files.find(file => file.skillName === 'kiokuko-soul')!
@@ -26,6 +33,7 @@ test('plugin startup synchronizes before provider registration and repeats after
     return context.provide('kiokukoDsh', { skills: { registerProvider() {
       for (const file of parity.files) assert.equal(readFileSync(path.join(root, file.skillName, file.relativePath), 'utf8'), file.content)
       assert.equal(readFileSync(path.join(root, 'japanese-translation-for-oss-models', 'SKILL.md'), 'utf8'), japanese.content)
+      assert.equal(readFileSync(agentsPath, 'utf8'), `User instructions\n${DSH_MANAGED_BLOCK}\nKeep this too\n`)
       registrations++
       return () => {}
     } } })
@@ -37,22 +45,33 @@ test('plugin startup synchronizes before provider registration and repeats after
     assert.equal(registrations, pass + 1)
     for (const file of parity.files) assert.equal(await readFile(path.join(root, file.skillName, file.relativePath), 'utf8'), file.content)
     await fiber.dispose()
-    if (pass === 0) await writeFile(soulPath, old)
+    if (pass === 0) {
+      await writeFile(soulPath, old)
+      await writeFile(agentsPath, oldAgents)
+    }
   }
 })
 
 test('disabled plugin does not sync; unmanaged conflicts warn and preserve bundled provider startup', async t => {
+  const workspace = path.join(home(), 'disabled-workspace')
+  await mkdir(workspace)
+  t.mock.method(process, 'cwd', () => workspace)
+  const agentsPath = path.join(workspace, 'AGENTS.md')
+  const oldAgents = '<!-- BEGIN KIOKUKO MANAGED BLOCK -->\nsoulRead: true\n<!-- END KIOKUKO MANAGED BLOCK -->'
+  await writeFile(agentsPath, oldAgents)
   const soulPath = path.join(home(), '.agents', 'skills', 'kiokuko-soul', 'SKILL.md')
   await writeFile(soulPath, 'user-owned')
   const ctx = new Context()
   const disabled = ctx.plugin(plugin, { enabled: false })
   await disabled
   assert.equal(await readFile(soulPath, 'utf8'), 'user-owned')
+  assert.equal(await readFile(agentsPath, 'utf8'), oldAgents)
   await disabled.dispose()
   const warnings = t.mock.method(console, 'warn', () => {})
   const enabled = ctx.plugin(plugin, {})
   await enabled
   assert.equal(await readFile(soulPath, 'utf8'), 'user-owned')
+  assert.equal(await readFile(agentsPath, 'utf8'), oldAgents)
   assert.ok(warnings.mock.calls.some(call => String(call.arguments[0]).includes('synchronization failed (CONFLICT)')))
   await enabled.dispose()
 })

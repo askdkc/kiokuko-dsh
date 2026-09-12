@@ -97,7 +97,7 @@ export function validateStandardSkillParity(files: readonly BundledStandardSkill
     if (file.relativePath !== 'SKILL.md') references += 1
   }
   const expectedFiles = STANDARD_SKILL_MANIFESTS.reduce((count, manifest) => count + manifest.files.length, 0)
-  if (files.length !== expectedFiles || seen.size !== expectedFiles || expected.size !== 6 || references !== 15) {
+  if (files.length !== expectedFiles || seen.size !== expectedFiles || expected.size !== 7 || references !== 15) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Bundled standard skill manifest is incomplete')
   }
   for (const manifest of STANDARD_SKILL_MANIFESTS) {

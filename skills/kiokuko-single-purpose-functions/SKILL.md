@@ -29,6 +29,10 @@ Applies to every created or changed function:
 
 Cohesion is the objective, not smallness. Keep operations together when splitting them would hide sequencing, duplicate policy, or weaken a transaction.
 
+When a change spans setup, delivery, persisted state, or runtime handoffs, also
+apply the available `veteran-programmer-skill` before and after implementation
+to check the complete workflow. An isolated edit needs no additional audit.
+
 ## Expert selection
 
 For each new or materially changed function, or for the smallest WorkUnit owning one cohesive use case: classify the dominant risk, select one expert below, add at most two more only when the same contract genuinely crosses those risks, record a concrete reason for each, and read the selected files before implementation or review. A different expert set or reason to change means a separate WorkUnit or a separate function contract inside it.

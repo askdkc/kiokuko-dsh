@@ -159,7 +159,8 @@ async function createAndSmokeTestTarball() {
     const provider = createStandardSkillProvider();
     try {
       const { candidates } = await provider.list({});
-      const sources = await buildDshMessageSources({
+      if (!candidates.some(candidate => candidate.name === 'veteran-programmer-skill')) throw new Error('packed veteran Skill is missing');
+    const sources = await buildDshMessageSources({
         task: 'Continue the approved plan.', intakeStatus: 'ready', nextAction: 'proceed', context: null,
         memoryPolicy: { memoryReasoningRequired: true, contextWithheld: false },
         routeSkillNames: candidates.map(candidate => candidate.name),
@@ -185,6 +186,8 @@ async function createAndSmokeTestTarball() {
     const soulPath = path.join(deployed, soul.skillName, soul.relativePath);
     await fs.mkdir(path.dirname(soulPath), { recursive: true });
     await fs.writeFile(soulPath, soul.managedMarker + '\\nold soulRead requestId contract');
+    const agentsPath = path.join(process.cwd(), 'AGENTS.md');
+    await fs.writeFile(agentsPath, 'user prefix\\n<!-- BEGIN KIOKUKO MANAGED BLOCK -->\\nsoulRead: true; create requestId\\n<!-- END KIOKUKO MANAGED BLOCK -->\\nuser suffix');
     const homedir = os.homedir;
     os.homedir = () => home;
     try {
@@ -192,6 +195,15 @@ async function createAndSmokeTestTarball() {
       const fiber = context.plugin(plugin, {});
       await fiber;
       try {
+        const agents = await fs.readFile(agentsPath, 'utf8');
+        if (agents.includes('soulRead') || agents.includes('requestId') || !agents.includes('host operations, not model tools') || !agents.startsWith('user prefix') || !agents.endsWith('user suffix')) {
+          throw new Error('packed startup AGENTS.md migration failed');
+        }
+        const { execFileSync } = await import('node:child_process');
+        const setupScript = new URL('../../scripts/setup-dsh.mjs', import.meta.resolve('kiokuko-dsh/dsh'));
+        const { fileURLToPath } = await import('node:url');
+        const checked = JSON.parse(execFileSync(process.execPath, [fileURLToPath(setupScript), '--home', home, '--cwd', process.cwd(), '--check', '--json'], { encoding: 'utf8' }));
+        if (!checked.current || checked.skills.unchanged !== 23) throw new Error('packed setup check failed');
         if (await fs.readFile(path.join(deployed, 'japanese-translation-for-oss-models', 'SKILL.md'), 'utf8') !== skill.content) {
           throw new Error('packed startup Japanese Skill deployment failed');
         }

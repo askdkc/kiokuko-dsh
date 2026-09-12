@@ -11,16 +11,16 @@ description: Use for user-facing interface work — design, implementation, or r
 
 Make every interactive action discoverable, operable, perceivable, recoverable, accessible, and coherent across supported sizes and input methods.
 
-Covers Web, desktop, mobile, touch, keyboard, screen-reader, form, navigation, async, destructive, permission, and other user-facing interaction work; not backend-only work. This is the compact UI index: read it completely, then read only the expert fragments selected for the current component, flow, design decision, or WorkUnit.
+Covers Web, desktop, mobile, CLI, touch, keyboard, screen-reader, form, navigation, async, destructive, permission, and other user-facing interaction work; not backend-only work. This is the compact UI index: read it completely, then read only the expert fragments selected for the current component, flow, design decision, or WorkUnit.
 
 ## Universal core
 
 For new or behaviorally changed interactive actions, an action is complete only when the user can:
 
-1. discover and understand it;
-2. activate it comfortably;
+1. discover and understand it, with available choices shown whenever practical;
+2. select and activate it comfortably through suitable shortcuts, menus, or checkbox lists;
 3. perceive immediate acknowledgement;
-4. understand processing, success, and failure;
+4. follow intermediate progress or status during slow work, recognize completion, and understand the known cause of a failure;
 5. recover without losing work or context;
 6. continue through keyboard, touch, pointer, and assistive technology as applicable.
 
