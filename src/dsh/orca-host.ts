@@ -103,11 +103,15 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
           // the authority the recorder already gates them on: a child inherits the parent's
           // exact decision instead of storing a decision of its own that nothing reads.
           const interactive = native.interactive?.(agent) !== false
-          const authority = interactive ? binding : recordingAuthority(binding)
-          if (authority && (interactive || !config.askOnStart)) {
-            await choices.prepare(authority, agent, payload.signal ?? new AbortController().signal,
-              () => services.resolveSessionBinding(agent, session) !== undefined && recordingAuthority(binding) !== undefined)
-          } else await services.sessionRecordingStatus(binding)
+          const signal = payload.signal ?? new AbortController().signal
+          const current = () => services.resolveSessionBinding(agent, session) !== undefined
+          if (interactive) await choices.prepare(binding, agent, signal, current)
+          else {
+            const authority = recordingAuthority(binding)
+            if (authority && !config.askOnStart) await choices.prepare(authority, agent, signal,
+              () => current() && recordingAuthority(binding) !== undefined)
+            else await services.sessionRecordingStatus(binding)
+          }
         }
       } catch { /* Optional recording cannot veto the native step. */ }
       return next()
