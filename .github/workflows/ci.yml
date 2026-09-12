@@ -152,12 +152,8 @@ jobs:
             runner: ubuntu-24.04
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
-          - platform: macos-x64
-            runner: macos-15-intel
           - platform: macos-arm64
             runner: macos-15
-          - platform: windows-x64
-            runner: windows-2025
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
