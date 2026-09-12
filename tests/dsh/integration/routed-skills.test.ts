@@ -12,6 +12,22 @@ const admitted = {
   memoryPolicy: { memoryReasoningRequired: true, contextWithheld: false }, context: null,
 } as const
 
+test('workflow Skill body reaches a selected route without loading it into unrelated tasks', async () => {
+  const provider = createStandardSkillProvider()
+  try {
+    const listed = await provider.list({})
+    const candidates = 'candidates' in listed ? listed.candidates : listed
+    const candidate = candidates.find(skill => skill.name === 'veteran-programmer-skill')
+    assert.ok(candidate)
+    const definition = await provider.get(candidate, {})
+    assert.ok(definition)
+    const selected = await buildDshMessageSources({ ...admitted, routeSkillNames: [candidate.name] })
+    assert.equal(selected.find(source => source.name === candidate.name)?.text, definition.content)
+    const unrelated = await buildDshMessageSources({ ...admitted, task: 'Correct a README heading typo.' })
+    assert.ok(!unrelated.some(source => source.name === candidate.name))
+  } finally { provider.dispose() }
+})
+
 test('every advertised bundled Skill can be routed into model context with its exact provider content', async () => {
   const provider = createStandardSkillProvider()
   try {

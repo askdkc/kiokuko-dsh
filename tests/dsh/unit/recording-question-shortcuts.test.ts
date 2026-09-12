@@ -2,11 +2,15 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { apply } from '../../../src/client.js'
 
+/** One answer batch the card submitted, matching the native carrier's payload. */
+interface RecordedAnswer { answers: { id: string; selected: string[]; custom?: string }[] }
+
 /**
  * The OrcaReplay detailed-log choice is a native DSH question, so the plugin's
- * composer entry has to claim exactly that carrier and give it the same
- * number-key plus Enter contract as the task-type card, without taking over any
- * other plugin's question.
+ * composer entry has to claim that carrier and give it the same number-key plus
+ * Enter contract as the task-type card. Every other single-select question that
+ * carries one to nine options is claimed the same way, so no question this
+ * composer shows is left without a shortcut.
  */
 const recordingQuestion = {
   id: 'kioku-orca-recording',
@@ -19,7 +23,7 @@ const recordingQuestion = {
   ],
 }
 
-test('recording question uses the numbered option card and falls through for every other question', async () => {
+test('every single-select question keeps the numbered option card while unaddressable carriers stay native', async () => {
   const globals = globalThis as unknown as Record<string, any>
   const names = ['createSnapshotStore', 'jsx', 'jsxs', 'useState', 'useRef', 'useEffect']
   const previous = names.map(name => globals[name])
@@ -43,12 +47,15 @@ test('recording question uses the numbered option card and falls through for eve
   globals.useEffect = (effect: () => void) => hook(() => { effect(); return true })
 
   const registered: any[] = []
-  const responses: any[] = []
+  // The recorded payload keeps its own shape: `assert.deepEqual` narrows
+  // `responses` to whatever it was compared against, and an `unknown` parameter
+  // would then stop being pushable.
+  const responses: RecordedAnswer[] = []
   let cancellations = 0
   const pending = {
     kind: 'question', key: 'orca-recording-one',
     questions: [recordingQuestion],
-    async answer(answer: unknown) { responses.push(answer) },
+    async answer(answer: RecordedAnswer) { responses.push(answer) },
     async cancel() { cancellations++ },
   }
   const descendants = (node: any): any[] => node && typeof node === 'object'
@@ -70,15 +77,32 @@ test('recording question uses the numbered option card and falls through for eve
     const entry = registered.find(item => item.definition.name === 'conversation.composer')
     assert.ok(entry, 'the plugin must register one composer entry')
 
-    // Boundary: only the exact identity pair is claimed; each single half and a
-    // multi-select carrier fall through to the native composer.
+    // The card claims every single-select question inside the range one number
+    // key addresses, so a question this plugin has never seen still shows a
+    // shortcut. Each single half of a known pair is no longer an exemption.
     assert.equal(entry.definition.select({ pendingInteraction: pending }), pending)
     assert.equal(entry.definition.select({ pendingInteraction: { ...pending, kind: 'plan-review' } }), null)
+    for (let count = 1; count <= 9; count += 1) {
+      const questions = [{
+        id: 'reflection-method', header: '反映方法', question: 'どちらにしますか？',
+        options: Array.from({ length: count }, (_, index) => ({ label: `選択肢${index + 1}` })),
+      }]
+      const carrier = { ...pending, key: `coverage-${count}`, questions }
+      assert.equal(entry.definition.select({ pendingInteraction: carrier }), carrier, `options=${count}`)
+    }
     for (const questions of [
       [{ ...recordingQuestion, header: 'OrcaReplay · 別の見出し' }],
       [{ ...recordingQuestion, id: 'other-recording' }],
+    ]) {
+      const carrier = { ...pending, questions }
+      assert.equal(entry.definition.select({ pendingInteraction: carrier }), carrier,
+        'an unlisted single-select question keeps the shortcut card')
+    }
+    // Carriers one number key cannot address stay with the native composer.
+    for (const questions of [
       [{ ...recordingQuestion, multiSelect: true }],
       [{ ...recordingQuestion, options: [] }],
+      [{ ...recordingQuestion, options: Array.from({ length: 10 }, (_, index) => ({ label: `選択肢${index + 1}` })) }],
     ]) {
       assert.equal(entry.definition.select({ pendingInteraction: { ...pending, questions } }), null)
     }
@@ -126,6 +150,30 @@ test('recording question uses the numbered option card and falls through for eve
     assert.deepEqual(responses, [{
       answers: [{ id: 'kioku-orca-recording', selected: ['記録しない'] }],
     }])
+    assert.equal(cancellations, 0)
+
+    // The same shortcut answers a question the plugin has never seen, such as a
+    // choice the model composed in chat.
+    const reflection = {
+      kind: 'question', key: 'reflection-one',
+      questions: [{
+        id: 'reflection-method', header: '反映方法', question: 'いま入れ替えますか？',
+        options: [{ label: '今すぐ反映する' }, { label: 'ソース変更のみで終える' }],
+      }],
+      async answer(answer: RecordedAnswer) { responses.push(answer) },
+      async cancel() { cancellations++ },
+    }
+    slots = []
+    const reflectionWrapper = entry.component({ matched: reflection })
+    cursor = 0
+    let reflectionTree = reflectionWrapper.component(reflectionWrapper.props)
+    reflectionTree.props.onKeyDown(key('2'))
+    cursor = 0; reflectionTree = reflectionWrapper.component(reflectionWrapper.props)
+    reflectionTree.props.onKeyDown(key('Enter'))
+    await Promise.resolve(); await Promise.resolve()
+    assert.deepEqual(responses[1], {
+      answers: [{ id: 'reflection-method', selected: ['ソース変更のみで終える'] }],
+    })
     assert.equal(cancellations, 0)
   } finally {
     names.forEach((name, index) => {

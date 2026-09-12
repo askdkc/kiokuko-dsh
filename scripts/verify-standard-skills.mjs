@@ -1,7 +1,7 @@
 import { loadStandardSkillParity } from '../dist/dsh/standard-skill-integrity.js'
 
 const parity = await loadStandardSkillParity()
-if (parity.skills.length !== 6 || parity.markdownFileCount !== 21 || parity.referenceFileCount !== 15) {
+if (parity.skills.length !== 7 || parity.markdownFileCount !== 22 || parity.referenceFileCount !== 15) {
   throw new Error('dsh Skill parity counts are invalid')
 }
 process.stdout.write(JSON.stringify({

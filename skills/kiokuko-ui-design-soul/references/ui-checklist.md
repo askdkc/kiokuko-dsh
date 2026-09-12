@@ -8,6 +8,17 @@ This checklist paraphrases decision principles. It does not reproduce Apple text
 
 Read this file for detailed implementation review or final verification of affected interactions. For a single visible change inside one expert's contract, the selected `ui.*` fragment and its universal-core checks are sufficient.
 
+## Required GUI and CLI interaction checks
+
+Apply these requirements to graphical interfaces and command-line interfaces alike:
+
+- **Visible choices:** show the available, task-relevant choices whenever practical. Do not require users to guess valid values or memorize identifiers when the application already knows the options. Group, filter, search, or paginate large sets so choices remain discoverable.
+- **Easy selection:** provide suitable shortcuts, numbered menus, or checkbox lists instead of unnecessary free-text entry. Show the relevant keys or gestures beside the choices. Distinguish single selection from multiple selection, make the current selection visible, and make confirmation and cancellation clear. For interactive CLIs, use number keys or arrow navigation, Space to toggle, and Enter to confirm where appropriate.
+- **Visible progress and state:** acknowledge the action promptly and show intermediate status during slow work. Display measured progress when available; otherwise show the current phase or an honest activity indicator. Make completion, failure, cancellation, and stalled work distinguishable; do not leave users guessing whether processing has started or finished.
+- **Useful error causes:** display what failed, its known cause, and the next available recovery action. A generic failure message, error code, or log entry alone is insufficient when the cause is known. If the cause is unknown, say so and give a useful diagnostic next step rather than inventing an explanation. Keep secrets out of messages.
+
+For non-interactive CLI use, keep explicit flags or input formats available instead of forcing a prompt. Preserve the command's output contract: progress and diagnostics must not corrupt machine-readable output; use the documented diagnostic channel, typically stderr, and disable terminal animation when no TTY is available.
+
 ## Eight-principle map
 
 | Principle | Practical question |
@@ -50,16 +61,7 @@ For each primary action, verify the applicable states:
 - Keep time limits adjustable or avoid them unless the task itself requires one.
 - On the web, apply the existing design system and WCAG 2.2; do not imitate iOS merely because these principles originated in Apple HIG.
 
-## Async-action spot check
-
-For a save, upload, generation, import, or other asynchronous action, confirm:
-
-1. Press or focus feedback is immediate.
-2. The busy state names the ongoing action and blocks accidental duplicates.
-3. Progress type matches what the system can measure.
-4. Cancellation has defined semantics and leaves data consistent.
-5. Success and failure are announced in the same task context.
-6. A failure keeps user input and provides a tested recovery path.
+For an asynchronous action, run the `ui.async.v1` state, processing, and recovery contract in [async-recovery.md](async-recovery.md) against the flow.
 
 ## Official sources
 

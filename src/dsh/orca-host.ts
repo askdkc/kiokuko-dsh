@@ -28,7 +28,7 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
   let accepting = true
   const withIndex: WithOrcaIndex = operation => runtime.withDatabase(async db => await operation(new DshOrcaStore(db)))
   const recorder = new DshOrcaRecorder(config, withIndex)
-  const choices = new DshOrcaSessionChoices(withIndex, native.questions)
+  const choices = new DshOrcaSessionChoices(withIndex, native.questions, config.askOnStart)
   const operations = new Map<string, Promise<void>>()
   let shutdown: Promise<void> | undefined
   const disposers: (() => void)[] = []
@@ -99,9 +99,19 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
         const agent = payload.agent, session = agent?.session
         const binding = agent && session ? services.resolveSessionBinding(agent, session) : undefined
         if (binding && agent && session) {
-          if (native.interactive?.(agent) === false) await services.sessionRecordingStatus(binding)
-          else await choices.prepare(binding, agent, payload.signal ?? new AbortController().signal,
-            () => services.resolveSessionBinding(agent, session) !== undefined)
+          // Managed children are never asked, so recording-by-default reaches them through
+          // the authority the recorder already gates them on: a child inherits the parent's
+          // exact decision instead of storing a decision of its own that nothing reads.
+          const interactive = native.interactive?.(agent) !== false
+          const signal = payload.signal ?? new AbortController().signal
+          const current = () => services.resolveSessionBinding(agent, session) !== undefined
+          if (interactive) await choices.prepare(binding, agent, signal, current)
+          else {
+            const authority = recordingAuthority(binding)
+            if (authority && !config.askOnStart) await choices.prepare(authority, agent, signal,
+              () => current() && recordingAuthority(binding) !== undefined)
+            else await services.sessionRecordingStatus(binding)
+          }
         }
       } catch { /* Optional recording cannot veto the native step. */ }
       return next()

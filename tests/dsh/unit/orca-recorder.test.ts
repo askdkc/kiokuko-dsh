@@ -12,6 +12,8 @@ test('Orca config records by default, allows explicit opt-out, and rejects inval
   assert.equal(Config.parse({ orca: {} }).orca.enabled, true)
   assert.equal(Config.parse({ orca: { enabled: false } }).orca.enabled, false)
   assert.equal(Config.parse({ orca: {} }).orca.capture.reasoning, false)
+  assert.equal(Config.parse({ orca: {} }).orca.askOnStart, false)
+  assert.equal(Config.parse({ orca: { askOnStart: true } }).orca.askOnStart, true)
   for (const value of [0, -1, Infinity, NaN, 1.2]) assert.equal(OrcaConfig.safeParse({ maxOpenTraces: value }).success, false)
   assert.equal(OrcaConfig.safeParse({ storage: 'cwd' }).success, false)
 })

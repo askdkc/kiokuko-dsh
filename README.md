@@ -28,10 +28,10 @@ If you use a globally installed `dsh` CLI, omit `pnpm` from the commands.
 Enter your task normally; no Kiokuko setup command is needed.
 For GitHub/local installation, see the [plugin guide](docs/dsh-plugin.md).
 
-OrcaReplay is configured automatically; **no manual setup is required**. At the start of a chat, choose whether to record detailed logs.
-Choosing to record saves subsequent model responses and tool results to `.orca/runs/` in the session workspace. The choice is remembered per session; skipped or cancelled questions continue without recording.
+OrcaReplay is configured automatically; **no manual setup is required**. Every chat records detailed logs without asking.
+Recording saves model responses and tool results to `.orca/runs/` in the session workspace. A decision is remembered per session, so `/kioku-orca stop` keeps that chat unrecorded; set `orca.askOnStart: true` to ask at the start of each chat instead.
 
-- `/kioku-orca start`: start recording manually or resume after stopping. Not needed if you chose to record at the start; past activity is not captured.
+- `/kioku-orca start`: start recording manually or resume after stopping. Not needed unless this chat was stopped earlier; past activity is not captured.
 - `/kioku-orca status`: briefly show the recording state, storage location, and next action. Use `/kioku-orca status --json` for diagnostic details.
 
 Use `/kioku-orca stop` to finalize the log, `list` to find its run ID, `show <run ID>` to inspect it, and `export <run ID>` to create HTML (all under `/kioku-orca`).
@@ -46,7 +46,9 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
 ```
 
-At startup, all seven bundled Skills (including Japanese output) and their references are synchronized to `~/.agents/skills/`. Missing files are created and managed copies are updated; unmanaged files are preserved. Other agents must reload their Skill catalog.
+At startup, all eight bundled Skills (including Japanese output) and their references are synchronized to `~/.agents/skills/`. Missing files are created and managed copies are updated; unmanaged files are preserved. Other agents must reload their Skill catalog.
+
+Startup also refreshes an existing Kiokuko managed block in the startup directory’s `AGENTS.md`, preserving your other instructions. Restart DSH after updating the package. See [setup and verification](docs/dsh-plugin.md#what-setup-updates-and-when) for another workspace or stale copies; `kiokuko use` is not the DSH setup command.
 
 To update Orca dependencies after a release such as 0.3.0:
 

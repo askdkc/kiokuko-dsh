@@ -16,33 +16,44 @@ does not expose one. See the bundled [Apache-2.0 license](ORCAREPLAY-LICENSE.txt
 ## Automatic setup and use
 
 Installing the Kiokuko bundle configures the recording feature automatically.
-At the first native step of a chat, a native question asks whether to record
-detailed logs. Choosing to record admits subsequent observations; choosing not
-to record leaves the chat running without Orca trace files. The bundled loader
-row supplies these defaults:
+Configuration approves recording: at the first native step of a chat the session
+is recorded without asking, and only `orca.askOnStart: true` restores the
+per-chat 記録する／記録しない question. The bundled loader row supplies these
+defaults:
 
 ```yaml
 enabled: true
 orca:
   enabled: true
+  askOnStart: false
   storage: project
   capture:
     content: redacted
     reasoning: false
 ```
 
-Omitted `orca` settings also enable the feature, but do not approve recording for
-a session. The yes/no choice is saved in Kiokuko SQLite, scoped to the session ID,
-workspace, session cwd and storage root; reloads do not ask again after a saved
-choice. While a question is pending, no observations are recorded. Skipped,
-invalid, cancelled or unavailable questions continue without capture. An unanswered question is not repeated
-on each step; use `/kioku-orca start` later (or answer after reloading). Hosts
-without a question UI also require an explicit start command.
-Managed Enno worker sessions do not prompt or inherit the parent session's choice;
-each session needs its own explicit recording choice.
+Omitted `orca` settings also enable the feature and record. Either the default or
+an affirmative answer admits subsequent observations; a refusal leaves the chat
+running without Orca trace files. The decision is saved in Kiokuko SQLite, scoped
+to the session ID, workspace, session cwd and storage root; a saved choice
+outranks the configuration default, so a session stopped once stays unrecorded
+across reloads. While a question is pending, no observations are recorded. A
+failed preference write leaves the session unrecorded and reports
+`selectionError` in `status --json`; `/kioku-orca start` can still authorize that
+session explicitly. Skipped, invalid, cancelled or unavailable questions continue
+without capture. An unanswered question is not repeated on each step; use
+`/kioku-orca start` later (or answer after reloading). With `askOnStart: true`,
+hosts without a question UI also require an explicit start command.
+Managed Enno worker and delegated child sessions are never prompted. A child
+follows the exact decision of the session that owns it: with `askOnStart: false`
+it records under that parent's default, and with `askOnStart: true` it records
+only when the parent approved, because a question would interrupt managed work.
+A child stores no decision of its own, so its work still appears in `.orca/runs/`
+as its own generation, and a managed session without an owning parent records
+under the configured default or needs its own explicit `/kioku-orca start`.
 
-After approval, the next attributable model/tool observation creates the trace
-directory, not package installation. Past calls are not captured.
+Once a session is approved, the next attributable model/tool observation creates
+the trace directory, not package installation. Past calls are not captured.
 
 After updating an older installation, restart DSH to load the new bundle defaults.
 An explicit `orca.enabled: false` in a profile, home, or launch patch still takes
@@ -74,7 +85,9 @@ from the default display. Use `status --json` for the full diagnostic snapshot.
 
 The JSON snapshot distinguishes disabled, available and unavailable capability, trace
 state, missing/unresolved observations and index persistence failure.
-`sessionRecording` is `awaiting_choice`, `enabled` or `disabled`; `selectionError`
+`sessionRecording` is `awaiting_choice`, `enabled` or `disabled`; with
+`askOnStart: false` a session reports `enabled` from its first step unless a
+saved refusal exists. `selectionError`
 reports unavailable questions or failed preference persistence. Feature capability
 `available` alone does not mean this session has opted into recording. An empty
 trace means no attributable observation has started. `completed` means the chosen

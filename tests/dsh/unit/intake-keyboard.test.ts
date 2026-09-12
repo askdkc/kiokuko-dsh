@@ -38,7 +38,22 @@ test('intake keyboard is scoped, confirms once, preserves drafts, and leaves edi
     const entry = registered.find(item => item.definition.name === 'conversation.composer')
     assert.equal(entry.definition.select({ pendingInteraction: pending }), pending)
     assert.equal(entry.definition.select({ pendingInteraction: { ...pending, kind: 'plan-review' } }), null)
-    assert.equal(entry.definition.select({ pendingInteraction: { ...pending, questions: [{ ...pending.questions[0], header: 'Other plugin' }] } }), null)
+    // A question this plugin has never seen keeps the same numbered card, so the
+    // shortcut is present for whatever the composer asks.
+    const unseen = {
+      ...pending, key: 'intake-unseen',
+      questions: [{ ...pending.questions[0], id: 'reflection-method', header: '反映方法' }],
+    }
+    assert.equal(entry.definition.select({ pendingInteraction: unseen }), unseen)
+    // Carriers a single number key cannot address stay with the native composer.
+    for (const questions of [
+      [{ ...pending.questions[0], multiSelect: true }],
+      [{ ...pending.questions[0], options: [] }],
+      [{ ...pending.questions[0], options: Array.from({ length: 10 }, (_, index) => ({ label: `選択肢${index + 1}` })) }],
+      [pending.questions[0], pending.questions[0]],
+    ]) {
+      assert.equal(entry.definition.select({ pendingInteraction: { ...pending, questions } }), null)
+    }
     const wrapper = entry.component({ matched: pending })
     const render = () => { cursor = 0; return wrapper.component(wrapper.props) }
     let tree = render()

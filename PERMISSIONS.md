@@ -10,13 +10,24 @@ Kiokuko operation.
   repository metadata.
 - Writes the configured Kiokuko database and pre-migration backups, including
   DSH leases, receipts, retrieval state, and embedding state.
-- On enabled plugin load, synchronizes all seven bundled Skills and their
+- Stores the first native input batch of each governed turn in that database
+  for recovery before model or tool execution. This is an input-message copy,
+  not a backup of the workspace or whole session. Later step inputs do not
+  replace it. Storage failure cannot veto the native turn; observed model or
+  tool execution prevents automatic input replay.
+- On enabled plugin load, synchronizes all eight bundled Skills and their
   references to `~/.agents/skills/` before registering the DSH surfaces. Creates
   missing files and atomically replaces files carrying their exact Kiokuko
   management marker. Leaves unrelated files untouched and refuses unmanaged
   collisions, symbolic links, and unsafe parent directories. A synchronization
   failure warns that deployed copies may be stale; the bundled DSH provider
   remains available. Interrupted synchronization resumes on the next load.
+- On enabled plugin load, replaces only the existing Kiokuko managed block in
+  the startup directory’s `AGENTS.md` with the DSH host-owned contract. Preserves
+  instructions outside the markers; absent or unmanaged files stay untouched.
+  Refuses linked files or ambiguous markers. The bundled `scripts/setup-dsh.mjs`
+  provides the same repair for an explicit workspace and a read-only `--check`.
+  It does not scan parent/global instruction files or other session workspaces.
 - On plugin load, enumerates stored DSH session IDs and validates each history.
   When DSH rejects a v3 history containing legacy Kiokuko informational
   events, reads that exact native session file and marks the five supported
@@ -97,9 +108,15 @@ run.
 ## Orca recordings
 
 `orca.enabled` defaults to `true`, including in the installed bundle configuration.
-This enables the feature; a native question asks whether to record each session.
-Only affirmative choices or `/kioku-orca start` authorize capture. Choices are
-saved in SQLite; skip/cancel or unavailable UI continues without recording.
+This enables the feature, and configuration also approves it: each interactive
+session is recorded without a question, and delegated or managed child sessions
+follow the same default without ever being asked. `orca.askOnStart: true`
+restores the per-session question instead, and child sessions then need an
+explicit `/kioku-orca start`. Default recording, an affirmative answer or
+`/kioku-orca start` authorize capture. Choices are
+saved in SQLite and outrank the default, so a saved refusal keeps that session
+unrecorded; with `askOnStart: true`, skip/cancel or unavailable UI continues
+without recording.
 Set it to `false` and reload to disable the feature. The runtime dependencies
 `@orcareplay/core`, `@orcareplay/schema`, and `@orcareplay/viewer` with range `>=0.2.1`
 are installed automatically by npm/pnpm with this package. No extra installer,

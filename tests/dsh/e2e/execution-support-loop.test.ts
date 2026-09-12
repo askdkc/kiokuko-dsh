@@ -66,6 +66,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     } })
   } }); await questionFiber
   const options = { repositoryRoot: root, databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
+    orca: { askOnStart: true },
     llm: { async *stream() { throw new Error('Memory backend deliberately unavailable after completion') } } }
   let adapter = createDshHostAdapter(ctx, options)
   let composition = await mountDshComposition(ctx, adapter.host)

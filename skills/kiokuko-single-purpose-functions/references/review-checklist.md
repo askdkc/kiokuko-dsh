@@ -89,11 +89,4 @@ Read this file for a comprehensive code review or final verification, especially
 - [ ] Integration tests exercise the real storage, filesystem, network, process, or protocol boundary when adapter behavior changes.
 - [ ] Tests assert observable contracts, not incidental private call order.
 
-## Verification report
-
-- [ ] The narrow affected test was run.
-- [ ] Relevant static or type checks were run.
-- [ ] The broader suite was run when shared behavior changed.
-- [ ] Build and package checks were run when distribution changed.
-- [ ] Every skipped command, known failure, assumption, and residual risk is stated exactly.
-- [ ] Completion is not described as perfect, crash-proof, or fully verified beyond the evidence.
+Report the run commands, results, and residual risk exactly as `verification.md` requires.

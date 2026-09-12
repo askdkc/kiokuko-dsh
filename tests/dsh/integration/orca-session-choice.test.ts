@@ -15,8 +15,8 @@ function deferred<T>() {
   const promise = new Promise<T>(r => { resolve = r })
   return { promise, resolve }
 }
-async function fixture(questions?: DshUserQuestions, interactive = true) {
-  const f = await orcaFixture()
+async function fixture(questions?: DshUserQuestions, interactive = true, askOnStart = true) {
+  const f = await orcaFixture({ askOnStart })
   const session = { id: f.binding.sessionId, header: { cwd: f.root } }
   const agent = { id: 'native-agent', session }
   const listeners = new Map<string, (...args: any[]) => any>()
@@ -78,6 +78,25 @@ test('first-step recording choice gates early model/tool observations, deduplica
     const rows = await f.reader.list(f.binding)
     assert.equal(rows.length, 2)
     assert.ok(rows.every(r => r.state === 'completed' && r.event_count > 0))
+  } finally { await f.dispose() }
+})
+
+test('the default configuration records each chat without asking, while a saved refusal still wins', async () => {
+  let asked = 0
+  const f = await fixture({ ask: async () => { asked++; return answer('記録しない') } }, true, false)
+  try {
+    await f.step()
+    assert.equal(asked, 0, 'the default configuration asks no recording question')
+    assert.equal((await f.command('status --json')).sessionRecording, 'enabled')
+    await f.stream()
+    await f.command('stop')
+    const rows = await f.reader.list(f.binding)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0]?.state, 'completed')
+    await f.reload(); await f.step(); await f.stream()
+    assert.equal(asked, 0)
+    assert.equal((await f.command('status --json')).sessionRecording, 'disabled')
+    assert.equal((await f.reader.list(f.binding)).length, 1)
   } finally { await f.dispose() }
 })
 
@@ -171,6 +190,11 @@ test('failed preference storage stays non-recording and visible; explicit start 
     fail = false
     await choices.set(f.binding, true)
     assert.equal(choices.allows(f.binding), true)
+    const silent = new DshOrcaSessionChoices(async () => { throw new Error('database unavailable') }, undefined, false)
+    await silent.prepare(f.binding, { id: 'agent' }, new AbortController().signal, () => true)
+    assert.equal(silent.allows(f.binding), false, 'a failed default must not record without the saved choice')
+    assert.equal((await silent.status(f.binding)).selectionError, 'recording_choice_persistence_failed')
+    await silent.shutdown()
   } finally { await choices.shutdown(); await f.dispose() }
 })
 
@@ -203,4 +227,55 @@ test('managed children do not interrupt work with recording questions or inherit
     assert.equal(asked, 0)
     assert.equal((await f.command('status --json')).sessionRecording, 'enabled')
   } finally { await f.dispose() }
+})
+
+test('managed children record without asking when the configuration records by default', async () => {
+  let asked = 0
+  const f = await fixture({ ask: async () => { asked++; return answer('記録しない') } }, false, false)
+  try {
+    await f.step()
+    assert.equal(asked, 0, 'managed children are never asked')
+    assert.equal((await f.command('status --json')).sessionRecording, 'enabled')
+    await f.stream()
+    await f.command('stop')
+    const rows = await f.reader.list(f.binding)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0]?.state, 'completed')
+  } finally { await f.dispose() }
+})
+
+test('a delegated child records through its parent choice and stores no decision of its own', async () => {
+  let asked = 0
+  const f = await orcaFixture({ askOnStart: false })
+  const parentSession = { id: 'deep-case-parent', header: { cwd: f.root } }
+  const childSession = { id: 'deep-case-worker', header: { cwd: f.root } }
+  const parent = { id: 'parent-agent', session: parentSession }
+  const child = { id: 'child-agent', session: childSession }
+  const listeners = new Map<string, (...args: any[]) => any>()
+  const ctx = { on: (name: string, listener: (...args: any[]) => any) => { listeners.set(name, listener); return () => listeners.delete(name) } }
+  const host = createDshOrcaHost(ctx as never, f.config, { withDatabase: async (op: any) => op(f.database) } as never, {
+    session: id => [parentSession, childSession].find(session => session.id === id),
+    agent: id => [parent, child].find(candidate => candidate.id === id),
+    logicalRun: () => undefined,
+    questions: { ask: async () => { asked++; throw new Error('Children must not ask') } },
+    interactive: agent => agent === parent,
+    recordingParent: agent => agent === child ? { agent: parent, session: parentSession } : undefined,
+  })
+  const step = (agent: any) => listeners.get('agent/pre-step')!({ agent, signal: new AbortController().signal }, () => 'native-decision')
+  const childBinding = { sessionId: childSession.id, workspaceRoot: f.root, sessionCwd: f.root, storeRoot: f.root }
+  try {
+    assert.equal(await step(parent), 'native-decision')
+    assert.equal(await step(child), 'native-decision')
+    assert.equal(asked, 0, 'the default configuration asks no session, and a child never inherits the question')
+    // The child's recording authority is the parent, so only the parent stores a decision.
+    const decisions = f.database.prepare('SELECT dsh_session_id FROM dsh_orca_session_choices').all<{ dsh_session_id: string }>()
+    assert.deepEqual(decisions.map(row => row.dsh_session_id), [parentSession.id])
+    // The child still records, because it inherits that exact parent decision.
+    await collect(listeners.get('llm/stream')!({ ...request, sessionId: childSession.id }, () => chunks(response())))
+    await host.closeSessionRecording(childSession.id, 'manual')
+    const traces = await f.reader.list(childBinding)
+    assert.equal(traces.length, 1)
+    assert.equal(traces[0]?.dsh_session_id, childSession.id)
+    assert.equal(traces[0]?.state, 'completed')
+  } finally { await host.shutdown(); await f.dispose() }
 })

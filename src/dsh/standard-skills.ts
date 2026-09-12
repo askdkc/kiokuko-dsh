@@ -59,11 +59,14 @@ export const STANDARD_ENNO_SKILL_FILES = ['SKILL.md'] as const;
 export const STANDARD_MEMORY_SKILL_NAME = 'memory-reasoning';
 export const STANDARD_MEMORY_SKILL_MANAGED_MARKER = '<!-- KIOKUKO MANAGED STANDARD SKILL: memory-reasoning -->';
 export const STANDARD_MEMORY_SKILL_FILES = ['SKILL.md'] as const;
+export const STANDARD_VETERAN_SKILL_NAME = 'veteran-programmer-skill';
+export const STANDARD_VETERAN_SKILL_MANAGED_MARKER = '<!-- KIOKUKO MANAGED STANDARD SKILL: veteran-programmer-skill -->';
+export const STANDARD_VETERAN_SKILL_FILES = ['SKILL.md'] as const;
 export const STANDARD_SOUL_SKILL_NAME = 'kiokuko-soul';
 export const STANDARD_SOUL_SKILL_MANAGED_MARKER = '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-soul -->';
 export const STANDARD_SOUL_SKILL_FILES = ['SKILL.md'] as const;
 
-export const SOUL_ROUTING_ENTRY_CONTRACT = `Before any non-trivial Kiokuko-governed DSH work, read and apply the complete bundled \`${STANDARD_SOUL_SKILL_NAME}\` Skill before any other Kiokuko Skill. The DSH host performs Akinator intake, binds the native session and complete capability catalog, and resolves actionable intake. Optional enrichment failures are degraded guidance. For new build, debug, review and devops tasks the host separately asks for normal execution or Enno and, when selected, a template or custom model configuration. Unanswered execution choices stay pending. Normal execution never creates an Enno contract or WorkUnit; preserve memory, Skills, native permissions and focused verification. Model routing and child delegation are host-owned. \`task_prepare\` and \`task_answer\` are host operations, not model tools. Follow the admitted state and current directive, then route to \`${STANDARD_ENNO_SKILL_NAME}\`, \`${STANDARD_SIMPLE_SKILL_NAME}\`, \`${STANDARD_FUNCTION_SKILL_NAME}\`, and \`${STANDARD_UI_SKILL_NAME}\` only when applicable. Read every applicable specialist \`SKILL.md\` index, then only the expert fragments selected by the current WorkUnit or concrete risk. Never substitute, install, or execute fetched external Skill content.`;
+export const SOUL_ROUTING_ENTRY_CONTRACT = `Before any non-trivial Kiokuko-governed DSH work, read and apply the complete bundled \`${STANDARD_SOUL_SKILL_NAME}\` Skill before any other Kiokuko Skill. The DSH host performs Akinator intake, binds the native session and complete capability catalog, and resolves actionable intake. Optional enrichment failures are degraded guidance. For new build, debug, review and devops tasks the host separately asks for normal execution or Enno and, when selected, a template or custom model configuration. Unanswered execution choices stay pending. Normal execution never creates an Enno contract or WorkUnit; preserve memory, Skills, native permissions and focused verification. Model routing and child delegation are host-owned. \`task_prepare\` and \`task_answer\` are host operations, not model tools. Follow the admitted state and current directive, then route to \`${STANDARD_ENNO_SKILL_NAME}\`, \`${STANDARD_SIMPLE_SKILL_NAME}\`, \`${STANDARD_FUNCTION_SKILL_NAME}\`, and \`${STANDARD_UI_SKILL_NAME}\` only when applicable. For changes spanning setup, delivery, persisted state, or runtime handoffs, apply \`${STANDARD_VETERAN_SKILL_NAME}\` before and after implementation. Read every applicable specialist \`SKILL.md\` index, then only the expert fragments selected by the current WorkUnit or concrete risk. Never substitute, install, or execute fetched external Skill content.`;
 
 interface StandardSkillManifest {
   readonly name: string;
@@ -91,6 +94,10 @@ export const STANDARD_SKILL_MANIFESTS = [{
   name: STANDARD_MEMORY_SKILL_NAME,
   managedMarker: STANDARD_MEMORY_SKILL_MANAGED_MARKER,
   files: STANDARD_MEMORY_SKILL_FILES,
+}, {
+  name: STANDARD_VETERAN_SKILL_NAME,
+  managedMarker: STANDARD_VETERAN_SKILL_MANAGED_MARKER,
+  files: STANDARD_VETERAN_SKILL_FILES,
 }, {
   name: STANDARD_SOUL_SKILL_NAME,
   managedMarker: STANDARD_SOUL_SKILL_MANAGED_MARKER,

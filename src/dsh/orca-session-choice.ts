@@ -13,11 +13,16 @@ interface ChoiceEntry {
   writes: Promise<void>
 }
 
-/** One native question per session, with explicit commands superseding pending answers. */
+/**
+ * One recording decision per session, with explicit commands superseding pending answers.
+ * Without a saved choice, `askOnStart` decides between asking the human and recording
+ * directly; the default asks, so only explicit configuration authorizes capture silently.
+ */
 export class DshOrcaSessionChoices {
   readonly #entries = new Map<string, ChoiceEntry>()
   #closed = false
-  constructor(private readonly withIndex: WithOrcaIndex, private readonly questions?: DshUserQuestions) {}
+  constructor(private readonly withIndex: WithOrcaIndex, private readonly questions?: DshUserQuestions,
+    private readonly askOnStart = true) {}
   #entry(binding: DshOrcaBinding): ChoiceEntry {
     const key = JSON.stringify([binding.sessionId, binding.workspaceRoot, binding.sessionCwd, binding.storeRoot])
     let entry = this.#entries.get(key)
@@ -73,6 +78,8 @@ export class DshOrcaSessionChoices {
         await this.#load(binding, entry)
         if (this.#closed || entry.choice !== undefined || entry.attempted || signal.aborted || !isCurrent()) return
         entry.attempted = true
+        // A saved choice wins; otherwise configuration decides between recording and asking.
+        if (!this.askOnStart) { await this.set(binding, true); return }
         if (!this.questions) { entry.error = 'recording_question_unavailable'; return }
         const revision = entry.revision
         const combined = AbortSignal.any([signal, entry.controller.signal])
@@ -91,7 +98,7 @@ export class DshOrcaSessionChoices {
         if (value === '記録する' || value === '1') await this.set(binding, true)
         else if (value === '記録しない' || value === '2') await this.set(binding, false)
       } catch {
-        // Dismissed or unavailable questions never authorize recording or veto work.
+        // Dismissed or unavailable questions and failed persistence never record or veto work.
         if (!signal.aborted && !entry.controller.signal.aborted) entry.error ??= 'recording_question_unavailable'
       }
     })().finally(() => { delete entry.pending })

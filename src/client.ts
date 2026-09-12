@@ -375,16 +375,9 @@ interface IntakeKeyEvent {
   preventDefault(): void; stopPropagation(): void;
 }
 
-/**
- * Small intake questions this plugin renders as a numbered option card. The identity
- * pair is matched exactly: another plugin's question that happens to share one
- * half falls through to the native composer. `supported` keeps the option count
- * inside the 1-9 range the number-key shortcut can address.
- */
-const INTAKE_QUESTIONS: readonly { readonly id: string; readonly header: string }[] = [
-  { id: 'taskType', header: 'Kiokuko · 作業の選択' },
-  { id: 'kioku-orca-recording', header: 'OrcaReplay · 詳細ログ' },
-]
+/** Option count a single number key addresses: the range the shortcut card covers. */
+const DIGIT_ADDRESSABLE_OPTIONS = 9
+
 const ENNO_SELECTION_QUESTIONS = [
   'enno-execution-mode', 'enno-model-source', 'enno-template', 'enno-template-provider',
   'enno-template-unavailable', 'enno-bind-provider', 'enno-model-review', 'enno-catalog-retry',
@@ -403,14 +396,26 @@ function questionInputKind(question: IntakePending['questions'][0]): 'choice' | 
   return 'choice'
 }
 
+/**
+ * Decide whether this plugin's numbered card owns a native question carrier.
+ *
+ * The card claims every single-select question carrying one to nine options,
+ * whoever asked it — Kiokuko's own intake, an Enno or Deep selection, another
+ * plugin, or a question the model composed in chat — so a number-key plus Enter
+ * shortcut is never missing from a question this composer shows. Longer catalogs
+ * are claimed only by the Enno and Deep selection questions, whose typed search
+ * and value flows own their own addressing. Multi-select batches, optionless
+ * prompts, and multi-question batches have no single number per answer and stay
+ * with the native composer.
+ */
 function isSupportedQuestion(question: IntakePending['questions'][0] | undefined): boolean {
   if (question === undefined || question.multiSelect === true) return false
   const options = question.options?.length ?? 0
   if (options < 1) return false
+  if (options <= DIGIT_ADDRESSABLE_OPTIONS) return true
   if (question.header === '実行方式とモデル' && (ENNO_SELECTION_QUESTIONS.includes(question.id) || isEnnoSearchQuestion(question))) return true
   if (question.header === 'Deep planning' && DEEP_SELECTION_QUESTIONS.includes(question.id)) return true
-  if (options > 9) return false
-  return INTAKE_QUESTIONS.some(kind => kind.id === question.id && kind.header === question.header)
+  return false
 }
 
 function intakePending(props: Record<string, unknown>): IntakePending | null {
@@ -421,7 +426,11 @@ function intakePending(props: Record<string, unknown>): IntakePending | null {
     ? pending : null
 }
 
-/** Native pending carrier, plugin-only presentation. Other DSH questions remain untouched. */
+/**
+ * Native pending carrier, plugin-only presentation. The card answers through the
+ * carrier's own protocol, so claiming a question does not change what the asker
+ * receives — only how the option can be chosen.
+ */
 function IntakeQuestion(props: Record<string, unknown>): unknown {
   const pending = props.matched as IntakePending
   return jsx(IntakeQuestionCard, { key: pending.key, pending })

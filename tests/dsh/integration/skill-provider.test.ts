@@ -9,13 +9,14 @@ test('bundled provider exposes complete model/user-invocable definitions and dis
   const result = await provider.list({})
   const listed = 'complete' in result ? result : { candidates: result, complete: true as const }
   assert.equal(listed.complete, true)
-  assert.equal(listed.candidates.length, 7)
+  assert.equal(listed.candidates.length, 8)
   assert.deepEqual(listed.candidates.map((candidate) => candidate.name), [
     'kiokuko-ui-design-soul',
     'kiokuko-simple-work',
     'kiokuko-single-purpose-functions',
     'kiokuko-enno-oduno',
     'memory-reasoning',
+    'veteran-programmer-skill',
     'kiokuko-soul',
     'natural-japanese-output',
   ])

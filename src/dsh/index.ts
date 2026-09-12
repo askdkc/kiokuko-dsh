@@ -4,7 +4,7 @@ import { Config, type Config as DshConfig } from './config.js'
 import type { DshRuntime } from './runtime.js'
 import { KIOKUKO_DSH_HOST_SERVICE, mountDshComposition, type DshCompositionHost } from './composition.js'
 import { createDshHostAdapter } from './host-adapter.js'
-import { synchronizeStandardSkillsOnLoad } from './standard-skill-deployment.js'
+import { setupDshOnLoad } from './setup.js'
 
 /** Public Cordis plugin name mounted by the dsh bundle patch. */
 export const name = 'kiokuko-dsh'
@@ -69,7 +69,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
 
   console.info('[kiokuko-dsh] [info] plugin loaded')
   await ctx.effect(async () => {
-    await synchronizeStandardSkillsOnLoad()
+    await setupDshOnLoad()
     const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
       host.memoryEvolution?.configure(resolvedConfig.memoryEvolution)

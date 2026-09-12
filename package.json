@@ -24,6 +24,7 @@
     "skills/",
     "dsh/cordis.patch.yml",
     "docs/",
+    "scripts/setup-dsh.mjs",
     "scripts/repair-session-log.mjs",
     "scripts/repair-continuation-source.mjs",
     "scripts/session-history-codec.mjs",
@@ -84,7 +85,8 @@
         "Stored native DSH session IDs and histories for startup validation and legacy Kiokuko compatibility"
       ],
       "writePaths": [
-        "Seven bundled managed Skills and references under ~/.agents/skills on enabled plugin load",
+        "Eight bundled managed Skills and references under ~/.agents/skills on enabled plugin load",
+        "Existing Kiokuko managed block in startup-directory AGENTS.md; instructions outside the markers are preserved",
         "Configured Kiokuko database and pre-migration backups",
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",
         ".orca/runs and .orca/exports inside verified session workspaces, or the configured Kiokuko data directory",
@@ -136,7 +138,8 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run publint && npm run pack:check",
     "test:orca:package": "npm run build && node scripts/verify-orca-consumer.mjs",
     "test:evolution": "node scripts/run-tests.mjs tests/dsh/unit/evolution tests/dsh/integration/evolution",
-    "test:evaluation:evolution": "node --import tsx scripts/run-evolution-evaluation.mjs"
+    "test:evaluation:evolution": "node --import tsx scripts/run-evolution-evaluation.mjs",
+    "setup:dsh": "node scripts/setup-dsh.mjs"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

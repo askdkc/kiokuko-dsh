@@ -22,10 +22,10 @@ pnpm dsh web
 시작 후 평소처럼 작업을 입력하면 됩니다. Kiokuko 전용 setup 작업은 필요하지 않습니다.
 GitHub 및 로컬 설치 방법은 [플러그인 안내](docs/dsh-plugin.md)를 참고하세요.
 
-OrcaReplay 기능은 자동으로 설정되며 **수동 설정이 필요 없습니다**. 채팅 시작 시 상세 로그를 기록할지 선택합니다.
-기록을 선택하면 이후 모델 응답과 도구 실행 결과가 세션 작업 공간의 `.orca/runs/`에 저장됩니다. 선택은 세션별로 유지되며, 건너뛰거나 취소하면 기록 없이 채팅을 계속합니다.
+OrcaReplay 기능은 자동으로 설정되며 **수동 설정이 필요 없습니다**. 각 채팅은 확인 없이 상세 로그를 기록합니다.
+기록하면 이후 모델 응답과 도구 실행 결과가 세션 작업 공간의 `.orca/runs/`에 저장됩니다. 결정은 세션별로 유지되므로 `/kioku-orca stop`한 채팅은 기록하지 않은 상태로 남습니다. 채팅 시작 시 확인하려면 `orca.askOnStart: true`를 설정하세요.
 
-- `/kioku-orca start`: 기록을 수동으로 시작하거나 중지 후 다시 시작합니다. 시작 시 기록을 선택했다면 실행할 필요가 없습니다. 과거 동작은 기록되지 않습니다.
+- `/kioku-orca start`: 기록을 수동으로 시작하거나 중지 후 다시 시작합니다. 해당 채팅을 중지하지 않았다면 실행할 필요가 없습니다. 과거 동작은 기록되지 않습니다.
 - `/kioku-orca status`: 기록 상태, 저장 위치와 다음 동작을 간단히 표시합니다. 진단용 상세 정보는 `/kioku-orca status --json`으로 확인할 수 있습니다.
 
 `/kioku-orca stop`으로 로그를 확정한 뒤 `list`로 run ID를 확인하고, `show <run ID>`로 내용을 보거나 `export <run ID>`로 HTML을 내보낼 수 있습니다(모두 `/kioku-orca` 뒤에 입력).
@@ -40,7 +40,9 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
 ```
 
-시작 시 일본어 출력 Skill을 포함한 번들 Skill 7개와 참조 파일을 `~/.agents/skills/`에 동기화합니다. 누락된 파일을 만들고 관리 대상 복사본을 업데이트하며, 비관리 파일은 덮어쓰지 않습니다. 다른 에이전트에서는 Skill 카탈로그를 다시 로드해야 합니다.
+시작 시 일본어 출력 Skill을 포함한 번들 Skill 8개와 참조 파일을 `~/.agents/skills/`에 동기화합니다. 누락된 파일을 만들고 관리 대상 복사본을 업데이트하며, 비관리 파일은 덮어쓰지 않습니다. 다른 에이전트에서는 Skill 카탈로그를 다시 로드해야 합니다.
+
+시작 시 시작 디렉터리의 `AGENTS.md`에 있는 기존 Kiokuko 관리 블록도 갱신하며, 블록 밖의 지침은 보존합니다. 패키지 업데이트 후 DSH를 다시 시작하세요. 다른 작업 디렉터리나 오래된 복사본의 확인 및 복구는 [설정 절차](docs/dsh-plugin.md#what-setup-updates-and-when)를 참고하세요. `kiokuko use`는 DSH 설정 명령이 아닙니다.
 
 Orca 0.3.0 등 새 버전이 공개된 후 Orca 관련 의존 패키지를 업데이트하려면:
 

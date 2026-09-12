@@ -156,46 +156,106 @@ or any other metadata file in the workspace.
 its own row under the stable `kiokuko-dsh` id. Its DSH lazy-CJS client owns the
 Header modal and `/export` command UI while the Host route uses cursor-backed
 streaming export. Removing the bundle restores the stock row without rewriting
-unrelated plugins or settings. The plugin does not edit `AGENTS.md`.
+unrelated plugins or settings. Startup also refreshes an existing Kiokuko managed
+block in the startup directory’s `AGENTS.md`, as described below.
 
 ## Bundled standard Skills: canonical source and refresh
 
 The repository's `skills/<name>/` directories are the single canonical source
-for the six standard Skills and for the bundled Japanese output Skill.
+for the seven standard Skills and for the bundled Japanese output Skill.
 `src/dsh/standard-skills.ts` resolves them relative to the built module
 (`dist/dsh/` → `../../skills/<name>`), and `src/dsh/standard-skill-integrity.ts`
 refuses to load a tree that breaks the manifest: exactly one management marker
 per file, frontmatter `name` equal to the manifest name with a non-empty
 description and no `disable-model-invocation`, every local Markdown link
-resolvable inside its own Skill, and exactly 6 Skills with 21 Markdown files and
+resolvable inside its own Skill, and exactly 7 Skills with 22 Markdown files and
 15 reference files.
 
-Because the package ships that tree, a plugin upgrade is what refreshes a
-deployed copy: bump the package version and reinstall the plugin
-(`pnpm dsh plugin --profile web add kiokuko-dsh` after publishing, or the
-GitHub/commit-pinned install from **Install**). A working directory that keeps an
-independent copy of these Skills, such as an agent-level Skills directory, is
-*not* written by this repository and drifts independently; after changing a
-Skill, refresh that copy from this tree and confirm it matches, or delete it so
-only the plugin's bundled content is used.
+The Japanese output Skill is an additional eighth Skill. Its directory is
+`japanese-translation-for-oss-models/`; its frontmatter/provider name is
+`natural-japanese-output`. Both names refer to the same Skill. Deployment includes
+all eight Skills and 23 Markdown files, including the 15 references.
 
-Vocabulary is fixed by the implementation: `task_prepare` and `task_answer` are
-host operations performed by the DSH host before the model request, not model
-tools, and no model-side attestation field is required. Skill text that asks the
-model to call those tools, or to create its own `requestId`, belongs to an older
-deployment and must not be reintroduced.
+`veteran-programmer-skill` checks workflow completeness before and after changes
+spanning setup, delivery, persisted state or runtime handoffs. SOUL and the code
+index route to it when applicable; isolated edits do not require a workflow audit.
 
-### Regenerate and verify
+### What setup updates and when
+
+The enabled plugin runs setup on every load, before registering its DSH surfaces:
+
+1. Validate the bundled Skills and preflight the deployment targets.
+2. Synchronize all eight managed Skill directories to the process user's
+   `~/.agents/skills/`, creating missing files and replacing stale managed files.
+3. Replace the existing `<!-- BEGIN KIOKUKO MANAGED BLOCK -->` through
+   `<!-- END KIOKUKO MANAGED BLOCK -->` section of the startup directory's
+   `AGENTS.md` with the DSH contract. Preserve all text outside those markers.
+   Absent or unmanaged `AGENTS.md` files are left alone.
+
+The DSH contract comes from `SOUL_ROUTING_ENTRY_CONTRACT`, also used by the
+host prompt. `task_prepare` and `task_answer` are host operations; the model does
+not manufacture request identity or attest that it read a Skill. The DSH host
+owns intake, session binding, memory delivery and finalization. The generic
+`kiokuko use` command is not part of this package and must not be used to
+regenerate DSH instructions. If it recreates a legacy block, the next DSH setup
+replaces that block again.
+
+Updating the npm package changes the bundled source. Setup executes when the
+updated plugin is loaded, **not inside npm's install/update lifecycle**. Stop the
+old DSH process, update the plugin, then start DSH from the target project:
+
+```bash
+pnpm dsh plugin --profile web update kiokuko-dsh --latest
+# Run the next command from the project whose AGENTS.md should be refreshed.
+pnpm dsh web
+```
+
+Other clients must reload their Skill catalog, and existing conversations must
+be restarted to read updated instructions. This does not rewrite a prompt
+already assembled in a running session. A conversation using a directory other
+than the DSH startup directory needs explicit setup there, or a DSH restart from
+that directory. Parent-directory/global instruction files and unrelated Skill
+copies are not scanned or modified.
+
+Setup refuses unmanaged Skill collisions, symlinks, unsafe parent permissions,
+and malformed or duplicate project management markers. It reports failures with
+the affected path/reason; the bundled provider remains available, but that warning
+means setup is incomplete. Files are published atomically one at a time. If a
+write fails midway, fix the reported problem and rerun setup; it resumes by
+comparing every file. Back up or rename a conflicting user-owned file yourself
+before retrying; setup never removes it to force an update.
+
+### Repair or check an explicit workspace
+
+From the repository checkout, build once, then run setup with the actual project
+path. `--check` performs no writes and exits with status 1 for drift or errors;
+without it, setup performs the repair. `--json` gives structured results.
 
 ```bash
 npm run build
-node scripts/verify-standard-skills.mjs
+node scripts/setup-dsh.mjs --cwd /absolute/path/to/project --check
+node scripts/setup-dsh.mjs --cwd /absolute/path/to/project
+node scripts/setup-dsh.mjs --cwd /absolute/path/to/project --check
 ```
 
-The script loads the parity from `dist/` and fails unless the counts are 6
-Skills, 21 Markdown files, and 15 reference files; it prints the Skill names,
-counts, and the content digest that changes on every Skill edit. Compare the
-digest before and after a Skill change to confirm which deployment is stale.
+The same `scripts/setup-dsh.mjs` ships in the installed package. Use the **actual
+installed kiokuko-dsh package directory** instead of the checkout to verify that
+installation's content:
+
+```bash
+node /absolute/path/to/installed/kiokuko-dsh/scripts/setup-dsh.mjs --cwd /absolute/path/to/project --check
+node /absolute/path/to/installed/kiokuko-dsh/scripts/setup-dsh.mjs --cwd /absolute/path/to/project
+node /absolute/path/to/installed/kiokuko-dsh/scripts/setup-dsh.mjs --cwd /absolute/path/to/project --check
+```
+
+The destination defaults to the current process user's home. `--home
+/absolute/path/to/home` explicitly selects another home when diagnosing a different
+runtime user. Check the reported paths: a successful source build or bundled
+parity check alone does not prove that another process's deployed files match.
+
+`node scripts/verify-standard-skills.mjs` remains a source/bundle integrity check
+for the seven standard Skills (22 files, 15 references). Use `setup-dsh.mjs --check`
+for the complete eight-Skill deployment **and** project instruction check.
 
 ## STORE contract and permissions
 
@@ -245,7 +305,7 @@ listeners contain their own failures; only an orchestration-requested native
 
 The dsh integration provides:
 
-- the exact bundled `kiokuko-soul` system-prompt section and six standard Skill
+- the exact bundled `kiokuko-soul` system-prompt section and seven standard Skill
   providers;
 - named context fragments deduplicated against the retained native conversation
   and current message batch. Turns and phase changes append only changed
@@ -264,8 +324,14 @@ The dsh integration provides:
   number keys 1–8 to select and Enter to confirm; digits entered in the custom
   field (including full-width digits) resolve in the same displayed order.
   Shift+Enter and IME composition do not submit. Pending drafts survive a
-  Session switch, and other plugins' questions and plan-approval cards retain
-  their native UI;
+  Session switch. Every single-select question carrying one to nine options uses
+  the same numbered card — Kiokuko's own intake, the Enno and Deep selection
+  questions, an agent-composed choice such as a release step, and another
+  plugin's question alike — so a shortcut is never missing from a question this
+  composer shows. Carriers a single number key cannot address — multi-select
+  batches, optionless prompts, several questions in one request, and catalogs
+  larger than nine options outside the Enno and Deep flows — retain their native
+  UI, as do plan-approval cards;
 - an explicit `chat` intake choice (including free-form aliases such as
   `just chatting` and `雑談`) and the task-type question's **Skip this
   question** action; both skip target/success follow-ups and never create an
@@ -428,10 +494,11 @@ unloading this plugin. An unavailable DeepSeek CLI is reported as
 ## OrcaReplay recording
 
 Orca dependencies and recording configuration are installed automatically with
-this package; the feature is **enabled by default**. At the first native step,
-a session-scoped question asks whether to record. Only an affirmative choice
-starts capture; skipping or an unavailable question UI continues without recording.
-The choice survives reloads. The first subsequent model/tool observation creates
+this package; the feature is **enabled by default** and records each chat without
+asking, including delegated and managed child sessions. Set `orca.askOnStart: true` to ask once per chat instead; only an
+affirmative choice then starts capture, while skipping or an unavailable question
+UI continues without recording and child sessions need an explicit start. The decision survives reloads, and a saved
+refusal outranks the recording default. The first recorded model/tool observation creates
 `.orca/runs/` in the verified session workspace. Set `config.orca.enabled: false` and reload to disable
 recording. `/kioku-orca stop`, `list`, `show <run ID>` and
 `export <run ID>` finalize and inspect the selected session's trace. This records
