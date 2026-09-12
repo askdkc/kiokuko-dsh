@@ -38,6 +38,32 @@ The log distinguishes `Repairing history` from `Repaired history`. Missing
 turn-ending events and unrelated invalid records remain explicit failures;
 the checker does not invent completed turns or discard messages.
 
+Historical lookup is separate from reopening a runnable session. DSH's native
+`sessionQuery.readSession(id)` can find a v0, v1 or v2 ID and still reject its
+Kiokuko informational events during migration, even with `ignorable: true`.
+Kiokuko therefore reads cold historical logs with the published frozen v0/v1/v2
+physical codecs before attempting the native query. Packed v0/v1 assistant
+chunks are expanded in their original coordinates; IDs, payloads, timestamps,
+sequence numbers and inherited boundaries are retained. This read-only path
+feeds the existing cache, memory finalizer and `/export`. It creates no native
+successor or backup and does not make a rejected history runnable.
+
+The native store still owns identity and generation selection. Lookup requires
+a matching header and an unchanged native revision, rejects symlink or damaged
+sources, and never falls back past an existing current generation. Files are
+bounded to 64 MiB compressed and 32 MiB expanded/logical JSONL. The frozen
+physical codecs are package dependencies, so installed plugins use the same
+reader without requiring a DSH checkout or a separately configured decoder.
+Integration tests verify all three generations through cold export and memory
+finalization, including the original provenance range and exclusion of later
+turns. For compressed and uncompressed v0/v1/v2 fixtures, tests compare native
+IDs, revisions and session lists before and after import, then recreate the
+native persistence service. Supported histories reopen with their original ID;
+unsupported custom histories retain the same native format error. These checks
+do not establish compatibility with unexamined user logs or a different running
+DSH version. Native history-open errors may remain when only archival lookup is
+possible.
+
 Opening or resuming a chat also retries DSH's normal reader through the same
 compatibility adapter, covering sessions added after the startup check. New
 observations and notices continue to use Kiokuko's database. Checks run when

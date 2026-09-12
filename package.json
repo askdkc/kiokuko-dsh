@@ -142,6 +142,9 @@
     "setup:dsh": "node scripts/setup-dsh.mjs"
   },
   "dependencies": {
+    "@deepseek-ai/dsh-session-format": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-session-format-v0-to-v1": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-session-format-v1-to-v2": "0.1.5-rc.1",
     "@orcareplay/core": ">=0.2.1",
     "@orcareplay/schema": ">=0.2.1",
     "@orcareplay/viewer": ">=0.2.1",

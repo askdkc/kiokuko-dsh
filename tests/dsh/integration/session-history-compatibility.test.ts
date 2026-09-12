@@ -1,13 +1,20 @@
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { access, mkdtemp, readFile, readdir, rm, writeFile, symlink, rename } from 'node:fs/promises'
+import { access, mkdtemp, readFile, readdir, rm, writeFile, symlink, rename, truncate } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { execFileSync } from 'node:child_process'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import * as dshPlugin from '../../../src/dsh/index.js'
 import { mountSessionHistoryCompatibility } from '../../../src/dsh/session-history-compatibility.js'
+import { readHistoricalDshSession } from '../../../src/dsh/session-history-lookup.js'
+import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
+import { DshMemoryFinalizer } from '../../../src/dsh/session-memory-finalizer.js'
+import { LedgerStore } from '../../../src/ledger/store.js'
+import { withImmediateTransaction } from '../../../src/db/transaction.js'
+import { realpathSync } from 'node:fs'
 import { decodeSessionLog, encodeSessionLog, parseJsonl } from '../../../scripts/session-history-codec.mjs'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
@@ -55,13 +62,13 @@ async function fixture(compression: 'zstd' | 'none' = 'zstd') {
       await writeFile(path, original)
       return { id, path, original, header, events }
     },
-    async legacy(id: string, events: any[] = legacyRows()) {
+    async legacy(id: string, events: any[] = legacyRows(), version: 0 | 1 | 2 = 0) {
       const header = { version: 3, id, createdAt: 1, delegationDepth: 0, isSeeded: false, cwd: root }
       await backend.persistHeader(header, 0)
       const currentPath = await backend.resolveCurrentLog(id)
-      const path = currentPath.replace('session.v3.', 'session.')
+      const path = currentPath.replace('session.v3.', version === 0 ? 'session.' : `session.v${version}.`)
       const { isSeeded: _seeded, ...physical } = header
-      const original = encode(Buffer.from([{ ...physical, type: 'session', version: 0 }, ...events].map(row => JSON.stringify(row)).join('\n') + '\n'))
+      const original = encode(Buffer.from([{ ...physical, ...(version === 2 ? { isSeeded: false } : {}), type: 'session', version }, ...events].map(row => JSON.stringify(row)).join('\n') + '\n'))
       await rm(currentPath)
       await writeFile(path, original)
       return { id, path, currentPath, original, header, events }
@@ -188,6 +195,304 @@ async function restored(backend: any, id: string, access = 'read') {
   const handle = await backend.open(id, access)
   try { return { state: await handle.read(), header: handle.header, inherited: handle.inheritedEventCount } } finally { await handle.close() }
 }
+
+for (const version of [0, 1, 2] as const) for (const customEvents of [false, true]) test(`v${version} session ID lookup ${customEvents ? 'reports the unsupported Kiokuko history without changing it' : 'reads supported history through the native query'}`, options, async () => {
+  const f = await fixture()
+  try {
+    const query = await import(pathToFileURL(modulePath('dsh-session-query')).href)
+    for (const plugin of [f.session.default, query.default]) {
+      const fiber = f.ctx.plugin(plugin)
+      await fiber
+      f.disposers.push(() => fiber.dispose())
+    }
+    const old = await f.legacy(`historical-v${version}`, [
+      { type: 'session/title', seq: 0, time: 1, data: { title: 'Historical session', messageSeqs: [], source: { kind: 'user' } } },
+      ...(customEvents ? rows().slice(1) : []),
+    ], version)
+    const historical = await readHistoricalDshSession(f.backend, old.id)
+    assert.equal(historical?.session.id, old.id)
+    assert.deepEqual(JSON.parse(JSON.stringify(historical?.events)), old.events, 'lookup retains old coordinates and custom payloads without migration')
+    await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+    const refusal = /unknown historical event|unknown event|unclassified event/
+    if (customEvents) await assert.rejects(() => f.ctx.sessionQuery.readSession(old.id), refusal)
+    const composition = await f.mount()
+    const check = await composition.historyCheck
+    assert.equal(check.listed, 1, 'the native store finds the original session ID')
+    assert.equal(check.failed, customEvents ? 1 : 0)
+    if (customEvents) {
+      assert.match(check.failures[0]!.error, refusal)
+      await assert.rejects(() => f.ctx.sessionQuery.readSession(old.id), refusal)
+      await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+    } else {
+      const result = await f.ctx.sessionQuery.readSession(old.id)
+      assert.equal(result.session.id, old.id)
+      assert.equal(result.session.version, 3)
+      assert.equal(result.events[0].data.title, old.events[0].data.title)
+    }
+    assert.deepEqual(await readFile(old.path), old.original)
+    await assert.rejects(access(`${old.path}.bak`), { code: 'ENOENT' })
+    const listed = await f.backend.list()
+    assert.equal(listed.filter((item: any) => item.header.id === old.id).length, 1)
+  } finally { await f.close() }
+})
+
+for (const compression of ['zstd', 'none'] as const) for (const version of [0, 1, 2] as const) test(`cold v${version} ${compression} lookup reaches the host cache and export without native migration`, options, async () => {
+  const f = await fixture(compression)
+  try {
+    execFileSync('git', ['init', '-q', f.root])
+    const sessions = f.ctx.plugin(f.session.default)
+    await sessions
+    f.disposers.push(() => sessions.dispose())
+    const events: any[] = rows().slice(1).map((event, seq) => ({ ...event, seq }))
+    if (version < 2) events.push({ type: 'text-chunks', seq0: events.length, time0: 100,
+      data: { turn: 1, step: 1, index: 0, dt: [3], texts: ['Historical ', 'reply'] } })
+    const old = await f.legacy(`export-v${version}`, events, version)
+    const nativeBefore = await f.backend.stat(old.id)
+    const listedBefore = await f.backend.list()
+    assert.equal(nativeBefore.header.id, old.id)
+    let originalRefusal: { name: string; message: string } | undefined
+    await assert.rejects(() => restored(f.backend, old.id), (error: Error) => {
+      assert.match(error.message, /unknown historical event|unknown event|unclassified event/)
+      originalRefusal = { name: error.name, message: error.message }
+      return true
+    })
+    let nativeReads = 0
+    const adapter = createDshHostAdapter(f.ctx, {
+      repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
+      migrationsDirectory: join(process.cwd(), 'migrations'),
+      sessionQuery: { async readSession() { nativeReads++; throw new Error('migration must not be used for historical lookup') } },
+    })
+    f.disposers.push(adapter.dispose)
+    const result = await adapter.host.sessionExport!.open(old.id)
+    assert.equal(result.status, 200)
+    const parts: Buffer[] = []
+    for await (const part of result.body) parts.push(Buffer.from(part))
+    const archive = Buffer.concat(parts)
+    const start = 30 + archive.readUInt16LE(26)
+    const end = archive.indexOf(Buffer.from([0x50, 0x4b, 0x07, 0x08]), start)
+    assert.ok(end > start)
+    const exported = archive.subarray(start, end).toString('utf8').trimEnd().split('\n').map(line => JSON.parse(line))
+    assert.deepEqual(exported.slice(0, 5), events.slice(0, 5))
+    if (version < 2) {
+      assert.deepEqual(exported.slice(5).map(event => [event.seq, event.time, event.data.chunk.text]), [
+        [5, 100, 'Historical '], [6, 103, 'reply'],
+      ])
+    }
+    assert.equal(nativeReads, 0)
+    assert.deepEqual(await readFile(old.path), old.original)
+    await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+    await assert.rejects(access(`${old.path}.bak`), { code: 'ENOENT' })
+    // A second request uses the persistent mirror, not an in-memory decoder result.
+    const cached = await adapter.host.sessionExport!.open(old.id)
+    for await (const _part of cached.body) { /* drain */ }
+    assert.equal(nativeReads, 0)
+    assert.deepEqual(await f.backend.stat(old.id), nativeBefore, 'import retains the native ID, header, revision and size')
+    assert.deepEqual(await f.backend.list(), listedBefore, 'import neither duplicates nor renames native sessions')
+    // Recreate the native persistence service so these assertions cannot rely on cached identity.
+    const reopened = new f.cordis.Context()
+    const fiber = reopened.plugin(f.jsonl, { root: join(f.root, 'history'), compression })
+    await fiber
+    try {
+      assert.deepEqual(await reopened.sessionPersistence.stat(old.id), nativeBefore)
+      assert.deepEqual(await reopened.sessionPersistence.list(), listedBefore)
+      await assert.rejects(() => restored(reopened.sessionPersistence, old.id), (error: Error) => {
+        assert.deepEqual({ name: error.name, message: error.message }, originalRefusal,
+          'native reopening retains the original format refusal rather than introducing an ID integrity failure')
+        return true
+      })
+      assert.deepEqual(await readFile(old.path), old.original)
+      await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+    } finally { await fiber.dispose() }
+  } finally { await f.close() }
+})
+
+for (const compression of ['zstd', 'none'] as const) for (const version of [0, 1, 2] as const) test(`native DSH reopens imported supported v${version} ${compression} history with the original ID`, options, async () => {
+  const f = await fixture(compression)
+  try {
+    execFileSync('git', ['init', '-q', f.root])
+    const sessions = f.ctx.plugin(f.session.default)
+    await sessions
+    f.disposers.push(() => sessions.dispose())
+    const old = await f.legacy(`reopen-v${version}`, [
+      { type: 'session/title', seq: 0, time: 1, data: { title: 'Original title', messageSeqs: [], source: { kind: 'user' } } },
+    ], version)
+    const before = await f.backend.stat(old.id)
+    const adapter = createDshHostAdapter(f.ctx, {
+      repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
+      migrationsDirectory: join(process.cwd(), 'migrations'),
+      sessionQuery: { async readSession() { throw new Error('import must use the historical reader') } },
+    })
+    f.disposers.push(adapter.dispose)
+    const result = await adapter.host.sessionExport!.open(old.id)
+    assert.equal(result.status, 200)
+    for await (const _part of result.body) { /* drain */ }
+    assert.deepEqual(await f.backend.stat(old.id), before)
+    assert.deepEqual(await readFile(old.path), old.original)
+    await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+    const reopened = new f.cordis.Context()
+    const fiber = reopened.plugin(f.jsonl, { root: join(f.root, 'history'), compression })
+    await fiber
+    try {
+      assert.deepEqual(await reopened.sessionPersistence.stat(old.id), before)
+      const restoredSession = await restored(reopened.sessionPersistence, old.id)
+      assert.equal(restoredSession.header.id, old.id)
+      assert.equal(restoredSession.state.events[0].data.title, 'Original title')
+      const listed = await reopened.sessionPersistence.list()
+      assert.equal(listed.length, 1)
+      assert.equal(listed[0].header.id, old.id)
+      assert.deepEqual(await readFile(old.path), old.original)
+    } finally { await fiber.dispose() }
+  } finally { await f.close() }
+})
+
+for (const defect of ['gap', 'torn-frame', 'wrong-id', 'symlink', 'changed-revision', 'current-generation'] as const) test(`historical lookup rejects or defers ${defect} without changing the source`, options, async () => {
+  const f = await fixture()
+  try {
+    const old = await f.legacy(`lookup-${defect}`, rows().slice(1).map((event, seq) => ({ ...event, seq })))
+    if (defect === 'gap') {
+      const parsed = parseJsonl(f.decode(old.original)).records as any[]
+      parsed[2].seq = 99
+      await writeFile(old.path, f.encode(Buffer.from(parsed.map(row => JSON.stringify(row)).join('\n') + '\n')))
+    }
+    if (defect === 'torn-frame') await writeFile(old.path, old.original.subarray(0, old.original.length - 1))
+    if (defect === 'wrong-id') {
+      const parsed = parseJsonl(f.decode(old.original)).records as any[]
+      parsed[0].id = 'another-session'
+      await writeFile(old.path, f.encode(Buffer.from(parsed.map(row => JSON.stringify(row)).join('\n') + '\n')))
+    }
+    if (defect === 'symlink') { await rename(old.path, `${old.path}.target`); await symlink(`${old.path}.target`, old.path) }
+    if (defect === 'current-generation') await writeFile(old.currentPath, f.encode(Buffer.from(JSON.stringify({ type: 'session', ...old.header }) + '\n')))
+    if (defect === 'changed-revision') {
+      const originalStat = f.backend.stat.bind(f.backend)
+      let count = 0
+      f.backend.stat = async (id: string) => {
+        const snapshot = await originalStat(id)
+        return ++count === 1 ? snapshot : { ...snapshot, revision: 'concurrent-update' }
+      }
+    }
+    const before = await readFile(old.path)
+    if (defect === 'current-generation') assert.equal(await readHistoricalDshSession(f.backend, old.id), undefined)
+    else await assert.rejects(() => readHistoricalDshSession(f.backend, old.id))
+    assert.deepEqual(await readFile(old.path), before)
+    await assert.rejects(access(`${old.path}.bak`), { code: 'ENOENT' })
+  } finally { await f.close() }
+})
+
+for (const version of [0, 1, 2] as const) test(`historical v${version} lookup retains the inherited prefix`, options, async () => {
+  const f = await fixture()
+  try {
+    const old = await f.legacy(`seeded-v${version}`, [
+      { type: 'kiokuko/completion-report', seq: 0, time: 1, data: { text: 'inherited' } },
+      { type: 'session/end-seed', seq: 1, time: 2, data: { inherited: true } },
+      { type: 'kiokuko/completion-report', seq: 2, time: 3, data: { text: 'own' } },
+    ], version)
+    const parsed = parseJsonl(f.decode(old.original)).records as any[]
+    if (version < 2) parsed[0].seedLength = 1
+    else parsed[0].isSeeded = true
+    await writeFile(old.path, f.encode(Buffer.from(parsed.map(row => JSON.stringify(row)).join('\n') + '\n')))
+    const result = await readHistoricalDshSession(f.backend, old.id)
+    assert.equal(result?.inheritedEventCount, 1)
+    assert.deepEqual(result?.events.map(event => event.seq), [0, 1, 2])
+    await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+  } finally { await f.close() }
+})
+
+test('historical lookup selects the newest stored generation and never falls back from its damaged body', options, async () => {
+  const f = await fixture()
+  try {
+    const old = await f.legacy('multiple-generations', [{ type: 'kiokuko/completion-report', seq: 0, time: 1, data: { text: 'v0' } }])
+    const newerPath = old.currentPath.replace('.v3.', '.v2.')
+    const physical = { type: 'session', ...old.header, version: 2 }
+    const event = { type: 'kiokuko/completion-report', seq: 0, time: 2, data: { text: 'v2' } }
+    await writeFile(newerPath, f.encode(Buffer.from([physical, event].map(row => JSON.stringify(row)).join('\n') + '\n')))
+    assert.deepEqual(JSON.parse(JSON.stringify((await readHistoricalDshSession(f.backend, old.id))?.events)), [event])
+    await writeFile(newerPath, f.encode(Buffer.from([physical, { ...event, seq: 99 }].map(row => JSON.stringify(row)).join('\n') + '\n')))
+    await assert.rejects(() => readHistoricalDshSession(f.backend, old.id), /seq gap/)
+    assert.deepEqual(await readFile(old.path), old.original)
+    await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+  } finally { await f.close() }
+})
+
+for (const limit of ['file', 'expanded'] as const) test(`historical lookup reports the ${limit} size limit as 413 before caching`, options, async () => {
+  const f = await fixture()
+  try {
+    const events = [{ type: 'kiokuko/completion-report', seq: 0, time: 1,
+      data: { text: limit === 'expanded' ? 'x'.repeat(32 * 1024 * 1024) : 'small' } }]
+    const old = await f.legacy(`oversized-${limit}`, events)
+    if (limit === 'file') await truncate(old.path, 64 * 1024 * 1024 + 1)
+    await assert.rejects(() => readHistoricalDshSession(f.backend, old.id), (error: any) => error.details?.httpStatus === 413)
+    await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+    await assert.rejects(access(`${old.path}.bak`), { code: 'ENOENT' })
+  } finally { await f.close() }
+})
+
+for (const version of [0, 1, 2] as const) test(`host finalization extracts memory from a cold v${version} log with its original source range`, options, async () => {
+  const f = await fixture()
+  try {
+    execFileSync('git', ['init', '-q', f.root])
+    const sessions = f.ctx.plugin(f.session.default)
+    await sessions
+    f.disposers.push(() => sessions.dispose())
+    const message = (id: string, text: string) => ({ id, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
+    const old = await f.legacy(`memory-v${version}`, [
+      { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
+      { type: 'user/message', seq: 1, time: 2, data: message('old-user', 'Preserve historical lookup coordinates.'), surfaceOp: 'append' },
+      { type: 'request/header', seq: 2, time: 3, data: { header: { config: { provider: 'test-provider', model: 'test-model' } }, reason: 'initial' } },
+      { type: 'kiokuko/completion-report', seq: 3, time: 4, data: { text: 'Historical custom event' } },
+      { type: 'assistant/message', seq: 4, time: 5, data: { message: { id: 'old-answer', role: 'assistant', content: [{ type: 'text', text: 'Historical lookup verified.' }], source: { kind: 'model', provider: 'test-provider', model: 'test-model' } } }, surfaceOp: 'append' },
+      { type: 'turn/end', seq: 5, time: 6, data: { turn: 1, reason: { kind: 'completed' } } },
+      { type: 'turn/start', seq: 6, time: 7, data: { turn: 2 } },
+      { type: 'user/message', seq: 7, time: 8, data: message('future-user', 'FUTURE TURN MUST NOT LEAK'), surfaceOp: 'append' },
+      { type: 'turn/end', seq: 8, time: 9, data: { turn: 2, reason: { kind: 'completed' } } },
+    ], version)
+    const calls: string[] = []
+    const adapter = createDshHostAdapter(f.ctx, {
+      repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'),
+      memoryEvolution: { mode: 'off' },
+      sessionQuery: { async readSession() { throw new Error('historical finalization must not invoke native migration') } },
+      llm: { async * stream(request) {
+        calls.push(JSON.stringify(request))
+        yield { type: 'text-delta', index: 0, text: JSON.stringify({ schemaVersion: 1, memories: [
+          { kind: 'lesson', title: 'Historical coordinates', body: 'Preserve original event coordinates when reading old logs.', summary: null, confidence: 0.9, tags: [] },
+        ] }) }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      } },
+    })
+    f.disposers.push(adapter.dispose)
+    const runtime = adapter.host.runtime!, finalizer = adapter.host.memoryFinalizer!
+    assert.ok(finalizer instanceof DshMemoryFinalizer)
+    const workspace = await runtime.withDatabase(database => {
+      const binding = database.prepare('SELECT r.workspace FROM repositories r JOIN repository_locations l ON l.repository_id = r.repository_id WHERE l.canonical_root = ?')
+        .get<{ workspace: string }>(realpathSync(f.root))!
+      new LedgerStore(database).createRun({ runId: 'lookup-run', workspace: binding.workspace, dshSessionId: old.id,
+        protocolVersion: '1', captureProfile: 'minimal', coverage: { run: 'complete', tool: 'complete', command: 'complete', file: 'complete', approval: 'complete' },
+        task: { title: 'Historical lookup', query: 'Historical lookup', profileHints: { taskType: 'build', target: null, expected: null, constraints: null } } })
+      return binding.workspace
+    })
+    await finalizer.bindRunStart({ runId: 'lookup-run', workspace, dshSessionId: old.id, sourceStartSeq: 0, sourceStartTurn: 1 })
+    await runtime.withDatabase(database => withImmediateTransaction(database, () => {
+      new LedgerStore(database).updateRunStatusInTransaction('lookup-run', 'completed')
+      finalizer.scheduleInTransaction(database, { runId: 'lookup-run', workspace, dshSessionId: old.id, sourceEndSeq: 5 })
+      if (version === 0) database.prepare("UPDATE dsh_memory_finalizations SET status = 'failed', attempt_count = 1 WHERE run_id = ?").run('lookup-run')
+    }))
+    // A pre-update failed lookup is retried on startup within the existing budget.
+    await finalizer.start()
+    await finalizer.whenIdle()
+    const evidence = await runtime.withDatabase(database => ({
+      job: database.prepare('SELECT * FROM dsh_memory_finalizations WHERE run_id = ?').get('lookup-run'),
+      memory: database.prepare('SELECT provenance_json FROM entry_revisions WHERE title = ?').get<{ provenance_json: string }>('Historical coordinates'),
+    }))
+    assert.equal(evidence.job?.status, 'completed', JSON.stringify(evidence.job))
+    assert.equal(evidence.job?.attempt_count, version === 0 ? 2 : 1)
+    assert.equal(calls.length, 1)
+    assert.ok(calls[0]!.includes('Preserve historical lookup coordinates.'))
+    assert.ok(calls[0]!.includes('Historical lookup verified.'))
+    assert.ok(!calls[0]!.includes('FUTURE TURN MUST NOT LEAK'))
+    assert.ok(JSON.parse(evidence.memory!.provenance_json).reference.startsWith(`dsh-session:${old.id}?seq=0-5#sha256:`))
+    assert.deepEqual(await readFile(old.path), old.original)
+    await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+  } finally { await f.close() }
+})
 
 for (const compression of ['zstd', 'none'] as const) test(`normal history open repairs multiple old ${compression} chats and supports cold resume`, options, async () => {
   const f = await fixture(compression)

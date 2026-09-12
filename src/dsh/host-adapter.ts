@@ -85,6 +85,7 @@ import {
   unexecutedRunInput,
 } from './input-claim.js'
 import { DshSessionLogMirror, type DshImageAttachmentRef, type DshMirrorEventSession } from './session-log-mirror.js'
+import { readHistoricalDshSession } from './session-history-lookup.js'
 import { abortable, DshBoundaryWorker } from './boundary-worker.js'
 import { DshSessionLogExportService } from './session-log-export.js'
 import { DshCompletionReporter } from './completion-report.js'
@@ -470,9 +471,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   })
   async function importLegacySession(sessionId: string) {
     if (sessionQuery === undefined) throw new KiokukoError('NOT_FOUND', 'DSH session is unavailable')
-    // DSH 0.1.2-rc.1 exposes only a materializing reader for cold sessions.
-    // Bound the one-time compatibility path before copying into the mirror.
-    const snapshot = await sessionQuery.readSession(sessionId)
+    // Preserve historical coordinates before the native query attempts migration.
+    // Live sessions must still use their native view rather than an older disk log.
+    const historical = sessions !== undefined && sessions.get(sessionId) === undefined
+      ? await readHistoricalDshSession(native.get('sessionPersistence', false), sessionId) : undefined
+    const snapshot = historical ?? await sessionQuery.readSession(sessionId)
+    // Bound the materializing native fallback before copying into the mirror.
     let bytes = 0
     for (const event of snapshot.events) {
       bytes += Buffer.byteLength(JSON.stringify(event), 'utf8') + 1
@@ -528,7 +532,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         || (current.confirmedThrough >= current.observedThrough && current.observedThrough >= 0)) return
       if (sessionQuery === undefined) return
       const snapshot = await importLegacySession(sessionId)
-      // The public cold-session reader returns the already persisted DSH log;
+      // Cold lookup returns the already persisted DSH source log;
       // unlike a live Session, it does not require another sessions.flush().
       await sessionMirror.checkpointAfterNativeFlush({
         id: sessionId,
