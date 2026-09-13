@@ -1,3 +1,4 @@
+import { AkinatorMemoryConfig, type ProbeConfig } from '../akinator/memory-probe-types.js'
 import { answerAgentTask, prepareAgentTask, type PreparedAgentTask } from './task-intake.js'
 import type { TaskProfile } from '../akinator/types.js'
 import { KiokukoError } from '../errors.js'
@@ -97,10 +98,19 @@ export class DshIntakeGate {
     answerer?: DshIntakeAnswerer,
     readCapabilities?: (context: DshCapabilityReadContext) => DshCapabilityCatalog | PromiseLike<DshCapabilityCatalog>,
     private readonly executionSelection = false,
+    private akinatorMemory: ProbeConfig = AkinatorMemoryConfig.parse({}),
   ) {
     this.#runtime = runtime
     this.#answerer = answerer
     this.#readCapabilities = readCapabilities
+  }
+
+  configureMemory(config: ProbeConfig): void {
+    this.akinatorMemory = AkinatorMemoryConfig.parse(config)
+    // Emergency-off suppresses previously prepared hints without replacing run identity.
+    if (this.akinatorMemory.mode === 'off' || this.akinatorMemory.mode === 'shadow') {
+      for (const cached of this.#prepared.values()) delete cached.result.prepared.intake.memoryHints
+    }
   }
 
   async prepare(event: DshPreStepEvent): Promise<DshIntakeGateResult> {
@@ -164,8 +174,10 @@ export class DshIntakeGate {
         }),
         ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
         signal: event.signal,
-      }))
+      }, { akinatorMemory: this.akinatorMemory }))
       while (prepared.intake.status === 'needs_answer') {
+        if (event.signal.aborted) break
+        if (this.akinatorMemory.mode === 'off' || this.akinatorMemory.mode === 'shadow') delete prepared.intake.memoryHints
         if (this.#answerer === undefined || prepared.intake.question === null) {
           const result = { admitted: false, prepared, catalog: event.capabilities }
           this.#prepared.set(cacheKey, {
@@ -177,7 +189,7 @@ export class DshIntakeGate {
           })
           return result
         }
-        const value = await this.#answerer.ask(prepared.intake.question, event.signal, event.nativeAgent)
+        const value = await this.#answerer.ask(prepared.intake.question, event.signal, event.nativeAgent, prepared.intake.memoryHints)
         const currentCapabilities = this.#readCapabilities === undefined
           ? event.capabilities
           : await this.#readCapabilities({
@@ -197,7 +209,7 @@ export class DshIntakeGate {
           capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
           ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
           signal: event.signal,
-        }))
+        }, { akinatorMemory: this.akinatorMemory }))
       }
       const result = prepared.nextAction !== 'proceed'
         ? { admitted: false, prepared, catalog: event.capabilities }

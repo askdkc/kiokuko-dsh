@@ -1,3 +1,4 @@
+import { projectProfileMemory } from './profile-memory-store.js';
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { KiokukoError, type ErrorCode } from '../errors.js';
 import { canonicalJson, requireWorkspace } from '../serialization/validate.js';
@@ -49,7 +50,7 @@ export interface AkinatorAnswerRecord {
   readonly createdAt: string;
 }
 
-export type AkinatorProfileSource = 'inferred' | 'client_supplied' | 'user_answer';
+export type AkinatorProfileSource = 'inferred' | 'client_supplied' | 'user_answer' | 'memory';
 export type AkinatorProfileSources = Partial<Record<keyof TaskProfile, AkinatorProfileSource>>;
 
 export interface InsertRunIntakeLinkInput {
@@ -147,7 +148,7 @@ const INTAKE_LINK_READ_FIELDS = new Set(['workspace', 'runId']);
 const INTAKE_LINK_FINALIZE_FIELDS = new Set(['workspace', 'runId', 'profileHash', 'recommendedTags', 'finalizedAt']);
 const INTAKE_LINK_SOURCE_FIELDS = new Set(['workspace', 'runId', 'field']);
 const PROFILE_FIELDS = new Set(['taskType', 'target', 'expected', 'constraints']);
-const PROFILE_SOURCE_VALUES = ['inferred', 'client_supplied', 'user_answer'] as const;
+const PROFILE_SOURCE_VALUES = ['inferred', 'client_supplied', 'user_answer', 'memory'] as const;
 const SESSION_STATUSES = ['active', 'ready', 'exhausted'] as const;
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
@@ -777,7 +778,9 @@ export function finalizeRunIntakeLink(database: SqliteDatabase, value: unknown):
   }
   const finalized = selectIntakeLink(database, input.workspace, input.runId);
   if (!finalized) return integrity();
-  return mapIntakeLink(finalized);
+  const view = mapIntakeLink(finalized);
+  projectProfileMemory(database, input.workspace, input.runId);
+  return view;
 }
 
 /** Caller-owned primitive: mark one still-pending profile field as answered by the user. */

@@ -1,3 +1,5 @@
+import { AkinatorMemoryConfig } from '../akinator/memory-probe-types.js'
+export { AkinatorMemoryConfig }
 import { MemoryEvolutionConfig } from '../memory/evolution/contracts.js'
 export { MemoryEvolutionConfig }
 import { z } from 'zod'
@@ -33,6 +35,7 @@ export const FinalizationConfig = z.object({ inputMode: z.enum(['prefix_reuse', 
 /** Runtime configuration accepted by the dsh bundle entrypoint. */
 export const Config = z.object({
   enabled: z.boolean().default(true),
+  akinatorMemory: AkinatorMemoryConfig.prefault({}),
   deepPlanning: DeepThinkerConfigSchema.prefault({}),
   modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),
   orca: OrcaConfig.prefault({}),

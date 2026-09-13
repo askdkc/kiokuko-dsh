@@ -1,3 +1,6 @@
+import { AkinatorMemoryConfig, type ProbeConfig } from '../akinator/memory-probe-types.js';
+import { probeProfileMemory, type MemoryProbeScope } from '../akinator/memory-probe.js';
+import { saveMemoryResolution } from '../akinator/profile-memory-store.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { withImmediateTransaction } from '../db/transaction.js';
@@ -19,7 +22,7 @@ import {
   type TaskInput,
 } from '../ledger/types.js';
 import { LedgerStore } from '../ledger/store.js';
-import { AKINATOR_POLICY_VERSION, profileHash } from '../akinator/domain.js';
+import { AKINATOR_POLICY_VERSION, deriveProfile, profileHash } from '../akinator/domain.js';
 import {
   answerAkinatorInTransaction,
   startAkinatorInTransaction,
@@ -61,6 +64,8 @@ export interface DshRunIntakeResponse {
 }
 
 export interface DshRunIntakeServiceOptions {
+  readonly akinatorMemory?: ProbeConfig;
+  readonly memoryScope?: MemoryProbeScope;
   readonly now?: () => string;
   readonly home?: string;
   readonly runIdFactory?: () => string;
@@ -365,10 +370,20 @@ export class DshRunIntakeService {
           dshSessionId,
           now,
         });
+        if (this.options.memoryScope && this.options.memoryScope.workspace !== request.workspace) {
+          throw new KiokukoError('CONFLICT', 'Profile probe scope differs from the current request');
+        }
+        const config = AkinatorMemoryConfig.parse(this.options.akinatorMemory ?? {});
+        const baseProfile = deriveProfile(task.query, task.profileHints);
+        const memory = probeProfileMemory(this.database, { task: task.query, profile: baseProfile,
+          config, ...(this.options.memoryScope ? { scope: this.options.memoryScope } : {}), now });
+        const adopted = config.mode === 'resolve'
+          ? memory.resolutions.find(item => item.field === 'target' && item.decision === 'adopt') : undefined;
+        const resolvedHints = adopted ? { ...task.profileHints, target: adopted.value } : task.profileHints;
         const result = startAkinatorInTransaction(this.database, {
           workspace: request.workspace,
           task: task.query,
-          profileHints: task.profileHints,
+          profileHints: resolvedHints,
           now,
           idFactory: () => sessionId,
         });
@@ -378,11 +393,14 @@ export class DshRunIntakeService {
           workspace: request.workspace,
           policyVersion: AKINATOR_POLICY_VERSION,
           profileSchemaVersion: 1,
-          profileSources: sourceMap(request, result.session.profile),
+          profileSources: { ...sourceMap(request, result.session.profile), ...(adopted ? { target: 'memory' as const } : {}) },
           initialProfileHash: null,
           recommendedTags: result.recommendedTags,
           linkedAt: now,
           finalizedAt: null,
+        });
+        if (config.mode !== 'off') saveMemoryResolution(this.database, {
+          runId, baseHash: profileHash(baseProfile), resultHash: profileHash(result.session.profile), config, result: memory, now,
         });
         const lifecycle: LedgerEventInput[] = [this.lifecycleEvent('intake.started', {
           intakeSessionId: sessionId,

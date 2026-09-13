@@ -13,6 +13,10 @@ const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
   'LICENSE',
+  'migrations/016_akinator_memory_probe.sql',
+  'docs/akinator-memory.md',
+  'scripts/backfill-akinator-memory.mjs',
+  'dist/akinator/memory-probe.js',
   'README.md',
   'README.ja.md',
   'README.zh-CN.md',

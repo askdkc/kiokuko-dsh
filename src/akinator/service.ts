@@ -185,25 +185,38 @@ function queryText(session: AkinatorSessionView): string {
   return boundTaskRetrievalQuery(source);
 }
 
-function taggedEntries(database: SqliteDatabase, workspace: string, tags: string[], limit = 12): EntryRecord[] {
+export function taggedEntries(database: SqliteDatabase, workspace: string, tags: string[], limit = 12): EntryRecord[] {
   if (tags.length === 0) return [];
-  const rows = database.prepare(`
-    SELECT e.id
-    FROM entries e
-    WHERE e.workspace = ?
-    ORDER BY e.updated_at DESC, e.id ASC
-  `).all<{ id: unknown }>(workspace);
-  const requestedTags = new Set(tags);
-  return rows.map((row) => {
-    if (typeof row.id !== 'string' || row.id.length === 0) {
-      throw new KiokukoError('INTEGRITY_ERROR', 'Stored entry candidate is invalid');
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 12 || tags.length > 64
+    || tags.some(tag => typeof tag !== 'string' || !tag.length || tag.length > 1024)) validation('Invalid tag search budget');
+  const selected: EntryRecord[] = [];
+  const uniqueTags = [...new Set(tags)];
+  let cursor: { id: string; updated_at: string } | undefined;
+  const pageSize = 32;
+  while (selected.length < limit) {
+    const rows = database.prepare(`
+      SELECT DISTINCT e.id, e.updated_at
+      FROM entry_revision_tags AS t INDEXED BY idx_entry_revision_tags_tag
+      JOIN entries AS e ON e.id = t.entry_id AND e.current_revision = t.revision
+      WHERE e.workspace = ? AND t.tag IN (${uniqueTags.map(() => '?').join(',')})
+        AND e.status <> 'superseded'
+        ${cursor ? 'AND (e.updated_at < ? OR (e.updated_at = ? AND e.id > ?))' : ''}
+      ORDER BY e.updated_at DESC, e.id ASC LIMIT ?
+    `).all<{ id: string; updated_at: string }>(workspace, ...uniqueTags,
+      ...(cursor ? [cursor.updated_at, cursor.updated_at, cursor.id] : []), pageSize);
+    for (const row of rows) {
+      if (typeof row.id !== 'string' || !row.id || typeof row.updated_at !== 'string') {
+        throw new KiokukoError('INTEGRITY_ERROR', 'Stored entry candidate is invalid');
+      }
+      cursor = row;
+      const entry = readEntry(database, { workspace, entryId: row.id });
+      if (isRetrievableEntry(database, entry) && entry.status !== 'superseded'
+        && entry.tags.some(tag => uniqueTags.includes(tag))) selected.push(entry);
+      if (selected.length === limit) break;
     }
-    return readEntry(database, { workspace, entryId: row.id });
-  }).filter((entry) => {
-    if (!isRetrievableEntry(database, entry)) return false;
-    if (entry.status === 'superseded') return false;
-    return entry.tags.some((tag) => requestedTags.has(tag));
-  }).slice(0, limit);
+    if (rows.length < pageSize) break;
+  }
+  return selected;
 }
 
 function localEntries(database: SqliteDatabase, session: AkinatorSessionView, tags: string[]): EntryRecord[] {
@@ -212,6 +225,7 @@ function localEntries(database: SqliteDatabase, session: AkinatorSessionView, ta
   if (query.trim()) {
     for (const entry of searchEntries(database, { workspace: session.workspace, query, limit: 12 }).items) found.set(entry.id, entry);
   }
+  if (found.size >= 12) return [...found.values()].slice(0, 12);
   for (const entry of taggedEntries(database, session.workspace, tags)) found.set(entry.id, entry);
   return [...found.values()].slice(0, 12);
 }
@@ -308,16 +322,21 @@ export async function answerAkinatorService(
   return withImmediateTransaction(database, () => answerAkinatorInTransaction(database, normalized).result);
 }
 
+/** Read only the intake state; never retrieve memory bodies. */
+export async function getAkinatorStateService(
+  database: SqliteDatabase,
+  input: AkinatorContextInput,
+): Promise<AkinatorResult> {
+  const normalized = contextInput(input);
+  return resultForSession(readAkinatorSession(database, normalized));
+}
+
 export async function getAkinatorContextService(
   database: SqliteDatabase,
   input: AkinatorContextInput,
 ): Promise<AkinatorContext> {
-  const normalized = contextInput(input);
-  const session = readAkinatorSession(database, {
-    workspace: normalized.workspace,
-    sessionId: normalized.sessionId,
-  });
-  const result = resultForSession(session);
+  const result = await getAkinatorStateService(database, input);
+  const session = result.session;
   if (result.status === 'needs_answer') {
     return {
       ...result,

@@ -24,6 +24,7 @@
     "skills/",
     "dsh/cordis.patch.yml",
     "docs/",
+    "scripts/backfill-akinator-memory.mjs",
     "scripts/setup-dsh.mjs",
     "scripts/repair-session-log.mjs",
     "scripts/repair-continuation-source.mjs",
@@ -139,7 +140,10 @@
     "test:orca:package": "npm run build && node scripts/verify-orca-consumer.mjs",
     "test:evolution": "node scripts/run-tests.mjs tests/dsh/unit/evolution tests/dsh/integration/evolution",
     "test:evaluation:evolution": "node --import tsx scripts/run-evolution-evaluation.mjs",
-    "setup:dsh": "node scripts/setup-dsh.mjs"
+    "setup:dsh": "node scripts/setup-dsh.mjs",
+    "memory:backfill:akinator": "node scripts/backfill-akinator-memory.mjs",
+    "test:evaluation:akinator": "npm run build && node scripts/run-akinator-memory-evaluation.mjs",
+    "test:benchmark:akinator": "npm run build && node scripts/run-akinator-memory-benchmark.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-session-format": "0.1.5-rc.1",
