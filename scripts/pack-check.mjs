@@ -13,6 +13,9 @@ const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
   'LICENSE',
+  'migrations/017_dsh_deep_quality.sql',
+  'dist/deep-thinker/core/quality.js',
+  'dist/deep-thinker/acceptance.js',
   'migrations/016_akinator_memory_probe.sql',
   'docs/akinator-memory.md',
   'scripts/backfill-akinator-memory.mjs',

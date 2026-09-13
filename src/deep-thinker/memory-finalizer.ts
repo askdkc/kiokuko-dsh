@@ -7,14 +7,15 @@ import { canonicalContentHash } from '../serialization/validate.js'
 import { findSecretInValue } from '../memory/secrets.js'
 import { DeepStore } from './store.js'
 import { budgetProblem, estimateRequestTokens } from './core/budget.js'
-import { DeepConfigurationSchema, CandidateSchema, GoalNodeSchema } from './core/contracts.js'
+import { DeepConfigurationSchema, CandidateSchema, GoalNodeSchema, QualityNodeSchema } from './core/contracts.js'
 import { deepMemoryRequestScope } from './memory-request.js'
 import { currentArtifacts, changedSources } from './evidence.js'
 import { abortableStream } from './abortable-stream.js'
 import { processDeepSlots } from './slots.js'
 
 export const DeepFinalizationSourceSchema = z.object({ kind: z.literal('deep-report'), workspace: z.string(), sessionId: z.string(), configuration: DeepConfigurationSchema,
-  report: z.object({ reportId: z.string(), runId: z.string(), revision: z.number().int(), phase: z.string(), text: z.string().max(131_072), summary: z.string().max(8_192), protocolVersion: z.literal(1) }).strict(),
+  report: z.object({ reportId: z.string(), runId: z.string(), revision: z.number().int(), phase: z.string(), text: z.string().max(131_072), summary: z.string().max(8_192), protocolVersion: z.union([z.literal(1), z.literal(2)]),
+    quality: z.array(z.object({ nodeId: z.string(), status: GoalNodeSchema.shape.status, checks: QualityNodeSchema.shape.checks, issues: QualityNodeSchema.shape.issues, review: QualityNodeSchema.shape.review, candidates: QualityNodeSchema.shape.candidates, receipt: GoalNodeSchema.shape.receipt }).strict()).max(128).optional() }).strict(),
   accepted: z.array(z.object({ nodeId: z.string(), revision: z.number().int(), candidate: CandidateSchema.nullable(), receipt: GoalNodeSchema.shape.receipt })).max(128),
 }).strict()
 
@@ -45,7 +46,7 @@ export class DeepMemoryFinalizer {
       const artifacts = currentArtifacts(state, await this.store.artifacts(state.runId))
       if ((await changedSources(state.rootPath, artifacts)).length) { detail = '参照資料が変更されたため記憶保存を省略しました。'; return true }
       const evidence = JSON.stringify({ problem: state.task, constraints: state.constraints, reportId: source.report.reportId,
-        accepted: source.accepted, artifacts: artifacts.map(a => ({ id: a.id, path: a.path, startLine: a.startLine, endLine: a.endLine, sourceDigest: a.sourceDigest })) })
+        accepted: source.accepted.map(item => item.receipt?.verifierVersion !== 2 ? item : { ...item, receipt: { verifierVersion: 2, inputDigest: item.receipt.inputDigest, evidenceDigest: item.receipt.evidenceDigest, assessment: item.receipt.assessment, selectedCandidateId: item.receipt.selectedCandidateId, evaluations: item.receipt.review.evaluations.filter(e=>e.candidateId===(item.receipt as Extract<NonNullable<typeof item.receipt>, {verifierVersion:2}>).selectedCandidateId) } }), artifacts: artifacts.map(a => ({ id: a.id, path: a.path, startLine: a.startLine, endLine: a.endLine, sourceDigest: a.sourceDigest })) })
       if (Buffer.byteLength(evidence) > 65_536 || findSecretInValue(evidence)) { detail = '採用済み証拠が記憶入力の保存・転送上限を超えたため省略しました。'; return true }
       const model = source.configuration.roles.synthesizer, maxTokens = Math.min(4096, source.configuration.budget.maxOutputTokensPerRequest)
       const request = { provider: model.provider, model: model.model, ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}), sessionId: source.sessionId, purpose: 'compaction' as const, maxTokens, signal: abort.signal,

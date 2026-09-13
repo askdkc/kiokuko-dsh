@@ -59,7 +59,7 @@ export class DeepReadPort {
       if (!selected.length) throw new KiokukoError('VALIDATION_ERROR', 'The selected line exceeds the read limit')
       const content = selected.join('\n')
       if (findSecretInValue(content)) throw new KiokukoError('SECURITY_REJECTION', 'Secret-shaped source content was not returned or stored')
-      const artifact: DeepArtifact = { id: randomUUID(), runId: state.runId, nodeId: authority.nodeId, nodeRevision: authority.nodeRevision, requirementRevision: authority.requirementRevision, path: source.path, content, digest: digest(content), sourceDigest: source.sourceDigest, startLine, endLine: startLine + selected.length - 1 }
+      const artifact: DeepArtifact = { id: randomUUID(), ...(state.protocolVersion === 2 ? { attemptId: authority.attemptId } : {}), runId: state.runId, nodeId: authority.nodeId, nodeRevision: authority.nodeRevision, requirementRevision: authority.requirementRevision, path: source.path, content, digest: digest(content), sourceDigest: source.sourceDigest, startLine, endLine: startLine + selected.length - 1 }
       signal.throwIfAborted()
       await this.store.transaction(db => {
         assertDeepAuthority(db, readDeepState(db, state.runId), authority, this.store.now())

@@ -25,6 +25,8 @@ export const DeepRouteSchema = z.object({ provider: id, family: z.enum(['openai'
   connection: z.enum(['api', 'codex', 'local']), protocol: z.enum(['responses', 'chat-completions', 'messages', 'unknown']) }).strict()
 export const DeepConfigurationSchema = z.object({
   roles: z.object({ planner: DeepModelSchema, solver: DeepModelSchema, critic: DeepModelSchema, synthesizer: DeepModelSchema }).strict(),
+  reasoningMode: z.enum(['standard', 'quality']).optional(),
+  alternativeSolver: DeepModelSchema.optional(),
   budget: DeepBudgetSchema.prefault({}),
   localProviders: z.array(id).max(128).default([]),
   routeBindings: z.array(DeepRouteSchema).max(128).default([]),
@@ -67,6 +69,40 @@ export type PlannerReply = z.infer<typeof PlannerReplySchema>
 export type AgentReply = PlannerReply | z.infer<typeof SolverReplySchema> | z.infer<typeof CriticReplySchema>
 export const ReplySchemas = { planner: PlannerReplySchema, solver: SolverReplySchema, critic: CriticReplySchema, synthesizer: SynthesizerReplySchema }
 
+// Version 2 adds bounded comparison without changing the version 1 worker schemas.
+export const QualityCheckSchema = z.object({ id, key: id, requirementId: id, text, evidenceNeeded: text }).strict()
+const ProposedCheckSchema = QualityCheckSchema.omit({ id: true })
+export const QualityPlanSchema = z.object({ kind: z.literal('quality-plan'), decision: z.enum(['leaf', 'decompose', 'blocked']),
+  checks: z.array(ProposedCheckSchema).max(64), children: z.array(ChildProposalSchema.extend({ checkKeys: z.array(id).min(1).max(64) })).max(8), reason: text, synthesis: text }).strict()
+export const QualityPlanReviewSchema = CriticReplySchema.extend({ kind: z.literal('quality-plan-review'), verdict: z.enum(['supported', 'reconsider', 'unresolved']), checkIds: z.array(id).max(64) })
+export const QualityCandidateSchema = CandidateSchema.extend({ kind: z.literal('quality-candidate'),
+  findings: z.array(z.object({ checkId: id, conclusion: text, evidence: z.array(EvidenceRefSchema).max(64), unresolved: z.boolean() }).strict()).min(1).max(64) })
+export const QualityIssueSchema = z.object({ id, checkId: id, text }).strict()
+export const QualityReviewSchema = z.object({ kind: z.literal('quality-review'),
+  action: z.enum(['select', 'repair', 'synthesize', 'replan', 'unresolved']), selectedCandidateId: id.nullable(),
+  requirementIds: z.array(id).min(1).max(64), reason: text, evidence: z.array(EvidenceRefSchema).max(64),
+  evaluations: z.array(z.object({ candidateId: id, checkId: id, verdict: z.enum(['supported', 'contradicted', 'unresolved']), reason: text, evidence: z.array(EvidenceRefSchema).max(64) }).strict()).max(192),
+  agreement: z.array(z.object({ checkId: id, kind: z.enum(['agreement', 'contradiction', 'complementary', 'unknown']), reason: text }).strict()).max(64),
+  issues: z.array(z.object({ checkId: id, text }).strict()).max(64),
+  resolutions: z.array(z.object({ issueId: id, status: z.enum(['resolved', 'unresolved']), reason: text, evidence: z.array(EvidenceRefSchema).max(64) }).strict()).max(64),
+}).strict()
+export const QualityPhaseSchema = z.enum(['plan', 'plan-review', 'draft-a', 'draft-b', 'compare', 'repair', 'synthesize', 'compose', 'final-review'])
+export const QualityNodeSchema = z.object({
+  phase: QualityPhaseSchema, checks: z.array(QualityCheckSchema).max(64), inheritedChecks: z.array(QualityCheckSchema).max(64),
+  plan: QualityPlanSchema.nullable(), correctionUsed: z.boolean(),
+  candidates: z.array(z.object({ id, attemptId: id, model: DeepModelSchema, reply: QualityCandidateSchema }).strict()).max(3),
+  issues: z.array(QualityIssueSchema).max(64), review: QualityReviewSchema.nullable(),
+  commonArtifactIds: z.array(id).max(256).nullable(),
+}).strict()
+export type QualityNode = z.infer<typeof QualityNodeSchema>
+export type QualityReply = z.infer<typeof QualityPlanSchema> | z.infer<typeof QualityPlanReviewSchema> | z.infer<typeof QualityCandidateSchema> | z.infer<typeof QualityReviewSchema>
+export const QualityJobSchema = z.object({ protocolVersion: z.literal(2), phase: QualityPhaseSchema, model: DeepModelSchema,
+  candidateId: id.nullable(), poolDigest: id, commonArtifactIds: z.array(id).max(256) }).strict()
+export type QualityJob = z.infer<typeof QualityJobSchema>
+const ReceiptV1Schema = z.object({ inputDigest: id, evidenceDigest: id, verifierVersion: z.literal(1), assessment: z.enum(['source-supported', 'analytical']) }).strict()
+const ReceiptV2Schema = ReceiptV1Schema.extend({ verifierVersion: z.literal(2), selectedCandidateId: id, poolDigest: id,
+  candidates: z.array(z.object({ id, attemptId: id, model: DeepModelSchema }).strict()).min(1).max(3), review: QualityReviewSchema })
+
 export const GoalNodeSchema = z.object({
   id, parentId: id.nullable(), revision: z.number().int().positive(),
   question: text, requirementIds: z.array(id).min(1).max(64), acceptanceCriteria: strings.min(1), assumptions: strings,
@@ -74,11 +110,12 @@ export const GoalNodeSchema = z.object({
   status: z.enum(['planning', 'ready', 'verifying-plan', 'waiting-children', 'composing', 'verifying', 'accepted', 'unresolved', 'superseded']),
   activeAttemptId: id.nullable(), candidate: CandidateSchema.nullable(),
   proposal: PlannerReplySchema.nullable(), reason: z.string().max(32_768),
-  receipt: z.object({ inputDigest: id, evidenceDigest: id, verifierVersion: z.literal(1), assessment: z.enum(['source-supported', 'analytical']) }).strict().nullable(),
+  quality: QualityNodeSchema.optional(),
+  receipt: z.union([ReceiptV1Schema, ReceiptV2Schema]).nullable(),
 }).strict()
 export type GoalNode = z.infer<typeof GoalNodeSchema>
 export const DeepStateSchema = z.object({
-  protocolVersion: z.literal(1), runId: id, startId: id, workspace: id, sessionId: id, rootPath: text,
+  protocolVersion: z.union([z.literal(1), z.literal(2)]), runId: id, startId: id, workspace: id, sessionId: id, rootPath: text,
   revision: z.number().int().min(0), requirementRevision: z.number().int().positive(),
   ownerEpoch: z.number().int().min(0), ownerId: id.nullable(), leaseUntil: z.number().nonnegative(),
   phase: z.enum(['ready', 'running', 'paused', 'answered', 'partial', 'blocked', 'failed', 'cancelled']),
@@ -87,11 +124,14 @@ export const DeepStateSchema = z.object({
   usage: z.object({ jobs: z.number().int().nonnegative(), requests: z.number().int().nonnegative(), tokens: z.number().nonnegative(), reservedTokens: z.number().nonnegative(), estimated: z.boolean(), activeMs: z.number().nonnegative(), activeSince: z.number().nonnegative().nullable() }).strict(),
   nodes: z.array(GoalNodeSchema).min(1).max(128),
   pendingInputs: z.array(z.object({ id, text, source: z.enum(['user', 'plugin']), consumed: z.boolean() }).strict()).max(64),
-}).strict()
+}).strict().superRefine((state, ctx) => {
+  const quality = state.protocolVersion === 2
+  if (quality !== (state.configuration.reasoningMode === 'quality') || quality && !state.configuration.alternativeSolver || state.nodes.some(node => quality !== !!node.quality)) ctx.addIssue({ code: 'custom', message: 'Deep protocol, configuration and node modes must match' })
+})
 export type DeepState = z.infer<typeof DeepStateSchema>
 export type DeepPhase = DeepState['phase']
 export const terminal = (phase: DeepPhase): boolean => ['answered', 'partial', 'blocked', 'failed', 'cancelled'].includes(phase)
-export interface DeepJob { readonly nodeId: string; readonly nodeRevision: number; readonly role: DeepRole; readonly inputDigest: string; readonly prompt: string; readonly inputArtifactIds: readonly string[] }
-export const DeepArtifactSchema = z.object({ id, runId: id, nodeId: id, nodeRevision: z.number().int().positive(), requirementRevision: z.number().int().positive(), path: text,
+export interface DeepJob { readonly nodeId: string; readonly nodeRevision: number; readonly role: DeepRole; readonly inputDigest: string; readonly prompt: string; readonly inputArtifactIds: readonly string[]; readonly quality?: QualityJob }
+export const DeepArtifactSchema = z.object({ id, attemptId: id.optional(), runId: id, nodeId: id, nodeRevision: z.number().int().positive(), requirementRevision: z.number().int().positive(), path: text,
   content: z.string().max(16_384), digest: id, sourceDigest: id, startLine: z.number().int().positive(), endLine: z.number().int().positive() }).strict()
 export type DeepArtifact = z.infer<typeof DeepArtifactSchema>

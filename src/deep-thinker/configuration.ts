@@ -33,7 +33,10 @@ export class DeepConfigurationUI {
   async problems(configuration: DeepConfiguration): Promise<string[]> {
     if (!this.catalog) return ['DSHのモデル一覧がありません']
     const catalog = await readModelCatalog(this.catalog)
-    return modelBindingProblems(DEEP_ROLES.map(role => ({ label: labels[role], binding: configuration.roles[role] })), catalog,
+    if (configuration.reasoningMode === 'quality' && !configuration.alternativeSolver) return ['品質重視では別案のモデルを選択してください。同じモデルも使えます。']
+    const bindings = DEEP_ROLES.map(role => ({ label: labels[role] as string, binding: configuration.roles[role] }))
+    if (configuration.reasoningMode === 'quality' && configuration.alternativeSolver) bindings.push({ label: '別案のモデル', binding: configuration.alternativeSolver })
+    return modelBindingProblems(bindings, catalog,
       modelRoutesForCatalog(catalog, [...this.routes, ...configuration.routeBindings.filter(r => !this.routes.some(known => known.provider === r.provider))]), this.compatibility)
   }
   async resolve(workspace: string, agent: DeepNativeAgent): Promise<DeepConfiguration | null> {
@@ -65,7 +68,9 @@ export class DeepConfigurationUI {
       const complete = DeepConfigurationSchema.safeParse(draft)
       const problems = complete.success ? await this.problems(complete.data) : ['四つの役割にモデルを設定してください']
       const roleChoices = DEEP_ROLES.map(role => `${labels[role]}: ${draft.roles[role] ? `${draft.roles[role]!.provider} / ${draft.roles[role]!.model}` : '未設定'}`)
-      const choice = await deepQuestion(this.questions, agent, signal, 'deep-configuration', 'Deepのモデルと予算', [...roleChoices, '予算を編集', ...(complete.success && !problems.length ? ['保存'] : [])],
+      const modeChoice = `推論: ${draft.reasoningMode === 'quality' ? '品質重視（実験）' : '通常'}`
+      const alternativeChoice = `別案のモデル: ${draft.alternativeSolver ? `${draft.alternativeSolver.provider} / ${draft.alternativeSolver.model}` : '未設定'}`
+      const choice = await deepQuestion(this.questions, agent, signal, 'deep-configuration', 'Deepのモデルと予算', [...roleChoices, modeChoice, ...(draft.reasoningMode === 'quality' ? [alternativeChoice] : []), '予算を編集', ...(complete.success && !problems.length ? ['保存'] : [])],
         `同じworkspaceの今後の開始に適用します。予約・実行中の構成は自動変更しません。\n${problems.join('\n')}\n${(Object.keys(budgetLabels) as (keyof DeepBudget)[]).map(key => `${budgetLabels[key]}: ${draft.budget[key]}`).join('\n')}\nトークン数は推定を含みます。provider内部の再送や料金の厳密な上限は保証しません。`)
       if (choice === '保存' && complete.success && !(await this.problems(complete.data)).length) {
         const routes = modelRoutesForCatalog(catalog, [...this.routes, ...complete.data.routeBindings])
@@ -73,7 +78,16 @@ export class DeepConfigurationUI {
         revision = await this.#save(workspace, revision, draft, true)
         return DeepConfigurationSchema.parse(draft)
       }
-      if (choice === '予算を編集') {
+      if (choice === modeChoice) {
+        const mode = await deepQuestion(this.questions, agent, signal, 'deep-reasoning-mode', '推論の進め方', ['通常', '品質重視（実験）', '戻る'], '品質重視は2案を比較し、必要なら1回修正して再検証します。総予算は増やしません。同じモデルでも利用できますが、一致は正しさの証明ではありません。')
+        if (mode === '戻る') continue
+        if (!['通常', '品質重視（実験）'].includes(mode)) continue
+        draft = { ...draft, reasoningMode: mode === '通常' ? 'standard' : 'quality' }
+      } else if (choice === alternativeChoice && draft.reasoningMode === 'quality') {
+        const selected = await this.#pickModel(agent, signal, catalog, '別案', draft.roles.solver)
+        if (!selected) continue
+        draft = { ...draft, alternativeSolver: selected }
+      } else if (choice === '予算を編集') {
         const limits = budgetLabels
         const keys = Object.keys(limits) as (keyof DeepBudget)[], choices = keys.map(key => `${limits[key]}: ${draft.budget[key]}`)
         const selected = await deepQuestion(this.questions, agent, signal, 'deep-budget-field', '変更する上限を選択', [...choices, '戻る'])

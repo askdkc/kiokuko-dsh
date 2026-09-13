@@ -1,3 +1,4 @@
+import { emptyQualityNode, qualityRole } from './quality.js'
 import type { AgentReply, DeepState, GoalNode, PlannerReply, DeepRole } from './contracts.js'
 
 /** Edges point from a waiting node to its prerequisites, including its children. */
@@ -35,6 +36,7 @@ export function validateDecomposition(state: DeepState, parent: GoalNode, reply:
 
 export function nextRole(node: GoalNode): DeepRole | undefined {
   if (node.activeAttemptId) return undefined
+  if (node.quality && ['planning','ready','verifying-plan','verifying','composing'].includes(node.status)) return qualityRole(node)
   switch (node.status) {
     case 'planning': return 'planner'
     case 'ready': return 'solver'
@@ -56,7 +58,7 @@ export function advanceGraph(state: DeepState): void {
       if ([...dependencies, ...children].some(n => n.status === 'unresolved')) {
         node.status = 'unresolved'; node.reason = 'A required prerequisite remains unresolved'; changed = true
       } else if (node.status === 'waiting-children' && children.length && children.every(n => n.status === 'accepted')) {
-        node.status = 'composing'; changed = true
+        node.status = 'composing'; if (node.quality) node.quality.phase = 'compose'; changed = true
       }
     }
   }
@@ -80,16 +82,22 @@ export function invalidateNodes(state: DeepState, ids: readonly string[], reason
   }
   for (const node of state.nodes) if (invalid.has(node.id) && node.status !== 'superseded') {
     node.revision++; node.receipt = null; node.candidate = null; node.activeAttemptId = null; node.reason = reason
+    if (node.quality) { const previous = node.quality; node.quality = emptyQualityNode(['plan','plan-review'].includes(previous.phase) ? previous.inheritedChecks : previous.checks, previous.correctionUsed); node.quality.checks = previous.checks; node.quality.issues = previous.issues }
     node.status = state.nodes.some(n => n.parentId === node.id && n.status !== 'superseded') ? 'waiting-children' : 'planning'
   }
 }
 
-function replan(state: DeepState, node: GoalNode, reason: string): void {
+export function replan(state: DeepState, node: GoalNode, reason: string): void {
   node.reason = reason
   if (node.replans >= state.configuration.budget.maxReplansPerNode) { node.status = 'unresolved'; return }
   const descendants = new Set([node.id])
   for (let i = 0; i < state.nodes.length; i++) for (const n of state.nodes) if (n.parentId && descendants.has(n.parentId)) descendants.add(n.id)
   for (const n of state.nodes) if (n.id !== node.id && descendants.has(n.id)) { n.status = 'superseded'; n.receipt = null }
+  if (node.quality) {
+    const previous = node.quality
+    node.quality = emptyQualityNode(['compare','final-review'].includes(previous.phase) ? previous.checks : previous.inheritedChecks, previous.correctionUsed)
+    node.quality.issues = previous.issues
+  }
   node.replans++; node.revision++; node.status = 'planning'; node.candidate = null; node.proposal = null; node.receipt = null
 }
 

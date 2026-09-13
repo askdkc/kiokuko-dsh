@@ -38,3 +38,22 @@ for (const family of ['deepseek', 'orcarouter'] as const) test(`Deep configurati
     assert.deepEqual(await ui.resolve(f.state.workspace, existing), saved)
   } finally { await f.close() }
 })
+
+test('quality configuration requires an alternative, preserves drafts and allows the same exact model', async()=>{
+  const f=await deepFixture(), steps=['推論:','品質重視（実験）','別案のモデル:','設定済みの役割からコピー','閉じる・下書きを保持','保存']
+  const catalog:DshModelCatalog={listProviders:()=>[{id:'mock',name:'Mock'}],listModels:async()=>[{provider:'mock',id:'same',name:'Same'}]}
+  const ui=new DeepConfigurationUI(f.store,catalog,{ask:async request=>{
+    const q=request.questions[0],prefix=steps.shift()!;const selected=q.options!.find(o=>o.label.startsWith(prefix))
+    assert.ok(selected,JSON.stringify(q));return {answers:[{id:q.id,selected:[selected.label]}]}
+  }},[{provider:'mock',family:'other',connection:'api',protocol:'chat-completions'}],undefined,f.configuration.budget)
+  const parent={id:'parent',options:{provider:'mock',model:'same'}}
+  try {
+    await assert.rejects(ui.configure(f.state.workspace,parent,new AbortController().signal),/設定待ち/)
+    const saved=await ui.configure(f.state.workspace,parent,new AbortController().signal)
+    assert.equal(saved.reasoningMode,'quality');assert.deepEqual(saved.alternativeSolver,saved.roles.solver)
+    assert.deepEqual(await ui.resolve(f.state.workspace,parent),saved);assert.equal(steps.length,0)
+    const {alternativeSolver:_alt,...missing}=saved
+    assert.match((await ui.problems(missing)).join(' '),/別案のモデル/)
+    assert.match((await ui.problems({...saved,alternativeSolver:{provider:'mock',model:'missing'}})).join(' '),/ありません/)
+  } finally{await f.close()}
+})
