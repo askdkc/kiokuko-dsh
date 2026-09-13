@@ -107,7 +107,7 @@ export class DeepNativeExecutor implements DeepExecution {
   async execute(authority: DeepAuthority, job: DeepJob, state: DeepState, signal: AbortSignal): Promise<unknown> {
     const parent = this.#parents.get(state.runId)
     if (!parent) throw new Error('Deep parent Session is unavailable')
-    const binding: Binding = { authority, state, model: state.configuration.roles[job.role], parent }
+    const binding: Binding = { authority, state, model: job.quality?.model ?? state.configuration.roles[job.role], parent }
     try { return await this.#managed.execute(binding, { parent, signal, agentOptions: binding.model, maxDepth: 1, toolFilter: { allow: [] }, label: `Deep ${job.role}`,
       prompt: [{ type: 'text', text: job.prompt }] }, async (result, agent) => {
       await this.beforeAssembly(agent)
@@ -134,7 +134,7 @@ export class DeepNativeExecutor implements DeepExecution {
         || !!db.prepare('SELECT 1 FROM dsh_deep_attempts WHERE child_session_id=?').get(sessionId))) throw new Error('Deep-owned Session cannot fall back to a normal model request')
       yield* next(); return
     }
-    if (options.provider !== binding.model.provider || options.model !== binding.model.model || options.maxTokens !== binding.state.configuration.budget.maxOutputTokensPerRequest) throw new Error('Deep request route or output limit changed')
+    if (options.provider !== binding.model.provider || options.model !== binding.model.model || options.reasoningEffort !== binding.model.reasoningEffort && binding.state.protocolVersion === 2 || options.maxTokens !== binding.state.configuration.budget.maxOutputTokensPerRequest) throw new Error('Deep request route or output limit changed')
     const bytes = Buffer.byteLength(JSON.stringify({ system: options.system, messages: options.messages, tools: options.tools }))
     if (bytes > 524_288) throw new Error('Deep provider input exceeds the bounded request size')
     const reservation = await this.store.reserveRequest(binding.authority, estimateRequestTokens(bytes, binding.state.configuration.budget.maxOutputTokensPerRequest))

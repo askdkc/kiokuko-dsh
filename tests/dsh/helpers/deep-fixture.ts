@@ -8,18 +8,18 @@ import { registerRepositoryAndLocation } from '../../../src/repository/binding.j
 import type { DshDatabaseOperation } from '../../../src/dsh/runtime.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { DeepStore } from '../../../src/deep-thinker/store.js'
-import { DeepConfigurationSchema, DEEP_ROLES, type DeepBudget } from '../../../src/deep-thinker/core/contracts.js'
+import { DeepConfigurationSchema, DEEP_ROLES, type DeepBudget, type DeepConfiguration } from '../../../src/deep-thinker/core/contracts.js'
 import { initialDeepState } from '../../../src/deep-thinker/initial-state.js'
 
-export async function deepFixture(budget: Partial<DeepBudget> = {}) {
+export async function deepFixture(budget: Partial<DeepBudget> = {}, overrides: Partial<DeepConfiguration> = {}, migrationsDirectory = join(process.cwd(), 'migrations')) {
   const root = realpathSync(await mkdtemp(join(tmpdir(), 'deep-fixture-')))
   const dbPath = join(root, 'state.sqlite3'), db = openConnection(dbPath)
-  migrateDatabase(db, join(process.cwd(), 'migrations'))
+  migrateDatabase(db, migrationsDirectory)
   registerRepositoryAndLocation(db, { repositoryId: 'deep-fixture', workspace: 'deep-fixture', displayName: 'Deep fixture', canonicalRoot: root, remoteFingerprint: null, bindingSchemaVersion: 1, agentTemplateVersion: 1 })
   let now = 1_000
   const runtime = { withDatabase: async <T>(fn: DshDatabaseOperation<T>): Promise<T> => fn(db, undefined as never) }
   const store = new DeepStore(runtime, () => now)
-  const configuration = DeepConfigurationSchema.parse({ roles: Object.fromEntries(DEEP_ROLES.map(role => [role, { provider: 'mock', model: role }])), budget })
+  const configuration = DeepConfigurationSchema.parse({ roles: Object.fromEntries(DEEP_ROLES.map(role => [role, { provider: 'mock', model: role }])), budget, ...overrides })
   const intent = await store.createIntent({ workspace: 'deep-fixture', sessionId: 'parent', rootPath: root, commandId: 'start-command', task: 'Design a bounded analysis process', status: 'pending', configuration })
   const prepared = await prepareAgentTask(db, { requestId: intent.startId, task: intent.task, cwd: root, dshSessionId: intent.sessionId, deepSelection: { startId: intent.startId, configuration },
     profileHints: { taskType: 'analysis', target: root, expected: 'A verified plan' }, skillDiscoveryMode: 'off' })

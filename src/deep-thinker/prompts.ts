@@ -1,10 +1,12 @@
+import { qualityJobFor, qualityReplySchema } from './quality-prompts.js'
 import { z } from 'zod'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { findSecretInValue } from '../memory/secrets.js'
 import { KiokukoError } from '../errors.js'
-import { ReplySchemas, type DeepArtifact, type DeepJob, type DeepRole, type DeepState, type GoalNode } from './core/contracts.js'
+import { ReplySchemas, type DeepArtifact, type DeepJob, type DeepRole, type DeepState, type GoalNode, type QualityJob } from './core/contracts.js'
 
 export function jobFor(state: DeepState, node: GoalNode, role: DeepRole, artifacts: readonly DeepArtifact[]): DeepJob {
+  if (node.quality) return qualityJobFor(state, node, artifacts)
   const input = {
     role, originalProblem: state.task, constraints: state.constraints,
     question: node.question, requirementIds: node.requirementIds, acceptanceCriteria: node.acceptanceCriteria,
@@ -28,10 +30,10 @@ export function jobFor(state: DeepState, node: GoalNode, role: DeepRole, artifac
   ].join('\n\n')
   return { nodeId: node.id, nodeRevision: node.revision, role, inputDigest: canonicalContentHash({ input, requirementRevision: state.requirementRevision, nodeRevision: node.revision, model: state.configuration.roles[role] }), prompt, inputArtifactIds: artifacts.map(a => a.id) }
 }
-export function parseDeepReply(role: DeepRole, output: unknown) {
+export function parseDeepReply(role: DeepRole, output: unknown, quality?: QualityJob) {
   const raw = typeof output === 'string' ? output : Array.isArray(output) ? output.map(block => block?.type === 'text' && typeof block.text === 'string' ? block.text : '').join('\n') : JSON.stringify(output)
   if (!raw || Buffer.byteLength(raw) > 131_072) throw new KiokukoError('VALIDATION_ERROR', 'Deep worker output is absent or exceeds 128 KiB')
   if (findSecretInValue(raw)) throw new KiokukoError('SECURITY_REJECTION', 'Secret-shaped worker output was not stored or forwarded')
   const text = raw.trim().replace(/^```(?:json)?\s*/u, '').replace(/\s*```$/u, '')
-  return ReplySchemas[role].parse(JSON.parse(text))
+  return (quality ? qualityReplySchema(quality.phase) : ReplySchemas[role]).parse(JSON.parse(text))
 }

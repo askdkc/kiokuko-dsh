@@ -1,11 +1,14 @@
+import { acceptDeepReply } from './acceptance.js'
+import { assertQualityJob, qualityModel } from './core/quality.js'
+import { QualityJobSchema } from './core/contracts.js'
 import { randomUUID } from 'node:crypto'
 import { findSecretInValue } from '../memory/secrets.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { budgetProblem, stopClock, activeMilliseconds } from './core/budget.js'
-import { applyReply, advanceGraph, invalidateNodes, nextRole, runnableNodes } from './core/graph.js'
+import { advanceGraph, invalidateNodes, nextRole, runnableNodes } from './core/graph.js'
 import { terminal, type DeepJob, type DeepModel, type DeepState } from './core/contracts.js'
 import { DeepStore, assertDeepAuthority, type DeepAuthority } from './store.js'
-import { changedSources, currentArtifacts, evidenceReceipt, inputArtifacts } from './evidence.js'
+import { changedSources, currentArtifacts, inputArtifacts } from './evidence.js'
 import { jobFor, parseDeepReply } from './prompts.js'
 import { deepReport } from './report.js'
 import { processDeepSlots } from './slots.js'
@@ -45,24 +48,25 @@ export class DeepScheduler {
   async idle(runId: string): Promise<void> { await this.#runs.get(runId)?.done }
   async reconcile(attemptId: string, output: unknown): Promise<void> {
     const attempt = await this.store.database(db => db.prepare('SELECT * FROM dsh_deep_attempts WHERE attempt_id=?').get<{
-      run_id: string; node_id: string; node_revision: number; requirement_revision: number; role: DeepRole; input_digest: string; input_artifact_ids_json: string; status: string
+      run_id: string; node_id: string; node_revision: number; requirement_revision: number; role: DeepRole; input_digest: string; input_artifact_ids_json: string; status: string; prompt: string; job_json: string | null; model_json: string
     }>(attemptId))
     if (!attempt || !['reserved','started','uncertain'].includes(attempt.status)) return
     const state = await this.store.read(attempt.run_id)
     if (this.running(state.runId) || terminal(state.phase) || state.ownerId && state.leaseUntil > this.store.now()) throw new Error('Deep recovery requires an unowned nonterminal run')
-    const reply = parseDeepReply(attempt.role, output)
+    const quality = attempt.job_json ? QualityJobSchema.parse(JSON.parse(attempt.job_json)) : undefined
+    if ((state.protocolVersion === 2) !== !!quality || quality && canonicalContentHash(quality.model) !== canonicalContentHash(JSON.parse(attempt.model_json))) throw new Error('Recovered Deep job protocol or model changed')
+    const job: DeepJob = { nodeId: attempt.node_id, nodeRevision: attempt.node_revision, role: attempt.role, inputDigest: attempt.input_digest,
+      prompt: attempt.prompt, inputArtifactIds: JSON.parse(attempt.input_artifact_ids_json), ...(quality ? {quality} : {}) }
+    const reply = parseDeepReply(attempt.role, output, quality)
     const ids: string[] = JSON.parse(attempt.input_artifact_ids_json)
-    const artifacts = currentArtifacts(state, await this.store.artifacts(state.runId)).filter(a => ids.includes(a.id) || a.nodeId === attempt.node_id)
+    const artifacts = currentArtifacts(state, await this.store.artifacts(state.runId)).filter(a => ids.includes(a.id) || (quality ? a.attemptId === attemptId : a.nodeId === attempt.node_id))
     if ((await changedSources(state.rootPath, artifacts)).length) throw new Error('資料が変更されたため、古い試行結果は再利用できません')
-    const node = state.nodes.find(n => n.id === attempt.node_id)!
-    const receipt = evidenceReceipt(reply, node.candidate, artifacts, attempt.input_digest)
     await this.store.mutate(state.runId, (current, db) => {
       const target = current.nodes.find(n => n.id === attempt.node_id)
       if (terminal(current.phase) || current.ownerId && current.leaseUntil > this.store.now() || current.requirementRevision !== attempt.requirement_revision || target?.revision !== attempt.node_revision) throw new Error('Deep recovery identity changed')
       const row = db.prepare('SELECT status FROM dsh_deep_attempts WHERE attempt_id=?').get<{status:string}>(attemptId)
       if (!row || !['reserved','started','uncertain'].includes(row.status)) return
-      applyReply(current, target, attempt.role, reply, target.proposal?.kind === 'decompose' ? target.proposal.children.map(() => randomUUID()) : [])
-      target.activeAttemptId = null; if (target.status === 'accepted') target.receipt = receipt
+      acceptDeepReply(current, target, job, attemptId, reply, artifacts, target.proposal?.kind === 'decompose' ? target.proposal.children.map(() => randomUUID()) : [])
       current.phase = 'paused'; current.ownerId = null; current.ownerEpoch++; current.leaseUntil = 0; stopClock(current, this.store.now())
       current.reason = '子Sessionの完了記録から結果を復旧しました。--resume で継続できます。'
       db.prepare("UPDATE dsh_deep_attempts SET status='completed',result_json=? WHERE attempt_id=?").run(JSON.stringify(reply), attemptId)
@@ -168,17 +172,23 @@ export class DeepScheduler {
     return this.store.mutate(state.runId, (current, db) => {
       const node = current.nodes.find(n => n.id === job.nodeId)
       if (current.phase !== 'running' || current.ownerId !== this.ownerId || current.ownerEpoch !== state.ownerEpoch || current.leaseUntil <= this.store.now() || current.requirementRevision !== state.requirementRevision || !node || node.revision !== job.nodeRevision || node.activeAttemptId) throw new Error('Deep job claim is stale')
+      if (job.quality) {
+        assertQualityJob(node, job)
+        if (canonicalContentHash(job.quality.model) !== canonicalContentHash(qualityModel(node, current.configuration.roles, current.configuration.alternativeSolver))) throw new Error('Quality model binding changed')
+        if (node.quality!.phase === 'draft-a' && node.quality!.commonArtifactIds === null) node.quality!.commonArtifactIds = [...job.quality.commonArtifactIds]
+      }
       const problem = budgetProblem(current, this.store.now(), 'job'); if (problem) throw new Error(problem)
       if (repairOf && db.prepare('SELECT 1 FROM dsh_deep_attempts WHERE repair_of=?').get(repairOf)) throw new Error('JSON repair already attempted')
       const attemptId = randomUUID(); node.activeAttemptId = attemptId; current.usage.jobs++
       db.prepare(`INSERT INTO dsh_deep_attempts(attempt_id,run_id,node_id,node_revision,requirement_revision,owner_epoch,role,input_digest,prompt,input_artifact_ids_json,repair_of,model_json,status,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'reserved',?)`).run(attemptId, current.runId, node.id, node.revision, current.requirementRevision, current.ownerEpoch, job.role, job.inputDigest, job.prompt, JSON.stringify(job.inputArtifactIds), repairOf ?? null, JSON.stringify(current.configuration.roles[job.role]), this.store.now())
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'reserved',?)`).run(attemptId, current.runId, node.id, node.revision, current.requirementRevision, current.ownerEpoch, job.role, job.inputDigest, job.prompt, JSON.stringify(job.inputArtifactIds), repairOf ?? null, JSON.stringify(job.quality?.model ?? current.configuration.roles[job.role]), this.store.now())
+      if (job.quality) db.prepare('UPDATE dsh_deep_attempts SET job_json=? WHERE attempt_id=?').run(JSON.stringify(job.quality), attemptId)
       return { runId: current.runId, nodeId: node.id, nodeRevision: node.revision, requirementRevision: current.requirementRevision, ownerEpoch: current.ownerEpoch, ownerId: this.ownerId, attemptId, inputDigest: job.inputDigest }
     })
   }
   async #runJob(state: DeepState, nodeId: string, signal: AbortSignal): Promise<void> {
     const node = state.nodes.find(n => n.id === nodeId)!, role = nextRole(node)!
-    const model: DeepModel = state.configuration.roles[role]
+    const model: DeepModel = node.quality ? qualityModel(node, state.configuration.roles, state.configuration.alternativeSolver) : state.configuration.roles[role]
     const release = await processDeepSlots.acquire(state.runId, model.provider, state.configuration.localProviders.includes(model.provider), this.maxTotal, signal)
     let authority: DeepAuthority | undefined
     try {
@@ -187,7 +197,7 @@ export class DeepScheduler {
         authority = await this.#reserve(state, job, authority?.attemptId)
         const output = await this.executor.execute(authority, job, state, signal)
         let reply: ReturnType<typeof parseDeepReply>
-        try { reply = parseDeepReply(role, output) }
+        try { reply = parseDeepReply(role, output, job.quality) }
         catch (error) {
           if (findSecretInValue(output) || repair === 1) throw error
           await this.store.mutate(state.runId, (current, db) => {
@@ -200,7 +210,7 @@ export class DeepScheduler {
           continue
         }
         const latest = await this.store.read(state.runId), artifacts = await this.store.artifacts(state.runId)
-        const available = currentArtifacts(latest, artifacts).filter(a => job.inputArtifactIds.includes(a.id) || a.nodeId === nodeId && a.nodeRevision === job.nodeRevision)
+        const available = currentArtifacts(latest, artifacts).filter(a => job.inputArtifactIds.includes(a.id) || (job.quality ? a.attemptId === authority!.attemptId : a.nodeId === nodeId && a.nodeRevision === job.nodeRevision))
         const changed = await changedSources(state.rootPath, available)
         if (changed.length) {
           await this.store.mutate(state.runId, (current, db) => {
@@ -210,13 +220,10 @@ export class DeepScheduler {
           })
           return
         }
-        const receipt = evidenceReceipt(reply, latest.nodes.find(n => n.id === nodeId)!.candidate, available, job.inputDigest)
         await this.store.mutate(state.runId, (current, db) => {
           assertDeepAuthority(db, current, authority!, this.store.now())
           const target = current.nodes.find(n => n.id === nodeId)!
-          applyReply(current, target, role, reply, target.proposal?.kind === 'decompose' ? target.proposal.children.map(() => randomUUID()) : [])
-          target.activeAttemptId = null
-          if (target.status === 'accepted') target.receipt = receipt
+          acceptDeepReply(current, target, job, authority!.attemptId, reply, available, target.proposal?.kind === 'decompose' ? target.proposal.children.map(() => randomUUID()) : [])
           db.prepare("UPDATE dsh_deep_attempts SET status='completed',result_json=? WHERE attempt_id=?").run(JSON.stringify(reply), authority!.attemptId)
         })
         await this.notify(await this.store.read(state.runId)).catch(() => {})
@@ -233,6 +240,11 @@ export class DeepScheduler {
         if (unknown || error instanceof DeepModelUnavailable) { current.phase = 'paused'; current.reason = error instanceof DeepModelUnavailable ? errorText(error) : '結果が不明な要求があります。記録の再確認が必要です。'; stopClock(current, this.store.now()) }
         else { target.status = 'unresolved'; target.reason = errorText(error) }
       }).catch(() => {})
+      else if (!signal.aborted && node.quality) await this.store.mutate(state.runId, current => {
+        const target = current.nodes.find(n=>n.id===nodeId)
+        if (current.phase !== 'running' || current.ownerId !== this.ownerId || current.ownerEpoch !== state.ownerEpoch || current.leaseUntil <= this.store.now() || target?.revision !== node.revision || target.activeAttemptId) throw error
+        target.status = 'unresolved'; target.reason = errorText(error)
+      })
       else if (!signal.aborted) throw error
     } finally { release() }
   }

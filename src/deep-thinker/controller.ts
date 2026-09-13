@@ -1,3 +1,4 @@
+import { emptyQualityNode } from './core/quality.js'
 import { randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
@@ -124,9 +125,11 @@ export class DeepPlanningController {
           }
           if (command.kind === 'configure') {
             const configuration = await this.configuration.configure(project.workspace, agent, invocation.signal)
-            if (intent?.runId && (await this.store.read(intent.runId)).phase === 'paused') {
+            const paused = intent?.runId ? await this.store.read(intent.runId) : undefined
+            if (paused?.phase === 'paused' && (paused.configuration.reasoningMode ?? 'standard') !== (configuration.reasoningMode ?? 'standard')) return { kind: 'success', text: '設定を保存しました。推論モードの変更は新しい作業から適用します。停止中の作業は元のモードを保持します。' }
+            if (intent?.runId && paused?.phase === 'paused') {
               const apply = await deepQuestion(this.options.questions, agent, invocation.signal, 'deep-apply-configuration', '保存済みの構成を一時停止中の作業にも適用しますか？', ['今後の作業だけに適用', '一時停止中の作業にも適用'], '適用すると残予算は回復せず、変更されたモデルで今後の要求を実行します。')
-              if (apply === '一時停止中の作業にも適用') await this.store.mutate(intent.runId, state => { if (state.phase !== 'paused') throw new Error('Deep state changed'); state.configuration = configuration })
+              if (apply === '一時停止中の作業にも適用') await this.store.mutate(intent.runId, state => { if (state.phase !== 'paused' || (state.configuration.reasoningMode ?? 'standard') !== (configuration.reasoningMode ?? 'standard')) throw new Error('Deep state changed'); state.configuration = configuration })
             }
             return { kind: 'success', text: 'Deepの設定を保存しました。' }
           }
@@ -305,6 +308,11 @@ export class DeepPlanningController {
           current.requirementRevision++; current.constraints.push(...inputs.map(i => i.text))
           for (const node of current.nodes) node.requirementIds = [...new Set([...node.requirementIds, ...inputs.map(i => `constraint:${i.id}`)])]
           invalidateNodes(current, current.nodes.map(n => n.id), '追加制約に基づく再検証が必要です')
+          if (current.protocolVersion === 2) {
+            const root = current.nodes[0]!
+            for (const child of current.nodes.slice(1)) { child.status = 'superseded'; child.receipt = null }
+            root.quality = emptyQualityNode([], root.quality!.correctionUsed); root.status = 'planning'; root.proposal = null
+          }
         }
         for (const m of current.pendingInputs) if (inputs.some(i => i.id === m.id)) m.consumed = true
       })
