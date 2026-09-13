@@ -1,3 +1,4 @@
+import type { ProfileMemoryHint } from '../akinator/memory-probe-types.js'
 import type { AkinatorQuestion } from '../akinator/types.js'
 import { KiokukoError } from '../errors.js'
 import type { ConfirmationBasis, UserFacingConfirmation, UserFacingConfirmationAction, UserFacingLanguage } from '../enno-oduno/types.js'
@@ -72,7 +73,7 @@ export interface DshUserQuestions {
 }
 
 export interface DshIntakeAnswerer {
-  ask(question: AkinatorQuestion, signal?: AbortSignal, agent?: DshUserQuestionAgent): Promise<string>
+  ask(question: AkinatorQuestion, signal?: AbortSignal, agent?: DshUserQuestionAgent, memoryHints?: readonly ProfileMemoryHint[]): Promise<string>
 }
 
 export interface DshConfirmationAnswer {
@@ -104,12 +105,17 @@ function conflict(message: string): never {
 /** Adapt the dsh user-question service to one exact Akinator question at a time. */
 export function createDshIntakeAnswerer(service: DshUserQuestions): DshIntakeAnswerer {
   return {
-    async ask(question, signal, agent) {
+    async ask(question, signal, agent, memoryHints) {
       const presentation = intakePresentation(question)
+      const hints = (memoryHints ?? []).filter(hint => hint.field === question.id).slice(0, 3)
+      const hintDetail = hints.length ? '\n前回の例（今回の回答は自由に変更できます）:\n'
+        + hints.map(hint => `${hint.value} — ${hint.source.observedAt.slice(0, 10)} / ${hint.source.runId}`).join('\n') : ''
       const result = await service.ask({
         questions: [{
           id: question.id,
           ...presentation,
+          ...(question.options === null && hints.length ? { options: hints.map(hint => ({ label: hint.value, description: `前回の例 · ${hint.source.observedAt.slice(0, 10)}` })) } : {}),
+          ...(hintDetail ? { detail: ('detail' in presentation ? presentation.detail : '') + hintDetail } : {}),
         }],
         ...(agent === undefined ? {} : { agent }),
         ...(signal === undefined ? {} : { signal }),

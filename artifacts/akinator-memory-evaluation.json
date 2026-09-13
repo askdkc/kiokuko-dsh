@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "seed": "synthetic-profile-v1",
+  "cases": [
+    {
+      "name": "exact-file",
+      "correctAdoption": true,
+      "targetCandidateFound": true,
+      "expectedCandidate": true,
+      "scannedCandidates": 1,
+      "queries": 3
+    },
+    {
+      "name": "current-target",
+      "correctAdoption": true,
+      "targetCandidateFound": false,
+      "expectedCandidate": false,
+      "scannedCandidates": 0,
+      "queries": 0
+    },
+    {
+      "name": "current-complete",
+      "correctAdoption": true,
+      "targetCandidateFound": false,
+      "expectedCandidate": false,
+      "scannedCandidates": 0,
+      "queries": 0
+    },
+    {
+      "name": "chat",
+      "correctAdoption": true,
+      "targetCandidateFound": false,
+      "expectedCandidate": false,
+      "scannedCandidates": 0,
+      "queries": 0
+    },
+    {
+      "name": "review-without-exact-id",
+      "correctAdoption": true,
+      "targetCandidateFound": true,
+      "expectedCandidate": true,
+      "scannedCandidates": 1,
+      "queries": 2
+    },
+    {
+      "name": "lexical-only",
+      "correctAdoption": true,
+      "targetCandidateFound": true,
+      "expectedCandidate": true,
+      "scannedCandidates": 1,
+      "queries": 2
+    },
+    {
+      "name": "missing-capability",
+      "correctAdoption": true,
+      "targetCandidateFound": false,
+      "expectedCandidate": false,
+      "scannedCandidates": 0,
+      "queries": 0
+    },
+    {
+      "name": "conflicting-targets",
+      "correctAdoption": true,
+      "targetCandidateFound": true,
+      "expectedCandidate": true,
+      "scannedCandidates": 2,
+      "queries": 3
+    },
+    {
+      "name": "partial-coverage",
+      "correctAdoption": true,
+      "targetCandidateFound": false,
+      "expectedCandidate": false,
+      "scannedCandidates": 0,
+      "queries": 3
+    },
+    {
+      "name": "bounded-truncated",
+      "correctAdoption": true,
+      "targetCandidateFound": true,
+      "expectedCandidate": true,
+      "scannedCandidates": 1,
+      "queries": 1
+    },
+    {
+      "name": "memory-is-not-confirmation",
+      "correctAdoption": true,
+      "targetCandidateFound": false,
+      "expectedCandidate": false,
+      "scannedCandidates": 1,
+      "queries": 3
+    },
+    {
+      "name": "previous-expected-only",
+      "correctAdoption": true,
+      "targetCandidateFound": true,
+      "expectedCandidate": true,
+      "scannedCandidates": 1,
+      "queries": 3
+    },
+    {
+      "name": "other-repository",
+      "correctAdoption": true,
+      "targetCandidateFound": false,
+      "expectedCandidate": false,
+      "scannedCandidates": 0,
+      "queries": 3
+    }
+  ],
+  "falseAdoptions": 0,
+  "candidateRecallAt64": 1,
+  "questionModes": [
+    {
+      "mode": "off",
+      "unresolvedRequiredFields": 1,
+      "needsAnswer": true
+    },
+    {
+      "mode": "shadow",
+      "unresolvedRequiredFields": 1,
+      "needsAnswer": true
+    },
+    {
+      "mode": "suggest",
+      "unresolvedRequiredFields": 1,
+      "needsAnswer": true
+    },
+    {
+      "mode": "resolve",
+      "unresolvedRequiredFields": 0,
+      "needsAnswer": false
+    }
+  ],
+  "userCorrectionRate": null,
+  "postAdoptionCorrectionRate": null,
+  "limitations": [
+    "Synthetic finite cases only; correction rates require user observations.",
+    "Unresolved field count is not a live user question count.",
+    "Ordinary scoped memory delivery is covered by integration tests, not this resolver dataset."
+  ]
+}

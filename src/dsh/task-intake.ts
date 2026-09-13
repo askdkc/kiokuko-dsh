@@ -1,3 +1,7 @@
+import { AkinatorMemoryConfig, type ProbeConfig, type ProfileMemoryHint } from '../akinator/memory-probe-types.js';
+import { verifyTaskTargets, shouldProbe } from '../akinator/memory-probe.js';
+import { deriveProfile } from '../akinator/domain.js';
+import { readMemoryHints } from '../akinator/profile-memory-store.js';
 import { boundTaskRetrievalQuery } from '../memory/retrieval-query.js';
 import { initializeExecutionSelection, writeExecutionSelection } from './execution-selection.js';
 import { claimExecutionOwner } from './orchestration/execution-owner.js';
@@ -15,7 +19,7 @@ import {
   resolveProjectWorkspaceReadOnly,
   type ResolvedProjectWorkspace,
 } from '../memory/workspaces.js';
-import { getAkinatorContextService } from '../akinator/service.js';
+import { getAkinatorStateService } from '../akinator/service.js';
 import {
   deriveMemoryUseSignal,
   deriveMemoryPolicy,
@@ -36,7 +40,7 @@ import {
   failAgentTaskSkillDiscoveryAttempt,
   readAgentTaskSkillDiscoveryAttempt,
 } from '../akinator/skill-discovery-attempt.js';
-import type { AkinatorContext, AkinatorReasoning, TaskProfile } from '../akinator/types.js';
+import type { AkinatorResult, AkinatorReasoning, TaskProfile } from '../akinator/types.js';
 import { DshRunIntakeService } from './run-intake-service.js';
 import { bindDshRunLogStartInTransaction } from './session-memory-finalizer.js';
 import { canonicalContentHash, type JsonObject } from '../serialization/validate.js';
@@ -112,13 +116,14 @@ export interface PreparedAgentTask {
   project: ResolvedProjectWorkspace;
   executionContext: AgentTaskExecutionContext;
   intake: {
-    status: AkinatorContext['status'];
+    status: AkinatorResult['status'];
     sessionId: string;
     profile: TaskProfile;
-    question: AkinatorContext['question'];
-    missingFields: AkinatorContext['missingFields'];
+    question: AkinatorResult['question'];
+    missingFields: AkinatorResult['missingFields'];
     recommendedTags: string[];
     reasoning: AkinatorReasoning;
+    memoryHints?: ProfileMemoryHint[];
   };
   capabilities: CapabilityResolution;
   run: { runId: string; status: 'intake' | 'active' };
@@ -251,7 +256,7 @@ function assertTaskContextRequestBinding(metadata: JsonObject, maxContextChars: 
   }
 }
 
-function memoryCapabilityUnavailableForTask(context: AkinatorContext, capabilities: unknown): boolean {
+function memoryCapabilityUnavailableForTask(context: AkinatorResult, capabilities: unknown): boolean {
   return context.status === 'ready'
     && (context.session.profile.taskType === 'build' || context.session.profile.taskType === 'debug')
     && memoryReasoningCapabilityAvailability(capabilities) !== 'available';
@@ -262,7 +267,7 @@ type NonTerminalTaskRun = Omit<RunRecord, 'status'> & { status: 'intake' | 'acti
 function authoritativeTaskRun(
   database: SqliteDatabase,
   runId: string,
-  intakeStatus?: AkinatorContext['status'],
+  intakeStatus?: AkinatorResult['status'],
 ): NonTerminalTaskRun {
   const run = new LedgerStore(database).readRun(runId);
   if (run === undefined) throw new KiokukoError('NOT_FOUND', 'Task run was not found');
@@ -281,8 +286,8 @@ function authoritativeTaskRun(
 function currentAgentTaskContext(
   database: SqliteDatabase,
   runId: string,
-  context: AkinatorContext,
-): AkinatorContext {
+  context: AkinatorResult,
+): AkinatorResult {
   const current = readContextBrokerRunState(database, runId);
   if (current.intakeSessionId !== context.session.id || current.status !== context.status) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Task intake and authoritative broker state disagree');
@@ -387,7 +392,7 @@ function assertAgentTaskSnapshot(
   database: SqliteDatabase,
   runId: string,
   expectedRun: NonTerminalTaskRun,
-  expectedContext: AkinatorContext,
+  expectedContext: AkinatorResult,
 ): void {
   const currentRun = authoritativeTaskRun(database, runId, expectedContext.status);
   const currentContext = currentAgentTaskContext(database, runId, expectedContext);
@@ -467,7 +472,7 @@ function buildPreparedTaskBase(
   database: SqliteDatabase,
   project: ResolvedProjectWorkspace,
   executionContext: AgentTaskExecutionContext,
-  context: AkinatorContext,
+  context: AkinatorResult,
   capabilities: unknown,
   run: { runId: string; status: 'intake' | 'active' },
   scopedContext: ScopedContextResult | null,
@@ -524,7 +529,7 @@ interface FinalizeAgentTaskInput {
   project: ResolvedProjectWorkspace;
   executionContext: AgentTaskExecutionContext;
   manifestSnapshot: ReturnType<typeof captureProjectManifestSnapshot>;
-  context: AkinatorContext;
+  context: AkinatorResult;
   runId: string;
   capabilities: unknown;
   maxContextChars: number;
@@ -537,7 +542,7 @@ interface FinalizeAgentTaskInput {
 interface PreparedTaskContextQuery {
   readonly fingerprint: ReturnType<typeof resolveProjectFingerprint>;
   readonly selectionWorkspaces: readonly string[];
-  readonly queryFor: (context: AkinatorContext) => {
+  readonly queryFor: (context: AkinatorResult) => {
     project: ResolvedProjectWorkspace;
     fingerprint: ReturnType<typeof resolveProjectFingerprint>;
     task: string;
@@ -589,11 +594,11 @@ async function drainEmbeddingsBeforeRetrieval(
 
 function prepareTaskContextQuery(
   input: FinalizeAgentTaskInput,
-  context: AkinatorContext,
+  context: AkinatorResult,
 ): PreparedTaskContextQuery {
   const fingerprint = resolveProjectFingerprint(input.database, input.project, input.manifestSnapshot);
   const selectionWorkspaces = [input.project.workspace, GLOBAL_WORKSPACE];
-  const queryFor = (current: AkinatorContext) => ({
+  const queryFor = (current: AkinatorResult) => ({
     project: input.project,
     fingerprint,
     task: current.session.task,
@@ -633,7 +638,7 @@ async function previewMemoryBeforeDiscovery(
   input: FinalizeAgentTaskInput,
   prepared: PreparedTaskContextQuery,
   run: NonTerminalTaskRun,
-  context: AkinatorContext,
+  context: AkinatorResult,
 ): Promise<MemoryPreviewResult> {
   const query = prepared.queryFor(context);
   const runtime = await searchRuntime(input, query);
@@ -665,7 +670,7 @@ interface SkillDiscoveryResolutionInput {
   readonly input: FinalizeAgentTaskInput;
   readonly prepared: PreparedTaskContextQuery;
   readonly run: NonTerminalTaskRun;
-  readonly context: AkinatorContext;
+  readonly context: AkinatorResult;
   readonly preDiscoveryMemoryState: string | null;
   readonly replayedAttempt: ReturnType<typeof readAgentTaskSkillDiscoveryAttempt>;
 }
@@ -737,7 +742,7 @@ async function resolveSkillDiscovery(
 }
 
 interface FinalTaskContextResult {
-  readonly context: AkinatorContext;
+  readonly context: AkinatorResult;
   readonly run: NonTerminalTaskRun;
   readonly scopedContext: ScopedContextResult | null;
   readonly memoryUse: MemoryUseSignal;
@@ -746,7 +751,7 @@ interface FinalTaskContextResult {
 interface FinalTaskContextInput {
   readonly input: FinalizeAgentTaskInput;
   readonly prepared: PreparedTaskContextQuery;
-  readonly context: AkinatorContext;
+  readonly context: AkinatorResult;
   readonly missingMemoryCapability: boolean;
 }
 
@@ -890,7 +895,7 @@ function preparedEnnoState(
   return ennoStateForPreparedTask(database, prepared, dshSessionId);
 }
 
-export async function prepareAgentTask(database: SqliteDatabase, input: PrepareAgentTaskInput): Promise<PreparedAgentTask> {
+export async function prepareAgentTask(database: SqliteDatabase, input: PrepareAgentTaskInput, host: { akinatorMemory?: ProbeConfig } = {}): Promise<PreparedAgentTask> {
   const requestId = taskRequestId(input.requestId);
   const maxContextChars = taskContextCharacterBudget(input.maxContextChars);
   const { project, executionContext } = await requireProject(database, input.cwd);
@@ -906,7 +911,18 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
     constraints: hints.constraints ?? null,
   };
   const runKey = `dsh-task-prepare-${canonicalContentHash({ version: 1, requestId })}`;
+  const memoryConfig = AkinatorMemoryConfig.parse(host.akinatorMemory ?? {});
+  const memoryAllowed = memoryReasoningCapabilityAvailability(input.capabilities) === 'available'
+    && !input.signal?.aborted && !hasBlockingRequiredCapability(resolveCapabilities({
+      task: input.task, profile: deriveProfile(input.task, profileHints), recommendedTags: [], capabilities: input.capabilities, memoryUse: 'none',
+    }));
+  const scope = { workspace: project.workspace, repositoryId: project.repositoryId,
+    repositoryRoot: project.repositoryRoot, allowed: memoryAllowed, verifiedTargets: [] as string[] };
+  if (shouldProbe(deriveProfile(input.task, profileHints), memoryConfig, scope)) {
+    scope.verifiedTargets = verifyTaskTargets(input.task, project.repositoryRoot, executionContext.canonicalCwd);
+  }
   const intakeService = new DshRunIntakeService(database, {
+    akinatorMemory: memoryConfig, memoryScope: scope,
     onRunCreatedInTransaction: ({ database: transactionDatabase, runId, workspace, dshSessionId, now }) => {
       if (input.executionSelection) initializeExecutionSelection(transactionDatabase, runId);
       if (input.sessionOwnership || input.deepSelection) claimExecutionOwner(transactionDatabase, {
@@ -947,7 +963,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
     },
   });
   authoritativeTaskRun(database, opened.runId);
-  const context = await getAkinatorContextService(database, {
+  const context = await getAkinatorStateService(database, {
     workspace: project.workspace,
     sessionId: opened.intakeSessionId,
   });
@@ -973,6 +989,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
         prepared.executionFrame = frame;
       } catch { /* optional support cannot veto intake, including old schemas */ }
     }
+    attachMemoryHints(database, prepared, input.capabilities, host.akinatorMemory);
     return prepared;
   } catch (error) {
     if (input.signal?.aborted) return failTaskRunAfterAbort(database, opened.runId, error);
@@ -980,7 +997,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
   }
 }
 
-export async function answerAgentTask(database: SqliteDatabase, input: AnswerAgentTaskInput): Promise<PreparedAgentTask> {
+export async function answerAgentTask(database: SqliteDatabase, input: AnswerAgentTaskInput, host: { akinatorMemory?: ProbeConfig } = {}): Promise<PreparedAgentTask> {
   const maxContextChars = taskContextCharacterBudget(input.maxContextChars);
   const { project, executionContext } = await requireRegisteredProjectReadOnly(database, input.cwd);
   await drainEmbeddingsBeforeRetrieval(input.embeddingRuntime, project.workspace);
@@ -1010,12 +1027,12 @@ export async function answerAgentTask(database: SqliteDatabase, input: AnswerAge
     },
     { assertBeforeAnswer: () => assertRegisteredProjectLocation(database, project) },
   );
-  const context = await getAkinatorContextService(database, {
+  const context = await getAkinatorStateService(database, {
     workspace: project.workspace,
     sessionId: answered.intakeSessionId,
   });
   try {
-    return await finalizeAgentTask({
+    const prepared = await finalizeAgentTask({
       database,
       project,
       executionContext,
@@ -1029,8 +1046,19 @@ export async function answerAgentTask(database: SqliteDatabase, input: AnswerAge
       ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     }, input.dshSessionId);
+    attachMemoryHints(database, prepared, input.capabilities, host.akinatorMemory);
+    return prepared;
   } catch (error) {
     if (input.signal?.aborted) return failTaskRunAfterAbort(database, answered.runId, error);
     throw error;
   }
+}
+
+function attachMemoryHints(database: SqliteDatabase, prepared: PreparedAgentTask, capabilities: unknown, config?: ProbeConfig): void {
+  const enabled = (config?.mode === 'suggest' || config?.mode === 'resolve')
+    && memoryReasoningCapabilityAvailability(capabilities) === 'available'
+    && prepared.nextAction === 'answer_from_evidence_or_ask_user';
+  const hints = readMemoryHints(database, { runId: prepared.run.runId, workspace: prepared.project.workspace,
+    repositoryId: prepared.project.repositoryId, enabled }).filter(hint => prepared.intake.profile[hint.field] === null);
+  if (hints.length) prepared.intake.memoryHints = hints;
 }

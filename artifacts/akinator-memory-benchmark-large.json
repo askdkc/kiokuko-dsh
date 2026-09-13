@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "seed": "synthetic-profile-v1",
+  "node": "v26.5.0",
+  "sqlite": "3.53.4",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "entries": 100000,
+  "profiles": 10000,
+  "measurements": [
+    {
+      "name": "old-full-tag-scan",
+      "samples": 2,
+      "firstMs": 12565.823583999998,
+      "warmP50Ms": 12565.823583999998,
+      "p95Ms": 12565.823583999998,
+      "cpuMs": 25362.72,
+      "sql": 600001,
+      "entryReads": 100000,
+      "profileReads": 0,
+      "scannedCandidates": null,
+      "expandedProfiles": null,
+      "status": null
+    },
+    {
+      "name": "indexed-tag-scan",
+      "samples": 5,
+      "firstMs": 1.8507499999832362,
+      "warmP50Ms": 1.510999999998603,
+      "p95Ms": 1.8507499999832362,
+      "cpuMs": 7.947,
+      "sql": 73,
+      "entryReads": 12,
+      "profileReads": 0,
+      "scannedCandidates": null,
+      "expandedProfiles": null,
+      "status": null
+    },
+    {
+      "name": "probe-off",
+      "samples": 5,
+      "firstMs": 0.04808300000149757,
+      "warmP50Ms": 0.0023330000112764537,
+      "p95Ms": 0.04808300000149757,
+      "cpuMs": 0.118,
+      "sql": 0,
+      "entryReads": 0,
+      "profileReads": 0,
+      "scannedCandidates": 0,
+      "expandedProfiles": 0,
+      "status": "skipped"
+    },
+    {
+      "name": "probe-shadow",
+      "samples": 5,
+      "firstMs": 11.145749999966938,
+      "warmP50Ms": 10.640500000037719,
+      "p95Ms": 11.145749999966938,
+      "cpuMs": 64.196,
+      "sql": 11,
+      "entryReads": 0,
+      "profileReads": 1,
+      "scannedCandidates": 1,
+      "expandedProfiles": 1,
+      "status": "complete"
+    },
+    {
+      "name": "probe-suggest",
+      "samples": 5,
+      "firstMs": 10.71483300003456,
+      "warmP50Ms": 10.19866599998204,
+      "p95Ms": 10.71483300003456,
+      "cpuMs": 51.277,
+      "sql": 11,
+      "entryReads": 0,
+      "profileReads": 1,
+      "scannedCandidates": 1,
+      "expandedProfiles": 1,
+      "status": "complete"
+    },
+    {
+      "name": "probe-resolve",
+      "samples": 5,
+      "firstMs": 10.191125000012107,
+      "warmP50Ms": 10.191125000012107,
+      "p95Ms": 10.508874999999534,
+      "cpuMs": 51.048,
+      "sql": 11,
+      "entryReads": 0,
+      "profileReads": 1,
+      "scannedCandidates": 1,
+      "expandedProfiles": 1,
+      "status": "complete"
+    }
+  ],
+  "stateLookup": {
+    "sql": 1,
+    "entryReads": 0,
+    "profileReads": 1
+  },
+  "eventLoopDelayMaxMs": 369.623039,
+  "synchronousWorkloadTimerDelayMs": 37837.854249999975,
+  "prepareMeasurements": [
+    {
+      "mode": "off",
+      "elapsedMs": 368.8244999999879,
+      "writeTransactionMs": 62.31708399992203,
+      "sql": 89,
+      "entryReads": 0,
+      "profileReads": 7,
+      "status": "blocked",
+      "errorCode": "INTEGRITY_ERROR",
+      "reason": "existing-context-selection-state-bound"
+    }
+  ],
+  "rssMiB": 766.015625,
+  "limitations": [
+    "In-memory SQLite, first-query/warm samples; not disk cold-cache measurements.",
+    "Event-loop delay covers the combined synchronous search workload, including the baseline.",
+    "Prepare measurements use explicit grounded inputs, local synthetic entries, discovery off and no embedding runtime; no network or model latency."
+  ]
+}

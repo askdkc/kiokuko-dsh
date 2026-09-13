@@ -2,7 +2,7 @@ import { executionObservation } from './evolution-observation.js'
 import { saveEvolutionObservation, saveSessionNotice } from './plugin-records.js'
 import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution/contracts.js'
 import { evolutionStatus } from '../memory/evolution/store.js'
-import { OrcaConfig, EfficiencyConfig, FinalizationConfig } from './config.js'
+import { OrcaConfig, EfficiencyConfig, FinalizationConfig, AkinatorMemoryConfig } from './config.js'
 import { DshEfficiencyObserver, mountDshEfficiencyObserver, type FinalizationInputMode } from './efficiency.js'
 import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
 import { selectExecution, ExecutionSelectionPending } from './model-selection-ui.js'
@@ -156,6 +156,7 @@ interface AdapterContext extends Context {
 
 export interface DshHostAdapterOptions {
   readonly deepPlanning?: unknown
+  readonly akinatorMemory?: import('zod').z.input<typeof AkinatorMemoryConfig>
   readonly efficiency?: import('zod').z.input<typeof EfficiencyConfig>
   readonly memoryEvolution?: import('zod').z.input<typeof MemoryEvolutionConfig>
   readonly finalization?: import('zod').z.input<typeof FinalizationConfig>
@@ -411,6 +412,7 @@ function operationName(value: string): value is typeof DSH_MODEL_FACING_OPERATIO
 }
 
 export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOptions = {}): DshHostAdapter {
+  const akinatorMemoryConfig = AkinatorMemoryConfig.parse(options.akinatorMemory ?? {})
   const efficiencyConfig = EfficiencyConfig.parse(options.efficiency ?? {})
   const evolutionConfig = MemoryEvolutionConfig.parse(options.memoryEvolution ?? {})
   const finalizationConfig = FinalizationConfig.parse(options.finalization ?? {})
@@ -1037,6 +1039,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     userQuestions === undefined ? undefined : createDshIntakeAnswerer(userQuestions),
     (context) => capabilityCatalog(skills, tools, context),
     true,
+    akinatorMemoryConfig,
   )
   const currentSession = (sessionId: string): TurnRecord | undefined => latestBySession.get(sessionId)
   const currentForAgentEvent = (agentId: string, sessionId?: string, turn?: number, nativeSession?: object, nativeAgent?: object): TurnRecord | undefined => {
