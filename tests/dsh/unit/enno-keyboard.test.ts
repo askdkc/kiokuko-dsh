@@ -15,12 +15,12 @@ const question = (id = 'enno-model-zenki', count = 24) => ({
   options: Array.from({ length: count }, (_, i) => ({ label: `Option ${i + 1}` })),
 })
 
-function clientHarness(platform = 'Linux x86_64') {
+function clientHarness(platform = 'Linux x86_64', userAgent = '') {
   const globals = globalThis as unknown as Record<string, any>
   const names = ['createSnapshotStore', 'jsx', 'jsxs', 'useState', 'useRef', 'useEffect']
   const previous = names.map(name => globals[name])
   const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
-  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { platform } })
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { platform, userAgent } })
   const listeners = new Set<(event: any) => void>()
   let visible = true
   const ownerDocument = {
@@ -174,6 +174,30 @@ test('platform shortcuts select from outside the card, show matching hints, and 
       assert.equal(h.listenerCount, 0, 'unmount releases the document shortcut listener')
     } finally { h.restore() }
   }
+})
+
+test('macOS Safari uses Control+digit instead of its reserved Command+digit shortcut', () => {
+  const safari = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15'
+  const h = clientHarness('MacIntel', safari)
+  try {
+    const card = h.mount({ kind: 'question', key: 'safari-shortcut', questions: [question('taskType', 4)],
+      async answer() {}, async cancel() {} })
+    let tree = card.render()
+    const hints = descendants(tree).filter(node => node.component === 'kbd')
+    assert.deepEqual(hints.map(node => node.props.children), ['Ctrl+1', 'Ctrl+2', 'Ctrl+3', 'Ctrl+4'])
+    assert.ok(descendants(tree).some(node => node.props?.children === 'Ctrl+1〜4で選択、Enterで確定。'))
+
+    h.documentKey(key('2', { metaKey: true, preventDefault() { assert.fail('Safari Command+digit stays reserved') } }))
+    assert.equal(descendants(card.render()).some(node => node.props?.['aria-pressed']), false)
+
+    let prevented = 0
+    h.documentKey(key('2', { ctrlKey: true, preventDefault() { prevented++ } }))
+    assert.equal(prevented, 1)
+    tree = card.render()
+    const chosen = descendants(tree).filter(node => node.props?.['aria-pressed'])
+    assert.equal(chosen.length, 1)
+    assert.equal(chosen[0].props['aria-keyshortcuts'], '2 Control+2')
+  } finally { h.restore() }
 })
 
 test('modified shortcuts reject IME and unsupported keys, reset long ordinals, and ignore hidden cards', async () => {

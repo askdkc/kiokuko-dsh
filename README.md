@@ -2,16 +2,18 @@
 # Kiokuko(記憶庫) DeepSeek Harness Plugin
 [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [한국어](README.ko.md)
 
-Kiokuko adds project memory, planning, and verification support to
+Kiokuko adds memory, planning, verification, and observability to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
-OrcaReplay records model/tool activity for inspection and HTML export.
 
+## Features
 
-For new coding tasks, choose normal execution or 役小角(enno-oduno). Enno offers model templates and role assignments from configured DSH models. [Model selection and connection limits](docs/model-selection.md).
-
-Use `/deep-planning <problem>` for bounded, read-only investigation and planning with four agent roles. It preserves inputs, supports pause/recovery, and returns partial answers when its estimated budget is exhausted. [Commands, budgets and recovery](docs/deep-planning.md).
-
-DeepSeek, Kimi, GLM, Qwen, HY/Hunyuan, MiMo and MiniMax agents automatically receive the bundled Japanese writing Skill. [Application rules and model identification](docs/japanese-output.md).
+- **Execution modes** — Choose normal execution or 役小角(enno-oduno) for role-based planning and verification. [Details](docs/model-selection.md)
+- **Project memory** — Retrieve useful project knowledge for later work. [Concepts](docs/concepts.md)
+- **Deep planning** — Run bounded, read-only investigation with four roles. [Usage](docs/deep-planning.md)
+- **Continuity** — Disabled by default. Set `continuity.mode: active` to summarize recent execution evidence for the model. [Setup](docs/continuity.md)
+- **Memory evolution** — Turn completed work into reusable episode and lesson candidates. [Settings](docs/memory-evolution.md)
+- **OrcaReplay** — Record model/tool activity and export it as HTML. [Settings and commands](docs/orca-recording.md)
+- **Japanese output** — Give supported models a bundled Skill for natural Japanese. [Details](docs/japanese-output.md)
 
 ## Install and use
 
@@ -28,15 +30,6 @@ If you use a globally installed `dsh` CLI, omit `pnpm` from the commands.
 Enter your task normally; no Kiokuko setup command is needed.
 For GitHub/local installation, see the [plugin guide](docs/dsh-plugin.md).
 
-OrcaReplay is configured automatically; **no manual setup is required**. Every chat records detailed logs without asking.
-Recording saves model responses and tool results to `.orca/runs/` in the session workspace. A decision is remembered per session, so `/kioku-orca stop` keeps that chat unrecorded; set `orca.askOnStart: true` to ask at the start of each chat instead.
-
-- `/kioku-orca start`: start recording manually or resume after stopping. Not needed unless this chat was stopped earlier; past activity is not captured.
-- `/kioku-orca status`: briefly show the recording state, storage location, and next action. Use `/kioku-orca status --json` for diagnostic details.
-
-Use `/kioku-orca stop` to finalize the log, `list` to find its run ID, `show <run ID>` to inspect it, and `export <run ID>` to create HTML (all under `/kioku-orca`).
-To disable recording, set `orca.enabled: false` and reload. See [recording settings and commands](docs/orca-recording.md).
-
 ## Update
 
 Finish active tasks and stop DSH before updating. Update the npm-installed plugin:
@@ -44,6 +37,17 @@ Finish active tasks and stop DSH before updating. Update the npm-installed plugi
 ```bash
 pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
+```
+
+Kiokuko releases frequently, and pnpm 11 applies a 24-hour
+[`minimumReleaseAge`](https://pnpm.io/settings/dependency-resolution#minimumreleaseage)
+by default. If `update --latest` keeps the previous version, add Kiokuko to
+`minimumReleaseAgeExclude` in `~/.dsh/profiles/web/pnpm-workspace.yaml` (not
+`pnpm-lock.yaml`), then run the update command again:
+
+```yaml
+minimumReleaseAgeExclude:
+  - kiokuko-dsh
 ```
 
 At startup, all eight bundled Skills (including Japanese output) and their references are synchronized to `~/.agents/skills/`. Missing files are created and managed copies are updated; unmanaged files are preserved. Other agents must reload their Skill catalog.
