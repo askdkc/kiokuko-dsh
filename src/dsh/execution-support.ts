@@ -1,4 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { realpathSync } from 'node:fs'
+import { retainedEvents } from './context-projection.js'
+import { ContinuityConfig, renderContinuationView, type ContinuityProjection } from '../context/continuity-view.js'
+import { adaptContinuity, type ContinuitySources } from './continuity-adapter.js'
+import type { EnnoOdunoState, EnnoRunSnapshot } from '../enno-oduno/types.js'
+import type { ContinuityObservation } from './efficiency.js'
 import type { DshRuntime } from './runtime.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 import { canonicalContentHash } from '../serialization/validate.js'
@@ -20,6 +26,7 @@ export interface ExecutionBinding {
   terminal: boolean
   chat: boolean
   generation: string
+  ennoState?: EnnoOdunoState
 }
 interface SupportState {
   binding: ExecutionBinding
@@ -29,7 +36,9 @@ interface SupportState {
   pending: ExecutionEvidence[]
   pendingIds: Set<string>
   evidence: ExecutionEvidence[]
-  projected?: string
+  enno?: ContinuitySources['enno']
+  projection?: ContinuityProjection
+  canonicalWorkspace?: string
   loaded: boolean
   serial: number
   confirmations: Map<number, string>
@@ -45,7 +54,20 @@ export class DshExecutionSupport {
   readonly #disposers: (() => void)[] = []
   readonly #started = new WeakMap<object, { binding: ExecutionBinding; epoch: number; warnings: string[] }>()
   #disposed = false
-  constructor(private readonly runtime: Pick<DshRuntime, 'withDatabase'>) {}
+  readonly #config: ContinuityConfig
+  constructor(private readonly runtime: Pick<DshRuntime, 'withDatabase'>,
+    private readonly options: { continuity?: import('zod').z.input<typeof ContinuityConfig>; observe?: (value: ContinuityObservation) => void } = {}) {
+    this.#config = ContinuityConfig.parse(options.continuity ?? {})
+  }
+
+  /** Consume only the source read by the host at this request boundary. */
+  ennoSource(sessionId: string, snapshot: EnnoRunSnapshot, state: EnnoOdunoState): void {
+    if (this.#config.mode === 'off') return
+    const support = this.#states.get(sessionId)
+    if (!support || snapshot.runId !== support.binding.runId || snapshot.dshSessionId !== sessionId
+      || canonicalContentHash(state) !== canonicalContentHash(support.binding.ennoState ?? null)) return
+    support.enno = { snapshot, state }
+  }
 
   async refresh(binding: ExecutionBinding, human: boolean): Promise<void> {
     if (this.#disposed) return
@@ -53,10 +75,16 @@ export class DshExecutionSupport {
     let state = previous?.binding.runId === binding.runId ? previous : undefined
     if (!state) state = { binding, degraded: false, monitor: newExplorationState(binding.generation), pending: [], pendingIds: new Set(), evidence: [], loaded: false, serial: 0, confirmations: new Map() }
     state.binding = binding
+    delete state.enno
+    delete state.projection
     this.#states.set(binding.sessionId, state)
     if (binding.chat) return
     const current = state
     const serial = ++current.serial
+    if (this.#config.mode !== 'off') {
+      delete current.canonicalWorkspace
+      try { current.canonicalWorkspace = realpathSync(binding.cwd) } catch { /* Only the supplemental owner is unavailable. */ }
+    }
     try {
       const pending = [...current.pending]
       const committed = await this.runtime.withDatabase(database => withImmediateTransaction(database, () => {
@@ -187,8 +215,26 @@ export class DshExecutionSupport {
     if (!state || state.binding.chat) return ''
     if (state.degraded) return 'Kiokuko execution support is degraded. Do not claim path enforcement or evidence coverage is complete. Preserve the user request; explain any affected operation separately.'
     const evidence = state.evidence.slice(-16).map(item => `${item.id.slice(0, 12)} ${item.operation.paths.join(', ').slice(0, 512)} ${JSON.stringify(item.operation.range).slice(0, 256)}: ${item.presentation} (tool success: ${item.toolSucceeded ?? 'unknown'}; acquired range: ${JSON.stringify(item.acquiredRange ?? null)}; acquired: ${item.acquisition ?? 'unknown'}; source event: ${item.sourceSeq ?? 'unknown'}; result digest: ${item.digest.slice(0, 12)})`)
-    return [state.frame ? executionFrameText(state.frame) : '', state.binding.terminal ? 'Terminal state: report recorded results now. Do not run more tools.' : state.monitor.notice ?? '',
+    const legacy = [state.frame ? executionFrameText(state.frame) : '', state.binding.terminal ? 'Terminal state: report recorded results now. Do not run more tools.' : state.monitor.notice ?? '',
       evidence.length ? `Recent evidence presentation (specified ranges only):\n${evidence.join('\n').slice(0, 4096)}` : ''].filter(Boolean).join('\n')
+    if (this.#config.mode === 'off') return legacy
+    try {
+      if (!state.canonicalWorkspace) throw new Error('Continuity workspace unavailable')
+      const enno = state.binding.ennoState
+      const view = adaptContinuity({ owner: { runId: state.binding.runId, sessionId, workspace: state.canonicalWorkspace ?? state.binding.cwd,
+        mode: enno?.applicable ? 'enno' : 'normal', workUnitId: enno?.directive?.workUnit?.id ?? null, role: enno?.currentRole ?? null },
+        generation: state.binding.generation, workspaceAlias: state.binding.cwd, frame: state.frame, evidence: state.evidence, enno: state.enno })
+      const projection = renderContinuationView(view, this.#config)
+      state.projection = projection
+      if (this.#config.mode === 'shadow') return legacy
+      return [state.frame ? executionFrameText(state.frame) : '', state.binding.terminal
+        ? 'Terminal state: report recorded results now. Do not run more tools.' : state.monitor.notice ?? '', projection.text].filter(Boolean).join('\n')
+    } catch {
+      delete state.projection
+      return this.#config.mode === 'shadow' ? legacy : [state.frame ? executionFrameText(state.frame) : '',
+        state.binding.terminal ? 'Terminal state: report recorded results now. Do not run more tools.' : state.monitor.notice ?? '',
+        'Continuity unavailable. Preserve the original request and current directive; no completeness or verification claim.'].filter(Boolean).join('\n')
+    }
   }
 
   /** Intake runs after native assembly. Refresh that same snapshot before commit,
@@ -201,15 +247,14 @@ export class DshExecutionSupport {
       const isSnapshot = (message: any) => message?.source?.plugin === '@deepseek-ai/dsh-system-prompt'
         && message.source.form === 'snapshot' && Array.isArray(message.source.sections)
       const current = [...messages].reverse().find(isSnapshot)
-      const retained = current ? undefined : (state.binding.nativeSession as any)?.snapshotEvents?.()?.findLast((event: any) =>
+      const retained: any = current ? undefined : [...retainedEvents((state.binding.nativeSession ?? {}) as any)].reverse().find((event: any) =>
         isSnapshot(event.data?.message ?? event.data))
       const before = current ?? retained?.data?.message ?? retained?.data
       const sections = [...(before?.source.sections ?? []).filter((item: any) => item.name !== 'kiokuko:execution'),
         { name: 'kiokuko:execution', text }]
       const body = 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n'
         + sections.map(item => item.text).join('\n\n')
-      if (!current && (before?.content?.[0]?.text === body || (!before && state.projected === body))) return messages
-      state.projected = body
+      if (!current && before?.content?.[0]?.text === body) return messages
       const snapshot = { ...(current ?? { id: randomUUID(), role: 'user' }),
         content: [{ type: 'text', text: body }], source: {
           kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot', sections,
@@ -294,6 +339,15 @@ export class DshExecutionSupport {
       try {
         const state = this.#states.get(request.sessionId)
         if (state && Array.isArray(request.messages)) {
+          if (this.#config.mode !== 'off' && state.projection) {
+            try {
+              const projection = state.projection
+              const copies = request.messages.reduce((sum: number, message: any) => sum + (Array.isArray(message.content)
+                ? message.content.filter((block: any) => block.type === 'text' && typeof block.text === 'string' && block.text.includes(projection.text)).length : 0), 0)
+              this.options.observe?.({ mode: this.#config.mode, bytes: projection.bytes, items: projection.items,
+                omittedItems: projection.omittedItems, coverage: projection.coverage, copiesInRequest: copies })
+            } catch { /* numeric observations cannot change the stream */ }
+          }
           for (const evidence of [...state.evidence, ...state.pending]) {
             let visible: unknown
             for (const message of request.messages) {
@@ -307,10 +361,11 @@ export class DshExecutionSupport {
           }
           if (!state.binding.terminal) state.monitor.presented = [...state.monitor.warned]
           const observed = state.evidence.map(item => ({ ...item }))
+          const observedBinding = state.binding
           void this.runtime.withDatabase(db => {
             for (const item of observed) db.prepare('UPDATE dsh_execution_evidence SET evidence_json = ? WHERE run_id = ? AND evidence_id = ?')
-              .run(JSON.stringify(item), state.binding.runId, item.id)
-          }).catch(() => { for (const item of state.evidence) item.presentation = 'unknown' })
+              .run(JSON.stringify(item), observedBinding.runId, item.id)
+          }).catch(() => { if (state.binding === observedBinding) for (const item of state.evidence) item.presentation = 'unknown' })
         }
       } catch { /* observational failure must not change the request */ }
       return next()

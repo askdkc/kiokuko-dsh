@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "scope": "context-recovery-probe",
+  "scenarios": [
+    {"id":"compaction", "prompt":"A partial file read was compacted. Return JSON {\"documentComplete\":boolean,\"currentPresentation\":string} for what is established now.", "evidence":{"acquisition":"partial","presentation":"full"}, "expected":{"documentComplete":false,"currentPresentation":"unknown"}},
+    {"id":"steering", "prompt":"The user replaced the prior completion condition with 'integration tests'. Return JSON {\"completion\":string} using the current condition.", "conditions":"done when: integration tests", "expected":{"completion":"integration tests"}},
+    {"id":"reverification", "prompt":"A previously passing test preceded an unverified code change. Return JSON {\"currentlyVerified\":boolean}.", "expected":{"currentlyVerified":false}},
+    {"id":"repeat-read", "prompt":"The recorded read acquired only a requested range. Return JSON {\"wholeDocumentRead\":boolean}.", "evidence":{"acquisition":"full","presentation":"full"}, "expected":{"wholeDocumentRead":false}},
+    {"id":"dependency-report", "prompt":"A dependency worker reported completion, without host verification. Return JSON {\"hostVerified\":boolean}.", "report":"Implementation complete; all tests pass (worker claim only)", "expected":{"hostVerified":false}},
+    {"id":"resume", "prompt":"This is the same run after pause/resume. Prior tool evidence is recorded. No tool was re-executed by the resume itself. Return JSON {\"replayedTools\":boolean,\"currentPresentation\":string}.", "evidence":{"acquisition":"full","presentation":"full"}, "expected":{"replayedTools":false,"currentPresentation":"unknown"}}
+  ]
+}

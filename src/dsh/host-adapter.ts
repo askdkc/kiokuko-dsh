@@ -2,7 +2,7 @@ import { executionObservation } from './evolution-observation.js'
 import { saveEvolutionObservation, saveSessionNotice } from './plugin-records.js'
 import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution/contracts.js'
 import { evolutionStatus } from '../memory/evolution/store.js'
-import { OrcaConfig, EfficiencyConfig, FinalizationConfig, AkinatorMemoryConfig } from './config.js'
+import { OrcaConfig, EfficiencyConfig, FinalizationConfig, AkinatorMemoryConfig, ContinuityConfig } from './config.js'
 import { DshEfficiencyObserver, mountDshEfficiencyObserver, type FinalizationInputMode } from './efficiency.js'
 import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
 import { selectExecution, ExecutionSelectionPending } from './model-selection-ui.js'
@@ -158,6 +158,7 @@ export interface DshHostAdapterOptions {
   readonly deepPlanning?: unknown
   readonly akinatorMemory?: import('zod').z.input<typeof AkinatorMemoryConfig>
   readonly efficiency?: import('zod').z.input<typeof EfficiencyConfig>
+  readonly continuity?: import('zod').z.input<typeof ContinuityConfig>
   readonly memoryEvolution?: import('zod').z.input<typeof MemoryEvolutionConfig>
   readonly finalization?: import('zod').z.input<typeof FinalizationConfig>
   readonly modelRoutes?: readonly ModelRoute[]
@@ -414,6 +415,7 @@ function operationName(value: string): value is typeof DSH_MODEL_FACING_OPERATIO
 export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOptions = {}): DshHostAdapter {
   const akinatorMemoryConfig = AkinatorMemoryConfig.parse(options.akinatorMemory ?? {})
   const efficiencyConfig = EfficiencyConfig.parse(options.efficiency ?? {})
+  const continuityConfig = ContinuityConfig.parse(options.continuity ?? {})
   const evolutionConfig = MemoryEvolutionConfig.parse(options.memoryEvolution ?? {})
   const finalizationConfig = FinalizationConfig.parse(options.finalization ?? {})
   const native = ctx as unknown as AdapterContext
@@ -553,12 +555,14 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }>()
   const resumedLeases = new Map<string, NonNullable<EnnoOperationResponse['executionLease']>>()
   const policy = new DshToolPolicy({ phase: 'intake', runId: 'pending', workspace: 'pending', orchestrationId: 'pending', revision: 1, routeEpoch: 0 })
-  const executionSupport = new DshExecutionSupport(runtime)
+  const executionSupport = new DshExecutionSupport(runtime, { continuity: continuityConfig,
+    observe: value => efficiency?.recordContinuity(value) })
   executionSupport.mount({ on: (name, listener, options) => (ctx as any).on(name, listener, options),
     ...(tools === undefined ? {} : { tools: { guard: tools.guard.bind(tools) } }) })
   const executionBinding = (item: TurnRecord): ExecutionBinding => ({
     runId: item.runId, sessionId: item.sessionId, nativeAgent: item.nativeAgent, nativeSession: item.nativeSession,
     cwd: item.cwd, task: item.task, turn: item.turn,
+    ennoState: item.prepared.ennoOduno,
     chat: item.prepared.intake.profile.taskType === 'chat',
     terminal: item.closed || ['complete', 'report_blocker'].includes(item.prepared.ennoOduno.nextAction)
       && item.prepared.ennoOduno.applicable,
@@ -1370,7 +1374,17 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       soulInSystemPrompt: ctx.get('systemPrompt', false) !== undefined,
       userTaskInConversation: true,
     })
-    return projectDshContext([...messages, ...await deepPlanning.previousReport(event.sessionId)], sessionEventSource(event.nativeSession), pending)
+    const previousReport = await deepPlanning.previousReport(event.sessionId)
+    if (continuityConfig.mode !== 'off' && prepared.ennoOduno.applicable && !executionBinding(item).terminal && !executionSupport.paused(event.sessionId)) {
+      // One service read at the request boundary; reuse its verdict without running verifiers.
+      try {
+        const snapshot = await runtime.withDatabase(db => readEnnoSnapshot(db, {
+          runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
+        }))
+        if (item.prepared === prepared) executionSupport.ennoSource(event.sessionId, snapshot, stateForSnapshot(snapshot))
+      } catch { /* Optional projection is unavailable; existing authority guards still apply. */ }
+    }
+    return projectDshContext([...messages, ...previousReport], sessionEventSource(event.nativeSession), pending)
   }
 
   const toolHost: DshToolHost = {

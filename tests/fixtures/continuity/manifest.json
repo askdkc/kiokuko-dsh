@@ -1,0 +1,10 @@
+{
+  "id": "continuity-v1",
+  "sha256": "fa25d34c414f0a458dc411a10f8cf5ddefb8bacecb8ef08465290bc577412515",
+  "scoring": "Exact JSON fields fixed in scenarios.json; task-paired bootstrap across six context recovery probes.",
+  "groups": [
+    "A: baseline execution evidence",
+    "B: continuity projection"
+  ],
+  "realModelStatus": "unmeasured"
+}

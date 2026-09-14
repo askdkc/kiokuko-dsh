@@ -143,7 +143,9 @@
     "setup:dsh": "node scripts/setup-dsh.mjs",
     "memory:backfill:akinator": "node scripts/backfill-akinator-memory.mjs",
     "test:evaluation:akinator": "npm run build && node scripts/run-akinator-memory-evaluation.mjs",
-    "test:benchmark:akinator": "npm run build && node scripts/run-akinator-memory-benchmark.mjs"
+    "test:benchmark:akinator": "npm run build && node scripts/run-akinator-memory-benchmark.mjs",
+    "test:continuity": "node scripts/run-tests.mjs tests/dsh/unit/continuity tests/dsh/integration/continuity",
+    "test:evaluation:continuity": "node --import tsx scripts/run-continuity-evaluation.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-session-format": "0.1.5-rc.1",

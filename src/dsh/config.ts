@@ -3,6 +3,8 @@ export { AkinatorMemoryConfig }
 import { MemoryEvolutionConfig } from '../memory/evolution/contracts.js'
 export { MemoryEvolutionConfig }
 import { z } from 'zod'
+import { ContinuityConfig } from '../context/continuity-view.js'
+export { ContinuityConfig }
 import { ModelRouteSchema } from './model-configuration.js'
 import { DeepThinkerConfigSchema } from '../deep-thinker/core/contracts.js'
 
@@ -40,6 +42,7 @@ export const Config = z.object({
   modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),
   orca: OrcaConfig.prefault({}),
   efficiency: EfficiencyConfig.prefault({}),
+  continuity: ContinuityConfig.prefault({}),
   finalization: FinalizationConfig.prefault({}),
   memoryEvolution: MemoryEvolutionConfig.prefault({}),
 })

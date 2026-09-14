@@ -5,6 +5,14 @@ import { findSecret } from '../memory/secrets.js'
 /** Prevent the finalizer's own observation from being counted again by the global hook. */
 export const finalizationObservationScope = new AsyncLocalStorage<boolean>()
 export type FinalizationInputMode = 'prefix_reuse' | 'bounded_evidence'
+export interface ContinuityObservation {
+  readonly mode: 'shadow' | 'active'
+  readonly bytes: number
+  readonly items: number
+  readonly omittedItems: number
+  readonly coverage: 'complete' | 'partial' | 'unavailable'
+  readonly copiesInRequest: number
+}
 export type EfficiencyTask = 'main' | 'child' | 'auxiliary' | 'memory-finalization'
 export interface EfficiencyBinding {
   readonly sessionId: string
@@ -67,6 +75,7 @@ export function modelLabel(value: unknown): string | null {
 /** Evaluation-only, bounded numeric observations. No prompts, files, timers or DB writes. */
 export class DshEfficiencyObserver {
   readonly #records: EfficiencyObservation[] = []
+  readonly #continuity: ContinuityObservation[] = []
   #evicted = 0
   #unattributed = 0
   #errors = 0
@@ -83,11 +92,19 @@ export class DshEfficiencyObserver {
     this.#records.push(Object.freeze({ ...observation, usage: Object.freeze({ ...observation.usage }),
       request: observation.request === null ? null : Object.freeze({ ...observation.request }) }))
   }
+  recordContinuity(observation: ContinuityObservation): void {
+    if (this.#closed) return
+    const { mode, bytes, items, omittedItems, coverage, copiesInRequest } = observation
+    if (!['shadow', 'active'].includes(mode) || !['complete', 'partial', 'unavailable'].includes(coverage)
+      || [bytes, items, omittedItems, copiesInRequest].some(value => !Number.isSafeInteger(value) || value < 0)) return
+    if (this.#continuity.length === this.capacity) this.#continuity.shift()
+    this.#continuity.push(Object.freeze({ mode, bytes, items, omittedItems, coverage, copiesInRequest }))
+  }
   snapshot() {
     return { format: 'dsh.efficiency.v1', coverage: 'observed_only', providerInternalRetries: 'unknown',
       wirePayloadConfirmed: false, tokenizer: null, evicted: this.#evicted, unattributed: this.#unattributed,
       observationErrors: this.#errors, streamCallsStarted: this.#started, activeStreams: this.#active,
-      discardedAfterClose: this.#discardedAfterClose, observations: [...this.#records] } as const
+      discardedAfterClose: this.#discardedAfterClose, observations: [...this.#records], continuity: [...this.#continuity] } as const
   }
   close(): void { this.#closed = true }
   unavailable(): void { this.#errors++; this.close() }

@@ -246,6 +246,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   const createAdapter = () => createDshHostAdapter(ctx, {
     modelRoutes: mockModelRoutes,
     efficiency: { observe: true },
+    continuity: { mode: finalMode === 'text' ? 'active' : 'off' },
     finalization: { inputMode: finalMode === 'text' ? 'bounded_evidence' : 'prefix_reuse' },
     repositoryRoot: fixtureRoot,
     databasePath,
@@ -509,6 +510,13 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     }
     await adapter.host.memoryFinalizer!.whenIdle()
     const observations = [...priorObservations, ...adapter.host.efficiency!.snapshot().observations]
+    if (finalMode === 'text') {
+      const texts = adapterScript.requests.flatMap((request: any) => request.messages.flatMap((message: any) =>
+        message.content.filter((block: any) => block.type === 'text').map((block: any) => block.text)))
+      assert.ok(texts.some((text: string) => text.includes('Continuity (host projection')))
+      assert.ok(texts.some((text: string) => text.includes('Recorded verifier') && text.includes('freshness is not established')))
+      assert.ok(adapter.host.efficiency!.snapshot().continuity.every(item => item.bytes <= 4096))
+    }
     assert.ok(observations.some(item => item.task === 'main'), 'native model requests are observed')
     assert.ok(observations.some(item => item.task === 'child' && item.parentSessionId === liveAgent.session.id && item.runId), 'delegated native usage retains its parent run binding')
     assert.ok(observations.some(item => item.task === 'memory-finalization' && item.status === 'completed'), 'post-completion auxiliary work is observed')

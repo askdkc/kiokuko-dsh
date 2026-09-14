@@ -1,5 +1,12 @@
 # DSH composition architecture
 
+Optional [continuity projection](continuity.md) derives a bounded read model from
+the existing execution frame/evidence and host-bound Enno snapshot. It occupies
+the existing dynamic `kiokuko:execution` section, adds no canonical state or
+worker, and leaves Deep planning and memory trust contracts unchanged. Default
+mode is `off`; retained-surface delivery correction applies to execution context
+in all modes. Native request observations contain numeric metadata only.
+
 `src/index.ts` is the primary package entrypoint; `./dsh` remains a compatible
 alias and `./client` owns the Web surface. Cordis mounts one composition that
 owns the intake gate, model-visible tools, durable boundary worker, run ledger,

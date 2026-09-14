@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "baselineCommit": "4094b061c6f713c6cde550b4b4cebe4bd8d715dd",
+  "node": "v26.7.0",
+  "npm": "11.19.0",
+  "dsh": "0.1.5-rc.1",
+  "packageLockSha256": "e69098f528dcfe57c476bd63013cdfb62d300675c4d7b52e30accc3a14c9a422",
+  "pnpmLockSha256": "57ab0fcf2b7c1b71aab73730b7ae73ad24d87dee8c249e194c9d93a201a5b1ba",
+  "scope": "Single scripted native research lifecycle per mode; timings are not performance evidence. off includes the independently reproduced retained-surface correction.",
+  "baselineChecks": {
+    "typecheck": "passed",
+    "existingFocusedTests": 16,
+    "compactionRegressionBeforeFix": "failed: expected one re-projected snapshot, got zero"
+  },
+  "nativeMeasurements": [
+    {
+      "continuity": "off",
+      "modelRequests": 10,
+      "reads": 5,
+      "writes": 0,
+      "requestBytes": [
+        35705,
+        36539,
+        73632,
+        74289,
+        89310,
+        105047,
+        121878,
+        35701,
+        81581,
+        99484
+      ],
+      "durationMs": 922.186875,
+      "providerTokens": null,
+      "mockUsageIsNotRealUsage": true,
+      "totalRequestBytes": 753166
+    },
+    {
+      "continuity": "shadow",
+      "modelRequests": 10,
+      "reads": 5,
+      "writes": 0,
+      "requestBytes": [
+        35705,
+        36539,
+        73632,
+        74289,
+        89310,
+        105047,
+        121878,
+        35701,
+        81581,
+        99484
+      ],
+      "durationMs": 726.484125,
+      "providerTokens": null,
+      "mockUsageIsNotRealUsage": true,
+      "totalRequestBytes": 753166
+    },
+    {
+      "continuity": "active",
+      "modelRequests": 10,
+      "reads": 5,
+      "writes": 0,
+      "requestBytes": [
+        35705,
+        36539,
+        74186,
+        74843,
+        90570,
+        107285,
+        125366,
+        35701,
+        83103,
+        102800
+      ],
+      "durationMs": 690.5362920000002,
+      "providerTokens": null,
+      "mockUsageIsNotRealUsage": true,
+      "totalRequestBytes": 766098
+    }
+  ],
+  "realModelEvaluation": "unmeasured",
+  "sqlCount": null,
+  "dbDurationMs": null,
+  "entryExpansions": null,
+  "providerCacheTokens": null,
+  "retrievalOptimization": "not implemented; no evidence that duplicate expansion dominates"
+}
