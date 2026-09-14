@@ -441,7 +441,10 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const question = pending.questions[0]
   const inputKind = questionInputKind(question)
   const mac = /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? '')
-  const shortcutModifier = mac ? 'Cmd' : 'Ctrl'
+  const userAgent = globalThis.navigator?.userAgent ?? ''
+  const safari = mac && /Safari\//u.test(userAgent) && !/(?:Chrome|Chromium|CriOS|Edg|OPR)\//u.test(userAgent)
+  const controlShortcut = !mac || safari
+  const shortcutModifier = controlShortcut ? 'Ctrl' : 'Cmd'
   const [draft, setDraft] = useState<IntakeDraft>(() => intakeDrafts.get(pending) ?? { selected: null, custom: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -500,7 +503,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const selectShortcut = (event: IntakeKeyEvent) => {
     if (busy || inFlight.current || event.repeat || event.isComposing || event.keyCode === 229
       || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || event.altKey || event.shiftKey
-      || !(mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return false
+      || !(controlShortcut ? event.ctrlKey && !event.metaKey : event.metaKey && !event.ctrlKey)) return false
     const digit = /^(?:Digit|Numpad)([1-9])$/u.exec(event.code ?? '')?.[1] ?? event.key
     if (!/^[1-9]$/u.test(digit) || Number(digit) > question.options.length) return false
     event.preventDefault(); event.stopPropagation()
@@ -519,7 +522,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
     }
     owner.addEventListener('keydown', listener, true)
     return () => owner.removeEventListener('keydown', listener, true)
-  }, [pending, busy, mac])
+  }, [pending, busy, controlShortcut])
   const keyDown = (event: IntakeKeyEvent & { target?: { tagName?: string; isContentEditable?: boolean } }) => {
     if (selectShortcut(event)) return
     if (busy || inFlight.current || event.repeat || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229
@@ -557,7 +560,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
           key: option.label, type: 'button', className: 'kiokuko-intake-option', disabled: busy,
           ref: (element: HTMLElement | null) => { optionElements.current[index] = element },
           'aria-pressed': draft.selected === index,
-          ...(index < 9 ? { 'aria-keyshortcuts': `${question.options.length <= 9 ? `${index + 1} ` : ''}${mac ? 'Meta' : 'Control'}+${index + 1}` } : {}),
+          ...(index < 9 ? { 'aria-keyshortcuts': `${question.options.length <= 9 ? `${index + 1} ` : ''}${controlShortcut ? 'Control' : 'Meta'}+${index + 1}` } : {}),
           onClick: () => update({ selected: index, custom: '' }),
           onKeyDown: (event: IntakeKeyEvent) => {
             if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || (intakeDrafts.get(pending) ?? draft).selected !== index) return

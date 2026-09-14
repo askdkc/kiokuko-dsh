@@ -2,15 +2,17 @@
 
 [English](README.md) | 日本語 | [简体中文](README.zh-CN.md) | [한국어](README.ko.md)
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) に、プロジェクトの記憶・作業計画・検証支援を追加するプラグインです。
-OrcaReplay でモデル・ツールの動作を記録し、内容の確認と HTML 出力もできます。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) に、記憶・計画・検証・動作記録を追加するプラグインです。
 
+## 機能
 
-新しい変更作業では、通常実行か役小角(enno-oduno)を選べます。役小角ではおすすめテンプレート、またはDSH設定済みモデルから役割ごとの構成を選択します。[モデル選択と接続上の制約](docs/model-selection.ja.md)
-
-`/deep-planning <問題>` は、四つの役割による読み取り専用の調査・分析・計画作成です。入力を保持し、一時停止・復旧に対応します。推定予算に達した場合も部分回答を返します。[操作・予算・復旧の仕様](docs/deep-planning.md)
-
-DeepSeek・Kimi・GLM・Qwen・HY/Hunyuan・MiMo・MiniMaxのAgentには、日本語を自然に整える同梱Skillを自動で渡します。[適用条件とモデル判定](docs/japanese-output.md)
+- **実行方式** — 通常実行と役小角(enno-oduno)を選べます。[詳細](docs/model-selection.ja.md)
+- **プロジェクト記憶** — 作業で得た知識を後のタスクで検索できます。[基本概念](docs/concepts.ja.md)
+- **Deep Planning** — 四つの役割で読み取り専用の調査・計画を行います。[使い方](docs/deep-planning.md)
+- **Continuity** — 既定では無効です。`continuity.mode: active` にすると、最近の実行記録を短くまとめてモデルへ渡します。[設定方法](docs/continuity.ja.md)
+- **記憶学習** — 完了した作業から再利用できる episode・教訓候補を作ります。[設定](docs/memory-evolution.md)
+- **OrcaReplay** — モデル・ツールの動作を記録し、HTML に出力できます。[設定とコマンド](docs/orca-recording.md)
+- **日本語出力** — 対応モデルへ自然な日本語を書く同梱 Skill を渡します。[詳細](docs/japanese-output.md)
 
 ## 導入と使い方
 
@@ -27,17 +29,6 @@ pnpm dsh web
 起動後は普通に依頼を入力します。Kiokuko 専用の setup 操作は不要です。
 GitHub・ローカルからの導入は [プラグインガイド](docs/dsh-plugin.md) を参照してください。
 
-OrcaReplay の機能設定は自動導入され、**手動設定は不要**です。各チャットは確認なしで詳細ログを記録します。
-記録すると、モデル応答やツール実行結果が作業プロジェクトの `.orca/runs/` に保存されます。判断はセッションごとに保持されるため、`/kioku-orca stop` したチャットは記録されないままです。毎回確認したい場合は `orca.askOnStart: true` を設定します。
-
-- `/kioku-orca start`: 手動で記録を開始、または停止後に再開します。そのチャットを停止していなければ実行不要です。過去の動作は記録されません。
-- `/kioku-orca status`: 記録状態・保存先・次の操作を短く表示します。診断用の詳細情報は `/kioku-orca status --json` で確認できます。
-
-`/kioku-orca stop` でログを確定後、`list` で run ID を確認し、`show <run ID>` で内容を表示、`export <run ID>` で HTML を出力できます（いずれも `/kioku-orca` に続けて入力）。
-無効にする場合は `orca.enabled: false` を設定して再読み込みします。詳細は [記録設定とコマンド](docs/orca-recording.md) を参照してください。
-
-終了した作業から episode と教訓候補を生成します。初期設定の `active` では、根拠が有効な候補を次のセッションの検索・自動注入に使います。候補生成だけにする場合は `observe`、停止する場合は `off` を指定します。状態は `/kioku-evolution status`、詳細は [記憶学習の設定・検証](docs/memory-evolution.md) を参照してください。
-
 ## 更新
 
 作業中のタスクを終えて DSH を停止してから更新します。npm 版の Kiokuko 本体の更新:
@@ -45,6 +36,17 @@ OrcaReplay の機能設定は自動導入され、**手動設定は不要**で�
 ```bash
 pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
+```
+
+Kiokuko は更新頻度が高く、pnpm 11 では公開後24時間未満のバージョンを
+[`minimumReleaseAge`](https://pnpm.io/settings/dependency-resolution#minimumreleaseage)
+により既定で選びません。`update --latest` を実行しても旧版のままになる場合は、
+`~/.dsh/profiles/web/pnpm-workspace.yaml`（`pnpm-lock.yaml` ではありません）の
+`minimumReleaseAgeExclude` に次を追加し、更新コマンドを再実行します。
+
+```yaml
+minimumReleaseAgeExclude:
+  - kiokuko-dsh
 ```
 
 起動時に、日本語出力を含む全8 Skillと参照ファイルを `~/.agents/skills/` へ同期します。不足分を作成し、管理対象の旧版を更新します。非管理ファイルは上書きしません。他のエージェントではSkillカタログの再読み込みが必要です。

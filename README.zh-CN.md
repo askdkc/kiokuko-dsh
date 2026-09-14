@@ -40,6 +40,17 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
 ```
 
+Kiokuko 更新频繁，而 pnpm 11 默认通过
+[`minimumReleaseAge`](https://pnpm.io/settings/dependency-resolution#minimumreleaseage)
+延迟选择发布不足24小时的版本。如果执行 `update --latest` 后仍停留在旧版本，请在
+`~/.dsh/profiles/web/pnpm-workspace.yaml`（不是 `pnpm-lock.yaml`）的
+`minimumReleaseAgeExclude` 中添加以下设置，然后重新执行更新命令：
+
+```yaml
+minimumReleaseAgeExclude:
+  - kiokuko-dsh
+```
+
 启动时会将包括日语输出在内的全部8个内置 Skill 及其引用文件同步到 `~/.agents/skills/`，创建缺失文件并更新受管理的副本，不覆盖非受管理文件。其他代理需要重新加载 Skill 目录。
 
 启动时也会更新启动目录中 `AGENTS.md` 的现有 Kiokuko 管理块，保留块外的指令。更新包后请重启 DSH。其他工作目录或旧副本的检查与修复请参阅[设置步骤](docs/dsh-plugin.md#what-setup-updates-and-when)。`kiokuko use` 不是 DSH 的设置命令。
