@@ -1,3 +1,4 @@
+import { startupRecoveryMessage } from './startup-recovery.js'
 import { mountDshOrcaCommand } from './orca-command-surface.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { Config, type Config as DshConfig } from './config.js'
@@ -59,6 +60,7 @@ export function mountDshRuntime(ctx: Context, runtime: DshRuntime): ReturnType<C
 export async function apply(ctx: Context, config: DshConfig): Promise<void> {
   try { await startDshPlugin(ctx, config) } catch (error) {
     console.error('[kiokuko-dsh] [crit] Plugin startup failed:', error instanceof Error ? error.message : String(error))
+    console.error(startupRecoveryMessage(process.argv, ctx.baseUrl))
     throw error
   }
 }

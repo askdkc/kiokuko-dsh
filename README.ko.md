@@ -67,4 +67,6 @@ pnpm dsh web
 허용하지만 기존 설치를 자동으로 업데이트하지는 않습니다. 업데이트 후 기록과 HTML 내보내기를 확인하세요.
 [업데이트 상세 안내](docs/dsh-plugin.md#update)
 
+DSH 업데이트 후 Kiokuko를 불러오지 못하면 [시작 오류 복구 절차](docs/dsh-plugin.md#startup-failure-after-a-dsh-update)에서 해당 프로필의 업데이트 및 재설치 명령을 확인하세요. 세션 로그와 Kiokuko 데이터베이스는 삭제하지 마세요. API 호환성 문제는 재설치만으로 해결되지 않을 수 있습니다.
+
 [문서](docs/README.md) · [권한](PERMISSIONS.md) · [MIT 라이선스](LICENSE)

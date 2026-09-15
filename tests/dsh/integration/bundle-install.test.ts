@@ -1,11 +1,12 @@
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { execFile, spawnSync } from 'node:child_process'
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
+import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import YAML from 'yaml'
 import * as plugin from '../../../src/dsh/index.js'
@@ -180,3 +181,71 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
 
 // Isolate the plugin's startup deployment from the user's Skill directory.
 isolateSkillHome()
+
+const sourceCli = '/checkout/apps/cli/src/bin.ts'
+const builtRoot = join(repositoryRoot, 'dist')
+
+for (const scenario of ['missing', 'incompatible', 'success'] as const) {
+  test(`built Cordis entry diagnoses ${scenario} imports without installed dependencies`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kiokuko-startup-entry-'))
+    try {
+      await mkdir(join(root, 'dsh'))
+      await writeFile(join(root, 'package.json'), '{"type":"module"}')
+      await copyFile(join(builtRoot, 'index.js'), join(root, 'plugin.js'))
+      await copyFile(join(builtRoot, 'dsh/startup-recovery.js'), join(root, 'dsh/startup-recovery.js'))
+      if (scenario !== 'missing') await writeFile(join(root, 'plugin-runtime.js'), scenario === 'incompatible'
+        ? 'throw new Error("fixture incompatible host API")'
+        : 'export const name="kiokuko-dsh", inject={}, Config={}; export function apply() {}')
+      const code = `process.argv = ['node', ${JSON.stringify(sourceCli)}, 'web']; await import(${JSON.stringify(pathToFileURL(join(root, 'plugin.js')).href)})`
+      const child = spawnSync(process.execPath, ['--input-type=module', '--eval', code], {
+        cwd: root, env: { PATH: process.env.PATH, HOME: root }, encoding: 'utf8', timeout: 10_000,
+      })
+      assert.ifError(child.error)
+      if (scenario === 'success') {
+        assert.equal(child.status, 0, child.stderr)
+        assert.equal(child.stderr, '')
+      } else {
+        assert.notEqual(child.status, 0)
+        assert.match(child.stderr, scenario === 'missing' ? /ERR_MODULE_NOT_FOUND/ : /fixture incompatible host API/)
+        assert.match(child.stderr, /pnpm dsh plugin --profile web update kiokuko-dsh --latest/)
+        assert.match(child.stderr, /Do not delete session logs/)
+      }
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+}
+
+// Run the delivered readers outside the repository: devDependencies must not mask missing imports.
+test('bundled v0/v1/v2 history readers preserve physical records without another DSH runtime', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'kiokuko-isolated-codecs-'))
+  try {
+    const path = join(root, 'codecs.mjs')
+    await copyFile(resolve(import.meta.dirname, '../../../dist/dsh/legacy-session-codecs.js'), path)
+    const code = `
+      import assert from 'node:assert/strict';
+      const codecs = await import(${JSON.stringify(pathToFileURL(path).href)});
+      for (const version of [0, 1, 2]) {
+        const codec = codecs['releasedV' + version + 'SessionFormatCodec'];
+        const header = { type: 'session', version, id: 'legacy-fixture', createdAt: 1,
+          delegationDepth: 0, cwd: '/tmp/legacy-fixture', ...(version === 2 ? { isSeeded: false } : {}) };
+        const decoder = codec.createDecoder(header, 'strict');
+        const row = { type: 'user/message', seq: 0, time: 1, surfaceOp: 'append', data: {
+          id: 'message-1', role: 'user', content: [{ type: 'text', text: 'Historical fixture' }], source: { kind: 'user' } } };
+        const rows = [];
+        const context = { emitEvent(event) { rows.push(event) }, emitRun(run) { rows.push(...run.expand()) } };
+        decoder.decodeRow(row, context);
+        assert.equal(decoder.finish(context), 0);
+        assert.equal(decoder.header.id, header.id);
+        assert.equal(decoder.header.version, version);
+        assert.deepEqual(rows, [row]);
+        assert.throws(() => codec.createDecoder({ ...header, id: 42 }, 'strict'), /id/);
+        const invalid = codec.createDecoder(header, 'strict');
+        assert.throws(() => invalid.decodeRow({ ...row, seq: 10 }, context), /seq|sequence/i);
+      }
+    `
+    const child = spawnSync(process.execPath, ['--input-type=module', '--eval', code], {
+      cwd: root, env: { PATH: process.env.PATH, HOME: root }, encoding: 'utf8', timeout: 10_000,
+    })
+    assert.ifError(child.error)
+    assert.equal(child.status, 0, child.stderr)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

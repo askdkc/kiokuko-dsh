@@ -35,7 +35,8 @@
     "README.zh-CN.md",
     "README.ko.md",
     "PERMISSIONS.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "exports": {
     ".": {
@@ -119,7 +120,7 @@
   },
   "scripts": {
     "clean:dist": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
-    "build": "npm run clean:dist && tsc -p tsconfig.build.json && node scripts/build-dsh-client.mjs",
+    "build": "npm run clean:dist && tsc -p tsconfig.build.json && node scripts/build-dsh-client.mjs && node scripts/build-history-codecs.mjs && node scripts/build-plugin-entry.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs tests/dsh",
     "test:unit": "node scripts/run-tests.mjs tests/dsh/unit",
@@ -148,9 +149,6 @@
     "test:evaluation:continuity": "node --import tsx scripts/run-continuity-evaluation.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-session-format": "0.1.5-rc.1",
-    "@deepseek-ai/dsh-session-format-v0-to-v1": "0.1.5-rc.1",
-    "@deepseek-ai/dsh-session-format-v1-to-v2": "0.1.5-rc.1",
     "@orcareplay/core": ">=0.2.1",
     "@orcareplay/schema": ">=0.2.1",
     "@orcareplay/viewer": ">=0.2.1",
@@ -182,10 +180,15 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
+    "@deepseek-ai/dsh-session-format": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-session-format-v0-to-v1": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-session-format-v1-to-v2": "0.1.5-rc.1",
     "@huggingface/hub": "2.16.1",
     "@huggingface/transformers": "4.2.0",
     "@types/node": "24.13.3",
     "@types/semver": "7.8.0",
+    "esbuild": "0.28.2",
     "publint": "0.3.24",
     "sqlite-vec": "0.1.9",
     "tsx": "4.23.13",

@@ -67,4 +67,6 @@ pnpm dsh web
 
 既存チャットが `unknown ... not marked ignorable` で開けない場合は、[履歴の修復手順](docs/session-history-repair.md)を参照してください。
 
+DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復旧手順](docs/dsh-plugin.md#startup-failure-after-a-dsh-update)で、対象プロファイルの更新・再導入コマンドを確認してください。履歴や Kiokuko のデータベースは削除しません。API の互換性の問題は、再導入だけでは直らない場合があります。
+
 [ドキュメント](docs/README.ja.md) · [権限](PERMISSIONS.md) · [MIT ライセンス](LICENSE)
