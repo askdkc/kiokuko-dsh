@@ -17,7 +17,8 @@ Kiokuko adds memory, planning, verification, and observability to
 
 ## Install and use
 
-Supports DSH [0.1.5-rc.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.5-rc.1), [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1), and [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2).
+Supports **DSH 0.1.6-alpha.1** ([verification scope](docs/dsh-plugin.md#compatibility)).
+
 Requires Node.js **24.16.0+** and pnpm.
 Run these commands from the DSH source directory to install the published npm package and start:
 

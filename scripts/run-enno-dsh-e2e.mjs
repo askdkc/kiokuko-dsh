@@ -11,7 +11,8 @@ const exec = promisify(execFile)
 const root = resolve(import.meta.dirname, '..')
 const dsh = process.env.DSH_BIN ?? 'dsh'
 const profile = 'web'
-const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? '0.1.5-rc.1'
+const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? packageManifest.dsh.compatibility.dsh
 const requireDshCli = process.env.KIOKUKO_REQUIRE_DSH_CLI === '1'
 
 async function run(command, args, env = {}, timeout = 180_000) {

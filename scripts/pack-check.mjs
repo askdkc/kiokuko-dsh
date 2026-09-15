@@ -262,6 +262,10 @@ try {
   if (metadata?.name !== 'kiokuko-dsh') throw new Error('packed package has an unexpected name')
   if (metadata?.version === undefined) throw new Error('packed package has no version')
   const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+  const compatibility = packageManifest.dsh?.compatibility
+  if (typeof compatibility?.dsh !== 'string' || compatibility.dshReleases?.[compatibility.dsh] !== 'compatible') {
+    throw new Error('DSH compatibility target must have a matching compatible release entry')
+  }
   if (packageManifest.bin !== undefined) throw new Error('generic CLI binary must not be public')
   if (paths.has('dist/cli.js')) throw new Error('generic CLI output must not be published')
   if (packageManifest.dependencies?.commander !== undefined || packageManifest.dependencies?.['@modelcontextprotocol/sdk'] !== undefined) {

@@ -16,7 +16,8 @@
 
 ## 導入と使い方
 
-対応 DSH: [0.1.5-rc.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.5-rc.1) / [0.1.3-alpha.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1) / [v0.1.3-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.2)。
+対応 DSH: **0.1.6-alpha.1**（[検証範囲](docs/dsh-plugin.md#compatibility)）。
+
 Node.js **24.16.0 以上**と pnpm が必要です。
 DSH のソースディレクトリで、公開済み npm パッケージを導入して起動します。
 
