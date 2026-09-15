@@ -1,6 +1,5 @@
+import { currentScopedEntry } from '../context/scoped-memory-gate.js'
 import type { PreparedAgentTask } from './task-intake.js'
-import { readEntry } from '../memory/entries.js'
-import { isRetrievableEntry } from '../memory/hybrid-retrieval.js'
 import type { DshRuntime } from './runtime.js'
 import type { DshExpertReference, DshMessageSource, DshMessageSourceInput } from './message-sources.js'
 import { buildDshMessageSources } from './message-sources.js'
@@ -91,10 +90,7 @@ export async function injectDshContext(input: {
     ? undefined
     : async (item: (NonNullable<PreparedAgentTask['context']>['items'])[number]): Promise<void> => {
       await input.runtime!.withDatabase((database) => {
-        const entry = readEntry(database, { workspace: input.prepared.project.workspace, entryId: item.entryId })
-        if (entry.revision !== item.revision || !isRetrievableEntry(database, entry) || entry.status === 'superseded') {
-          throw new Error('Scoped memory changed or is no longer retrievable')
-        }
+        currentScopedEntry(database, input.prepared.project.workspace, item)
       })
     }
   const sources = await buildDshMessageSources({

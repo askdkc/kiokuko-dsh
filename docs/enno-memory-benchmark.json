@@ -1,0 +1,761 @@
+{
+  "format": "kiokuko.enno-memory.benchmark.v1",
+  "node": "v26.5.0",
+  "comparison": "deterministic fixture, lexical retrieval, 8000-character presentation, 5000ms cooperative budget",
+  "quality": "real-model unmeasured",
+  "rerank": "not_adopted",
+  "rows": [
+    {
+      "size": 20,
+      "mode": "off",
+      "repetitions": 5,
+      "corpusStatus": "available",
+      "corpusProbeMs": 8.405625000000043,
+      "totalMs": {
+        "p50": 0.004124999999987722,
+        "p95": 0.007291000000009262,
+        "max": 0.007291000000009262,
+        "samples": [
+          0.007291000000009262,
+          0.004124999999987722,
+          0.005499999999983629,
+          0.003291999999987638,
+          0.002583000000015545
+        ]
+      },
+      "injectedCorrect": false,
+      "fullSearches": 0,
+      "discarded": 0,
+      "observations": [],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 20,
+      "mode": "observe",
+      "repetitions": 5,
+      "corpusStatus": "available",
+      "corpusProbeMs": 4.854874999999993,
+      "totalMs": {
+        "p50": 0.041333000000008724,
+        "p95": 0.04754200000002129,
+        "max": 0.04754200000002129,
+        "samples": [
+          0.04754200000002129,
+          0.03970800000001873,
+          0.038958999999977095,
+          0.044208000000026004,
+          0.041333000000008724
+        ]
+      },
+      "injectedCorrect": false,
+      "fullSearches": 0,
+      "discarded": 0,
+      "observations": [
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.0795420000000604
+        },
+        {
+          "decision": "full",
+          "reason": "focus_changed",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.03637500000002092
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.032166999999958534
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.029541000000108397
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.032166999999958534
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.037790999999970154
+        }
+      ],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 20,
+      "mode": "active",
+      "repetitions": 5,
+      "corpusStatus": "available",
+      "corpusProbeMs": 4.983082999999965,
+      "totalMs": {
+        "p50": 35.08287500000006,
+        "p95": 50.64829199999997,
+        "max": 50.64829199999997,
+        "samples": [
+          50.64829199999997,
+          34.152833999999984,
+          35.08287500000006,
+          31.358875000000012,
+          35.513915999999995
+        ]
+      },
+      "injectedCorrect": true,
+      "fullSearches": 1,
+      "discarded": 0,
+      "observations": [
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 4.70129200000008,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 20.035581999999863,
+          "totalMs": 35.84808399999997
+        },
+        {
+          "decision": "full",
+          "reason": "focus_changed",
+          "corpusValidationMs": 6.028374999999983,
+          "retrievalMs": 7.724458000000027,
+          "rankingMs": 0.26108399999998255,
+          "deliveryMs": 23.831541000000016,
+          "totalMs": 50.632499999999936
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 5.112958000000049,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 18.74604099999999,
+          "totalMs": 34.136499999999955
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 4.8075000000000045,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 17.713166,
+          "totalMs": 35.0657920000001
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 4.587416999999959,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 15.44566599999996,
+          "totalMs": 31.349124999999958
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 5.122707999999989,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 16.810834,
+          "totalMs": 35.49854099999993
+        }
+      ],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 1000,
+      "mode": "off",
+      "repetitions": 5,
+      "corpusStatus": "available",
+      "corpusProbeMs": 250.891208,
+      "totalMs": {
+        "p50": 0.0009170000000722212,
+        "p95": 0.00233299999990777,
+        "max": 0.00233299999990777,
+        "samples": [
+          0.00233299999990777,
+          0.001207999999905951,
+          0.0009170000000722212,
+          0.0008749999999508873,
+          0.0009169999998448475
+        ]
+      },
+      "injectedCorrect": false,
+      "fullSearches": 0,
+      "discarded": 0,
+      "observations": [],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 1000,
+      "mode": "observe",
+      "repetitions": 5,
+      "corpusStatus": "available",
+      "corpusProbeMs": 255.52758300000005,
+      "totalMs": {
+        "p50": 0.020041999999648397,
+        "p95": 0.03337499999997817,
+        "max": 0.03337499999997817,
+        "samples": [
+          0.03337499999997817,
+          0.02358300000014424,
+          0.020041999999648397,
+          0.019416999999975815,
+          0.018707999999605818
+        ]
+      },
+      "injectedCorrect": false,
+      "fullSearches": 0,
+      "discarded": 0,
+      "observations": [
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.03587500000003274
+        },
+        {
+          "decision": "full",
+          "reason": "focus_changed",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.026374999999916326
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.02029199999969933
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.01754099999971004
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.01724999999987631
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.01658399999996618
+        }
+      ],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 1000,
+      "mode": "active",
+      "repetitions": 5,
+      "corpusStatus": "available",
+      "corpusProbeMs": 283.7677910000002,
+      "totalMs": {
+        "p50": 862.8579589999999,
+        "p95": 965.0804589999998,
+        "max": 965.0804589999998,
+        "samples": [
+          965.0804589999998,
+          862.8579589999999,
+          852.3900000000003,
+          869.9371669999991,
+          857.3834999999999
+        ]
+      },
+      "injectedCorrect": true,
+      "fullSearches": 1,
+      "discarded": 0,
+      "observations": [
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 252.40937499999927,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 438.35833300000104,
+          "totalMs": 980.3875829999997
+        },
+        {
+          "decision": "full",
+          "reason": "focus_changed",
+          "corpusValidationMs": 248.395125,
+          "retrievalMs": 15.017249999999876,
+          "rankingMs": 0.19399999999950523,
+          "deliveryMs": 432.3684170000006,
+          "totalMs": 965.0668750000004
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 213.34787500000039,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 402.9652079999996,
+          "totalMs": 862.8451250000007
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 211.71479200000067,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 397.80870799999957,
+          "totalMs": 852.3782500000007
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 217.59541700000045,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 403.0153329999994,
+          "totalMs": 869.9244159999998
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 210.78499999999985,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 399.83616599999914,
+          "totalMs": 857.3706249999996
+        }
+      ],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 9999,
+      "mode": "off",
+      "repetitions": 5,
+      "corpusStatus": "available",
+      "corpusProbeMs": 2250.1427919999987,
+      "totalMs": {
+        "p50": 0.0008749999979045242,
+        "p95": 0.0031670000025769696,
+        "max": 0.0031670000025769696,
+        "samples": [
+          0.0031670000025769696,
+          0.0025830000013229437,
+          0.0008749999979045242,
+          0.0007500000028812792,
+          0.0007499999992433004
+        ]
+      },
+      "injectedCorrect": false,
+      "fullSearches": 0,
+      "discarded": 0,
+      "observations": [],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 9999,
+      "mode": "observe",
+      "repetitions": 5,
+      "corpusStatus": "available",
+      "corpusProbeMs": 2318.7782909999987,
+      "totalMs": {
+        "p50": 0.017749999999068677,
+        "p95": 0.03141699999832781,
+        "max": 0.03141699999832781,
+        "samples": [
+          0.03141699999832781,
+          0.024375000000873115,
+          0.017749999999068677,
+          0.016165999997610925,
+          0.015749999998661224
+        ]
+      },
+      "injectedCorrect": false,
+      "fullSearches": 0,
+      "discarded": 0,
+      "observations": [
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.025125000000116415
+        },
+        {
+          "decision": "full",
+          "reason": "focus_changed",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.024207999998907326
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.02162500000122236
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.015749999998661224
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.014375000002473826
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.013999999999214197
+        }
+      ],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 9999,
+      "mode": "active",
+      "repetitions": 5,
+      "corpusStatus": "available",
+      "corpusProbeMs": 2224.296957999999,
+      "totalMs": {
+        "p50": 6930.6988340000025,
+        "p95": 6955.5662500000035,
+        "max": 6955.5662500000035,
+        "samples": [
+          6930.6988340000025,
+          6937.155082999998,
+          6901.992624999999,
+          6926.9226250000065,
+          6955.5662500000035
+        ]
+      },
+      "injectedCorrect": false,
+      "fullSearches": 5,
+      "discarded": 6,
+      "observations": [
+        {
+          "decision": "reuse",
+          "reason": "time_budget",
+          "corpusValidationMs": 2283.7650830000057,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 5088.223375000001
+        },
+        {
+          "decision": "full",
+          "reason": "time_budget",
+          "corpusValidationMs": 2209.8650830000042,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 6930.683041999997
+        },
+        {
+          "decision": "full",
+          "reason": "time_budget",
+          "corpusValidationMs": 2216.5647080000053,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 6937.129417000004
+        },
+        {
+          "decision": "full",
+          "reason": "time_budget",
+          "corpusValidationMs": 2209.370667000003,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 6901.969666999998
+        },
+        {
+          "decision": "full",
+          "reason": "time_budget",
+          "corpusValidationMs": 2226.061916999999,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 6926.9015
+        },
+        {
+          "decision": "full",
+          "reason": "time_budget",
+          "corpusValidationMs": 2218.150999999998,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 6955.543875000003
+        }
+      ],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 10001,
+      "mode": "off",
+      "repetitions": 5,
+      "corpusStatus": "unavailable",
+      "corpusProbeMs": 45.31174999999348,
+      "totalMs": {
+        "p50": 0.0007499999919673428,
+        "p95": 0.0015419999981531873,
+        "max": 0.0015419999981531873,
+        "samples": [
+          0.0015419999981531873,
+          0.0009580000041751191,
+          0.0007499999919673428,
+          0.0007080000068526715,
+          0.0007089999999152496
+        ]
+      },
+      "injectedCorrect": false,
+      "fullSearches": 0,
+      "discarded": 0,
+      "observations": [],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 10001,
+      "mode": "observe",
+      "repetitions": 5,
+      "corpusStatus": "unavailable",
+      "corpusProbeMs": 46.931125000002794,
+      "totalMs": {
+        "p50": 0.016625000003841706,
+        "p95": 0.031082999994396232,
+        "max": 0.031082999994396232,
+        "samples": [
+          0.031082999994396232,
+          0.019541000001481734,
+          0.016625000003841706,
+          0.01600000000325963,
+          0.01554200000828132
+        ]
+      },
+      "injectedCorrect": false,
+      "fullSearches": 0,
+      "discarded": 0,
+      "observations": [
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.023665999993681908
+        },
+        {
+          "decision": "full",
+          "reason": "focus_changed",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.023832999999285676
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.01691700000083074
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.014666999995824881
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.014249999992898665
+        },
+        {
+          "decision": "reuse",
+          "reason": "unchanged",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 0.013875000004190952
+        }
+      ],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    },
+    {
+      "size": 10001,
+      "mode": "active",
+      "repetitions": 5,
+      "corpusStatus": "unavailable",
+      "corpusProbeMs": 44.204750000004424,
+      "totalMs": {
+        "p50": 46.29254199999559,
+        "p95": 54.785957999993116,
+        "max": 54.785957999993116,
+        "samples": [
+          54.785957999993116,
+          46.041333999994094,
+          46.29254199999559,
+          46.1203749999986,
+          54.29662500000268
+        ]
+      },
+      "injectedCorrect": false,
+      "fullSearches": 0,
+      "discarded": 6,
+      "observations": [
+        {
+          "decision": "skip",
+          "reason": "memory_unavailable",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 54.66454199999862
+        },
+        {
+          "decision": "skip",
+          "reason": "memory_unavailable",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 54.77433300000848
+        },
+        {
+          "decision": "skip",
+          "reason": "memory_unavailable",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 46.02729199999885
+        },
+        {
+          "decision": "skip",
+          "reason": "memory_unavailable",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 46.27983400000085
+        },
+        {
+          "decision": "skip",
+          "reason": "memory_unavailable",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 46.10770800001046
+        },
+        {
+          "decision": "skip",
+          "reason": "memory_unavailable",
+          "corpusValidationMs": 0,
+          "retrievalMs": 0,
+          "rankingMs": 0,
+          "deliveryMs": 0,
+          "totalMs": 54.28191700000025
+        }
+      ],
+      "llmCalls": 0,
+      "remoteEmbeddingCalls": 0,
+      "billedTokens": null
+    }
+  ]
+}

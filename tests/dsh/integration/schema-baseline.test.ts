@@ -14,7 +14,7 @@ const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migratio
 test('the schema keeps 001 immutable and appends forward-only DSH runtime migrations', async () => {
   const entries = await readdir(migrationsDirectory)
   const sqlFiles = entries.filter((name) => name.endsWith('.sql'))
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql', '011_dsh_finalization_input_mode.sql', '012_memory_evolution.sql', '013_dsh_deep_thinker.sql', '014_memory_projection_evidence.sql', '015_dsh_plugin_records.sql', '016_akinator_memory_probe.sql', '017_dsh_deep_quality.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql', '011_dsh_finalization_input_mode.sql', '012_memory_evolution.sql', '013_dsh_deep_thinker.sql', '014_memory_projection_evidence.sql', '015_dsh_plugin_records.sql', '016_akinator_memory_probe.sql', '017_dsh_deep_quality.sql', '018_dsh_enno_memory_refresh.sql'])
   assert.ok(!entries.some((name) => name === 'down'), 'migrations/down must not exist')
 
   const snapshot = loadMigrationSnapshot(migrationsDirectory)
@@ -127,6 +127,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_deep_preferences',
         'dsh_deep_runs',
         'dsh_enno_delegations',
+        'dsh_enno_memory_refresh',
         'dsh_evolution_observations', 'dsh_execution_evidence',
         'dsh_execution_frames',
         'dsh_execution_owners',

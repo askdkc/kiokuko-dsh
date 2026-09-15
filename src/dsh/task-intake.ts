@@ -1,8 +1,9 @@
+import { scopedMemoryUseSignal, assertScopedMemoryUseSignal } from '../context/scoped-memory-gate.js';
+import { renderScopedRetrievalQuery } from '../context/retrieval-query.js';
 import { AkinatorMemoryConfig, type ProbeConfig, type ProfileMemoryHint } from '../akinator/memory-probe-types.js';
 import { verifyTaskTargets, shouldProbe } from '../akinator/memory-probe.js';
 import { deriveProfile } from '../akinator/domain.js';
 import { readMemoryHints } from '../akinator/profile-memory-store.js';
-import { boundTaskRetrievalQuery } from '../memory/retrieval-query.js';
 import { initializeExecutionSelection, writeExecutionSelection } from './execution-selection.js';
 import { claimExecutionOwner } from './orchestration/execution-owner.js';
 import type { SqliteDatabase } from '../db/adapter.js';
@@ -10,9 +11,7 @@ import { readExecutionFrame, saveExecutionFrame, updateExecutionFrame, type Task
 import { KiokukoError } from '../errors.js';
 import { LedgerStore } from '../ledger/store.js';
 import type { RunRecord } from '../ledger/types.js';
-import { readEntry } from '../memory/entries.js';
 import { isRetrievableEntry, retrievableWorkspaceEntryCount } from '../memory/hybrid-retrieval.js';
-import { effectiveRetrievalScope, hasExplicitApplicability } from '../memory/structured-memory.js';
 import {
   GLOBAL_WORKSPACE,
   resolveProjectWorkspace,
@@ -23,7 +22,6 @@ import { getAkinatorStateService } from '../akinator/service.js';
 import {
   deriveMemoryUseSignal,
   deriveMemoryPolicy,
-  hasActionableMemorySelection,
   hasBlockingRequiredCapability,
   memoryReasoningCapabilityAvailability,
   normalizeCapabilityCatalog,
@@ -51,8 +49,6 @@ import {
   type ScopedContextItem,
   type ScopedContextResult,
 } from '../context/scoped-broker.js';
-import { contextFeedbackSignals } from '../context/feedback.js';
-import { entryOriginMatchesWorkspace } from '../context/origin.js';
 import { readContextBrokerRunState } from '../context/run-state.js';
 import { ordinaryContextSelectionStateHash } from '../context/selection-state.js';
 import { deriveAkinatorReasoning } from '../akinator/reasoning.js';
@@ -64,9 +60,7 @@ import {
 } from '../repository/project-fingerprint.js';
 import { readSkillDiscoveryConfig } from '../skills/config.js';
 import { discoverSkills } from '../skills/discovery-service.js';
-import { isExternalSkillReference } from '../skills/store.js';
 import type { SkillDiscoverySummary, SkillDiscoveryMode } from '../skills/types.js';
-import { isCuratorManagedGlobalMemory } from '../memory/curator-trust.js';
 import { canonicalDirectory } from '../repository/detect-root.js';
 import { ennoStateForPreparedTask } from '../enno-oduno/service.js';
 import { prepareEmbeddingSearchRuntime } from '../embedding/runtime.js';
@@ -299,85 +293,6 @@ function currentAgentTaskContext(
   };
 }
 
-function currentScopedEntry(
-  database: SqliteDatabase,
-  runWorkspace: string,
-  item: Pick<ScopedContextItem, 'entryId' | 'revision' | 'origin'>,
-) {
-  const row = database.prepare('SELECT workspace FROM entries WHERE id = ?')
-    .get<{ workspace: unknown }>(item.entryId);
-  if (row === undefined || typeof row.workspace !== 'string' || row.workspace.length === 0) {
-    throw new KiokukoError('INTEGRITY_ERROR', 'Scoped context entry is missing or invalid');
-  }
-  const entry = readEntry(
-    database,
-    { workspace: row.workspace, entryId: item.entryId },
-    { requireStructuredScope: item.origin !== 'project' },
-  );
-  if (entry.revision !== item.revision) {
-    throw new KiokukoError('CONFLICT', 'Scoped context entry changed after ranking');
-  }
-  if (!entryOriginMatchesWorkspace({
-    origin: item.origin,
-    runWorkspace,
-    entryWorkspace: entry.workspace,
-  })) {
-    throw new KiokukoError('INTEGRITY_ERROR', 'Scoped context entry origin is invalid');
-  }
-  if (item.origin === 'global'
-    && (entry.scope.visibility !== 'global' || effectiveRetrievalScope(entry.scope) !== 'global')) {
-    throw new KiokukoError('INTEGRITY_ERROR', 'Scoped context global entry scope is invalid');
-  }
-  if (item.origin === 'ecosystem'
-    && (!Object.hasOwn(entry.scope, 'retrievalScope')
-      || effectiveRetrievalScope(entry.scope) !== 'ecosystem'
-      || !hasExplicitApplicability(entry.scope))) {
-    throw new KiokukoError('INTEGRITY_ERROR', 'Scoped context ecosystem entry scope is invalid');
-  }
-  if (!isRetrievableEntry(database, entry)) {
-    throw new KiokukoError('CONFLICT', 'Scoped context entry is no longer retrievable');
-  }
-  if (entry.status === 'superseded') {
-    throw new KiokukoError('CONFLICT', 'Scoped context entry is no longer retrievable');
-  }
-  return entry;
-}
-
-function capabilityGatedScopedItems(
-  database: SqliteDatabase,
-  runWorkspace: string,
-  scopedContext: ScopedContextResult,
-): ScopedContextItem[] {
-  return scopedContext.items.filter((item) => {
-    const entry = currentScopedEntry(database, runWorkspace, item);
-    return !isExternalSkillReference(entry) && !isCuratorManagedGlobalMemory(entry);
-  });
-}
-
-function scopedMemoryUseSignal(
-  database: SqliteDatabase,
-  runWorkspace: string,
-  scopedContext: ScopedContextResult,
-): MemoryUseSignal {
-  const items = capabilityGatedScopedItems(database, runWorkspace, scopedContext);
-  if (hasActionableMemorySelection(items)) return 'actionable';
-  return items.some((item) => contextFeedbackSignals(database, item.entryId)
-      .some((signal) => signal.verdict === 'helpful'))
-    ? 'actionable'
-    : 'none';
-}
-
-function assertScopedMemoryUseSignal(
-  database: SqliteDatabase,
-  runWorkspace: string,
-  scopedContext: ScopedContextResult,
-  expected: MemoryUseSignal,
-): void {
-  if (scopedMemoryUseSignal(database, runWorkspace, scopedContext) !== expected) {
-    throw new KiokukoError('CONFLICT', 'Scoped memory capability decision changed before context persistence');
-  }
-}
-
 function assertOrdinaryMemoryState(
   database: SqliteDatabase,
   workspaces: readonly string[],
@@ -561,22 +476,11 @@ interface PreparedTaskContextQuery {
 
 type TaskContextQuery = ReturnType<PreparedTaskContextQuery['queryFor']>;
 
-function embeddingQueryText(query: TaskContextQuery): string {
-  return boundTaskRetrievalQuery([
-    query.task,
-    query.taskProfile.taskType ?? '',
-    query.taskProfile.target ?? '',
-    query.taskProfile.expected ?? '',
-    query.taskProfile.constraints ?? '',
-    ...query.recommendedTags,
-  ].join('\n'));
-}
-
 async function searchRuntime(
   input: FinalizeAgentTaskInput,
   query: TaskContextQuery,
 ): Promise<import('../memory/hybrid-retrieval.js').HybridSearchRuntime> {
-  return prepareEmbeddingSearchRuntime(input.embeddingRuntime, input.database, embeddingQueryText(query));
+  return prepareEmbeddingSearchRuntime(input.embeddingRuntime, input.database, renderScopedRetrievalQuery(query));
 }
 
 async function drainEmbeddingsBeforeRetrieval(

@@ -13,6 +13,11 @@ const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
   'LICENSE',
+  'migrations/018_dsh_enno_memory_refresh.sql',
+  'dist/dsh/enno-memory-refresh.js',
+  'dist/dsh/enno-memory-refresh-store.js',
+  'dist/enno-oduno/memory-focus.js',
+  'dist/enno-oduno/memory-refresh-policy.js',
   'migrations/017_dsh_deep_quality.sql',
   'dist/deep-thinker/core/quality.js',
   'dist/deep-thinker/acceptance.js',

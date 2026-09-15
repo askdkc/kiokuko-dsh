@@ -74,6 +74,8 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     await setupDshOnLoad()
     const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
+      if (host.configureEnnoMemory) host.configureEnnoMemory(resolvedConfig.ennoMemory)
+      else if (resolvedConfig.ennoMemory.mode !== 'off') throw new Error('The explicit Kiokuko host does not support ennoMemory')
       host.intakeGate?.configureMemory(resolvedConfig.akinatorMemory)
       host.memoryEvolution?.configure(resolvedConfig.memoryEvolution)
       if (host.configureEfficiency !== undefined) host.configureEfficiency({ observe: resolvedConfig.efficiency.observe, inputMode: resolvedConfig.finalization.inputMode })
@@ -118,7 +120,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
     const adapter = createDshHostAdapter(ctx, { deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
-      akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution })
+      ennoMemory: resolvedConfig.ennoMemory, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined
     let disposeExport: (() => Promise<void>) | undefined

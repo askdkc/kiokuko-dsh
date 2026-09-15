@@ -249,7 +249,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     close: async () => { composition.stopIngress(); await adapter.dispose(); await composition.dispose(); disposeTool(); for (const fiber of fibers.reverse()) await fiber?.dispose?.() } }
 }
 
-function ennoScript(mock: ReturnType<typeof nativeMock>, round: number, readonly = false): any[] {
+export function ennoScript(mock: ReturnType<typeof nativeMock>, round: number, readonly = false): any[] {
   const dispositions = (slots: string[]) => slots.map(slotId => ({ slotId, disposition: 'adopted', rationale: 'Applied the fixture evidence.' }))
   const ideal = dispositions(['constraint_guardian','skill_trust_analyst','success_signal_critic'])
   const planning = dispositions(['workunit_architect','protocol_risk_reviewer','verification_designer'])

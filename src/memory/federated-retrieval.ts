@@ -102,7 +102,7 @@ function frameworkValues(value: unknown): Array<{ name: string; version?: string
   });
 }
 
-function applicabilityCompatibility(entry: EntryRecord, fingerprint: ProjectFingerprint): { score: number; reasons: string[]; incompatible: boolean } {
+export function applicabilityCompatibility(entry: EntryRecord, fingerprint: ProjectFingerprint): { score: number; reasons: string[]; incompatible: boolean } {
   const applicability = metadataObject(entry).applicability;
   if (typeof applicability !== 'object' || applicability === null || Array.isArray(applicability)) return { score: 0, reasons: ['applicability_unknown'], incompatible: false };
   const value = applicability as Record<string, unknown>;

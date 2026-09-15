@@ -1,8 +1,7 @@
+import { captureProjectManifestSnapshot, resolveProjectFingerprint } from '../repository/project-fingerprint.js'
+import { currentScopedEntry } from '../context/scoped-memory-gate.js'
 import type { SqliteDatabase } from '../db/adapter.js'
 import type { PreparedAgentTask } from './task-intake.js'
-import { readEntry } from '../memory/entries.js'
-import { isRetrievableEntry } from '../memory/hybrid-retrieval.js'
-import { entryOriginMatchesWorkspace } from '../context/origin.js'
 import { projectMemoryEntry, renderMemoryFields } from '../context/memory-projection.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { randomUUID } from 'node:crypto'
@@ -12,11 +11,11 @@ import { retainedEvents } from './context-projection.js'
 export function currentRequestMemory(db: SqliteDatabase, prepared: PreparedAgentTask): ReadonlyMap<string, string> {
   const allowed = new Map<string, string>()
   if (prepared.memoryPolicy.contextWithheld) return allowed
+  const fingerprint = prepared.context?.items.some(item => item.origin === 'ecosystem')
+    ? resolveProjectFingerprint(db, prepared.project, captureProjectManifestSnapshot(prepared.project), { readOnly: true }) : undefined
   for (const item of prepared.context?.items ?? []) {
-    const row = db.prepare('SELECT workspace FROM entries WHERE id=?').get<{workspace:string}>(item.entryId)
-    if (!row || !entryOriginMatchesWorkspace({ origin: item.origin, runWorkspace: prepared.project.workspace, entryWorkspace: row.workspace })) continue
-    const entry = readEntry(db, { workspace: row.workspace, entryId: item.entryId })
-    if (entry.revision !== item.revision || entry.status === 'superseded' || !isRetrievableEntry(db, entry)) continue
+    let entry
+    try { entry = currentScopedEntry(db, prepared.project.workspace, item, fingerprint) } catch { continue }
     const projected = projectMemoryEntry(db, entry)
     if (!projected || item.projection && canonicalContentHash(item.projection) !== canonicalContentHash(projected.projection)) continue
     const text = renderMemoryFields(item)

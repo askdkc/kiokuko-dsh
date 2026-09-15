@@ -147,7 +147,10 @@
     "test:evaluation:akinator": "npm run build && node scripts/run-akinator-memory-evaluation.mjs",
     "test:benchmark:akinator": "npm run build && node scripts/run-akinator-memory-benchmark.mjs",
     "test:continuity": "node scripts/run-tests.mjs tests/dsh/unit/continuity tests/dsh/integration/continuity",
-    "test:evaluation:continuity": "node --import tsx scripts/run-continuity-evaluation.mjs"
+    "test:evaluation:continuity": "node --import tsx scripts/run-continuity-evaluation.mjs",
+    "test:enno-memory": "node scripts/run-tests.mjs tests/dsh/unit/enno-memory tests/dsh/integration/enno-memory",
+    "test:benchmark:enno-memory": "node --import tsx scripts/run-enno-memory-benchmark.ts",
+    "test:evaluation:enno-memory": "node scripts/run-enno-memory-evaluation.mjs"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

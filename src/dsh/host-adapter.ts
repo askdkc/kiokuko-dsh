@@ -1,3 +1,5 @@
+import { DshEnnoMemoryRefresh } from './enno-memory-refresh.js'
+import { EnnoMemoryConfig } from './config.js'
 import { executionObservation } from './evolution-observation.js'
 import { saveEvolutionObservation, saveSessionNotice } from './plugin-records.js'
 import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution/contracts.js'
@@ -158,6 +160,7 @@ export interface DshHostAdapterOptions {
   readonly deepPlanning?: unknown
   readonly akinatorMemory?: import('zod').z.input<typeof AkinatorMemoryConfig>
   readonly efficiency?: import('zod').z.input<typeof EfficiencyConfig>
+  readonly ennoMemory?: import('zod').z.input<typeof EnnoMemoryConfig>
   readonly continuity?: import('zod').z.input<typeof ContinuityConfig>
   readonly memoryEvolution?: import('zod').z.input<typeof MemoryEvolutionConfig>
   readonly finalization?: import('zod').z.input<typeof FinalizationConfig>
@@ -198,6 +201,7 @@ interface TurnRecord {
   catalog: DshCapabilityCatalog
   /** Monotonic host generation assigned before each prepare begins. */
   prepareGeneration: number
+  memoryInput?: string
   failed: boolean
   closed: boolean
 }
@@ -559,6 +563,45 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     observe: value => efficiency?.recordContinuity(value) })
   executionSupport.mount({ on: (name, listener, options) => (ctx as any).on(name, listener, options),
     ...(tools === undefined ? {} : { tools: { guard: tools.guard.bind(tools) } }) })
+  const ennoMemory = new DshEnnoMemoryRefresh(runtime, EnnoMemoryConfig.parse(options.ennoMemory ?? {}),
+    value => efficiency?.recordEnnoMemory(value))
+  const memoryCalls = new WeakMap<object, Map<string, { name: string; runId: string; agent: object; turn: number; seq: number }>>()
+  const refreshEnnoMemory = async (item: TurnRecord, signal: AbortSignal): Promise<void> => {
+    if (!ennoMemory.enabled || !item.nativeAgent || !item.nativeSession || item.closed || executionSupport.paused(item.sessionId)
+      || delegation.isChild(item.nativeAgent) || selections.get(item.runId)?.value.status !== 'ready') return
+    const prepared = item.prepared, catalog = item.catalog, generation = item.prepareGeneration
+    const policySnapshot = states.get(item.runId)
+    const input = item.memoryInput ?? item.prepared.intake.profile.constraints ?? ''
+    const nativeAgent = item.nativeAgent, nativeSession = item.nativeSession
+    const inboxIdentity = () => canonicalContentHash([
+      ...((nativeAgent as any).inbox?.nextStep ?? []), ...((nativeAgent as any).inbox?.nextTurn ?? []),
+    ].filter(isHumanMessage))
+    const pendingInput = inboxIdentity()
+    const current = () => currentSession(item.sessionId) === item && !item.closed && item.prepareGeneration === generation
+      && item.catalog === catalog && item.nativeAgent === nativeAgent && item.nativeSession === nativeSession
+      && item.prepared.ennoOduno === prepared.ennoOduno && states.get(item.runId) === policySnapshot
+      && (item.memoryInput ?? item.prepared.intake.profile.constraints ?? '') === input
+      && !executionSupport.paused(item.sessionId) && inboxIdentity() === pendingInput
+    await ennoMemory.refresh({ runId: item.runId, sessionId: item.sessionId, nativeAgent, nativeSession,
+      prepared, capabilities: [...catalog.skills, ...catalog.tools], constraints: input, signal, isCurrent: current,
+      validateCapabilities: async () => {
+        const fresh = await capabilityCatalog(skills, tools, { agent: { id: item.agentId }, nativeAgent, cwd: item.cwd, signal })
+        gate.assertTurnStoppingCatalog(catalog, fresh)
+      },
+      ...(policySnapshot?.leaseToken === undefined ? {} : { leaseToken: policySnapshot.leaseToken }),
+      apply: value => {
+        if (item.closed || currentSession(item.sessionId)?.runId !== item.runId
+          || currentSession(item.sessionId)?.nativeAgent !== nativeAgent || currentSession(item.sessionId)?.nativeSession !== nativeSession) return
+        const target = currentSession(item.sessionId)!
+        target.prepared = { ...target.prepared, ...value }
+        const activePolicy = states.get(item.runId)
+        if (activePolicy) {
+          const { deliveryId: _previousDelivery, ...authority } = activePolicy
+          const next = { ...authority, ...(value.context?.deliveryId ? { deliveryId: value.context.deliveryId } : {}) }
+          states.set(item.runId, next); policy.setState(next)
+        }
+      } })
+  }
   const executionBinding = (item: TurnRecord): ExecutionBinding => ({
     runId: item.runId, sessionId: item.sessionId, nativeAgent: item.nativeAgent, nativeSession: item.nativeSession,
     cwd: item.cwd, task: item.task, turn: item.turn,
@@ -664,6 +707,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       prepared: result.prepared,
       catalog: result.catalog,
       prepareGeneration: generation,
+      ...(latest?.runId === run && latest.memoryInput !== undefined ? { memoryInput: latest.memoryInput } : {}),
       failed: false,
       closed: false,
     }
@@ -954,6 +998,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (humanPresent) {
         boundaryWorker.cancelSession(event.sessionId)
         const previous = currentSession(event.sessionId)
+        if (previous) ennoMemory.invalidate(previous.runId)
         const state = previous === undefined ? undefined : states.get(previous.runId)
         if (previous !== undefined) {
           try {
@@ -995,6 +1040,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           const humanMessages = [...new Map([...nativeMessages, ...nativeDecision.messages].filter(isHumanMessage)
             .map(message => [objectRecord(message)?.id ?? canonicalContentHash(message), message])).values()]
           const humanTask = humanPresent ? textFromMessages(humanMessages, event.task) : undefined
+          if (humanTask !== undefined) item.memoryInput = humanTask
           await executionSupport.refresh({ ...executionBinding(item), ...(humanTask === undefined ? {} : {
             // Steering within a native turn must update optional conditions,
             // without changing the logical-turn intake/receipt identity.
@@ -1022,6 +1068,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             if (paused) return { kind: 'reject' }
           }
         }
+        if (item !== undefined) await refreshEnnoMemory(item, event.signal)
         const messages = await contextMessages(event, nativeDecision.messages)
         return { ...nativeDecision, messages: [...executionSupport.projectMessages(event.sessionId, nativeDecision.messages), ...messages] }
       } catch (error) {
@@ -1166,7 +1213,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false, withheldReason: null, deliveryEmpty: true },
       warnings: capabilityResolution.warnings,
       nextAction: 'proceed',
-      securityNotice: 'This resumed DSH run uses only current repository evidence and the current host capability catalog; previously delivered ordinary memory is not replayed implicitly.',
+      securityNotice: 'This resumed DSH run uses only current repository evidence and the current host capability catalog; previously delivered ordinary memory is not replayed implicitly. Active ennoMemory may make a new bounded selection under current authority.',
       ennoOduno: snapshot ? stateForSnapshot(snapshot) : inapplicableEnnoState(),
     }
     if (decision?.executionLease) resumedLeases.set(runId, decision.executionLease)
@@ -1748,6 +1795,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const event = boundaryEvent(item)
     await assertTurnBoundary(event)
     if (state.directive === null) throw new Error('kiokuko-dsh boundary context has no directive')
+    await refreshEnnoMemory(item, event.signal)
     const selection = selectDshDirectiveSources(state.directive)
     const exactNativeAgent = item.nativeAgent as { readonly inject?: (message: unknown) => void } | undefined
     const agent = exactNativeAgent === undefined ? agents?.get(item.agentId) : exactNativeAgent
@@ -2251,6 +2299,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         ...(item.nativeSession === undefined ? {} : { nativeSession: item.nativeSession }),
       })
       item.closed = true
+      ennoMemory.clear(item.runId)
       executionSupport.clear(item.sessionId)
       gate.clearTurn(item.sessionId, item.turn)
       const modeKey = identityKey(item.agentId, item.sessionId)
@@ -2271,6 +2320,16 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }
   const observationDisposer = (ctx as any).on('tools/result', (execution: any, result: unknown) => {
     try {
+      if (ennoMemory.enabled && execution.parent === undefined) {
+        const agent = execution.agent, session = agent?.session, item = session ? currentSession(session.id) : undefined
+        const calls = session ? memoryCalls.get(session) : undefined
+        const call = calls?.get(execution.callId)
+        calls?.delete(execution.callId)
+        if (item && !item.closed && item.nativeAgent === agent && item.nativeSession === session && call
+          && call.runId === item.runId && call.agent === agent && call.turn === item.turn && call.name === execution.name) {
+          ennoMemory.observeResult(item.runId, agent, session, item.repositoryRoot, result)
+        }
+      }
       if (evolutionConfig.mode === 'off' || execution.parent !== undefined) return
       const agent = execution.agent, session = agent?.session, item = session ? currentSession(session.id) : undefined
       if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || typeof session.eventAt !== 'function' || !Number.isSafeInteger(session.seq)) return
@@ -2300,7 +2359,18 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const item = currentSession(session.id)
     const data = objectRecord(event.data)
     const eventTurn = typeof data?.turn === 'number' && Number.isSafeInteger(data.turn) ? data.turn : item?.turn
+    if (ennoMemory.enabled && item && item.nativeSession === session && event.type === 'user/message' && isHumanMessage(event.data)) {
+      ennoMemory.invalidate(item.runId)
+    }
     const ownsTurn = item !== undefined && !item.closed && eventTurn === item.turn && typeof event.type === 'string'
+    if (ennoMemory.enabled && ownsTurn && item.nativeSession === session && item.nativeAgent && event.type === 'tool/call'
+      && data?.turn === item.turn && Number.isSafeInteger(event.seq) && typeof data?.callId === 'string' && typeof data.name === 'string'
+      && !/^(?:enno_|oduno_|kiokuko|deep_)/u.test(data.name)) {
+      let calls = memoryCalls.get(session)
+      if (!calls) { calls = new Map(); memoryCalls.set(session, calls) }
+      if (calls.size >= 256) calls.delete(calls.keys().next().value!)
+      calls.set(data.callId, { name: data.name, runId: item.runId, agent: item.nativeAgent, turn: item.turn, seq: event.seq as number })
+    }
     const claimKey = `${session.id}\u0000${eventTurn}`
     const fallback = ownsTurn ? inMemoryClaims.get(claimKey) : undefined
     const providerStarted = event.type === 'request/header' || event.type === 'request/context'
@@ -2504,6 +2574,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     deepPlanning,
     get efficiency() { return efficiency },
     configureEfficiency,
+    configureEnnoMemory: config => ennoMemory.configure(config),
     memoryEvolution: {
       configure(config: EvolutionConfig) { memoryFinalizer.configureMemoryEvolution(config); Object.assign(evolutionConfig, config) },
       async status(sessionId: string) {
@@ -2559,6 +2630,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const failures: unknown[] = []
       try { await orca?.shutdown() } catch (error) { failures.push(error) }
       const pausedSessions = new Set([...latestBySession.keys()].filter(id => executionSupport.paused(id)))
+      ennoMemory.close()
       executionSupport.dispose()
       try { errorDisposer?.() } catch (error) { failures.push(error) }
       try { sessionEventDisposer?.() } catch (error) { failures.push(error) }

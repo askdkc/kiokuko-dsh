@@ -1,5 +1,5 @@
+import { renderScopedRetrievalQuery } from './retrieval-query.js';
 import { diversifyEpisodes } from '../memory/evolution/store.js';
-import { boundTaskRetrievalQuery } from '../memory/retrieval-query.js';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { KiokukoError } from '../errors.js';
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js';
@@ -29,6 +29,7 @@ import type { HybridSearchRuntime } from '../memory/hybrid-retrieval.js';
 import { projectMemoryEntry, type MemoryProjectionReceipt } from './memory-projection.js';
 
 export const SCOPED_CONTEXT_POLICY_VERSION = 'context-ranking-v7' as const;
+export type ScopedContextPolicy = typeof SCOPED_CONTEXT_POLICY_VERSION | 'context-ranking-v8';
 export const SCOPED_CONTEXT_DEFAULT_CHARACTER_BUDGET = 8_000;
 export const SCOPED_CONTEXT_MAX_CHARACTER_BUDGET = 100_000;
 
@@ -44,6 +45,10 @@ export interface ScopedContextQuery {
   limit?: number;
   characterBudget?: number;
   runId?: string;
+  /** Host-only focus: never changes the intake profile or execution authority. */
+  focus?: { objective: string | null; identifiers: readonly string[]; constraints: string;
+    retrievalDomainDigest: string; rankingFocusDigest: string };
+
 }
 
 export interface ScopedContextItem {
@@ -83,7 +88,7 @@ export interface ScopedContextResult {
   project: ResolvedProjectWorkspace | null;
   taskProfileHash: string;
   queryHash: string;
-  policyVersion: typeof SCOPED_CONTEXT_POLICY_VERSION;
+  policyVersion: ScopedContextPolicy;
   items: ScopedContextItem[];
   deliveryId: string | null;
   truncated: boolean;
@@ -96,6 +101,8 @@ export interface ScopedContextGateDecision<T> {
   value: T;
   assertBeforePersist?: () => void;
 }
+
+export interface ScopedContextTimings { retrievalMs: number; rankingMs: number; deliveryMs: number }
 
 export interface ScopedContextGatedResult<T> {
   context: ScopedContextResult | null;
@@ -215,19 +222,6 @@ function characterCount(value: string): number {
 
 function takeCharacters(value: string, limit: number): string {
   return Array.from(value).slice(0, Math.max(0, limit)).join('');
-}
-
-function textFor(query: ScopedContextQuery): string {
-  return boundTaskRetrievalQuery([
-    query.task,
-    query.taskProfile.taskType ?? '',
-    query.taskProfile.target ?? '',
-    query.taskProfile.expected ?? '',
-    query.taskProfile.constraints ?? '',
-    ...(query.recommendedTags ?? []),
-    ...(query.changedPaths ?? []),
-    ...(query.errorSignatures ?? []),
-  ].join('\n'));
 }
 
 function scopeObject(entry: EntryRecord): Record<string, unknown> {
@@ -493,13 +487,14 @@ function storedDeliveryIsRetrievable(
   taskProfileHash: string,
   limit: number,
   characterBudget: number,
+  policyVersion: ScopedContextPolicy,
 ): boolean {
-  if (delivery.policyVersion !== SCOPED_CONTEXT_POLICY_VERSION) return false;
+  if (delivery.policyVersion !== policyVersion) return false;
   assertScopedDeliveryIdentity(delivery);
   if (delivery.throughSequence !== throughSequence) return false;
   if (!delivery.items.every((item) => currentRetrievableDeliveryEntry(database, delivery.workspace, item) !== null)) return false;
   return !(delivery.taskProfileHash !== taskProfileHash
-    || delivery.policyVersion !== SCOPED_CONTEXT_POLICY_VERSION
+    || delivery.policyVersion !== policyVersion
     || delivery.charBudget !== characterBudget
     || delivery.items.length > limit);
 }
@@ -511,6 +506,7 @@ function replayableDelivery(
   taskProfileHash: string,
   limit: number,
   characterBudget: number,
+  policyVersion: ScopedContextPolicy,
 ): ContextDeliveryView | null {
   if (run === null) return null;
   const rows = database.prepare(`
@@ -521,7 +517,7 @@ function replayableDelivery(
   `).all<{ deliveryId: string }>(run.runId, queryHash);
   for (const row of rows) {
     const delivery = readContextDelivery(database, { workspace: run.workspace, deliveryId: row.deliveryId });
-    if (storedDeliveryIsRetrievable(database, delivery, run.throughSequence, taskProfileHash, limit, characterBudget)) return delivery;
+    if (storedDeliveryIsRetrievable(database, delivery, run.throughSequence, taskProfileHash, limit, characterBudget, policyVersion)) return delivery;
   }
   return null;
 }
@@ -587,6 +583,7 @@ function deliveryRequest(
   queryHash: string,
   characterBudget: number,
   fitted: FittedScopedItems,
+  policyVersion: ScopedContextPolicy = SCOPED_CONTEXT_POLICY_VERSION,
 ): ScopedDeliveryRequest {
   return {
     workspace: run.workspace,
@@ -595,7 +592,7 @@ function deliveryRequest(
     intakeSessionId: run.intakeSessionId,
     taskProfileHash,
     queryHash,
-    policyVersion: SCOPED_CONTEXT_POLICY_VERSION,
+    policyVersion,
     charBudget: characterBudget,
     charCount: fitted.charCount,
     truncated: fitted.truncated,
@@ -608,7 +605,10 @@ async function prepareScopedContext(
   database: SqliteDatabase,
   raw: ScopedContextQuery,
   requestedRuntime: HybridSearchRuntime,
+  reuse?: ScopedContextResult,
+  timings?: ScopedContextTimings,
 ): Promise<PreparedScopedContext> {
+  const policyVersion: ScopedContextPolicy = raw.focus === undefined ? SCOPED_CONTEXT_POLICY_VERSION : 'context-ranking-v8';
   const runtime = snapshotSemanticRuntime(requestedRuntime);
   const semanticIdentity = semanticQueryIdentity(runtime);
   const taskProfileHash = canonicalContentHash(raw.taskProfile);
@@ -645,12 +645,14 @@ async function prepareScopedContext(
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT || !Number.isSafeInteger(characterBudget) || characterBudget < 1 || characterBudget > SCOPED_CONTEXT_MAX_CHARACTER_BUDGET) {
     throw new KiokukoError('VALIDATION_ERROR', 'Scoped context bounds are invalid');
   }
-  const queryText = textFor(raw);
+  const queryText = renderScopedRetrievalQuery(raw);
   const selectionWorkspaces = project === undefined ? [] : [project.workspace, GLOBAL_WORKSPACE];
   const { ordinary: selectionStateHash, retrieval: retrievalStateHash } = contextSelectionStateHashes(database, selectionWorkspaces, {
     includeEcosystem: project !== undefined,
   });
   const queryHash = canonicalContentHash({
+    ...(raw.focus === undefined ? {} : { focus: raw.focus }),
+    ...(reuse === undefined ? {} : { reusedSelection: deliveryItems(reuse.items) }),
     task: raw.task,
     taskProfile: raw.taskProfile,
     recommendedTags: raw.recommendedTags ?? [],
@@ -664,7 +666,7 @@ async function prepareScopedContext(
     },
     limit,
     characterBudget,
-    policyVersion: SCOPED_CONTEXT_POLICY_VERSION,
+    policyVersion,
     retrievalStateHash,
     runStateHash: run?.stateHash ?? null,
     semanticQuery: semanticIdentity,
@@ -676,6 +678,7 @@ async function prepareScopedContext(
     taskProfileHash,
     limit,
     characterBudget,
+    policyVersion,
   );
   if (replay !== null) {
     return {
@@ -683,7 +686,7 @@ async function prepareScopedContext(
         project: project ?? null,
         taskProfileHash,
         queryHash,
-        policyVersion: SCOPED_CONTEXT_POLICY_VERSION,
+        policyVersion,
         items: storedScopedItems(database, replay),
         deliveryId: replay.deliveryId,
         truncated: replay.truncated,
@@ -699,14 +702,30 @@ async function prepareScopedContext(
       projectState,
     };
   }
+  if (reuse !== undefined) {
+    if (reuse.project?.workspace !== project?.workspace || reuse.taskProfileHash !== taskProfileHash) {
+      throw new KiokukoError('CONFLICT', 'Reused memory scope changed');
+    }
+    const fitted = fitScopedItems(reuse.items, limit, characterBudget);
+    fitted.truncated ||= reuse.truncated;
+    return {
+      result: { ...reuse, queryHash, policyVersion, deliveryId: null, items: fitted.items, truncated: fitted.truncated },
+      replayDelivery: null, selectionStateHash, retrievalStateHash, selectionWorkspaces,
+      pendingDelivery: run === null ? null : deliveryRequest(run, taskProfileHash, queryHash, characterBudget, fitted, policyVersion),
+      run, projectState,
+    };
+  }
   const candidates = new Map<string, ScopedContextItem>();
   const omissions: NonNullable<ScopedContextResult['omissions']> = [];
+  const retrievalStarted = timings === undefined ? 0 : performance.now();
   const federated = project === undefined ? [] : await federatedEntries(database, {
     project,
     ...(fingerprint === undefined ? {} : { fingerprint }),
     query: queryText,
     limit: 200,
   }, runtime);
+  if (timings) timings.retrievalMs = performance.now() - retrievalStarted;
+  const rankingStarted = timings === undefined ? 0 : performance.now();
   for (const hit of federated) {
     const entry = hit.entry;
     const item = entryScore(entry, hit.origin, hit.score, hit.selectionReasons.includes('exact_signal_match'), queryText);
@@ -736,12 +755,13 @@ async function prepareScopedContext(
   for (const item of ordered.filter(item => !retained.has(item.entryId))) {
     omissions.push({ entryId: item.entryId, reason: (item.projection?.characters ?? 0) > characterBudget ? 'budget' : !reconsidered.some(candidate => candidate.entryId === item.entryId) ? 'diversified' : fitted.items.length >= limit ? 'limit' : 'budget' });
   }
+  if (timings) timings.rankingMs = performance.now() - rankingStarted;
   return {
     result: {
       project: project ?? null,
       taskProfileHash,
       queryHash,
-      policyVersion: SCOPED_CONTEXT_POLICY_VERSION,
+      policyVersion,
       items: fitted.items,
       omissions,
       deliveryId: null,
@@ -752,7 +772,7 @@ async function prepareScopedContext(
     selectionStateHash,
     retrievalStateHash,
     selectionWorkspaces,
-    pendingDelivery: run === null ? null : deliveryRequest(run, taskProfileHash, queryHash, characterBudget, fitted),
+    pendingDelivery: run === null ? null : deliveryRequest(run, taskProfileHash, queryHash, characterBudget, fitted, policyVersion),
     run,
     projectState,
   };
@@ -806,6 +826,7 @@ function persistPreparedScopedContext(
   database: SqliteDatabase,
   prepared: PreparedScopedContext,
   assertBeforePersist?: () => void,
+  commit?: (context: ScopedContextResult | null) => void,
 ): ScopedContextResult {
   if (prepared.pendingDelivery === null) {
     return withImmediateTransaction(database, () => {
@@ -814,6 +835,7 @@ function persistPreparedScopedContext(
         assertBeforePersist();
         assertPreparedScopedState(database, prepared);
       }
+      commit?.(prepared.result);
       return prepared.result;
     });
   }
@@ -834,12 +856,14 @@ function persistPreparedScopedContext(
       if (existing && existing.reason !== omission.reason) throw new KiokukoError('INTEGRITY_ERROR', 'Context omission reason changed on replay');
       if (!existing) database.prepare('INSERT INTO context_delivery_omissions(delivery_id,entry_id,reason) VALUES(?,?,?)').run(delivery.deliveryId, omission.entryId, omission.reason);
     }
-    return {
+    const result: ScopedContextResult = {
       ...prepared.result,
       items: storedScopedItems(database, delivery),
       deliveryId: delivery.deliveryId,
       truncated: delivery.truncated,
     };
+    commit?.(result);
+    return result;
   });
 }
 
@@ -848,8 +872,11 @@ export async function queryScopedContextGated<T>(
   raw: ScopedContextQuery,
   decide: (candidate: ScopedContextResult) => ScopedContextGateDecision<T>,
   runtime: HybridSearchRuntime = {},
+  effects: { reuse?: ScopedContextResult; commit?: (context: ScopedContextResult | null) => void; timings?: ScopedContextTimings; beforeCommit?: () => Promise<void> } = {},
 ): Promise<ScopedContextGatedResult<T>> {
-  const prepared = await prepareScopedContext(database, raw, runtime);
+  const prepared = await prepareScopedContext(database, raw, runtime, effects.reuse, effects.timings);
+  if (effects.beforeCommit) await effects.beforeCommit();
+  const deliveryStarted = effects.timings === undefined ? 0 : performance.now();
   const decision = normalizedScopedGateDecision<T>(decide(prepared.result));
   if (!decision.persist) {
     withImmediateTransaction(database, () => {
@@ -858,10 +885,13 @@ export async function queryScopedContextGated<T>(
         decision.assertBeforePersist();
         assertPreparedScopedState(database, prepared);
       }
+      effects.commit?.(null);
     });
   }
+  const context = decision.persist ? persistPreparedScopedContext(database, prepared, decision.assertBeforePersist, effects.commit) : null;
+  if (effects.timings) effects.timings.deliveryMs = performance.now() - deliveryStarted;
   return {
-    context: decision.persist ? persistPreparedScopedContext(database, prepared, decision.assertBeforePersist) : null,
+    context,
     value: decision.value,
     selectionStateHash: prepared.selectionStateHash,
   };

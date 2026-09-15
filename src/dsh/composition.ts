@@ -47,6 +47,7 @@ export interface DshNativeTurnStoppingPayload {
 }
 
 export interface DshCompositionHost {
+  readonly configureEnnoMemory?: (config: import('./config.js').EnnoMemoryConfig) => void
   readonly deepPlanning?: import('../deep-thinker/controller.js').DeepPlanningController
   readonly memoryEvolution?: { configure: (config: import('../memory/evolution/contracts.js').EvolutionConfig) => void; status: (sessionId: string) => Promise<Record<string, unknown>> }
   readonly efficiency?: import('./efficiency.js').DshEfficiencyObserver | undefined

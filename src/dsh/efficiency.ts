@@ -1,3 +1,4 @@
+import type { EnnoMemoryObservation } from './enno-memory-refresh.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { findSecret } from '../memory/secrets.js'
@@ -75,6 +76,7 @@ export function modelLabel(value: unknown): string | null {
 /** Evaluation-only, bounded numeric observations. No prompts, files, timers or DB writes. */
 export class DshEfficiencyObserver {
   readonly #records: EfficiencyObservation[] = []
+  readonly #ennoMemory: EnnoMemoryObservation[] = []
   readonly #continuity: ContinuityObservation[] = []
   #evicted = 0
   #unattributed = 0
@@ -100,11 +102,16 @@ export class DshEfficiencyObserver {
     if (this.#continuity.length === this.capacity) this.#continuity.shift()
     this.#continuity.push(Object.freeze({ mode, bytes, items, omittedItems, coverage, copiesInRequest }))
   }
+  recordEnnoMemory(value: EnnoMemoryObservation): void {
+    if (this.#closed) return
+    if (this.#ennoMemory.length === this.capacity) this.#ennoMemory.shift()
+    this.#ennoMemory.push(Object.freeze({ ...value }))
+  }
   snapshot() {
     return { format: 'dsh.efficiency.v1', coverage: 'observed_only', providerInternalRetries: 'unknown',
       wirePayloadConfirmed: false, tokenizer: null, evicted: this.#evicted, unattributed: this.#unattributed,
       observationErrors: this.#errors, streamCallsStarted: this.#started, activeStreams: this.#active,
-      discardedAfterClose: this.#discardedAfterClose, observations: [...this.#records], continuity: [...this.#continuity] } as const
+      discardedAfterClose: this.#discardedAfterClose, observations: [...this.#records], continuity: [...this.#continuity], ennoMemory: [...this.#ennoMemory] } as const
   }
   close(): void { this.#closed = true }
   unavailable(): void { this.#errors++; this.close() }

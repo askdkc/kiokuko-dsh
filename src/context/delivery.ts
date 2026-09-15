@@ -303,7 +303,7 @@ function deliveryPolicyVersion(): string {
 }
 
 function storedDeliveryPolicyMatches(policyVersion: string): boolean {
-  return policyVersion === deliveryPolicyVersion() || policyVersion === 'context-ranking-v6';
+  return policyVersion === deliveryPolicyVersion() || policyVersion === 'context-ranking-v6' || policyVersion === 'context-ranking-v8';
 }
 
 function storedNonNegativeSafeInteger(value: unknown): number {
