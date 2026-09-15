@@ -26,6 +26,10 @@ const requiredFiles = [
   'README.ko.md',
   'PERMISSIONS.md',
   'dsh/cordis.patch.yml',
+  'THIRD_PARTY_NOTICES.md',
+  'dist/plugin-runtime.js',
+  'dist/dsh/startup-recovery.js',
+  'dist/dsh/legacy-session-codecs.js',
   'dist/index.js',
   'dist/index.d.ts',
   'dist/client.cjs',
@@ -147,13 +151,21 @@ async function createAndSmokeTestTarball() {
   const tarball = join(packageOutput, filename)
   await exec('tar', ['-xzf', tarball, '-C', extractRoot])
   const packageRoot = join(extractRoot, 'package')
+  // Import the packed private readers before development dependencies can satisfy a leaked import.
+  await exec(process.execPath, ['--input-type=module', '--eval',
+    `await import(${JSON.stringify(join(packageRoot, 'dist/dsh/legacy-session-codecs.js'))})`], {
+    cwd: extractRoot, env: { PATH: process.env.PATH, HOME: work },
+  })
   await symlink(join(root, 'node_modules'), join(packageRoot, 'node_modules'), 'dir')
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
   await assertDshClientArtifact(packageRoot)
 
   const smokeCode = `
     const root = await import('kiokuko-dsh');
-    const plugin = await import('kiokuko-dsh/dsh');
+    const plugin = await import('kiokuko-dsh');
+    const direct = await import('kiokuko-dsh/dsh');
+    if (JSON.stringify(Object.keys(root)) !== JSON.stringify(Object.keys(direct))) throw new Error('guarded entry changed public exports');
+    for (const name of Object.keys(direct)) if (root[name] !== direct[name]) throw new Error('guarded entry changed export identity: ' + name);
     if (plugin.name !== 'kiokuko-dsh') throw new Error('unexpected plugin name');
     if (typeof root.DshSessionLogExportService !== 'function') throw new Error('missing root export service');
     if ('default' in plugin) throw new Error('unexpected default export');
@@ -254,6 +266,9 @@ try {
   if (paths.has('dist/cli.js')) throw new Error('generic CLI output must not be published')
   if (packageManifest.dependencies?.commander !== undefined || packageManifest.dependencies?.['@modelcontextprotocol/sdk'] !== undefined) {
     throw new Error('DSH package must not depend on generic CLI or MCP runtimes')
+  }
+  if (Object.keys(packageManifest.dependencies ?? {}).some(name => name.startsWith('@deepseek-ai/dsh-'))) {
+    throw new Error('Published Kiokuko must not install a second DSH runtime through dependencies')
   }
   const npmLock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'))
   const { parse } = await import('yaml')

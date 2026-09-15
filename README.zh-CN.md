@@ -66,4 +66,6 @@ pnpm dsh web
 已安装的 Kiokuko 必须包含 `>=0.2.1` 依赖范围。该范围允许正式版 0.3.0 及后续版本，
 但不会自动更新现有安装。更新后请检查记录和 HTML 导出。[更新详情](docs/dsh-plugin.md#update)
 
+DSH 更新后若无法加载 Kiokuko，请参阅[启动恢复步骤](docs/dsh-plugin.md#startup-failure-after-a-dsh-update)，按对应 profile 更新或重新安装。请保留会话日志和 Kiokuko 数据库；重新安装不一定能解决 API 兼容性问题。
+
 [文档](docs/README.md) · [权限](PERMISSIONS.md) · [MIT 许可证](LICENSE)

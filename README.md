@@ -68,4 +68,6 @@ Verify recording and export after updating. See [update details](docs/dsh-plugin
 
 If existing chats fail with an unknown `kiokuko/` event, see [history repair](docs/session-history-repair.md).
 
+If Kiokuko fails to load after a DSH update, see [startup recovery](docs/dsh-plugin.md#startup-failure-after-a-dsh-update) for profile-specific update and reinstall commands. Keep session logs and the Kiokuko database; reinstallation cannot fix every API incompatibility.
+
 [Documentation](docs/README.md) · [Permissions](PERMISSIONS.md) · [MIT license](LICENSE)

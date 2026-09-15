@@ -12,9 +12,9 @@ test('plugin startup reports critical failure and preserves the original rejecti
   const errors = t.mock.method(console, 'error', () => {})
   const ctx = { effect: async () => { throw failure } } as unknown as Context
   await assert.rejects(dshPlugin.apply(ctx, { enabled: true }), error => error === failure)
-  assert.deepEqual(errors.mock.calls.map(call => call.arguments), [
-    ['[kiokuko-dsh] [crit] Plugin startup failed:', failure.message],
-  ])
+  assert.deepEqual(errors.mock.calls[0]?.arguments, ['[kiokuko-dsh] [crit] Plugin startup failed:', failure.message])
+  assert.match(String(errors.mock.calls[1]?.arguments[0]), /update kiokuko-dsh --latest/)
+  assert.match(String(errors.mock.calls[1]?.arguments[0]), /Do not delete session logs/)
 })
 
 test('explicit host adapter mounts native DSH tools and commands and unloads them', async () => {

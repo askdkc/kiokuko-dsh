@@ -1,7 +1,7 @@
 # DeepSeek Harness Plugin
 
 Kiokuko provides an out-of-tree DeepSeek Harness bundle at `kiokuko-dsh`.
-`kiokuko-dsh/dsh` remains a compatibility import. It mounts the DSH-only Kiokuko runtime contracts; it does
+`kiokuko-dsh` is the guarded Cordis entry. `kiokuko-dsh/dsh` remains a compatibility import. It mounts the DSH-only Kiokuko runtime contracts; it does
 not fork DeepSeek Harness or modify a repository's files.
 
 ## Install
@@ -120,6 +120,28 @@ above with the intended new commit; updating a fixed source reference does not
 move it to a newer commit. For a local checkout, update/build that checkout and
 install its built path again. These profile commands do not update the lockfiles
 in a separate Kiokuko development checkout.
+
+## Startup failure after a DSH update
+
+Stop DSH before updating the plugin. For an npm installation, run these commands from the DSH source checkout (omit `pnpm` for an installed `dsh` CLI):
+
+```bash
+pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh web
+```
+
+If package files remain broken, stop DSH and reinstall the npm package:
+
+```bash
+pnpm dsh plugin --profile web add kiokuko-dsh@latest --force
+pnpm dsh web
+```
+
+Use the affected profile in place of `web`. For GitHub or local installs, reinstall the original package spec instead of changing distribution. Keep pnpm build approvals and release-age policies; the update guidance above explains release-age exclusions. Reinstallation may repair stale or incomplete package files, but it cannot guarantee compatibility with a changed DSH API. Retain the original error when reporting a failure. Never delete session logs, the Kiokuko database, or profile settings as a startup repair.
+
+The guarded bundle entry prints these next steps for dependency-import failures and Kiokuko activation failures, then preserves the original rejection. It cannot print before DSH resolves that entry or when DSH never activates it because a required service is unavailable; those errors remain DSH-owned. The public library imports are unchanged.
+
+Released v0/v1/v2 history readers are bundled privately into the npm artifact. Their DSH packages are build dependencies only, so installing Kiokuko does not hoist an older DSH LLM over the running host. This preserves the released readers rather than substituting the current host's history format. Other plugins may still install conflicting DSH packages; inspect their dependency paths if the same Typert error persists.
 
 ## Remove
 
