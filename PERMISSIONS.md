@@ -140,3 +140,21 @@ New directories/files use 0700/0600 and unsafe existing modes/symlinks are refus
 `.orca/.gitignore` excludes new stores from Git. Exports are never published or
 uploaded automatically. Deletion and disabling instructions are in
 [Orca recording](docs/orca-recording.md).
+# Optional Common Lisp mode
+
+With `lisp.enabled: true`, `/kioku-lisp enable` starts an OS-protected SBCL for the
+current session. It reads bundled runtime libraries and explicitly selected input
+copies and a verified compiled bundle, and writes its own scratch/cache. Initial
+Lisp enable compiles bundled sources in a supervised sandbox; the host publishes
+the completed bundle for read-only reuse. Runtime/compiler/source changes select
+a new entry. Invalid entries are quarantined and require explicit recovery. The
+host stores operation records and
+independent backups beside the Kiokuko database. No credentials or inherited
+environment are forwarded, and direct network/host IPC access is denied.
+
+File deletion and replacement require the native human confirmation for the exact
+proposal. Generic operations reject databases/sidecars, credential paths, links,
+directories, plugin files and host state. Refusal, skip, cancellation and missing
+confirmation UI never grant permission. Normal tools and child bypasses remain
+blocked until a human safely disables the mode. Plugin unload retains the fence.
+See [Common Lisp setup and recovery](docs/lisp.md) for commands and limits.

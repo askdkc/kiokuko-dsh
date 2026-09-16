@@ -288,6 +288,71 @@ function CompletionReport(props: Record<string, unknown>): unknown {
 }
 
 interface DeepDisplayItem { id: string; kind: 'report' | 'status'; text: string; delivered: boolean }
+interface LispDisplayState { enabled: boolean; state: string; recovery?: string; error?: { message: string; recovery: string }; operations?: { id: string; state: string }[] }
+/** Recovery stays available even when the model loop is stopped. */
+function LispSessionStatus(props: Record<string, unknown>): unknown {
+  const sessionId = String(props.sessionId)
+  const [status, setStatus] = useState<LispDisplayState | null>(null)
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [details, setDetails] = useState('')
+  const dialog = useRef<HTMLDialogElement | null>(null)
+  const trigger = useRef<HTMLButtonElement | null>(null)
+  const current = useRef(sessionId); current.current = sessionId
+  const request = async (action?: string) => {
+    const url = new URL('/api/kiokuko.lisp', hostBase()); url.searchParams.set('sessionId', sessionId)
+    const response = await fetch(url, action ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) } : {})
+    if (response.status === 404 && !action) return null
+    const value = await response.json() as LispDisplayState & { message?: string; code?: string }
+    if (!response.ok) throw new Error(value.message ?? 'Lisp の状態を取得できません。接続を確認してください。')
+    return value
+  }
+  useEffect(() => {
+    if (open && dialog.current && !dialog.current.open) dialog.current.showModal()
+    if (!open && dialog.current?.open) { dialog.current.close(); trigger.current?.focus() }
+  }, [open])
+  useEffect(() => {
+    let disposed = false, timer: ReturnType<typeof setTimeout> | undefined, lastState = ''
+    setStatus(null); setError(''); setOpen(false); setDetails(''); setBusy(false)
+    const refresh = async () => {
+      try {
+        const value = await request()
+        if (disposed) return
+        if (value) { setStatus(value); setError(''); if (value.enabled && ['RECOVERY_REQUIRED', 'STOP_UNCONFIRMED'].includes(value.state) && value.state !== lastState) setOpen(true); lastState = value.state }
+        else if (lastState) setError('Lisp の接続が失われました。保護は解除されていません。プラグインを戻して /kioku-lisp status を確認してください。')
+      } catch (failure) { if (!disposed && lastState) setError(messageOf(failure)) }
+      finally { if (!disposed) timer = setTimeout(() => void refresh(), document.hidden ? 10000 : 2000) }
+    }
+    void refresh()
+    return () => { disposed = true; clearTimeout(timer) }
+  }, [sessionId])
+  const act = async (action: string) => {
+    if (busy) return
+    setBusy(true); setError('')
+    try {
+      const result = await request(action)
+      if (current.current !== sessionId) return
+      if (result?.code) setDetails(JSON.stringify(result, null, 2))
+      else { setDetails(''); if (result?.state) setStatus({ ...status, ...result, enabled: result.enabled ?? status?.enabled ?? true }) }
+    } catch (failure) { if (current.current === sessionId) setError(messageOf(failure)) }
+    finally { if (current.current === sessionId) setBusy(false) }
+  }
+  if (!status?.enabled && !error) return null
+  const label = ({ READY: '実行可能', EVALUATING: '処理中', PREFLIGHT: '起動中', STOPPING: '停止中', RECOVERY_REQUIRED: '確認が必要', STOP_UNCONFIRMED: '停止未確認' } as Record<string, string>)[status?.state ?? ''] ?? '状態不明'
+  return jsxs(Fragment, { children: [jsx('button', { type: 'button', ref: trigger, onClick: () => setOpen(true), children: `Lisp: ${label}` }),
+    jsx('dialog', { ref: dialog, onCancel: () => setOpen(false), 'aria-label': 'Lisp の状態と復旧', style: { maxWidth: 'min(720px, 90vw)', maxHeight: '85vh' },
+      children: jsxs('section', { children: [jsx('h2', { children: `Lisp: ${label}` }),
+        jsx('p', { role: 'status', 'aria-live': 'polite', children: busy ? '処理しています。初回の起動には時間がかかる場合があります。' : status?.error?.message ?? '現在のセッションの状態です。' }),
+        jsx('p', { children: status?.error?.recovery ?? status?.recovery ?? '' }),
+        ...(error ? [jsx('p', { role: 'alert', children: error })] : []),
+        ...(details ? [jsx('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }, children: details })] : []),
+        jsx('p', { children: '未確定の変更は自動で再実行・復元しません。詳細は /kioku-lisp diagnostics でも確認できます。' }),
+        jsx('button', { type: 'button', disabled: busy, onClick: () => void act('cancel'), children: '停止する' }),
+        jsx('button', { type: 'button', disabled: busy || status?.state === 'STOP_UNCONFIRMED', onClick: () => void act('recover'), children: '照合して新しい Lisp を起動' }),
+        jsx('button', { type: 'button', onClick: () => setOpen(false), children: '閉じる' }),
+      ] }) })] })
+}
 /** Read-only, Session-bound display with explicit delivery acknowledgement after render. */
 function DeepSessionReports(props: Record<string, unknown>): unknown {
   const sessionId = String(props.sessionId)
@@ -610,6 +675,9 @@ function installIntakeStyle(): (() => void) | undefined {
 
 /** Register Kiokuko's streaming Session-export browser surface. */
 export function apply(ctx: DshClientContext): void {
+  ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+    name: 'conversation.input.left', id: 'kiokuko-lisp-status', locale: LOCALE_NAMESPACE,
+  }, LispSessionStatus))
   ctx.slots.inject('conversation.composer', () => ctx.slots.register({
     name: 'conversation.composer', priority: -10, select: intakePending, locale: LOCALE_NAMESPACE,
   }, IntakeQuestion))

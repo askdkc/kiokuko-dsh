@@ -19,7 +19,8 @@ test('deployment creates all eight bundled Skills and references, updates manage
   assert.deepEqual(initial, { directory: path.join(home, '.agents', 'skills'), created: 23, updated: 0, unchanged: 0 })
   const root = initial.directory
   const sourceRoot = new URL('../../../skills/', import.meta.url)
-  const sourceDirectories = (await readdir(sourceRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name).sort()
+  // Lisp is an opt-in, session-scoped Skill; it must not be installed globally.
+  const sourceDirectories = [...parity.skills, 'japanese-translation-for-oss-models'].sort()
   assert.deepEqual((await readdir(root)).sort(), sourceDirectories)
   for (const name of sourceDirectories) assert.equal(await readFile(path.join(root, name, 'SKILL.md'), 'utf8'), await readFile(new URL(`${name}/SKILL.md`, sourceRoot), 'utf8'))
   const japanesePath = path.join(root, 'japanese-translation-for-oss-models', 'SKILL.md')

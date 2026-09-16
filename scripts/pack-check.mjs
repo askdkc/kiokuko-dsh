@@ -12,6 +12,23 @@ const cache = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-cache-'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
+  'migrations/019_dsh_lisp.sql',
+  'dist/dsh/lisp/manager.js',
+  'dist/dsh/lisp/surface.js',
+  'dist/dsh/lisp/worker.js',
+  'skills/kiokuko-lisp/SKILL.md',
+  'lisp/bootstrap.lisp',
+  'lisp/compile.lisp',
+  'lisp/check-compiled.lisp',
+  'lisp/runtime-identity.lisp',
+  'lisp/kioku-runtime.asd',
+  'lisp/supervisor.mjs',
+  'dist/dsh/lisp/compiled-cache.js',
+  'lisp/tools.lisp',
+  'lisp/vendor-manifest.json',
+  'lisp/vendor/cl-unicode/methods.lisp',
+  'lisp/vendor/cl-unicode/hash-tables.lisp',
+  'lisp/vendor/cl-unicode/lists.lisp',
   'LICENSE',
   'migrations/018_dsh_enno_memory_refresh.sql',
   'dist/dsh/enno-memory-refresh.js',
@@ -45,6 +62,8 @@ const requiredFiles = [
 ]
 const requiredDirectories = ['dist/', 'migrations/', 'skills/', 'docs/']
 const forbiddenPrefixes = [
+  'lisp/vendor/cl-unicode/test/derived-properties',
+  'lisp/vendor/cl-unicode/test/normalization-forms',
   'src/',
   'tests/',
   'node_modules/',
@@ -259,6 +278,8 @@ try {
   const files = metadata?.files ?? []
   const paths = new Set(files.map((entry) => entry.path))
   const missing = requiredFiles.filter((file) => !paths.has(file))
+  const lispManifest = JSON.parse(await readFile(join(root, 'lisp/vendor-manifest.json'), 'utf8'))
+  missing.push(...Object.keys(lispManifest.files).map(file => `lisp/vendor/${file}`).filter(file => !paths.has(file)))
   const missingDirectories = requiredDirectories.filter((directory) => !files.some((entry) => entry.path.startsWith(directory)))
   const forbidden = files.map((entry) => entry.path).filter((file) => forbiddenPrefixes.some((prefix) => file === prefix || file.startsWith(prefix)))
   if (missing.length > 0 || missingDirectories.length > 0 || forbidden.length > 0) {

@@ -1,4 +1,6 @@
 import { formatEvolutionStatus } from '../memory/evolution/status.js'
+import { mountLispSurface } from './lisp/surface.js'
+import type { LispConfiguration } from './lisp/contracts.js'
 import { mountDeepReportSurface } from '../deep-thinker/report-surface.js'
 import { mountDshNoticeSurface } from './session-notice-surface.js'
 import { mountSessionHistoryCompatibility, type SessionHistoryCheck } from './session-history-compatibility.js'
@@ -95,6 +97,7 @@ function toolRegistration(host: DshCompositionHost): { register: (definition: an
 type DshDisposer = () => unknown
 
 export interface DshCompositionHandle {
+  readonly drainLisp: () => Promise<void>
   /** Startup validation of all persisted session IDs, also run after plugin reload/update. */
   readonly historyCheck: Promise<SessionHistoryCheck>
   /** Stop all event, command, tool, and session ingress synchronously. */
@@ -179,7 +182,10 @@ function mountNativeBoundaryKick(
  * adapter is deliberately explicit: a generic Cordis context cannot invent a
  * repository/run binding or an intake task projection safely.
  */
-export async function mountDshComposition(ctx: Context, host: DshCompositionHost): Promise<DshCompositionHandle> {
+export async function mountDshComposition(ctx: Context, host: DshCompositionHost, lisp?: LispConfiguration): Promise<DshCompositionHandle> {
+  let lispSurface: Awaited<ReturnType<typeof mountLispSurface>> | undefined
+  let lispDrain: Promise<void> | undefined
+  const drainLisp = () => lispDrain ??= lispSurface?.dispose() ?? Promise.resolve()
   const ingressDisposers: DshDisposer[] = []
   const cleanupDisposers: DshDisposer[] = []
   const setupResourceDisposers: DshDisposer[] = []
@@ -227,7 +233,14 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       const disposer = await mountRuntime(host.runtime)
       setupResourceDisposers.push(disposer)
       if (host.runtimeOwner !== 'host') cleanupDisposers.push(disposer)
+      if (lisp && (lisp.enabled || await host.runtime.withDatabase(db => Boolean(db.prepare('SELECT session_id FROM dsh_lisp_sessions WHERE enabled=1 LIMIT 1').get())))) {
+        lispSurface = await mountLispSurface(ctx, host.runtime, lisp)
+        ingressDisposers.push(() => lispSurface?.stop())
+        cleanupDisposers.push(drainLisp)
+        setupResourceDisposers.push(drainLisp)
+      }
     }
+    else if (lisp?.enabled) throw new Error('Lisp requires the DSH runtime')
     if (host.sessionMirror !== undefined) {
       await host.sessionMirror.start()
       const closeMirror = async () => host.sessionMirror!.close()
@@ -344,5 +357,5 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     disposePromise = runCleanup()
     return disposePromise
   }
-  return { stopIngress, dispose, historyCheck } as DshCompositionHandle
+  return { stopIngress, dispose, historyCheck, drainLisp } as DshCompositionHandle
 }

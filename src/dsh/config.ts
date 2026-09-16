@@ -3,6 +3,8 @@ export { AkinatorMemoryConfig }
 import { MemoryEvolutionConfig } from '../memory/evolution/contracts.js'
 export { MemoryEvolutionConfig }
 import { z } from 'zod'
+import { LispConfig } from './lisp/contracts.js'
+export { LispConfig }
 import { ContinuityConfig } from '../context/continuity-view.js'
 export { ContinuityConfig }
 import { ModelRouteSchema } from './model-configuration.js'
@@ -45,6 +47,7 @@ export type EnnoMemoryConfig = z.infer<typeof EnnoMemoryConfig>
 /** Runtime configuration accepted by the dsh bundle entrypoint. */
 export const Config = z.object({
   enabled: z.boolean().default(true),
+  lisp: LispConfig.prefault({}),
   akinatorMemory: AkinatorMemoryConfig.prefault({}),
   deepPlanning: DeepThinkerConfigSchema.prefault({}),
   modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),

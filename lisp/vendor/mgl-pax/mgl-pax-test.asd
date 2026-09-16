@@ -1,0 +1,29 @@
+;;;; See comment in mgl-pax-bootstrap.asd for why this is a separate
+;;;; .asd file.
+
+(asdf:defsystem "mgl-pax-test"
+  :licence "MIT, see COPYING."
+  :author "Gábor Melis"
+  :mailto "mega@retes.hu"
+  :homepage ""
+  :bug-tracker ""
+  :source-control ""
+  :description "Test system for MGL-PAX."
+  :long-description ""
+  ;; KLUDGE: CMUCL cannot load CL+SSL.
+  :depends-on (#-cmucl "mgl-pax/full"
+               #+cmucl "mgl-pax/document"
+               "dref-test" "try")
+  :components ((:module "test"
+                :serial t
+                :components ((:file "package")
+                             (:file "test-defs")
+                             (:file "test-util")
+                             (:file "test-hyperspec")
+                             (:file "test-navigate")
+                             (:file "test-markdown")
+                             (:file "test-document")
+                             (:file "test-transcribe")
+                             (:file "test"))))
+  :perform (asdf:test-op (o s)
+             (uiop:symbol-call '#:mgl-pax-test '#:test)))
