@@ -28,7 +28,13 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     return { answers: [{ id: request.questions[0].id, selected: approval === 'skip' ? [] : [request.questions[0].options![approval === 'allow' || approval === 'mutate' ? 1 : 0]!.label] }] }
   } }
   const config = LispConfig.parse({ enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 })
-  const options = { store, config, dataRoot: join(base, 'data'), questions: ui }
+  const ciRequests: unknown[] = []
+  const options = { store, config, dataRoot: join(base, 'data'), questions: ui, ciCall: async (_owner: unknown, request: any) => {
+    ciRequests.push(request)
+    if (request.kind === 'list-runs') return { source: 'fixture', runs: [{ databaseId: 42 }] }
+    if (request.kind === 'failed-log') return { source: 'fixture', runId: request.runId, log: 'failed log' }
+    return { target: request.target, state: 'SUCCEEDED', code: 0, stdout: 'verified', stderr: '' }
+  } }
   let manager = new LispManager(options)
   const owner = { sessionId: 'session', agentId: 'agent', root }
   const evaluate = (operationId: string, code: string, extra = {}) => manager.execute(owner, 'lisp_eval', { operationId, code, ...extra }) as Promise<any>
@@ -62,11 +68,46 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     assert.equal(artifact.ok, true, JSON.stringify(artifact)); assert.equal(await readFile(artifact.value.json.path, 'utf8'), 'artifact')
     const data = await evaluate('data', `(list (gethash "x" (kioku.data:parse-json ${JSON.stringify('{"x":42}')})) (kioku.data:read-csv "a,b") (kioku.data:regex-matches "[0-9]+" "x12"))`)
     assert.equal(data.ok, true, JSON.stringify(data)); assert.match(data.value.printed, /42/); assert.match(data.value.printed, /12/)
+    const ciRuns = await evaluate('ci-runs', '(kioku.ci:list-runs :limit 3)')
+    assert.equal(ciRuns.ok, true, JSON.stringify(ciRuns)); assert.match(JSON.stringify(ciRuns), /databaseId/)
+    const ciLog = await evaluate('ci-log', '(kioku.ci:failed-log 42)')
+    assert.equal(ciLog.ok, true, JSON.stringify(ciLog)); assert.match(JSON.stringify(ciLog), /failed log/)
+    const ciVerify = await evaluate('ci-verify', '(kioku.ci:verify :typecheck)')
+    assert.equal(ciVerify.ok, true, JSON.stringify(ciVerify)); assert.match(JSON.stringify(ciVerify), /SUCCEEDED/)
+    assert.equal((await evaluate('ci-invalid-run', '(kioku.ci:failed-log "other/repo")')).ok, false)
+    assert.deepEqual(ciRequests, [{ kind: 'list-runs', limit: 3 }, { kind: 'failed-log', runId: '42' }, { kind: 'verify', target: 'typecheck' }])
+    const helpers = await evaluate('helpers', `(let* ((root (kioku.files:scratch)) (source (merge-pathnames "helper.txt" root)) (link (merge-pathnames "helper-link.txt" root)))
+      (kioku.files:write-text source (format nil "a1~%b2~%c3~%"))
+      (assert (equalp #( "a1" "b2") (kioku.files:head-lines source :n 2)))
+      (assert (equalp #( "b2" "c3") (kioku.files:tail-lines source :n 2)))
+      (assert (= 3 (kioku.files:count-lines source)))
+      (kioku.files:copy-scratch "helper.txt" "helper-copy.txt")
+      (assert (equal (format nil "a1~%b2~%c3~%") (kioku.files:read-text (merge-pathnames "helper-copy.txt" root))))
+      (assert (= 2 (length (kioku.files:grep-scratch "b2" :glob "helper*.txt"))))
+      (assert (handler-case (progn (kioku.files:copy-scratch "../helper.txt" "bad.txt") nil) (error () t)))
+      (assert (handler-case (progn (kioku.files:copy-scratch "helper.txt" "helper.txt") nil) (error () t)))
+      (assert (kioku.process:result-ok? (kioku.process:run "python3" (list "-I" "-c" "import os,sys;os.symlink('helper.txt',os.path.join(sys.argv[1],'helper-link.txt'))" (namestring root)))))
+      (assert (handler-case (progn (kioku.files:delete-scratch "helper-link.txt") nil) (error () t)))
+      (delete-file link)
+      (assert (equalp #( "a" "b") (kioku.data:uniq-lines '("a" "a" "b"))))
+      (assert (equalp #( "a" "b" "c") (kioku.data:sort-lines '("c" "a" "b"))))
+      (assert (equal "a,b" (kioku.data:join-lines '("a" "b") :separator ",")))
+      (let* ((items (loop repeat 5000 collect "x")) (start (get-internal-real-time)))
+        (assert (= 1 (length (kioku.data:uniq-lines items))))
+        (format t "helpers-5000-ms=~D~%" (round (* 1000 (/ (- (get-internal-real-time) start) internal-time-units-per-second)))))
+      (kioku.files:delete-scratch "helper-copy.txt")
+      (kioku.files:delete-scratch "helper.txt")
+      :helpers-ok)`)
+    assert.equal(helpers.ok, true, JSON.stringify(helpers)); assert.match(helpers.output.stdout, /helpers-5000-ms=\d+/)
     assert.equal((await manager.execute(owner, 'lisp_inspect', { operationId: 'inspect', ref: data.value.ref }) as any).ok, true)
     assert.equal((await manager.execute(owner, 'lisp_describe', { operationId: 'describe', symbol: 'kioku.files:propose-delete' }) as any).ok, true)
     const python = await evaluate('python', '(kioku.process:python "print(6*7)")')
     assert.equal(python.ok, true, JSON.stringify(python)); assert.match(JSON.stringify(python), /42/)
-    assert.equal((await evaluate('job-start', '(defparameter *job* (kioku.process:start-job "python3" (list "-I" "-c" "import time; time.sleep(30)")))')).ok, true)
+    const startedJob = await evaluate('job-start', '(defparameter *job* (kioku.process:start-job "python3" (list "-I" "-c" "import time; time.sleep(30)")))')
+    assert.equal(startedJob.ok, true, JSON.stringify(startedJob))
+    const listedJobs = await evaluate('job-list', '(kioku.process:list-jobs)')
+    assert.equal(listedJobs.ok, true, JSON.stringify(listedJobs))
+    assert.match(JSON.stringify(listedJobs), /[0-9a-f]{8}-[0-9a-f-]{27}/i)
     assert.match(JSON.stringify(await evaluate('job-status', '(kioku.process:job-status *job*)')), /RUNNING/)
     assert.equal((await evaluate('job-cancel', '(kioku.process:cancel-job *job*)')).ok, true)
     const protectedFile = join(root, 'private.txt')

@@ -41,7 +41,7 @@ B,5"))
 ```
 
 Packages: `kioku.tools`, `kioku.data`, `kioku.files`, `kioku.process`,
-`kioku.objects`, `kioku.environment`. CL-PPCRE, CL-CSV and YASON are bundled;
+`kioku.objects`, `kioku.environment`, `kioku.ci`. CL-PPCRE, CL-CSV and YASON are bundled;
 there is no runtime Quicklisp/network download. Standard Common Lisp is available.
 First enable automatically compiles the bundled libraries and tools. Later starts
 reuse a host-verified, read-only bundle; session state is never cached. Compilation
@@ -85,6 +85,23 @@ Single-process Python and shell builtins/exec work within the same file/network
 boundary. On Linux, Bubblewrap uses a PID namespace. Do not retry blocked commands
 outside the protection boundary. Jobs have a maximum count, deadline and output
 limit. Credentials and inherited environment variables are not passed through.
+
+## GitHub CI and verification
+
+```lisp
+(kioku.ci:list-runs :limit 10)
+(kioku.ci:failed-log 123456789)
+(kioku.ci:verify :typecheck)
+```
+
+CI reads use the host's `gh` installation and authentication in the repository
+bound to this session; credentials are never copied into the worker. Run IDs are
+numeric and resolved only against that repository. Verification accepts only
+`typecheck`, `lisp`, `test`, `build`, `package`, or `vendor`; it never accepts a
+shell string. The exact executable, arguments, working directory and timeout are
+shown for native human confirmation. Refusal, cancellation and unavailable UI
+return `NOT_APPLIED`. Results are bound to the surrounding `lisp_eval` operation
+ID, so exact replay does not run a verifier twice and conflicting reuse is refused.
 
 ## Stop and recover
 

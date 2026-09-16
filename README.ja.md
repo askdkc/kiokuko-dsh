@@ -92,6 +92,6 @@ DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復
       sbclPath: sbcl
 ```
 
-Linux では別途 Bubblewrap が必要です。VM は不要です。
+Linux では別途 Bubblewrap が必要です。
 削除・既存ファイルの置換はユーザーの確認後に実行します。
 [設定、API、停止・復旧方法](docs/lisp.md)を参照してください。

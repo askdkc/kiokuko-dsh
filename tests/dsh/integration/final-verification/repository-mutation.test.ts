@@ -63,6 +63,37 @@ async function fixture(command: string, maxAttempts = 8, git = true) {
   } catch (error) { await cleanup(); throw error }
 }
 
+test('a successful last allowed work attempt can verify, accept and complete meditation', async () => {
+  const f = await fixture('process.exit(0)', 1)
+  try {
+    assert.equal(f.snapshot().attempts, 1)
+    const input = f.input()
+    const verified = await prepareEnnoVerification(f.database, input, { descendantSettleMs: 0 })
+    assert.equal(verified.ennoOduno.nextAction, 'submit_final_review')
+    assert.deepEqual(await prepareEnnoVerification(f.database, input), verified)
+    const review = await finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'accept-last',
+      review: { decision: 'accept', summary: 'Fresh final verification passed.' } })
+    assert.equal(review.ennoOduno.nextAction, 'submit_meditation')
+    const done = submitOdunoMeditation(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'meditate-last',
+      meditation: { summary: 'No deletion candidates.', inspectedPaths: ['source.txt'], deletionCandidates: [] } })
+    assert.equal(done.ennoOduno.nextAction, 'complete')
+  } finally { await f.cleanup() }
+})
+
+for (const decision of ['accept', 'replan'] as const) {
+  test(`final review at the attempt limit still blocks ${decision === 'accept' ? 'failed verification' : 'requested replanning'}`, async () => {
+    const f = await fixture(decision === 'accept' ? 'process.exit(1)' : 'process.exit(0)', 1)
+    try {
+      const verified = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
+      assert.equal(verified.ennoOduno.nextAction, 'submit_final_review')
+      const review = await finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'reject-last',
+        review: { decision, summary: 'Acceptance is not satisfied.' } })
+      assert.equal(review.ennoOduno.status, 'blocked')
+      assert.equal(f.snapshot().revision, 2, 'no new implementation attempt is authorized')
+    } finally { await f.cleanup() }
+  })
+}
+
 for (const [label, command] of [
   ['build artifact', 'require("node:fs").writeFileSync("source.elc", "compiled")'],
   ['source edit', 'require("node:fs").writeFileSync("source.txt", "changed")'],

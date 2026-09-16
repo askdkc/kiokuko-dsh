@@ -11,12 +11,14 @@ import { prepareLayout } from './sandbox.js'
 import { verifyLispVendor } from './integrity.js'
 import { CompiledLispCache, type CompilationStatus } from './compiled-cache.js'
 import { applyChange, backupUsage, checkedBytes, freezeChange, restoreBytes, snapshot, under, type FrozenChange } from './files.js'
+import type { LispCiRequest } from './ci.js'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus }
 export interface ManagerOptions {
   store: LispStore; config: LispConfiguration; dataRoot: string; library?: string; protectedRoots?: string[]; questions?: DshUserQuestions
   notify?: (owner: LispOwner, message: string) => void
   toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>) => Promise<unknown>
+  ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal) => Promise<unknown>
 }
 /** Host-owned authority. Worker frames never grant permissions or choose identities. */
 export class LispManager {
@@ -124,6 +126,17 @@ export class LispManager {
       const parsed = z.object({ name: z.literal('lisp_status'), args: z.object({}).strict() }).strict().parse(args)
       if (!this.options.toolCall) fail('HOST_ADAPTER_UNAVAILABLE', 'このホストには監査済みアダプターがありません。')
       return this.options.toolCall(state.owner, parsed.name, parsed.args)
+    }
+    if (method === 'ci-list-runs' || method === 'ci-failed-log' || method === 'ci-verify') {
+      if (!this.options.ciCall) fail('HOST_ADAPTER_UNAVAILABLE', 'このホストには CI アダプターがありません。')
+      const request: LispCiRequest = method === 'ci-list-runs'
+        ? { kind: 'list-runs', ...z.object({ limit: z.number().int().min(1).max(20) }).strict().parse(args) }
+        : method === 'ci-failed-log'
+          ? { kind: 'failed-log', ...z.object({ runId: z.string().regex(/^[1-9][0-9]{0,19}$/) }).strict().parse(args) }
+          : { kind: 'verify', ...z.object({ target: z.enum(['typecheck', 'lisp', 'test', 'build', 'package', 'vendor']) }).strict().parse(args) }
+      const active = [...state.active]
+      if (active.length !== 1) fail('HOST_STATE', 'CI 呼び出しの実行主体を一意に確認できません。')
+      return this.options.ciCall(state.owner, request, active[0]!.signal)
     }
     if (method === 'artifact') {
       const { path } = z.object({ path: z.string().min(1).max(4096) }).strict().parse(args)

@@ -92,6 +92,6 @@ desired session. Check the loaded configuration with `dsh --profile web --dump-c
       sbclPath: sbcl
 ```
 
-Linux also requires Bubblewrap; no VM is required.
+Linux also requires Bubblewrap.
 Deletion and replacement of existing files require human confirmation.
 See [setup, APIs, limits and recovery](docs/lisp.md).

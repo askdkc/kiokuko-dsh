@@ -109,6 +109,12 @@ isolation from unrelated host applications modifying paths concurrently. Those
 limits remain explicit in [the runtime guide](lisp.md). Real database changes and
 arbitrary host-tool forwarding remain outside the exposed API.
 
+CI bridge tests use a deterministic host adapter to verify public Lisp calls,
+repository-root binding, numeric run IDs, the fixed verifier allowlist, refusal
+without native approval, nonzero-exit reporting, and the absence of arbitrary
+shell/URL arguments. This fixture does not prove live GitHub availability or
+account permissions; live reads use the host's installed `gh` authentication.
+
 ## Repeat the installed Web check
 
 ```sh

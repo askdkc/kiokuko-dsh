@@ -10,6 +10,7 @@ import type { DshUserQuestions } from '../user-interaction.js'
 import { LispManager } from './manager.js'
 import { LispStore } from './store.js'
 import { mountLispHttp } from './http.js'
+import { createLispCiAdapter } from './ci.js'
 import { LISP_TOOLS, failure, fail, identifier, renderResult, type LispConfiguration, type LispOwner, type LispTool } from './contracts.js'
 
 interface Session { id: string; header: { cwd: string; parentSession?: string } }
@@ -35,15 +36,17 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const commands = ctx.get('commands', false) as { register(definition: DshNativeCommandDefinition): () => void } | undefined
   if (!tools || !agents || !sessions || !commands) fail('HOST_CAPABILITY_MISSING', 'Lisp には DSH のツール・セッション・コマンドサービスが必要です。')
   const questions = ctx.get('userQuestions', false) as DshUserQuestions | undefined
+  const ownerQuestions = questions ? { ask: (request: Parameters<DshUserQuestions['ask']>[0]) => {
+    const agent = request.agent ? agents.get(request.agent.id) : undefined
+    if (!agent || sessions.get(agent.session.id) !== agent.session) fail('SESSION_MISMATCH', '確認画面のセッションを確認できません。')
+    return questions.ask({ ...request, agent })
+  } } : undefined
   const databasePath = await runtime.withDatabase(db => db.filePath)
   const store = new LispStore(fn => runtime.withDatabase(db => fn(db)))
   const manager = new LispManager({ store, config,
     dataRoot: join(dirname(databasePath), 'lisp'), protectedRoots: [databasePath, `${databasePath}-wal`, `${databasePath}-shm`],
-    ...(questions ? { questions: { ask: (request: Parameters<DshUserQuestions['ask']>[0]) => {
-      const agent = request.agent ? agents.get(request.agent.id) : undefined
-      if (!agent || sessions.get(agent.session.id) !== agent.session) fail('SESSION_MISMATCH', '確認画面のセッションを確認できません。')
-      return questions.ask({ ...request, agent })
-    } } } : {}),
+    ...(ownerQuestions ? { questions: ownerQuestions } : {}),
+    ciCall: createLispCiAdapter(ownerQuestions),
     toolCall: async (owner, name, args) => {
       const agent = agents.get(owner.agentId)
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', 'ホスト呼び出しの主体を確認できません。')

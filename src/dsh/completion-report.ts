@@ -54,15 +54,20 @@ export class DshCompletionReporter {
   async #deliver(session: ReportSession): Promise<void> {
     const pending = await this.runtime.withDatabase(database => database.prepare(`
       SELECT report.run_id AS runId, report.native_turn AS nativeTurn,
-        contract.workspace, contract.orchestration_session_id AS orchestrationId
+        contract.workspace, contract.orchestration_session_id AS orchestrationId,
+        receipt.next_action AS nextAction
       FROM dsh_completion_reports AS report JOIN enno_contracts AS contract ON contract.run_id = report.run_id
+      JOIN dsh_turn_receipts AS receipt ON receipt.receipt_id = report.receipt_id
       WHERE report.dsh_session_id = ? AND report.status = 'pending' ORDER BY report.native_turn
-    `).all<{ runId: string; nativeTurn: number; workspace: string; orchestrationId: string }>(session.id))
+    `).all<{ runId: string; nativeTurn: number; workspace: string; orchestrationId: string; nextAction: string | null }>(session.id))
     for (const item of pending) {
       const id = canonicalContentHash({ runId: item.runId, kind: DSH_COMPLETION_REPORT_EVENT })
       const events = session.snapshotEvents()
-      const resultIndex = events.findIndex(event => event.type === 'tool/result' && record(event.data)?.turn === item.nativeTurn
-        && JSON.stringify(event.data).includes('ennoOduno'))
+      // Text after a nonterminal work report cannot acknowledge a later,
+      // host-only verification failure that the model has never received.
+      const resultIndex = item.nextAction === 'complete' || item.nextAction === 'report_blocker'
+        ? events.findIndex(event => event.type === 'tool/result' && record(event.data)?.turn === item.nativeTurn
+          && JSON.stringify(event.data).includes('ennoOduno')) : -1
       let delivered = events.find(event => event.type === DSH_COMPLETION_REPORT_EVENT && record(event.data)?.reportId === id)
       if (!delivered && resultIndex >= 0) delivered = events.slice(resultIndex + 1).find(event => {
         const data = record(event.data)

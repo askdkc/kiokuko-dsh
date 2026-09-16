@@ -4,6 +4,7 @@
 (defpackage :kioku.objects (:use :cl) (:export :retain :inspect-ref :release :register-artifact))
 (defpackage :kioku.process (:use :cl) (:export :run :python :shell :start-job :job-status :cancel-job :result-code :result-stdout :result-stderr :result-ok? :split-lines :python-stdout :shell-stdout :run-lines :list-jobs :forget-job))
 (defpackage :kioku.environment (:use :cl) (:export :status))
+(defpackage :kioku.ci (:use :cl) (:export :list-runs :failed-log :verify))
 (defpackage :kioku.tools (:use :cl) (:export :describe-tools :describe-symbol :available-tools :call-tool))
 (defpackage :kioku.user (:use :cl))
 (in-package :kioku.internal)
@@ -87,6 +88,20 @@
 (defun regex-replace (pattern text replacement) (cl-ppcre:regex-replace-all pattern text replacement))
 (in-package :kioku.files)
 (defun scratch () (pathname (uiop:getenv "KIOKU_SCRATCH")))
+(defun %scratch-path (name &key must-exist)
+  "Resolve NAME below scratch without accepting absolute paths, traversal, or links."
+  (let* ((root (truename (scratch)))
+         (candidate (handler-case (merge-pathnames (pathname name) root)
+                      (error () (error "INVALID_SCRATCH_PATH")))))
+    (unless (and (uiop:relative-pathname-p (pathname name)) (uiop:subpathp candidate root))
+      (error "INVALID_SCRATCH_PATH"))
+    (let ((existing (probe-file candidate)))
+      (when (and must-exist (null existing)) (error "SCRATCH_MISSING"))
+      (when existing
+        (let ((resolved (truename candidate)))
+          (unless (equal (namestring resolved) (namestring candidate))
+            (error "SCRATCH_LINK_REFUSED"))))
+    candidate)))
 (defun input (index) (aref kioku.internal:*inputs* index))
 (defun read-text (path) (uiop:read-file-string path))
 (defun write-text (path text) (with-open-file (s path :direction :output :if-exists :supersede :if-does-not-exist :create) (write-string text s)) path)
@@ -132,10 +147,24 @@
   (kioku.internal:rpc "run" (kioku.internal:object "program" program "argv" (coerce arguments 'vector) "timeoutMs" timeout-ms)))
 (defun python (code &key (timeout-ms 120000)) (run "python3" (list "-I" "-c" code) :timeout-ms timeout-ms))
 (defun shell (code &key (timeout-ms 120000)) (run "sh" (list "-c" code) :timeout-ms timeout-ms))
+(defvar *job-registry* nil)
 (defun start-job (program arguments &key (timeout-ms 120000))
-  (kioku.internal:rpc "start-job" (kioku.internal:object "program" program "argv" (coerce arguments 'vector) "timeoutMs" timeout-ms)))
+  "Start one managed job and retain its id for LIST-JOBS in this worker generation."
+  (let ((id (kioku.internal:rpc "start-job" (kioku.internal:object "program" program "argv" (coerce arguments 'vector) "timeoutMs" timeout-ms))))
+    (pushnew id *job-registry* :test #'equal)
+    id))
 (defun job-status (id) (kioku.internal:rpc "job-status" (kioku.internal:object "id" id)))
 (defun cancel-job (id) (kioku.internal:rpc "cancel-job" (kioku.internal:object "id" id)))
+(in-package :kioku.ci)
+(defun list-runs (&key (limit 10))
+  "List recent GitHub Actions runs for the bound workspace repository."
+  (kioku.internal:rpc "ci-list-runs" (kioku.internal:object "limit" limit)))
+(defun failed-log (run-id)
+  "Read failed logs for one numeric run id in the bound workspace repository."
+  (kioku.internal:rpc "ci-failed-log" (kioku.internal:object "runId" (princ-to-string run-id))))
+(defun verify (target)
+  "Run one host-approved verifier: typecheck, lisp, test, build, package, or vendor."
+  (kioku.internal:rpc "ci-verify" (kioku.internal:object "target" (string-downcase (string target)))))
 (in-package :kioku.environment)
 (defun status () (kioku.internal:object "generation" kioku.internal:*generation* "sbcl" (lisp-implementation-version) "os" (software-type) "architecture" (machine-type) "scratch" (namestring (kioku.files:scratch)) "network" yason:false "hostWrites" "proposals only" "libraries" #("yason" "cl-ppcre" "cl-csv")))
 (in-package :kioku.tools)
@@ -144,11 +173,11 @@
   (kioku.internal:rpc "tool-call" (kioku.internal:object "name" name "args" arguments)))
 (defun describe-tools ()
   (mapcar (lambda (package) (cons package (sort (loop for symbol being the external-symbols of (find-package package) collect (symbol-name symbol)) #'string<)))
-          '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT")))
+          '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI")))
 (defun describe-symbol (name)
   (if (zerop (length name)) (kioku.internal::printed (describe-tools))
       (let* ((*read-eval* nil) (symbol (read-from-string name)))
-        (unless (and (symbolp symbol) (member (package-name (symbol-package symbol)) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT") :test #'equal)) (error "UNKNOWN_SYMBOL"))
+        (unless (and (symbolp symbol) (member (package-name (symbol-package symbol)) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI") :test #'equal)) (error "UNKNOWN_SYMBOL"))
         (kioku.internal:object "symbol" name "arguments" (kioku.internal::printed (sb-introspect:function-lambda-list symbol)) "documentation" (or (documentation symbol 'function) "See bundled kiokuko-lisp Skill.")))))
 
 
@@ -166,9 +195,17 @@
             'vector)))
 
 (defun glob-scratch (pattern &key (limit 500))
-  "Glob under scratch without forking. PATTERN is merged under scratch."
+  "Glob under scratch without accepting absolute patterns or parent traversal."
   (declare (type fixnum limit))
-  (list-directory (kioku.files:scratch) :pattern pattern :limit limit))
+  (let* ((root (truename (scratch)))
+         (relative (pathname pattern))
+         (wild (merge-pathnames relative root)))
+    (unless (and (uiop:relative-pathname-p relative) (uiop:subpathp wild root))
+      (error "INVALID_SCRATCH_PATTERN"))
+    (coerce (loop for p in (directory wild)
+                  for i from 0 below (min (max limit 0) 500)
+                  collect (namestring p))
+            'vector)))
 
 (defun head-lines (path &key (n 20))
   "First N lines of a scratch/input file; early exit, no fork."
@@ -203,51 +240,59 @@
           do (when (> c 1000000) (error "LINE_LIMIT")) finally (return c))))
 
 (defun copy-scratch (from-name to-name &key (max-bytes (* 64 1024 1024)))
-  "Copy scratch->scratch with 64KB binary buffer; no whole-file string."
-  (let ((from (merge-pathnames from-name (kioku.files:scratch)))
-        (to (merge-pathnames to-name (kioku.files:scratch))))
+  "Copy one regular scratch file with a 64KB buffer; reject traversal, links, and self-copy."
+  (when (minusp max-bytes) (error "INVALID_COPY_LIMIT"))
+  (let ((from (%scratch-path from-name :must-exist t))
+        (to (%scratch-path to-name)))
+    (when (or (uiop:directory-exists-p from) (equal from to)) (error "INVALID_SCRATCH_COPY"))
+    (let ((parent (uiop:pathname-directory-pathname to)))
+      (unless (probe-file parent) (error "SCRATCH_PARENT_MISSING"))
+      (unless (equal (namestring (truename parent)) (namestring parent))
+        (error "SCRATCH_LINK_REFUSED")))
     (with-open-file (in from :direction :input :element-type '(unsigned-byte 8))
       (when (> (or (file-length in) 0) max-bytes) (error "COPY_LIMIT"))
       (with-open-file (out to :direction :output :element-type '(unsigned-byte 8)
                            :if-exists :supersede :if-does-not-exist :create)
         (let ((buf (make-array 65536 :element-type '(unsigned-byte 8))))
           (declare (type (simple-array (unsigned-byte 8) (*)) buf))
-          (loop for n = (read-sequence buf in) while (plusp n) do (write-sequence buf out :end n)))))
+          (loop for n = (read-sequence buf in) while (plusp n)
+                do (write-sequence buf out :end n)))))
     to))
 
 (defun delete-scratch (name)
-  "Delete one scratch file; directories/links are not followed."
-  (let ((p (merge-pathnames name (kioku.files:scratch))))
-    (when (null (probe-file p)) (error "SCRATCH_MISSING"))
+  "Delete one regular scratch file; reject traversal, links, and directories."
+  (let ((p (%scratch-path name :must-exist t)))
+    (when (uiop:directory-exists-p p) (error "SCRATCH_DIRECTORY_REFUSED"))
     (delete-file p)
     t))
 
 (defun grep-scratch (pattern &key (glob "*.*") (limit 1000) (max-files 200) (max-bytes (* 2 1024 1024)))
-  "Recursive-free grep under scratch: precompiled scanner, skips files over max-bytes. Bounded."
+  "Recursive-free bounded grep; compile once and skip oversized files without ending the scan."
   (declare (type fixnum limit max-files))
-  (let ((scanner (cl-ppcre:create-scanner pattern)) (hits nil) (files 0))
-    (declare (type fixnum files))
+  (when (or (minusp limit) (minusp max-files) (minusp max-bytes)) (error "INVALID_GREP_LIMIT"))
+  (let ((scanner (cl-ppcre:create-scanner pattern)) (hits nil)
+        (hit-count 0) (file-count 0) (hit-limit (min limit 1000)))
+    (declare (type fixnum hit-count file-count hit-limit))
     (dolist (namestring (coerce (glob-scratch glob :limit max-files) 'list) (nreverse hits))
-      (when (>= (length hits) (min limit 1000)) (return (nreverse hits)))
+      (when (or (>= hit-count hit-limit) (>= file-count max-files)) (return (nreverse hits)))
       (let ((p (pathname namestring)))
-        (when (and (probe-file p) (null (nth-value 1 (probe-file p))))
-          (with-open-file (probe p :direction :input :element-type '(unsigned-byte 8))
-            (when (> (or (file-length probe) 0) max-bytes)
-              (return)))
-          (incf files)
-          (when (> files max-files) (return (nreverse hits)))
-          (with-open-file (s p :direction :input)
-            (loop for line = (read-line s nil nil) for number from 1 while line do
-              (when (cl-ppcre:scan scanner line)
-                (push (kioku.internal:object "path" (namestring p) "line" number
-                                             "text" (subseq line 0 (min 400 (length line))))
-                      hits)
-                (when (>= (length hits) (min limit 1000))
-                  (return-from grep-scratch (nreverse hits)))))))))))
+        (when (and (probe-file p) (not (uiop:directory-exists-p p)))
+          (incf file-count)
+          (let ((size (with-open-file (probe p :direction :input :element-type '(unsigned-byte 8))
+                        (or (file-length probe) 0))))
+            (when (<= size max-bytes)
+              (with-open-file (s p :direction :input)
+                (loop for line = (read-line s nil nil) for number from 1 while line do
+                  (when (cl-ppcre:scan scanner line)
+                    (push (kioku.internal:object "path" (namestring p) "line" number
+                                                 "text" (subseq line 0 (min 400 (length line))))
+                          hits)
+                    (incf hit-count)
+                    (when (>= hit-count hit-limit)
+                      (return-from grep-scratch (nreverse hits)))))))))))))
 
 (in-package :kioku.process)
 ;; --- result helpers: hash-tableのまま回す怠さを消す。余計なコピーなし ---
-(defvar *job-registry* nil)
 
 (defun result-code (result) (gethash "code" result))
 (defun result-stdout (result) (gethash "stdout" result))
@@ -286,12 +331,6 @@
       (error (format nil "SHELL_FAILED(~A): ~A" (gethash "code" r) (gethash "stderr" r ""))))
     (gethash "stdout" r "")))
 
-;; start-jobを自動登録で包む: 既存の呼び出し形は変えない
-(let ((orig #'start-job))
-  (defun start-job (program arguments &key (timeout-ms 120000))
-    (let ((id (funcall orig program arguments :timeout-ms timeout-ms)))
-      (pushnew id *job-registry* :test #'equal)
-      id)))
 (defun list-jobs ()
   "Tracked job ids in this generation; use job-status per id."
   (coerce (copy-list *job-registry*) 'vector))
@@ -301,45 +340,51 @@
 
 (in-package :kioku.data)
 ;; --- vector/string pipelines without shell pipes ---
+(defun %line-prefix (lines limit)
+  "Copy at most LIMIT items in one pass; lists never use indexed ELT."
+  (let* ((cap (min (max limit 0) 5000))
+         (out (make-array cap :adjustable t :fill-pointer 0)))
+    (etypecase lines
+      (list (loop for line in lines while (< (length out) cap)
+                  do (vector-push-extend (string line) out)))
+      (vector (loop for line across lines while (< (length out) cap)
+                    do (vector-push-extend (string line) out))))
+    (coerce out 'simple-vector)))
+
 (defun join-lines (lines &key (separator (string #\Newline)) (limit 2000))
-  "Join a vector/list of strings with SEPARATOR; bounded, single pass."
-  (with-output-to-string (o)
-    (loop for i from 0 below (min (length lines) (min (max limit 0) 2000))
-          for line = (elt lines i)
-          do (unless (zerop i) (write-string separator o))
-             (write-string (string line) o))))
+  "Join a bounded prefix of a list/vector in one pass."
+  (let ((items (%line-prefix lines (min (max limit 0) 2000))))
+    (with-output-to-string (o)
+      (loop for line across items for first = t then nil
+            do (unless first (write-string separator o))
+               (write-string line o)))))
 
 (defun sort-lines (lines &key (limit 5000))
-  "Copy + sort strings; O(n log n), no fork."
-  (let* ((n (min (length lines) (min (max limit 0) 5000)))
-         (v (make-array n)))
-    (dotimes (i n) (setf (aref v i) (string (elt lines i))))
-    (sort v #'string<)))
+  "Copy a bounded prefix and sort it in O(n log n)."
+  (sort (%line-prefix lines (min (max limit 0) 5000)) #'string<))
 
 (defun uniq-lines (lines &key (limit 5000))
-  "Order-preserving dedupe in O(n) via hash table."
-  (let ((seen (make-hash-table :test 'equal :size 1024)) (out nil) (n 0))
-    (declare (type fixnum n))
-    (block done
-      (loop for i from 0 below (length lines) do
-        (when (>= n (min (max limit 0) 5000)) (return-from done (coerce (nreverse out) 'vector)))
-        (let ((s (string (elt lines i))))
-          (unless (gethash s seen)
-            (setf (gethash s seen) t)
-            (push s out)
-            (incf n))))
-      (coerce (nreverse out) 'vector))))
+  "Order-preserving dedupe of a bounded prefix in expected O(n)."
+  (let ((seen (make-hash-table :test 'equal :size 1024)) (out nil))
+    (loop for s across (%line-prefix lines (min (max limit 0) 5000)) do
+      (unless (gethash s seen)
+        (setf (gethash s seen) t)
+        (push s out)))
+    (coerce (nreverse out) 'vector)))
 
 (defun take-lines (lines k)
-  "First K items as vector; no copy beyond K."
-  (let ((n (min (max k 0) (length lines))))
-    (let ((v (make-array n)))
-      (dotimes (i n) (setf (aref v i) (elt lines i)))
-      v)))
+  "First K items as a vector, capped at 5000."
+  (%line-prefix lines (min (max k 0) 5000)))
 
-(defun drop-lines (lines k)
-  "Drop first K items as vector."
-  (let* ((len (length lines)) (s (min (max k 0) len)) (n (- len s)))
-    (let ((v (make-array n)))
-      (dotimes (i n) (setf (aref v i) (elt lines (+ s i))))
-      v)))
+(defun drop-lines (lines k &key (limit 5000))
+  "Drop K items and return at most LIMIT more without indexed list traversal."
+  (let* ((remaining (max k 0))
+         (cap (min (max limit 0) 5000))
+         (out (make-array cap :adjustable t :fill-pointer 0)))
+    (flet ((visit (line)
+             (if (plusp remaining) (decf remaining)
+                 (when (< (length out) cap) (vector-push-extend (string line) out)))))
+      (etypecase lines
+        (list (loop for line in lines while (< (length out) cap) do (visit line)))
+        (vector (loop for line across lines while (< (length out) cap) do (visit line)))))
+    (coerce out 'simple-vector)))

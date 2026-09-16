@@ -150,7 +150,11 @@ the completed bundle for read-only reuse. Runtime/compiler/source changes select
 a new entry. Invalid entries are quarantined and require explicit recovery. The
 host stores operation records and
 independent backups beside the Kiokuko database. No credentials or inherited
-environment are forwarded, and direct network/host IPC access is denied.
+environment are forwarded, and direct network/host IPC access is denied. The
+host may run repository-scoped `gh run list`/`gh run view --log-failed` reads on
+behalf of Lisp without copying credentials into the worker. Verification accepts
+only six fixed npm targets and requires native human confirmation showing the
+command, repository root and timeout; arbitrary shell input is not accepted.
 
 File deletion and replacement require the native human confirmation for the exact
 proposal. Generic operations reject databases/sidecars, credential paths, links,

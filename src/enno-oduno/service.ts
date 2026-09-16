@@ -1368,7 +1368,9 @@ export async function prepareEnnoVerification(
   assertExpected(before, input.expectedRevision, ['enno_verifying']);
   const preRepositoryState = captureRepositoryState(before.repositoryRoot);
   const verifierSpecDigest = canonicalContentHash(before.contract.finalVerifiers);
-  if (before.attempts >= before.contract.maxAttempts) {
+  // The last permitted work report may have succeeded. Its final verification
+  // is still required; failure below blocks instead of granting another attempt.
+  if (before.attempts > before.contract.maxAttempts) {
     return withImmediateTransaction(database, () => blockedForAttemptLimit(database, readEnnoSnapshot(database, identity(database, input)), operation));
   }
   let verifierRunIds: string[] = [];
@@ -1505,7 +1507,9 @@ export async function finishEnno(
     requireAdvisoryRound(database, before, 'final_review', before.mutationRevision, advisoryContextForSubmission(before, 'final_review'), input.advisoryRoundDigest);
   }
   const reviewSummary = sanitizedReviewSummary(input.review.summary, before.repositoryRoot);
-  if (before.attempts >= before.contract.maxAttempts) {
+  // Acceptance settles the successful last attempt. Rejection still observes
+  // the limit below and cannot authorize another implementation cycle.
+  if (before.attempts > before.contract.maxAttempts) {
     return withImmediateTransaction(database, () => blockedForAttemptLimit(database, readEnnoSnapshot(database, identity(database, input)), operation));
   }
   return withImmediateTransaction(database, () => {

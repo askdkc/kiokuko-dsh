@@ -32,7 +32,7 @@ function dshModule(relativePath: string): string {
   return pathToFileURL(join(dshPackageRoot, '@deepseek-ai', name, 'lib/index.js')).href
 }
 
-for (const finalMode of ['text', 'empty', 'error', 'stall', 'pause', 'verifier_mutation'] as const) {
+for (const finalMode of ['text', 'empty', 'error', 'stall', 'pause', 'verifier_mutation', 'last_attempt', 'boundary_blocked'] as const) {
 test(`real DSH agent loop: persisted resume, verification retry, completion (${finalMode})`, {
   skip: !dshSourceRoot && !dshPackageRoot ? 'requires the pinned DeepSeek Harness runtime' : false,
   timeout: 60_000,
@@ -106,10 +106,10 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     skillRequirements: [],
     finalVerifiers: [{
       id: 'final-test', kind: 'test', executable: process.execPath,
-      args: ['--eval', finalMode === 'verifier_mutation'
+      args: ['--eval', finalMode === 'verifier_mutation' || finalMode === 'boundary_blocked'
         ? 'require("node:fs").writeFileSync("compiled.elc", "artifact")' : 'process.exit(0)'], cwd: '.', timeoutMs: 5_000,
     }],
-    maxAttempts: finalMode === 'verifier_mutation' ? 8 : 3,
+    maxAttempts: finalMode === 'verifier_mutation' ? 8 : finalMode === 'last_attempt' || finalMode === 'boundary_blocked' ? 2 : 3,
     provenance: {
       scope: 'explicit_user', exclusions: 'explicit_user', acceptanceCriteria: 'explicit_user',
       workPlan: 'inferred', skillSet: 'repository_evidence', finalVerifiers: 'repository_evidence',
@@ -387,9 +387,31 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       assert.deepEqual(boundaryFailures, [])
       return
     }
+    if (finalMode === 'boundary_blocked') {
+      await completeTurn('@PLAN.md を実装', () => adapter.host.runtime!.withDatabase(db =>
+        !!db.prepare("SELECT run_id FROM dsh_completion_reports WHERE status = 'delivered'").get()))
+      const stopped = await adapter.host.runtime!.withDatabase(db => ({
+        status: db.prepare('SELECT status FROM enno_contracts').get()?.status,
+        reports: db.prepare("SELECT text FROM dsh_session_notices WHERE kind = 'report'").all<{ text: string }>(),
+      }))
+      assert.equal(stopped.status, 'blocked')
+      assert.equal(stopped.reports.length, 1)
+      assert.match(stopped.reports[0]!.text, /未完了|stopped before completion/)
+      assert.match(stopped.reports[0]!.text, /Repository changes were observed/)
+      assert.equal(routedTools.some(tool => tool.name === 'enno_finish'), false)
+      adapter.host.boundaryWorker!.kick(liveAgent.session.id, liveAgent)
+      await adapter.host.boundaryWorker!.whenIdle()
+      assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT count(*) AS n FROM dsh_session_notices WHERE kind='report'").get()?.n), 1)
+      return
+    }
     await completeTurn('@PLAN.md を実装', () => completed(1))
     assert.deepEqual(boundaryFailures, [], 'multiline intake must not trigger an internal-error question')
     assert.match(confirmationDetails[0]!, /Keep the native workflow recoverable/)
+    if (finalMode === 'last_attempt') {
+      assert.match(JSON.stringify(liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'assistant/message').at(-1)), /Completed one/)
+      assert.ok(routedTools.some(tool => tool.name === 'enno_meditation_submit'))
+      return
+    }
     if (finalMode === 'verifier_mutation') {
       assert.equal(recoveryQuestions, 0, 'invalid verifier evidence must not loop until the no-progress modal')
       assert.equal(confirmations, 2, 'the repaired verifier requires approval')

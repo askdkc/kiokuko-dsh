@@ -393,18 +393,22 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     }
     const blockedClose = await adapter.host.resolveIdleClose!('fallback-agent', fallbackSession.id, fallbackSession, fallbackAgent)
     assert.deepEqual(blockedClose, { runId: fallbackRun, status: 'failed', terminalTurn: 1 })
-    await adapter.host.lifecycle!.closeTurn(blockedClose!)
-    assert.equal(adapter.host.resolveSessionRunId!(fallbackSession), undefined)
-    assert.equal(adapter.host.ponytailModes!.isActive('dsh:fallback-agent:native-fallback:1'), false)
     const questionsBeforeRecovery = questionIds.length
     const recoveredEvent = await adapter.host.mapPreStep!({
       agent: fallbackAgent,
-      messages: [{ role: 'user', content: [{ type: 'text', text: '@README.md をレビュー' }], source: { kind: 'user' } }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'OK. Done?' }], source: { kind: 'user' } }],
       turn: 2, step: 1, signal: event.signal,
     })
+    assert.equal(recoveredEvent.profileHints?.taskType, 'build')
     assert.equal((await adapter.host.intakeGate!.preStep(recoveredEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
     const recoveredRun = adapter.host.resolveSessionRunId!(fallbackSession)!
     assert.notEqual(recoveredRun, fallbackRun)
+    assert.equal(adapter.host.ponytailModes!.isActive('dsh:fallback-agent:native-fallback:1'), false)
+    const recoveredNextStep = await adapter.host.mapPreStep!({
+      agent: fallbackAgent, messages: [], turn: 2, step: 2, signal: event.signal,
+    })
+    assert.deepEqual(recoveredNextStep.profileHints, recoveredEvent.profileHints)
+    assert.equal((await adapter.host.intakeGate!.prepare(recoveredNextStep)).prepared.run.runId, recoveredRun)
     assert.equal(questionIds.length, questionsBeforeRecovery)
     const recoveredClose = await adapter.host.resolveSessionClose!(fallbackSession.id, fallbackSession)
     assert.deepEqual(recoveredClose, { runId: recoveredRun, status: 'cancelled' })

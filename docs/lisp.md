@@ -145,12 +145,50 @@ Published bundles are limited to 256 MiB each. Concurrent first enables share on
 serialized build under the host's existing exclusive data-directory lease.
 
 macOS denies fork inside workers and jobs. Use `kioku.process` broker APIs for
-external processes. Shell pipelines and Python multiprocessing may be rejected;
-single-process Python, shell builtins and `exec` remain available. Linux uses a
-PID namespace to stop descendants and a seccomp filter to deny socket creation
+external processes. Result helpers (`result-ok?`, `result-code`, `result-stdout`,
+`result-stderr`, `run-lines`, `python-stdout`, `shell-stdout`) and generation-local
+job helpers (`list-jobs`, `forget-job`) avoid ordinary shell plumbing.
+
+Fork-free scratch helpers include `glob-scratch`, `head-lines`, `tail-lines`,
+`count-lines`, `grep-scratch`, `copy-scratch` and `delete-scratch`. Mutating
+helpers reject absolute paths, parent traversal, links, directories and self-copy.
+Counts, bytes, returned lines and matches are bounded. `tail-lines` uses a fixed
+ring buffer, file copies use a 64 KiB buffer, each grep compiles its scanner once,
+and `join-lines`, `sort-lines`, `uniq-lines`, `take-lines` and `drop-lines` scan
+lists sequentially rather than using indexed list access.
+
+Shell pipelines and Python multiprocessing may be rejected; single-process Python,
+shell builtins and `exec` remain available. Linux uses a PID namespace to stop
+descendants and a seccomp filter to deny socket creation
 (including io_uring). Neither platform promises aggregate hard
 limits for every memory/thread/scratch allocation. Timeouts/output limits and
 confirmed-stop handling are separate controls.
+
+## CI investigation from Lisp
+
+`kioku.ci:list-runs` and `kioku.ci:failed-log` invoke the host's `gh` executable
+from the exact repository root bound to the protected session. The worker receives
+only bounded results, never host credentials or arbitrary network access. Run IDs
+must be numeric and are resolved by `gh` against that repository, so a run from a
+different repository is rejected.
+
+`kioku.ci:verify` accepts only `typecheck`, `lisp`, `test`, `build`, `package`, or
+`vendor`. These map to fixed `npm` commands and timeouts; arbitrary executable,
+arguments, URL, directory or shell input is not accepted. Before execution, the
+native confirmation shows the command, repository root, timeout and possible
+artifact effects. Refusal, cancellation or unavailable confirmation returns
+`NOT_APPLIED`; nonzero exit returns `FAILED` with bounded output. The enclosing
+`lisp_eval` operation ID provides replay and conflict handling.
+
+Typical flow:
+
+```lisp
+(kioku.ci:list-runs :limit 5)
+(kioku.ci:failed-log 123456789)
+;; inspect project inputs, then propose a bounded file change
+(kioku.files:propose-write "path/to/file" new-content)
+(kioku.ci:verify :lisp)
+```
 
 ## Development verification
 

@@ -34,6 +34,7 @@ async function fixture() {
     ideal: { objective: 'Report', principles: ['Truth'], skillContributions: [], successSignals: ['Visible'] },
   })
   database.prepare("UPDATE enno_contracts SET status = 'completed' WHERE run_id = ?").run(prepared.run.runId)
+  database.prepare("UPDATE dsh_turn_receipts SET next_action = 'complete' WHERE receipt_id = ?").run(intent.receiptId)
   database.prepare('INSERT INTO dsh_completion_reports(run_id, receipt_id, dsh_session_id, native_turn) VALUES (?, ?, ?, 1)')
     .run(prepared.run.runId, intent.receiptId, 'report-session')
   const events: DshLogEvent[] = [{ type: 'tool/result', seq: 0, time: 0, data: { turn: 1, ennoOduno: { nextAction: 'complete' } } }]
@@ -69,6 +70,19 @@ test('a nonempty model final response suppresses the host fallback', async () =>
     await new DshCompletionReporter(f.runtime, async () => undefined).deliver(f.session)
     assert.equal(f.events.length, 2)
     assert.equal(f.database.prepare('SELECT delivered_seq AS seq FROM dsh_completion_reports').get()?.seq, 1)
+  } finally { await f.cleanup() }
+})
+
+test('text following a work report cannot hide a later host verification blocker', async () => {
+  const f = await fixture()
+  try {
+    f.database.prepare("UPDATE dsh_turn_receipts SET next_action = 'run_final_verification'").run()
+    f.database.prepare("UPDATE enno_contracts SET status = 'blocked', blocker = 'Final verification failed'").run()
+    f.events.push({ type: 'assistant/message', seq: 1, time: 0, data: { turn: 1,
+      message: { content: [{ type: 'text', text: 'Implementation is ready for verification.' }] } } })
+    await new DshCompletionReporter(f.runtime, async () => undefined).deliver(f.session)
+    assert.equal(f.notices().length, 1)
+    assert.match(f.notices()[0]!.text, /Final verification failed/)
   } finally { await f.cleanup() }
 })
 

@@ -193,6 +193,7 @@ interface TurnRecord {
   readonly orchestrationId: string
   readonly repositoryRoot: string
   readonly cwd: string
+  readonly profileHints?: DshPreStepEvent['profileHints']
   nativeAgent?: DshUserQuestionAgent
   nativeSession?: object
   task: string
@@ -703,6 +704,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       repositoryRoot: result.prepared.project.repositoryRoot,
       cwd: event.cwd,
       task: event.task,
+      ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
       turn: event.turn,
       prepared: result.prepared,
       catalog: result.catalog,
@@ -1268,8 +1270,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         if (bound !== undefined) {
           // Reuse the actual initial projection for this logical turn. Inferring
           // new hints after its first tool makes the intake fingerprint conflict.
-          const cached = continuedTurns.get(`${sessionId}\u0000${payload.turn}`) ?? resumedTurns.get(`${sessionId}\u0000${payload.turn}`)
-          return cached?.profileHints === undefined ? {} : { profileHints: cached.profileHints }
+          return bound.profileHints === undefined ? {} : { profileHints: bound.profileHints }
         }
         if (previous === undefined) return {}
         const inferred = resolveGroundedIntakeProfile({ task, cwd }).profileHints.taskType
@@ -1958,10 +1959,23 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         const state = await readBoundaryState(item)
         if (state.status === 'completed' || state.status === 'blocked' || state.status === 'cancelled'
           || state.nextAction === 'complete' || state.nextAction === 'report_blocker') {
-          await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+          const hostTerminal = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+            // Host-only verification can terminate without a model phase
+            // receipt. Bind its report to the causal receipt before retiring
+            // the continuation, so an idle session cannot hide the result.
+            const seal = readTurnSeal(database, job.dshSessionId, job.nativeTurn)
+            const needsReport = (state.status === 'blocked' || state.status === 'completed')
+              && seal?.nextAction !== 'complete' && seal?.nextAction !== 'report_blocker'
+            if (needsReport) {
+              database.prepare(`INSERT OR IGNORE INTO dsh_completion_reports
+                (run_id, receipt_id, dsh_session_id, native_turn) VALUES (?, ?, ?, ?)`)
+                .run(job.runId, job.receiptId, job.dshSessionId, job.nativeTurn)
+            }
             database.prepare(`UPDATE dsh_continuation_outbox SET status = 'superseded', updated_at = ? WHERE receipt_id = ? AND status IN ('pending', 'dispatched')`)
               .run(options.now?.() ?? new Date().toISOString(), job.receiptId)
+            return needsReport
           }))
+          if (hostTerminal) await deliverCompletionReport(item.nativeSession)
           return { kind: 'superseded' }
         }
         if (state.nextAction === 'ask_user_confirmation') return { kind: 'completed', nextKind: 'confirmation' }
