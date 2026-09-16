@@ -36,7 +36,9 @@
     "README.ko.md",
     "PERMISSIONS.md",
     "LICENSE",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "lisp/",
+    "scripts/verify-lisp-vendor.mjs"
   ],
   "exports": {
     ".": {
@@ -93,10 +95,12 @@
         "Configured Kiokuko database and pre-migration backups",
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",
         ".orca/runs and .orca/exports inside verified session workspaces, or the configured Kiokuko data directory",
-        "Legacy history compatibility under DSH's native write lease: exact rejected v3 file or validated new v3 generation from retained v0, identical .bak, and disposable validation artifacts"
+        "Legacy history compatibility under DSH's native write lease: exact rejected v3 file or validated new v3 generation from retained v0, identical .bak, and disposable validation artifacts",
+        "Opt-in Lisp scratch, input snapshots, verified compiled bundle cache, durable operation journal, and approved file changes with host backups"
       ],
       "commands": [
-        "Restricted repository-relative verifier and backup subprocesses when explicitly requested"
+        "Restricted repository-relative verifier and backup subprocesses when explicitly requested",
+        "Opt-in protected SBCL and brokered subprocesses; no implicit runtime installation or VM"
       ],
       "externalServices": [
         "GitHub or skills.sh for optional Skill discovery and source retrieval",
@@ -125,6 +129,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs tests/dsh",
     "test:unit": "node scripts/run-tests.mjs tests/dsh/unit",
+    "probe:lisp:p0": "node --import tsx scripts/probe-lisp-p0.ts",
     "test:integration": "node scripts/run-tests.mjs tests/dsh/integration",
     "test:sqlite-vec": "node --import tsx tests/ci/sqlite-vec-package-smoke.ts",
     "test:evaluation": "npm run build && node scripts/run-retrieval-evaluation.mjs",
@@ -150,7 +155,10 @@
     "test:evaluation:continuity": "node --import tsx scripts/run-continuity-evaluation.mjs",
     "test:enno-memory": "node scripts/run-tests.mjs tests/dsh/unit/enno-memory tests/dsh/integration/enno-memory",
     "test:benchmark:enno-memory": "node --import tsx scripts/run-enno-memory-benchmark.ts",
-    "test:evaluation:enno-memory": "node scripts/run-enno-memory-evaluation.mjs"
+    "test:evaluation:enno-memory": "node scripts/run-enno-memory-evaluation.mjs",
+    "verify:lisp:vendor": "node scripts/verify-lisp-vendor.mjs",
+    "test:lisp": "node scripts/run-tests.mjs tests/dsh/unit/lisp tests/dsh/integration/lisp",
+    "test:lisp:web": "node scripts/verify-lisp-web.mjs"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

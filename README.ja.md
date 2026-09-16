@@ -71,3 +71,16 @@ pnpm dsh web
 DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復旧手順](docs/dsh-plugin.md#startup-failure-after-a-dsh-update)で、対象プロファイルの更新・再導入コマンドを確認してください。履歴や Kiokuko のデータベースは削除しません。API の互換性の問題は、再導入だけでは直らない場合があります。
 
 [ドキュメント](docs/README.ja.md) · [権限](PERMISSIONS.md) · [MIT ライセンス](LICENSE)
+## Common Lisp ツール（任意）
+
+事前に SBCL をインストールしてください。
+
+- macOS: `brew install sbcl`
+- Debian / Ubuntu: `sudo apt install sbcl`
+- Arch Linux: `sudo pacman -S sbcl`
+
+`lisp.enabled: true` を設定してプラグインを再読み込みし、対象のセッションで
+`/kioku-lisp enable` を実行すると、状態を保持する Common Lisp を利用できます。
+Linux では別途 Bubblewrap が必要です。VM は不要です。
+削除・既存ファイルの置換はユーザーの確認後に実行します。
+[設定、API、停止・復旧方法](docs/lisp.md)を参照してください。

@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "phase": "P0",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "kernel": "27.0.0",
+  "node": "v26.5.0",
+  "sbcl": "SBCL 2.6.4",
+  "backend": "Seatbelt candidate",
+  "checks": [
+    {
+      "id": "sbcl-version",
+      "status": "passed",
+      "detail": "SBCL 2.6.4; version discovery is not Lisp execution evidence."
+    },
+    {
+      "id": "native-build",
+      "status": "passed",
+      "detail": "Built finite development fixture in private temporary directory."
+    },
+    {
+      "id": "rlimit-fsize-counterexample",
+      "status": "passed",
+      "detail": "{\"perFileLimitBytes\":4096,\"totalBytesWritten\":6144} — RLIMIT_FSIZE cannot stand in for aggregate scratch quota."
+    },
+    {
+      "id": "filesystem-sample",
+      "status": "passed",
+      "detail": "Bounded fixture probes passed in parent and one child; not complete isolation evidence."
+    },
+    {
+      "id": "network-sample",
+      "status": "passed",
+      "detail": "Bounded fixture probes passed in parent and one child; not complete isolation evidence."
+    },
+    {
+      "id": "fd-sample",
+      "status": "passed",
+      "detail": "Bounded fixture probes passed in parent and one child; not complete isolation evidence."
+    },
+    {
+      "id": "rlimit-as-sample",
+      "status": "passed",
+      "detail": "{\"baselineError\":0,\"setLimitError\":0,\"limitedError\":12,\"limitBytes\":500529266688} — Address-space allocation only; not an aggregate physical-memory guarantee."
+    },
+    {
+      "id": "fork-denial-sample",
+      "status": "passed",
+      "detail": "{\"baseline\":{\"code\":0,\"signal\":null,\"stdout\":\"{\\\"forkError\\\":0}\\n\",\"stderr\":\"\"},\"confined\":{\"code\":0,\"signal\":null,\"stdout\":\"{\\\"forkError\\\":1}\\n\",\"stderr\":\"\"}} — One bounded fork; not complete process/IPC isolation."
+    },
+    {
+      "id": "rlimit-nproc-thread-counterexample",
+      "status": "passed",
+      "detail": "{\"code\":0,\"signal\":null,\"stdout\":\"{\\\"rlimitNproc\\\":1,\\\"createdThreads\\\":40,\\\"threadError\\\":0}\\n\",\"stderr\":\"\"} — Fork denial and RLIMIT_NPROC do not establish the 32-task limit."
+    },
+    {
+      "id": "aggregate-memory",
+      "status": "unverified",
+      "detail": "Worker and descendant aggregate memory limit has no verified backend."
+    },
+    {
+      "id": "aggregate-cpu",
+      "status": "unverified",
+      "detail": "Worker and descendant CPU allocation limit has no verified backend."
+    },
+    {
+      "id": "aggregate-tasks",
+      "status": "unverified",
+      "detail": "Worker and descendant thread/process limit has no verified backend."
+    },
+    {
+      "id": "scratch-quota",
+      "status": "unverified",
+      "detail": "No verified fixed-capacity scratch filesystem is mounted by this prototype."
+    },
+    {
+      "id": "global-reservations",
+      "status": "unverified",
+      "detail": "Cross-session resource admission and reservations are not implemented."
+    },
+    {
+      "id": "process-isolation",
+      "status": "unverified",
+      "detail": "Signal/ptrace/IPC isolation and complete descendant ownership are unverified."
+    },
+    {
+      "id": "crash-cleanup",
+      "status": "unverified",
+      "detail": "Host-crash ownership recovery and descendant termination are unverified."
+    },
+    {
+      "id": "dsh-all-paths",
+      "status": "unverified",
+      "detail": "Protection admission, child/PTC paths, registry changes and unload fencing require native DSH proof."
+    },
+    {
+      "id": "platform-matrix",
+      "status": "unverified",
+      "detail": "Both OS implementations and all four OS/CPU combinations require separate evidence."
+    }
+  ],
+  "readyForP1": false
+}

@@ -72,3 +72,15 @@ If existing chats fail with an unknown `kiokuko/` event, see [history repair](do
 If Kiokuko fails to load after a DSH update, see [startup recovery](docs/dsh-plugin.md#startup-failure-after-a-dsh-update) for profile-specific update and reinstall commands. Keep session logs and the Kiokuko database; reinstallation cannot fix every API incompatibility.
 
 [Documentation](docs/README.md) · [Permissions](PERMISSIONS.md) · [MIT license](LICENSE)
+## Optional Common Lisp tools
+
+Install SBCL first:
+
+- macOS: `brew install sbcl`
+- Debian / Ubuntu: `sudo apt install sbcl`
+- Arch Linux: `sudo pacman -S sbcl`
+
+Set `lisp.enabled: true`, reload the plugin, then run `/kioku-lisp enable` in the
+desired session. Linux also requires Bubblewrap; no VM is required.
+Deletion and replacement of existing files require human confirmation.
+See [setup, APIs, limits and recovery](docs/lisp.md).

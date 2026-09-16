@@ -1,0 +1,112 @@
+# Lifted from @etimmons' script for ASDF
+###############################################################################
+# Global configuration
+###############################################################################
+
+variables:
+  # Just let the runner fetch and update the submodules for us.
+  GIT_SUBMODULE_STRATEGY: normal
+  ABCL_IMAGE: rpgoldman/abcl
+  ABCL_TAG: latest
+  ALLEGRO_IMAGE: rpgoldman/allegro11express
+  ALLEGRO_TAG: latest
+  CCL_IMAGE: rpgoldman/ccl
+  CCL_TAG: 1.13-bullseye
+  CLASP_IMAGE: ghcr.io/clasp-developers/clasp
+  CLASP_TAG: latest
+  CLISP_IMAGE: clfoundation/clisp
+  CLISP_TAG: latest
+  CMUCL_IMAGE: rpgoldman/cmucl
+  CMUCL_TAG: 21e-bullseye
+  ECL_IMAGE: clfoundation/ecl
+  ECL_TAG: latest
+  SBCL_IMAGE: rpgoldman/sbcl
+  SBCL_TAG: 2.4.6-bullseye
+
+
+# This causes pipelines to be created only on the default branch, tags, merge
+# requests, and when triggered via the web interface.
+# workflow:
+#   rules:
+#     - if: $CI_MERGE_REQUEST_IID
+#     - if: $CI_COMMIT_TAG
+#     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+#     - if: $CI_COMMIT_BRANCH == "fix-asdf-test-op"
+#     - if: $CI_PIPELINE_SOURCE == "web"
+
+stages:
+  - regression
+
+###############################################################################
+# Testing Templates
+###############################################################################
+
+.Regression tests:
+  stage: regression
+  script:
+    - make test
+  artifacts:
+    paths:
+      - test/$l-test.text
+  needs: []
+
+###############################################################################
+# Actual test jobs - Makefile based harness
+###############################################################################
+
+ABCL regression tests:
+  extends: .Regression tests
+  image: $ABCL_IMAGE:$ABCL_TAG
+  variables:
+    l: abcl
+
+ABCL 1.9.0 regression tests:
+  extends: .Regression tests
+  image: rpgoldman/abcl:1.9.0
+  variables:
+    l: abcl
+
+# ACL regression tests:
+#   extends: .Regression tests
+#   image: $ALLEGRO_IMAGE:$ALLEGRO_TAG
+#   variables:
+#     l: allegro
+#     I_AGREE_TO_ALLEGRO_EXPRESS_LICENSE: yes
+
+CCL regression tests:
+  extends: .Regression tests
+  image: $CCL_IMAGE:$CCL_TAG
+  variables:
+    l: ccl
+
+Clasp regression tests:
+  extends: .Regression tests
+  image: $CLASP_IMAGE:$CLASP_TAG
+  variables:
+    l: clasp
+
+CLISP regression tests:
+  extends: .Regression tests
+  image: $CLISP_IMAGE:$CLISP_TAG
+  variables:
+    l: clisp
+  allow_failure: true
+
+CMUCL regression tests:
+  extends: .Regression tests
+  image: $CMUCL_IMAGE:$CMUCL_TAG
+  variables:
+    l: cmucl
+  allow_failure: true
+
+ECL regression tests:
+  extends: .Regression tests
+  image: $ECL_IMAGE:$ECL_TAG
+  variables:
+    l: ecl
+
+SBCL regression tests:
+  extends: .Regression tests
+  image: $SBCL_IMAGE:$SBCL_TAG
+  variables:
+    l: sbcl

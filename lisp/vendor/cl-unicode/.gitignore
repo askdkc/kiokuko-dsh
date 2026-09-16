@@ -1,0 +1,10 @@
+hash-tables.lisp
+lists.lisp
+methods.lisp
+test/derived-properties
+test/normalization-forms
+
+# Kiokuko ships generated tables for offline runtime loading.
+!methods.lisp
+!hash-tables.lisp
+!lists.lisp

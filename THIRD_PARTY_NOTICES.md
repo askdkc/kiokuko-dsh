@@ -29,3 +29,28 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+# Bundled Common Lisp libraries
+
+The `lisp/vendor/` directory contains the pinned upstream source trees listed
+below. Each directory retains its original copyright and license notices and an
+`UPSTREAM.json` commit record. `lisp/vendor-manifest.json` records every bundled
+file's SHA-256; verify with `npm run verify:lisp:vendor`.
+
+| Library | Upstream | License |
+|---|---|---|
+| YASON | phmarek/yason | BSD (see LICENSE) |
+| CL-PPCRE | edicl/cl-ppcre | BSD-2-Clause |
+| CL-CSV | AccelerationNet/cl-csv | BSD (see LICENSE) |
+| Alexandria | common-lisp.net/alexandria | Public domain / permissive fallback (source notices) |
+| trivial-gray-streams | trivial-gray-streams/trivial-gray-streams | MIT (COPYING) |
+| Iterate | common-lisp.net/iterate | MIT (source and README notices) |
+| CL-INTERPOL | edicl/cl-interpol | BSD-2-Clause (source notices) |
+| CL-UNICODE | edicl/cl-unicode | BSD-2-Clause; Unicode data retains its own notices |
+| FLEXI-STREAMS | edicl/flexi-streams | BSD-2-Clause (source notices) |
+| named-readtables | melisgl/named-readtables | BSD (LICENSE) |
+| MGL-PAX bootstrap | melisgl/mgl-pax | MIT (COPYING) |
+
+CL-UNICODE's generated tables are produced from its bundled Unicode data by its
+upstream `cl-unicode/build` system and shipped as source, so plugin users do not
+need to regenerate them. No SBCL binary, Python runtime, Bubblewrap, VM runtime,
+or Homebrew bottle is included in the plugin package.

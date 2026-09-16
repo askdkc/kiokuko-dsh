@@ -14,6 +14,42 @@ env:
   ONNXRUNTIME_NODE_INSTALL: skip
 
 jobs:
+  lisp-runtime:
+    name: Protected Lisp (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+          cache: npm
+      - name: Install test runtimes
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo apt-get update
+            sudo apt-get install -y sbcl bubblewrap python3
+            # Dedicated CI runner: permit the user namespaces required by bwrap.
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          else
+            brew install sbcl python
+          fi
+      - run: npm ci
+      - run: npm ci --prefix tests/fixtures/dsh-runtime
+      - run: npm run verify:lisp:vendor
+      - name: Test actual runtime and native DSH guard
+        shell: bash
+        run: |
+          KIOKUKO_REQUIRE_LISP_RUNTIME=1 \
+          KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" \
+          npm run test:lisp
+      - run: npm run pack:check
+
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 30

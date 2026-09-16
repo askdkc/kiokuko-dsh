@@ -96,7 +96,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
         if (failures.length) throw new AggregateError(failures, 'kiokuko-dsh explicit host unload failed')
       })()
       try {
-        composition = await mountDshComposition(ctx, host)
+        composition = await mountDshComposition(ctx, host, resolvedConfig.lisp)
         disposeOrcaCommand = host.commands === undefined ? undefined : mountDshOrcaCommand({ commands: host.commands }, resolvedConfig.orca.enabled, host.orca)
         disposeExport = host.sessionExport === undefined ? undefined
           : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, host.sessionExport)
@@ -111,7 +111,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       const composition = await mountDshComposition(ctx, {
         ...(ctx.get('skills', false) === undefined ? {} : { skills: ctx.get('skills', false) as DshCompositionHost['skills'] }),
         ...(ctx.get('systemPrompt', false) === undefined ? {} : { systemPrompt: ctx.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] }),
-      } as DshCompositionHost)
+      } as DshCompositionHost, resolvedConfig.lisp)
       const commands = ctx.get('commands', false) as DshCompositionHost['commands']
       const disposeCommand = commands === undefined ? undefined : mountDshOrcaCommand({ commands }, resolvedConfig.orca.enabled)
       return () => { disposeCommand?.(); return composition.dispose() }
@@ -129,6 +129,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       composition?.stopIngress()
       disposeOrcaCommand?.()
       const failures: unknown[] = []
+      try { await composition?.drainLisp() } catch (error) { failures.push(error) }
       try { await disposeExport?.() } catch (error) { failures.push(error) }
       try { await adapter.dispose() } catch (error) { failures.push(error) }
       try { await composition?.dispose() } catch (error) { failures.push(error) }
@@ -136,7 +137,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       if (failures.length > 1) throw new AggregateError(failures, 'kiokuko-dsh unload failed')
     })()
     try {
-      composition = await mountDshComposition(ctx, adapter.host)
+      composition = await mountDshComposition(ctx, adapter.host, resolvedConfig.lisp)
       disposeOrcaCommand = adapter.host.commands === undefined ? undefined : mountDshOrcaCommand({ commands: adapter.host.commands }, resolvedConfig.orca.enabled, adapter.host.orca)
       disposeExport = adapter.host.sessionExport === undefined ? undefined
         : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, adapter.host.sessionExport)
