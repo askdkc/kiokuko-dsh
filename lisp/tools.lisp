@@ -1,8 +1,8 @@
 (defpackage :kioku.internal (:use :cl) (:export :serve :object :rpc :*proposals* :*inputs* :*objects* :*generation*))
-(defpackage :kioku.data (:use :cl) (:export :parse-json :encode-json :parse-jsonl :map-jsonl :read-csv :write-csv :read-tsv :write-tsv :regex-matches :regex-replace))
-(defpackage :kioku.files (:use :cl) (:export :input :read-text :write-text :propose-write :propose-delete :scratch :search-text :diff-text))
+(defpackage :kioku.data (:use :cl) (:export :parse-json :encode-json :parse-jsonl :map-jsonl :read-csv :write-csv :read-tsv :write-tsv :regex-matches :regex-replace :join-lines :sort-lines :uniq-lines :take-lines :drop-lines))
+(defpackage :kioku.files (:use :cl) (:export :input :read-text :write-text :propose-write :propose-delete :scratch :search-text :diff-text :list-directory :head-lines :tail-lines :count-lines :glob-scratch :copy-scratch :delete-scratch :grep-scratch))
 (defpackage :kioku.objects (:use :cl) (:export :retain :inspect-ref :release :register-artifact))
-(defpackage :kioku.process (:use :cl) (:export :run :python :shell :start-job :job-status :cancel-job))
+(defpackage :kioku.process (:use :cl) (:export :run :python :shell :start-job :job-status :cancel-job :result-code :result-stdout :result-stderr :result-ok? :split-lines :python-stdout :shell-stdout :run-lines :list-jobs :forget-job))
 (defpackage :kioku.environment (:use :cl) (:export :status))
 (defpackage :kioku.tools (:use :cl) (:export :describe-tools :describe-symbol :available-tools :call-tool))
 (defpackage :kioku.user (:use :cl))
@@ -150,3 +150,196 @@
       (let* ((*read-eval* nil) (symbol (read-from-string name)))
         (unless (and (symbolp symbol) (member (package-name (symbol-package symbol)) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT") :test #'equal)) (error "UNKNOWN_SYMBOL"))
         (kioku.internal:object "symbol" name "arguments" (kioku.internal::printed (sb-introspect:function-lambda-list symbol)) "documentation" (or (documentation symbol 'function) "See bundled kiokuko-lisp Skill.")))))
+
+
+(in-package :kioku.files)
+;; --- fork-free shell alternatives (perf-conscious) ---
+;; directory/readline系はforkを使わない。length/subseqの毎行呼出しなどO(n*k)を避け、
+;; tailはリングバッファO(n)/O(k)、splitは単一走査O(n)、grepはscanner事前compile。
+
+(defun list-directory (path &key (pattern "*.*") (limit 1000))
+  "Fork-free directory listing for scratch/input dirs; no host files are changed."
+  (declare (type fixnum limit))
+  (let ((wild (merge-pathnames pattern (pathname path))))
+    (coerce (loop for p in (directory wild) for i from 0 below (min (max limit 0) 1000)
+                  collect (namestring p))
+            'vector)))
+
+(defun glob-scratch (pattern &key (limit 500))
+  "Glob under scratch without forking. PATTERN is merged under scratch."
+  (declare (type fixnum limit))
+  (list-directory (kioku.files:scratch) :pattern pattern :limit limit))
+
+(defun head-lines (path &key (n 20))
+  "First N lines of a scratch/input file; early exit, no fork."
+  (declare (type fixnum n))
+  (let ((k (min (max n 0) 500)))
+    (coerce (with-open-file (s path :direction :input)
+              (loop for i from 0 below k for line = (read-line s nil nil) while line collect line))
+            'vector)))
+
+(defun tail-lines (path &key (n 20))
+  "Last N lines via ring buffer: O(lines) time, O(N) memory, no fork."
+  (declare (type fixnum n))
+  (let ((k (min (max n 0) 500)))
+    (if (zerop k)
+        #()
+        (let ((ring (make-array k :initial-element nil)) (idx 0) (total 0))
+          (declare (type fixnum idx total) (type simple-vector ring))
+          (with-open-file (s path :direction :input)
+            (loop for line = (read-line s nil nil) while line do
+              (setf (aref ring (mod idx k)) line)
+              (incf idx) (incf total)))
+          (let ((m (min total k)) (out (make-array (min total k))))
+            (declare (type fixnum m))
+            (dotimes (i m)
+              (setf (aref out i) (aref ring (mod (+ (- total m) i) k))))
+            out)))))
+
+(defun count-lines (path)
+  "Count lines; capped at 1M to bound time."
+  (with-open-file (s path :direction :input)
+    (loop for line = (read-line s nil nil) while line count 1 into c
+          do (when (> c 1000000) (error "LINE_LIMIT")) finally (return c))))
+
+(defun copy-scratch (from-name to-name &key (max-bytes (* 64 1024 1024)))
+  "Copy scratch->scratch with 64KB binary buffer; no whole-file string."
+  (let ((from (merge-pathnames from-name (kioku.files:scratch)))
+        (to (merge-pathnames to-name (kioku.files:scratch))))
+    (with-open-file (in from :direction :input :element-type '(unsigned-byte 8))
+      (when (> (or (file-length in) 0) max-bytes) (error "COPY_LIMIT"))
+      (with-open-file (out to :direction :output :element-type '(unsigned-byte 8)
+                           :if-exists :supersede :if-does-not-exist :create)
+        (let ((buf (make-array 65536 :element-type '(unsigned-byte 8))))
+          (declare (type (simple-array (unsigned-byte 8) (*)) buf))
+          (loop for n = (read-sequence buf in) while (plusp n) do (write-sequence buf out :end n)))))
+    to))
+
+(defun delete-scratch (name)
+  "Delete one scratch file; directories/links are not followed."
+  (let ((p (merge-pathnames name (kioku.files:scratch))))
+    (when (null (probe-file p)) (error "SCRATCH_MISSING"))
+    (delete-file p)
+    t))
+
+(defun grep-scratch (pattern &key (glob "*.*") (limit 1000) (max-files 200) (max-bytes (* 2 1024 1024)))
+  "Recursive-free grep under scratch: precompiled scanner, skips files over max-bytes. Bounded."
+  (declare (type fixnum limit max-files))
+  (let ((scanner (cl-ppcre:create-scanner pattern)) (hits nil) (files 0))
+    (declare (type fixnum files))
+    (dolist (namestring (coerce (glob-scratch glob :limit max-files) 'list) (nreverse hits))
+      (when (>= (length hits) (min limit 1000)) (return (nreverse hits)))
+      (let ((p (pathname namestring)))
+        (when (and (probe-file p) (null (nth-value 1 (probe-file p))))
+          (with-open-file (probe p :direction :input :element-type '(unsigned-byte 8))
+            (when (> (or (file-length probe) 0) max-bytes)
+              (return)))
+          (incf files)
+          (when (> files max-files) (return (nreverse hits)))
+          (with-open-file (s p :direction :input)
+            (loop for line = (read-line s nil nil) for number from 1 while line do
+              (when (cl-ppcre:scan scanner line)
+                (push (kioku.internal:object "path" (namestring p) "line" number
+                                             "text" (subseq line 0 (min 400 (length line))))
+                      hits)
+                (when (>= (length hits) (min limit 1000))
+                  (return-from grep-scratch (nreverse hits)))))))))))
+
+(in-package :kioku.process)
+;; --- result helpers: hash-tableのまま回す怠さを消す。余計なコピーなし ---
+(defvar *job-registry* nil)
+
+(defun result-code (result) (gethash "code" result))
+(defun result-stdout (result) (gethash "stdout" result))
+(defun result-stderr (result) (gethash "stderr" result))
+(defun result-ok? (result) (zerop (gethash "code" result 1)))
+
+(defun split-lines (text &key (limit 2000))
+  "Single-pass split on #\\Newline: O(n) time, bounded lines."
+  (declare (type fixnum limit))
+  (let ((n (length text)) (start 0) (out nil) (count 0))
+    (declare (type fixnum n start count))
+    (block done
+      (loop
+        (when (>= count (min (max limit 0) 2000)) (return-from done (coerce (nreverse out) 'vector)))
+        (let ((pos (position #\Newline text :start start)))
+          (push (subseq text start (or pos n)) out)
+          (incf count)
+          (unless pos (return-from done (coerce (nreverse out) 'vector)))
+          (setf start (1+ (the fixnum pos))))))))
+
+(defun run-lines (program arguments &key (timeout-ms 120000) (limit 2000))
+  "RUN + split in one step; pipesは使わずLisp側で畳む用."
+  (split-lines (gethash "stdout" (run program arguments :timeout-ms timeout-ms) "") :limit limit))
+
+(defun python-stdout (code &key (timeout-ms 120000))
+  "Single-process python returning stdout string; signals on non-zero exit."
+  (let ((r (python code :timeout-ms timeout-ms)))
+    (unless (zerop (gethash "code" r 1))
+      (error (format nil "PYTHON_FAILED: ~A" (gethash "stderr" r ""))))
+    (gethash "stdout" r "")))
+
+(defun shell-stdout (code &key (timeout-ms 120000))
+  "One shell command, no pipes; signals on non-zero exit. Pipes may hit fork denial."
+  (let ((r (shell code :timeout-ms timeout-ms)))
+    (unless (zerop (gethash "code" r 1))
+      (error (format nil "SHELL_FAILED(~A): ~A" (gethash "code" r) (gethash "stderr" r ""))))
+    (gethash "stdout" r "")))
+
+;; start-jobを自動登録で包む: 既存の呼び出し形は変えない
+(let ((orig #'start-job))
+  (defun start-job (program arguments &key (timeout-ms 120000))
+    (let ((id (funcall orig program arguments :timeout-ms timeout-ms)))
+      (pushnew id *job-registry* :test #'equal)
+      id)))
+(defun list-jobs ()
+  "Tracked job ids in this generation; use job-status per id."
+  (coerce (copy-list *job-registry*) 'vector))
+(defun forget-job (id)
+  (setf *job-registry* (remove id *job-registry* :test #'equal))
+  t)
+
+(in-package :kioku.data)
+;; --- vector/string pipelines without shell pipes ---
+(defun join-lines (lines &key (separator (string #\Newline)) (limit 2000))
+  "Join a vector/list of strings with SEPARATOR; bounded, single pass."
+  (with-output-to-string (o)
+    (loop for i from 0 below (min (length lines) (min (max limit 0) 2000))
+          for line = (elt lines i)
+          do (unless (zerop i) (write-string separator o))
+             (write-string (string line) o))))
+
+(defun sort-lines (lines &key (limit 5000))
+  "Copy + sort strings; O(n log n), no fork."
+  (let* ((n (min (length lines) (min (max limit 0) 5000)))
+         (v (make-array n)))
+    (dotimes (i n) (setf (aref v i) (string (elt lines i))))
+    (sort v #'string<)))
+
+(defun uniq-lines (lines &key (limit 5000))
+  "Order-preserving dedupe in O(n) via hash table."
+  (let ((seen (make-hash-table :test 'equal :size 1024)) (out nil) (n 0))
+    (declare (type fixnum n))
+    (block done
+      (loop for i from 0 below (length lines) do
+        (when (>= n (min (max limit 0) 5000)) (return-from done (coerce (nreverse out) 'vector)))
+        (let ((s (string (elt lines i))))
+          (unless (gethash s seen)
+            (setf (gethash s seen) t)
+            (push s out)
+            (incf n))))
+      (coerce (nreverse out) 'vector))))
+
+(defun take-lines (lines k)
+  "First K items as vector; no copy beyond K."
+  (let ((n (min (max k 0) (length lines))))
+    (let ((v (make-array n)))
+      (dotimes (i n) (setf (aref v i) (elt lines i)))
+      v)))
+
+(defun drop-lines (lines k)
+  "Drop first K items as vector."
+  (let* ((len (length lines)) (s (min (max k 0) len)) (n (- len s)))
+    (let ((v (make-array n)))
+      (dotimes (i n) (setf (aref v i) (elt lines (+ s i))))
+      v)))
