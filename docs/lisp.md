@@ -2,6 +2,10 @@
 
 ## Enable
 
+The `kiokuko-lisp` Skill is listed in DSH's available Skills and can be read with
+the `skill` tool before enabling Lisp. Reading the Skill does not enable Lisp or
+start SBCL. Execution requires the configuration and session command below.
+
 Target hosts: macOS and Linux, with a working SBCL installed by the user.
 Linux also requires Bubblewrap (`bwrap`) with user/PID/network namespaces enabled.
 There is no VM/container engine dependency, implicit installer, Quicklisp download,

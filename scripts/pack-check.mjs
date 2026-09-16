@@ -203,6 +203,7 @@ async function createAndSmokeTestTarball() {
     try {
       const { candidates } = await provider.list({});
       if (!candidates.some(candidate => candidate.name === 'veteran-programmer-skill')) throw new Error('packed veteran Skill is missing');
+      if (!candidates.some(candidate => candidate.name === 'kiokuko-lisp')) throw new Error('packed Lisp Skill is missing');
     const sources = await buildDshMessageSources({
         task: 'Continue the approved plan.', intakeStatus: 'ready', nextAction: 'proceed', context: null,
         memoryPolicy: { memoryReasoningRequired: true, contextWithheld: false },

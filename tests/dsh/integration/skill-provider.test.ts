@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { mountSoulPrompt } from '../../../src/dsh/prompt-policy.js'
 import { createStandardSkillProvider, mountStandardSkillProvider } from '../../../src/dsh/standard-skill-provider.js'
@@ -9,7 +10,7 @@ test('bundled provider exposes complete model/user-invocable definitions and dis
   const result = await provider.list({})
   const listed = 'complete' in result ? result : { candidates: result, complete: true as const }
   assert.equal(listed.complete, true)
-  assert.equal(listed.candidates.length, 8)
+  assert.equal(listed.candidates.length, 9)
   assert.deepEqual(listed.candidates.map((candidate) => candidate.name), [
     'kiokuko-ui-design-soul',
     'kiokuko-simple-work',
@@ -19,6 +20,7 @@ test('bundled provider exposes complete model/user-invocable definitions and dis
     'veteran-programmer-skill',
     'kiokuko-soul',
     'natural-japanese-output',
+    'kiokuko-lisp',
   ])
   assert.ok(listed.candidates.every((candidate) => candidate.invocation.modelInvocable && candidate.invocation.userInvocable))
   const soul = listed.candidates.find((candidate) => candidate.name === 'kiokuko-soul')!
@@ -30,6 +32,23 @@ test('bundled provider exposes complete model/user-invocable definitions and dis
   provider.dispose()
   assert.deepEqual(await provider.list({}), { candidates: [], complete: true })
   assert.equal(await provider.get(soul, {}), undefined)
+})
+
+test('Lisp Skill is discoverable and readable without enabling a Lisp session', async () => {
+  const provider = createStandardSkillProvider()
+  try {
+    const listed = await provider.list({})
+    const candidates = 'candidates' in listed ? listed.candidates : listed
+    const lisp = candidates.find(candidate => candidate.name === 'kiokuko-lisp')
+    assert.ok(lisp, 'available Skills must include the Lisp guide before enable')
+    assert.deepEqual(lisp.invocation, { modelInvocable: true, userInvocable: true })
+    const definition = await provider.get(lisp, {})
+    assert.equal(definition?.content, await readFile(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url), 'utf8'))
+    assert.match(definition!.content, /\/kioku-lisp enable/u)
+    assert.equal(await provider.get({ ...lisp, provider: 'other' }, {}), undefined)
+    assert.equal(await provider.get({ ...lisp, locator: { skillName: 'kiokuko-soul' } }, {}), undefined)
+    assert.equal(await provider.get({ ...lisp, name: '../../package.json', locator: { skillName: '../../package.json' } }, {}), undefined)
+  } finally { provider.dispose() }
 })
 
 test('provider and SOUL prompt are independently reversible Cordis-style effects', async () => {

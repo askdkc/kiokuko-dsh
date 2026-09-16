@@ -1,5 +1,6 @@
 import { loadStandardSkillParity, standardSkillFrontmatter, type StandardSkillParity } from './standard-skill-integrity.js'
 import { JAPANESE_OUTPUT_SKILL_NAME, loadJapaneseOutputSkill } from './japanese-output-skill.js'
+import { LISP_SKILL_NAME, loadLispSkill } from './lisp/skill.js'
 
 export const STANDARD_DSH_SKILL_PROVIDER = 'kiokuko-standard'
 export const STANDARD_DSH_SKILL_RANK = 600
@@ -37,14 +38,16 @@ function abortIfRequested(signal: AbortSignal | undefined): void {
 /** Resolve public Skill identities through their validated package loaders, never as paths. */
 export async function loadBundledDshSkillContent(skillName: string, parity: StandardSkillParity): Promise<string | undefined> {
   if (skillName === JAPANESE_OUTPUT_SKILL_NAME) return (await loadJapaneseOutputSkill()).content
+  if (skillName === LISP_SKILL_NAME) return (await loadLispSkill()).content
   return parity.files.find(file => file.skillName === skillName && file.relativePath === 'SKILL.md')?.content
 }
 
 async function candidates(parity: StandardSkillParity): Promise<DshSkillCandidate[]> {
-  const japanese = await loadJapaneseOutputSkill()
-  return [...parity.skills, japanese.name].map((skillName) => {
-    const primary = parity.files.find((file) => file.skillName === skillName && file.relativePath === 'SKILL.md')!
-    const description = skillName === japanese.name ? japanese.description : standardSkillFrontmatter(primary.content).description
+  const additional = await Promise.all([loadJapaneseOutputSkill(), loadLispSkill()])
+  return [...parity.skills, ...additional.map(skill => skill.name)].map((skillName) => {
+    const content = additional.find(skill => skill.name === skillName)?.content
+      ?? parity.files.find(file => file.skillName === skillName && file.relativePath === 'SKILL.md')!.content
+    const description = standardSkillFrontmatter(content).description
     if (description === null || description.length === 0) throw new Error(`Missing standard Skill description: ${skillName}`)
     return {
       name: skillName,
