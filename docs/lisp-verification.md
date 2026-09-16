@@ -11,7 +11,7 @@
 | Standard suite | 735 tests: 647 passed, 88 optional/environment tests skipped, no failures |
 | Focused Lisp suite on macOS | 12 real/runtime and unit tests passed without skips; additional Unicode result test passed |
 | Native DSH human-question service | Exact live-agent binding and refusal passed after Web-discovered correction |
-| Vendor/package | 394 vendored files verified; tarball contents, import closure, client artifact and publint passed |
+| Vendor/package | 392 Git-tracked vendored files verified in a clean-source copy; tarball contents, import closure, client artifact and publint passed (see correction below) |
 | Installed Web package | Isolated tarball install, fresh Lisp cache, explicit enable, restart recovery, native deletion refusal/approval, timeout guidance, explicit recovery, stop, backup restoration and safe disable verified |
 
 The pinned native fixture and installed Web host use DSH **0.1.5-rc.1** (CLI,
@@ -27,6 +27,28 @@ SBCL and normal DSH profiles were not replaced.
 Native Intel macOS and Linux x64 execution were not exercised locally. The CI
 matrix is the remaining platform-verification path; its presence is not a passing
 CI run.
+
+## CI regression correction for da85bfc
+
+[CI run 35060014982](https://github.com/askdkc/kiokuko-dsh/actions/runs/35060014982)
+failed: the manifest required two untracked generated Unicode test files, and
+the repeated-memory upgrade fixture expected migrations only through 18. The
+earlier local 394-file check did not establish clean-checkout reproducibility.
+
+After correcting those defects, disabled-session recovery registration and
+permission preservation during file replacement, local verification passed:
+
+- A Git archive with the fixes applied and neither generated test file present:
+  392-file manifest check, startup integrity check, build, package check and
+  `publint --pack npm`.
+- That same source copy on macOS 27 / arm64, SBCL 2.6.8: 21 Lisp tests passed,
+  one historical opt-in P0 test skipped; real workers and native DSH were used.
+- Both repeated-memory upgrade modes passed through migration 19.
+- Standard suite: 650 passed, 92 optional/environment tests skipped, no failures
+  (742 total). Typecheck passed.
+
+The fixes have not been rerun in remote CI or on Linux/x64. This is local evidence,
+not confirmation that the four-platform CI matrix passes.
 
 ## Covered behavior
 

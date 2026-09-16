@@ -46,7 +46,7 @@ export async function snapshot(root: string, path: string, protectedRoots: reado
   } finally { await file.close() }
 }
 export function sameFile(a: FileSnapshot, b: FileSnapshot): boolean {
-  return a.path === b.path && a.parentDev === b.parentDev && a.parentIno === b.parentIno && a.exists === b.exists && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.hash === b.hash && JSON.stringify(a.missingParents) === JSON.stringify(b.missingParents)
+  return a.path === b.path && a.parentDev === b.parentDev && a.parentIno === b.parentIno && a.exists === b.exists && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.hash === b.hash && a.mode === b.mode && JSON.stringify(a.missingParents) === JSON.stringify(b.missingParents)
 }
 export async function checkedBytes(before: FileSnapshot): Promise<Buffer> {
   const file = await open(before.path, constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -59,8 +59,10 @@ export async function checkedBytes(before: FileSnapshot): Promise<Buffer> {
   } finally { await file.close() }
 }
 async function durableWrite(path: string, content: string | Buffer, mode = 0o600): Promise<void> {
-  const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode)
-  try { await file.writeFile(content); await file.sync() } finally { await file.close() }
+  const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+  // Keep incomplete bytes private, then set the exact mode through the open
+  // handle: creation permissions alone are filtered by the host's umask.
+  try { await file.writeFile(content); await file.chmod(mode); await file.sync() } finally { await file.close() }
 }
 async function syncDirectory(path: string): Promise<void> { const file = await open(path, constants.O_RDONLY); try { await file.sync() } finally { await file.close() } }
 export async function freezeChange(owner: LispOwner, request: ProposalInput, backupRoot: string, protectedRoots: readonly string[]): Promise<FrozenChange> {

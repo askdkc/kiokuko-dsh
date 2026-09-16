@@ -150,7 +150,10 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         if (action === 'enable') { register(binding.agent); result = await manager.enable(binding.owner) }
         else if (action === 'disable') { result = await manager.disable(binding.owner); unregister(binding.agent) }
         else if (action === 'cancel') result = await manager.execute(binding.owner, 'lisp_cancel', {})
-        else if (action === 'recover') { register(binding.agent); result = await manager.recover(binding.owner, invocation.signal) }
+        else if (action === 'recover') {
+          if (manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
+          result = await manager.recover(binding.owner, invocation.signal)
+        }
         else if (action === 'abandon') result = await manager.abandon(binding.owner, argument ?? '')
         else if (action === 'restore') result = await manager.restore(binding.owner, argument ?? '', invocation.signal)
         else if (action === 'diagnostics') result = await manager.diagnostics(binding.owner, argument === '--json' ? undefined : argument)

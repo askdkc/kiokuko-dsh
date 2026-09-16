@@ -62,6 +62,8 @@ const requiredFiles = [
 ]
 const requiredDirectories = ['dist/', 'migrations/', 'skills/', 'docs/']
 const forbiddenPrefixes = [
+  'lisp/vendor/cl-unicode/test/derived-properties',
+  'lisp/vendor/cl-unicode/test/normalization-forms',
   'src/',
   'tests/',
   'node_modules/',

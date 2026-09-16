@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, realpath, mkdir, writeFile, readFile, symlink, link } from 'node:fs/promises'
+import { mkdtemp, realpath, mkdir, writeFile, readFile, symlink, link, chmod, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applyChange, freezeChange, snapshot } from '../../../../src/dsh/lisp/files.js'
@@ -40,4 +40,33 @@ test('parent symlink replacement after review stops before touching an outside f
   await rename(join(root, 'dir'), join(root, 'old')); await symlink(outside, join(root, 'dir'))
   await assert.rejects(applyChange(owner, frozen, []), /親ディレクトリ/)
   assert.equal(await readFile(join(outside, 'a'), 'utf8'), 'outside')
+})
+
+test('replacement preserves approved permission bits despite restrictive umask; backups stay private', async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'lm-'))), root = join(base, 'work'), backups = join(base, 'backups')
+  await mkdir(root); await mkdir(backups)
+  const owner = { sessionId: 's', agentId: 'a', root }, previousMask = process.umask(0o077)
+  try {
+    for (const mode of [0o644, 0o755, 0o640]) {
+      const path = `file-${mode}`, target = join(root, path)
+      await writeFile(target, 'before'); await chmod(target, mode)
+      const change = await freezeChange(owner, { operation: 'write', path, content: 'after' }, backups, [])
+      await applyChange(owner, change, [])
+      assert.equal((await stat(target)).mode & 0o777, mode)
+      assert.equal(await readFile(target, 'utf8'), 'after')
+      assert.equal((await stat(change.backup!)).mode & 0o777, 0o600)
+      assert.equal(await readFile(change.backup!, 'utf8'), 'before')
+    }
+  } finally { process.umask(previousMask) }
+})
+
+test('permission changes after approval invalidate the file proposal', async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'lm-'))), root = join(base, 'work'), backups = join(base, 'backups')
+  await mkdir(root); await mkdir(backups)
+  await writeFile(join(root, 'file'), 'before'); await chmod(join(root, 'file'), 0o644)
+  const owner = { sessionId: 's', agentId: 'a', root }
+  const change = await freezeChange(owner, { operation: 'write', path: 'file', content: 'after' }, backups, [])
+  await chmod(join(root, 'file'), 0o600)
+  await assert.rejects(applyChange(owner, change, []), { code: 'TARGET_CHANGED' })
+  assert.equal(await readFile(join(root, 'file'), 'utf8'), 'before')
 })

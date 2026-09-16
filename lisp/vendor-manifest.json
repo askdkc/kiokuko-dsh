@@ -151,8 +151,6 @@
     "cl-unicode/methods.lisp": "93247f2e0314f19b5544aa17fd6ff841f11210f8077876eae46badbfdde59977",
     "cl-unicode/packages.lisp": "1c3e484f5717af0c4ff8611fca755473119dd7c058049f9a65e078c3d0aff286",
     "cl-unicode/specials.lisp": "cd93efa2b9cf9575e17999bcf847cf3c616cd7de58fe72d3c877b0e9811edfb3",
-    "cl-unicode/test/derived-properties": "0943f833b11684b4c0221858c2ba4175b36ed6bb2f4d0f0c1115fe1696d50c31",
-    "cl-unicode/test/normalization-forms": "11ce94c6d3fa120e30713dd749265ca39c42eb354a832c144aea6716687fe8aa",
     "cl-unicode/test/packages.lisp": "255f3ea62d3a626ea305f87bd78628d7b937c70015b15c8c65415e986daa4418",
     "cl-unicode/test/properties": "8009e42d59145e59a337fbe23b7866ba94f19040797ce13ce18151802487a5e6",
     "cl-unicode/test/simple": "fd631144478160097e2d7a2bd09e93d93c966f45d1dbe51d7093d0bd67ad33f5",

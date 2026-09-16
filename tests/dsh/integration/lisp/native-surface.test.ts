@@ -12,6 +12,45 @@ import { mountLispSurface } from '../../../../src/dsh/lisp/surface.js'
 import type { DshRuntime } from '../../../../src/dsh/runtime.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
+test('recover on a disabled session leaves native tools available without requiring SBCL', {
+  skip: packages ? false : 'requires pinned native DSH', timeout: 15000,
+}, async () => {
+  const [cordis, prompt, tools, scope] = await Promise.all(['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope']
+    .map(name => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)))
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'ls-disabled-')))
+  const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
+  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
+  const ctx = new cordis.Context(), fibers: any[] = [], commands = new Map<string, any>()
+  const agent: any = { id: 'disabled-session', session: { id: 'disabled-session', header: { cwd: base } } }
+  let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined, agentScope: any, effects = 0
+  try {
+    fibers.push(await ctx.plugin(prompt.default, {})); fibers.push(await ctx.plugin(tools.default, { mode: 'native' }))
+    fibers.push(await ctx.plugin({ name: 'disabled-lisp-fixture', apply(c: any) {
+      c.provide('agents', { get: (id: string) => id === agent.id ? agent : undefined })
+      c.provide('sessions', { get: (id: string) => id === agent.session.id ? agent.session : undefined })
+      c.provide('commands', { register: (definition: any) => { commands.set(definition.name, definition); return () => commands.delete(definition.name) } })
+    } }))
+    agentScope = scope.createScope(ctx, agent); agent.ctx = agentScope.ctx
+    ctx.tools.register(tools.defineTool({ name: 'ordinary_tool', description: 'counter', parameters: {},
+      output: { schema: { type: 'integer' }, render: () => [] }, execute: async () => ++effects }))
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true, sbclPath: '/does-not-exist' }))
+    const call = () => ctx.tools.execute({ callId: randomUUID(), name: 'ordinary_tool', arguments: {}, agent, signal: new AbortController().signal })
+    assert.equal((await call()).isError, false)
+    for (let i = 0; i < 2; i++) {
+      const recovered = await commands.get('kioku-lisp').handler({ rawInput: 'recover', agent, signal: new AbortController().signal })
+      assert.equal(recovered.kind, 'error'); assert.match(recovered.text, /有効にしていません/)
+      assert.equal((await call()).isError, false, 'failed recovery must not hide ordinary tools')
+      assert.equal((await surface.manager.status({ sessionId: agent.id, agentId: agent.id, root: base }) as any).state, 'DISABLED')
+    }
+    assert.equal(effects, 3)
+  } finally {
+    surface?.stop(); await surface?.dispose(); await agentScope?.dispose()
+    for (const fiber of fibers.reverse()) await fiber.dispose()
+    db.close()
+  }
+})
+
 test('real DSH registry: session tools, nested/child/late-tool denial, unload fence and safe disable', {
   skip: !packages || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires pinned native DSH and protected SBCL' : false, timeout: 120000,
 }, async () => {

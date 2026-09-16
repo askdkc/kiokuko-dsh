@@ -3,14 +3,19 @@ import { createHash } from 'node:crypto'
 import { join, relative, resolve } from 'node:path'
 const root = resolve(import.meta.dirname, '../lisp/vendor')
 const files = {}
+// Upstream-generated test fixtures are ignored by Git and excluded from npm.
+// Runtime Unicode tables (lists/hash-tables/methods.lisp) remain required.
+const generatedTests = new Set(['cl-unicode/test/derived-properties', 'cl-unicode/test/normalization-forms'])
 async function scan(directory) {
   for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a,b) => a.name.localeCompare(b.name))) {
     // npm omits these control files even with an explicit files allowlist.
     if (entry.name === '.gitignore' || entry.name === '.npmignore') continue
     const path = join(directory, entry.name)
+    const name = relative(root, path).split('\\').join('/')
+    if (generatedTests.has(name)) continue
     if (entry.isSymbolicLink()) throw new Error(`Vendored symlink: ${path}`)
     if (entry.isDirectory()) await scan(path)
-    else files[relative(root, path).split('\\').join('/')] = createHash('sha256').update(await readFile(path)).digest('hex')
+    else files[name] = createHash('sha256').update(await readFile(path)).digest('hex')
   }
 }
 await scan(root)
