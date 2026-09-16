@@ -33,13 +33,20 @@ async function until(check: () => Promise<boolean>) {
   }
 }
 
-test('compiled cache: concurrent admission, source invalidation, corrupt bundle stops before recovery', native, async () => {
+for (const admission of ['simultaneous', 'other-first'] as const) test(`compiled cache (${admission}): concurrent admission, source invalidation, corrupt bundle stops before recovery`, native, async () => {
   const f = await fixture()
   try {
     const other = { ...f.owner, sessionId: 'other-session', agentId: 'other-agent' }
-    const [first, second] = await Promise.all([f.manager.enable(f.owner), f.manager.enable(other)]) as any[]
-    assert.equal(first.compilation.reused, false); assert.equal(second.compilation.reused, true)
+    // Exercise reversed cache arrival by observing the other session's build phase.
+    const firstAdmission = admission === 'simultaneous' ? f.manager.enable(f.owner)
+      : until(async () => (await f.manager.status(other) as any).compilation?.state === 'compiling').then(() => f.manager.enable(f.owner))
+    const [first, second] = await Promise.all([firstAdmission, f.manager.enable(other)]) as any[]
+    assert.equal(first.state, 'READY'); assert.equal(second.state, 'READY')
+    // Promise.all preserves result order, not arrival order at the cache queue.
+    assert.deepEqual([first.compilation.reused, second.compilation.reused].sort(), [false, true])
+    if (admission === 'other-first') assert.equal(first.compilation.reused, true)
     assert.equal(first.compilation.key, second.compilation.key)
+    assert.deepEqual(await readdir(join(f.dataRoot, 'compiled')), [first.compilation.key])
     await f.manager.disable(other)
     const originalPath = join(f.dataRoot, 'compiled', first.compilation.key, 'runtime.fasl')
     const originalStat = await stat(originalPath)
