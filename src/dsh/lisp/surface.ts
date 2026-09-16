@@ -147,7 +147,17 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         const [action = 'status', argument, ...extra] = invocation.rawInput.trim().split(/\s+/u).filter(Boolean)
         if (extra.length || (argument && !['status', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|status|diagnostics|cancel|recover|abandon ID|restore ID|disable')
         let result: unknown
-        if (action === 'enable') { register(binding.agent); result = await manager.enable(binding.owner) }
+        if (action === 'enable') {
+          const wasEnabled = manager.enabled.has(binding.owner.sessionId)
+          try { result = await manager.enable(binding.owner) }
+          catch (error) {
+            // Admission persists the host fence before worker startup. Keep
+            // diagnostics for startup failures, but never register on rejection.
+            if (!wasEnabled && manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
+            throw error
+          }
+          register(binding.agent)
+        }
         else if (action === 'disable') { result = await manager.disable(binding.owner); unregister(binding.agent) }
         else if (action === 'cancel') result = await manager.execute(binding.owner, 'lisp_cancel', {})
         else if (action === 'recover') {

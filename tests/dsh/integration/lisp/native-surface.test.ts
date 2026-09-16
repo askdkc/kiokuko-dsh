@@ -51,6 +51,61 @@ test('recover on a disabled session leaves native tools available without requir
   }
 })
 
+for (const scenario of ['disabled-config', 'scope-conflict', 'startup-failure'] as const) test(`enable ${scenario}: native tools follow admission, with persisted sessions still fenced`, {
+  skip: packages ? false : 'requires pinned native DSH', timeout: 15000,
+}, async () => {
+  const [cordis, prompt, tools, scope] = await Promise.all(['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope']
+    .map(name => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)))
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'ls-enable-')))
+  const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
+  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.prepare('INSERT INTO dsh_lisp_sessions VALUES(?,?,1,?,?)').run('saved', base, 'epoch', new Date().toISOString())
+  if (scenario === 'scope-conflict') db.prepare('INSERT INTO dsh_lisp_sessions VALUES(?,?,0,?,?)').run('new', join(base, 'old-root'), 'epoch', new Date().toISOString())
+  const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
+  const ctx = new cordis.Context(), fibers: any[] = [], scopes: any[] = [], commands = new Map<string, any>()
+  const agents: any[] = ['saved', 'new'].map(id => ({ id, session: { id, header: { cwd: base } } }))
+  let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined, effects = 0
+  try {
+    fibers.push(await ctx.plugin(prompt.default, {})); fibers.push(await ctx.plugin(tools.default, { mode: 'native' }))
+    fibers.push(await ctx.plugin({ name: 'rejected-enable-fixture', apply(c: any) {
+      c.provide('agents', { get: (id: string) => agents.find(agent => agent.id === id) })
+      c.provide('sessions', { get: (id: string) => agents.find(agent => agent.id === id)?.session })
+      c.provide('commands', { register: (definition: any) => { commands.set(definition.name, definition); return () => commands.delete(definition.name) } })
+    } }))
+    for (const agent of agents) { const local = scope.createScope(ctx, agent); scopes.push(local); agent.ctx = local.ctx }
+    ctx.tools.register(tools.defineTool({ name: 'ordinary_tool', description: 'counter', parameters: {},
+      output: { schema: { type: 'integer' }, render: () => [] }, execute: async () => ++effects }))
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: scenario !== 'disabled-config', sbclPath: join(base, 'missing-sbcl') }))
+    const call = (agent: any, name = 'ordinary_tool') => ctx.tools.execute({ callId: randomUUID(), name, arguments: {}, agent, signal: new AbortController().signal })
+    const command = (agent: any) => commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal: new AbortController().signal })
+    assert.equal((await call(agents[0])).isError, true, 'saved session remains protected')
+    assert.equal((await call(agents[1])).isError, false)
+    for (let i = 0; i < 2; i++) {
+      const result = await command(agents[1])
+      if (scenario !== 'startup-failure' || i === 0) assert.equal(result.kind, 'error', result.text)
+      if (scenario === 'disabled-config') assert.match(result.text, /設定の lisp.enabled/)
+      if (scenario === 'scope-conflict') assert.match(result.text, /作業場所が変わっています/)
+      const admitted = scenario === 'startup-failure'
+      assert.equal((await call(agents[1])).isError, admitted, 'only an admitted session may lose ordinary tools')
+      assert.equal(Boolean(ctx.tools.get('lisp_status', agents[1])), admitted, 'rejection must not register Lisp tools')
+      assert.equal(surface.manager.enabled.has('new'), admitted)
+      if (admitted) assert.equal((await call(agents[1], 'lisp_status')).isError, false, 'startup failure retains diagnostic tools')
+      assert.equal((await call(agents[0])).isError, true, 'another session cannot remove the persisted fence')
+    }
+    if (scenario === 'disabled-config') {
+      assert.equal((await command(agents[0])).kind, 'error')
+      assert.equal(Boolean(ctx.tools.get('lisp_status', agents[0])), false, 'rejected enable must not alter saved-session registration either')
+      assert.equal((await call(agents[0])).isError, true)
+    }
+    assert.equal(effects, scenario === 'startup-failure' ? 1 : 3)
+  } finally {
+    surface?.stop(); await surface?.dispose()
+    for (const local of scopes.reverse()) await local.dispose()
+    for (const fiber of fibers.reverse()) await fiber.dispose()
+    db.close()
+  }
+})
+
 test('real DSH registry: session tools, nested/child/late-tool denial, unload fence and safe disable', {
   skip: !packages || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires pinned native DSH and protected SBCL' : false, timeout: 120000,
 }, async () => {
