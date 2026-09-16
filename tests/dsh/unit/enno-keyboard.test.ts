@@ -106,6 +106,34 @@ test('all Enno selection cards use numbered keyboard controls, including lists l
   } finally { h.restore() }
 })
 
+test('execution card forwards typed Japanese through Enter into one durable discussion answer', async () => {
+  const h = clientHarness('MacIntel')
+  let stored: StoredExecutionSelection = { revision: 0, value: { mode: 'pending', status: 'selecting' } }
+  let asks = 0
+  try {
+    const result = await selectExecution({ task: 'Fix selection', turn: 3, stored,
+      routes: [], signal: new AbortController().signal,
+      save: async (revision, value) => stored = { revision: revision + 1, value },
+      questions: { ask: async request => {
+        if (++asks > 1) throw new Error('Question loop')
+        let response: any
+        const card = h.mount({ kind: 'question', key: 'free-text-regression', questions: request.questions,
+          async answer(value: unknown) { response = value }, async cancel() { throw new Error('Unexpected cancellation') } })
+        const tree = card.render()
+        descendants(tree).find(node => node.component === 'textarea').props.onChange({ target: { value: 'ただのチャット' } })
+        tree.props.onKeyDown(key('Enter', { target: { tagName: 'TEXTAREA' } }))
+        await flush()
+        assert.deepEqual(response.answers, [{ id: 'enno-execution-mode', selected: [], custom: 'ただのチャット' }])
+        return response
+      } },
+    })
+    assert.equal(asks, 1)
+    assert.equal(result.value.mode, 'pending')
+    assert.equal(result.value.status, 'selecting')
+    assert.deepEqual(result.value.discussion, { questionId: 'enno-execution-mode', text: 'ただのチャット', turn: 3 })
+  } finally { h.restore() }
+})
+
 test('Deep cards use the shortcut renderer while unrelated and multi-select questions stay native', () => {
   const h = clientHarness()
   try {

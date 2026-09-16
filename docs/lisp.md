@@ -4,7 +4,8 @@
 
 The `kiokuko-lisp` Skill is listed in DSH's available Skills and can be read with
 the `skill` tool before enabling Lisp. Reading the Skill does not enable Lisp or
-start SBCL. Execution requires the configuration and session command below.
+start SBCL. Execution requires the configuration below and an explicit session
+choice through the coding prompt or enable command.
 
 Target hosts: macOS and Linux, with a working SBCL installed by the user.
 Linux also requires Bubblewrap (`bwrap`) with user/PID/network namespaces enabled.
@@ -20,7 +21,15 @@ lisp:
   sbclPath: sbcl
 ```
 
-Then, in the desired DSH session:
+Before the first implementation or debugging request, the host asks whether to
+use Lisp. It resolves unclear task intent first. Both enable and decline choices
+persist for that session, including after a restart. Conversation and review
+requests do not trigger this prompt. Free text returns to conversation without
+starting Lisp; cancellation and startup failure block coding admission.
+
+Choosing Lisp also selects normal execution; Enno requires choosing not to use
+Lisp. The prompt is available only when `lisp.enabled` is true. To enable Lisp
+manually or inspect its state, use these commands in the desired DSH session:
 
 ```text
 /kioku-lisp enable

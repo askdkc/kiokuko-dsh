@@ -1,11 +1,12 @@
 ---
 name: kiokuko-lisp
-description: Stateful Common Lisp computation, data processing and permission-controlled file proposals in a protected DSH session.
+description: Build and reuse task-specific tools with Common Lisp functions, macros and eval in a stateful, protected DSH Lisp session.
 ---
 
 # Common Lisp in Kiokuko DSH
 
-The user starts this mode with `/kioku-lisp enable`. The host binds the current
+The user starts this mode by choosing Lisp before coding or with
+`/kioku-lisp enable`. The host binds the current
 session, agent, directory and worker generation. Never supply or spoof those
 identities. Ordinary bash, file tools and delegated execution are blocked while
 this mode is active. A missing runtime or failed protection check stops admission.
@@ -47,6 +48,45 @@ First enable automatically compiles the bundled libraries and tools. Later start
 reuse a host-verified, read-only bundle; session state is never cached. Compilation
 failure or cache corruption stops startup. Report the error and direct the user
 to `/kioku-lisp recover`; do not attempt to modify compiled files or replay code.
+
+## Build the tools you need
+
+In Lisp mode, you can create the tools needed for the user's task as you work.
+When no ready-made helper fits, define a small function with `defun` through
+`lisp_eval`, check it on a small example, then reuse it in later evaluations.
+Compose standard Common Lisp and the available `kioku.*` APIs into parsers,
+transformations, validators, reports or task-specific workflows. A missing
+dedicated tool name alone is not a reason to stop or request another plugin.
+
+Use `defmacro` when reusable syntax or code generation helps, and `eval` when
+you need to evaluate a programmatically constructed form. Ordinary computations
+usually need only function calls. Treat imported task data as data, not as code
+for `eval`; user-authorized source code is a separate input.
+
+For example, define a tool-generating macro in one `lisp_eval` call:
+
+```lisp
+(defmacro define-threshold-counter (name threshold)
+  (let ((items (gensym "ITEMS")) (item (gensym "ITEM")))
+    `(defun ,name (,items)
+       (count-if (lambda (,item) (> ,item ,threshold)) ,items))))
+(define-threshold-counter count-over-10 10)
+(count-over-10 '(3 12 19)) ; => 2
+```
+
+In a later call on the same worker, reuse it or generate another tool:
+
+```lisp
+(eval (list 'define-threshold-counter 'count-over-20 20))
+(list (count-over-10 '(3 12 19)) (count-over-20 '(3 12 29))) ; => (2 1)
+```
+
+These tools are Lisp definitions called through `lisp_eval`; the six native DSH
+tool names stay fixed. Definitions and macros persist only in the current worker
+generation and disappear when it is replaced, reset or lost. Recreate needed
+definitions after recovery without replaying completed side effects. Creating a
+helper does not expand file, network, subprocess or host-adapter permissions;
+use the existing proposal and broker APIs for those effects.
 
 ## Files
 

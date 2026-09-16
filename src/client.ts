@@ -635,6 +635,8 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
             jsx('kbd', { className: 'kiokuko-intake-shortcut', 'aria-hidden': true, children: index < 9 ? `${shortcutModifier}+${index + 1}` : `${index + 1} → Enter` })],
         })) }),
         jsx('label', { htmlFor: `${titleId}-custom`, children: inputKind === 'search' ? '検索（Enterで検索・数字も検索語として入力できます）' : inputKind === 'value' ? '値を入力（Enterで確定）' : '自由入力（任意）' }),
+        inputKind === 'choice' && question.header === '実行方式とモデル'
+          ? jsx('p', { children: '選択肢に当てはまらない内容はAIに渡し、会話に戻ります。実行方式やモデル構成は確定しません。' }) : null,
         jsx('textarea', { id: `${titleId}-custom`, rows: 1, disabled: busy, value: draft.custom,
           onChange: (event: { target: { value: string } }) => update({ selected: null, custom: event.target.value }),
         }),

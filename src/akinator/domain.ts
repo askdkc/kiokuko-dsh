@@ -121,7 +121,9 @@ function inferTaskType(task: string): TaskType | null {
   if (/deploy|deployment|devops|運用|デプロイ|サーバー|インフラ/u.test(normalized)) return 'devops';
   if (/write|writing|documentation|docs|文書|執筆|ドキュメント/u.test(normalized)) return 'writing';
   if (/analysis|analyse|分析|集計/u.test(normalized)) return 'analysis';
-  if (/build|implement|feature|code|実装|作成|追加|開発|機能/u.test(normalized)) return 'build';
+  // Topic nouns (feature, code, 機能) are not implementation requests. Leaving
+  // them unresolved lets the DSH host preserve an existing chat classification.
+  if (/build|implement|実装|作成|追加|開発/u.test(normalized)) return 'build';
   return null;
 }
 

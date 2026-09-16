@@ -81,8 +81,10 @@ Install SBCL first:
 - Arch Linux: `sudo pacman -S sbcl`
 
 Add this to the `kiokuko-dsh` row in `~/.dsh/profiles/web/cordis.patch.yml`
-(keep other `config` values), then reload the plugin and run `/kioku-lisp enable` in the
-desired session. Check the loaded configuration with `dsh --profile web --dump-config`.
+(keep other `config` values), then reload the plugin. The first implementation or
+debugging request asks whether to use Lisp; the session retains your choice.
+You can also enable it with `/kioku-lisp enable`.
+Check the loaded configuration with `dsh --profile web --dump-config`.
 
 ```yaml
 - id: kiokuko-dsh
@@ -93,5 +95,7 @@ desired session. Check the loaded configuration with `dsh --profile web --dump-c
 ```
 
 Linux also requires Bubblewrap.
+Choosing Lisp starts normal execution with the Lisp tools. Choose not to use Lisp
+if you want Enno. Free text is passed to the AI as a discussion or correction.
 Deletion and replacement of existing files require human confirmation.
 See [setup, APIs, limits and recovery](docs/lisp.md).

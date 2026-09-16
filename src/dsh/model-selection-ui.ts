@@ -4,10 +4,11 @@ import { MODEL_ROLES, MODEL_TEMPLATES, ROLE_LABELS, ModelConfigurationSchema, co
   type DshModelCatalog, type DshModelCompatibility, type ModelBinding, type ModelCatalogSnapshot, type ModelConfigurationDraft, type ModelRole, type ModelRoute, type ModelTemplate } from './model-configuration.js'
 
 export class ExecutionSelectionPending extends Error {
-  constructor() { super('実行方式・モデル構成の選択待ちです。依頼と完了済みの作業は保持されています。') }
+  constructor(message = '実行方式・モデル構成の選択待ちです。依頼と完了済みの作業は保持されています。') { super(message) }
 }
 interface SelectionUiInput {
   readonly task: string
+  readonly turn?: number
   readonly agent?: DshUserQuestionAgent
   readonly signal: AbortSignal
   readonly questions?: DshUserQuestions
@@ -19,6 +20,9 @@ interface SelectionUiInput {
 }
 const BACK = '戻る', CANCEL = '取消・作業を保持', NEXT_PAGE = '次のページ', PREVIOUS_PAGE = '前のページ', CHANGE_PROVIDER = '接続を変更'
 const CLEAR_SEARCH = '検索をクリア', RELOAD = '一覧を再取得'
+class SelectionDiscussion extends Error {
+  constructor(readonly questionId: string, readonly text: string) { super('User requested discussion') }
+}
 async function ask(input: SelectionUiInput, id: string, question: string, choices: readonly string[], detail = '', searchable = false): Promise<string> {
   let validation = ''
   while (true) {
@@ -36,6 +40,7 @@ async function ask(input: SelectionUiInput, id: string, question: string, choice
     }
     const answer = response.answers[0]
     if (answer?.id !== id || answer.selected.length > 1) throw new ExecutionSelectionPending()
+    if (answer.selected[0] === CANCEL) throw new ExecutionSelectionPending()
     const custom = answer.custom?.trim()
     const value = custom || answer.selected[0]
     if (!value) throw new ExecutionSelectionPending()
@@ -45,6 +50,7 @@ async function ask(input: SelectionUiInput, id: string, question: string, choice
     if (resolved === CANCEL) throw new ExecutionSelectionPending()
     const navigation = [BACK, NEXT_PAGE, PREVIOUS_PAGE, CHANGE_PROVIDER, CLEAR_SEARCH, RELOAD]
     if (resolved && (choices.includes(resolved) || (searchable && !navigation.includes(resolved)))) return resolved
+    if (custom && !searchable && !/^\d+$/u.test(custom)) throw new SelectionDiscussion(id, custom)
     validation = '表示されている選択肢を選んでください。'
   }
 }
@@ -138,8 +144,23 @@ async function templateStatus(input: SelectionUiInput, template: ModelTemplate, 
 /** Native question cards keep keyboard, cancellation and answer routing owned by DSH. */
 export async function selectExecution(input: SelectionUiInput): Promise<StoredExecutionSelection> {
   let stored = input.stored
+  try {
+    return await selectExecutionChoices({ ...input, save: async (revision, value) => {
+      stored = await input.save(revision, value)
+      return stored
+    } })
+  } catch (error) {
+    if (!(error instanceof SelectionDiscussion)) throw error
+    return input.save(stored.revision, { ...stored.value, discussion: {
+      questionId: error.questionId, text: error.text, turn: input.turn ?? 0,
+    } })
+  }
+}
+
+async function selectExecutionChoices(input: SelectionUiInput): Promise<StoredExecutionSelection> {
+  let stored = input.stored
   const save = async (value: ExecutionSelection) => { stored = await input.save(stored.revision, value) }
-  if (stored.value.status === 'ready') return stored
+  if (stored.value.status === 'ready' || stored.value.discussion) return stored
   let draft: ModelConfigurationDraft = structuredClone(stored.value.draft ?? stored.value.configuration ?? { roles: {}, custom: true, maxConcurrentChildren: 4 })
   let explicit = stored.value.mode === 'pending' ? explicitExecutionMode(input.task) : undefined
   let screen: 'mode' | 'source' | 'templates' | 'review' = stored.value.mode === 'pending' ? 'mode' : Object.keys(draft.roles).length ? 'review' : 'source'

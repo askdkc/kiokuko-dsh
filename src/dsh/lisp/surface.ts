@@ -9,6 +9,7 @@ import type { DshNativeCommandDefinition } from '../commands.js'
 import type { DshUserQuestions } from '../user-interaction.js'
 import { LispManager } from './manager.js'
 import { LispStore } from './store.js'
+import { createLispCodingChoice, LISP_CODING_SERVICE } from './coding-choice.js'
 import { mountLispHttp } from './http.js'
 import { createLispCiAdapter } from './ci.js'
 import { LISP_TOOLS, failure, fail, identifier, renderResult, type LispConfiguration, type LispOwner, type LispTool } from './contracts.js'
@@ -136,6 +137,32 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     if (prompt) local.push(prompt.section({ name: 'kiokuko:lisp', order: -90000, text: guide }))
   }
   const guide = await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
+  const enable = async (binding: ReturnType<typeof owner>): Promise<unknown> => {
+    const wasEnabled = manager.enabled.has(binding.owner.sessionId)
+    try {
+      const result = await manager.enable(binding.owner)
+      register(binding.agent)
+      return result
+    } catch (error) {
+      // Startup failures retain the admitted fence and diagnostic tools.
+      if (!wasEnabled && manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
+      throw error
+    }
+  }
+  if (config.enabled) disposers.push((ctx as any).provide(LISP_CODING_SERVICE, createLispCodingChoice({
+    ...(questions ? { questions } : {}),
+    enabled: candidate => manager.enabled.has(owner(candidate).owner.sessionId),
+    decided: async candidate => {
+      const binding = owner(candidate), saved = await store.session(binding.owner.sessionId)
+      if (saved && saved.root_path !== binding.owner.root) fail('SCOPE_CONFLICT', 'セッションの作業場所が変わっています。')
+      return saved !== undefined
+    },
+    decline: candidate => store.decline(owner(candidate).owner),
+    enable: async candidate => {
+      const result = await enable(owner(candidate)) as { state?: string }
+      if (!['READY', 'EVALUATING'].includes(result.state ?? '')) fail('RECOVERY_REQUIRED', 'Lisp の起動・復旧が必要です。/kioku-lisp status で状態を確認してください。')
+    },
+  })))
   disposers.push(mountLispHttp(ctx, manager, (sessionId, recover) => {
     const agent = agents.get(sessionId)
     const binding = owner(agent)
@@ -150,17 +177,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         const [action = 'status', argument, ...extra] = invocation.rawInput.trim().split(/\s+/u).filter(Boolean)
         if (extra.length || (argument && !['status', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|status|diagnostics|cancel|recover|abandon ID|restore ID|disable')
         let result: unknown
-        if (action === 'enable') {
-          const wasEnabled = manager.enabled.has(binding.owner.sessionId)
-          try { result = await manager.enable(binding.owner) }
-          catch (error) {
-            // Admission persists the host fence before worker startup. Keep
-            // diagnostics for startup failures, but never register on rejection.
-            if (!wasEnabled && manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
-            throw error
-          }
-          register(binding.agent)
-        }
+        if (action === 'enable') result = await enable(binding)
         else if (action === 'disable') { result = await manager.disable(binding.owner); unregister(binding.agent) }
         else if (action === 'cancel') result = await manager.execute(binding.owner, 'lisp_cancel', {})
         else if (action === 'recover') {

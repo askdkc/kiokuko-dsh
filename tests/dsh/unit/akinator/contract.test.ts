@@ -2,6 +2,22 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { dshTurnRequestId, resolveGroundedIntakeProfile } from '../../../../src/dsh/intake-profile-resolver.js'
 
+test('implementation topics alone do not classify a conversational observation as build', () => {
+  for (const task of [
+    'まぁ、ローカルで実行環境が持てて、しかもevalで機能がいくらでもはやせるから、品質を落とさずにトークン量削減まで見えて来たよな',
+    'This feature could reduce token usage.',
+    'The code runs locally now.',
+  ]) {
+    assert.equal(resolveGroundedIntakeProfile({ task, cwd: '/repo' }).profileHints.taskType, null, task)
+  }
+  for (const task of ['この機能を追加して', '@PLAN.md を実装', 'Implement this feature.', 'Build the code.']) {
+    assert.equal(resolveGroundedIntakeProfile({ task, cwd: '/repo' }).profileHints.taskType, 'build', task)
+  }
+  assert.equal(resolveGroundedIntakeProfile({
+    task: 'この機能について', cwd: '/repo', profileHints: { taskType: 'build' },
+  }).profileHints.taskType, 'build')
+})
+
 test('Akinator input resolution keeps grounded profile and turn identity deterministic', () => {
   const input = {
     task: '  Implement the plugin  ',

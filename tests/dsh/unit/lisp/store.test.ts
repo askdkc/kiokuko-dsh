@@ -30,3 +30,19 @@ test('durable requests deduplicate by owner and digest; restart quarantines unfi
     assert.equal((await store.get(owner, 'id'))?.state, 'UNKNOWN')
   } finally { db.close() }
 })
+
+test('declining Lisp persists without enabling a worker and cannot undo an enabled session', async () => {
+  const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
+  db.exec(readFileSync(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  const store = new LispStore(async fn => fn(db)), owner = { sessionId: 's', agentId: 'a', root: '/workspace' }
+  try {
+    await store.decline(owner)
+    const restarted = new LispStore(async fn => fn(db))
+    assert.equal((await restarted.session(owner.sessionId))?.enabled, 0)
+    assert.deepEqual(await restarted.start(), [])
+    await assert.rejects(restarted.decline({ ...owner, root: '/other' }), /状態が変わって/)
+    await restarted.enable(owner)
+    await assert.rejects(restarted.decline(owner), /状態が変わって/)
+    assert.equal((await restarted.session(owner.sessionId))?.enabled, 1)
+  } finally { db.close() }
+})

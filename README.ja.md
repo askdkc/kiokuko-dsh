@@ -80,8 +80,8 @@ DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復
 - Arch Linux: `sudo pacman -S sbcl`
 
 `~/.dsh/profiles/web/cordis.patch.yml` の `kiokuko-dsh` 行に次を追加し（他の `config` 値は保持）、
-プラグインを再読み込みしてから対象のセッションで
-`/kioku-lisp enable` を実行すると、状態を保持する Common Lisp を利用できます。
+プラグインを再読み込みすると、最初の実装・不具合修正の前に Lisp モードを使うか確認します。
+選択はセッション内で保持します。`/kioku-lisp enable` でも有効にできます。
 読み込まれた設定は `dsh --profile web --dump-config` で確認できます。
 
 ```yaml
@@ -93,5 +93,7 @@ DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復
 ```
 
 Linux では別途 Bubblewrap が必要です。
+Lisp を選ぶと、Lisp 用ツールで通常実行します。役小角を使う場合は「Lispモードを使わない」を選んでください。
+自由入力は相談・訂正として AI に渡します。
 削除・既存ファイルの置換はユーザーの確認後に実行します。
 [設定、API、停止・復旧方法](docs/lisp.md)を参照してください。

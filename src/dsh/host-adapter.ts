@@ -6,8 +6,9 @@ import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution
 import { evolutionStatus } from '../memory/evolution/store.js'
 import { OrcaConfig, EfficiencyConfig, FinalizationConfig, AkinatorMemoryConfig, ContinuityConfig } from './config.js'
 import { DshEfficiencyObserver, mountDshEfficiencyObserver, type FinalizationInputMode } from './efficiency.js'
-import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
+import { explicitExecutionMode, readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
 import { selectExecution, ExecutionSelectionPending } from './model-selection-ui.js'
+import { LISP_CODING_SERVICE, type LispCodingService } from './lisp/coding-choice.js'
 import { installDshModelRouting, modelRoleForState, isModelAvailabilityFailure, type RoutableAgent } from './model-routing.js'
 import type { ModelRoute, DshModelCatalog, DshModelCompatibility } from './model-configuration.js'
 import { nativeModelCatalog } from './native-model-catalog.js'
@@ -607,7 +608,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     runId: item.runId, sessionId: item.sessionId, nativeAgent: item.nativeAgent, nativeSession: item.nativeSession,
     cwd: item.cwd, task: item.task, turn: item.turn,
     ennoState: item.prepared.ennoOduno,
-    chat: item.prepared.intake.profile.taskType === 'chat',
+    chat: item.prepared.intake.profile.taskType === 'chat' || !!selections.get(item.runId)?.value.discussion,
     terminal: item.closed || ['complete', 'report_blocker'].includes(item.prepared.ennoOduno.nextAction)
       && item.prepared.ennoOduno.applicable,
     generation: canonicalContentHash({ revision: item.prepared.ennoOduno.contractRevision,
@@ -819,15 +820,37 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   class CapturingGate extends DshIntakeGate {
     async choose(event: DshPreStepEvent, result: DshIntakeGateResult): Promise<DshIntakeGateResult> {
       const runId = result.prepared.run.runId
-      const stored = await runtime.withDatabase(db => readExecutionSelection(db, runId))
+      let stored = await runtime.withDatabase(db => readExecutionSelection(db, runId))
       if (!stored) return result
+      const discussion = stored.value.discussion
+      if (discussion && event.turn > discussion.turn) {
+        const incomingType = resolveGroundedIntakeProfile({ task: event.task, cwd: event.cwd,
+          ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
+        }).profileHints.taskType
+        const requestedMode = explicitExecutionMode(event.task)
+        if (requestedMode !== undefined || incomingType !== null && incomingType !== 'chat') {
+          const { discussion: _answered, ...value } = stored.value
+          const revision = stored.revision
+          stored = await runtime.withDatabase(db => writeExecutionSelection(db, runId, revision,
+            requestedMode === undefined ? value : { ...value, mode: 'pending' }))
+        }
+      }
       if (!ENNO_APPLICABLE_TASK_TYPES.includes(result.prepared.intake.profile.taskType as typeof ENNO_APPLICABLE_TASK_TYPES[number])) {
-        if (stored.value.mode === 'pending') await runtime.withDatabase(db => db.prepare('DELETE FROM dsh_execution_selections WHERE run_id = ? AND revision = ?').run(runId, stored.revision))
+        const revision = stored.revision
+        if (stored.value.mode === 'pending') await runtime.withDatabase(db => db.prepare('DELETE FROM dsh_execution_selections WHERE run_id = ? AND revision = ?').run(runId, revision))
         return result
       }
       selections.set(runId, stored)
+      const lispCoding = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
+      if (stored.value.mode === 'pending' && !stored.value.discussion && event.nativeAgent && lispCoding?.enabled(event.nativeAgent)) {
+        if (explicitExecutionMode(event.task) === 'enno') throw new ExecutionSelectionPending('Lispモードでは役小角を使えません。/kioku-lisp disable で解除してから選択してください。')
+        stored = await runtime.withDatabase(db => writeExecutionSelection(db, runId, stored!.revision, {
+          mode: 'normal', status: 'ready', ...(stored!.value.ordinaryModel ? { ordinaryModel: stored!.value.ordinaryModel } : {}),
+        }))
+        selections.set(runId, stored)
+      }
       const selected = await selectExecution({
-        task: event.task, signal: event.signal, stored, routes: options.modelRoutes ?? [],
+        task: event.task, turn: event.turn, signal: event.signal, stored, routes: options.modelRoutes ?? [],
         ...(event.nativeAgent ? { agent: event.nativeAgent } : {}),
         ...(userQuestions ? { questions: userQuestions } : {}),
         ...(modelCatalog ? { llm: modelCatalog } : {}),
@@ -839,7 +862,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         },
       })
       selections.set(runId, selected)
-      const ennoOduno = await runtime.withDatabase(db => ennoStateForPreparedTask(db, result.prepared, event.sessionId))
+      const ennoOduno = selected.value.discussion ? result.prepared.ennoOduno
+        : await runtime.withDatabase(db => ennoStateForPreparedTask(db, result.prepared, event.sessionId))
       return { ...result, prepared: { ...result.prepared, ennoOduno } }
     }
     override async prepare(event: DshPreStepEvent): Promise<DshIntakeGateResult> {
@@ -1028,7 +1052,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         if (!result.admitted) return nativeDecision
         const item = currentSession(event.sessionId)
         if (item !== undefined) {
-          if (selections.get(item.runId)?.value.status === 'ready') {
+          if (selections.get(item.runId)?.value.status === 'ready' || selections.get(item.runId)?.value.discussion) {
             const original = await runtime.withDatabase(db => unexecutedRunInput(db, item.runId, item.sessionId))
             const deliveredIds = new Set(sessionEventSource(event.nativeSession).snapshotEvents()
               .filter(e => e.type === 'user/message').map(e => objectRecord(e.data)?.id))
@@ -1070,7 +1094,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             if (paused) return { kind: 'reject' }
           }
         }
-        if (item !== undefined) await refreshEnnoMemory(item, event.signal)
+        if (item !== undefined && !selections.get(item.runId)?.value.discussion) await refreshEnnoMemory(item, event.signal)
         const messages = await contextMessages(event, nativeDecision.messages)
         return { ...nativeDecision, messages: [...executionSupport.projectMessages(event.sessionId, nativeDecision.messages), ...messages] }
       } catch (error) {
@@ -1095,6 +1119,17 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     akinatorMemoryConfig,
   )
   const currentSession = (sessionId: string): TurnRecord | undefined => latestBySession.get(sessionId)
+  const discussionGuardDisposer = tools?.guard((value) => {
+    const agent = (value as { agent?: NativeAgent }).agent
+    if (!agent?.session) return undefined
+    const lispCoding = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
+    if (lispCoding?.discussing(agent)) return 'Lispモードの選択への自由入力に回答中です。ツールを使わず、ユーザーの発言に回答してください。'
+    const item = currentSession(agent.session.id)
+    if (item?.nativeAgent === agent && item.nativeSession === agent.session && selections.get(item.runId)?.value.discussion) {
+      return '自由入力への回答中です。実行方式は未確定です。ツールを使わず、ユーザーの発言に回答してください。'
+    }
+    return undefined
+  })
   const currentForAgentEvent = (agentId: string, sessionId?: string, turn?: number, nativeSession?: object, nativeAgent?: object): TurnRecord | undefined => {
     // The session is the authoritative route key. Agent ID alone is not
     // sufficient because an agent can own multiple sessions over its life.
@@ -1234,12 +1269,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const cwd = boundSession?.header?.cwd
     if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('kiokuko-dsh native session cwd is unavailable')
     const sourceStartSeq = dshTurnBoundarySeq(sessionEventSource(boundSession as object | undefined), payload.turn, 'start')
-    const catalog = await capabilityCatalog(skills, tools, {
-      agent: { id: payload.agent.id },
-      nativeAgent: payload.agent,
-      cwd,
-      signal: payload.signal,
-    })
     const bound = currentForAgentEvent(payload.agent.id, sessionId, payload.turn, boundSession as object | undefined, payload.agent as object)
     const previous = bound === undefined
       ? currentForAgentEvent(payload.agent.id, sessionId, undefined, boundSession as object | undefined, payload.agent as object)
@@ -1255,6 +1284,25 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     // model, while any supplied step-local user text still replaces this
     // fallback and is recorded as the continuation instruction.
     const task = bound === undefined ? textFromMessages(payload.messages, previous?.task) : bound.task
+    let profile = (() => {
+      if (bound !== undefined) return bound.profileHints
+      if (previous === undefined) return undefined
+      const inferred = resolveGroundedIntakeProfile({ task, cwd }).profileHints.taskType
+      const previousType = selections.get(previous.runId)?.value.discussion ? 'chat' : previous.prepared.intake.profile.taskType
+      return inferred === null || previousType === 'chat' && inferred === 'chat' ? { taskType: previousType } : undefined
+    })()
+    const lispCoding = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
+    if (lispCoding && bound === undefined && !previous?.prepared.ennoOduno.applicable && !delegation.isChild(payload.agent)) {
+      const grounded = resolveGroundedIntakeProfile({ task, cwd, ...(profile === undefined ? {} : { profileHints: profile }) })
+      const choice = await lispCoding.prepare({ agent: payload.agent, task, taskType: grounded.profileHints.taskType,
+        turn: payload.turn, signal: payload.signal })
+      profile = { ...profile, taskType: choice.taskType, ...(choice.clarification ? { constraints: choice.clarification } : {}) }
+    }
+    // Lisp changes the scoped tool surface. Bind capabilities only after its
+    // explicit selection and activation, never mutate an already-bound catalog.
+    const catalog = await capabilityCatalog(skills, tools, {
+      agent: { id: payload.agent.id }, nativeAgent: payload.agent, cwd, signal: payload.signal,
+    })
     return {
       agent: { id: payload.agent.id },
       nativeAgent: payload.agent,
@@ -1266,20 +1314,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       nativeMessages: payload.messages,
       task,
       cwd,
-      ...(() => {
-        if (bound !== undefined) {
-          // Reuse the actual initial projection for this logical turn. Inferring
-          // new hints after its first tool makes the intake fingerprint conflict.
-          return bound.profileHints === undefined ? {} : { profileHints: bound.profileHints }
-        }
-        if (previous === undefined) return {}
-        const inferred = resolveGroundedIntakeProfile({ task, cwd }).profileHints.taskType
-        const previousType = previous.prepared.intake.profile.taskType
-        if (inferred === null || previousType === 'chat' && inferred === 'chat') {
-          return { profileHints: { taskType: previousType } }
-        }
-        return {}
-      })(),
+      ...(profile === undefined ? {} : { profileHints: profile }),
       capabilities: catalog,
       signal: payload.signal,
     }
@@ -1349,7 +1384,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const item = agent.session ? currentSession(agent.session.id) : undefined
       if (!item || item.closed) return undefined
       const selection = selections.get(item.runId)?.value
-      if (selection && selection.status !== 'ready' && item.prepared.intake.profile.taskType !== 'chat') selectionBlocked.add(agent)
+      if (selection && selection.status !== 'ready' && !selection.discussion && item.prepared.intake.profile.taskType !== 'chat') selectionBlocked.add(agent)
       const role = modelRoleForState(item.prepared.ennoOduno)
       return selection?.mode === 'enno' && selection.status === 'ready' && role ? selection.configuration?.roles[role] : undefined
     }, {
@@ -1407,7 +1442,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     // Enno operations advance item.prepared after each tool result. Always
     // inject from that current host state instead of replaying the intake-time
     // directive from the cached gate result.
-    const prepared = item.prepared
+    const discussion = selections.get(item.runId)?.value.discussion
+    const prepared = discussion ? { ...item.prepared, ennoOduno: inapplicableEnnoState() } : item.prepared
     const directive = projectDshDirective(prepared.ennoOduno)
     const selection = directive === null ? { routeSkillNames: [], expertRefs: [] } : selectDshDirectiveSources(directive)
     const advisoryEvidence = await advisoryEvidenceFor(item, prepared.ennoOduno)
@@ -1432,7 +1468,17 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         if (item.prepared === prepared) executionSupport.ennoSource(event.sessionId, snapshot, stateForSnapshot(snapshot))
       } catch { /* Optional projection is unavailable; existing authority guards still apply. */ }
     }
-    return projectDshContext([...messages, ...previousReport], sessionEventSource(event.nativeSession), pending)
+    const executionSelection = selections.get(item.runId)?.value
+    const discussionText = discussion
+      ? `実行方式・モデル選択の質問（${discussion.questionId}）に対するユーザーの自由入力:\n\n${discussion.text}\n\n実行方式・モデル構成はまだ承認されていません。まずこの発言に会話として回答してください。ツールを使った作業や同じ選択質問の繰り返しは行わないでください。`
+      : executionSelection?.status === 'ready'
+        ? '実行方式・モデル構成の選択が確定しました。自由入力への会話のみという制限は解除されています。直近のユーザーの依頼と現在の実行指示に従ってください。'
+        : undefined
+    const discussionMessages = discussionText ? [{
+      role: 'user' as const, source: 'user-task' as const, name: 'execution-selection-discussion',
+      content: discussionText,
+    }] : []
+    return projectDshContext([...messages, ...previousReport, ...discussionMessages], sessionEventSource(event.nativeSession), pending)
   }
 
   const toolHost: DshToolHost = {
@@ -2232,6 +2278,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const item = currentForAgentEvent(agentId, sessionId, undefined, nativeSession, nativeAgent)
     if (item === undefined || item.closed || executionSupport.paused(item.sessionId)) return undefined
     const selection = selections.get(item.runId)?.value
+    if (selection?.discussion) return undefined
     if (selection && (selection.status !== 'ready' && item.prepared.intake.profile.taskType !== 'chat' || item.failed && selection.mode === 'normal')) return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
@@ -2638,6 +2685,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       routingClaimDisposer()
       modelErrorDisposer()
       childGuardDisposer?.()
+      discussionGuardDisposer?.()
       childExecutionDisposer()
       for (const dispose of routingDisposers.values()) dispose()
       routingDisposers.clear()

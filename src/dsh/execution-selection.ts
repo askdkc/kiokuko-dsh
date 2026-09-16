@@ -12,7 +12,13 @@ export const ExecutionSelectionSchema = z.object({
   ordinaryModel: ModelBindingSchema.optional(),
   draft: ModelConfigurationDraftSchema.optional(),
   problem: z.string().max(1024).optional(),
+  discussion: z.object({
+    questionId: z.string().min(1).max(256),
+    text: z.string().trim().min(1).max(64 * 1024),
+    turn: z.number().int().nonnegative(),
+  }).strict().optional(),
 }).strict().superRefine((value, ctx) => {
+  if (value.discussion && value.status === 'ready') ctx.addIssue({ code: 'custom', message: 'Discussion cannot authorize execution' })
   if (value.mode === 'deep-thinker' && (!value.deepConfiguration || value.configuration || value.draft)) ctx.addIssue({ code: 'custom', message: 'Deep requires its independent configuration' })
   if (value.mode !== 'deep-thinker' && value.deepConfiguration) ctx.addIssue({ code: 'custom', message: 'Deep configuration requires Deep ownership' })
   if (value.mode === 'enno' && value.status === 'ready' && !value.configuration) ctx.addIssue({ code: 'custom', message: 'Enno requires a complete model configuration' })

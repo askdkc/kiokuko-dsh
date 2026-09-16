@@ -1,5 +1,6 @@
 import { formatEvolutionStatus } from '../memory/evolution/status.js'
 import { mountLispSurface } from './lisp/surface.js'
+import { ExecutionSelectionPending } from './model-selection-ui.js'
 import type { LispConfiguration } from './lisp/contracts.js'
 import { mountDeepReportSurface } from '../deep-thinker/report-surface.js'
 import { mountDshNoticeSurface } from './session-notice-surface.js'
@@ -130,7 +131,8 @@ function mountNativeIntakeGate(
       return { kind: 'reject', reason: 'Deep owns and has preserved this input.' }
     }
     let mapped: DshPreStepEvent
-    try { mapped = await mapPreStep(payload) } catch {
+    try { mapped = await mapPreStep(payload) } catch (error) {
+      if (error instanceof ExecutionSelectionPending) return { kind: 'reject' }
       // Mapping is optional host preparation. In particular, an earlier
       // degraded first step must not break the next native tool/model step.
       return next()

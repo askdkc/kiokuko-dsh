@@ -6,6 +6,7 @@ import * as dshPlugin from '../../../src/dsh/index.js'
 import { DshPonytailModes } from '../../../src/dsh/commands.js'
 import { DshToolPolicy } from '../../../src/dsh/tool-policy.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
+import { ExecutionSelectionPending } from '../../../src/dsh/model-selection-ui.js'
 
 test('plugin startup reports critical failure and preserves the original rejection', async (t) => {
   const failure = new Error('native startup unavailable')
@@ -118,6 +119,19 @@ test('failed optional native task mapping preserves the original step and calls 
     const nativeFailure = new Error('native downstream failure')
     await assert.rejects(run({}, async () => { calls++; throw nativeFailure }), nativeFailure)
     assert.equal(calls, 2, 'a downstream failure must not cause a second execution')
+  } finally { await composition.dispose() }
+})
+
+test('a pending coding-mode choice rejects the step instead of using optional-intake fallback', async () => {
+  const listeners = new Map<string, Function>()
+  const context = { on(name: string, fn: Function) { listeners.set(name, fn); return () => listeners.delete(name) } } as unknown as Context
+  const composition = await mountDshComposition(context, {
+    intakeGate: {} as any, mapPreStep: () => { throw new ExecutionSelectionPending() },
+  })
+  try {
+    let calls = 0
+    assert.deepEqual(await listeners.get('agent/pre-step')!({}, async () => { calls++; return { kind: 'enter', messages: [] } }), { kind: 'reject' })
+    assert.equal(calls, 0)
   } finally { await composition.dispose() }
 })
 

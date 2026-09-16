@@ -43,6 +43,14 @@ export class LispStore {
     })
   }
   session(id: string): Promise<Session | undefined> { return this.database(db => db.prepare('SELECT * FROM dsh_lisp_sessions WHERE session_id=?').get<Session>(id)) }
+  async decline(owner: LispOwner): Promise<void> {
+    await this.database(db => {
+      const old = db.prepare('SELECT * FROM dsh_lisp_sessions WHERE session_id=?').get<Session>(owner.sessionId)
+      if (old && (old.root_path !== owner.root || old.enabled)) fail('SCOPE_CONFLICT', 'Lisp の状態が変わっています。現在のセッションを確認してください。')
+      db.prepare('INSERT OR IGNORE INTO dsh_lisp_sessions(session_id,root_path,enabled,epoch,updated_at) VALUES(?,?,0,?,?)')
+        .run(owner.sessionId, owner.root, randomUUID(), new Date().toISOString())
+    })
+  }
   async enable(owner: LispOwner): Promise<void> {
     await this.database(db => {
       const old = db.prepare('SELECT * FROM dsh_lisp_sessions WHERE session_id=?').get<Session>(owner.sessionId)

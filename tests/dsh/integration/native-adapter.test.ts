@@ -16,6 +16,9 @@ import { DSH_MODEL_FACING_OPERATIONS } from '../../../src/dsh/tools.js'
 import { mockModelRoutes, modelSelectionAnswer, openaiModels } from '../helpers/model-selection.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 import { dshTurnBoundarySeq, type DshLogEvent } from '../../../src/dsh/session-memory-finalizer.js'
+import { readExecutionSelection, writeExecutionSelection } from '../../../src/dsh/execution-selection.js'
+import { createLispCodingChoice, LISP_CODING_SERVICE } from '../../../src/dsh/lisp/coding-choice.js'
+import { LISP_TOOLS } from '../../../src/dsh/lisp/contracts.js'
 
 async function fixture(): Promise<{ root: string; databasePath: string }> {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-native-adapter-'))
@@ -46,7 +49,9 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   const questionIds: string[] = []
   const selectionQuestions: string[] = []
   let skipTaskType = false
+  let executionCustom: string | undefined
   let soulModelInvocable = true
+  const lispAgents = new Set<string>()
   const nativeSessions = new Map<string, ReturnType<typeof createNativeSession>>()
   const archivedSessions = new Map<string, {
     readonly id: string
@@ -103,6 +108,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       },
       schemas(scope: unknown) {
         toolSchemaScopes.push(scope)
+        if (lispAgents.has((scope as { id: string }).id)) return LISP_TOOLS.map(name => ({ name }))
         return DSH_MODEL_FACING_OPERATIONS.map((name, index) => ({
           name,
           ...(index === 0 ? { description: `Native tool summary.\n\n${'Detailed behavior. '.repeat(150)}` } : {}),
@@ -112,6 +118,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     commands: { register() { return () => undefined } },
     userQuestions: { async ask(request: { questions: readonly [{ id: string; options?: { label: string }[] }]; agent?: object }) {
       if (request.agent === undefined) throw new Error('no user-questions answerer accepted the request')
+      if (request.questions[0].id === 'enno-execution-mode' && executionCustom !== undefined) {
+        selectionQuestions.push(request.questions[0].id)
+        return { answers: [{ id: request.questions[0].id, selected: [], custom: executionCustom }] }
+      }
       const selection = modelSelectionAnswer(request.questions[0])
       if (selection) { selectionQuestions.push(request.questions[0].id); return { answers: [{ id: request.questions[0].id, selected: [selection] }] } }
       questionAgents.push(request.agent)
@@ -413,6 +423,84 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     const recoveredClose = await adapter.host.resolveSessionClose!(fallbackSession.id, fallbackSession)
     assert.deepEqual(recoveredClose, { runId: recoveredRun, status: 'cancelled' })
     await adapter.host.lifecycle!.closeTurn(recoveredClose!)
+    const discussionSession = createNativeSession('selection-discussion-session')
+    const discussionAgent = { id: 'selection-discussion-agent', session: discussionSession }
+    const questionsBeforeDiscussion = selectionQuestions.length
+    executionCustom = 'ただのチャット\n実装は頼んでいない'
+    const discussionEvent = await adapter.host.mapPreStep!({
+      agent: discussionAgent, turn: 1, step: 1, signal: event.signal,
+      messages: [{ id: 'discussion-original', role: 'user', content: [{ type: 'text', text: '実装の話をしているだけ' }], source: { kind: 'user' } }],
+    })
+    const discussionDecision = await adapter.host.intakeGate!.preStep(discussionEvent, async () => ({ kind: 'enter', messages: [] }))
+    assert.equal(discussionDecision.kind, 'enter')
+    assert.equal(selectionQuestions.length, questionsBeforeDiscussion + 1)
+    assert.ok(JSON.stringify(discussionDecision.messages).includes('ただのチャット'))
+    assert.ok(JSON.stringify(discussionDecision.messages).includes('実装は頼んでいない'))
+    const discussionRun = adapter.host.resolveSessionRunId!(discussionSession)!
+    const discussionDb = openConnection(f.databasePath)
+    try {
+      const value = JSON.parse(discussionDb.prepare('SELECT state_json FROM dsh_execution_selections WHERE run_id = ?').get<{ state_json: string }>(discussionRun)!.state_json)
+      assert.equal(value.mode, 'pending')
+      assert.equal(value.status, 'selecting')
+      assert.equal(value.discussion.text, executionCustom)
+      assert.equal(discussionDb.prepare('SELECT COUNT(*) AS count FROM enno_contracts WHERE run_id = ?').get<{ count: number }>(discussionRun)!.count, 0)
+    } finally { discussionDb.close() }
+    assert.ok(guards.some(guard => guard({ agent: discussionAgent, name: 'shell' })?.includes('実行方式は未確定')))
+    commitContext(discussionSession, discussionDecision.messages)
+    const discussionStep = await adapter.host.mapPreStep!({ agent: discussionAgent, turn: 1, step: 2, signal: event.signal, messages: [] })
+    const repeatedDiscussion = await adapter.host.intakeGate!.preStep(discussionStep, async () => ({ kind: 'enter', messages: [] }))
+    assert.equal(repeatedDiscussion.kind, 'enter')
+    assert.equal(JSON.stringify(repeatedDiscussion.messages).includes('ただのチャット'), false, 'native history already carries the answer')
+    assert.equal(selectionQuestions.length, questionsBeforeDiscussion + 1)
+    assert.equal(await adapter.host.resolveIdleClose!(discussionAgent.id, discussionSession.id, discussionSession, discussionAgent), undefined)
+    const followupDiscussion = await adapter.host.mapPreStep!({ agent: discussionAgent, turn: 2, step: 1, signal: event.signal,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'その話を続けよう' }], source: { kind: 'user' } }],
+    })
+    assert.equal(followupDiscussion.profileHints?.taskType, 'chat')
+    assert.equal((await adapter.host.intakeGate!.preStep(followupDiscussion, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+    assert.equal(selectionQuestions.length, questionsBeforeDiscussion + 1)
+    executionCustom = undefined
+    const resumeDiscussion = await adapter.host.mapPreStep!({ agent: discussionAgent, turn: 3, step: 1, signal: event.signal,
+      messages: [{ role: 'user', content: [{ type: 'text', text: '通常実行で続けて' }], source: { kind: 'user' } }],
+    })
+    const resumeDecision = await adapter.host.intakeGate!.preStep(resumeDiscussion, async () => ({ kind: 'enter', messages: [] }))
+    assert.equal(resumeDecision.kind, 'enter')
+    assert.ok(JSON.stringify(resumeDecision.messages).includes('制限は解除'))
+    assert.equal(adapter.host.resolveSessionRunId!(discussionSession), discussionRun)
+    assert.equal(guards.some(guard => guard({ agent: discussionAgent, name: 'shell' })?.includes('実行方式は未確定')), false)
+    const completedDiscussion = openConnection(f.databasePath)
+    try {
+      const value = JSON.parse(completedDiscussion.prepare('SELECT state_json FROM dsh_execution_selections WHERE run_id = ?').get<{ state_json: string }>(discussionRun)!.state_json)
+      assert.equal(value.mode, 'normal')
+      assert.equal(value.status, 'ready')
+      assert.equal(value.discussion, undefined)
+    } finally { completedDiscussion.close() }
+
+    const coldDiscussionSession = createNativeSession('cold-discussion-session')
+    const coldDiscussionDb = openConnection(f.databasePath)
+    let coldDiscussionRun: string
+    try {
+      const prepared = await prepareAgentTask(coldDiscussionDb, { requestId: 'cold-discussion-request', task: 'Fix this', cwd: f.root,
+        profileHints: { taskType: 'debug', target: 'src/index.ts', expected: 'Tests pass' },
+        capabilities: event.capabilities.skills, dshSessionId: coldDiscussionSession.id, executionSelection: true, skillDiscoveryMode: 'off',
+      })
+      coldDiscussionRun = prepared.run.runId
+      const saved = readExecutionSelection(coldDiscussionDb, coldDiscussionRun)!
+      writeExecutionSelection(coldDiscussionDb, coldDiscussionRun, saved.revision, { ...saved.value,
+        discussion: { questionId: 'enno-execution-mode', text: 'ただのチャット', turn: 1 },
+      })
+    } finally { coldDiscussionDb.close() }
+    const selectionsBeforeColdDiscussion = selectionQuestions.length
+    const coldDiscussionAgent = { id: 'cold-discussion-agent', session: coldDiscussionSession }
+    const coldDiscussionEvent = await adapter.host.mapPreStep!({ agent: coldDiscussionAgent, turn: 2, step: 1, signal: event.signal,
+      messages: [{ role: 'user', content: [{ type: 'text', text: '続けて' }], source: { kind: 'user' } }],
+    })
+    const coldDiscussionDecision = await adapter.host.intakeGate!.preStep(coldDiscussionEvent, async () => ({ kind: 'enter', messages: [] }))
+    assert.equal(coldDiscussionDecision.kind, 'enter')
+    assert.equal(adapter.host.resolveSessionRunId!(coldDiscussionSession), coldDiscussionRun)
+    assert.equal(selectionQuestions.length, selectionsBeforeColdDiscussion)
+    assert.ok(JSON.stringify(coldDiscussionDecision.messages).includes('ただのチャット'))
+
     const beforeChat = openConnection(f.databasePath)
     const ennoContractsBeforeChat = beforeChat.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get<{ count: number }>()!.count
     beforeChat.close()
@@ -480,10 +568,12 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     ;(root as any).emit('session/event', chatSession, { type: 'assistant/message', seq: 3, time: 3, data: { text: 'second answer' } })
     assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
 
-    ;(root as any).emit('session/event', chatSession, { type: 'user/message', seq: 4, time: 4, data: { text: 'And one more follow-up.' } })
+    const technicalChat = 'まぁ、ローカルで実行環境が持てて、しかもevalで機能がいくらでもはやせるから、品質を落とさずにトークン量削減まで見えて来たよな'
+    const selectionsBeforeTechnicalChat = selectionQuestions.length
+    ;(root as any).emit('session/event', chatSession, { type: 'user/message', seq: 4, time: 4, data: { text: technicalChat } })
     const thirdChatEvent = await adapter.host.mapPreStep!({
       agent: chatAgent,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'And one more follow-up.' }], source: { kind: 'user' } }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: technicalChat }], source: { kind: 'user' } }],
       turn: 3, step: 1, signal: event.signal,
     })
     assert.equal(thirdChatEvent.profileHints?.taskType, 'chat')
@@ -491,6 +581,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(thirdChatDecision.kind, 'enter')
     assert.equal(questionIds.length, questionsAfterFirstChat)
     const thirdChatRun = adapter.host.resolveSessionRunId!(chatSession)!
+    assert.equal(selectionQuestions.length, selectionsBeforeTechnicalChat)
     assert.equal(thirdChatRun, secondChatRun)
     adapter.host.boundaryWorker!.kick(chatSession.id, chatAgent)
     await adapter.host.boundaryWorker!.whenIdle()
@@ -598,6 +689,56 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     } finally {
       afterColdPivot.close()
     }
+    let lispQuestions = 0
+    let lispCustom: string | undefined
+    const lispFiber = root.plugin({ name: 'lisp-coding-choice-fixture', apply(ctx) {
+      return ctx.provide(LISP_CODING_SERVICE, createLispCodingChoice({
+        questions: { ask: async request => {
+          lispQuestions++
+          return { answers: [{ id: request.questions[0].id, selected: lispCustom ? [] : ['Lispモードを使う（通常実行）'],
+            ...(lispCustom ? { custom: lispCustom } : {}) }] }
+        } },
+        enabled: agent => lispAgents.has(agent.id), decided: async () => false, decline: async () => {},
+        enable: async agent => { lispAgents.add(agent.id) },
+      }))
+    } })
+    await lispFiber
+    try {
+      const lispSession = createNativeSession('lisp-coding-session')
+      const lispAgent = { id: 'lisp-coding-agent', session: lispSession }
+      const input = { agent: lispAgent, turn: 1, step: 1, signal: event.signal,
+        messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'src/index.ts を実装。tests pass' }], source: { kind: 'user' as const } }] }
+      const selectionsBeforeLisp = selectionQuestions.length
+      const mapped = await adapter.host.mapPreStep!(input)
+      assert.equal(lispQuestions, 1)
+      assert.deepEqual(mapped.capabilities.tools.map(tool => tool.name), [...LISP_TOOLS].sort())
+      assert.equal((await adapter.host.intakeGate!.preStep(mapped, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+      assert.equal(selectionQuestions.length, selectionsBeforeLisp, 'Lisp choice already authorized normal execution')
+      const db = openConnection(f.databasePath)
+      try {
+        const runId = adapter.host.resolveSessionRunId!(lispSession)!
+        assert.equal(readExecutionSelection(db, runId)?.value.mode, 'normal')
+        assert.equal(readExecutionSelection(db, runId)?.value.status, 'ready')
+        assert.equal(db.prepare('SELECT COUNT(*) AS count FROM enno_contracts WHERE run_id=?').get<{ count: number }>(runId)?.count, 0)
+      } finally { db.close() }
+      const repeated = await adapter.host.mapPreStep!({ ...input, step: 2 })
+      assert.deepEqual(repeated.capabilities, mapped.capabilities)
+      assert.equal((await adapter.host.intakeGate!.preStep(repeated, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
+      assert.equal(lispQuestions, 1)
+
+      lispCustom = 'ただのチャット。Lisp の用途を説明して'
+      const discussionSession = createNativeSession('lisp-discussion-session')
+      const discussionAgent = { id: 'lisp-discussion-agent', session: discussionSession }
+      const discussion = await adapter.host.mapPreStep!({ ...input, agent: discussionAgent })
+      assert.equal(discussion.profileHints?.taskType, 'chat')
+      assert.equal(discussion.profileHints?.constraints, lispCustom)
+      assert.equal(lispAgents.has(discussionAgent.id), false)
+      const decision = await adapter.host.intakeGate!.preStep(discussion, async () => ({ kind: 'enter', messages: [] }))
+      assert.equal(decision.kind, 'enter')
+      assert.match(JSON.stringify(decision), /ただのチャット。Lisp の用途を説明して/u)
+      assert.ok(guards.some(guard => guard({ agent: discussionAgent })?.includes('自由入力')))
+      assert.equal(selectionQuestions.length, selectionsBeforeLisp)
+    } finally { await lispFiber.dispose() }
   } finally {
     await disposeComposition.dispose()
     await adapter.dispose()

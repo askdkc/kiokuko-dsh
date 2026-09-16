@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { ExecutionSelectionPending, selectExecution } from '../../../src/dsh/model-selection-ui.js'
-import type { StoredExecutionSelection } from '../../../src/dsh/execution-selection.js'
+import { ExecutionSelectionSchema, type StoredExecutionSelection } from '../../../src/dsh/execution-selection.js'
 import { MODEL_ROLES, MODEL_TEMPLATES, ROLE_LABELS, templateBindings, type DshModelCatalog, type DshModelCompatibility, type ModelConfigurationDraft, type ModelRoute } from '../../../src/dsh/model-configuration.js'
 import type { DshUserQuestionRequest } from '../../../src/dsh/user-interaction.js'
 
@@ -52,12 +52,39 @@ test('back from explicit Enno source reaches the mode choice instead of reenteri
   assert.equal(result?.value.mode, 'normal')
 })
 
-test('invalid fixed choices explain the error without changing screens or choosing a default', async () => {
-  await navigate([
-    ['enno-model-source', { custom: 'typo' }],
-    ['enno-model-source', 'DSHに設定済みのモデルから選ぶ', q => assert.match(q.detail ?? '', /選択肢/u)],
-    ['enno-model-review', null],
-  ])
+test('free text on a fixed menu is retained for discussion without selecting a default', async () => {
+  const { result } = await navigate([['enno-model-source', { custom: 'どちらを選ぶべき？' }]])
+  assert.equal(result?.value.status, 'selecting')
+  assert.deepEqual(result?.value.discussion, { questionId: 'enno-model-source', text: 'どちらを選ぶべき？', turn: 0 })
+})
+
+test('execution-mode free text ends the question loop without authorizing execution', async () => {
+  const { result } = await navigate([['enno-execution-mode', { custom: 'ただのチャット' }]], {
+    stored: { revision: 0, value: { mode: 'pending', status: 'selecting' } },
+  })
+  assert.equal(result?.value.mode, 'pending')
+  assert.equal(result?.value.status, 'selecting')
+  assert.equal(result?.value.discussion?.text, 'ただのチャット')
+  const replay = await selectExecution({ task: 'Fix selection', signal: new AbortController().signal,
+    routes: [], stored: result!, save: async () => { throw new Error('Replay must not write') },
+    questions: { ask: async () => { throw new Error('Replay must not ask') } },
+  })
+  assert.deepEqual(replay, result)
+  assert.equal(ExecutionSelectionSchema.safeParse({ ...result!.value, mode: 'normal', status: 'ready' }).success, false)
+})
+
+test('discussion preserves the latest model draft and cancellation stores no discussion', async () => {
+  const { result } = await navigate([
+    ['enno-model-review', 'enno-idealを変更'],
+    ['enno-model-ideal', 'gpt-5.6-sol [gpt-5.6-sol]'],
+    ['enno-model-review', { custom: 'この構成について説明して' }],
+  ], { stored: initial(roleDraft) })
+  assert.equal(result?.value.draft?.roles.ideal?.model, 'gpt-5.6-sol')
+  assert.equal(result?.value.discussion?.text, 'この構成について説明して')
+  const cancelled = await navigate([['enno-model-review', '取消・作業を保持']], { stored: initial(roleDraft) })
+  assert.equal(cancelled.result, undefined)
+  assert.equal(cancelled.stored.value.discussion, undefined)
+  assert.deepEqual(cancelled.stored.value.draft, roleDraft)
 })
 
 test('fixed-choice cards still accept a typed option number', async () => {
