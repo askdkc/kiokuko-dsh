@@ -198,12 +198,14 @@ async function createAndSmokeTestTarball() {
     const prompt = await japanese.applyJapaneseOutputSkill({sections:[],variables:{model:'qwen3-coder'}});
     if (skill.name !== 'natural-japanese-output' || !prompt.variables.kiokuko_natural_japanese_output.includes(skill.content)) throw new Error('packed Japanese Skill delivery failed');
     const { createStandardSkillProvider } = await import(new URL('./standard-skill-provider.js', import.meta.resolve('kiokuko-dsh/dsh')));
+    const { createDshCapabilityCatalog } = await import(new URL('./capability-catalog.js', import.meta.resolve('kiokuko-dsh/dsh')));
     const { buildDshMessageSources } = await import(new URL('./message-sources.js', import.meta.resolve('kiokuko-dsh/dsh')));
     const provider = createStandardSkillProvider();
     try {
       const { candidates } = await provider.list({});
       if (!candidates.some(candidate => candidate.name === 'veteran-programmer-skill')) throw new Error('packed veteran Skill is missing');
       if (!candidates.some(candidate => candidate.name === 'kiokuko-lisp')) throw new Error('packed Lisp Skill is missing');
+      createDshCapabilityCatalog(candidates);
     const sources = await buildDshMessageSources({
         task: 'Continue the approved plan.', intakeStatus: 'ready', nextAction: 'proceed', context: null,
         memoryPolicy: { memoryReasoningRequired: true, contextWithheld: false },

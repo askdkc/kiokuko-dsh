@@ -4,6 +4,7 @@ import test from 'node:test'
 import { mountSoulPrompt } from '../../../src/dsh/prompt-policy.js'
 import { createStandardSkillProvider, mountStandardSkillProvider } from '../../../src/dsh/standard-skill-provider.js'
 import { loadJapaneseOutputSkill } from '../../../src/dsh/japanese-output-skill.js'
+import { createDshCapabilityCatalog } from '../../../src/dsh/capability-catalog.js'
 
 test('bundled provider exposes complete model/user-invocable definitions and disposes cleanly', async () => {
   const provider = createStandardSkillProvider()
@@ -19,9 +20,10 @@ test('bundled provider exposes complete model/user-invocable definitions and dis
     'memory-reasoning',
     'veteran-programmer-skill',
     'kiokuko-soul',
-    'natural-japanese-output',
     'kiokuko-lisp',
+    'natural-japanese-output',
   ])
+  assert.equal(createDshCapabilityCatalog(listed.candidates).skills.length, 9)
   assert.ok(listed.candidates.every((candidate) => candidate.invocation.modelInvocable && candidate.invocation.userInvocable))
   const soul = listed.candidates.find((candidate) => candidate.name === 'kiokuko-soul')!
   const definition = await provider.get(soul, {})

@@ -21,10 +21,14 @@ async function standardSnapshot(): Promise<unknown[]> {
 test('dsh capability catalog is complete, immutable, and order-bound', async () => {
   const catalog = createDshCapabilityCatalog(await standardSnapshot())
   assert.equal(catalog.complete, true)
-  assert.equal(catalog.skills.length, 8)
+  assert.equal(catalog.skills.length, 9)
+  assert.deepEqual(catalog.skills.slice(-2).map(skill => skill.name), ['kiokuko-lisp', 'natural-japanese-output'])
   assert.match(catalog.digest, /^[0-9a-f]{64}$/u)
   assert.doesNotThrow(() => assertCompleteDshCapabilityCatalog(catalog))
   assert.throws(() => createDshCapabilityCatalog([...catalog.skills].reverse()), /reordered|incomplete/u)
+  assert.throws(() => createDshCapabilityCatalog([
+    ...catalog.skills.slice(0, -2), ...catalog.skills.slice(-2).reverse(),
+  ]), /Additional Skill catalog entries are reordered/u)
   assert.throws(() => createDshCapabilityCatalog([...catalog.skills, catalog.skills[0]!]), /Duplicate/u)
   assert.throws(() => createDshCapabilityCatalog([...catalog.skills, { kind: 'unknown', name: 'bad' }]), /snapshot|descriptor/u)
   assert.throws(() => assertCompleteDshCapabilityCatalog({ ...catalog, complete: false }), /incomplete/u)

@@ -1,6 +1,7 @@
 import { loadStandardSkillParity, standardSkillFrontmatter, type StandardSkillParity } from './standard-skill-integrity.js'
 import { JAPANESE_OUTPUT_SKILL_NAME, loadJapaneseOutputSkill } from './japanese-output-skill.js'
 import { LISP_SKILL_NAME, loadLispSkill } from './lisp/skill.js'
+import { compareCanonicalStrings } from '../serialization/validate.js'
 
 export const STANDARD_DSH_SKILL_PROVIDER = 'kiokuko-standard'
 export const STANDARD_DSH_SKILL_RANK = 600
@@ -44,6 +45,8 @@ export async function loadBundledDshSkillContent(skillName: string, parity: Stan
 
 async function candidates(parity: StandardSkillParity): Promise<DshSkillCandidate[]> {
   const additional = await Promise.all([loadJapaneseOutputSkill(), loadLispSkill()])
+  // The capability catalog preserves manifest order, then requires sorted extras.
+  additional.sort((left, right) => compareCanonicalStrings(left.name, right.name))
   return [...parity.skills, ...additional.map(skill => skill.name)].map((skillName) => {
     const content = additional.find(skill => skill.name === skillName)?.content
       ?? parity.files.find(file => file.skillName === skillName && file.relativePath === 'SKILL.md')!.content
