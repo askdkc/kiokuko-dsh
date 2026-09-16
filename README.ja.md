@@ -79,8 +79,19 @@ DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復
 - Debian / Ubuntu: `sudo apt install sbcl`
 - Arch Linux: `sudo pacman -S sbcl`
 
-`lisp.enabled: true` を設定してプラグインを再読み込みし、対象のセッションで
+`~/.dsh/profiles/web/cordis.patch.yml` の `kiokuko-dsh` 行に次を追加し（他の `config` 値は保持）、
+プラグインを再読み込みしてから対象のセッションで
 `/kioku-lisp enable` を実行すると、状態を保持する Common Lisp を利用できます。
+読み込まれた設定は `dsh --profile web --dump-config` で確認できます。
+
+```yaml
+- id: kiokuko-dsh
+  config:
+    lisp:
+      enabled: true
+      sbclPath: sbcl
+```
+
 Linux では別途 Bubblewrap が必要です。VM は不要です。
 削除・既存ファイルの置換はユーザーの確認後に実行します。
 [設定、API、停止・復旧方法](docs/lisp.md)を参照してください。

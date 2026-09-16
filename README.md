@@ -80,7 +80,18 @@ Install SBCL first:
 - Debian / Ubuntu: `sudo apt install sbcl`
 - Arch Linux: `sudo pacman -S sbcl`
 
-Set `lisp.enabled: true`, reload the plugin, then run `/kioku-lisp enable` in the
-desired session. Linux also requires Bubblewrap; no VM is required.
+Add this to the `kiokuko-dsh` row in `~/.dsh/profiles/web/cordis.patch.yml`
+(keep other `config` values), then reload the plugin and run `/kioku-lisp enable` in the
+desired session. Check the loaded configuration with `dsh --profile web --dump-config`.
+
+```yaml
+- id: kiokuko-dsh
+  config:
+    lisp:
+      enabled: true
+      sbclPath: sbcl
+```
+
+Linux also requires Bubblewrap; no VM is required.
 Deletion and replacement of existing files require human confirmation.
 See [setup, APIs, limits and recovery](docs/lisp.md).
