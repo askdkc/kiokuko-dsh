@@ -12,7 +12,7 @@ import { mountLispSurface } from '../../../../src/dsh/lisp/surface.js'
 import type { DshRuntime } from '../../../../src/dsh/runtime.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
-for (const placement of ['global', 'agent'] as const) test(`Lisp preserves native reads and Skill loading (${placement} tools) without granting mutations`, {
+for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-preset'] as const) test(`Lisp preserves native reads and Skill loading (${placement} tools) without granting mutations`, {
   skip: packages ? false : 'requires pinned native DSH', timeout: 15000,
 }, async t => {
   const [cordis, prompt, tools, scope, fsTools, skillTools] = await Promise.all(
@@ -48,17 +48,23 @@ for (const placement of ['global', 'agent'] as const) test(`Lisp preserves nativ
         editText: async () => { mutations++; throw new Error('must not edit') },
       })
     } }))
+    const preset = { agentPreset: 'fixture' }
+    const presetScope = scope.createScope(ctx, preset)
+    scopes.push(presetScope)
+    const inheritsPreset = ['preset', 'mixed', 'restricted-preset'].includes(placement)
     for (const agent of [parent, child]) {
-      const local = scope.createScope(ctx, agent, agent === child ? { parent } : undefined)
+      const local = scope.createScope(ctx, agent, agent === child ? { parent } : inheritsPreset ? { parent: preset } : undefined)
       scopes.push(local); agent.ctx = local.ctx
     }
-    const toolContext = placement === 'global' ? ctx : parent.ctx
+    const toolContext = placement === 'global' ? ctx : inheritsPreset ? presetScope.ctx : parent.ctx
     const readPlugin = await toolContext.plugin(fsTools, {}), skillPlugin = await toolContext.plugin(skillTools, {})
     fibers.push(readPlugin, skillPlugin)
     const define = (name: string, execute: () => Promise<unknown>) => tools.defineTool({ name, description: 'fixture', parameters: {},
       output: { schema: { type: 'json' }, render: () => [] }, execute })
-    for (const name of ['glob', 'grep']) toolContext.get('tools').register(define(name, async () => ['PLAN.md']))
+    const searchContext = placement === 'mixed' ? parent.ctx : toolContext
+    for (const name of ['glob', 'grep']) searchContext.get('tools').register(define(name, async () => ['PLAN.md']))
     toolContext.get('tools').register(define('bash', async () => ++mutations))
+    if (placement === 'restricted-preset') parent.ctx.get('tools').restrict({ deny: ['grep'] })
     surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true }))
     t.mock.method(surface.manager, 'enable', async (owner: LispOwner) => {
       surface!.manager.enabled.set(owner.sessionId, owner.root)
@@ -66,14 +72,22 @@ for (const placement of ['global', 'agent'] as const) test(`Lisp preserves nativ
     })
     const command = (rawInput: string) => commands.get('kioku-lisp').handler({ rawInput, agent: parent, signal: new AbortController().signal })
     assert.equal((await command('enable')).kind, 'success')
-    for (const name of ['read', 'glob', 'grep', 'skill']) assert.ok(ctx.tools.schemas(parent).some((s: any) => s.name === name), name)
+    // A first call can already be queued when Lisp replaces the model surface.
+    const firstRead = await call('read', { file_path: 'skills/one-shot-software-completion/SKILL.md' })
+    assert.equal(firstRead.isError, false, JSON.stringify(firstRead))
+    const admittedReads = placement === 'restricted-preset' ? ['read', 'glob', 'skill'] : ['read', 'glob', 'grep', 'skill']
+    for (const name of admittedReads) assert.ok(ctx.tools.schemas(parent).some((s: any) => s.name === name), name)
+    if (placement === 'restricted-preset') {
+      assert.equal(ctx.tools.schemas(parent).some((s: any) => s.name === 'grep'), false)
+      assert.equal((await call('grep')).isError, true, 'pre-existing restrictions must remain effective')
+    }
     for (const nested of [false, true]) {
       const result = await call('read', { file_path: 'PLAN.md' }, parent, nested)
       assert.equal(result.isError, false, JSON.stringify(result)); assert.match(JSON.stringify(result), /PLAN fixture/)
       const loaded = await call('skill', { name: skill.name }, parent, nested)
       assert.equal(loaded.isError, false, JSON.stringify(loaded)); assert.match(JSON.stringify(loaded), /Fixture Skill body/)
     }
-    for (const name of ['glob', 'grep']) assert.equal((await call(name)).isError, false)
+    for (const name of admittedReads.filter(name => name === 'glob' || name === 'grep')) assert.equal((await call(name)).isError, false)
     assert.equal((await call('skill', { name: 'unknown-skill' })).isError, true)
     const removeDenial = ctx.tools.guard((exec: any) => exec.name === 'read' ? 'NATIVE_READ_DENIED' : undefined)
     const before = reads

@@ -23,6 +23,19 @@ interface Fence { sessions: Map<string, string>; controller?: LispManager; prepa
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill'] as const
 
+/** Keep admitted inherited reads without naming agent-owned tools in restrict(). */
+function restrictToReads(tools: Tools, scopedTools: Tools, agent: Agent, reads: string[]): () => void {
+  // DSH restricts inherited tools (global + preset ancestors), but rejects
+  // names registered on the agent itself. Its global get() cannot distinguish
+  // those cases. An empty mask exposes only own registrations through the
+  // public lookup API; remove it synchronously before installing the real mask.
+  const restore = scopedTools.restrict({ allow: [] })
+  let inherited: string[]
+  try { inherited = reads.filter(name => !tools.get(name, agent)) }
+  finally { restore() }
+  return scopedTools.restrict({ allow: inherited })
+}
+
 function text(value: unknown): string {
   const result = value as { state?: string; enabled?: boolean; ok?: boolean; message?: string; recovery?: string; error?: { message?: string; recovery?: string }; operations?: { id: string; state: string }[] }
   if (result.message) return `${result.message}\n${result.recovery ?? ''}`
@@ -145,11 +158,12 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     // Retain the host's existing read capabilities, including agent-local preset
     // tools. Pin their implementations so a later same-name registration cannot
     // acquire permission. Dispatch still traverses every native DSH policy/guard.
+    const reads: string[] = []
     for (const name of LISP_READ_TOOLS) {
       const definition = tools.get(name, agent)
-      if (definition) fence!.definitions.set(`${agent.id}:${name}`, definition)
+      if (definition) { fence!.definitions.set(`${agent.id}:${name}`, definition); reads.push(name) }
     }
-    local.push(scopedTools.restrict({ allow: LISP_READ_TOOLS.filter(name => tools.get(name)) }))
+    local.push(restrictToReads(tools, scopedTools, agent, reads))
     for (const name of LISP_TOOLS) {
       const definition = { name, description: description(name), modelFacing: true,
         parameters: lispToolSchema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
