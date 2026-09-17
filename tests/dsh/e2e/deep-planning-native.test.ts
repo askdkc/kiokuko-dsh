@@ -144,7 +144,8 @@ test('Deep native: Japanese Skill reaches all OSS workers without tool access an
     await f.command('/deep-planning 設定の確認手順を日本語でまとめてください。')
     const intent=await f.complete(), state=await f.deep.store.read(intent!.runId!)
     assert.equal(state.phase,'answered',state.reason??'')
-    const skill=await loadJapaneseOutputSkill()
+    const skill={content:await f.adapter.host.skillPrompts!.require('natural-japanese-output')}
+    if(process.env.KIOKUKO_TEST_COMPILED_SKILLS==='1') assert.equal(f.adapter.host.skillPrompts!.diagnostics().find(d=>d.id==='natural-japanese-output/SKILL.md')?.representation,'compiled')
     const requests=f.provider.requests.filter(r=>r.sessionId!==f.parent.session.id)
     assert.equal(requests.length,3)
     const reservations=await f.deep.store.database(db=>db.prepare("SELECT tokens FROM dsh_deep_budget_reservations WHERE run_id=? AND kind='agent' ORDER BY rowid").all<{tokens:number}>(state.runId))

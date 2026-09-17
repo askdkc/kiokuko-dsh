@@ -12,6 +12,8 @@ const cache = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-cache-'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
+  'dist/dsh/skill-prompts.json',
+  'dist/dsh/skill-prompts.js',
   'migrations/019_dsh_lisp.sql',
   'dist/dsh/lisp/manager.js',
   'dist/dsh/lisp/surface.js',

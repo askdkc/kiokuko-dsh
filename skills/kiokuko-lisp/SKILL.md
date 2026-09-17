@@ -3,6 +3,7 @@ name: kiokuko-lisp
 description: Build and reuse task-specific tools with Common Lisp functions, macros and eval in a stateful, protected DSH Lisp session.
 ---
 
+<!-- kiokuko:runtime contract -->
 # Common Lisp in Kiokuko DSH
 
 The user starts this mode by choosing Lisp before coding or with
@@ -174,3 +175,4 @@ Other tools, including recursive evaluation, are refused.
 A symbol query and inspection execute under the normal evaluation limits.
 `lisp_status` reports job state and resource limits; unavailable aggregate OS
 quotas are explicitly marked unavailable. Output includes bounded stdout/stderr.
+<!-- /kiokuko:runtime -->

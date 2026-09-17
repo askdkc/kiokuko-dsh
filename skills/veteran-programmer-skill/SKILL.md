@@ -5,6 +5,7 @@ description: Check workflow completeness before and after implementation when ch
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: veteran-programmer-skill -->
 
+<!-- kiokuko:runtime contract -->
 # Workflow completeness
 
 Ensure the requested behavior reaches its actual consumer. A correct component
@@ -62,3 +63,4 @@ publish, deploy, broaden filesystem access, or bypass host-owned execution.
 Design basis: [OpenAI's guidance on skills and prompts](https://developers.openai.com/blog/rethinking-skills-and-prompts-for-gpt-6-astra).
 The checks above define the outcome and decision boundaries; choose the tools
 and level of detail appropriate to the task.
+<!-- /kiokuko:runtime -->

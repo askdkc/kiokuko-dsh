@@ -49,6 +49,8 @@ jobs:
           KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" \
           npm run test:lisp
       - run: npm run pack:check
+      - name: Verify Skill bodies through native and packed model delivery
+        run: npm run test:skill-delivery
 
   verify:
     runs-on: ubuntu-latest
@@ -83,6 +85,8 @@ jobs:
 
       - name: Type-check
         run: npm run typecheck
+      - name: Check deterministic Skill compilation and fixed efficiency targets
+        run: npm run test:skill-prompts && npm run test:skill-efficiency
 
       - name: Run test suite
         run: npm test

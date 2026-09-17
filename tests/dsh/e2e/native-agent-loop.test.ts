@@ -10,8 +10,6 @@ import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { createDshCapabilityCatalog } from '../../../src/dsh/capability-catalog.js'
-import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
-import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { submitEnnoAdvice } from '../../../src/enno-oduno/service.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
 import { compareCanonicalStrings } from '../../../src/serialization/validate.js'
@@ -20,6 +18,8 @@ import { dshTurnBoundarySeq } from '../../../src/dsh/session-memory-finalizer.js
 import type { EfficiencyObservation } from '../../../src/dsh/efficiency.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { mockModelRoutes, modelSelectionAnswer, openaiModels } from '../helpers/model-selection.js'
+const { createDshHostAdapter, mountDshComposition, DshSkillPrompts } = await import(process.env.KIOKUKO_SKILL_PACKAGE_ROOT
+  ? pathToFileURL(join(process.env.KIOKUKO_SKILL_PACKAGE_ROOT,'dist/index.js')).href : '../../../src/dsh/index.js') as typeof import('../../../src/dsh/index.js')
 
 const dshSourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 const dshPackageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
@@ -244,6 +244,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   await questionFiber
 
   const createAdapter = () => createDshHostAdapter(ctx, {
+    skillPrompts: new DshSkillPrompts({mode:process.env.KIOKUKO_TEST_COMPILED_SKILLS==='1'?'compiled':'full'}),
     modelRoutes: mockModelRoutes,
     efficiency: { observe: true },
     continuity: { mode: finalMode === 'text' ? 'active' : 'off' },
@@ -500,6 +501,16 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       .flatMap((block: any) => block.type === 'text' ? [block.text] : [])
     assert.equal(injectedTexts.some((text: string) => text.includes('# Kiokuko SOUL router')), false,
       'SOUL is already carried by the system prompt')
+    if (process.env.KIOKUKO_TEST_COMPILED_SKILLS === '1') {
+      const delivery = adapter.host.skillPrompts!
+      for (const name of ['kiokuko-soul','kiokuko-enno-oduno','kiokuko-single-purpose-functions']) {
+        const body = await delivery.require(name)
+        assert.ok(adapterScript.requests.some((r:any) => JSON.stringify(r).includes(JSON.stringify(body).slice(1,-1))), `${name} must reach a native provider request`)
+        assert.equal(delivery.diagnostics().find(d=>d.id===`${name}/SKILL.md`)?.representation,'compiled')
+      }
+      const expert = await delivery.require('kiokuko-single-purpose-functions','references/verification.md')
+      assert.ok(adapterScript.requests.some((r:any)=>JSON.stringify(r).includes(JSON.stringify(expert).slice(1,-1))), 'selected expert must reach the model')
+    }
     const skillTexts = injectedTexts.filter((text: string) => text.startsWith('---\nname:') || text.startsWith('<!-- KIOKUKO MANAGED STANDARD SKILL:'))
     assert.equal(new Set(skillTexts).size, skillTexts.length,
       'phase changes and persisted resume must not append identical Skill bodies')

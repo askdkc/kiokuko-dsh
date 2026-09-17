@@ -5,6 +5,7 @@ description: Use for user-facing interface work — design, implementation, or r
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-ui-design-soul -->
 
+<!-- kiokuko:runtime contract -->
 # UI design soul router
 
 ## Outcome
@@ -60,3 +61,4 @@ Typical pairs: async Save button → `ui.interaction.v1` + `ui.async.v1`; valida
 For new or behaviorally changed actions, do not review screenshots alone: trace the affected activation, processing, success, failure, recovery, focus, and responsive behavior. For purely visual changes, use focused visual and accessibility checks. Read [ui-checklist.md](references/ui-checklist.md) for detailed review or final verification of affected interactions — a change crossing several `ui.*` risks, or the last check before accepting — not for a single visible change inside one expert's contract.
 
 Report what was exercised in a running interface, what was inferred from source, and what remains unverified. A build, an API success, or a good screenshot alone does not prove UI correctness.
+<!-- /kiokuko:runtime -->

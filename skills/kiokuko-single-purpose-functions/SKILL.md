@@ -5,6 +5,7 @@ description: Use for any code work — writing, changing, reviewing, or debuggin
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-single-purpose-functions -->
 
+<!-- kiokuko:runtime contract -->
 # Single-purpose function router
 
 ## Outcome
@@ -65,3 +66,4 @@ Read [kiokuko-patterns.md](references/kiokuko-patterns.md) only when a selected 
 ## Completion report
 
 Report the function or WorkUnit contracts changed, the selected expert IDs, the focused verifier results, and anything left unverified. A build alone does not prove boundary, failure, or interaction behavior.
+<!-- /kiokuko:runtime -->

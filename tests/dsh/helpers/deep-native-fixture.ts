@@ -7,8 +7,8 @@ import { pathToFileURL } from 'node:url'
 import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
-import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
-import { mountDshComposition } from '../../../src/dsh/composition.js'
+const { createDshHostAdapter, mountDshComposition, DshSkillPrompts } = await import(process.env.KIOKUKO_SKILL_PACKAGE_ROOT
+  ? pathToFileURL(join(process.env.KIOKUKO_SKILL_PACKAGE_ROOT,'dist/index.js')).href : '../../../src/dsh/index.js') as typeof import('../../../src/dsh/index.js')
 import { nativeMock } from './native-mock.js'
 import { mountDshOrcaCommand } from '../../../src/dsh/orca-command-surface.js'
 
@@ -28,7 +28,7 @@ export async function deepNativeFixture(makeScript: (mock: ReturnType<typeof nat
   fibers.push(await ctx.plugin(loop.default,{agents:[]}));fibers.push(await ctx.plugin(spawn,{providerName:'spawn'}))
   if(options.questions) fibers.push(await ctx.plugin({name:'deep-case-questions',apply(c:any){return c.provide('userQuestions',{ask:options.questions})}}))
   ctx.llm.registerAdapter(['mock'],provider)
-  const adapter=createDshHostAdapter(ctx,{repositoryRoot:root,databasePath:dbPath,modelRoutes:[{provider:'mock',family:'other',connection:'api',protocol:'chat-completions'}],orca:{enabled:options.orca??false},deepPlanning:{budget:options.budget??{}}})
+  const adapter=createDshHostAdapter(ctx,{skillPrompts:new DshSkillPrompts({mode:process.env.KIOKUKO_TEST_COMPILED_SKILLS==='1'?'compiled':'full'}),repositoryRoot:root,databasePath:dbPath,modelRoutes:[{provider:'mock',family:'other',connection:'api',protocol:'chat-completions'}],orca:{enabled:options.orca??false},deepPlanning:{budget:options.budget??{}}})
   const composition=await mountDshComposition(ctx,adapter.host)
   const disposeOrca=options.orca&&adapter.host.orca?mountDshOrcaCommand(ctx,true,adapter.host.orca):undefined
   const parent=await ctx.agentLoop.create(session.SessionId(options.sessionId ?? 'deep-case-parent'),{provider:'mock',model:'mock'},{cwd:root})

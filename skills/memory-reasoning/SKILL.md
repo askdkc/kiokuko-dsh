@@ -5,6 +5,7 @@ description: Use when Kiokuko supplies stored memory for a build or debug task. 
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: memory-reasoning -->
 
+<!-- kiokuko:runtime contract -->
 # Memory reasoning
 
 ## Outcome
@@ -36,3 +37,4 @@ When Kiokuko delivers ordinary memory for a build or debug task:
 ## Completion evidence
 
 Report which recalled premises materially affected the work, how each was verified or falsified, the invariant and counterexample used, the focused check result or direct evidence, and any remaining unverified assumption. If no recalled claim survives verification, proceed from repository evidence and say so.
+<!-- /kiokuko:runtime -->

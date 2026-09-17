@@ -157,6 +157,9 @@ dsh plugin --profile web remove kiokuko-dsh
 
 ## Usage
 
+Skill prompts default to full source. The optional deterministic compiler and
+its native/package delivery checks are documented in [Skill prompt compiler](skill-compiler.md).
+
 Do not run `/kiokuko-soul`. The plugin mounts the bundled `kiokuko-soul` content
 as the `kiokuko:soul` system-prompt section automatically. Start the selected
 DSH profile and enter your task, for example:

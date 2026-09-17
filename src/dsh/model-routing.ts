@@ -2,6 +2,8 @@ import type { ModelBinding, ModelRole } from './model-configuration.js'
 import type { EnnoOdunoState } from '../enno-oduno/types.js'
 import type { DshNativeSession } from './session-bridge.js'
 import { applyJapaneseOutputSkill } from './japanese-output-skill.js'
+import type { PromptAssembly } from './japanese-output-skill.js'
+import type { DshSkillPrompts } from './skill-prompts.js'
 
 export function modelRoleForState(state: EnnoOdunoState): Exclude<ModelRole, 'worker'> | undefined {
   switch (state.status) {
@@ -24,7 +26,7 @@ export interface RoutableAgent {
 export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (signal: AbortSignal) => Promise<ModelBinding | undefined>, ordinaryModel?: {
   load(): ModelBinding | undefined
   save(binding: ModelBinding): Promise<void>
-}): () => void {
+}, guidance?: { prompts(): DshSkillPrompts; assembled?(assembly: PromptAssembly): Promise<void> }): () => void {
   if (!agent.ctx) return () => {}
   let assembled: ModelBinding | undefined
   let ordinary: ModelBinding | undefined
@@ -40,7 +42,9 @@ export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (si
       assembled = selected ? Object.freeze({ ...selected }) : routed ? ordinary : undefined
       routed = selected !== undefined
       const result = await next()
-      return applyJapaneseOutputSkill(!assembled ? result : { ...result, variables: { ...result.variables, provider: assembled.provider, model: assembled.model } })
+      const prompt = await applyJapaneseOutputSkill(!assembled ? result : { ...result, variables: { ...result.variables, provider: assembled.provider, model: assembled.model } }, guidance?.prompts())
+      await guidance?.assembled?.(prompt)
+      return prompt
     }, { prepend: true }),
     agent.ctx.on('agent/request', async (_payload: unknown, next: () => Promise<any>) => {
       const resolved = await next()

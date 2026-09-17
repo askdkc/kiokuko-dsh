@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { DshSkillPrompts } from '../skill-prompts.js'
 import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -29,7 +30,7 @@ const ToolInput = z.object({ operationId: identifier.optional(), code: z.string(
   timeoutMs: z.number().int().min(100).max(600000).optional(), symbol: z.string().max(256).optional(), ref: identifier.optional(), generation: identifier.optional() }).strict()
 
 /** The fence belongs to the host root, so plugin unload cannot restore bash access. */
-export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
+export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
   const root = (ctx.root ?? ctx) as unknown as Context & { [fenceKey]?: Fence }
   const tools = root.get('tools', false) as Tools | undefined
   const agents = root.get('agents', false) as { get(id: string): Agent | undefined } | undefined
@@ -45,6 +46,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const databasePath = await runtime.withDatabase(db => db.filePath)
   const store = new LispStore(fn => runtime.withDatabase(db => fn(db)))
   const manager = new LispManager({ store, config,
+    ...(skillPrompts ? { skillPrompts } : {}),
     dataRoot: join(dirname(databasePath), 'lisp'), protectedRoots: [databasePath, `${databasePath}-wal`, `${databasePath}-shm`],
     ...(ownerQuestions ? { questions: ownerQuestions } : {}),
     ciCall: createLispCiAdapter(ownerQuestions),
@@ -136,7 +138,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     const prompt = agent.ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
     if (prompt) local.push(prompt.section({ name: 'kiokuko:lisp', order: -90000, text: guide }))
   }
-  const guide = await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
+  const guide = skillPrompts ? await skillPrompts.require('kiokuko-lisp') : await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
   const enable = async (binding: ReturnType<typeof owner>): Promise<unknown> => {
     const wasEnabled = manager.enabled.has(binding.owner.sessionId)
     try {
