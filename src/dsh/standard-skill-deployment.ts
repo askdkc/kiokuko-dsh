@@ -15,7 +15,7 @@ export interface StandardSkillDeployment {
   readonly unchanged: number
 }
 
-/** Preflight all seven standard Skills plus Japanese output without writing files. */
+/** Preflight all standard Skills plus Japanese output without writing files. */
 export async function planStandardSkills(homeDirectory: string = os.homedir()): Promise<{ home: string; directory: string; files: DeploymentFile[] }> {
   if (!path.isAbsolute(homeDirectory) || homeDirectory.includes('\0') || path.resolve(homeDirectory) === path.parse(homeDirectory).root) {
     throw new KiokukoError('VALIDATION_ERROR', 'Standard Skill deployment requires an absolute user home')

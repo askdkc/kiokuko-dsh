@@ -193,23 +193,32 @@ block in the startup directory’s `AGENTS.md`, as described below.
 ## Bundled standard Skills: canonical source and refresh
 
 The repository's `skills/<name>/` directories are the single canonical source
-for the seven standard Skills and for the bundled Japanese output Skill.
+for the eight standard Skills and for the bundled Japanese output Skill.
 `src/dsh/standard-skills.ts` resolves them relative to the built module
 (`dist/dsh/` → `../../skills/<name>`), and `src/dsh/standard-skill-integrity.ts`
 refuses to load a tree that breaks the manifest: exactly one management marker
 per file, frontmatter `name` equal to the manifest name with a non-empty
 description and no `disable-model-invocation`, every local Markdown link
-resolvable inside its own Skill, and exactly 7 Skills with 22 Markdown files and
-15 reference files.
+resolvable inside its own Skill, and exactly 8 Skills with 27 Markdown files and
+19 reference files.
 
-The Japanese output Skill is an additional eighth Skill. Its directory is
+The Japanese output Skill is an additional ninth Skill. Its directory is
 `japanese-translation-for-oss-models/`; its frontmatter/provider name is
 `natural-japanese-output`. Both names refer to the same Skill. Deployment includes
-all eight Skills and 23 Markdown files, including the 15 references.
+all nine Skills and 28 Markdown files, including the 19 references.
 
 `veteran-programmer-skill` checks workflow completeness before and after changes
 spanning setup, delivery, persisted state or runtime handoffs. SOUL and the code
 index route to it when applicable; isolated edits do not require a workflow audit.
+
+For code changes, SOUL also routes to `one-shot-software-completion`. Its compact
+`SKILL.md` covers the completion contract; four references cover discovery/scope,
+boundaries/lifecycle, verification/completion, and failure recovery. Read only
+references relevant to the current risk, normally one or two at a time. Provider
+selection delivers the index without automatically appending the references in
+either `full` or `compiled` mode. They remain available in the deployed Skill
+directory and through explicit bundled reference selection. Context capacity
+alone does not establish remaining input budget or model quality.
 
 ### What setup updates and when
 
@@ -285,8 +294,8 @@ runtime user. Check the reported paths: a successful source build or bundled
 parity check alone does not prove that another process's deployed files match.
 
 `node scripts/verify-standard-skills.mjs` remains a source/bundle integrity check
-for the seven standard Skills (22 files, 15 references). Use `setup-dsh.mjs --check`
-for the complete eight-Skill deployment **and** project instruction check.
+for the eight standard Skills (27 files, 19 references). Use `setup-dsh.mjs --check`
+for the complete nine-Skill deployment **and** project instruction check.
 
 ## STORE contract and permissions
 
