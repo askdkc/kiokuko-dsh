@@ -114,6 +114,11 @@ conflicting reuse is refused.
 
 ## Evidence and recovery
 
+Idle workers suspend after five minutes or slot pressure. Active turns/evaluations/
+approvals/jobs stay running. Next use auto-starts; status reads do not. Rebuild lost
+definitions/references for the new host generation; never replay effects.
+`WORKER_RESUMED` means no code executed; abnormal stops need recovery.
+
 Model results normally fit 16 KiB, omitting source echoes and duplicate value forms.
 Full received results remain in the journal. Follow inspection metadata for needed
 evidence; do not rerun execution or request all history. Correct missing input paths

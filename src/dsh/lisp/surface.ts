@@ -17,9 +17,9 @@ import { attachmentInput, type LispAttachmentSession, type LispAttachmentStore }
 import { LISP_TOOLS, failure, fail, identifier, renderResult, type LispConfiguration, type LispOwner, type LispTool } from './contracts.js'
 
 interface Session extends LispAttachmentSession { id: string; header: { cwd: string; parentSession?: string } }
-interface Agent { id: string; session: Session; ctx: { get(name: string, strict?: boolean): any }; inject?: (message: unknown) => void }
+interface Agent { id: string; status?: string; session: Session; ctx: { get(name: string, strict?: boolean): any }; inject?: (message: unknown) => void }
 interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; presentAs(mode: 'native'): () => void; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
-interface Fence { sessions: Map<string, string>; controller?: LispManager; definitions: Map<string, object>; stopped: boolean }
+interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean }
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill'] as const
 
@@ -97,8 +97,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       const scope = scopeSession(payload.agent, persistent)
       if (!scope) return next()
       if (persistent.stopped || !persistent.controller || scope !== payload.agent.session.id) return { kind: 'reject' }
-      const status = await persistent.controller.status({ sessionId: scope, agentId: payload.agent.id, root: persistent.sessions.get(scope)! }) as { state: string }
-      return ['READY', 'EVALUATING'].includes(status.state) ? next() : { kind: 'reject' }
+      return await persistent.prepareAgent?.(payload.agent) ? next() : { kind: 'reject' }
     }) as never, { prepend: true, global: true })
   }
   if (fence.controller && !fence.stopped) fail('HOST_CONFLICT', 'Lisp プラグインが既に接続されています。')
@@ -107,22 +106,37 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   fence.sessions = manager.enabled; fence.controller = manager; fence.stopped = false
   const disposers: (() => void)[] = []
   try {
-  const owner = (candidate: { id: string } | undefined): { agent: Agent; owner: LispOwner } => {
+  const sessionBindings = new Map<string, { session: Session; abort: AbortController }>()
+  const closedSessions = new WeakSet<Session>()
+  disposers.push(() => { for (const binding of sessionBindings.values()) binding.abort.abort(); sessionBindings.clear() })
+  const owner = (candidate: { id: string } | undefined): { agent: Agent; owner: LispOwner; signal: AbortSignal } => {
     if (!candidate) fail('NO_SESSION', '現在のセッションから実行してください。')
     const agent = agents.get(candidate.id)
     if (!agent || agent !== candidate || sessions.get(agent.session.id) !== agent.session) fail('SESSION_MISMATCH', '現在のセッションを確認できません。')
-    return { agent, owner: { sessionId: identifier.parse(agent.session.id), agentId: identifier.parse(agent.id), root: realpathSync(agent.session.header.cwd) } }
+    if (closedSessions.has(agent.session)) fail('SESSION_MISMATCH', 'このセッションは終了しています。')
+    let binding = sessionBindings.get(agent.session.id)
+    if (binding?.session !== agent.session) {
+      binding?.abort.abort()
+      binding = { session: agent.session, abort: new AbortController() }; sessionBindings.set(agent.session.id, binding)
+    }
+    return { agent, owner: { sessionId: identifier.parse(agent.session.id), agentId: identifier.parse(agent.id), root: realpathSync(agent.session.header.cwd) }, signal: binding.abort.signal }
   }
   const registeredAgents = new WeakSet<object>()
   const agentDisposers = new Map<string, (() => void)[]>()
+  const boundAgents = new Map<string, Agent>()
+  const runtimePrompts = new Map<string, () => void>()
   const unregister = (agent: Agent) => {
+    if (boundAgents.get(agent.id) !== agent) return
+    runtimePrompts.get(agent.id)?.(); runtimePrompts.delete(agent.id); boundAgents.delete(agent.id)
     for (const dispose of agentDisposers.get(agent.id)?.reverse() ?? []) dispose()
     agentDisposers.delete(agent.id); registeredAgents.delete(agent)
     for (const name of [...LISP_TOOLS, ...LISP_READ_TOOLS]) fence!.definitions.delete(`${agent.id}:${name}`)
   }
-  disposers.push(() => { for (const list of agentDisposers.values()) for (const dispose of list.reverse()) dispose(); agentDisposers.clear(); fence!.definitions.clear() })
+  disposers.push(() => { for (const dispose of runtimePrompts.values()) dispose(); runtimePrompts.clear(); boundAgents.clear(); for (const list of agentDisposers.values()) for (const dispose of list.reverse()) dispose(); agentDisposers.clear(); fence!.definitions.clear() })
   const register = (agent: Agent) => {
     if (registeredAgents.has(agent)) return
+    if (boundAgents.has(agent.id)) unregister(boundAgents.get(agent.id)!)
+    boundAgents.set(agent.id, agent)
     const local: (() => void)[] = []
     agentDisposers.set(agent.id, local)
     const scopedTools = agent.ctx.get('tools') as Tools
@@ -156,15 +170,43 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     if (prompt) local.push(prompt.section({ name: 'kiokuko:lisp', order: -90000, text: guide }))
   }
   const guide = skillPrompts ? await skillPrompts.require('kiokuko-lisp') : await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
+  fence.prepareAgent = async candidate => {
+    const binding = owner(candidate)
+    manager.setAgentBusy(binding.owner, true)
+    const status = await manager.prepare(binding.owner) as { state: string; generation?: string; resumed?: boolean }
+    binding.signal.throwIfAborted()
+    register(binding.agent)
+    const prompt = binding.agent.ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
+    runtimePrompts.get(candidate.id)?.(); runtimePrompts.delete(candidate.id)
+    if (prompt) runtimePrompts.set(candidate.id, prompt.section({ name: 'kiokuko:lisp-runtime', order: -89999,
+      text: `Current Lisp generation: ${status.generation ?? 'none'}. State: ${status.state}.` + (status.resumed
+        ? ' Lisp was automatically restarted after normal suspension. Definitions, variables and object references from older generations are gone. Recreate needed helpers; never replay completed file or process effects. Compare the generation of previous tool results before reusing state.' : '') }))
+    return ['READY', 'EVALUATING'].includes(status.state)
+  }
+  disposers.push((ctx as any).on('agent/status', (event: { agent: Agent; status: string }) => {
+    if (!manager.enabled.has(event.agent.session.id) || agents.get(event.agent.id) !== event.agent || sessions.get(event.agent.session.id) !== event.agent.session) return
+    manager.setAgentBusy(owner(event.agent).owner, event.status !== 'idle')
+  }, { global: true }))
+  disposers.push((ctx as any).on('session/disposed', async (session: Session) => {
+    // The host can remove the registry entry before emitting disposal. Match the
+    // exact object retained at registration, never a stale event's ID alone.
+    const binding = sessionBindings.get(session.id)
+    if (binding?.session !== session) return
+    closedSessions.add(session); binding.abort.abort(); sessionBindings.delete(session.id)
+    const attached = [...boundAgents.values()].filter(agent => agent.session === session)
+    try { await manager.disposeSession(session.id) }
+    finally { for (const agent of attached) unregister(agent) }
+  }, { global: true }))
   const enable = async (binding: ReturnType<typeof owner>): Promise<unknown> => {
     const wasEnabled = manager.enabled.has(binding.owner.sessionId)
     try {
-      const result = await manager.enable(binding.owner)
+      const result = await manager.enable(binding.owner, binding.agent.status !== undefined && binding.agent.status !== 'idle', binding.signal)
+      binding.signal.throwIfAborted()
       register(binding.agent)
       return result
     } catch (error) {
       // Startup failures retain the admitted fence and diagnostic tools.
-      if (!wasEnabled && manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
+      if (!binding.signal.aborted && !wasEnabled && manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
       throw error
     }
   }

@@ -352,7 +352,7 @@ function LispSessionStatus(props: Record<string, unknown>): unknown {
     finally { if (current.current === sessionId) setBusy(false) }
   }
   if (!status?.enabled && !error) return null
-  const label = ({ READY: '実行可能', EVALUATING: '処理中', PREFLIGHT: '起動中', STOPPING: '停止中', RECOVERY_REQUIRED: '確認が必要', STOP_UNCONFIRMED: '停止未確認' } as Record<string, string>)[status?.state ?? ''] ?? '状態不明'
+  const label = ({ READY: '実行可能', SUSPENDED: '休止中（次回自動起動）', EVALUATING: '処理中', PREFLIGHT: '起動中', STOPPING: '停止中', RECOVERY_REQUIRED: '確認が必要', STOP_UNCONFIRMED: '停止未確認' } as Record<string, string>)[status?.state ?? ''] ?? '状態不明'
   return jsxs(Fragment, { children: [jsx('button', { type: 'button', ref: trigger, onClick: () => setOpen(true), children: `Lisp: ${label}` }),
     jsx('dialog', { ref: dialog, onCancel: () => setOpen(false), 'aria-label': 'Lisp の状態と復旧', style: { maxWidth: 'min(720px, 90vw)', maxHeight: '85vh' },
       children: jsxs('section', { children: [jsx('h2', { children: `Lisp: ${label}` }),
@@ -362,7 +362,7 @@ function LispSessionStatus(props: Record<string, unknown>): unknown {
         ...(details ? [jsx('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }, children: details })] : []),
         jsx('p', { children: '未確定の変更は自動で再実行・復元しません。詳細は /kioku-lisp diagnostics でも確認できます。' }),
         jsx('button', { type: 'button', disabled: busy, onClick: () => void act('cancel'), children: '停止する' }),
-        jsx('button', { type: 'button', disabled: busy || status?.state === 'STOP_UNCONFIRMED', onClick: () => void act('recover'), children: '照合して新しい Lisp を起動' }),
+        jsx('button', { type: 'button', disabled: busy || ['STOP_UNCONFIRMED', 'SUSPENDED'].includes(status?.state ?? ''), onClick: () => void act('recover'), children: '照合して新しい Lisp を起動' }),
         jsx('button', { type: 'button', onClick: () => setOpen(false), children: '閉じる' }),
       ] }) })] })
 }

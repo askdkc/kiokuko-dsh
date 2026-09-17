@@ -21,6 +21,16 @@ lisp:
   sbclPath: sbcl
 ```
 
+Workers idle for five minutes stop automatically. Configure `idleTimeoutMs`
+(1000–3600000, default 300000) to change this interval. When `maxWorkers`
+(default 4) is reached, the longest-idle eligible worker stops before a new one
+starts. Active agent turns, evaluations, approvals and running jobs are excluded.
+Session disposal also stops its workers. Normal suspension appears as `SUSPENDED`,
+retains protection and resumes automatically on the next use; status polling never
+starts a worker. Variables, definitions and references are lost on restart; the
+agent receives the new generation and must rebuild helpers without replaying
+completed effects. Crashes and explicit cancellation still require human recovery.
+
 Before the first implementation or debugging request, the host asks whether to
 use Lisp. It resolves unclear task intent first. Both enable and decline choices
 persist for that session, including after a restart. Conversation and review
