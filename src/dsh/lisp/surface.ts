@@ -13,9 +13,10 @@ import { LispStore } from './store.js'
 import { createLispCodingChoice, LISP_CODING_SERVICE } from './coding-choice.js'
 import { mountLispHttp } from './http.js'
 import { createLispCiAdapter } from './ci.js'
+import { attachmentInput, type LispAttachmentSession, type LispAttachmentStore } from './attachment-input.js'
 import { LISP_TOOLS, failure, fail, identifier, renderResult, type LispConfiguration, type LispOwner, type LispTool } from './contracts.js'
 
-interface Session { id: string; header: { cwd: string; parentSession?: string } }
+interface Session extends LispAttachmentSession { id: string; header: { cwd: string; parentSession?: string } }
 interface Agent { id: string; session: Session; ctx: { get(name: string, strict?: boolean): any }; inject?: (message: unknown) => void }
 interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; presentAs(mode: 'native'): () => void; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
 interface Fence { sessions: Map<string, string>; controller?: LispManager; definitions: Map<string, object>; stopped: boolean }
@@ -54,6 +55,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     dataRoot: join(dirname(databasePath), 'lisp'), protectedRoots: [databasePath, `${databasePath}-wal`, `${databasePath}-shm`],
     ...(ownerQuestions ? { questions: ownerQuestions } : {}),
     ciCall: createLispCiAdapter(ownerQuestions),
+    attachmentInput: (owner, path, signal) => {
+      const agent = agents.get(owner.agentId)
+      if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', '添付入力のセッションを確認できません。')
+      return attachmentInput(agent.session, agent.ctx.get('attachments', false) as LispAttachmentStore | undefined, path, signal)
+    },
     toolCall: async (owner, name, args) => {
       const agent = agents.get(owner.agentId)
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', 'ホスト呼び出しの主体を確認できません。')
@@ -224,7 +230,7 @@ export function lispToolSchema(name: LispTool): object {
   const properties: Record<string, unknown> = name === 'lisp_status' ? {} : { operationId: { type: 'string', minLength: 1, maxLength: 256 } }
   const required = Object.keys(properties)
   if (name === 'lisp_status') properties.offset = { type: 'integer', minimum: 0, description: 'Read the next 10 operation summaries using nextOffset.' }
-  if (name === 'lisp_eval') { Object.assign(properties, { code: { type: 'string', maxLength: 262144 }, inputs: { type: 'array', items: { type: 'string' }, maxItems: 100 }, timeoutMs: { type: 'integer', minimum: 100, maximum: 600000 } }); required.push('code') }
+  if (name === 'lisp_eval') { Object.assign(properties, { code: { type: 'string', maxLength: 262144 }, inputs: { type: 'array', items: { type: 'string' }, maxItems: 100, description: 'Workspace-relative files or exact host paths of files uploaded by the user in this session. Copied read-only; other absolute paths are refused.' }, timeoutMs: { type: 'integer', minimum: 100, maximum: 600000 } }); required.push('code') }
   if (name === 'lisp_describe') properties.symbol = { type: 'string', maxLength: 256 }
   if (name === 'lisp_inspect') Object.assign(properties, {
     ref: { type: 'string', maxLength: 256, description: 'Worker reference; use either ref or resultOperationId.' },

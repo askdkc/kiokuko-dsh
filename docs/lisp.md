@@ -86,6 +86,12 @@ not the complete worker startup or the speed of an individual Lisp computation.
 
 ## What can change
 
+- `lisp_eval.inputs` accepts workspace-relative files and the exact host paths of
+  files uploaded by the user in the current session. Attachments are read through
+  DSH's attachment service, checked against their recorded size and SHA-256, and
+  copied into the worker's read-only inputs. Files from other sessions and arbitrary
+  absolute paths are refused. The original attachment store stays inaccessible to
+  Lisp and its subprocesses. Limits: 64 MiB per file, 256 MiB per worker generation.
 - Direct Lisp/FFI/Python/shell access is limited by the OS to runtime files,
   selected read-only input copies and compiled bundle, and the worker's scratch/cache.
 - Project changes use host-validated proposals. New regular files can be created

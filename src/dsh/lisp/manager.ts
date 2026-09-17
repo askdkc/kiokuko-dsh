@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, open, readFile, realpath, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
@@ -16,6 +16,7 @@ import { LispProposalBatch } from './proposal-batch.js'
 import { inspectSavedResult } from './inspection.js'
 import { recordedResult } from './recorded-result.js'
 import type { DshSkillPrompts } from '../skill-prompts.js'
+import type { AttachmentInput } from './attachment-input.js'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus }
 export interface ManagerOptions {
@@ -24,6 +25,7 @@ export interface ManagerOptions {
   notify?: (owner: LispOwner, message: string) => void
   toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>) => Promise<unknown>
   ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal) => Promise<unknown>
+  attachmentInput?: (owner: LispOwner, path: string, signal: AbortSignal) => AttachmentInput
 }
 /** Host-owned authority. Worker frames never grant permissions or choose identities. */
 export class LispManager {
@@ -270,16 +272,23 @@ export class LispManager {
           const snapshots = []
           const sources = []
           for (const path of parsed.inputs) {
+            if (isAbsolute(path) && this.options.attachmentInput) {
+              sources.push(this.options.attachmentInput(owner, path, combined))
+              continue
+            }
             const before = await snapshot(owner.root, path, this.protectedRoots())
             if (!before.exists) throw new LispError('INPUT_MISSING', `入力ファイルがありません: ${path}`, 'read/glob で対象パスを確認し、inputs を修正してください。Lisp の復旧は不要です。')
-            sources.push(before)
+            sources.push({ source: before, size: before.size!, read: () => checkedBytes(before) })
           }
-          if ((state.inputBytes ?? 0) + sources.reduce((sum, before) => sum + before.size!, 0) > 256 * 1024 ** 2) fail('INPUT_LIMIT', 'この Lisp 世代の入力コピーが 256 MiB を超えます。状態を確認して reset してください。')
-          for (const before of sources) {
-            state.inputBytes = (state.inputBytes ?? 0) + before.size!
+          if ((state.inputBytes ?? 0) + sources.reduce((sum, input) => sum + input.size, 0) > 256 * 1024 ** 2) fail('INPUT_LIMIT', 'この Lisp 世代の入力コピーが 256 MiB を超えます。状態を確認して reset してください。')
+          for (const source of sources) {
+            combined.throwIfAborted()
+            const bytes = await source.read()
+            combined.throwIfAborted()
+            state.inputBytes = (state.inputBytes ?? 0) + source.size
             const target = join(worker.layout.inputs, randomUUID())
-            await writeFile(target, await checkedBytes(before), { flag: 'wx', mode: 0o400 }); inputs.push(target)
-            snapshots.push({ source: before, input: target })
+            await writeFile(target, bytes, { flag: 'wx', mode: 0o400 }); inputs.push(target)
+            snapshots.push({ source: source.source, input: target })
           }
           payload.snapshots = snapshots
           args = { code: parsed.code, inputs }

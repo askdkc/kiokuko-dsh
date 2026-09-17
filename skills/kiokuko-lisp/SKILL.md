@@ -21,7 +21,7 @@ and audited brokers. Never retry denied commands outside protection.
 
 ## Tools and identity
 
-- `lisp_eval`: `{operationId, code, inputs?: [relativeFile], timeoutMs?}`.
+- `lisp_eval`: `{operationId, code, inputs?: [relativeFileOrAttachmentPath], timeoutMs?}`.
 - `lisp_describe`: `{operationId, symbol?}`. No symbol returns the short API/verifier
   map, including during recovery; symbol queries use normal evaluation limits.
 - `lisp_inspect`: `{operationId, ref}` for a current-generation object, or
@@ -66,7 +66,12 @@ run through lisp_eval; the six native Lisp tool names do not change.
 
 ## Files and outcomes
 
-`inputs` are copied read-only project files; `(kioku.files:input 0)` selects one.
+`inputs` accept workspace-relative files or the exact host path of a file uploaded
+by the user in this session. The host verifies attachment identity, size and digest
+through DSH's attachment service, then copies it read-only; other absolute paths
+are refused. Each file is limited to 64 MiB, with 256 MiB per worker generation.
+Use the supplied attachment path directly; no manual workspace copy or disabling
+Lisp is needed. `(kioku.files:input 0)` selects the first read-only copy.
 Read with `kioku.files:read-text`. `(kioku.files:scratch)` takes no arguments and
 returns writable scratch. `(kioku.files:propose-write path content)` and
 `(kioku.files:propose-delete path)`
