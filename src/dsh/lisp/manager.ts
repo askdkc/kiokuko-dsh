@@ -18,7 +18,8 @@ import { recordedResult } from './recorded-result.js'
 import type { DshSkillPrompts } from '../skill-prompts.js'
 import type { AttachmentInput } from './attachment-input.js'
 
-interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus }
+interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus
+  slotReserved?: boolean; hostBusy?: boolean; idleSince?: number; idleTimer?: ReturnType<typeof setTimeout>; suspension?: Promise<void>; resumed?: boolean; disposed?: boolean }
 export interface ManagerOptions {
   skillPrompts?: DshSkillPrompts
   store: LispStore; config: LispConfiguration; dataRoot: string; library?: string; protectedRoots?: string[]; questions?: DshUserQuestions
@@ -40,6 +41,7 @@ export class LispManager {
   #closed = false
   #lock = false
   #artifactReserved = 0
+  #admissionQueue: Promise<void> = Promise.resolve()
   readonly #inflight = new Map<string, string>()
   constructor(readonly options: ManagerOptions) {
     this.#config = options.config; this.#store = options.store
@@ -78,26 +80,31 @@ export class LispManager {
     return state
   }
   private protectedRoots(): string[] { return [this.options.dataRoot, dirname(this.#library), ...this.options.protectedRoots ?? []] }
-  async enable(owner: LispOwner): Promise<unknown> {
+  async enable(owner: LispOwner, hostBusy = false, signal?: AbortSignal): Promise<unknown> {
+    signal?.throwIfAborted()
     if (!this.#config.enabled) fail('LISP_DISABLED', '設定の lisp.enabled を true にしてプラグインを再読み込みしてください。')
     if (this.#closed) fail('HOST_STOPPED', 'プラグインが停止しています。')
-    if (this.enabled.has(owner.sessionId)) return this.status(owner)
+    if (this.enabled.has(owner.sessionId)) { this.setAgentBusy(owner, hostBusy); return this.prepare(owner) }
     if (await realpath(owner.root) !== owner.root) fail('SCOPE_CONFLICT', '作業ディレクトリを確認できません。')
     // Persist the fence before starting any worker. A failed startup stays protected.
     await this.#store.enable(owner); this.enabled.set(owner.sessionId, owner.root)
+    signal?.throwIfAborted()
     const state = this.entry(owner)
+    state.hostBusy = hostBusy
     await this.startWorker(state)
     return this.status(owner)
   }
   private async startWorker(state: AgentState): Promise<LispWorker> {
     if (state.admission) return state.admission
-    if ([...this.#agents.values()].filter(a => a.worker?.healthy || a.admission).length >= this.#config.maxWorkers) fail('WORKER_LIMIT', 'Lisp の同時起動数が上限です。別のセッションを停止してください。')
+    if (this.#closed || state.disposed) fail('HOST_STOPPED', 'Lisp のセッションが停止しています。')
+    clearTimeout(state.idleTimer)
     state.state = 'PREFLIGHT'
     state.compilation = { state: 'checking' }
     const abort = new AbortController(); state.active.add(abort)
     const admission = (async () => {
       let worker: LispWorker | undefined
       try {
+        await this.reserveSlot(state)
         const compiled = await this.#compiled.ensure(abort.signal, status => { state.compilation = status })
         if (this.#closed || state.state !== 'PREFLIGHT' || abort.signal.aborted) fail('CANCELLED', '起動は取り消されています。')
         const base = await mkdtemp(join(this.options.dataRoot, 'w-'))
@@ -116,10 +123,98 @@ export class LispManager {
         if (this.#closed || state.state !== 'PREFLIGHT') { await worker.stop(); fail('CANCELLED', '起動を取り消しました。') }
         state.state = 'READY'; state.inputBytes = 0; delete state.error
         return worker
-      } catch (error) { try { await worker?.stop() } catch (stop) { error = stop }; this.halted(state, error); throw error }
+      } catch (error) {
+        try { await worker?.stop() } catch (stop) { error = stop }
+        if (error instanceof LispError && error.code === 'WORKER_LIMIT') { state.state = 'SUSPENDED'; delete state.error }
+        else this.halted(state, error)
+        throw error
+      }
     })()
     state.admission = admission
-    try { return await admission } finally { delete state.admission; state.active.delete(abort) }
+    try { return await admission } finally { delete state.admission; delete state.slotReserved; state.active.delete(abort); this.scheduleIdle(state) }
+  }
+  /** Serialize only slot allocation/eviction; compilation remains concurrent. */
+  private reserveSlot(state: AgentState): Promise<void> {
+    const allocation = this.#admissionQueue.then(async () => {
+      if (this.#closed || state.disposed || state.state !== 'PREFLIGHT') fail('CANCELLED', 'Lisp の起動を取り消しました。')
+      const occupied = () => [...this.#agents.values()].filter(a => a.slotReserved || (a.worker && !a.worker.stopped)).length
+      if (occupied() >= this.#config.maxWorkers) {
+        const candidates = [...this.#agents.values()].filter(a => a !== state && this.canSuspend(a)).sort((a, b) => (a.idleSince ?? 0) - (b.idleSince ?? 0))
+        for (const candidate of candidates) {
+          await this.suspend(candidate)
+          if (occupied() < this.#config.maxWorkers) break
+        }
+      }
+      if (occupied() >= this.#config.maxWorkers) throw new LispError('WORKER_LIMIT', 'Lisp の起動枠はすべて使用中です。待機中の Lisp は自動で停止します。', '実行中の処理が終わってから、もう一度依頼してください。')
+      if (this.#closed || state.disposed || state.state !== 'PREFLIGHT') fail('CANCELLED', 'Lisp の起動を取り消しました。')
+      state.slotReserved = true
+    })
+    this.#admissionQueue = allocation.catch(() => {})
+    return allocation
+  }
+  private canSuspend(state: AgentState): boolean {
+    return !this.#closed && !state.disposed && state.state === 'READY' && !state.hostBusy && !state.admission && state.active.size === 0
+      && Boolean(state.worker?.healthy) && !state.worker?.hasRunningJobs
+  }
+  private scheduleIdle(state: AgentState): void {
+    clearTimeout(state.idleTimer)
+    if (this.#closed || state.disposed || state.state !== 'READY' || state.hostBusy || state.admission || state.active.size) return
+    state.idleSince = Date.now()
+    state.idleTimer = setTimeout(() => {
+      void this.suspend(state).then(() => {
+        // A background job can outlive the last evaluation. Recheck after it ends.
+        if (state.state === 'READY') this.scheduleIdle(state)
+      }).catch(error => this.halted(state, error))
+    }, this.#config.idleTimeoutMs)
+    state.idleTimer.unref()
+  }
+  private async suspend(state: AgentState): Promise<void> {
+    if (!this.canSuspend(state)) return
+    clearTimeout(state.idleTimer)
+    state.state = 'STOPPING' // claim before awaiting the journal or process exit
+    const suspension = (async () => {
+      try {
+        const pending = (await this.#store.operations(state.owner.sessionId)).some(o => ['RUNNING', 'APPLYING', 'UNKNOWN', 'AWAITING_APPROVAL'].includes(o.state))
+        if (pending) { state.state = 'READY'; return }
+        await state.worker!.stop()
+        state.state = 'SUSPENDED'; delete state.error; delete state.worker
+      } catch (error) { this.halted(state, error); throw error }
+    })()
+    state.suspension = suspension
+    try { await suspension } finally { delete state.suspension }
+  }
+  /** Normal suspension is resumable; crashes and explicit cancellation are not. */
+  async prepare(owner: LispOwner): Promise<unknown> {
+    const state = this.entry(owner)
+    if (state.suspension) await state.suspension
+    if (state.state === 'SUSPENDED') { await this.startWorker(state); state.resumed = true }
+    else if (state.admission) await state.admission
+    return this.status(owner)
+  }
+  setAgentBusy(owner: LispOwner, busy: boolean): void {
+    if (!this.enabled.has(owner.sessionId)) return
+    const state = this.entry(owner)
+    if (state.hostBusy === busy) return
+    state.hostBusy = busy
+    if (busy) clearTimeout(state.idleTimer)
+    else this.scheduleIdle(state)
+  }
+  /** Disposed sessions retain their fence/journal but cannot admit new work. */
+  async disposeSession(sessionId: string): Promise<void> {
+    const states = [...this.#agents.values()].filter(state => state.owner.sessionId === sessionId)
+    const resumable = states.filter(state => state.state === 'READY' || state.state === 'SUSPENDED')
+    for (const state of states) { state.disposed = true; clearTimeout(state.idleTimer) }
+    const stopped = await Promise.allSettled(states.map(state => this.cancel(state)))
+    await Promise.allSettled([...this.#executions].filter(([, session]) => session === sessionId).map(([promise]) => promise))
+    const pending = (await this.#store.operations(sessionId)).some(o => ['RUNNING', 'APPLYING', 'UNKNOWN', 'AWAITING_APPROVAL'].includes(o.state))
+    for (const state of states) {
+      state.hostBusy = false; state.disposed = false
+      if (!pending && resumable.includes(state) && state.state === 'RECOVERY_REQUIRED' && state.worker?.stopped !== false) {
+        state.state = 'SUSPENDED'; delete state.worker; delete state.error
+      }
+    }
+    const failed = stopped.find(result => result.status === 'rejected')
+    if (failed?.status === 'rejected') throw failed.reason
   }
   private halted(state: AgentState, error: unknown): void {
     state.error = failure(error)
@@ -174,12 +269,12 @@ export class LispManager {
     const pending = operations.filter(o => ['RUNNING', 'UNKNOWN', 'APPLYING', 'AWAITING_APPROVAL'].includes(o.state))
     return { enabled: true, state: state.state, generation: state.worker?.generation ?? null, error: state.error ?? null,
       jobs: state.worker?.jobStatus() ?? [],
-      compilation: state.compilation ?? null,
-      limits: { timeoutMs: this.#config.timeoutMs, maxOutputBytes: this.#config.maxOutputBytes, maxWorkers: this.#config.maxWorkers,
+      compilation: state.compilation ?? null, resumed: state.resumed ?? false,
+      limits: { timeoutMs: this.#config.timeoutMs, maxOutputBytes: this.#config.maxOutputBytes, maxWorkers: this.#config.maxWorkers, idleTimeoutMs: this.#config.idleTimeoutMs,
         aggregateMemory: 'unavailable', aggregateCpu: 'unavailable', scratchQuota: 'unavailable', termination: 'supervised', fileBoundary: process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap' },
       operations: offset === undefined ? operations : operations.slice(offset, offset + 10),
       ...(offset === undefined ? {} : { operationCount: operations.length, pendingCount: pending.length, pendingStates: Object.fromEntries([...new Set(pending.map(o => o.state))].map(state => [state, pending.filter(o => o.state === state).length])), offset, nextOffset: offset + 10 < operations.length ? offset + 10 : null }),
-      recovery: state.state === 'READY' ? null : '停止理由と操作履歴を確認し、/kioku-lisp recover を実行してください。' }
+      recovery: state.state === 'SUSPENDED' ? 'Lisp は休止中です。次の利用時に自動起動します。変数・関数定義は保持されません。' : state.state === 'READY' ? null : '停止理由と操作履歴を確認し、/kioku-lisp recover を実行してください。' }
   }
   async diagnostics(owner: LispOwner, id?: string): Promise<unknown> {
     this.entry(owner)
@@ -200,7 +295,10 @@ export class LispManager {
     if (key) this.#inflight.set(key, hash)
     const result = this.dispatch(owner, tool, input, signal)
     this.#executions.set(result, owner.sessionId)
-    const finished = () => { this.#executions.delete(result); if (key) this.#inflight.delete(key) }
+    const finished = () => {
+      this.#executions.delete(result); if (key) this.#inflight.delete(key)
+      if (tool !== 'lisp_status' && this.enabled.has(owner.sessionId)) this.scheduleIdle(this.entry(owner))
+    }
     void result.then(finished, finished)
     return result
   }
@@ -237,13 +335,19 @@ export class LispManager {
         }
         await this.cancel(state); return { ok: true, state: state.state }
       }
-      if (this.#closed) fail('HOST_STOPPED', 'Lisp のホストが停止しています。')
+      if (this.#closed || state.disposed) fail('HOST_STOPPED', 'Lisp のホストまたはセッションが停止しています。')
       const id = identifier.parse(input.operationId)
       const hash = digest({ tool, input })
       const old = await this.#store.get(owner, id)
       if (old) {
         if (old.digest !== hash || old.kind !== tool) fail('ID_CONFLICT', '同じ操作 ID の内容を変えることはできません。')
         return await this.replay(owner, old)
+      }
+      if (state.suspension || state.state === 'SUSPENDED') {
+        const prepared = await this.prepare(owner) as { state: string }
+        if (prepared.state !== 'READY') fail('RECOVERY_REQUIRED', 'Lisp の停止状態を確認してください。')
+        return { ok: false, code: 'WORKER_RESUMED', generation: state.worker?.generation, executed: false,
+          message: '休止中の Lisp を自動起動しました。以前の変数・関数・参照は失われています。必要な定義を作り直してから実行してください。この要求のコードは実行していません。過去の副作用を再実行しないでください。' }
       }
       if (tool === 'lisp_reset') {
         if (state.state !== 'READY') fail('RECOVERY_REQUIRED', '異常停止からの再開には /kioku-lisp recover を使ってください。')
@@ -331,6 +435,8 @@ export class LispManager {
       result: await recordedResult(this.#store, owner, old), recovery: ['RUNNING', 'UNKNOWN'].includes(old.state) ? '/kioku-lisp status で確認してください。自動再実行はしません。' : null }
   }
   private async cancel(state: AgentState): Promise<void> {
+    clearTimeout(state.idleTimer)
+    if (state.suspension) await state.suspension
     state.state = 'STOPPING'
     for (const abort of state.active) abort.abort(new LispError('CANCELLED', 'Lisp の処理を取り消しました。'))
     try {
@@ -386,6 +492,7 @@ export class LispManager {
     await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
     if ((await this.#store.operations(owner.sessionId)).some(o => ['RUNNING', 'APPLYING', 'UNKNOWN', 'AWAITING_APPROVAL'].includes(o.state))) fail('RECOVERY_REQUIRED', '未確定の処理を /kioku-lisp recover で確認してから解除してください。')
     await this.#store.disable(owner.sessionId); this.enabled.delete(owner.sessionId)
+    for (const [key, state] of this.#agents) if (state.owner.sessionId === owner.sessionId) this.#agents.delete(key)
     return { ok: true, state: 'DISABLED' }
   }
   async dispose(): Promise<void> {

@@ -12,11 +12,11 @@ async function fixture(t: TestContext): Promise<string> {
   return realpath(directory)
 }
 
-test('deployment creates all eight bundled Skills and references, updates managed copies, and preserves user files', async t => {
+test('deployment creates all nine bundled Skills and references, updates managed copies, and preserves user files', async t => {
   const home = await fixture(t)
   const parity = await loadStandardSkillParity()
   const initial = await synchronizeStandardSkills(home)
-  assert.deepEqual(initial, { directory: path.join(home, '.agents', 'skills'), created: 23, updated: 0, unchanged: 0 })
+  assert.deepEqual(initial, { directory: path.join(home, '.agents', 'skills'), created: 28, updated: 0, unchanged: 0 })
   const root = initial.directory
   const sourceRoot = new URL('../../../skills/', import.meta.url)
   // Lisp is an opt-in, session-scoped Skill; it must not be installed globally.
@@ -41,7 +41,7 @@ test('deployment creates all eight bundled Skills and references, updates manage
   assert.equal(await readFile(path.join(root, 'notes.txt'), 'utf8'), 'user notes')
   assert.equal(await readFile(path.join(root, 'kiokuko-simple-work', 'custom.md'), 'utf8'), 'user extension')
   const before = await lstat(soulPath)
-  assert.deepEqual(await synchronizeStandardSkills(home), { directory: root, created: 0, updated: 0, unchanged: 23 })
+  assert.deepEqual(await synchronizeStandardSkills(home), { directory: root, created: 0, updated: 0, unchanged: 28 })
   assert.equal((await lstat(soulPath)).mtimeMs, before.mtimeMs)
 })
 

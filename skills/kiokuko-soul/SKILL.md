@@ -26,6 +26,7 @@ Apply all relevant contracts below, in order. Use a host-supplied complete runti
 | `veteran-programmer-skill` | Changes span setup, delivery, persisted state or runtime handoffs; check before and after implementation. |
 | `kiokuko-simple-work` | Bounded code work adds no architecture, dependency, migration, public protocol, security/authorization policy or cross-system orchestration; or the user explicitly requests minimal/YAGNI. If unclear without that request, use the ordinary code route. |
 | `kiokuko-single-purpose-functions` | Any code writing, modification, debugging, refactoring or review. |
+| `one-shot-software-completion` | Writing or changing code: apply its compact contract and risk-relevant references; reuse the current plan and evidence. |
 | `kiokuko-ui-design-soul` | User-facing interface design, implementation, debugging or review; code changes also require the code contract. |
 
 Routes compose. Simple work never waives validation, security, accessibility, error handling or verification. Load no unrelated references by default.

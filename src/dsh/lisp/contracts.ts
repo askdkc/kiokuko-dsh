@@ -6,6 +6,7 @@ export const LispConfig = z.object({
   timeoutMs: z.number().int().min(100).max(600_000).default(120_000),
   startupTimeoutMs: z.number().int().min(100).max(60_000).default(30_000),
   maxWorkers: z.number().int().min(1).max(32).default(4),
+  idleTimeoutMs: z.number().int().min(1000).max(3_600_000).default(300_000),
   maxOutputBytes: z.number().int().min(1024).max(8_388_608).default(8_388_608),
 }).strict()
 export type LispConfiguration = z.infer<typeof LispConfig>
@@ -16,7 +17,7 @@ export const FILE_BYTES = 64 * 1024 * 1024
 export { RESULT_BYTES, renderResult } from './model-result.js'
 export const identifier = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 export interface LispOwner { sessionId: string; agentId: string; root: string }
-export type LispState = 'DISABLED' | 'PREFLIGHT' | 'READY' | 'EVALUATING' | 'STOPPING' | 'RECOVERY_REQUIRED' | 'STOP_UNCONFIRMED'
+export type LispState = 'DISABLED' | 'PREFLIGHT' | 'READY' | 'SUSPENDED' | 'EVALUATING' | 'STOPPING' | 'RECOVERY_REQUIRED' | 'STOP_UNCONFIRMED'
 export class LispError extends Error {
   constructor(readonly code: string, message: string, readonly recovery = '/kioku-lisp status で状態を確認してください。') { super(message); this.name = 'LispError' }
 }

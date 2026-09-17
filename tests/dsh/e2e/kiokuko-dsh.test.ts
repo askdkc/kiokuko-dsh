@@ -69,7 +69,7 @@ test('real Cordis composition mounts and unloads the bundled dsh surfaces', asyn
   const listed = await provider.list({})
   assert.equal('complete' in listed ? listed.complete : false, true)
   const candidates = 'complete' in listed ? listed.candidates : listed
-  assert.equal(candidates.length, 9)
+  assert.equal(candidates.length, 10)
   const lisp = candidates.find(candidate => candidate.name === 'kiokuko-lisp')
   assert.ok(lisp)
   assert.match((await provider.get(lisp, {}))?.content ?? '', /name: kiokuko-lisp/u)

@@ -8,7 +8,7 @@ import { sandboxLaunch, type SandboxLayout } from './sandbox.js'
 
 const Rpc = z.object({ version: z.literal(1), type: z.literal('rpc'), id: z.string().max(256), request: z.string(), method: z.enum(['run', 'start-job', 'job-status', 'cancel-job', 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify']), arguments: z.unknown() }).strict()
 const Program = z.object({ program: z.string().min(1).max(4096), argv: z.array(z.string().max(262144)).max(128), timeoutMs: z.number().int().min(100).max(600000) }).strict()
-interface Job { child: ChildProcess; done: Promise<void>; result?: { code: number | null; signal: string | null; stdout: string; stderr: string }; error?: string }
+interface Job { child: ChildProcess; done: Promise<void>; settled?: boolean; result?: { code: number | null; signal: string | null; stdout: string; stderr: string }; error?: string }
 interface Pending { id: string; resolve: (r: WorkerResult) => void; reject: (e: unknown) => void }
 /** A worker has one evaluation slot; cancellation never waits for that slot. */
 export class LispWorker {
@@ -32,6 +32,8 @@ export class LispWorker {
     readonly hostCall?: (method: string, args: unknown) => Promise<unknown>) {}
   get busy(): boolean { return this.#pending !== undefined }
   get healthy(): boolean { return !this.#closed && !this.#fatal && this.#child !== undefined }
+  get hasRunningJobs(): boolean { return [...this.jobs.values()].some(job => !job.settled) }
+  get stopped(): boolean { return (!this.#child || this.#stopped) && !this.hasRunningJobs }
   output(): unknown { return { stdout: Buffer.concat(this.#stdout).toString('utf8'), stderr: Buffer.concat(this.#stderr).toString('utf8'), bytes: this.#bytes, truncated: this.#bytes > this.config.maxOutputBytes } }
   jobStatus(): unknown[] { return [...this.jobs].map(([id, job]) => ({ id, state: job.error ? 'FAILED' : job.result ? 'FINISHED' : 'RUNNING', code: job.result?.code ?? null, error: job.error ?? null })) }
   async start(): Promise<void> {
@@ -159,8 +161,8 @@ export class LispWorker {
     })
     const timer = setTimeout(() => { job.error = 'JOB_TIMEOUT'; child.kill('SIGTERM') }, input.timeoutMs)
     job.done = new Promise(resolve => {
-      child.once('error', error => { job.error = error.message; clearTimeout(timer); resolve() })
-      child.once('close', (code, signal) => { job.result = { code, signal, stdout, stderr }; clearTimeout(timer); resolve() })
+      child.once('error', error => { job.error = error.message; job.settled = true; clearTimeout(timer); resolve() })
+      child.once('close', (code, signal) => { job.result = { code, signal, stdout, stderr }; job.settled = true; clearTimeout(timer); resolve() })
     })
     return job
   }
