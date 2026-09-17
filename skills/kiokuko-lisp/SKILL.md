@@ -9,8 +9,11 @@ description: Build and reuse task-specific tools with Common Lisp functions, mac
 The user starts this mode by choosing Lisp before coding or with
 `/kioku-lisp enable`. The host binds the current
 session, agent, directory and worker generation. Never supply or spoof those
-identities. Ordinary bash, file tools and delegated execution are blocked while
-this mode is active. A missing runtime or failed protection check stops admission.
+identities. DSH's existing `read`, `glob`, `grep` and `skill` tools remain available
+under the session's native permissions. Use them to inspect project files, load
+applicable Skills and read their references. Ordinary bash, file mutation tools
+and delegated execution are blocked while this mode is active. A missing runtime
+or failed protection check stops admission.
 
 ## Six tools
 

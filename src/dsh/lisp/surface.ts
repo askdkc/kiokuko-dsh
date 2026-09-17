@@ -20,6 +20,7 @@ interface Agent { id: string; session: Session; ctx: { get(name: string, strict?
 interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; presentAs(mode: 'native'): () => void; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
 interface Fence { sessions: Map<string, string>; controller?: LispManager; definitions: Map<string, object>; stopped: boolean }
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
+const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill'] as const
 
 function text(value: unknown): string {
   const result = value as { state?: string; enabled?: boolean; ok?: boolean; message?: string; recovery?: string; error?: { message?: string; recovery?: string }; operations?: { id: string; state: string }[] }
@@ -81,7 +82,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (agent.session.id !== scope) return '保護中の子セッションでは任意ツールを実行できません。親セッションの Lisp を使用してください。'
       const registered = persistent.definitions.get(`${agent.id}:${execution.name}`)
       if (registered && tools.get(execution.name, agent)?.execute === (registered as { execute: unknown }).execute) return undefined
-      return 'Lisp 保護中は六つの Lisp ツールだけを実行できます。削除は利用者の確認が必要です。'
+      return 'Lisp 保護中は Lisp ツールと DSH の読み取り・検索・スキル読み込みを使えます。変更は Lisp 経由で行い、削除・既存ファイルの置換には利用者の確認が必要です。'
     })
     root.on('agent/pre-step' as never, (async (payload: { agent: Agent }, next: () => Promise<unknown>) => {
       const scope = scopeSession(payload.agent, persistent)
@@ -108,7 +109,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const unregister = (agent: Agent) => {
     for (const dispose of agentDisposers.get(agent.id)?.reverse() ?? []) dispose()
     agentDisposers.delete(agent.id); registeredAgents.delete(agent)
-    for (const name of LISP_TOOLS) fence!.definitions.delete(`${agent.id}:${name}`)
+    for (const name of [...LISP_TOOLS, ...LISP_READ_TOOLS]) fence!.definitions.delete(`${agent.id}:${name}`)
   }
   disposers.push(() => { for (const list of agentDisposers.values()) for (const dispose of list.reverse()) dispose(); agentDisposers.clear(); fence!.definitions.clear() })
   const register = (agent: Agent) => {
@@ -118,7 +119,14 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     const scopedTools = agent.ctx.get('tools') as Tools
     // Do not depend on arbitrary third-party PTC runtimes enforcing our boundary.
     local.push(scopedTools.presentAs('native'))
-    local.push(scopedTools.restrict({ allow: [] }))
+    // Retain the host's existing read capabilities, including agent-local preset
+    // tools. Pin their implementations so a later same-name registration cannot
+    // acquire permission. Dispatch still traverses every native DSH policy/guard.
+    for (const name of LISP_READ_TOOLS) {
+      const definition = tools.get(name, agent)
+      if (definition) fence!.definitions.set(`${agent.id}:${name}`, definition)
+    }
+    local.push(scopedTools.restrict({ allow: LISP_READ_TOOLS.filter(name => tools.get(name)) }))
     for (const name of LISP_TOOLS) {
       const definition = { name, description: description(name), modelFacing: true,
         parameters: schema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },

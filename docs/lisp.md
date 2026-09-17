@@ -36,8 +36,12 @@ manually or inspect its state, use these commands in the desired DSH session:
 /kioku-lisp status
 ```
 
-This switches that session to the six Lisp tools and supplies the bundled
-`kiokuko-lisp` Skill. Normal sessions retain their tools. Protection also blocks
+This enables the six Lisp tools and supplies the bundled `kiokuko-lisp` Skill.
+Existing DSH `read`, `glob`, `grep` and `skill` tools remain available under native
+session permissions, so project files and applicable Skills can be inspected.
+File changes still use Lisp proposals and their confirmation rules. The read
+implementations are bound when Lisp is enabled; a later same-name replacement
+does not inherit permission. Normal sessions retain their tools. Protection also blocks
 unclassified child-session execution, late registrations, and PTC bypasses.
 The protected agent uses native tool presentation even in a PTC deployment.
 
