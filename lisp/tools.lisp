@@ -48,7 +48,9 @@
     (object "printed" (printed last) "ref" (kioku.objects:retain (first last))
             "json" (handler-case
                         (let ((json (kioku.data:encode-json (first last))))
-                          (if (< (length json) 16000) (kioku.data:parse-json json) nil))
+                          ;; Keep ordinary verifier logs in the saved result. Leave
+                          ;; half the bounded frame for printed values/proposals.
+                          (if (< (length (sb-ext:string-to-octets json :external-format :utf-8)) 524288) (kioku.data:parse-json json) nil))
                       (error () nil)))))
 (defun serve ()
   (setf *wire* (sb-sys:make-fd-stream 3 :input t :output t :element-type 'character :external-format :utf-8 :buffering :line))
@@ -60,8 +62,10 @@
                              ((equal "describe" (gethash "method" request)) (kioku.tools:describe-symbol (gethash "symbol" request "")))
                              ((equal "inspect" (gethash "method" request)) (kioku.objects:inspect-ref (gethash "ref" request)))
                              (t (error "UNKNOWN_METHOD")))))
+            (finish-output *standard-output*) (finish-output *error-output*)
             (emit (object "version" 1 "type" "result" "id" *request* "ok" yason:true "value" value "proposals" (coerce (reverse *proposals*) 'vector))))
         (error (condition)
+          (finish-output *standard-output*) (finish-output *error-output*)
           (emit (object "version" 1 "type" "result" "id" *request* "ok" yason:false "value" (let ((text (princ-to-string condition))) (subseq text 0 (min 4000 (length text)))) "proposals" #())))))))
 (in-package :kioku.data)
 (defun parse-json (text)
@@ -162,9 +166,11 @@
 (defun failed-log (run-id)
   "Read failed logs for one numeric run id in the bound workspace repository."
   (kioku.internal:rpc "ci-failed-log" (kioku.internal:object "runId" (princ-to-string run-id))))
-(defun verify (target)
-  "Run one host-approved verifier: typecheck, lisp, test, build, package, or vendor."
-  (kioku.internal:rpc "ci-verify" (kioku.internal:object "target" (string-downcase (string target)))))
+(defun verify (target &key script)
+  "Run a host-approved verifier. :test accepts :script naming an existing test or test:* npm script."
+  (let ((request (kioku.internal:object "target" (string-downcase (string target)))))
+    (when script (setf (gethash "script" request) script))
+    (kioku.internal:rpc "ci-verify" request)))
 (in-package :kioku.environment)
 (defun status () (kioku.internal:object "generation" kioku.internal:*generation* "sbcl" (lisp-implementation-version) "os" (software-type) "architecture" (machine-type) "scratch" (namestring (kioku.files:scratch)) "network" yason:false "hostWrites" "proposals only" "libraries" #("yason" "cl-ppcre" "cl-csv")))
 (in-package :kioku.tools)

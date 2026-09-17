@@ -28,7 +28,10 @@ function text(value: unknown): string {
   return `Lisp: ${result.state ?? (result.ok ? '処理完了' : '状態不明')}\n${result.error?.message ?? ''}\n${result.error?.recovery ?? result.recovery ?? ''}\n${result.operations?.map(o => `${o.id}: ${o.state}`).join('\n') ?? ''}`.trim()
 }
 const ToolInput = z.object({ operationId: identifier.optional(), code: z.string().max(262144).optional(), inputs: z.array(z.string().max(4096)).max(100).optional(),
-  timeoutMs: z.number().int().min(100).max(600000).optional(), symbol: z.string().max(256).optional(), ref: identifier.optional(), generation: identifier.optional() }).strict()
+  timeoutMs: z.number().int().min(100).max(600000).optional(), symbol: z.string().max(256).optional(), ref: identifier.optional(), generation: identifier.optional(),
+  resultOperationId: identifier.optional(), section: z.enum(['result', 'value', 'stdout', 'stderr', 'changes']).optional(),
+  pointer: z.string().max(1024).optional(),
+  offset: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(2000).optional() }).strict()
 
 /** The fence belongs to the host root, so plugin unload cannot restore bash access. */
 export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
@@ -129,7 +132,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     local.push(scopedTools.restrict({ allow: LISP_READ_TOOLS.filter(name => tools.get(name)) }))
     for (const name of LISP_TOOLS) {
       const definition = { name, description: description(name), modelFacing: true,
-        parameters: schema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
+        parameters: lispToolSchema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
         execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string }) => {
           try {
             const binding = owner(execution.agent), parsed = ToolInput.parse(args)
@@ -214,15 +217,23 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
 }
 function description(name: LispTool): string {
   return ({ lisp_eval: 'Evaluate Common Lisp in this protected session. Use a new operationId for new work. Same ID never re-evaluates. Host changes require proposals; deletions require human approval.',
-    lisp_describe: 'Describe bundled Common Lisp APIs.', lisp_inspect: 'Inspect a retained object in the current generation.', lisp_status: 'Read host state and operation outcomes without contacting Lisp.',
+    lisp_describe: 'Describe bundled Common Lisp APIs and available verifiers.', lisp_inspect: 'Read a retained object or a page of saved evidence; never executes the original operation.', lisp_status: 'Read current host state and paged operation summaries without contacting Lisp.',
     lisp_cancel: 'Stop Lisp and all managed jobs without waiting for evaluation.', lisp_reset: 'Stop a healthy worker and start a new generation. Never use to bypass recovery.' })[name]
 }
-function schema(name: LispTool): object {
+export function lispToolSchema(name: LispTool): object {
   const properties: Record<string, unknown> = name === 'lisp_status' ? {} : { operationId: { type: 'string', minLength: 1, maxLength: 256 } }
   const required = Object.keys(properties)
+  if (name === 'lisp_status') properties.offset = { type: 'integer', minimum: 0, description: 'Read the next 10 operation summaries using nextOffset.' }
   if (name === 'lisp_eval') { Object.assign(properties, { code: { type: 'string', maxLength: 262144 }, inputs: { type: 'array', items: { type: 'string' }, maxItems: 100 }, timeoutMs: { type: 'integer', minimum: 100, maximum: 600000 } }); required.push('code') }
   if (name === 'lisp_describe') properties.symbol = { type: 'string', maxLength: 256 }
-  if (name === 'lisp_inspect') { properties.ref = { type: 'string', maxLength: 256 }; required.push('ref') }
+  if (name === 'lisp_inspect') Object.assign(properties, {
+    ref: { type: 'string', maxLength: 256, description: 'Worker reference; use either ref or resultOperationId.' },
+    resultOperationId: { type: 'string', maxLength: 256, description: 'Saved operation from this session and agent. Reads evidence without executing again.' },
+    section: { type: 'string', enum: ['result', 'value', 'stdout', 'stderr', 'changes'] },
+    pointer: { type: 'string', maxLength: 1024, description: 'With section=result, follow the returned JSON pointer to the exact omitted field.' },
+    offset: { type: 'integer', minimum: 0, description: 'Unicode character offset; use the returned nextOffset.' },
+    limit: { type: 'integer', minimum: 1, maximum: 2000 },
+  })
   if (name === 'lisp_cancel') { properties.generation = { type: 'string', maxLength: 256 }; required.push('generation') }
   return { type: 'object', properties, required, additionalProperties: false }
 }

@@ -18,9 +18,9 @@ or failed protection check stops admission.
 ## Six tools
 
 - `lisp_eval`: `{operationId, code, inputs?: [relativeFile], timeoutMs?}`.
-- `lisp_describe`: `{operationId, symbol?: "kioku.files:propose-delete"}`.
-- `lisp_inspect`: `{operationId, ref}` for a retained value in this generation.
-- `lisp_status`: `{}` reads host state, including during failures.
+- `lisp_describe`: `{operationId, symbol?: "kioku.files:propose-delete"}`. Without a symbol, returns a short API and available verifier map; this injected guide is not repeated.
+- `lisp_inspect`: `{operationId, ref}` for a retained value in this generation, or `{operationId, resultOperationId, section?, pointer?, offset?, limit?}` to read saved evidence without replaying execution. Sections are `result`, `value`, `stdout`, `stderr`, `changes`; a returned `pointer` selects the exact omitted field with `section=result`. Offsets count Unicode characters, limit is 1–2000, and `nextOffset` continues the result. Never supply both reference forms.
+- `lisp_status`: `{offset?: 0}` reads current state, pending counts and 10 operation summaries, including during failures. Use `nextOffset` only when older records are needed.
 - `lisp_cancel`: `{operationId, generation}` stops the worker and its managed jobs.
 - `lisp_reset`: `{operationId}` replaces a healthy worker after confirming stop.
 
@@ -106,12 +106,20 @@ or connect to networks/host sockets, even through FFI or external programs.
 ```
 
 Proposals are applied only after successful evaluation and durable recording.
-Deletion and replacement of existing files require the native human confirmation
-for the exact frozen target/content. Refusal, skipping, UI failure and cancellation
-never grant permission. A proposal is not proof that a change occurred: inspect
-its host outcome. Protected files, database files, directories and links are
+Deletion and replacement require one native human confirmation for the evaluation's
+complete frozen batch, with target list and diffs. Duplicate targets are rejected;
+unchanged writes have no effect or confirmation. Refusal, skipping, UI failure and
+cancellation never grant permission. Outcomes distinguish APPLIED, UNCHANGED,
+NOT_APPLIED (with observed reason) and UNKNOWN. Partial completion stops the rest;
+do not retry an unknown effect. A proposal is not proof of application: use returned
+host outcomes. Protected files, database files, directories and links are
 refused. New files may create necessary parent directories; recursive deletion is unavailable. No real database mutation
 API is provided. Backups are independent host copies and are never auto-pruned.
+
+Evaluation alone does not complete file changes: the parent operation remains
+RUNNING until its final receipts are saved. Failed or interrupted finalization
+cannot report SUCCEEDED. After restart, saved per-file receipts reconstruct the
+interrupted outcome; human recovery preserves that evidence without reapplying it.
 
 ## External programs and jobs
 
@@ -136,6 +144,7 @@ limit. Credentials and inherited environment variables are not passed through.
 (kioku.ci:list-runs :limit 10)
 (kioku.ci:failed-log 123456789)
 (kioku.ci:verify :typecheck)
+(kioku.ci:verify :test :script "test:unit")
 ```
 
 CI reads use the host's `gh` installation and authentication in the repository
@@ -146,6 +155,15 @@ shell string. The exact executable, arguments, working directory and timeout are
 shown for native human confirmation. Refusal, cancellation and unavailable UI
 return `NOT_APPLIED`. Results are bound to the surrounding `lisp_eval` operation
 ID, so exact replay does not run a verifier twice and conflicting reuse is refused.
+Targets are checked against package.json before asking or running. Typecheck uses
+typecheck, or check when typecheck is absent. The optional :script is valid only
+for :test and must name an existing test or test:* script. Use a focused test while
+fixing it; run the broader suite after relevant changes are complete.
+
+Model results normally fit 16 KiB. Source echoes and duplicate value forms are
+omitted; full results remain in the operation journal. Follow returned inspection
+metadata for needed evidence instead of repeating execution or requesting all
+history. A missing input reports its path; correct inputs without runtime recovery.
 
 ## Stop and recover
 

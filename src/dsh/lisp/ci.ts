@@ -4,12 +4,14 @@ import { access, realpath } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { delimiter, join, relative } from 'node:path'
 import type { DshUserQuestions } from '../user-interaction.js'
-import { LispError, fail, type LispOwner } from './contracts.js'
+import { LispError, fail, digest, type LispOwner } from './contracts.js'
+import { checkedBytes, snapshot } from './files.js'
+import { confirm } from './approval.js'
 
 export type LispCiRequest =
   | { kind: 'list-runs'; limit: number }
   | { kind: 'failed-log'; runId: string }
-  | { kind: 'verify'; target: keyof typeof VERIFIERS }
+  | { kind: 'verify'; target: keyof typeof VERIFIERS; script?: string | undefined }
 
 interface CommandResult { code: number; stdout: string; stderr: string }
 type CommandRunner = (file: string, args: string[], options: { cwd: string; timeoutMs: number; signal: AbortSignal }) => Promise<CommandResult>
@@ -50,18 +52,27 @@ const runCommand: CommandRunner = async (file, args, options) => {
   })
 }
 
-async function approveVerifier(questions: DshUserQuestions | undefined, owner: LispOwner, target: string, command: typeof VERIFIERS[keyof typeof VERIFIERS], signal: AbortSignal): Promise<boolean> {
-  if (!questions || signal.aborted) return false
-  const id = `lisp-ci-${randomUUID()}`
-  const label = 'この検証を実行'
-  try {
-    const answer = await questions.ask({ agent: { id: owner.agentId }, signal, questions: [{
-      id, header: 'Lisp · 検証実行の確認', question: `${target} を実行しますか？`,
-      detail: `実行: ${command.file} ${command.args.join(' ')}\n作業ディレクトリ: ${owner.root}\nタイムアウト: ${command.timeoutMs} ms\nテスト・ビルド成果物が作業ディレクトリに作成される場合があります。拒否・取消・無回答では実行しません。`,
-      options: [{ label: '実行しない' }, { label }], intent: { kind: 'plan-review', approve: label },
-    }] })
-    return !signal.aborted && answer.answers.length === 1 && answer.answers[0]?.id === id && !answer.answers[0].custom && answer.answers[0].selected.length === 1 && answer.answers[0].selected[0] === label
-  } catch { return false }
+async function scriptsFor(owner: LispOwner): Promise<Record<string, string>> {
+  const file = await snapshot(owner.root, 'package.json', [])
+  if (!file.exists) return {}
+  if (file.size! > 1024 * 1024) throw new LispError('PACKAGE_INVALID', 'package.json が大きすぎます。', 'package.json を確認してください。')
+  let parsed: unknown
+  try { parsed = JSON.parse((await checkedBytes(file)).toString('utf8')) }
+  catch { throw new LispError('PACKAGE_INVALID', 'package.json を読み取れません。', 'package.json のJSONを修正してください。') }
+  const scripts = parsed && typeof parsed === 'object' && 'scripts' in parsed ? parsed.scripts : undefined
+  if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) return {}
+  return Object.fromEntries(Object.entries(scripts).filter(([, value]) => typeof value === 'string' && value.trim()))
+}
+const scriptFor = (target: keyof typeof VERIFIERS, scripts: Record<string, string>, selected?: string) =>
+  selected ?? (target === 'test' ? 'test' : target === 'typecheck' && !Object.hasOwn(scripts, 'typecheck') && Object.hasOwn(scripts, 'check') ? 'check' : VERIFIERS[target].args[1]!)
+
+/** Discovery is read-only; missing scripts never need a model-driven trial run. */
+export async function describeVerifiers(owner: LispOwner): Promise<unknown> {
+  const scripts = await scriptsFor(owner)
+  return Object.fromEntries(Object.keys(VERIFIERS).map(key => {
+    const target = key as keyof typeof VERIFIERS, script = scriptFor(target, scripts)
+    return [target, { script, available: Object.hasOwn(scripts, script), ...(target === 'test' ? { focused: Object.keys(scripts).filter(key => /^test(?::[A-Za-z0-9._-]+)*$/u.test(key)) } : {}) }]
+  }))
 }
 
 /** Host-only CI adapter. Credentials remain in the host child process and are never copied into the Lisp worker. */
@@ -78,9 +89,22 @@ export function createLispCiAdapter(questions?: DshUserQuestions, runner: Comman
       if (result.code !== 0) fail('CI_COMMAND_FAILED', result.stderr || 'GitHub CI の失敗ログを取得できませんでした。')
       return { source: 'github', repositoryRoot: owner.root, runId: request.runId, log: result.stdout }
     }
-    const command = VERIFIERS[request.target]
-    if (!await approveVerifier(questions, owner, request.target, command, signal)) return { target: request.target, state: 'NOT_APPLIED' }
+    const scripts = await scriptsFor(owner)
+    if (request.script !== undefined && (request.target !== 'test' || !/^test(?::[A-Za-z0-9._-]+)*$/u.test(request.script))) {
+      return { target: request.target, state: 'NOT_APPLIED', code: 'INVALID_TEST_SCRIPT', reason: 'invalid_input', message: 'script は test 対象の test または test:* のみ指定できます。' }
+    }
+    const script = scriptFor(request.target, scripts, request.script)
+    if (!Object.hasOwn(scripts, script)) return { target: request.target, state: 'NOT_APPLIED', code: 'SCRIPT_MISSING', reason: 'script_missing', script,
+      message: `package.json に ${script} がありません。実行・確認はしていません。`, availableScripts: Object.keys(scripts) }
+    const command = { ...VERIFIERS[request.target], args: script === 'test' ? ['test'] : ['run', script] }
+    const approval = await confirm(questions, owner.agentId, {
+      id: `lisp-ci-${randomUUID()}`, header: 'Lisp · 検証実行の確認', question: `${script} を実行しますか？`,
+      detail: `実行: ${command.file} ${command.args.join(' ')}\nスクリプト: ${scripts[script]}\n作業ディレクトリ: ${owner.root}\nタイムアウト: ${command.timeoutMs} ms\nテスト・ビルド成果物が作成される場合があります。`,
+      options: [{ label: '実行しない' }, { label: 'この検証を実行' }], intent: { kind: 'plan-review', approve: 'この検証を実行' },
+    }, signal)
+    if (!approval.approved) return { target: request.target, script, state: 'NOT_APPLIED', reason: approval.reason }
+    if (digest(scripts) !== digest(await scriptsFor(owner))) return { target: request.target, script, state: 'NOT_APPLIED', code: 'TARGET_CHANGED', reason: 'scripts_changed', message: '確認中にnpmスクリプトが変わりました。実行していません。' }
     const result = await runner(command.file, [...command.args], { cwd: owner.root, timeoutMs: command.timeoutMs, signal })
-    return { target: request.target, state: result.code === 0 ? 'SUCCEEDED' : 'FAILED', ...result }
+    return { target: request.target, script, state: result.code === 0 ? 'SUCCEEDED' : 'FAILED', ...result }
   }
 }

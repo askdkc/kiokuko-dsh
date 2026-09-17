@@ -6,6 +6,7 @@ import { fail, FILE_BYTES, type LispOwner, type ProposalInput } from './contract
 
 export interface FileSnapshot { path: string; parent: string; parentDev: number; parentIno: number; exists: boolean; dev?: number; ino?: number; size?: number; hash?: string; mode?: number; missingParents?: string[] }
 export interface FrozenChange { request: ProposalInput; before: FileSnapshot; id: string; backup: string | null; restoration?: { path: string; hash: string; size: number } }
+export type CreatedParents = Map<string, { dev: number; ino: number }>
 const protectedSegment = /^(?:\.git|\.ssh|\.gnupg|\.aws|\.azure|\.config|\.env(?:\..*)?|AGENTS\.md|.*\.(?:sqlite3?|db)(?:-(?:wal|shm|journal))?|.*\.(?:pem|key|p12)|credentials(?:\..*)?)$/iu
 export function under(root: string, path: string): boolean { const part = relative(root, path); return part === '' || (!isAbsolute(part) && part !== '..' && !part.startsWith(`..${sep}`)) }
 
@@ -72,17 +73,38 @@ export async function freezeChange(owner: LispOwner, request: ProposalInput, bac
   return { request, before, id: randomUUID(), backup: before.exists ? join(backupRoot, randomUUID()) : null }
 }
 /** Backups are independent copies. Never replay this function after an uncertain outcome. */
-export async function applyChange(owner: LispOwner, change: FrozenChange, protectedRoots: readonly string[]): Promise<void> {
-  if (!sameFile(change.before, await snapshot(owner.root, change.request.path, protectedRoots))) fail('TARGET_CHANGED', '承認後に対象が変わりました。変更案を作り直してください。')
+export async function applyChange(owner: LispOwner, change: FrozenChange, protectedRoots: readonly string[], createdParents: CreatedParents = new Map()): Promise<void> {
+  // Only directories created by an earlier change in this exact batch may advance
+  // a missing-parent snapshot. Existing directories and external races still fail.
+  let expected = change.before
+  if (expected.missingParents) {
+    let advanced = 0
+    for (const parent of expected.missingParents) {
+      const created = createdParents.get(parent)
+      if (!created) break
+      const current = await lstat(parent)
+      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== created.dev || current.ino !== created.ino) fail('TARGET_CHANGED', '作成した親ディレクトリが変わりました。')
+      expected = { ...expected, parentDev: created.dev, parentIno: created.ino }; advanced++
+    }
+    if (advanced) {
+      const missingParents = expected.missingParents!.slice(advanced)
+      const { missingParents: _old, ...base } = expected
+      expected = missingParents.length ? { ...base, missingParents } : base
+    }
+  }
+  if (!sameFile(expected, await snapshot(owner.root, change.request.path, protectedRoots))) fail('TARGET_CHANGED', '承認後に対象が変わりました。変更案を作り直してください。')
   if (change.backup) {
     await durableWrite(change.backup, await checkedBytes(change.before))
     await syncDirectory(dirname(change.backup))
   }
   let before = await snapshot(owner.root, change.request.path, protectedRoots)
-  if (!sameFile(change.before, before)) fail('TARGET_CHANGED', '保存後に対象が変わりました。処理を停止しました。')
+  if (!sameFile(expected, before)) fail('TARGET_CHANGED', '保存後に対象が変わりました。処理を停止しました。')
   if (before.missingParents) {
     for (const parent of before.missingParents) {
       await mkdir(parent, { mode: 0o700 }) // exclusive: an intervening entry is a conflict, never followed
+      const created = await lstat(parent)
+      if (!created.isDirectory() || created.isSymbolicLink()) fail('TARGET_CHANGED', '作成した親ディレクトリが変わりました。')
+      createdParents.set(parent, { dev: created.dev, ino: created.ino })
       await syncDirectory(dirname(parent))
     }
     before = await snapshot(owner.root, change.request.path, protectedRoots)

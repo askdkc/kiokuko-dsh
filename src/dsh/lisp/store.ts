@@ -15,6 +15,11 @@ export class LispStore {
   async start(): Promise<Session[]> {
     return this.database(db => {
       db.prepare("UPDATE dsh_lisp_operations SET state='UNKNOWN',updated_at=? WHERE state IN ('RUNNING','APPLYING','AWAITING_APPROVAL')").run(new Date().toISOString())
+      // Older hosts marked evaluation success before applying proposals. A parent
+      // without its final changes array is incomplete, not a successful receipt.
+      db.prepare(`UPDATE dsh_lisp_operations SET state='UNKNOWN',updated_at=?
+        WHERE kind='lisp_eval' AND state='SUCCEEDED' AND json_array_length(result,'$.proposals')>0
+        AND json_type(result,'$.changes') IS NULL`).run(new Date().toISOString())
       return db.prepare('SELECT * FROM dsh_lisp_sessions WHERE enabled=1').all<Session>()
     })
   }
@@ -94,6 +99,12 @@ export class LispStore {
   }
   operations(sessionId: string): Promise<Operation[]> {
     return this.database(db => db.prepare("SELECT * FROM dsh_lisp_operations WHERE session_id=? AND kind!='binding' ORDER BY CASE WHEN state IN ('RUNNING','APPLYING','UNKNOWN','AWAITING_APPROVAL') THEN 0 ELSE 1 END, updated_at DESC").all<Operation>(sessionId))
+  }
+  proposalReceipts(owner: LispOwner, evalId: string): Promise<{ id: string; state: string; path: string; result: string | null }[]> {
+    return this.database(db => db.prepare(`SELECT operation_id AS id,state,json_extract(payload,'$.request.path') AS path,result
+      FROM dsh_lisp_operations WHERE session_id=? AND agent_id=? AND kind='proposal'
+      AND COALESCE(json_extract(payload,'$.evalId'),json_extract(result,'$.evalId'))=? ORDER BY operation_id`)
+      .all<{ id: string; state: string; path: string; result: string | null }>(owner.sessionId, owner.agentId, evalId))
   }
   pendingTargets(): Promise<Operation[]> {
     return this.database(db => db.prepare("SELECT * FROM dsh_lisp_operations WHERE kind='proposal' AND state IN ('APPLYING','UNKNOWN')").all<Operation>())

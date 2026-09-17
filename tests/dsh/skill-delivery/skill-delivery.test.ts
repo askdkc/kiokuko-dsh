@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile, mkdtemp, rm, realpath } from 'node:fs/promises'
+import { readFile, writeFile, stat, mkdtemp, rm, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -25,7 +25,7 @@ const textOf = (request: any): string => [request.system ?? '', ...request.messa
   b.type === 'text' ? [b.text] : b.type === 'tool-result' ? b.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text) : []))].join('\n')
 function requireBody(request: any, name: string) { assert.ok(textOf(request).includes(content(name)), `${name}: compiled body absent at adapter boundary`) }
 
-async function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' = 'compiled', extra: object = {}) {
+async function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' = 'compiled', extra: object = {}, nativeAnswer?: (request: any) => Promise<any>) {
   const modules = await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','tool-skill','commands','subagent','subagent-spawn-in-process']
     .map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
   const [cordis,llm,session,projection,prompt,tools,agents,loop,skills,skillTool,commands,subagents,spawn]=modules
@@ -33,7 +33,12 @@ async function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' 
   process.env.KIOKUKO_DATA_DIR = dir
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
   fibers.push(await ctx.plugin({name:'headless-web-connection',apply(c:any){return c.provide('connection',{fetch:{register:()=>()=>{}}})}}))
-  if('lisp' in extra)fibers.push(await ctx.plugin({name:'delivery-intent-answer',apply(c:any){return c.provide('userQuestions',{ask:async(r:any)=>({answers:r.questions.map((q:any)=>{assert.equal(q.id,'taskType');return{id:q.id,selected:['chat']}})})})}}))
+  if('lisp' in extra) {
+    if (nativeAnswer) {
+      const questions = await import(pathToFileURL(join(packages!, '@deepseek-ai/dsh-user-questions/lib/index.js')).href)
+      fibers.push(await ctx.plugin(questions.default, {}))
+    } else fibers.push(await ctx.plugin({name:'delivery-intent-answer',apply(c:any){return c.provide('userQuestions',{ask:async(r:any)=>({answers:r.questions.map((q:any)=>{assert.equal(q.id,'taskType');return{id:q.id,selected:['chat']}})})})}}))
+  }
   const initial=explicit==='prompt-only'?[llm,prompt,skills]:[llm,session,projection,prompt,tools,agents,skills,commands,subagents,skillTool]
   for(const m of initial) fibers.push(await ctx.plugin(m.default??m, m===prompt?{persona:''}:undefined))
   if(explicit!=='prompt-only'){fibers.push(await ctx.plugin(loop.default,{agents:[]}));fibers.push(await ctx.plugin(spawn,{providerName:'spawn'}))}
@@ -50,12 +55,13 @@ async function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' 
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
   }
   const agent = await ctx.agentLoop.create(session.SessionId('skill-main'),{provider:'mock',model:'qwen3-coder'},{cwd:dir})
+  const offQuestions = nativeAnswer ? agent.ctx.on('user-questions/request', nativeAnswer) : undefined
   const errors: unknown[]=[]
   const off=ctx.on('agent/error',(e:any)=>errors.push(e.error))
   const turn=async(input='この内容を日本語で説明してください。')=>{agent.followup(llm.createUserMessage({content:[{type:'text',text:input}],source:{kind:'user'}}));await agent.whenIdle();assert.deepEqual(errors,[])}
   return {ctx,agent,model,responses,mock,turn,adapter,dir,llm,
     async reload(nextMode: 'full'|'compiled') { await plugin.dispose(); plugin=await ctx.plugin(subject,{enabled:true,skillPrompts:{mode:nextMode},orca:{enabled:false},...extra}) },
-    async close(){off();await plugin.dispose();await adapter?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();if(previousData===undefined)delete process.env.KIOKUKO_DATA_DIR;else process.env.KIOKUKO_DATA_DIR=previousData;await rm(dir,{recursive:true,force:true})} }
+    async close(){off();offQuestions?.();await plugin.dispose();await adapter?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();if(previousData===undefined)delete process.env.KIOKUKO_DATA_DIR;else process.env.KIOKUKO_DATA_DIR=previousData;await rm(dir,{recursive:true,force:true})} }
 }
 
 for(const explicit of [false,true]) test(`compiled Skill delivery: production entrypoint (${explicit?'explicit':'native'} host), every native skill lookup`,native,async()=>{
@@ -141,9 +147,69 @@ test('compiled Skill delivery: protected Lisp enable and lisp_describe reach the
     requireBody(f.model.requests[0],'kiokuko-lisp')
     const last=f.model.requests.at(-1)
     const results=last.messages.flatMap((m:any)=>m.content).filter((b:any)=>b.type==='tool-result')
-    assert.ok(results.some((b:any)=>b.content.some((c:any)=>c.type==='text'&&JSON.parse(c.text).guide===content('kiokuko-lisp'))), 'lisp_describe guide must survive result rendering')
-    assert.deepEqual(last.tools.map((t:any)=>t.name).sort(),['lisp_cancel','lisp_describe','lisp_eval','lisp_inspect','lisp_reset','lisp_status'])
+    assert.ok(results.some((b:any)=>b.content.some((c:any)=>c.type==='text'&&JSON.parse(c.text).api?.verify&&JSON.parse(c.text).guide===undefined)), 'lisp_describe delivers a concise API without duplicating the injected guide')
+    const expectedTools = ['lisp_cancel','lisp_describe','lisp_eval','lisp_inspect','lisp_reset','lisp_status','skill']
+    for (const request of [f.model.requests[0], last]) assert.deepEqual(request.tools.map((t:any)=>t.name).sort(), expectedTools,
+      'the first request already exposes protected Lisp and the available native Skill reader, never blocked mutations')
   } finally {await f.close()}
+})
+
+test('Lisp workflow reaches the next model request through native approval, evidence paging, plugin restart and exact replay', {
+  ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
+}, async () => {
+  let approvals = 0, observedDetail = ''
+  const f = await fixture(false, 'compiled', { lisp: { enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
+    const q = request.questions[0]
+    if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['chat'] }] }
+    assert.match(q.id, /^batch-/u); assert.equal(request.agent.id, 'skill-main')
+    approvals++; observedDetail = q.detail
+    return { answers: [{ id: q.id, selected: [q.intent.approve] }] }
+  })
+  const latestResult = (request: any) => {
+    const block = request.messages.flatMap((m: any) => m.content).filter((b: any) => b.type === 'tool-result').at(-1)
+    return JSON.parse(block.content.find((b: any) => b.type === 'text').text)
+  }
+  const expectedTools = ['lisp_cancel','lisp_describe','lisp_eval','lisp_inspect','lisp_reset','lisp_status','skill']
+  const args = { operationId: 'workflow-batch', code: '(kioku.files:propose-write "a.txt" "new-a") (kioku.files:propose-write "b.txt" "new-b") (write-string (make-string 12000 :initial-element #\\a)) :done' }
+  let hostId = ''
+  try {
+    await writeFile(join(f.dir, 'a.txt'), 'old-a'); await writeFile(join(f.dir, 'b.txt'), 'old-b')
+    assert.equal((await f.ctx.commands.execute(f.agent, '/kioku-lisp enable', [], new AbortController().signal)).result.kind, 'success')
+    f.responses.push(f.mock.toolCallResponse('workflow-write', 'lisp_eval', args), (request: any) => {
+      const result = latestResult(request); hostId = result.operationId
+      assert.equal(result.changeSummary.states.APPLIED, 2); assert.equal(result.proposals, undefined)
+      assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 16384)
+      const { tool, ...inspection } = result.inspect
+      return f.mock.toolCallResponse('workflow-read', tool, { operationId: 'read-output', ...inspection })
+    }, (request: any) => {
+      const result = latestResult(request)
+      assert.equal(result.data, 'a'.repeat(2000)); assert.equal(result.nextOffset, 2000)
+      return f.mock.textResponse('適用と結果取得を確認しました。')
+    })
+    await f.turn()
+    assert.equal(approvals, 1); assert.match(observedDetail, /a\.txt/u); assert.match(observedDetail, /b\.txt/u)
+    assert.match(observedDetail, /-old-a\n\+new-a/u); assert.match(observedDetail, /-old-b\n\+new-b/u)
+    const before = (await stat(join(f.dir, 'a.txt'))).mtimeMs
+    await f.reload('compiled')
+    assert.equal((await f.ctx.commands.execute(f.agent, '/kioku-lisp recover', [], new AbortController().signal)).result.kind, 'success')
+    const firstAfterRecovery = f.model.requests.length
+    f.responses.push((request: any) => {
+      assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedTools)
+      return f.mock.toolCallResponse('workflow-replay', 'lisp_eval', args)
+    }, (request: any) => {
+      const result = latestResult(request)
+      assert.equal(result.replay, true); assert.equal(result.operationId, hostId); assert.equal(result.changeSummary.states.APPLIED, 2)
+      return f.mock.toolCallResponse('workflow-receipts', 'lisp_inspect', { operationId: 'read-receipts', resultOperationId: hostId, section: 'changes' })
+    }, (request: any) => {
+      const receipts = JSON.parse(latestResult(request).data)
+      assert.equal(receipts.length, 2); assert.ok(receipts.every((r: any) => r.state === 'APPLIED'))
+      return f.mock.textResponse('再開後も再適用せず履歴を確認できました。')
+    })
+    await f.turn()
+    requireBody(f.model.requests[firstAfterRecovery], 'kiokuko-lisp')
+    assert.equal(approvals, 1); assert.equal((await stat(join(f.dir, 'a.txt'))).mtimeMs, before)
+    assert.equal(await readFile(join(f.dir, 'a.txt'), 'utf8'), 'new-a'); assert.equal(await readFile(join(f.dir, 'b.txt'), 'utf8'), 'new-b')
+  } finally { await f.close() }
 })
 
 test('compiled Skill delivery: real DeepSeek serializer sends the bodies in the HTTP payload',native,async t=>{

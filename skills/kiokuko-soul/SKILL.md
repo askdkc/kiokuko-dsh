@@ -14,6 +14,8 @@ Read this router first. The DSH host owns Akinator intake, session/capability bi
 
 User instructions outrank Skill design, style and workflow preferences, but never host-enforced safety, authorization, identity, revision, lease, state-machine or integrity checks. Existing authorization and current repository evidence settle routine choices; ask only when uncertainty materially changes intent or permitted effects. Optional intake/enrichment failures are degraded guidance, not a veto on native work.
 
+Continue authorized, executable work until the user's observable requirements are met; an internal milestone or apology is not completion. Establish blockers from available capabilities and observed failures. Reuse verified results; do not repeat an unchanged failed operation or broad checks without a relevant change. Do not guess remaining time or token budgets. Prefer focused checks while fixing a failure, then proportionate final verification. These rules add no automatic continuation or retries.
+
 ## Routes
 
 Apply every relevant complete runtime contract below, in this order. A host-supplied complete runtime contract satisfies the reading requirement; otherwise read its whole SKILL.md index. Read only the expert fragments selected by the approved WorkUnit or concrete risk. This router is not a substitute for a specialist contract.

@@ -26,14 +26,14 @@ export class LispWorker {
   #ready: (() => void) | undefined
   #startupReject: ((e: unknown) => void) | undefined
   #rpcActive = false
-  #stdout = Buffer.alloc(0)
-  #stderr = Buffer.alloc(0)
+  #stdout: Buffer[] = []
+  #stderr: Buffer[] = []
   constructor(readonly layout: SandboxLayout, readonly config: LispConfiguration,
     readonly hostCall?: (method: string, args: unknown) => Promise<unknown>) {}
   get busy(): boolean { return this.#pending !== undefined }
   get healthy(): boolean { return !this.#closed && !this.#fatal && this.#child !== undefined }
-  output(): unknown { return { stdout: this.#stdout.toString('utf8'), stderr: this.#stderr.toString('utf8'), bytes: this.#bytes, truncated: this.#bytes > 32768 } }
-  jobStatus(): unknown[] { return [...this.jobs].map(([id, job]) => ({ id, state: job.error ? 'FAILED' : job.result ? 'FINISHED' : 'RUNNING', code: job.result?.code, error: job.error })) }
+  output(): unknown { return { stdout: Buffer.concat(this.#stdout).toString('utf8'), stderr: Buffer.concat(this.#stderr).toString('utf8'), bytes: this.#bytes, truncated: this.#bytes > this.config.maxOutputBytes } }
+  jobStatus(): unknown[] { return [...this.jobs].map(([id, job]) => ({ id, state: job.error ? 'FAILED' : job.result ? 'FINISHED' : 'RUNNING', code: job.result?.code ?? null, error: job.error ?? null })) }
   async start(): Promise<void> {
     const launch = await sandboxLaunch(this.layout, this.config.sbclPath, ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(this.layout.library, 'bootstrap.lisp')], this.generation, true)
     const ready = new Promise<void>((resolve, reject) => { this.#ready = resolve; this.#startupReject = reject })
@@ -48,8 +48,10 @@ export class LispWorker {
     let diagnostics = ''
     for (const output of [child.stdout, child.stderr]) output?.on('data', (chunk: Buffer) => {
       this.#bytes += chunk.length
-      if (output === child.stdout) this.#stdout = Buffer.concat([this.#stdout, chunk]).subarray(-16384)
-      else this.#stderr = Buffer.concat([this.#stderr, chunk]).subarray(-16384)
+      if (this.#bytes <= this.config.maxOutputBytes) {
+        if (output === child.stdout) this.#stdout.push(chunk)
+        else this.#stderr.push(chunk)
+      }
       diagnostics = (diagnostics + chunk.toString()).slice(-6000)
       if (this.#bytes > this.config.maxOutputBytes) this.break(new LispError('OUTPUT_LIMIT', 'Lisp の出力量が上限を超えました。'))
     })
@@ -100,7 +102,7 @@ export class LispWorker {
   async request(method: string, args: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<WorkerResult> {
     if (this.#pending) throw new LispError('BUSY', 'この Lisp は別の評価を実行中です。')
     if (signal?.aborted) throw new LispError('CANCELLED', '評価を取り消しました。')
-    this.#bytes = 0; this.#stdout = Buffer.alloc(0); this.#stderr = Buffer.alloc(0)
+    this.#bytes = 0; this.#stdout = []; this.#stderr = []
     const id = randomUUID()
     const promise = new Promise<WorkerResult>((resolve, reject) => { this.#pending = { id, resolve, reject } })
     const abort = () => this.break(new LispError('CANCELLED', '評価を取り消しました。'))
