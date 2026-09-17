@@ -36,8 +36,12 @@ manually or inspect its state, use these commands in the desired DSH session:
 /kioku-lisp status
 ```
 
-This switches that session to the six Lisp tools and supplies the bundled
-`kiokuko-lisp` Skill. Normal sessions retain their tools. Protection also blocks
+This enables the six Lisp tools and supplies the bundled `kiokuko-lisp` Skill.
+Existing DSH `read`, `glob`, `grep` and `skill` tools remain available under native
+session permissions, so project files and applicable Skills can be inspected.
+File changes still use Lisp proposals and their confirmation rules. The read
+implementations are bound when Lisp is enabled; a later same-name replacement
+does not inherit permission. Normal sessions retain their tools. Protection also blocks
 unclassified child-session execution, late registrations, and PTC bypasses.
 The protected agent uses native tool presentation even in a PTC deployment.
 
@@ -85,8 +89,10 @@ not the complete worker startup or the speed of an individual Lisp computation.
 - Direct Lisp/FFI/Python/shell access is limited by the OS to runtime files,
   selected read-only input copies and compiled bundle, and the worker's scratch/cache.
 - Project changes use host-validated proposals. New regular files can be created
-  with necessary parent directories. Deletion and replacement require the human
-  confirmation showing the exact target, digest and backup location.
+  with necessary parent directories. Deletion and replacement require one human
+  confirmation for the evaluation's frozen batch, showing every target, diff,
+  digest and backup location. Duplicate targets are rejected; unchanged writes
+  return `UNCHANGED` without a confirmation or write.
 - Refusal, skip, timeout, cancelled confirmation or unavailable UI means no change.
   File identities/content are checked again after approval. Links, directories,
   database files/sidecars, common credential paths and plugin/state data are refused.
@@ -94,6 +100,50 @@ not the complete worker startup or the speed of an individual Lisp computation.
   is 1 GiB in this implementation; reaching it stops changes without pruning data.
 - The host journal distinguishes success, failure, no change, in progress and
   unknown outcomes. Unknown changes are never automatically replayed or rolled back.
+
+Model-facing results normally fit 16 KiB. They omit proposed source echoes and
+duplicate printed/JSON values, retaining operation identity and outcome counts.
+Long logs show bounded head/tail previews. The complete received result and
+captured process output remain in the operation journal. Read only needed evidence:
+
+```json
+{"operationId":"inspect-1","resultOperationId":"<returned host operation ID>","section":"stdout","offset":0,"limit":2000}
+```
+
+Pass this to `lisp_inspect`; use the returned `nextOffset` to continue. Sections
+are `result`, `value`, `stdout`, `stderr`, and `changes`; offsets count Unicode
+characters. The existing `{operationId, ref}` form still reads worker objects.
+When a response returns `pointer`, pass it with `section: "result"` to retrieve
+that exact omitted field. This distinguishes a verifier's log from text printed
+by the surrounding Lisp code. Only stored own-properties can be selected.
+Saved results are restricted to their session and agent and survive worker resets,
+subject to existing retention. Inspection never replays the original operation.
+`lisp_status` returns current state, pending counts and 10 operation summaries;
+`{offset: nextOffset}` pages history. Human diagnostics retain full detail.
+
+`NOT_APPLIED` reports observed reasons such as `declined`, `cancelled`, `timed_out`,
+`unavailable` or `invalid_answer`; an unavailable UI is not a refusal. A conflict
+before the first write stops the batch. Later failure stops the remaining writes
+and preserves each `APPLIED`, `NOT_APPLIED` or `UNKNOWN` outcome and backup.
+The parent stays `RUNNING` until its final result is committed; a final-save
+failure cannot leave a successful parent without its receipts. An interrupted
+parent is reconstructed from its independently persisted file receipts after
+restart. Recovery retains the evidence and never re-executes the evaluation.
+On upgrade, older successful parents with proposals but no final change receipts
+are quarantined as `UNKNOWN`. Unlinked legacy effects remain unknown; missing
+links must not be interpreted as proof that an old write did not happen.
+
+Verifier scripts are checked before confirmation or execution. `:typecheck` uses
+`typecheck`, falling back to `check` only when absent. Focused tests use
+`(kioku.ci:verify :test :script "test:unit")`; only existing `test`/`test:*` scripts
+are accepted. The confirmation shows the resolved command and script body;
+changed scripts invalidate approval. `lisp_describe` without a symbol returns
+the API summary and available verifier map without repeating the injected Skill.
+
+Run `npm run test:lisp:efficiency` for anonymous deterministic response-size and
+schema-size comparisons. It makes no model calls and does not estimate token
+charges. Native integration tests separately verify confirmation counts, tool
+delivery, output validation and recovery.
 
 The host serializes conflicting target proposals. OS protection prevents the Lisp
 worker from swapping project paths while the host applies a proposal. This is not

@@ -13,7 +13,7 @@ export const LISP_TOOLS = ['lisp_eval', 'lisp_describe', 'lisp_inspect', 'lisp_s
 export type LispTool = typeof LISP_TOOLS[number]
 export const FRAME_BYTES = 1_048_576
 export const FILE_BYTES = 64 * 1024 * 1024
-export const RESULT_BYTES = 64 * 1024
+export { RESULT_BYTES, renderResult } from './model-result.js'
 export const identifier = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 export interface LispOwner { sessionId: string; agentId: string; root: string }
 export type LispState = 'DISABLED' | 'PREFLIGHT' | 'READY' | 'EVALUATING' | 'STOPPING' | 'RECOVERY_REQUIRED' | 'STOP_UNCONFIRMED'
@@ -26,14 +26,9 @@ export function digest(value: unknown): string {
     return item
   })).digest('hex')
 }
-/** Preserve valid JSON and UTF-8 even when the complete result is too large. */
-export function renderResult(value: unknown): string {
-  const json = JSON.stringify(value)
-  if (Buffer.byteLength(json) <= RESULT_BYTES) return json
-  return JSON.stringify({ truncated: true, message: '応答が表示上限を超えました。lisp_status または /kioku-lisp diagnostics で操作 ID を確認してください。', preview: Buffer.from(json).subarray(0, 12000).toString('utf8') })
-}
 export function fail(code: string, message: string): never { throw new LispError(code, message) }
 export function failure(error: unknown): { ok: false; code: string; message: string; recovery: string } {
+  if (error instanceof z.ZodError) return { ok: false, code: 'INVALID_INPUT', message: error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('\n').slice(0, 1000), recovery: '指定した引数を修正してください。Lisp の復旧は不要です。' }
   return error instanceof LispError ? { ok: false, code: error.code, message: error.message, recovery: error.recovery }
     : { ok: false, code: 'LISP_INTERNAL_ERROR', message: error instanceof Error ? error.message.slice(0, 1000) : 'Lisp 処理に失敗しました。', recovery: '/kioku-lisp status で確認し、/kioku-lisp recover で照合してください。自動再実行はしません。' }
 }

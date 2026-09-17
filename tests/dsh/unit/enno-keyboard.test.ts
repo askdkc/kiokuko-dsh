@@ -17,7 +17,7 @@ const question = (id = 'enno-model-zenki', count = 24) => ({
 
 function clientHarness(platform = 'Linux x86_64', userAgent = '') {
   const globals = globalThis as unknown as Record<string, any>
-  const names = ['createSnapshotStore', 'jsx', 'jsxs', 'useState', 'useRef', 'useEffect']
+  const names = ['createSnapshotStore', 'jsx', 'jsxs', 'useState', 'useRef', 'useEffect', 'MarkdownText']
   const previous = names.map(name => globals[name])
   const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { platform, userAgent } })
@@ -36,6 +36,7 @@ function clientHarness(platform = 'Linux x86_64', userAgent = '') {
   const hook = (initial: () => any) => { const index = cursor++; if (!(index in slots)) slots[index] = initial(); return index }
   globals.createSnapshotStore = (state: unknown) => ({ getSnapshot: () => state, update() {} })
   globals.jsx = globals.jsxs = (component: unknown, props: unknown) => ({ component, props })
+  globals.MarkdownText = 'MarkdownText'
   globals.useState = (initial: any) => {
     const index = hook(() => typeof initial === 'function' ? initial() : initial)
     return [slots[index], (value: unknown) => { slots[index] = value }]
@@ -63,7 +64,7 @@ function clientHarness(platform = 'Linux x86_64', userAgent = '') {
     mount(pending: any) {
       unmount()
       assert.equal(entry.definition.select({ pendingInteraction: pending }), pending)
-      const wrapper = entry.component({ matched: pending })
+      const wrapper = entry.component({ matched: pending, t: (name: string) => name === 'review.discuss' ? 'Chat about it' : name })
       let focused = '', scrolls = 0
       const render = () => {
         cursor = 0
@@ -85,6 +86,67 @@ function clientHarness(platform = 'Linux x86_64', userAgent = '') {
     },
   }
 }
+
+test('plan review offers discussion, refusal and approval shortcuts without changing native answers', async () => {
+  for (const platform of ['MacIntel', 'Win32', 'Linux x86_64']) for (const choice of [1, 2, 3]) {
+    const h = clientHarness(platform), responses: unknown[] = []
+    let cancellations = 0
+    const approve = '実行する: npm run verify:lisp:vendor'
+    const q = { id: 'lisp-ci-verification', header: '検証の確認', question: '検証コマンドを実行しますか？',
+      detail: '**実行:** npm run verify:lisp:vendor\n\n拒否・取消では実行しません。',
+      intent: { kind: 'plan-review', approve }, options: [{ label: approve }, { label: '実行しない' }] }
+    const pending = { kind: 'plan-review', key: `plan-${platform}-${choice}`, questions: [q],
+      async answer(value: unknown) { responses.push(value) }, async cancel() { cancellations++ } }
+    try {
+      const card = h.mount(pending)
+      let tree = card.render()
+      assert.equal(descendants(tree).find(node => node.component === 'MarkdownText').props.text, q.detail)
+      assert.equal(descendants(tree).some(node => node.component === 'textarea'), false, 'approval has no ambiguous custom answer')
+      assert.deepEqual(descendants(tree).filter(node => node.component === 'strong').map(node => node.props.children),
+        ['1. Chat about it', '2. 実行しない', `3. ${approve}`])
+      assert.deepEqual(descendants(tree).filter(node => node.component === 'kbd').map(node => node.props.children),
+        [1, 2, 3].map(n => `${platform === 'MacIntel' ? 'Cmd' : 'Ctrl'}+${n}`))
+      tree.props.onKeyDown(key('Enter')); await flush()
+      assert.equal(responses.length + cancellations, 0, 'Enter alone cannot approve')
+      h.documentKey(key(String(choice), platform === 'MacIntel' ? { metaKey: true } : { ctrlKey: true }))
+      tree = card.render()
+      assert.equal(responses.length + cancellations, 0, 'selection is separate from confirmation')
+      for (const extra of [{ repeat: true }, { isComposing: true }, { keyCode: 229 }, { nativeEvent: { isComposing: true } }]) tree.props.onKeyDown(key('Enter', extra))
+      await flush(); assert.equal(responses.length + cancellations, 0)
+      tree.props.onKeyDown(key('Enter')); tree.props.onKeyDown(key('Enter')); await flush()
+      assert.equal(cancellations, choice === 1 ? 1 : 0)
+      assert.deepEqual(responses, choice === 1 ? [] : [{ answers: [{ id: q.id, selected: [choice === 2 ? '実行しない' : approve] }] }])
+      h.unmount(); assert.equal(h.listenerCount, 0)
+    } finally { h.restore() }
+  }
+})
+
+test('approval-only review uses two choices; failed submission retains selection for retry', async () => {
+  const h = clientHarness('MacIntel', 'Version/19 Safari/605.1.15'), responses: unknown[] = []
+  let attempts = 0
+  const q = { id: 'plan', header: 'Review', question: 'Review plan', detail: '# Plan',
+    intent: { kind: 'plan-review', approve: 'Proceed' }, options: [{ label: 'Proceed' }] }
+  const pending = { kind: 'plan-review', key: 'plan-retry', questions: [q],
+    async answer(value: unknown) { if (++attempts === 1) throw new Error('Send failed'); responses.push(value) }, async cancel() {} }
+  try {
+    for (const invalid of [{ ...q, intent: undefined }, { ...q, detail: undefined }, { ...q, multiSelect: true },
+      { ...q, options: [{ label: 'Other' }] }, { ...q, options: [...q.options, { label: 'No' }, { label: 'Later' }] }]) {
+      assert.equal(h.entry.definition.select({ pendingInteraction: { ...pending, questions: [invalid] } }), null)
+    }
+    const card = h.mount(pending)
+    let tree = card.render()
+    assert.deepEqual(descendants(tree).filter(node => node.component === 'kbd').map(node => node.props.children), ['Ctrl+1', 'Ctrl+2'])
+    tree.props.onKeyDown(key('2', { target: { tagName: 'TEXTAREA' } }))
+    assert.equal(descendants(card.render()).some(node => node.props?.['aria-pressed']), false)
+    h.documentKey(key('2', { ctrlKey: true, target: { tagName: 'TEXTAREA' } }))
+    assert.equal(card.focused, 'section')
+    tree.props.onKeyDown(key('Enter')); await flush(); tree = card.render()
+    assert.match(descendants(tree).find(node => node.props?.role === 'status').props.children, /Send failed/)
+    assert.equal(descendants(tree).filter(node => node.props?.['aria-pressed']).length, 1)
+    tree.props.onKeyDown(key('Enter')); await flush()
+    assert.deepEqual(responses, [{ answers: [{ id: 'plan', selected: ['Proceed'] }] }])
+  } finally { h.restore() }
+})
 
 test('all Enno selection cards use numbered keyboard controls, including lists longer than nine', () => {
   const h = clientHarness()

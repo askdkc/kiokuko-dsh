@@ -158,6 +158,7 @@
     "test:evaluation:enno-memory": "node scripts/run-enno-memory-evaluation.mjs",
     "verify:lisp:vendor": "node scripts/verify-lisp-vendor.mjs",
     "test:lisp": "node scripts/run-tests.mjs tests/dsh/unit/lisp tests/dsh/integration/lisp",
+    "test:lisp:efficiency": "node --import tsx scripts/run-lisp-efficiency.mjs",
     "test:lisp:web": "node scripts/verify-lisp-web.mjs",
     "test:skill-prompts": "node scripts/run-tests.mjs tests/dsh/unit/skill-compiler.test.ts tests/dsh/unit/skill-snapshot.test.ts",
     "test:skill-delivery": "npm run build && node scripts/run-skill-delivery.mjs",

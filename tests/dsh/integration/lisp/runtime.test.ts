@@ -74,8 +74,20 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     assert.equal(ciLog.ok, true, JSON.stringify(ciLog)); assert.match(JSON.stringify(ciLog), /failed log/)
     const ciVerify = await evaluate('ci-verify', '(kioku.ci:verify :typecheck)')
     assert.equal(ciVerify.ok, true, JSON.stringify(ciVerify)); assert.match(JSON.stringify(ciVerify), /SUCCEEDED/)
+    const focused = await evaluate('ci-focused', '(kioku.ci:verify :test :script "test:unit")')
+    assert.equal(focused.ok, true, JSON.stringify(focused))
     assert.equal((await evaluate('ci-invalid-run', '(kioku.ci:failed-log "other/repo")')).ok, false)
-    assert.deepEqual(ciRequests, [{ kind: 'list-runs', limit: 3 }, { kind: 'failed-log', runId: '42' }, { kind: 'verify', target: 'typecheck' }])
+    assert.deepEqual(ciRequests, [{ kind: 'list-runs', limit: 3 }, { kind: 'failed-log', runId: '42' }, { kind: 'verify', target: 'typecheck' }, { kind: 'verify', target: 'test', script: 'test:unit' }])
+    const missing = await evaluate('missing-input', '(+ 1 2)', { inputs: ['missing.ts'] })
+    assert.equal(missing.code, 'INPUT_MISSING'); assert.match(missing.message, /missing.ts/)
+    assert.doesNotMatch(missing.recovery, /\/kioku-lisp (?:status|recover)/)
+    assert.equal((await evaluate('after-missing-input', '(+ 1 2)')).ok, true)
+    const largeOutput = await evaluate('large-output', '(write-string (make-string 40000 :initial-element #\\a))')
+    assert.equal(largeOutput.output.stdout.length, 40000, 'journal evidence is complete, not only the last 16 KiB')
+    const page = await manager.execute(owner, 'lisp_inspect', { operationId: 'output-page', resultOperationId: 'large-output', section: 'stdout', offset: 39000, limit: 1000 }) as any
+    assert.equal(page.data.length, 1000); assert.equal(page.nextOffset, null)
+    const summary = await manager.execute(owner, 'lisp_status', {}) as any
+    assert.equal(summary.operations.length, 10); assert.ok(summary.operationCount > 10); assert.equal(summary.nextOffset, 10)
     const helpers = await evaluate('helpers', `(let* ((root (kioku.files:scratch)) (source (merge-pathnames "helper.txt" root)) (link (merge-pathnames "helper-link.txt" root)))
       (kioku.files:write-text source (format nil "a1~%b2~%c3~%"))
       (assert (equalp #( "a1" "b2") (kioku.files:head-lines source :n 2)))
@@ -133,6 +145,28 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     assert.equal(await readFile(deleted.changes[0].backup, 'utf8'), 'preserve')
     await assert.rejects(readFile(join(root, 'delete.txt')), { code: 'ENOENT' })
     const before = questions; assert.equal((await evaluate('approved', code)).replay, true); assert.equal(questions, before)
+    // A filesystem receipt is not the completed parent operation. If the final
+    // parent save fails, replay/recovery must preserve effects without success.
+    const saveResult = store.transition.bind(store)
+    let lostFinalResult = false
+    store.transition = async (...args) => {
+      if (args[1] === 'lost-final-result' && Array.isArray((args[4] as any)?.changes) && !lostFinalResult) {
+        lostFinalResult = true; throw new Error('fixture: final summary unavailable')
+      }
+      return saveResult(...args)
+    }
+    const newFile = '(kioku.files:propose-write "receipt.txt" "applied once")'
+    const lostSummary = await evaluate('lost-final-result', newFile)
+    assert.equal(lostSummary.ok, false)
+    assert.equal((await store.get(owner, 'lost-final-result'))!.state, 'UNKNOWN', 'parent must not appear completed when its final evidence was not committed')
+    assert.equal(lostSummary.operationId, 'lost-final-result')
+    assert.equal(lostSummary.changes[0].state, 'APPLIED')
+    await manager.recover(owner)
+    const replayedSummary = await evaluate('lost-final-result', newFile)
+    assert.equal(replayedSummary.replay, true); assert.equal(replayedSummary.result.ok, false)
+    assert.equal(replayedSummary.result.changes[0].state, 'APPLIED')
+    assert.equal(await readFile(join(root, 'receipt.txt'), 'utf8'), 'applied once')
+    store.transition = saveResult
     const restored = await manager.restore(owner, deleted.changes[0].id, new AbortController().signal) as any
     assert.equal(restored.state, 'APPLIED'); assert.equal(await readFile(join(root, 'delete.txt'), 'utf8'), 'preserve')
     await manager.recover(owner)

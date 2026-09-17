@@ -20,6 +20,7 @@ interface Agent { id: string; session: Session; ctx: { get(name: string, strict?
 interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; presentAs(mode: 'native'): () => void; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
 interface Fence { sessions: Map<string, string>; controller?: LispManager; definitions: Map<string, object>; stopped: boolean }
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
+const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill'] as const
 
 function text(value: unknown): string {
   const result = value as { state?: string; enabled?: boolean; ok?: boolean; message?: string; recovery?: string; error?: { message?: string; recovery?: string }; operations?: { id: string; state: string }[] }
@@ -27,7 +28,10 @@ function text(value: unknown): string {
   return `Lisp: ${result.state ?? (result.ok ? '処理完了' : '状態不明')}\n${result.error?.message ?? ''}\n${result.error?.recovery ?? result.recovery ?? ''}\n${result.operations?.map(o => `${o.id}: ${o.state}`).join('\n') ?? ''}`.trim()
 }
 const ToolInput = z.object({ operationId: identifier.optional(), code: z.string().max(262144).optional(), inputs: z.array(z.string().max(4096)).max(100).optional(),
-  timeoutMs: z.number().int().min(100).max(600000).optional(), symbol: z.string().max(256).optional(), ref: identifier.optional(), generation: identifier.optional() }).strict()
+  timeoutMs: z.number().int().min(100).max(600000).optional(), symbol: z.string().max(256).optional(), ref: identifier.optional(), generation: identifier.optional(),
+  resultOperationId: identifier.optional(), section: z.enum(['result', 'value', 'stdout', 'stderr', 'changes']).optional(),
+  pointer: z.string().max(1024).optional(),
+  offset: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(2000).optional() }).strict()
 
 /** The fence belongs to the host root, so plugin unload cannot restore bash access. */
 export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
@@ -81,7 +85,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (agent.session.id !== scope) return '保護中の子セッションでは任意ツールを実行できません。親セッションの Lisp を使用してください。'
       const registered = persistent.definitions.get(`${agent.id}:${execution.name}`)
       if (registered && tools.get(execution.name, agent)?.execute === (registered as { execute: unknown }).execute) return undefined
-      return 'Lisp 保護中は六つの Lisp ツールだけを実行できます。削除は利用者の確認が必要です。'
+      return 'Lisp 保護中は Lisp ツールと DSH の読み取り・検索・スキル読み込みを使えます。変更は Lisp 経由で行い、削除・既存ファイルの置換には利用者の確認が必要です。'
     })
     root.on('agent/pre-step' as never, (async (payload: { agent: Agent }, next: () => Promise<unknown>) => {
       const scope = scopeSession(payload.agent, persistent)
@@ -108,7 +112,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const unregister = (agent: Agent) => {
     for (const dispose of agentDisposers.get(agent.id)?.reverse() ?? []) dispose()
     agentDisposers.delete(agent.id); registeredAgents.delete(agent)
-    for (const name of LISP_TOOLS) fence!.definitions.delete(`${agent.id}:${name}`)
+    for (const name of [...LISP_TOOLS, ...LISP_READ_TOOLS]) fence!.definitions.delete(`${agent.id}:${name}`)
   }
   disposers.push(() => { for (const list of agentDisposers.values()) for (const dispose of list.reverse()) dispose(); agentDisposers.clear(); fence!.definitions.clear() })
   const register = (agent: Agent) => {
@@ -118,10 +122,17 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     const scopedTools = agent.ctx.get('tools') as Tools
     // Do not depend on arbitrary third-party PTC runtimes enforcing our boundary.
     local.push(scopedTools.presentAs('native'))
-    local.push(scopedTools.restrict({ allow: [] }))
+    // Retain the host's existing read capabilities, including agent-local preset
+    // tools. Pin their implementations so a later same-name registration cannot
+    // acquire permission. Dispatch still traverses every native DSH policy/guard.
+    for (const name of LISP_READ_TOOLS) {
+      const definition = tools.get(name, agent)
+      if (definition) fence!.definitions.set(`${agent.id}:${name}`, definition)
+    }
+    local.push(scopedTools.restrict({ allow: LISP_READ_TOOLS.filter(name => tools.get(name)) }))
     for (const name of LISP_TOOLS) {
       const definition = { name, description: description(name), modelFacing: true,
-        parameters: schema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
+        parameters: lispToolSchema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
         execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string }) => {
           try {
             const binding = owner(execution.agent), parsed = ToolInput.parse(args)
@@ -206,15 +217,23 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
 }
 function description(name: LispTool): string {
   return ({ lisp_eval: 'Evaluate Common Lisp in this protected session. Use a new operationId for new work. Same ID never re-evaluates. Host changes require proposals; deletions require human approval.',
-    lisp_describe: 'Describe bundled Common Lisp APIs.', lisp_inspect: 'Inspect a retained object in the current generation.', lisp_status: 'Read host state and operation outcomes without contacting Lisp.',
+    lisp_describe: 'Describe bundled Common Lisp APIs and available verifiers.', lisp_inspect: 'Read a retained object or a page of saved evidence; never executes the original operation.', lisp_status: 'Read current host state and paged operation summaries without contacting Lisp.',
     lisp_cancel: 'Stop Lisp and all managed jobs without waiting for evaluation.', lisp_reset: 'Stop a healthy worker and start a new generation. Never use to bypass recovery.' })[name]
 }
-function schema(name: LispTool): object {
+export function lispToolSchema(name: LispTool): object {
   const properties: Record<string, unknown> = name === 'lisp_status' ? {} : { operationId: { type: 'string', minLength: 1, maxLength: 256 } }
   const required = Object.keys(properties)
+  if (name === 'lisp_status') properties.offset = { type: 'integer', minimum: 0, description: 'Read the next 10 operation summaries using nextOffset.' }
   if (name === 'lisp_eval') { Object.assign(properties, { code: { type: 'string', maxLength: 262144 }, inputs: { type: 'array', items: { type: 'string' }, maxItems: 100 }, timeoutMs: { type: 'integer', minimum: 100, maximum: 600000 } }); required.push('code') }
   if (name === 'lisp_describe') properties.symbol = { type: 'string', maxLength: 256 }
-  if (name === 'lisp_inspect') { properties.ref = { type: 'string', maxLength: 256 }; required.push('ref') }
+  if (name === 'lisp_inspect') Object.assign(properties, {
+    ref: { type: 'string', maxLength: 256, description: 'Worker reference; use either ref or resultOperationId.' },
+    resultOperationId: { type: 'string', maxLength: 256, description: 'Saved operation from this session and agent. Reads evidence without executing again.' },
+    section: { type: 'string', enum: ['result', 'value', 'stdout', 'stderr', 'changes'] },
+    pointer: { type: 'string', maxLength: 1024, description: 'With section=result, follow the returned JSON pointer to the exact omitted field.' },
+    offset: { type: 'integer', minimum: 0, description: 'Unicode character offset; use the returned nextOffset.' },
+    limit: { type: 'integer', minimum: 1, maximum: 2000 },
+  })
   if (name === 'lisp_cancel') { properties.generation = { type: 'string', maxLength: 256 }; required.push('generation') }
   return { type: 'object', properties, required, additionalProperties: false }
 }

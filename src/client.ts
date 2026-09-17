@@ -62,6 +62,7 @@ declare const useEffect: (effect: () => void | (() => void), dependencies: reado
 declare const Modal: unknown
 declare const Button: unknown
 declare const IconDownloadOutline16: unknown
+declare const MarkdownText: unknown
 
 const SESSION_EXPORT_PATH = '/api/session.export'
 const LOCALE_NAMESPACE = 'kiokuko-session-log-download'
@@ -76,6 +77,10 @@ const en = {
   'dialog.errorTitle': 'Session export failed',
   'dialog.close': 'Close',
   'dialog.commandFailed': 'Could not export the Session log.',
+  'review.discuss': 'Chat about it',
+  'review.copy': 'Copy',
+  'review.copied': 'Copied',
+  'review.footnotes': 'Footnotes',
 }
 
 const ja: Record<keyof typeof en, string> = {
@@ -87,6 +92,10 @@ const ja: Record<keyof typeof en, string> = {
   'dialog.errorTitle': 'Sessionのエクスポートに失敗',
   'dialog.close': '閉じる',
   'dialog.commandFailed': 'Session logをエクスポートできませんでした。',
+  'review.discuss': '相談に戻る',
+  'review.copy': 'コピー',
+  'review.copied': 'コピーしました',
+  'review.footnotes': '脚注',
 }
 
 const zh: Record<keyof typeof en, string> = {
@@ -98,6 +107,10 @@ const zh: Record<keyof typeof en, string> = {
   'dialog.errorTitle': 'Session 导出失败',
   'dialog.close': '关闭',
   'dialog.commandFailed': '无法导出 Session 日志。',
+  'review.discuss': '继续讨论',
+  'review.copy': '复制',
+  'review.copied': '已复制',
+  'review.footnotes': '脚注',
 }
 
 function hostBase(): string {
@@ -425,8 +438,8 @@ function DeepSessionReports(props: Record<string, unknown>): unknown {
 
 interface IntakePending {
   readonly key: string
-  readonly kind: 'question'
-  readonly questions: readonly [{ id: string; header: string; question: string; detail?: string; options: readonly { label: string; description?: string }[]; multiSelect?: boolean }]
+  readonly kind: 'question' | 'plan-review'
+  readonly questions: readonly [{ id: string; header: string; question: string; detail?: string; options: readonly { label: string; description?: string }[]; multiSelect?: boolean; intent?: { kind: 'plan-review'; approve: string } }]
   answer(value: { answers: [{ id: string; selected: string[]; custom?: string }] }): Promise<void>
   cancel(): Promise<void>
 }
@@ -485,10 +498,13 @@ function isSupportedQuestion(question: IntakePending['questions'][0] | undefined
 
 function intakePending(props: Record<string, unknown>): IntakePending | null {
   const pending = props.pendingInteraction as IntakePending | undefined
-  return pending?.kind === 'question' && pending.questions.length === 1
-    && isSupportedQuestion(pending.questions[0])
-    && typeof pending.answer === 'function' && typeof pending.cancel === 'function'
-    ? pending : null
+  if (!pending || pending.questions?.length !== 1 || typeof pending.answer !== 'function' || typeof pending.cancel !== 'function') return null
+  const question = pending.questions[0]
+  if (!isSupportedQuestion(question)) return null
+  if (pending.kind === 'question') return pending
+  return pending.kind === 'plan-review' && question.intent?.kind === 'plan-review'
+    && typeof question.detail === 'string' && question.options.length <= 2
+    && question.options.some(option => option.label === question.intent!.approve) ? pending : null
 }
 
 /**
@@ -498,12 +514,25 @@ function intakePending(props: Record<string, unknown>): IntakePending | null {
  */
 function IntakeQuestion(props: Record<string, unknown>): unknown {
   const pending = props.matched as IntakePending
-  return jsx(IntakeQuestionCard, { key: pending.key, pending })
+  const t = props.t as (key: string) => string
+  return jsx(IntakeQuestionCard, { key: pending.key, pending,
+    ...(pending.kind === 'plan-review' ? { reviewCopy: { discuss: t('review.discuss'),
+      labels: { code: { copyLabel: t('review.copy'), copiedLabel: t('review.copied') }, footnotes: t('review.footnotes') } } } : {}),
+  })
 }
 
 function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const pending = props.pending as IntakePending
-  const question = pending.questions[0]
+  const reviewing = pending.kind === 'plan-review'
+  const reviewCopy = props.reviewCopy as { discuss: string; labels: unknown } | undefined
+  const original = pending.questions[0]
+  // The review's first choice cancels back to discussion. Other choices retain
+  // the host's exact labels; approval stays last, even if supplied first.
+  const question = reviewing ? { ...original, options: [
+    { label: reviewCopy!.discuss },
+    ...original.options.filter(option => option.label !== original.intent!.approve),
+    ...original.options.filter(option => option.label === original.intent!.approve),
+  ] } : original
   const inputKind = questionInputKind(question)
   const mac = /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? '')
   const userAgent = globalThis.navigator?.userAgent ?? ''
@@ -538,10 +567,10 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
     let custom = current.custom.trim()
     let selected = current.selected
     if (!cancel && selected === null && custom === '') {
-      setError('選択肢を選ぶか、自由入力してください。')
+      setError(reviewing ? '選択肢を選んでから確定してください。' : '選択肢を選ぶか、自由入力してください。')
       return
     }
-    if (!cancel && inputKind === 'choice' && /^[0-9０-９]+$/u.test(custom)) {
+    if (!cancel && !reviewing && inputKind === 'choice' && /^[0-9０-９]+$/u.test(custom)) {
       const ordinal = Number(custom.normalize('NFKC'))
       if (ordinal < 1 || ordinal > question.options.length) {
         setError(`番号は1〜${question.options.length}で入力してください。`)
@@ -554,7 +583,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
     setBusy(true)
     setError('')
     // Enter is a separate confirmation. Typing, key-repeat and IME cannot submit twice.
-    void Promise.resolve().then(() => cancel ? pending.cancel() : pending.answer({ answers: [{
+    void Promise.resolve().then(() => cancel || (reviewing && selected === 0) ? pending.cancel() : pending.answer({ answers: [{
       id: question.id,
       selected: selected === null ? [] : [question.options[selected]!.label],
       ...(custom ? { custom } : {}),
@@ -590,7 +619,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   }, [pending, busy, controlShortcut])
   const keyDown = (event: IntakeKeyEvent & { target?: { tagName?: string; isContentEditable?: boolean } }) => {
     if (selectShortcut(event)) return
-    if (busy || inFlight.current || event.repeat || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229
+    if (busy || inFlight.current || event.repeat || event.isComposing || event.keyCode === 229 || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229
       || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
     const editing = event.target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName ?? '')
     const current = intakeDrafts.get(pending) ?? draft
@@ -617,29 +646,30 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
       jsxs('header', { children: [jsx('h2', { id: titleId, children: question.question }),
         jsx('button', { type: 'button', disabled: busy, onClick: () => settle(true), 'aria-label': '質問を閉じる', children: '閉じる' })] }),
       jsxs('div', { className: 'kiokuko-intake-body', children: [
-        question.detail ? jsx('p', { children: question.detail }) : null,
+        reviewing ? jsx(MarkdownText, { text: question.detail, labels: reviewCopy!.labels })
+          : question.detail ? jsx('p', { children: question.detail }) : null,
         jsx('p', { children: question.options.length > 9
           ? `${shortcutModifier}+1〜9で選択、Enterで確定。10以上は番号（1〜${question.options.length}）を数字で続けて入力、Backspaceで訂正できます。`
           : `${shortcutModifier}+1〜${question.options.length}で選択、Enterで確定。` }),
         jsx('div', { 'aria-label': '選択肢', children: question.options.map((option, index) => jsxs('button', {
-          key: option.label, type: 'button', className: 'kiokuko-intake-option', disabled: busy,
+          key: index, type: 'button', className: 'kiokuko-intake-option', disabled: busy,
           ref: (element: HTMLElement | null) => { optionElements.current[index] = element },
           'aria-pressed': draft.selected === index,
           ...(index < 9 ? { 'aria-keyshortcuts': `${question.options.length <= 9 ? `${index + 1} ` : ''}${controlShortcut ? 'Control' : 'Meta'}+${index + 1}` } : {}),
           onClick: () => update({ selected: index, custom: '' }),
           onKeyDown: (event: IntakeKeyEvent) => {
-            if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || (intakeDrafts.get(pending) ?? draft).selected !== index) return
+            if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing || event.keyCode === 229 || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || (intakeDrafts.get(pending) ?? draft).selected !== index) return
             event.preventDefault(); event.stopPropagation(); settle()
           },
           children: [jsx('strong', { children: `${index + 1}. ${option.label}` }), option.description ? jsx('span', { children: option.description }) : null,
             jsx('kbd', { className: 'kiokuko-intake-shortcut', 'aria-hidden': true, children: index < 9 ? `${shortcutModifier}+${index + 1}` : `${index + 1} → Enter` })],
         })) }),
-        jsx('label', { htmlFor: `${titleId}-custom`, children: inputKind === 'search' ? '検索（Enterで検索・数字も検索語として入力できます）' : inputKind === 'value' ? '値を入力（Enterで確定）' : '自由入力（任意）' }),
+        !reviewing ? jsx('label', { htmlFor: `${titleId}-custom`, children: inputKind === 'search' ? '検索（Enterで検索・数字も検索語として入力できます）' : inputKind === 'value' ? '値を入力（Enterで確定）' : '自由入力（任意）' }) : null,
         inputKind === 'choice' && question.header === '実行方式とモデル'
           ? jsx('p', { children: '選択肢に当てはまらない内容はAIに渡し、会話に戻ります。実行方式やモデル構成は確定しません。' }) : null,
-        jsx('textarea', { id: `${titleId}-custom`, rows: 1, disabled: busy, value: draft.custom,
+        !reviewing ? jsx('textarea', { id: `${titleId}-custom`, rows: 1, disabled: busy, value: draft.custom,
           onChange: (event: { target: { value: string } }) => update({ selected: null, custom: event.target.value }),
-        }),
+        }) : null,
       ] }),
       jsxs('footer', { children: [
         jsx('span', { role: 'status', 'aria-live': 'polite', children: error || (busy ? '送信中…' : draft.selected === null ? '' : `${draft.selected + 1}. ${question.options[draft.selected]!.label}を選択中`) }),
