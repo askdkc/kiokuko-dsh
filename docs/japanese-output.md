@@ -14,7 +14,9 @@ family name cannot be detected automatically.
 
 The Skill retains its file's declared name, `natural-japanese-output`, and is
 also available from the bundled Skill provider for explicit use. Its contents
-are loaded verbatim; the original file is not rewritten.
+are loaded verbatim in the default `full` mode. In opt-in `compiled` mode the
+host supplies the complete runtime contract from the validated build artifact;
+see [Skill prompt compiler](skill-compiler.md). Deployment still uses the original file.
 
 For matching models, the guidance is present once in the active system prompt.
 It applies when handling Japanese input or producing requested Japanese output.
@@ -28,7 +30,7 @@ transcript, or make an extra translation call. Keeping the guidance present for
 the selected family avoids guessing Japanese from isolated kanji or tool
 results. It adds the Skill's text to the prompt even on English turns; its
 application remains conditional on the requested language. The local file is
-cached once per process. Provider prompt caching is not guaranteed.
+cached by the plugin's prompt lifecycle. Provider prompt caching is not guaranteed.
 
 The normal native prompt/log pipeline carries the content. Deep's existing
 request accounting includes the additional bytes. Changing to an unrelated

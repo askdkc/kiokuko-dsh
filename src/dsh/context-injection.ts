@@ -75,6 +75,8 @@ function sourceInput(prepared: PreparedAgentTask, fallbackTask: string, routeSki
 
 /** Compose the fixed source ordering into dsh-compatible model messages. */
 export async function injectDshContext(input: {
+  readonly skillPrompts?: DshMessageSourceInput['skillPrompts']
+  readonly systemSkillNames?: DshMessageSourceInput['systemSkillNames']
   readonly prepared: PreparedAgentTask
   readonly task: string
   readonly routeSkillNames?: readonly string[]
@@ -94,6 +96,8 @@ export async function injectDshContext(input: {
       })
     }
   const sources = await buildDshMessageSources({
+    ...(input.skillPrompts ? { skillPrompts: input.skillPrompts } : {}),
+    ...(input.systemSkillNames ? { systemSkillNames: input.systemSkillNames } : {}),
     ...sourceInput(input.prepared, input.task, input.routeSkillNames ?? [], input.expertRefs ?? [], input.directive, input.userTaskInConversation === true),
     ...(input.soulInSystemPrompt === undefined ? {} : { soulInSystemPrompt: input.soulInSystemPrompt }),
     ...(input.advisoryEvidence === undefined ? {} : { advisoryEvidence: input.advisoryEvidence }),

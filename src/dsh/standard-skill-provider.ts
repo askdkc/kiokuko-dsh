@@ -2,6 +2,7 @@ import { loadStandardSkillParity, standardSkillFrontmatter, type StandardSkillPa
 import { JAPANESE_OUTPUT_SKILL_NAME, loadJapaneseOutputSkill } from './japanese-output-skill.js'
 import { LISP_SKILL_NAME, loadLispSkill } from './lisp/skill.js'
 import { compareCanonicalStrings } from '../serialization/validate.js'
+import type { DshSkillPrompts } from './skill-prompts.js'
 
 export const STANDARD_DSH_SKILL_PROVIDER = 'kiokuko-standard'
 export const STANDARD_DSH_SKILL_RANK = 600
@@ -37,7 +38,8 @@ function abortIfRequested(signal: AbortSignal | undefined): void {
 }
 
 /** Resolve public Skill identities through their validated package loaders, never as paths. */
-export async function loadBundledDshSkillContent(skillName: string, parity: StandardSkillParity): Promise<string | undefined> {
+export async function loadBundledDshSkillContent(skillName: string, parity: StandardSkillParity, prompts?: DshSkillPrompts): Promise<string | undefined> {
+  if (prompts) return (await prompts.get(skillName))?.content
   if (skillName === JAPANESE_OUTPUT_SKILL_NAME) return (await loadJapaneseOutputSkill()).content
   if (skillName === LISP_SKILL_NAME) return (await loadLispSkill()).content
   return parity.files.find(file => file.skillName === skillName && file.relativePath === 'SKILL.md')?.content
@@ -66,7 +68,7 @@ async function candidates(parity: StandardSkillParity): Promise<DshSkillCandidat
 }
 
 /** Create a complete, read-only provider over the core standard Skill loader. */
-export function createStandardSkillProvider(): DshSkillProvider & { dispose(): void } {
+export function createStandardSkillProvider(prompts?: DshSkillPrompts): DshSkillProvider & { dispose(): void } {
   let disposed = false
   let parityPromise: Promise<StandardSkillParity> | undefined
   const parity = (): Promise<StandardSkillParity> => parityPromise ??= loadStandardSkillParity()
@@ -83,7 +85,7 @@ export function createStandardSkillProvider(): DshSkillProvider & { dispose(): v
       abortIfRequested(options.signal)
       if (disposed || candidate.provider !== STANDARD_DSH_SKILL_PROVIDER || candidate.source !== 'bundled') return undefined
       if (candidate.name !== candidate.locator.skillName) return undefined
-      const content = await loadBundledDshSkillContent(candidate.name, await parity())
+      const content = await loadBundledDshSkillContent(candidate.name, await parity(), prompts)
       if (content === undefined) return undefined
       abortIfRequested(options.signal)
       return { ...candidate, content }
@@ -100,10 +102,10 @@ export interface DshSkillContext {
 }
 
 /** Register the bundled provider; the caller owns the returned Cordis disposer. */
-export function mountStandardSkillProvider(ctx: DshSkillContext): () => void {
+export function mountStandardSkillProvider(ctx: DshSkillContext, prompts?: DshSkillPrompts): () => void {
   let provider: (DshSkillProvider & { dispose(): void }) | undefined
   const unregister = ctx.skills.registerProvider((control) => {
-    provider = createStandardSkillProvider()
+    provider = createStandardSkillProvider(prompts)
     control.signal.addEventListener('abort', () => provider?.dispose(), { once: true })
     return provider
   })

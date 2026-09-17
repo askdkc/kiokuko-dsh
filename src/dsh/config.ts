@@ -3,6 +3,8 @@ export { AkinatorMemoryConfig }
 import { MemoryEvolutionConfig } from '../memory/evolution/contracts.js'
 export { MemoryEvolutionConfig }
 import { z } from 'zod'
+import { SkillPromptsConfig } from './skill-prompt-contracts.js'
+export { SkillPromptsConfig }
 import { LispConfig } from './lisp/contracts.js'
 export { LispConfig }
 import { ContinuityConfig } from '../context/continuity-view.js'
@@ -47,6 +49,7 @@ export type EnnoMemoryConfig = z.infer<typeof EnnoMemoryConfig>
 /** Runtime configuration accepted by the dsh bundle entrypoint. */
 export const Config = z.object({
   enabled: z.boolean().default(true),
+  skillPrompts: SkillPromptsConfig.prefault({}),
   lisp: LispConfig.prefault({}),
   akinatorMemory: AkinatorMemoryConfig.prefault({}),
   deepPlanning: DeepThinkerConfigSchema.prefault({}),

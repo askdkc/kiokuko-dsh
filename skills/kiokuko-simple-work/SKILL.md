@@ -6,6 +6,7 @@ license: MIT
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-simple-work -->
 
+<!-- kiokuko:runtime contract -->
 # Kiokuko Simple Work
 
 Build the smallest solution that fully works. The best code is the code never written.
@@ -62,3 +63,4 @@ Lazy code without its check is unfinished. Non-trivial logic — a branch, a loo
 Ponytail governs what you build, not how you talk. "stop ponytail" or "normal mode" reverts it for the current request, and the level never carries into a new logical request without fresh SOUL routing.
 
 The shortest path to done is the right path.
+<!-- /kiokuko:runtime -->

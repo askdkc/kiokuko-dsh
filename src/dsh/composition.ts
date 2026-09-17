@@ -7,6 +7,7 @@ import { mountDshNoticeSurface } from './session-notice-surface.js'
 import { mountSessionHistoryCompatibility, type SessionHistoryCheck } from './session-history-compatibility.js'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
+import { DshSkillPrompts } from './skill-prompts.js'
 import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingContext } from './enno-controller.js'
 import { DshIntakeGate, type DshPreStepDecision, type DshPreStepEvent, type DshPreStepContext } from './intake-gate.js'
 import { mountDshIdleLifecycle, mountDshSessionLifecycle, type DshCloseIntent, type DshIdleLifecycleContext, type DshNativeSession, type DshRunLifecycle, type DshSessionLifecycleContext } from './session-bridge.js'
@@ -50,6 +51,8 @@ export interface DshNativeTurnStoppingPayload {
 }
 
 export interface DshCompositionHost {
+  readonly skillPrompts?: DshSkillPrompts
+  readonly configureSkillPrompts?: (prompts: DshSkillPrompts) => void
   readonly configureEnnoMemory?: (config: import('./config.js').EnnoMemoryConfig) => void
   readonly deepPlanning?: import('../deep-thinker/controller.js').DeepPlanningController
   readonly memoryEvolution?: { configure: (config: import('../memory/evolution/contracts.js').EvolutionConfig) => void; status: (sessionId: string) => Promise<Record<string, unknown>> }
@@ -184,7 +187,11 @@ function mountNativeBoundaryKick(
  * adapter is deliberately explicit: a generic Cordis context cannot invent a
  * repository/run binding or an intake task projection safely.
  */
-export async function mountDshComposition(ctx: Context, host: DshCompositionHost, lisp?: LispConfiguration): Promise<DshCompositionHandle> {
+export async function mountDshComposition(ctx: Context, host: DshCompositionHost, lisp?: LispConfiguration, prompts = host.skillPrompts ?? new DshSkillPrompts()): Promise<DshCompositionHandle> {
+  if (host.configureSkillPrompts) host.configureSkillPrompts(prompts)
+  else if (prompts.mode === 'compiled' && (host.intakeGate || host.toolHost || host.deepPlanning)) {
+    throw new Error('The explicit Kiokuko runtime host must implement configureSkillPrompts for compiled delivery')
+  }
   let lispSurface: Awaited<ReturnType<typeof mountLispSurface>> | undefined
   let lispDrain: Promise<void> | undefined
   const drainLisp = () => lispDrain ??= lispSurface?.dispose() ?? Promise.resolve()
@@ -236,7 +243,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       setupResourceDisposers.push(disposer)
       if (host.runtimeOwner !== 'host') cleanupDisposers.push(disposer)
       if (lisp && (lisp.enabled || await host.runtime.withDatabase(db => Boolean(db.prepare('SELECT session_id FROM dsh_lisp_sessions WHERE enabled=1 LIMIT 1').get())))) {
-        lispSurface = await mountLispSurface(ctx, host.runtime, lisp)
+        lispSurface = await mountLispSurface(ctx, host.runtime, lisp, prompts)
         ingressDisposers.push(() => lispSurface?.stop())
         cleanupDisposers.push(drainLisp)
         setupResourceDisposers.push(drainLisp)
@@ -275,12 +282,12 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       if (host.boundaryWorkerOwner !== 'host') cleanupDisposers.push(closeBoundaryWorker)
     }
     if (host.skills !== undefined) {
-      const disposer = mountStandardSkillProvider({ skills: host.skills })
+      const disposer = mountStandardSkillProvider({ skills: host.skills }, prompts)
       setupResourceDisposers.push(disposer)
       cleanupDisposers.push(disposer)
     }
     if (host.systemPrompt !== undefined) {
-      const disposer = mountSoulPrompt({ systemPrompt: host.systemPrompt, effect: ctx.effect } as never)
+      const disposer = mountSoulPrompt({ systemPrompt: host.systemPrompt, effect: ctx.effect } as never, prompts)
       if (typeof disposer === 'function') {
         const cleanup = () => disposer()
         setupResourceDisposers.push(cleanup)

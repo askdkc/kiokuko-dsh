@@ -12,9 +12,11 @@ import { verifyLispVendor } from './integrity.js'
 import { CompiledLispCache, type CompilationStatus } from './compiled-cache.js'
 import { applyChange, backupUsage, checkedBytes, freezeChange, restoreBytes, snapshot, under, type FrozenChange } from './files.js'
 import type { LispCiRequest } from './ci.js'
+import type { DshSkillPrompts } from '../skill-prompts.js'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus }
 export interface ManagerOptions {
+  skillPrompts?: DshSkillPrompts
   store: LispStore; config: LispConfiguration; dataRoot: string; library?: string; protectedRoots?: string[]; questions?: DshUserQuestions
   notify?: (owner: LispOwner, message: string) => void
   toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>) => Promise<unknown>
@@ -200,7 +202,8 @@ export class LispManager {
       const state = this.entry(owner)
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
         packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment'],
-        guide: await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8') }
+        guide: this.options.skillPrompts ? await this.options.skillPrompts.require('kiokuko-lisp')
+          : await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8') }
       if (tool === 'lisp_cancel') {
         if (input.operationId !== undefined) {
           const id = identifier.parse(input.operationId), hash = digest(input), old = await this.#store.get(owner, id)

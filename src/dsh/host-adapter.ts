@@ -10,6 +10,8 @@ import { explicitExecutionMode, readExecutionSelection, writeExecutionSelection,
 import { selectExecution, ExecutionSelectionPending } from './model-selection-ui.js'
 import { LISP_CODING_SERVICE, type LispCodingService } from './lisp/coding-choice.js'
 import { installDshModelRouting, modelRoleForState, isModelAvailabilityFailure, type RoutableAgent } from './model-routing.js'
+import { DshSkillPrompts } from './skill-prompts.js'
+import { refreshDshSkillSnapshots } from './skill-snapshot.js'
 import type { ModelRoute, DshModelCatalog, DshModelCompatibility } from './model-configuration.js'
 import { nativeModelCatalog } from './native-model-catalog.js'
 import { ennoStateForPreparedTask } from '../enno-oduno/service.js'
@@ -158,6 +160,7 @@ interface AdapterContext extends Context {
 }
 
 export interface DshHostAdapterOptions {
+  readonly skillPrompts?: DshSkillPrompts
   readonly deepPlanning?: unknown
   readonly akinatorMemory?: import('zod').z.input<typeof AkinatorMemoryConfig>
   readonly efficiency?: import('zod').z.input<typeof EfficiencyConfig>
@@ -419,6 +422,8 @@ function operationName(value: string): value is typeof DSH_MODEL_FACING_OPERATIO
 }
 
 export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOptions = {}): DshHostAdapter {
+  let skillPrompts = options.skillPrompts ?? new DshSkillPrompts()
+  const systemSkillNames = new WeakMap<object, ReadonlySet<string>>()
   const akinatorMemoryConfig = AkinatorMemoryConfig.parse(options.akinatorMemory ?? {})
   const efficiencyConfig = EfficiencyConfig.parse(options.efficiency ?? {})
   const continuityConfig = ContinuityConfig.parse(options.continuity ?? {})
@@ -1400,6 +1405,18 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           if (stored && !stored.value.ordinaryModel) selections.set(runId, writeExecutionSelection(db, runId, stored.revision, { ...stored.value, ordinaryModel }))
         })
       },
+    }, {
+      prompts: () => skillPrompts,
+      assembled: async assembly => {
+        const delivered = new Set<string>()
+        for (const [name, sectionName] of [['kiokuko-soul','kiokuko:soul'], ['natural-japanese-output','kiokuko:natural-japanese-output'], ['kiokuko-lisp','kiokuko:lisp']]) {
+          const section = assembly.sections.find(section => section.name === sectionName)
+          if (!section) continue
+          const text = section.text.replace(/\{\{([^{}]+)\}\}/gu, (_match, variable: string) => assembly.variables[variable] ?? '')
+          if (text.includes(await skillPrompts.require(name!))) delivered.add(name!)
+        }
+        systemSkillNames.set(agent, delivered)
+      },
     })
     const disposeMemoryFence = agent.ctx.on('llm/stream', (request: any, next: () => AsyncIterable<any>) => (async function* () {
       const item = agent.session ? currentSession(agent.session.id) : undefined
@@ -1448,6 +1465,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const selection = directive === null ? { routeSkillNames: [], expertRefs: [] } : selectDshDirectiveSources(directive)
     const advisoryEvidence = await advisoryEvidenceFor(item, prepared.ennoOduno)
     const messages = await injectDshContext({
+      skillPrompts,
+      systemSkillNames: systemSkillNames.get(event.nativeAgent ?? event.agent) ?? new Set(),
       prepared,
       task: event.task,
       routeSkillNames: selection.routeSkillNames,
@@ -1478,6 +1497,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       role: 'user' as const, source: 'user-task' as const, name: 'execution-selection-discussion',
       content: discussionText,
     }] : []
+    refreshDshSkillSnapshots(messages, sessionEventSource(event.nativeSession), systemSkillNames.get(event.nativeAgent ?? event.agent))
     return projectDshContext([...messages, ...previousReport, ...discussionMessages], sessionEventSource(event.nativeSession), pending)
   }
 
@@ -1850,6 +1870,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const projectedDirective = projectDshDirective({ nextAction: state.nextAction, directive: state.directive })
     const advisoryEvidence = await advisoryEvidenceFor(item, state)
     const messages = await injectDshContext({
+      skillPrompts,
+      systemSkillNames: systemSkillNames.get(item.nativeAgent ?? agent ?? {}) ?? new Set(),
       prepared: item.prepared,
       task: item.task,
       routeSkillNames: selection.routeSkillNames,
@@ -1862,6 +1884,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     })
     event.signal.throwIfAborted()
     const pending = (agent as { readonly inbox?: { readonly nextStep?: readonly unknown[] } }).inbox?.nextStep ?? []
+    refreshDshSkillSnapshots(messages, sessionEventSource(item.nativeSession), systemSkillNames.get(item.nativeAgent ?? agent ?? {}))
     for (const message of projectDshContext(messages, sessionEventSource(item.nativeSession), pending)) {
       agent.inject(message)
     }
@@ -2635,6 +2658,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     deepPlanning,
     get efficiency() { return efficiency },
     configureEfficiency,
+    get skillPrompts() { return skillPrompts },
+    configureSkillPrompts(prompts) { skillPrompts = prompts },
     configureEnnoMemory: config => ennoMemory.configure(config),
     memoryEvolution: {
       configure(config: EvolutionConfig) { memoryFinalizer.configureMemoryEvolution(config); Object.assign(evolutionConfig, config) },

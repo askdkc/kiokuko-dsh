@@ -6,6 +6,10 @@ import type { DshRuntime } from './runtime.js'
 import { KIOKUKO_DSH_HOST_SERVICE, mountDshComposition, type DshCompositionHost } from './composition.js'
 import { createDshHostAdapter } from './host-adapter.js'
 import { setupDshOnLoad } from './setup.js'
+import { DshSkillPrompts } from './skill-prompts.js'
+export { DshSkillPrompts } from './skill-prompts.js'
+export * from './skill-prompt-contracts.js'
+export { compileSkillBundle, compileSkillResource } from './skill-compiler.js'
 
 /** Public Cordis plugin name mounted by the dsh bundle patch. */
 export const name = 'kiokuko-dsh'
@@ -68,6 +72,7 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
 async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
   const resolvedConfig = Config.parse(config)
   if (!resolvedConfig.enabled) return
+  const skillPrompts = new DshSkillPrompts(resolvedConfig.skillPrompts)
 
   console.info('[kiokuko-dsh] [info] plugin loaded')
   await ctx.effect(async () => {
@@ -96,7 +101,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
         if (failures.length) throw new AggregateError(failures, 'kiokuko-dsh explicit host unload failed')
       })()
       try {
-        composition = await mountDshComposition(ctx, host, resolvedConfig.lisp)
+        composition = await mountDshComposition(ctx, host, resolvedConfig.lisp, skillPrompts)
         disposeOrcaCommand = host.commands === undefined ? undefined : mountDshOrcaCommand({ commands: host.commands }, resolvedConfig.orca.enabled, host.orca)
         disposeExport = host.sessionExport === undefined ? undefined
           : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, host.sessionExport)
@@ -111,7 +116,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       const composition = await mountDshComposition(ctx, {
         ...(ctx.get('skills', false) === undefined ? {} : { skills: ctx.get('skills', false) as DshCompositionHost['skills'] }),
         ...(ctx.get('systemPrompt', false) === undefined ? {} : { systemPrompt: ctx.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] }),
-      } as DshCompositionHost, resolvedConfig.lisp)
+      } as DshCompositionHost, resolvedConfig.lisp, skillPrompts)
       const commands = ctx.get('commands', false) as DshCompositionHost['commands']
       const disposeCommand = commands === undefined ? undefined : mountDshOrcaCommand({ commands }, resolvedConfig.orca.enabled)
       return () => { disposeCommand?.(); return composition.dispose() }
@@ -119,7 +124,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx, { deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
+    const adapter = createDshHostAdapter(ctx, { skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
       ennoMemory: resolvedConfig.ennoMemory, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined
@@ -137,7 +142,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       if (failures.length > 1) throw new AggregateError(failures, 'kiokuko-dsh unload failed')
     })()
     try {
-      composition = await mountDshComposition(ctx, adapter.host, resolvedConfig.lisp)
+      composition = await mountDshComposition(ctx, adapter.host, resolvedConfig.lisp, skillPrompts)
       disposeOrcaCommand = adapter.host.commands === undefined ? undefined : mountDshOrcaCommand({ commands: adapter.host.commands }, resolvedConfig.orca.enabled, adapter.host.orca)
       disposeExport = adapter.host.sessionExport === undefined ? undefined
         : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, adapter.host.sessionExport)

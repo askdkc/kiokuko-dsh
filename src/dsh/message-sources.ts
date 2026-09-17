@@ -5,6 +5,7 @@ import type { ScopedContextItem, ScopedContextResult } from '../context/scoped-b
 import { loadStandardSkillParity } from './standard-skill-integrity.js'
 import { loadBundledDshSkillContent } from './standard-skill-provider.js'
 import type { AdvisoryContribution, AdvisoryPhase, RoleDirective } from '../enno-oduno/types.js'
+import type { DshSkillPrompts } from './skill-prompts.js'
 
 export type DshMessageSourceKind = 'soul' | 'directive' | 'memory-reasoning' | 'route-skill' | 'expert' | 'advisory' | 'memory' | 'user-task'
 
@@ -21,6 +22,8 @@ export interface DshExpertReference {
 }
 
 export interface DshMessageSourceInput {
+  readonly skillPrompts?: DshSkillPrompts
+  readonly systemSkillNames?: ReadonlySet<string>
   readonly task: string
   /** The native composition already includes the complete SOUL as a system section. */
   readonly soulInSystemPrompt?: boolean
@@ -91,20 +94,23 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
   }
   if (input.context !== null && input.context.untrusted !== true) throw new Error('Dsh context must remain untrusted')
   const parity = await loadStandardSkillParity()
+  const readSkill = (name: string, path = 'SKILL.md') => input.skillPrompts
+    ? input.skillPrompts.require(name, path) : Promise.resolve(skillFile(parity.files, name, path))
   const sources: DshMessageSource[] = [{
     kind: 'soul',
     name: 'kiokuko-soul',
-    text: admittedSoulText(input.soulInSystemPrompt ? '' : skillFile(parity.files, 'kiokuko-soul'), input.intakeStatus).trimStart(),
+    text: admittedSoulText(input.soulInSystemPrompt ? '' : await readSkill('kiokuko-soul'), input.intakeStatus).trimStart(),
     trust: 'system',
   }]
   const directive = directiveSource(input.directive)
   if (directive !== null) sources.push(directive)
   if (input.memoryPolicy.memoryReasoningRequired && !input.memoryPolicy.contextWithheld) {
-    sources.push({ kind: 'memory-reasoning', name: 'memory-reasoning', text: skillFile(parity.files, 'memory-reasoning'), trust: 'system' })
+    sources.push({ kind: 'memory-reasoning', name: 'memory-reasoning', text: await readSkill('memory-reasoning'), trust: 'system' })
   }
   for (const skillName of input.routeSkillNames ?? []) {
     if (skillName === 'kiokuko-soul' || skillName === 'memory-reasoning') continue
-    const content = await loadBundledDshSkillContent(skillName, parity)
+    if (input.systemSkillNames?.has(skillName)) continue
+    const content = await loadBundledDshSkillContent(skillName, parity, input.skillPrompts)
     sources.push({
       kind: 'route-skill', name: skillName, trust: 'system',
       text: content ?? `Kiokuko Skill guidance (host-authored):\n${JSON.stringify({
@@ -115,7 +121,7 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
   }
   for (const reference of input.expertRefs ?? []) {
     if (!reference.relativePath.startsWith('references/')) throw new Error(`Invalid bundled expert path: ${reference.relativePath}`)
-    sources.push({ kind: 'expert', name: `${reference.skillName}/${reference.relativePath}`, text: skillFile(parity.files, reference.skillName, reference.relativePath), trust: 'system' })
+    sources.push({ kind: 'expert', name: `${reference.skillName}/${reference.relativePath}`, text: await readSkill(reference.skillName, reference.relativePath), trust: 'system' })
   }
   if (input.advisoryEvidence !== undefined) sources.push(advisorySource(input.advisoryEvidence))
   if (!input.memoryPolicy.contextWithheld) {
