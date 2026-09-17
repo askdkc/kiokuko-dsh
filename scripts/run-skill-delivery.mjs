@@ -14,7 +14,7 @@ delete env.NODE_TEST_CONTEXT
 async function verify(packageRoot) {
   const options={cwd:root,env:{...env,...(packageRoot?{KIOKUKO_SKILL_PACKAGE_ROOT:packageRoot}:{})},maxBuffer:16*1024*1024}
   for (const args of [
-    ['--import','tsx','--test','tests/dsh/e2e/skill-delivery.test.ts'],
+    ['--import','tsx','--test','tests/dsh/skill-delivery/skill-delivery.test.ts'],
     ['--import','tsx','--test','--test-name-pattern=\\(text\\)|Japanese Skill reaches','tests/dsh/e2e/native-agent-loop.test.ts','tests/dsh/e2e/deep-planning-native.test.ts'],
   ]) {
     try { const result=await exec(process.execPath,args,options);process.stdout.write(result.stdout);process.stderr.write(result.stderr) }

@@ -62,6 +62,9 @@ continue to return original files for deployment and inspection.
 DSH runtime, then packs and extracts the npm artifact and repeats the checks.
 It requires installed fixture dependencies and protected SBCL (plus Bubblewrap
 on Linux). Missing prerequisites are failures, not successful skipped coverage.
+Its opt-in cases live in `tests/dsh/skill-delivery/`, outside the mandatory native
+E2E directory. The separate native lifecycle runner still rejects every skipped
+test; placing opt-in cases in that directory would break that gate.
 The test uses an isolated Skill home, state directory and temporary Lisp worker;
 it never installs into the user's live profile.
 

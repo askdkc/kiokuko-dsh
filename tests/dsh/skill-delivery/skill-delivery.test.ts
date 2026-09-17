@@ -11,8 +11,9 @@ isolateSkillHome()
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 const packageRoot = process.env.KIOKUKO_SKILL_PACKAGE_ROOT
 const enabled = Boolean(packages) && process.env.KIOKUKO_TEST_COMPILED_SKILLS === '1'
-// The general suite includes a build/pack test that replaces dist. Run compiled
-// delivery in its dedicated, serialized job so fallback cannot mask a build race.
+// Keep this opt-in suite outside e2e/: the mandatory native lifecycle runner
+// discovers that directory and correctly rejects every skipped test. This
+// dedicated job also avoids the general suite's build/pack artifact replacement.
 const native = { skip: enabled ? false : 'run npm run test:skill-delivery', timeout: 60000 }
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packages) throw new Error('Skill delivery requires the pinned native runtime')
 const subject: typeof import('../../../src/dsh/index.js') = await import(packageRoot
