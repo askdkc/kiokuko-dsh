@@ -362,7 +362,11 @@ The dsh integration provides:
   composer shows. Carriers a single number key cannot address — multi-select
   batches, optionless prompts, several questions in one request, and catalogs
   larger than nine options outside the Enno and Deep flows — retain their native
-  UI, as do plan-approval cards;
+  UI. Plan-review cards also use numbered choices: discussion first, refusal
+  when offered, then approval. Cmd/Ctrl+1–3 selects a choice and Enter confirms;
+  selecting a number alone never submits approval. The plan remains rendered as
+  Markdown, and answers preserve the host's exact option labels. Discussion
+  cancels the request through the native carrier;
 - an explicit `chat` intake choice (including free-form aliases such as
   `just chatting` and `雑談`) and the task-type question's **Skip this
   question** action; both skip target/success follow-ups and never create an
