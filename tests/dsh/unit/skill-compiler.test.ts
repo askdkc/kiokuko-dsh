@@ -1,14 +1,38 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { compileSkillBundle, compileSkillResource } from '../../../src/dsh/skill-compiler.js'
 import { DshSkillPrompts } from '../../../src/dsh/skill-prompts.js'
+import { loadSkillSources } from '../../../src/dsh/skill-sources.js'
+import { requestSize } from '../../../src/dsh/efficiency.js'
 
 const source = (content: string) => ({ name: 'fixture', relativePath: 'SKILL.md', content })
 const contract = '<!-- kiokuko:runtime core -->\nNever replay completed effects.\n<!-- /kiokuko:runtime -->\n<!-- kiokuko:documentation explanation -->\nLong background.\n<!-- /kiokuko:documentation -->'
+test('current canonical Skills satisfy the unchanged CI efficiency budget without a prior build', async () => {
+  const baseline = JSON.parse(await readFile(new URL('../../fixtures/skill-prompts/baseline.json', import.meta.url), 'utf8')) as { resources: { path: string; content: string }[] }
+  const compiled = compileSkillBundle(await loadSkillSources())
+  const cases = [
+    ['kiokuko-soul'], ['kiokuko-soul', 'natural-japanese-output'],
+    ['kiokuko-soul', 'natural-japanese-output', 'kiokuko-lisp'],
+    ['kiokuko-soul', 'kiokuko-enno-oduno', 'kiokuko-single-purpose-functions'],
+    ['kiokuko-soul', 'kiokuko-single-purpose-functions', 'kiokuko-ui-design-soul'],
+  ]
+  let before = 0, after = 0
+  for (const names of cases) {
+    const prior = names.map(name => baseline.resources.find(r => r.path.endsWith(`/${name}/SKILL.md`) || name === 'natural-japanese-output' && r.path.endsWith('/japanese-translation-for-oss-models/SKILL.md'))!.content).join('\n\n')
+    const current = names.map(name => compiled.resources.find(r => r.id === `${name}/SKILL.md`)!.content).join('\n\n')
+    const priorBytes = Buffer.byteLength(prior), currentBytes = Buffer.byteLength(current)
+    assert.ok(currentBytes <= priorBytes, `${names.join(',')}: runtime guidance grew beyond the fixed baseline`)
+    const envelope = (system: string) => ({ system, tools: [], messages: [{ role: 'user', content: [{ type: 'text', text: 'Complete this bounded task.' }] }] })
+    assert.ok(requestSize(envelope(current)).totalBytes <= requestSize(envelope(prior)).totalBytes, `${names.join(',')}: serialized request grew`)
+    before += priorBytes; after += currentBytes
+  }
+  const reduction = 1 - after / before
+  assert.ok(reduction >= 0.3, `Canonical Skill reduction ${(reduction * 100).toFixed(2)}% is below the CI minimum 30%`)
+})
 test('compiler retains rules, excludes only documentation, preserves unannotated resources and is deterministic', () => {
   const result = compileSkillResource(source(contract))
   assert.match(result.content, /Never replay completed effects\./u)

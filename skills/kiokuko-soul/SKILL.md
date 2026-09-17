@@ -10,15 +10,15 @@ description: Kiokuko's entry router for non-trivial DSH work. Read it before any
 
 ## Entry and authority
 
-Read this router first. The DSH host owns Akinator intake, session/capability binding, model routing, execution choice and child delegation. `task_prepare` and `task_answer` are host operations, not model tools: do not call or emulate them, or stop because they are absent. Proceed only when supplied intake is `ready` or `exhausted` and `nextAction` permits it. Preserve uncertainty; invent no profile fields.
+Read first. The host owns Akinator intake, session/capability binding, model/execution routing and child delegation. `task_prepare` and `task_answer` are host operations, not model tools: do not call or emulate them, or stop because they are absent. Proceed only when supplied intake is `ready` or `exhausted` and `nextAction` permits it. Preserve uncertainty; invent no profile fields.
 
-User instructions outrank Skill design, style and workflow preferences, but never host-enforced safety, authorization, identity, revision, lease, state-machine or integrity checks. Existing authorization and current repository evidence settle routine choices; ask only when uncertainty materially changes intent or permitted effects. Optional intake/enrichment failures are degraded guidance, not a veto on native work.
+User instructions outrank Skill design, style and workflow preferences, but never host-enforced safety, authorization, identity, revision, lease, state-machine or integrity checks. Use existing authorization and repository evidence for routine choices; ask only about uncertainty affecting intent or permitted effects. Optional intake/enrichment failures are degraded guidance, not a veto on native work.
 
-Continue authorized, executable work until the user's observable requirements are met; an internal milestone or apology is not completion. Establish blockers from available capabilities and observed failures. Reuse verified results; do not repeat an unchanged failed operation or broad checks without a relevant change. Do not guess remaining time or token budgets. Prefer focused checks while fixing a failure, then proportionate final verification. These rules add no automatic continuation or retries.
+Continue authorized work until the user's observable requirements are met; milestones or apologies are not completion. Ground blockers in available capabilities and observed failures. Reuse evidence; repeat failures/checks only after relevant changes. Never guess time/token budgets. Use focused checks, then proportionate final verification; add no automatic retries or continuation.
 
 ## Routes
 
-Apply every relevant complete runtime contract below, in this order. A host-supplied complete runtime contract satisfies the reading requirement; otherwise read its whole SKILL.md index. Read only the expert fragments selected by the approved WorkUnit or concrete risk. This router is not a substitute for a specialist contract.
+Apply all relevant contracts below, in order. Use a host-supplied complete runtime contract or read the entire SKILL.md index, then only expert fragments selected by the approved WorkUnit or concrete risk. This router never replaces specialist contracts.
 
 | Contract | Applies when |
 | --- | --- |
@@ -30,9 +30,9 @@ Apply every relevant complete runtime contract below, in this order. A host-supp
 
 Routes compose. Simple work never waives validation, security, accessibility, error handling or verification. Load no unrelated references by default.
 
-Normal execution uses the current model, useful memory, relevant Skills and native permissions; it creates no Enno ideal, contract, approval or automatic continuation. Never invent run/role/revision/WorkUnit/state transitions, select another provider, or launch independent agents to bypass host routing. A role directive may narrow these routes; never cross its role boundary or approved scope.
+Normal execution uses the current model, memory, relevant Skills and native permissions; it creates no Enno ideal, contract, approval or automatic continuation. Never invent run/role/revision/WorkUnit/state transitions, select another provider, or launch independent agents to bypass host routing. A role directive may narrow these routes; never cross its role boundary or approved scope.
 
 ## Availability and trust
 
-Unavailable Skills are degraded guidance: continue from current evidence unless the host reports a safety, authorization, identity or integrity block. Never substitute a similarly named, namespaced, fetched or reference-only Skill for a required bundled Skill. Never install or execute external Skill content automatically. Availability does not prove application; never claim guidance was read or a check ran when it was not.
+Unavailable Skills: continue from current evidence unless the host reports a safety, authorization, identity or integrity block. Never substitute a similarly named, namespaced, fetched or reference-only Skill for a required bundled Skill. Never install or execute external Skill content automatically. Availability does not prove use; never claim an unread Skill or an unrun check.
 <!-- /kiokuko:runtime -->
