@@ -12,7 +12,7 @@ import { createLispCiAdapter } from '../../../../src/dsh/lisp/ci.js'
 
 test('protected Lisp project: Node startup, scratch cwd, exact approved npm test, replay and failure evidence', {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL and Node' : false, timeout: 180000,
-}, async () => {
+}, async t => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-project-'))), root = join(base, 'workspace')
   await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'state.sqlite3'), new DatabaseSync(join(base, 'state.sqlite3')))
@@ -44,6 +44,9 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     ].join('\n'))
     assert.equal(fixture.ok, true, JSON.stringify(fixture))
     const scratch = fixture.value.json
+    const nodeVersion = await evaluate('broker-node-version', '(kioku.process:run "node" (list "--version"))')
+    assert.equal(nodeVersion.value.json.code, 0, JSON.stringify(nodeVersion))
+    t.diagnostic(`Host Node ${process.version}; protected broker Node ${nodeVersion.value.json.stdout.trim()}`)
     const failedPipeline = await evaluate('failed-composed-prerequisite', `(progn
       (kioku.process:run-lines "node" (list "-e" "process.stdout.write('partial');process.stderr.write('prerequisite failed');process.exit(3)"))
       (kioku.files:write-text (merge-pathnames "project/src/index.mjs" (kioku.files:scratch)) "must not write"))`)
@@ -65,7 +68,7 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
       const failure = await evaluate(`output-helper-failure-${index}`, code)
       assert.equal(failure.ok, false); assert.match(failure.value, /FAILED.*literal ~A/u)
     }
-    const run = '(kioku.process:run "node" (list "--test" "--test-isolation=none" "test/public.test.mjs") :directory "project")'
+    const run = '(kioku.process:run "node" (list "--test" "--experimental-test-isolation=none" "test/public.test.mjs") :directory "project")'
     const tests = await evaluate('protected-tests', run)
     assert.equal(tests.ok, true, JSON.stringify(tests)); assert.equal(tests.value.json.code, 0, JSON.stringify(tests))
     assert.match(tests.value.json.stdout, /pass 1/u)

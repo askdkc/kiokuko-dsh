@@ -258,9 +258,14 @@ For a scratch project, run tests without child-process isolation when supported:
 
 ```lisp
 (kioku.process:run "node"
-  '("--test" "--test-isolation=none" "test/public.test.mjs")
+  '("--test" "--experimental-test-isolation=none" "test/public.test.mjs")
   :directory "extract/project")
 ```
+
+The experimental flag spelling works with Node 22.8+ and remains accepted by
+Node 24/26. The shorter `--test-isolation` spelling requires Node 23.6+.
+The broker resolves programs through its fixed system PATH, so its Node can differ
+from the host's Node or the version selected by a version manager/CI setup step.
 
 Check `result-code`; evaluation success alone does not establish process success.
 This alternative invocation does not establish that `npm test` passed.

@@ -95,8 +95,8 @@ report SUCCEEDED. Restart reconstructs outcomes from receipts; recovery never re
 `:directory` (scratch-relative, default `"."`; no links/traversal). `python` takes
 source; jobs use `job-status`/`cancel-job`. The macOS sandbox denies fork: use Lisp
 file helpers/direct broker calls, not shell chains, npm or multiprocessing.
-Node uses empty OpenSSL config; `--test --test-isolation=none` runs scratch tests
-without children. This does not prove `npm test` ran. Linux uses Bubblewrap PID
+Node uses empty OpenSSL config; `--test --experimental-test-isolation=none` (22.8+)
+avoids children; this is not `npm test`. Linux uses Bubblewrap PID
 namespaces. Jobs have count/time/output limits; no credentials/inherited environment.
 
 `kioku.ci:list-runs :limit 10`/`failed-log` (numeric run ID) use host gh/auth only for
@@ -169,7 +169,7 @@ The example checks a scratch Node project; it does not claim to run `npm test`.
 (defun check-project (directory)
   "Return the scratch project's process exit code, stdout and stderr."
   (kioku.process:run "node"
-    '("--test" "--test-isolation=none" "test/public.test.mjs")
+    '("--test" "--experimental-test-isolation=none" "test/public.test.mjs")
     :directory directory))
 
 (defun repair-and-check (directory file before after)

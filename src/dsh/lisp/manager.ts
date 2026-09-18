@@ -312,7 +312,7 @@ export class LispManager {
         api: { scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
           workflow: 'Define task-specific defun helpers once, compose them into one useful operation, and call that function in later evaluations. Batch known reads and checks; return a compact result. Definitions last for this worker generation. Stop before decisions requiring new evidence or approval.',
-          run: '(kioku.process:run "node" (list "--test" "--test-isolation=none" "test/public.test.mjs") :directory "project") uses a scratch-relative directory. Check result-code.',
+          run: '(kioku.process:run "node" (list "--test" "--experimental-test-isolation=none" "test/public.test.mjs") :directory "project") uses a scratch-relative directory. Check result-code.',
           inspect: 'lisp_inspect accepts ref, or resultOperationId with section/offset/limit (Unicode characters). Never rerun to retrieve output.',
           reads: 'Use native read/glob/grep/skill for repository exploration; lisp_eval.inputs for read-only workspace or session-attachment copies.',
           verify: '(kioku.ci:verify :test :script "test:unit") runs a focused npm script. For an extracted project: (kioku.ci:verify :test :location :scratch :directory "extract/project"). Requires human approval and runs the actual npm command.' },
