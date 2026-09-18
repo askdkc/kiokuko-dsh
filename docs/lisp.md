@@ -1,5 +1,27 @@
 # Common Lisp tools
 
+## Compose task tools
+
+Use the worker as a persistent programming environment. Before repeating primitive
+reads, transformations or commands, define the functions needed for the task and
+compose them into an operation that returns the next useful result. Definitions
+and a first invocation can share one `lisp_eval`; subsequent calls reuse the
+functions with new inputs. A call should usually perform a meaningful task phase.
+Pause at decisions that need new evidence or approval; do not preprogram guesses.
+
+The [Lisp Skill's executable toolkit example](../skills/kiokuko-lisp/SKILL.md#task-toolkit-example)
+defines `replace-once`, `check-project` and `repair-and-check`. One
+`(repair-and-check "project" "src/index.mjs" before after)` validates the match,
+edits scratch, runs the check and returns its exit code and logs. Failed checks
+remain failures and leave the scratch edit visible. Workspace proposals stay
+separate so their host outcomes and approval cannot be mistaken for scratch writes.
+
+Use `lisp_describe` with `symbol: "kioku.user"` to list current task functions, then
+`symbol: "kioku.user::repair-and-check"` for arguments and documentation. Ordinary
+`defun` and `defmacro` need no registry or new native tool. Discovery does not run
+the functions, includes only definitions owned by `kioku.user`, and is local to
+the worker generation. After replacement, rebuild definitions without replaying effects.
+
 ## Enable
 
 The `kiokuko-lisp` Skill is listed in DSH's available Skills and can be read with
@@ -219,10 +241,29 @@ subprocesses use the same output limit and parent-liveness supervisor as workers
 Published bundles are limited to 256 MiB each. Concurrent first enables share one
 serialized build under the host's existing exclusive data-directory lease.
 
-macOS denies fork inside workers and jobs. Use `kioku.process` broker APIs for
+The macOS sandbox denies fork inside workers and jobs. Use `kioku.process` broker APIs for
 external processes. Result helpers (`result-ok?`, `result-code`, `result-stdout`,
 `result-stderr`, `run-lines`, `python-stdout`, `shell-stdout`) and generation-local
 job helpers (`list-jobs`, `forget-job`) avoid ordinary shell plumbing.
+`run` and `start-job` accept `:directory`, relative to scratch (default `"."`);
+absolute paths, traversal and symlink directories are refused. Node uses an empty
+OpenSSL configuration, so it does not need access to host OpenSSL configuration.
+`python`, `shell`, `run-lines`, `python-stdout` and `shell-stdout` also accept
+`:directory`. The output-only helpers signal an error on process failure, so a
+composed operation stops before its next step. Use `run` when the function needs
+to inspect a nonzero exit and handle it explicitly. `result-ok?` is true only for
+exit code zero; missing or nonnumeric exit codes return false.
+
+For a scratch project, run tests without child-process isolation when supported:
+
+```lisp
+(kioku.process:run "node"
+  '("--test" "--test-isolation=none" "test/public.test.mjs")
+  :directory "extract/project")
+```
+
+Check `result-code`; evaluation success alone does not establish process success.
+This alternative invocation does not establish that `npm test` passed.
 
 Fork-free scratch helpers include `glob-scratch`, `head-lines`, `tail-lines`,
 `count-lines`, `grep-scratch`, `copy-scratch` and `delete-scratch`. Mutating
@@ -249,9 +290,13 @@ different repository is rejected.
 
 `kioku.ci:verify` accepts only `typecheck`, `lisp`, `test`, `build`, `package`, or
 `vendor`. These map to fixed `npm` commands and timeouts; arbitrary executable,
-arguments, URL, directory or shell input is not accepted. Before execution, the
-native confirmation shows the command, repository root, timeout and possible
-artifact effects. Refusal, cancellation or unavailable confirmation returns
+arguments, URL or shell input is not accepted. `:directory` selects a relative
+project directory under the bound workspace, or under the current worker's scratch
+with `:location :scratch`. Absolute paths, traversal and links are refused. Before
+execution, native confirmation shows the command, package script, exact directory,
+timeout and possible artifact effects. The verifier runs on the host, including npm
+lifecycle scripts, outside the worker sandbox. Directory identity and scripts are
+rechecked after approval. Refusal, cancellation or unavailable confirmation returns
 `NOT_APPLIED`; nonzero exit returns `FAILED` with bounded output. The enclosing
 `lisp_eval` operation ID provides replay and conflict handling.
 
@@ -263,6 +308,10 @@ Typical flow:
 ;; inspect project inputs, then propose a bounded file change
 (kioku.files:propose-write "path/to/file" new-content)
 (kioku.ci:verify :lisp)
+;; Run the actual npm test in the extracted project, after human confirmation.
+(kioku.ci:verify :test :location :scratch :directory "extract/project")
+;; Or verify an authorized project already applied beneath the workspace.
+(kioku.ci:verify :test :directory "project")
 ```
 
 ## Development verification

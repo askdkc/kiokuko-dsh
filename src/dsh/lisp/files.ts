@@ -10,6 +10,23 @@ export type CreatedParents = Map<string, { dev: number; ino: number }>
 const protectedSegment = /^(?:\.git|\.ssh|\.gnupg|\.aws|\.azure|\.config|\.env(?:\..*)?|AGENTS\.md|.*\.(?:sqlite3?|db)(?:-(?:wal|shm|journal))?|.*\.(?:pem|key|p12)|credentials(?:\..*)?)$/iu
 export function under(root: string, path: string): boolean { const part = relative(root, path); return part === '' || (!isAbsolute(part) && part !== '..' && !part.startsWith(`..${sep}`)) }
 
+/** Bind a working directory to one trusted root without following links. */
+export async function checkedDirectory(root: string, path = '.'): Promise<{ path: string; dev: number; ino: number }> {
+  if (await realpath(root) !== root) fail('ROOT_CHANGED', '作業ディレクトリの参照先が変わりました。')
+  if (path !== '.' && (isAbsolute(path) || /[\\\p{Cc}\p{Cf}]/u.test(path) || path.split('/').some(part => !part || part === '.' || part === '..' || protectedSegment.test(part)))) {
+    fail('PROTECTED_PATH', '作業ディレクトリは許可されたルート内の相対パスで指定してください。')
+  }
+  let current = root
+  for (const part of path === '.' ? [] : path.split('/')) {
+    current = join(current, part)
+    const info = await lstat(current)
+    if (!info.isDirectory() || info.isSymbolicLink()) fail('UNSAFE_PARENT', '作業ディレクトリにリンクまたは通常でない項目があります。')
+  }
+  const info = await lstat(current)
+  if (!info.isDirectory() || info.isSymbolicLink()) fail('UNSAFE_PARENT', '作業ディレクトリを確認できません。')
+  return { path: current, dev: info.dev, ino: info.ino }
+}
+
 /** Resolve every directory without following links; no directory deletion is exposed. */
 export async function snapshot(root: string, path: string, protectedRoots: readonly string[]): Promise<FileSnapshot> {
   if (isAbsolute(path) || /[\\\p{Cc}\p{Cf}]/u.test(path) || path.split('/').some(p => !p || p === '.' || p === '..' || protectedSegment.test(p))) fail('PROTECTED_PATH', 'このパスは汎用 Lisp ファイル操作の対象にできません。')

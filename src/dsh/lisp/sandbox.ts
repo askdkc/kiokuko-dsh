@@ -1,8 +1,9 @@
 import { access, mkdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
-import { dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { fail } from './contracts.js'
 import { networkFilter } from './seccomp.js'
+import { checkedDirectory } from './files.js'
 
 export interface SandboxLayout { base: string; scratch: string; inputs: string; cache: string; library: string; compiled?: string }
 export interface Launch { command: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string; seccompPath?: string }
@@ -24,12 +25,16 @@ export async function prepareLayout(base: string, library: string): Promise<Sand
   return layout
 }
 /** The OS boundary applies to arbitrary Lisp, FFI, exec, Python and shell alike. */
-export async function sandboxLaunch(layout: SandboxLayout, program: string, args: string[], generation: string, protocol = false): Promise<Launch> {
+export async function sandboxLaunch(layout: SandboxLayout, program: string, args: string[], generation: string, protocol = false, directory = '.'): Promise<Launch> {
   const binary = await executable(program)
+  const cwd = (await checkedDirectory(layout.scratch, directory)).path
   if (!protocol && !['/usr/', '/bin/', '/opt/homebrew/Cellar/', '/opt/homebrew/bin/'].some(root => binary.startsWith(root))) fail('EXECUTABLE_SCOPE', '実行ファイルは OS またはインストール済みランタイムの場所から指定してください。')
   const env: Record<string, string> = { PATH: systemPaths.join(':'), HOME: layout.scratch, TMPDIR: layout.scratch, LANG: 'C.UTF-8',
     KIOKU_SCRATCH: `${layout.scratch}/`, KIOKU_CACHE: `${layout.cache}/`, KIOKU_GENERATION: generation }
   if (layout.compiled) env.KIOKU_COMPILED = `${layout.compiled}/`
+  // Homebrew Node otherwise reads host OpenSSL configuration outside its
+  // allowed runtime roots. A fixed empty config needs no extra read permission.
+  if (basename(binary) === 'node') env.OPENSSL_CONF = '/dev/null'
   if (process.platform === 'darwin') {
     const runtime = dirname(dirname(binary))
     // No child can fork or escape the host's direct-child termination accounting.
@@ -45,7 +50,7 @@ export async function sandboxLaunch(layout: SandboxLayout, program: string, args
 (allow file-read* file-write* (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))`
     const policy = join(layout.base, `policy-${protocol ? 'worker' : 'job'}.sb`)
     await writeFile(policy, profile, { mode: 0o600 })
-    return { command: '/usr/bin/sandbox-exec', args: ['-f', policy, binary, ...args], env, cwd: layout.scratch }
+    return { command: '/usr/bin/sandbox-exec', args: ['-f', policy, binary, ...args], env, cwd }
   }
   if (process.platform === 'linux') {
     const seccompPath = join(layout.base, 'network.bpf')
@@ -58,7 +63,7 @@ export async function sandboxLaunch(layout: SandboxLayout, program: string, args
     }
     return { command: await executable('bwrap'), args: ['--unshare-all', '--die-with-parent', '--new-session', '--clearenv', ...Object.entries(env).flatMap(([k,v]) => ['--setenv', k, v]),
       ...binds, '--proc', '/proc', '--dev', '/dev', '--bind', layout.scratch, layout.scratch, '--bind', layout.cache, layout.cache,
-      '--seccomp', '4', '--chdir', layout.scratch, '--', binary, ...args], env, cwd: layout.scratch, seccompPath }
+      '--seccomp', '4', '--chdir', cwd, '--', binary, ...args], env, cwd, seccompPath }
   }
   return fail('UNSUPPORTED_OS', 'Common Lisp は macOS と Linux で利用できます。')
 }

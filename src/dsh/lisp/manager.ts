@@ -25,7 +25,7 @@ export interface ManagerOptions {
   store: LispStore; config: LispConfiguration; dataRoot: string; library?: string; protectedRoots?: string[]; questions?: DshUserQuestions
   notify?: (owner: LispOwner, message: string) => void
   toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>) => Promise<unknown>
-  ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal) => Promise<unknown>
+  ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal, scratchRoot?: string) => Promise<unknown>
   attachmentInput?: (owner: LispOwner, path: string, signal: AbortSignal) => AttachmentInput
 }
 /** Host-owned authority. Worker frames never grant permissions or choose identities. */
@@ -235,10 +235,11 @@ export class LispManager {
         ? { kind: 'list-runs', ...z.object({ limit: z.number().int().min(1).max(20) }).strict().parse(args) }
         : method === 'ci-failed-log'
           ? { kind: 'failed-log', ...z.object({ runId: z.string().regex(/^[1-9][0-9]{0,19}$/) }).strict().parse(args) }
-          : { kind: 'verify', ...z.object({ target: z.enum(['typecheck', 'lisp', 'test', 'build', 'package', 'vendor']), script: z.string().min(1).max(256).optional() }).strict().parse(args) }
+          : { kind: 'verify', ...z.object({ target: z.enum(['typecheck', 'lisp', 'test', 'build', 'package', 'vendor']), script: z.string().min(1).max(256).optional(),
+            directory: z.string().min(1).max(4096).optional(), location: z.enum(['workspace', 'scratch']).optional() }).strict().parse(args) }
       const active = [...state.active]
       if (active.length !== 1) fail('HOST_STATE', 'CI 呼び出しの実行主体を一意に確認できません。')
-      return this.options.ciCall(state.owner, request, active[0]!.signal)
+      return this.options.ciCall(state.owner, request, active[0]!.signal, state.worker.layout.scratch)
     }
     if (method === 'artifact') {
       const { path } = z.object({ path: z.string().min(1).max(4096) }).strict().parse(args)
@@ -309,8 +310,12 @@ export class LispManager {
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
         packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci'],
         api: { scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
+          describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
+          workflow: 'Define task-specific defun helpers once, compose them into one useful operation, and call that function in later evaluations. Batch known reads and checks; return a compact result. Definitions last for this worker generation. Stop before decisions requiring new evidence or approval.',
+          run: '(kioku.process:run "node" (list "--test" "--test-isolation=none" "test/public.test.mjs") :directory "project") uses a scratch-relative directory. Check result-code.',
           inspect: 'lisp_inspect accepts ref, or resultOperationId with section/offset/limit (Unicode characters). Never rerun to retrieve output.',
-          reads: 'Use native read/glob/grep/skill for repository exploration.', verify: '(kioku.ci:verify :test :script "test:unit") runs an existing focused npm script.' },
+          reads: 'Use native read/glob/grep/skill for repository exploration; lisp_eval.inputs for read-only workspace or session-attachment copies.',
+          verify: '(kioku.ci:verify :test :script "test:unit") runs a focused npm script. For an extracted project: (kioku.ci:verify :test :location :scratch :directory "extract/project"). Requires human approval and runs the actual npm command.' },
         verifiers: await describeVerifiers(owner) }
       if (tool === 'lisp_inspect' && input.resultOperationId !== undefined) {
         if (input.ref !== undefined) throw new LispError('INVALID_INSPECTION', 'ref と resultOperationId は同時に指定できません。', 'どちらか一つを指定してください。')

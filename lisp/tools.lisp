@@ -160,14 +160,15 @@
 (defun register-artifact (scratch-relative-path)
   (kioku.internal:rpc "artifact" (kioku.internal:object "path" scratch-relative-path)))
 (in-package :kioku.process)
-(defun run (program arguments &key (timeout-ms 120000))
-  (kioku.internal:rpc "run" (kioku.internal:object "program" program "argv" (coerce arguments 'vector) "timeoutMs" timeout-ms)))
-(defun python (code &key (timeout-ms 120000)) (run "python3" (list "-I" "-c" code) :timeout-ms timeout-ms))
-(defun shell (code &key (timeout-ms 120000)) (run "sh" (list "-c" code) :timeout-ms timeout-ms))
+(defun run (program arguments &key (timeout-ms 120000) (directory "."))
+  "Run a protected program in a scratch-relative DIRECTORY. Inspect result-code; Lisp evaluation success is not process success."
+  (kioku.internal:rpc "run" (kioku.internal:object "program" program "argv" (coerce arguments 'vector) "timeoutMs" timeout-ms "directory" directory)))
+(defun python (code &key (timeout-ms 120000) (directory ".")) (run "python3" (list "-I" "-c" code) :timeout-ms timeout-ms :directory directory))
+(defun shell (code &key (timeout-ms 120000) (directory ".")) (run "sh" (list "-c" code) :timeout-ms timeout-ms :directory directory))
 (defvar *job-registry* nil)
-(defun start-job (program arguments &key (timeout-ms 120000))
+(defun start-job (program arguments &key (timeout-ms 120000) (directory "."))
   "Start one managed job and retain its id for LIST-JOBS in this worker generation."
-  (let ((id (kioku.internal:rpc "start-job" (kioku.internal:object "program" program "argv" (coerce arguments 'vector) "timeoutMs" timeout-ms))))
+  (let ((id (kioku.internal:rpc "start-job" (kioku.internal:object "program" program "argv" (coerce arguments 'vector) "timeoutMs" timeout-ms "directory" directory))))
     (pushnew id *job-registry* :test #'equal)
     id))
 (defun job-status (id) (kioku.internal:rpc "job-status" (kioku.internal:object "id" id)))
@@ -179,10 +180,12 @@
 (defun failed-log (run-id)
   "Read failed logs for one numeric run id in the bound workspace repository."
   (kioku.internal:rpc "ci-failed-log" (kioku.internal:object "runId" (princ-to-string run-id))))
-(defun verify (target &key script)
-  "Run a host-approved verifier. :test accepts :script naming an existing test or test:* npm script."
+(defun verify (target &key script (directory ".") (location :workspace))
+  "Run an approved npm verifier in a relative DIRECTORY under :workspace or :scratch. :test accepts :script naming test or test:*."
   (let ((request (kioku.internal:object "target" (string-downcase (string target)))))
     (when script (setf (gethash "script" request) script))
+    (unless (equal directory ".") (setf (gethash "directory" request) directory))
+    (unless (eq location :workspace) (setf (gethash "location" request) (string-downcase (string location))))
     (kioku.internal:rpc "ci-verify" request)))
 (in-package :kioku.environment)
 (defun status () (kioku.internal:object "generation" kioku.internal:*generation* "sbcl" (lisp-implementation-version) "os" (software-type) "architecture" (machine-type) "scratch" (namestring (kioku.files:scratch)) "network" yason:false "hostWrites" "proposals only" "libraries" #("yason" "cl-ppcre" "cl-csv")))
@@ -193,11 +196,32 @@
 (defun describe-tools ()
   (mapcar (lambda (package) (cons package (sort (loop for symbol being the external-symbols of (find-package package) collect (symbol-name symbol)) #'string<)))
           '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI")))
+(defun task-functions ()
+  "List functions and macros defined in this worker's KIOKU.USER package."
+  (let ((package (find-package :kioku.user)))
+    (sort (loop for symbol being the symbols of package
+                when (and (eq (symbol-package symbol) package) (fboundp symbol))
+                  collect (let ((*package* (find-package :keyword)) (*print-case* :downcase))
+                            (prin1-to-string symbol))) #'string<)))
 (defun describe-symbol (name)
+  (when (string-equal name "kioku.user")
+    (return-from describe-symbol
+      (kioku.internal:object "package" "kioku.user" "generation" kioku.internal:*generation*
+                            "symbols" (coerce (task-functions) 'vector))))
+  (let ((package (find-package (string-upcase name))))
+    (when (and package (member (package-name package) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI") :test #'equal))
+      (return-from describe-symbol
+        (kioku.internal:object "package" (string-downcase (package-name package))
+          "symbols" (coerce (sort (loop for symbol being the external-symbols of package
+                                        collect (string-downcase (format nil "~A:~A" (package-name package) (symbol-name symbol)))) #'string<) 'vector)))))
   (if (zerop (length name)) (kioku.internal::printed (describe-tools))
-      (let* ((*read-eval* nil) (symbol (read-from-string name)))
-        (unless (and (symbolp symbol) (member (package-name (symbol-package symbol)) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI") :test #'equal)) (error "UNKNOWN_SYMBOL"))
-        (kioku.internal:object "symbol" name "arguments" (kioku.internal::printed (sb-introspect:function-lambda-list symbol)) "documentation" (or (documentation symbol 'function) "See bundled kiokuko-lisp Skill.")))))
+      (let ((*read-eval* nil) (*package* (find-package :kioku.user)))
+        (multiple-value-bind (symbol end) (read-from-string name)
+          (unless (and (symbolp symbol) (symbol-package symbol) (fboundp symbol)
+                       (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq name end))))
+                       (member (package-name (symbol-package symbol)) '("KIOKU.USER" "KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI") :test #'equal))
+            (error "UNKNOWN_SYMBOL"))
+          (kioku.internal:object "symbol" name "arguments" (kioku.internal::printed (sb-introspect:function-lambda-list symbol)) "documentation" (or (documentation symbol 'function) "No function documentation."))))))
 
 
 (in-package :kioku.files)
@@ -316,7 +340,7 @@
 (defun result-code (result) (gethash "code" result))
 (defun result-stdout (result) (gethash "stdout" result))
 (defun result-stderr (result) (gethash "stderr" result))
-(defun result-ok? (result) (zerop (gethash "code" result 1)))
+(defun result-ok? (result) (eql 0 (gethash "code" result)))
 
 (defun split-lines (text &key (limit 2000))
   "Single-pass split on #\\Newline: O(n) time, bounded lines."
@@ -332,22 +356,25 @@
           (unless pos (return-from done (coerce (nreverse out) 'vector)))
           (setf start (1+ (the fixnum pos))))))))
 
-(defun run-lines (program arguments &key (timeout-ms 120000) (limit 2000))
-  "RUN + split in one step; pipesは使わずLisp側で畳む用."
-  (split-lines (gethash "stdout" (run program arguments :timeout-ms timeout-ms) "") :limit limit))
+(defun run-lines (program arguments &key (timeout-ms 120000) (limit 2000) (directory "."))
+  "Run in scratch-relative DIRECTORY and split stdout; signal on process failure."
+  (let ((result (run program arguments :timeout-ms timeout-ms :directory directory)))
+    (unless (result-ok? result)
+      (error "PROGRAM_FAILED(~A): ~A" (result-code result) (result-stderr result)))
+    (split-lines (result-stdout result) :limit limit)))
 
-(defun python-stdout (code &key (timeout-ms 120000))
+(defun python-stdout (code &key (timeout-ms 120000) (directory "."))
   "Single-process python returning stdout string; signals on non-zero exit."
-  (let ((r (python code :timeout-ms timeout-ms)))
-    (unless (zerop (gethash "code" r 1))
-      (error (format nil "PYTHON_FAILED: ~A" (gethash "stderr" r ""))))
+  (let ((r (python code :timeout-ms timeout-ms :directory directory)))
+    (unless (result-ok? r)
+      (error "PYTHON_FAILED: ~A" (gethash "stderr" r "")))
     (gethash "stdout" r "")))
 
-(defun shell-stdout (code &key (timeout-ms 120000))
+(defun shell-stdout (code &key (timeout-ms 120000) (directory "."))
   "One shell command, no pipes; signals on non-zero exit. Pipes may hit fork denial."
-  (let ((r (shell code :timeout-ms timeout-ms)))
-    (unless (zerop (gethash "code" r 1))
-      (error (format nil "SHELL_FAILED(~A): ~A" (gethash "code" r) (gethash "stderr" r ""))))
+  (let ((r (shell code :timeout-ms timeout-ms :directory directory)))
+    (unless (result-ok? r)
+      (error "SHELL_FAILED(~A): ~A" (gethash "code" r) (gethash "stderr" r "")))
     (gethash "stdout" r "")))
 
 (defun list-jobs ()

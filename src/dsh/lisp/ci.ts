@@ -2,19 +2,19 @@ import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { access, realpath } from 'node:fs/promises'
 import { constants } from 'node:fs'
-import { delimiter, join, relative } from 'node:path'
+import { delimiter, join } from 'node:path'
 import type { DshUserQuestions } from '../user-interaction.js'
 import { LispError, fail, digest, type LispOwner } from './contracts.js'
-import { checkedBytes, snapshot } from './files.js'
+import { checkedBytes, checkedDirectory, snapshot, under } from './files.js'
 import { confirm } from './approval.js'
 
 export type LispCiRequest =
   | { kind: 'list-runs'; limit: number }
   | { kind: 'failed-log'; runId: string }
-  | { kind: 'verify'; target: keyof typeof VERIFIERS; script?: string | undefined }
+  | { kind: 'verify'; target: keyof typeof VERIFIERS; script?: string | undefined; directory?: string | undefined; location?: 'workspace' | 'scratch' | undefined }
 
 interface CommandResult { code: number; stdout: string; stderr: string }
-type CommandRunner = (file: string, args: string[], options: { cwd: string; timeoutMs: number; signal: AbortSignal }) => Promise<CommandResult>
+type CommandRunner = (file: string, args: string[], options: { cwd: string; timeoutMs: number; signal: AbortSignal; excludedRoots?: readonly string[] }) => Promise<CommandResult>
 
 const OUTPUT_LIMIT = 1024 * 1024
 const VERIFIERS = {
@@ -26,12 +26,11 @@ const VERIFIERS = {
   vendor: { file: 'npm', args: ['run', 'verify:lisp:vendor'], timeoutMs: 60_000 },
 } as const
 
-async function trustedExecutable(name: 'gh' | 'npm', repositoryRoot: string): Promise<string> {
+async function trustedExecutable(name: 'gh' | 'npm', excludedRoots: readonly string[]): Promise<string> {
   for (const directory of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
     try {
       const executable = await realpath(join(directory, name))
-      const inside = relative(repositoryRoot, executable)
-      if (inside === '' || (!inside.startsWith('..') && inside !== '..')) continue
+      if (excludedRoots.some(root => under(root, executable))) continue
       await access(executable, constants.X_OK)
       return executable
     } catch { /* try the next fixed PATH entry */ }
@@ -41,9 +40,12 @@ async function trustedExecutable(name: 'gh' | 'npm', repositoryRoot: string): Pr
 
 const runCommand: CommandRunner = async (file, args, options) => {
   if (file !== 'gh' && file !== 'npm') fail('HOST_COMMAND_REFUSED', '許可されていないホストコマンドです。')
-  const executable = await trustedExecutable(file, options.cwd)
+  const executable = await trustedExecutable(file, options.excludedRoots ?? [options.cwd])
+  const env = { ...process.env }
+  // This is a standalone verifier, never a child of a Node test worker.
+  delete env.NODE_TEST_CONTEXT
   return new Promise((resolve, reject) => {
-    execFile(executable, args, { cwd: options.cwd, timeout: options.timeoutMs, maxBuffer: OUTPUT_LIMIT, signal: options.signal, env: process.env }, (error, stdout, stderr) => {
+    execFile(executable, args, { cwd: options.cwd, timeout: options.timeoutMs, maxBuffer: OUTPUT_LIMIT, signal: options.signal, env }, (error, stdout, stderr) => {
       if (options.signal.aborted) return reject(new LispError('CANCELLED', 'ホスト処理を取り消しました。'))
       if (error && (error as NodeJS.ErrnoException).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return reject(new LispError('OUTPUT_LIMIT', 'ホスト処理の出力が上限を超えました。'))
       const code = error && typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : error ? 1 : 0
@@ -77,7 +79,7 @@ export async function describeVerifiers(owner: LispOwner): Promise<unknown> {
 
 /** Host-only CI adapter. Credentials remain in the host child process and are never copied into the Lisp worker. */
 export function createLispCiAdapter(questions?: DshUserQuestions, runner: CommandRunner = runCommand) {
-  return async (owner: LispOwner, request: LispCiRequest, signal: AbortSignal): Promise<unknown> => {
+  return async (owner: LispOwner, request: LispCiRequest, signal: AbortSignal, scratchRoot?: string): Promise<unknown> => {
     if (request.kind === 'list-runs') {
       const result = await runner('gh', ['run', 'list', '--limit', String(request.limit), '--json', 'databaseId,name,status,conclusion,headBranch,headSha,url'], { cwd: owner.root, timeoutMs: 30_000, signal })
       if (result.code !== 0) fail('CI_COMMAND_FAILED', result.stderr || 'GitHub CI の一覧を取得できませんでした。')
@@ -89,7 +91,11 @@ export function createLispCiAdapter(questions?: DshUserQuestions, runner: Comman
       if (result.code !== 0) fail('CI_COMMAND_FAILED', result.stderr || 'GitHub CI の失敗ログを取得できませんでした。')
       return { source: 'github', repositoryRoot: owner.root, runId: request.runId, log: result.stdout }
     }
-    const scripts = await scriptsFor(owner)
+    const root = request.location === 'scratch' ? scratchRoot : owner.root
+    if (!root) fail('HOST_STATE', '現在の Lisp scratch を確認できません。')
+    const directory = await checkedDirectory(root, request.directory)
+    const targetOwner = { ...owner, root: directory.path }
+    const scripts = await scriptsFor(targetOwner)
     if (request.script !== undefined && (request.target !== 'test' || !/^test(?::[A-Za-z0-9._-]+)*$/u.test(request.script))) {
       return { target: request.target, state: 'NOT_APPLIED', code: 'INVALID_TEST_SCRIPT', reason: 'invalid_input', message: 'script は test 対象の test または test:* のみ指定できます。' }
     }
@@ -99,12 +105,15 @@ export function createLispCiAdapter(questions?: DshUserQuestions, runner: Comman
     const command = { ...VERIFIERS[request.target], args: script === 'test' ? ['test'] : ['run', script] }
     const approval = await confirm(questions, owner.agentId, {
       id: `lisp-ci-${randomUUID()}`, header: 'Lisp · 検証実行の確認', question: `${script} を実行しますか？`,
-      detail: `実行: ${command.file} ${command.args.join(' ')}\nスクリプト: ${scripts[script]}\n作業ディレクトリ: ${owner.root}\nタイムアウト: ${command.timeoutMs} ms\nテスト・ビルド成果物が作成される場合があります。`,
+      detail: `実行: ${command.file} ${command.args.join(' ')}\nスクリプト: ${scripts[script]}\n作業ディレクトリ: ${directory.path}\nタイムアウト: ${command.timeoutMs} ms\nホスト上で npm とライフサイクルスクリプトを実行します。Lisp ワーカーの保護外で、テスト・ビルド成果物が作成される場合があります。`,
       options: [{ label: '実行しない' }, { label: 'この検証を実行' }], intent: { kind: 'plan-review', approve: 'この検証を実行' },
     }, signal)
     if (!approval.approved) return { target: request.target, script, state: 'NOT_APPLIED', reason: approval.reason }
-    if (digest(scripts) !== digest(await scriptsFor(owner))) return { target: request.target, script, state: 'NOT_APPLIED', code: 'TARGET_CHANGED', reason: 'scripts_changed', message: '確認中にnpmスクリプトが変わりました。実行していません。' }
-    const result = await runner(command.file, [...command.args], { cwd: owner.root, timeoutMs: command.timeoutMs, signal })
-    return { target: request.target, script, state: result.code === 0 ? 'SUCCEEDED' : 'FAILED', ...result }
+    if (digest(directory) !== digest(await checkedDirectory(root, request.directory)) || digest(scripts) !== digest(await scriptsFor(targetOwner))) {
+      return { target: request.target, script, state: 'NOT_APPLIED', code: 'TARGET_CHANGED', reason: 'scripts_changed', message: '確認中に作業ディレクトリまたはnpmスクリプトが変わりました。実行していません。' }
+    }
+    const result = await runner(command.file, [...command.args], { cwd: directory.path, timeoutMs: command.timeoutMs, signal,
+      excludedRoots: [owner.root, ...(scratchRoot ? [scratchRoot] : [])] })
+    return { target: request.target, script, ...(request.directory || request.location ? { cwd: directory.path } : {}), state: result.code === 0 ? 'SUCCEEDED' : 'FAILED', ...result }
   }
 }

@@ -1,0 +1,139 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { DatabaseSync } from 'node:sqlite'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
+import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
+import { LispStore } from '../../../../src/dsh/lisp/store.js'
+import { LispManager } from '../../../../src/dsh/lisp/manager.js'
+import { createLispCiAdapter } from '../../../../src/dsh/lisp/ci.js'
+
+test('protected Lisp project: Node startup, scratch cwd, exact approved npm test, replay and failure evidence', {
+  skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL and Node' : false, timeout: 180000,
+}, async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-project-'))), root = join(base, 'workspace')
+  await mkdir(root)
+  const db = new NodeSqliteAdapter(join(base, 'state.sqlite3'), new DatabaseSync(join(base, 'state.sqlite3')))
+  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  const store = new LispStore(async fn => fn(db)), owner = { sessionId: 'session', agentId: 'agent', root }
+  let approvals = 0, approve = true
+  const adapter = createLispCiAdapter({ ask: async request => {
+    approvals++
+    assert.match(request.questions[0]!.detail!, /npm test/u)
+    assert.match(request.questions[0]!.detail!, /scratch\/project/u)
+    return { answers: [{ id: request.questions[0]!.id, selected: [request.questions[0]!.options![approve ? 1 : 0]!.label] }] }
+  } })
+  const manager = new LispManager({ store, config: LispConfig.parse({ enabled: true, startupTimeoutMs: 60000 }),
+    dataRoot: join(base, 'data'), ciCall: adapter })
+  const evaluate = (operationId: string, code: string) => manager.execute(owner, 'lisp_eval', { operationId, code }) as Promise<any>
+  const put = (path: string, text: string) => `(let ((p (merge-pathnames ${JSON.stringify(path)} (kioku.files:scratch)))) (ensure-directories-exist p) (kioku.files:write-text p ${JSON.stringify(text)}))`
+  try {
+    await manager.start(); await manager.enable(owner)
+    const described = await manager.execute(owner, 'lisp_describe', { operationId: 'describe-files', symbol: 'kioku.files' }) as any
+    assert.equal(described.ok, true, JSON.stringify(described))
+    assert.ok(described.value.symbols.includes('kioku.files:copy-scratch'))
+    // Reproduce the reported project layout and npm command with a synthetic
+    // fixture; no source from the uploaded session is evaluated.
+    const fixture = await evaluate('fixture', [
+      put('project/package.json', JSON.stringify({ type: 'module', scripts: { test: 'node --test test/*.test.mjs' } })),
+      put('project/src/index.mjs', 'export const value = 42;'),
+      put('project/test/public.test.mjs', 'import test from "node:test"; import assert from "node:assert/strict"; import { value } from "../src/index.mjs"; test("value", () => assert.equal(value, 42));'),
+      '(namestring (kioku.files:scratch))',
+    ].join('\n'))
+    assert.equal(fixture.ok, true, JSON.stringify(fixture))
+    const scratch = fixture.value.json
+    const failedPipeline = await evaluate('failed-composed-prerequisite', `(progn
+      (kioku.process:run-lines "node" (list "-e" "process.stdout.write('partial');process.stderr.write('prerequisite failed');process.exit(3)"))
+      (kioku.files:write-text (merge-pathnames "project/src/index.mjs" (kioku.files:scratch)) "must not write"))`)
+    assert.equal(failedPipeline.ok, false, 'run-lines must stop a composed operation on a failed process')
+    assert.match(failedPipeline.value, /PROGRAM_FAILED\(3\).*prerequisite failed/u)
+    assert.equal(await readFile(join(scratch, 'project/src/index.mjs'), 'utf8'), 'export const value = 42;')
+    const helpers = await evaluate('composed-process-helpers', `(progn
+      (assert (not (kioku.process:result-ok? (make-hash-table))))
+      (assert (not (kioku.process:result-ok? (kioku.data:parse-json "{\\\"code\\\":null}"))))
+      (assert (equalp #("line") (kioku.process:run-lines "node" (list "-e" "process.stdout.write('line')") :directory "project")))
+      (assert (search "package.json" (kioku.process:python-stdout "import os; print(os.listdir('.'))" :directory "project")))
+      (assert (search "/project" (kioku.process:shell-stdout "pwd" :directory "project")))
+      :helpers-ok)`)
+    assert.equal(helpers.ok, true, JSON.stringify(helpers))
+    for (const [index, code] of [
+      '(kioku.process:python-stdout "import sys; sys.stderr.write(\'literal ~A\'); sys.exit(2)" :directory "project")',
+      '(kioku.process:shell-stdout "printf \'literal ~A\' >&2; exit 2" :directory "project")',
+    ].entries()) {
+      const failure = await evaluate(`output-helper-failure-${index}`, code)
+      assert.equal(failure.ok, false); assert.match(failure.value, /FAILED.*literal ~A/u)
+    }
+    const run = '(kioku.process:run "node" (list "--test" "--test-isolation=none" "test/public.test.mjs") :directory "project")'
+    const tests = await evaluate('protected-tests', run)
+    assert.equal(tests.ok, true, JSON.stringify(tests)); assert.equal(tests.value.json.code, 0, JSON.stringify(tests))
+    assert.match(tests.value.json.stdout, /pass 1/u)
+    const nonzero = await evaluate('nonzero', '(kioku.process:run "node" (list "-e" "process.exit(7)") :directory "project")')
+    assert.equal(nonzero.value.json.code, 7, 'successful evaluation must retain the failed process exit code')
+    for (const [index, directory] of ['../workspace', root].entries()) {
+      const denied = await evaluate(`invalid-directory-${index}`, `(kioku.process:run "node" (list "-e" "throw 0") :directory ${JSON.stringify(directory)})`)
+      assert.equal(denied.ok, false); assert.match(denied.value, /相対パス/u)
+    }
+    await symlink(root, join(scratch, 'outside'))
+    assert.equal((await evaluate('symlink-directory', '(kioku.process:run "node" (list "-e" "throw 0") :directory "outside")')).ok, false)
+    const verify = '(kioku.ci:verify :test :location :scratch :directory "project")'
+    approve = false
+    const refused = await evaluate('refused', verify)
+    assert.equal(refused.value.json.state, 'NOT_APPLIED')
+    approve = true
+    const verified = await evaluate('npm-test', verify)
+    assert.equal(verified.ok, true, JSON.stringify(verified)); assert.equal(verified.value.json.state, 'SUCCEEDED', JSON.stringify(verified))
+    assert.equal(verified.value.json.code, 0); assert.equal(verified.value.json.cwd, join(scratch, 'project'))
+    assert.match(verified.value.json.stdout, /pass 1/u)
+    assert.equal((await evaluate('npm-test', verify)).replay, true); assert.equal(approvals, 2)
+    await evaluate('break-test', put('project/src/index.mjs', 'export const value = 0;'))
+    const failed = await evaluate('npm-test-fails', verify)
+    assert.equal(failed.value.json.state, 'FAILED'); assert.notEqual(failed.value.json.code, 0)
+
+    // Execute the published example itself: three reusable functions, then one
+    // call which reads, validates, edits and checks without model round trips.
+    const skill = await readFile(new URL('../../../../skills/kiokuko-lisp/SKILL.md', import.meta.url), 'utf8')
+    const example = skill.slice(skill.indexOf('## Task toolkit example'))
+    const [definitions, invocation] = [...example.matchAll(/```lisp\n([\s\S]*?)\n```/gu)].map(match => match[1]!)
+    assert.ok(definitions && invocation, 'the documented toolkit must remain executable')
+    const describe = (id: string, symbol: string) => manager.execute(owner, 'lisp_describe', { operationId: id, symbol }) as Promise<any>
+    assert.deepEqual((await describe('empty-task-tools', 'kioku.user')).value.symbols, [])
+    const repaired = await evaluate('compose-and-repair', `${definitions}\n${invocation}`)
+    assert.equal(repaired.ok, true, JSON.stringify(repaired)); assert.equal(repaired.value.json.code, 0, JSON.stringify(repaired))
+    assert.match(repaired.value.json.stdout, /pass 1/u)
+    assert.equal(await readFile(join(scratch, 'project/src/index.mjs'), 'utf8'), 'export const value = 42;')
+    const catalog = await describe('task-tools', 'kioku.user')
+    assert.deepEqual(catalog.value.symbols, ['kioku.user::check-project', 'kioku.user::repair-and-check', 'kioku.user::replace-once'])
+    const detail = await describe('repair-docs', 'kioku.user::repair-and-check')
+    assert.equal(detail.ok, true, JSON.stringify(detail))
+    assert.match(detail.value.arguments, /DIRECTORY FILE BEFORE AFTER/iu)
+    assert.match(detail.value.documentation, /failed tests leave the edit visible/u)
+    assert.equal((await describe('short-name', 'replace-once')).ok, true)
+    for (const [index, symbol] of ['cl:delete-file', 'kioku.internal:rpc', 'missing-task', 'check-project (delete-file "x")', '#.(error "must-not-run")'].entries()) {
+      assert.equal((await describe(`invalid-tool-${index}`, symbol)).ok, false)
+    }
+    assert.equal(await readFile(join(scratch, 'project/src/index.mjs'), 'utf8'), 'export const value = 42;', 'discovery must never invoke a task function')
+    const brokenAgain = await evaluate('reuse-repair', '(repair-and-check "project" "src/index.mjs" "42" "0")')
+    assert.equal(brokenAgain.ok, true); assert.notEqual(brokenAgain.value.json.code, 0)
+    const baseline = await evaluate('reuse-check', '(check-project "project")')
+    assert.equal(baseline.ok, true); assert.notEqual(baseline.value.json.code, 0)
+    for (const [index, before] of ['', 'missing', 't'].entries()) {
+      const rejected = await evaluate(`bad-replacement-${index}`, `(repair-and-check "project" "src/index.mjs" ${JSON.stringify(before)} "42")`)
+      assert.equal(rejected.ok, false)
+      assert.equal(await readFile(join(scratch, 'project/src/index.mjs'), 'utf8'), 'export const value = 0;')
+    }
+    await evaluate('other-definitions', '(defparameter *not-a-tool* 1) (defmacro task-identity (x) x) (defun |Case Sensitive| () 9) (import \'kioku.files:read-text)')
+    const otherTools = await describe('other-task-tools', 'kioku.user')
+    assert.ok(otherTools.value.symbols.includes('kioku.user::|Case Sensitive|'))
+    assert.ok(otherTools.value.symbols.includes('kioku.user::task-identity'))
+    assert.ok(!otherTools.value.symbols.some((name: string) => /read-text|not-a-tool/u.test(name)))
+    for (const [index, symbol] of ['kioku.user::task-identity', 'kioku.user::|Case Sensitive|'].entries()) {
+      assert.equal((await describe(`unusual-function-${index}`, symbol)).ok, true)
+    }
+    const other = { ...owner, agentId: 'other-agent', sessionId: 'other-session' }
+    await manager.enable(other)
+    const isolated = await manager.execute(other, 'lisp_describe', { operationId: 'isolated-task-tools', symbol: 'kioku.user' }) as any
+    assert.deepEqual(isolated.value.symbols, [], 'task definitions must not leak into another worker')
+  } finally { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) }
+})

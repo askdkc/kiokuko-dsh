@@ -141,17 +141,56 @@ test('compiled Skill delivery: protected Lisp enable and lisp_describe reach the
   try {
     const enabled=await f.ctx.commands.execute(f.agent,'/kioku-lisp enable',[],new AbortController().signal)
     assert.equal(enabled.result.kind,'success',JSON.stringify(enabled.result))
-    f.responses.push(f.mock.toolCallResponse('describe-lisp','lisp_describe',{operationId:'describe-guide'}),f.mock.textResponse('Lisp APIを確認しました。'))
+    const skill = await readFile(join(packageRoot ?? process.cwd(), 'skills/kiokuko-lisp/SKILL.md'), 'utf8')
+    const toolkit = skill.slice(skill.indexOf('## Task toolkit example')).match(/```lisp\n([\s\S]*?)\n```/u)?.[1]
+    assert.ok(toolkit, 'the shipped task toolkit example must be present')
+    f.responses.push(
+      f.mock.toolCallResponse('describe-lisp','lisp_describe',{operationId:'describe-guide'}),
+      f.mock.toolCallResponse('define-task-tools', 'lisp_eval', { operationId: 'define-task-tools', code: `${toolkit}\n(replace-once "value=0" "0" "42")` }),
+      f.mock.toolCallResponse('describe-task-tool', 'lisp_describe', { operationId: 'describe-task-tool', symbol: 'kioku.user::replace-once' }),
+      f.mock.toolCallResponse('reuse-task-tool', 'lisp_eval', { operationId: 'reuse-task-tool', code: '(replace-once "value=0" "0" "10")' }),
+      f.mock.textResponse('Lisp APIを確認しました。'))
     await f.turn()
-    assert.equal(f.model.requests.length,2,'Lisp must reach the model, execute describe, then deliver its result')
+    assert.equal(f.model.requests.length,5,'native requests must define, discover and reuse the task toolkit')
     requireBody(f.model.requests[0],'kiokuko-lisp')
     const last=f.model.requests.at(-1)
     const results=last.messages.flatMap((m:any)=>m.content).filter((b:any)=>b.type==='tool-result')
     assert.ok(results.some((b:any)=>b.content.some((c:any)=>c.type==='text'&&JSON.parse(c.text).api?.verify&&JSON.parse(c.text).guide===undefined)), 'lisp_describe delivers a concise API without duplicating the injected guide')
+    const outcomes = results.flatMap((b: any) => b.content.filter((c: any) => c.type === 'text').map((c: any) => JSON.parse(c.text)))
+    assert.ok(outcomes.some((result: any) => result.ok && result.value?.json === 'value=42'))
+    assert.ok(outcomes.some((result: any) => result.ok && result.value?.json === 'value=10'))
+    assert.ok(outcomes.some((result: any) => result.ok && result.value?.documentation?.includes('exactly one nonempty literal')))
     const expectedTools = ['lisp_cancel','lisp_describe','lisp_eval','lisp_inspect','lisp_reset','lisp_status','skill']
     for (const request of [f.model.requests[0], last]) assert.deepEqual(request.tools.map((t:any)=>t.name).sort(), expectedTools,
       'the first request already exposes protected Lisp and the available native Skill reader, never blocked mutations')
   } finally {await f.close()}
+})
+
+test('Lisp selected during initial admission reaches the first model request', {
+  ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
+}, async () => {
+  const asked: string[] = []
+  const f = await fixture(false, 'compiled', { lisp: { enabled: true, startupTimeoutMs: 60000 } }, async request => {
+    const q = request.questions[0]
+    asked.push(q.id)
+    if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['debug'] }] }
+    if (q.id === 'lisp-coding-mode') return { answers: [{ id: q.id, selected: ['Lispモードを使う（通常実行）'] }] }
+    throw new Error(`Unexpected admission question: ${JSON.stringify(q)}`)
+  })
+  try {
+    // These tools are visible when native assembly begins, before the choice.
+    for (const name of ['bash', 'write']) f.ctx.tools.register({ name, description: name, parameters: { type: 'object' },
+      output: { schema: {}, render: () => [] }, execute: async () => { throw new Error('blocked tool must never execute') } })
+    f.responses.push(f.mock.toolCallResponse('initial-lisp', 'lisp_describe', { operationId: 'initial-guide' }), f.mock.textResponse('Inspected.'))
+    await f.turn('Fix the failing implementation in src/main.js and verify that its tests pass.')
+    assert.ok(asked.includes('lisp-coding-mode'))
+    assert.equal(f.model.requests.length, 2, JSON.stringify(f.agent.session.snapshotEvents().slice(-6)))
+    for (const request of f.model.requests) {
+      requireBody(request, 'kiokuko-lisp')
+      assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(),
+        ['lisp_cancel', 'lisp_describe', 'lisp_eval', 'lisp_inspect', 'lisp_reset', 'lisp_status', 'skill'])
+    }
+  } finally { await f.close() }
 })
 
 test('Lisp workflow reaches the next model request through native approval, evidence paging, plugin restart and exact replay', {

@@ -9,6 +9,7 @@ import { DshEfficiencyObserver, mountDshEfficiencyObserver, type FinalizationInp
 import { explicitExecutionMode, readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
 import { selectExecution, ExecutionSelectionPending } from './model-selection-ui.js'
 import { LISP_CODING_SERVICE, type LispCodingService } from './lisp/coding-choice.js'
+import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './lisp/request-surface.js'
 import { installDshModelRouting, modelRoleForState, isModelAvailabilityFailure, type RoutableAgent } from './model-routing.js'
 import { DshSkillPrompts } from './skill-prompts.js'
 import { refreshDshSkillSnapshots } from './skill-snapshot.js'
@@ -1408,6 +1409,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     }, {
       prompts: () => skillPrompts,
       assembled: async assembly => {
+        const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
+        if (lisp) assembly = lisp.project(agent, assembly)
         const delivered = new Set<string>()
         for (const [name, sectionName] of [['kiokuko-soul','kiokuko:soul'], ['natural-japanese-output','kiokuko:natural-japanese-output'], ['kiokuko-lisp','kiokuko:lisp']]) {
           const section = assembly.sections.find(section => section.name === sectionName)
@@ -1416,6 +1419,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           if (text.includes(await skillPrompts.require(name!))) delivered.add(name!)
         }
         systemSkillNames.set(agent, delivered)
+        return assembly
       },
     })
     const disposeMemoryFence = agent.ctx.on('llm/stream', (request: any, next: () => AsyncIterable<any>) => (async function* () {

@@ -154,7 +154,13 @@ environment are forwarded, and direct network/host IPC access is denied. The
 host may run repository-scoped `gh run list`/`gh run view --log-failed` reads on
 behalf of Lisp without copying credentials into the worker. Verification accepts
 only six fixed npm targets and requires native human confirmation showing the
-command, repository root and timeout; arbitrary shell input is not accepted.
+command, package script, exact working directory and timeout. The directory may
+be the workspace root, a workspace subdirectory, or a subdirectory of the current
+worker's scratch. Traversal and symlink directories are refused, and directory
+identity and scripts are rechecked after approval. These approved verifiers run
+on the host, including npm lifecycle scripts, outside the worker sandbox;
+arbitrary shell input is not accepted. Brokered worker programs can select only a
+scratch-relative working directory and retain the existing OS restrictions.
 
 File deletion and replacement require the native human confirmation for the exact
 proposal. Generic operations reject databases/sidecars, credential paths, links,

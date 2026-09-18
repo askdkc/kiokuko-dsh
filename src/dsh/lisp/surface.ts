@@ -11,6 +11,7 @@ import type { DshUserQuestions } from '../user-interaction.js'
 import { LispManager } from './manager.js'
 import { LispStore } from './store.js'
 import { createLispCodingChoice, LISP_CODING_SERVICE } from './coding-choice.js'
+import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './request-surface.js'
 import { mountLispHttp } from './http.js'
 import { createLispCiAdapter } from './ci.js'
 import { attachmentInput, type LispAttachmentSession, type LispAttachmentStore } from './attachment-input.js'
@@ -18,7 +19,7 @@ import { LISP_TOOLS, failure, fail, identifier, renderResult, type LispConfigura
 
 interface Session extends LispAttachmentSession { id: string; header: { cwd: string; parentSession?: string } }
 interface Agent { id: string; status?: string; session: Session; ctx: { get(name: string, strict?: boolean): any }; inject?: (message: unknown) => void }
-interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; presentAs(mode: 'native'): () => void; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
+interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; schemas(scope?: unknown): { name: string; description: string; parameters: unknown }[]; presentAs(mode: 'native'): () => void; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
 interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean }
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill'] as const
@@ -238,6 +239,28 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (!['READY', 'EVALUATING'].includes(result.state ?? '')) fail('RECOVERY_REQUIRED', 'Lisp の起動・復旧が必要です。/kioku-lisp status で状態を確認してください。')
     },
   })))
+  const requestSurface: LispAssemblyService = {
+    project(candidate, assembly) {
+      const binding = owner(candidate)
+      if (!manager.enabled.has(binding.owner.sessionId)) return assembly
+      register(binding.agent)
+      // Native DSH snapshots providers before its assembly waterfall. Admission
+      // can activate Lisp inside that waterfall: refresh this request, not only
+      // the next one. Use native visibility plus the exact guarded definitions.
+      const schemas = tools.schemas(binding.agent).filter(schema => {
+        const registered = fence!.definitions.get(`${candidate.id}:${schema.name}`) as { execute?: unknown } | undefined
+        return registered && tools.get(schema.name, binding.agent)?.execute === registered.execute
+      })
+      if (!LISP_TOOLS.every(name => schemas.some(schema => schema.name === name))) fail('HOST_CAPABILITY_MISSING', 'Lisp のツール定義を要求へ反映できません。')
+      const sections = assembly.sections.filter(section => section.name !== 'kiokuko:lisp')
+      sections.splice(Math.max(0, sections.findIndex(section => section.name === 'kiokuko:soul') + 1), 0,
+        { name: 'kiokuko:lisp', text: '{{kiokuko_lisp}}' })
+      const projected = { ...assembly, sections, variables: { ...assembly.variables, kiokuko_lisp: guide },
+        tools: schemas.sort((a, b) => a.name.localeCompare(b.name)) }
+      return projected
+    },
+  }
+  disposers.push((ctx as any).provide(LISP_ASSEMBLY_SERVICE, requestSurface))
   disposers.push(mountLispHttp(ctx, manager, (sessionId, recover) => {
     const agent = agents.get(sessionId)
     const binding = owner(agent)
@@ -278,8 +301,8 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }
 }
 function description(name: LispTool): string {
-  return ({ lisp_eval: 'Evaluate Common Lisp in this protected session. Use a new operationId for new work. Same ID never re-evaluates. Host changes require proposals; deletions require human approval.',
-    lisp_describe: 'Describe bundled Common Lisp APIs and available verifiers.', lisp_inspect: 'Read a retained object or a page of saved evidence; never executes the original operation.', lisp_status: 'Read current host state and paged operation summaries without contacting Lisp.',
+  return ({ lisp_eval: 'Build and call reusable task functions in persistent Common Lisp. Compose reads, transforms and checks into one useful operation per call; return decision-ready results instead of issuing one call per primitive. Use a new operationId for new work; exact replay never re-evaluates. Host writes use proposals and native approval.',
+    lisp_describe: 'Describe Lisp APIs or task functions. symbol="kioku.user" lists this worker\'s functions; symbol="kioku.user::name" returns arguments and documentation. No symbol returns the bundled API/verifier map.', lisp_inspect: 'Read a retained object or a page of saved evidence; never executes the original operation.', lisp_status: 'Read current host state and paged operation summaries without contacting Lisp.',
     lisp_cancel: 'Stop Lisp and all managed jobs without waiting for evaluation.', lisp_reset: 'Stop a healthy worker and start a new generation. Never use to bypass recovery.' })[name]
 }
 export function lispToolSchema(name: LispTool): object {

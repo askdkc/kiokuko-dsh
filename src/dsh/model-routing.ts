@@ -26,7 +26,7 @@ export interface RoutableAgent {
 export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (signal: AbortSignal) => Promise<ModelBinding | undefined>, ordinaryModel?: {
   load(): ModelBinding | undefined
   save(binding: ModelBinding): Promise<void>
-}, guidance?: { prompts(): DshSkillPrompts; assembled?(assembly: PromptAssembly): Promise<void> }): () => void {
+}, guidance?: { prompts(): DshSkillPrompts; assembled?(assembly: PromptAssembly): Promise<PromptAssembly | void> }): () => void {
   if (!agent.ctx) return () => {}
   let assembled: ModelBinding | undefined
   let ordinary: ModelBinding | undefined
@@ -43,8 +43,7 @@ export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (si
       routed = selected !== undefined
       const result = await next()
       const prompt = await applyJapaneseOutputSkill(!assembled ? result : { ...result, variables: { ...result.variables, provider: assembled.provider, model: assembled.model } }, guidance?.prompts())
-      await guidance?.assembled?.(prompt)
-      return prompt
+      return await guidance?.assembled?.(prompt) ?? prompt
     }, { prepend: true }),
     agent.ctx.on('agent/request', async (_payload: unknown, next: () => Promise<any>) => {
       const resolved = await next()
