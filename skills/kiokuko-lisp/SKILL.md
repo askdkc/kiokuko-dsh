@@ -72,10 +72,10 @@ through DSH's attachment service, then copies it read-only; other absolute paths
 are refused. Each file is limited to 64 MiB, with 256 MiB per worker generation.
 Use the supplied attachment path directly; no manual workspace copy or disabling
 Lisp is needed. `(kioku.files:input 0)` selects the first read-only copy.
-Read with `kioku.files:read-text`. `(kioku.files:scratch)` takes no arguments and
-returns writable scratch. `(kioku.files:propose-write path content)` and
-`(kioku.files:propose-delete path)`
-request project effects only after successful evaluation and durable recording.
+`(kioku.files:scratch)` takes no args; use `read-text`/`write-text` there.
+`propose-write`/`propose-delete` require workspace-relative strings/pathnames,
+successful evaluation and durable recording:
+`(kioku.files:propose-write "src/infer.mjs" (kioku.files:read-text src))`.
 
 Deletion/replacement needs one human confirmation of the complete frozen batch,
 including targets and diffs. Duplicate targets are rejected; unchanged writes need

@@ -109,12 +109,25 @@
 (defun input (index) (aref kioku.internal:*inputs* index))
 (defun read-text (path) (uiop:read-file-string path))
 (defun write-text (path text) (with-open-file (s path :direction :output :if-exists :supersede :if-does-not-exist :create) (write-string text s)) path)
+(defun %proposal-string (text min max)
+  ;; Match the host's JavaScript string limits, including non-BMP characters.
+  (check-type text string)
+  (unless (<= min (loop for char across text sum (if (> (char-code char) #xffff) 2 1)) max)
+    (error "PROPOSAL_STRING_LIMIT"))
+  text)
+(defun %proposal-path (path)
+  ;; Pathnames are ordinary file arguments, but cannot cross the JSON wire.
+  ;; Leave workspace ownership and protected-path checks to the host.
+  (%proposal-string (etypecase path (string path) (pathname (namestring path))) 1 4096))
 (defun propose-write (path content)
+  "Propose a workspace-relative write; use WRITE-TEXT for scratch files."
   (when (>= (length kioku.internal:*proposals*) 100) (error "PROPOSAL_LIMIT"))
-  (push (kioku.internal:object "operation" "write" "path" path "content" content) kioku.internal:*proposals*) path)
+  (%proposal-string content 0 262144)
+  (push (kioku.internal:object "operation" "write" "path" (%proposal-path path) "content" content) kioku.internal:*proposals*) path)
 (defun propose-delete (path)
+  "Propose a workspace-relative deletion; scratch files need no proposal."
   (when (>= (length kioku.internal:*proposals*) 100) (error "PROPOSAL_LIMIT"))
-  (push (kioku.internal:object "operation" "delete" "path" path) kioku.internal:*proposals*) path)
+  (push (kioku.internal:object "operation" "delete" "path" (%proposal-path path)) kioku.internal:*proposals*) path)
 (defun search-text (pattern paths &key (limit 1000))
   "Search explicitly selected input/scratch files; return bounded line excerpts."
   (let ((hits nil))

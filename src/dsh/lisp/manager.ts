@@ -413,7 +413,7 @@ export class LispManager {
         await this.#store.transition(owner, id, ['RUNNING'], finished.state, finished)
         return finished
       } catch (error) {
-        let outcome: Record<string, unknown> = { ...evidence, ...failure(error), operationId: id, state: reserved ? 'UNKNOWN' : 'FAILED' }
+        let outcome: Record<string, unknown> = { ...(reserved ? { output: worker.output(), generation: worker.generation } : {}), ...evidence, ...failure(error), operationId: id, state: reserved ? 'UNKNOWN' : 'FAILED' }
         if (reserved) {
           // Close admission before attempting a potentially failing journal write.
           state.state = 'STOPPING'
