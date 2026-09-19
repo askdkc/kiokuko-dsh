@@ -308,7 +308,7 @@ test('v15 upgrades without scanning history; migration failure rolls back, then 
     } }), /injected migration failure/);
     assert.equal(f.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'akinator_profile_documents'").get(), undefined);
     assert.equal(f.db.prepare('SELECT max(version) AS version FROM schema_migrations').get()?.version, 15);
-    assert.deepEqual(migrateDatabase(f.db).applied, [16, 17, 18, 19]);
+    assert.deepEqual(migrateDatabase(f.db).applied, [16, 17, 18, 19, 20]);
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM akinator_profile_documents').get()?.n, 0);
     assert.equal(backfillProfileMemory(f.db, 1).processed, 1);
     assert.equal(backfillProfileMemory(f.db, 1).complete, true);

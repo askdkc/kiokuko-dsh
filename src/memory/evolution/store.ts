@@ -1,3 +1,4 @@
+import { capturePolicy } from '../capture-policy.js'
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { recordEntryInTransaction, readEntry, updateCandidateEntryInTransaction, type EntryRecord } from '../entries.js'
 import { buildStructuredScope } from '../structured-memory.js'
@@ -22,6 +23,7 @@ function adverseFeedback(db: SqliteDatabase, id: string, revision: number): bool
     WHERE f.entry_id=? AND d.entry_revision=? AND f.verdict IN ('stale','conflicting') LIMIT 1`).get(id, revision)
 }
 export function episodeCurrent(db: SqliteDatabase, episode: Episode): boolean {
+  if(capturePolicy(db,episode.workspace,episode.sessionId).mode!=='allowed')return false
   const row = db.prepare(`SELECT e.episode_json,e.overview_entry_id, r.status, r.workspace FROM memory_episodes e
     JOIN ledger_runs r ON r.run_id=e.run_id WHERE e.run_id=?`).get<{ episode_json: string; overview_entry_id: string | null; status: string; workspace: string }>(episode.runId)
   if (!row || row.workspace !== episode.workspace || row.status !== episode.outcome || digest(JSON.parse(row.episode_json)) !== digest(episode)) return false

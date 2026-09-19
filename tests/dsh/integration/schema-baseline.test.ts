@@ -14,7 +14,7 @@ const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migratio
 test('the schema keeps 001 immutable and appends forward-only DSH runtime migrations', async () => {
   const entries = await readdir(migrationsDirectory)
   const sqlFiles = entries.filter((name) => name.endsWith('.sql'))
-  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql', '011_dsh_finalization_input_mode.sql', '012_memory_evolution.sql', '013_dsh_deep_thinker.sql', '014_memory_projection_evidence.sql', '015_dsh_plugin_records.sql', '016_akinator_memory_probe.sql', '017_dsh_deep_quality.sql', '018_dsh_enno_memory_refresh.sql', '019_dsh_lisp.sql'])
+  assert.deepEqual(sqlFiles, ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql', '005_dsh_completion_recovery.sql', '006_dsh_execution_support.sql', '007_outbox_message_form.sql', '008_dsh_orca_traces.sql', '009_dsh_execution_selection.sql', '010_dsh_orca_session_choices.sql', '011_dsh_finalization_input_mode.sql', '012_memory_evolution.sql', '013_dsh_deep_thinker.sql', '014_memory_projection_evidence.sql', '015_dsh_plugin_records.sql', '016_akinator_memory_probe.sql', '017_dsh_deep_quality.sql', '018_dsh_enno_memory_refresh.sql', '019_dsh_lisp.sql', '020_dsh_memory_review.sql'])
   assert.ok(!entries.some((name) => name === 'down'), 'migrations/down must not exist')
 
   const snapshot = loadMigrationSnapshot(migrationsDirectory)
@@ -185,13 +185,13 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'ledger_memory_links',
         'ledger_purge_audit',
         'ledger_runs',
-        'memory_derivations',
+        'memory_capture_exclusions', 'memory_derivations',
         'memory_episode_entries',
         'memory_episodes',
         'memory_evolution_calls',
         'memory_evolution_jobs',
         'memory_evolution_settings',
-        'memory_evolution_skips',
+        'memory_evolution_skips', 'memory_review_control', 'memory_review_effects', 'memory_review_jobs', 'memory_review_states', 'memory_review_turns',
         'nudge_deliveries',
         'query_embeddings',
         'repositories',

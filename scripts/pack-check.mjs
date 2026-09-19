@@ -15,6 +15,8 @@ const requiredFiles = [
   'dist/dsh/skill-prompts.json',
   'dist/dsh/skill-prompts.js',
   'migrations/019_dsh_lisp.sql',
+  'migrations/020_dsh_memory_review.sql',
+  'docs/auto-memory-review.md',
   'dist/dsh/lisp/manager.js',
   'dist/dsh/lisp/surface.js',
   'dist/dsh/lisp/worker.js',

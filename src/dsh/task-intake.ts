@@ -1,3 +1,4 @@
+import { readContextRunRetrievalState } from '../context/run-state.js'
 import { scopedMemoryUseSignal, assertScopedMemoryUseSignal } from '../context/scoped-memory-gate.js';
 import { renderScopedRetrievalQuery } from '../context/retrieval-query.js';
 import { AkinatorMemoryConfig, type ProbeConfig, type ProfileMemoryHint } from '../akinator/memory-probe-types.js';
@@ -657,6 +658,29 @@ interface FinalTaskContextInput {
   readonly prepared: PreparedTaskContextQuery;
   readonly context: AkinatorResult;
   readonly missingMemoryCapability: boolean;
+}
+
+export async function refreshContinuedTaskContext(input: {
+  database: SqliteDatabase; prepared: PreparedAgentTask; task: string; capabilities: readonly unknown[];
+  assertCurrent: () => void; validateCapabilities: () => Promise<void>
+}): Promise<Pick<PreparedAgentTask, 'context' | 'memoryPolicy'>> {
+  const { database, prepared } = input
+  const snapshot = captureProjectManifestSnapshot(prepared.project)
+  const runState=readContextRunRetrievalState(database,prepared.run.runId)
+  const assertCurrent = () => { input.assertCurrent(); assertCurrentProjectManifest(prepared.project,snapshot);if(readContextRunRetrievalState(database,prepared.run.runId).stateHash!==runState.stateHash)throw new Error('continued_run_changed') }
+  assertCurrent()
+  const query = { project:prepared.project, task:input.task, taskProfile:prepared.intake.profile,
+    recommendedTags:prepared.intake.recommendedTags, runId:prepared.run.runId, characterBudget:8000 }
+  const gated = await queryScopedContextGated(database,query,candidate=>{
+    assertCurrent()
+    const memoryUse=scopedMemoryUseSignal(database,prepared.project.workspace,candidate)
+    const policy=deriveMemoryPolicy(prepared.intake.profile,memoryUse,input.capabilities)
+    const capabilities=resolveCapabilities({task:input.task,profile:prepared.intake.profile,recommendedTags:prepared.intake.recommendedTags,capabilities:input.capabilities,memoryUse})
+    return {persist:!policy.contextWithheld&&!hasBlockingRequiredCapability(capabilities),value:policy,
+      assertBeforePersist:()=>{assertCurrent();assertScopedMemoryUseSignal(database,prepared.project.workspace,candidate,memoryUse)}}
+  },{}, {beforeCommit:input.validateCapabilities})
+  assertCurrent()
+  return {context:gated.context,memoryPolicy:gated.value}
 }
 
 async function selectFinalTaskContext(

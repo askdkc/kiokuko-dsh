@@ -1,3 +1,4 @@
+import { capturePolicy, watchCapture } from '../capture-policy.js'
 import { finalizationObservationScope } from '../../dsh/efficiency.js'
 import { randomUUID } from 'node:crypto'
 import type { SqliteDatabase } from '../../db/adapter.js'
@@ -97,6 +98,7 @@ export class EvolutionWorker {
     let outputTokens: number | null = null
     let resultState = 'failed'
     let reason = 'model_failed'
+    const unwatch: (() => void)[] = []
     const controller = new AbortController()
     this.#abort = controller
     const timer = setTimeout(() => controller.abort(), this.options.config.timeoutMs)
@@ -104,7 +106,9 @@ export class EvolutionWorker {
       if (!this.options.llm) { reason = 'model_unavailable'; throw new Error(reason) }
       if (job.algorithm !== EVOLUTION_VERSION) { reason = 'unsupported_algorithm'; throw new Error(reason) }
       const all = JSON.parse(job.input_json) as Episode[]
+      for (const episode of all) unwatch.push(watchCapture(episode.workspace,episode.sessionId,controller))
       if (digest({ version: EVOLUTION_VERSION, kind: job.kind, episodes: all }) !== job.input_digest) { reason = 'input_digest_mismatch'; throw new Error(reason) }
+      if(await this.options.runtime.withDatabase(db=>all.some(e=>capturePolicy(db,e.workspace,e.sessionId).mode!=='allowed'))){reason='capture_excluded';throw new Error(reason)}
       const episodes = [...all]
       const model = JSON.parse(job.model_json) as EvolutionModel
       let request = buildEvolutionRequest(episodes, job.kind, model, this.options.config)
@@ -116,6 +120,7 @@ export class EvolutionWorker {
       if (!request || inductionKind(episodes) !== job.kind) { reason = 'context_budget_or_support'; throw new Error(reason) }
       callId = await this.options.runtime.withDatabase(db => withImmediateTransaction(db, () => {
         this.#assertClaim(db, job)
+        if(all.some(e=>capturePolicy(db,e.workspace,e.sessionId).mode!=='allowed')){reason='capture_excluded';throw new Error(reason)}
         if (episodes.some(e => !episodeCurrent(db, e))) { reason = 'source_changed'; throw new Error(reason) }
         const day = this.#now().slice(0, 10)
         const count = db.prepare('SELECT COUNT(*) AS n FROM memory_evolution_calls WHERE workspace=? AND utc_day=?').get<{ n: number }>(job.workspace, day)!.n
@@ -153,6 +158,7 @@ export class EvolutionWorker {
       const draft = LessonDraftSchema.parse(JSON.parse(text))
       await this.options.runtime.withDatabase(db => withImmediateTransaction(db, () => {
         this.#assertClaim(db, job)
+        if(all.some(e=>capturePolicy(db,e.workspace,e.sessionId).mode!=='allowed')){reason='capture_excluded';throw new Error(reason)}
         saveLesson(db, episodes, job.kind, draft, this.#now())
         db.prepare("UPDATE memory_evolution_jobs SET state='completed',reason=NULL,claim_token=NULL,lease_until=NULL,updated_at=? WHERE id=? AND claim_token=?")
           .run(this.#now(), job.id, job.claim_token)
@@ -169,6 +175,7 @@ export class EvolutionWorker {
           .run(resultState, reason, this.#now(), job.id, job.claim_token)
       })
     } finally {
+      for (const stop of unwatch) stop()
       clearTimeout(timer)
       this.#abort = undefined
       if (callId) await this.options.runtime.withDatabase(db => {

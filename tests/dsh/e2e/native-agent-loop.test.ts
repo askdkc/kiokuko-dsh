@@ -264,7 +264,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     },
     llm: {
       async * stream() {
-        yield { type: 'text-delta', index: 0, text: '{"schemaVersion":1,"memories":[]}' }
+        yield { type: 'text-delta', index: 0, text: '{"schemaVersion":3,"memoryOperations":[]}' }
         yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 8 } }
         yield { type: 'finish', reason: { kind: 'stop' } }
       },
