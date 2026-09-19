@@ -5,6 +5,7 @@
 (defpackage :kioku.process (:use :cl) (:export :run :python :shell :start-job :job-status :cancel-job :result-code :result-stdout :result-stderr :result-ok? :split-lines :python-stdout :shell-stdout :run-lines :list-jobs :forget-job))
 (defpackage :kioku.environment (:use :cl) (:export :status))
 (defpackage :kioku.ci (:use :cl) (:export :list-runs :failed-log :verify))
+(defpackage :kioku.typesafe (:use :cl) (:export :status :evaluate :service-error :error-code))
 (defpackage :kioku.tools (:use :cl) (:export :describe-tools :describe-symbol :available-tools :call-tool))
 (defpackage :kioku.user (:use :cl))
 (in-package :kioku.internal)
@@ -35,7 +36,11 @@
     (emit (object "version" 1 "type" "rpc" "id" id "request" *request* "method" method "arguments" arguments))
     (let ((reply (receive)))
       (unless (and reply (equal id (gethash "id" reply))) (error "RPC_MISMATCH"))
-      (unless (eq yason:true (gethash "ok" reply)) (error "~A" (gethash "error" reply)))
+      (unless (eq yason:true (gethash "ok" reply))
+        (let ((code (gethash "code" reply "")))
+          (when (and (stringp code) (alexandria:starts-with-subseq "TYPESAFE_" code))
+            (error 'kioku.typesafe:service-error :code code :message (gethash "error" reply))))
+        (error "~A" (gethash "error" reply)))
       (gethash "value" reply))))
 (defun printed (value)
   ;; print-length bounds elements, not arbitrary strings; the host independently caps frames/output.
@@ -187,6 +192,21 @@
     (unless (equal directory ".") (setf (gethash "directory" request) directory))
     (unless (eq location :workspace) (setf (gethash "location" request) (string-downcase (string location))))
     (kioku.internal:rpc "ci-verify" request)))
+(in-package :kioku.typesafe)
+(define-condition service-error (error)
+  ((code :initarg :code :reader error-code) (message :initarg :message :reader service-message))
+  (:report (lambda (condition stream) (format stream "~A: ~A" (error-code condition) (service-message condition)))))
+(defun status ()
+  "Return configured/source/writable metadata without a key or network request."
+  (kioku.internal:rpc "typesafe-status" (kioku.internal:object)))
+(defun evaluate (state questions &key (model "jev-latest") (timeout-ms 30000))
+  "Explicitly send selected JSON material to TypeSafe. QUESTIONS is a hash table of noul/choice/score questions. Return answers/model/usage; service-error is catchable. No retries or proposal approval."
+  (let* ((request (kioku.internal:object "state" state "questions" questions "model" model "timeoutMs" timeout-ms))
+         (bytes (handler-case (length (sb-ext:string-to-octets (kioku.data:encode-json request) :external-format :utf-8))
+                  (error () (error 'service-error :code "TYPESAFE_INVALID_REQUEST" :message "TypeSafe requires JSON values.")))))
+    (when (> bytes 262144)
+      (error 'service-error :code "TYPESAFE_REQUEST_TOO_LARGE" :message "TypeSafe request exceeds 256 KiB; select less material."))
+    (kioku.internal:rpc "typesafe-evaluate" request)))
 (in-package :kioku.environment)
 (defun status () (kioku.internal:object "generation" kioku.internal:*generation* "sbcl" (lisp-implementation-version) "os" (software-type) "architecture" (machine-type) "scratch" (namestring (kioku.files:scratch)) "network" yason:false "hostWrites" "proposals only" "libraries" #("yason" "cl-ppcre" "cl-csv")))
 (in-package :kioku.tools)
@@ -195,7 +215,7 @@
   (kioku.internal:rpc "tool-call" (kioku.internal:object "name" name "args" arguments)))
 (defun describe-tools ()
   (mapcar (lambda (package) (cons package (sort (loop for symbol being the external-symbols of (find-package package) collect (symbol-name symbol)) #'string<)))
-          '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI")))
+          '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.TYPESAFE")))
 (defun task-functions ()
   "List functions and macros defined in this worker's KIOKU.USER package."
   (let ((package (find-package :kioku.user)))
@@ -209,7 +229,7 @@
       (kioku.internal:object "package" "kioku.user" "generation" kioku.internal:*generation*
                             "symbols" (coerce (task-functions) 'vector))))
   (let ((package (find-package (string-upcase name))))
-    (when (and package (member (package-name package) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI") :test #'equal))
+    (when (and package (member (package-name package) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.TYPESAFE") :test #'equal))
       (return-from describe-symbol
         (kioku.internal:object "package" (string-downcase (package-name package))
           "symbols" (coerce (sort (loop for symbol being the external-symbols of package
@@ -219,7 +239,7 @@
         (multiple-value-bind (symbol end) (read-from-string name)
           (unless (and (symbolp symbol) (symbol-package symbol) (fboundp symbol)
                        (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq name end))))
-                       (member (package-name (symbol-package symbol)) '("KIOKU.USER" "KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI") :test #'equal))
+                       (member (package-name (symbol-package symbol)) '("KIOKU.USER" "KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.TYPESAFE") :test #'equal))
             (error "UNKNOWN_SYMBOL"))
           (kioku.internal:object "symbol" name "arguments" (kioku.internal::printed (sb-introspect:function-lambda-list symbol)) "documentation" (or (documentation symbol 'function) "No function documentation."))))))
 

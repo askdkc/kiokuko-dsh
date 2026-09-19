@@ -38,7 +38,8 @@
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "lisp/",
-    "scripts/verify-lisp-vendor.mjs"
+    "scripts/verify-lisp-vendor.mjs",
+    "scripts/smoke-typesafe.mjs"
   ],
   "exports": {
     ".": {
@@ -94,7 +95,7 @@
       ]
     },
     "permissions": {
-      "summary": "Local Kiokuko state and managed project files, optional network-backed Skill or embedding features, and restricted verifier or backup subprocesses.",
+      "summary": "Local Kiokuko state and managed files, optional network-backed Skills, embeddings and explicit TypeSafe decisions, DSH-managed TypeSafe credentials, and protected or approved subprocesses.",
       "readPaths": [
         "Configured Kiokuko SQLite database and embedding assets",
         "Registered project roots and their repository metadata",
@@ -118,10 +119,12 @@
         "GitHub or skills.sh for optional Skill discovery and source retrieval",
         "User-configured embedding endpoint when remote embeddings are enabled",
         "DSH-configured model providers for explicitly started Deep planning and its budgeted memory extraction",
-        "DSH-configured model provider for automatic memory review (active by default, up to 12 worker dispatches per project per UTC day), ordinary finalization and configured memory evolution"
+        "DSH-configured model provider for automatic memory review (active by default, up to 12 worker dispatches per project per UTC day), ordinary finalization and configured memory evolution",
+        "TypeSafe fixed systemone endpoint only for explicit Lisp semantic questions; selected state/questions, 256 KiB request/response cap, no retries"
       ],
       "credentials": [
-        "Optional user-provided GitHub or embedding credentials; never bundled or persisted by the plugin"
+        "Optional user-provided GitHub or embedding credentials; never bundled or persisted by the plugin",
+        "TYPESAFE_API_KEY resolved per explicit call; optional DSH-managed set/unset via /kioku-typesafe-key, inherited environment precedence, no worker or Kiokuko storage exposure; input visible while typing"
       ],
       "failureBoundaries": [
         "Repository identity, run identity, lease, revision, and integrity mismatches fail closed",

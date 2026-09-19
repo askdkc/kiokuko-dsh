@@ -1,5 +1,9 @@
 # Common Lisp tools
 
+For explicit semantic decisions and `/kioku-typesafe-key` setup, see
+[TypeSafe from Lisp](typesafe.md). Answers can guide inspection and proposals;
+the existing permission and approval boundaries still apply.
+
 ## Compose task tools
 
 Use the worker as a persistent programming environment. Before repeating primitive
