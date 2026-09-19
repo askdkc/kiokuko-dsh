@@ -1,57 +1,12 @@
-import { readFile } from 'node:fs/promises'
+import { ConfiguredSkillPrompts } from './configured-skill-prompts.js'
 import { loadSkillSources } from './skill-sources.js'
-import { SkillPromptBundle, SkillPromptsConfig, skillDigest, skillResourceId, type SkillPromptMode, type SkillSource } from './skill-prompt-contracts.js'
+import type { SkillPromptMode, SkillSource } from './skill-prompt-contracts.js'
+export type { SkillPromptDelivery } from './configured-skill-prompts.js'
 
-export interface SkillPromptDelivery {
-  id: string; content: string; representation: 'full' | 'compiled' | 'verbatim'
-  sourceDigest: string; contentDigest: string; fallback?: 'bundle_unavailable' | 'resource_mismatch'
-}
-
-/** One immutable source/artifact snapshot per plugin lifecycle; never compiles at runtime. */
-export class DshSkillPrompts {
-  readonly mode: SkillPromptMode
-  #loaded?: Promise<ReadonlyMap<string, SkillPromptDelivery>>
-  #diagnostics = new Map<string, Omit<SkillPromptDelivery, 'content'>>()
-  constructor(config: { mode?: SkillPromptMode } = {}, private readonly artifact = new URL('../../dist/dsh/skill-prompts.json', import.meta.url),
-    private readonly sources: () => Promise<readonly SkillSource[]> = loadSkillSources) {
-    this.mode = SkillPromptsConfig.parse(config).mode
+/** Full compatibility inventory; core callers supply their own resource manifest. */
+export class DshSkillPrompts extends ConfiguredSkillPrompts {
+  constructor(config: { mode?: SkillPromptMode } = {}, artifact = new URL('../../dist/dsh/skill-prompts.json', import.meta.url),
+    sources: () => Promise<readonly SkillSource[]> = loadSkillSources) {
+    super(config, artifact, sources)
   }
-  async #load(): Promise<ReadonlyMap<string, SkillPromptDelivery>> {
-    const sources = await this.sources() // Original integrity errors must propagate.
-    let bundle: SkillPromptBundle | undefined
-    if (this.mode === 'compiled') {
-      try {
-        const text = await readFile(this.artifact, 'utf8')
-        if (Buffer.byteLength(text) > 2_097_152) throw new Error('Skill bundle exceeds limit')
-        bundle = SkillPromptBundle.parse(JSON.parse(text))
-        if (new Set(bundle.resources.map(resource => resource.id)).size !== bundle.resources.length) bundle = undefined
-      } catch { /* The validated source remains available; diagnostics identify degraded delivery. */ }
-    }
-    return new Map(sources.map(source => {
-      const id = skillResourceId(source), sourceDigest = skillDigest(source.content)
-      const resource = bundle?.resources.find(item => item.id === id)
-      const matches = resource && resource.sourceDigest === sourceDigest && resource.sourceBytes === Buffer.byteLength(source.content)
-        && resource.contentDigest === skillDigest(resource.content) && resource.contentBytes === Buffer.byteLength(resource.content)
-        && (resource.representation === 'compiled' ? resource.blocks.length > 0 : resource.content === source.content && resource.blocks.length === 0)
-      const result: SkillPromptDelivery = matches
-        ? { id, content: resource.content, representation: resource.representation, sourceDigest, contentDigest: resource.contentDigest }
-        : { id, content: source.content, representation: 'full', sourceDigest, contentDigest: sourceDigest,
-          ...(this.mode === 'compiled' ? { fallback: bundle ? 'resource_mismatch' as const : 'bundle_unavailable' as const } : {}) }
-      return [id, Object.freeze(result)]
-    }))
-  }
-  async get(name: string, relativePath = 'SKILL.md'): Promise<SkillPromptDelivery | undefined> {
-    const result = (await (this.#loaded ??= this.#load())).get(`${name}/${relativePath}`)
-    if (result) {
-      const { content: _content, ...diagnostic } = result
-      this.#diagnostics.set(result.id, diagnostic)
-    }
-    return result
-  }
-  async require(name: string, relativePath = 'SKILL.md'): Promise<string> {
-    const result = await this.get(name, relativePath)
-    if (!result) throw new Error(`Bundled Skill file is unavailable: ${name}/${relativePath}`)
-    return result.content
-  }
-  diagnostics(): readonly Omit<SkillPromptDelivery, 'content'>[] { return [...this.#diagnostics.values()].map(value => ({ ...value })) }
 }

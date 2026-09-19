@@ -3,6 +3,8 @@ name: kiokuko-lisp
 description: Compose reusable task tools with Common Lisp functions in a persistent, protected DSH session.
 ---
 
+<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-lisp -->
+
 <!-- kiokuko:runtime contract -->
 # Common Lisp in Kiokuko DSH
 

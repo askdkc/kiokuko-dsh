@@ -9,7 +9,7 @@ import { workspaceKey } from './orca-security.js'
 import { record } from './orca-event-mapper.js'
 import { DshOrcaSessionChoices } from './orca-session-choice.js'
 import type { DshUserQuestions } from './user-interaction.js'
-import type { DshRuntime } from './runtime.js'
+import type { DshCoreRuntime as DshRuntime } from './core-runtime.js'
 import type { DshOrcaBinding, DshOrcaHostServices, WithOrcaIndex } from './orca-types.js'
 
 export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: DshRuntime, native: {

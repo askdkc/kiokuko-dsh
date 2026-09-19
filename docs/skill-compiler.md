@@ -1,5 +1,10 @@
 # Skill prompt compiler
 
+This page describes the full compatibility distribution. The configured core
+uses the same compiler and validation with a composition-specific resource
+manifest; absent Skills are never recovered from the full inventory. See
+[core and optional modules](core-modules.md) for artifacts and measurements.
+
 The compiler extracts author-classified runtime guidance from the canonical
 `skills/` tree. It makes no model calls. The default remains **full** until live
 quality comparison, Japanese review and native/package delivery gates pass.

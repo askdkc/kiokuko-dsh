@@ -54,3 +54,19 @@ Adding an optional field with a safe default may preserve compatibility;
 renaming, deleting, changing type or redefining defaults may not. Test old data
 and callers where they remain supported. Check readers as well as writers and
 rollout/restart ordering when old and new versions can coexist.
+
+## Admitted execution paths
+
+Frame/Trace/Bound/Implement/Verify/Finish are responsibilities assigned to the
+current role. Zenki plans; Goki implements and verifies only its approved
+WorkUnit; Enno owns final acceptance. A WorkUnit report is not run completion.
+Normal execution completes the observable request with the available native
+permissions; it adds no orchestration approval.
+
+When the host admits protected Lisp, use its Skill and current state: native
+read/glob/grep/skill remain subject to existing permissions; workspace mutation
+uses scratch, proposals, host confirmation and durable results. Use allowed
+verification targets. Distinguish execution success, verifier outcome and
+APPLIED/UNCHANGED/NOT_APPLIED/UNKNOWN; scratch success is not workspace success.
+Do not replay RUNNING/UNKNOWN effects under new IDs or use native fallback after
+runtime/protection failure. Only the host finalizes persisted run state.

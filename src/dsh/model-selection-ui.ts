@@ -3,9 +3,9 @@ import { explicitExecutionMode, type StoredExecutionSelection, type ExecutionSel
 import { MODEL_ROLES, MODEL_TEMPLATES, ROLE_LABELS, ModelConfigurationSchema, configurationProblems, modelRoutesForCatalog, readModelCatalog, templateBindings,
   type DshModelCatalog, type DshModelCompatibility, type ModelBinding, type ModelCatalogSnapshot, type ModelConfigurationDraft, type ModelRole, type ModelRoute, type ModelTemplate } from './model-configuration.js'
 
-export class ExecutionSelectionPending extends Error {
-  constructor(message = '実行方式・モデル構成の選択待ちです。依頼と完了済みの作業は保持されています。') { super(message) }
-}
+import { ExecutionSelectionPending } from './execution-pending.js'
+export { ExecutionSelectionPending } from './execution-pending.js'
+
 interface SelectionUiInput {
   readonly task: string
   readonly turn?: number

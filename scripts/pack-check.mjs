@@ -62,6 +62,11 @@ const requiredFiles = [
   'dist/client.d.ts',
   'dist/dsh/index.js',
   'dist/dsh/index.d.ts',
+  'dist/dsh/core/index.js',
+  'dist/dsh/core/index.d.ts',
+  'dist/dsh/modules/enno.js',
+  'dist/dsh/modules/lisp.js',
+  'docs/core-modules.md',
   'skills/japanese-translation-for-oss-models/SKILL.md',
 ]
 const requiredDirectories = ['dist/', 'migrations/', 'skills/', 'docs/']
@@ -192,6 +197,10 @@ async function createAndSmokeTestTarball() {
     const root = await import('kiokuko-dsh');
     const plugin = await import('kiokuko-dsh');
     const direct = await import('kiokuko-dsh/dsh');
+    const core = await import('kiokuko-dsh/core');
+    const enno = await import('kiokuko-dsh/modules/enno');
+    const lisp = await import('kiokuko-dsh/modules/lisp');
+    if (typeof core.createConfiguredPlugin !== 'function' || enno.ennoModule.id !== 'enno' || lisp.lispModule.id !== 'lisp') throw new Error('missing configured module exports');
     if (JSON.stringify(Object.keys(root)) !== JSON.stringify(Object.keys(direct))) throw new Error('guarded entry changed public exports');
     for (const name of Object.keys(direct)) if (root[name] !== direct[name]) throw new Error('guarded entry changed export identity: ' + name);
     if (plugin.name !== 'kiokuko-dsh') throw new Error('unexpected plugin name');
@@ -323,7 +332,7 @@ try {
     }
   }
   const exportsKeys = Object.keys(packageManifest.exports ?? {})
-  if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh'])) throw new Error('public exports must contain ., ./client, and ./dsh')
+  if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh', './core', './modules/enno', './modules/lisp'])) throw new Error('public exports must contain the compatibility, core and explicit module entries')
   const smoke = await createAndSmokeTestTarball()
   process.stdout.write(`${JSON.stringify({
     name: metadata.name,

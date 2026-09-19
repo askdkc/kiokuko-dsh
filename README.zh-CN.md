@@ -57,6 +57,8 @@ minimumReleaseAgeExclude:
 
 启动时会将包括日语输出在内的全部9个内置 Skill 及其引用文件同步到 `~/.agents/skills/`，创建缺失文件并更新受管理的副本，不覆盖非受管理文件。其他代理需要重新加载 Skill 目录。
 
+以上是完整包的默认行为。[核心与可选模块构建](docs/core-modules.md)仅打包所选资源；核心可独立处理对话、调研、写作和项目记忆，不包含 Enno/Lisp 运行时。
+
 启动时也会更新启动目录中 `AGENTS.md` 的现有 Kiokuko 管理块，保留块外的指令。更新包后请重启 DSH。其他工作目录或旧副本的检查与修复请参阅[设置步骤](docs/dsh-plugin.md#what-setup-updates-and-when)。`kiokuko use` 不是 DSH 的设置命令。
 
 Orca 发布 0.3.0 等新版本后，更新 Orca 相关依赖：

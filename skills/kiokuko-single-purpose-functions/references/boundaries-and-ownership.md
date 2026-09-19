@@ -29,6 +29,8 @@ Validation must match the actual threat boundary. A TypeScript type annotation d
 
 ## Boundary shape
 
+The schema example below assumes input was decoded or safely normalized into an owned, bounded data-only representation. A schema alone does not reject arbitrary in-process Proxy/accessor behavior without invoking it; use the established normalization boundary first. Do not duplicate that defense in trusted internal calls.
+
 Prefer a thin public function that performs hostile-boundary work and then calls a constrained private core:
 
 ```ts

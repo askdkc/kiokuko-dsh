@@ -4,6 +4,15 @@ Kiokuko DSH is a local-first DeepSeek Harness suite. The DSH host owns profile
 lifecycle and the plugin only uses the effects required by the selected
 Kiokuko operation.
 
+This document describes the full compatibility package. The
+[configured core](docs/core-modules.md) synchronizes only its selected managed
+Skills and uses the shared database, intake, ledger and scoped memory. It does
+not mount Orca, Deep, advanced-memory workers, session-history repair or the
+full browser client. Enno retains the existing compatibility host adapter;
+Lisp adds protected execution and its existing explicit approval boundaries.
+Omitted managed Skills are preserved on disk. Configured startup rejects unsafe
+Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
+
 ## Local data
 
 - Reads configured Kiokuko SQLite state, registered project roots, and

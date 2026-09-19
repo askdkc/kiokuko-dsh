@@ -1,7 +1,7 @@
 import { normalizeTaskType } from '../../akinator/domain.js'
 import { TASK_TYPES, type TaskType } from '../../akinator/types.js'
-import { ExecutionSelectionPending } from '../model-selection-ui.js'
-import { createDshIntakeAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from '../user-interaction.js'
+import { ExecutionSelectionPending } from '../execution-pending.js'
+import { createDshIntakeAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from '../intake-questions.js'
 
 export const LISP_CODING_SERVICE = 'kiokukoLispCoding'
 export interface LispCodingInput {

@@ -51,6 +51,8 @@ jobs:
       - run: npm run pack:check
       - name: Verify Skill bodies through native and packed model delivery
         run: npm run test:skill-delivery
+      - name: Verify isolated core and optional module packages
+        run: npm run test:modules
 
   verify:
     runs-on: ubuntu-latest

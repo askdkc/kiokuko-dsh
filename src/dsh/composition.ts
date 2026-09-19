@@ -1,5 +1,5 @@
 import { formatEvolutionStatus } from '../memory/evolution/status.js'
-import { mountLispSurface } from './lisp/surface.js'
+import type { mountLispSurface } from './lisp/surface.js'
 import { ExecutionSelectionPending } from './model-selection-ui.js'
 import type { LispConfiguration } from './lisp/contracts.js'
 import { mountDeepReportSurface } from '../deep-thinker/report-surface.js'
@@ -17,7 +17,7 @@ import { DshPonytailModes, mountDshPonytailCommand, type DshPonytailCommandConte
 import { mountStandardSkillProvider, type DshSkillContext } from './standard-skill-provider.js'
 import { mountSoulPrompt } from './prompt-policy.js'
 import type { DshUserQuestions } from './user-interaction.js'
-import type { DshRuntime } from './runtime.js'
+import type { DshCoreRuntime as DshRuntime } from './core-runtime.js'
 import type { DshMemoryFinalizer } from './session-memory-finalizer.js'
 import type { DshMirrorCheckpoint } from './session-log-mirror.js'
 import type { DshBoundaryWorker } from './boundary-worker.js'
@@ -63,7 +63,7 @@ export interface DshCompositionHost {
   readonly skills?: DshSkillContext['skills']
   readonly systemPrompt?: Parameters<typeof mountSoulPrompt>[0]['systemPrompt']
   readonly runtime?: DshRuntime
-  readonly runtimeOwner?: 'composition' | 'host'
+  readonly runtimeOwner?: 'composition' | 'host' | 'external'
   readonly userQuestions?: DshUserQuestions
   readonly commands?: DshPonytailCommandContext['commands']
   readonly ponytailModes?: DshPonytailModes
@@ -241,9 +241,10 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     if (host.deepPlanning) ingressDisposers.push(mountDshNoticeSurface(ctx, host.deepPlanning))
     if (host.runtime !== undefined) {
       const disposer = await mountRuntime(host.runtime)
-      setupResourceDisposers.push(disposer)
-      if (host.runtimeOwner !== 'host') cleanupDisposers.push(disposer)
+      if (host.runtimeOwner !== 'external') setupResourceDisposers.push(disposer)
+      if (!host.runtimeOwner || host.runtimeOwner === 'composition') cleanupDisposers.push(disposer)
       if (lisp && (lisp.enabled || await host.runtime.withDatabase(db => Boolean(db.prepare('SELECT session_id FROM dsh_lisp_sessions WHERE enabled=1 LIMIT 1').get())))) {
+        const { mountLispSurface } = await import('./lisp/surface.js')
         lispSurface = await mountLispSurface(ctx, host.runtime, lisp, prompts)
         ingressDisposers.push(() => lispSurface?.stop())
         cleanupDisposers.push(drainLisp)

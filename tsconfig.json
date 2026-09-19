@@ -14,6 +14,6 @@
     "rootDir": ".",
     "outDir": "dist"
   },
-  "include": ["src/dsh/index.ts", "tests/dsh/**/*.ts"],
+  "include": ["src/dsh/index.ts", "src/dsh/core/index.ts", "src/dsh/modules/enno.ts", "src/dsh/modules/lisp.ts", "tests/dsh/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

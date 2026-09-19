@@ -7,7 +7,7 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "files": ["src/index.ts", "src/client.ts", "src/dsh/index.ts"],
+  "files": ["src/index.ts", "src/client.ts", "src/dsh/index.ts", "src/dsh/core/index.ts", "src/dsh/modules/enno.ts", "src/dsh/modules/lisp.ts"],
   "include": [],
   "exclude": ["node_modules", "dist", "tests"]
 }

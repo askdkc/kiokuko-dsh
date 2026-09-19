@@ -27,3 +27,6 @@ CLAUDE.md
 GEMINI.md
 .kiokuko.json
 .orca
+
+# Local module staging and measurements
+.artifacts/
