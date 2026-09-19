@@ -35,7 +35,7 @@ function resolveImport(file: string, specifier: string): string | undefined {
 
 const allSources = new Set(await sourceFiles(path.join(root, 'src')))
 
-test('every active source is reachable from one of the three DSH package entrypoints', async () => {
+test('every active source is reachable from a declared DSH package entrypoint', async () => {
   const reached = new Set<string>()
   const visit = async (file: string): Promise<void> => {
     if (reached.has(file)) return
@@ -50,6 +50,9 @@ test('every active source is reachable from one of the three DSH package entrypo
     visit(path.join(root, 'src/index.ts')),
     visit(path.join(root, 'src/client.ts')),
     visit(path.join(root, 'src/dsh/index.ts')),
+    visit(path.join(root, 'src/dsh/core/index.ts')),
+    visit(path.join(root, 'src/dsh/modules/enno.ts')),
+    visit(path.join(root, 'src/dsh/modules/lisp.ts')),
   ])
   assert.deepEqual([...allSources].filter((file) => !reached.has(file)), [])
 })
@@ -86,9 +89,9 @@ test('migrations preserve the immutable baseline and append forward-only evoluti
   assert.equal(packed.files.includes('migrations/'), true)
 })
 
-test('package and model surfaces expose only the DSH root, browser client, and plugin entrypoint', async () => {
+test('package exposes compatibility entries and explicit core/module entries without restoring generic clients', async () => {
   const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-  assert.deepEqual(Object.keys(manifest.exports), ['.', './client', './dsh'])
+  assert.deepEqual(Object.keys(manifest.exports), ['.', './client', './dsh', './core', './modules/enno', './modules/lisp'])
   assert.equal(manifest.bin, undefined)
   assert.equal(manifest.dependencies?.commander, undefined)
   assert.equal(manifest.dependencies?.['@modelcontextprotocol/sdk'], undefined)

@@ -18,6 +18,19 @@ test('plugin startup reports critical failure and preserves the original rejecti
   assert.match(String(errors.mock.calls[1]?.arguments[0]), /Do not delete session logs/)
 })
 
+test('an externally owned shared runtime is never closed by a failed compatibility mount', async () => {
+  const failure = new Error('surface registration failed'), events: string[] = []
+  const runtime = { async start() { events.push('start') }, async close() { events.push('close') } } as any
+  const context = { on() { return () => {} } } as unknown as Context
+  await assert.rejects(mountDshComposition(context, { runtime, runtimeOwner: 'external', commands: { register() { throw failure } } }), error => error === failure)
+  assert.deepEqual(events, ['start'])
+  const successful = await mountDshComposition(context, { runtime, runtimeOwner: 'external' })
+  await successful.dispose()
+  assert.deepEqual(events, ['start', 'start'])
+  await runtime.close()
+  assert.deepEqual(events, ['start', 'start', 'close'])
+})
+
 test('explicit host adapter mounts native DSH tools and commands and unloads them', async () => {
   const tools: any[] = []
   const commands: any[] = []

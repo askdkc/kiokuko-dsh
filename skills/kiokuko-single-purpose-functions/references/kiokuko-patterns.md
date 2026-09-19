@@ -8,28 +8,35 @@ These patterns are repository- and language-agnostic contracts illustrated with 
 
 An exported operation may accept unconstrained input when it is the real trust boundary. Validate once, create an owned value, then call a constrained helper.
 
+This Node example accepts arbitrary in-process objects. Reject Proxy objects before reflection and accessors without invoking them. Accept only plain records with enumerable own data properties; return an independent value. For already decoded data-only input, reuse its established normalization boundary instead.
+
+<!-- example:parseWindow -->
 ```ts
+import { isProxy } from 'node:util/types';
+
 interface ValidatedWindow {
   readonly start: number;
   readonly limit: number;
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+export function parseWindow(value: unknown): ValidatedWindow {
+  if (typeof value !== 'object' || value === null || isProxy(value)) {
+    throw new Error('window must be a plain data object');
+  }
   const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function parseWindow(value: unknown): ValidatedWindow {
-  if (!isPlainRecord(value)) throw new Error('window must be an object');
-  if (typeof value.start !== 'number' || !Number.isInteger(value.start) || value.start < 0) {
-    throw new Error('window start is invalid');
-  }
-  if (typeof value.limit !== 'number' || !Number.isInteger(value.limit)
-    || value.limit < 1 || value.limit > 100) {
-    throw new Error('window limit is invalid');
-  }
-  return { start: value.start, limit: value.limit };
+  if (prototype !== Object.prototype && prototype !== null) throw new Error('invalid window prototype');
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== 2 || !keys.includes('start') || !keys.includes('limit')) throw new Error('invalid window fields');
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const startField = descriptors.start!;
+  const limitField = descriptors.limit!;
+  if (!('value' in startField) || !startField.enumerable
+    || !('value' in limitField) || !limitField.enumerable) throw new Error('window requires data properties');
+  const start: unknown = startField.value;
+  const limit: unknown = limitField.value;
+  if (typeof start !== 'number' || !Number.isInteger(start) || start < 0) throw new Error('window start is invalid');
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('window limit is invalid');
+  return { start, limit };
 }
 
 function calculateEnd(window: ValidatedWindow): number {
@@ -40,6 +47,7 @@ export function endOfWindow(value: unknown): number {
   return calculateEnd(parseWindow(value));
 }
 ```
+<!-- /example:parseWindow -->
 
 Use the project's error type and validation library where available. Do not make `calculateEnd` accept `unknown` or repeat transport validation throughout the domain.
 
@@ -47,16 +55,53 @@ Use the project's error type and validation library where available. Do not make
 
 Use a schema library the project already depends on; do not add one for a boundary the standard library can guard. The schema is the boundary: reject unknown fields when the protocol is closed, bound every collection and string, and require an explicit default for optional inputs. Internal helpers consume the validated output or a narrower domain value, never the raw transport shape.
 
+The accepted representation is a plain data record containing strings, a dense ordinary string array, and an optional integer. Normalize this fixed shape without invoking getters or Proxy traps, then validate the owned data with the existing schema library. This example defaults `limit` only when its key is omitted; explicit `undefined` and `null` are invalid. Paths are non-empty strings of at most 4096 characters, with at most 100 paths. No filesystem access or path authorization is implied.
+
+<!-- example:parseRequest -->
 ```ts
-const parseRequest: (value: unknown) => Request = (value) => {
-  if (!isPlainRecord(value)) throw new Error('request must be an object');
-  return {
-    requestId: requireBoundedString(value.requestId, 1, 256),
-    paths: requirePathArray(value.paths, 100),
-    limit: optionalInt(value.limit, 1, 100) ?? 20,
-  };
-};
+import { isProxy } from 'node:util/types';
+import { z } from 'zod';
+
+const requestSchema = z.object({
+  requestId: z.string().min(1).max(256),
+  paths: z.array(z.string().min(1).max(4096)).max(100),
+  limit: z.number().int().min(1).max(100),
+}).strict();
+type Request = z.infer<typeof requestSchema>;
+
+export function parseRequest(value: unknown): Request {
+  const invalid = () => new Error('invalid request');
+  if (typeof value !== 'object' || value === null || isProxy(value)) throw invalid();
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw invalid();
+  const keys = Reflect.ownKeys(value);
+  if (keys.length > 3 || keys.some(key => key !== 'requestId' && key !== 'paths' && key !== 'limit')) throw invalid();
+  const data: Record<string, unknown> = Object.create(null);
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (!descriptor.enumerable || !('value' in descriptor)) throw invalid();
+    data[key as string] = descriptor.value;
+  }
+  const paths = data.paths;
+  if (typeof paths !== 'object' || paths === null || isProxy(paths)
+    || !Array.isArray(paths) || Object.getPrototypeOf(paths) !== Array.prototype) throw invalid();
+  const length: number = Object.getOwnPropertyDescriptor(paths, 'length')!.value;
+  if (length > 100 || Reflect.ownKeys(paths).length !== length + 1) throw invalid();
+  const ownedPaths: string[] = [];
+  for (let index = 0; index < length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(paths, String(index));
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor)
+      || typeof descriptor.value !== 'string') throw invalid();
+    ownedPaths.push(descriptor.value);
+  }
+  data.paths = ownedPaths;
+  if (!Object.hasOwn(data, 'limit')) data.limit = 20;
+  const parsed = requestSchema.safeParse(data);
+  if (!parsed.success) throw invalid();
+  return parsed.data;
+}
 ```
+<!-- /example:parseRequest -->
 
 ## 3. Exact optional values
 
@@ -184,11 +229,15 @@ Do not copy unknown exception messages, submitted values, credentials, URLs with
 
 When both fail, retain both failures without replacing the primary one.
 
+<!-- example:useResource -->
 ```ts
-async function useResource<T>(open: () => Promise<Resource>, operation: (r: Resource) => Promise<T>): Promise<T> {
+interface Resource { close(): Promise<void>; }
+
+export async function useResource<T>(open: () => Promise<Resource>, operation: (r: Resource) => Promise<T>): Promise<T> {
   const resource = await open();
+  let result: T;
   try {
-    return await operation(resource);
+    result = await operation(resource);
   } catch (operationFailure) {
     try {
       await resource.close();
@@ -197,10 +246,14 @@ async function useResource<T>(open: () => Promise<Resource>, operation: (r: Reso
     }
     throw operationFailure;
   }
+  // Outside the operation catch: a failed close must never cause a second close.
+  await resource.close();
+  return result;
 }
 ```
+<!-- /example:useResource -->
 
-Use the language's structured multi-error or error-chaining mechanism where possible.
+Close exactly once after every successful open, including successful operations. Preserve thrown values even when they are `undefined`. Use the language's structured multi-error or error-chaining mechanism; Lisp's `unwind-protect` alone does not preserve both conditions. Forced worker termination and recovery belong to the host contract.
 
 ## 10. Classify failures by structured fields
 

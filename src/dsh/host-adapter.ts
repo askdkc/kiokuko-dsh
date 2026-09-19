@@ -34,6 +34,7 @@ import {
   type DshNativePreStepPayload,
 } from './composition.js'
 import { DshRuntime } from './runtime.js'
+import type { DshCoreRuntime } from './core-runtime.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 import { DshIntakeGate, type DshCapabilityReadContext, type DshIntakeGateResult, type DshPreStepDecision, type DshPreStepEvent } from './intake-gate.js'
 import { resolveGroundedIntakeProfile } from './intake-profile-resolver.js'
@@ -167,6 +168,8 @@ interface AdapterContext extends Context {
 }
 
 export interface DshHostAdapterOptions {
+  /** An enclosing composition owns and closes this shared runtime. */
+  readonly runtime?: DshCoreRuntime
   readonly skillPrompts?: DshSkillPrompts
   readonly deepPlanning?: unknown
   readonly akinatorMemory?: import('zod').z.input<typeof AkinatorMemoryConfig>
@@ -456,7 +459,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const selectionFailures = new Map<string, Promise<void>>()
   const selectionBlocked = new WeakSet<object>()
   const root = realpathSync(options.repositoryRoot ?? process.cwd())
-  const runtime = new DshRuntime({
+  const runtime = options.runtime ?? new DshRuntime({
     repositoryRoot: root,
     ...(options.databasePath === undefined ? {} : { databasePath: options.databasePath }),
     migrationsDirectory: options.migrationsDirectory ?? fileURLToPath(new URL('../../migrations/', import.meta.url)),
@@ -2761,7 +2764,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ...(skills === undefined ? {} : { skills: skills as any }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
     runtime,
-    runtimeOwner: 'host',
+    runtimeOwner: options.runtime ? 'external' : 'host',
     ...(userQuestions === undefined ? {} : { userQuestions }),
     ...(commands === undefined ? {} : { commands: commands as any }),
     ponytailModes: modes,
@@ -2860,7 +2863,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       closeEfficiency()
       try { observationDisposer() } catch (error) { failures.push(error) }
       try { await sessionMirror.close() } catch (error) { failures.push(error) }
-      try { await runtime.close() } catch (error) { failures.push(error) }
+      try { if (!options.runtime) await runtime.close() } catch (error) { failures.push(error) }
       turns.clear()
       latestBySession.clear()
       states.clear()

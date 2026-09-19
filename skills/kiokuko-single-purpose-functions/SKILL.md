@@ -14,6 +14,12 @@ Create code whose functions each own one cohesive, externally observable respons
 
 This index is the execution envelope for code work. Read it completely, select the smallest sufficient expert set, then read only those expert files.
 
+## Credo
+
+**本当に、それを全部計算・保存・検索する必要があるのか？**
+
+Before decomposing a function, justify its work. Compute only required outputs; justify stored data by its consumer and retention need; bound searches to needed evidence. Consider on-demand or incremental work before full recomputation. Preserve the contract, ownership and required checks; fewer functions alone do not mean less work.
+
 ## Universal core
 
 Applies to every created or changed function:

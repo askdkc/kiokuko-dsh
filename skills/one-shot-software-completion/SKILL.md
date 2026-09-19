@@ -14,6 +14,17 @@ goal; it promises neither success in one model turn nor permission to act beyond
 the request. Repository evidence supplies defaults, not authority to override
 user intent, permissions, or host safety, identity and integrity checks.
 
+## Credo
+
+**本当に、それを全部計算・保存・検索する必要があるのか？**
+
+Complete the required outcome with only the computation, persistence and search
+it needs. Before implementation, eliminate unnecessary work and narrow the rest;
+justify exhaustive processing or retention with a concrete requirement. Search
+for missing evidence and stop when it is sufficient. Verify that omitted work
+does not change required behavior or weaken integration, recovery or checks.
+Completion means meeting the user's requirements, not processing everything.
+
 ## Read economically
 
 Read this entire index. It is sufficient for a bounded change with clear callers
@@ -29,12 +40,10 @@ applicable even when no reference is needed.
 | Choosing evidence, reviewing the diff or checking delivery | [Verification and completion](references/verification-and-completion.md) |
 | A check fails or progress stalls | [Failure recovery](references/failure-recovery.md) |
 
-For a 256K context window or smaller, leave room for the task, code, tools,
-history and output: select repository reads by symbols and relevant contiguous
-regions; expand only when dependencies require it. Keep a brief working note of
-requirements, affected contracts, unresolved risks and check results. Byte size
-is not a model token count; use a model tokenizer or host usage if available and
-never infer the remaining budget from advertised context capacity alone.
+Keep context bounded: read relevant symbols and regions, expanding only for
+dependencies. Track requirements, contracts, risks and check results. Bytes are
+not model tokens; use tokenizer or host usage, never advertised capacity, to
+estimate the remaining budget.
 
 ## Completion contract
 
@@ -73,6 +82,16 @@ Reuse their contract, plan and evidence rather than generating duplicate plans
 or checklists. In DSH, the host owns intake, model routing, delegation and
 continuation. Respect the current role/WorkUnit scope; this Skill neither creates
 an Enno run nor authorizes extra agents, retries, publication or deployment.
+
+Assign Frame/Trace/Bound/Implement/Verify/Finish to the admitted role: Zenki
+plans, Goki implements/verifies its WorkUnit, Enno accepts the run. A WorkUnit
+report is not final acceptance. Normal work adds no orchestration approval.
+
+For admitted Lisp, follow its Skill: permitted native reads, scratch → proposals
+→ host confirmation → durable result; allowed verification targets only.
+Distinguish execution, verification and APPLIED/UNCHANGED/NOT_APPLIED/UNKNOWN.
+No replay of RUNNING/UNKNOWN effects or native fallback after protection failure.
+Only the host finalizes run state.
 
 Continue authorized work while evidence supports a next step. On failure, read
 the recovery reference before changing strategy. Do not retry an unchanged

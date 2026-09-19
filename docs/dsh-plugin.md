@@ -4,6 +4,11 @@ Kiokuko provides an out-of-tree DeepSeek Harness bundle at `kiokuko-dsh`.
 `kiokuko-dsh` is the guarded Cordis entry. `kiokuko-dsh/dsh` remains a compatibility import. It mounts the DSH-only Kiokuko runtime contracts; it does
 not fork DeepSeek Harness or modify a repository's files.
 
+These installation instructions use the full compatibility package. A separate
+`kiokuko-dsh/core` entry and local core/Enno/Lisp artifacts are available through
+the [configured module build](core-modules.md). Selecting a subpath alone does
+not remove files or dependencies from an installed full package.
+
 ## Compatibility
 
 The current target is **DSH 0.1.6-alpha.1**, verified against source commit `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720`. Disposable-profile checks cover replacing Kiokuko 0.1.51, removal of the old DSH dependency graph, Web startup and client discovery, session listing, `session/control`, and Kiokuko HTTP routes. All 63 history compatibility tests also passed against that checkout.

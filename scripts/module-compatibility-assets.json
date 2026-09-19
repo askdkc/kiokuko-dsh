@@ -1,0 +1,27 @@
+{
+  "migrations": [
+    "migrations/001_baseline.sql",
+    "migrations/002_dsh_memory_finalization.sql",
+    "migrations/003_dsh_turn_process.sql",
+    "migrations/004_dsh_loop_guard.sql",
+    "migrations/005_dsh_completion_recovery.sql",
+    "migrations/006_dsh_execution_support.sql",
+    "migrations/007_outbox_message_form.sql",
+    "migrations/008_dsh_orca_traces.sql",
+    "migrations/009_dsh_execution_selection.sql",
+    "migrations/010_dsh_orca_session_choices.sql",
+    "migrations/011_dsh_finalization_input_mode.sql",
+    "migrations/012_memory_evolution.sql",
+    "migrations/013_dsh_deep_thinker.sql",
+    "migrations/014_memory_projection_evidence.sql",
+    "migrations/015_dsh_plugin_records.sql",
+    "migrations/016_akinator_memory_probe.sql",
+    "migrations/017_dsh_deep_quality.sql",
+    "migrations/018_dsh_enno_memory_refresh.sql",
+    "migrations/019_dsh_lisp.sql",
+    "migrations/020_dsh_memory_review.sql"
+  ],
+  "runtimeAssets": [
+    "dist/security/sanitize.js"
+  ]
+}

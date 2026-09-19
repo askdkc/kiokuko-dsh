@@ -57,6 +57,8 @@ minimumReleaseAgeExclude:
 
 시작 시 일본어 출력 Skill을 포함한 번들 Skill 9개와 참조 파일을 `~/.agents/skills/`에 동기화합니다. 누락된 파일을 만들고 관리 대상 복사본을 업데이트하며, 비관리 파일은 덮어쓰지 않습니다. 다른 에이전트에서는 Skill 카탈로그를 다시 로드해야 합니다.
 
+위 설명은 전체 패키지의 기본 동작입니다. [코어와 선택 모듈 빌드](docs/core-modules.md)는 선택한 리소스만 포함합니다. 코어는 Enno/Lisp 런타임 없이 대화·조사·글쓰기·프로젝트 메모리를 처리합니다.
+
 시작 시 시작 디렉터리의 `AGENTS.md`에 있는 기존 Kiokuko 관리 블록도 갱신하며, 블록 밖의 지침은 보존합니다. 패키지 업데이트 후 DSH를 다시 시작하세요. 다른 작업 디렉터리나 오래된 복사본의 확인 및 복구는 [설정 절차](docs/dsh-plugin.md#what-setup-updates-and-when)를 참고하세요. `kiokuko use`는 DSH 설정 명령이 아닙니다.
 
 Orca 0.3.0 등 새 버전이 공개된 후 Orca 관련 의존 패키지를 업데이트하려면:

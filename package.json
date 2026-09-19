@@ -52,6 +52,18 @@
     "./dsh": {
       "types": "./dist/dsh/index.d.ts",
       "default": "./dist/dsh/index.js"
+    },
+    "./core": {
+      "types": "./dist/dsh/core/index.d.ts",
+      "default": "./dist/dsh/core/index.js"
+    },
+    "./modules/enno": {
+      "types": "./dist/dsh/modules/enno.d.ts",
+      "default": "./dist/dsh/modules/enno.js"
+    },
+    "./modules/lisp": {
+      "types": "./dist/dsh/modules/lisp.d.ts",
+      "default": "./dist/dsh/modules/lisp.js"
     }
   },
   "dsh": {
@@ -166,7 +178,9 @@
     "test:skill-delivery": "npm run build && node scripts/run-skill-delivery.mjs",
     "test:skill-efficiency": "node scripts/run-skill-efficiency.mjs",
     "test:skill-quality": "node scripts/run-skill-quality.mjs",
-    "test:benchmark:memory-review": "node --import tsx tests/dsh/integration/memory-review/performance.ts"
+    "test:benchmark:memory-review": "node --import tsx tests/dsh/integration/memory-review/performance.ts",
+    "build:modules": "npm run build && node scripts/stage-modules.mjs",
+    "test:modules": "node scripts/run-tests.mjs tests/dsh/unit/core-modules.test.ts tests/dsh/integration/core-host.test.ts && node scripts/verify-module-packages.mjs"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

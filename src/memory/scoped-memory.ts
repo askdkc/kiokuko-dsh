@@ -451,6 +451,7 @@ async function checkpointScopedMemoryInternal(
   database: SqliteDatabase,
   input: ScopedCheckpointInput,
   signal?: AbortSignal,
+  host: { allowDirectory?: boolean } = {},
 ): Promise<ScopedCheckpointResult> {
   if (signal?.aborted) throw signal.reason;
   const request = normalizeCheckpointInput(input);
@@ -470,7 +471,7 @@ async function checkpointScopedMemoryInternal(
     if (delivery.runId !== run!.runId) throw new KiokukoError('NOT_FOUND', 'Checkpoint delivery was not found for this run');
   }
   const needsProject = memories.some((memory) => (memory.scope ?? 'project') === 'project');
-  const plannedProject = await resolveProjectWorkspaceReadOnly(database, request.cwd);
+  const plannedProject = await resolveProjectWorkspaceReadOnly(database, request.cwd, host);
   if (needsProject && !plannedProject) {
     throw new KiokukoError('NOT_FOUND', 'No Git repository or .kiokuko.json binding was found for project-scoped memory; use scope "global" only for cross-project preferences or lessons');
   }
@@ -577,7 +578,7 @@ async function checkpointScopedMemoryInternal(
     return record;
   });
 
-  const project = await resolveProjectWorkspace(database, request.cwd);
+  const project = await resolveProjectWorkspace(database, request.cwd, host);
   if (signal?.aborted) throw signal.reason;
   if (!sameProject(plannedProject, project)) {
     throw new KiokukoError('CONFLICT', 'Checkpoint project identity changed after validation');
@@ -670,6 +671,7 @@ export function checkpointDshMemory(
   database: SqliteDatabase,
   input: ScopedCheckpointInput,
   signal?: AbortSignal,
+  host: { allowDirectory?: boolean } = {},
 ): Promise<ScopedCheckpointResult> {
-  return checkpointScopedMemoryInternal(database, input, signal);
+  return checkpointScopedMemoryInternal(database, input, signal, host);
 }
