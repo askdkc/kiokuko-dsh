@@ -55,6 +55,17 @@ Kiokuko operation.
 - Remote embedding requests can contact the configured endpoint. Remote
   embeddings are disabled by default; local embedding state remains separate.
 
+- Automatic memory review is active by default: every eight completed human
+  turns can send bounded session evidence and project candidate snapshots to
+  that session's configured DSH provider/model, with up to 12 worker dispatches
+  per project per UTC day. Ordinary/Deep finalization and configured Evolution
+  have separate calls and budgets. Provider-internal retries are not counted as
+  additional worker dispatches. [Controls and limits](docs/auto-memory-review.md).
+- `/kioku-memory-review exclude session` persists a session-wide automatic
+  capture exclusion across these paths. It blocks future dispatch and adoption,
+  attempts local cancellation, and cannot retract already transmitted data.
+  Existing logs/memories and explicit memory tools are unaffected.
+
 ## Credentials and optional dependencies
 
 - GitHub and embedding credentials are optional user-provided environment or

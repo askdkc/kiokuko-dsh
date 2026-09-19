@@ -1,3 +1,4 @@
+import { assertCaptureAllowed, capturePolicy, watchCapture } from '../memory/capture-policy.js'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { parseCapsule, type DshLlm } from '../dsh/session-memory-finalizer.js'
@@ -27,7 +28,7 @@ export class DeepMemoryFinalizer {
   async processNext(): Promise<boolean> {
     const job = await this.store.transaction(db => {
       db.prepare("UPDATE dsh_deep_finalizations SET status='uncertain',error='Host stopped during memory extraction; no automatic resend' WHERE status='processing' AND lease_until<=?").run(this.store.now())
-      const row = db.prepare("SELECT run_id,source_json FROM dsh_deep_finalizations WHERE status='pending' ORDER BY rowid LIMIT 1").get<{run_id:string;source_json:string}>()
+      const row = db.prepare("SELECT run_id,source_json FROM dsh_deep_finalizations WHERE status='pending' AND NOT EXISTS(SELECT 1 FROM memory_capture_exclusions x WHERE x.workspace=json_extract(source_json,'$.workspace') AND x.native_session_id=json_extract(source_json,'$.sessionId')) ORDER BY rowid LIMIT 1").get<{run_id:string;source_json:string}>()
       if (!row) return undefined
       db.prepare("UPDATE dsh_deep_finalizations SET status='processing',process_id=?,lease_until=? WHERE run_id=? AND status='pending'").run(this.processId, this.store.now() + 45_000, row.run_id)
       return row
@@ -39,8 +40,10 @@ export class DeepMemoryFinalizer {
     const heartbeat = setInterval(() => { void this.store.database(db => db.prepare("UPDATE dsh_deep_finalizations SET lease_until=? WHERE run_id=? AND process_id=? AND status='processing'").run(this.store.now() + 45_000, job.run_id, this.processId)).catch(error => abort.abort(error)) }, 10_000)
     let status = 'skipped', detail = '予算または採用済みの証拠が不足するため、記憶保存を省略しました。'
     let release: (() => void) | undefined
+    let unwatch: (() => void) | undefined
     try {
       const source = DeepFinalizationSourceSchema.parse(JSON.parse(job.source_json))
+      unwatch = watchCapture(source.workspace,source.sessionId,abort)
       const state = await this.store.read(job.run_id)
       if (!this.llm || !source.accepted.length || budgetProblem(state, this.store.now(), 'request')) return true
       const artifacts = currentArtifacts(state, await this.store.artifacts(state.runId))
@@ -54,6 +57,7 @@ export class DeepMemoryFinalizer {
         messages: [{ role: 'user', content: [{ type: 'text', text: evidence }] }], tools: [] }
       if (budgetProblem(state, this.store.now(), 'request', estimateRequestTokens(Buffer.byteLength(JSON.stringify(request)), maxTokens))) return true
       release = await processDeepSlots.acquire(job.run_id, model.provider, source.configuration.localProviders.includes(model.provider), 6, abort.signal)
+      await this.store.transaction(db=>assertCaptureAllowed(db,source.workspace,source.sessionId))
       let text = '', finished = false
       await deepMemoryRequestScope.run({ runId: job.run_id, processId: this.processId, model, maxTokens, sessionId: source.sessionId }, async () => {
         for await (const value of abortableStream(this.llm!.stream(request), abort.signal)) {
@@ -68,6 +72,7 @@ export class DeepMemoryFinalizer {
       const capsule = parseCapsule(text).capsule
       if ((await changedSources(state.rootPath, artifacts)).length) throw new Error('Sources changed before memory commit')
       await this.store.transaction(db => {
+        assertCaptureAllowed(db,source.workspace,source.sessionId)
         const current = db.prepare('SELECT status,process_id,reservation_id FROM dsh_deep_finalizations WHERE run_id=?').get<{status:string;process_id:string;reservation_id:string|null}>(job.run_id)
         if (current?.status !== 'processing' || current.process_id !== this.processId || !current.reservation_id) throw new Error('Memory extraction requires an observed budget reservation')
         const repository = db.prepare('SELECT repository_id FROM repositories WHERE workspace=?').get<{repository_id:string}>(source.workspace)
@@ -88,6 +93,7 @@ export class DeepMemoryFinalizer {
       status = reservation?.status === 'reserved' || reservation?.status === 'uncertain' ? 'uncertain' : 'failed'
       detail = `記憶保存を${status === 'uncertain' ? '結果不明として停止' : '中止'}しました。回答は保存済みです。${error instanceof Error && !findSecretInValue(error.message) ? ` ${error.message.slice(0, 512)}` : ''}`
     } finally {
+      unwatch?.()
       clearTimeout(timer); clearInterval(heartbeat); if (this.#abort === abort) this.#abort = undefined
       release?.()
       await this.store.mutate(job.run_id, (state, db) => {

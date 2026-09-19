@@ -1,3 +1,5 @@
+import { MemoryReviewConfig } from '../memory/review/contracts.js'
+export { MemoryReviewConfig }
 import { AkinatorMemoryConfig } from '../akinator/memory-probe-types.js'
 export { AkinatorMemoryConfig }
 import { MemoryEvolutionConfig } from '../memory/evolution/contracts.js'
@@ -60,5 +62,6 @@ export const Config = z.object({
   ennoMemory: EnnoMemoryConfig.prefault({}),
   finalization: FinalizationConfig.prefault({}),
   memoryEvolution: MemoryEvolutionConfig.prefault({}),
+  memoryReview: MemoryReviewConfig.prefault({}),
 })
 export type Config = z.input<typeof Config>

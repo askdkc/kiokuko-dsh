@@ -117,7 +117,9 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     llm: { async *stream(request) {
       auxiliaryCalls++
       await auxiliaryHook?.(request)
-      const prompt = (request.messages.at(-1) as any).content[0].text as string
+      const last = (request.messages.at(-1) as any).content[0].text as string
+      const reconciliation=last.startsWith('{"reconciliation"')?JSON.parse(last).reconciliation:undefined
+      const prompt = reconciliation ? (request.messages.at(-2) as any).content[0].text as string : last
       let response: unknown
       if (request.system?.startsWith('Select a conservative reusable lesson')) {
         const input = JSON.parse(prompt)
@@ -138,6 +140,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
         response = { schemaVersion: episode ? 2 : 1, memories: [{ kind: 'reference', title: `Fixture observation ${activeRound}`,
           body: result?.text ?? `Read-only lifecycle check ${activeRound}`, summary: null, tags: ['fixture-v1'], confidence: 0.5 }], ...(episode ? { episode } : {}) }
       }
+      if(reconciliation){const capsule=response as any;response={schemaVersion:3,memoryOperations:capsule.memories.map((m:any)=>({action:'add',kind:m.kind,title:m.title,body:m.body,evidenceIds:[reconciliation.evidence.at(-1).id]})),...(capsule.episode?{episode:capsule.episode}:{})}}
       yield { type: 'text-delta', text: JSON.stringify(response) }
       yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 10 } }
       yield { type: 'finish', reason: { kind: 'stop' } }

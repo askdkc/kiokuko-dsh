@@ -105,7 +105,8 @@
       "externalServices": [
         "GitHub or skills.sh for optional Skill discovery and source retrieval",
         "User-configured embedding endpoint when remote embeddings are enabled",
-        "DSH-configured model providers for explicitly started Deep planning and its budgeted memory extraction"
+        "DSH-configured model providers for explicitly started Deep planning and its budgeted memory extraction",
+        "DSH-configured model provider for automatic memory review (active by default, up to 12 worker dispatches per project per UTC day), ordinary finalization and configured memory evolution"
       ],
       "credentials": [
         "Optional user-provided GitHub or embedding credentials; never bundled or persisted by the plugin"
@@ -145,6 +146,7 @@
     "prepare": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run publint && npm run pack:check",
     "test:orca:package": "npm run build && node scripts/verify-orca-consumer.mjs",
+    "test:memory-review": "node scripts/run-tests.mjs tests/dsh/unit/memory-review tests/dsh/integration/memory-review",
     "test:evolution": "node scripts/run-tests.mjs tests/dsh/unit/evolution tests/dsh/integration/evolution",
     "test:evaluation:evolution": "node --import tsx scripts/run-evolution-evaluation.mjs",
     "setup:dsh": "node scripts/setup-dsh.mjs",
@@ -163,7 +165,8 @@
     "test:skill-prompts": "node scripts/run-tests.mjs tests/dsh/unit/skill-compiler.test.ts tests/dsh/unit/skill-snapshot.test.ts",
     "test:skill-delivery": "npm run build && node scripts/run-skill-delivery.mjs",
     "test:skill-efficiency": "node scripts/run-skill-efficiency.mjs",
-    "test:skill-quality": "node scripts/run-skill-quality.mjs"
+    "test:skill-quality": "node scripts/run-skill-quality.mjs",
+    "test:benchmark:memory-review": "node --import tsx tests/dsh/integration/memory-review/performance.ts"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

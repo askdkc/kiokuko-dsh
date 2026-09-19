@@ -32,11 +32,13 @@ test('native result DTOs survive text-only log rendering as identity-bound episo
       execute:async(args:any)=>({exitCode:args.exitCode})}))
     const questions=ctx.plugin({name:'evolution-questions',apply(context:any){return context.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='kioku-orca-recording'?'記録しない':'chat']}))}}})}});fibers.push(questions);await questions
     adapter=createDshHostAdapter(ctx,{repositoryRoot:root,databasePath:join(root,'state.sqlite3'),migrationsDirectory:join(process.cwd(),'migrations'),llm:{async *stream(request){
-      const prompt=(request.messages.at(-1) as any).content[0].text
+      const last=(request.messages.at(-1) as any).content[0].text
+      const v3=last.startsWith('{"reconciliation"')
+      const prompt=(request.messages.at(v3?-2:-1) as any).content[0].text
       const evidence=JSON.parse(prompt.split('\n\n').at(-1))
       const action=evidence.filter((e:any)=>e.kind==='action').at(-1),failed=evidence.find((e:any)=>e.outcome==='failed'),passed=evidence.find((e:any)=>e.outcome==='passed')
       assert.ok(action&&failed&&passed,'Both typed execution outcomes must be in the bounded native manifest')
-      yield {type:'text-delta',text:JSON.stringify({schemaVersion:2,memories:[],episode:{goal:'Observed native recovery',applicability:'Native test',anchors:{error:'unknown',tool:'verify',target:'unknown',version:'unknown'},events:[{kind:'failure',description:failed.text,evidence:[failed.seq]},{kind:'action',description:action.text,evidence:[action.seq]},{kind:'verification',description:passed.text,evidence:[passed.seq]}],procedure:action.text,verification:passed.text,boundary:'Not proof of general correctness',unresolved:[],avoidance:null}})}
+      yield {type:'text-delta',text:JSON.stringify({... (v3?{schemaVersion:3,memoryOperations:[]}:{schemaVersion:2,memories:[]}),episode:{goal:'Observed native recovery',applicability:'Native test',anchors:{error:'unknown',tool:'verify',target:'unknown',version:'unknown'},events:[{kind:'failure',description:failed.text,evidence:[failed.seq]},{kind:'action',description:action.text,evidence:[action.seq]},{kind:'verification',description:passed.text,evidence:[passed.seq]}],procedure:action.text,verification:passed.text,boundary:'Not proof of general correctness',unresolved:[],avoidance:null}})}
       yield {type:'finish',reason:{kind:'stop'}}
     }}})
     composition=await mountDshComposition(ctx,adapter.host)

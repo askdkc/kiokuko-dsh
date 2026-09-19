@@ -100,6 +100,7 @@ const CACHE_SCHEMA = `
     PRIMARY KEY (session_id, seq)
   );
   CREATE INDEX IF NOT EXISTS idx_session_events_order ON session_events(session_id, seq);
+  CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(session_id, json_extract(event_json,'$.type'), seq);
   CREATE TABLE IF NOT EXISTS session_attachments (
     session_id TEXT NOT NULL,
     attachment_id TEXT NOT NULL,
@@ -620,6 +621,56 @@ export class DshSessionLogMirror implements DshSessionQuery {
   }
 
   /** Called only after the caller's native sessions.flush() has succeeded. */
+  async checkpointThroughAfterNativeFlush(session: { readonly id: string }, throughSeq: number, rangeStartSeq = 0): Promise<DshMirrorCheckpoint & { rangeConfirmedThrough?:number }> {
+    const sessionId = validSessionId(session.id)
+    if (!Number.isSafeInteger(throughSeq) || throughSeq < 0) throw new Error('invalid_review_boundary')
+    await this.start()
+    await this.#tail
+    const database = this.#database
+    if (!database) return this.#degrade(sessionId, new Error('session cache unavailable'))
+    const before = this.#checkpoint(sessionId)
+    // Only already mirrored contiguous events qualify. Never replay snapshotEvents here.
+    if (before.error) return before
+    const coverage=database.prepare('SELECT count(*) AS n FROM session_events WHERE session_id=? AND seq>=? AND seq<=?').get<{n:number}>(sessionId,rangeStartSeq,throughSeq)!.n
+    if(coverage!==throughSeq-rangeStartSeq+1)return before
+    database.prepare('UPDATE session_watermarks SET native_durable_through=max(native_durable_through,?),updated_at=? WHERE session_id=?')
+      .run(throughSeq, this.#now(), sessionId)
+    const checkpoint = this.#checkpoint(sessionId)
+    await this.#writeCoreHealth(checkpoint)
+    return {...checkpoint,rangeConfirmedThrough:throughSeq}
+  }
+
+  async latestEvent(sessionId: string, type: string, throughSeq: number): Promise<DshLogEvent | undefined> {
+    await this.start(); await this.#tail
+    const row = this.#database?.prepare("SELECT event_json AS eventJson FROM session_events WHERE session_id=? AND json_extract(event_json,'$.type')=? AND seq<=? ORDER BY seq DESC LIMIT 1")
+      .get<{eventJson:string}>(validSessionId(sessionId),type,throughSeq)
+    return row ? JSON.parse(row.eventJson) as DshLogEvent : undefined
+  }
+
+  async sourceGeneration(sessionId: string): Promise<string> {
+    await this.start(); await this.#tail
+    const first = this.#database?.prepare('SELECT seq,digest FROM session_events WHERE session_id=? ORDER BY seq LIMIT 1').get<{seq:number;digest:string}>(validSessionId(sessionId))
+    if (!first) throw new Error('source_unavailable')
+    return createHash('sha256').update(JSON.stringify({sessionId,first})).digest('hex')
+  }
+
+  async *streamRange(sessionId: string, startSeq: number, endSeq: number): AsyncIterable<DshLogEvent> {
+    await this.start(); await this.#tail
+    const db = this.#database
+    if (!db || !Number.isSafeInteger(startSeq) || !Number.isSafeInteger(endSeq) || startSeq < 0 || endSeq < startSeq) throw new Error('source_unavailable')
+    let after = startSeq-1
+    while (after < endSeq) {
+      // One event per read keeps a giant page of unrelated bodies out of memory.
+      const row = db.prepare('SELECT seq,byte_count,CASE WHEN byte_count<=1048576 THEN event_json ELSE NULL END AS eventJson FROM session_events WHERE session_id=? AND seq>? AND seq<=? ORDER BY seq LIMIT 1')
+        .get<{seq:number;byte_count:number;eventJson:string}>(validSessionId(sessionId),after,endSeq)
+      if (!row || row.seq !== after+1) throw new Error('source_unavailable')
+      if (row.byte_count > 1024*1024) throw new Error('input_too_large')
+      yield JSON.parse(row.eventJson) as DshLogEvent
+      after=row.seq
+    }
+  }
+
+  /** Called only after the caller's native sessions.flush() has succeeded. */
   async checkpointAfterNativeFlush(session: DshMirrorEventSession): Promise<DshMirrorCheckpoint> {
     const sessionId = validSessionId(session.id)
     await this.start()
@@ -836,6 +887,8 @@ export class DshSessionLogMirror implements DshSessionQuery {
     await this.start()
     const database = this.#database
     if (database === undefined) return
+    const referenced = await this.#runtime.withDatabase(db=>!!db.prepare("SELECT 1 FROM ledger_runs WHERE dsh_session_id=? AND status IN ('active','intake') LIMIT 1").get(sessionId))
+    if(referenced){await this.markUnfinalized(sessionId);return}
     const now = this.#now()
     const expires = new Date(Date.parse(now) + RETENTION_TTL_MS).toISOString()
     try {
@@ -912,6 +965,10 @@ export class DshSessionLogMirror implements DshSessionQuery {
           total -= row.byteCount
         }
       })
+      for(const sessionId of removed)await this.#runtime.withDatabase(db=>withImmediateTransaction(db,()=>{
+        db.prepare("UPDATE memory_review_jobs SET state='held',reason='source_unavailable',owner_nonce=NULL WHERE session_id=? AND resolved_by IS NULL AND (state<>'completed' OR EXISTS(SELECT 1 FROM memory_review_effects e WHERE e.job_id=memory_review_jobs.id AND e.disposition='held'))").run(sessionId)
+        db.prepare("UPDATE memory_review_states SET reason='source_unavailable',lease_nonce=NULL,lease_until=NULL WHERE session_id=?").run(sessionId)
+      }))
       for (const directory of attachmentDirectories) await rm(directory, { recursive: true, force: true })
     } catch (error) {
       this.#lastError = error

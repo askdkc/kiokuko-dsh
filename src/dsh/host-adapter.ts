@@ -1,3 +1,9 @@
+import { humanInput } from '../memory/review/evidence.js'
+import { AutoMemoryReviewCoordinator, type ReviewNativeSession } from './auto-memory-review.js'
+import { MemoryReviewConfig } from '../memory/review/contracts.js'
+import { handoffReview } from '../memory/review/store.js'
+import { assertCaptureAllowed } from '../memory/capture-policy.js'
+import { refreshContinuedTaskContext } from './task-intake.js'
 import { DshEnnoMemoryRefresh } from './enno-memory-refresh.js'
 import { EnnoMemoryConfig } from './config.js'
 import { executionObservation } from './evolution-observation.js'
@@ -168,6 +174,7 @@ export interface DshHostAdapterOptions {
   readonly ennoMemory?: import('zod').z.input<typeof EnnoMemoryConfig>
   readonly continuity?: import('zod').z.input<typeof ContinuityConfig>
   readonly memoryEvolution?: import('zod').z.input<typeof MemoryEvolutionConfig>
+  readonly memoryReview?: import('zod').z.input<typeof MemoryReviewConfig>
   readonly finalization?: import('zod').z.input<typeof FinalizationConfig>
   readonly modelRoutes?: readonly ModelRoute[]
   readonly modelCompatibility?: DshModelCompatibility
@@ -591,7 +598,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       && (item.memoryInput ?? item.prepared.intake.profile.constraints ?? '') === input
       && !executionSupport.paused(item.sessionId) && inboxIdentity() === pendingInput
     await ennoMemory.refresh({ runId: item.runId, sessionId: item.sessionId, nativeAgent, nativeSession,
-      prepared, capabilities: [...catalog.skills, ...catalog.tools], constraints: input, signal, isCurrent: current,
+      prepared, capabilities: [...catalog.skills, ...catalog.tools], constraints: input, query:item.task, signal, isCurrent: current,
       validateCapabilities: async () => {
         const fresh = await capabilityCatalog(skills, tools, { agent: { id: item.agentId }, nativeAgent, cwd: item.cwd, signal })
         gate.assertTurnStoppingCatalog(catalog, fresh)
@@ -630,6 +637,16 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ...(llm === undefined ? {} : { llm }),
     ...(options.now === undefined ? {} : { now: options.now }),
   })
+  const autoReview = new AutoMemoryReviewCoordinator({ runtime, mirror:sessionMirror,
+    config:MemoryReviewConfig.parse(options.memoryReview??{}), ...(llm?{llm}:{}),
+    onCapturePolicy:async(sessionId,mode)=>{
+      const item=currentSession(sessionId);if(!item)return
+      await runtime.withDatabase(db=>saveSessionNotice(db,{id:`capture-notice:${item.runId}:${mode}`,runId:item.runId,sessionId,rootPath:item.cwd,kind:'status',anchorSeq:0,
+        text:mode==='held'?'保存拒否の可能性を検出したため、この会話の自動メモリ生成を保留しました。/kioku-memory-review exclude session で除外を確定できます。再開する場合は履歴を継承しない新しい会話を開始してください。':'この会話の自動メモリ生成を除外しました。保存済み記憶と会話ログは残ります。'}))
+    },
+    onChanged:async(job,result)=>{await runtime.withDatabase(db=>saveSessionNotice(db,{id:`review-notice:${job.id}`,runId:job.run_id,sessionId:job.session_id,rootPath:root,kind:'status',text:`記憶を更新しました（追加${result.added}件、更新${result.updated}件）`,anchorSeq:job.end_seq}))},
+    ...(sessions?.flush?{flush:session=>sessions.flush!(session)}:{}),...(options.now?{now:options.now}:{}) })
+  const reviewBinding = (item:TurnRecord,session:object) => ({workspace:item.workspace,runId:item.runId,session:session as ReviewNativeSession,startSeq:0})
   deepPlanning.attachFinalizer(() => memoryFinalizer.kick())
   const modes = new DshPonytailModes()
   const confirmationAnswerer = userQuestions === undefined ? undefined : createDshConfirmationAnswerer(userQuestions)
@@ -788,6 +805,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       sourceStartTurn: event.turn,
     })
     record(event, result, generation)
+    if(event.nativeSession && !delegation.isChild(event.nativeAgent??{})) {
+      try { await autoReview.bind({workspace:result.prepared.project.workspace,runId:result.prepared.run.runId,session:event.nativeSession as ReviewNativeSession,startSeq:sourceStartSeq}) }
+      catch { /* Unsupported or unavailable review source must not veto a native request. */ }
+    }
   }
 
   const refreshContinuedWorkLease = async (
@@ -877,7 +898,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       // work. Revision ordering alone cannot distinguish two same-revision
       // context deliveries that finish out of order.
       const generation = ++prepareGeneration
-      await runtime.withDatabase((database) => resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true }))
+      const reviewProject=await runtime.withDatabase((database) => resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true }))
+      if(reviewProject)await autoReview.acceptInput(reviewProject.workspace,event.sessionId,event.task)
       const cacheKey = `${event.sessionId}\u0000${event.turn}`
       const fingerprint = canonicalContentHash({
         sessionId: event.sessionId,
@@ -964,7 +986,23 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             states.set(previous.runId, next)
             policy.setState(next)
           }
-          const continued = await this.choose(event, { admitted: !event.signal.aborted, prepared: previous.prepared, catalog: event.capabilities })
+          let continuedMemory:Pick<PreparedAgentTask,'context'|'memoryPolicy'>|undefined
+          if(!ennoMemory.ownsActiveRefresh(previous.prepared.ennoOduno)) {
+            const captured=previous.prepared, started=performance.now()
+            const inboxIdentity=()=>canonicalContentHash([...((event.nativeAgent as any)?.inbox?.nextStep??[]),...((event.nativeAgent as any)?.inbox?.nextTurn??[])].filter(isHumanMessage))
+            const pendingInput=inboxIdentity()
+            const assertCurrent=()=>{
+              if(inboxIdentity()!==pendingInput||event.signal.aborted||previous.closed||previous.prepared!==captured||currentSession(event.sessionId)!==previous||prepareGeneration!==generation||performance.now()-started>1000)
+                throw new Error('continued_memory_stale')
+              if(event.nativeSession!==previous.nativeSession||event.nativeAgent!==previous.nativeAgent)throw new Error('continued_memory_owner_changed')
+            }
+            try { continuedMemory=await runtime.withDatabase((database,embedding)=>{
+              if(embedding.mode==='required')throw new Error('required_embedding_unavailable')
+              return refreshContinuedTaskContext({database,prepared:captured,task:event.task,capabilities:[...event.capabilities.skills,...event.capabilities.tools],assertCurrent,
+                validateCapabilities:async()=>{const fresh=await capabilityCatalog(skills,tools,{agent:event.agent,...(event.nativeAgent?{nativeAgent:event.nativeAgent}:{}),cwd:event.cwd,signal:event.signal});this.assertCatalog(event.capabilities,fresh);assertCurrent()}})
+            }) } catch { /* Delivery-time validation still fences the previously selected context. */ }
+          }
+          const continued = await this.choose(event, { admitted: !event.signal.aborted, prepared: continuedMemory?{...previous.prepared,...continuedMemory}:previous.prepared, catalog: event.capabilities })
           if (continued.admitted) {
             continuedTurns.set(cacheKey, {
               fingerprint,
@@ -2330,8 +2368,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }
   const resolveSessionClose = async (sessionId: string, nativeSession: object): Promise<DshCloseIntent | undefined> => {
     const item = currentSession(sessionId)
-    if (item === undefined || item.closed || item.nativeSession !== nativeSession || executionSupport.paused(item.sessionId)) return undefined
-    if (selections.get(item.runId)?.value.status !== undefined && selections.get(item.runId)?.value.status !== 'ready') return undefined
+    if (item === undefined || item.closed || item.nativeSession !== nativeSession) return undefined
+    if (executionSupport.paused(item.sessionId) || selections.get(item.runId)?.value.status !== undefined && selections.get(item.runId)?.value.status !== 'ready') {
+      const end=await sessionMirror.latestEvent(sessionId,'turn/end',Number.MAX_SAFE_INTEGER)
+      if(end)autoReview.notify(reviewBinding(item,nativeSession as ReviewNativeSession),end.seq,'boundary')
+      return undefined
+    }
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
     if (state.status === 'completed') {
       await deliverCompletionReport(nativeSession)
@@ -2374,7 +2416,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         scheduled = true
         scheduledSessionId = before.dshSessionId
       }
+      handoffReview(database,input.runId,input.status)
     }))
+    autoReview.worker.abort(input.runId)
     if (scheduled) {
       if (scheduledSessionId === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Completed run has no DSH session identity')
       await sessionMirror.markUnfinalized(scheduledSessionId)
@@ -2445,6 +2489,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   })
   const sessionEventDisposer = (ctx as any).on('session/event', (session: { id: string }, event: { type?: unknown; seq?: unknown; data?: unknown }) => {
     const item = currentSession(session.id)
+    if(event.type==='user/message'&&typeof event.seq==='number'){
+      const input=humanInput(event as DshLogEvent)
+      if(input)void runtime.withDatabase(db=>resolveProjectWorkspaceReadOnly(db,root,{allowDirectory:true})).then(project=>project?autoReview.acceptInput(project.workspace,session.id,input.text):undefined).catch(()=>undefined)
+    }
     const data = objectRecord(event.data)
     const eventTurn = typeof data?.turn === 'number' && Number.isSafeInteger(data.turn) ? data.turn : item?.turn
     if (ennoMemory.enabled && item && item.nativeSession === session && event.type === 'user/message' && isHumanMessage(event.data)) {
@@ -2459,6 +2507,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (calls.size >= 256) calls.delete(calls.keys().next().value!)
       calls.set(data.callId, { name: data.name, runId: item.runId, agent: item.nativeAgent, turn: item.turn, seq: event.seq as number })
     }
+    if(event.type==='turn/end'&&typeof event.seq==='number'&&item?.nativeSession===session&&!item.closed) autoReview.notify(reviewBinding(item,session),event.seq)
     const claimKey = `${session.id}\u0000${eventTurn}`
     const fallback = ownsTurn ? inMemoryClaims.get(claimKey) : undefined
     const providerStarted = event.type === 'request/header' || event.type === 'request/context'
@@ -2582,6 +2631,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       // Observe-only DSH listeners must never veto the native event.
     })
   })
+  const reviewIdleDisposer=(ctx as any).on('agent/idle',(agent:NativeAgent)=>{
+    const session=agent.session as ReviewNativeSession|undefined
+    const item=session?currentSession(session.id):undefined
+    if(item&&session&&item.nativeSession===session&&!item.closed) void sessionMirror.latestEvent(session.id,'turn/end',Number.MAX_SAFE_INTEGER).then(end=>{if(end)autoReview.notify(reviewBinding(item,session),end.seq)}).catch(()=>undefined)
+  })
   const runLifecycle = new DshRunLifecycle({ closeRun })
   const failedBoundary = async (item: TurnRecord): Promise<{ sourceEndSeq?: number }> => {
     try {
@@ -2665,6 +2719,34 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     get skillPrompts() { return skillPrompts },
     configureSkillPrompts(prompts) { skillPrompts = prompts },
     configureEnnoMemory: config => ennoMemory.configure(config),
+    memoryReview: {
+      async start(){const project=await runtime.withDatabase(db=>resolveProjectWorkspaceReadOnly(db,root,{allowDirectory:true}));if(project)await autoReview.start(project.workspace)},
+      configure:config=>autoReview.configure(config),
+      async command(session,raw) {
+        const item=currentSession(session.id)
+        if(item&&item.nativeSession!==session)throw new Error('session_owner_unavailable')
+        const sessionRoot=objectRecord(objectRecord(session)?.header)?.cwd
+        const workspace=item?.workspace??(await runtime.withDatabase(db=>resolveProjectWorkspaceReadOnly(db,typeof sessionRoot==='string'?sessionRoot:root,{allowDirectory:true})))?.workspace
+        if(!workspace)throw new Error('workspace_unavailable')
+        const args=raw.trim().split(/\s+/)
+        if(!raw.trim()||args[0]==='status')return autoReview.status(workspace,session.id)
+        if(args[0]==='mode'&&args.length===2&&['off','observe','active'].includes(args[1]!)){await autoReview.setMode(workspace,args[1] as 'off'|'observe'|'active');return autoReview.status(workspace,session.id)}
+        if(raw.trim()==='exclude session') {await autoReview.exclude(workspace,session.id);return {state:'excluded',message:'この会話の自動メモリ生成を除外しました。保存済み記憶と会話ログは残ります。'}}
+        if(!item)throw new Error('session_owner_unavailable')
+        if(args[0]==='retry'&&args.length===2){const job=await autoReview.retry(item.workspace,args[1]!);return {jobId:job.id,state:job.state,reason:job.reason}}
+        if(args[0]==='retry-finalizer'&&args.length===2){
+          await runtime.withDatabase(db=>{const job=db.prepare('SELECT workspace,dsh_session_id,status,attempt_count FROM dsh_memory_finalizations WHERE run_id=?').get<{workspace:string;dsh_session_id:string;status:string;attempt_count:number}>(args[1]!);if(!job||job.workspace!==item.workspace)throw new Error('finalizer_not_found');assertCaptureAllowed(db,job.workspace,job.dsh_session_id);if(job.status!=='failed'||job.attempt_count>=3)throw new Error('finalizer_retry_unavailable')})
+          await memoryFinalizer.retryFailed(args[1]!);return {runId:args[1],state:'queued'}
+        }
+        if(raw.trim()==='run'){
+          const end=await sessionMirror.latestEvent(session.id,'turn/end',Number.MAX_SAFE_INTEGER)
+          if(!end)return {state:'no_confirmed_turns'}
+          const job=await autoReview.scan(reviewBinding(item,session),end.seq,'manual')
+          return job?{jobId:job.id,state:job.state}:{state:'no_unscheduled_turns'}
+        }
+        throw new Error('invalid_command')
+      },
+    },
     memoryEvolution: {
       configure(config: EvolutionConfig) { memoryFinalizer.configureMemoryEvolution(config); Object.assign(evolutionConfig, config) },
       async status(sessionId: string) {
@@ -2708,6 +2790,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     host,
     dispose: () => disposePromise ??= (async () => {
       await deepPlanning.stop()
+      await autoReview.dispose()
       await memoryFinalizer.dispose()
       await deepPlanning.dispose()
       routingCreatedDisposer()
@@ -2772,6 +2855,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         } catch (error) { failures.push(error) }
       }
       try { await runLifecycle.dispose() } catch (error) { failures.push(error) }
+      try { reviewIdleDisposer?.(); await autoReview.dispose() } catch (error) { failures.push(error) }
       try { await memoryFinalizer.dispose() } catch (error) { failures.push(error) }
       closeEfficiency()
       try { observationDisposer() } catch (error) { failures.push(error) }

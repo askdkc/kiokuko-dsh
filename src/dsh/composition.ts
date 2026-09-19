@@ -55,6 +55,7 @@ export interface DshCompositionHost {
   readonly configureSkillPrompts?: (prompts: DshSkillPrompts) => void
   readonly configureEnnoMemory?: (config: import('./config.js').EnnoMemoryConfig) => void
   readonly deepPlanning?: import('../deep-thinker/controller.js').DeepPlanningController
+  readonly memoryReview?: { start?:()=>Promise<void>; configure:(config:import('../memory/review/contracts.js').ReviewConfig)=>Promise<void>; command:(session:DshNativeSession,raw:string)=>Promise<Record<string,unknown>> }
   readonly memoryEvolution?: { configure: (config: import('../memory/evolution/contracts.js').EvolutionConfig) => void; status: (sessionId: string) => Promise<Record<string, unknown>> }
   readonly efficiency?: import('./efficiency.js').DshEfficiencyObserver | undefined
   readonly configureEfficiency?: (config: { observe: boolean; inputMode: import('./efficiency.js').FinalizationInputMode }) => void
@@ -256,11 +257,23 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       setupResourceDisposers.push(closeMirror)
       if (host.sessionMirrorOwner !== 'host') cleanupDisposers.push(closeMirror)
     }
+    await host.memoryReview?.start?.()
     if (host.memoryFinalizer !== undefined) {
       await host.memoryFinalizer.start()
       const closeFinalizer = async () => host.memoryFinalizer!.dispose()
       setupResourceDisposers.push(closeFinalizer)
       if (host.memoryFinalizerOwner !== 'host') cleanupDisposers.push(closeFinalizer)
+    }
+    if(host.memoryReview&&host.commands){
+      ingressDisposers.push(host.commands.register({name:'kioku-memory-review',description:'Automatic memory review: status [--json], run, retry <job-id>, retry-finalizer <run-id>, exclude session',
+        handler:async invocation=>{
+          const session=invocation.agent?.session
+          if(!session)return {kind:'error',text:'このセッションで /kioku-memory-review status を実行してください。'}
+          try{
+            const result=await host.memoryReview!.command(session,invocation.rawInput)
+            return {kind:'success',text:invocation.rawInput.includes('--json')?JSON.stringify(result):formatMemoryReviewStatus(result)}
+          }catch(error){const code=error instanceof Error&&/^[a-z_]+$/.test(error.message)?error.message:'review_unavailable';return {kind:'error',text:`自動メモリ操作を実行できません（${code}）。/kioku-memory-review status --json で状態を確認してください。`}}
+        }}))
     }
     if (host.memoryEvolution && host.commands) {
       ingressDisposers.push(host.commands.register({ name: 'kioku-evolution', description: 'Memory evolution status for this project',
@@ -367,4 +380,15 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     return disposePromise
   }
   return { stopIngress, dispose, historyCheck, drainLisp } as DshCompositionHandle
+}
+
+function formatMemoryReviewStatus(value:Record<string,unknown>):string {
+  if(value.message)return String(value.message)
+  if(value.jobId)return `レビューを予約しました: ${value.jobId}（${value.state}）。/kioku-memory-review status で結果を確認できます。`
+  if(!value.states)return `自動メモリ: ${value.state??'unknown'}`
+  const jobs=value.jobs as {id:string;state:string;reason:string|null;retryAvailable:boolean}[]
+  return [`自動メモリ: ${value.effectiveMode} / 本日の呼び出し ${value.dailyCalls}、残り ${value.remaining}`,
+    `会話の保存方針: ${(value.capture as {mode:string}).mode}`,
+    ...jobs.slice(0,10).map(j=>`${j.id}: ${j.state}${j.reason?` (${j.reason})`:''}${j.retryAvailable?`\n再評価: /kioku-memory-review retry ${j.id}`:''}`),
+    '詳細: /kioku-memory-review status --json', '保存除外: /kioku-memory-review exclude session'].join('\n')
 }
