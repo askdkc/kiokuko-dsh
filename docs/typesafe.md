@@ -113,7 +113,9 @@ a protected Lisp worker, make a credential available in the host environment
 and explicitly invoke this command from a built checkout or installed package:
 
 ```sh
+# Source checkout only; installed packages are already built.
 npm run build
+# Run from the built checkout or installed package directory.
 node scripts/smoke-typesafe.mjs --live
 ```
 

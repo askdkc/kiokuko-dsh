@@ -7,7 +7,7 @@ export interface TypeSafeClient {
 }
 /** Race even injected transports/providers that ignore abort; discard their late result. */
 async function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  signal.throwIfAborted()
+  if (signal.aborted) { void operation.catch(() => {}); signal.throwIfAborted() }
   let abort!: () => void
   const cancelled = new Promise<never>((_, reject) => { abort = () => reject(signal.reason); signal.addEventListener('abort', abort, { once: true }) })
   try { return await Promise.race([operation, cancelled]) }

@@ -22,8 +22,13 @@ test('an externally owned shared runtime is never closed by a failed compatibili
   const failure = new Error('surface registration failed'), events: string[] = []
   const runtime = { async start() { events.push('start') }, async close() { events.push('close') } } as any
   const context = { on() { return () => {} } } as unknown as Context
-  await assert.rejects(mountDshComposition(context, { runtime, runtimeOwner: 'external', commands: { register() { throw failure } } }), error => error === failure)
+  let removedKeyCommand = false
+  await assert.rejects(mountDshComposition(context, { runtime, runtimeOwner: 'external', commands: { register(definition) {
+    if (definition.name === 'kioku-typesafe-key') return () => { removedKeyCommand = true }
+    throw failure
+  } } }), error => error === failure)
   assert.deepEqual(events, ['start'])
+  assert.equal(removedKeyCommand, true, 'an independently registered credential command is removed on mount failure')
   const successful = await mountDshComposition(context, { runtime, runtimeOwner: 'external' })
   await successful.dispose()
   assert.deepEqual(events, ['start', 'start'])
@@ -65,9 +70,12 @@ test('explicit host adapter mounts native DSH tools and commands and unloads the
   await plugin
 
   assert.equal(tools.length, 8)
-  assert.equal(commands.length, 2)
+  assert.equal(commands.length, 3)
   assert.ok(commands.some(command => command.name === 'kioku-orca'))
-  assert.deepEqual(await commands[0].handler({ rawInput: 'ultra', signal: new AbortController().signal }), {
+  const keyCommand = commands.find(command => command.name === 'kioku-typesafe-key')
+  assert.equal(keyCommand.recordInput, false)
+  assert.match((await keyCommand.handler({ rawInput: 'status', signal: new AbortController().signal })).text, /^TypeSafe:/)
+  assert.deepEqual(await commands.find(command => command.name === 'ponytail').handler({ rawInput: 'ultra', signal: new AbortController().signal }), {
     kind: 'success', text: 'Ponytail mode set to ultra for the active request.',
   })
   const workReport = tools.find((tool) => tool.name === 'enno_work_report')

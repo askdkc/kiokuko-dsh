@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtemp, realpath, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, realpath, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
@@ -10,6 +10,7 @@ import { LispManager } from '../../../../src/dsh/lisp/manager.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
 import { HttpTypeSafeClient } from '../../../../src/dsh/typesafe/client.js'
 import { TypeSafeCredentials } from '../../../../src/dsh/typesafe/credentials.js'
+import { compileSkillResource } from '../../../../src/dsh/skill-compiler.js'
 
 test('protected Lisp consumes TypeSafe decisions, catches API errors, preserves approval and aborts HTTP on termination', {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL' : false, timeout: 180000,
@@ -25,6 +26,14 @@ test('protected Lisp consumes TypeSafe decisions, catches API errors, preserves 
     bodies.push(JSON.parse(String(options!.body))); requestSignal = options!.signal!
     if (mode === 'hang') { began(); return new Promise(resolve => { late = resolve }) }
     if (mode === 'auth') return new Response('fixture-host-secret error body', { status: 401 })
+    const questions = bodies.at(-1).questions
+    if (!questions.next) {
+      const answers = Object.fromEntries(Object.entries(questions).map(([id, q]: [string, any]) => [id, q.type === 'choice'
+        ? { type: 'choice', choice: decision, probabilities: Object.fromEntries(Object.keys(q.criteria).map(key => [key, key === decision ? 1 : 0])), confidence: 1 }
+        : q.type === 'score' ? { type: 'score', score: 0.5, probabilities: { '0': 0.5, '1': 0.5 }, legend: { '0': q.criteria[0], '1': q.criteria[1] }, confidence: 0 }
+        : { type: 'noul', noul: id === '0' || id === 'fit' && decision === 'propose' ? 0.95 : 0.05 }]))
+      return Response.json({ model: 'fixture-model', answers, usage: { input_tokens: 10, output_tokens: 5 } })
+    }
     return Response.json({ model: 'fixture-model', answers: { next: { type: 'choice', choice: decision,
       probabilities: { inspect: decision === 'inspect' ? 1 : 0, propose: decision === 'propose' ? 1 : 0, insufficient: decision === 'insufficient' ? 1 : 0 }, confidence: 1 } }, usage: { input_tokens: 30, output_tokens: 10 } })
   })
@@ -60,18 +69,53 @@ test('protected Lisp consumes TypeSafe decisions, catches API errors, preserves 
     const uncaught = await evaluate('uncaught', `(kioku.files:propose-write "candidate.txt" "must not apply") ${request}`)
     assert.equal(uncaught.ok, false); assert.match(uncaught.value, /TYPESAFE_AUTH/); assert.deepEqual(uncaught.proposals, [])
     assert.equal(approvals, 1); assert.equal((await evaluate('usable', '(+ 20 22)')).value.json, 42)
+    const tooLarge = await evaluate('oversized', '(handler-case (kioku.typesafe:evaluate (make-string 1100000 :initial-element #\\x) (make-hash-table)) (kioku.typesafe:service-error (e) (kioku.typesafe:error-code e)))')
+    assert.equal(tooLarge.value.json, 'TYPESAFE_REQUEST_TOO_LARGE')
     assert.equal((await evaluate('no-worker-key', '(uiop:getenv "TYPESAFE_API_KEY")')).value.json, null)
     assert.ok(!JSON.stringify([status, caught, uncaught, await manager.diagnostics(owner)]).includes('fixture-host-secret'))
     assert.deepEqual(bodies[0].state, ['synthetic code', 'failure evidence'])
     for (const b of bindings) { assert.deepEqual(b.owner, owner); assert.equal(b.generation, answer.generation); assert.ok(b.evaluationId) }
     const wrongOwner = await manager.execute({ ...owner, root: base }, 'lisp_eval', { operationId: 'wrong-owner', code: request }) as any
     assert.equal(wrongOwner.ok, false); assert.equal(wrongOwner.code, 'LISP_DISABLED')
-    for (const termination of ['timeout', 'cancel', 'exit', 'dispose'] as const) {
+    // Execute the shipped examples, including both branches of the proposal helper.
+    mode = 'ok'
+    const skill = await readFile(new URL('../../../../skills/kiokuko-lisp/SKILL.md', import.meta.url), 'utf8')
+    const examples = skill.slice(skill.indexOf('### Explicit TypeSafe decisions')).match(/```lisp\n([\s\S]*?)```/)![1]!
+    assert.equal((await evaluate('documented-helpers', examples)).ok, true)
+    const compiledGuide = compileSkillResource({ name: 'kiokuko-lisp', relativePath: 'SKILL.md', content: skill }).content
+    const deliveredExamples = compiledGuide.slice(compiledGuide.indexOf('### TypeSafe')).match(/```lisp\n([\s\S]*?)```/)![1]!
+    assert.equal((await evaluate('delivered-examples', deliveredExamples)).ok, true)
+    decision = 'import'
+    const mixed = await evaluate('mixed', `(kioku.typesafe:evaluate (obj "code" "synthetic" "facts" #(1 2))
+      (obj "0" (obj "type" "noul" "instructions" "Related?")
+           "cause" (obj "type" "choice" "instructions" "Cause?" "criteria" (obj "import" "Module resolution" "insufficient" "Need evidence"))
+           "severity" (obj "type" "score" "instructions" "Severity?" "criteria" #("Low" "High"))))`)
+    assert.equal(mixed.value.json.answers['0'].noul, 0.95); assert.equal(mixed.value.json.answers.severity.score, 0.5)
+    const delivered = await evaluate('consume-delivered', '(inspect-diagnosis (kioku.typesafe:evaluate "module not found" (obj "cause" (obj "type" "choice" "instructions" "Cause?" "criteria" (obj "import" "Missing module" "insufficient" "Need evidence")))))', { inputs: ['candidate.txt'] })
+    assert.deepEqual(delivered.value.json, ['original'])
+    const selected = await evaluate('select-shortlist', '(inspect-relevant "requirement" #("relevant candidate" "unrelated candidate") 0.8)', { inputs: ['candidate.txt', 'candidate.txt'] })
+    assert.deepEqual(selected.value.json, ['original'])
+    decision = 'insufficient'
+    assert.match((await evaluate('classify-uncertain', '(inspect-failure "partial error")')).value.json, /Collect the failing command/)
+    decision = 'import'
+    assert.deepEqual((await evaluate('classify-import', '(inspect-failure "module not found")', { inputs: ['candidate.txt'] })).value.json, ['original'])
+    decision = 'inspect'
+    assert.match((await evaluate('change-inspect', '(consider-change "requirement" "original" "changed" "candidate.txt" 0.8 0.2)')).value.json, /Inspect/)
+    decision = 'propose'
+    assert.equal((await evaluate('change-propose', '(consider-change "requirement" "original" "changed" "candidate.txt" 0.8 0.2)')).changes[0].state, 'NOT_APPLIED')
+    assert.equal(approvals, 2)
+    mode = 'hang'; began = () => {}
+    const serviceTimeout = await evaluate('service-timeout', request.slice(0, -1) + ' :timeout-ms 20)')
+    assert.equal(serviceTimeout.ok, false); assert.match(serviceTimeout.value, /TYPESAFE_TIMEOUT/); assert.equal(requestSignal!.aborted, true)
+    late(Response.json({})); assert.equal((await evaluate('after-service-timeout', '(+ 1 2)')).value.json, 3)
+    for (const termination of ['timeout', 'cancel', 'signal', 'exit', 'dispose'] as const) {
       mode = 'hang'
       const started = new Promise<void>(resolve => { began = resolve })
-      const pending = evaluate(`terminate-${termination}`, request, { timeoutMs: termination === 'timeout' ? 200 : 10000 })
+      const controller = new AbortController()
+      const pending = evaluate(`terminate-${termination}`, request, { timeoutMs: termination === 'timeout' ? 200 : 10000 }, controller.signal)
       await started
       if (termination === 'cancel') await manager.execute(owner, 'lisp_cancel', {})
+      if (termination === 'signal') controller.abort()
       if (termination === 'exit') {
         const generation = (await manager.status(owner) as any).generation
         const { execFileSync } = await import('node:child_process')
@@ -85,5 +129,5 @@ test('protected Lisp consumes TypeSafe decisions, catches API errors, preserves 
       late(Response.json({ model: 'late', answers: {}, usage: { input_tokens: 0, output_tokens: 0 } }))
       if (termination !== 'dispose') { await manager.recover(owner); assert.equal((await evaluate(`after-${termination}`, '(+ 1 2)')).value.json, 3) }
     }
-  } finally { await manager.dispose(); db.close() }
+  } finally { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) }
 })

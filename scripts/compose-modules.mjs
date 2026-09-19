@@ -56,7 +56,11 @@ export async function composeModules(sources, destination) {
   await mkdir(join(destination, 'dsh'))
   await writeFile(join(destination, 'dsh/cordis.patch.yml'), JSON.stringify([{ insert: [{ id: 'kiokuko-dsh', name: 'kiokuko-dsh', inject, config: { enabled: true } }] }], null, 2) + '\n')
   manifest.dsh = { bundle: { patch: './dsh/cordis.patch.yml' }, permissions: { summary: 'Configured local Kiokuko core and explicitly selected modules.', readPaths: ['Registered workspace and configured Kiokuko database'], writePaths: ['Configured Kiokuko database, pre-migration backups and selected managed Skills under ~/.agents/skills', ...(sources.lisp ? ['Protected Lisp scratch, journals, backups and explicitly approved project changes'] : [])], commands: sources.lisp ? ['Explicit protected SBCL and brokered subprocesses'] : [] } }
-  manifest.files = ['dist/', 'skills/', 'scripts/', 'migrations/', 'dsh/cordis.patch.yml', ...(sources.lisp ? ['lisp/'] : []), ...Object.keys(sources).map(name => `module-${name}.json`), 'LICENSE', 'THIRD_PARTY_NOTICES.md']
+  if (sources.lisp) {
+    manifest.dsh.permissions.externalServices = ['TypeSafe fixed systemone endpoint for explicit Lisp questions only; selected state/questions, 256 KiB request/response cap, no retries']
+    manifest.dsh.permissions.credentials = ['TYPESAFE_API_KEY through optional DSH-managed credentials; inherited environment precedence; no worker exposure; /kioku-typesafe-key input visible but unrecorded']
+  }
+  manifest.files = ['dist/', 'skills/', 'scripts/', 'migrations/', 'dsh/cordis.patch.yml', ...(sources.lisp ? ['lisp/', 'docs/', 'PERMISSIONS.md'] : []), ...Object.keys(sources).map(name => `module-${name}.json`), 'LICENSE', 'THIRD_PARTY_NOTICES.md']
   await writeFile(join(destination, 'package.json'), JSON.stringify(manifest, null, 2) + '\n')
   return manifest
 }
