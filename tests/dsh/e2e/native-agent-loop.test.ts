@@ -32,7 +32,7 @@ function dshModule(relativePath: string): string {
   return pathToFileURL(join(dshPackageRoot, '@deepseek-ai', name, 'lib/index.js')).href
 }
 
-for (const finalMode of ['text', 'empty', 'error', 'stall', 'pause', 'verifier_mutation', 'last_attempt', 'boundary_blocked'] as const) {
+for (const finalMode of ['text', 'empty', 'error', 'stall', 'pause', 'verifier_mutation', 'last_attempt', 'boundary_blocked', 'phase_handoff'] as const) {
 test(`real DSH agent loop: persisted resume, verification retry, completion (${finalMode})`, {
   skip: !dshSourceRoot && !dshPackageRoot ? 'requires the pinned DeepSeek Harness runtime' : false,
   timeout: 60_000,
@@ -130,7 +130,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   const flowResponses = (suffix: string, longPlanningStep = false, failBeforeWork = false, retryWork = false) => [
     mock.textResponse('The ideal is ready for the host advisory round.'),
     mock.toolCallResponse(`ideal-${suffix}`, 'enno_ideal_submit', { ideal, advisoryDisposition: idealDispositions }),
-    mock.textResponse(longPlanningStep
+    finalMode === 'phase_handoff' ? mock.toolCallResponse(`planning-read-${suffix}`, 'read', { file_path: 'src/fixture.ts' }) : mock.textResponse(longPlanningStep
       ? `The plan is ready for the host advisory round. ${'x'.repeat(4_531)}`
       : 'The plan is ready for the host advisory round.'),
     mock.toolCallResponse(`plan-${suffix}`, 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
@@ -190,7 +190,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   })
   adapterScript.listModels = async (provider: string) => ['mock', ...openaiModels].map(id => ({ provider, id, name: id }))
   let exploratoryReads = 0
-  const readDisposer = finalMode === 'pause' ? ctx.tools.register({ name: 'read', description: 'Read fixed source evidence.',
+  const readDisposer = finalMode === 'pause' || finalMode === 'phase_handoff' ? ctx.tools.register({ name: 'read', description: 'Read fixed source evidence.',
     parameters: { file_path: { type: 'string', required: true } },
     output: { schema: { type: 'string' }, render: (_args: unknown, text: string) => [{ type: 'text', text }] },
     execute: () => { exploratoryReads++; return 'unchanged source evidence' },
@@ -284,6 +284,12 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   let adapter = createAdapter()
   const priorObservations: EfficiencyObservation[] = []
   let composition = await mountDshComposition(ctx, adapter.host)
+  const fastBoundaryDisposer = finalMode === 'phase_handoff' ? ctx.on('agent/turn-stopping', async ({ agent }: any) => {
+    // Reproduce a worker that delivers before DSH appends turn/end. The
+    // continuation must still wait for a new turn, even with no I/O delay.
+    adapter.host.boundaryWorker!.kick(agent.session.id, agent)
+    await adapter.host.boundaryWorker!.whenIdle()
+  }) : undefined
   try {
     liveAgent = await ctx.agentLoop.create(
       session.SessionId('real-loop-session'),
@@ -408,6 +414,22 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     await completeTurn('@PLAN.md を実装', () => completed(1))
     assert.deepEqual(boundaryFailures, [], 'multiline intake must not trigger an internal-error question')
     assert.match(confirmationDetails[0]!, /Keep the native workflow recoverable/)
+    if (finalMode === 'phase_handoff') {
+      const events = liveAgent.session.snapshotEvents()
+      const idealCall = events.find((e: any) => e.type === 'tool/call' && e.data.callId === 'ideal-one')
+      const readCall = events.find((e: any) => e.type === 'tool/call' && e.data.callId === 'planning-read-one')
+      assert.equal(exploratoryReads, 1, 'the next phase can read repository evidence')
+      assert.ok(readCall.data.turn > idealCall.data.turn, 'the committed phase must end before the planning tool starts')
+      const idealEnd = events.find((e: any) => e.type === 'turn/end' && e.data.turn === idealCall.data.turn)
+      const planningDirective = events.find((e: any) => e.type === 'user/message'
+        && e.data.source?.sections?.some((section: any) => section.name === 'directive:kiokuko-directive' && section.text.includes('"role":"zenki"')))
+      assert.ok(idealEnd.seq < planningDirective.seq && planningDirective.seq < readCall.seq,
+        'the next phase context reaches the new turn before its first tool')
+      assert.equal(events.filter((e: any) => e.type === 'tool/result').some((e: any) => e.data.message.content[0]?.isError), false)
+      assert.ok(routedTools.some(tool => tool.name === 'enno_meditation_submit'))
+      assert.match(JSON.stringify(events.filter((e: any) => e.type === 'assistant/message').at(-1)), /Completed one/)
+      return
+    }
     if (finalMode === 'last_attempt') {
       assert.match(JSON.stringify(liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'assistant/message').at(-1)), /Completed one/)
       assert.ok(routedTools.some(tool => tool.name === 'enno_meditation_submit'))
@@ -610,6 +632,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     await adapter.dispose()
     await composition.dispose()
     await questionFiber.dispose()
+    fastBoundaryDisposer?.()
     readDisposer?.()
     await rm(fixtureRoot, { recursive: true, force: true })
     await rm(dataRoot, { recursive: true, force: true })

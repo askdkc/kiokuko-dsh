@@ -138,6 +138,7 @@ interface NativeAgent {
   readonly session?: { readonly id: string; readonly header?: { readonly cwd?: string }; snapshotEvents?: () => readonly DshLogEvent[] }
   readonly inject?: (message: unknown) => void
   readonly steer?: (message: unknown) => void
+  readonly followup?: (message: unknown) => void
 }
 interface NativeAgents {
   get(id: string): NativeAgent | undefined
@@ -2122,7 +2123,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       }
       if (job.kind === 'context') {
         const state = await readBoundaryState(item)
-        await injectBoundaryContext(item, state)
+        await assertTurnBoundary(boundaryEvent(item))
+        if (state.directive === null) throw new Error('kiokuko-dsh boundary context has no directive')
+        // The worker can finish before the causal native turn ends. Injecting
+        // next-step context here would reopen that sealed turn. The admitted
+        // next turn projects its current directive, Skills and memory through
+        // CapturingGate.preStep, after binding its new native turn identity.
         await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
           const outbox = readPendingOutbox(database, item.sessionId).find((candidate) => candidate.receiptId === job.receiptId)
           if (outbox !== undefined) replacePendingOutboxMessageInTransaction(
@@ -2213,11 +2219,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     },
     dispatch: async (job, outbox) => {
       const item = currentSession(job.dshSessionId)
-      const nativeAgent = (boundaryAgents.get(job.dshSessionId) ?? agents?.get(job.dshSessionId)) as { readonly steer?: (message: unknown) => void } | undefined
-      if ((item !== undefined && (item.closed || item.runId !== job.runId)) || nativeAgent?.steer === undefined) {
+      const nativeAgent = (boundaryAgents.get(job.dshSessionId) ?? agents?.get(job.dshSessionId)) as NativeAgent | undefined
+      if ((item !== undefined && (item.closed || item.runId !== job.runId)) || nativeAgent?.followup === undefined) {
         throw new Error('kiokuko-dsh native boundary delivery agent is unavailable')
       }
-      nativeAgent.steer(outbox.message)
+      nativeAgent.followup(outbox.message)
     },
     onWaitingUser: async (job, error, signal) => {
       boundarySignals.set(job.dshSessionId, signal)
