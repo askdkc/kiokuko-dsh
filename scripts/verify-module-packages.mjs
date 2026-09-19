@@ -66,6 +66,10 @@ try {
     const combination = ['core', ...configuration].join('-'), consumer = join(work, combination)
     const manifest = await composeModules(Object.fromEntries(['core', ...configuration].map(name => [name, packed[name].directory])), consumer)
     const composed = await pack(consumer, join(work, `configured-${combination}`))
+    if (configuration.includes('lisp')) {
+      for (const path of ['docs/typesafe.md', 'PERMISSIONS.md', 'scripts/smoke-typesafe.mjs', 'dist/dsh/typesafe/client.js']) assert.ok(composed.files.some(file => file.path === path), `Missing TypeSafe module asset: ${path}`)
+      assert.ok(manifest.dsh.permissions.externalServices.some(service => service.includes('TypeSafe')))
+    }
     const dependencies = { ...manifest.dependencies, ...Object.fromEntries(Object.entries(manifest.peerDependencies).filter(([name]) => !manifest.peerDependenciesMeta?.[name]?.optional)) }
     const resolvedDependencies = await isolatedDependencies(consumer, dependencies)
     // Type consumers need declaration-only imports too. Node types are validation tooling.

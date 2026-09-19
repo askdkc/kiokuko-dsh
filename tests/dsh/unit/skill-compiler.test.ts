@@ -41,6 +41,11 @@ test('compiler retains rules, excludes only documentation, preserves unannotated
   assert.equal(compileSkillResource(source('unchanged reference')).content, 'unchanged reference')
   assert.deepEqual(compileSkillBundle([source(contract)]), compileSkillBundle([source(contract)]))
 })
+test('compiled Lisp guidance retains TypeSafe discovery and answer-consuming examples', async () => {
+  const compiled = compileSkillBundle(await loadSkillSources())
+  const lisp = compiled.resources.find(resource => resource.id === 'kiokuko-lisp/SKILL.md')!.content
+  for (const contract of ['kioku.typesafe:evaluate', '/kioku-typesafe-key', 'inspect-selected', 'inspect-diagnosis', 'propose-if-fit', 'Existing approvals remain authoritative']) assert.ok(lisp.includes(contract), contract)
+})
 test('compiler rejects unclassified, duplicate, nested, empty and malformed blocks', () => {
   for (const content of [`unclassified\n${contract}`, `${contract}\n${contract}`, contract.replace('Never replay completed effects.', ''),
     contract.replace('runtime core', 'runtime INVALID'), contract.replace('<!-- /kiokuko:runtime -->', ''),

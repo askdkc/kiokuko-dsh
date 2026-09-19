@@ -5,6 +5,8 @@ import { resolveGroundedIntakeProfile } from '../intake-profile-resolver.js'
 import type { DshModule } from '../core/modules.js'
 import type { CoreModuleHost } from '../core/host.js'
 import { bundledResources } from './resources.js'
+import { mountTypeSafeCommand, typeSafeCredentials } from '../typesafe/command.js'
+import type { DshNativeCommandDefinition } from '../commands.js'
 
 /** Protected execution stays host-owned. Unload preserves the existing root fence. */
 export const lispModule: DshModule<CoreModuleHost> = {
@@ -12,6 +14,9 @@ export const lispModule: DshModule<CoreModuleHost> = {
   resources: bundledResources(['kiokuko-lisp']),
   configure: value => LispConfig.parse(value ?? {}),
   async mount({ host, defer }, configuration) {
+    const commands = host.context.get('commands') as { register(definition: DshNativeCommandDefinition): () => void }
+    const removeKeyCommand = mountTypeSafeCommand(commands, typeSafeCredentials(host.context))
+    defer(removeKeyCommand)
     const surface = await mountLispSurface(host.context, host.runtime, LispConfig.parse(configuration), host.prompts)
     const unregister = host.beforeTask(async input => {
       const coding = host.context.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
@@ -22,6 +27,6 @@ export const lispModule: DshModule<CoreModuleHost> = {
     })
     defer(unregister)
     let drained: Promise<void> | undefined
-    return { stopIngress() { unregister(); surface.stop() }, drain() { return drained ??= surface.dispose() }, async dispose() {} }
+    return { stopIngress() { removeKeyCommand(); unregister(); surface.stop() }, drain() { return drained ??= surface.dispose() }, async dispose() {} }
   },
 }

@@ -15,6 +15,8 @@ import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './request-surfa
 import { mountLispHttp } from './http.js'
 import { createLispCiAdapter } from './ci.js'
 import { attachmentInput, type LispAttachmentSession, type LispAttachmentStore } from './attachment-input.js'
+import { HttpTypeSafeClient } from '../typesafe/client.js'
+import { typeSafeCredentials } from '../typesafe/command.js'
 import { LISP_TOOLS, failure, fail, identifier, renderResult, type LispConfiguration, type LispOwner, type LispTool } from './contracts.js'
 
 interface Session extends LispAttachmentSession { id: string; header: { cwd: string; parentSession?: string } }
@@ -64,11 +66,18 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   } } : undefined
   const databasePath = await runtime.withDatabase(db => db.filePath)
   const store = new LispStore(fn => runtime.withDatabase(db => fn(db)))
+  const typesafe = new HttpTypeSafeClient(typeSafeCredentials(ctx))
   const manager = new LispManager({ store, config,
     ...(skillPrompts ? { skillPrompts } : {}),
     dataRoot: join(dirname(databasePath), 'lisp'), protectedRoots: [databasePath, `${databasePath}-wal`, `${databasePath}-shm`],
     ...(ownerQuestions ? { questions: ownerQuestions } : {}),
     ciCall: createLispCiAdapter(ownerQuestions),
+    typesafeCall: async (owner, method, args, context) => {
+      const agent = agents.get(owner.agentId)
+      if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', 'TypeSafe のセッションを確認できません。')
+      context.signal.throwIfAborted()
+      return method === 'typesafe-status' ? typesafe.status() : typesafe.evaluate(args, context.signal)
+    },
     attachmentInput: (owner, path, signal) => {
       const agent = agents.get(owner.agentId)
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', '添付入力のセッションを確認できません。')

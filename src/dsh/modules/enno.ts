@@ -17,7 +17,7 @@ export const ennoModule: DshModule<CoreModuleHost> = {
     defer(adapter.dispose)
     // Shared runtime, Skills and SOUL are owned by the enclosing composition.
     const { skills: _skills, systemPrompt: _prompt, ...featureHost } = adapter.host
-    const composition = await mountDshComposition(host.context, featureHost, undefined, host.prompts)
+    const composition = await mountDshComposition(host.context, featureHost, undefined, host.prompts, { typeSafeCommand: false })
     let drained: Promise<void> | undefined
     return { stopIngress: composition.stopIngress, drain() { return drained ??= (async () => { composition.stopIngress(); await composition.dispose(); await adapter.dispose() })() }, async dispose() {} }
   },

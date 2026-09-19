@@ -1,5 +1,6 @@
 import { formatEvolutionStatus } from '../memory/evolution/status.js'
 import type { mountLispSurface } from './lisp/surface.js'
+import { mountTypeSafeCommand, typeSafeCredentials } from './typesafe/command.js'
 import { ExecutionSelectionPending } from './model-selection-ui.js'
 import type { LispConfiguration } from './lisp/contracts.js'
 import { mountDeepReportSurface } from '../deep-thinker/report-surface.js'
@@ -188,7 +189,7 @@ function mountNativeBoundaryKick(
  * adapter is deliberately explicit: a generic Cordis context cannot invent a
  * repository/run binding or an intake task projection safely.
  */
-export async function mountDshComposition(ctx: Context, host: DshCompositionHost, lisp?: LispConfiguration, prompts = host.skillPrompts ?? new DshSkillPrompts()): Promise<DshCompositionHandle> {
+export async function mountDshComposition(ctx: Context, host: DshCompositionHost, lisp?: LispConfiguration, prompts = host.skillPrompts ?? new DshSkillPrompts(), options: { typeSafeCommand?: boolean } = {}): Promise<DshCompositionHandle> {
   if (host.configureSkillPrompts) host.configureSkillPrompts(prompts)
   else if (prompts.mode === 'compiled' && (host.intakeGate || host.toolHost || host.deepPlanning)) {
     throw new Error('The explicit Kiokuko runtime host must implement configureSkillPrompts for compiled delivery')
@@ -231,6 +232,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   }
 
   try {
+    if (host.commands && options.typeSafeCommand !== false) ingressDisposers.push(mountTypeSafeCommand(host.commands, typeSafeCredentials(ctx)))
     const historyCompatibility = mountSessionHistoryCompatibility(ctx)
     historyCheck = historyCompatibility.ready
     ingressDisposers.push(historyCompatibility.stop)

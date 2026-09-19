@@ -65,6 +65,12 @@ try {
   assert.equal(names.includes('kiokuko-enno-oduno'), legacy || combination.includes('enno'))
   assert.equal(names.includes('kiokuko-lisp'), legacy || combination.includes('lisp'))
   const parent = await ctx.agentLoop.create(session.SessionId('module-fixture'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
+  const hasTypeSafe = legacy || combination.includes('lisp')
+  assert.equal(ctx.commands.list(parent).filter(command => command.name === 'kioku-typesafe-key').length, hasTypeSafe ? 1 : 0)
+  if (hasTypeSafe) {
+    const status = await ctx.commands.execute(parent, '/kioku-typesafe-key status', [], new AbortController().signal)
+    assert.equal(status.result.kind, 'success'); assert.match(status.result.text, /TypeSafe:/)
+  }
   for (const task of ['こんにちは', 'この文章を要約してください', 'この資料を調査してください']) {
     const count = provider.requests.length
     parent.followup(llm.createUserMessage({ content: [{ type: 'text', text: task }], source: { kind: 'user' } }))
@@ -83,15 +89,23 @@ try {
     assert.notEqual(result.isError, true, JSON.stringify(result))
     assert.equal(result.value.ok, true, JSON.stringify(result))
     assert.match(JSON.stringify(result), /42/)
+    const discovery = await ctx.tools.execute({ callId: 'packed-typesafe-discovery', name: 'lisp_describe', arguments: { operationId: 'typesafe-discovery' }, agent: parent, signal: new AbortController().signal })
+    assert.equal(discovery.value.ok, true, JSON.stringify(discovery))
+    assert.ok(JSON.stringify(discovery).includes('kioku.typesafe:evaluate'), JSON.stringify(discovery))
+    const status = await ctx.tools.execute({ callId: 'packed-typesafe-status', name: 'lisp_eval', arguments: { operationId: 'typesafe-status', code: '(kioku.typesafe:status)' }, agent: parent, signal: new AbortController().signal })
+    assert.equal(status.value.ok, true, JSON.stringify(status))
+    assert.equal(typeof status.value.value.json.configured, 'boolean')
     const replay = await ctx.tools.execute({ callId: 'packed-lisp-replay', name: 'lisp_eval', arguments: arguments_, agent: parent, signal: new AbortController().signal })
     assert.equal(replay.value.replay, true, 'exact completed effects must not execute twice')
     await handle.dispose(); handle = undefined
+    assert.equal(ctx.commands.list(parent).some(command => command.name === 'kioku-typesafe-key'), false)
     const blocked = await ctx.tools.execute({ callId: 'packed-after-stop', name: 'module_fixture_write', arguments: {}, agent: parent, signal: new AbortController().signal })
     assert.equal(blocked.isError, true, 'stopping the module must retain the protected session fence')
     assert.equal(effects, 0)
     removeProbe()
   }
   await handle?.dispose(); handle = undefined
+  assert.equal(ctx.commands.list(parent).some(command => command.name === 'kioku-typesafe-key'), false)
   const first = provider.requests[0]
   const system = first.system ?? first.messages.filter(message => message.role === 'system').flatMap(message => message.content).map(block => block.text ?? '').join('\n')
   console.log(JSON.stringify({ combination, status: 'passed', nativeRequests: provider.requests.length, skills: names, startupModules: imported.map(url => url.slice(pathToFileURL(packageRoot).href.length + 1)), constantPromptBytes: Buffer.byteLength(system), protectedLisp: combination.includes('lisp'), liveModelQuality: 'unmeasured' }))

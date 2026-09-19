@@ -6,7 +6,7 @@ import { z } from 'zod'
 import type { DshUserQuestions } from '../user-interaction.js'
 import { EvalInput, LispError, digest, fail, failure, identifier, type LispConfiguration, type LispOwner, type LispState, type LispTool } from './contracts.js'
 import { LispStore } from './store.js'
-import { LispWorker } from './worker.js'
+import { LispWorker, type LispRpcContext } from './worker.js'
 import { prepareLayout } from './sandbox.js'
 import { verifyLispVendor } from './integrity.js'
 import { CompiledLispCache, type CompilationStatus } from './compiled-cache.js'
@@ -27,6 +27,7 @@ export interface ManagerOptions {
   toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>) => Promise<unknown>
   ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal, scratchRoot?: string) => Promise<unknown>
   attachmentInput?: (owner: LispOwner, path: string, signal: AbortSignal) => AttachmentInput
+  typesafeCall?: (owner: LispOwner, method: 'typesafe-status' | 'typesafe-evaluate', args: unknown, context: LispRpcContext) => Promise<unknown>
 }
 /** Host-owned authority. Worker frames never grant permissions or choose identities. */
 export class LispManager {
@@ -110,7 +111,7 @@ export class LispManager {
         const base = await mkdtemp(join(this.options.dataRoot, 'w-'))
         const layout = await prepareLayout(base, this.#library)
         layout.compiled = compiled.path
-        worker = new LispWorker(layout, this.#config, (method, args) => this.bridge(state, method, args))
+        worker = new LispWorker(layout, this.#config, (method, args, context) => this.bridge(state, method, args, context))
         state.worker = worker
         if (this.#closed || state.state !== 'PREFLIGHT' || abort.signal.aborted) fail('CANCELLED', '起動は取り消されています。')
         await worker.start()
@@ -221,8 +222,16 @@ export class LispManager {
     state.state = state.error.code === 'STOP_UNCONFIRMED' ? 'STOP_UNCONFIRMED' : 'RECOVERY_REQUIRED'
     try { this.options.notify?.(state.owner, `${state.error.message}\n${state.error.recovery}`) } catch { /* independent status/commands still expose the durable recovery state */ }
   }
-  private async bridge(state: AgentState, method: string, args: unknown): Promise<unknown> {
+  private async bridge(state: AgentState, method: string, args: unknown, context: LispRpcContext): Promise<unknown> {
     if (state.state !== 'EVALUATING' || !state.worker?.healthy || this.#closed) fail('STALE_RPC', '現在の評価に属さない要求です。')
+    if (context.generation !== state.worker.generation || context.signal.aborted) fail('STALE_RPC', '現在の評価に属さない要求です。')
+    if (method === 'typesafe-status' || method === 'typesafe-evaluate') {
+      if (!this.options.typesafeCall) fail('TYPESAFE_UNAVAILABLE', 'TypeSafe host adapter is unavailable.')
+      if (method === 'typesafe-status' && !z.object({}).strict().safeParse(args).success) fail('TYPESAFE_INVALID_REQUEST', 'TypeSafe status takes no arguments.')
+      const result = await this.options.typesafeCall(state.owner, method, args, context)
+      if (this.#closed || state.state !== 'EVALUATING' || state.worker.generation !== context.generation || context.signal.aborted) fail('STALE_RPC', '現在の評価に属さない要求です。')
+      return result
+    }
     if (method === 'tools-list') return this.options.toolCall ? [{ name: 'lisp_status', parameters: { type: 'object', additionalProperties: false }, effects: 'read-only', adapterVersion: 1 }] : []
     if (method === 'tool-call') {
       const parsed = z.object({ name: z.literal('lisp_status'), args: z.object({}).strict() }).strict().parse(args)
@@ -298,7 +307,8 @@ export class LispManager {
     this.#executions.set(result, owner.sessionId)
     const finished = () => {
       this.#executions.delete(result); if (key) this.#inflight.delete(key)
-      if (tool !== 'lisp_status' && this.enabled.has(owner.sessionId)) this.scheduleIdle(this.entry(owner))
+      const state = this.#agents.get(JSON.stringify([owner.sessionId, owner.agentId]))
+      if (tool !== 'lisp_status' && state && state.owner.root === owner.root && this.enabled.get(owner.sessionId) === owner.root) this.scheduleIdle(state)
     }
     void result.then(finished, finished)
     return result
@@ -308,8 +318,9 @@ export class LispManager {
       if (tool === 'lisp_status') return await this.status(owner, z.number().int().nonnegative().parse(input.offset ?? 0))
       const state = this.entry(owner)
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
-        packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci'],
+        packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.typesafe'],
         api: { scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
+          typesafe: '(kioku.typesafe:status); (kioku.typesafe:evaluate state questions :model "jev-latest" :timeout-ms 30000). Explicit semantic decisions via the host; consume answers with gethash. Strings/hash tables/vectors use JSON conventions. Catch kioku.typesafe:service-error; no retries or approval bypass. Configure with /kioku-typesafe-key.',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
           workflow: 'Define task-specific defun helpers once, compose them into one useful operation, and call that function in later evaluations. Batch known reads and checks; return a compact result. Definitions last for this worker generation. Stop before decisions requiring new evidence or approval.',
           run: '(kioku.process:run "node" (list "--test" "--experimental-test-isolation=none" "test/public.test.mjs") :directory "project") uses a scratch-relative directory. Check result-code.',

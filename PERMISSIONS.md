@@ -77,6 +77,18 @@ Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
 
 ## Credentials and optional dependencies
 
+- Explicit `kioku.typesafe:evaluate` calls transmit only their selected state and
+  questions to `https://api.typesafe.ai/v1/systemone` from the host. Requests and
+  responses are capped at 256 KiB; no automatic retries or redirects. The worker
+  remains without network access. Results can be journaled as ordinary Lisp
+  evidence, but cannot grant proposal approval. Cancellation cannot retract data
+  already sent. [Setup and examples](docs/typesafe.md).
+- `/kioku-typesafe-key` writes/removes only the `TYPESAFE_API_KEY` reference through
+  DSH's optional credential provider. Inherited environment precedence is preserved.
+  Without that provider, evaluation can read the host environment but storage is
+  unavailable. Keys never enter worker environments, Kiokuko storage or command
+  results. Command arguments are not recorded; the key remains visible while typing.
+
 - GitHub and embedding credentials are optional user-provided environment or
   configuration values. They are not bundled in the package and are not
   persisted by the plugin.

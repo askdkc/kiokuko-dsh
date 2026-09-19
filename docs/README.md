@@ -7,6 +7,7 @@ Choose a guide by what you need to do:
 - [役小角(enno-oduno)](enno-oduno.md) — the agent loop, confirmation, recovery, continuation, verification, and Advisory Round.
 - [Semantic retrieval](semantic-retrieval.md) — embedding runtime setup, operation, offline mode, and fallback.
 - [Security and trust](security-and-trust.md) — secret rejection, memory boundaries, External Skills, and public errors.
+- [TypeSafe from Lisp](typesafe.md) — credential setup, semantic decisions, examples and explicit live smoke.
 
 Implementation references: [architecture](architecture.md), [database](database.md),
 [execution ledger](execution-ledger.md), and [retrieval evaluation](retrieval-evaluation.md).
