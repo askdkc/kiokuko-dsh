@@ -8,8 +8,10 @@ import { resolveGroundedIntakeProfile } from '../intake-profile-resolver.js'
 import { resolveProjectWorkspaceReadOnly } from '../../memory/workspaces.js'
 import { recallScopedMemory, checkpointDshMemory, type ScopedCheckpointInput } from '../../memory/scoped-memory.js'
 import { LedgerStore } from '../../ledger/store.js'
+import { TERMINAL_RUN_STATUSES } from '../../ledger/types.js'
 import { claimExecutionOwner, readExecutionOwner } from '../orchestration/execution-owner.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
+import type { SqliteDatabase } from '../../db/adapter.js'
 import type { DshCoreRuntime } from '../core-runtime.js'
 import type { DshIntakeAnswerer, DshUserQuestionAgent } from '../intake-questions.js'
 import type { TaskProfile } from '../../akinator/types.js'
@@ -36,6 +38,22 @@ export interface CoreTask {
   readonly admitted: boolean
 }
 
+type CoreTaskIdentity = Pick<CoreTask, 'requestId' | 'sessionId' | 'runId' | 'workspace'>
+type CoreTaskOutcome = (typeof TERMINAL_RUN_STATUSES)[number]
+
+/** Close the exact run and release its owner atomically, including pre-admission failures. */
+function finishCoreTask(db: SqliteDatabase, task: CoreTaskIdentity, outcome: CoreTaskOutcome): void {
+  withImmediateTransaction(db, () => {
+    const store = new LedgerStore(db), run = store.readRun(task.runId)
+    if (!run || run.workspace !== task.workspace || run.dshSessionId !== task.sessionId) throw new Error('Task completion identity mismatch')
+    const owner = readExecutionOwner(db, task.sessionId)
+    if (owner && (owner.run_id !== task.runId || owner.start_id !== task.requestId || owner.workspace !== task.workspace || owner.mode !== 'normal')) throw new Error('Task completion owner mismatch')
+    if (run.status === 'active' || run.status === 'intake' && outcome !== 'completed') store.updateRunStatusInTransaction(task.runId, outcome)
+    else if (!TERMINAL_RUN_STATUSES.some(status => status === run.status)) throw new Error('Task is not ready for completion')
+    db.prepare("DELETE FROM dsh_execution_owners WHERE dsh_session_id=? AND run_id=? AND start_id=? AND workspace=? AND mode='normal'").run(task.sessionId, task.runId, task.requestId, task.workspace)
+  })
+}
+
 /** Ordinary task/memory path over the existing ledger and Akinator; no model/provider selection. */
 export class CoreTasks {
   constructor(private readonly runtime: DshCoreRuntime, private readonly answerer?: DshIntakeAnswerer, private readonly moduleIds: readonly string[] = []) {}
@@ -56,25 +74,33 @@ export class CoreTasks {
         request: { apiVersion: '1', workspace: project.workspace, task: { title: input.task, query: input.task, profileHints: grounded.profileHints }, captureProfile: 'minimal',
           coverage: { run: 'unavailable', tool: 'unavailable', command: 'unavailable', file: 'unavailable', approval: 'unavailable' },
           capabilities: input.capabilities, metadata: { coreContractVersion: 1, requestId: input.requestId, repositoryRoot: project.repositoryRoot } } })
-      let state = await getAkinatorStateService(db, { workspace: project.workspace, sessionId: opened.intakeSessionId })
-      while (state.status === 'needs_answer' && state.question && this.answerer) {
-        const question = state.question
-        const value = await this.answerer.ask(question, input.signal, input.agent)
+      const identity = { requestId: input.requestId, sessionId: input.sessionId, runId: opened.runId, workspace: project.workspace }
+      try {
         input.signal.throwIfAborted()
-        intake.answerIntake({ runId: opened.runId, idempotencyKey: `core-answer:${canonicalContentHash({ runId: opened.runId, question: question.id, value })}`,
-          request: { apiVersion: '1', questionId: question.id, value, capabilities: input.capabilities } })
-        state = await getAkinatorStateService(db, { workspace: project.workspace, sessionId: opened.intakeSessionId })
+        let state = await getAkinatorStateService(db, { workspace: project.workspace, sessionId: opened.intakeSessionId })
+        while (state.status === 'needs_answer' && state.question && this.answerer) {
+          const question = state.question
+          const value = await this.answerer.ask(question, input.signal, input.agent)
+          input.signal.throwIfAborted()
+          intake.answerIntake({ runId: opened.runId, idempotencyKey: `core-answer:${canonicalContentHash({ runId: opened.runId, question: question.id, value })}`,
+            request: { apiVersion: '1', questionId: question.id, value, capabilities: input.capabilities } })
+          state = await getAkinatorStateService(db, { workspace: project.workspace, sessionId: opened.intakeSessionId })
+        }
+        const capabilities = resolveCapabilities({ task: input.task, profile: state.session.profile, recommendedTags: [], capabilities: input.capabilities, memoryUse: 'none' })
+        const run = new LedgerStore(db).readRun(opened.runId)
+        const admitted = state.status !== 'needs_answer' && run?.status === 'active' && !hasBlockingRequiredCapability(capabilities)
+        let memory: unknown = null
+        if (admitted) {
+          const policy = deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities)
+          if (!policy.contextWithheld) memory = await recallScopedMemory(db, { cwd, project, query: input.task, scope: 'project', limit: 5, maxChars: 4000, readOnly: true })
+        }
+        input.signal.throwIfAborted()
+        return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted, memory })
+      } catch (error) {
+        try { finishCoreTask(db, identity, input.signal.aborted ? 'cancelled' : 'failed') }
+        catch (cleanup) { throw new AggregateError([error, cleanup], 'Task preparation and cleanup failed') }
+        throw error
       }
-      const capabilities = resolveCapabilities({ task: input.task, profile: state.session.profile, recommendedTags: [], capabilities: input.capabilities, memoryUse: 'none' })
-      const run = new LedgerStore(db).readRun(opened.runId)
-      const admitted = state.status !== 'needs_answer' && run?.status === 'active' && !hasBlockingRequiredCapability(capabilities)
-      let memory: unknown = null
-      if (admitted) {
-        const policy = deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities)
-        if (!policy.contextWithheld) memory = await recallScopedMemory(db, { cwd, project, query: input.task, scope: 'project', limit: 5, maxChars: 4000, readOnly: true })
-      }
-      input.signal.throwIfAborted()
-      return Object.freeze({ requestId: input.requestId, sessionId: input.sessionId, runId: opened.runId, workspace: project.workspace, cwd, profile: state.session.profile, admitted, memory })
     })
   }
   async checkpoint(task: CoreTask, input: { memories?: unknown; evidence?: unknown; outcome: string }, signal: AbortSignal): Promise<unknown> {
@@ -86,16 +112,8 @@ export class CoreTasks {
       return checkpointDshMemory(db, { ...input, runId: task.runId, cwd: task.cwd } as ScopedCheckpointInput, signal, { allowDirectory: true })
     })
   }
-  async finish(task: CoreTask, outcome: 'completed' | 'failed' | 'cancelled'): Promise<void> {
-    if (!task.admitted) return
-    await this.runtime.withDatabase(db => withImmediateTransaction(db, () => {
-      const store = new LedgerStore(db), run = store.readRun(task.runId)
-      if (!run || run.workspace !== task.workspace || run.dshSessionId !== task.sessionId) throw new Error('Task completion identity mismatch')
-      const owner = readExecutionOwner(db, task.sessionId)
-      if (owner && (owner.run_id !== task.runId || owner.start_id !== task.requestId || owner.workspace !== task.workspace || owner.mode !== 'normal')) throw new Error('Task completion owner mismatch')
-      if (run.status === 'active') store.updateRunStatusInTransaction(task.runId, outcome)
-      else if (!['completed', 'failed', 'cancelled'].includes(run.status)) throw new Error('Task is not ready for completion')
-      db.prepare('DELETE FROM dsh_execution_owners WHERE dsh_session_id=? AND run_id=? AND start_id=?').run(task.sessionId, task.runId, task.requestId)
-    }))
+  async finish(task: CoreTask, outcome: CoreTaskOutcome): Promise<void> {
+    if (!task.admitted && outcome === 'completed') throw new Error('Task is not admitted')
+    await this.runtime.withDatabase(db => finishCoreTask(db, task, outcome))
   }
 }

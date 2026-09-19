@@ -15,7 +15,7 @@ import { synchronizeConfiguredSkills } from '../../../src/dsh/core/deployment.js
 import { compileSkillBundle } from '../../../src/dsh/skill-compiler.js'
 import { pathToFileURL } from 'node:url'
 
-async function fixture() {
+async function fixture(questions?: { ask(request: any): Promise<any> }) {
   const directory = await mkdtemp(join(tmpdir(), 'kiokuko-core-')), root = realpathSync(directory)
   const listeners = new Map<string, Function>(), tools: any[] = [], providers: any[] = [], sections: any[] = []
   const events: any[] = []
@@ -26,6 +26,7 @@ async function fixture() {
     skills: { registerProvider(create: Function) { const provider = create({ signal: new AbortController().signal }); providers.push(provider); return () => { providers.splice(providers.indexOf(provider), 1) } }, async snapshot() { return { complete: true, skills: (await Promise.all(providers.map(provider => provider.list({})))).flatMap(result => result.candidates) } } },
     tools: { guard: () => () => {}, schemas: () => tools.map(({ name, description }) => ({ name, description })), register(tool: any) { tools.push(tool); return () => { tools.splice(tools.indexOf(tool), 1) } } },
     systemPrompt: { section(section: any) { sections.push(section); return () => { sections.splice(sections.indexOf(section), 1) } } },
+    ...(questions ? { userQuestions: questions } : {}),
   }
   const ctx = { get: (name: string) => services[name], on(name: string, callback: Function) { listeners.set(name, callback); return () => { listeners.delete(name) } } } as unknown as Context
   return { root, ctx, agent, session, events, listeners, tools, sections, providers, services, async cleanup() { await rm(root, { recursive: true, force: true }) } }
@@ -189,5 +190,182 @@ test('native error and cancellation preserve distinct terminal outcomes', async 
     assert.deepEqual(db.prepare('SELECT status FROM ledger_runs ORDER BY status').all().map(row => row.status), ['cancelled', 'failed'])
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
     db.close()
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
+test('cancelling intake releases the pending owner and admits the next request', async () => {
+  const controller = new AbortController()
+  let asked = false
+  const f = await fixture({ ask: async () => { asked = true; controller.abort(); throw new Error('User cancelled intake') } })
+  const databasePath = join(f.root, 'memory.sqlite3')
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  try {
+    await assert.rejects(
+      f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: 'Do that please' }], turn: 1, step: 0, signal: controller.signal }, async () => ({ kind: 'enter', messages: [] })),
+      /User cancelled intake|aborted|cancelled/i,
+    )
+    assert.equal(asked, true)
+    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted' } } })
+    await f.listeners.get('agent/idle')!({ agent: f.agent })
+    const afterCancellation = openConnection(databasePath)
+    assert.deepEqual(afterCancellation.prepare('SELECT status FROM ledger_runs').all().map((row: any) => row.status), ['cancelled'])
+    assert.equal(afterCancellation.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
+    afterCancellation.close()
+
+    const messages = [{ role: 'user', content: 'こんにちは' }]
+    const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    assert.equal(result.kind, 'enter')
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
+test('intake answer failure without signal abort releases the failed owner', async () => {
+  let asked = false
+  const f = await fixture({ ask: async () => { asked = true; throw new Error('Question service unavailable') } })
+  const databasePath = join(f.root, 'memory.sqlite3')
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  try {
+    await assert.rejects(
+      f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: 'Do that please' }], turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [] })),
+      /Question service unavailable/,
+    )
+    assert.equal(asked, true)
+    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'error' } } })
+    await f.listeners.get('agent/idle')!({ agent: f.agent })
+    const afterFailure = openConnection(databasePath)
+    assert.deepEqual(afterFailure.prepare('SELECT status FROM ledger_runs').all().map((row: any) => row.status), ['failed'])
+    assert.equal(afterFailure.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
+    afterFailure.close()
+
+    const messages = [{ role: 'user', content: 'こんにちは' }]
+    const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    assert.equal(result.kind, 'enter')
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
+test('max-tokens is an interrupted boundary and releases ownership before the next request', async () => {
+  const f = await fixture()
+  const databasePath = join(f.root, 'memory.sqlite3')
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  try {
+    const first = [{ role: 'user', content: 'こんにちは' }]
+    await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: first, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: first }))
+    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } })
+    const second = [{ role: 'user', content: 'こんにちは' }]
+    const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: second, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: second }))
+    assert.equal(result.kind, 'enter')
+    const afterBoundary = openConnection(databasePath)
+    assert.deepEqual(afterBoundary.prepare('SELECT status FROM ledger_runs ORDER BY started_at').all().map((row: any) => row.status), ['interrupted', 'active'])
+    afterBoundary.close()
+    f.events.push({ type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } })
+    await f.listeners.get('agent/idle')!({ agent: f.agent })
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
+test('max-tokens is finalized by native idle when no next request arrives', async () => {
+  const f = await fixture()
+  const databasePath = join(f.root, 'memory.sqlite3')
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  try {
+    const messages = [{ role: 'user', content: 'こんにちは' }]
+    await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } })
+    await f.listeners.get('agent/idle')!({ agent: f.agent })
+    const afterIdle = openConnection(databasePath)
+    assert.deepEqual(afterIdle.prepare('SELECT status FROM ledger_runs').all().map((row: any) => row.status), ['interrupted'])
+    assert.equal(afterIdle.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
+    afterIdle.close()
+    const next = [{ role: 'user', content: 'こんにちは' }]
+    assert.equal((await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: next, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: next }))).kind, 'enter')
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
+test('a missing or wrong-turn boundary never releases the current owner', async () => {
+  const f = await fixture()
+  const databasePath = join(f.root, 'memory.sqlite3')
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  try {
+    const first = [{ role: 'user', content: 'こんにちは' }]
+    await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: first, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: first }))
+    await assert.rejects(
+      f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: '次の依頼' }], turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [] })),
+      /Previous task has not reached its confirmed native boundary/,
+    )
+    let db = openConnection(databasePath)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 1)
+    db.close()
+
+    f.events.push({ type: 'turn/end', data: { turn: 99, reason: { kind: 'max-tokens' } } })
+    await assert.rejects(
+      f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: '次の依頼' }], turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [] })),
+      /Previous task has not reached its confirmed native boundary/,
+    )
+    db = openConnection(databasePath)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 1)
+    db.close()
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
+test('a non-admitted intake run is failed and released by a native blocked boundary', async () => {
+  const f = await fixture()
+  const databasePath = join(f.root, 'memory.sqlite3')
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  try {
+    const first = [{ role: 'user', content: 'Do that please' }]
+    const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: first, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: first }))
+    assert.equal(result.kind, 'reject')
+    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'blocked' } } })
+    await f.listeners.get('agent/idle')!({ agent: f.agent })
+    const afterBlocked = openConnection(databasePath)
+    assert.deepEqual(afterBlocked.prepare('SELECT status FROM ledger_runs').all().map((row: any) => row.status), ['failed'])
+    assert.equal(afterBlocked.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
+    afterBlocked.close()
+    const next = [{ role: 'user', content: 'こんにちは' }]
+    assert.equal((await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: next, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: next }))).kind, 'enter')
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
+test('a late valid intake answer after signal cancellation is not persisted', async () => {
+  const controller = new AbortController()
+  let asked = false
+  const f = await fixture({ ask: async (request: any) => {
+    asked = true
+    controller.abort()
+    return { answers: [{ id: request.questions[0].id, selected: ['chat'] }] }
+  } })
+  const databasePath = join(f.root, 'memory.sqlite3')
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  try {
+    await assert.rejects(
+      f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: 'Do that please' }], turn: 1, step: 0, signal: controller.signal }, async () => ({ kind: 'enter', messages: [] })),
+      /aborted|cancelled/i,
+    )
+    assert.equal(asked, true)
+    const db = openConnection(databasePath)
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ledger_events WHERE event_type='intake.answered'").get()?.n, 0)
+    assert.equal(db.prepare("SELECT status FROM ledger_runs").get()?.status, 'cancelled')
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
+    db.close()
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
+test('cancellation at the prepared-task handoff releases the owner before host registration', async () => {
+  const controller = new AbortController(), failure = new Error('Cancelled at task handoff')
+  const f = await fixture(), databasePath = join(f.root, 'memory.sqlite3')
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  let bindings = 0
+  f.services.agents.get = (id: string) => {
+    if (++bindings === 2) controller.abort(failure)
+    return id === f.agent.id ? f.agent : undefined
+  }
+  try {
+    const messages = [{ role: 'user', content: 'こんにちは' }]
+    let entered = false
+    await assert.rejects(f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: controller.signal }, async () => { entered = true; return { kind: 'enter', messages } }), error => error === failure)
+    assert.equal(entered, false)
+    const db = openConnection(databasePath)
+    assert.equal(db.prepare('SELECT status FROM ledger_runs').get()?.status, 'cancelled')
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
+    db.close()
+    assert.equal((await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))).kind, 'enter')
   } finally { await handle.dispose(); await f.cleanup() }
 })

@@ -70,10 +70,10 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     bind(current.agent)
     const boundary = [...current.agent.session.snapshotEvents()].reverse().find(event => event.type === 'turn/end' && event.data?.turn === current.turn)
     const reason = boundary?.data?.reason?.kind
-    if (!['completed', 'error', 'aborted'].includes(reason)) return
+    if (!['completed', 'error', 'aborted', 'max-tokens', 'blocked'].includes(reason)) return
     current.finishing = (async () => {
       await sessions.flush(current.agent.session)
-      await tasks.finish(current.task, reason === 'aborted' ? 'cancelled' : current.failed || reason === 'error' ? 'failed' : 'completed')
+      await tasks.finish(current.task, reason === 'aborted' ? 'cancelled' : reason === 'max-tokens' ? 'interrupted' : reason === 'completed' && !current.failed && current.task.admitted ? 'completed' : 'failed')
       if (active.get(sessionId) === current) active.delete(sessionId)
     })()
     return current.finishing
@@ -136,7 +136,12 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         const schemas = await tools.schemas(payload.agent)
         request = { ...request, capabilities: [...snapshot.skills.filter((skill: any) => skill.invocation?.modelInvocable !== false).map((skill: any) => ({ kind: 'skill' as const, name: skill.name, ...(skill.description ? { description: skill.description } : {}) })), ...schemas.map((tool: any) => ({ kind: 'tool' as const, name: tool.name, ...(tool.description ? { description: tool.description } : {}) }))] }
         const task = await tasks.prepare(request)
-        bind(payload.agent); signal.throwIfAborted()
+        try { bind(payload.agent); signal.throwIfAborted() }
+        catch (error) {
+          try { await tasks.finish(task, signal.aborted ? 'cancelled' : 'failed') }
+          catch (cleanup) { throw new AggregateError([error, cleanup], 'Task binding and cleanup failed') }
+          throw error
+        }
         active.set(task.sessionId, { agent: payload.agent, turn: payload.turn, task, failed: false, checkpointed: false })
         if (!task.admitted) return { kind: 'reject' }
         const result = await next()
