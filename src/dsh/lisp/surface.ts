@@ -29,7 +29,7 @@ interface Agent { id: string; status?: string; session: Session; ctx: { get(name
 interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; schemas(scope?: unknown): { name: string; description: string; parameters: unknown }[]; presentAs(mode: 'native'): () => void; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
 interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean }
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
-const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill'] as const
+const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill', 'observation_read'] as const
 
 /** Keep admitted inherited reads without naming agent-owned tools in restrict(). */
 function restrictToReads(tools: Tools, scopedTools: Tools, agent: Agent, reads: string[]): () => void {

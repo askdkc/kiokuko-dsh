@@ -18,6 +18,12 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done })
   return { promise, resolve }
 }
+test('child observation reads accept only session handles, never paths or caller-selected sessions', () => {
+  const handle = `op1.7.${'a'.repeat(64)}`
+  assert.equal(childFileScopeDenial(process.cwd(), ['source.txt'], 'observation_read', { handle }), undefined)
+  assert.ok(childFileScopeDenial(process.cwd(), ['source.txt'], 'observation_read', { handle, sessionId: 'parent' }))
+  assert.ok(childFileScopeDenial(process.cwd(), ['source.txt'], 'observation_read', { handle, path: '../private' }))
+})
 
 test('delegation requires the live lease, limits Ollama concurrency, preserves child identity on reload and never accepts a WorkUnit', async () => {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-delegation-'))

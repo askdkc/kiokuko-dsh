@@ -16,17 +16,17 @@ const [cordis, llm, sessions, projection, prompt, tools, registry, loop, meter, 
 const version = JSON.parse(await readFile(join(packages, '@deepseek-ai/dsh-compaction-basic/package.json'), 'utf8')).version
 assert.equal(version, process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? '0.1.5-rc.1')
 
-async function nativeFixture(enabled = true, text = 'Old file content. '.repeat(350), tool = 'read', options: { seed?: any[]; parentSession?: string; choose?: string; roleRatio?: number } = {}) {
+async function nativeFixture(enabled = true, text = 'Old file content. '.repeat(350), tool = 'read', options: { seed?: any[]; parentSession?: string; choose?: string; roleRatio?: number; contextWindow?: number; script?: (mock: any) => any[] } = {}) {
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
   class Provider extends mock.MockAdapter {
-    override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, context: { contextWindow: model === 'goki' ? 10000 : 1600 } } }
+    override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, context: { contextWindow: model === 'goki' ? 10000 : options.contextWindow ?? 1600 } } }
   }
-  const provider = new Provider(Array.from({ length: 12 }, () => mock.textResponse('Required task and acceptance criteria retained.')))
+  const provider = new Provider(options.script?.(mock) ?? Array.from({ length: 12 }, () => mock.textResponse('Required task and acceptance criteria retained.')))
   for (const plugin of [llm, sessions, projection, prompt, tools, registry, meter, pruner]) fibers.push(await ctx.plugin(plugin.default, plugin === prompt ? { persona: '' } : undefined))
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   fibers.push(await ctx.plugin(compaction.default, { thresholdRatio: .8, retainTokens: 150, ...(options.roleRatio === undefined ? {} : { modelPolicies: [{ provider: 'mock', model: 'goki', thresholdRatio: options.roleRatio, retainTokens: 100 }] }) }))
   ctx.llm.registerAdapter(['mock'], provider)
-  const d = decisions({ evaluate: async batch => ({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: q.id === 'fruit' ? 'apple' : options.choose ?? 'shorten' })) }) })
+  const d = decisions({ evaluate: async batch => ({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: q.id === 'fruit' ? 'apple' : q.id === 'timing' ? 'compact' : options.choose ?? 'shorten' })) }) })
   const coordinator = enabled ? new SemanticCompactionCoordinator(ctx, d.service, realpathSync(process.cwd())) : undefined
   const handle = await ctx.agents.create({ sessionId: sessions.SessionId('native-semantic'), agentOptions: { provider: 'mock', model: 'mock' }, meta: { cwd: process.cwd(), ...(options.parentSession ? { parentSession: options.parentSession } : {}) }, ...(options.seed ? { seed: options.seed } : {}) })
   const agent = handle.agent
@@ -151,4 +151,25 @@ for (const trigger of ['manual', 'context-overflow']) test(`native ${trigger} by
     assert.ok(result); assert.equal(f.calls.length, 0)
     assert.ok(f.agent.session.snapshotEvents().some((e: any) => e.type === 'compaction/end'))
   } finally { await f.close() }
+})
+
+for (const preemptive of [true, false]) test(`actual native TODO below-threshold Jev and overhead comparison (preemptive=${preemptive})`, async t => {
+  const f = await nativeFixture(true, undefined, 'read', { contextWindow: 50000, script: mock => [
+    mock.toolCallResponse('todo-1', 'todo_write', { todos: [{ content: 'Inspect', status: 'in_progress' }, { content: 'Implement', status: 'pending' }] }),
+    mock.textResponse('Inspected the original output.'),
+    mock.toolCallResponse('todo-2', 'todo_write', { todos: [{ content: 'Inspect', status: 'completed' }, { content: 'Implement', status: 'in_progress' }] }),
+    mock.textResponse('Continue implementation.'),
+  ] })
+  f.service.semanticCompaction.preemptive = preemptive
+  const todo = await f.ctx.plugin(await load('tool-todo'), { allowParallelInProgress: false })
+  try {
+    await f.run(); assert.equal(f.calls.filter(c => c.purpose === 'compaction').length, 0)
+    await f.run()
+    assert.equal(f.calls.filter(c => c.purpose === 'compaction').length, preemptive ? 1 : 0)
+    const status = (f.service.status() as any).semanticCompaction, last = status.last
+    assert.equal(last.trigger, preemptive ? 'todo_boundary' : 'pressure'); assert.equal(last.outcome, preemptive ? 'shortened' : 'skipped'); assert.ok(last.beforeTokens < 40000)
+    assert.equal(status.metrics.calls, preemptive ? 1 : 0)
+    t.diagnostic(JSON.stringify({ preemptive, modelRequests: f.provider.requests.length, requestBytes: f.provider.requests.reduce((n: number, r: any) => n + Buffer.byteLength(JSON.stringify({ messages: r.messages, tools: r.tools })), 0), decision: status.metrics }))
+    assert.ok(!f.agent.session.snapshotEvents().some((e: any) => e.type === 'compaction/end'))
+  } finally { await todo.dispose(); await f.close() }
 })

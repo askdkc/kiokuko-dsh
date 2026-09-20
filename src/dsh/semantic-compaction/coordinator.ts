@@ -1,3 +1,7 @@
+import type { z } from 'zod'
+import { ObservationPack } from '../observation-pack/service.js'
+import { ObservationPackConfig, packedSource, packedMessage } from '../observation-pack/policy.js'
+import { SessionProgress } from './progress.js'
 import { realpathSync } from 'node:fs'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { abortable } from '../http-json.js'
@@ -13,9 +17,14 @@ function freeze<T>(value: T): T {
   if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value) }
   return value
 }
+function inspectable(session: CompactionSession): boolean {
+  return session.header?.version === 3 && Number.isSafeInteger(session.seq) && typeof session.eventAt === 'function' && Array.isArray(session.surface?.nodes)
+}
 
 /** Owns only automatic step-boundary history projection, never manual/overflow compaction. */
 export class SemanticCompactionCoordinator {
+  private readonly observations: ObservationPack
+  private readonly progress = new WeakMap<CompactionSession, SessionProgress>()
   private readonly lifetime = new AbortController()
   private readonly agents = new Map<CompactionAgent, Registration>()
   private readonly projectors = new Map<string, ResultProjector>()
@@ -24,14 +33,18 @@ export class SemanticCompactionCoordinator {
   private readonly busy = new Set<CompactionSession>()
   private readonly failed = new WeakSet<CompactionSession>()
   private readonly routes = new WeakMap<CompactionAgent, { provider: string; model: string }>()
+  private readonly toolSurfaces = new WeakMap<CompactionAgent, readonly unknown[]>()
   private readonly disposeCreated: () => void
   private readonly disposeRemoved: () => void
-  constructor(private readonly ctx: Host, private readonly decisions: DecisionService, private readonly root: string) {
+  constructor(private readonly ctx: Host, private readonly decisions: DecisionService, private readonly root: string, observationPack?: z.input<typeof ObservationPackConfig>) {
+    this.observations = new ObservationPack(ctx, observationPack, (agent, session) => this.ownership(agent, session, this.agents.get(agent)?.authority), this.lifetime.signal)
+    this.decisions.reportObservationPack(this.observations.config.mode, this.observations.stats)
     this.disposeCreated = ctx.on('agent/created', ({ agent }: { agent: CompactionAgent }) => this.attach(agent))
     this.disposeRemoved = ctx.on('agent/disposed', ({ agent }: { agent: CompactionAgent }) => {
       this.agents.get(agent)?.dispose()
       this.agents.delete(agent)
       this.routes.delete(agent)
+      this.toolSurfaces.delete(agent)
     })
     for (const agent of ctx.get('agents', false)?.list?.() ?? []) this.attach(agent)
     this.supported()
@@ -47,20 +60,29 @@ export class SemanticCompactionCoordinator {
     if (this.lifetime.signal.aborted || !agent?.ctx?.on) return
     const current = this.agents.get(agent)
     if (current) { if (authority) current.authority = authority; return }
+    if (agent.session && inspectable(agent.session) && !this.progress.has(agent.session)) this.progress.set(agent.session, new SessionProgress(agent.session))
     const registration: Registration = { ...(authority ? { authority } : {}), dispose: () => {} }
     const disposeAssembly = agent.ctx.on('system-prompt/assemble', async (_assembly: unknown, _context: unknown, next: () => Promise<any>) => {
       const assembly = await next()
       this.recordRoute(agent, assembly.variables ?? {})
+      this.recordTools(agent, assembly.tools)
       return assembly
     }, { prepend: true })
     const disposeStep = agent.ctx.on('agent/pre-step', async (step: Step, next: () => Promise<unknown>) => {
       if (step.agent !== agent || this.lifetime.signal.aborted) return next()
-      const operation = this.run(step, registration.authority)
+      const operation = this.run(step, registration.authority).then(async () => {
+        // A classifier await may outlive a tool-surface/permission change.
+        if (agent.session && this.requiresRestoration(agent, agent.session)) await this.run(step, registration.authority, true)
+      })
       this.pending.add(operation)
       try { await operation } finally { this.pending.delete(operation) }
       return next()
     }, { prepend: true })
-    registration.dispose = () => { disposeStep(); disposeAssembly() }
+    const disposeRequest = agent.ctx.on('llm/stream', (request: Record<string, unknown>, next: () => AsyncIterable<unknown>) => {
+      if (!this.lifetime.signal.aborted && request.sessionId === agent.session?.id) this.observations.observeRequest(request)
+      return next()
+    })
+    registration.dispose = () => { disposeStep(); disposeAssembly(); disposeRequest() }
     this.agents.set(agent, registration)
   }
   registerProjector(tool: string, projector: ResultProjector): () => void {
@@ -73,13 +95,19 @@ export class SemanticCompactionCoordinator {
     if (variables.provider && variables.model) this.routes.set(agent, { provider: variables.provider, model: variables.model })
     else this.routes.delete(agent)
   }
+  recordTools(agent: CompactionAgent, tools: unknown): void {
+    this.observations.assembled(agent, tools)
+    if (Array.isArray(tools)) this.toolSurfaces.set(agent, structuredClone(tools))
+    else this.toolSurfaces.delete(agent)
+  }
   private effectiveHeader(agent: CompactionAgent, session: CompactionSession) {
-    const previous = session.requestHeader(), route = this.routes.get(agent)
-    return route && previous ? { ...previous, config: { ...previous.config, ...route } } : previous
+    const previous = session.requestHeader(), route = this.routes.get(agent), tools = this.toolSurfaces.get(agent)
+    return previous ? { ...previous, ...(route ? { config: { ...previous.config, ...route } } : {}), ...(tools ? { tools } : {}) } : previous
   }
   stop(): void {
     if (this.lifetime.signal.aborted) return
     this.lifetime.abort(new Error('Semantic compaction stopped'))
+    this.observations.stop()
     this.disposeCreated()
     this.disposeRemoved()
     for (const registration of this.agents.values()) registration.dispose()
@@ -88,6 +116,7 @@ export class SemanticCompactionCoordinator {
   }
   async drain(): Promise<void> {
     await Promise.allSettled([...this.pending])
+    await this.observations.drain()
     await Promise.allSettled([...this.resources])
   }
   /** Cancellation ends the step promptly; database-bearing operations still drain on unload. */
@@ -109,33 +138,85 @@ export class SemanticCompactionCoordinator {
     return { sessionId: session.id, agentId: agent.id }
   }
 
-  private async run(step: Step, authority?: CompactionAuthority): Promise<void> {
+  private requiresRestoration(agent: CompactionAgent, session: CompactionSession): boolean {
+    if (!inspectable(session)) return false
+    return compactionSurface(session).some(event => {
+      const source = packedSource(session, event)
+      return source && (!this.observations.available(agent) || canonicalContentHash(packedMessage(session.id, source)) !== canonicalContentHash(surfaceMessage(event)))
+    })
+  }
+
+  private async run(step: Step, authority?: CompactionAuthority, restoreOnly = false): Promise<void> {
     const { agent } = step, session = agent.session
-    if (!session || this.decisions.semanticCompaction.mode === 'off' || !this.supported()) return
+    if (!session || !inspectable(session)) return
+    const requiresRestore = this.requiresRestoration(agent, session)
+    if (!this.supported()) {
+      if (requiresRestore) throw new Error('Observation reader and native restoration services unavailable')
+      return
+    }
+    if (requiresRestore && this.failed.has(session)) throw new Error('Observation restoration blocked by a previous partial commit')
     const native = this.ctx.get('compaction', false).config
-    if (native.auto !== true || session.header.version !== 3 || this.busy.has(session) || this.failed.has(session)) return
+    if (session.header.version !== 3 || this.busy.has(session) || this.failed.has(session)) return
+    const progress = this.progress.get(session) ?? new SessionProgress(session)
+    this.progress.set(session, progress)
+    progress.scan(session)
+    const boundary = progress.takeBoundary()
+    let trigger: CompactionOutcome['trigger']
     const started = performance.now(), deadline = new AbortController()
     const signal = AbortSignal.any([step.signal, this.lifetime.signal, deadline.signal])
     const timer = setTimeout(() => deadline.abort(), this.decisions.semanticCompaction.budgetMs)
     const meter = this.ctx.get('tokenMeter', false) as NativeTokenMeter
     let landed = 0, commitStarted = false, commitSeq = 0, beforeTokens: number | undefined
     const report = (outcome: CompactionOutcome['outcome'], reason: string, afterTokens?: number) => this.decisions.reportCompaction(!this.lifetime.signal.aborted,
-      { outcome, reason, shortened: landed, elapsedMs: Math.round(performance.now() - started), ...(commitStarted ? { landedEvents: session.seq - commitSeq } : {}), ...(beforeTokens === undefined ? {} : { beforeTokens }), ...(afterTokens === undefined ? {} : { afterTokens }) })
+      { outcome, reason, ...(trigger ? { trigger } : {}), shortened: landed, elapsedMs: Math.round(performance.now() - started), ...(commitStarted ? { landedEvents: session.seq - commitSeq } : {}), ...(beforeTokens === undefined ? {} : { beforeTokens }), ...(afterTokens === undefined ? {} : { afterTokens }) })
     this.busy.add(session)
     try {
       signal.throwIfAborted()
       let root: string | undefined
       try { root = realpathSync(session.header.cwd) } catch { /* unavailable workspace is outside this coordinator */ }
-      if (root !== this.root) { report('skipped', 'outside_workspace'); return }
+      if (root !== this.root) {
+        if (requiresRestore) throw new Error('Observation workspace changed before restoration')
+        report('skipped', 'outside_workspace'); return
+      }
       const owner = await abortable(this.track(this.ownership(agent, session, authority)), signal)
       if (activeCompaction(session)) throw new Error('Semantic compaction encountered active native compaction')
+      // Restore before all automatic-mode gates: a hidden reader must never strand a packed result.
+      const available = this.observations.available(agent)
+      // Forked histories contain handles belonging to their original native session.
+      const restore = !available || requiresRestore
+      const packs = restore || native.auto === true ? this.observations.candidates(session, meter, progress, restore) : []
+      if (packs.length) {
+        const packSeq = session.seq, packConfig = canonicalContentHash({ native, observation: this.observations.config })
+        const currentOwner = await abortable(this.track(this.ownership(agent, session, authority)), signal)
+        signal.throwIfAborted()
+        if (session.seq !== packSeq || canonicalContentHash(owner) !== canonicalContentHash(currentOwner)
+          || canonicalContentHash({ native: this.ctx.get('compaction', false).config, observation: this.observations.config }) !== packConfig
+          || available !== this.observations.available(agent) || activeCompaction(session)) throw new Error('Observation source or authority changed')
+        const prepared = packs.map(candidate => this.prepare(session, candidate, meter))
+        commitStarted = true; commitSeq = session.seq
+        for (const replacement of prepared) {
+          const expected = commitSeq + landed * 2
+          const guard = (seq: number) => {
+            signal.throwIfAborted()
+            if (session.seq !== seq || agent.session !== session || this.ctx.get('agents', false)?.get(agent.id) !== agent
+              || this.ctx.get('sessions', false)?.get(session.id) !== session || available !== this.observations.available(agent)
+              || activeCompaction(session)) throw new Error('Observation commit state changed')
+          }
+          guard(expected); replacement(() => guard(expected + 1)); landed++
+        }
+        this.observations.committed(packs, restore)
+        commitStarted = false; landed = 0
+        progress.scan(session)
+      }
+      if (restore && compactionSurface(session).some(event => packedSource(session, event))) throw new Error('Observation restoration incomplete; inspect native history')
+      if (restoreOnly || native.auto !== true || this.decisions.semanticCompaction.mode === 'off') return
       const header = this.effectiveHeader(agent, session), route = header?.config
       if (!route?.provider || !route.model) throw new CompactionFallback('missing_route')
       const boundModel = (owner as { model?: { provider: string; model: string } })?.model
       if (boundModel && (boundModel.provider !== route.provider || boundModel.model !== route.model)) throw new Error('Semantic child model binding changed')
       const events = compactionSurface(session), seq = session.seq
       if (step.messages.some(message => !Array.isArray(message.content) || message.content.some(block => block.type !== 'text'))) throw new CompactionFallback('unsupported_pending_content')
-      const configDigest = canonicalContentHash(native)
+      const configDigest = canonicalContentHash({ native, observationPack: this.observations.config })
       const decisionConfig = this.decisions.configurationDigest()
       const measurement = meter.measure(session, header)
       const pendingTokens = step.messages.filter(message => !events.some(event => surfaceMessage(event)!.id === message.id)).reduce((sum, message) => sum + meter.estimateMessage(message), 0)
@@ -149,7 +230,9 @@ export class SemanticCompactionCoordinator {
       const threshold = Math.floor(capacity * ratio)
       const retain = override?.retainTokens ?? (override?.retainRatio !== undefined ? Math.floor(capacity * override.retainRatio) : native.retainTokens ?? Math.floor(capacity * native.retainRatio))
       if (!Number.isSafeInteger(capacity) || capacity <= 0 || !Number.isFinite(ratio) || ratio <= 0 || ratio > 1 || !Number.isSafeInteger(retain) || retain >= threshold) throw new CompactionFallback('unsupported_native_policy')
-      if (beforeTokens < threshold) { report('skipped', 'low_pressure'); return }
+      const preemptive = !!boundary && this.decisions.semanticCompaction.preemptive
+      trigger = preemptive ? 'todo_boundary' : 'pressure'
+      if (beforeTokens < threshold && !preemptive) { report('skipped', 'low_pressure'); return }
       // A prune marker without its replacement may be the tail of a failed commit.
       // Never blindly retry that append sequence, including after reload.
       const pruned = new Set<number>()
@@ -157,12 +240,13 @@ export class SemanticCompactionCoordinator {
         const event = session.eventAt(index)
         if (event?.type === 'compaction/prune') for (const seq of event.data.shadowedSeqs ?? []) pruned.add(seq)
       }
-      const candidates = selectCandidates(events, meter, this.projectors).filter(candidate => !pruned.has(candidate.event.seq))
+      const candidates = selectCandidates(events, meter, this.projectors, seq => session.eventAt(seq)).filter(candidate => !pruned.has(candidate.event.seq) && (!preemptive || progress.exposedTwice(candidate.event.seq)))
       if (!worthwhile(beforeTokens, candidates.reduce((sum, candidate) => sum + candidate.savings, 0), threshold)) { report('skipped', 'insufficient_potential'); return }
       const digest = surfaceDigest(events, step.messages, { effective: header, logged: session.requestHeader() })
-      const key = canonicalContentHash({ sessionId: session.id, digest, owner, configDigest, decisionConfig, policy: COMPACTION_POLICY })
-      const outcome = await abortable(this.track(this.decisions.evaluate(`compaction:${session.id}:${key}`, compactionBatch(events, step.messages, candidates), signal, key)), signal)
+      const key = canonicalContentHash({ sessionId: session.id, digest, owner, configDigest, decisionConfig, observationPack: this.observations.config, boundary: preemptive ? boundary : null, policy: COMPACTION_POLICY })
+      const outcome = await abortable(this.track(this.decisions.evaluate(`compaction:${session.id}:${key}`, compactionBatch(events, step.messages, candidates, preemptive ? boundary : undefined), signal, key)), signal)
       if (outcome.status !== 'completed') throw new CompactionFallback(outcome.reason)
+      if (preemptive && !outcome.result.answers.some(answer => answer.id === 'timing' && answer.status === 'selected' && answer.choiceId === 'compact')) { report('skipped', 'timing_deferred'); return }
       const accepted = new Set(outcome.result.answers.filter(answer => answer.status === 'selected' && answer.choiceId === 'shorten').map(answer => answer.id))
       const replacements = candidates.filter(candidate => accepted.has(candidate.id))
       const savings = replacements.reduce((sum, candidate) => sum + candidate.savings, 0)
@@ -171,7 +255,7 @@ export class SemanticCompactionCoordinator {
       signal.throwIfAborted()
       if (canonicalContentHash(owner) !== canonicalContentHash(currentOwner) || session.seq !== seq
         || surfaceDigest(compactionSurface(session), step.messages, { effective: this.effectiveHeader(agent, session), logged: session.requestHeader() }) !== digest
-        || canonicalContentHash(this.ctx.get('compaction', false).config) !== configDigest
+        || canonicalContentHash({ native: this.ctx.get('compaction', false).config, observationPack: this.observations.config }) !== configDigest
         || this.decisions.configurationDigest() !== decisionConfig
         || canonicalContentHash(meter.measure(session, header)) !== canonicalContentHash(measurement) || activeCompaction(session)) throw new Error('Semantic compaction source or authority changed')
       // Validate and freeze the entire set before the first append. No await within the commit.
@@ -202,7 +286,11 @@ export class SemanticCompactionCoordinator {
         throw new Error(`Semantic compaction commit failed after ${landed} confirmed replacements; inspect native history before retrying`, { cause: error })
       }
       if (step.signal.aborted || this.lifetime.signal.aborted) { report('cancelled', 'cancelled'); throw error }
-      if (deadline.signal.aborted || error instanceof CompactionFallback) { report('fallback', error instanceof CompactionFallback ? error.message : 'budget_exceeded'); return }
+      if (deadline.signal.aborted || error instanceof CompactionFallback) {
+        report('fallback', error instanceof CompactionFallback ? error.message : 'budget_exceeded')
+        if (requiresRestore && compactionSurface(session).some(event => packedSource(session, event))) throw new Error('Observation restoration could not be authorized', { cause: error })
+        return
+      }
       report('cancelled', 'integrity_failure')
       throw error
     } finally { clearTimeout(timer); this.busy.delete(session) }

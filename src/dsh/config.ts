@@ -1,3 +1,4 @@
+import { ObservationPackConfig } from './observation-pack/policy.js'
 import { SemanticCompactionConfig } from './semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../memory/reuse.js'
 import { TypedDecisionsConfig } from './decisions/config.js'
@@ -59,6 +60,7 @@ export const Config = z.object({
   typedDecisions: TypedDecisionsConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),
   semanticCompaction: SemanticCompactionConfig.prefault({}),
+  observationPack: ObservationPackConfig.prefault({}),
   akinatorMemory: AkinatorMemoryConfig.prefault({}),
   deepPlanning: DeepThinkerConfigSchema.prefault({}),
   modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),

@@ -50,6 +50,11 @@ test('native path blocks missing decisions, observes failing next-migration regr
     assert.deepEqual(Reflect.ownKeys(tools[0].parameters), Object.keys(tools[0].parameters),
       'native DSH schema projection rejects non-enumerable or symbol properties')
     assert.equal(f.status().ready, false)
+    const pendingStatus = f.status()
+    let readAllowed = false
+    await listeners.get('tools/pre-execute')(execution('original-read', 'observation_read', { handle: 'existing-session-handle' }), async () => { readAllowed = true })
+    assert.equal(readAllowed, true, 'retrieval needed to assess memory must stay read-only')
+    assert.deepEqual(f.status(), pendingStatus, 'retrieval is not a new execution or verification')
     let effects = 0
     await assert.rejects(listeners.get('tools/pre-execute')(execution('missing', 'Edit'), async () => { effects++ }), /resolve memory decisions/)
     assert.equal(effects, 0)

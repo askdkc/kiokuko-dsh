@@ -2,10 +2,11 @@ import { z } from 'zod'
 
 export const SemanticCompactionConfig = z.object({
   mode: z.enum(['auto', 'off']).default('auto'),
+  preemptive: z.boolean().default(true),
   budgetMs: z.number().int().min(1).max(600000).default(5000),
 }).strict()
 export type SemanticCompactionConfiguration = z.infer<typeof SemanticCompactionConfig>
-export const COMPACTION_POLICY = 'semantic-results-v1'
+export const COMPACTION_POLICY = 'semantic-results-v2'
 export const COMPACTION_MARKER = '[Kiokuko shortened earlier tool output; the original remains in session history.]'
 
 export interface CompactionOutcome {
@@ -16,6 +17,7 @@ export interface CompactionOutcome {
   landedEvents?: number
   beforeTokens?: number
   afterTokens?: number
+  trigger?: 'pressure' | 'todo_boundary'
 }
 /** Native values are inspected here, never decoded from classifier output. */
 export interface SurfaceMessage {

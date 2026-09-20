@@ -1,46 +1,80 @@
-# Semantic compaction
+# ObservationPack and semantic compaction
 
-Kiokuko can shorten selected old tool results before DSH's automatic pressure compaction. It uses the existing typed-decision backend; it does not require `fast-jev-compaction` or changes to DSH.
+Kiokuko reduces old tool output through the existing native compaction coordinator. The order is ObservationPack, native token-meter measurement, Jev semantic selection, then DSH's own automatic handling. Original events remain in the native append-only history; no additional database or migration is needed.
+
+Both the full plugin and standalone core default to:
 
 ```yaml
+observationPack:
+  mode: auto
 semanticCompaction:
-  mode: auto       # auto (default) | off
-  budgetMs: 5000   # readiness, queueing, evaluation and preparation
+  mode: auto
+  preemptive: true
+  budgetMs: 5000
 ```
 
-This configuration belongs to the full plugin or the modular core. Enable and configure [typed decisions](typed-decisions.md). TypeSafe uses `TYPESAFE_API_KEY` or the native credential configured by `/kioku-typesafe-key`; a generic `API_KEY` is not used. Nimble uses its configured endpoint, model and optional native credential reference. Credential presence alone is insufficient: the backend must pass its readiness probe. `/kioku-decisions status` reports configuration, readiness, native support and the last bounded compaction outcome. `/kioku-decisions probe` explicitly refreshes readiness.
+`observationPack.mode: off` stops new packing while keeping historical handles readable. `semanticCompaction.preemptive: false` disables only TODO-boundary decisions; pressure-triggered semantic compaction remains enabled. `semanticCompaction.mode: off` disables both semantic paths without disabling ObservationPack. Native automatic-compaction disablement prevents automatic packing and semantic shortening. Restoration of inaccessible packed output still runs before the next request.
 
-Coverage:
+## ObservationPack
 
-| Execution | Coverage |
-| --- | --- |
-| Normal | Native conversation tool-result history |
-| Enno | Main agent across role changes and explicitly bound native workers, including restored workers |
-| Lisp | Native conversation and supported rendered `lisp_eval` data; stored values and Lisp runtime state remain intact |
+Successful native `read`, `glob`, `grep` and foreground `bash` results containing a single plain text block larger than 10 KiB remain full for two completed native model calls after their result event. Failed attempts and interrupted assistant messages do not count. Before a later request, packing replaces the display with its original byte count, digest, stable session-bound handle and complete head/tail lines totaling at most 1 KiB. The envelope adds metadata beyond that excerpt budget. ObservationPack makes no Jev call.
 
-Direct auxiliary `llm.stream()` calls have no native conversation history and are outside this feature. Manual `/compact` and context-overflow recovery use DSH's existing behavior.
+Failures, unknown success, background execution, Lisp and execution-control results are excluded. Bash additionally requires a captured structured foreground exit status of zero, without interruption or sandbox failure, and an exact match to the logged presentation. `isError: false` alone is insufficient. After reload, Bash results without that live proof remain untouched.
 
-## Protection and fallback
+The auxiliary native tool is separate from Enno business operations:
 
-User and assistant messages, every tool call, the first six and newest six surface messages remain unchanged. The plugin only considers unambiguously paired results with one plain text block longer than 1,024 Unicode code points. Multimodal, unfamiliar, previously replaced and orchestration control results remain unchanged. At most 64 candidates are selected by estimated savings, with surface-order tie breaking.
+```ts
+observation_read({ handle, offset: 2000, limit: 2000 })
+// { text, nextOffset: number | null, characters, bytes, digest }
+```
 
-The backend chooses `keep`, `shorten` or `uncertain`. Only accepted `shorten` results authorize changes. Ordinary output retains its first 300 and last 100 Unicode code points, with an omission marker. Lisp uses an internal 1 KiB rendering profile that reduces supported display data and preserves outcome metadata, change summaries and inspection references. Protected metadata can prevent Lisp reduction entirely.
+Offsets count Unicode code points. The default and maximum page size are 2,000 characters; offsets beyond the original end and additional input fields are rejected. No file path or session ID is accepted. Native permissions and the exact active session binding apply. Lisp retains this read capability through its existing permission fence and pins its implementation. Handles continue to work with packing disabled. Parent-session handles cannot read from child sessions; inherited packed displays are restored to their originals before child requests.
 
-The classification view contains redacted task/context text, bounded tool arguments, result statuses, sizes and excerpts. It excludes attachment bytes, provider replay state and raw provider responses. Every batch retains required evidence. Oversized evidence falls back rather than silently dropping required context; this is especially conservative for Nimble's smaller prompt limit. Classification input compression does not count as request savings.
+Packing requires the original reader definition to be visible in the assembled tool surface. If access disappears, owned packed displays are restored before the next model request. If restoration cannot be authorized or committed, the step stops instead of sending inaccessible references.
 
-Before any append, native token-meter projections, including pending input and request overhead, must show at least a 25% reduction and a result below the exact routed-model threshold. The plugin rechecks session identity, execution authority, source history, cancellation and active compaction. Insufficient savings, unavailable authentication, provider errors, fitting limits or the deadline leave semantic history unchanged and continue native handling. Cancellation or integrity failures interrupt the step without committing semantic replacements.
+## Jev decisions
 
-Replacements use DSH's append-only `compaction/prune` and `tool/result` protocol, preserving original events and exact source references. Appends are not an atomic transaction: a commit-stage failure reports confirmed replacements and landed events, stops the step and suppresses automatic retry for that live session. Orphan prune markers are also excluded after reload. Inspect native history before recovery; there is no destructive rollback.
+The existing [typed-decision backend](typed-decisions.md), credentials, readiness probe, configured provider/model, acceptance criteria and persisted decisions are reused. No provider substitution or automatic retry is added. Missing Jev readiness does not disable independent ObservationPack or native DSH handling.
 
-## Verification limits
+A preemptive boundary occurs when consecutive native `todo/write` snapshots change an existing item's unchanged `content` from `pending` or `in_progress` to `completed`, with unfinished work remaining. Initial completed items, renaming, reordering, duplicate notifications and final completion do not trigger it. Each boundary is consumed once at the following pre-step. Reconnection starts from the current history tail; it does not replay old boundaries.
 
-Protocol tests use the pinned DSH 0.1.5-rc.1 fixture and scripted classifier responses. English and Japanese fixtures separately demonstrate stock summary compaction versus a smaller semantic request that avoids summary and survives reload. Missing native prerequisites fail the new integration suite.
+After packing, the native token meter must predict at least a 25% reduction of the total request, including pending input and native overhead, and a result below the routed model's native threshold. A qualifying TODO boundary can run below the current threshold. Without a boundary, the existing pressure gate applies.
 
-For a fresh checkout, install the fixture before running the tests:
+One logical batch combines the timing decision (`compact`, `defer`, `uncertain`) with candidate decisions (`keep`, `shorten`, `uncertain`). Transport splitting obeys existing limits, preserving complete required evidence in every part. Only accepted `compact` plus accepted `shorten` selections can commit. The selected subset must independently satisfy the savings gate. Current task text, TODO changes, remaining work, candidate status and excerpts are supplied; oversized or sensitive required evidence causes a fallback.
+
+Semantic selection preserves user/assistant messages, tool calls, the first six and newest six surface messages, and ambiguous, multimodal or previously replaced results. It considers up to 64 eligible results longer than 1,024 Unicode code points. The preemptive path also preserves results not yet presented in two completed native calls. Native manual and overflow recovery retain their existing authority. Normal results keep a 300/100-character head/tail excerpt; Lisp's existing projector preserves outcome metadata and inspection references.
+
+## Integrity and evidence
+
+The coordinator rechecks native session/agent identity, execution authority, history, configuration, routed model and cancellation before appending. Original native results reference their tool-call events; replacement results reference earlier tool-result events. These are distinct, preventing both accidental exclusion of ordinary results and repeated shortening.
+
+Replacement uses native `compaction/prune` followed by `tool/result` surface replacement. Appends are not atomic: failure stops the current step, reports landed replacements/events and prevents a blind retry. Orphan prune markers remain excluded after reload. Inspect native history before recovery.
+
+Memory selection uses original events within its existing evidence limits. Display replacements are not new executions; review and evolution retain original sequence/hash bindings. Observation retrieval is not independent verification. Packed conversation displays remain explicitly incomplete evidence.
+
+Inspect status with:
+
+```text
+/kioku-decisions status
+/kioku-decisions probe
+```
+
+Status includes the preemptive setting/activation, last boundary outcome and skip reason, plus numeric packing/restoration counts, original/packed byte totals, reader calls/bytes and reader-schema size. Native stream observations also report serialized request-attempt bytes, tool-definition bytes and attempt counts; a failed connection may mean an attempted request was never sent. Semantic provider metrics count actual dispatches, serialized batch bytes, elapsed time and reported token usage when available. Cached decisions do not increment dispatch counts. Metrics retain no tool bodies, reset when the service is recreated, and do not estimate billing or counterfactual bytes saved across future requests.
+
+## Verification
+
+The pinned native DSH fixture executes real file reads, Unicode middle-page retrieval and a subsequent file write. It also exercises actual native TODO transitions, reader disappearance/restoration, and existing manual/overflow behavior. Focused tests cover failures, partial appends, provenance, cancellation, configuration, child bindings and decision fallbacks.
 
 ```sh
 npm ci --prefix tests/fixtures/dsh-runtime
-node scripts/run-tests.mjs tests/dsh/unit/semantic-compaction tests/dsh/integration/semantic-compaction
+KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" \
+  node scripts/run-tests.mjs tests/dsh/unit/semantic-compaction tests/dsh/integration/semantic-compaction tests/dsh/integration/lisp/read-surface.test.ts
+npm run typecheck
+npm test
+npm run build
+npm run publint
+npm run pack:check
+npm run test:modules
 ```
 
-These tests establish protocol behavior, not live classifier quality, cost or latency. No live-model benchmark is implied. Low-pressure steps make no classifier call. High-pressure calls share the existing typed-decision concurrency limit and the total configured deadline.
+The native packing test prints enabled/disabled request JSON bytes, including tool definitions and the extra retrieval request, for the same final file-writing task. Its model and classifier are scripted. Native token-meter projections, serialized bytes, provider-reported tokens, actual billed cost and live-model task success are different measurements. No live judgment-quality, cost or success-rate improvement is claimed.

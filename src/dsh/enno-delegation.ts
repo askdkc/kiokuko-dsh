@@ -1,4 +1,5 @@
 import { ManagedAgentExecutor, type DshSpawnBackend } from './orchestration/managed-agent-executor.js'
+import { ObservationReadInput } from './observation-pack/policy.js'
 export type { DshSpawnBackend } from './orchestration/managed-agent-executor.js'
 import { realpathSync } from 'node:fs'
 import path from 'node:path'
@@ -15,12 +16,14 @@ import { readExecutionSelection } from './execution-selection.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 
 interface ChildBinding { readonly runId: string; readonly parent?: RoutableAgent; readonly parentSessionId: string; readonly model: ModelBinding; readonly toolNames: readonly string[]; readonly root: string; readonly scope: readonly string[]; readonly delegationId: string; child?: RoutableAgent }
-const CHILD_FILE_TOOLS = new Set(['read', 'write', 'edit', 'multiedit', 'str_replace_editor', 'glob', 'grep', 'skill'])
+const CHILD_FILE_TOOLS = new Set(['read', 'write', 'edit', 'multiedit', 'str_replace_editor', 'glob', 'grep', 'skill', 'observation_read'])
 /** Child shells/custom execution tools cannot enforce a WorkUnit file boundary.
  * The Goki head owns commands and final focused verification in this version. */
 export function childFileScopeDenial(root: string, scope: readonly string[], name: string, args: unknown): string | undefined {
   if (!CHILD_FILE_TOOLS.has(name)) return 'Goki children use scoped file tools; the head runs commands and verifiers'
   if (!args || typeof args !== 'object' || Array.isArray(args)) return 'Invalid child tool arguments'
+  // This reader resolves only the exact child's native history; it has no filesystem argument.
+  if (name === 'observation_read') return ObservationReadInput.safeParse(args).success ? undefined : 'Invalid observation read arguments'
   const fields = args as Record<string, unknown>
   const supplied = fields.file_path ?? fields.filePath ?? fields.path
   if (name === 'skill') return undefined

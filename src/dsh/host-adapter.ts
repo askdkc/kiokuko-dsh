@@ -1,3 +1,4 @@
+import { ObservationPackConfig } from './observation-pack/policy.js'
 import { bindMemoryApplication, memoryApplicationStatus, memoryRetrievalStatus } from '../memory/application.js'
 import { mountMemoryApplication } from './memory-application.js'
 import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
@@ -185,6 +186,7 @@ interface AdapterContext extends Context {
 export interface DshHostAdapterOptions {
   readonly decisions?: DecisionService
   readonly semanticCompactionCoordinator?: SemanticCompactionCoordinator
+  readonly observationPack?: import('zod').z.input<typeof ObservationPackConfig>
   readonly semanticCompaction?: import('zod').z.input<typeof SemanticCompactionConfig>
   readonly typedDecisions?: import('zod').z.input<typeof TypedDecisionsConfig>
   readonly memoryReuse?: import('zod').z.input<typeof MemoryReuseConfig>
@@ -489,7 +491,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ...(options.now === undefined ? {} : { now: options.now }),
   })
   const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}), SemanticCompactionConfig.parse(options.semanticCompaction ?? {}))
-  const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root)
+  const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root, options.observationPack)
   const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
   const deepPlanning = new DeepPlanningController({ runtime, decisions, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
     sessions, agents, catalog: modelCatalog, questions: userQuestions, routes: options.modelRoutes ?? [], compatibility: modelCompatibility, sessionQuery, config: options.deepPlanning,
@@ -1526,6 +1528,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         semanticCompaction.recordRoute(agent as unknown as CompactionAgent, assembly.variables)
         const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
         if (lisp) assembly = lisp.project(agent, assembly)
+        semanticCompaction.recordTools(agent as unknown as CompactionAgent, (assembly as { tools?: unknown }).tools)
         const delivered = new Set<string>()
         for (const [name, sectionName] of [['kiokuko-soul','kiokuko:soul'], ['natural-japanese-output','kiokuko:natural-japanese-output'], ['kiokuko-lisp','kiokuko:lisp']]) {
           const section = assembly.sections.find(section => section.name === sectionName)
