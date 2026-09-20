@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm, symlink } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
-import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
+import { LispConfig, renderResult, RESULT_BYTES } from '../../../../src/dsh/lisp/contracts.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
 import { LispManager } from '../../../../src/dsh/lisp/manager.js'
 import { createLispCiAdapter } from '../../../../src/dsh/lisp/ci.js'
@@ -93,6 +93,79 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     await evaluate('break-test', put('project/src/index.mjs', 'export const value = 0;'))
     const failed = await evaluate('npm-test-fails', verify)
     assert.equal(failed.value.json.state, 'FAILED'); assert.notEqual(failed.value.json.code, 0)
+
+    // Real protected npm -> CI broker -> SBCL return -> journal -> model -> inspect.
+    const diagnostic = 'src/cache.ts(48,17): error TS2345: middle\r\n'
+    const verifierLog = 'normal line\r\n'.repeat(1000) + diagnostic + 'normal line\r\n'.repeat(1000)
+    const logScript = `import{appendFileSync,writeSync}from'node:fs';appendFileSync('runs.txt','1');writeSync(1,${JSON.stringify(verifierLog)});writeSync(2,${JSON.stringify(verifierLog)});process.exitCode=2;`
+    await evaluate('diagnostic-fixture', [put('project/logs.mjs', logScript),
+      put('project/package.json', JSON.stringify({ type: 'module', scripts: { test: 'node logs.mjs' } }))].join('\n'))
+    const printAndVerify = `(progn (dotimes (i 2000) (format *error-output* "Lisp printing~%")) ${verify})`
+    const diagnosticResult = await evaluate('diagnostic-verifier', printAndVerify)
+    assert.equal(diagnosticResult.ok, true, JSON.stringify(diagnosticResult))
+    assert.equal(diagnosticResult.value.json.code, 2)
+    assert.equal(diagnosticResult.value.json.stderr, verifierLog)
+    assert.ok(diagnosticResult.value.json.stdout.endsWith(verifierLog)) // npm adds its script header.
+    const journalBefore = (await store.get(owner, 'diagnostic-verifier'))!.result
+    const replayed = await evaluate('diagnostic-verifier', printAndVerify)
+    assert.equal(replayed.replay, true)
+    assert.equal(await readFile(join(scratch, 'project/runs.txt'), 'utf8'), '1')
+    for (const result of [diagnosticResult, replayed]) {
+      const rendered = renderResult(result), visible = JSON.parse(rendered)
+      assert.ok(Buffer.byteLength(rendered) <= RESULT_BYTES)
+      assert.equal(visible.value.json.state, 'FAILED'); assert.equal(visible.value.json.code, 2)
+      for (const stream of ['stdout', 'stderr']) assert.ok(visible.value.json[stream].diagnostics.some((e: any) => e.text.includes(diagnostic)))
+      const excerpts = ['stdout', 'stderr'].flatMap(stream => visible.value.json[stream].diagnostics)
+      for (const template of [visible.inspect, ...excerpts.map((e: any) => e.inspect)]) {
+        const { tool, ...hint } = template
+        assert.equal(tool, 'lisp_inspect')
+        assert.equal(hint.section, 'result')
+        assert.ok(['/value/json/stdout', '/value/json/stderr'].includes(hint.pointer))
+        const stream = hint.pointer.split('/').at(-1), original = diagnosticResult.value.json[stream]
+        const page = await manager.execute(owner, tool, { operationId: 'inspect-diagnostic', ...hint }) as any
+        assert.equal(page.data, Array.from(original).slice(hint.offset, hint.offset + 2000).join(''))
+        assert.ok(page.data.includes(diagnostic))
+      }
+    }
+    assert.equal((await store.get(owner, 'diagnostic-verifier'))!.result, journalBefore)
+
+    // Assert the JSON encoding size inside actual SBCL before evaluate-code applies its strict limit.
+    for (const size of [524287, 524288]) {
+      const result = await evaluate(`json-boundary-${size}`, `(let ((r (make-hash-table :test 'equal)))
+        (setf (gethash "state" r) "FAILED" (gethash "code" r) 2
+              (gethash "stderr" r) "" (gethash "stdout" r) (format nil "~%error TS1: boundary~%"))
+        (let* ((base (length (sb-ext:string-to-octets (kioku.data:encode-json r) :external-format :utf-8)))
+               (padding (- ${size} base)))
+          (setf (gethash "stdout" r) (concatenate 'string (make-string (floor padding 2) :initial-element #\\x)
+            (gethash "stdout" r) (make-string (- padding (floor padding 2)) :initial-element #\\x))))
+        (let ((bytes (length (sb-ext:string-to-octets (kioku.data:encode-json r) :external-format :utf-8))))
+          (assert (= bytes ${size})) (format t "encoded-bytes=~D~%" bytes)) r)`)
+      assert.equal(result.ok, true, JSON.stringify(result))
+      assert.match(result.output.stdout, new RegExp(`encoded-bytes=${size}`))
+      const rendered = renderResult(result)
+      if (size < 524288) {
+        assert.equal(Buffer.byteLength(JSON.stringify(result.value.json)), size)
+        assert.match(rendered, /"diagnostics":/u)
+      } else {
+        assert.equal(result.value.json, null)
+        assert.doesNotMatch(rendered, /"diagnostics":|\/value\/json\/(?:stdout|stderr)/u)
+      }
+    }
+    const largeStream = 'x'.repeat(300 * 1024)
+    // Construct large script in scratch without sending it as one oversized eval request.
+    await evaluate('large-log-fixture', put('project/logs.mjs', "import{writeSync}from'node:fs';const log='x'.repeat(300*1024);writeSync(1,log);writeSync(2,log);process.exitCode=2;"))
+    assert.ok(Buffer.byteLength(JSON.stringify({ code: 2, state: 'FAILED', stdout: largeStream, stderr: largeStream })) > 524288)
+    const missingLogs = await evaluate('oversize-verifier', `(let ((r ${verify}))
+      (assert (>= (length (gethash "stdout" r)) (* 300 1024)))
+      (assert (= (length (gethash "stderr" r)) (* 300 1024)))
+      (let ((bytes (length (sb-ext:string-to-octets (kioku.data:encode-json r) :external-format :utf-8))))
+        (assert (> bytes 524288)) (format t "oversize-bytes=~D~%" bytes)) r)`)
+    assert.equal(missingLogs.ok, true, JSON.stringify(missingLogs))
+    assert.equal(missingLogs.value.json, null)
+    assert.match(missingLogs.output.stdout, /oversize-bytes=6[0-9]{5}/u)
+    assert.doesNotMatch(renderResult(missingLogs), /"diagnostics":|\/value\/json\/(?:stdout|stderr)/u)
+    // Restore the original test command before exercising the published toolkit.
+    await evaluate('restore-project-test', put('project/package.json', JSON.stringify({ type: 'module', scripts: { test: 'node --test test/*.test.mjs' } })))
 
     // Execute the published example itself: three reusable functions, then one
     // call which reads, validates, edits and checks without model round trips.

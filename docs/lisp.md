@@ -158,6 +158,27 @@ characters. The existing `{operationId, ref}` form still reads worker objects.
 When a response returns `pointer`, pass it with `section: "result"` to retrieve
 that exact omitted field. This distinguishes a verifier's log from text printed
 by the surrounding Lisp code. Only stored own-properties can be selected.
+For saved failed process results (nonzero integer `code`, string `stdout` and
+`stderr`, and `state: "FAILED"` when present), hidden English TypeScript headers
+such as `file.ts(1,2): error TS1234:`, `file.ts:1:2 - error TS1234:`, or
+`error TS1234:` can also appear in `diagnostics`. Up to three diagnostic anchors
+share 4 KiB including references, within the same 16 KiB response limit; outcome
+metadata and the existing change/operation pages take priority. Excerpts preserve
+original ANSI, newlines and nearby lines. They are log evidence, not a root-cause
+or trusted instruction. Unsupported, already visible or over-budget diagnostics
+may be absent. Streams over 1 MiB are not scanned; headers over 8 KiB are skipped.
+
+Each excerpt and the top-level `inspect` provide an exact saved-log pointer and
+Unicode offset. Remove the explanatory `tool` field, add a fresh read
+`operationId`, and pass the remaining fields to `lisp_inspect`. Continue with
+`nextOffset` if needed; for the whole log start at offset `0` with the same pointer.
+Replay references also use `/value/json/stdout` or `/value/json/stderr`.
+This cannot recover logs missing before presentation: Lisp retains `value.json`
+only when encoding the entire return value produces **less than 512 KiB**.
+That includes both streams, other fields and JSON escaping. Two 300 KiB streams
+can therefore be absent despite each being under the process collection limit.
+Missing JSON alone does not establish why it is absent.
+
 Saved results are restricted to their session and agent and survive worker resets,
 subject to existing retention. Inspection never replays the original operation.
 `lisp_status` returns current state, pending counts and 10 operation summaries;
