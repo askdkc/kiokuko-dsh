@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtemp, mkdir, readFile, writeFile, realpath, rm } from 'node:fs/promises'
@@ -26,6 +27,156 @@ async function fixture(t: test.TestContext) {
   return { base, root, store, owner }
 }
 const allowed: DshUserQuestions = { ask: async request => ({ answers: [{ id: request.questions[0].id, selected: [request.questions[0].intent!.approve] }] }) }
+
+const diagnosticLine = 'src/cache.ts(48,17): error TS2345: middle\n'
+const middleLog = 'normal line\n'.repeat(700) + diagnosticLine + 'normal line\n'.repeat(700)
+const failedResult = (stdout = middleLog, stderr = '') => ({ ok: true, operationId: 'op',
+  value: { json: { state: 'FAILED', code: 2, stdout, stderr } } })
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object') { Object.freeze(value); for (const child of Object.values(value)) deepFreeze(child) }
+  return value
+}
+
+test('non-target and diagnostic-free rendering matches pre-change baseline byte for byte', () => {
+  // SHA-256 of the unmodified renderer's exact strings, recorded before implementation.
+  const cases = [
+    [{ ok: true, operationId: 'op', value: { json: { state: 'SUCCEEDED', code: 0, stdout: middleLog, stderr: '' } } }, '944fd7252eee9a82321afbbe2bf4fb1a25ac4fc7d5962425880bbd42dfe05fd3'],
+    [failedResult('short'), 'c7f5a52fa4e07ecd5cffea726f787e4a24451ddd310ced812ba510d11a9fa123'],
+    [{ ok: false, operationId: 'op', value: { printed: middleLog, json: null }, output: { stderr: middleLog } }, '3258422d0de4fe654f5070d2df299128dcf5be17606b7ea3e6fc822c97c240a1'],
+    [failedResult('ordinary\n'.repeat(2000)), 'aa35c1759ae68a71541f8801322d1a381428c6f9d05e43b764315d3880b3c67f'],
+  ] as const
+  for (const [input, hash] of cases) assert.equal(createHash('sha256').update(renderResult(input)).digest('hex'), hash)
+})
+
+test('middle diagnostics preserve outer success, short streams and immutable inputs within 16 KiB', () => {
+  for (const stream of ['stdout', 'stderr'] as const) {
+    const input = deepFreeze({ ...failedResult(stream === 'stdout' ? middleLog : 'short', stream === 'stderr' ? middleLog : 'short'), state: 'SUCCEEDED' })
+    const before = JSON.stringify(input), rendered = renderResult(input), result = JSON.parse(rendered)
+    assert.ok(Buffer.byteLength(rendered) <= RESULT_BYTES)
+    assert.ok(result.value.json[stream].diagnostics[0].text.includes(diagnosticLine))
+    assert.equal(result.value.json[stream === 'stdout' ? 'stderr' : 'stdout'], 'short')
+    assert.equal(result.value.json.code, 2); assert.equal(result.value.json.state, 'FAILED')
+    assert.equal(result.ok, true); assert.equal(result.state, 'SUCCEEDED')
+    assert.equal(result.value.json[stream].characters, Array.from(middleLog).length)
+    assert.ok(result.omitted.includes(`/value/json/${stream}`))
+    assert.equal(JSON.stringify(input), before)
+    console.log(JSON.stringify({ fixture: `middle-${stream}`, rawBytes: Buffer.byteLength(before), currentBytes: Buffer.byteLength(rendered), diagnosticVisible: true }))
+  }
+})
+
+test('shape gating rejects contradictory state, nonnumeric codes, inherited fields and invalid identities', () => {
+  const valid = failedResult().value.json
+  const rejected: unknown[] = [
+    ...['NOT_APPLIED', 'UNKNOWN', 'RUNNING', 'SUCCEEDED', null, undefined].map(state => ({ ...valid, state })),
+    ...[null, '2', 0, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1].map(code => ({ ...valid, code })),
+    { ...valid, stdout: null }, { ...valid, stderr: undefined }, { nested: valid }, [valid],
+    Object.assign(Object.create({ code: 2 }), { state: 'FAILED', stdout: middleLog, stderr: '' }),
+  ]
+  for (const json of rejected) assert.doesNotMatch(renderResult({ ...failedResult(), value: { json } }), /"diagnostics":/u)
+  for (const operationId of ['', 'x'.repeat(257), 'bad\n', 'bad\u200b', null]) assert.doesNotMatch(renderResult({ ...failedResult(), operationId }), /"diagnostics":/u)
+  const { state: _state, ...processResult } = valid
+  assert.match(renderResult({ ...failedResult(), value: { json: processResult } }), /"diagnostics":/u)
+  assert.doesNotMatch(renderResult({ ...failedResult(), value: { json: { state: 'FAILED', code: 2, log: middleLog } } }), /"diagnostics":/u)
+})
+
+test('diagnostics do not reduce baseline change/operation pages or lose late state fields', () => {
+  const changes = Array.from({ length: 25 }, (_, i) => ({ id: `p${i}`, path: `src/${i}.ts`, state: 'APPLIED', reason: 'unchanged reason' }))
+  const fields = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`custom${i}`, 'ordinary']))
+  const input = { ...failedResult(), changes, operations: changes, offset: 0, nextOffset: 25, operationCount: 25,
+    reason: 'failure reason '.repeat(80), value: { json: { ...fields, ...failedResult().value.json, target: 'typecheck', script: 'check' } } }
+  const result = JSON.parse(renderResult(deepFreeze(input)))
+  assert.ok(result.value.json.stdout.diagnostics)
+  assert.deepEqual(result.changes, changes); assert.deepEqual(result.operations, changes); assert.equal(result.nextOffset, 25)
+  assert.equal(result.reason, input.reason); assert.equal(result.changeSummary.total, 25)
+  assert.equal(result.value.json.code, 2); assert.equal(result.value.json.state, 'FAILED')
+  assert.equal(result.value.json.target, 'typecheck'); assert.equal(result.value.json.script, 'check')
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) <= RESULT_BYTES)
+})
+
+test('protected control metadata can exhaust evidence budget without losing state or inventing excerpts', () => {
+  for (const length of [16000, 17000]) {
+    const reason = 'x'.repeat(length), input = { ...failedResult(), reason }
+    const result = JSON.parse(renderResult(input))
+    assert.equal(result.reason, reason)
+    assert.equal(result.operationId, 'op')
+    assert.doesNotMatch(JSON.stringify(result), /"diagnostics":/u)
+  }
+  const input = failedResult(('error TS1: ' + 'x'.repeat(5000) + '\n').repeat(8))
+  const result = JSON.parse(renderResult(input))
+  assert.doesNotMatch(JSON.stringify(result), /"diagnostics":/u)
+  assert.equal(result.value.json.stdout.preview.length, 2000, 'unsuccessful selection must return the original preview level')
+})
+
+test('budget levels preserve baseline pages across escaping, Unicode and large identities', () => {
+  for (const reasonLength of [0, 4000, 10000, 14500, 15500]) for (const count of [0, 13, 25, 40]) {
+    const log = '🙂\u0000\"\\\r\n'.repeat(1000) + diagnosticLine + '🙂\u0000\"\\\r\n'.repeat(1000)
+    const input = { ...failedResult(log, middleLog), operationId: '識'.repeat(256), reason: 'x'.repeat(reasonLength),
+      changes: Array.from({ length: count }, (_, i) => ({ id: `p${i}`, state: 'NOT_APPLIED', reason: 'preserve me' })) }
+    // A one-digit zero disables extraction without changing baseline serialization costs.
+    const baseline = JSON.parse(renderResult({ ...input, value: { json: { ...input.value.json, code: 0 } } }))
+    const rendered = renderResult(input), result = JSON.parse(rendered)
+    assert.deepEqual(result.changes, baseline.changes)
+    assert.equal(result.reason, input.reason); assert.equal(result.operationId, input.operationId)
+    const diagnostics = [result.value?.json?.stdout?.diagnostics, result.value?.json?.stderr?.diagnostics].filter(Boolean)
+    if (diagnostics.length) {
+      assert.equal(result.value.json.code, 2); assert.equal(result.value.json.state, 'FAILED')
+      const cost = diagnostics.reduce((sum: number, entries: unknown) => sum + Buffer.byteLength(JSON.stringify({ diagnostics: entries })), 0)
+        + Buffer.byteLength(JSON.stringify({ inspect: result.inspect }))
+      assert.ok(cost <= 4096)
+      assert.ok(Buffer.byteLength(rendered) <= RESULT_BYTES)
+    }
+  }
+})
+
+test('initially visible headers leave slots for a middle diagnostic in the rendered preview', () => {
+  const prefix = 'error TS1: visible\n' + 'gap\n'.repeat(30) + 'error TS2: visible\n' + 'gap\n'.repeat(30) + 'error TS3: visible\n'
+  const result = JSON.parse(renderResult(failedResult(prefix + middleLog)))
+  for (const number of [1, 2, 3]) assert.ok(result.value.json.stdout.preview.includes(`error TS${number}:`))
+  assert.equal(result.value.json.stdout.diagnostics.map((e: any) => e.text).join('').split('error TS').length - 1, 1)
+  assert.ok(result.value.json.stdout.diagnostics[0].text.includes(diagnosticLine))
+})
+
+test('returned diagnostic templates retrieve saved Unicode evidence, replay and complete pages under the exact owner', async t => {
+  const f = await fixture(t)
+  const manager = new LispManager({ store: f.store, config: LispConfig.parse({}), dataRoot: join(f.base, 'runtime') })
+  manager.enabled.set(f.owner.sessionId, f.root)
+  for (const stream of ['stdout', 'stderr'] as const) {
+    const log = '🙂日本語\r\n'.repeat(1000) + '\u001b[31m' + diagnosticLine.trimEnd() + (stream === 'stderr' ? 'x'.repeat(2300) : '') + '\u001b[0m\r\n' + '終\r\n'.repeat(2000)
+    const id = `evidence-${stream}`, saved = { ...failedResult(stream === 'stdout' ? log : '', stream === 'stderr' ? log : ''), operationId: id,
+      generation: 'old', output: { [stream === 'stdout' ? 'stderr' : 'stdout']: 'Lisp print\n'.repeat(3000) } }
+    const original = JSON.stringify(saved)
+    await f.store.reserve(f.owner, id, 'lisp_eval', 'hash', 'old', {})
+    await f.store.transition(f.owner, id, ['RUNNING'], 'SUCCEEDED', saved)
+    for (const input of [saved, { replay: true, operationId: id, state: 'SUCCEEDED', result: saved }]) {
+      const rendered = JSON.parse(renderResult(input)), excerpts = rendered.value.json[stream].diagnostics
+      assert.ok(excerpts.length)
+      if (stream === 'stderr') assert.ok(Array.from(excerpts[0].text).length > 2000, 'large excerpts require inspection paging')
+      assert.deepEqual(rendered.inspect, excerpts[0].inspect)
+      for (const hint of [rendered.inspect, ...excerpts.map((e: any) => e.inspect)]) {
+        const { tool, ...args } = hint
+        assert.equal(tool, 'lisp_inspect'); assert.equal(args.pointer, `/value/json/${stream}`)
+        const page = await manager.execute(f.owner, tool, { operationId: 'read-evidence', ...args }) as any
+        assert.equal(page.data, Array.from(log).slice(args.offset, args.offset + 2000).join(''))
+        assert.ok(page.data.includes('TS2345'))
+      }
+      const { tool: _tool, ...hint } = rendered.inspect
+      let offset = 0, collected = ''
+      do {
+        const page = await inspectSavedResult(f.store, f.owner, { ...hint, offset })
+        collected += page.data
+        if (page.nextOffset === null) break
+        offset = page.nextOffset
+      } while (true)
+      assert.equal(collected, log)
+      for (const owner of [{ ...f.owner, sessionId: 'other' }, { ...f.owner, agentId: 'other' }]) {
+        await assert.rejects(inspectSavedResult(f.store, owner, hint), { code: 'UNKNOWN_OPERATION' })
+      }
+    }
+    assert.equal(JSON.stringify(saved), original)
+    assert.equal((await f.store.get(f.owner, id))!.result, original)
+  }
+  assert.equal((await f.store.operations(f.owner.sessionId)).length, 2)
+})
 
 test('model result omits source echoes, preserves outcomes and reduces log-shaped batches over 80%', () => {
   for (const count of [13, 21]) {
