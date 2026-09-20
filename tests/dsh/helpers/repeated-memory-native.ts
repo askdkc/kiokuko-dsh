@@ -24,7 +24,7 @@ export const UNRESOLVED = 'Concurrent writers remain untested'
 export const VERIFICATION = 'The fixture schema and row checksum were verified'
 export type RepeatedRoute = 'normal' | 'enno'
 export interface RoundFault { saveFailure?: boolean; duplicateCompletion?: boolean; forbiddenIds?: readonly string[]; staleAuthority?: 'revision' | 'lease' }
-export interface RoundReport { round: number; runId: string; session: string; start: number; end: number; mainCalls: number; auxiliaryCalls: number; toolExecutions: number; suppliedIds: string[]; finalizations: number; episodes: number; lessons: number; stages: string[] }
+export interface RoundReport { round: number; runId: string; session: string; start: number; end: number; mainCalls: number; auxiliaryCalls: number; planReviewCalls: number; toolExecutions: number; suppliedIds: string[]; finalizations: number; episodes: number; lessons: number; stages: string[] }
 export const fixtureData = ['account rows: Ada, Ken; schema accounts(email)', 'inventory rows: bolt, nut, washer; schema parts(sku, quantity)', 'audit rows: created, revised, reviewed, approved; schema events(actor, action, time)']
 
 export async function prepareRepeatedWorkspace(root: string, migrationsDirectory?: string): Promise<void> {
@@ -62,7 +62,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   ctx.on('agent/error', (event: any) => { nativeErrors.push(String(event.error?.stack ?? event.error ?? 'native agent failed')) })
   const mock = nativeMock(llm), provider = new mock.MockAdapter(script, ['mock', ...openaiModels])
   provider.resolveModel = async (provider: string, model: string) => ({ provider, id: model, name: model, context: { contextWindow: 100000 } })
-  let auxiliaryCalls = 0, toolExecutions = 0, activeRound = 0
+  let auxiliaryCalls = 0, planReviewCalls = 0, toolExecutions = 0, activeRound = 0
   let auxiliaryHook: ((request: any) => Promise<void>) | undefined
   let activeFault: RoundFault = {}, activeSession = ''
   for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined))
@@ -116,6 +116,13 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     advisory: { verifyReadOnly: () => true, execute: async call => ({ slotId: call.slotId, outcome: 'completed', summary: 'Reviewed the immutable fixture contract.', recommendations: [], risks: [], evidence: [] }) },
     llm: { async *stream(request) {
       auxiliaryCalls++
+      const review = fixturePlanReview(request)
+      if (review) {
+        planReviewCalls++
+        yield { type: 'text-delta', text: JSON.stringify(review) }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+        return
+      }
       await auxiliaryHook?.(request)
       const last = (request.messages.at(-1) as any).content[0].text as string
       const reconciliation=last.startsWith('{"reconciliation"')?JSON.parse(last).reconciliation:undefined
@@ -154,7 +161,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     activeFault = fault; activeSession = sessionId
     let agent = liveAgents.get(sessionId)
     if (!agent) { agent = await ctx.agentLoop.create(session.SessionId(sessionId), { provider: 'mock', model: 'mock' }, { cwd: root }); liveAgents.set(sessionId, agent) }
-    const beforeMain = provider.requests.length, beforeAux = auxiliaryCalls, beforeTools = toolExecutions
+    const beforeMain = provider.requests.length, beforeAux = auxiliaryCalls, beforeReview = planReviewCalls, beforeTools = toolExecutions
     const prior = await database(db => db.prepare('SELECT run_id FROM ledger_runs').all<{run_id:string}>())
     if (fault.saveFailure) await database(db => db.exec(`CREATE TEMP TRIGGER repeated_fail_before_commit BEFORE UPDATE OF status ON dsh_memory_finalizations
       WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'injected memory commit failure'); END;`))
@@ -167,7 +174,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     script.push(mock.textResponse(response))
     agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
     await waitFor(() => {
-      if (nativeErrors.length) throw new Error(nativeErrors.join('\n'))
+      if (nativeErrors.length) throw new Error(`${nativeErrors.join('\n')}\nRecent tool results: ${JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').slice(-8).map((event: any) => event.data))}`)
       return agent.status === 'idle' && agent.session.snapshotEvents().some((event: any) => event.type === 'assistant/message' && event.data.message.content.some((block: any) => block.text === response))
     }, 'native final response')
     await deadline(ctx.sessions.flush(agent.session), 'native log flush')
@@ -187,7 +194,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       })
       await (adapter.host.memoryFinalizer as DshMemoryFinalizer).retryFailed(failed)
       await deadline(adapter.host.memoryFinalizer!.whenIdle(), 'explicit finalization retry')
-      assert.equal(auxiliaryCalls - beforeAux, 2, 'one failed extraction plus one authorized retry')
+      assert.equal(auxiliaryCalls - beforeAux - (planReviewCalls - beforeReview), 2, 'one failed extraction plus one authorized retry')
     }
     const state = await database(db => {
       const runs = db.prepare('SELECT run_id,status,dsh_session_id FROM ledger_runs').all<{run_id:string;status:string;dsh_session_id:string}>().filter(run => !prior.some(old => old.run_id === run.run_id))
@@ -207,6 +214,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       return { run, job, episodes, lessons, finalizations: db.prepare('SELECT count(*) AS n FROM dsh_memory_finalizations').get<{n:number}>()!.n }
     })
     const requests = provider.requests.slice(beforeMain)
+    assert.equal(planReviewCalls - beforeReview, route === 'enno' ? 3 : 0, 'each Enno plan must complete all three check-model review slots')
     for (const id of fault.forbiddenIds ?? []) assert.ok(!JSON.stringify(requests).includes(id), 'invalidated or disabled derived memory reached a native model request')
     if (fault.duplicateCompletion) {
       const calls = auxiliaryCalls
@@ -241,7 +249,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     assert.equal(script.length, 0, 'no unconsumed or repeated main model requests')
     assert.equal(toolExecutions - beforeTools, readonly ? 0 : 1)
     const report = { round: number, runId: state.run.run_id, session: sessionId, start: state.job.source_start_seq, end: state.job.source_end_seq,
-      mainCalls: requests.length, auxiliaryCalls: auxiliaryCalls - beforeAux, toolExecutions: toolExecutions - beforeTools,
+      mainCalls: requests.length, auxiliaryCalls: auxiliaryCalls - beforeAux, planReviewCalls: planReviewCalls - beforeReview, toolExecutions: toolExecutions - beforeTools,
       suppliedIds: [...suppliedIds], finalizations: state.finalizations, episodes: state.episodes.length, lessons: state.lessons.length,
       stages: ['admission', 'native-execution', 'final-response', 'log-flush', 'memory-finalization', 'episode/evolution', 'durable-state', 'model-request'] }
     recordRepeatedStage(report)
@@ -258,15 +266,30 @@ export function ennoScript(mock: ReturnType<typeof nativeMock>, round: number, r
   const planning = dispositions(['workunit_architect','protocol_risk_reviewer','verification_designer'])
   const final = dispositions(['acceptance_auditor','regression_adversary','evidence_freshness_reviewer'])
   const verifier = { id: 'fixture-check', kind: 'test', executable: process.execPath, args: ['--eval', 'process.exit(0)'], cwd: '.', timeoutMs: 5000 }
-  return [mock.textResponse('The ideal is ready.'), mock.toolCallResponse(`ideal-${round}`, 'enno_ideal_submit', {
-    ideal: { objective: 'Validate the requested disposable fixture.', principles: ['Preserve the source data.'], skillContributions: [], successSignals: [VERIFICATION] }, advisoryDisposition: ideal }),
-  mock.textResponse('The plan is ready.'), mock.toolCallResponse(`plan-${round}`, 'enno_plan_submit', {
+  const plan = {
     executionHints: [], scope: ['fixtures'], exclusions: [], acceptanceCriteria: [{ id: 'verified', description: VERIFICATION }],
     workPlan: { objective: PROCEDURE, units: [{ id: 'verify-fixture', objective: PROCEDURE, scope: ['fixtures'], dependencies: [], routes: ['code'], skillNames: ['kiokuko-single-purpose-functions'], expertRefs: [{ id: 'code.verification.v1', reason: 'Verify source evidence.' }], acceptanceCriteria: [VERIFICATION], focusedVerifiers: [verifier] }] },
     skillRequirements: [], finalVerifiers: [verifier], maxAttempts: 3,
-    provenance: { scope: 'explicit_user', exclusions: 'explicit_user', acceptanceCriteria: 'explicit_user', workPlan: 'inferred', skillSet: 'repository_evidence', finalVerifiers: 'repository_evidence', maxAttempts: 'inferred' }, advisoryDisposition: planning }),
+    provenance: { scope: 'explicit_user', exclusions: 'explicit_user', acceptanceCriteria: 'explicit_user', workPlan: 'inferred', skillSet: 'repository_evidence', finalVerifiers: 'repository_evidence', maxAttempts: 'inferred' } }
+  return [mock.textResponse('The ideal is ready.'), mock.toolCallResponse(`ideal-${round}`, 'enno_ideal_submit', {
+    ideal: { objective: 'Validate the requested disposable fixture.', principles: ['Preserve the source data.'], skillContributions: [], successSignals: [VERIFICATION] }, advisoryDisposition: ideal }),
+  mock.textResponse('The plan is ready.'), mock.toolCallResponse(`review-${round}`, 'enno_plan_review', plan),
+  mock.toolCallResponse(`plan-${round}`, 'enno_plan_submit', { ...plan, advisoryDisposition: planning }),
   ...(readonly ? [] : [mock.toolCallResponse(`verify-${round}`, 'verify_migration', { fixture: (round - 1) % 3, procedure: PROCEDURE })]),
   mock.toolCallResponse(`work-${round}`, 'enno_work_report', { result: { outcome: 'completed', summary: VERIFICATION, mutated: false, changedPaths: [] } }),
   mock.toolCallResponse(`finish-${round}`, 'enno_finish', { advisoryDisposition: final, review: { decision: 'accept', summary: VERIFICATION } }),
   mock.toolCallResponse(`meditate-${round}`, 'enno_meditation_submit', { meditation: { summary: 'All fixture evidence remains applicable only to fixture-v1.', inspectedPaths: ['fixtures'], deletionCandidates: [] } })]
+}
+
+/** Answer only the real no-tool plan-review protocol; memory extraction uses its own fixture. */
+export function fixturePlanReview(request: Parameters<import('../../../src/dsh/session-memory-finalizer.js').DshLlm['stream']>[0]) {
+  if (!request.system?.startsWith('Review the entire candidate plan')) return undefined
+  assert.equal(request.provider, 'mock')
+  assert.equal(request.model, 'gpt-6-astra')
+  assert.deepEqual(request.tools, [])
+  const payload = JSON.parse((request.messages[0] as { content: { text: string }[] }).content[0]!.text)
+  assert.ok(['workunit_architect', 'protocol_risk_reviewer', 'verification_designer'].includes(payload.slotId))
+  assert.equal(payload.context.phase, 'planning')
+  assert.ok(payload.context.candidate.workPlan.units.length > 0)
+  return { slotId: payload.slotId, outcome: 'completed', summary: 'Reviewed the complete fixture plan.', recommendations: [], risks: [], evidence: [] }
 }

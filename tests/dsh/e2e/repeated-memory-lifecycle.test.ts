@@ -131,7 +131,8 @@ for (const route of ['normal', 'enno'] as const) for (const mode of ['prefix_reu
       assert.equal(rounds[2]!.episodes, 3)
       assert.equal(rounds[2]!.lessons, 1)
       assert.equal(rounds[3]!.finalizations, 4)
-      assert.equal(rounds[3]!.auxiliaryCalls, 1, 'read-only retrieval must not generate extra model calls')
+      assert.equal(rounds[3]!.planReviewCalls, route === 'enno' ? 3 : 0)
+      assert.equal(rounds[3]!.auxiliaryCalls, 1 + rounds[3]!.planReviewCalls, 'read-only retrieval adds no calls beyond required plan review and finalization')
       if (host) {
         const derivedIds = await host.database(db => db.prepare('SELECT DISTINCT entry_id FROM memory_derivations').all<{entry_id:string}>().map(row => row.entry_id))
         for (const [index, setting] of ['observe', 'off'].entries()) {

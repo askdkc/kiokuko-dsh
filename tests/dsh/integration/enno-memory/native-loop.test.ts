@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { prepareRepeatedWorkspace, ennoScript, waitFor } from '../../helpers/repeated-memory-native.js'
+import { prepareRepeatedWorkspace, ennoScript, fixturePlanReview, waitFor } from '../../helpers/repeated-memory-native.js'
 import { nativeMock } from '../../helpers/native-mock.js'
 import { modelSelectionAnswer, mockModelRoutes, openaiModels } from '../../helpers/model-selection.js'
 import { createDshHostAdapter } from '../../../../src/dsh/host-adapter.js'
@@ -54,7 +54,12 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
   const adapter = createDshHostAdapter(ctx, { repositoryRoot: root, databasePath: join(root, '.git/state.sqlite3'), orca: { enabled: false },
     modelRoutes: mockModelRoutes, efficiency: { observe: true }, ennoMemory: { mode, localBudgetMs: 1000 },
     advisory: { verifyReadOnly: () => true, execute: async call => ({ slotId: call.slotId, outcome: 'completed', summary: 'Reviewed fixture contract.', recommendations: [], risks: [], evidence: [] }) },
-    llm: { async *stream() { throw new Error('Finalization is outside this refresh fixture') } } })
+    llm: { async *stream(request) {
+      const review = fixturePlanReview(request)
+      if (!review) throw new Error('Finalization is outside this refresh fixture')
+      yield { type: 'text-delta', text: JSON.stringify(review) }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    } } })
   const composition = await mountDshComposition(ctx, adapter.host)
   const memory = (request: any, id: string) => request.messages.filter((message: any) => message.source?.plugin === 'kiokuko-dsh'
     && message.source.sections?.some((section: any) => section.name === `memory:memory:${id}`))
@@ -68,7 +73,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
     }
   }
   const controls = ennoScript(mock, 1, true)
-  script.push((request: any) => { checkedRequest(request, false); return controls[0] }, ...controls.slice(1, 4),
+  script.push((request: any) => { checkedRequest(request, false); return controls[0] }, ...controls.slice(1, 5),
     (request: any) => {
       runId = db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status='active' AND dsh_session_id='refresh-parent'").get<{id:string}>()!.id
       checkedRequest(request, false)
@@ -94,7 +99,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
       db.prepare("UPDATE entries SET status='superseded',superseded_by=? WHERE id=?").run(a.id, b.id)
       return mock.toolCallResponse('failure-4', 'fail_queue', {})
     },
-    (request: any) => { checkedRequest(request, false); return controls[4] }, ...controls.slice(5), mock.textResponse('REFRESH_FIXTURE_COMPLETE'))
+    (request: any) => { checkedRequest(request, false); return controls[5] }, ...controls.slice(6), mock.textResponse('REFRESH_FIXTURE_COMPLETE'))
   try {
     agent = await ctx.agentLoop.create(session.SessionId('refresh-parent'), { provider: 'mock', model: 'mock' }, { cwd: root })
     const task = '役小角を使って QUEUE_TEST_BASELINE のテストを修正してください。read paths: fixtures\nwrite paths: fixtures\n完了条件: 検証して報告'
