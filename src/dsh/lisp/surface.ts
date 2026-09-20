@@ -1,3 +1,5 @@
+import type { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
+import { renderHistoryResult } from './model-result.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
 import type { DecisionService } from '../decisions/service.js'
 import { DecisionError } from '../decisions/contracts.js'
@@ -54,7 +56,7 @@ const ToolInput = z.object({ operationId: identifier.optional(), code: z.string(
   offset: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(2000).optional() }).strict()
 
 /** The fence belongs to the host root, so plugin unload cannot restore bash access. */
-export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts, decisions?: DecisionService): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
+export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts, decisions?: DecisionService, semanticCompaction?: SemanticCompactionCoordinator): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
   const root = (ctx.root ?? ctx) as unknown as Context & { [fenceKey]?: Fence }
   const tools = root.get('tools', false) as Tools | undefined
   const agents = root.get('agents', false) as { get(id: string): Agent | undefined } | undefined
@@ -142,6 +144,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   await manager.start()
   fence.sessions = manager.enabled; fence.controller = manager; fence.stopped = false
   const disposers: (() => void)[] = []
+  if (semanticCompaction) for (const tool of ['lisp_eval', 'lisp_inspect']) disposers.push(semanticCompaction.registerProjector(tool, renderHistoryResult))
   try {
   const sessionBindings = new Map<string, { session: Session; abort: AbortController }>()
   const closedSessions = new WeakSet<Session>()

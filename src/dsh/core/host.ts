@@ -1,3 +1,5 @@
+import { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
+import { SemanticCompactionConfig } from '../semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../../memory/reuse.js'
 import { classifyTask } from '../decisions/workflows.js'
 import { TypedDecisionsConfig } from '../decisions/config.js'
@@ -23,6 +25,7 @@ export interface CoreModuleHost {
   readonly repositoryRoot: string
   readonly runtime: DshCoreRuntime
   readonly decisions: DecisionService
+  readonly semanticCompaction: SemanticCompactionCoordinator
   readonly prompts: ConfiguredSkillPrompts
   /** Validate host-owned request/continuation bindings; this never grants native permissions. */
   admitModules(bindings: readonly ModuleBinding[]): void
@@ -35,6 +38,7 @@ export const CoreConfig = z.object({
   enabled: z.boolean().default(true),
   typedDecisions: TypedDecisionsConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),
+  semanticCompaction: SemanticCompactionConfig.prefault({}),
   repositoryRoot: z.string().min(1).optional(),
   databasePath: z.string().min(1).optional(),
   migrationsDirectory: z.string().min(1).optional(),
@@ -63,7 +67,8 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 30_000, batchSize: 16 } })
   const prompts = configuredSkillPrompts(modules.resources(), config.skillPrompts.mode, new URL('../../../dist/dsh/skill-prompts.json', import.meta.url))
   const questions = get('userQuestions') as DshUserQuestions | undefined
-  const decisions = createDecisionService(ctx, runtime, config.typedDecisions, config.memoryReuse)
+  const decisions = createDecisionService(ctx, runtime, config.typedDecisions, config.memoryReuse, config.semanticCompaction)
+  const semanticCompaction = new SemanticCompactionCoordinator(ctx as any, decisions, root)
   const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions)
   function bind(agent: NativeAgent): void {
     if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || realpathSync(agent.session.header.cwd) !== root) throw new Error('Native task identity mismatch')
@@ -91,11 +96,13 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const stopIngress = () => {
     if (stopped) return
     stopped = true
+    semanticCompaction.stop()
     lifecycle.abort(new Error('Kiokuko core stopped'))
     modules.stopIngress()
     for (const dispose of disposers.reverse()) { try { dispose() } catch (error) { stopErrors.push(error) } }
   }
   const drain = async () => {
+    await semanticCompaction.drain()
     await Promise.allSettled([...pending])
     await modules.dispose()
   }
@@ -107,7 +114,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     if (failures.length === 1) throw failures[0]
     if (failures.length > 1) throw new AggregateError(failures, 'Core teardown failed')
   })()
-  if (!config.enabled) return { stopIngress, drain, dispose }
+  if (!config.enabled) { semanticCompaction.stop(); return { stopIngress, drain, dispose } }
   try {
     if (!skills?.registerProvider || !skills.snapshot || !tools?.schemas || !tools.guard || !tools.register || !sessions?.get || !sessions.flush || !agents?.get || !systemPrompt?.section) throw new Error('Core requires native Skill, prompt, tool, session and agent services')
     await runtime.start()
@@ -116,7 +123,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     disposers.push(skills.registerProvider(() => provider))
     if (systemPrompt?.section) disposers.push(systemPrompt.section({ name: 'kiokuko:soul', order: -100_000, text: await prompts.require('kiokuko-soul') }))
     if (get('commands')) disposers.push(mountTypeSafeCommand(get('commands'), typeSafeCredentials(ctx), () => decisions.invalidateReadiness()), mountDecisionCommand(get('commands'), decisions))
-    await modules.mount({ context: ctx, repositoryRoot: root, runtime, prompts, decisions, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
+    await modules.mount({ context: ctx, repositoryRoot: root, runtime, prompts, decisions, semanticCompaction, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
       beforeTask(handler) { beforeTask.add(handler); return () => { beforeTask.delete(handler) } } })
     if (!claimed) {
       const listen = (name: string, handler: (...args: any[]) => unknown) => disposers.push((ctx.on as any)(name, handler, { prepend: true }))

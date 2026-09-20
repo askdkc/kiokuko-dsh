@@ -1,3 +1,5 @@
+import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
+import { realpathSync } from 'node:fs'
 import { createDecisionService } from './decisions/host.js'
 import { startupRecoveryMessage } from './startup-recovery.js'
 import { mountDshOrcaCommand } from './orca-command-surface.js'
@@ -81,10 +83,11 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     let host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
       if (host.runtime && !host.decisions) {
-        const decisions = createDecisionService(ctx, host.runtime, resolvedConfig.typedDecisions, resolvedConfig.memoryReuse)
+        const decisions = createDecisionService(ctx, host.runtime, resolvedConfig.typedDecisions, resolvedConfig.memoryReuse, resolvedConfig.semanticCompaction)
         host.intakeGate?.configureDecisions(decisions)
         host = { ...host, decisions }
       }
+      if (host.decisions && !host.semanticCompaction) host = { ...host, semanticCompaction: new SemanticCompactionCoordinator(ctx as any, host.decisions, realpathSync(process.cwd())) }
       if (host.configureEnnoMemory) host.configureEnnoMemory(resolvedConfig.ennoMemory)
       else if (resolvedConfig.ennoMemory.mode !== 'off') throw new Error('The explicit Kiokuko host does not support ennoMemory')
       host.intakeGate?.configureMemory(resolvedConfig.akinatorMemory)
@@ -132,7 +135,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx, { typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
+    const adapter = createDshHostAdapter(ctx, { typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
       ennoMemory: resolvedConfig.ennoMemory, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, memoryReview: resolvedConfig.memoryReview })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined

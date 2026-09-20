@@ -109,3 +109,5 @@ selection, worker identity/generation checks and proposal approval remain intact
 
 The explicit `kioku.typesafe:status` / `evaluate` API, including `noul` and `score`,
 and `/kioku-typesafe-key` remain TypeSafe-specific compatibility interfaces.
+
+[Semantic compaction](semantic-compaction.md) shares this service for automatic history shortening, including readiness, credentials, acceptance policy, persisted decisions and bounded concurrency. Its independent setting is `semanticCompaction: { mode: auto, budgetMs: 5000 }`.

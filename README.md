@@ -113,3 +113,7 @@ are optional; `memoryReuse.mode: off` disables this additional selection.
 The compatibility [TypeSafe API](docs/typesafe.md) use `/kioku-typesafe-key` for
 DSH-managed credentials and `kioku.typesafe:evaluate` for explicit semantic
 questions. Lisp consumes the answers; file-change approval remains required.
+
+### Semantic compaction
+
+[Semantic compaction](docs/semantic-compaction.md) selectively shortens old tool results before native automatic compaction in normal, Enno and Lisp modes. It defaults to `semanticCompaction: { mode: auto, budgetMs: 5000 }` and requires a ready typed-decision backend and supported native services. Inspect activation and the last outcome with `/kioku-decisions status`.

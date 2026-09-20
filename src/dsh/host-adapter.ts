@@ -1,3 +1,5 @@
+import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
+import { SemanticCompactionConfig, type CompactionAgent } from './semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../memory/reuse.js'
 import { createMemoryReuseRuntime } from './memory-reuse.js'
 import { reviewPlanDecisions } from './decisions/plan-review.js'
@@ -180,6 +182,8 @@ interface AdapterContext extends Context {
 
 export interface DshHostAdapterOptions {
   readonly decisions?: DecisionService
+  readonly semanticCompactionCoordinator?: SemanticCompactionCoordinator
+  readonly semanticCompaction?: import('zod').z.input<typeof SemanticCompactionConfig>
   readonly typedDecisions?: import('zod').z.input<typeof TypedDecisionsConfig>
   readonly memoryReuse?: import('zod').z.input<typeof MemoryReuseConfig>
   /** An enclosing composition owns and closes this shared runtime. */
@@ -482,7 +486,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     autoRegisterRepository: true,
     ...(options.now === undefined ? {} : { now: options.now }),
   })
-  const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}))
+  const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}), SemanticCompactionConfig.parse(options.semanticCompaction ?? {}))
+  const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root)
   const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
   const deepPlanning = new DeepPlanningController({ runtime, decisions, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
     sessions, agents, catalog: modelCatalog, questions: userQuestions, routes: options.modelRoutes ?? [], compatibility: modelCompatibility, sessionQuery, config: options.deepPlanning,
@@ -1426,6 +1431,18 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const routingDisposers = new Map<object, () => void>()
   const installRouting = (agent: RoutableAgent) => {
     if (routingDisposers.has(agent) || !agent.ctx) return
+    semanticCompaction.attach(agent as unknown as CompactionAgent, async () => {
+      const childModel = await delegation.restoreOrPersist(agent)
+      if (childModel) {
+        const authority = await delegation.authorityFingerprint(agent)
+        return { child: delegation.observationBinding(agent), childSessionId: agent.session?.id, model: childModel, authority }
+      }
+      const header = (agent as unknown as CompactionAgent).session?.header
+      if (header?.parentSession || header?.origin === 'subagent' || header?.delegationDepth) return undefined
+      const item = agent.session ? currentSession(agent.session.id) : undefined
+      return item ? { runId: item.runId, sessionId: item.sessionId, selection: selections.get(item.runId) ?? null,
+        state: await runtime.withDatabase(db => stateForRun(db, item)) } : { sessionId: agent.session?.id }
+    })
     const disposeMemory = agent.ctx.on('agent/request', async (_event: unknown, next: () => Promise<any>) => {
       const request = await next()
       if (delegation.isChild(agent)) return request
@@ -1489,6 +1506,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     }, {
       prompts: () => skillPrompts,
       assembled: async assembly => {
+        semanticCompaction.recordRoute(agent as unknown as CompactionAgent, assembly.variables)
         const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
         if (lisp) assembly = lisp.project(agent, assembly)
         const delivered = new Set<string>()
@@ -2786,6 +2804,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   configureEfficiency({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
   const host: DshCompositionHost = {
     decisions,
+    semanticCompaction,
     deepPlanning,
     get efficiency() { return efficiency },
     configureEfficiency,
@@ -2862,6 +2881,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   return {
     host,
     dispose: () => disposePromise ??= (async () => {
+      semanticCompaction.stop()
+      await semanticCompaction.drain()
       await deepPlanning.stop()
       await autoReview.dispose()
       await memoryFinalizer.dispose()

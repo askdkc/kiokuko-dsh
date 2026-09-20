@@ -1,3 +1,5 @@
+import { SemanticCompactionConfig, type SemanticCompactionConfiguration, type CompactionOutcome } from '../semantic-compaction/contracts.js'
+import { evaluateCompactionBatches } from './compaction-batches.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { abortable } from '../http-json.js'
@@ -34,6 +36,9 @@ export function databaseDecisionStore(runtime: { withDatabase<T>(operation: (db:
 }
 export class DecisionService {
   readonly memoryReuse: MemoryReuseConfiguration
+  readonly semanticCompaction: SemanticCompactionConfiguration
+  private compactionStatus: { supported: boolean; nativeAuto: boolean; last: CompactionOutcome | null } = { supported: false, nativeAuto: false, last: null }
+  reportCompaction(supported: boolean, last?: CompactionOutcome, nativeAuto = this.compactionStatus.nativeAuto): void { this.compactionStatus = { supported, nativeAuto, last: last ?? this.compactionStatus.last } }
   private readonly readiness: DecisionReadinessMonitor
   private readonly memoryConcurrency = new MemoryDecisionConcurrency()
   private readonly bindings = new Map<string, Promise<DecisionConfiguration>>()
@@ -41,8 +46,9 @@ export class DecisionService {
   private readonly pending = new Map<string, Promise<DecisionOutcome>>()
   private lastFallback: string | null = null
   constructor(private readonly config: DecisionConfiguration, private readonly provider: (config: DecisionConfiguration) => DecisionProvider, private readonly store?: DecisionStore,
-    options: ReadinessOptions & { memoryReuse?: MemoryReuseConfiguration } = {}) {
+    options: ReadinessOptions & { memoryReuse?: MemoryReuseConfiguration; semanticCompaction?: SemanticCompactionConfiguration } = {}) {
     this.memoryReuse = MemoryReuseConfig.parse(options.memoryReuse ?? {})
+    this.semanticCompaction = SemanticCompactionConfig.parse(options.semanticCompaction ?? {})
     this.readiness = new DecisionReadinessMonitor(config => this.memoryProvider(config), options)
   }
   private memoryProvider(config: DecisionConfiguration): DecisionProvider {
@@ -53,6 +59,7 @@ export class DecisionService {
   probe(signal: AbortSignal, force = false) { return this.readiness.probe(this.config, signal, force) }
   async inspectStatus(signal: AbortSignal) { await this.readiness.inspect(this.config, signal); return this.status() }
   invalidateReadiness(): void { this.readiness.invalidate() }
+  configurationDigest(): string { return canonicalContentHash({ config: this.config, semanticCompaction: this.semanticCompaction, policyVersion: POLICY_VERSION }) }
   async bind(requestId: string): Promise<DecisionConfiguration> {
     if (!requestId || requestId.length > 512) throw new Error('Invalid decision request identity')
     let binding = this.bindings.get(requestId)
@@ -69,6 +76,7 @@ export class DecisionService {
     return { mode: this.config.mode, provider: this.config.provider, model: selected.model ?? null, timeoutMs: selected.timeoutMs,
       configurationReady: this.config.mode !== 'off' && (this.config.provider !== 'nimble' || Boolean(this.config.nimble.endpoint && this.config.nimble.model)),
       limits: this.provider(this.config).capabilities, acceptance: selected.acceptance, policyVersion: POLICY_VERSION, lastFallback: this.lastFallback,
+      semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, active: this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },
       readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' } }
   }
   async evaluate(requestId: string, input: unknown, signal: AbortSignal, catalogDigest = ''): Promise<DecisionOutcome> {
@@ -80,35 +88,49 @@ export class DecisionService {
       if (!(error instanceof DecisionError)) throw error
       return { status: 'fallback', reason: error.code }
     }
-    const digest = canonicalContentHash({ batch, config, catalogDigest, policyVersion: POLICY_VERSION })
+    const semantic = batch.purpose === 'compaction'
+    const managed = semantic || batch.purpose === 'memory-reuse'
+    const digest = canonicalContentHash({ batch, config, catalogDigest, policyVersion: POLICY_VERSION, ...(semantic ? { semanticCompaction: this.semanticCompaction } : {}) })
     const key = `${requestId}:${digest}`
     const cached = this.results.get(key) ?? await this.store?.read(requestId, digest)
     if (signal.aborted) throw new DecisionError('CANCELLED')
     if (cached) {
       if (cached.status === 'completed') parseDecisionResult(cached.result, batch)
       else if (cached.status !== 'fallback' || typeof cached.reason !== 'string') throw new Error('Decision result integrity mismatch')
+      if (semantic) {
+        if (this.semanticCompaction.mode === 'off' || config.mode === 'off') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
+        const budget = AbortSignal.any([signal, AbortSignal.timeout(this.semanticCompaction.budgetMs)])
+        try {
+          if ((await this.readiness.probe(config, budget)).state !== 'ready') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
+        } catch (error) {
+          if (signal.aborted) throw new DecisionError('CANCELLED')
+          if (!budget.aborted && !(error instanceof DecisionError)) throw error
+          return { status: 'fallback', reason: budget.aborted ? 'DECISION_TIMEOUT' : (error as DecisionError).code }
+        }
+      }
       return structuredClone(cached)
     }
     const existing = this.pending.get(key)
     if (existing) return abortable(existing, signal)
     const operation = (async (): Promise<DecisionOutcome> => {
       const timeout = new AbortController(), selected = config[config.provider]
-      const timer = setTimeout(() => timeout.abort(), batch.purpose === 'memory-reuse' ? Math.min(selected.timeoutMs, this.memoryReuse.budgetMs) : selected.timeoutMs)
+      const timer = setTimeout(() => timeout.abort(), managed ? Math.min(selected.timeoutMs, semantic ? this.semanticCompaction.budgetMs : this.memoryReuse.budgetMs) : selected.timeoutMs)
       const combined = AbortSignal.any([signal, timeout.signal])
       let outcome: DecisionOutcome
       try {
         if (config.mode === 'off') throw new DecisionError('UNAVAILABLE')
-        if (batch.purpose === 'memory-reuse') {
-          if (this.memoryReuse.mode === 'off') throw new DecisionError('UNAVAILABLE')
+        if (managed) {
+          if ((semantic ? this.semanticCompaction : this.memoryReuse).mode === 'off') throw new DecisionError('UNAVAILABLE')
           const ready = await this.readiness.probe(config, combined)
           if (ready.state !== 'ready') throw new DecisionError(ready.reason === 'DECISION_AUTH' || ready.reason === 'missing_credential' ? 'AUTH' : 'UNAVAILABLE')
         }
-        const provider = batch.purpose === 'memory-reuse' ? this.memoryProvider(config) : this.provider(config), limits = provider.capabilities
+        const provider = managed ? this.memoryProvider(config) : this.provider(config), limits = provider.capabilities
         if (!Number.isSafeInteger(limits.maxQuestions) || limits.maxQuestions < 1) throw new DecisionError('UNSUPPORTED')
         if (batch.questions.some(q => q.choices.length > limits.maxChoices) || Buffer.byteLength(JSON.stringify(batch)) > limits.maxBytes) throw new DecisionError('TOO_LARGE')
         const parts: DecisionBatchResult[] = []
         // Each question is independent and retains the complete evidence and its alternatives.
-        if (batch.purpose === 'memory-reuse') parts.push(await evaluateMemoryBatches(provider, batch, config.provider, combined))
+        if (semantic) parts.push(...await evaluateCompactionBatches(provider, batch, combined))
+        else if (batch.purpose === 'memory-reuse') parts.push(await evaluateMemoryBatches(provider, batch, config.provider, combined))
         else for (let offset = 0; offset < batch.questions.length; offset += limits.maxQuestions) {
           combined.throwIfAborted()
           const part = { ...batch, questions: batch.questions.slice(offset, offset + limits.maxQuestions) }
@@ -126,8 +148,8 @@ export class DecisionService {
         if (!timeout.signal.aborted && !(error instanceof DecisionError)) throw error
         const reason = timeout.signal.aborted ? 'DECISION_TIMEOUT' : (error as DecisionError).code
         const wasReady = this.readiness.status(config).state === 'ready'
-        if (reason === 'DECISION_AUTH' && (wasReady || batch.purpose !== 'memory-reuse')) this.invalidateReadiness()
-        if (batch.purpose === 'memory-reuse' && (wasReady || reason === 'DECISION_TIMEOUT')) this.readiness.failed(config, reason)
+        if (reason === 'DECISION_AUTH' && (wasReady || !managed)) this.invalidateReadiness()
+        if (managed && (wasReady || reason === 'DECISION_TIMEOUT')) this.readiness.failed(config, reason)
         this.lastFallback = reason
         outcome = { status: 'fallback', reason }
       } finally { clearTimeout(timer) }

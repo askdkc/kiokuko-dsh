@@ -222,3 +222,12 @@ receipts and raw source records stay local. The first nonempty eligible selectio
 triggers the probe; startup and empty retrieval do not. Set `memoryReuse.mode: off`
 to disable this additional use without disabling other typed decisions. No source
 memory, trust level or scope is changed. See [memory reuse](docs/memory-reuse.md).
+
+With `semanticCompaction.mode: auto` (default), automatic context pressure can also
+send a bounded, redacted classification view of conversation text, tool arguments,
+result statuses, sizes and excerpts to the same ready backend. Attachment bytes,
+replay metadata and raw provider output are excluded. Accepted decisions can shorten
+eligible old tool results through DSH's append-only history protocol; original log
+events remain available. They never grant execution authority or change stored Lisp
+values. Set `semanticCompaction.mode: off` to disable this use independently.
+See [semantic compaction](docs/semantic-compaction.md) for protection and failure behavior.

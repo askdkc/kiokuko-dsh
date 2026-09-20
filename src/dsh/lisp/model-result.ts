@@ -3,6 +3,7 @@ import { errorExcerpts, MAX_DIAGNOSTIC_BYTES, type ExcerptSource } from './error
 
 /** Model presentation only. The operation journal retains the complete result. */
 export const RESULT_BYTES = 16 * 1024
+const HISTORY_BYTES = 1024
 type RecordValue = Record<string, unknown>
 const record = (value: unknown): value is RecordValue => !!value && typeof value === 'object' && !Array.isArray(value)
 const levels = [[4000, 25], [1000, 10], [200, 3], [0, 0]] as const
@@ -132,4 +133,44 @@ export function renderResult(value: unknown): string {
   }
   // Exceptionally large control metadata is preferable to hiding a failure or identity.
   return JSON.stringify({ ...core, truncated: true, inspect: { tool: 'lisp_inspect', resultOperationId: core.operationId ?? null, section: 'result', offset: 0, limit: 2000 } })
+}
+
+/** Internal history profile: shrink only known display data, retaining every control field.
+ * Inspection paths always address the original journal result, not this presentation.
+ */
+export function renderHistoryResult(text: string): string | undefined {
+  let source: RecordValue
+  try { const parsed: unknown = JSON.parse(text); if (!record(parsed)) return; source = parsed } catch { return }
+  if (!identifier.safeParse(source.operationId).success || typeof source.ok !== 'boolean') return
+  // Inspect responses have a different pointer base. Leave those pages unchanged.
+  if (source.resultOperationId !== undefined || source.section !== undefined) return
+  for (const characters of [100, 30, 0]) {
+    const result = structuredClone(source), omitted: string[] = []
+    const shrink = (parent: RecordValue, key: string, path: string) => {
+      const value = parent[key]
+      if (typeof value === 'string') parent[key] = boundedData(value, characters, 0, omitted, path)
+      else if (record(value) && typeof value.preview === 'string' && typeof value.tail === 'string' && typeof value.characters === 'number') {
+        // Keep outcome diagnostics, source counts and any existing inspection hints.
+        if (Array.from(value.preview).length + Array.from(value.tail).length > characters) {
+          parent[key] = { ...value, preview: Array.from(value.preview).slice(0, Math.ceil(characters / 2)).join(''),
+            tail: characters ? Array.from(value.tail).slice(-Math.floor(characters / 2)).join('') : '' }
+          omitted.push(path)
+        }
+      }
+    }
+    if (record(result.output)) for (const stream of streams) shrink(result.output, stream, `/output/${stream}`)
+    if (record(result.value)) {
+      shrink(result.value, 'printed', '/value/printed')
+      shrink(result.value, 'json', '/value/json')
+      if (record(result.value.json)) for (const stream of streams) shrink(result.value.json, stream, `/value/json/${stream}`)
+    }
+    if (!omitted.length) return
+    result.truncated = true
+    result.omitted = [...new Set([...(Array.isArray(source.omitted) ? source.omitted : []), ...omitted])]
+    result.inspect ??= { tool: 'lisp_inspect', resultOperationId: source.operationId, section: 'result', pointer: inspectionPointer(omitted), offset: 0, limit: 2000 }
+    const rendered = JSON.stringify(result)
+    if (Buffer.byteLength(rendered) <= HISTORY_BYTES) return rendered
+  }
+  // Control metadata, outcomes and diagnostics take precedence over reduction.
+  return undefined
 }

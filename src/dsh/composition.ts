@@ -1,3 +1,4 @@
+import type { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
 import { mountDecisionCommand } from './decisions/host.js'
 import type { DecisionService } from './decisions/service.js'
 import { formatEvolutionStatus } from '../memory/evolution/status.js'
@@ -55,6 +56,7 @@ export interface DshNativeTurnStoppingPayload {
 
 export interface DshCompositionHost {
   readonly decisions?: DecisionService
+  readonly semanticCompaction?: SemanticCompactionCoordinator
   readonly skillPrompts?: DshSkillPrompts
   readonly configureSkillPrompts?: (prompts: DshSkillPrompts) => void
   readonly configureEnnoMemory?: (config: import('./config.js').EnnoMemoryConfig) => void
@@ -211,12 +213,14 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   const stopIngress = (): void => {
     if (ingressStopped) return
     ingressStopped = true
+    host.semanticCompaction?.stop()
     for (const dispose of ingressDisposers.reverse()) {
       try { dispose() } catch (error) { stopErrors.push(error) }
     }
   }
 
   const runCleanup = async (): Promise<void> => {
+    await host.semanticCompaction?.drain()
     const failures = [...stopErrors]
     for (const dispose of cleanupDisposers.reverse()) {
       try { await dispose() } catch (error) { failures.push(error) }
@@ -251,7 +255,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       if (!host.runtimeOwner || host.runtimeOwner === 'composition') cleanupDisposers.push(disposer)
       if (lisp && (lisp.enabled || await host.runtime.withDatabase(db => Boolean(db.prepare('SELECT session_id FROM dsh_lisp_sessions WHERE enabled=1 LIMIT 1').get())))) {
         const { mountLispSurface } = await import('./lisp/surface.js')
-        lispSurface = await mountLispSurface(ctx, host.runtime, lisp, prompts, host.decisions)
+        lispSurface = await mountLispSurface(ctx, host.runtime, lisp, prompts, host.decisions, host.semanticCompaction)
         ingressDisposers.push(() => lispSurface?.stop())
         cleanupDisposers.push(drainLisp)
         setupResourceDisposers.push(drainLisp)

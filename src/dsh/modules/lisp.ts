@@ -12,7 +12,7 @@ export const lispModule: DshModule<CoreModuleHost> = {
   resources: bundledResources(['kiokuko-lisp']),
   configure: value => LispConfig.parse(value ?? {}),
   async mount({ host, defer }, configuration) {
-    const surface = await mountLispSurface(host.context, host.runtime, LispConfig.parse(configuration), host.prompts, host.decisions)
+    const surface = await mountLispSurface(host.context, host.runtime, LispConfig.parse(configuration), host.prompts, host.decisions, host.semanticCompaction)
     const unregister = host.beforeTask(async input => {
       const coding = host.context.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
       if (!coding || !input.agent) return

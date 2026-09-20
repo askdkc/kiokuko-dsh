@@ -9,6 +9,7 @@ import { LispConfig, renderResult, RESULT_BYTES } from '../../../../src/dsh/lisp
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
 import { LispManager } from '../../../../src/dsh/lisp/manager.js'
 import { createLispCiAdapter } from '../../../../src/dsh/lisp/ci.js'
+import { renderHistoryResult } from '../../../../src/dsh/lisp/model-result.js'
 
 test('protected Lisp project: Node startup, scratch cwd, exact approved npm test, replay and failure evidence', {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL and Node' : false, timeout: 180000,
@@ -47,6 +48,17 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     const nodeVersion = await evaluate('broker-node-version', '(kioku.process:run "node" (list "--version"))')
     assert.equal(nodeVersion.value.json.code, 0, JSON.stringify(nodeVersion))
     t.diagnostic(`Host Node ${process.version}; protected broker Node ${nodeVersion.value.json.stdout.trim()}`)
+    const historySource = await evaluate('history-profile', `(progn (defparameter *history-retained* 42)
+      (kioku.process:run "node" (list "-e" "process.stdout.write('old output '.repeat(800))")))`)
+    const originalHistoryRow = (await store.get(owner, 'history-profile'))!.result
+    const historyText = renderHistoryResult(renderResult(historySource))
+    assert.ok(historyText, 'supported display data must fit the history profile')
+    const historyResult = JSON.parse(historyText), { tool: historyTool, ...historyHint } = historyResult.inspect
+    assert.equal(historyResult.value.json.code, 0)
+    const historyPage = await manager.execute(owner, historyTool, { operationId: 'inspect-history-profile', ...historyHint }) as any
+    assert.equal(historyPage.data, Array.from(historySource.value.json.stdout).slice(0, 2000).join(''))
+    assert.equal((await store.get(owner, 'history-profile'))!.result, originalHistoryRow)
+    assert.equal((await evaluate('history-runtime-preserved', '*history-retained*')).value.json, 42)
     const failedPipeline = await evaluate('failed-composed-prerequisite', `(progn
       (kioku.process:run-lines "node" (list "-e" "process.stdout.write('partial');process.stderr.write('prerequisite failed');process.exit(3)"))
       (kioku.files:write-text (merge-pathnames "project/src/index.mjs" (kioku.files:scratch)) "must not write"))`)

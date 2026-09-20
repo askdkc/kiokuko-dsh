@@ -68,16 +68,24 @@ export class DshEnnoDelegation {
   /** Durable ownership is checked again before every child request and tool,
    * including after reload. Completing or replacing a lease revokes the child. */
   async assertCurrent(agent: object): Promise<void> {
+    await this.authorityFingerprint(agent)
+  }
+  /** Read-only fingerprint for asynchronous projections; never grants new execution authority. */
+  async authorityFingerprint(agent: object): Promise<string | undefined> {
     const binding = this.#managed.binding(agent)
     if (!binding) return
-    await this.runtime.withDatabase(db => {
-      const row = db.prepare('SELECT authority_json, status FROM dsh_enno_delegations WHERE delegation_id = ?')
-        .get<{ authority_json: string; status: string }>(binding.delegationId)
+    return this.runtime.withDatabase(db => {
+      const row = db.prepare('SELECT authority_json, status, run_id, parent_session_id, child_session_id, model_json FROM dsh_enno_delegations WHERE delegation_id = ?')
+        .get<{ authority_json: string; status: string; run_id: string; parent_session_id: string; child_session_id: string | null; model_json: string }>(binding.delegationId)
       if (!row || row.status !== 'started') throw new KiokukoError('CONFLICT', 'The delegated execution is no longer active')
+      if (row.run_id !== binding.runId || row.parent_session_id !== binding.parentSessionId
+        || row.child_session_id !== ((agent as RoutableAgent).session?.id ?? (agent as RoutableAgent).id)
+        || canonicalContentHash(JSON.parse(row.model_json)) !== canonicalContentHash(binding.model)) throw new KiokukoError('CONFLICT', 'The delegated session or model binding changed')
       const authority = authoritySchema.parse(JSON.parse(row.authority_json))
       const snapshot = readEnnoSnapshot(db, authority)
       if (snapshot.status !== 'goki_executing' || snapshot.revision !== authority.revision || snapshot.dshSessionId !== binding.parentSessionId) throw new KiokukoError('CONFLICT', 'The delegated WorkUnit authority is stale')
       assertExecutionLeaseInTransaction(db, snapshot, authority)
+      return canonicalContentHash({ row, revision: snapshot.revision, mutationRevision: snapshot.mutationRevision })
     })
   }
   /** Persist the created binding before the child's first request; restore only
