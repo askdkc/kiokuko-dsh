@@ -107,6 +107,7 @@ export interface AnswerAgentTaskInput {
 }
 
 export interface PreparedAgentTask {
+  selectedSkills?: readonly string[];
   executionFrame?: TaskExecutionFrame;
   project: ResolvedProjectWorkspace;
   executionContext: AgentTaskExecutionContext;

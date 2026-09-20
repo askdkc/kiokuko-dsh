@@ -33,7 +33,7 @@ package through the profile's normal local-package workflow; retain the full
 package for its existing browser client contributions.
 
 The generated entry accepts the core options (`enabled`, `repositoryRoot`,
-`databasePath`, `migrationsDirectory`, `skillPrompts`) and a `modules` object:
+`databasePath`, `migrationsDirectory`, `skillPrompts`, `typedDecisions`) and a `modules` object:
 
 ```yaml
 enabled: true
@@ -59,9 +59,10 @@ selection and execution ownership still prohibit using both for one request.
 | Lisp add-on | Protected runtime, capability fences, approvals, journals, recovery and vendor assets | Five coding Skills plus Lisp |
 | Full compatibility package | Existing setup, commands, browser client, Orca, Deep and advanced memory workflows | Existing complete inventory |
 
-Only SOUL is a constant configured-core prompt. Other configured resources
-are available through native Skill lookup; merely listing a Skill does not
-prove it was read. Specialized host flows retain their existing delivery.
+SOUL is a constant configured-core prompt. Selected bundled Skills are delivered
+through the validated loader; other selected installed Skills are requested by
+exact name through native Skill lookup. Selection uses the shared
+[typed-decision configuration](typed-decisions.md). Specialized host flows retain their existing delivery.
 Full and compiled modes use the same selected resource manifest. Missing or
 stale compiled content falls back to validated source from that manifest;
 it cannot restore absent modules from a full installation.

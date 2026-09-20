@@ -1,3 +1,4 @@
+import { createDecisionService } from './decisions/host.js'
 import { startupRecoveryMessage } from './startup-recovery.js'
 import { mountDshOrcaCommand } from './orca-command-surface.js'
 import type { Context } from '@deepseek-ai/cordis'
@@ -77,8 +78,13 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
   console.info('[kiokuko-dsh] [info] plugin loaded')
   await ctx.effect(async () => {
     await setupDshOnLoad()
-    const host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
+    let host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
+      if (host.runtime && !host.decisions) {
+        const decisions = createDecisionService(ctx, host.runtime, resolvedConfig.typedDecisions)
+        host.intakeGate?.configureDecisions(decisions)
+        host = { ...host, decisions }
+      }
       if (host.configureEnnoMemory) host.configureEnnoMemory(resolvedConfig.ennoMemory)
       else if (resolvedConfig.ennoMemory.mode !== 'off') throw new Error('The explicit Kiokuko host does not support ennoMemory')
       host.intakeGate?.configureMemory(resolvedConfig.akinatorMemory)
@@ -92,11 +98,12 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       let disposeOrcaCommand: (() => void) | undefined
       let disposeExport: (() => Promise<void>) | undefined
       let shutdown: Promise<void> | undefined
+      const shutdownHost = host
       const cleanup = () => shutdown ??= (async () => {
         composition?.stopIngress()
         disposeOrcaCommand?.()
         const failures: unknown[] = []
-        try { await host.orca?.shutdown() } catch (error) { failures.push(error) }
+        try { await shutdownHost.orca?.shutdown() } catch (error) { failures.push(error) }
         try { await disposeExport?.() } catch (error) { failures.push(error) }
         try { await composition?.dispose() } catch (error) { failures.push(error) }
         if (failures.length) throw new AggregateError(failures, 'kiokuko-dsh explicit host unload failed')
@@ -125,7 +132,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx, { skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
+    const adapter = createDshHostAdapter(ctx, { typedDecisions: resolvedConfig.typedDecisions, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
       ennoMemory: resolvedConfig.ennoMemory, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, memoryReview: resolvedConfig.memoryReview })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined
@@ -157,3 +164,6 @@ export { DshOrcaRecorder } from './orca-recorder.js'
 export { DshOrcaStore } from './orca-store.js'
 
 export * from '../memory/evolution/contracts.js'
+
+export { DecisionService } from './decisions/service.js'
+export type { DecisionProvider, DecisionBatch, DecisionBatchResult, DecisionCapabilities } from './decisions/contracts.js'

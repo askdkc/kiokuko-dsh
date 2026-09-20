@@ -13,7 +13,7 @@ export const ennoModule: DshModule<CoreModuleHost> = {
     host.claimNativeIngress()
     const config = Config.parse({ ...EnnoModuleConfig.parse(configuration), deepPlanning: { enabled: false }, orca: { enabled: false }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' } })
     const [{ createDshHostAdapter }, { mountDshComposition }] = await Promise.all([import('../host-adapter.js'), import('../composition.js')])
-    const adapter = createDshHostAdapter(host.context, { ...config, repositoryRoot: host.repositoryRoot, runtime: host.runtime, skillPrompts: host.prompts })
+    const adapter = createDshHostAdapter(host.context, { ...config, repositoryRoot: host.repositoryRoot, runtime: host.runtime, decisions: host.decisions, skillPrompts: host.prompts })
     defer(adapter.dispose)
     // Shared runtime, Skills and SOUL are owned by the enclosing composition.
     const { skills: _skills, systemPrompt: _prompt, ...featureHost } = adapter.host

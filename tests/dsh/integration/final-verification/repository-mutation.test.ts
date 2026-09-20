@@ -1,3 +1,4 @@
+import { submitReviewedPlan } from '../../helpers/reviewed-plan.js'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -8,7 +9,7 @@ import { openConnection } from '../../../../src/db/connection.js'
 import { migrateDatabase } from '../../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../../src/dsh/task-intake.js'
 import { verificationBoundaryKey } from '../../../../src/dsh/verification-identity.js'
-import { answerEnno, finishEnno, prepareEnnoVerification, reportEnnoWork, submitEnnoPlan, submitOdunoIdeal, submitOdunoMeditation } from '../../../../src/enno-oduno/service.js'
+import { answerEnno, finishEnno, prepareEnnoVerification, reportEnnoWork, submitOdunoIdeal, submitOdunoMeditation } from '../../../../src/enno-oduno/service.js'
 import { captureRepositoryState } from '../../../../src/enno-oduno/repository-state.js'
 import { readEnnoSnapshot } from '../../../../src/enno-oduno/store.js'
 
@@ -37,7 +38,7 @@ async function fixture(command: string, maxAttempts = 8, git = true) {
     const snapshot = () => readEnnoSnapshot(database, identity)
     submitOdunoIdeal(database, { ...identity, expectedRevision: 1, idempotencyKey: 'ideal',
       ideal: { objective: 'Verify the implementation', principles: ['Require fresh evidence'], skillContributions: [], successSignals: ['verified'] } })
-    const plan = await submitEnnoPlan(database, { ...identity, expectedRevision: 1, idempotencyKey: 'plan',
+    const plan = await submitReviewedPlan(database, { ...identity, expectedRevision: 1, idempotencyKey: 'plan',
       scope: ['source.txt'], exclusions: [], acceptanceCriteria: [{ id: 'verified', description: 'Fresh evidence exists' }],
       workPlan: { objective: 'Verify source', units: [{
         id: 'work', objective: 'Implement source', scope: ['source.txt'], dependencies: [], routes: ['code'],
@@ -106,7 +107,7 @@ for (const [label, command] of [
       const response = await prepareEnnoVerification(f.database, input, { descendantSettleMs: 50 })
       assert.equal(response.verifierResults?.[0]?.status, 'passed', 'exit 0 alone is not sufficient')
       assert.equal(response.verifierResults?.[0]?.changedDuringVerification, true)
-      assert.equal(response.ennoOduno.nextAction, 'submit_plan')
+      assert.equal(response.ennoOduno.nextAction, 'review_plan')
       assert.equal(response.ennoOduno.contractRevision, 3)
       assert.equal(f.snapshot().finalEvidenceReady, false)
       assert.equal(f.snapshot().attempts, 2)
@@ -154,7 +155,7 @@ test('a nonzero verifier with stable evidence still reaches final review, never 
     const reviewed = await finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'failed-review',
       review: { decision: 'accept', summary: 'An exit failure cannot be accepted' },
     })
-    assert.equal(reviewed.ennoOduno.nextAction, 'submit_plan')
+    assert.equal(reviewed.ennoOduno.nextAction, 'review_plan')
   } finally { await f.cleanup() }
 })
 
@@ -175,7 +176,7 @@ test('a corrected verifier proceeds through plan approval, work, review and medi
     const rejected = f.snapshot()
     assert.equal(rejected.status, 'zenki_planning')
     const { scope, exclusions, acceptanceCriteria, workPlan, provenance, maxAttempts } = rejected.contract
-    const revised = await submitEnnoPlan(f.database, { ...f.identity, expectedRevision: rejected.revision,
+    const revised = await submitReviewedPlan(f.database, { ...f.identity, expectedRevision: rejected.revision,
       idempotencyKey: 'corrected-plan', scope, exclusions, acceptanceCriteria, workPlan, skillRequirements: [], provenance,
       maxAttempts, capabilities, finalVerifiers: [{ ...rejected.contract.finalVerifiers[0], args: ['--eval', 'process.exit(0)'] }],
     })
@@ -231,7 +232,7 @@ test('non-Git verification still detects temporary source changes restored befor
   try {
     const response = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 50 })
     assert.equal(response.verifierResults?.[0]?.changedDuringVerification, true)
-    assert.equal(response.ennoOduno.nextAction, 'submit_plan')
+    assert.equal(response.ennoOduno.nextAction, 'review_plan')
   } finally { await f.cleanup() }
 })
 

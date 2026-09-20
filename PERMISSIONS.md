@@ -200,3 +200,16 @@ directories, plugin files and host state. Refusal, skip, cancellation and missin
 confirmation UI never grant permission. Normal tools and child bypasses remain
 blocked until a human safely disables the mode. Plugin unload retains the fence.
 See [Common Lisp setup and recovery](docs/lisp.md) for commands and limits.
+
+# Configured typed decisions
+
+With `typedDecisions.mode: auto` (default), the host may send the current request,
+installed Skill descriptions, sanitized candidate plan or explicitly selected Lisp
+evidence to the configured adapter. TypeSafe uses its fixed HTTPS endpoint and
+DSH-managed TYPESAFE_API_KEY. Nimble requires an explicit complete HTTPS or loopback
+HTTP endpoint and model; an optional separate bearer reference is resolved through
+DSH. Credentials never enter workers, prompts, logs or Kiokuko SQLite. No redirects,
+HTTP retries, provider substitution or runtime/model installation occur. `/kioku-decisions
+status` reports configuration, limits and the last fallback without a network call.
+Review fallback sends the full sanitized plan to the exact configured `roles.check`
+model with no tools. Typed answers grant no permissions or execution approval.

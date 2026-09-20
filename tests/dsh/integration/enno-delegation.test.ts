@@ -1,3 +1,4 @@
+import { submitReviewedPlan } from '../helpers/reviewed-plan.js'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile, mkdir, symlink, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,7 +9,7 @@ import { migrateDatabase } from '../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { DshEnnoDelegation, childFileScopeDenial } from '../../../src/dsh/enno-delegation.js'
 import { initializeExecutionSelection, readExecutionSelection, writeExecutionSelection } from '../../../src/dsh/execution-selection.js'
-import { answerEnno, submitEnnoPlan, submitOdunoIdeal } from '../../../src/enno-oduno/service.js'
+import { answerEnno, submitOdunoIdeal } from '../../../src/enno-oduno/service.js'
 import { readEnnoSnapshot } from '../../../src/enno-oduno/store.js'
 import type { DshDatabaseOperation } from '../../../src/dsh/runtime.js'
 
@@ -29,7 +30,7 @@ test('delegation requires the live lease, limits Ollama concurrency, preserves c
     const identity = { runId: task.run.runId, workspace: task.project.workspace, orchestrationId: task.intake.sessionId }
     submitOdunoIdeal(db, { ...identity, expectedRevision: 1, idempotencyKey: 'ideal', ideal: { objective: 'Implement source', principles: ['Verify'], skillContributions: [], successSignals: ['verified'] } })
     const verifier = { id: 'verify', kind: 'test', executable: process.execPath, args: ['--eval', 'process.exit(0)'], cwd: '.', timeoutMs: 1000 }
-    await submitEnnoPlan(db, { ...identity, expectedRevision: 1, idempotencyKey: 'plan', scope: ['source.txt'], exclusions: [], acceptanceCriteria: [{ id: 'done', description: 'Verified' }],
+    await submitReviewedPlan(db, { ...identity, expectedRevision: 1, idempotencyKey: 'plan', scope: ['source.txt'], exclusions: [], acceptanceCriteria: [{ id: 'done', description: 'Verified' }],
       workPlan: { objective: 'Implement source', units: [{ id: 'unit', objective: 'Implement source', scope: ['source.txt'], dependencies: [], routes: ['code'], skillNames: ['kiokuko-single-purpose-functions'], expertRefs: [{ id: 'code.verification.v1', reason: 'Verify' }], acceptanceCriteria: ['Verified'], focusedVerifiers: [verifier] }] },
       skillRequirements: [], finalVerifiers: [verifier], maxAttempts: 3, capabilities,
       provenance: { scope: 'explicit_user', exclusions: 'explicit_user', acceptanceCriteria: 'explicit_user', workPlan: 'inferred', skillSet: 'repository_evidence', finalVerifiers: 'repository_evidence', maxAttempts: 'inferred' },

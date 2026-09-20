@@ -10,6 +10,7 @@ import {
 } from '../enno-oduno/schemas.js';
 
 export const MODEL_TOOL_OPERATION_NAMES = [
+  'enno_plan_review',
   'enno_plan_submit',
   'enno_ideal_submit',
   'enno_work_report',
@@ -51,6 +52,7 @@ export interface ModelToolContract {
 const commonIdentityFields = ['runId', 'workspace', 'orchestrationId', 'resumeToken', 'expectedRevision', 'idempotencyKey'] as const;
 
 export const MODEL_TOOL_CONTRACTS = [
+  { name: 'enno_plan_review', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: planSubmissionSchema, hostOwnedFields: [...commonIdentityFields, 'advisoryRoundDigest', 'recoveryAction', 'capabilities'] },
   { name: 'enno_plan_submit', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: planSubmissionSchema, hostOwnedFields: [...commonIdentityFields, 'advisoryRoundDigest', 'recoveryAction', 'capabilities'] },
   { name: 'enno_ideal_submit', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: idealSubmissionSchema, hostOwnedFields: [...commonIdentityFields, 'advisoryRoundDigest'] },
   { name: 'enno_work_report', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: workReportSchema, hostOwnedFields: [...commonIdentityFields, 'leaseToken', 'routeEpoch', 'workUnitId'] },

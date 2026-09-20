@@ -133,12 +133,14 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     finalMode === 'phase_handoff' ? mock.toolCallResponse(`planning-read-${suffix}`, 'read', { file_path: 'src/fixture.ts' }) : mock.textResponse(longPlanningStep
       ? `The plan is ready for the host advisory round. ${'x'.repeat(4_531)}`
       : 'The plan is ready for the host advisory round.'),
+    mock.toolCallResponse(`review-${suffix}`, 'enno_plan_review', plan),
     mock.toolCallResponse(`plan-${suffix}`, 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
     ...(finalMode === 'pause' && suffix === 'one' ? [1, 2, 3, 4].map(index => mock.toolCallResponse(`repeated-${index}`, 'read', { file_path: 'src/fixture.ts' })) : []),
     ...(failBeforeWork ? [() => { throw new llm.LlmError('WebSocket error', 'PI_AI_ERROR') }] : []),
     mock.toolCallResponse(`work-${suffix}`, 'enno_work_report', workResult),
     ...(retryWork ? [mock.toolCallResponse(`work-${suffix}-retry`, 'enno_work_report', workResult)] : []),
     ...(finalMode === 'verifier_mutation' ? [
+      mock.toolCallResponse(`review-${suffix}-repair`, 'enno_plan_review', { ...plan, finalVerifiers: [{ ...plan.finalVerifiers[0], args: ['--eval', 'process.exit(0)'] }] }),
       mock.toolCallResponse(`plan-${suffix}-repair`, 'enno_plan_submit', {
         ...plan, advisoryDisposition: planningDispositions,
         finalVerifiers: [{ ...plan.finalVerifiers[0], args: ['--eval', 'process.exit(0)'] }],
@@ -159,13 +161,14 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   const adapterScript = new mock.MockAdapter(finalMode === 'stall'
     ? Array.from({ length: 8 }, () => mock.textResponse('I have not submitted the required phase.')) : [
     ...flowResponses('one', true, false, true),
-    ...secondFlow.slice(0, 4),
+    ...secondFlow.slice(0, 5),
+    mock.toolCallResponse('review-two-revised', 'enno_plan_review', plan),
     mock.toolCallResponse('plan-two-revised', 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
     mock.toolCallResponse('delegate-two', 'enno_delegate', { instruction: 'Inspect the current WorkUnit and return verification evidence. Do not edit files.' }),
     (request: any) => { assert.equal(request.model, 'gpt-5.6-luna'); assert.notEqual(request.sessionId, 'real-loop-session'); return mock.textResponse('Child evidence: no additional changes are required.') },
-    ...secondFlow.slice(4, 5),
+    ...secondFlow.slice(5, 6),
     () => { throw new llm.LlmError('Selected model is unavailable', 'MODEL_NOT_FOUND') },
-    ...secondFlow.slice(5),
+    ...secondFlow.slice(6),
     mock.textResponse('Yes. The requested implementation and verification are complete.'),
     mock.textResponse('fix(dsh): keep long Enno sessions recoverable'),
   ])
@@ -263,8 +266,16 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       },
     },
     llm: {
-      async * stream() {
-        yield { type: 'text-delta', index: 0, text: '{"schemaVersion":3,"memoryOperations":[]}' }
+      async * stream(request) {
+        const payload = request.system?.startsWith('Review the entire candidate plan') ? JSON.parse((request.messages[0] as { content: { text: string }[] }).content[0]!.text) : {}
+        const review = payload.context?.phase === 'planning'
+        if (review) {
+          assert.deepEqual(request.tools, [])
+          assert.equal(request.provider, 'mock')
+          assert.equal(request.model, 'gpt-6-astra')
+          assert.ok(payload.context.candidate)
+        }
+        yield { type: 'text-delta', index: 0, text: review ? JSON.stringify({ slotId: payload.slotId, outcome: 'completed', summary: `Checked ${payload.slotId}.`, recommendations: [], risks: [], evidence: [] }) : '{"schemaVersion":3,"memoryOperations":[]}' }
         yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 8 } }
         yield { type: 'finish', reason: { kind: 'stop' } }
       },
@@ -359,7 +370,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         'enno_contracts', 'dsh_turn_receipts', 'dsh_boundary_jobs', 'dsh_exploration_states', 'dsh_execution_evidence',
       ].map(table => [table, db.prepare(`SELECT * FROM ${table}`).all().map((row: any) => Object.fromEntries(Object.entries(row).filter(([key]) => !['contract_json', 'handoff_json', 'ideal_json', 'intake_discovery_json', 'meditation_json', 'payload_json'].includes(key))))])))
       throw new Error('Native workflow did not settle: ' + JSON.stringify({ state, events: liveAgent.session.snapshotEvents()
-        .filter((e: any) => e.type === 'tool/result' || e.type === 'turn/end').slice(-8) }))
+        .filter((e: any) => e.type === 'tool/result' || e.type === 'turn/end').slice(-16) }))
     }
     const completed = async (count: number) => adapter.host.runtime!.withDatabase(db =>
       db.prepare("SELECT COUNT(*) AS count FROM ledger_runs WHERE status = 'completed'").get<{ count: number }>()!.count >= count)
@@ -494,7 +505,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       assert.ok(longAssistantMessage.data.stream?.length, 'V3 keeps the compacted stream in the settlement')
       assert.equal(longAssistantMessage.sourceEventSeqs, undefined, 'V3 forbids legacy chunk references on assistant messages')
     } else assert.ok(longAssistantMessage.sourceEventSeqs?.length > 2_048, 'legacy logs exercise the former bridge source-reference limit')
-    assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(13).fill(false), JSON.stringify({ toolEvents, turnEnds }))
+    assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(16).fill(false), JSON.stringify({ toolEvents, turnEnds }))
     const delegation = results.find((event: any) => event.data.message.content[0]?.toolCallId === 'delegate-two')
     const delegated = JSON.parse(delegation.data.message.content[0].content[0].text)
     assert.equal(delegated.accepted, false)

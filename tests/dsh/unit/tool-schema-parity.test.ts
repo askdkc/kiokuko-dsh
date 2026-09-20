@@ -21,13 +21,13 @@ function execution(name: string, args: unknown = {}) {
   return { callId: 'call-1', name, arguments: args, agent: { dshSessionId: 'session-1', turn: 1 }, signal }
 }
 
-test('dsh registry contains exactly the eight model-visible operations', () => {
+test('dsh registry contains exactly the nine model-visible operations', () => {
   const owned = [...DSH_MODEL_FACING_OPERATIONS]
   assert.deepEqual([...owned].sort(), [...MODEL_TOOL_OPERATION_NAMES].sort())
-  assert.equal(new Set(owned).size, 8)
+  assert.equal(new Set(owned).size, 9)
   const definitions = createDshToolDefinitions(host)
   assert.deepEqual(definitions.map((definition) => definition.name), MODEL_TOOL_OPERATION_NAMES)
-  assert.equal(definitions.filter((definition) => definition.modelFacing).length, 8)
+  assert.equal(definitions.filter((definition) => definition.modelFacing).length, 9)
 })
 
 test('model-facing schemas exclude every host-owned field', () => {

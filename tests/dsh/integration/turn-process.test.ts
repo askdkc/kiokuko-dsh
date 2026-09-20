@@ -81,7 +81,7 @@ test('Enno completion atomically creates the turn receipt, handoff, boundary job
     const seal = readTurnSeal(f.database, 'turn-process-session', 1)
     assert.equal(seal?.receiptId, intent.receiptId)
     assert.equal(seal?.outcomeKind, 'applied')
-    assert.equal(seal?.nextAction, 'submit_plan')
+    assert.equal(seal?.nextAction, 'review_plan')
     assert.equal(f.database.prepare('SELECT COUNT(*) AS count FROM dsh_turn_handoffs').get<{ count: number }>()?.count, 1)
     assert.equal(f.database.prepare('SELECT COUNT(*) AS count FROM dsh_boundary_jobs').get<{ count: number }>()?.count, 1)
     const outbox = readPendingOutbox(f.database, 'turn-process-session')

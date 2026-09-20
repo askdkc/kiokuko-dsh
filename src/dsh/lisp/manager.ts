@@ -27,6 +27,7 @@ export interface ManagerOptions {
   toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>) => Promise<unknown>
   ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal, scratchRoot?: string) => Promise<unknown>
   attachmentInput?: (owner: LispOwner, path: string, signal: AbortSignal) => AttachmentInput
+  decisionCall?: (owner: LispOwner, method: 'decisions-status' | 'decisions-evaluate', args: unknown, context: LispRpcContext) => Promise<unknown>
   typesafeCall?: (owner: LispOwner, method: 'typesafe-status' | 'typesafe-evaluate', args: unknown, context: LispRpcContext) => Promise<unknown>
 }
 /** Host-owned authority. Worker frames never grant permissions or choose identities. */
@@ -225,6 +226,13 @@ export class LispManager {
   private async bridge(state: AgentState, method: string, args: unknown, context: LispRpcContext): Promise<unknown> {
     if (state.state !== 'EVALUATING' || !state.worker?.healthy || this.#closed) fail('STALE_RPC', '現在の評価に属さない要求です。')
     if (context.generation !== state.worker.generation || context.signal.aborted) fail('STALE_RPC', '現在の評価に属さない要求です。')
+    if (method === 'decisions-status' || method === 'decisions-evaluate') {
+      if (!this.options.decisionCall) fail('DECISION_UNAVAILABLE', 'Typed decision host is unavailable.')
+      if (method === 'decisions-status' && !z.object({}).strict().safeParse(args).success) fail('DECISION_INVALID_INPUT', 'Status takes no arguments.')
+      const result = await this.options.decisionCall(state.owner, method, args, context)
+      if (this.#closed || state.state !== 'EVALUATING' || state.worker.generation !== context.generation || context.signal.aborted) fail('STALE_RPC', 'Decision evaluation is no longer current.')
+      return result
+    }
     if (method === 'typesafe-status' || method === 'typesafe-evaluate') {
       if (!this.options.typesafeCall) fail('TYPESAFE_UNAVAILABLE', 'TypeSafe host adapter is unavailable.')
       if (method === 'typesafe-status' && !z.object({}).strict().safeParse(args).success) fail('TYPESAFE_INVALID_REQUEST', 'TypeSafe status takes no arguments.')
@@ -318,8 +326,9 @@ export class LispManager {
       if (tool === 'lisp_status') return await this.status(owner, z.number().int().nonnegative().parse(input.offset ?? 0))
       const state = this.entry(owner)
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
-        packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.typesafe'],
+        packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.typesafe', 'kioku.decisions'],
         api: { scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
+          decisions: '(kioku.decisions:status), evaluate, assess-relevance, classify-failure, assess-change. Consume selected/abstained results; ordinary reasoning on fallback, cancellation is terminal.',
           typesafe: '(kioku.typesafe:status); (kioku.typesafe:evaluate state questions :model "jev-latest" :timeout-ms 30000). Explicit semantic decisions via the host; consume answers with gethash. Strings/hash tables/vectors use JSON conventions. Catch kioku.typesafe:service-error; no retries or approval bypass. Configure with /kioku-typesafe-key.',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
           workflow: 'Define task-specific defun helpers once, compose them into one useful operation, and call that function in later evaluations. Batch known reads and checks; return a compact result. Definitions last for this worker generation. Stop before decisions requiring new evidence or approval.',

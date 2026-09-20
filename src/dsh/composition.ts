@@ -1,3 +1,5 @@
+import { mountDecisionCommand } from './decisions/host.js'
+import type { DecisionService } from './decisions/service.js'
 import { formatEvolutionStatus } from '../memory/evolution/status.js'
 import type { mountLispSurface } from './lisp/surface.js'
 import { mountTypeSafeCommand, typeSafeCredentials } from './typesafe/command.js'
@@ -52,6 +54,7 @@ export interface DshNativeTurnStoppingPayload {
 }
 
 export interface DshCompositionHost {
+  readonly decisions?: DecisionService
   readonly skillPrompts?: DshSkillPrompts
   readonly configureSkillPrompts?: (prompts: DshSkillPrompts) => void
   readonly configureEnnoMemory?: (config: import('./config.js').EnnoMemoryConfig) => void
@@ -232,6 +235,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   }
 
   try {
+    if (host.commands && host.decisions && options.typeSafeCommand !== false) ingressDisposers.push(mountDecisionCommand(host.commands, host.decisions))
     if (host.commands && options.typeSafeCommand !== false) ingressDisposers.push(mountTypeSafeCommand(host.commands, typeSafeCredentials(ctx)))
     const historyCompatibility = mountSessionHistoryCompatibility(ctx)
     historyCheck = historyCompatibility.ready
@@ -247,7 +251,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       if (!host.runtimeOwner || host.runtimeOwner === 'composition') cleanupDisposers.push(disposer)
       if (lisp && (lisp.enabled || await host.runtime.withDatabase(db => Boolean(db.prepare('SELECT session_id FROM dsh_lisp_sessions WHERE enabled=1 LIMIT 1').get())))) {
         const { mountLispSurface } = await import('./lisp/surface.js')
-        lispSurface = await mountLispSurface(ctx, host.runtime, lisp, prompts)
+        lispSurface = await mountLispSurface(ctx, host.runtime, lisp, prompts, host.decisions)
         ingressDisposers.push(() => lispSurface?.stop())
         cleanupDisposers.push(drainLisp)
         setupResourceDisposers.push(drainLisp)

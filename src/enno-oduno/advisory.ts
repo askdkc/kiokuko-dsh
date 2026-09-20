@@ -169,7 +169,7 @@ function finalReviewOutcomes(snapshot: EnnoRunSnapshot): AdvisoryWorkUnitOutcome
 const ADVISORY_MAX_CONTEXT_BYTES = 64 * 1024;
 
 function boundedAdvisoryContext<T extends AdvisoryContext>(context: T): T {
-  if (Buffer.byteLength(canonicalJson(context), 'utf8') > ADVISORY_MAX_CONTEXT_BYTES) {
+  if (Buffer.byteLength(canonicalJson(context), 'utf8') > (context.phase === 'planning' ? 1024 * 1024 : ADVISORY_MAX_CONTEXT_BYTES)) {
     throw new KiokukoError('CONFLICT', 'Enno advisory context exceeds the safety limit');
   }
   return context;
@@ -189,6 +189,7 @@ export function advisoryContextForSnapshot(snapshot: EnnoRunSnapshot, phase: Adv
   if (phase === 'planning') {
     return boundedAdvisoryContext({
       phase: 'planning',
+      ...(snapshot.planDraft ? { candidate: snapshot.planDraft.candidate, availableSkills: snapshot.planDraft.availableSkills, draftDigest: snapshot.planDraft.digest, catalogDigest: snapshot.planDraft.catalogDigest } : {}),
       idealObjective: snapshot.ideal?.objective ?? snapshot.handoff.objective,
       acceptanceCriteria: snapshot.contract.acceptanceCriteria.map((criterion) => criterion.description),
       planningConstraints: [...snapshot.handoff.constraints],
@@ -230,7 +231,7 @@ export function advisoryContextForSnapshot(snapshot: EnnoRunSnapshot, phase: Adv
 
 export function advisoryDirectiveForSnapshot(snapshot: EnnoRunSnapshot): AdvisoryFanoutDirective | undefined {
   const phase = advisoryPhaseForStatus(snapshot.status);
-  if (phase === null) return undefined;
+  if (phase === null || phase === 'planning') return undefined;
   if (phase === 'final_review' && !snapshot.finalEvidenceReady) return undefined;
   if (snapshot.advisoryPhaseState !== undefined
     && snapshot.advisoryPhaseState.state !== 'fanout_requested') return undefined;

@@ -1,3 +1,5 @@
+import type { DecisionService } from './decisions/service.js'
+import { classifyTask, selectInstalledSkills } from './decisions/workflows.js'
 import { AkinatorMemoryConfig, type ProbeConfig } from '../akinator/memory-probe-types.js'
 import { answerAgentTask, prepareAgentTask, type PreparedAgentTask } from './task-intake.js'
 import type { TaskProfile } from '../akinator/types.js'
@@ -99,11 +101,14 @@ export class DshIntakeGate {
     readCapabilities?: (context: DshCapabilityReadContext) => DshCapabilityCatalog | PromiseLike<DshCapabilityCatalog>,
     private readonly executionSelection = false,
     private akinatorMemory: ProbeConfig = AkinatorMemoryConfig.parse({}),
+    private decisions?: DecisionService,
   ) {
     this.#runtime = runtime
     this.#answerer = answerer
     this.#readCapabilities = readCapabilities
   }
+
+  configureDecisions(service: DecisionService): void { this.decisions = service }
 
   configureMemory(config: ProbeConfig): void {
     this.akinatorMemory = AkinatorMemoryConfig.parse(config)
@@ -160,13 +165,14 @@ export class DshIntakeGate {
       return event.signal.aborted ? { ...result, admitted: false } : result
     }
     const operation = (async (): Promise<DshIntakeGateResult> => {
+      const taskType = await classifyTask(this.decisions, requestId, grounded.task, event.profileHints?.taskType, event.signal)
       let prepared = await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
         requestId,
         executionSelection: this.executionSelection,
         sessionOwnership: true,
         task: grounded.task,
         cwd: grounded.cwd,
-        profileHints: grounded.profileHints,
+        profileHints: { ...grounded.profileHints, ...(taskType ? { taskType } : {}) },
         capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
         dshSessionId: event.sessionId,
         ...(event.sourceStartSeq === undefined ? {} : {
@@ -175,6 +181,7 @@ export class DshIntakeGate {
         ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
         signal: event.signal,
       }, { akinatorMemory: this.akinatorMemory }))
+      await this.decisions?.alias(`run:${prepared.run.runId}`, requestId)
       while (prepared.intake.status === 'needs_answer') {
         if (event.signal.aborted) break
         if (this.akinatorMemory.mode === 'off' || this.akinatorMemory.mode === 'shadow') delete prepared.intake.memoryHints
@@ -211,6 +218,7 @@ export class DshIntakeGate {
           signal: event.signal,
         }, { akinatorMemory: this.akinatorMemory }))
       }
+      if (prepared.nextAction === 'proceed') prepared.selectedSkills = await selectInstalledSkills(this.decisions, requestId, grounded.task, [...event.capabilities.skills, ...event.capabilities.tools], prepared.capabilities, event.signal)
       const result = prepared.nextAction !== 'proceed'
         ? { admitted: false, prepared, catalog: event.capabilities }
         : { admitted: true, prepared, catalog: event.capabilities }

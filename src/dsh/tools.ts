@@ -4,6 +4,7 @@ import { modelFacingInputSchema, modelFacingTransportSchema, modelToolContract, 
 import { KiokukoError } from '../errors.js'
 
 export const DSH_MODEL_FACING_OPERATIONS = [
+  'enno_plan_review',
   'enno_plan_submit',
   'enno_ideal_submit',
   'enno_work_report',
@@ -205,6 +206,7 @@ export function bindDshToolInvocation(
 }
 
 function descriptionFor(operation: ModelToolOperationName): string {
+  if (operation === 'enno_plan_review') return 'Review the complete candidate plan before submission. The host selects the configured typed provider or exact check model. No execution is approved. Read findings, supply dispositions, then enno_plan_submit the identical reviewed candidate; changed drafts require review again. Ordinary review failure is recoverable.'
   if (operation === 'enno_delegate') return 'Delegate a bounded part of the CURRENT approved WorkUnit to a native DSH spawn child. Supply instruction only. The host chooses the approved worker model and scope. No grandchildren. Review the returned evidence, run focused verification, then submit enno_work_report yourself. Child completion does not accept the WorkUnit.'
   return `Use native JSON types; never encode an object or array as a JSON string. The host supplies identity, routing, lease and idempotency. Returns TurnOutcome: applied.value is the business response; applied.handoff is next-turn state. Predictable rejections return retry or clarify, not transport errors. Business payload: ${JSON.stringify(modelFacingInputSchema(operation))}`
 }
@@ -278,7 +280,7 @@ export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDef
       // boundary. DSH appends successful tool/results before observing
       // concludeTurn. Terminal results deliberately stay open for one final,
       // visible assistant response.
-      if (concludesDshTurn(value)) rawExecution.concludeTurn?.()
+      if (operation !== 'enno_plan_review' && concludesDshTurn(value)) rawExecution.concludeTurn?.()
       return value
     },
   })))

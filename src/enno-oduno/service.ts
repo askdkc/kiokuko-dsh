@@ -1,3 +1,6 @@
+import { findSecretInValue } from '../memory/secrets.js'
+import { advisoryContributionSchemaPublic } from './schemas.js'
+import { planCandidate, readPlanDraft } from './plan-draft.js'
 import { readExecutionSelection } from '../dsh/execution-selection.js';
 import { createHash } from 'node:crypto';
 import type { SqliteDatabase } from '../db/adapter.js';
@@ -168,7 +171,7 @@ export function stateForSnapshot(snapshot: EnnoRunSnapshot): EnnoOdunoState {
   let nextAction: EnnoNextAction;
   if (snapshot.status === 'intake') nextAction = 'answer_intake';
   else if (snapshot.status === 'oduno_ideal') nextAction = 'submit_ideal';
-  else if (snapshot.status === 'zenki_planning') nextAction = 'submit_plan';
+  else if (snapshot.status === 'zenki_planning') nextAction = snapshot.planDraft?.status === 'reviewed' ? 'submit_plan' : 'review_plan';
   else if (snapshot.status === 'needs_confirmation') nextAction = 'ask_user_confirmation';
   else if (snapshot.status === 'goki_executing') nextAction = 'execute_work_unit';
   else if (snapshot.status === 'enno_verifying') nextAction = snapshot.finalEvidenceReady ? 'submit_final_review' : 'run_final_verification';
@@ -884,6 +887,69 @@ export function submitOdunoIdeal(
   });
 }
 
+export interface PlanReviewResult { contributions: readonly AdvisoryContribution[]; backend: Record<string, unknown> }
+function assertReviewedPlan(database: SqliteDatabase, snapshot: EnnoRunSnapshot, input: ReturnType<typeof parsePlanSubmission>): void {
+  const draft = readPlanDraft(database, snapshot);
+  if (!draft || draft.status !== 'reviewed' || draft.digest !== canonicalContentHash(planCandidate(input))
+    || draft.catalogDigest !== canonicalContentHash(input.capabilities ?? []) || !draft.reviewDigest || input.advisoryRoundDigest !== draft.reviewDigest) {
+    throw new KiokukoError('CONFLICT', 'Review the exact current candidate with enno_plan_review before submission. Changed drafts require another review.');
+  }
+}
+/** Host-only reviewer dependency has no execution or approval authority. */
+export async function reviewEnnoPlan(database: SqliteDatabase, rawInput: unknown, review: (context: AdvisoryContext, signal: AbortSignal) => Promise<PlanReviewResult>, signal: AbortSignal, assertCurrent: () => Promise<void> = async () => {}): Promise<EnnoOperationResponse> {
+  signal.throwIfAborted();
+  const parsed = parsePlanSubmission(rawInput);
+  const before = readEnnoSnapshot(database, identity(database, parsed));
+  assertExpected(before, parsed.expectedRevision, ['zenki_planning']);
+  const input = sanitizePlanSubmission(parsed, before.repositoryRoot);
+  const recovery = planCapabilityRecoveryReason(database, input, before.workspace);
+  if (recovery !== null) pausePlanStartRecovery(database, before, recovery);
+  assertWorkPlanExpertCoverage(input.workPlan);
+  assertContractVerifierCwds(before.repositoryRoot, { workPlan: input.workPlan, finalVerifiers: input.finalVerifiers });
+  const candidate = planCandidate(input), digest = canonicalContentHash(candidate), catalogDigest = canonicalContentHash(input.capabilities ?? []);
+  if (findSecretInValue(candidate) !== undefined) throw new KiokukoError('VALIDATION_ERROR', 'Plan review contains unsafe evidence');
+  const existing = readPlanDraft(database, before);
+  if (existing?.status === 'reviewed' && existing.digest === digest && existing.catalogDigest === catalogDigest) {
+    return { ennoOduno: stateForSnapshot(before), advisoryRound: readAdvisoryRound(database, { runId: before.runId, contractRevision: before.revision, mutationRevision: before.mutationRevision, phase: 'planning', inputDigest: existing.reviewDigest! })! };
+  }
+  const draftRevision = withImmediateTransaction(database, () => {
+    const current = readEnnoSnapshot(database, identity(database, input));
+    assertExpected(current, input.expectedRevision, ['zenki_planning']);
+    if (current.mutationRevision !== before.mutationRevision) throw new KiokukoError('CONFLICT', 'Plan review mutation binding changed');
+    const revision = (readPlanDraft(database, current)?.revision ?? 0) + 1;
+    database.prepare(`INSERT INTO enno_plan_drafts (run_id,contract_revision,mutation_revision,draft_revision,candidate_json,draft_digest,catalog_digest,catalog_json,status)
+      VALUES (?,?,?,?,?,?,?,?,'reviewing') ON CONFLICT(run_id) DO UPDATE SET contract_revision=excluded.contract_revision,mutation_revision=excluded.mutation_revision,draft_revision=excluded.draft_revision,candidate_json=excluded.candidate_json,draft_digest=excluded.draft_digest,catalog_digest=excluded.catalog_digest,catalog_json=excluded.catalog_json,review_digest=NULL,backend_json=NULL,status='reviewing'`)
+      .run(before.runId, before.revision, before.mutationRevision, revision, canonicalJson(candidate), digest, catalogDigest, canonicalJson((input.capabilities ?? []).filter((c): c is { kind: string; name: string } => typeof c === 'object' && c !== null && (c as { kind?: string }).kind === 'skill' && typeof (c as { name?: string }).name === 'string').map(c => c.name)));
+    return revision;
+  });
+  try {
+    const context = advisoryContextForSubmission(readEnnoSnapshot(database, identity(database, input)), 'planning');
+    const result = await review(context, signal);
+    signal.throwIfAborted();
+    await assertCurrent();
+    signal.throwIfAborted();
+    if (findSecretInValue(result.backend) !== undefined || Buffer.byteLength(canonicalJson(result.backend)) > 8192) throw new KiokukoError('VALIDATION_ERROR', 'Unsafe plan review metadata');
+    const normalized = normalizeAdvisoryContributions('planning', result.contributions.map(c => advisoryContributionSchemaPublic.parse(c) as AdvisoryContribution));
+    if (result.contributions.length !== 3 || normalized.some(c => c.outcome !== 'completed')) throw new KiokukoError('SERVICE_UNAVAILABLE', 'The complete plan review is unavailable. The draft remains unsubmitted.');
+    return withImmediateTransaction(database, () => {
+      signal.throwIfAborted();
+      const current = readEnnoSnapshot(database, identity(database, input));
+      assertExpected(current, input.expectedRevision, ['zenki_planning']);
+      const draft = readPlanDraft(database, current);
+      if (current.mutationRevision !== before.mutationRevision || draft?.revision !== draftRevision || draft.digest !== digest || draft.catalogDigest !== catalogDigest || draft.status !== 'reviewing') throw new KiokukoError('CONFLICT', 'Plan review was superseded');
+      const reviewDigest = advisoryInputDigest({ phase: 'planning', contractRevision: before.revision, mutationRevision: before.mutationRevision, allowlistedContext: context });
+      database.prepare("UPDATE enno_plan_drafts SET status='reviewed',review_digest=?,backend_json=? WHERE run_id=?").run(reviewDigest, canonicalJson(result.backend), before.runId);
+      const roundIdentity = { runId: before.runId, contractRevision: before.revision, mutationRevision: before.mutationRevision, phase: 'planning' as const, inputDigest: reviewDigest };
+      const round = readAdvisoryRound(database, roundIdentity) ?? createAdvisoryRoundInTransaction(database, { ...roundIdentity, contributions: normalized });
+      appendEnnoEventInTransaction(database, input.runId, 'enno.advice_submitted', 'zenki', 'aggregated', { draftDigest: digest, reviewDigest, draftRevision });
+      return { ennoOduno: stateForSnapshot(readEnnoSnapshot(database, identity(database, input))), advisoryRound: round };
+    });
+  } catch (error) {
+    database.prepare("UPDATE enno_plan_drafts SET status='failed' WHERE run_id=? AND contract_revision=? AND mutation_revision=? AND draft_revision=? AND draft_digest=? AND status='reviewing'").run(before.runId, before.revision, before.mutationRevision, draftRevision, digest);
+    throw error;
+  }
+}
+
 export async function submitEnnoPlan(
   database: SqliteDatabase,
   rawInput: unknown,
@@ -915,11 +981,13 @@ export async function submitEnnoPlan(
       expected: { minItems: before.attempts + 1 },
     }]);
   }
+  if (before.planDraft) assertReviewedPlan(database, before, input);
   const recoveryReason = planCapabilityRecoveryReason(database, input, before.workspace);
   if (recoveryReason !== null) pausePlanStartRecovery(database, before, recoveryReason);
   if (input.advisoryRoundDigest !== undefined) {
     requireAdvisoryRound(database, before, 'planning', before.mutationRevision, advisoryContextForSubmission(before, 'planning'), input.advisoryRoundDigest);
   }
+  assertReviewedPlan(database, before, input);
   const includesCodeChanges = planChangesCode(input, before.taskType);
   const includesUiWork = planHasUi(input);
   assertWorkPlanExpertCoverage(input.workPlan);
@@ -978,6 +1046,7 @@ export async function submitEnnoPlan(
     if (replayed !== undefined) return replayed;
     const current = readEnnoSnapshot(database, identity(database, input));
     assertExpected(current, input.expectedRevision, ['zenki_planning']);
+    assertReviewedPlan(database, current, input);
     const operationOwner = startOperationInTransaction(database, input.runId, operation);
     const advisoryRound = consumeAdvisoryRoundIfPresent(
       database,
@@ -1001,6 +1070,7 @@ export async function submitEnnoPlan(
       blocker,
       planDigest: canonicalContentHash(contract.workPlan),
     });
+    database.prepare("UPDATE enno_plan_drafts SET status='submitted' WHERE run_id=?").run(input.runId);
     replaceWorkUnitsInTransaction(database, input.runId, nextRevision, contract.workPlan);
     appendEnnoEventInTransaction(database, input.runId, 'zenki.plan_created', 'zenki', 'created', {
       contractRevision: nextRevision,

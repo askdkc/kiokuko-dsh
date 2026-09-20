@@ -69,7 +69,7 @@ test('explicit host adapter mounts native DSH tools and commands and unloads the
   await host
   await plugin
 
-  assert.equal(tools.length, 8)
+  assert.equal(tools.length, 9)
   assert.equal(commands.length, 3)
   assert.ok(commands.some(command => command.name === 'kioku-orca'))
   const keyCommand = commands.find(command => command.name === 'kioku-typesafe-key')

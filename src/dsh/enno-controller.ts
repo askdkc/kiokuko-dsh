@@ -80,6 +80,7 @@ export type DshEnnoNextActionHandler =
 export const DSH_ENNO_NEXT_ACTION_HANDLERS: Readonly<Record<EnnoNextAction, DshEnnoNextActionHandler>> = Object.freeze({
   answer_intake: { kind: 'pending', requiresDirective: true },
   submit_ideal: { kind: 'pending', requiresDirective: true },
+  review_plan: { kind: 'pending', requiresDirective: true },
   submit_plan: { kind: 'pending', requiresDirective: true },
   ask_user_confirmation: { kind: 'pending', requiresDirective: true },
   execute_work_unit: { kind: 'pending', requiresDirective: true },

@@ -104,6 +104,8 @@ if you want Enno. Free text is passed to the AI as a discussion or correction.
 Deletion and replacement of existing files require human confirmation.
 See [setup, APIs, limits and recovery](docs/lisp.md).
 
-Optional [TypeSafe decisions](docs/typesafe.md) use `/kioku-typesafe-key` for
+[Provider-independent typed decisions](docs/typed-decisions.md) route Akinator, installed Skills, Zenki draft review and Lisp through configured TypeSafe or Nimble HTTP adapters.
+
+The compatibility [TypeSafe API](docs/typesafe.md) use `/kioku-typesafe-key` for
 DSH-managed credentials and `kioku.typesafe:evaluate` for explicit semantic
 questions. Lisp consumes the answers; file-change approval remains required.

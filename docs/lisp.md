@@ -1,3 +1,5 @@
+For configured semantic routing, use [provider-independent decisions](typed-decisions.md) and `kioku.decisions`. The Lisp mode-choice prompt and proposal approvals are unchanged.
+
 # Common Lisp tools
 
 For explicit semantic decisions and `/kioku-typesafe-key` setup, see

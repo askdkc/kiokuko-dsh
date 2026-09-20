@@ -369,3 +369,30 @@ test('cancellation at the prepared-task handoff releases the owner before host r
     assert.equal((await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))).kind, 'enter')
   } finally { await handle.dispose(); await f.cleanup() }
 })
+
+for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: selected installed Skill reaches model context and model-invocation exclusions remain`, async () => {
+  const f = await fixture(), originalFetch = globalThis.fetch
+  f.services.credentials = { resolve: async () => ({ value: 'fixture-key', source: 'file' }) }
+  const snapshot = f.services.skills.snapshot
+  f.services.skills.snapshot = async () => ({ ...(await snapshot()), skills: [...(await snapshot()).skills,
+    { name: 'fixture-writing', description: 'Rewrite prose clearly', invocation: { modelInvocable: true } },
+    { name: 'excluded-skill', description: 'Writing', invocation: { modelInvocable: false } }] })
+  let calls = 0
+  globalThis.fetch = async (_url, init) => {
+    calls++; const request = JSON.parse(String(init!.body)); assert.ok(!String(init!.body).includes('excluded-skill'))
+    return Response.json({ model: request.model, answers: Object.fromEntries(Object.entries(request.questions).map(([id, q]: [string, any]) => {
+      const choice = id === 'task-type' ? 'writing' : q.instructions.includes('fixture-writing') ? 'yes' : 'no'
+      return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
+    })) })
+  }
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), typedDecisions: { provider, nimble: { endpoint: 'http://127.0.0.1:8000/v1/systemone', model: 'fixture-model' } } })
+  try {
+    const messages = [{ role: 'user', content: '文章を読みやすく修正して' }]
+    const output = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    assert.equal(output.kind, 'enter'); assert.match(JSON.stringify(output.messages), /fixture-writing/); assert.ok(!JSON.stringify(output.messages).includes('excluded-skill'))
+    assert.equal(calls, 2)
+    const db = openConnection(join(f.root, 'memory.sqlite3'))
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()?.n, 0)
+    db.close()
+  } finally { await handle.dispose(); globalThis.fetch = originalFetch; await f.cleanup() }
+})

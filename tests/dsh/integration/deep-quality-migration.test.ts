@@ -31,7 +31,7 @@ test('quality migration preserves a version 1 interrupted attempt byte-for-byte 
     })
     const before = f.db.prepare('SELECT * FROM dsh_deep_attempts').get()!
     const beforeRun = f.db.prepare('SELECT * FROM dsh_deep_runs').get()!
-    assert.deepEqual(migrateDatabase(f.db, migrations).applied, [17, 18, 19, 20])
+    assert.deepEqual(migrateDatabase(f.db, migrations).applied, [17, 18, 19, 20, 21])
     const { job_json, ...after } = f.db.prepare('SELECT * FROM dsh_deep_attempts').get()!
     assert.equal(job_json, null); assert.deepEqual(after, { ...before })
     assert.deepEqual(f.db.prepare('SELECT * FROM dsh_deep_runs').get(), beforeRun)

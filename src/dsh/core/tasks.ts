@@ -1,3 +1,5 @@
+import type { DecisionService } from '../decisions/service.js'
+import { classifyTask, selectInstalledSkills } from '../decisions/workflows.js'
 import { legacyModuleRequirements } from '../modules/legacy-bindings.js'
 import { realpathSync } from 'node:fs'
 import { canonicalContentHash } from '../../serialization/validate.js'
@@ -35,6 +37,7 @@ export interface CoreTask {
   readonly cwd: string
   readonly profile: TaskProfile
   readonly memory: unknown
+  readonly selectedSkills?: readonly string[]
   readonly admitted: boolean
 }
 
@@ -56,11 +59,12 @@ function finishCoreTask(db: SqliteDatabase, task: CoreTaskIdentity, outcome: Cor
 
 /** Ordinary task/memory path over the existing ledger and Akinator; no model/provider selection. */
 export class CoreTasks {
-  constructor(private readonly runtime: DshCoreRuntime, private readonly answerer?: DshIntakeAnswerer, private readonly moduleIds: readonly string[] = []) {}
+  constructor(private readonly runtime: DshCoreRuntime, private readonly answerer?: DshIntakeAnswerer, private readonly moduleIds: readonly string[] = [], private readonly decisions?: DecisionService) {}
   async prepare(input: CoreTaskInput): Promise<CoreTask> {
     input.signal.throwIfAborted()
     const cwd = realpathSync(input.cwd)
-    const grounded = resolveGroundedIntakeProfile({ task: input.task, cwd, ...(input.profileHints ? { profileHints: input.profileHints } : {}) })
+    const taskType = await classifyTask(this.decisions, input.requestId, input.task, input.profileHints?.taskType, input.signal)
+    const grounded = resolveGroundedIntakeProfile({ task: input.task, cwd, profileHints: { ...input.profileHints, ...(taskType ? { taskType } : {}) } })
     return this.runtime.withDatabase(async db => {
       for (const id of legacyModuleRequirements(db, input.sessionId)) {
         if (!this.moduleIds.includes(id)) throw new Error(`Required module unavailable for persisted session: ${id}`)
@@ -94,8 +98,9 @@ export class CoreTasks {
           const policy = deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities)
           if (!policy.contextWithheld) memory = await recallScopedMemory(db, { cwd, project, query: input.task, scope: 'project', limit: 5, maxChars: 4000, readOnly: true })
         }
+        const selectedSkills = admitted ? await selectInstalledSkills(this.decisions, input.requestId, input.task, input.capabilities, capabilities, input.signal) : []
         input.signal.throwIfAborted()
-        return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted, memory })
+        return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted, memory, selectedSkills })
       } catch (error) {
         try { finishCoreTask(db, identity, input.signal.aborted ? 'cancelled' : 'failed') }
         catch (cleanup) { throw new AggregateError([error, cleanup], 'Task preparation and cleanup failed') }

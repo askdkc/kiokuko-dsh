@@ -65,8 +65,9 @@ try {
   assert.equal(names.includes('kiokuko-enno-oduno'), legacy || combination.includes('enno'))
   assert.equal(names.includes('kiokuko-lisp'), legacy || combination.includes('lisp'))
   const parent = await ctx.agentLoop.create(session.SessionId('module-fixture'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
-  const hasTypeSafe = legacy || combination.includes('lisp')
+  const hasTypeSafe = true
   assert.equal(ctx.commands.list(parent).filter(command => command.name === 'kioku-typesafe-key').length, hasTypeSafe ? 1 : 0)
+  assert.equal(ctx.commands.list(parent).filter(command => command.name === 'kioku-decisions').length, 1)
   if (hasTypeSafe) {
     const status = await ctx.commands.execute(parent, '/kioku-typesafe-key status', [], new AbortController().signal)
     assert.equal(status.result.kind, 'success'); assert.match(status.result.text, /TypeSafe:/)

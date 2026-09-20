@@ -210,7 +210,7 @@ export function directiveForRun(snapshot: EnnoRunSnapshot): RoleDirective | null
       contractRevision: snapshot.revision,
       routeEpoch: snapshot.routeEpoch ?? 0,
       role,
-      instructions: roleInstructions(role),
+      instructions: [...roleInstructions(role), ' Call enno_plan_review with the complete candidate before submission. Inspect all three findings, provide advisoryDisposition, then submit the identical reviewed candidate. If you change the candidate, review it again. Review failure leaves the plan unsubmitted.'],
       handoff: snapshot.handoff,
       objective: boundedObjective(snapshot.blocker === null
         ? `Create a bounded WorkPlan that realizes this Oduno ideal: ${snapshot.ideal?.objective ?? snapshot.handoff.objective}. ${planLanguageInstruction(snapshot.userFacingLanguage)} ${ZENKI_SINGLE_PURPOSE_PLANNING_CONTRACT} Select only available Skills and define focused plus final verifiers. Do not implement changes.`

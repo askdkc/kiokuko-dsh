@@ -1,3 +1,4 @@
+import { submitReviewedPlan } from '../helpers/reviewed-plan.js'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -7,7 +8,7 @@ import test from 'node:test'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
-import { submitEnnoPlan, submitOdunoIdeal } from '../../../src/enno-oduno/service.js'
+import { submitOdunoIdeal } from '../../../src/enno-oduno/service.js'
 import { DshContinuationRegistry } from '../../../src/dsh/agent-state.js'
 import { DshRuntime } from '../../../src/dsh/runtime.js'
 
@@ -56,7 +57,7 @@ test('runtime resumes the exact dsh route and rejects stale credentials before a
         skillContributions: [], successSignals: ['route resumes'],
       },
     })
-    await submitEnnoPlan(database, {
+    await submitReviewedPlan(database, {
       ...identity, expectedRevision: 1, idempotencyKey: 'dsh-resume-plan',
       scope: ['src/route.ts'], exclusions: [], acceptanceCriteria: [{ id: 'resume', description: 'route resumes' }],
       workPlan: { objective: 'Resume route', units: [{
