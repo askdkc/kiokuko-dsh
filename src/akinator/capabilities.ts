@@ -13,7 +13,7 @@ export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 export const MAX_CAPABILITY_DESCRIPTION_CHARS = 2_000;
 export const MAX_RAW_CAPABILITY_DESCRIPTION_CHARS = 64_000;
 export const MAX_CAPABILITY_NAME_CHARS = 300;
-export const MAX_CAPABILITY_ITEMS = 200;
+export const MAX_CAPABILITY_ITEMS = 16_384;
 export const MAX_RAW_CAPABILITY_CATALOG_CODE_POINTS = 512_000;
 
 export interface CapabilityDescriptor {
@@ -104,6 +104,7 @@ const ACTIONABLE_MEMORY_SELECTION_REASONS = new Set([
   'changed_path_match',
   'error_signature_match',
   'helpful_feedback',
+  'semantic_reuse_match',
 ]);
 
 export function hasActionableMemorySelection(
@@ -120,15 +121,21 @@ export function deriveMemoryUseSignal(input: {
   return hasActionableMemorySelection(input.items) ? 'actionable' : 'none';
 }
 
+export function hasExplicitCodingIntent(profile: Partial<TaskProfile>): boolean {
+  return EXPLICIT_CODING_INTENT.test([profile.target, profile.expected, profile.constraints].filter(Boolean).join(' '));
+}
+
 export function memoryReasoningRequired(
-  profile: Pick<TaskProfile, 'taskType'>,
+  profile: Pick<TaskProfile, 'taskType'> & Partial<TaskProfile>,
   memoryUse: MemoryUseSignal,
 ): boolean {
-  return memoryUse === 'actionable' && (profile.taskType === 'build' || profile.taskType === 'debug');
+  return memoryUse === 'actionable' && (profile.taskType === 'build' || profile.taskType === 'debug'
+    || ['review', 'analysis', 'writing'].includes(profile.taskType ?? '')
+      && EXPLICIT_CODING_INTENT.test([profile.target, profile.expected, profile.constraints].filter(Boolean).join(' ')));
 }
 
 export function deriveMemoryPolicy(
-  profile: Pick<TaskProfile, 'taskType'>,
+  profile: Pick<TaskProfile, 'taskType'> & Partial<TaskProfile>,
   memoryUse: MemoryUseSignal,
   capabilities: unknown,
   delivery?: MemoryDeliveryObservation,
@@ -256,52 +263,39 @@ export function normalizeCapabilityCatalog(input: unknown): NormalizedCapability
   const skills: CapabilityDescriptor[] = [];
   const tools: CapabilityDescriptor[] = [];
   const processCount = Math.min(input.length, MAX_CAPABILITY_ITEMS);
+  // Identity has its own budget. A large description must never hide a later Skill.
   let remaining = MAX_RAW_CAPABILITY_CATALOG_CODE_POINTS;
-  let budgetExceeded = false;
-  const accept = (descriptor: CapabilityDescriptor, truncated: boolean): void => {
-    diagnostics.accepted += 1;
-    if (truncated) diagnostics.truncated += 1;
-    (descriptor.kind === 'skill' ? skills : tools).push(descriptor);
-  };
+  let descriptionBudget = MAX_RAW_CAPABILITY_CATALOG_CODE_POINTS;
+  let budgetExceeded = input.length > MAX_CAPABILITY_ITEMS;
   for (let index = 0; index < processCount; index += 1) {
     const item = input[index];
     const header = validateCapabilityHeader(item);
-    if (header === null) {
+    if (header === null || !isPlainRecord(item) || item.description !== undefined && typeof item.description !== 'string') {
       diagnostics.dropped += 1;
       continue;
     }
-    const nameCost = boundedCodePointLength(header.name, remaining);
-    if (nameCost > remaining) {
+    const cost = Array.from(header.name).length + header.kind.length + 32;
+    if (cost > remaining) {
       diagnostics.dropped += processCount - index;
       budgetExceeded = true;
       break;
     }
-    remaining -= nameCost;
+    remaining -= cost;
     const descriptor: CapabilityDescriptor = { ...header };
-    if (!isPlainRecord(item) || item.description === undefined) {
-      accept(descriptor, false);
-      continue;
-    }
-    if (typeof item.description !== 'string') {
-      diagnostics.dropped += 1;
-      continue;
-    }
-    const scanLimit = Math.min(remaining, MAX_RAW_CAPABILITY_DESCRIPTION_CHARS);
-    const descriptionCost = boundedCodePointLength(item.description, scanLimit);
-    if (descriptionCost > scanLimit) {
-      accept(descriptor, true);
-      if (remaining <= MAX_RAW_CAPABILITY_DESCRIPTION_CHARS) {
-        diagnostics.dropped += processCount - index - 1;
-        budgetExceeded = true;
-        break;
+    if (typeof item.description === 'string') {
+      const scanLimit = Math.min(descriptionBudget, MAX_RAW_CAPABILITY_DESCRIPTION_CHARS);
+      const length = boundedCodePointLength(item.description, scanLimit);
+      descriptionBudget -= Math.min(length, scanLimit);
+      if (length > scanLimit) {
+        diagnostics.truncated += 1;
+      } else {
+        const compacted = compactCapabilityDescription(item.description);
+        if (compacted.description) descriptor.description = compacted.description;
+        if (compacted.truncated) diagnostics.truncated += 1;
       }
-      remaining -= descriptionCost;
-      continue;
     }
-    remaining -= descriptionCost;
-    const compacted = compactCapabilityDescription(item.description);
-    if (compacted.description.length > 0) descriptor.description = compacted.description;
-    accept(descriptor, compacted.truncated || (item.description.length > 0 && compacted.description.length === 0));
+    diagnostics.accepted += 1;
+    (descriptor.kind === 'skill' ? skills : tools).push(descriptor);
   }
   const availability: CapabilityCatalogAvailability = input.length === 0
     ? 'known-empty'

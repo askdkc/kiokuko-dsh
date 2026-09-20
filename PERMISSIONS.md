@@ -200,3 +200,34 @@ directories, plugin files and host state. Refusal, skip, cancellation and missin
 confirmation UI never grant permission. Normal tools and child bypasses remain
 blocked until a human safely disables the mode. Plugin unload retains the fence.
 See [Common Lisp setup and recovery](docs/lisp.md) for commands and limits.
+
+# Configured typed decisions
+
+With `typedDecisions.mode: auto` (default), the host may send the current request,
+installed Skill descriptions, sanitized candidate plan or explicitly selected Lisp
+evidence to the configured adapter. TypeSafe uses its fixed HTTPS endpoint and
+DSH-managed TYPESAFE_API_KEY. Nimble requires an explicit complete HTTPS or loopback
+HTTP endpoint and model; an optional separate bearer reference is resolved through
+DSH. Credentials never enter workers, prompts, logs or Kiokuko SQLite. No redirects,
+HTTP retries, provider substitution or runtime/model installation occur. `/kioku-decisions
+status` reports configuration, limits and the last fallback without a network call.
+Review fallback sends the full sanitized plan to the exact configured `roles.check`
+model with no tools. Typed answers grant no permissions or execution approval.
+
+With `memoryReuse.mode: auto` (default), eligible retrieval candidates can also be
+sent after the full candidate set passes memory capability checks and a synthetic
+readiness probe succeeds. Only the current task/constraints and complete sanitized
+`renderMemoryFields()` projections are transmitted. Internal record IDs, revision
+receipts and raw source records stay local. The first nonempty eligible selection
+triggers the probe; startup and empty retrieval do not. Set `memoryReuse.mode: off`
+to disable this additional use without disabling other typed decisions. No source
+memory, trust level or scope is changed. See [memory reuse](docs/memory-reuse.md).
+
+With `semanticCompaction.mode: auto` (default), automatic context pressure can also
+send a bounded, redacted classification view of conversation text, tool arguments,
+result statuses, sizes and excerpts to the same ready backend. Attachment bytes,
+replay metadata and raw provider output are excluded. Accepted decisions can shorten
+eligible old tool results through DSH's append-only history protocol; original log
+events remain available. They never grant execution authority or change stored Lisp
+values. Set `semanticCompaction.mode: off` to disable this use independently.
+See [semantic compaction](docs/semantic-compaction.md) for protection and failure behavior.

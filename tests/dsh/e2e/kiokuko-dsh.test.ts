@@ -108,7 +108,7 @@ test('composed host boundaries preserve model, tool, question, ledger, and turn-
   assert.equal(policy.decide(toolExecution).kind, 'allow')
   await tool.execute(toolExecution.arguments, toolExecution)
   assert.deepEqual(toolCalls, ['enno_work_report'])
-  assert.equal(host.registeredTools.length, 8)
+  assert.equal(host.registeredTools.length, 9)
 
   const fakeModel = { async request(messages: readonly unknown[]) { modelMessages.push([...messages]); return 'model-output' } }
   await fakeModel.request([{ role: 'system', source: 'soul', content: await loadSoulPrompt() }])

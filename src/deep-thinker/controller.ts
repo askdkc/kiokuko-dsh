@@ -1,3 +1,5 @@
+import type { DecisionService } from '../dsh/decisions/service.js'
+import { createMemoryReuseRuntime } from '../dsh/memory-reuse.js'
 import { emptyQualityNode } from './core/quality.js'
 import { randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
@@ -36,6 +38,7 @@ function hasAttachments(value: unknown): boolean { const m = message(value); ret
 function safeError(error: unknown): string { const text = error instanceof Error ? error.message : 'Deep処理が停止しました'; return findSecretInValue(text) ? 'Deep処理が安全に停止しました' : text.slice(0, 2_048) }
 
 export interface DeepControllerOptions {
+  decisions?: DecisionService | undefined;
   runtime: DshRuntime; ctx: DeepNativeContext; backend?: DshSpawnBackend | undefined; sessions?: DeepSessions | undefined;
   agents?: { get(id: string): object | undefined } | undefined; catalog?: DshModelCatalog | undefined; questions?: DshUserQuestions | undefined;
   routes: readonly ModelRoute[]; compatibility?: DshModelCompatibility | undefined; sessionQuery?: DshSessionQuery | undefined;
@@ -237,7 +240,8 @@ export class DeepPlanningController {
       if (!intent.task.trim() || findSecretInValue(intent.task)) throw new Error('Deep入力は空、または保存・転送できない内容を含みます')
       const capabilities = await withDeepAbort(Promise.resolve(this.options.capabilities?.(agent, signal)), signal)
       signal.throwIfAborted()
-      const prepared = await withDeepAbort(this.options.runtime.withDatabase(db => { signal.throwIfAborted(); return prepareAgentTask(db, { requestId: intent.startId, task: intent.task, cwd: intent.rootPath,
+      const memoryReuse = await createMemoryReuseRuntime(this.options.decisions, intent.startId, signal)
+      const prepared = await withDeepAbort(this.options.runtime.withDatabase(db => { signal.throwIfAborted(); return prepareAgentTask(db, { requestId: intent.startId, memoryReuse, task: intent.task, cwd: intent.rootPath,
         dshSessionId: intent.sessionId, deepSelection: { startId: intent.startId, configuration: intent.configuration! }, maxContextChars: 8_192,
         profileHints: { taskType: 'analysis', target: intent.rootPath, expected: '調査・分析・設計・計画の回答。リポジトリの変更は行わない。' }, signal,
         ...(capabilities === undefined ? {} : { capabilities }), skillDiscoveryMode: 'off' }) }), signal)

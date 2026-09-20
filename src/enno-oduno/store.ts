@@ -1,3 +1,4 @@
+import { readPlanDraft } from './plan-draft.js'
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
@@ -414,6 +415,8 @@ export function readEnnoSnapshot(database: SqliteDatabase, identity: EnnoIdentit
     blocker: row.blocker,
     advisoryPhaseState: { state: 'not_started' },
   };
+  const draft = readPlanDraft(database, snapshot);
+  if (draft) snapshot.planDraft = draft;
   const advisoryPhase = advisoryPhaseForStatus(status);
   const currentInputDigest = advisoryPhase === null || (advisoryPhase === 'final_review' && !finalEvidenceReady)
     ? undefined

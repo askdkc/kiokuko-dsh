@@ -32,3 +32,6 @@ export function createConfiguredPlugin(registrations: readonly ModuleRegistratio
 export async function apply(ctx: Context, config: CoreConfig): Promise<void> {
   await createConfiguredPlugin([]).apply(ctx, config)
 }
+
+export { DecisionService } from '../decisions/service.js'
+export type { DecisionProvider, DecisionBatch, DecisionBatchResult, DecisionCapabilities } from '../decisions/contracts.js'

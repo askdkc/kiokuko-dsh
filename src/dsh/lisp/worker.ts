@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { FRAME_BYTES, LispError, WorkerFrame, failure, type LispConfiguration, type WorkerResult } from './contracts.js'
 import { sandboxLaunch, type SandboxLayout } from './sandbox.js'
 
-const Rpc = z.object({ version: z.literal(1), type: z.literal('rpc'), id: z.string().max(256), request: z.string(), method: z.enum(['run', 'start-job', 'job-status', 'cancel-job', 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate']), arguments: z.unknown() }).strict()
+const Rpc = z.object({ version: z.literal(1), type: z.literal('rpc'), id: z.string().max(256), request: z.string(), method: z.enum(['run', 'start-job', 'job-status', 'cancel-job', 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate']), arguments: z.unknown() }).strict()
 const Program = z.object({ program: z.string().min(1).max(4096), argv: z.array(z.string().max(262144)).max(128), timeoutMs: z.number().int().min(100).max(600000), directory: z.string().min(1).max(4096).optional() }).strict()
 interface Job { child: ChildProcess; done: Promise<void>; settled?: boolean; result?: { code: number | null; signal: string | null; stdout: string; stderr: string }; error?: string }
 export interface LispRpcContext { generation: string; evaluationId: string; signal: AbortSignal }
@@ -126,7 +126,7 @@ export class LispWorker {
     try {
       if (!this.#pending || this.#pending.id !== rpc.request) throw new Error('RPC outside evaluation')
       let value: unknown
-      if (['tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate'].includes(rpc.method)) {
+      if (['tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate'].includes(rpc.method)) {
         if (!this.hostCall) throw new Error('HOST_ADAPTER_UNAVAILABLE')
         value = await this.hostCall(rpc.method, rpc.arguments, { generation: this.generation, evaluationId: this.#pending.id, signal: this.#pending.abort.signal })
       } else if (rpc.method === 'run' || rpc.method === 'start-job') {

@@ -1,3 +1,17 @@
+import { bindMemoryApplication, memoryApplicationStatus, memoryRetrievalStatus } from '../memory/application.js'
+import { mountMemoryApplication } from './memory-application.js'
+import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
+import { SemanticCompactionConfig, type CompactionAgent } from './semantic-compaction/contracts.js'
+import { MemoryReuseConfig } from '../memory/reuse.js'
+import { createMemoryReuseRuntime } from './memory-reuse.js'
+import { reviewPlanDecisions } from './decisions/plan-review.js'
+import { executeCheckModel } from './decisions/check-model.js'
+import { createDecisionService } from './decisions/host.js'
+import { TypedDecisionsConfig } from './decisions/config.js'
+import type { DecisionService } from './decisions/service.js'
+import { dshTurnRequestId } from './intake-profile-resolver.js'
+import { reviewEnnoPlan } from '../enno-oduno/service.js'
+import { classifyTask, selectInstalledSkills } from './decisions/workflows.js'
 import { humanInput } from '../memory/review/evidence.js'
 import { AutoMemoryReviewCoordinator, type ReviewNativeSession } from './auto-memory-review.js'
 import { MemoryReviewConfig } from '../memory/review/contracts.js'
@@ -12,7 +26,7 @@ import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution
 import { evolutionStatus } from '../memory/evolution/store.js'
 import { OrcaConfig, EfficiencyConfig, FinalizationConfig, AkinatorMemoryConfig, ContinuityConfig } from './config.js'
 import { DshEfficiencyObserver, mountDshEfficiencyObserver, type FinalizationInputMode } from './efficiency.js'
-import { explicitExecutionMode, readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
+import { explicitExecutionMode, initializeExecutionSelection, readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
 import { selectExecution, ExecutionSelectionPending } from './model-selection-ui.js'
 import { LISP_CODING_SERVICE, type LispCodingService } from './lisp/coding-choice.js'
 import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './lisp/request-surface.js'
@@ -169,6 +183,11 @@ interface AdapterContext extends Context {
 }
 
 export interface DshHostAdapterOptions {
+  readonly decisions?: DecisionService
+  readonly semanticCompactionCoordinator?: SemanticCompactionCoordinator
+  readonly semanticCompaction?: import('zod').z.input<typeof SemanticCompactionConfig>
+  readonly typedDecisions?: import('zod').z.input<typeof TypedDecisionsConfig>
+  readonly memoryReuse?: import('zod').z.input<typeof MemoryReuseConfig>
   /** An enclosing composition owns and closes this shared runtime. */
   readonly runtime?: DshCoreRuntime
   readonly skillPrompts?: DshSkillPrompts
@@ -423,6 +442,7 @@ function operationInput(
   const identity = { runId: binding.runId, workspace: binding.workspace, orchestrationId: binding.orchestrationId, expectedRevision: binding.revision, idempotencyKey: binding.idempotencyKey }
   const advisory = binding.advisoryRoundDigest === undefined ? {} : { advisoryRoundDigest: binding.advisoryRoundDigest }
   if (operation === 'enno_work_report') return { ...source, ...identity, leaseToken: binding.leaseToken, routeEpoch: binding.routeEpoch, workUnitId: binding.workUnitId }
+  if (operation === 'enno_plan_review') return { ...source, ...identity, capabilities: [...catalog.skills, ...catalog.tools] }
   if (operation === 'enno_plan_submit') return { ...source, ...identity, ...advisory, capabilities: [...catalog.skills, ...catalog.tools] }
   if (operation === 'curator_check') return { ...source, cwd, workspace: binding.workspace }
   if (operation === 'memory_checkpoint') return { ...source, cwd, runId: binding.runId, ...(binding.deliveryId === undefined ? {} : { deliveryId: binding.deliveryId }) }
@@ -468,8 +488,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     autoRegisterRepository: true,
     ...(options.now === undefined ? {} : { now: options.now }),
   })
+  const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}), SemanticCompactionConfig.parse(options.semanticCompaction ?? {}))
+  const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root)
   const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
-  const deepPlanning = new DeepPlanningController({ runtime, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
+  const deepPlanning = new DeepPlanningController({ runtime, decisions, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
     sessions, agents, catalog: modelCatalog, questions: userQuestions, routes: options.modelRoutes ?? [], compatibility: modelCompatibility, sessionQuery, config: options.deepPlanning,
     capabilities: async (agent, signal) => {
       const catalog = await capabilityCatalog(skills, tools, { cwd: root, signal, agent, nativeAgent: agent })
@@ -620,6 +642,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           states.set(item.runId, next); policy.setState(next)
         }
       } })
+    const refreshed = currentSession(item.sessionId)
+    if (refreshed && !refreshed.closed && refreshed.nativeAgent === nativeAgent && refreshed.nativeSession === nativeSession) {
+      await runtime.withDatabase(db => bindMemoryApplication(db, { runId: refreshed.runId, workspace: refreshed.workspace, sessionId: refreshed.sessionId, repositoryRoot: refreshed.repositoryRoot },
+        refreshed.prepared.intake.profile, refreshed.prepared.context, memoryRetrievalStatus(db, refreshed.workspace, refreshed.prepared.context, refreshed.prepared.memoryPolicy.contextWithheld)))
+    }
   }
   const executionBinding = (item: TurnRecord): ExecutionBinding => ({
     runId: item.runId, sessionId: item.sessionId, nativeAgent: item.nativeAgent, nativeSession: item.nativeSession,
@@ -809,6 +836,16 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       sourceStartTurn: event.turn,
     })
     record(event, result, generation)
+    if (result.admitted && result.prepared.run.status === 'active' && currentSession(event.sessionId)?.prepareGeneration === generation && !delegation.isChild(event.nativeAgent ?? {})) {
+      await runtime.withDatabase(db => {
+        if (currentSession(event.sessionId)?.prepareGeneration !== generation) return
+        bindMemoryApplication(db, {
+        runId: result.prepared.run.runId, workspace: result.prepared.project.workspace,
+        sessionId: event.sessionId, repositoryRoot: result.prepared.project.repositoryRoot,
+      }, result.prepared.intake.profile, result.prepared.context,
+      memoryRetrievalStatus(db, result.prepared.project.workspace, result.prepared.context, result.prepared.memoryPolicy.contextWithheld))
+      })
+    }
     if(event.nativeSession && !delegation.isChild(event.nativeAgent??{})) {
       try { await autoReview.bind({workspace:result.prepared.project.workspace,runId:result.prepared.run.runId,session:event.nativeSession as ReviewNativeSession,startSeq:sourceStartSeq}) }
       catch { /* Unsupported or unavailable review source must not veto a native request. */ }
@@ -852,6 +889,19 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     async choose(event: DshPreStepEvent, result: DshIntakeGateResult): Promise<DshIntakeGateResult> {
       const runId = result.prepared.run.runId
       let stored = await runtime.withDatabase(db => readExecutionSelection(db, runId))
+      if (result.admitted && result.prepared.selectedSkills === undefined) {
+        const task = await runtime.withDatabase(db => readAkinatorSession(db, { workspace: result.prepared.project.workspace, sessionId: result.prepared.intake.sessionId }).task)
+        result.prepared.selectedSkills = await selectInstalledSkills(decisions, `run:${runId}`, task, [...event.capabilities.skills, ...event.capabilities.tools], result.prepared.capabilities, event.signal)
+      }
+      // Legacy accepted plans keep their original execution contract. A draft
+      // awaiting the new review gate must first acquire an explicit check binding.
+      if (!stored && result.prepared.ennoOduno.status === 'zenki_planning') {
+        stored = await runtime.withDatabase(db => {
+          initializeExecutionSelection(db, runId)
+          const current = readExecutionSelection(db, runId)!
+          return current.value.mode === 'pending' ? writeExecutionSelection(db, runId, current.revision, { mode: 'enno', status: 'selecting' }) : current
+        })
+      }
       if (!stored) return result
       const discussion = stored.value.discussion
       if (discussion && event.turn > discussion.turn) {
@@ -996,15 +1046,20 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             const inboxIdentity=()=>canonicalContentHash([...((event.nativeAgent as any)?.inbox?.nextStep??[]),...((event.nativeAgent as any)?.inbox?.nextTurn??[])].filter(isHumanMessage))
             const pendingInput=inboxIdentity()
             const assertCurrent=()=>{
-              if(inboxIdentity()!==pendingInput||event.signal.aborted||previous.closed||previous.prepared!==captured||currentSession(event.sessionId)!==previous||prepareGeneration!==generation||performance.now()-started>1000)
-                throw new Error('continued_memory_stale')
-              if(event.nativeSession!==previous.nativeSession||event.nativeAgent!==previous.nativeAgent)throw new Error('continued_memory_owner_changed')
+              event.signal.throwIfAborted()
+              if(inboxIdentity()!==pendingInput||previous.closed||previous.prepared!==captured||currentSession(event.sessionId)!==previous||prepareGeneration!==generation)
+                throw new KiokukoError('CONFLICT', 'continued_memory_stale')
+              if(event.nativeSession!==previous.nativeSession||event.nativeAgent!==previous.nativeAgent)throw new KiokukoError('CONFLICT', 'continued_memory_owner_changed')
+              if(performance.now()-started>1000+(decisions.memoryReuse.mode==='auto'?decisions.memoryReuse.budgetMs:0))throw new Error('continued_memory_deadline')
             }
-            try { continuedMemory=await runtime.withDatabase((database,embedding)=>{
+            try { continuedMemory=await runtime.withDatabase(async (database,embedding)=>{
               if(embedding.mode==='required')throw new Error('required_embedding_unavailable')
-              return refreshContinuedTaskContext({database,prepared:captured,task:event.task,capabilities:[...event.capabilities.skills,...event.capabilities.tools],assertCurrent,
+              return refreshContinuedTaskContext({database, memoryReuse: await createMemoryReuseRuntime(decisions, `run:${captured.run.runId}`, event.signal), prepared:captured,task:event.task,capabilities:[...event.capabilities.skills,...event.capabilities.tools],assertCurrent,
                 validateCapabilities:async()=>{const fresh=await capabilityCatalog(skills,tools,{agent:event.agent,...(event.nativeAgent?{nativeAgent:event.nativeAgent}:{}),cwd:event.cwd,signal:event.signal});this.assertCatalog(event.capabilities,fresh);assertCurrent()}})
-            }) } catch { /* Delivery-time validation still fences the previously selected context. */ }
+            }) } catch (error) {
+              if(event.signal.aborted || error instanceof KiokukoError && ['CONFLICT','SECURITY_REJECTION','AUTHENTICATION_ERROR','INTEGRITY_ERROR'].includes(error.code))throw error
+              /* Optional retrieval failure retains the previous delivery, whose state is validated before injection. */
+            }
           }
           const continued = await this.choose(event, { admitted: !event.signal.aborted, prepared: continuedMemory?{...previous.prepared,...continuedMemory}:previous.prepared, catalog: event.capabilities })
           if (continued.admitted) {
@@ -1165,6 +1220,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     (context) => capabilityCatalog(skills, tools, context),
     true,
     akinatorMemoryConfig,
+    decisions,
   )
   const currentSession = (sessionId: string): TurnRecord | undefined => latestBySession.get(sessionId)
   const discussionGuardDisposer = tools?.guard((value) => {
@@ -1339,6 +1395,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const previousType = selections.get(previous.runId)?.value.discussion ? 'chat' : previous.prepared.intake.profile.taskType
       return inferred === null || previousType === 'chat' && inferred === 'chat' ? { taskType: previousType } : undefined
     })()
+    if (bound === undefined && !delegation.isChild(payload.agent)) {
+      const taskType = await classifyTask(decisions, dshTurnRequestId({ dshSessionId: sessionId, turn: payload.turn }), task, profile?.taskType, payload.signal)
+      if (taskType) profile = { ...profile, taskType }
+    }
     const lispCoding = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
     if (lispCoding && bound === undefined && !previous?.prepared.ennoOduno.applicable && !delegation.isChild(payload.agent)) {
       const grounded = resolveGroundedIntakeProfile({ task, cwd, ...(profile === undefined ? {} : { profileHints: profile }) })
@@ -1388,6 +1448,18 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const routingDisposers = new Map<object, () => void>()
   const installRouting = (agent: RoutableAgent) => {
     if (routingDisposers.has(agent) || !agent.ctx) return
+    semanticCompaction.attach(agent as unknown as CompactionAgent, async () => {
+      const childModel = await delegation.restoreOrPersist(agent)
+      if (childModel) {
+        const authority = await delegation.authorityFingerprint(agent)
+        return { child: delegation.observationBinding(agent), childSessionId: agent.session?.id, model: childModel, authority }
+      }
+      const header = (agent as unknown as CompactionAgent).session?.header
+      if (header?.parentSession || header?.origin === 'subagent' || header?.delegationDepth) return undefined
+      const item = agent.session ? currentSession(agent.session.id) : undefined
+      return item ? { runId: item.runId, sessionId: item.sessionId, selection: selections.get(item.runId) ?? null,
+        state: await runtime.withDatabase(db => stateForRun(db, item)) } : { sessionId: agent.session?.id }
+    })
     const disposeMemory = agent.ctx.on('agent/request', async (_event: unknown, next: () => Promise<any>) => {
       const request = await next()
       if (delegation.isChild(agent)) return request
@@ -1451,6 +1523,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     }, {
       prompts: () => skillPrompts,
       assembled: async assembly => {
+        semanticCompaction.recordRoute(agent as unknown as CompactionAgent, assembly.variables)
         const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
         if (lisp) assembly = lisp.project(agent, assembly)
         const delivered = new Set<string>()
@@ -1630,6 +1703,31 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         response = await runtime.withDatabase(async (database) => {
           const input = operationInput(args, binding, cwd, operation, run.catalog)
           if (operation === 'enno_ideal_submit') return submitOdunoIdeal(database, input)
+          if (operation === 'enno_plan_review') {
+            const selected = readExecutionSelection(database, run.runId)
+            if (selected?.value.mode !== 'enno' || selected.value.status !== 'ready') throw new Error('Plan review has no admitted model configuration')
+            const check = selected.value.configuration?.roles.check
+            const selectionDigest = canonicalContentHash(selected?.value.configuration ?? null)
+            const assertCurrent = async () => {
+              operationSignal.throwIfAborted()
+              const catalog = await capabilityCatalog(skills, tools, { agent: { id: run.agentId }, ...(run.nativeAgent ? { nativeAgent: run.nativeAgent } : {}), cwd, signal: operationSignal })
+              gate.assertTurnStoppingCatalog(run.catalog, catalog)
+              if (run.closed || currentSession(run.sessionId) !== run || sessions?.get(run.sessionId) !== run.nativeSession || agents?.get(run.agentId) !== run.nativeAgent || readExecutionSelection(database, run.runId)?.revision !== selected.revision || canonicalContentHash(readExecutionSelection(database, run.runId)?.value.configuration ?? null) !== selectionDigest) throw new Error('Plan review binding changed')
+            }
+            return reviewEnnoPlan(database, input, (context, reviewSignal) => reviewPlanDecisions({ service: decisions,
+              requestId: `run:${run.runId}`, context, signal: reviewSignal,
+              check: { identity: { provider: check?.provider ?? null, requestedModel: check?.model ?? null, source: 'roles.check' },
+                verifyReadOnly: async () => {
+                  if (!check || !llm) return false
+                  if (modelCatalog?.resolveCallConfig) {
+                    const resolved = await modelCatalog.resolveCallConfig(check)
+                    if (canonicalContentHash(resolved) !== canonicalContentHash(check)) throw new Error('Configured check model binding changed')
+                  }
+                  return true
+                },
+                execute: call => { if (!check || !llm) throw new Error('Configured check model is unavailable'); return executeCheckModel(llm, check, call) },
+              } }), operationSignal, assertCurrent)
+          }
           if (operation === 'enno_plan_submit') return submitEnnoPlan(database, input)
           if (operation === 'enno_work_report') return reportEnnoWork(database, input)
           if (operation === 'enno_finish') return finishEnno(database, input)
@@ -2397,6 +2495,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     return { runId: item.runId, status: 'cancelled' }
   }
   const closeRun = async (input: DshRunClose): Promise<void> => {
+    if (input.status === 'completed' && !await runtime.withDatabase(db => memoryApplicationStatus(db, input.runId).ready)) input = { ...input, status: 'failed' }
     let scheduled = false
     let scheduledSessionId: string | undefined
     await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
@@ -2459,6 +2558,50 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     advisoryRounds.delete(input.runId)
     resumedLeases.delete(input.runId)
   }
+  const applicationDisposer = tools ? mountMemoryApplication({ tools: tools as any, on: (ctx as any).on.bind(ctx), ...(commands ? { commands: commands as any } : {}) }, {
+    runtime,
+    session(value) {
+      const agent = value as NativeAgent | undefined
+      if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || typeof agent.session.header?.cwd !== 'string') return undefined
+      return { sessionId: agent.session.id, repositoryRoot: realpathSync(agent.session.header.cwd) }
+    },
+    resolve(execution) {
+      const agent = execution.agent, session = agent?.session
+      const item = session ? currentSession(session.id) : undefined
+      if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || delegation.isChild(agent)) return undefined
+      return { runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot }
+    },
+    async refresh(execution, query) {
+      const item = currentSession(execution.agent.session.id)!
+      const captured = item.prepared
+      const assertCurrent = () => {
+        execution.signal.throwIfAborted()
+        if (item.closed || item.prepared !== captured || currentSession(item.sessionId) !== item) throw new Error('Memory refresh task changed')
+      }
+      const result = await runtime.withDatabase(async database => {
+        const value = await refreshContinuedTaskContext({ database, prepared: captured, task: query,
+          capabilities: [...item.catalog.skills, ...item.catalog.tools], assertCurrent,
+          validateCapabilities: async () => {
+            assertCurrent()
+            const fresh = await capabilityCatalog(skills, tools, { agent: { id: item.agentId }, nativeAgent: execution.agent, cwd: item.cwd, signal: execution.signal })
+            gate.assertTurnStoppingCatalog(item.catalog, fresh)
+          } })
+        assertCurrent()
+        bindMemoryApplication(database, { runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot }, captured.intake.profile, value.context,
+          memoryRetrievalStatus(database, item.workspace, value.context, value.memoryPolicy.contextWithheld))
+        return value
+      })
+      assertCurrent()
+      item.prepared = { ...captured, ...result }
+      const activePolicy = states.get(item.runId)
+      if (activePolicy) {
+        const { deliveryId: _previous, ...state } = activePolicy
+        const next = { ...state, ...(result.context?.deliveryId ? { deliveryId: result.context.deliveryId } : {}) }
+        states.set(item.runId, next); policy.setState(next)
+      }
+      return result
+    },
+  }) : undefined
   const observationDisposer = (ctx as any).on('tools/result', (execution: any, result: unknown) => {
     try {
       if (ennoMemory.enabled && execution.parent === undefined) {
@@ -2621,7 +2764,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           if (state.nextAction === 'complete' || state.nextAction === 'report_blocker'
             || state.status === 'cancelled' || state.contractRevision === null) return
           const phase = state.nextAction === 'submit_ideal' ? 'ideal'
-            : state.nextAction === 'submit_plan' || state.nextAction === 'ask_user_confirmation' ? 'planning'
+            : state.nextAction === 'review_plan' || state.nextAction === 'submit_plan' || state.nextAction === 'ask_user_confirmation' ? 'planning'
             : state.nextAction === 'execute_work_unit' ? 'work_unit'
             : state.nextAction === 'submit_meditation' ? 'meditation' : 'final_review'
           const operation = phase === 'ideal' ? 'ideal_submit' : phase === 'planning' ? 'plan_submit'
@@ -2722,6 +2865,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }
   configureEfficiency({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
   const host: DshCompositionHost = {
+    decisions,
+    semanticCompaction,
     deepPlanning,
     get efficiency() { return efficiency },
     configureEfficiency,
@@ -2798,6 +2943,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   return {
     host,
     dispose: () => disposePromise ??= (async () => {
+      semanticCompaction.stop()
+      await semanticCompaction.drain()
       await deepPlanning.stop()
       await autoReview.dispose()
       await memoryFinalizer.dispose()
@@ -2867,6 +3014,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       try { reviewIdleDisposer?.(); await autoReview.dispose() } catch (error) { failures.push(error) }
       try { await memoryFinalizer.dispose() } catch (error) { failures.push(error) }
       closeEfficiency()
+      try { applicationDisposer?.() } catch (error) { failures.push(error) }
       try { observationDisposer() } catch (error) { failures.push(error) }
       try { await sessionMirror.close() } catch (error) { failures.push(error) }
       try { if (!options.runtime) await runtime.close() } catch (error) { failures.push(error) }

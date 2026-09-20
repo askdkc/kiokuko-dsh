@@ -76,7 +76,7 @@ export async function stageModules(output) {
     const directory = join(output, name)
     await mkdir(directory, { recursive: true })
     const files = [...graphs[name].files].filter(file => name === 'core' || !graphs.core.files.has(file))
-    const assetFiles = name === 'core' ? migrations : name === 'lisp' ? [...(await walk(join(root, 'lisp'))).map(file => `lisp/${file}`), 'docs/typesafe.md', 'docs/lisp.md', 'scripts/smoke-typesafe.mjs', 'PERMISSIONS.md'] : []
+    const assetFiles = name === 'core' ? [...migrations, 'docs/typed-decisions.md', 'docs/semantic-compaction.md', 'docs/typesafe.md', 'PERMISSIONS.md'] : name === 'lisp' ? [...(await walk(join(root, 'lisp'))).map(file => `lisp/${file}`), 'docs/typesafe.md', 'docs/lisp.md', 'scripts/smoke-typesafe.mjs', 'PERMISSIONS.md'] : []
     const declarations = [...graphs[name].declarations].filter(file => name === 'core' || !graphs.core.declarations.has(file))
     for (const file of [...files, ...declarations, ...assetFiles]) {
       await copyFile(join(root, file), join(directory, file))
@@ -98,7 +98,7 @@ export async function stageModules(output) {
     const dependencies = Object.fromEntries([...graphs[name].dependencies].filter(dep => manifest.dependencies[dep] && (name === 'core' || !graphs.core.dependencies.has(dep))).sort().map(dep => [dep, manifest.dependencies[dep]]))
     const peerDependencies = Object.fromEntries([...graphs[name].dependencies].filter(dep => manifest.peerDependencies[dep]).sort().map(dep => [dep, manifest.peerDependencies[dep]]))
     const packageJson = { name: manifest.name, version: manifest.version, private: true, type: 'module', license: manifest.license, engines: manifest.engines,
-      exports: { '.': { types: `./${entries[name].replace(/\.js$/, '.d.ts')}`, default: `./${entries[name]}` } }, files: ['dist/', 'skills/', 'scripts/', ...(name === 'core' ? ['migrations/'] : name === 'lisp' ? ['lisp/', 'docs/', 'PERMISSIONS.md'] : []), `module-${name}.json`, 'LICENSE', 'THIRD_PARTY_NOTICES.md'], dependencies, peerDependencies,
+      exports: { '.': { types: `./${entries[name].replace(/\.js$/, '.d.ts')}`, default: `./${entries[name]}` } }, files: ['dist/', 'skills/', 'scripts/', ...(name === 'core' ? ['migrations/', 'docs/', 'PERMISSIONS.md'] : name === 'lisp' ? ['lisp/', 'docs/', 'PERMISSIONS.md'] : []), `module-${name}.json`, 'LICENSE', 'THIRD_PARTY_NOTICES.md'], dependencies, peerDependencies,
       peerDependenciesMeta: Object.fromEntries(Object.entries(manifest.peerDependenciesMeta).filter(([dep]) => dep in peerDependencies)) }
     await writeFile(join(directory, 'package.json'), JSON.stringify(packageJson, null, 2) + '\n')
     for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) await copyFile(join(root, file), join(directory, file))

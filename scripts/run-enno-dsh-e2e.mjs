@@ -110,6 +110,7 @@ async function runCordisComposition() {
     ...(requireDshCli ? { KIOKUKO_REQUIRE_DSH_NATIVE: '1' } : {}),
   }
   const baseTests = (await readdir(join(root, 'tests/dsh/e2e'))).filter(name => name.endsWith('.test.ts') && name !== 'repeated-memory-lifecycle.test.ts').map(name => `tests/dsh/e2e/${name}`)
+  baseTests.push('tests/dsh/integration/enno-memory/native-loop.test.ts')
   const result = await run(process.execPath, ['scripts/run-tests.mjs', ...baseTests], nativeEnvironment)
   if (requireDshCli && /\bskipped [1-9]\d*/u.test(result.stdout)) {
     throw new Error(`Mandatory native workflow tests were skipped:\n${result.stdout}`)

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import { HostServiceError } from '../service-error.js'
 
 export const LispConfig = z.object({
   enabled: z.boolean().default(false), sbclPath: z.string().min(1).default('sbcl'),
@@ -18,8 +19,8 @@ export { RESULT_BYTES, renderResult } from './model-result.js'
 export const identifier = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 export interface LispOwner { sessionId: string; agentId: string; root: string }
 export type LispState = 'DISABLED' | 'PREFLIGHT' | 'READY' | 'SUSPENDED' | 'EVALUATING' | 'STOPPING' | 'RECOVERY_REQUIRED' | 'STOP_UNCONFIRMED'
-export class LispError extends Error {
-  constructor(readonly code: string, message: string, readonly recovery = '/kioku-lisp status で状態を確認してください。') { super(message); this.name = 'LispError' }
+export class LispError extends HostServiceError {
+  constructor(code: string, message: string, recovery = '/kioku-lisp status で状態を確認してください。') { super(code, message, recovery); this.name = 'LispError' }
 }
 export function digest(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value, (_key, item: unknown) => {
@@ -30,7 +31,7 @@ export function digest(value: unknown): string {
 export function fail(code: string, message: string): never { throw new LispError(code, message) }
 export function failure(error: unknown): { ok: false; code: string; message: string; recovery: string } {
   if (error instanceof z.ZodError) return { ok: false, code: 'INVALID_INPUT', message: error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('\n').slice(0, 1000), recovery: '指定した引数を修正してください。Lisp の復旧は不要です。' }
-  return error instanceof LispError ? { ok: false, code: error.code, message: error.message, recovery: error.recovery }
+  return error instanceof HostServiceError ? { ok: false, code: error.code, message: error.message, recovery: error.recovery }
     : { ok: false, code: 'LISP_INTERNAL_ERROR', message: error instanceof Error ? error.message.slice(0, 1000) : 'Lisp 処理に失敗しました。', recovery: '/kioku-lisp status で確認し、/kioku-lisp recover で照合してください。自動再実行はしません。' }
 }
 export const EvalInput = z.object({ code: z.string().min(1).max(262_144), timeoutMs: z.number().int().min(100).max(600_000).optional(),

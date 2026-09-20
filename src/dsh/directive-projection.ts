@@ -4,6 +4,7 @@ import type { DshModelFacingOperation } from './tools.js'
 
 const MODEL_OPERATION_BY_NEXT_ACTION: Readonly<Partial<Record<EnnoNextAction, DshModelFacingOperation>>> = Object.freeze({
   submit_ideal: 'enno_ideal_submit',
+  review_plan: 'enno_plan_review',
   submit_plan: 'enno_plan_submit',
   execute_work_unit: 'enno_work_report',
   submit_final_review: 'enno_finish',

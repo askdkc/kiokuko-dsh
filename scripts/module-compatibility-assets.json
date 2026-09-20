@@ -19,7 +19,10 @@
     "migrations/017_dsh_deep_quality.sql",
     "migrations/018_dsh_enno_memory_refresh.sql",
     "migrations/019_dsh_lisp.sql",
-    "migrations/020_dsh_memory_review.sql"
+    "migrations/020_dsh_memory_review.sql",
+    "migrations/021_typed_decisions.sql",
+    "migrations/022_memory_reuse.sql",
+    "migrations/023_memory_application.sql"
   ],
   "runtimeAssets": [
     "dist/security/sanitize.js"

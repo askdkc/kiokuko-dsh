@@ -306,6 +306,10 @@ const advisoryContextSchema = z.discriminatedUnion('phase', [
   }).strict(),
   z.object({
     phase: z.literal('planning'),
+    availableSkills: z.array(z.string().max(300)).max(2000).optional(),
+    candidate: z.record(z.string(), z.unknown()).optional(),
+    draftDigest: z.string().optional(),
+    catalogDigest: z.string().optional(),
     idealObjective: ennoRequestHandoffSchema.shape.objective,
     acceptanceCriteria: z.array(acceptanceCriterionSchema.shape.description).max(128),
     planningConstraints: z.array(ennoRequestHandoffSchema.shape.constraints.element).max(32),

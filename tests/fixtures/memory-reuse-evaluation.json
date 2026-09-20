@@ -1,0 +1,62 @@
+[
+  {
+    "id": "ja-negation",
+    "task": "SQLITE_BUSY をデータを消さずに解消したい。",
+    "constraints": "DB 削除は禁止。書き込み元は停止可能。",
+    "memories": [
+      { "id": "delete", "body": "SQLITE_BUSY: 使い捨て DB ならファイルを削除して再作成する。", "relevant": false },
+      { "id": "writer", "body": "SQLITE_BUSY: 別接続の書き込みが原因なら、そのトランザクションの終了を待つ。DB は削除しない。", "relevant": true },
+      { "id": "description", "body": "SQLITE_BUSY という文字列をブログの見出しに使った。対処方法は調べていない。", "relevant": false }
+    ]
+  },
+  {
+    "id": "en-paraphrase",
+    "task": "SQLITE_BUSY: let a migration acquire the writer lock without losing records.",
+    "constraints": "The competing connection can be closed gracefully.",
+    "memories": [
+      { "id": "same-meaning", "body": "SQLITE_BUSY: release the competing write transaction before retrying the schema change. Existing rows remain intact.", "relevant": true },
+      { "id": "read-only", "body": "SQLITE_BUSY: this suggestion only displays an error banner; it does not release a writer lock.", "relevant": false },
+      { "id": "reset", "body": "SQLITE_BUSY: discard every record and create an empty database.", "relevant": false }
+    ]
+  },
+  {
+    "id": "ja-actor",
+    "task": "credential をサーバー側で失効させたい。",
+    "constraints": "操作主体はサーバー管理者。クライアントのローカル保存だけを消しても解決しない。",
+    "memories": [
+      { "id": "client", "body": "credential: 利用者はクライアントの保存済みキーを消せる。サーバー上のキーは引き続き有効。", "relevant": false },
+      { "id": "server", "body": "credential: サーバー管理者がキー管理画面で revoke すると、そのキーでの新規 API 要求は拒否される。", "relevant": true },
+      { "id": "rotate-ui", "body": "credential: UI の表示ラベルを変更した。認証状態は変更していない。", "relevant": false }
+    ]
+  },
+  {
+    "id": "en-proposal",
+    "task": "migration: identify a procedure already verified to preserve all rows.",
+    "constraints": "Only observed successful procedures qualify; speculative proposals do not.",
+    "memories": [
+      { "id": "proposal", "body": "migration: propose dropping the temporary table after copying. This has never been executed or verified.", "relevant": false },
+      { "id": "observed", "body": "migration: copied rows in a transaction, checked counts and checksums, then committed. The verification passed and every row was retained.", "relevant": true },
+      { "id": "failure", "body": "migration: the previous procedure lost rows. There is no verified recovery procedure in this note.", "relevant": false }
+    ]
+  },
+  {
+    "id": "ja-failure-avoidance",
+    "task": "SQLITE_BUSY が再発した。前回の失敗を踏まえて安全に対処したい。",
+    "constraints": "WAL モード。データを保持する。",
+    "memories": [
+      { "id": "failed-useful", "body": "SQLITE_BUSY: WAL を消す方法は未チェックポイントの更新を失う失敗になった。削除を避け、接続を正常終了してから再試行する。", "relevant": true },
+      { "id": "safe-success", "body": "SQLITE_BUSY: 書き込み接続を正常終了してから再試行したところ成功し、全行の保持を確認できた。", "relevant": true },
+      { "id": "unsafe", "body": "SQLITE_BUSY: データを捨ててよい一時 DB に限り、WAL と DB をすべて削除する。", "relevant": false }
+    ]
+  },
+  {
+    "id": "en-preconditions",
+    "task": "runtime: resolve the Node 24 module loading error in an ESM package.",
+    "constraints": "Keep ESM and Node 24; do not convert to CommonJS or downgrade.",
+    "memories": [
+      { "id": "old-version", "body": "runtime: for Node 12 CommonJS only, replace imports with require and downgrade the runtime.", "relevant": false },
+      { "id": "current", "body": "runtime: in Node 24 ESM, specify the emitted .js extension for relative imports; verify the built module loads.", "relevant": true },
+      { "id": "browser", "body": "runtime: browser-only import maps replace bare module names. No Node loader is involved.", "relevant": false }
+    ]
+  }
+]

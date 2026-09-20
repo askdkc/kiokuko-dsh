@@ -284,3 +284,33 @@ test('pre-step rejects invisible agent identities before preparation', async () 
     await rm(fixture.root, { recursive: true, force: true })
   }
 })
+
+for (const kind of ['typesafe', 'nimble'] as const) test(`full gate ${kind}: provisional classification and selected Skills reach actual context`, async () => {
+  const { TypedDecisionsConfig } = await import('../../../src/dsh/decisions/config.js')
+  const { DecisionService, databaseDecisionStore } = await import('../../../src/dsh/decisions/service.js')
+  const { TypeSafeDecisionProvider, NimbleDecisionProvider } = await import('../../../src/dsh/decisions/providers.js')
+  const { injectDshContext } = await import('../../../src/dsh/context-injection.js')
+  const f = await makeFixture(), runtime = new DshRuntime({ repositoryRoot: f.root, databasePath: f.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'), embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 } })
+  try {
+    const base = await catalog(), capabilities = createDshCapabilityCatalog([...base.skills, { kind: 'skill', name: 'z-fixture-selection', description: 'Inspect relevant evidence' }, ...base.tools])
+    const config = TypedDecisionsConfig.parse({ provider: kind, nimble: { endpoint: 'http://localhost:8000/v1/systemone', model: 'fixture' } })
+    let calls = 0
+    const request: typeof fetch = async (_url, options) => {
+      calls++; const input = JSON.parse(String(options!.body))
+      return Response.json({ model: input.model, answers: Object.fromEntries(Object.entries(input.questions).map(([id, q]: [string, any]) => {
+        const choice = id === 'task-type' ? 'research' : q.instructions.includes('fixture-selection') ? 'yes' : 'no'
+        return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(c => [c, c === choice ? 1 : 0])), confidence: 1 }]
+      })) })
+    }
+    const provider = kind === 'typesafe' ? new TypeSafeDecisionProvider(config.typesafe, async () => 'host-key', request) : new NimbleDecisionProvider(config.nimble, async () => undefined, request)
+    const service = new DecisionService(config, () => provider, databaseDecisionStore(runtime))
+    const gate = new DshIntakeGate(runtime, undefined, undefined, false, undefined, service)
+    const input = { ...event(f.root, capabilities), task: 'この資料を調べてください' }
+    const result = await gate.prepare(input)
+    assert.equal(result.admitted, true); assert.equal(result.prepared.intake.profile.taskType, 'research')
+    const messages = await injectDshContext({ prepared: result.prepared, task: input.task, routeSkillNames: ['kiokuko-single-purpose-functions'] })
+    assert.ok(messages.some(m => m.name === 'z-fixture-selection' && m.content.includes('native Skill tool')))
+    assert.ok(messages.some(m => m.name === 'kiokuko-single-purpose-functions'))
+    assert.equal(calls, 2); await gate.prepare(input); assert.equal(calls, 2)
+  } finally { await runtime.close(); await rm(f.root, { recursive: true, force: true }) }
+})

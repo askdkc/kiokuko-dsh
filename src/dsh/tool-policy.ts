@@ -36,7 +36,7 @@ const phaseAllowlist: Readonly<Record<DshToolPhase, readonly string[]>> = Object
   normal: ['curator_check', 'memory_checkpoint'],
   intake: [],
   ideal: ['enno_ideal_submit'],
-  planning: ['enno_plan_submit'],
+  planning: ['enno_plan_review', 'enno_plan_submit'],
   confirmation: [],
   goki: ['enno_work_report', 'enno_delegate', 'curator_check', 'memory_checkpoint'],
   verifying: ['enno_finish', 'curator_check', 'memory_checkpoint'],
@@ -48,6 +48,7 @@ const phaseAllowlist: Readonly<Record<DshToolPhase, readonly string[]>> = Object
 
 const directiveOperation: Readonly<Partial<Record<EnnoNextAction, string>>> = Object.freeze({
   submit_ideal: 'enno_ideal_submit',
+  review_plan: 'enno_plan_review',
   submit_plan: 'enno_plan_submit',
   execute_work_unit: 'enno_work_report',
   submit_final_review: 'enno_finish',
@@ -153,7 +154,7 @@ export class DshToolPolicy {
     if (state.nextAction !== undefined && execution.origin !== 'host') {
       const expected = directiveOperation[state.nextAction]
       if (expected === undefined) return denied('STALE_STATE', publicReason('STALE_STATE'))
-      if (expected !== execution.name && !(expected === 'enno_work_report' && execution.name === 'enno_delegate')) return denied('WRONG_DIRECTIVE', publicReason('WRONG_DIRECTIVE'))
+      if (expected !== execution.name && !(expected === 'enno_plan_submit' && execution.name === 'enno_plan_review') && !(expected === 'enno_work_report' && execution.name === 'enno_delegate')) return denied('WRONG_DIRECTIVE', publicReason('WRONG_DIRECTIVE'))
     }
     const allowedOperations = phaseAllowlist[state.phase]
     if (allowedOperations === undefined) return denied('STALE_STATE', publicReason('STALE_STATE'))

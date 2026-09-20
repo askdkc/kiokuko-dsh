@@ -1,9 +1,9 @@
 import { KiokukoError } from '../errors.js'
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js'
 import { STANDARD_SKILL_MANIFESTS } from './standard-skills.js'
-import { MAX_RAW_CAPABILITY_DESCRIPTION_CHARS } from '../akinator/capabilities.js'
+import { MAX_RAW_CAPABILITY_DESCRIPTION_CHARS, normalizeCapabilityCatalog } from '../akinator/capabilities.js'
 
-export const DSH_CAPABILITY_CATALOG_VERSION = 2 as const
+export const DSH_CAPABILITY_CATALOG_VERSION = 3 as const
 
 export interface DshCapabilityDescriptor {
   readonly kind: 'skill' | 'tool'
@@ -50,14 +50,13 @@ function descriptor(kind: 'skill' | 'tool', value: unknown): DshCapabilityDescri
     validation('Capability descriptor name is invalid')
   }
   if (value.description !== undefined && (typeof value.description !== 'string'
-    || value.description.length > MAX_RAW_CAPABILITY_DESCRIPTION_CHARS
-    || hasInvalidDescriptionCharacters(value.description))) {
+    || value.description.length <= MAX_RAW_CAPABILITY_DESCRIPTION_CHARS && hasInvalidDescriptionCharacters(value.description))) {
     validation('Capability descriptor description is invalid')
   }
   return Object.freeze({
     kind,
     name: value.name,
-    ...(value.description === undefined ? {} : { description: value.description }),
+    ...(value.description === undefined || value.description.length > MAX_RAW_CAPABILITY_DESCRIPTION_CHARS ? {} : { description: value.description }),
   })
 }
 
@@ -106,10 +105,14 @@ export function createDshCapabilityCatalog(snapshot: DshCapabilitySnapshot): Dsh
       ? snapshot
       : null
   if (lanes === null) validation('Capability snapshot must contain complete skill and tool lanes')
-  const skills = lanes.skills.map((item) => descriptor('skill', item))
-  const tools = lanes.tools.map((item) => descriptor('tool', item))
+  let skills = lanes.skills.map((item) => descriptor('skill', item))
+  let tools = lanes.tools.map((item) => descriptor('tool', item))
   assertUnique([...skills, ...tools])
   assertStableOrder(skills, tools)
+  const normalized = normalizeCapabilityCatalog([...skills, ...tools])
+  if (normalized.availability === 'unknown') conflict('Capability catalog identity budget is incomplete')
+  skills = normalized.skills.map(item => Object.freeze(item))
+  tools = normalized.tools.map(item => Object.freeze(item))
   const catalog = {
     version: DSH_CAPABILITY_CATALOG_VERSION,
     complete: true as const,

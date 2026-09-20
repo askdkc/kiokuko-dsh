@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { DshModules, type DshModule, type ModuleBinding } from '../../../src/dsh/core/modules.js'
+import { CURRENT_MIGRATION_SNAPSHOT } from '../../fixtures/current-migrations.js'
+
+test('module compatibility allowlist includes the complete current migration history', () => {
+  const compatibility = JSON.parse(readFileSync(new URL('../../../scripts/module-compatibility-assets.json', import.meta.url), 'utf8'))
+  assert.deepEqual(compatibility.migrations, CURRENT_MIGRATION_SNAPSHOT.migrations.map(migration => `migrations/${migration.name}`),
+    'Update the explicit module compatibility allowlist when adding a migration')
+})
 
 const empty: DshModule<string[]> = { id: 'writing', coreVersion: 1, requires: [], configure: value => { if (value !== undefined) throw new Error('invalid config'); return undefined } }
 const binding = (moduleId: string): ModuleBinding => ({ moduleId, version: 1, requestId: 'request', sessionId: 'session', workspace: 'workspace' })

@@ -124,6 +124,13 @@ export async function runVerifier(
   const stderrHash = createHash('sha256');
   let stdoutPreview: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let stderrPreview: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  let skipped = false;
+  const tails = { stdout: '', stderr: '' };
+  const observeSkip = (lane: keyof typeof tails, chunk: Buffer | string): void => {
+    const value = tails[lane] + chunk.toString();
+    if (/(?:# SKIP|\b[1-9]\d* (?:skipped|pending)\b|# (?:skipped|todo) [1-9])/iu.test(value)) skipped = true;
+    tails[lane] = value.slice(-256);
+  };
   let child: ChildProcessByStdio<null, Readable, Readable>;
   try {
     child = (dependencies.spawn ?? spawn)(normalized.executable, normalized.args, {
@@ -149,11 +156,13 @@ export async function runVerifier(
 
   child.stdout.on('data', (chunk: Buffer | string) => {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    observeSkip('stdout', bytes);
     stdoutHash.update(bytes);
     stdoutPreview = appendPreview(stdoutPreview, bytes);
   });
   child.stderr.on('data', (chunk: Buffer | string) => {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    observeSkip('stderr', bytes);
     stderrHash.update(bytes);
     stderrPreview = appendPreview(stderrPreview, bytes);
   });
@@ -215,6 +224,7 @@ export async function runVerifier(
   return {
     verifier: { ...verifier, args: [...verifier.args] },
     ...completion,
+    skipped,
     durationMs: Math.max(0, Math.round((dependencies.now?.() ?? performance.now()) - start)),
     stdoutPreview: stdoutPreview.toString('utf8'),
     stderrPreview: stderrPreview.toString('utf8'),

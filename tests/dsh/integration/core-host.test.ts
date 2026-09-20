@@ -32,6 +32,40 @@ async function fixture(questions?: { ask(request: any): Promise<any> }) {
   return { root, ctx, agent, session, events, listeners, tools, sections, providers, services, async cleanup() { await rm(root, { recursive: true, force: true }) } }
 }
 
+test('mounted core gates actionable memory and exposes a session-bound diagnostic after interrupted completion', async () => {
+  const f = await fixture(), commands: any[] = []
+  f.services.commands = { register(command: any) { commands.push(command); return () => commands.splice(commands.indexOf(command), 1) } }
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
+  try {
+    const db = openConnection(join(f.root, 'memory.sqlite3'))
+    const workspace = db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
+    recordEntry(db, { workspace, kind: 'lesson', title: 'code migration expectations', body: 'code migration expectations must include the next migration.', createdBy: 'fixture' })
+    db.close()
+    const messages = [{ role: 'user', content: 'Implement code migration expectations' }]
+    await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    const execution = { callId: 'write', name: 'Edit', arguments: {}, agent: f.agent, signal: new AbortController().signal }
+    let mutated = false
+    await assert.rejects(f.listeners.get('tools/pre-execute')!(execution, async () => { mutated = true }), /resolve memory decisions/)
+    assert.equal(mutated, false)
+    const tool = f.tools.find(tool => tool.name === 'task_memory_review')
+    const status = await tool.execute({ action: 'status' }, { ...execution, name: 'task_memory_review' })
+    assert.equal(status.ready, false)
+    assert.equal(status.pending[0].problem, 'decision_missing')
+    await assert.rejects(tool.execute({ action: 'status' }, { ...execution, name: 'task_memory_review', agent: { ...f.agent } }), /identity/)
+    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+    await f.listeners.get('agent/idle')!({ agent: f.agent })
+    const command = commands.find(command => command.name === 'kioku-memory-application')
+    const result = await command.handler({ agent: f.agent, rawInput: 'status --json', signal: execution.signal })
+    const diagnostic = JSON.parse(result.text)
+    assert.equal(diagnostic.integration, 'native_active'); assert.equal(diagnostic.ready, false)
+    assert.equal(diagnostic.verification, 'unobserved')
+    assert.equal('body' in diagnostic.pending[0], false)
+    const stored = openConnection(join(f.root, 'memory.sqlite3'))
+    assert.equal(stored.prepare('SELECT status FROM ledger_runs').get()?.status, 'interrupted')
+    stored.close()
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
 test('core native path handles conversation, research, writing and project memory without coding choices or optional runtimes', async () => {
   const f = await fixture()
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
@@ -368,4 +402,31 @@ test('cancellation at the prepared-task handoff releases the owner before host r
     db.close()
     assert.equal((await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))).kind, 'enter')
   } finally { await handle.dispose(); await f.cleanup() }
+})
+
+for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: selected installed Skill reaches model context and model-invocation exclusions remain`, async () => {
+  const f = await fixture(), originalFetch = globalThis.fetch
+  f.services.credentials = { resolve: async () => ({ value: 'fixture-key', source: 'file' }) }
+  const snapshot = f.services.skills.snapshot
+  f.services.skills.snapshot = async () => ({ ...(await snapshot()), skills: [...(await snapshot()).skills,
+    { name: 'fixture-writing', description: 'Rewrite prose clearly', invocation: { modelInvocable: true } },
+    { name: 'excluded-skill', description: 'Writing', invocation: { modelInvocable: false } }] })
+  let calls = 0
+  globalThis.fetch = async (_url, init) => {
+    calls++; const request = JSON.parse(String(init!.body)); assert.ok(!String(init!.body).includes('excluded-skill'))
+    return Response.json({ model: request.model, answers: Object.fromEntries(Object.entries(request.questions).map(([id, q]: [string, any]) => {
+      const choice = id === 'task-type' ? 'writing' : q.instructions.includes('fixture-writing') ? 'yes' : 'no'
+      return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
+    })) })
+  }
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), typedDecisions: { provider, nimble: { endpoint: 'http://127.0.0.1:8000/v1/systemone', model: 'fixture-model' } } })
+  try {
+    const messages = [{ role: 'user', content: '文章を読みやすく修正して' }]
+    const output = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    assert.equal(output.kind, 'enter'); assert.match(JSON.stringify(output.messages), /fixture-writing/); assert.ok(!JSON.stringify(output.messages).includes('excluded-skill'))
+    assert.equal(calls, 2)
+    const db = openConnection(join(f.root, 'memory.sqlite3'))
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()?.n, 0)
+    db.close()
+  } finally { await handle.dispose(); globalThis.fetch = originalFetch; await f.cleanup() }
 })

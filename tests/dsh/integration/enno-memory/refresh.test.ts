@@ -1,3 +1,4 @@
+import { submitReviewedPlan } from '../../helpers/reviewed-plan.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fixture, failure } from './fixture.js'
@@ -171,11 +172,11 @@ test('new corpus entries trigger discovery, cancellation and terminal states nev
 test('execution requires the current lease and does not accept a replaced native owner', async () => {
   const f = await fixture()
   try {
-    const { submitOdunoIdeal, submitEnnoPlan, answerEnno } = await import('../../../../src/enno-oduno/service.js')
+    const { submitOdunoIdeal, answerEnno } = await import('../../../../src/enno-oduno/service.js')
     const identity = { runId: f.prepared.run.runId, workspace: f.prepared.project.workspace, orchestrationId: f.prepared.intake.sessionId }
     submitOdunoIdeal(f.db, { ...identity, expectedRevision: 1, idempotencyKey: 'ideal', ideal: { objective: 'QUEUE_TEST_BASELINE', principles: ['Verify'], skillContributions: [], successSignals: ['verified'] } })
     const verifier = { id: 'verify', kind: 'test', executable: process.execPath, args: ['--eval', 'process.exit(0)'], cwd: '.', timeoutMs: 1000 }
-    await submitEnnoPlan(f.db, { ...identity, expectedRevision: 1, idempotencyKey: 'plan', scope: ['src'], exclusions: [], acceptanceCriteria: [{ id: 'done', description: 'Verified' }],
+    await submitReviewedPlan(f.db, { ...identity, expectedRevision: 1, idempotencyKey: 'plan', scope: ['src'], exclusions: [], acceptanceCriteria: [{ id: 'done', description: 'Verified' }],
       workPlan: { objective: 'QUEUE_TEST_BASELINE', units: [{ id: 'unit', objective: 'QUEUE_TEST_BASELINE', scope: ['src'], dependencies: [], routes: ['code'], skillNames: ['kiokuko-single-purpose-functions'], expertRefs: [{ id: 'code.verification.v1', reason: 'Verify' }], acceptanceCriteria: ['Verified'], focusedVerifiers: [verifier] }] },
       skillRequirements: [], finalVerifiers: [verifier], maxAttempts: 3, capabilities: f.binding().capabilities,
       provenance: { scope: 'explicit_user', exclusions: 'explicit_user', acceptanceCriteria: 'explicit_user', workPlan: 'inferred', skillSet: 'repository_evidence', finalVerifiers: 'repository_evidence', maxAttempts: 'inferred' } })

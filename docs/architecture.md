@@ -18,8 +18,9 @@ arguments never select a run, repository, route epoch, resume token, lease, or
 idempotency key. A route may move to another DSH session only when the run is
 unambiguous and no current execution lease belongs to the previous session.
 
-The model-visible registry contains exactly eight operations:
-`enno_ideal_submit`, `enno_plan_submit`, `enno_work_report`, `enno_finish`,
+The model-visible registry contains exactly nine operations:
+`enno_ideal_submit`, `enno_plan_review`, `enno_plan_submit`, `enno_work_report`,
+`enno_delegate`, `enno_finish`,
 `enno_meditation_submit`, `curator_check`, and `memory_checkpoint`. Intake,
 advisory fanout, confirmation, final verification, and globalization are host
 operations and are not published as model tools.

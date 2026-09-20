@@ -1,3 +1,8 @@
+import type { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
+import { renderHistoryResult } from './model-result.js'
+import { dshTurnRequestId } from '../intake-profile-resolver.js'
+import type { DecisionService } from '../decisions/service.js'
+import { DecisionError } from '../decisions/contracts.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { DshSkillPrompts } from '../skill-prompts.js'
 import { realpathSync } from 'node:fs'
@@ -51,7 +56,7 @@ const ToolInput = z.object({ operationId: identifier.optional(), code: z.string(
   offset: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(2000).optional() }).strict()
 
 /** The fence belongs to the host root, so plugin unload cannot restore bash access. */
-export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
+export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts, decisions?: DecisionService, semanticCompaction?: SemanticCompactionCoordinator): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
   const root = (ctx.root ?? ctx) as unknown as Context & { [fenceKey]?: Fence }
   const tools = root.get('tools', false) as Tools | undefined
   const agents = root.get('agents', false) as { get(id: string): Agent | undefined } | undefined
@@ -72,6 +77,17 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     dataRoot: join(dirname(databasePath), 'lisp'), protectedRoots: [databasePath, `${databasePath}-wal`, `${databasePath}-shm`],
     ...(ownerQuestions ? { questions: ownerQuestions } : {}),
     ciCall: createLispCiAdapter(ownerQuestions),
+    decisionCall: async (owner, method, args, context) => {
+      const agent = agents.get(owner.agentId)
+      if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', 'Decision session identity changed.')
+      context.signal.throwIfAborted()
+      if (!decisions) throw new DecisionError('UNAVAILABLE')
+      if (method === 'decisions-status') return decisions.status()
+      const events = agent.session.snapshotEvents?.() as readonly { type?: string; data?: { turn?: number } }[] | undefined
+      const turn = events?.filter(e => e.type === 'turn/start').at(-1)?.data?.turn
+      if (!Number.isSafeInteger(turn)) fail('SESSION_MISMATCH', 'Decision request has no native turn identity.')
+      return decisions.evaluate(dshTurnRequestId({ dshSessionId: owner.sessionId, turn: turn! }), args, context.signal)
+    },
     typesafeCall: async (owner, method, args, context) => {
       const agent = agents.get(owner.agentId)
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', 'TypeSafe のセッションを確認できません。')
@@ -128,6 +144,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   await manager.start()
   fence.sessions = manager.enabled; fence.controller = manager; fence.stopped = false
   const disposers: (() => void)[] = []
+  if (semanticCompaction) for (const tool of ['lisp_eval', 'lisp_inspect']) disposers.push(semanticCompaction.registerProjector(tool, renderHistoryResult))
   try {
   const sessionBindings = new Map<string, { session: Session; abort: AbortController }>()
   const closedSessions = new WeakSet<Session>()

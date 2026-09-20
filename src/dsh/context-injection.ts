@@ -98,7 +98,7 @@ export async function injectDshContext(input: {
   const sources = await buildDshMessageSources({
     ...(input.skillPrompts ? { skillPrompts: input.skillPrompts } : {}),
     ...(input.systemSkillNames ? { systemSkillNames: input.systemSkillNames } : {}),
-    ...sourceInput(input.prepared, input.task, input.routeSkillNames ?? [], input.expertRefs ?? [], input.directive, input.userTaskInConversation === true),
+    ...sourceInput(input.prepared, input.task, [...new Set([...(input.routeSkillNames ?? []), ...(input.prepared.selectedSkills ?? [])])], input.expertRefs ?? [], input.directive, input.userTaskInConversation === true),
     ...(input.soulInSystemPrompt === undefined ? {} : { soulInSystemPrompt: input.soulInSystemPrompt }),
     ...(input.advisoryEvidence === undefined ? {} : { advisoryEvidence: input.advisoryEvidence }),
     ...(assertMemoryCurrent === undefined ? {} : { assertMemoryCurrent }),

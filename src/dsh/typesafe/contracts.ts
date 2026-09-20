@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { LispError } from '../lisp/contracts.js'
+import { HostServiceError } from '../service-error.js'
 
 export const TYPESAFE_BYTES = 256 * 1024
 export const TYPESAFE_MODEL = 'jev-latest'
@@ -22,7 +22,7 @@ const messages = {
   CANCELLED: 'TypeSafe request was cancelled.',
   UNAVAILABLE: 'TypeSafe service is unavailable. No automatic retry was made.',
 } as const
-export class TypeSafeError extends LispError {
+export class TypeSafeError extends HostServiceError {
   constructor(kind: keyof typeof messages) {
     super(`TYPESAFE_${kind}`, messages[kind], 'Inspect the request or credential status before a new explicit call. Ordinary service errors do not require Lisp recovery.')
   }

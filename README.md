@@ -104,6 +104,18 @@ if you want Enno. Free text is passed to the AI as a discussion or correction.
 Deletion and replacement of existing files require human confirmation.
 See [setup, APIs, limits and recovery](docs/lisp.md).
 
-Optional [TypeSafe decisions](docs/typesafe.md) use `/kioku-typesafe-key` for
+[Provider-independent typed decisions](docs/typed-decisions.md) route Akinator, installed Skills, Zenki draft review and Lisp through configured TypeSafe or Nimble HTTP adapters.
+
+[Semantic memory reuse](docs/memory-reuse.md) checks existing retrieval candidates
+against the current request after a synthetic provider probe succeeds. Embeddings
+are optional; `memoryReuse.mode: off` disables this additional selection.
+
+[Memory application and verification](docs/memory-application.md) records dispositions and host-observed regression evidence. Check the current native session with `/kioku-memory-application status` or `/kioku-memory-application status --json`.
+
+The compatibility [TypeSafe API](docs/typesafe.md) use `/kioku-typesafe-key` for
 DSH-managed credentials and `kioku.typesafe:evaluate` for explicit semantic
 questions. Lisp consumes the answers; file-change approval remains required.
+
+### Semantic compaction
+
+[Semantic compaction](docs/semantic-compaction.md) selectively shortens old tool results before native automatic compaction in normal, Enno and Lisp modes. It defaults to `semanticCompaction: { mode: auto, budgetMs: 5000 }` and requires a ready typed-decision backend and supported native services. Inspect activation and the last outcome with `/kioku-decisions status`.

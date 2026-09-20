@@ -82,6 +82,8 @@ jobs:
           cp tests/fixtures/dsh-runtime/package*.json "$dsh_cli_dir/"
           npm ci --prefix "$dsh_cli_dir"
           echo "$dsh_cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
+          # The mandatory compaction suite loads the same pinned native fixture.
+          ln -s "$dsh_cli_dir/node_modules" tests/fixtures/dsh-runtime/node_modules
         env:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
 

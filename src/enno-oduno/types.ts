@@ -20,6 +20,7 @@ export type EnnoRole = (typeof ENNO_ROLES)[number];
 export const ENNO_NEXT_ACTIONS = [
   'answer_intake',
   'submit_ideal',
+  'review_plan',
   'submit_plan',
   'ask_user_confirmation',
   'execute_work_unit',
@@ -151,6 +152,10 @@ export interface IdealAdvisoryContext {
 }
 
 export interface PlanningAdvisoryContext {
+  candidate?: Record<string, unknown>;
+  availableSkills?: string[];
+  draftDigest?: string;
+  catalogDigest?: string;
   phase: 'planning';
   idealObjective: string;
   acceptanceCriteria: string[];
@@ -449,12 +454,15 @@ export interface VerifierRunResult {
   stderrPreview: string;
   stdoutDigest: string;
   stderrDigest: string;
+  /** Stream-observed skipped/pending checks, not inferred from exit status. */
+  skipped?: boolean;
   repositoryStatePolicyVersion?: number | undefined;
   repositoryStateDigest?: string | undefined;
   changedDuringVerification?: boolean | undefined;
 }
 
 export interface EnnoRunSnapshot {
+  planDraft?: import('./plan-draft.js').PlanDraft;
   runId: string;
   workspace: string;
   orchestrationId: string;

@@ -1,3 +1,5 @@
+import { applyMemoryReuse, type MemoryReuseRuntime } from '../memory/reuse.js';
+import { renderMemoryFields } from './memory-projection.js';
 import { renderScopedRetrievalQuery } from './retrieval-query.js';
 import { diversifyEpisodes } from '../memory/evolution/store.js';
 import type { SqliteDatabase } from '../db/adapter.js';
@@ -6,7 +8,7 @@ import { canonicalContentHash, compareCanonicalStrings } from '../serialization/
 import { readEntry, type EntryRecord } from '../memory/entries.js';
 import { decodeStoredStructuredScope, readEntryRevision } from '../memory/revisions.js';
 import { ensureGlobalWorkspace, GLOBAL_WORKSPACE, resolveProjectWorkspace, type ResolvedProjectWorkspace } from '../memory/workspaces.js';
-import { federatedEntries, type FederatedOrigin } from '../memory/federated-retrieval.js';
+import { applicabilityCompatibility, federatedEntries, type FederatedOrigin } from '../memory/federated-retrieval.js';
 import { isRetrievableEntry } from '../memory/hybrid-retrieval.js';
 import { effectiveRetrievalScope, hasExplicitApplicability } from '../memory/structured-memory.js';
 import type { TaskProfile } from '../akinator/types.js';
@@ -29,7 +31,7 @@ import type { HybridSearchRuntime } from '../memory/hybrid-retrieval.js';
 import { projectMemoryEntry, type MemoryProjectionReceipt } from './memory-projection.js';
 
 export const SCOPED_CONTEXT_POLICY_VERSION = 'context-ranking-v7' as const;
-export type ScopedContextPolicy = typeof SCOPED_CONTEXT_POLICY_VERSION | 'context-ranking-v8';
+export type ScopedContextPolicy = typeof SCOPED_CONTEXT_POLICY_VERSION | 'context-ranking-v8' | 'context-ranking-v9';
 export const SCOPED_CONTEXT_DEFAULT_CHARACTER_BUDGET = 8_000;
 export const SCOPED_CONTEXT_MAX_CHARACTER_BUDGET = 100_000;
 
@@ -39,6 +41,7 @@ export interface ScopedContextQuery {
   fingerprint?: ProjectFingerprint;
   task: string;
   taskProfile: TaskProfile;
+  projectOnly?: boolean;
   recommendedTags?: string[];
   changedPaths?: string[];
   errorSignatures?: string[];
@@ -93,7 +96,7 @@ export interface ScopedContextResult {
   deliveryId: string | null;
   truncated: boolean;
   untrusted: true;
-  omissions?: Array<{ entryId: string; reason: 'budget' | 'limit' | 'diversified' | 'secret' }>;
+  omissions?: Array<{ entryId: string; reason: 'budget' | 'limit' | 'diversified' | 'secret' | 'semantic_not_applicable' }>;
 }
 
 export interface ScopedContextGateDecision<T> {
@@ -601,14 +604,55 @@ function deliveryRequest(
   };
 }
 
+export interface ScopedMemoryReuseEffect {
+  runtime: MemoryReuseRuntime;
+  /** Checks the full eligible baseline before remote disclosure, never the filtered output. */
+  authorize: (baseline: ScopedContextResult) => boolean;
+}
+
+async function collectScopedCandidates(
+  database: SqliteDatabase, project: ResolvedProjectWorkspace | undefined, fingerprint: ProjectFingerprint | undefined,
+  queryText: string, runtime: HybridSearchRuntime, omissions: NonNullable<ScopedContextResult['omissions']>, timings?: ScopedContextTimings, reuseIneligible?: Set<string>, projectOnly = false,
+): Promise<ScopedContextItem[]> {
+  const candidates = new Map<string, ScopedContextItem>();
+  const retrievalStarted = timings === undefined ? 0 : performance.now();
+  const federated = project === undefined ? [] : await federatedEntries(database, {
+    project,
+    ...(fingerprint === undefined ? {} : { fingerprint }),
+    query: queryText,
+    projectOnly,
+    limit: 200,
+  }, runtime);
+  if (timings) timings.retrievalMs = performance.now() - retrievalStarted;
+  for (const hit of federated) {
+    const entry = hit.entry;
+    if (reuseIneligible && fingerprint && applicabilityCompatibility(entry, fingerprint).incompatible) reuseIneligible.add(entry.id);
+    const item = entryScore(entry, hit.origin, hit.score, hit.selectionReasons.includes('exact_signal_match'), queryText);
+    const projection = projectMemoryEntry(database, entry);
+    if (projection === null) { omissions.push({ entryId: entry.id, reason: 'secret' }); continue; }
+    Object.assign(item, projection);
+    item.selectionReasons.push(...hit.selectionReasons);
+    item.selectionReasons = [...new Set(item.selectionReasons)];
+    const feedback = feedbackScore(database, entry.id);
+    item.score += feedback.score;
+    item.scoreComponents.feedback = feedback.score;
+    item.selectionReasons.push(...feedback.reasons);
+    if (item.score <= -50) continue;
+    const previous = candidates.get(item.entryId);
+    if (previous === undefined || item.score > previous.score) candidates.set(item.entryId, item);
+  }
+  return [...candidates.values()].sort((left, right) => right.score - left.score || compareCanonicalStrings(left.entryId, right.entryId));
+}
+
 async function prepareScopedContext(
   database: SqliteDatabase,
   raw: ScopedContextQuery,
   requestedRuntime: HybridSearchRuntime,
   reuse?: ScopedContextResult,
   timings?: ScopedContextTimings,
+  memoryReuse?: ScopedMemoryReuseEffect,
 ): Promise<PreparedScopedContext> {
-  const policyVersion: ScopedContextPolicy = raw.focus === undefined ? SCOPED_CONTEXT_POLICY_VERSION : 'context-ranking-v8';
+  let policyVersion: ScopedContextPolicy = raw.focus === undefined ? SCOPED_CONTEXT_POLICY_VERSION : 'context-ranking-v8';
   const runtime = snapshotSemanticRuntime(requestedRuntime);
   const semanticIdentity = semanticQueryIdentity(runtime);
   const taskProfileHash = canonicalContentHash(raw.taskProfile);
@@ -650,8 +694,20 @@ async function prepareScopedContext(
   const { ordinary: selectionStateHash, retrieval: retrievalStateHash } = contextSelectionStateHashes(database, selectionWorkspaces, {
     includeEcosystem: project !== undefined,
   });
+  const omissions: NonNullable<ScopedContextResult['omissions']> = [];
+  const reuseIneligible = new Set<string>();
+  const baseline = memoryReuse && reuse === undefined
+    ? await collectScopedCandidates(database, project, fingerprint, queryText, runtime, omissions, timings, reuseIneligible, raw.projectOnly) : undefined;
+  const reuseCandidates = baseline?.filter(item => !reuseIneligible.has(item.entryId)).slice(0, memoryReuse!.runtime.maxCandidates) ?? [];
+  const reuseAllowed = baseline !== undefined && reuseCandidates.length > 0 && memoryReuse!.authorize({ project: project ?? null,
+    taskProfileHash, queryHash: '', policyVersion, items: baseline, deliveryId: null, truncated: false, untrusted: true });
+  const reuseIdentity = reuseAllowed ? { runtime: memoryReuse!.runtime.identity,
+    candidates: reuseCandidates.map(item => ({ entryId: item.entryId, revision: item.revision, projection: item.projection })) } : null;
+  if (reuseAllowed) policyVersion = 'context-ranking-v9';
   const queryHash = canonicalContentHash({
+    ...(reuseIdentity === null ? {} : { memoryReuse: reuseIdentity }),
     ...(raw.focus === undefined ? {} : { focus: raw.focus }),
+    ...(raw.projectOnly ? { projectOnly: true } : {}),
     ...(reuse === undefined ? {} : { reusedSelection: deliveryItems(reuse.items) }),
     task: raw.task,
     taskProfile: raw.taskProfile,
@@ -703,6 +759,7 @@ async function prepareScopedContext(
     };
   }
   if (reuse !== undefined) {
+    if (raw.projectOnly && reuse.items.some(item => item.origin !== 'project')) throw new KiokukoError('CONFLICT', 'Project-only context cannot reuse foreign memory');
     if (reuse.project?.workspace !== project?.workspace || reuse.taskProfileHash !== taskProfileHash) {
       throw new KiokukoError('CONFLICT', 'Reused memory scope changed');
     }
@@ -715,34 +772,26 @@ async function prepareScopedContext(
       run, projectState,
     };
   }
-  const candidates = new Map<string, ScopedContextItem>();
-  const omissions: NonNullable<ScopedContextResult['omissions']> = [];
-  const retrievalStarted = timings === undefined ? 0 : performance.now();
-  const federated = project === undefined ? [] : await federatedEntries(database, {
-    project,
-    ...(fingerprint === undefined ? {} : { fingerprint }),
-    query: queryText,
-    limit: 200,
-  }, runtime);
-  if (timings) timings.retrievalMs = performance.now() - retrievalStarted;
-  const rankingStarted = timings === undefined ? 0 : performance.now();
-  for (const hit of federated) {
-    const entry = hit.entry;
-    const item = entryScore(entry, hit.origin, hit.score, hit.selectionReasons.includes('exact_signal_match'), queryText);
-    const projection = projectMemoryEntry(database, entry);
-    if (projection === null) { omissions.push({ entryId: entry.id, reason: 'secret' }); continue; }
-    Object.assign(item, projection);
-    item.selectionReasons.push(...hit.selectionReasons);
-    item.selectionReasons = [...new Set(item.selectionReasons)];
-    const feedback = feedbackScore(database, entry.id);
-    item.score += feedback.score;
-    item.scoreComponents.feedback = feedback.score;
-    item.selectionReasons.push(...feedback.reasons);
-    if (item.score <= -50) continue;
-    const previous = candidates.get(item.entryId);
-    if (previous === undefined || item.score > previous.score) candidates.set(item.entryId, item);
+  let ordered = baseline ?? await collectScopedCandidates(database, project, fingerprint, queryText, runtime, omissions, timings, undefined, raw.projectOnly);
+  if (reuseAllowed && memoryReuse) {
+    const selected = reuseCandidates;
+    const result = await memoryReuse.runtime.select({ task: [raw.task, raw.taskProfile.target, raw.taskProfile.expected].filter(Boolean).join('\n'), constraints: raw.taskProfile.constraints ?? '', binding: queryHash,
+      candidates: selected.map(item => ({ entryId: item.entryId, revision: item.revision,
+        projectionHash: canonicalContentHash(item.projection), text: renderMemoryFields(item)! })) });
+    // Also guards rejected and unselected records, not just the eventual delivery items.
+    if (contextSelectionStateHashes(database, selectionWorkspaces, { includeEcosystem: project !== undefined }).retrieval !== retrievalStateHash) {
+      throw new KiokukoError('CONFLICT', 'Memory changed during semantic selection');
+    }
+    if (result.status === 'completed') {
+      if (result.verdicts.length !== selected.length || result.verdicts.some(v => !['applicable', 'not_applicable', 'uncertain'].includes(v))) throw new KiokukoError('INTEGRITY_ERROR', 'Invalid memory reuse decisions');
+      const verdicts = new Map(selected.map((item, index) => [item.entryId, result.verdicts[index]!]));
+      const applied = applyMemoryReuse(ordered, ordered.map(item => verdicts.get(item.entryId) ?? 'uncertain'));
+      for (const item of applied.excluded) omissions.push({ entryId: item.entryId, reason: 'semantic_not_applicable' });
+      for (const [index, verdict] of result.verdicts.entries()) if (verdict === 'applicable') selected[index]!.selectionReasons.push('semantic_reuse_match');
+      ordered = applied.items;
+    }
   }
-  const ordered = [...candidates.values()].sort((left, right) => right.score - left.score || compareCanonicalStrings(left.entryId, right.entryId));
+  const rankingStarted = timings === undefined ? 0 : performance.now();
   const initial = fitScopedItems(diversifyEpisodes(database, ordered), limit, characterBudget);
   const selected = new Set(initial.items.map(item => item.entryId));
   // Only packed lessons may suppress their source overviews. Retain the first
@@ -872,9 +921,9 @@ export async function queryScopedContextGated<T>(
   raw: ScopedContextQuery,
   decide: (candidate: ScopedContextResult) => ScopedContextGateDecision<T>,
   runtime: HybridSearchRuntime = {},
-  effects: { reuse?: ScopedContextResult; commit?: (context: ScopedContextResult | null) => void; timings?: ScopedContextTimings; beforeCommit?: () => Promise<void> } = {},
+  effects: { reuse?: ScopedContextResult; commit?: (context: ScopedContextResult | null) => void; timings?: ScopedContextTimings; beforeCommit?: () => Promise<void>; memoryReuse?: ScopedMemoryReuseEffect } = {},
 ): Promise<ScopedContextGatedResult<T>> {
-  const prepared = await prepareScopedContext(database, raw, runtime, effects.reuse, effects.timings);
+  const prepared = await prepareScopedContext(database, raw, runtime, effects.reuse, effects.timings, effects.memoryReuse);
   if (effects.beforeCommit) await effects.beforeCommit();
   const deliveryStarted = effects.timings === undefined ? 0 : performance.now();
   const decision = normalizedScopedGateDecision<T>(decide(prepared.result));

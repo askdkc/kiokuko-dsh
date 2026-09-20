@@ -95,7 +95,7 @@
       ]
     },
     "permissions": {
-      "summary": "Local Kiokuko state and managed files, optional network-backed Skills, embeddings and explicit TypeSafe decisions, DSH-managed TypeSafe credentials, and protected or approved subprocesses.",
+      "summary": "Local Kiokuko state and managed files, optional network-backed Skills, embeddings and configured provider-independent typed decisions, DSH-managed TypeSafe credentials, and protected or approved subprocesses.",
       "readPaths": [
         "Configured Kiokuko SQLite database and embedding assets",
         "Registered project roots and their repository metadata",
@@ -120,11 +120,12 @@
         "User-configured embedding endpoint when remote embeddings are enabled",
         "DSH-configured model providers for explicitly started Deep planning and its budgeted memory extraction",
         "DSH-configured model provider for automatic memory review (active by default, up to 12 worker dispatches per project per UTC day), ordinary finalization and configured memory evolution",
-        "TypeSafe fixed systemone endpoint only for explicit Lisp semantic questions; selected state/questions, 256 KiB request/response cap, no retries"
+        "Configured TypeSafe fixed endpoint or explicit Nimble HTTPS/loopback endpoint for automatic task/Skill/draft decisions, projected memory reuse after a synthetic readiness probe, and Lisp; no redirects, retries or provider substitution; exact roles.check no-tool fallback for complete draft review"
       ],
       "credentials": [
         "Optional user-provided GitHub or embedding credentials; never bundled or persisted by the plugin",
-        "TYPESAFE_API_KEY resolved per explicit call; optional DSH-managed set/unset via /kioku-typesafe-key, inherited environment precedence, no worker or Kiokuko storage exposure; input visible while typing"
+        "TYPESAFE_API_KEY resolved per explicit call; optional DSH-managed set/unset via /kioku-typesafe-key, inherited environment precedence, no worker or Kiokuko storage exposure; input visible while typing",
+        "Optional separate Nimble bearer credential reference through DSH; TYPESAFE_API_KEY is prohibited for Nimble; credentials are never persisted in decision records"
       ],
       "failureBoundaries": [
         "Repository identity, run identity, lease, revision, and integrity mismatches fail closed",
@@ -145,6 +146,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs tests/dsh",
     "test:unit": "node scripts/run-tests.mjs tests/dsh/unit",
+    "test:memory-reuse": "node scripts/run-tests.mjs tests/dsh/unit/decisions/memory-reuse.test.ts tests/dsh/integration/memory-reuse.test.ts",
+    "test:evaluation:memory-reuse": "node --import tsx scripts/run-memory-reuse-evaluation.mjs",
     "probe:lisp:p0": "node --import tsx scripts/probe-lisp-p0.ts",
     "test:integration": "node scripts/run-tests.mjs tests/dsh/integration",
     "test:sqlite-vec": "node --import tsx tests/ci/sqlite-vec-package-smoke.ts",
