@@ -564,7 +564,7 @@ export async function retrieveFederatedMemory(
 
 export async function federatedEntries(
   database: SqliteDatabase,
-  input: { project: ResolvedProjectWorkspace; query: string; limit: number; fingerprint?: ProjectFingerprint },
+  input: { project: ResolvedProjectWorkspace; query: string; limit: number; fingerprint?: ProjectFingerprint; projectOnly?: boolean },
   runtime: HybridSearchRuntime = {},
 ): Promise<FederatedEntry[]> {
   const ranked = (workspace: string): RankedRecallHit[] => rankedEntryHits(database, { workspace, query: input.query, limit: Math.min(input.limit, 100) }, runtime).hits;
@@ -574,8 +574,8 @@ export async function federatedEntries(
     score: hit.retrievalScore,
     selectionReasons: ['project_origin', ...hit.reasons],
   }));
-  const ecosystem = ecosystemEntries(database, input.project, input.query, { ...DEFAULT_FEDERATED_POLICY, project: { enabled: true, limit: input.limit }, ecosystem: { ...DEFAULT_FEDERATED_POLICY.ecosystem, limit: input.limit }, global: { enabled: false, limit: 0 } }, false, input.fingerprint, runtime).entries;
-  const global = globalLaneCandidates(database, input.query, Math.min(input.limit, 100), runtime).candidates.map(({ entry, hit }) => ({
+  const ecosystem = input.projectOnly ? [] : ecosystemEntries(database, input.project, input.query, { ...DEFAULT_FEDERATED_POLICY, project: { enabled: true, limit: input.limit }, ecosystem: { ...DEFAULT_FEDERATED_POLICY.ecosystem, limit: input.limit }, global: { enabled: false, limit: 0 } }, false, input.fingerprint, runtime).entries;
+  const global = input.projectOnly ? [] : globalLaneCandidates(database, input.query, Math.min(input.limit, 100), runtime).candidates.map(({ entry, hit }) => ({
     entry,
     origin: 'global' as const,
     score: hit.retrievalScore,

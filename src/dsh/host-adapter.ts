@@ -1,3 +1,5 @@
+import { bindMemoryApplication, memoryApplicationStatus, memoryRetrievalStatus } from '../memory/application.js'
+import { mountMemoryApplication } from './memory-application.js'
 import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
 import { SemanticCompactionConfig, type CompactionAgent } from './semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../memory/reuse.js'
@@ -640,6 +642,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           states.set(item.runId, next); policy.setState(next)
         }
       } })
+    const refreshed = currentSession(item.sessionId)
+    if (refreshed && !refreshed.closed && refreshed.nativeAgent === nativeAgent && refreshed.nativeSession === nativeSession) {
+      await runtime.withDatabase(db => bindMemoryApplication(db, { runId: refreshed.runId, workspace: refreshed.workspace, sessionId: refreshed.sessionId, repositoryRoot: refreshed.repositoryRoot },
+        refreshed.prepared.intake.profile, refreshed.prepared.context, memoryRetrievalStatus(db, refreshed.workspace, refreshed.prepared.context, refreshed.prepared.memoryPolicy.contextWithheld)))
+    }
   }
   const executionBinding = (item: TurnRecord): ExecutionBinding => ({
     runId: item.runId, sessionId: item.sessionId, nativeAgent: item.nativeAgent, nativeSession: item.nativeSession,
@@ -829,6 +836,16 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       sourceStartTurn: event.turn,
     })
     record(event, result, generation)
+    if (result.admitted && result.prepared.run.status === 'active' && currentSession(event.sessionId)?.prepareGeneration === generation && !delegation.isChild(event.nativeAgent ?? {})) {
+      await runtime.withDatabase(db => {
+        if (currentSession(event.sessionId)?.prepareGeneration !== generation) return
+        bindMemoryApplication(db, {
+        runId: result.prepared.run.runId, workspace: result.prepared.project.workspace,
+        sessionId: event.sessionId, repositoryRoot: result.prepared.project.repositoryRoot,
+      }, result.prepared.intake.profile, result.prepared.context,
+      memoryRetrievalStatus(db, result.prepared.project.workspace, result.prepared.context, result.prepared.memoryPolicy.contextWithheld))
+      })
+    }
     if(event.nativeSession && !delegation.isChild(event.nativeAgent??{})) {
       try { await autoReview.bind({workspace:result.prepared.project.workspace,runId:result.prepared.run.runId,session:event.nativeSession as ReviewNativeSession,startSeq:sourceStartSeq}) }
       catch { /* Unsupported or unavailable review source must not veto a native request. */ }
@@ -2478,6 +2495,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     return { runId: item.runId, status: 'cancelled' }
   }
   const closeRun = async (input: DshRunClose): Promise<void> => {
+    if (input.status === 'completed' && !await runtime.withDatabase(db => memoryApplicationStatus(db, input.runId).ready)) input = { ...input, status: 'failed' }
     let scheduled = false
     let scheduledSessionId: string | undefined
     await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
@@ -2540,6 +2558,50 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     advisoryRounds.delete(input.runId)
     resumedLeases.delete(input.runId)
   }
+  const applicationDisposer = tools ? mountMemoryApplication({ tools: tools as any, on: (ctx as any).on.bind(ctx), ...(commands ? { commands: commands as any } : {}) }, {
+    runtime,
+    session(value) {
+      const agent = value as NativeAgent | undefined
+      if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || typeof agent.session.header?.cwd !== 'string') return undefined
+      return { sessionId: agent.session.id, repositoryRoot: realpathSync(agent.session.header.cwd) }
+    },
+    resolve(execution) {
+      const agent = execution.agent, session = agent?.session
+      const item = session ? currentSession(session.id) : undefined
+      if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || delegation.isChild(agent)) return undefined
+      return { runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot }
+    },
+    async refresh(execution, query) {
+      const item = currentSession(execution.agent.session.id)!
+      const captured = item.prepared
+      const assertCurrent = () => {
+        execution.signal.throwIfAborted()
+        if (item.closed || item.prepared !== captured || currentSession(item.sessionId) !== item) throw new Error('Memory refresh task changed')
+      }
+      const result = await runtime.withDatabase(async database => {
+        const value = await refreshContinuedTaskContext({ database, prepared: captured, task: query,
+          capabilities: [...item.catalog.skills, ...item.catalog.tools], assertCurrent,
+          validateCapabilities: async () => {
+            assertCurrent()
+            const fresh = await capabilityCatalog(skills, tools, { agent: { id: item.agentId }, nativeAgent: execution.agent, cwd: item.cwd, signal: execution.signal })
+            gate.assertTurnStoppingCatalog(item.catalog, fresh)
+          } })
+        assertCurrent()
+        bindMemoryApplication(database, { runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot }, captured.intake.profile, value.context,
+          memoryRetrievalStatus(database, item.workspace, value.context, value.memoryPolicy.contextWithheld))
+        return value
+      })
+      assertCurrent()
+      item.prepared = { ...captured, ...result }
+      const activePolicy = states.get(item.runId)
+      if (activePolicy) {
+        const { deliveryId: _previous, ...state } = activePolicy
+        const next = { ...state, ...(result.context?.deliveryId ? { deliveryId: result.context.deliveryId } : {}) }
+        states.set(item.runId, next); policy.setState(next)
+      }
+      return result
+    },
+  }) : undefined
   const observationDisposer = (ctx as any).on('tools/result', (execution: any, result: unknown) => {
     try {
       if (ennoMemory.enabled && execution.parent === undefined) {
@@ -2952,6 +3014,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       try { reviewIdleDisposer?.(); await autoReview.dispose() } catch (error) { failures.push(error) }
       try { await memoryFinalizer.dispose() } catch (error) { failures.push(error) }
       closeEfficiency()
+      try { applicationDisposer?.() } catch (error) { failures.push(error) }
       try { observationDisposer() } catch (error) { failures.push(error) }
       try { await sessionMirror.close() } catch (error) { failures.push(error) }
       try { if (!options.runtime) await runtime.close() } catch (error) { failures.push(error) }

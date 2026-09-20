@@ -41,6 +41,7 @@ export interface ScopedContextQuery {
   fingerprint?: ProjectFingerprint;
   task: string;
   taskProfile: TaskProfile;
+  projectOnly?: boolean;
   recommendedTags?: string[];
   changedPaths?: string[];
   errorSignatures?: string[];
@@ -611,7 +612,7 @@ export interface ScopedMemoryReuseEffect {
 
 async function collectScopedCandidates(
   database: SqliteDatabase, project: ResolvedProjectWorkspace | undefined, fingerprint: ProjectFingerprint | undefined,
-  queryText: string, runtime: HybridSearchRuntime, omissions: NonNullable<ScopedContextResult['omissions']>, timings?: ScopedContextTimings, reuseIneligible?: Set<string>,
+  queryText: string, runtime: HybridSearchRuntime, omissions: NonNullable<ScopedContextResult['omissions']>, timings?: ScopedContextTimings, reuseIneligible?: Set<string>, projectOnly = false,
 ): Promise<ScopedContextItem[]> {
   const candidates = new Map<string, ScopedContextItem>();
   const retrievalStarted = timings === undefined ? 0 : performance.now();
@@ -619,6 +620,7 @@ async function collectScopedCandidates(
     project,
     ...(fingerprint === undefined ? {} : { fingerprint }),
     query: queryText,
+    projectOnly,
     limit: 200,
   }, runtime);
   if (timings) timings.retrievalMs = performance.now() - retrievalStarted;
@@ -695,7 +697,7 @@ async function prepareScopedContext(
   const omissions: NonNullable<ScopedContextResult['omissions']> = [];
   const reuseIneligible = new Set<string>();
   const baseline = memoryReuse && reuse === undefined
-    ? await collectScopedCandidates(database, project, fingerprint, queryText, runtime, omissions, timings, reuseIneligible) : undefined;
+    ? await collectScopedCandidates(database, project, fingerprint, queryText, runtime, omissions, timings, reuseIneligible, raw.projectOnly) : undefined;
   const reuseCandidates = baseline?.filter(item => !reuseIneligible.has(item.entryId)).slice(0, memoryReuse!.runtime.maxCandidates) ?? [];
   const reuseAllowed = baseline !== undefined && reuseCandidates.length > 0 && memoryReuse!.authorize({ project: project ?? null,
     taskProfileHash, queryHash: '', policyVersion, items: baseline, deliveryId: null, truncated: false, untrusted: true });
@@ -705,6 +707,7 @@ async function prepareScopedContext(
   const queryHash = canonicalContentHash({
     ...(reuseIdentity === null ? {} : { memoryReuse: reuseIdentity }),
     ...(raw.focus === undefined ? {} : { focus: raw.focus }),
+    ...(raw.projectOnly ? { projectOnly: true } : {}),
     ...(reuse === undefined ? {} : { reusedSelection: deliveryItems(reuse.items) }),
     task: raw.task,
     taskProfile: raw.taskProfile,
@@ -756,6 +759,7 @@ async function prepareScopedContext(
     };
   }
   if (reuse !== undefined) {
+    if (raw.projectOnly && reuse.items.some(item => item.origin !== 'project')) throw new KiokukoError('CONFLICT', 'Project-only context cannot reuse foreign memory');
     if (reuse.project?.workspace !== project?.workspace || reuse.taskProfileHash !== taskProfileHash) {
       throw new KiokukoError('CONFLICT', 'Reused memory scope changed');
     }
@@ -768,7 +772,7 @@ async function prepareScopedContext(
       run, projectState,
     };
   }
-  let ordered = baseline ?? await collectScopedCandidates(database, project, fingerprint, queryText, runtime, omissions, timings);
+  let ordered = baseline ?? await collectScopedCandidates(database, project, fingerprint, queryText, runtime, omissions, timings, undefined, raw.projectOnly);
   if (reuseAllowed && memoryReuse) {
     const selected = reuseCandidates;
     const result = await memoryReuse.runtime.select({ task: [raw.task, raw.taskProfile.target, raw.taskProfile.expected].filter(Boolean).join('\n'), constraints: raw.taskProfile.constraints ?? '', binding: queryHash,

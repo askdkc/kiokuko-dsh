@@ -167,7 +167,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   })
   const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
-    assert.equal(registered.length, 9)
+    assert.equal(registered.length, 10)
     const archivedExportSession = createNativeSession('archived-export-session')
     nativeSessions.delete(archivedExportSession.id)
     archivedSessions.set(archivedExportSession.id, archivedExportSession)

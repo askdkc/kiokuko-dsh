@@ -1,3 +1,4 @@
+import { CURRENT_MIGRATION_VERSIONS } from '../../fixtures/current-migrations.js'
 import assert from 'node:assert/strict'
 import { copyFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -79,7 +80,7 @@ test('version-10 pending finalization upgrades with prefix mode and unchanged jo
     new LedgerStore(f.database).updateRunStatusInTransaction('run-finalizer', 'completed')
     f.database.prepare("INSERT INTO dsh_memory_finalizations (run_id, workspace, dsh_session_id, source_start_seq, source_end_seq, status, attempt_count, scheduled_at, updated_at) VALUES (?, ?, ?, 0, 8, 'pending', 1, ?, ?)")
       .run('run-finalizer', 'workspace-finalizer', 'archived-dsh-session', '2026-09-09', '2026-09-09')
-    assert.deepEqual(migrateDatabase(f.database, source).applied, [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22])
+    assert.deepEqual(migrateDatabase(f.database, source).applied, CURRENT_MIGRATION_VERSIONS.filter(version => version > 10))
     const row = f.database.prepare('SELECT input_mode AS mode, attempt_count AS attempts, status, source_end_seq AS end FROM dsh_memory_finalizations').get()
     assert.deepEqual({ ...row }, { mode: 'prefix_reuse', attempts: 1, status: 'pending', end: 8 })
     assert.deepEqual(f.database.prepare('PRAGMA foreign_key_check').all(), [])

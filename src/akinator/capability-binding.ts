@@ -3,7 +3,7 @@ import { KiokukoError } from '../errors.js';
 import { canonicalContentHash } from '../serialization/validate.js';
 import { normalizeCapabilityCatalog, type CapabilityDescriptor } from './capabilities.js';
 
-export const CAPABILITY_CATALOG_BINDING_VERSION = 2 as const;
+export const CAPABILITY_CATALOG_BINDING_VERSION = 3 as const;
 export const CAPABILITY_CATALOG_BINDING_METADATA_KEY = 'kiokukoCapabilityCatalogBinding' as const;
 
 type CapabilityCatalogBinding = {

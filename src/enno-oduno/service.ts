@@ -1,3 +1,4 @@
+import { runMemoryAwareVerifiers } from './memory-verification.js';
 import { findSecretInValue } from '../memory/secrets.js'
 import { advisoryContributionSchemaPublic } from './schemas.js'
 import { planCandidate, readPlanDraft } from './plan-draft.js'
@@ -105,7 +106,7 @@ import {
   type VerifierSpec,
   type VerifierRunResult,
 } from './types.js';
-import { RepositoryAuditError, runVerifiers, type VerifierDependencies } from './verifier.js';
+import { RepositoryAuditError, type VerifierDependencies } from './verifier.js';
 import {
   planStartRecoveryBlocker,
   planStartRecoveryError,
@@ -1348,7 +1349,7 @@ export async function reportEnnoWork(
   });
   let rawResults: VerifierRunResult[];
   try {
-    rawResults = await runVerifiers(unit.workUnit.focusedVerifiers, before.repositoryRoot, dependencies);
+    rawResults = await runMemoryAwareVerifiers(database, input.runId, unit.workUnit.focusedVerifiers, before.repositoryRoot, dependencies);
   } catch {
     rawResults = spawnFailedVerifierResults(unit.workUnit.focusedVerifiers);
   }
@@ -1485,7 +1486,7 @@ export async function prepareEnnoVerification(
   } else {
     try {
       results = sanitizedVerifierResults(
-        await runVerifiers(before.contract.finalVerifiers, before.repositoryRoot, dependencies),
+        await runMemoryAwareVerifiers(database, input.runId, before.contract.finalVerifiers, before.repositoryRoot, dependencies),
         before.repositoryRoot,
       );
     } catch (error) {

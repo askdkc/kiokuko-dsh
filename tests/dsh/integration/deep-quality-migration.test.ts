@@ -1,3 +1,4 @@
+import { CURRENT_MIGRATION_VERSIONS } from '../../fixtures/current-migrations.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises'
@@ -31,7 +32,7 @@ test('quality migration preserves a version 1 interrupted attempt byte-for-byte 
     })
     const before = f.db.prepare('SELECT * FROM dsh_deep_attempts').get()!
     const beforeRun = f.db.prepare('SELECT * FROM dsh_deep_runs').get()!
-    assert.deepEqual(migrateDatabase(f.db, migrations).applied, [17, 18, 19, 20, 21, 22])
+    assert.deepEqual(migrateDatabase(f.db, migrations).applied, CURRENT_MIGRATION_VERSIONS.filter(version => version > 16))
     const { job_json, ...after } = f.db.prepare('SELECT * FROM dsh_deep_attempts').get()!
     assert.equal(job_json, null); assert.deepEqual(after, { ...before })
     assert.deepEqual(f.db.prepare('SELECT * FROM dsh_deep_runs').get(), beforeRun)

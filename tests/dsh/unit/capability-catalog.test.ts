@@ -3,7 +3,7 @@ import test from 'node:test'
 import { createDshCapabilityCatalog, assertCompleteDshCapabilityCatalog, assertDshCapabilityCatalogStable } from '../../../src/dsh/capability-catalog.js'
 import { createStandardSkillProvider } from '../../../src/dsh/standard-skill-provider.js'
 import { dshTurnRequestId, resolveGroundedIntakeProfile } from '../../../src/dsh/intake-profile-resolver.js'
-import { MAX_RAW_CAPABILITY_DESCRIPTION_CHARS } from '../../../src/akinator/capabilities.js'
+import { MAX_RAW_CAPABILITY_DESCRIPTION_CHARS, compactCapabilityDescription } from '../../../src/akinator/capabilities.js'
 import { assertCapabilityCatalogBinding, bindCapabilityCatalog } from '../../../src/akinator/capability-binding.js'
 import { canonicalContentHash } from '../../../src/serialization/validate.js'
 
@@ -42,15 +42,14 @@ test('dsh capability descriptions accept native multiline text within the raw ca
     skills,
     tools: [{ kind: 'tool', name: 'native-tool', description }],
   })
-  assert.equal(catalog.tools[0]?.description, description)
+  assert.equal(catalog.tools[0]?.description, compactCapabilityDescription(description).description)
   assert.throws(() => createDshCapabilityCatalog({
     skills,
     tools: [{ kind: 'tool', name: 'unsafe-tool', description: 'before\u0000after' }],
   }), /description is invalid/u)
-  assert.throws(() => createDshCapabilityCatalog({
-    skills,
-    tools: [{ kind: 'tool', name: 'oversized-tool', description: 'x'.repeat(MAX_RAW_CAPABILITY_DESCRIPTION_CHARS + 1) }],
-  }), /description is invalid/u)
+  const oversized = createDshCapabilityCatalog({ skills, tools: [{ kind: 'tool', name: 'oversized-tool', description: 'x'.repeat(MAX_RAW_CAPABILITY_DESCRIPTION_CHARS + 1) }] })
+  assert.equal(oversized.tools[0]?.name, 'oversized-tool')
+  assert.equal(oversized.tools[0]?.description, undefined)
 })
 
 test('grounded profile and dsh turn request identity are deterministic', () => {
@@ -65,13 +64,13 @@ test('grounded profile and dsh turn request identity are deterministic', () => {
   assert.throws(() => resolveGroundedIntakeProfile({ task: 'task', cwd: 'relative' }), /absolute/u)
 })
 
-test('run bindings use version 2 exclusively and reject every other binding version', () => {
+test('run bindings use version 3 exclusively and reject every other binding version', () => {
   const current = [
     { kind: 'skill' as const, name: 'kiokuko-soul' },
     { kind: 'tool' as const, name: 'enno_plan_submit' },
   ]
   const bound = bindCapabilityCatalog({}, current)
-  assert.equal((bound.kiokukoCapabilityCatalogBinding as { version: number }).version, 2)
+  assert.equal((bound.kiokukoCapabilityCatalogBinding as { version: number }).version, 3)
   assert.doesNotThrow(() => assertCapabilityCatalogBinding(bound, current))
 
   const staleVersion = { kiokukoCapabilityCatalogBinding: { version: 1, digest: canonicalContentHash({ version: 1 }) } }

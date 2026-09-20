@@ -1,3 +1,4 @@
+import { CURRENT_MIGRATION_VERSIONS } from '../../fixtures/current-migrations.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { copyFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
@@ -163,7 +164,7 @@ test('migration 22 preserves historical deliveries and omissions with their immu
     await queryScopedContextGated(f.db, { ...f.query, limit: 1 }, value => ({ persist: true, value }))
     const before = f.db.prepare('SELECT * FROM context_delivery_omissions ORDER BY delivery_id, entry_id').all()
     const deliveries = f.db.prepare('SELECT * FROM context_deliveries ORDER BY delivery_id').all()
-    assert.ok(before.length > 0); assert.deepEqual(migrateDatabase(f.db).applied, [22])
+    assert.ok(before.length > 0); assert.deepEqual(migrateDatabase(f.db).applied, CURRENT_MIGRATION_VERSIONS.filter(version => version > 21))
     assert.deepEqual(f.db.prepare('SELECT * FROM context_delivery_omissions ORDER BY delivery_id, entry_id').all(), before)
     assert.deepEqual(f.db.prepare('SELECT * FROM context_deliveries ORDER BY delivery_id').all(), deliveries)
     assert.throws(() => f.db.prepare("UPDATE context_delivery_omissions SET reason='semantic_not_applicable'").run(), /immutable/)
@@ -185,8 +186,8 @@ test('native CoreTasks delivers semantic selection without any embedding service
     const tasks = new CoreTasks(f.runtime as any, undefined, [], decisions)
     const prepared = await tasks.prepare({ requestId: 'native-core', sessionId: 'core', turn: 1, task: 'SQLITE_BUSY', cwd: f.root, capabilities, profileHints: profile, signal: new AbortController().signal })
     assert.equal(prepared.admitted, true); assert.equal(probes, 1); assert.equal(evaluations, 1)
-    assert.equal((prepared.memory as any).project.memory.items.length, 0)
-    assert.equal((prepared.memory as any).combined.items.length, 0, 'Rejected memory must not survive in the combined context')
+    assert.equal(prepared.memory?.project?.memory.items.length, 0)
+    assert.equal(prepared.memory?.combined?.items.length, 0, 'Rejected memory must not survive in the combined context')
     await tasks.finish(prepared, 'completed')
   } finally { await f.cleanup() }
 })

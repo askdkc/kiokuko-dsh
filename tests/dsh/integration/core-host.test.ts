@@ -32,6 +32,40 @@ async function fixture(questions?: { ask(request: any): Promise<any> }) {
   return { root, ctx, agent, session, events, listeners, tools, sections, providers, services, async cleanup() { await rm(root, { recursive: true, force: true }) } }
 }
 
+test('mounted core gates actionable memory and exposes a session-bound diagnostic after interrupted completion', async () => {
+  const f = await fixture(), commands: any[] = []
+  f.services.commands = { register(command: any) { commands.push(command); return () => commands.splice(commands.indexOf(command), 1) } }
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
+  try {
+    const db = openConnection(join(f.root, 'memory.sqlite3'))
+    const workspace = db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
+    recordEntry(db, { workspace, kind: 'lesson', title: 'code migration expectations', body: 'code migration expectations must include the next migration.', createdBy: 'fixture' })
+    db.close()
+    const messages = [{ role: 'user', content: 'Implement code migration expectations' }]
+    await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    const execution = { callId: 'write', name: 'Edit', arguments: {}, agent: f.agent, signal: new AbortController().signal }
+    let mutated = false
+    await assert.rejects(f.listeners.get('tools/pre-execute')!(execution, async () => { mutated = true }), /resolve memory decisions/)
+    assert.equal(mutated, false)
+    const tool = f.tools.find(tool => tool.name === 'task_memory_review')
+    const status = await tool.execute({ action: 'status' }, { ...execution, name: 'task_memory_review' })
+    assert.equal(status.ready, false)
+    assert.equal(status.pending[0].problem, 'decision_missing')
+    await assert.rejects(tool.execute({ action: 'status' }, { ...execution, name: 'task_memory_review', agent: { ...f.agent } }), /identity/)
+    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+    await f.listeners.get('agent/idle')!({ agent: f.agent })
+    const command = commands.find(command => command.name === 'kioku-memory-application')
+    const result = await command.handler({ agent: f.agent, rawInput: 'status --json', signal: execution.signal })
+    const diagnostic = JSON.parse(result.text)
+    assert.equal(diagnostic.integration, 'native_active'); assert.equal(diagnostic.ready, false)
+    assert.equal(diagnostic.verification, 'unobserved')
+    assert.equal('body' in diagnostic.pending[0], false)
+    const stored = openConnection(join(f.root, 'memory.sqlite3'))
+    assert.equal(stored.prepare('SELECT status FROM ledger_runs').get()?.status, 'interrupted')
+    stored.close()
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
 test('core native path handles conversation, research, writing and project memory without coding choices or optional runtimes', async () => {
   const f = await fixture()
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })

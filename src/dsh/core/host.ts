@@ -1,3 +1,6 @@
+import { capabilityCatalogDigest } from '../../akinator/capability-binding.js'
+import { memoryApplicationMode } from '../../memory/application.js'
+import { mountMemoryApplication, MEMORY_APPLICATION_GUIDANCE } from '../memory-application.js'
 import { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
 import { SemanticCompactionConfig } from '../semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../../memory/reuse.js'
@@ -126,6 +129,36 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     await modules.mount({ context: ctx, repositoryRoot: root, runtime, prompts, decisions, semanticCompaction, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
       beforeTask(handler) { beforeTask.add(handler); return () => { beforeTask.delete(handler) } } })
     if (!claimed) {
+      disposers.push(mountMemoryApplication({ tools, on: ctx.on.bind(ctx) as any, ...(get('commands') ? { commands: get('commands') } : {}) }, { runtime,
+        session(agent) {
+          if (!agent) return undefined
+          bind(agent as NativeAgent)
+          return { sessionId: (agent as NativeAgent).session.id, repositoryRoot: root }
+        },
+        resolve(execution) {
+          if (!execution.agent) return undefined
+          bind(execution.agent)
+          const current = active.get(execution.agent.session.id)
+          return current && current.agent === execution.agent && current.task.admitted && !current.checkpointed
+            ? { ...current.task, repositoryRoot: root } : undefined
+        },
+        async refresh(execution, query) {
+          bind(execution.agent)
+          const current = active.get(execution.agent.session.id)
+          if (!current || current.agent !== execution.agent) throw new Error('No task for memory refresh')
+          const memory = await tasks.refresh(current.task, query, execution.signal, async () => {
+            bind(execution.agent)
+            const snapshot = await skills.snapshot({ scope: execution.agent, cwd: root, signal: execution.signal })
+            if (!snapshot.complete) throw new Error('Native capability inventory is incomplete')
+            const schemas = await tools.schemas(execution.agent)
+            const capabilities = [...snapshot.skills.filter((skill: any) => skill.invocation?.modelInvocable !== false).map((skill: any) => ({ kind: 'skill', name: skill.name, ...(skill.description ? { description: skill.description } : {}) })),
+              ...schemas.map((tool: any) => ({ kind: 'tool', name: tool.name, ...(tool.description ? { description: tool.description } : {}) }))]
+            if (capabilityCatalogDigest(capabilities) !== capabilityCatalogDigest(current.task.capabilities)) throw new Error('Native capabilities changed during memory refresh')
+          })
+          current.task = { ...current.task, ...memory }
+          return memory
+        },
+      }))
       const listen = (name: string, handler: (...args: any[]) => unknown) => disposers.push((ctx.on as any)(name, handler, { prepend: true }))
       listen('agent/pre-step', (payload: PreStep, next: () => Promise<any>) => track((async () => {
         if (stopped) return { kind: 'reject' }
@@ -166,7 +199,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         if (!task.admitted) return { kind: 'reject' }
         const result = await next()
         if (result.kind !== 'enter') return result
-        const guidance: string[] = []
+        const guidance: string[] = memoryApplicationMode(task.profile) === 'none' ? [] : [MEMORY_APPLICATION_GUIDANCE]
         for (const name of task.selectedSkills ?? []) {
           if (name === 'kiokuko-soul') continue
           const loaded = await prompts.get(name)

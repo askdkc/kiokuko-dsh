@@ -106,6 +106,8 @@ Lisp を選ぶと、Lisp 用ツールで通常実行します。役小角を使�
 
 TypeSafe または Nimble の利用確認が成功すると、既存検索の候補を今回の依頼に使えるか判定します。埋め込みは必須ではありません。`memoryReuse.mode: off` で停止できます。[設定・確認コマンド・評価方法](docs/memory-reuse.md)を参照してください。
 
+[記憶の適用と検証](docs/memory-application.md)では、採否とホストが観測した回帰検証を記録します。現在の会話の状態は `/kioku-memory-application status`、詳細は `/kioku-memory-application status --json` で確認できます。
+
 ### 過去のツール出力の短縮
 
 [Semantic compaction](docs/semantic-compaction.md) は、通常・Enno・Lisp モードで、DSH の自動圧縮前に古いツール出力を選んで短縮します。既定値は `semanticCompaction: { mode: auto, budgetMs: 5000 }` です。利用可能と確認された型付き判定バックエンドと、対応するネイティブサービスが必要です。`/kioku-decisions status` で有効状態と直近の結果を確認できます。

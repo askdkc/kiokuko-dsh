@@ -110,6 +110,8 @@ See [setup, APIs, limits and recovery](docs/lisp.md).
 against the current request after a synthetic provider probe succeeds. Embeddings
 are optional; `memoryReuse.mode: off` disables this additional selection.
 
+[Memory application and verification](docs/memory-application.md) records dispositions and host-observed regression evidence. Check the current native session with `/kioku-memory-application status` or `/kioku-memory-application status --json`.
+
 The compatibility [TypeSafe API](docs/typesafe.md) use `/kioku-typesafe-key` for
 DSH-managed credentials and `kioku.typesafe:evaluate` for explicit semantic
 questions. Lisp consumes the answers; file-change approval remains required.

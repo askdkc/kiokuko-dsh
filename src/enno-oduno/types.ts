@@ -454,6 +454,8 @@ export interface VerifierRunResult {
   stderrPreview: string;
   stdoutDigest: string;
   stderrDigest: string;
+  /** Stream-observed skipped/pending checks, not inferred from exit status. */
+  skipped?: boolean;
   repositoryStatePolicyVersion?: number | undefined;
   repositoryStateDigest?: string | undefined;
   changedDuringVerification?: boolean | undefined;
