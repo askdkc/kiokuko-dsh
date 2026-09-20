@@ -47,6 +47,8 @@ test('native path blocks missing decisions, observes failing next-migration regr
   })
   const execution = (callId: string, name = 'Bash', args: unknown = { command: 'node check.mjs' }) => ({ callId, name, arguments: args, agent, signal: new AbortController().signal })
   try {
+    assert.deepEqual(Reflect.ownKeys(tools[0].parameters), Object.keys(tools[0].parameters),
+      'native DSH schema projection rejects non-enumerable or symbol properties')
     assert.equal(f.status().ready, false)
     let effects = 0
     await assert.rejects(listeners.get('tools/pre-execute')(execution('missing', 'Edit'), async () => { effects++ }), /resolve memory decisions/)

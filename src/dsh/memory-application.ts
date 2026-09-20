@@ -52,7 +52,8 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
     } }))
   disposers.push(ctx.tools.register({ name: 'task_memory_review', modelFacing: true,
     description: MEMORY_APPLICATION_GUIDANCE,
-    parameters: z.toJSONSchema(inputSchema), output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
+    // Zod attaches non-enumerable ~standard metadata; DSH requires plain JSON.
+    parameters: JSON.parse(JSON.stringify(z.toJSONSchema(inputSchema))), output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args: unknown, execution: NativeExecution) => {
       const identity = host.resolve(execution)
       if (!identity || execution.parent !== undefined || execution.name !== 'task_memory_review') throw new Error('No active native task for memory application')
