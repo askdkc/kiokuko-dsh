@@ -50,7 +50,7 @@ export async function collectReviewEvidence(events: AsyncIterable<DshLogEvent>, 
   for await (const event of events) {
     const data = object(event.data), input = humanInput(event)
     let text = input?.text, seqs = [event.seq], role: ReviewEvidence['role'] = 'user_assertion'
-    if (event.type === 'tool/call' && typeof data.callId === 'string' && typeof data.name === 'string' && !/memory|kiok|recall|enno|curator|task_prepare/iu.test(data.name)) {
+    if (event.type === 'tool/call' && typeof data.callId === 'string' && typeof data.name === 'string' && !/memory|kiok|recall|enno|curator|task_prepare|^observation_read$/iu.test(data.name)) {
       if (calls.size >= 128) throw new Error('input_too_large')
       calls.set(data.callId,event)
     }

@@ -45,10 +45,10 @@ let semanticReady = false, semanticCalls = 0
 const originalFetch = globalThis.fetch
 globalThis.fetch = async (_url, init) => {
   const body = JSON.parse(String(init?.body))
-  if (!body.questions?.fruit && body.state?.policy !== 'semantic-results-v1') return new Response('', { status: 503 })
-  if (body.state?.policy === 'semantic-results-v1') semanticCalls++
+  if (!body.questions?.fruit && body.state?.policy !== 'semantic-results-v2') return new Response('', { status: 503 })
+  if (body.state?.policy === 'semantic-results-v2') semanticCalls++
   return Response.json({ model: body.model, answers: Object.fromEntries(Object.entries(body.questions).map(([id, question]) => {
-    const choice = id === 'fruit' ? 'apple' : 'shorten'
+    const choice = id === 'fruit' ? 'apple' : id === 'timing' ? 'compact' : 'shorten'
     return [id, { type: 'choice', choice, confidence: 1, probabilities: Object.fromEntries(Object.keys(question.criteria).map(key => [key, key === choice ? 1 : 0])) }]
   })) })
 }
@@ -124,6 +124,28 @@ try {
     assert.equal(packedEvents.filter(event => event.type === 'tool/result').length, 2)
     assert.equal(packedEvents.some(event => event.type === 'compaction/end'), false)
   } finally { await packedHandle.dispose(); semanticReady = false }
+  // The delivered auxiliary reader must work independently of classifier readiness.
+  const observationEvents = structuredClone(events)
+  observationEvents.splice(9, 0, { type: 'tool/call', data: { turn: 1, step: 1, callId: 'packed-old', name: 'read', arguments: '{}' } })
+  observationEvents.forEach((event, seq) => { event.seq = seq; event.time = seq })
+  observationEvents[10].sourceEventSeqs = [9]
+  for (const seq of [13, 14]) observationEvents[seq] = { seq, time: seq, type: 'assistant/message', surfaceOp: 'append',
+    data: { turn: 1, step: 1, stream: [], message: { id: `full-observation-${seq}`, role: 'assistant', source: { kind: 'model', provider: 'fixture', model: 'fixture' }, content: [{ type: 'text', text: 'Read the full original.' }] } } }
+  const observationAgent = await ctx.agents.create({ sessionId: session.SessionId('packed-observation'), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: directory }, seed: observationEvents })
+  try {
+    observationAgent.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'こんにちは' }], source: { kind: 'user' } }))
+    await observationAgent.agent.whenIdle()
+    const output = provider.requests.at(-1).messages.flatMap(message => message.content).find(block => block.type === 'tool-result' && block.toolCallId === 'packed-old').content[0].text
+    assert.match(output, /^\[Kiokuko ObservationPack v1\]/)
+    const reference = JSON.parse(output.split('\n')[1])
+    const page = await ctx.tools.execute({ callId: 'packed-original-read', name: 'observation_read', arguments: { handle: reference.handle, offset: 200000, limit: 80 }, agent: observationAgent.agent, signal: new AbortController().signal })
+    assert.equal(page.isError, false, JSON.stringify(page))
+    assert.equal(page.value.text, resultText.slice(200000, 200080))
+    const status = JSON.parse((await registeredCommands.get('kioku-decisions').handler({ rawInput: 'status', agent: observationAgent.agent, signal: new AbortController().signal })).text)
+    assert.equal(status.observationPack.mode, 'auto'); assert.equal(status.observationPack.metrics.packed, 1)
+    assert.equal(status.observationPack.metrics.reads, 1); assert.equal(status.semanticCompaction.preemptive, true)
+    assert.equal(semanticCalls, 1, 'packing and original retrieval do not call Jev')
+  } finally { await observationAgent.dispose() }
   if (combination.includes('lisp')) {
     let effects = 0
     const removeProbe = ctx.tools.register({ name: 'module_fixture_write', description: 'fixture effect', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => ++effects })

@@ -37,8 +37,12 @@ export function databaseDecisionStore(runtime: { withDatabase<T>(operation: (db:
 export class DecisionService {
   readonly memoryReuse: MemoryReuseConfiguration
   readonly semanticCompaction: SemanticCompactionConfiguration
+  private readonly compactionMetrics = { calls: 0, inputBytes: 0, elapsedMs: 0, inputTokens: 0, outputTokens: 0, usageReports: 0 }
+  private observationStatus: unknown = null
+  reportObservationPack(mode: string, metrics: Record<string, number>): void { this.observationStatus = { mode, metrics } }
+  private lastPreemptive: CompactionOutcome | null = null
   private compactionStatus: { supported: boolean; nativeAuto: boolean; last: CompactionOutcome | null } = { supported: false, nativeAuto: false, last: null }
-  reportCompaction(supported: boolean, last?: CompactionOutcome, nativeAuto = this.compactionStatus.nativeAuto): void { this.compactionStatus = { supported, nativeAuto, last: last ?? this.compactionStatus.last } }
+  reportCompaction(supported: boolean, last?: CompactionOutcome, nativeAuto = this.compactionStatus.nativeAuto): void { this.compactionStatus = { supported, nativeAuto, last: last ?? this.compactionStatus.last }; if (last?.trigger === 'todo_boundary') this.lastPreemptive = last }
   private readonly readiness: DecisionReadinessMonitor
   private readonly memoryConcurrency = new MemoryDecisionConcurrency()
   private readonly bindings = new Map<string, Promise<DecisionConfiguration>>()
@@ -54,7 +58,15 @@ export class DecisionService {
   private memoryProvider(config: DecisionConfiguration): DecisionProvider {
     const provider = this.provider(config)
     return { capabilities: provider.capabilities, evaluate: (batch, signal) => this.memoryConcurrency.run(signal,
-      () => abortable(provider.evaluate(batch, signal), signal)) }
+      async () => {
+        if (batch.purpose !== 'compaction') return abortable(provider.evaluate(batch, signal), signal)
+        const started = performance.now(); this.compactionMetrics.calls++; this.compactionMetrics.inputBytes += Buffer.byteLength(JSON.stringify(batch))
+        try {
+          const result = await abortable(provider.evaluate(batch, signal), signal)
+          if (result.usage) { this.compactionMetrics.usageReports++; this.compactionMetrics.inputTokens += result.usage.input_tokens; this.compactionMetrics.outputTokens += result.usage.output_tokens }
+          return result
+        } finally { this.compactionMetrics.elapsedMs += Math.round(performance.now() - started) }
+      }) }
   }
   probe(signal: AbortSignal, force = false) { return this.readiness.probe(this.config, signal, force) }
   async inspectStatus(signal: AbortSignal) { await this.readiness.inspect(this.config, signal); return this.status() }
@@ -76,7 +88,8 @@ export class DecisionService {
     return { mode: this.config.mode, provider: this.config.provider, model: selected.model ?? null, timeoutMs: selected.timeoutMs,
       configurationReady: this.config.mode !== 'off' && (this.config.provider !== 'nimble' || Boolean(this.config.nimble.endpoint && this.config.nimble.model)),
       limits: this.provider(this.config).capabilities, acceptance: selected.acceptance, policyVersion: POLICY_VERSION, lastFallback: this.lastFallback,
-      semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, active: this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },
+      observationPack: this.observationStatus,
+      semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, metrics: this.compactionMetrics, lastPreemptive: this.lastPreemptive, preemptiveActive: this.semanticCompaction.preemptive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready', active: this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },
       readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' } }
   }
   async evaluate(requestId: string, input: unknown, signal: AbortSignal, catalogDigest = ''): Promise<DecisionOutcome> {

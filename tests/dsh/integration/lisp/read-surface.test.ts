@@ -63,6 +63,7 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
       output: { schema: { type: 'json' }, render: () => [] }, execute })
     const searchContext = placement === 'mixed' ? parent.ctx : toolContext
     for (const name of ['glob', 'grep']) searchContext.get('tools').register(define(name, async () => ['PLAN.md']))
+    const removeObservation = toolContext.get('tools').register(define('observation_read', async () => ({ text: 'old handle original' })))
     toolContext.get('tools').register(define('bash', async () => ++mutations))
     if (placement === 'restricted-preset') parent.ctx.get('tools').restrict({ deny: ['grep'] })
     surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true }))
@@ -75,7 +76,7 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     // A first call can already be queued when Lisp replaces the model surface.
     const firstRead = await call('read', { file_path: 'skills/one-shot-software-completion/SKILL.md' })
     assert.equal(firstRead.isError, false, JSON.stringify(firstRead))
-    const admittedReads = placement === 'restricted-preset' ? ['read', 'glob', 'skill'] : ['read', 'glob', 'grep', 'skill']
+    const admittedReads = placement === 'restricted-preset' ? ['read', 'glob', 'skill', 'observation_read'] : ['read', 'glob', 'grep', 'skill', 'observation_read']
     for (const name of admittedReads) assert.ok(ctx.tools.schemas(parent).some((s: any) => s.name === name), name)
     if (placement === 'restricted-preset') {
       assert.equal(ctx.tools.schemas(parent).some((s: any) => s.name === 'grep'), false)
@@ -84,6 +85,7 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     for (const nested of [false, true]) {
       const result = await call('read', { file_path: 'PLAN.md' }, parent, nested)
       assert.equal(result.isError, false, JSON.stringify(result)); assert.match(JSON.stringify(result), /PLAN fixture/)
+      assert.equal((await call('observation_read', { handle: 'old-handle' }, parent, nested)).isError, false)
       const loaded = await call('skill', { name: skill.name }, parent, nested)
       assert.equal(loaded.isError, false, JSON.stringify(loaded)); assert.match(JSON.stringify(loaded), /Fixture Skill body/)
     }
@@ -102,8 +104,8 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
       }
     }
     assert.equal((await call('read', { file_path: 'PLAN.md' }, child)).isError, true)
-    if (placement === 'agent') { await readPlugin.dispose(); await skillPlugin.dispose() }
-    for (const name of ['read', 'skill']) {
+    if (placement === 'agent') { removeObservation(); await readPlugin.dispose(); await skillPlugin.dispose() }
+    for (const name of ['read', 'skill', 'observation_read']) {
       const undo = parent.ctx.get('tools').register(define(name, async () => ++mutations))
       assert.equal((await call(name)).isError, true, 'same-name replacements must not inherit permission')
       undo()

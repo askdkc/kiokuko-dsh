@@ -1,3 +1,4 @@
+import { ObservationPackConfig } from '../observation-pack/policy.js'
 import { capabilityCatalogDigest } from '../../akinator/capability-binding.js'
 import { memoryApplicationMode } from '../../memory/application.js'
 import { mountMemoryApplication, MEMORY_APPLICATION_GUIDANCE } from '../memory-application.js'
@@ -42,6 +43,7 @@ export const CoreConfig = z.object({
   typedDecisions: TypedDecisionsConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),
   semanticCompaction: SemanticCompactionConfig.prefault({}),
+  observationPack: ObservationPackConfig.prefault({}),
   repositoryRoot: z.string().min(1).optional(),
   databasePath: z.string().min(1).optional(),
   migrationsDirectory: z.string().min(1).optional(),
@@ -71,7 +73,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const prompts = configuredSkillPrompts(modules.resources(), config.skillPrompts.mode, new URL('../../../dist/dsh/skill-prompts.json', import.meta.url))
   const questions = get('userQuestions') as DshUserQuestions | undefined
   const decisions = createDecisionService(ctx, runtime, config.typedDecisions, config.memoryReuse, config.semanticCompaction)
-  const semanticCompaction = new SemanticCompactionCoordinator(ctx as any, decisions, root)
+  const semanticCompaction = new SemanticCompactionCoordinator(ctx as any, decisions, root, config.observationPack)
   const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions)
   function bind(agent: NativeAgent): void {
     if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || realpathSync(agent.session.header.cwd) !== root) throw new Error('Native task identity mismatch')

@@ -28,6 +28,7 @@ function finalizationPrompt(evidence: string, job: FinalizationRequestJob): stri
     `The target run is exactly DSH event seq ${job.sourceStartSeq} through ${job.sourceEndSeq}, inclusive.`,
     'Use the conversation prefix only as context. Store only durable information established, changed, verified, or learned inside the target run.',
     'Use the weighted target-run evidence below as the authoritative extraction window. Never store facts solely because they appear in an earlier conversation prefix.',
+    'ObservationPack and shortened tool displays are incomplete excerpts, not independent execution evidence. Use original native evidence selected below; do not infer omitted content or treat observation_read retrieval as a new verification.',
     'Do not call tools. Do not include hidden reasoning, credentials, raw file dumps, transient chatter, or facts not supported by the log.',
     'Keep decisions, user preferences, verified outcomes, reusable lessons, important references, failure causes, and recovery constraints.',
     'Return JSON only, with this exact shape:',

@@ -148,4 +148,4 @@ are optional; `memoryReuse.mode: off` disables this additional selection.
 
 ### Semantic compaction
 
-[Semantic compaction](docs/semantic-compaction.md) selectively shortens old tool results before native automatic compaction in normal, Enno and Lisp modes. It defaults to `semanticCompaction: { mode: auto, budgetMs: 5000 }` and requires a ready typed-decision backend and supported native services. Inspect activation and the last outcome with `/kioku-decisions status`.
+ObservationPack (`observationPack: { mode: auto }`) preserves large successful native tool results for two model calls, then replaces them with excerpts and an `observation_read` handle. [Semantic compaction](docs/semantic-compaction.md) evaluates TODO completion boundaries and selectively shortens old tool results before native automatic compaction in normal, Enno and Lisp modes. It defaults to `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` and requires a ready typed-decision backend and supported native services. Inspect activation and the last outcome with `/kioku-decisions status`.

@@ -40,6 +40,7 @@ export interface DshLogEvent {
   readonly seq: number
   readonly time: number
   readonly data?: unknown
+  readonly sourceEventSeqs?: readonly number[]
   readonly surfaceOp?: 'append' | DshSurfaceReplacement
 }
 
@@ -633,6 +634,12 @@ export async function reduceDshFinalizationLog(
     if (event.type === 'request/context') latestContext = event
     if (event.type === 'assistant/message' && latestInputUsage([event]) !== undefined) latestUsage = event
 
+    // Surface replacements are representations of earlier evidence, not new executions.
+    // The original was already considered with its native sequence and content hash.
+    const representation = event.type === 'tool/result' && event.surfaceOp !== undefined && event.surfaceOp !== 'append'
+      && event.sourceEventSeqs?.length === 1
+      && surfaceEvents.get(event.sourceEventSeqs[0]!)?.type === 'tool/result'
+
     if (event.surfaceOp === 'append') {
       nodes.push(event.seq)
       surfaceEvents.set(event.seq, event)
@@ -659,6 +666,7 @@ export async function reduceDshFinalizationLog(
     digest.update(canonicalJson(event), 'utf8').update('\n')
     eventCount += 1
     lastTargetType = event.type
+    if (representation) { if (event.seq === end) sawEnd = true; continue }
     considerEvidence(evidenceHeap, event)
     const nativeData = record(event.data)
     if (event.type === 'tool/call' && typeof nativeData?.callId === 'string' && typeof nativeData.name === 'string') {
@@ -1316,7 +1324,7 @@ export function episodeEvidenceForEvent(event: DshLogEvent, boundToolName?: stri
   const kind = event.type === 'user/message' ? 'user' : event.type === 'tool/call' ? 'action' : event.type === 'tool/result' ? 'result' : undefined
   if (!kind || kind === 'result' && boundToolName === undefined) return undefined
   // Memory/control tools must not recycle previous knowledge into new supporting evidence.
-  if (/kiok|memory|recall|enno|memos|curator|task_prepare|task_context_read/i.test(String(boundToolName ?? data.name ?? ''))) return undefined
+  if (/kiok|memory|recall|enno|memos|curator|task_prepare|task_context_read|^observation_read$/i.test(String(boundToolName ?? data.name ?? ''))) return undefined
   const text = redactDshSourceText(eventText(event))
   if (!text || text.length > 4000) return undefined
   const execution = record(data.result) ?? record(data.meta) ?? record(record(data.message)?.output) ?? data

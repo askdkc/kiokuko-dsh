@@ -144,4 +144,4 @@ TypeSafe または Nimble の利用確認が成功すると、既存検索の候
 
 ### 過去のツール出力の短縮
 
-[Semantic compaction](docs/semantic-compaction.md) は、通常・Enno・Lisp モードで、DSH の自動圧縮前に古いツール出力を選んで短縮します。既定値は `semanticCompaction: { mode: auto, budgetMs: 5000 }` です。利用可能と確認された型付き判定バックエンドと、対応するネイティブサービスが必要です。`/kioku-decisions status` で有効状態と直近の結果を確認できます。
+ObservationPack（既定値 `observationPack: { mode: auto }`）は、大きな正常終了のツール結果をモデルへ2回提示した後、抜粋と `observation_read` で原文を取得できる参照に置き換えます。[Semantic compaction](docs/semantic-compaction.md) は、TODOの完了境界でも前倒し判定を行い、通常・Enno・Lisp モードで、DSH の自動圧縮前に古いツール出力を選んで短縮します。既定値は `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` です。利用可能と確認された型付き判定バックエンドと、対応するネイティブサービスが必要です。`/kioku-decisions status` で有効状態と直近の結果を確認できます。

@@ -160,9 +160,9 @@ test('compiled Skill delivery: protected Lisp enable and lisp_describe reach the
     assert.ok(outcomes.some((result: any) => result.ok && result.value?.json === 'value=42'))
     assert.ok(outcomes.some((result: any) => result.ok && result.value?.json === 'value=10'))
     assert.ok(outcomes.some((result: any) => result.ok && result.value?.documentation?.includes('exactly one nonempty literal')))
-    const expectedTools = ['lisp_cancel','lisp_describe','lisp_eval','lisp_inspect','lisp_reset','lisp_status','skill']
+    const expectedTools = ['lisp_cancel','lisp_describe','lisp_eval','lisp_inspect','lisp_reset','lisp_status','observation_read','skill']
     for (const request of [f.model.requests[0], last]) assert.deepEqual(request.tools.map((t:any)=>t.name).sort(), expectedTools,
-      'the first request already exposes protected Lisp and the available native Skill reader, never blocked mutations')
+      'the first request already exposes protected Lisp and the native observation and Skill readers, never blocked mutations')
   } finally {await f.close()}
 })
 
@@ -188,7 +188,7 @@ test('Lisp selected during initial admission reaches the first model request', {
     for (const request of f.model.requests) {
       requireBody(request, 'kiokuko-lisp')
       assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(),
-        ['lisp_cancel', 'lisp_describe', 'lisp_eval', 'lisp_inspect', 'lisp_reset', 'lisp_status', 'skill'])
+        ['lisp_cancel', 'lisp_describe', 'lisp_eval', 'lisp_inspect', 'lisp_reset', 'lisp_status', 'observation_read', 'skill'])
     }
   } finally { await f.close() }
 })
@@ -208,7 +208,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
     const block = request.messages.flatMap((m: any) => m.content).filter((b: any) => b.type === 'tool-result').at(-1)
     return JSON.parse(block.content.find((b: any) => b.type === 'text').text)
   }
-  const expectedTools = ['lisp_cancel','lisp_describe','lisp_eval','lisp_inspect','lisp_reset','lisp_status','skill']
+  const expectedTools = ['lisp_cancel','lisp_describe','lisp_eval','lisp_inspect','lisp_reset','lisp_status','observation_read','skill']
   const args = { operationId: 'workflow-batch', code: '(kioku.files:propose-write "a.txt" "new-a") (kioku.files:propose-write "b.txt" "new-b") (write-string (make-string 12000 :initial-element #\\a)) :done' }
   let hostId = ''
   try {
