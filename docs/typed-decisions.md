@@ -1,7 +1,7 @@
 # Typed AI decisions
 
 Kiokuko uses one host-owned decision service for provisional Akinator task types,
-installed Skill relevance, Zenki draft review and semantic decisions inside Lisp.
+installed Skill relevance, past memory reuse, Zenki draft review and semantic decisions inside Lisp.
 The selected adapter owns its HTTP protocol and uncertainty policy. Domain
 workflows consume `selected` or `abstained`; they do not depend on model names.
 
@@ -23,12 +23,16 @@ Set the TypeSafe key through DSH, then inspect status:
 ```text
 /kioku-typesafe-key <key>
 /kioku-typesafe-key status
+/kioku-decisions probe
 /kioku-decisions status
 ```
 
 Key input is visible while typing. Status makes no inference call and never shows
-credentials. Configuration readiness is separate from working authentication;
-the last fallback reason reports an observed failure, not an availability probe.
+credentials. `probe` sends a fixed synthetic question with a known answer; it
+creates no decision history. Configuration readiness is separate from working
+authentication. Status includes the last probe time, reason and whether automatic
+[memory reuse](memory-reuse.md) is currently available. Status resolves local
+credential availability but makes no inference call.
 
 For Nimble, supply the complete endpoint and model explicitly:
 

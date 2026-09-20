@@ -1,3 +1,4 @@
+import { createMemoryReuseRuntime } from './memory-reuse.js'
 import type { DecisionService } from './decisions/service.js'
 import { classifyTask, selectInstalledSkills } from './decisions/workflows.js'
 import { AkinatorMemoryConfig, type ProbeConfig } from '../akinator/memory-probe-types.js'
@@ -166,8 +167,9 @@ export class DshIntakeGate {
     }
     const operation = (async (): Promise<DshIntakeGateResult> => {
       const taskType = await classifyTask(this.decisions, requestId, grounded.task, event.profileHints?.taskType, event.signal)
+      const memoryReuse = await createMemoryReuseRuntime(this.decisions, requestId, event.signal)
       let prepared = await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
-        requestId,
+        requestId, memoryReuse,
         executionSelection: this.executionSelection,
         sessionOwnership: true,
         task: grounded.task,
@@ -207,7 +209,7 @@ export class DshIntakeGate {
           })
         assertDshCapabilityCatalogStable(event.capabilities, currentCapabilities)
         prepared = await this.#runtime.withDatabase((database) => answerAgentTask(database, {
-          sessionId: prepared.intake.sessionId,
+          memoryReuse, sessionId: prepared.intake.sessionId,
           runId: prepared.run.runId,
           dshSessionId: event.sessionId,
           questionId: prepared.intake.question!.id,

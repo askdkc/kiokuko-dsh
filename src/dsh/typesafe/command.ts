@@ -8,7 +8,7 @@ export function typeSafeCredentials(ctx: { get(name: string, strict?: boolean): 
 function statusText(info: CredentialInfo): string {
   return `TypeSafe: ${info.configured ? 'configured' : 'not configured'}; source: ${info.source ?? 'none'}; ${info.writable ? 'writable' : 'read-only'}.`
 }
-export function mountTypeSafeCommand(commands: { register(definition: DshNativeCommandDefinition): () => void }, credentials: TypeSafeCredentials): () => void {
+export function mountTypeSafeCommand(commands: { register(definition: DshNativeCommandDefinition): () => void }, credentials: TypeSafeCredentials, onChanged?: () => void): () => void {
   return commands.register({ name: 'kioku-typesafe-key', description: 'Save the TypeSafe key, inspect status, or clear the stored key. Input is visible while typing.',
     input: { hint: '<key> | status | clear' }, recordInput: false,
     handler: async invocation => {
@@ -17,6 +17,7 @@ export function mountTypeSafeCommand(commands: { register(definition: DshNativeC
         const input = invocation.rawInput.trim()
         if (!input || input === 'status') return { kind: 'success', text: statusText(await credentials.status()) }
         await credentials.change(input === 'clear' ? undefined : input, invocation.signal)
+        onChanged?.()
         if (input !== 'clear') return { kind: 'success', text: 'TypeSafe key saved. No API request was made; the key has not been verified.' }
         try { return { kind: 'success', text: `Stored TypeSafe key cleared. ${statusText(await credentials.status())}` } }
         catch { return { kind: 'success', text: 'Stored TypeSafe key cleared. Remaining credential source could not be checked; run /kioku-typesafe-key status.' } }

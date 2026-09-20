@@ -1,4 +1,6 @@
 import type { DecisionService } from '../decisions/service.js'
+import { createMemoryReuseRuntime } from '../memory-reuse.js'
+import { readContextRunRetrievalState } from '../../context/run-state.js'
 import { classifyTask, selectInstalledSkills } from '../decisions/workflows.js'
 import { legacyModuleRequirements } from '../modules/legacy-bindings.js'
 import { realpathSync } from 'node:fs'
@@ -93,12 +95,24 @@ export class CoreTasks {
         const capabilities = resolveCapabilities({ task: input.task, profile: state.session.profile, recommendedTags: [], capabilities: input.capabilities, memoryUse: 'none' })
         const run = new LedgerStore(db).readRun(opened.runId)
         const admitted = state.status !== 'needs_answer' && run?.status === 'active' && !hasBlockingRequiredCapability(capabilities)
+        const admissionState = admitted ? readContextRunRetrievalState(db, opened.runId).stateHash : null
+        const selectedSkills = admitted ? await selectInstalledSkills(this.decisions, input.requestId, input.task, input.capabilities, capabilities, input.signal) : []
         let memory: unknown = null
         if (admitted) {
           const policy = deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities)
-          if (!policy.contextWithheld) memory = await recallScopedMemory(db, { cwd, project, query: input.task, scope: 'project', limit: 5, maxChars: 4000, readOnly: true })
+          if (!policy.contextWithheld) {
+            const memoryReuse = await createMemoryReuseRuntime(this.decisions, input.requestId, input.signal)
+            const assertCurrent = () => {
+              input.signal.throwIfAborted()
+              if (readContextRunRetrievalState(db, opened.runId).stateHash !== admissionState) throw new Error('Core task changed during memory selection')
+              const owner = readExecutionOwner(db, input.sessionId)
+              if (owner?.run_id !== opened.runId || owner.start_id !== input.requestId || owner.mode !== 'normal') throw new Error('Core task memory ownership changed')
+            }
+            assertCurrent()
+            memory = await recallScopedMemory(db, { cwd, project, query: input.task, scope: 'project', limit: 5, maxChars: 4000, readOnly: true }, {},
+              memoryReuse ? { runtime: memoryReuse, constraints: state.session.profile.constraints ?? '', assertCurrent } : undefined)
+          }
         }
-        const selectedSkills = admitted ? await selectInstalledSkills(this.decisions, input.requestId, input.task, input.capabilities, capabilities, input.signal) : []
         input.signal.throwIfAborted()
         return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted, memory, selectedSkills })
       } catch (error) {

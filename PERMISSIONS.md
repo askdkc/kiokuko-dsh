@@ -213,3 +213,12 @@ HTTP retries, provider substitution or runtime/model installation occur. `/kioku
 status` reports configuration, limits and the last fallback without a network call.
 Review fallback sends the full sanitized plan to the exact configured `roles.check`
 model with no tools. Typed answers grant no permissions or execution approval.
+
+With `memoryReuse.mode: auto` (default), eligible retrieval candidates can also be
+sent after the full candidate set passes memory capability checks and a synthetic
+readiness probe succeeds. Only the current task/constraints and complete sanitized
+`renderMemoryFields()` projections are transmitted. Internal record IDs, revision
+receipts and raw source records stay local. The first nonempty eligible selection
+triggers the probe; startup and empty retrieval do not. Set `memoryReuse.mode: off`
+to disable this additional use without disabling other typed decisions. No source
+memory, trust level or scope is changed. See [memory reuse](docs/memory-reuse.md).

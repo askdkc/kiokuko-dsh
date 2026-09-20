@@ -67,6 +67,7 @@ export const CONTEXT_SELECTION_REASON_ORDER = [
   'exact_signal_match',
   'word_match',
   'semantic_match',
+  'semantic_reuse_match',
   'lexical_match',
   'cjk_window_match',
   'substring_match',

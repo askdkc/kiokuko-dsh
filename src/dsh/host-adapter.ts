@@ -1,3 +1,5 @@
+import { MemoryReuseConfig } from '../memory/reuse.js'
+import { createMemoryReuseRuntime } from './memory-reuse.js'
 import { reviewPlanDecisions } from './decisions/plan-review.js'
 import { executeCheckModel } from './decisions/check-model.js'
 import { createDecisionService } from './decisions/host.js'
@@ -179,6 +181,7 @@ interface AdapterContext extends Context {
 export interface DshHostAdapterOptions {
   readonly decisions?: DecisionService
   readonly typedDecisions?: import('zod').z.input<typeof TypedDecisionsConfig>
+  readonly memoryReuse?: import('zod').z.input<typeof MemoryReuseConfig>
   /** An enclosing composition owns and closes this shared runtime. */
   readonly runtime?: DshCoreRuntime
   readonly skillPrompts?: DshSkillPrompts
@@ -479,9 +482,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     autoRegisterRepository: true,
     ...(options.now === undefined ? {} : { now: options.now }),
   })
-  const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}))
+  const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}))
   const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
-  const deepPlanning = new DeepPlanningController({ runtime, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
+  const deepPlanning = new DeepPlanningController({ runtime, decisions, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
     sessions, agents, catalog: modelCatalog, questions: userQuestions, routes: options.modelRoutes ?? [], compatibility: modelCompatibility, sessionQuery, config: options.deepPlanning,
     capabilities: async (agent, signal) => {
       const catalog = await capabilityCatalog(skills, tools, { cwd: root, signal, agent, nativeAgent: agent })
@@ -1021,15 +1024,20 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
             const inboxIdentity=()=>canonicalContentHash([...((event.nativeAgent as any)?.inbox?.nextStep??[]),...((event.nativeAgent as any)?.inbox?.nextTurn??[])].filter(isHumanMessage))
             const pendingInput=inboxIdentity()
             const assertCurrent=()=>{
-              if(inboxIdentity()!==pendingInput||event.signal.aborted||previous.closed||previous.prepared!==captured||currentSession(event.sessionId)!==previous||prepareGeneration!==generation||performance.now()-started>1000)
-                throw new Error('continued_memory_stale')
-              if(event.nativeSession!==previous.nativeSession||event.nativeAgent!==previous.nativeAgent)throw new Error('continued_memory_owner_changed')
+              event.signal.throwIfAborted()
+              if(inboxIdentity()!==pendingInput||previous.closed||previous.prepared!==captured||currentSession(event.sessionId)!==previous||prepareGeneration!==generation)
+                throw new KiokukoError('CONFLICT', 'continued_memory_stale')
+              if(event.nativeSession!==previous.nativeSession||event.nativeAgent!==previous.nativeAgent)throw new KiokukoError('CONFLICT', 'continued_memory_owner_changed')
+              if(performance.now()-started>1000+(decisions.memoryReuse.mode==='auto'?decisions.memoryReuse.budgetMs:0))throw new Error('continued_memory_deadline')
             }
-            try { continuedMemory=await runtime.withDatabase((database,embedding)=>{
+            try { continuedMemory=await runtime.withDatabase(async (database,embedding)=>{
               if(embedding.mode==='required')throw new Error('required_embedding_unavailable')
-              return refreshContinuedTaskContext({database,prepared:captured,task:event.task,capabilities:[...event.capabilities.skills,...event.capabilities.tools],assertCurrent,
+              return refreshContinuedTaskContext({database, memoryReuse: await createMemoryReuseRuntime(decisions, `run:${captured.run.runId}`, event.signal), prepared:captured,task:event.task,capabilities:[...event.capabilities.skills,...event.capabilities.tools],assertCurrent,
                 validateCapabilities:async()=>{const fresh=await capabilityCatalog(skills,tools,{agent:event.agent,...(event.nativeAgent?{nativeAgent:event.nativeAgent}:{}),cwd:event.cwd,signal:event.signal});this.assertCatalog(event.capabilities,fresh);assertCurrent()}})
-            }) } catch { /* Delivery-time validation still fences the previously selected context. */ }
+            }) } catch (error) {
+              if(event.signal.aborted || error instanceof KiokukoError && ['CONFLICT','SECURITY_REJECTION','AUTHENTICATION_ERROR','INTEGRITY_ERROR'].includes(error.code))throw error
+              /* Optional retrieval failure retains the previous delivery, whose state is validated before injection. */
+            }
           }
           const continued = await this.choose(event, { admitted: !event.signal.aborted, prepared: continuedMemory?{...previous.prepared,...continuedMemory}:previous.prepared, catalog: event.capabilities })
           if (continued.admitted) {

@@ -1,3 +1,4 @@
+import { MemoryReuseConfig } from '../../memory/reuse.js'
 import { classifyTask } from '../decisions/workflows.js'
 import { TypedDecisionsConfig } from '../decisions/config.js'
 import { createDecisionService, mountDecisionCommand } from '../decisions/host.js'
@@ -33,6 +34,7 @@ export interface CoreModuleHost {
 export const CoreConfig = z.object({
   enabled: z.boolean().default(true),
   typedDecisions: TypedDecisionsConfig.prefault({}),
+  memoryReuse: MemoryReuseConfig.prefault({}),
   repositoryRoot: z.string().min(1).optional(),
   databasePath: z.string().min(1).optional(),
   migrationsDirectory: z.string().min(1).optional(),
@@ -61,7 +63,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 30_000, batchSize: 16 } })
   const prompts = configuredSkillPrompts(modules.resources(), config.skillPrompts.mode, new URL('../../../dist/dsh/skill-prompts.json', import.meta.url))
   const questions = get('userQuestions') as DshUserQuestions | undefined
-  const decisions = createDecisionService(ctx, runtime, config.typedDecisions)
+  const decisions = createDecisionService(ctx, runtime, config.typedDecisions, config.memoryReuse)
   const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions)
   function bind(agent: NativeAgent): void {
     if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || realpathSync(agent.session.header.cwd) !== root) throw new Error('Native task identity mismatch')
@@ -113,7 +115,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     disposers.push(() => provider.dispose())
     disposers.push(skills.registerProvider(() => provider))
     if (systemPrompt?.section) disposers.push(systemPrompt.section({ name: 'kiokuko:soul', order: -100_000, text: await prompts.require('kiokuko-soul') }))
-    if (get('commands')) disposers.push(mountTypeSafeCommand(get('commands'), typeSafeCredentials(ctx)), mountDecisionCommand(get('commands'), decisions))
+    if (get('commands')) disposers.push(mountTypeSafeCommand(get('commands'), typeSafeCredentials(ctx), () => decisions.invalidateReadiness()), mountDecisionCommand(get('commands'), decisions))
     await modules.mount({ context: ctx, repositoryRoot: root, runtime, prompts, decisions, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
       beforeTask(handler) { beforeTask.add(handler); return () => { beforeTask.delete(handler) } } })
     if (!claimed) {

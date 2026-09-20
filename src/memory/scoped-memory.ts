@@ -1,4 +1,5 @@
 import type { SqliteDatabase } from '../db/adapter.js';
+import { reuseProjectMemory, type ProjectMemoryReuseEffect } from './project-reuse.js';
 import { KiokukoError } from '../errors.js';
 import { withImmediateTransaction } from '../db/transaction.js';
 import { recordEntryInTransaction, validateNewEntryInput, type EntryRecord } from './entries.js';
@@ -432,8 +433,9 @@ export async function recallScopedMemory(
   database: SqliteDatabase,
   input: ScopedRecallInput,
   runtime: HybridSearchRuntime = {},
+  memoryReuse?: ProjectMemoryReuseEffect,
 ): Promise<ScopedRecallResult> {
-  return retrieveFederatedMemory(database, {
+  const baseline = await retrieveFederatedMemory(database, {
     query: input.query,
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
     ...(input.project === undefined ? {} : { project: input.project }),
@@ -443,6 +445,11 @@ export async function recallScopedMemory(
     ...(input.maxChars === undefined ? {} : { maxChars: input.maxChars }),
     ...(input.readOnly === undefined ? {} : { readOnly: input.readOnly }),
   }, runtime);
+  if (memoryReuse && input.scope === 'project' && baseline.project) {
+    return reuseProjectMemory(database, { project: baseline.project.target, query: input.query,
+      limit: Math.min(input.limit ?? 5, 10), maxChars: input.maxChars ?? 8000 }, baseline, runtime, memoryReuse);
+  }
+  return baseline;
 }
 
 const DSH_CHECKPOINT_ACTOR = 'dsh';

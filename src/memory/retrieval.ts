@@ -134,9 +134,16 @@ export function recallEntries(
   runtime: HybridSearchRuntime = {},
 ): RecallResult {
   const limit = normalizedLimit(input.limit, DEFAULT_RECALL_LIMIT);
-  const maxChars = normalizedMaxChars(input.maxChars);
+  normalizedMaxChars(input.maxChars);
   const selected = rankedEntryHits(database, { ...input, limit }, runtime);
-  const rows = selected.hits;
+  return recallEntryHits(database, input, selected);
+}
+
+/** Render an already eligible ordered shortlist using the ordinary recall budget. */
+export function recallEntryHits(database: SqliteDatabase, input: RecallEntriesInput, selected: RankedRecallResult): RecallResult {
+  const limit = normalizedLimit(input.limit, DEFAULT_RECALL_LIMIT);
+  const maxChars = normalizedMaxChars(input.maxChars);
+  const rows = selected.hits.slice(0, limit);
   const items: RecallItem[] = [];
   let characters = 0;
   let truncated = false;

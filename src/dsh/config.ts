@@ -1,3 +1,4 @@
+import { MemoryReuseConfig } from '../memory/reuse.js'
 import { TypedDecisionsConfig } from './decisions/config.js'
 import { MemoryReviewConfig } from '../memory/review/contracts.js'
 export { MemoryReviewConfig }
@@ -55,6 +56,7 @@ export const Config = z.object({
   skillPrompts: SkillPromptsConfig.prefault({}),
   lisp: LispConfig.prefault({}),
   typedDecisions: TypedDecisionsConfig.prefault({}),
+  memoryReuse: MemoryReuseConfig.prefault({}),
   akinatorMemory: AkinatorMemoryConfig.prefault({}),
   deepPlanning: DeepThinkerConfigSchema.prefault({}),
   modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),

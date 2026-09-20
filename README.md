@@ -106,6 +106,10 @@ See [setup, APIs, limits and recovery](docs/lisp.md).
 
 [Provider-independent typed decisions](docs/typed-decisions.md) route Akinator, installed Skills, Zenki draft review and Lisp through configured TypeSafe or Nimble HTTP adapters.
 
+[Semantic memory reuse](docs/memory-reuse.md) checks existing retrieval candidates
+against the current request after a synthetic provider probe succeeds. Embeddings
+are optional; `memoryReuse.mode: off` disables this additional selection.
+
 The compatibility [TypeSafe API](docs/typesafe.md) use `/kioku-typesafe-key` for
 DSH-managed credentials and `kioku.typesafe:evaluate` for explicit semantic
 questions. Lisp consumes the answers; file-change approval remains required.

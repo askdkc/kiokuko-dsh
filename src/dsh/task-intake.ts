@@ -1,3 +1,4 @@
+import type { MemoryReuseRuntime } from '../memory/reuse.js';
 import { readContextRunRetrievalState } from '../context/run-state.js'
 import { scopedMemoryUseSignal, assertScopedMemoryUseSignal } from '../context/scoped-memory-gate.js';
 import { renderScopedRetrievalQuery } from '../context/retrieval-query.js';
@@ -73,6 +74,7 @@ import {
 } from '../enno-oduno/types.js';
 
 export interface PrepareAgentTaskInput {
+  memoryReuse?: MemoryReuseRuntime | undefined;
   /** Native host owns the explicit choice; old direct callers retain legacy behavior. */
   executionSelection?: boolean;
   sessionOwnership?: boolean;
@@ -92,6 +94,7 @@ export interface PrepareAgentTaskInput {
 }
 
 export interface AnswerAgentTaskInput {
+  memoryReuse?: MemoryReuseRuntime | undefined;
   sessionId: string;
   questionId: keyof TaskProfile;
   value: string;
@@ -442,6 +445,7 @@ function buildPreparedTaskBase(
 }
 
 interface FinalizeAgentTaskInput {
+  memoryReuse?: MemoryReuseRuntime | undefined;
   database: SqliteDatabase;
   project: ResolvedProjectWorkspace;
   executionContext: AgentTaskExecutionContext;
@@ -662,13 +666,13 @@ interface FinalTaskContextInput {
 }
 
 export async function refreshContinuedTaskContext(input: {
-  database: SqliteDatabase; prepared: PreparedAgentTask; task: string; capabilities: readonly unknown[];
+  database: SqliteDatabase; prepared: PreparedAgentTask; task: string; capabilities: readonly unknown[]; memoryReuse?: MemoryReuseRuntime | undefined;
   assertCurrent: () => void; validateCapabilities: () => Promise<void>
 }): Promise<Pick<PreparedAgentTask, 'context' | 'memoryPolicy'>> {
   const { database, prepared } = input
   const snapshot = captureProjectManifestSnapshot(prepared.project)
   const runState=readContextRunRetrievalState(database,prepared.run.runId)
-  const assertCurrent = () => { input.assertCurrent(); assertCurrentProjectManifest(prepared.project,snapshot);if(readContextRunRetrievalState(database,prepared.run.runId).stateHash!==runState.stateHash)throw new Error('continued_run_changed') }
+  const assertCurrent = () => { input.assertCurrent(); assertCurrentProjectManifest(prepared.project,snapshot);if(readContextRunRetrievalState(database,prepared.run.runId).stateHash!==runState.stateHash)throw new KiokukoError('CONFLICT', 'continued_run_changed') }
   assertCurrent()
   const query = { project:prepared.project, task:input.task, taskProfile:prepared.intake.profile,
     recommendedTags:prepared.intake.recommendedTags, runId:prepared.run.runId, characterBudget:8000 }
@@ -679,7 +683,12 @@ export async function refreshContinuedTaskContext(input: {
     const capabilities=resolveCapabilities({task:input.task,profile:prepared.intake.profile,recommendedTags:prepared.intake.recommendedTags,capabilities:input.capabilities,memoryUse})
     return {persist:!policy.contextWithheld&&!hasBlockingRequiredCapability(capabilities),value:policy,
       assertBeforePersist:()=>{assertCurrent();assertScopedMemoryUseSignal(database,prepared.project.workspace,candidate,memoryUse)}}
-  },{}, {beforeCommit:input.validateCapabilities})
+  },{}, {beforeCommit:input.validateCapabilities, ...(input.memoryReuse ? {memoryReuse:{runtime:input.memoryReuse, authorize: baseline => {
+    assertCurrent();
+    const memoryUse=scopedMemoryUseSignal(database,prepared.project.workspace,baseline);
+    return !deriveMemoryPolicy(prepared.intake.profile,memoryUse,input.capabilities).contextWithheld
+      && !hasBlockingRequiredCapability(resolveCapabilities({task:input.task,profile:prepared.intake.profile,recommendedTags:prepared.intake.recommendedTags,capabilities:input.capabilities,memoryUse}));
+  }}} : {})})
   assertCurrent()
   return {context:gated.context,memoryPolicy:gated.value}
 }
@@ -709,7 +718,13 @@ async function selectFinalTaskContext(
         );
       },
     };
-  }, runtime);
+  }, runtime, input.memoryReuse ? { memoryReuse: { runtime: input.memoryReuse, authorize: baseline => {
+    const memoryUse = scopedMemoryUseSignal(input.database, input.project.workspace, baseline);
+    const policy = deriveMemoryPolicy(value.context.session.profile, memoryUse, input.capabilities);
+    const capabilities = resolveCapabilities({ task: value.context.session.task, profile: value.context.session.profile,
+      recommendedTags: value.context.recommendedTags, capabilities: input.capabilities, memoryUse });
+    return !policy.contextWithheld && !hasBlockingRequiredCapability(capabilities);
+  } } } : {});
   assertCurrentProjectManifest(input.project, input.manifestSnapshot);
   const context = currentAgentTaskContext(input.database, input.runId, value.context);
   const run = authoritativeTaskRun(input.database, input.runId, context.status);
@@ -907,6 +922,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
       capabilities: input.capabilities,
       maxContextChars,
       discoveryMode,
+      memoryReuse: input.memoryReuse,
       ...(input.embeddingRuntime === undefined ? {} : { embeddingRuntime: input.embeddingRuntime }),
       ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
@@ -971,6 +987,7 @@ export async function answerAgentTask(database: SqliteDatabase, input: AnswerAge
       capabilities: input.capabilities,
       maxContextChars,
       discoveryMode,
+      memoryReuse: input.memoryReuse,
       ...(input.embeddingRuntime === undefined ? {} : { embeddingRuntime: input.embeddingRuntime }),
       ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),

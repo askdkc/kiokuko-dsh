@@ -81,7 +81,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     let host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
       if (host.runtime && !host.decisions) {
-        const decisions = createDecisionService(ctx, host.runtime, resolvedConfig.typedDecisions)
+        const decisions = createDecisionService(ctx, host.runtime, resolvedConfig.typedDecisions, resolvedConfig.memoryReuse)
         host.intakeGate?.configureDecisions(decisions)
         host = { ...host, decisions }
       }
@@ -132,7 +132,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx, { typedDecisions: resolvedConfig.typedDecisions, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
+    const adapter = createDshHostAdapter(ctx, { typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
       ennoMemory: resolvedConfig.ennoMemory, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, memoryReview: resolvedConfig.memoryReview })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined
