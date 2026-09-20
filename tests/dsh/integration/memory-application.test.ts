@@ -122,6 +122,22 @@ test('reviews bind revisions, reject conflicting retry and foreign identities, a
   } finally { await f.close() }
 })
 
+test('superseding an ordinary reviewed memory blocks further effects and completion without a revision change', async () => {
+  const f = await fixture()
+  try {
+    recordMemoryApplicationReview(f.db, f.identity, 'review', f.review('not_applicable'))
+    assert.equal(f.status().ready, true)
+    const replacement = recordEntry(f.db, { workspace: f.task.workspace, kind: 'reference', title: 'Replacement evidence',
+      body: 'The previous migration guidance is no longer applicable.', createdBy: 'fixture', scope: { visibility: 'project' } })
+    f.db.prepare("UPDATE entries SET status='superseded',superseded_by=? WHERE id=?").run(replacement.id, f.memory.id)
+    assert.equal(f.status().ready, false)
+    assert.equal(f.status().pending[0]?.problem, 'entry_changed')
+    assert.throws(() => beginMemoryExecution(f.db, f.identity, 'edit', null), /resolve memory decisions/)
+    assert.throws(() => recordMemoryApplicationReview(f.db, f.identity, 'retry', { ...f.review('not_applicable'), expectedRevision: 1 }), /Memory entry changed/)
+    assert.throws(() => new LedgerStore(f.db).updateRunStatus(f.task.runId, 'completed'), /incomplete/)
+  } finally { await f.close() }
+})
+
 test('plan reviews need current rationale but no implementation command; edits invalidate prior proof and concurrent results', async () => {
   const plan = await fixture('review')
   try {

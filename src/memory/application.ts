@@ -142,7 +142,7 @@ function reviews(db: SqliteDatabase, current: Binding): ReviewRow[] {
 function assertEntryCurrent(db: SqliteDatabase, item: RequiredMemory): void {
   const workspace = db.prepare('SELECT workspace FROM entries WHERE id=?').get<{workspace:string}>(item.entryId)?.workspace
   const entry = workspace ? readEntry(db, { entryId: item.entryId, workspace }) : undefined
-  if (!entry || entry.revision !== item.revision || !isRetrievableEntry(db, entry)) conflict('Memory entry changed; refresh its delivery and review')
+  if (!entry || entry.status === 'superseded' || entry.revision !== item.revision || !isRetrievableEntry(db, entry)) conflict('Memory entry changed; refresh its delivery and review')
 }
 export function recordMemoryApplicationReview(db: SqliteDatabase, identity: MemoryApplicationIdentity, requestId: string, raw: unknown): unknown {
   const review = memoryApplicationReviewSchema.parse(raw)

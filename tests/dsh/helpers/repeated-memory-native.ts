@@ -1,6 +1,7 @@
 import { recordRepeatedStage } from './repeated-memory-report.js'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
+import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -26,11 +27,14 @@ export type RepeatedRoute = 'normal' | 'enno'
 export interface RoundFault { saveFailure?: boolean; duplicateCompletion?: boolean; forbiddenIds?: readonly string[]; staleAuthority?: 'revision' | 'lease' }
 export interface RoundReport { round: number; runId: string; session: string; start: number; end: number; mainCalls: number; auxiliaryCalls: number; planReviewCalls: number; toolExecutions: number; suppliedIds: string[]; finalizations: number; episodes: number; lessons: number; stages: string[] }
 export const fixtureData = ['account rows: Ada, Ken; schema accounts(email)', 'inventory rows: bolt, nut, washer; schema parts(sku, quantity)', 'audit rows: created, revised, reviewed, approved; schema events(actor, action, time)']
+const applicationPaths = fixtureData.map((_, index) => `fixtures/${index}.txt`)
+const applicationCommand = `${process.execPath} fixtures/verify.mjs`
 
 export async function prepareRepeatedWorkspace(root: string, migrationsDirectory?: string): Promise<void> {
   execFileSync('git', ['init', '-q', root])
   await mkdir(join(root, 'fixtures'), { recursive: true })
   for (const [index, data] of fixtureData.entries()) await writeFile(join(root, 'fixtures', `${index}.txt`), data)
+  await writeFile(join(root, 'fixtures', 'verify.mjs'), `import assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nconst expected = ${JSON.stringify(fixtureData)};\nfor (const [index, value] of expected.entries()) assert.equal(readFileSync(new URL(index + '.txt', import.meta.url), 'utf8'), value);\n`)
   const databasePath = join(root, '.git', 'state.sqlite3')
   await initializeDatabase({ databasePath, ...(migrationsDirectory ? { migrationsDirectory } : {}) })
   const db = openConnection(databasePath)
@@ -68,6 +72,15 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined))
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   ctx.llm.registerAdapter(['mock'], provider)
+  const disposeApplicationVerifier = ctx.tools.register(tools.defineTool({ name: 'Bash', description: 'Run only the disposable fixture regression verifier.',
+    parameters: { command: { type: 'string', required: true } },
+    output: { schema: { type: 'object', additionalProperties: false, properties: { exitCode: { type: 'number', required: true } } },
+      render: (_args: unknown, value: any) => [{ type: 'text', text: JSON.stringify(value) }] },
+    execute: async (args: any) => {
+      assert.equal(args.command, applicationCommand)
+      await promisify(execFile)(process.execPath, ['fixtures/verify.mjs'], { cwd: root, timeout: 5000 })
+      return { exitCode: 0 }
+    } }))
   const disposeTool = ctx.tools.register(tools.defineTool({ name: 'verify_migration', description: 'Validate a disposable fixture schema and checksum.',
     parameters: { fixture: { type: 'number', required: true }, procedure: { type: 'string', required: true } },
     output: { schema: { type: 'object', additionalProperties: false, properties: { exitCode: { type: 'number', required: true }, observation: { type: 'string', required: true } } },
@@ -156,6 +169,41 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   const liveAgents = new Map<string, any>()
   const database = <T>(operation: (db: import('../../../src/db/adapter.js').SqliteDatabase) => T) => adapter.host.runtime!.withDatabase(operation)
 
+  // Scripted agents must use the same native disposition protocol as real agents.
+  // Inspect the tool result delivered to the model, never write review rows directly.
+  let applicationCall = 0
+  const withMemoryReview = (step: any, readonly: boolean, verifyNow: boolean): any => {
+    let resultId = '', verified = false, reviews = 0
+    const call = (name: string, args: object) => mock.toolCallResponse(resultId = `application-${activeRound}-${++applicationCall}`, name, args)
+    const start = () => { script.unshift(inspect); return call('task_memory_review', { action: 'status' }) }
+    const inspect = (request: any): any => {
+      const result = request.messages.flatMap((message: any) => message.content ?? [])
+        .findLast((block: any) => block.type === 'tool-result' && block.toolCallId === resultId)
+      assert.ok(result && !result.isError, `Native memory review failed: ${JSON.stringify(result)}`)
+      const status = JSON.parse(result.content.find((block: any) => block.type === 'text').text)
+      const unresolved = status.items.find((item: any) => item.problem && item.problem !== 'verification_missing_failed_or_stale')
+      if (unresolved) {
+        assert.ok(++reviews <= 128, 'memory disposition did not converge')
+        script.unshift(inspect)
+        return call('task_memory_review', { action: 'review', review: {
+          generation: status.generation, entryId: unresolved.entryId, entryRevision: unresolved.revision, expectedRevision: unresolved.reviewRevision,
+          decision: readonly ? 'not_applicable' : 'adopted', paths: [...applicationPaths, 'fixtures/verify.mjs'],
+          basis: readonly ? 'This request only inspects stored observations; no migration procedure is executed.' : 'The current fixture schema and rows are defined by the three fixture source files.',
+          ...(readonly ? {} : { invariant: 'Each fixture retains its expected schema and row contents.', counterexample: 'Changing a fixture schema or row must fail verification.',
+            method: 'Execute the fixture verifier against all current source files.', command: applicationCommand }),
+        } })
+      }
+      if (!status.ready && verifyNow) {
+        assert.equal(verified, false, `Native verification did not satisfy the obligation: ${JSON.stringify(status)}`)
+        verified = true
+        script.unshift(start)
+        return call('Bash', { command: applicationCommand })
+      }
+      return typeof step === 'function' ? step(request) : step
+    }
+    return start
+  }
+
   const executeRound = async (number: number, sessionId: string, readonly = false, expectLesson = number === 4, fault: RoundFault = {}): Promise<RoundReport> => {
     activeRound = number
     activeFault = fault; activeSession = sessionId
@@ -167,11 +215,14 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'injected memory commit failure'); END;`))
     const response = `Completed fixture lifecycle ${number}.`
     const task = `${route === 'normal' ? '通常実行で' : '役小角を使って'}、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測を確認' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`
-    if (route === 'enno') script.push(...ennoScript(mock, number, readonly))
+    if (route === 'enno') script.push(...ennoScript(mock, number, readonly).map(step => {
+      const name = step.find((chunk: any) => chunk.type === 'block-end' && chunk.block.type === 'tool-call')?.block.name
+      return ['enno_ideal_submit', 'enno_work_report', 'enno_finish', 'enno_meditation_submit'].includes(name) ? withMemoryReview(step, readonly, false) : step
+    }))
     else {
-      if (!readonly) script.push(mock.toolCallResponse(`verify-${number}`, 'verify_migration', { fixture: (number - 1) % 3, procedure: PROCEDURE }))
+      if (!readonly) script.push(withMemoryReview(mock.toolCallResponse(`verify-${number}`, 'verify_migration', { fixture: (number - 1) % 3, procedure: PROCEDURE }), false, false))
     }
-    script.push(mock.textResponse(response))
+    script.push(route === 'normal' ? withMemoryReview(mock.textResponse(response), readonly, true) : mock.textResponse(response))
     agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
     await waitFor(() => {
       if (nativeErrors.length) throw new Error(`${nativeErrors.join('\n')}\nRecent tool results: ${JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').slice(-8).map((event: any) => event.data))}`)
@@ -215,7 +266,13 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     })
     const requests = provider.requests.slice(beforeMain)
     assert.equal(planReviewCalls - beforeReview, route === 'enno' ? 3 : 0, 'each Enno plan must complete all three check-model review slots')
-    for (const id of fault.forbiddenIds ?? []) assert.ok(!JSON.stringify(requests).includes(id), 'invalidated or disabled derived memory reached a native model request')
+    // Old disposition calls retain entry IDs as native audit history, not fresh
+    // memory delivery. Keep checking all other content and this round's status.
+    const currentMemoryRequests = JSON.stringify(requests, (_key, value) => {
+      const id = value?.type === 'tool-call' ? value.id : value?.type === 'tool-result' ? value.toolCallId : undefined
+      return typeof id === 'string' && id.startsWith('application-') && !id.startsWith(`application-${number}-`) ? undefined : value
+    })
+    for (const id of fault.forbiddenIds ?? []) assert.ok(!currentMemoryRequests.includes(id), 'invalidated or disabled derived memory reached a current native model request')
     if (fault.duplicateCompletion) {
       const calls = auxiliaryCalls
       await adapter.host.lifecycle!.closeTurn({ runId: state.run.run_id, status: 'completed', sourceEndSeq: state.job.source_end_seq })
@@ -257,7 +314,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   }
   const round = (...args: Parameters<typeof executeRound>) => deadline(executeRound(...args), `complete lifecycle ${args[0]}`)
   return { round, database, adapter, provider, setAuxiliaryHook: (hook: typeof auxiliaryHook) => { auxiliaryHook = hook },
-    close: async () => { composition.stopIngress(); await adapter.dispose(); await composition.dispose(); disposeTool(); for (const fiber of fibers.reverse()) await fiber?.dispose?.() } }
+    close: async () => { composition.stopIngress(); await adapter.dispose(); await composition.dispose(); disposeTool(); disposeApplicationVerifier(); for (const fiber of fibers.reverse()) await fiber?.dispose?.() } }
 }
 
 export function ennoScript(mock: ReturnType<typeof nativeMock>, round: number, readonly = false): any[] {
@@ -265,7 +322,7 @@ export function ennoScript(mock: ReturnType<typeof nativeMock>, round: number, r
   const ideal = dispositions(['constraint_guardian','skill_trust_analyst','success_signal_critic'])
   const planning = dispositions(['workunit_architect','protocol_risk_reviewer','verification_designer'])
   const final = dispositions(['acceptance_auditor','regression_adversary','evidence_freshness_reviewer'])
-  const verifier = { id: 'fixture-check', kind: 'test', executable: process.execPath, args: ['--eval', 'process.exit(0)'], cwd: '.', timeoutMs: 5000 }
+  const verifier = { id: 'fixture-check', kind: 'test', executable: process.execPath, args: ['fixtures/verify.mjs'], cwd: '.', timeoutMs: 5000 }
   const plan = {
     executionHints: [], scope: ['fixtures'], exclusions: [], acceptanceCriteria: [{ id: 'verified', description: VERIFICATION }],
     workPlan: { objective: PROCEDURE, units: [{ id: 'verify-fixture', objective: PROCEDURE, scope: ['fixtures'], dependencies: [], routes: ['code'], skillNames: ['kiokuko-single-purpose-functions'], expertRefs: [{ id: 'code.verification.v1', reason: 'Verify source evidence.' }], acceptanceCriteria: [VERIFICATION], focusedVerifiers: [verifier] }] },
