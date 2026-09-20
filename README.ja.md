@@ -102,6 +102,40 @@ Lisp を選ぶと、Lisp 用ツールで通常実行します。役小角を使�
 削除・既存ファイルの置換はユーザーの確認後に実行します。
 [設定、API、停止・復旧方法](docs/lisp.md)を参照してください。
 
+## TypeSafe (Jev)
+
+Jev を自動の型付き判定に使えます。`~/.dsh/profiles/web/cordis.patch.yml` の既存の `kiokuko-dsh` 行に追加し、他の `config` 値は保持してください。
+
+```yaml
+- id: kiokuko-dsh
+  config:
+    typedDecisions:
+      mode: auto
+      provider: typesafe
+      typesafe:
+        model: jev-latest
+```
+
+APIキーは DSH の `~/.dsh/.credentials.yaml`（`DSH_HOME` を設定している場合は `$DSH_HOME/.credentials.yaml`）に書くか、`/kioku-typesafe-key YOUR_KEY` で保存します。既存の項目は残してください。
+
+```yaml
+version: 1
+refs:
+  TYPESAFE_API_KEY: YOUR_KEY
+```
+
+YAMLファイルを手動で作る場合は `chmod 600 ~/.dsh/.credentials.yaml` を実行してください（`DSH_HOME` を設定している場合はそのパスを使用）。
+
+プラグイン設定を変更したら DSH を再起動し、DSH のコマンド入力欄で確認します。
+
+```text
+/kioku-typesafe-key status
+/kioku-decisions probe
+/kioku-decisions status
+```
+
+`probe` は検査用のAPIリクエストを送ります。`status` は送信しません。保存したキーは `/kioku-typesafe-key clear` で削除できます。`/kioku-typesafe-key YOUR_KEY` の入力中はキーが画面に表示されます。詳しくは[型付き判定](docs/typed-decisions.md)と[Lispからの明示的な呼び出し](docs/typesafe.md)を参照してください。
+
 ## 過去の記憶を意味で選別
 
 TypeSafe または Nimble の利用確認が成功すると、既存検索の候補を今回の依頼に使えるか判定します。埋め込みは必須ではありません。`memoryReuse.mode: off` で停止できます。[設定・確認コマンド・評価方法](docs/memory-reuse.md)を参照してください。

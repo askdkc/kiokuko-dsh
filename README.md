@@ -104,17 +104,47 @@ if you want Enno. Free text is passed to the AI as a discussion or correction.
 Deletion and replacement of existing files require human confirmation.
 See [setup, APIs, limits and recovery](docs/lisp.md).
 
-[Provider-independent typed decisions](docs/typed-decisions.md) route Akinator, installed Skills, Zenki draft review and Lisp through configured TypeSafe or Nimble HTTP adapters.
+## TypeSafe (Jev)
+
+Kiokuko can use Jev for automatic typed decisions. Add this to the existing `kiokuko-dsh` row in `~/.dsh/profiles/web/cordis.patch.yml`, keeping its other `config` values:
+
+```yaml
+- id: kiokuko-dsh
+  config:
+    typedDecisions:
+      mode: auto
+      provider: typesafe
+      typesafe:
+        model: jev-latest
+```
+
+Set the API key in DSH's `~/.dsh/.credentials.yaml` (`$DSH_HOME/.credentials.yaml` if set), or use `/kioku-typesafe-key YOUR_KEY`. Keep any existing entries:
+
+```yaml
+version: 1
+refs:
+  TYPESAFE_API_KEY: YOUR_KEY
+```
+
+If creating the YAML file yourself, run `chmod 600 ~/.dsh/.credentials.yaml` (use `$DSH_HOME` if set).
+
+Reload DSH after changing the plugin configuration. In the DSH command UI, check the key and test the connection:
+
+```text
+/kioku-typesafe-key status
+/kioku-decisions probe
+/kioku-decisions status
+```
+
+`probe` sends a synthetic API request; `status` does not. `/kioku-typesafe-key clear` removes the stored key. Key input is visible when using `/kioku-typesafe-key YOUR_KEY`. See [typed decisions](docs/typed-decisions.md) and the [explicit Lisp API](docs/typesafe.md) for more.
+
+## Semantic memory reuse
 
 [Semantic memory reuse](docs/memory-reuse.md) checks existing retrieval candidates
 against the current request after a synthetic provider probe succeeds. Embeddings
 are optional; `memoryReuse.mode: off` disables this additional selection.
 
 [Memory application and verification](docs/memory-application.md) records dispositions and host-observed regression evidence. Check the current native session with `/kioku-memory-application status` or `/kioku-memory-application status --json`.
-
-The compatibility [TypeSafe API](docs/typesafe.md) use `/kioku-typesafe-key` for
-DSH-managed credentials and `kioku.typesafe:evaluate` for explicit semantic
-questions. Lisp consumes the answers; file-change approval remains required.
 
 ### Semantic compaction
 
