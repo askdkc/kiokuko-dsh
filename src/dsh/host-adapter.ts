@@ -490,7 +490,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     autoRegisterRepository: true,
     ...(options.now === undefined ? {} : { now: options.now }),
   })
-  const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}), SemanticCompactionConfig.parse(options.semanticCompaction ?? {}))
+  const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}), SemanticCompactionConfig.parse(options.semanticCompaction ?? {}), root)
   const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root, options.observationPack)
   const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
   const deepPlanning = new DeepPlanningController({ runtime, decisions, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,

@@ -1,6 +1,6 @@
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { abortable } from '../http-json.js'
-import type { DecisionConfiguration } from './config.js'
+import { decisionConfigurationIssue, selectedDecisionSettings, type DecisionConfiguration } from './config.js'
 import { DecisionError, parseDecisionResult, type DecisionBatch, type DecisionProvider } from './contracts.js'
 
 export interface DecisionReadiness {
@@ -47,8 +47,8 @@ export class DecisionReadinessMonitor {
     return this.status(config)
   }
   status(config: DecisionConfiguration): DecisionReadiness {
-    if (config.mode === 'off') return { state: 'unconfigured', reason: 'mode_off', checkedAt: null }
-    if (config.provider === 'nimble' && (!config.nimble.endpoint || !config.nimble.model)) return { state: 'unconfigured', reason: 'missing_endpoint_or_model', checkedAt: null }
+    const issue = decisionConfigurationIssue(config)
+    if (issue) return { state: 'unconfigured', reason: issue, checkedAt: null }
     const key = canonicalContentHash(config), cached = this.cache.get(key)
     if (this.pending.has(key)) return { state: 'probing', reason: null, checkedAt: null }
     return cached && cached.expires > this.now() ? { ...cached.value } : { state: 'unverified', reason: null, checkedAt: cached?.value.checkedAt ?? null }
@@ -72,7 +72,7 @@ export class DecisionReadinessMonitor {
     if (!pending) {
       const controller = new AbortController(), generation = this.generation
       let timedOut = false
-      const timer = setTimeout(() => { timedOut = true; controller.abort() }, config[config.provider].timeoutMs)
+      const timer = setTimeout(() => { timedOut = true; controller.abort() }, selectedDecisionSettings(config)?.timeoutMs ?? 5000)
       const operation = (async (): Promise<DecisionReadiness> => {
         let value: DecisionReadiness
         try {

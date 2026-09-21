@@ -72,7 +72,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 30_000, batchSize: 16 } })
   const prompts = configuredSkillPrompts(modules.resources(), config.skillPrompts.mode, new URL('../../../dist/dsh/skill-prompts.json', import.meta.url))
   const questions = get('userQuestions') as DshUserQuestions | undefined
-  const decisions = createDecisionService(ctx, runtime, config.typedDecisions, config.memoryReuse, config.semanticCompaction)
+  const decisions = createDecisionService(ctx, runtime, config.typedDecisions, config.memoryReuse, config.semanticCompaction, root)
   const semanticCompaction = new SemanticCompactionCoordinator(ctx as any, decisions, root, config.observationPack)
   const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions)
   function bind(agent: NativeAgent): void {
@@ -123,6 +123,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   try {
     if (!skills?.registerProvider || !skills.snapshot || !tools?.schemas || !tools.guard || !tools.register || !sessions?.get || !sessions.flush || !agents?.get || !systemPrompt?.section) throw new Error('Core requires native Skill, prompt, tool, session and agent services')
     await runtime.start()
+    await decisions.initialize()
     const provider = configuredSkillProvider(modules.resources(), prompts)
     disposers.push(() => provider.dispose())
     disposers.push(skills.registerProvider(() => provider))

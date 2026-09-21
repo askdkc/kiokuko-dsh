@@ -17,7 +17,7 @@ test('security overrides resolve consistently in both package-manager lockfiles'
   const npm = json('package-lock.json')
   const pnpm = yaml('pnpm-lock.yaml')
   const workspace = yaml('pnpm-workspace.yaml')
-  for (const [name, minimum] of Object.entries({ 'adm-zip': '0.6.0', sharp: '0.35.4' })) {
+  for (const [name, minimum] of Object.entries({ 'adm-zip': '0.6.1', sharp: '0.35.4' })) {
     const version = manifest.overrides[name]
     assert.ok(gte(version, minimum), `${name}: the published security fix must not regress`)
     assert.equal(workspace.overrides[name], version)
@@ -49,7 +49,29 @@ test('the actual Transformers dependencies use the security pins and retain imag
   zip.addFile('fixture.txt', Buffer.from('zip round trip'))
   const reopened = new AdmZip(zip.toBuffer())
   assert.equal(reopened.readAsText(reopened.getEntry('fixture.txt')), 'zip round trip')
-  // Intentionally do not claim that adm-zip 0.6.0 fixes symlink extraction.
+  // This round trip does not establish protection against symlink extraction.
+})
+
+test('adm-zip rejects the advisory ZIP without allocating its declared 1.8 GB size', () => {
+  const ortRequire = createRequire(transformersRequire.resolve('onnxruntime-node'))
+  // Isolate allocation guards so a vulnerable dependency fails safely, without OOM.
+  const script = `
+    const assert = require('node:assert/strict');
+    const AdmZip = require(process.argv[1]);
+    for (const name of ['alloc', 'allocUnsafe', 'allocUnsafeSlow']) {
+      const original = Buffer[name];
+      Buffer[name] = function (size, ...args) {
+        assert.ok(size <= 1024 * 1024, 'untrusted ZIP requested an oversized allocation');
+        return original(size, ...args);
+      };
+    }
+    // GHSA-7q85-xj36-vmfc: 105 bytes, stored payload 5 bytes, declared size 1,774,399,200.
+    const bytes = Buffer.from('UEsDBBQAAAAAAAAAAAAAAAAABQAAAAUAAAABAAAAYWhlbGxvUEsBAhQAFAAAAAAAAAAAAAAAAAAFAAAA4C7DaQEAAAAAAAAAAAAAAAAAAAAAAGFQSwUGAAAAAAEAAQAvAAAAJAAAAAAA', 'base64');
+    assert.throws(() => new AdmZip(bytes).getEntries()[0].getData(), /ADM-ZIP: CRC32 checksum failed/);
+  `
+  execFileSync(process.execPath, ['-e', script, ortRequire.resolve('adm-zip')], {
+    timeout: 10_000, stdio: 'pipe',
+  })
 })
 
 test('CI skips the ONNX download/extraction path even when Linux CUDA files are requested', () => {

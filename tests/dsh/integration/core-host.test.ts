@@ -14,6 +14,7 @@ import type { CoreModuleHost } from '../../../src/dsh/core/host.js'
 import { synchronizeConfiguredSkills } from '../../../src/dsh/core/deployment.js'
 import { compileSkillBundle } from '../../../src/dsh/skill-compiler.js'
 import { pathToFileURL } from 'node:url'
+import { layaReply, serveLaya } from '../helpers/laya.js'
 
 async function fixture(questions?: { ask(request: any): Promise<any> }) {
   const directory = await mkdtemp(join(tmpdir(), 'kiokuko-core-')), root = realpathSync(directory)
@@ -429,4 +430,22 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()?.n, 0)
     db.close()
   } finally { await handle.dispose(); globalThis.fetch = originalFetch; await f.cleanup() }
+})
+
+
+test('core Laya configuration reaches the same framed decision provider without credentials', { skip: process.platform === 'win32' }, async t => {
+  const f = await fixture(), commands: any[] = []
+  f.services.commands = { register(command: any) { commands.push(command); return () => {} } }
+  f.services.credentials = { resolve() { throw new Error('No cloud credentials for Laya') } }
+  const socket = await serveLaya(t, request => layaReply(request))
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), typedDecisions: { 'laya-coreml': { socketPath: socket.path } } })
+  try {
+    const command = commands.find(c => c.name === 'kioku-decisions'), signal = new AbortController().signal
+    const status = await command.handler({ rawInput: 'status', signal })
+    assert.equal(JSON.parse(status.text).provider, 'typesafe'); assert.equal(socket.calls(), 0)
+    const selected = await command.handler({ rawInput: 'use laya', signal })
+    assert.equal(selected.kind, 'success'); assert.equal(socket.calls(), 3)
+    const probe = await command.handler({ rawInput: 'probe', signal })
+    assert.equal(JSON.parse(probe.text).readiness.state, 'ready'); assert.equal(socket.calls(), 5)
+  } finally { await handle.dispose(); await f.cleanup() }
 })

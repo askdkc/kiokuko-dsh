@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  adm-zip: 0.6.0
+  adm-zip: 0.6.1
   sharp: 0.35.4
 
 importers:
@@ -539,8 +539,8 @@ packages:
   '@types/semver@7.8.0':
     resolution: {integrity: sha512-1mAINjtQCXXeLkJ9ehXkwOcBpqtLxiVtKhpUf83DdRNdQKV0iXZpaHYqRr7nj+wvxuJzoAmAwXI+sCNMv1CzLQ==}
 
-  adm-zip@0.6.0:
-    resolution: {integrity: sha512-XleryMhbuksdKtofnWZ9Sk+4CUTbms4Mb/EU32SZwToAyZ5RgVos/ki8n+yr0LWHOGKuakbXTuuYNHLQjhddgg==}
+  adm-zip@0.6.1:
+    resolution: {integrity: sha512-Xwrja8nx9e5o2N1my4DsKCeKpdrnACyr1wtbPxBDgGzKzKyE9kRtBFA8mWldI+RVlD7CBZNWY/wQ2+ydwOR6kQ==}
     engines: {node: '>=14.0'}
 
   ajv-formats@3.0.1:
@@ -1133,7 +1133,7 @@ snapshots:
 
   '@types/semver@7.8.0': {}
 
-  adm-zip@0.6.0: {}
+  adm-zip@0.6.1: {}
 
   ajv-formats@3.0.1(ajv@8.20.0):
     optionalDependencies:
@@ -1270,7 +1270,7 @@ snapshots:
 
   onnxruntime-node@1.24.3:
     dependencies:
-      adm-zip: 0.6.0
+      adm-zip: 0.6.1
       global-agent: 3.0.0
       onnxruntime-common: 1.24.3
 

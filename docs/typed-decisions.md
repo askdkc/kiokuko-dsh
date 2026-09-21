@@ -2,8 +2,28 @@
 
 Kiokuko uses one host-owned decision service for provisional Akinator task types,
 installed Skill relevance, past memory reuse, Zenki draft review and semantic decisions inside Lisp.
-The selected adapter owns its HTTP protocol and uncertainty policy. Domain
+The selected adapter owns its transport protocol and uncertainty policy. Domain
 workflows consume `selected` or `abstained`; they do not depend on model names.
+
+Switch backends in DSH without a restart:
+
+```text
+/kioku-decisions use jev
+/kioku-decisions use laya
+/kioku-decisions use nimble
+/kioku-decisions use default
+```
+
+Switching verifies a synthetic known answer before committing the choice. Laya
+also discovers its model and fingerprint from the configured socket (or the
+default socket); no manual hash is required. Failed/cancelled verification and
+failed persistence leave the active choice unchanged. Jev requires a key, and
+Nimble requires its endpoint and model first. Selection is stored in Kiokuko's
+SQLite database for the repository and base `typedDecisions` configuration, survives
+restarts, and applies only to new logical requests. `use default` restores the
+base configuration. A stale host cannot overwrite a selection saved by another
+host; restart it to load the latest choice. Changing the base configuration uses
+that configuration's selection, with the YAML provider as the default.
 
 Configure `typedDecisions` on the full plugin or modular core:
 
@@ -63,9 +83,17 @@ only with their complete evidence and alternatives; a plan is never truncated.
 No metadata endpoint is required for evaluation. See the
 [Nimble serving contract](https://github.com/bespokelabsai/nimble/blob/main/docs/MODAL_SERVING.md).
 
+For local Laya-CoreML, select `provider: laya-coreml` and configure its Unix
+socket if it differs from the default. Model and runtime fingerprint are discovered automatically; explicit values remain enforced pins. Jev remains the default. The host connects
+directly to `~/Library/Caches/laya-coreml/worker.sock`; no HTTP bridge or subprocess
+client is used. The worker must support `preflight` and `predict_strict`, which
+reject truncated inputs and mismatched runtime identities. See the complete
+[worker update and Laya configuration](laya-coreml.md). The Laya section stays
+optional so old TypeSafe/Nimble stored configuration digests remain valid.
+
 The initial acceptance policies are provisional routing heuristics, not accuracy
 estimates. TypeSafe uses choice confidence; Nimble uses the selected probability
-and margin, not its entropy-derived confidence. Ties, explicit abstention and
+and margin, not its entropy-derived confidence. Laya also uses probability/margin, with its own conservative four-decimal rounding policy. Ties, explicit abstention and
 failed thresholds become `abstained`. Model/revision/usage metadata is recorded
 only when supplied. English and Japanese quality and latency must be evaluated
 separately for each configured model; mocked tests establish protocol behavior.

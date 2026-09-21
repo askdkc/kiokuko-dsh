@@ -118,6 +118,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_continuation_outbox',
         'dsh_decision_bindings',
         'dsh_decision_results',
+        'dsh_decision_selections',
         'dsh_deep_artifacts',
         'dsh_deep_attempts',
         'dsh_deep_budget_reservations',

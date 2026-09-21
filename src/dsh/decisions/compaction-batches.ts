@@ -10,8 +10,12 @@ export async function evaluateCompactionBatches(provider: DecisionProvider, batc
     // UTF-8 bytes provide a deliberately conservative admission estimate, not a tokenizer.
     // Leave room for the provider envelope/template; the server remains authoritative.
     const budget = Math.min(provider.capabilities.maxBytes - 512, provider.capabilities.maxPromptTokens ? provider.capabilities.maxPromptTokens - 512 : Infinity)
-    if (Buffer.byteLength(JSON.stringify(part)) > budget) throw new DecisionError('TOO_LARGE')
+    if (Buffer.byteLength(JSON.stringify(part)) > (provider.preflight ? provider.capabilities.maxBytes : budget)) throw new DecisionError('TOO_LARGE')
     parts.push(part)
+  }
+  if (provider.preflight) for (const part of parts) {
+    signal.throwIfAborted()
+    await abortable(provider.preflight(part, signal), signal)
   }
   const results: DecisionBatchResult[] = []
   for (const part of parts) {
