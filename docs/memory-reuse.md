@@ -85,3 +85,10 @@ npm run test:evaluation:memory-reuse -- --live --provider=nimble
 ```
 
 設定不足は `skipped` と表示します。実モデル評価は小さな合成サンプルであり、本番の精度を保証しません。参照記事の精度や閾値を kiokuko-dsh の実測として扱いません。
+
+## Local Laya
+
+[Laya-CoreML](laya-coreml.md) evaluates one complete record at a time through the
+same service. An oversized record stays unassessed; if every record is oversized,
+the selection falls back. Capacity/input failures do not make readiness unavailable.
+No evidence is shortened to make it fit, and no TypeSafe/Nimble substitution occurs.

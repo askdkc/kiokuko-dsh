@@ -57,6 +57,9 @@ try {
   const packed = {}
   for (const name of ['core', 'enno', 'lisp']) packed[name] = await pack(join(staged, name), join(work, `pack-${name}`))
   const coreFiles = new Set(packed.core.files.map(file => file.path))
+  for (const path of ['scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'dist/dsh/decisions/laya-coreml.js', 'dist/dsh/decisions/laya-transport.js']) {
+    assert.ok(coreFiles.has(path), `Missing Laya core asset: ${path}`)
+  }
   for (const name of ['enno', 'lisp']) for (const file of report.artifacts[name].sourceFiles) assert.ok(!coreFiles.has(file), `${name} duplicates core implementation: ${file}`)
   assert.ok(!packed.core.files.some(file => /^lisp\/|^skills\/kiokuko-(lisp|enno-oduno)\//.test(file.path)))
   assert.ok(!Object.keys(report.artifacts.core.dependencies).some(name => name.startsWith('@orcareplay/')))
@@ -65,6 +68,7 @@ try {
   for (const configuration of [[], ['enno'], ['lisp'], ['enno', 'lisp']]) {
     const combination = ['core', ...configuration].join('-'), consumer = join(work, combination)
     const manifest = await composeModules(Object.fromEntries(['core', ...configuration].map(name => [name, packed[name].directory])), consumer)
+    assert.ok(manifest.dsh.permissions.externalServices.some(service => service.includes('Laya-CoreML Unix socket')))
     const composed = await pack(consumer, join(work, `configured-${combination}`))
     if (configuration.includes('lisp')) {
       for (const path of ['docs/typesafe.md', 'PERMISSIONS.md', 'scripts/smoke-typesafe.mjs', 'dist/dsh/typesafe/client.js']) assert.ok(composed.files.some(file => file.path === path), `Missing TypeSafe module asset: ${path}`)

@@ -54,3 +54,24 @@ CL-UNICODE's generated tables are produced from its bundled Unicode data by its
 upstream `cl-unicode/build` system and shipped as source, so plugin users do not
 need to regenerate them. No SBCL binary, Python runtime, Bubblewrap, VM runtime,
 or Homebrew bottle is included in the plugin package.
+
+# Optional Laya-CoreML worker
+
+`scripts/laya-worker.py` implements a strict input checker for Laya-CoreML's
+Apache-2.0 prompt layout. Changes: independent untruncated input construction,
+prepare/collate comparison, bounded Unix framing, runtime fingerprinting and
+strict operations. The inference runtime and model weights are installed
+separately; neither is bundled. [Apache-2.0 license](docs/laya-coreml-LICENSE.txt).
+
+- Laya-CoreML: https://github.com/mizorewww/laya-coreml
+  Copyright 2026 laya-coreml contributors.
+  Referenced revision: `12b7501583c7f03a6b2e49ebe118a2c6302505b9`.
+- Laya: https://github.com/NandhaKishorM/laya
+  Copyright Convai Innovations and Laya contributors.
+  Upstream revision: `6a5819129eb220570792e417e49723d697efd76f`.
+- Laya-MLX: https://github.com/mizorewww/laya-mlx
+  Copyright 2026 laya-mlx contributors. Apache-2.0.
+  Adapted revision: `fc1df62828a3fedf4d8229fdac1cbd85f1cdf337`.
+
+The model's original checkpoint weights retain their upstream authors' notices.
+This is an independent integration, not an official Convai Innovations or Apple release.

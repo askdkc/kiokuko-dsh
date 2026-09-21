@@ -1,11 +1,12 @@
 import { z } from 'zod'
+import type { DecisionConfiguration } from './config.js'
 import { abortable } from '../http-json.js'
 import { DecisionError, parseDecisionResult, type DecisionBatch, type DecisionBatchResult, type DecisionProvider } from './contracts.js'
 
 export const MemoryDecisionState = z.object({ task: z.string(), constraints: z.string(), memories: z.record(z.string(), z.string()) }).strict()
 
 /** Bound each wire request to its own complete evidence. A failed part never becomes partial success. */
-export async function evaluateMemoryBatches(provider: DecisionProvider, batch: DecisionBatch, kind: 'typesafe' | 'nimble', signal: AbortSignal): Promise<DecisionBatchResult> {
+export async function evaluateMemoryBatches(provider: DecisionProvider, batch: DecisionBatch, kind: DecisionConfiguration['provider'], signal: AbortSignal): Promise<DecisionBatchResult> {
   const parsed = MemoryDecisionState.safeParse(batch.state)
   if (!parsed.success || Object.keys(parsed.data.memories).length !== batch.questions.length || batch.questions.some(q => !Object.hasOwn(parsed.data.memories, q.id))) throw new DecisionError('INVALID_INPUT')
   const state = parsed.data, size = kind === 'typesafe' ? Math.min(8, provider.capabilities.maxQuestions) : 1

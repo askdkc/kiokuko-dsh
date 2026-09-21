@@ -137,6 +137,8 @@ Reload DSH after changing the plugin configuration. In the DSH command UI, check
 
 `probe` sends a synthetic API request; `status` does not. `/kioku-typesafe-key clear` removes the stored key. Key input is visible when using `/kioku-typesafe-key YOUR_KEY`. See [typed decisions](docs/typed-decisions.md) and the [explicit Lisp API](docs/typesafe.md) for more.
 
+Jev remains the default. Nimble and local [Laya-CoreML](docs/laya-coreml.md) are optional alternatives; Laya connects directly to `~/Library/Caches/laya-coreml/worker.sock` and requires the documented strict worker update.
+
 ## Semantic memory reuse
 
 [Semantic memory reuse](docs/memory-reuse.md) checks existing retrieval candidates

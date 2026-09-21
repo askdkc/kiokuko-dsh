@@ -19,6 +19,7 @@ import { dshTurnBoundarySeq, type DshLogEvent } from '../../../src/dsh/session-m
 import { readExecutionSelection, writeExecutionSelection } from '../../../src/dsh/execution-selection.js'
 import { createLispCodingChoice, LISP_CODING_SERVICE } from '../../../src/dsh/lisp/coding-choice.js'
 import { LISP_TOOLS } from '../../../src/dsh/lisp/contracts.js'
+import { layaConfig, serveLaya } from '../helpers/laya.js'
 
 async function fixture(): Promise<{ root: string; databasePath: string }> {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-native-adapter-'))
@@ -745,4 +746,16 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     await hostFiber.dispose()
     await rm(f.root, { recursive: true, force: true })
   }
+})
+
+
+test('full native adapter retains Laya configuration and reaches the direct socket provider', { skip: process.platform === 'win32' }, async t => {
+  const f = await fixture(), ctx = new Context(), socket = await serveLaya(t)
+  const adapter = createDshHostAdapter(ctx, { repositoryRoot: f.root, databasePath: f.databasePath,
+    typedDecisions: layaConfig(socket.path), memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, deepPlanning: { enabled: false }, orca: { enabled: false } })
+  try {
+    const decisions = adapter.host.decisions!
+    assert.equal((decisions.status() as any).provider, 'laya-coreml'); assert.equal(socket.calls(), 0)
+    assert.equal((await decisions.probe(new AbortController().signal)).state, 'ready'); assert.equal(socket.calls(), 2)
+  } finally { await adapter.dispose(); await rm(f.root, { recursive: true, force: true }) }
 })

@@ -39,7 +39,9 @@
     "THIRD_PARTY_NOTICES.md",
     "lisp/",
     "scripts/verify-lisp-vendor.mjs",
-    "scripts/smoke-typesafe.mjs"
+    "scripts/smoke-typesafe.mjs",
+    "scripts/laya-worker.py",
+    "scripts/smoke-laya-coreml.mjs"
   ],
   "exports": {
     ".": {
@@ -120,7 +122,8 @@
         "User-configured embedding endpoint when remote embeddings are enabled",
         "DSH-configured model providers for explicitly started Deep planning and its budgeted memory extraction",
         "DSH-configured model provider for automatic memory review (active by default, up to 12 worker dispatches per project per UTC day), ordinary finalization and configured memory evolution",
-        "Configured TypeSafe fixed endpoint or explicit Nimble HTTPS/loopback endpoint for automatic task/Skill/draft decisions, projected memory reuse after a synthetic readiness probe, and Lisp; no redirects, retries or provider substitution; exact roles.check no-tool fallback for complete draft review"
+        "Configured TypeSafe fixed endpoint or explicit Nimble HTTPS/loopback endpoint for automatic task/Skill/draft decisions, projected memory reuse after a synthetic readiness probe, and Lisp; no redirects, retries or provider substitution; exact roles.check no-tool fallback for complete draft review",
+        "Explicit Laya-CoreML Unix socket for strict local finite decisions; no subprocess client, automatic worker startup, model downloads or provider substitution"
       ],
       "credentials": [
         "Optional user-provided GitHub or embedding credentials; never bundled or persisted by the plugin",
@@ -186,7 +189,8 @@
     "test:skill-quality": "node scripts/run-skill-quality.mjs",
     "test:benchmark:memory-review": "node --import tsx tests/dsh/integration/memory-review/performance.ts",
     "build:modules": "npm run build && node scripts/stage-modules.mjs",
-    "test:modules": "node scripts/run-tests.mjs tests/dsh/unit/core-modules.test.ts tests/dsh/integration/core-host.test.ts && node scripts/verify-module-packages.mjs"
+    "test:modules": "node scripts/run-tests.mjs tests/dsh/unit/core-modules.test.ts tests/dsh/integration/core-host.test.ts && node scripts/verify-module-packages.mjs",
+    "test:laya-worker": "python3 -m unittest discover -s tests/laya -v"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

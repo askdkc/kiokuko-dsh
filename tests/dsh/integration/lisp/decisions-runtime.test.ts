@@ -10,15 +10,17 @@ import { LispManager } from '../../../../src/dsh/lisp/manager.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
 import { DecisionService } from '../../../../src/dsh/decisions/service.js'
 import { TypedDecisionsConfig } from '../../../../src/dsh/decisions/config.js'
+import { LayaCoreMLDecisionProvider } from '../../../../src/dsh/decisions/laya-coreml.js'
+import { layaConfig, layaReply } from '../../helpers/laya.js'
 import { NimbleDecisionProvider, TypeSafeDecisionProvider } from '../../../../src/dsh/decisions/providers.js'
 
-for (const provider of ['typesafe', 'nimble'] as const) test(`protected Lisp ${provider}: neutral helpers consume decisions without effects and discard late cancellation`, {
+for (const provider of ['typesafe', 'nimble', 'laya-coreml'] as const) test(`protected Lisp ${provider}: neutral helpers consume decisions without effects and discard late cancellation`, {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL' : false, timeout: 180000,
 }, async () => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'neutral-lisp-'))), root = join(base, 'work'); await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'db'), new DatabaseSync(join(base, 'db')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  const owner = { sessionId: 'session', agentId: 'agent', root }, config = TypedDecisionsConfig.parse({ provider, nimble: { endpoint: 'http://localhost:8000/v1/systemone', model: 'fixture-model' } })
+  const owner = { sessionId: 'session', agentId: 'agent', root }, config = provider === 'laya-coreml' ? layaConfig() : TypedDecisionsConfig.parse({ provider, nimble: { endpoint: 'http://localhost:8000/v1/systemone', model: 'fixture-model' } })
   let mode = 'selected', calls = 0, began!: () => void, late!: (response: Response) => void, requestSignal: AbortSignal | undefined
   const request: typeof fetch = async (_url, options) => {
     calls++; requestSignal = options!.signal!
@@ -30,7 +32,14 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`protected Lisp ${p
       return [id, { type: 'choice', choice, probabilities: Object.fromEntries(keys.map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
     })) })
   }
-  const service = new DecisionService(config, () => provider === 'typesafe' ? new TypeSafeDecisionProvider(config.typesafe, async () => 'private-host-key', request) : new NimbleDecisionProvider(config.nimble, async () => undefined, request))
+  const service = new DecisionService(config, () => provider === 'laya-coreml' ? new LayaCoreMLDecisionProvider(config['laya-coreml'], async (_path, json, signal) => {
+    const input = JSON.parse(json)
+    if (input.op === 'health') return layaReply(input)
+    calls++; requestSignal = signal
+    if (mode === 'hang') { began(); return new Promise(resolve => { late = resolve }) }
+    if (mode === 'error') return { version: 1, ok: false, error: { code: 'unavailable' } }
+    return layaReply(input, (_id, keys) => mode === 'abstained' ? 'abstain' : keys[0]!)
+  }) : provider === 'typesafe' ? new TypeSafeDecisionProvider(config.typesafe, async () => 'private-host-key', request) : new NimbleDecisionProvider(config.nimble, async () => undefined, request))
   const manager = new LispManager({ store: new LispStore(async fn => fn(db)), config: LispConfig.parse({ enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'),
     decisionCall: async (bound, method, args, context) => { assert.deepEqual(bound, owner); assert.ok(context.generation && context.evaluationId); return method === 'decisions-status' ? service.status() : service.evaluate(context.evaluationId, args, context.signal) },
   })

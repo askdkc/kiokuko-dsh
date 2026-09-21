@@ -136,6 +136,8 @@ YAMLファイルを手動で作る場合は `chmod 600 ~/.dsh/.credentials.yaml`
 
 `probe` は検査用のAPIリクエストを送ります。`status` は送信しません。保存したキーは `/kioku-typesafe-key clear` で削除できます。`/kioku-typesafe-key YOUR_KEY` の入力中はキーが画面に表示されます。詳しくは[型付き判定](docs/typed-decisions.md)と[Lispからの明示的な呼び出し](docs/typesafe.md)を参照してください。
 
+Jevが既定です。Nimbleとローカルの[Laya-CoreML](docs/laya-coreml.md)も選べます。Layaは`~/Library/Caches/laya-coreml/worker.sock`へ直接接続し、文書に記載した厳密検査対応workerへの更新が必要です。
+
 ## 過去の記憶を意味で選別
 
 TypeSafe または Nimble の利用確認が成功すると、既存検索の候補を今回の依頼に使えるか判定します。埋め込みは必須ではありません。`memoryReuse.mode: off` で停止できます。[設定・確認コマンド・評価方法](docs/memory-reuse.md)を参照してください。

@@ -8,15 +8,18 @@ import type { DshCoreRuntime } from '../core-runtime.js'
 import { TypedDecisionsConfig, type DecisionConfiguration } from './config.js'
 import { DecisionError } from './contracts.js'
 import { TypeSafeDecisionProvider, NimbleDecisionProvider } from './providers.js'
+import { LayaCoreMLDecisionProvider } from './laya-coreml.js'
 import { DecisionService, databaseDecisionStore } from './service.js'
 
-export function createDecisionService(ctx: { get(name: string, strict?: boolean): unknown }, runtime: Pick<DshCoreRuntime, 'withDatabase'>, configuration: DecisionConfiguration = TypedDecisionsConfig.parse({}), memoryReuse: MemoryReuseConfiguration = MemoryReuseConfig.parse({}), semanticCompaction: SemanticCompactionConfiguration = SemanticCompactionConfig.parse({})): DecisionService {
+export function createDecisionService(ctx: { get(name: string, strict?: boolean): unknown }, runtime: Pick<DshCoreRuntime, 'withDatabase'>, configuration: DecisionConfiguration = TypedDecisionsConfig.parse({}), memoryReuse: MemoryReuseConfiguration = MemoryReuseConfig.parse({}), semanticCompaction: SemanticCompactionConfiguration = SemanticCompactionConfig.parse({}), repositoryRoot = process.cwd()): DecisionService {
   const credentials = typeSafeCredentials(ctx)
-  return new DecisionService(configuration, config => config.provider === 'typesafe'
-    ? new TypeSafeDecisionProvider(config.typesafe, async () => {
+  return new DecisionService(configuration, config => {
+    switch (config.provider) {
+    case 'laya-coreml': return new LayaCoreMLDecisionProvider(config['laya-coreml'])
+    case 'typesafe': return new TypeSafeDecisionProvider(config.typesafe, async () => {
       try { return await credentials.resolve() } catch { throw new DecisionError('AUTH') }
     })
-    : new NimbleDecisionProvider(config.nimble, async () => {
+    case 'nimble': return new NimbleDecisionProvider(config.nimble, async () => {
       if (!config.nimble.credentialRef) return undefined
       try {
         const native = ctx.get('credentials', false) as TypeSafeCredentialProvider | undefined
@@ -24,11 +27,14 @@ export function createDecisionService(ctx: { get(name: string, strict?: boolean)
         if (!value) throw new DecisionError('AUTH')
         return value
       } catch { throw new DecisionError('AUTH') }
-    }), databaseDecisionStore(runtime), { memoryReuse, semanticCompaction, configurationCheck: async (config, signal) => {
+    })
+    }
+  }, databaseDecisionStore(runtime), { memoryReuse, semanticCompaction, repositoryRoot, configurationCheck: async (config, signal) => {
       signal.throwIfAborted()
       if (config.provider === 'typesafe') {
         try { return canonicalContentHash(await credentials.resolve()) } catch { return false }
       }
+      if (config.provider === 'laya-coreml') return true
       if (!config.nimble.credentialRef) return true
       try {
         const native = ctx.get('credentials', false) as TypeSafeCredentialProvider | undefined

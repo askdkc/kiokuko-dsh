@@ -63,9 +63,17 @@ only with their complete evidence and alternatives; a plan is never truncated.
 No metadata endpoint is required for evaluation. See the
 [Nimble serving contract](https://github.com/bespokelabsai/nimble/blob/main/docs/MODAL_SERVING.md).
 
+For local Laya-CoreML, select `provider: laya-coreml` and configure its Unix
+socket, model and runtime fingerprint. Jev remains the default. The host connects
+directly to `~/Library/Caches/laya-coreml/worker.sock`; no HTTP bridge or subprocess
+client is used. The worker must support `preflight` and `predict_strict`, which
+reject truncated inputs and mismatched runtime identities. See the complete
+[worker update and Laya configuration](laya-coreml.md). The Laya section stays
+optional so old TypeSafe/Nimble stored configuration digests remain valid.
+
 The initial acceptance policies are provisional routing heuristics, not accuracy
 estimates. TypeSafe uses choice confidence; Nimble uses the selected probability
-and margin, not its entropy-derived confidence. Ties, explicit abstention and
+and margin, not its entropy-derived confidence. Laya also uses probability/margin, with its own conservative four-decimal rounding policy. Ties, explicit abstention and
 failed thresholds become `abstained`. Model/revision/usage metadata is recorded
 only when supplied. English and Japanese quality and latency must be evaluated
 separately for each configured model; mocked tests establish protocol behavior.

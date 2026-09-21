@@ -28,6 +28,8 @@ const resultSchema = z.object({
 export type DecisionBatchResult = z.infer<typeof resultSchema>
 export interface DecisionProvider {
   readonly capabilities: DecisionCapabilities
+  /** Same per-part limits as evaluate. Checks admission without model inference. */
+  preflight?(request: DecisionBatch, signal: AbortSignal): Promise<void>
   evaluate(request: DecisionBatch, signal: AbortSignal): Promise<DecisionBatchResult>
 }
 export type DecisionErrorCode = 'UNAVAILABLE' | 'AUTH' | 'TIMEOUT' | 'CANCELLED' | 'INVALID_INPUT' | 'UNSUPPORTED' | 'TOO_LARGE' | 'MALFORMED_RESPONSE'

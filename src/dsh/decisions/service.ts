@@ -4,7 +4,7 @@ import { canonicalContentHash } from '../../serialization/validate.js'
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { abortable } from '../http-json.js'
 import { DecisionError, parseDecisionBatch, parseDecisionResult, type DecisionProvider, type DecisionBatchResult } from './contracts.js'
-import { TypedDecisionsConfig, type DecisionConfiguration } from './config.js'
+import { TypedDecisionsConfig, selectedDecisionSettings, decisionConfigurationIssue, resolveDecisionConfiguration, LAYA_POLICY_VERSION, type DecisionConfiguration } from './config.js'
 import { POLICY_VERSION } from './providers.js'
 import { DecisionReadinessMonitor, type ReadinessOptions } from './readiness.js'
 import { MemoryReuseConfig, type MemoryReuseConfiguration } from '../../memory/reuse.js'
@@ -50,14 +50,17 @@ export class DecisionService {
   private readonly pending = new Map<string, Promise<DecisionOutcome>>()
   private lastFallback: string | null = null
   constructor(private readonly config: DecisionConfiguration, private readonly provider: (config: DecisionConfiguration) => DecisionProvider, private readonly store?: DecisionStore,
-    options: ReadinessOptions & { memoryReuse?: MemoryReuseConfiguration; semanticCompaction?: SemanticCompactionConfiguration } = {}) {
+    options: ReadinessOptions & { memoryReuse?: MemoryReuseConfiguration; semanticCompaction?: SemanticCompactionConfiguration; repositoryRoot?: string } = {}) {
+    this.config = resolveDecisionConfiguration(config, options.repositoryRoot ?? process.cwd())
     this.memoryReuse = MemoryReuseConfig.parse(options.memoryReuse ?? {})
     this.semanticCompaction = SemanticCompactionConfig.parse(options.semanticCompaction ?? {})
     this.readiness = new DecisionReadinessMonitor(config => this.memoryProvider(config), options)
   }
   private memoryProvider(config: DecisionConfiguration): DecisionProvider {
     const provider = this.provider(config)
-    return { capabilities: provider.capabilities, evaluate: (batch, signal) => this.memoryConcurrency.run(signal,
+    return { capabilities: provider.capabilities,
+      ...(provider.preflight ? { preflight: (batch: Parameters<DecisionProvider['evaluate']>[0], signal: AbortSignal) => this.memoryConcurrency.run(signal, () => abortable(provider.preflight!(batch, signal), signal)) } : {}),
+      evaluate: (batch, signal) => this.memoryConcurrency.run(signal,
       async () => {
         if (batch.purpose !== 'compaction') return abortable(provider.evaluate(batch, signal), signal)
         const started = performance.now(); this.compactionMetrics.calls++; this.compactionMetrics.inputBytes += Buffer.byteLength(JSON.stringify(batch))
@@ -84,10 +87,10 @@ export class DecisionService {
     await this.bindings.get(requestId)
   }
   status(): unknown {
-    const selected = this.config[this.config.provider]
-    return { mode: this.config.mode, provider: this.config.provider, model: selected.model ?? null, timeoutMs: selected.timeoutMs,
-      configurationReady: this.config.mode !== 'off' && (this.config.provider !== 'nimble' || Boolean(this.config.nimble.endpoint && this.config.nimble.model)),
-      limits: this.provider(this.config).capabilities, acceptance: selected.acceptance, policyVersion: POLICY_VERSION, lastFallback: this.lastFallback,
+    const selected = selectedDecisionSettings(this.config)
+    return { mode: this.config.mode, provider: this.config.provider, model: selected?.model ?? null, timeoutMs: selected?.timeoutMs ?? null,
+      configurationReady: !decisionConfigurationIssue(this.config),
+      limits: this.provider(this.config).capabilities, acceptance: selected?.acceptance ?? null, policyVersion: this.config.provider === 'laya-coreml' ? LAYA_POLICY_VERSION : POLICY_VERSION, lastFallback: this.lastFallback,
       observationPack: this.observationStatus,
       semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, metrics: this.compactionMetrics, lastPreemptive: this.lastPreemptive, preemptiveActive: this.semanticCompaction.preemptive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready', active: this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },
       readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' } }
@@ -126,12 +129,12 @@ export class DecisionService {
     const existing = this.pending.get(key)
     if (existing) return abortable(existing, signal)
     const operation = (async (): Promise<DecisionOutcome> => {
-      const timeout = new AbortController(), selected = config[config.provider]
-      const timer = setTimeout(() => timeout.abort(), managed ? Math.min(selected.timeoutMs, semantic ? this.semanticCompaction.budgetMs : this.memoryReuse.budgetMs) : selected.timeoutMs)
+      const timeout = new AbortController(), timeoutMs = selectedDecisionSettings(config)?.timeoutMs ?? 5000
+      const timer = setTimeout(() => timeout.abort(), managed ? Math.min(timeoutMs, semantic ? this.semanticCompaction.budgetMs : this.memoryReuse.budgetMs) : timeoutMs)
       const combined = AbortSignal.any([signal, timeout.signal])
       let outcome: DecisionOutcome
       try {
-        if (config.mode === 'off') throw new DecisionError('UNAVAILABLE')
+        if (decisionConfigurationIssue(config)) throw new DecisionError('UNAVAILABLE')
         if (managed) {
           if ((semantic ? this.semanticCompaction : this.memoryReuse).mode === 'off') throw new DecisionError('UNAVAILABLE')
           const ready = await this.readiness.probe(config, combined)
@@ -162,7 +165,8 @@ export class DecisionService {
         const reason = timeout.signal.aborted ? 'DECISION_TIMEOUT' : (error as DecisionError).code
         const wasReady = this.readiness.status(config).state === 'ready'
         if (reason === 'DECISION_AUTH' && (wasReady || !managed)) this.invalidateReadiness()
-        if (managed && (wasReady || reason === 'DECISION_TIMEOUT')) this.readiness.failed(config, reason)
+        if (managed && !['DECISION_TOO_LARGE', 'DECISION_INVALID_INPUT', 'DECISION_CANCELLED'].includes(reason)
+          && (wasReady || reason === 'DECISION_TIMEOUT')) this.readiness.failed(config, reason)
         this.lastFallback = reason
         outcome = { status: 'fallback', reason }
       } finally { clearTimeout(timer) }

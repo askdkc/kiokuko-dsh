@@ -41,6 +41,8 @@ jobs:
           fi
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/dsh-runtime
+      - name: Verify Laya worker protocol and input integrity without Core ML
+        run: npm run test:laya-worker
       - run: npm run verify:lisp:vendor
       - name: Test actual runtime and native DSH guard
         shell: bash

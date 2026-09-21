@@ -78,3 +78,12 @@ npm run test:modules
 ```
 
 The native packing test prints enabled/disabled request JSON bytes, including tool definitions and the extra retrieval request, for the same final file-writing task. Its model and classifier are scripted. Native token-meter projections, serialized bytes, provider-reported tokens, actual billed cost and live-model task success are different measurements. No live judgment-quality, cost or success-rate improvement is claimed.
+
+## Local Laya
+
+[Laya-CoreML](laya-coreml.md) preflights every complete one-question part before
+starting any prediction for the compaction batch. This uses the actual tokenizer
+instead of the legacy byte-minus-512 estimate. A later part that does not fit
+prevents all predictions for that batch; an independent readiness probe may have
+already run. Preflight is not counted as a model prediction. Capacity rejection
+retains service readiness and uses the existing compaction fallback.

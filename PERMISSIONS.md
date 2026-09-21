@@ -208,7 +208,11 @@ installed Skill descriptions, sanitized candidate plan or explicitly selected Li
 evidence to the configured adapter. TypeSafe uses its fixed HTTPS endpoint and
 DSH-managed TYPESAFE_API_KEY. Nimble requires an explicit complete HTTPS or loopback
 HTTP endpoint and model; an optional separate bearer reference is resolved through
-DSH. Credentials never enter workers, prompts, logs or Kiokuko SQLite. No redirects,
+DSH. Laya-CoreML uses an explicitly configured owner-access Unix socket (default
+`~/Library/Caches/laya-coreml/worker.sock`) from the host, with bounded strict
+requests, cancellation and a pinned runtime fingerprint. It does not resolve cloud
+credentials or grant socket access to the protected Lisp worker. The optional
+Python worker is installed/restarted explicitly by the user, never by DSH. Credentials never enter workers, prompts, logs or Kiokuko SQLite. No redirects,
 HTTP retries, provider substitution or runtime/model installation occur. `/kioku-decisions
 status` reports configuration, limits and the last fallback without a network call.
 Review fallback sends the full sanitized plan to the exact configured `roles.check`
