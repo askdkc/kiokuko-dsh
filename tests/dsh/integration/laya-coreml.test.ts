@@ -16,6 +16,7 @@ test('Laya host reaches framed socket, persists exact bindings/replay, preserves
   const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
   t.after(() => db.close())
   db.exec(await readFile(new URL('../../../migrations/021_typed_decisions.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../migrations/024_decision_selection.sql', import.meta.url), 'utf8'))
   const runtime = { withDatabase: async (operation: any) => operation(db) } as Pick<DshCoreRuntime, 'withDatabase'>
   let evidenceCalls = 0
   const socket = await serveLaya(t, request => {

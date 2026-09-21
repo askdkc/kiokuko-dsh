@@ -235,3 +235,10 @@ eligible old tool results through DSH's append-only history protocol; original l
 events remain available. They never grant execution authority or change stored Lisp
 values. Set `semanticCompaction.mode: off` to disable this use independently.
 See [semantic compaction](docs/semantic-compaction.md) for protection and failure behavior.
+
+`/kioku-decisions use jev|laya|nimble` performs a bounded synthetic probe and
+saves the selected configuration in Kiokuko SQLite for the repository and base
+plugin configuration. Laya health discovery reads model identity from the local
+worker. No credential value is stored in this selection. Existing request
+bindings remain immutable; the command does not edit DSH profile files or restart
+DSH or the worker. `use default` restores the plugin configuration.

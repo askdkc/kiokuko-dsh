@@ -123,6 +123,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   try {
     if (!skills?.registerProvider || !skills.snapshot || !tools?.schemas || !tools.guard || !tools.register || !sessions?.get || !sessions.flush || !agents?.get || !systemPrompt?.section) throw new Error('Core requires native Skill, prompt, tool, session and agent services')
     await runtime.start()
+    await decisions.initialize()
     const provider = configuredSkillProvider(modules.resources(), prompts)
     disposers.push(() => provider.dispose())
     disposers.push(skills.registerProvider(() => provider))

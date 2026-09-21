@@ -103,19 +103,18 @@ if you want Enno. Free text is passed to the AI as a discussion or correction.
 Deletion and replacement of existing files require human confirmation.
 See [setup, APIs, limits and recovery](docs/lisp.md).
 
-## TypeSafe (Jev)
+## Typed decisions (Jev / Laya / Nimble)
 
-Kiokuko can use Jev for automatic typed decisions. Add this to the existing `kiokuko-dsh` row in `~/.dsh/profiles/web/cordis.patch.yml`, keeping its other `config` values:
+Jev is the default. Switch in DSH's command input without editing configuration or restarting DSH:
 
-```yaml
-- id: kiokuko-dsh
-  config:
-    typedDecisions:
-      mode: auto
-      provider: typesafe
-      typesafe:
-        model: jev-latest
+```text
+/kioku-decisions use jev
+/kioku-decisions use laya
+/kioku-decisions use nimble
+/kioku-decisions use default
 ```
+
+Laya discovers the model and runtime fingerprint from an already running strict worker. Jev needs a TypeSafe key; Nimble needs an endpoint and model configured first. A successful probe saves the selection for this project and applies it to new requests. It survives restarts and preserves in-flight request bindings. `use default` restores the plugin configuration.
 
 Set the API key in DSH's `~/.dsh/.credentials.yaml` (`$DSH_HOME/.credentials.yaml` if set), or use `/kioku-typesafe-key YOUR_KEY`. Keep any existing entries:
 
@@ -127,7 +126,7 @@ refs:
 
 If creating the YAML file yourself, run `chmod 600 ~/.dsh/.credentials.yaml` (use `$DSH_HOME` if set).
 
-Reload DSH after changing the plugin configuration. In the DSH command UI, check the key and test the connection:
+In the DSH command UI, check the key and test the connection:
 
 ```text
 /kioku-typesafe-key status

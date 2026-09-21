@@ -239,6 +239,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   }
 
   try {
+    await host.decisions?.initialize()
     if (host.commands && host.decisions && options.typeSafeCommand !== false) ingressDisposers.push(mountDecisionCommand(host.commands, host.decisions))
     if (host.commands && options.typeSafeCommand !== false) ingressDisposers.push(mountTypeSafeCommand(host.commands, typeSafeCredentials(ctx), () => host.decisions?.invalidateReadiness()))
     const historyCompatibility = mountSessionHistoryCompatibility(ctx)

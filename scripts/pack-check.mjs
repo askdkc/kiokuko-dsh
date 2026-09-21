@@ -17,6 +17,7 @@ const requiredFiles = [
   'migrations/019_dsh_lisp.sql',
   'migrations/020_dsh_memory_review.sql',
   'migrations/023_memory_application.sql',
+  'migrations/024_decision_selection.sql',
   'dist/memory/application.js',
   'dist/dsh/memory-application.js',
   'dist/enno-oduno/memory-verification.js',

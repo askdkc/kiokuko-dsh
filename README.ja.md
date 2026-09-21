@@ -102,19 +102,18 @@ Lisp を選ぶと、Lisp 用ツールで通常実行します。役小角を使�
 削除・既存ファイルの置換はユーザーの確認後に実行します。
 [設定、API、停止・復旧方法](docs/lisp.md)を参照してください。
 
-## TypeSafe (Jev)
+## 型付き判定（Jev / Laya / Nimble）
 
-Jev を自動の型付き判定に使えます。`~/.dsh/profiles/web/cordis.patch.yml` の既存の `kiokuko-dsh` 行に追加し、他の `config` 値は保持してください。
+Jevが既定です。DSHのコマンド入力欄で切り替えられます。設定編集や再起動は不要です。
 
-```yaml
-- id: kiokuko-dsh
-  config:
-    typedDecisions:
-      mode: auto
-      provider: typesafe
-      typesafe:
-        model: jev-latest
+```text
+/kioku-decisions use jev
+/kioku-decisions use laya
+/kioku-decisions use nimble
+/kioku-decisions use default
 ```
+
+Layaは起動済みの拡張workerからモデル名とfingerprintを自動取得します。JevにはTypeSafeキー、Nimbleには接続先・モデルの事前設定が必要です。probeが成功してから選択をプロジェクト単位で保存し、次のリクエストへ適用します。再起動後も保持し、進行中のリクエストは変更しません。`use default`でプラグイン設定へ戻せます。
 
 APIキーは DSH の `~/.dsh/.credentials.yaml`（`DSH_HOME` を設定している場合は `$DSH_HOME/.credentials.yaml`）に書くか、`/kioku-typesafe-key YOUR_KEY` で保存します。既存の項目は残してください。
 
@@ -126,7 +125,7 @@ refs:
 
 YAMLファイルを手動で作る場合は `chmod 600 ~/.dsh/.credentials.yaml` を実行してください（`DSH_HOME` を設定している場合はそのパスを使用）。
 
-プラグイン設定を変更したら DSH を再起動し、DSH のコマンド入力欄で確認します。
+DSHのコマンド入力欄で利用可能な状態を確認します。
 
 ```text
 /kioku-typesafe-key status
@@ -136,7 +135,7 @@ YAMLファイルを手動で作る場合は `chmod 600 ~/.dsh/.credentials.yaml`
 
 `probe` は検査用のAPIリクエストを送ります。`status` は送信しません。保存したキーは `/kioku-typesafe-key clear` で削除できます。`/kioku-typesafe-key YOUR_KEY` の入力中はキーが画面に表示されます。詳しくは[型付き判定](docs/typed-decisions.md)と[Lispからの明示的な呼び出し](docs/typesafe.md)を参照してください。
 
-Jevが既定です。Nimbleとローカルの[Laya-CoreML](docs/laya-coreml.md)も選べます。Layaは`~/Library/Caches/laya-coreml/worker.sock`へ直接接続し、文書に記載した厳密検査対応workerへの更新が必要です。
+Jevが既定です。Nimbleとローカルの[Laya-CoreML](docs/Laya-CoreML-ja.md)も選べます。Layaは`~/Library/Caches/laya-coreml/worker.sock`へ直接接続し、文書に記載した厳密検査対応workerへの更新が必要です。
 
 ## 過去の記憶を意味で選別
 

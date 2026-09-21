@@ -8,7 +8,7 @@ export const MEMORY_REUSE_POLICY = 'memory-reuse-v1'
 /** Bind once to the logical request; only sanitized current task and projected memories go on the wire. */
 export async function createMemoryReuseRuntime(service: DecisionService | undefined, requestId: string, signal: AbortSignal): Promise<MemoryReuseRuntime | undefined> {
   if (!service || service.memoryReuse.mode === 'off') return undefined
-  const config = await service.bind(requestId)
+  const config = await service.bind(requestId, signal)
   if (config.mode === 'off') return undefined
   const settings = service.memoryReuse
   return {

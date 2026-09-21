@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { canonicalJson } from '../../serialization/validate.js'
-import { LAYA_MODELS, LAYA_POLICY_VERSION, type LayaSettings } from './config.js'
+import { LAYA_MODELS, LAYA_POLICY_VERSION, TypedDecisionsConfig, resolveDecisionConfiguration, type DecisionConfiguration, type LayaSettings } from './config.js'
 import { DECISION_BYTES, DecisionError, parseDecisionBatch, parseDecisionResult, type DecisionBatch, type DecisionBatchResult, type DecisionProvider } from './contracts.js'
 import { requestLaya, type LayaTransport } from './laya-transport.js'
 
@@ -40,6 +40,16 @@ export function parseLayaHealth(value: unknown) {
   if (!parsed.success || !['preflight', 'predict_strict'].every(op => parsed.data.operations.includes(op))
     || parsed.data.runtime.limits.maxPromptTokens !== LAYA_MODELS[parsed.data.runtime.model]) throw new DecisionError('UNSUPPORTED')
   return parsed.data.runtime
+}
+
+/** Discover missing runtime identity without evidence or inference; explicit pins remain constraints. */
+export async function discoverLayaConfiguration(config: DecisionConfiguration, repositoryRoot: string, signal: AbortSignal, request: LayaTransport = requestLaya): Promise<DecisionConfiguration> {
+  if (config.provider !== 'laya-coreml' || config.mode === 'off') return structuredClone(config)
+  const resolved = resolveDecisionConfiguration(TypedDecisionsConfig.parse({ ...config, 'laya-coreml': config['laya-coreml'] ?? {} }), repositoryRoot)
+  const settings = resolved['laya-coreml']!
+  const runtime = parseLayaHealth(await request(settings.socketPath, '{"version":1,"op":"health"}', signal, settings.timeoutMs))
+  if (settings.model && settings.model !== runtime.model || settings.runtimeFingerprint && settings.runtimeFingerprint !== runtime.runtimeFingerprint) throw new DecisionError('UNSUPPORTED')
+  return { ...resolved, 'laya-coreml': { ...settings, model: runtime.model, runtimeFingerprint: runtime.runtimeFingerprint } }
 }
 
 /** Construct ordered object members directly; JSON.stringify(object) reorders integer-like IDs. */

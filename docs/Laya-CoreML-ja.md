@@ -4,6 +4,10 @@
 [厳密検査対応workerの更新手順](laya-coreml.md)に従い、リポジトリの
 `scripts/laya-worker.py`を使ってください。保守対象の実装はその1ファイルです。
 
+対応workerの起動後は、DSHで `/kioku-decisions use laya` を実行します。
+モデル名とfingerprintは自動取得します。Jevへ戻す場合は `/kioku-decisions use jev`。
+この切り替えにYAML編集やDSH再起動は不要です。
+
 ## モデルのダウンロードとインストール
 ```bash
 brew install python@3.13 pipx

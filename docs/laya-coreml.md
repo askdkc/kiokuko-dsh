@@ -25,15 +25,43 @@ python ~/.local/bin/laya-worker.py
 
 起動時に推論用ファイル、tokenizer、校正設定、Laya実装、worker実装、依存バージョン、実行環境をハッシュし、ロードとwarmupの前後で一致を確認します。`READY`後に接続できます。モデルファイルは稼働中に変更せず、更新時はworkerも明示的に再起動してください。
 
-## 設定を取得する
+## Jev / Layaを切り替える
 
-リポジトリから使う場合は先に `npm run build` を実行します。配布パッケージにはビルド済みファイルが入っています。
+拡張workerを起動したら、DSHのコマンド入力欄で実行します。通常はYAML編集、モデル名やfingerprintの転記、DSHの再起動は不要です。
 
-```bash
-node scripts/smoke-laya-coreml.mjs --live --print-config
+```text
+/kioku-decisions use laya
+/kioku-decisions use jev
+/kioku-decisions status
 ```
 
-この操作はhealth情報から貼り付け可能な設定を出力します。推論は行いません。既存のプラグイン設定内へ、他の設定を残して追記してください。
+`use laya`は既定のsocketからモデルとfingerprintを自動取得し、既知解のprobeが通ってから切り替えます。`use jev`は登録済みTypeSafeキーを使ってprobeします。検査中は元のproviderを使用し、失敗・キャンセル・保存失敗では選択を変えません。probeには検査用の推論呼び出しが含まれます。
+
+選択はプロジェクトと `typedDecisions` の基本設定に対応付けてKiokuko DBへ保存し、次のリクエストから使用します。再起動後も復元します。進行中・再開中の論理リクエストは元の設定・実体を維持します。基本設定を変更した場合は、その設定に対応する選択を使用します。別のDSHプロセスが先に選択を変更した場合は上書きせず、再起動して新しい選択を読み込みます。
+
+```text
+/kioku-decisions use nimble
+/kioku-decisions use default
+/kioku-decisions probe
+```
+
+Nimbleには接続先・モデルの事前設定が必要です。`use default`はプラグイン設定のproviderとmodeに戻します。`probe`は現在の選択を検査し、`status`はsocketやAPIへ接続しません。引数なしの `/kioku-decisions` でも選択肢を確認できます。
+
+旧workerが `preflight` / `predict_strict` に未対応なら、更新方法を表示して切り替えを止めます。DSHがworkerを自動更新・起動することはありません。
+
+### 設定ファイルを使う場合
+
+コマンドを使わずLayaを既定にする場合は、次だけをプラグインの既存configへ追加します。
+
+```yaml
+typedDecisions:
+  mode: auto
+  provider: laya-coreml
+```
+
+初回のprobeまたはリクエスト開始時に実体を自動取得します。取得できなかったリクエストは既存のfallbackへ戻り、後から同じリクエストの実体を書き換えません。
+
+接続先や受理方針を変更する場合だけ、optional設定を追加します。
 
 ```yaml
 typedDecisions:
@@ -41,24 +69,19 @@ typedDecisions:
   provider: laya-coreml
   laya-coreml:
     socketPath: ~/Library/Caches/laya-coreml/worker.sock
-    model: aac6fef/laya-multilingual-coreml-ane
-    runtimeFingerprint: "sha256:<取得した64桁の値>"
     timeoutMs: 5000
     acceptance:
       minProbability: 0.9
       minMargin: 0.2
 ```
 
-上のfingerprintは説明用です。実際には出力された値を使います。`~`は設定のスナップショット作成時に展開し、相対パスはDSHの登録リポジトリルート基準で解決します。解決済み接続先、モデル、fingerprint、受理方針を論理リクエストごとに固定します。モデル名は構成上の識別名であり、Hub revisionを証明しません。内容の識別にはfingerprintを使います。
+`~`はシェルなしで展開し、相対パスは登録リポジトリルート基準で解決します。解決済み接続先、モデル、fingerprint、受理方針を論理リクエストに固定します。YAMLを変更した場合はDSHを再起動してください。コマンドでの切り替えには再起動不要です。
 
-```text
-/kioku-decisions probe
-/kioku-decisions status
-```
+`model`と`runtimeFingerprint`を明示する高度な設定も引き続き使えます。その場合は自動検出結果と一致することを要求し、不一致を自動修正しません。固定値の取得が必要な場合だけ、リポジトリまたはパッケージのルートで `node scripts/smoke-laya-coreml.mjs --live --print-config` を実行します。リポジトリでは先に `npm run build` が必要です。
 
-`probe`は対応操作・実体を確認して既知解の質問を送ります。`status`は接続せず、設定と最後に確認した状態を返します。旧workerのhealth/predictが動くだけでは不足し、`DECISION_UNSUPPORTED`になります。未対応時に通常のpredictへ戻すことはありません。
+workerのモデルや実装を更新した後は、`/kioku-decisions use laya` を再実行すると新しい実体を検査・採用します。古いリクエストの実体は変更しません。YAMLに明示した固定値がある場合は、その制約の更新が必要です。
 
-GPU版を使う場合は `LAYA_MODEL` を配置済みの通常版へ変え、workerを明示的に再起動して設定を取得し直します。対応識別名は `aac6fef/laya-multilingual-coreml`（1024 tokens）と `aac6fef/laya-multilingual-coreml-ane`（96 tokens）。実際のshapeとモデル設定を起動時に照合します。
+GPU版は配置済みモデルへ `LAYA_MODEL` を変更してworkerを再起動し、`use laya`で選び直します。対応識別名は `aac6fef/laya-multilingual-coreml`（1024 tokens）と `aac6fef/laya-multilingual-coreml-ane`（96 tokens）。実際のshapeとモデル設定を起動時に照合します。
 
 ## 入力と受理の制限
 
@@ -117,4 +140,4 @@ node scripts/smoke-laya-coreml.mjs --live
 
 smokeは既知解、容量拒否、実体不一致、legacy noul互換を確認します。fake tokenizerの成功を実モデルの非切り詰め確認とは扱いません。実機未配置のCIでは実機検証を実行しません。英語・日本語の品質やP50/P95などの性能比較は別評価です。
 
-切り戻しは新しい論理リクエストに対する `provider: typesafe` または `provider: nimble` への変更で行います。旧Laya結果と設定は残します。workerを止めてもJev/Nimbleの利用に影響しません。Layaを知らない旧バイナリへのダウングレード互換は保証しません。
+切り戻しは `/kioku-decisions use jev` または `/kioku-decisions use nimble` で行い、新しい論理リクエストから適用します。旧Laya結果と設定は残します。workerを止めてもJev/Nimbleの利用に影響しません。Layaを知らない旧バイナリへのダウングレード互換は保証しません。

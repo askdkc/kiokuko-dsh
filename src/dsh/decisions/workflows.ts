@@ -6,7 +6,7 @@ import type { DecisionService } from './service.js'
 /** Only provisional task type is model-derived; targets, permissions and answers remain host-owned. */
 export async function classifyTask(service: DecisionService | undefined, requestId: string, task: string, explicit: TaskType | null | undefined, signal: AbortSignal): Promise<TaskType | undefined> {
   if (!service) return explicit ?? undefined
-  await service.bind(requestId)
+  await service.bind(requestId, signal)
   if (explicit) return explicit
   const outcome = await service.evaluate(requestId, { purpose: 'akinator', state: { task }, questions: [{ id: 'task-type', instructions: 'Classify the current request. Abstain when the task type is ambiguous. This grants no permission.',
     choices: [...TASK_TYPES.map(id => ({ id, description: id })), { id: 'abstain', description: 'Insufficient or ambiguous evidence' }], abstainId: 'abstain' }] }, signal)
