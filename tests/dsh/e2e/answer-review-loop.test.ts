@@ -13,7 +13,7 @@ import { serveLaya, layaV1Reply } from '../helpers/laya.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packageRoot) throw new Error('Answer review coverage requires the pinned native DSH package runtime')
-for (const host of ['full', 'core'] as const) for (const scenario of ['finding','tool-evidence','no-finding','superseded','queued-superseded','claimed-superseded','cancelled'] as const) test(`native ${host}: answer review ${scenario}`, {
+for (const host of ['full', 'core'] as const) for (const scenario of ['finding','tool-evidence','no-finding','unavailable','off','superseded','queued-superseded','claimed-superseded','cancelled'] as const) test(`native ${host}: answer review ${scenario}`, {
   skip: !packageRoot ? 'requires pinned native DSH package runtime' : false, timeout: 30000,
 }, async t => {
   const newRequest = scenario === 'superseded' || scenario === 'queued-superseded' || scenario === 'claimed-superseded'
@@ -28,6 +28,10 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
   const errors: unknown[] = []; let reviewStatus: () => unknown = () => undefined
   const socket = await serveLaya(t, request => {
     if(request.op==='predict' && request.questions?.request_fit) reviewInputs.push(JSON.parse(request.state))
+    if(scenario==='unavailable' && request.op==='predict' && request.questions?.request_fit) {
+      reviewCalls++
+      return {version:1,ok:false,error:{code:'model_unavailable'}}
+    }
     return layaV1Reply(request, (id, choices) => {
     if (id === 'task-type') { taskTypeCalls++; return 'writing' }
     if (id === 'request_fit') { reviewCalls++; onReview?.(); onReview = undefined; return scenario === 'no-finding' || reviewCalls > 1 ? 'satisfied' : 'finding' }
@@ -38,7 +42,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       const fiber = ctx.plugin(plugin,config); fibers.push(fiber); await fiber
     }
     const ui = ctx.plugin({ name:'answer-test-ui', apply(c: any) { return c.provide('userQuestions',{ ask: async (request: any) => { questions++; return { answers:request.questions.map((q:any)=>({id:q.id,selected:['通常実行']})) } } }) } }); fibers.push(ui); await ui
-    const config = { answerReview:{mode:'auto' as const,budgetMs:5000}, typedDecisions:{provider:'laya-coreml' as const,'laya-coreml':{socketPath:socket.path}} }
+    const config = { ...(scenario==='off'?{answerReview:{mode:'off' as const}}:{}), typedDecisions:{provider:'laya-coreml' as const,'laya-coreml':{socketPath:socket.path}} }
     if (host === 'full') {
       const adapter = createDshHostAdapter(ctx,{...config,repositoryRoot:root,databasePath,orca:{enabled:false},memoryReview:{mode:'off'},deepPlanning:{enabled:false},
         llm:{async *stream(){throw new Error('No auxiliary LLM in this fixture')}}})
@@ -86,7 +90,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       if(!newRequest) assert.equal(questions,questionCount,'correction does not reopen intake or execution choice')
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()!.n,newRequest ? 2 : 1)
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()!.n,0)
-      assert.equal(taskTypeCalls,newRequest?2:1,'classification is not repeated for reconsideration');assert.equal(rows.length,newRequest ? 2 : 1);assert.equal(reviewCalls,newRequest ? 2 : 1)
+      assert.equal(taskTypeCalls,newRequest?2:1,'classification is not repeated for reconsideration');assert.equal(rows.length,scenario==='off'?0:newRequest ? 2 : 1);assert.equal(reviewCalls,scenario==='off'?0:newRequest ? 2 : 1)
       assert.ok(rows.every(row=>row.status==='closed'))
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ledger_runs WHERE status='active'").get()!.n,0)
       if(host==='full') assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_memory_finalizations').get()!.n,newRequest?2:1)

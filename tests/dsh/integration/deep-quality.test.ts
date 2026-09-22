@@ -54,6 +54,9 @@ test('final review can retain a correct earlier candidate after repair introduce
     assert.equal(root.receipt!.verifierVersion,2)
     if(root.receipt!.verifierVersion===2) assert.equal(root.receipt!.selectedCandidateId,root.quality!.candidates[0]!.id)
     assert.equal(root.quality!.review!.resolutions[0]!.status,'resolved')
+    const report = deepReport(state, [])
+    assert.match(report.text, /採用: 案1/)
+    assert.match(report.text, /案3 .*: 矛盾あり/)
   }finally{await scheduler.dispose();await f.close()}
 })
 
@@ -124,6 +127,32 @@ test('quality decomposition inherits immutable check assignments and verifies pa
     return reply
   }},async()=>{})
   try {await scheduler.start(f.state.runId);await scheduler.idle(f.state.runId);const state=await f.store.read(f.state.runId);assert.equal(state.phase,'answered',state.reason);assert.equal(state.nodes.length,3);assert.equal(state.nodes[0]!.quality!.candidates.length,1);for(const child of state.nodes.slice(1)){assert.equal(child.quality!.checks.length,1);assert.deepEqual(child.quality!.checks,child.quality!.inheritedChecks)}}finally{await scheduler.dispose();await f.close()}
+})
+
+test('a rejected child assignment is not persisted or dispatched even when a sibling covers the gap', async () => {
+  const f = await deepFixture({}, mode), jobs: DeepJob[] = []
+  await f.store.mutate(f.state.runId, state => { state.nodes[0]!.requirementIds = ['R1', 'R2'] })
+  const scheduler = new DeepScheduler(f.store, { execute: async (_authority, job) => {
+    jobs.push(job)
+    const reply = qualityResponse(qualityInput(job))
+    if (reply.kind === 'quality-plan') {
+      reply.decision = 'decompose'
+      reply.children = ['R1', 'R2'].map((requirementId, index) => ({ key: `child-${index}`, question: `Investigate ${requirementId}`,
+        requirementIds: index === 0 ? ['R1', 'R2'] : ['R2'], acceptanceCriteria: ['Verify assigned requirements'], assumptions: [], dependsOn: [],
+        checkKeys: reply.checks.filter(check => check.requirementId === requirementId).map(check => check.key) }))
+    }
+    return reply
+  } }, async () => {})
+  try {
+    await scheduler.start(f.state.runId); await scheduler.idle(f.state.runId)
+    const state = await f.store.read(f.state.runId), root = state.nodes[0]!
+    assert.equal(state.phase, 'partial'); assert.equal(state.nodes.length, 1)
+    assert.equal(root.receipt, null); assert.equal(root.proposal, null); assert.deepEqual(root.quality!.checks, [])
+    assert.match(root.reason, /check requirements/)
+    assert.equal(jobs.length, 1)
+    const attempts = f.db.prepare('SELECT status,result_json FROM dsh_deep_attempts WHERE run_id=?').all<{ status: string; result_json: string | null }>(state.runId)
+    assert.deepEqual(attempts.map(row => ({ ...row })), [{ status: 'failed', result_json: null }])
+  } finally { await scheduler.dispose(); await f.close() }
 })
 
 test('replanning retains unresolved issues and frozen checks for the next comparison',async()=>{

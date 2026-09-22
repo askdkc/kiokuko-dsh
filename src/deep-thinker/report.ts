@@ -1,4 +1,4 @@
-import { qualityStatus, qualityReportLines } from './quality-report.js'
+import { boundedQualityReport, qualityStatus, qualitySummaryLines, qualityReportLines } from './quality-report.js'
 import type { DeepArtifact, DeepState } from './core/contracts.js'
 export const DEEP_PHASE_LABELS = { ready: '開始待ち', running: '実行中', paused: '一時停止', answered: '完了', partial: '部分回答', blocked: '停止', failed: '失敗', cancelled: '取消済み' } as const
 export function deepStatusText(state: DeepState): string {
@@ -10,15 +10,16 @@ export function deepReport(state: DeepState, artifacts: readonly DeepArtifact[])
   const root = state.nodes[0]!
   const candidates = root.candidate ? [root] : state.nodes.filter(n => n.status === 'accepted' && n.candidate)
   const evidenceIds = new Set(candidates.flatMap(n => n.candidate!.evidence.map(e => e.artifactId)))
-  const lines = [deepStatusText(state), '', ...candidates.map(n => `${n.status === 'accepted' && n.receipt ? '' : '未受理の暫定案（検証未完了）\n'}${n === root ? '' : `${n.question}\n`}${n.candidate!.answer}`)]
+  const unresolved = [...new Set([...state.nodes.filter(n => !['accepted','superseded'].includes(n.status)).map(n => `${n.question}: ${n.reason || '未検証'}`), ...candidates.flatMap(n => n.candidate!.unresolved)])]
+  const lines = [deepStatusText(state), ...(state.protocolVersion === 2 ? qualitySummaryLines(state, unresolved.length) : []), '', ...candidates.map(n => `${n.status === 'accepted' && n.receipt ? '' : '未受理の暫定案（検証未完了）\n'}${n === root ? '' : `${n.question}\n`}${n.candidate!.answer}`)]
   if (!candidates.length) lines.push('検査済みの回答はありません。')
   lines.push('', '根拠・出典（内容照合と分析評価。形式証明ではありません）')
   for (const artifact of artifacts.filter(a => evidenceIds.has(a.id))) lines.push(`- ${artifact.path}:${artifact.startLine}–${artifact.endLine}`)
   if (!evidenceIds.size) lines.push('- 出典に基づく確認なし。分析上の評価です。')
   const assumptions = [...new Set(candidates.flatMap(n => [...n.assumptions, ...n.candidate!.assumptions]))]
   if (assumptions.length) lines.push('', '前提', ...assumptions.map(item => `- ${item}`))
-  const unresolved = [...new Set([...state.nodes.filter(n => !['accepted','superseded'].includes(n.status)).map(n => `${n.question}: ${n.reason || '未検証'}`), ...candidates.flatMap(n => n.candidate!.unresolved)])]
   if (unresolved.length) lines.push('', '未解決・反例・制限', ...unresolved.map(item => `- ${item}`))
   if (state.protocolVersion === 2) lines.push(...qualityReportLines(state))
-  return { protocolVersion: state.protocolVersion, ...(state.protocolVersion === 2 ? { quality: state.nodes.filter(n=>n.quality && n.status !== 'superseded').map(n=>({nodeId:n.id,status:n.status,checks:n.quality!.checks,issues:n.quality!.issues,review:n.quality!.review,candidates:n.quality!.candidates,receipt:n.receipt})) } : {}), reportId: `deep-report:${state.runId}`, runId: state.runId, revision: state.requirementRevision, phase: state.phase, text: lines.join('\n').slice(0, 131_072), summary: candidates.map(n => n.candidate!.answer).join('\n').slice(0, 8_192) }
+  const text = lines.join('\n')
+  return { protocolVersion: state.protocolVersion, ...(state.protocolVersion === 2 ? { quality: state.nodes.filter(n=>n.quality && n.status !== 'superseded').map(n=>({nodeId:n.id,status:n.status,checks:n.quality!.checks,issues:n.quality!.issues,review:n.quality!.review,candidates:n.quality!.candidates,receipt:n.receipt})) } : {}), reportId: `deep-report:${state.runId}`, runId: state.runId, revision: state.requirementRevision, phase: state.phase, text: state.protocolVersion === 2 ? boundedQualityReport(text) : text.slice(0, 131_072), summary: candidates.map(n => n.candidate!.answer).join('\n').slice(0, 8_192) }
 }

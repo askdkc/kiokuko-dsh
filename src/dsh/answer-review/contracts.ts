@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { DecisionQuestion } from '../decisions/contracts.js'
 
 export const AnswerReviewConfig = z.object({
-  mode: z.enum(['off', 'auto']).default('off'),
+  mode: z.enum(['off', 'auto']).default('auto'),
   budgetMs: z.number().int().min(1).max(30000).default(5000),
 }).strict()
 export type AnswerReviewConfiguration = z.infer<typeof AnswerReviewConfig>

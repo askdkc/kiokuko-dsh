@@ -148,8 +148,9 @@ test('strict admission preflights every full part before any inference',async()=
   assert.equal(checks,2);assert.equal(calls,0)
 })
 
-test('default configuration is off and does not add inference',()=>{
-  assert.deepEqual(AnswerReviewConfig.parse({}),{mode:'off',budgetMs:5000})
+test('default configuration enables review and preserves explicit opt-out',()=>{
+  assert.deepEqual(AnswerReviewConfig.parse({}),{mode:'auto',budgetMs:5000})
+  assert.deepEqual(AnswerReviewConfig.parse({mode:'off'}),{mode:'off',budgetMs:5000})
 })
 test('a consumed continuation cannot be replayed after new input',async t=>{
   const f=await fixture(t);f.coordinator.hold(f.agent);await f.wait()

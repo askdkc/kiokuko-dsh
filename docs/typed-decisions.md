@@ -1,7 +1,7 @@
 # Typed AI decisions
 
 Kiokuko uses one host-owned decision service for provisional Akinator task types,
-installed Skill relevance, past memory reuse, Zenki draft review, optional [post-display answer review](answer-review.md), and semantic decisions inside Lisp.
+installed Skill relevance, past memory reuse, Zenki draft review, [post-display answer review](answer-review.md), and semantic decisions inside Lisp.
 The selected adapter owns its transport protocol and uncertainty policy. Domain
 workflows consume `selected` or `abstained`; they do not depend on model names.
 
@@ -149,7 +149,7 @@ and `/kioku-typesafe-key` remain TypeSafe-specific compatibility interfaces.
 
 ## Post-display answer review
 
-Set `answerReview: { mode: auto, budgetMs: 5000 }` on the full plugin or modular core (default: off).
+Answer review defaults to `answerReview: { mode: auto, budgetMs: 5000 }` on the full plugin and modular core; no opt-in setting is needed. Set `answerReview: { mode: off }` to disable it.
 The original answer is streamed first. Three finite rubrics check request fit, contradiction with current-run tool results, and exaggerated verification claims. Accepted findings can trigger one reconsideration by the same main model. The selected `typedDecisions` provider, acceptance thresholds and request binding are reused; there is no provider substitution or LangChain dependency.
 
-Evaluation failure, abstention or capacity rejection preserves the original answer. Laya v1 output is an unverified suggestion because internal truncation cannot be detected; strict workers preflight every complete part. The main model must inspect the original evidence before accepting a concern. Evaluation adds inference; reconsideration adds at most one main-model turn. [Lifecycle, limits and measurement commands](answer-review.md).
+An unavailable provider, evaluation failure, abstention or capacity rejection preserves the original answer. Laya v1 output is an unverified suggestion because internal truncation cannot be detected; strict workers preflight every complete part. The main model must inspect the original evidence before accepting a concern. Evaluation adds inference; reconsideration adds at most one main-model turn. [Lifecycle, limits and measurement commands](answer-review.md).

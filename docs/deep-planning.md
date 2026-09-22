@@ -36,6 +36,36 @@ Settings apply to future work in the same database/workspace. Existing
 reservations and runs keep their snapshot. Applying new settings to a paused
 run requires the explicit card action and does not reset consumed budgets.
 
+### Experimental quality mode
+
+Standard reasoning remains the default. To enable quality mode, open
+`/deep-planning --configure`, choose **推論: 通常** → **品質重視（実験）**,
+select **別案のモデル**, and save. The alternative may use the same exact
+provider/model as the solver; its identity is preserved in the run snapshot.
+Switch back to **通常** for future work. A paused run keeps its original mode.
+
+Quality mode reviews the plan's checks, produces two answers without showing
+either worker the other answer, then compares every candidate against every
+check. Each child's assigned checks must cover exactly its own requirements;
+a sibling covering a missing requirement cannot compensate for that omission.
+The critic may select a candidate, request one repair or synthesis followed by
+another review, replan within the existing limit, or leave the problem unresolved.
+Agreement never skips the critic. Synthesis creates another candidate that must
+be checked; it is not presumed better than either original answer.
+
+For a leaf with no retries or replanning, standard mode uses three agent jobs;
+quality mode uses five, or seven with repair/synthesis. Decomposition, JSON
+repair, tool-driven model steps and memory extraction add work. These job counts
+are **not** token or price multipliers. Quality mode does not increase the total
+budget, so it can exhaust that budget with fewer solved subproblems.
+
+Using the same model is permitted. [Self-Consistency](https://arxiv.org/abs/2203.11171)
+reports benefits from multiple samples of one model on reasoning benchmarks;
+it does not establish a benefit for this implementation. Neither matching
+answers nor different model names establish correctness or statistical
+independence. Quality mode remains experimental: there is no consensus-based
+acceptance shortcut, model-family ban, repeated recompression or extra hierarchy.
+
 | Limit | Default |
 | --- | ---: |
 | Concurrent agents per run / process | 3 / 6 |
@@ -84,11 +114,31 @@ answer atomically with run completion. The authenticated Web endpoint resolves
 the exact Session and workspace; the **Deepの回答** header action opens the saved
 answers. The browser acknowledges the stable report ID only after rendering.
 Disconnected clients leave delivery pending. `--status` also returns the saved
-answer through the ordinary native command result. No report event is appended
+answer for the **current run** through the ordinary native command result. If
+that run has no report yet, it shows only its state; earlier reports remain in
+**Deepの回答**. No report event is appended
 to the native log: DSH 0.1.2-rc.1 and 0.1.5-rc.1 drop the external event `ignorable` append
 option and would reject that log on reopening. The next ordinary input returns to
 the existing normal/Enno selection rules and receives a bounded, untrusted
 summary of this Session's last Deep report.
+
+Quality reports begin with the selected candidate, the critic's overall reason,
+whether any correction allowance was used, and unresolved counts. **未解決・制限**
+counts distinct unfinished-node/candidate limitations in the report;
+**未解決の指摘** counts current critic issues across non-superseded nodes.
+Details show each candidate's assessment and reason for each check, plus the
+critic's agreement, contradiction, complementary or unknown assessment.
+**未選択** means another answer was chosen, not that this answer was wrong;
+**未評価** means no assessment of that candidate/check has been recorded yet.
+Correction allowance usage can include an interrupted correction, not a
+successfully reviewed fix. These are analytical assessments, not proofs.
+
+Report rendering makes no model requests. Quality display text retains the
+summary before the answer and details and stays within 131,072 characters.
+Shortened summaries and omitted trailing text are explicitly marked. Complete
+structured candidates, checks and reviews remain in the saved report, and
+earlier completed reviews remain in attempt records. The Web view and
+`--status` use the same display text; neither is a full structured-record viewer.
 
 Memory extraction uses the fixed report, accepted evidence and configuration
 snapshot. It does not borrow an old parent model header or fabricate a native
@@ -143,6 +193,42 @@ fail when native tests are skipped. `deep-planning-native.test.ts` is collected
 by the repository test runner. Native recording-adapter fixtures establish
 integration behavior, not live-provider answer quality or efficiency gains.
 No model-quality, cost-saving or speed claim follows from these fixtures.
+
+### Manual paired comparison
+
+Prepare three fixed problems and their scoring rubrics before running either
+mode. Use the same frozen repository revision and files for every pair:
+
+| Problem | Fixed prompt | Score against |
+| --- | --- | --- |
+| Facts from sources | List Deep's default limits and allowed child tools, citing their definitions. | Exact limits/tool names in the frozen contracts and executor, with valid references. |
+| Counterexample | Assess a decomposition where child A owns R1/R2 but only checks R1, while child B checks R2. | Identification of A's missing check, a concrete counterexample, and a fix that still permits shared requirements. |
+| Combining sources | Explain how a saved Deep answer reaches Web and `--status`, including interruption and multiple runs. | Consistent tracing of controller, outbox, report port and endpoint; no invented delivery or retry guarantees. |
+
+1. Use disposable registered workspaces/profiles with identical source files,
+   initial memory, context, role models (including reasoning settings) and
+   budgets. Start a fresh Session for each run. Do not feed the first result or
+   its newly extracted memories into the other mode; reset the disposable
+   environment to the same starting conditions. Keep ordinary user profiles
+   untouched.
+2. Run each prompt once in standard mode and once in quality mode. Initially
+   choose the same solver as the alternative to isolate the workflow change.
+   Record any different-alternative experiment separately. Alternate which mode
+   runs first across problems, and record failures and exhausted budgets too.
+3. Grade each rubric item as satisfied, incorrect or unresolved from the actual
+   sources, preferably without seeing the mode label. Record unsupported claims
+   separately; do not use the mode's own critic assessment as ground truth.
+4. For every run record model bindings, final phase, satisfied/total items,
+   incorrect claims, unresolved items, requests, token count with its estimation
+   status, and elapsed wall time. Use the same start/end boundary for timing and
+   account for memory extraction separately when it finishes after the answer.
+   Compare requests, tokens and time as well as correctness; do not infer billed
+   cost from estimated tokens. If conditions differ, mark the pair incomparable.
+
+Keep raw per-problem results, including regressions. Three problems are a smoke
+comparison, not evidence of a general quality improvement. Do not change the
+default or claim gains without a larger repeated, independently graded study.
+These steps are manual; ordinary tests and CI do not call paid model providers.
 
 See [the local verification record](deep-planning-verification.md) for the
 tested runtime, visible Web checks and remaining evidence limits.

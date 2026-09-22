@@ -105,7 +105,7 @@ See [setup, APIs, limits and recovery](docs/lisp.md).
 
 ## Typed decisions (Jev / Laya / Nimble)
 
-Optional [answer review](docs/answer-review.md) evaluates an already displayed normal answer and may ask the same main model to reconsider once. Enable it on the full plugin or modular core:
+[Answer review](docs/answer-review.md) is enabled by default on the full plugin and modular core. It evaluates an already displayed normal answer using the configured Jev, Laya or Nimble provider and may ask the same main model to reconsider once. The defaults are:
 
 ```yaml
 answerReview:
@@ -113,7 +113,7 @@ answerReview:
   budgetMs: 5000
 ```
 
-The default is `off`. It inherits `typedDecisions`, adds evaluation inference (and at most one main-model turn), and does not delay the first answer. Laya v1 findings are unverified suggestions because worker-side truncation cannot be checked. `/kioku-decisions status` reports progress and skip reasons; it does not certify correctness.
+Set `answerReview.mode: off` to disable it. It inherits `typedDecisions`, adds evaluation inference (and at most one main-model turn), and does not delay the first answer. If the selected provider is unavailable, review is skipped and the original answer is preserved; no other provider is substituted. Laya v1 findings are unverified suggestions because worker-side truncation cannot be checked. `/kioku-decisions status` reports progress and skip reasons; it does not certify correctness.
 
 
 Jev is the default. Switch in DSH's command input without editing configuration or restarting DSH:
