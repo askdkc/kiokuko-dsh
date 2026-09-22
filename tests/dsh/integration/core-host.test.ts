@@ -14,7 +14,7 @@ import type { CoreModuleHost } from '../../../src/dsh/core/host.js'
 import { synchronizeConfiguredSkills } from '../../../src/dsh/core/deployment.js'
 import { compileSkillBundle } from '../../../src/dsh/skill-compiler.js'
 import { pathToFileURL } from 'node:url'
-import { layaReply, serveLaya } from '../helpers/laya.js'
+import { layaV1Reply, serveLaya } from '../helpers/laya.js'
 
 async function fixture(questions?: { ask(request: any): Promise<any> }) {
   const directory = await mkdtemp(join(tmpdir(), 'kiokuko-core-')), root = realpathSync(directory)
@@ -433,11 +433,11 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
 })
 
 
-test('core Laya configuration reaches the same framed decision provider without credentials', { skip: process.platform === 'win32' }, async t => {
+test('core connects to an existing start-laya v1 worker without credentials or replacement scripts', { skip: process.platform === 'win32' }, async t => {
   const f = await fixture(), commands: any[] = []
   f.services.commands = { register(command: any) { commands.push(command); return () => {} } }
   f.services.credentials = { resolve() { throw new Error('No cloud credentials for Laya') } }
-  const socket = await serveLaya(t, request => layaReply(request))
+  const socket = await serveLaya(t, request => layaV1Reply(request))
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), typedDecisions: { 'laya-coreml': { socketPath: socket.path } } })
   try {
     const command = commands.find(c => c.name === 'kioku-decisions'), signal = new AbortController().signal
@@ -446,6 +446,7 @@ test('core Laya configuration reaches the same framed decision provider without 
     const selected = await command.handler({ rawInput: 'use laya', signal })
     assert.equal(selected.kind, 'success'); assert.equal(socket.calls(), 3)
     const probe = await command.handler({ rawInput: 'probe', signal })
+    assert.equal(JSON.parse(probe.text).protocol, 'v1')
     assert.equal(JSON.parse(probe.text).readiness.state, 'ready'); assert.equal(socket.calls(), 5)
   } finally { await handle.dispose(); await f.cleanup() }
 })

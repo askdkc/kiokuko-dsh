@@ -15,6 +15,13 @@ export function layaReply(request: any, choose: (id: string, choices: string[]) 
     })) } }
 }
 
+export function layaV1Reply(request: any, choose?: (id: string, choices: string[]) => string): any {
+  if (request.op === 'health') return { version: 1, ok: true, status: 'ready', pid: 123, model: '/models/ane', uptime_seconds: 10 }
+  if (request.op !== 'predict') return { version: 1, ok: false, error: { code: 'invalid_operation' } }
+  const { runtime: _runtime, ...reply } = layaReply(request, choose)
+  return reply
+}
+
 // A real framed socket fixture exercises the Node transport without a model or Python.
 export async function serveLaya(t: import('node:test').TestContext, reply: (request: any, raw: string) => unknown = request => layaReply(request)) {
   const { createServer } = await import('node:net'), { mkdtemp, rm } = await import('node:fs/promises')

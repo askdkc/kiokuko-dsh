@@ -209,8 +209,9 @@ evidence to the configured adapter. TypeSafe uses its fixed HTTPS endpoint and
 DSH-managed TYPESAFE_API_KEY. Nimble requires an explicit complete HTTPS or loopback
 HTTP endpoint and model; an optional separate bearer reference is resolved through
 DSH. Laya-CoreML uses an explicitly configured owner-access Unix socket (default
-`~/Library/Caches/laya-coreml/worker.sock`) from the host, with bounded strict
-requests, cancellation and a pinned runtime fingerprint. It does not resolve cloud
+`~/Library/Caches/laya-coreml/worker.sock`) from the host, with bounded v1
+health/predict requests and cancellation. Existing strict workers additionally
+verify a pinned runtime fingerprint; ordinary start-laya workers do not expose one. It does not resolve cloud
 credentials or grant socket access to the protected Lisp worker. The optional
 Python worker is installed/restarted explicitly by the user, never by DSH. Credentials never enter workers, prompts, logs or Kiokuko SQLite. No redirects,
 HTTP retries, provider substitution or runtime/model installation occur. `/kioku-decisions
@@ -238,7 +239,9 @@ See [semantic compaction](docs/semantic-compaction.md) for protection and failur
 
 `/kioku-decisions use jev|laya|nimble` performs a bounded synthetic probe and
 saves the selected configuration in Kiokuko SQLite for the repository and base
-plugin configuration. Laya health discovery reads model identity from the local
-worker. No credential value is stored in this selection. Existing request
+plugin configuration. Laya health discovery selects the supported protocol from the local
+worker. `/kioku-decisions install-laya` reuses a running worker through the same
+selection flow or shows setup instructions; it does not install or replace files.
+No credential value is stored in this selection. Existing request
 bindings remain immutable; the command does not edit DSH profile files or restart
 DSH or the worker. `use default` restores the plugin configuration.

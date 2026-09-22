@@ -113,7 +113,7 @@ Jevが既定です。DSHのコマンド入力欄で切り替えられます。�
 /kioku-decisions use default
 ```
 
-Layaは起動済みの拡張workerからモデル名とfingerprintを自動取得します。JevにはTypeSafeキー、Nimbleには接続先・モデルの事前設定が必要です。probeが成功してから選択をプロジェクト単位で保存し、次のリクエストへ適用します。再起動後も保持し、進行中のリクエストは変更しません。`use default`でプラグイン設定へ戻せます。
+Layaは`start-laya`で起動済みのworkerへ直接接続します。workerの差し替えやfingerprint設定は不要です。JevにはTypeSafeキー、Nimbleには接続先・モデルの事前設定が必要です。probeが成功してから選択をプロジェクト単位で保存し、次のリクエストへ適用します。再起動後も保持し、進行中のリクエストは変更しません。`use default`でプラグイン設定へ戻せます。
 
 APIキーは DSH の `~/.dsh/.credentials.yaml`（`DSH_HOME` を設定している場合は `$DSH_HOME/.credentials.yaml`）に書くか、`/kioku-typesafe-key YOUR_KEY` で保存します。既存の項目は残してください。
 
@@ -135,7 +135,7 @@ DSHのコマンド入力欄で利用可能な状態を確認します。
 
 `probe` は検査用のAPIリクエストを送ります。`status` は送信しません。保存したキーは `/kioku-typesafe-key clear` で削除できます。`/kioku-typesafe-key YOUR_KEY` の入力中はキーが画面に表示されます。詳しくは[型付き判定](docs/typed-decisions.md)と[Lispからの明示的な呼び出し](docs/typesafe.md)を参照してください。
 
-Jevが既定です。Nimbleとローカルの[Laya-CoreML](docs/Laya-CoreML-ja.md)も選べます。Layaは`~/Library/Caches/laya-coreml/worker.sock`へ直接接続し、文書に記載した厳密検査対応workerへの更新が必要です。
+Jevが既定です。Nimbleとローカルの[Laya-CoreML](docs/Laya-CoreML-ja.md)も選べます。Layaは`~/Library/Caches/laya-coreml/worker.sock`へ直接接続し、既存のv1 `health`/`predict`を使います。`/kioku-decisions install-laya`でも起動済みworkerを利用でき、接続できなければ導入手順を案内します。
 
 ## 過去の記憶を意味で選別
 

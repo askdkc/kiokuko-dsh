@@ -37,6 +37,7 @@ const requiredFiles = [
   'docs/laya-coreml.md',
   'docs/laya-coreml-LICENSE.txt',
   'dist/dsh/decisions/laya-coreml.js',
+  'dist/dsh/decisions/laya-v1.js',
   'dist/dsh/decisions/laya-transport.js',
   'skills/kiokuko-lisp/SKILL.md',
   'lisp/bootstrap.lisp',

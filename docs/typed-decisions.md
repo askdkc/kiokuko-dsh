@@ -15,8 +15,8 @@ Switch backends in DSH without a restart:
 ```
 
 Switching verifies a synthetic known answer before committing the choice. Laya
-also discovers its model and fingerprint from the configured socket (or the
-default socket); no manual hash is required. Failed/cancelled verification and
+uses the existing `start-laya` worker at the configured or default socket;
+no replacement worker or manual fingerprint is required. Failed/cancelled verification and
 failed persistence leave the active choice unchanged. Jev requires a key, and
 Nimble requires its endpoint and model first. Selection is stored in Kiokuko's
 SQLite database for the repository and base `typedDecisions` configuration, survives
@@ -83,13 +83,20 @@ only with their complete evidence and alternatives; a plan is never truncated.
 No metadata endpoint is required for evaluation. See the
 [Nimble serving contract](https://github.com/bespokelabsai/nimble/blob/main/docs/MODAL_SERVING.md).
 
-For local Laya-CoreML, select `provider: laya-coreml` and configure its Unix
-socket if it differs from the default. Model and runtime fingerprint are discovered automatically; explicit values remain enforced pins. Jev remains the default. The host connects
-directly to `~/Library/Caches/laya-coreml/worker.sock`; no HTTP bridge or subprocess
-client is used. The worker must support `preflight` and `predict_strict`, which
-reject truncated inputs and mismatched runtime identities. See the complete
-[worker update and Laya configuration](laya-coreml.md). The Laya section stays
-optional so old TypeSafe/Nimble stored configuration digests remain valid.
+For local Laya-CoreML, run `/kioku-decisions use laya` after `start-laya`.
+The host connects directly to `~/Library/Caches/laya-coreml/worker.sock` using
+v1 `health`/`predict`; no HTTP bridge, subprocess client or replacement worker
+is needed. `/kioku-decisions install-laya` reuses an existing worker, or shows
+startup/setup instructions if it cannot connect. It does not install Python or models.
+Only configure `socketPath` if your socket differs from the default.
+
+A plain v1 worker has no runtime fingerprint or input-completeness preflight;
+status reports `protocol: "v1"` and `runtimeFingerprint: null`. The host preserves
+all request text, validates responses and pins the socket configuration, but cannot
+verify internal token truncation or model identity. Existing strict workers retain
+`preflight`/`predict_strict` support and explicit fingerprint pins are never relaxed.
+See [Laya configuration](laya-coreml.md). The optional Laya section and new fields
+preserve old TypeSafe/Nimble and strict Laya stored configuration digests.
 
 The initial acceptance policies are provisional routing heuristics, not accuracy
 estimates. TypeSafe uses choice confidence; Nimble uses the selected probability

@@ -19,7 +19,7 @@ import { dshTurnBoundarySeq, type DshLogEvent } from '../../../src/dsh/session-m
 import { readExecutionSelection, writeExecutionSelection } from '../../../src/dsh/execution-selection.js'
 import { createLispCodingChoice, LISP_CODING_SERVICE } from '../../../src/dsh/lisp/coding-choice.js'
 import { LISP_TOOLS } from '../../../src/dsh/lisp/contracts.js'
-import { serveLaya } from '../helpers/laya.js'
+import { layaV1Reply, serveLaya } from '../helpers/laya.js'
 import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
 
 async function fixture(): Promise<{ root: string; databasePath: string }> {
@@ -750,8 +750,8 @@ test('native adapter mounts model tools and admits a grounded turn without redun
 })
 
 
-test('full native adapter retains Laya configuration and reaches the direct socket provider', { skip: process.platform === 'win32' }, async t => {
-  const f = await fixture(), ctx = new Context(), socket = await serveLaya(t)
+test('full native adapter connects to the existing start-laya v1 socket', { skip: process.platform === 'win32' }, async t => {
+  const f = await fixture(), ctx = new Context(), socket = await serveLaya(t, request => layaV1Reply(request))
   const adapter = createDshHostAdapter(ctx, { repositoryRoot: f.root, databasePath: f.databasePath,
     typedDecisions: TypedDecisionsConfig.parse({ 'laya-coreml': { socketPath: socket.path } }), memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, deepPlanning: { enabled: false }, orca: { enabled: false } })
   try {
@@ -759,6 +759,7 @@ test('full native adapter retains Laya configuration and reaches the direct sock
     assert.equal((decisions.status() as any).provider, 'typesafe'); assert.equal(socket.calls(), 0)
     await decisions.selectProvider('laya-coreml', new AbortController().signal)
     assert.equal((decisions.status() as any).provider, 'laya-coreml')
+    assert.equal((decisions.status() as any).protocol, 'v1')
     assert.equal((await decisions.probe(new AbortController().signal)).state, 'ready'); assert.equal(socket.calls(), 3)
   } finally { await adapter.dispose(); await rm(f.root, { recursive: true, force: true }) }
 })

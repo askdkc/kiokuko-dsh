@@ -114,7 +114,7 @@ Jev is the default. Switch in DSH's command input without editing configuration 
 /kioku-decisions use default
 ```
 
-Laya discovers the model and runtime fingerprint from an already running strict worker. Jev needs a TypeSafe key; Nimble needs an endpoint and model configured first. A successful probe saves the selection for this project and applies it to new requests. It survives restarts and preserves in-flight request bindings. `use default` restores the plugin configuration.
+Laya connects directly to the existing worker started by `start-laya`; no worker replacement or fingerprint setup is needed. Jev needs a TypeSafe key; Nimble needs an endpoint and model configured first. A successful probe saves the selection for this project and applies it to new requests. It survives restarts and preserves in-flight request bindings. `use default` restores the plugin configuration.
 
 Set the API key in DSH's `~/.dsh/.credentials.yaml` (`$DSH_HOME/.credentials.yaml` if set), or use `/kioku-typesafe-key YOUR_KEY`. Keep any existing entries:
 
@@ -136,7 +136,7 @@ In the DSH command UI, check the key and test the connection:
 
 `probe` sends a synthetic API request; `status` does not. `/kioku-typesafe-key clear` removes the stored key. Key input is visible when using `/kioku-typesafe-key YOUR_KEY`. See [typed decisions](docs/typed-decisions.md) and the [explicit Lisp API](docs/typesafe.md) for more.
 
-Jev remains the default. Nimble and local [Laya-CoreML](docs/laya-coreml.md) are optional alternatives; Laya connects directly to `~/Library/Caches/laya-coreml/worker.sock` and requires the documented strict worker update.
+Jev remains the default. Nimble and local [Laya-CoreML](docs/laya-coreml.md) are optional alternatives; Laya connects directly to `~/Library/Caches/laya-coreml/worker.sock` using the existing v1 `health`/`predict` protocol. `/kioku-decisions install-laya` reuses a running worker or shows setup instructions.
 
 ## Semantic memory reuse
 

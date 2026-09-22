@@ -93,7 +93,7 @@ export class DecisionService {
     })()
   }
   private async resolved(config: DecisionConfiguration, signal: AbortSignal): Promise<DecisionConfiguration> {
-    if (config.provider !== 'laya-coreml' || config['laya-coreml']?.model && config['laya-coreml'].runtimeFingerprint) return structuredClone(config)
+    if (config.provider !== 'laya-coreml' || !decisionConfigurationIssue(config)) return structuredClone(config)
     return this.options.resolveConfiguration ? abortable(this.options.resolveConfiguration(config, signal), signal) : structuredClone(config)
   }
   async probe(signal: AbortSignal, force = false) {
@@ -175,6 +175,7 @@ export class DecisionService {
     const selected = selectedDecisionSettings(this.config)
     return { mode: this.config.mode, provider: this.config.provider, model: selected?.model ?? null, timeoutMs: selected?.timeoutMs ?? null,
       configurationReady: !decisionConfigurationIssue(this.config),
+      ...(this.config.provider === 'laya-coreml' ? { protocol: this.config['laya-coreml']?.protocol ?? (this.config['laya-coreml']?.runtimeFingerprint ? 'strict-v1' : null), runtimeFingerprint: this.config['laya-coreml']?.runtimeFingerprint ?? null } : {}),
       limits: this.provider(this.config).capabilities, acceptance: selected?.acceptance ?? null, policyVersion: this.config.provider === 'laya-coreml' ? LAYA_POLICY_VERSION : POLICY_VERSION, lastFallback: this.lastFallback,
       observationPack: this.observationStatus,
       semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, metrics: this.compactionMetrics, lastPreemptive: this.lastPreemptive, preemptiveActive: this.semanticCompaction.preemptive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready', active: this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },

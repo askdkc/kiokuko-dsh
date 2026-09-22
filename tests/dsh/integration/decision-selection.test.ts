@@ -7,7 +7,7 @@ import { createDecisionService, mountDecisionCommand } from '../../../src/dsh/de
 import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
 import type { DshCoreRuntime } from '../../../src/dsh/core-runtime.js'
 import type { DshNativeCommandDefinition } from '../../../src/dsh/commands.js'
-import { layaReply, layaRuntime, serveLaya } from '../helpers/laya.js'
+import { layaReply, layaV1Reply, layaRuntime, serveLaya } from '../helpers/laya.js'
 
 const signal = () => new AbortController().signal
 const batch = { purpose: 'lisp', state: 'The fruit is apple.', questions: [{ id: 'fruit', instructions: 'Which fruit?', choices: [{ id: 'apple', description: 'Apple' }, { id: 'unknown', description: 'Unknown' }], abstainId: 'unknown' }] }
@@ -66,19 +66,57 @@ test('native command switches Jev/Laya without identity fields or restart, persi
   assert.equal((await run('use laya extra')).kind, 'error')
 })
 
-test('old worker, failed probe and cancellation preserve the previous choice and create no persisted selection', { skip: process.platform === 'win32' }, async t => {
+test('unsupported protocol, failed probe and cancellation preserve the previous choice and create no persisted selection', { skip: process.platform === 'win32' }, async t => {
   const { db, runtime } = await database(t)
   let mode: 'legacy' | 'rejected' | 'good' = 'legacy'
-  const socket = await serveLaya(t, req => mode === 'legacy' ? { version: 1, ok: true, status: 'ready' } : layaReply(req, (_id, choices) => mode === 'rejected' ? 'unknown' : choices[0]!))
+  const socket = await serveLaya(t, req => mode === 'legacy' ? { version: 2, ok: true, status: 'ready' } : layaReply(req, (_id, choices) => mode === 'rejected' ? 'unknown' : choices[0]!))
   const config = TypedDecisionsConfig.parse({ 'laya-coreml': { socketPath: socket.path } })
   const service = createDecisionService(ctx, runtime, config), run = command(service)
-  const legacy = await run('use laya'); assert.equal(legacy.kind, 'error'); assert.match(legacy.text!, /DECISION_UNSUPPORTED.*worker/)
+  const legacy = await run('use laya'); assert.equal(legacy.kind, 'error'); assert.match(legacy.text!, /DECISION_UNSUPPORTED.*start-laya/)
+  assert.doesNotMatch(legacy.text!, /scripts\/laya-worker\.py/)
   mode = 'rejected'; assert.equal((await run('use laya')).kind, 'error')
   mode = 'good'; const cancelled = new AbortController(); cancelled.abort()
   assert.match((await run('use laya', cancelled.signal)).text!, /DECISION_CANCELLED/)
   assert.equal((service.status() as any).provider, 'typesafe')
   assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_decision_selections').get()!.n, 0)
   assert.equal((await run('use laya')).kind, 'success', 'explicit retry works after recovery')
+})
+
+test('start-laya v1 socket supports switching, probe, persistence and replay without worker installation or strict operations', { skip: process.platform === 'win32' }, async t => {
+  const { runtime } = await database(t), jevCalls = jev(t), operations: string[] = []
+  const socket = await serveLaya(t, request => { operations.push(request.op); return layaV1Reply(request) })
+  const config = TypedDecisionsConfig.parse({ 'laya-coreml': { socketPath: socket.path } })
+  const service = createDecisionService(ctx, runtime, config), run = command(service)
+  await service.bind('before-v1')
+  assert.equal((await run('use laya')).kind, 'success')
+  assert.equal((await run('probe')).kind, 'success')
+  const status = service.status() as any
+  assert.equal(status.protocol, 'v1'); assert.equal(status.runtimeFingerprint, null)
+  assert.equal(status.readiness.state, 'ready'); assert.equal(status.configurationReady, true)
+  assert.equal((await service.bind('before-v1')).provider, 'typesafe')
+  const outcome = await service.evaluate('v1-request', batch, signal())
+  assert.equal(outcome.status, 'completed')
+  if (outcome.status === 'completed') { assert.equal(outcome.result.answers[0]!.status, 'selected'); assert.equal(outcome.result.revision, undefined) }
+  const calls = socket.calls(), restarted = createDecisionService(ctx, runtime, config)
+  assert.equal(JSON.parse((await command(restarted)('status')).text!).protocol, 'v1')
+  assert.deepEqual(await restarted.evaluate('v1-request', batch, signal()), outcome)
+  assert.equal(socket.calls(), calls, 'status and cached replay need no worker calls')
+  assert.equal((await command(restarted)('install-laya')).kind, 'success', 'setup reuses the running socket')
+  assert.ok(operations.includes('predict')); assert.ok(operations.every(op => op === 'health' || op === 'predict'))
+  assert.equal(jevCalls(), 0)
+  assert.equal((await command(restarted)('use jev')).kind, 'success')
+})
+
+test('install-laya with no socket explains start-laya and preserves the active choice', { skip: process.platform === 'win32' }, async t => {
+  const { db, runtime } = await database(t), socket = await serveLaya(t)
+  const service = createDecisionService(ctx, runtime, TypedDecisionsConfig.parse({ 'laya-coreml': { socketPath: `${socket.path}.absent` } }))
+  const result = await command(service)('install-laya')
+  assert.equal(result.kind, 'error')
+  assert.match(result.text!, /start-laya/)
+  assert.match(result.text!, /docs\/Laya-CoreML-ja\.md/)
+  assert.doesNotMatch(result.text!, /scripts\/laya-worker\.py/)
+  assert.equal((service.status() as any).provider, 'typesafe')
+  assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_decision_selections').get()!.n, 0)
 })
 
 test('configuration-only Laya discovers once before binding, keeps runtime pinned and replays without contacting a changed worker', { skip: process.platform === 'win32' }, async t => {

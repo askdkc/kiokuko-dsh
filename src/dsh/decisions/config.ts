@@ -32,7 +32,8 @@ export const TypedDecisionsConfig = z.object({
   }).strict().prefault({}),
   'laya-coreml': z.object({
     socketPath: z.string().min(1).max(4096).refine(s => !/[\p{Cc}\p{Cf}]/u.test(s) && (!s.startsWith('~') || s.startsWith('~/'))).default(LAYA_SOCKET),
-    model: z.enum(['aac6fef/laya-multilingual-coreml', 'aac6fef/laya-multilingual-coreml-ane']).optional(),
+    model: z.enum(['laya-rl-agent', 'aac6fef/laya-multilingual-coreml', 'aac6fef/laya-multilingual-coreml-ane']).optional(),
+    protocol: z.literal('v1').optional(),
     runtimeFingerprint: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
     adapterVersion: z.literal(LAYA_POLICY_VERSION).default(LAYA_POLICY_VERSION),
     timeoutMs: timeout,
@@ -46,7 +47,11 @@ export function selectedDecisionSettings(config: DecisionConfiguration) { return
 export function decisionConfigurationIssue(config: DecisionConfiguration): string | undefined {
   if (config.mode === 'off') return 'mode_off'
   if (config.provider === 'nimble' && (!config.nimble.endpoint || !config.nimble.model)) return 'missing_endpoint_or_model'
-  if (config.provider === 'laya-coreml' && (!config['laya-coreml']?.model || !config['laya-coreml'].runtimeFingerprint)) return 'missing_laya_model_or_fingerprint'
+  if (config.provider === 'laya-coreml') {
+    const laya = config['laya-coreml']
+    if (laya?.protocol === 'v1') return laya.model === 'laya-rl-agent' && !laya.runtimeFingerprint ? undefined : 'invalid_laya_v1_configuration'
+    if (!laya?.model || !laya.runtimeFingerprint) return 'missing_laya_model_or_fingerprint'
+  }
   return undefined
 }
 /** Resolve new settings once, before binding. Parsing stored settings never consults cwd/home. */

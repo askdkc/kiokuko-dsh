@@ -57,7 +57,7 @@ try {
   const packed = {}
   for (const name of ['core', 'enno', 'lisp']) packed[name] = await pack(join(staged, name), join(work, `pack-${name}`))
   const coreFiles = new Set(packed.core.files.map(file => file.path))
-  for (const path of ['scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'dist/dsh/decisions/laya-coreml.js', 'dist/dsh/decisions/laya-transport.js']) {
+  for (const path of ['scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'dist/dsh/decisions/laya-coreml.js', 'dist/dsh/decisions/laya-v1.js', 'dist/dsh/decisions/laya-transport.js']) {
     assert.ok(coreFiles.has(path), `Missing Laya core asset: ${path}`)
   }
   for (const name of ['enno', 'lisp']) for (const file of report.artifacts[name].sourceFiles) assert.ok(!coreFiles.has(file), `${name} duplicates core implementation: ${file}`)
