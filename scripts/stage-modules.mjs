@@ -76,7 +76,7 @@ export async function stageModules(output) {
     const directory = join(output, name)
     await mkdir(directory, { recursive: true })
     const files = [...graphs[name].files].filter(file => name === 'core' || !graphs.core.files.has(file))
-    const assetFiles = name === 'core' ? [...migrations, 'docs/typed-decisions.md', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/semantic-compaction.md', 'docs/typesafe.md', 'PERMISSIONS.md'] : name === 'lisp' ? [...(await walk(join(root, 'lisp'))).map(file => `lisp/${file}`), 'docs/typesafe.md', 'docs/lisp.md', 'scripts/smoke-typesafe.mjs', 'PERMISSIONS.md'] : []
+    const assetFiles = name === 'core' ? [...migrations, 'docs/answer-review.md', 'docs/evaluations/answer-review-2026-09-22-laya.json', 'docs/evaluations/answer-review-2026-09-22-jev.json', 'scripts/evaluate-answer-review.mjs', 'docs/typed-decisions.md', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/semantic-compaction.md', 'docs/typesafe.md', 'PERMISSIONS.md'] : name === 'lisp' ? [...(await walk(join(root, 'lisp'))).map(file => `lisp/${file}`), 'docs/typesafe.md', 'docs/lisp.md', 'scripts/smoke-typesafe.mjs', 'PERMISSIONS.md'] : []
     const declarations = [...graphs[name].declarations].filter(file => name === 'core' || !graphs.core.declarations.has(file))
     for (const file of [...files, ...declarations, ...assetFiles]) {
       await copyFile(join(root, file), join(directory, file))

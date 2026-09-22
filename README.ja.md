@@ -104,6 +104,17 @@ Lisp を選ぶと、Lisp 用ツールで通常実行します。役小角を使�
 
 ## 型付き判定（Jev / Laya / Nimble）
 
+[回答の再検討](docs/answer-review.md)は、表示済みの通常回答を評価し、指摘があれば同じ主モデルに一度だけ見直させる機能です。通常版・modular coreのプラグイン設定で有効にします。
+
+```yaml
+answerReview:
+  mode: auto
+  budgetMs: 5000
+```
+
+省略時は `off`。評価providerは `typedDecisions` を継承します。最初の回答はそのまま表示され、評価の追加推論と、最大1回の主モデルによる再検討が発生します。Laya v1はworker内部の切り詰めを確認できないため、指摘は未確認の候補として扱います。`/kioku-decisions status` で進行状態・スキップ理由を確認できます。正しさを保証する機能ではありません。
+
+
 Jevが既定です。DSHのコマンド入力欄で切り替えられます。設定編集や再起動は不要です。
 
 ```text

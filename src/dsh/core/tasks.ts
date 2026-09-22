@@ -177,7 +177,7 @@ export class CoreTasks {
       return checkpointDshMemory(db, { ...input, runId: task.runId, cwd: task.cwd } as ScopedCheckpointInput, signal, { allowDirectory: true })
     })
   }
-  async finish(task: CoreTask, outcome: CoreTaskOutcome): Promise<void> {
+  async finish(task: CoreTaskIdentity & { admitted: boolean }, outcome: CoreTaskOutcome): Promise<void> {
     if (!task.admitted && outcome === 'completed') throw new Error('Task is not admitted')
     await this.runtime.withDatabase(db => finishCoreTask(db, task, outcome))
   }

@@ -1,7 +1,7 @@
 # Typed AI decisions
 
 Kiokuko uses one host-owned decision service for provisional Akinator task types,
-installed Skill relevance, past memory reuse, Zenki draft review and semantic decisions inside Lisp.
+installed Skill relevance, past memory reuse, Zenki draft review, optional [post-display answer review](answer-review.md), and semantic decisions inside Lisp.
 The selected adapter owns its transport protocol and uncertainty policy. Domain
 workflows consume `selected` or `abstained`; they do not depend on model names.
 
@@ -146,3 +146,10 @@ The explicit `kioku.typesafe:status` / `evaluate` API, including `noul` and `sco
 and `/kioku-typesafe-key` remain TypeSafe-specific compatibility interfaces.
 
 [Semantic compaction](semantic-compaction.md) shares this service for automatic history shortening, including readiness, credentials, acceptance policy, persisted decisions and bounded concurrency. Its independent setting is `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }`.
+
+## Post-display answer review
+
+Set `answerReview: { mode: auto, budgetMs: 5000 }` on the full plugin or modular core (default: off).
+The original answer is streamed first. Three finite rubrics check request fit, contradiction with current-run tool results, and exaggerated verification claims. Accepted findings can trigger one reconsideration by the same main model. The selected `typedDecisions` provider, acceptance thresholds and request binding are reused; there is no provider substitution or LangChain dependency.
+
+Evaluation failure, abstention or capacity rejection preserves the original answer. Laya v1 output is an unverified suggestion because internal truncation cannot be detected; strict workers preflight every complete part. The main model must inspect the original evidence before accepting a concern. Evaluation adds inference; reconsideration adds at most one main-model turn. [Lifecycle, limits and measurement commands](answer-review.md).

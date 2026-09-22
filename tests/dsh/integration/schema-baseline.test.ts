@@ -113,6 +113,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'context_delivery_entries',
         'context_delivery_omissions',
         'context_feedback',
+        'dsh_answer_reviews',
         'dsh_boundary_jobs',
         'dsh_completion_reports',
         'dsh_continuation_outbox',

@@ -9,6 +9,7 @@ export { AkinatorMemoryConfig }
 import { MemoryEvolutionConfig } from '../memory/evolution/contracts.js'
 export { MemoryEvolutionConfig }
 import { z } from 'zod'
+import { AnswerReviewConfig } from './answer-review/contracts.js'
 import { SkillPromptsConfig } from './skill-prompt-contracts.js'
 export { SkillPromptsConfig }
 import { LispConfig } from './lisp/contracts.js'
@@ -58,6 +59,7 @@ export const Config = z.object({
   skillPrompts: SkillPromptsConfig.prefault({}),
   lisp: LispConfig.prefault({}),
   typedDecisions: TypedDecisionsConfig.prefault({}),
+  answerReview: AnswerReviewConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),
   semanticCompaction: SemanticCompactionConfig.prefault({}),
   observationPack: ObservationPackConfig.prefault({}),

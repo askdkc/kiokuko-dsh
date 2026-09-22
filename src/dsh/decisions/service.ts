@@ -52,6 +52,8 @@ export class DecisionService {
   readonly semanticCompaction: SemanticCompactionConfiguration
   private readonly compactionMetrics = { calls: 0, inputBytes: 0, elapsedMs: 0, inputTokens: 0, outputTokens: 0, usageReports: 0 }
   private observationStatus: unknown = null
+  private answerReviewStatus: unknown = { mode: 'off', state: 'idle', reason: null }
+  reportAnswerReview(status: unknown): void { this.answerReviewStatus = status }
   reportObservationPack(mode: string, metrics: Record<string, number>): void { this.observationStatus = { mode, metrics } }
   private lastPreemptive: CompactionOutcome | null = null
   private compactionStatus: { supported: boolean; nativeAuto: boolean; last: CompactionOutcome | null } = { supported: false, nativeAuto: false, last: null }
@@ -178,6 +180,7 @@ export class DecisionService {
       ...(this.config.provider === 'laya-coreml' ? { protocol: this.config['laya-coreml']?.protocol ?? (this.config['laya-coreml']?.runtimeFingerprint ? 'strict-v1' : null), runtimeFingerprint: this.config['laya-coreml']?.runtimeFingerprint ?? null } : {}),
       limits: this.provider(this.config).capabilities, acceptance: selected?.acceptance ?? null, policyVersion: this.config.provider === 'laya-coreml' ? LAYA_POLICY_VERSION : POLICY_VERSION, lastFallback: this.lastFallback,
       observationPack: this.observationStatus,
+      answerReview: this.answerReviewStatus,
       semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, metrics: this.compactionMetrics, lastPreemptive: this.lastPreemptive, preemptiveActive: this.semanticCompaction.preemptive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready', active: this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },
       readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' } }
   }
@@ -233,10 +236,17 @@ export class DecisionService {
         // Each question is independent and retains the complete evidence and its alternatives.
         if (semantic) parts.push(...await evaluateCompactionBatches(provider, batch, combined))
         else if (batch.purpose === 'memory-reuse') parts.push(await evaluateMemoryBatches(provider, batch, config.provider, combined))
-        else for (let offset = 0; offset < batch.questions.length; offset += limits.maxQuestions) {
+        else {
+          if (batch.purpose === 'answer-review' && provider.preflight) {
+            for (let offset = 0; offset < batch.questions.length; offset += limits.maxQuestions) {
+              await abortable(provider.preflight({ ...batch, questions: batch.questions.slice(offset, offset + limits.maxQuestions) }, combined), combined)
+            }
+          }
+          for (let offset = 0; offset < batch.questions.length; offset += limits.maxQuestions) {
           combined.throwIfAborted()
           const part = { ...batch, questions: batch.questions.slice(offset, offset + limits.maxQuestions) }
           parts.push(parseDecisionResult(await abortable(provider.evaluate(part, combined), combined), part))
+          }
         }
         combined.throwIfAborted()
         const first = parts[0]!
