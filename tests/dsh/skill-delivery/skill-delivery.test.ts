@@ -21,6 +21,9 @@ const subject: typeof import('../../../src/dsh/index.js') = await import(package
 const artifact = enabled ? JSON.parse(await readFile(join(packageRoot ?? process.cwd(),'dist/dsh/skill-prompts.json'),'utf8')) : {resources:[]}
 const content = (name: string) => artifact.resources.find((r: any) => r.id === `${name}/SKILL.md`).content as string
 const names: string[] = artifact.resources.filter((r: any) => r.id.endsWith('/SKILL.md')).map((r: any) => r.id.slice(0,-'/SKILL.md'.length))
+// Exact model-facing contract: protected Lisp, native reads and memory recovery.
+const expectedLispTools = ['lisp_cancel', 'lisp_describe', 'lisp_eval', 'lisp_inspect', 'lisp_reset', 'lisp_status',
+  'observation_read', 'skill', 'task_memory_review']
 const textOf = (request: any): string => [request.system ?? '', ...request.messages.flatMap((m: any) => m.content.flatMap((b: any) =>
   b.type === 'text' ? [b.text] : b.type === 'tool-result' ? b.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text) : []))].join('\n')
 function requireBody(request: any, name: string) { assert.ok(textOf(request).includes(content(name)), `${name}: compiled body absent at adapter boundary`) }
@@ -160,9 +163,8 @@ test('compiled Skill delivery: protected Lisp enable and lisp_describe reach the
     assert.ok(outcomes.some((result: any) => result.ok && result.value?.json === 'value=42'))
     assert.ok(outcomes.some((result: any) => result.ok && result.value?.json === 'value=10'))
     assert.ok(outcomes.some((result: any) => result.ok && result.value?.documentation?.includes('exactly one nonempty literal')))
-    const expectedTools = ['lisp_cancel','lisp_describe','lisp_eval','lisp_inspect','lisp_reset','lisp_status','observation_read','skill']
-    for (const request of [f.model.requests[0], last]) assert.deepEqual(request.tools.map((t:any)=>t.name).sort(), expectedTools,
-      'the first request already exposes protected Lisp and the native observation and Skill readers, never blocked mutations')
+    for (const request of [f.model.requests[0], last]) assert.deepEqual(request.tools.map((t:any)=>t.name).sort(), expectedLispTools,
+      'the first request exposes protected Lisp, native readers and memory review, never blocked mutations')
   } finally {await f.close()}
 })
 
@@ -187,8 +189,7 @@ test('Lisp selected during initial admission reaches the first model request', {
     assert.equal(f.model.requests.length, 2, JSON.stringify(f.agent.session.snapshotEvents().slice(-6)))
     for (const request of f.model.requests) {
       requireBody(request, 'kiokuko-lisp')
-      assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(),
-        ['lisp_cancel', 'lisp_describe', 'lisp_eval', 'lisp_inspect', 'lisp_reset', 'lisp_status', 'observation_read', 'skill'])
+      assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
     }
   } finally { await f.close() }
 })
@@ -208,7 +209,6 @@ test('Lisp workflow reaches the next model request through native approval, evid
     const block = request.messages.flatMap((m: any) => m.content).filter((b: any) => b.type === 'tool-result').at(-1)
     return JSON.parse(block.content.find((b: any) => b.type === 'text').text)
   }
-  const expectedTools = ['lisp_cancel','lisp_describe','lisp_eval','lisp_inspect','lisp_reset','lisp_status','observation_read','skill']
   const args = { operationId: 'workflow-batch', code: '(kioku.files:propose-write "a.txt" "new-a") (kioku.files:propose-write "b.txt" "new-b") (write-string (make-string 12000 :initial-element #\\a)) :done' }
   let hostId = ''
   try {
@@ -233,7 +233,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
     assert.equal((await f.ctx.commands.execute(f.agent, '/kioku-lisp recover', [], new AbortController().signal)).result.kind, 'success')
     const firstAfterRecovery = f.model.requests.length
     f.responses.push((request: any) => {
-      assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedTools)
+      assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
       return f.mock.toolCallResponse('workflow-replay', 'lisp_eval', args)
     }, (request: any) => {
       const result = latestResult(request)
