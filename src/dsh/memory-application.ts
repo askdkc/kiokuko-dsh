@@ -27,7 +27,7 @@ export interface ApplicationHost {
   refresh(execution: NativeExecution, query: string): Promise<unknown>
 }
 // Exact native read tools only; never classify arbitrary shell strings as read-only.
-const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read_file', 'glob', 'grep', 'skill', 'observation_read'])
+const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status'])
 const CONTROL_TOOLS = new Set(['task_memory_review', 'memory_checkpoint', 'curator_check', 'enno_finish', 'enno_work_report', 'enno_plan_review', 'enno_plan_submit', 'enno_ideal_submit', 'enno_meditation_submit'])
 
 /** Mount on the actual DSH pre-execute/result path; it never grants native permission. */

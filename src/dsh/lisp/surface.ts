@@ -30,16 +30,19 @@ interface Tools { register(definition: any): () => void; guard(fn: (execution: a
 interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean }
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill', 'observation_read'] as const
+// Keep the host-owned review route reachable while Lisp blocks native effects.
+// Pin its implementation just like reads; its own run/session checks still apply.
+const LISP_NATIVE_TOOLS = [...LISP_READ_TOOLS, 'task_memory_review'] as const
 
-/** Keep admitted inherited reads without naming agent-owned tools in restrict(). */
-function restrictToReads(tools: Tools, scopedTools: Tools, agent: Agent, reads: string[]): () => void {
+/** Keep admitted inherited tools without naming agent-owned tools in restrict(). */
+function restrictInheritedTools(tools: Tools, scopedTools: Tools, agent: Agent, names: string[]): () => void {
   // DSH restricts inherited tools (global + preset ancestors), but rejects
   // names registered on the agent itself. Its global get() cannot distinguish
   // those cases. An empty mask exposes only own registrations through the
   // public lookup API; remove it synchronously before installing the real mask.
   const restore = scopedTools.restrict({ allow: [] })
   let inherited: string[]
-  try { inherited = reads.filter(name => !tools.get(name, agent)) }
+  try { inherited = names.filter(name => !tools.get(name, agent)) }
   finally { restore() }
   return scopedTools.restrict({ allow: inherited })
 }
@@ -170,7 +173,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     runtimePrompts.get(agent.id)?.(); runtimePrompts.delete(agent.id); boundAgents.delete(agent.id)
     for (const dispose of agentDisposers.get(agent.id)?.reverse() ?? []) dispose()
     agentDisposers.delete(agent.id); registeredAgents.delete(agent)
-    for (const name of [...LISP_TOOLS, ...LISP_READ_TOOLS]) fence!.definitions.delete(`${agent.id}:${name}`)
+    for (const name of [...LISP_TOOLS, ...LISP_NATIVE_TOOLS]) fence!.definitions.delete(`${agent.id}:${name}`)
   }
   disposers.push(() => { for (const dispose of runtimePrompts.values()) dispose(); runtimePrompts.clear(); boundAgents.clear(); for (const list of agentDisposers.values()) for (const dispose of list.reverse()) dispose(); agentDisposers.clear(); fence!.definitions.clear() })
   const register = (agent: Agent) => {
@@ -182,15 +185,15 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     const scopedTools = agent.ctx.get('tools') as Tools
     // Do not depend on arbitrary third-party PTC runtimes enforcing our boundary.
     local.push(scopedTools.presentAs('native'))
-    // Retain the host's existing read capabilities, including agent-local preset
+    // Retain the host's existing read and memory-review capabilities, including agent-local preset
     // tools. Pin their implementations so a later same-name registration cannot
     // acquire permission. Dispatch still traverses every native DSH policy/guard.
-    const reads: string[] = []
-    for (const name of LISP_READ_TOOLS) {
+    const nativeTools: string[] = []
+    for (const name of LISP_NATIVE_TOOLS) {
       const definition = tools.get(name, agent)
-      if (definition) { fence!.definitions.set(`${agent.id}:${name}`, definition); reads.push(name) }
+      if (definition) { fence!.definitions.set(`${agent.id}:${name}`, definition); nativeTools.push(name) }
     }
-    local.push(restrictToReads(tools, scopedTools, agent, reads))
+    local.push(restrictInheritedTools(tools, scopedTools, agent, nativeTools))
     for (const name of LISP_TOOLS) {
       const definition = { name, description: description(name), modelFacing: true,
         parameters: lispToolSchema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },

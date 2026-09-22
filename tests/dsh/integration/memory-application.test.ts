@@ -51,12 +51,18 @@ test('native path blocks missing decisions, observes failing next-migration regr
       'native DSH schema projection rejects non-enumerable or symbol properties')
     assert.equal(f.status().ready, false)
     const pendingStatus = f.status()
-    let readAllowed = false
-    await listeners.get('tools/pre-execute')(execution('original-read', 'observation_read', { handle: 'existing-session-handle' }), async () => { readAllowed = true })
-    assert.equal(readAllowed, true, 'retrieval needed to assess memory must stay read-only')
+    for (const name of ['read', 'Read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status']) {
+      let readAllowed = false
+      const call = execution(`original-${name}`, name, { file_path: 'check.mjs' })
+      await listeners.get('tools/pre-execute')(call, async () => { readAllowed = true })
+      await listeners.get('tools/result')(call, { value: { exitCode: 0 } })
+      assert.equal(readAllowed, true, `${name} must remain available to assess pending memory`)
+    }
     assert.deepEqual(f.status(), pendingStatus, 'retrieval is not a new execution or verification')
     let effects = 0
-    await assert.rejects(listeners.get('tools/pre-execute')(execution('missing', 'Edit'), async () => { effects++ }), /resolve memory decisions/)
+    for (const name of ['Edit', 'edit', 'write', 'bash', 'lisp_eval', 'unknown_tool']) {
+      await assert.rejects(listeners.get('tools/pre-execute')(execution(`missing-${name}`, name), async () => { effects++ }), /resolve memory decisions/)
+    }
     assert.equal(effects, 0)
     await tools[0].execute({ action: 'review', review: f.review() }, execution('review', 'task_memory_review'))
     await writeFile(join(f.root, 'migrations', '002.sql'), 'SELECT 2;')
