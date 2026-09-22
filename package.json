@@ -190,7 +190,7 @@
     "test:benchmark:memory-review": "node --import tsx tests/dsh/integration/memory-review/performance.ts",
     "build:modules": "npm run build && node scripts/stage-modules.mjs",
     "test:modules": "node scripts/run-tests.mjs tests/dsh/unit/core-modules.test.ts tests/dsh/integration/core-host.test.ts && node scripts/verify-module-packages.mjs",
-    "test:laya-worker": "python3 -m unittest discover -s tests/laya -v"
+    "test:laya-worker": "python3 -B -m unittest discover -s tests/laya -v"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

@@ -8,6 +8,9 @@ Jevへ戻す場合は `/kioku-decisions use jev`。切り替えにYAML編集やD
 以下はLayaをまだ導入していない場合の初期設定です。
 
 ## モデルのダウンロードとインストール
+
+英語を含め、どの言語でも通常版の `aac6fef/laya-multilingual-coreml` を使います。入力上限は質問・選択肢・判定対象を合わせて1,024 tokensです。`-ane` 版は96 tokensしかないため、この導入手順では使いません。[開発元のモデル仕様](https://github.com/mizorewww/laya-coreml#available-checkpoints)を参照してください。
+
 ```bash
 brew install python@3.13 pipx
 
@@ -19,11 +22,11 @@ pipx install \
 
 pipx install huggingface-hub
 
-mkdir -p ~/.local/share/laya-coreml/ane
+mkdir -p ~/.local/share/laya-coreml/multilingual
 
 hf download \
-  aac6fef/laya-multilingual-coreml-ane \
-  --local-dir ~/.local/share/laya-coreml/ane
+  aac6fef/laya-multilingual-coreml \
+  --local-dir ~/.local/share/laya-coreml/multilingual
 
 # 7. インストール確認
 laya-coreml --help
@@ -50,7 +53,7 @@ import laya_coreml as laya
 MODEL = Path(
     os.environ.get(
         "LAYA_MODEL",
-        "~/.local/share/laya-coreml/ane",
+        "~/.local/share/laya-coreml/multilingual",
     )
 ).expanduser()
 

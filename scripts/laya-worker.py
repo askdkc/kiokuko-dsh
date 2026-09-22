@@ -336,7 +336,7 @@ def handle_connection(conn, runtime, stop, slots):
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    model_dir = Path(os.environ.get("LAYA_MODEL", "~/.local/share/laya-coreml/ane")).expanduser().resolve()
+    model_dir = Path(os.environ.get("LAYA_MODEL", "~/.local/share/laya-coreml/multilingual")).expanduser().resolve()
     path = Path(os.environ.get("LAYA_SOCKET", SOCKET_DEFAULT)).expanduser().absolute()
     runtime = load_runtime(model_dir, os.environ.get("LAYA_MODEL_ID"))
     # Admit only immediately serviced connections: an executor queue would start

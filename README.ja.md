@@ -137,6 +137,16 @@ DSHのコマンド入力欄で利用可能な状態を確認します。
 
 Jevが既定です。Nimbleとローカルの[Laya-CoreML](docs/Laya-CoreML-ja.md)も選べます。Layaは`~/Library/Caches/laya-coreml/worker.sock`へ直接接続し、既存のv1 `health`/`predict`を使います。`/kioku-decisions install-laya`でも起動済みworkerを利用でき、接続できなければ導入手順を案内します。
 
+英語を含め、どの言語でも `aac6fef/laya-multilingual-coreml` を使います。入力上限は質問・選択肢・判定対象を合わせて1,024 tokensで、`-ane` 版は96 tokensのみです。[開発元のモデル仕様](https://github.com/mizorewww/laya-coreml#available-checkpoints)を参照してください。[初期導入](docs/Laya-CoreML-ja.md)を済ませてから、次のコマンドを実行します。起動中のLaya workerがあれば停止してから新しいモデルで起動してください。`LAYA_MODEL` の指定は、既存workerスクリプトの古い既定値も上書きします。
+
+```bash
+mkdir -p ~/.local/share/laya-coreml/multilingual
+hf download \
+  aac6fef/laya-multilingual-coreml \
+  --local-dir ~/.local/share/laya-coreml/multilingual
+LAYA_MODEL="$HOME/.local/share/laya-coreml/multilingual" start-laya
+```
+
 ## 過去の記憶を意味で選別
 
 TypeSafe または Nimble の利用確認が成功すると、既存検索の候補を今回の依頼に使えるか判定します。埋め込みは必須ではありません。`memoryReuse.mode: off` で停止できます。[設定・確認コマンド・評価方法](docs/memory-reuse.md)を参照してください。

@@ -4,6 +4,10 @@ Jev／TypeSafeが既定です。Nimbleも継続して使えます。Layaは手�
 
 接続先の既定値は `~/Library/Caches/laya-coreml/worker.sock`。DSHはNodeのUnix domain socketから直接接続します。HTTPサーバーや`laya-call`の子プロセスは使いません。Python、モデル、常駐workerの管理は利用者が行います。
 
+英語を含め、どの言語でも通常版の `aac6fef/laya-multilingual-coreml` を使います。入力上限は質問・選択肢・判定対象を合わせて1,024 tokensで、`-ane` 版は96 tokensのみです。[開発元のモデル仕様](https://github.com/mizorewww/laya-coreml#available-checkpoints)を参照してください。導入先とworkerの既定の読み込み先は `~/.local/share/laya-coreml/multilingual` です。
+
+既存workerを通常版へ切り替える場合は、[導入手順](Laya-CoreML-ja.md)のモデルをダウンロードし、起動中のworkerを停止してから `LAYA_MODEL="$HOME/.local/share/laya-coreml/multilingual" start-laya` で起動します。DSHのprovider切り替えだけでは、workerが読み込むモデルは変わりません。
+
 ## 起動済みのLayaを使う
 
 `start-laya`でworkerが動いていれば、そのまま使えます。workerの差し替え、追加スクリプトの配置、モデル名やfingerprintの転記は不要です。

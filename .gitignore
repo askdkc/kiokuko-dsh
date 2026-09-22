@@ -5,6 +5,10 @@ node_modules
 /dist/
 .kiokuko-dev/
 
+# Python bytecode caches
+__pycache__/
+*.py[cod]
+
 # AI assistant local state and configuration
 .codex
 .claude/

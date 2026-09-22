@@ -138,6 +138,16 @@ In the DSH command UI, check the key and test the connection:
 
 Jev remains the default. Nimble and local [Laya-CoreML](docs/laya-coreml.md) are optional alternatives; Laya connects directly to `~/Library/Caches/laya-coreml/worker.sock` using the existing v1 `health`/`predict` protocol. `/kioku-decisions install-laya` reuses a running worker or shows setup instructions.
 
+Use `aac6fef/laya-multilingual-coreml` for English and other languages. Its 1,024-token input capacity includes the question, options and state; the `-ane` variant allows only 96 tokens. See the [upstream model specifications](https://github.com/mizorewww/laya-coreml#available-checkpoints). After the [initial setup](docs/Laya-CoreML-ja.md), use the following commands. Stop any running Laya worker before starting it with the new model; `LAYA_MODEL` also overrides the old default in an existing worker script.
+
+```bash
+mkdir -p ~/.local/share/laya-coreml/multilingual
+hf download \
+  aac6fef/laya-multilingual-coreml \
+  --local-dir ~/.local/share/laya-coreml/multilingual
+LAYA_MODEL="$HOME/.local/share/laya-coreml/multilingual" start-laya
+```
+
 ## Semantic memory reuse
 
 [Semantic memory reuse](docs/memory-reuse.md) checks existing retrieval candidates
