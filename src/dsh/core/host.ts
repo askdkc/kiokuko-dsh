@@ -23,6 +23,8 @@ import { DshModules, type ModuleRegistration, type ModuleHandle, type ModuleBind
 import { CoreTasks, type CoreTask, type CoreTaskInput } from './tasks.js'
 import type { ConfiguredSkillPrompts } from '../configured-skill-prompts.js'
 import { coreSkills } from '../modules/resources.js'
+import { AnswerReviewConfig, ANSWER_REVIEW_FORM, hasHumanInput, type AnswerReviewConfiguration, type ReviewAgent } from '../answer-review/contracts.js'
+import { AnswerReviewCoordinator } from '../answer-review/coordinator.js'
 
 export interface CoreModuleHost {
   readonly context: Context
@@ -30,6 +32,7 @@ export interface CoreModuleHost {
   readonly runtime: DshCoreRuntime
   readonly decisions: DecisionService
   readonly semanticCompaction: SemanticCompactionCoordinator
+  readonly answerReviewConfig: AnswerReviewConfiguration
   readonly prompts: ConfiguredSkillPrompts
   /** Validate host-owned request/continuation bindings; this never grants native permissions. */
   admitModules(bindings: readonly ModuleBinding[]): void
@@ -41,6 +44,7 @@ export interface CoreModuleHost {
 export const CoreConfig = z.object({
   enabled: z.boolean().default(true),
   typedDecisions: TypedDecisionsConfig.prefault({}),
+  answerReview: AnswerReviewConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),
   semanticCompaction: SemanticCompactionConfig.prefault({}),
   observationPack: ObservationPackConfig.prefault({}),
@@ -50,7 +54,7 @@ export const CoreConfig = z.object({
   skillPrompts: z.object({ mode: z.enum(['full', 'compiled']).default('full') }).strict().prefault({}),
 }).strict()
 export type CoreConfig = z.input<typeof CoreConfig>
-interface NativeAgent { id: string; session: { id: string; header: { cwd: string }; snapshotEvents(): readonly { type: string; data?: any }[] } }
+interface NativeAgent { id: string; session: { id: string; header: { cwd: string }; snapshotEvents(): readonly { type: string; seq: number; data?: any }[] } }
 interface PreStep { agent: NativeAgent; messages: readonly any[]; turn: number; step: number; signal: AbortSignal }
 
 /** One runtime and one resource manifest shared by every configured local feature. */
@@ -73,6 +77,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const prompts = configuredSkillPrompts(modules.resources(), config.skillPrompts.mode, new URL('../../../dist/dsh/skill-prompts.json', import.meta.url))
   const questions = get('userQuestions') as DshUserQuestions | undefined
   const decisions = createDecisionService(ctx, runtime, config.typedDecisions, config.memoryReuse, config.semanticCompaction, root)
+  const answerReview = new AnswerReviewCoordinator(runtime, decisions, config.answerReview)
   const semanticCompaction = new SemanticCompactionCoordinator(ctx as any, decisions, root, config.observationPack)
   const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions)
   function bind(agent: NativeAgent): void {
@@ -91,14 +96,17 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     const boundary = [...current.agent.session.snapshotEvents()].reverse().find(event => event.type === 'turn/end' && event.data?.turn === current.turn)
     const reason = boundary?.data?.reason?.kind
     if (!['completed', 'error', 'aborted', 'max-tokens', 'blocked'].includes(reason)) return
+    if (reason === 'completed' && !current.failed && !current.checkpointed && answerReview.hold(current.agent as ReviewAgent)) return
     current.finishing = (async () => {
       await sessions.flush(current.agent.session)
       await tasks.finish(current.task, reason === 'aborted' ? 'cancelled' : reason === 'max-tokens' ? 'interrupted' : reason === 'completed' && !current.failed && current.task.admitted ? 'completed' : 'failed')
       if (active.get(sessionId) === current) active.delete(sessionId)
+      await answerReview.finish(current.agent as ReviewAgent)
     })()
     return current.finishing
   }
   const stopIngress = () => {
+    answerReview.stop()
     if (stopped) return
     stopped = true
     semanticCompaction.stop()
@@ -107,6 +115,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     for (const dispose of disposers.reverse()) { try { dispose() } catch (error) { stopErrors.push(error) } }
   }
   const drain = async () => {
+    await answerReview.dispose()
     await semanticCompaction.drain()
     await Promise.allSettled([...pending])
     await modules.dispose()
@@ -129,7 +138,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     disposers.push(skills.registerProvider(() => provider))
     if (systemPrompt?.section) disposers.push(systemPrompt.section({ name: 'kiokuko:soul', order: -100_000, text: await prompts.require('kiokuko-soul') }))
     if (get('commands')) disposers.push(mountTypeSafeCommand(get('commands'), typeSafeCredentials(ctx), () => decisions.invalidateReadiness()), mountDecisionCommand(get('commands'), decisions))
-    await modules.mount({ context: ctx, repositoryRoot: root, runtime, prompts, decisions, semanticCompaction, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
+    await modules.mount({ context: ctx, repositoryRoot: root, runtime, prompts, decisions, semanticCompaction, answerReviewConfig: config.answerReview, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
       beforeTask(handler) { beforeTask.add(handler); return () => { beforeTask.delete(handler) } } })
     if (!claimed) {
       disposers.push(mountMemoryApplication({ tools, on: ctx.on.bind(ctx) as any, ...(get('commands') ? { commands: get('commands') } : {}) }, { runtime,
@@ -166,11 +175,37 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       listen('agent/pre-step', (payload: PreStep, next: () => Promise<any>) => track((async () => {
         if (stopped) return { kind: 'reject' }
         bind(payload.agent)
+        const nextInput = async () => {
+          const result = await next()
+          return hasHumanInput(payload.messages) && result.kind === 'enter'
+            ? { ...result, messages: result.messages.filter((message: any) => message?.source?.form !== ANSWER_REVIEW_FORM) } : result
+        }
         const signal = AbortSignal.any([payload.signal, lifecycle.signal])
+        if (!active.has(payload.agent.session.id)) await answerReview.recover(payload.agent as ReviewAgent, async row => {
+          await sessions.flush(payload.agent.session)
+          await tasks.finish({ ...row, admitted: true }, row.status)
+        })
         const previous = active.get(payload.agent.session.id)
+        const reviewMessages = payload.messages.filter(message => message?.source?.form === ANSWER_REVIEW_FORM)
+        if (hasHumanInput(payload.messages)) {
+          answerReview.humanInput(payload.agent.session.id, payload.turn)
+          if (reviewMessages.length) payload = { ...payload, messages: payload.messages.filter(message => message?.source?.form !== ANSWER_REVIEW_FORM) }
+        } else if (reviewMessages.length) {
+          if (!previous || !previous.task.admitted || previous.checkpointed || previous.failed) return { kind: 'reject' }
+          const snapshot = await skills.snapshot({ scope: payload.agent, cwd: root, signal })
+          const schemas = await tools.schemas(payload.agent)
+          if (!snapshot.complete) return { kind: 'reject' }
+          const capabilities = [...snapshot.skills.filter((skill: any) => skill.invocation?.modelInvocable !== false).map((skill: any) => ({ kind: 'skill', name: skill.name, ...(skill.description ? { description: skill.description } : {}) })),
+            ...schemas.map((tool: any) => ({ kind: 'tool', name: tool.name, ...(tool.description ? { description: tool.description } : {}) }))]
+          try {
+            if (!await answerReview.accept(payload.agent as ReviewAgent, payload.messages, payload.turn, capabilityCatalogDigest(capabilities))) return { kind: 'reject' }
+          } catch { return { kind: 'reject' } }
+          previous.turn = payload.turn
+          return nextInput()
+        }
         if (previous?.turn === payload.turn) {
           if (previous.agent !== payload.agent || !previous.task.admitted) return { kind: 'reject' }
-          return next()
+          return nextInput()
         }
         if (previous) {
           await finishSession(payload.agent.session.id)
@@ -200,7 +235,15 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         }
         active.set(task.sessionId, { agent: payload.agent, turn: payload.turn, task, failed: false, checkpointed: false })
         if (!task.admitted) return { kind: 'reject' }
-        const result = await next()
+        const owner = active.get(task.sessionId)!
+        const reviewAgent = payload.agent as ReviewAgent
+        answerReview.bind({ runId: task.runId, workspace: task.workspace, requestId: task.requestId, task: text, catalogDigest: capabilityCatalogDigest(task.capabilities),
+          turn: payload.turn, agent: reviewAgent,
+          current: () => active.get(task.sessionId) === owner && agents?.get(payload.agent.id) === payload.agent && sessions?.get(task.sessionId) === payload.agent.session,
+          eligible: () => !stopped && owner.task.admitted && !owner.failed && !owner.checkpointed && !reviewAgent.session.header?.parentSession && reviewAgent.session.header?.origin !== 'subagent' && !reviewAgent.session.header?.delegationDepth,
+          settled: async () => { if (active.get(task.sessionId) === owner) await finishSession(task.sessionId) },
+        })
+        const result = await nextInput()
         if (result.kind !== 'enter') return result
         const guidance: string[] = memoryApplicationMode(task.profile) === 'none' ? [] : [MEMORY_APPLICATION_GUIDANCE]
         for (const name of task.selectedSkills ?? []) {
@@ -214,8 +257,11 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         const message = { id: randomUUID(), role: 'user', content: [{ type: 'text', text: contextText }], source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'snapshot', sections: [{ name: 'core-context', text: contextText }] } }
         return { ...result, messages: [...result.messages, message] }
       })()))
-      listen('agent/error', ({ agent }: { agent: NativeAgent }) => { const current = active.get(agent.session?.id); if (current?.agent === agent) current.failed = true })
+      listen('agent/session-start', ({ agent }: { agent: NativeAgent }) => track(answerReview.recover(agent as ReviewAgent, async row => { bind(agent); await sessions.flush(agent.session); await tasks.finish({ ...row, admitted: true }, row.status) })))
+      listen('agent/error', ({ agent }: { agent: NativeAgent }) => { const current = active.get(agent.session?.id); if (current?.agent === agent) { current.failed = true; answerReview.cancel(agent.session.id) } })
+      listen('session/event', (session: { id: string }, event: any) => { if (event.type === 'user/message' && hasHumanInput([event.data])) answerReview.humanInput(session.id, event.data?.turn) })
       listen('agent/idle', ({ agent }: { agent: NativeAgent }) => track(finishSession(agent.session?.id)))
+      listen('agent/status', ({ agent, status }: { agent: NativeAgent; status: string }) => { if (status === 'idle') return track(finishSession(agent.session?.id)) })
       disposers.push(tools.guard((execution: { agent?: NativeAgent }) => {
         const current = active.get(execution.agent?.session?.id ?? '')
         if (current && current.agent === execution.agent && (stopped || !current.task.admitted || current.checkpointed)) return 'Kiokuko task is not open for tool execution'

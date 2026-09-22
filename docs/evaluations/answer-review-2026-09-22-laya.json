@@ -1,0 +1,325 @@
+{
+  "version": 1,
+  "policy": "answer-review-v1",
+  "timestamp": "2026-09-22T05:17:16.112Z",
+  "provider": "laya",
+  "live": true,
+  "cases": [
+    {
+      "id": "correct",
+      "language": "ja",
+      "expected": [
+        "satisfied",
+        "satisfied",
+        "satisfied"
+      ],
+      "inputDigest": "48a9f065073f2922e6056adeabd78293755e16a6ca05eec43415bdb5697e687a",
+      "inputCompleteness": "unverified_v1",
+      "status": "completed",
+      "raw": [
+        {
+          "id": "request_fit",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "grounding",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "verification",
+          "status": "abstained",
+          "reason": "uncertain"
+        }
+      ],
+      "observed": [
+        "abstain",
+        "abstain",
+        "abstain"
+      ],
+      "model": "laya-rl-agent",
+      "elapsedMs": 2711
+    },
+    {
+      "id": "wrong-request",
+      "language": "ja",
+      "expected": [
+        "finding",
+        "not_applicable",
+        "not_applicable"
+      ],
+      "inputDigest": "ce43307239c48b55226da3606ef5e39705fa7fbde5d7693ec3f945edf2627eac",
+      "inputCompleteness": "unverified_v1",
+      "status": "completed",
+      "raw": [
+        {
+          "id": "request_fit",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "grounding",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "verification",
+          "status": "abstained",
+          "reason": "uncertain"
+        }
+      ],
+      "observed": [
+        "abstain",
+        "abstain",
+        "abstain"
+      ],
+      "model": "laya-rl-agent",
+      "elapsedMs": 129
+    },
+    {
+      "id": "false-success",
+      "language": "ja",
+      "expected": [
+        "satisfied",
+        "finding",
+        "finding"
+      ],
+      "inputDigest": "735e7bc2ce948f0c03bdb54184c7258449eff61d47df8ef48362ed3a17b1745c",
+      "inputCompleteness": "unverified_v1",
+      "status": "completed",
+      "raw": [
+        {
+          "id": "request_fit",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "grounding",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "verification",
+          "status": "abstained",
+          "reason": "uncertain"
+        }
+      ],
+      "observed": [
+        "abstain",
+        "abstain",
+        "abstain"
+      ],
+      "model": "laya-rl-agent",
+      "elapsedMs": 121
+    },
+    {
+      "id": "missing-evidence",
+      "language": "ja",
+      "expected": [
+        "satisfied",
+        "abstain",
+        "abstain"
+      ],
+      "inputDigest": "47fa2c851d52bc4603ab2031bfeeffd64810928b49970935410de8f0973e7110",
+      "inputCompleteness": "unverified_v1",
+      "status": "completed",
+      "raw": [
+        {
+          "id": "request_fit",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "grounding",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "verification",
+          "status": "abstained",
+          "reason": "uncertain"
+        }
+      ],
+      "observed": [
+        "abstain",
+        "abstain",
+        "abstain"
+      ],
+      "model": "laya-rl-agent",
+      "elapsedMs": 737
+    },
+    {
+      "id": "correct",
+      "language": "en",
+      "expected": [
+        "satisfied",
+        "satisfied",
+        "satisfied"
+      ],
+      "inputDigest": "e23124b2d6305487f78f7afbd58cbf5b8ca2e0ae0f72ab8c8abeb1a3a0b96448",
+      "inputCompleteness": "unverified_v1",
+      "status": "completed",
+      "raw": [
+        {
+          "id": "request_fit",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "grounding",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "verification",
+          "status": "abstained",
+          "reason": "uncertain"
+        }
+      ],
+      "observed": [
+        "abstain",
+        "abstain",
+        "abstain"
+      ],
+      "model": "laya-rl-agent",
+      "elapsedMs": 716
+    },
+    {
+      "id": "wrong-request",
+      "language": "en",
+      "expected": [
+        "finding",
+        "not_applicable",
+        "not_applicable"
+      ],
+      "inputDigest": "975f06af7a2336731941e1fccbbd48d18b0caaed1c39d1f74d13445a72f46519",
+      "inputCompleteness": "unverified_v1",
+      "status": "completed",
+      "raw": [
+        {
+          "id": "request_fit",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "grounding",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "verification",
+          "status": "abstained",
+          "reason": "uncertain"
+        }
+      ],
+      "observed": [
+        "abstain",
+        "abstain",
+        "abstain"
+      ],
+      "model": "laya-rl-agent",
+      "elapsedMs": 150
+    },
+    {
+      "id": "false-success",
+      "language": "en",
+      "expected": [
+        "satisfied",
+        "finding",
+        "finding"
+      ],
+      "inputDigest": "2be64c483dbe77c49d10ebc14dcf4225955ab5c365aa695fc75fa48dc2967979",
+      "inputCompleteness": "unverified_v1",
+      "status": "completed",
+      "raw": [
+        {
+          "id": "request_fit",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "grounding",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "verification",
+          "status": "abstained",
+          "reason": "uncertain"
+        }
+      ],
+      "observed": [
+        "abstain",
+        "abstain",
+        "abstain"
+      ],
+      "model": "laya-rl-agent",
+      "elapsedMs": 150
+    },
+    {
+      "id": "missing-evidence",
+      "language": "en",
+      "expected": [
+        "satisfied",
+        "abstain",
+        "abstain"
+      ],
+      "inputDigest": "212afaa0a0b5bf87187c8742488e8e4de406e701b56c9dbb7606811e8e4c3017",
+      "inputCompleteness": "unverified_v1",
+      "status": "completed",
+      "raw": [
+        {
+          "id": "request_fit",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "grounding",
+          "status": "abstained",
+          "reason": "uncertain"
+        },
+        {
+          "id": "verification",
+          "status": "abstained",
+          "reason": "uncertain"
+        }
+      ],
+      "observed": [
+        "abstain",
+        "abstain",
+        "abstain"
+      ],
+      "model": "laya-rl-agent",
+      "elapsedMs": 527
+    }
+  ],
+  "summaries": {
+    "ja": {
+      "attempted": 4,
+      "completed": 4,
+      "falseFindingRate": 0,
+      "negativeDimensions": 9,
+      "detectionRate": 0,
+      "positiveDimensions": 3,
+      "abstentionRate": 1,
+      "assessedDimensions": 12,
+      "meanCompletedMs": 924.5,
+      "totalElapsedMs": 3698
+    },
+    "en": {
+      "attempted": 4,
+      "completed": 4,
+      "falseFindingRate": 0,
+      "negativeDimensions": 9,
+      "detectionRate": 0,
+      "positiveDimensions": 3,
+      "abstentionRate": 1,
+      "assessedDimensions": 12,
+      "meanCompletedMs": 385.75,
+      "totalElapsedMs": 1543
+    }
+  },
+  "limitation": "Eight fixed synthetic cases. No general accuracy claim. v1 worker input completeness is unverified. Failed evaluations are excluded from rates, with coverage reported.",
+  "executionNote": "Laya: eight synthetic inference batches completed against the already-running plain-v1 worker. Jev: no API call made; TYPESAFE_API_KEY was absent."
+}

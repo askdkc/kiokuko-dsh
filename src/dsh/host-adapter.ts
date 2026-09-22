@@ -14,6 +14,8 @@ import { dshTurnRequestId } from './intake-profile-resolver.js'
 import { reviewEnnoPlan } from '../enno-oduno/service.js'
 import { classifyTask, selectInstalledSkills } from './decisions/workflows.js'
 import { humanInput } from '../memory/review/evidence.js'
+import { AnswerReviewCoordinator } from './answer-review/coordinator.js'
+import { AnswerReviewConfig, ANSWER_REVIEW_FORM, hasHumanInput, type ReviewAgent } from './answer-review/contracts.js'
 import { AutoMemoryReviewCoordinator, type ReviewNativeSession } from './auto-memory-review.js'
 import { MemoryReviewConfig } from '../memory/review/contracts.js'
 import { handoffReview } from '../memory/review/store.js'
@@ -184,6 +186,7 @@ interface AdapterContext extends Context {
 }
 
 export interface DshHostAdapterOptions {
+  readonly answerReview?: import('zod').z.input<typeof AnswerReviewConfig>
   readonly decisions?: DecisionService
   readonly semanticCompactionCoordinator?: SemanticCompactionCoordinator
   readonly observationPack?: import('zod').z.input<typeof ObservationPackConfig>
@@ -491,6 +494,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ...(options.now === undefined ? {} : { now: options.now }),
   })
   const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}), SemanticCompactionConfig.parse(options.semanticCompaction ?? {}), root)
+  const answerReview = new AnswerReviewCoordinator(runtime, decisions, AnswerReviewConfig.parse(options.answerReview ?? {}))
   const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root, options.observationPack)
   const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
   const deepPlanning = new DeepPlanningController({ runtime, decisions, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
@@ -838,6 +842,28 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       sourceStartTurn: event.turn,
     })
     record(event, result, generation)
+    const reviewItem = currentSession(event.sessionId)
+    const reviewAgent = event.nativeAgent as ReviewAgent | undefined
+    if (reviewItem && reviewAgent?.session && typeof reviewAgent.session.snapshotEvents === 'function') {
+      const eligible = () => {
+        const item = currentSession(event.sessionId), selection = selections.get(reviewItem.runId)?.value
+        const header = reviewAgent.session.header
+        return item?.runId === reviewItem.runId && !item.closed && !item.failed && item.prepared.run.status === 'active'
+          && !item.prepared.ennoOduno.applicable && !selection?.discussion && (!selection || selection.mode === 'normal' && selection.status === 'ready')
+          && !delegation.isChild(reviewAgent) && !deepPlanning.executor.isChild(reviewAgent) && !header?.parentSession && header?.origin !== 'subagent' && !header?.delegationDepth
+          && !executionSupport.paused(event.sessionId)
+      }
+      answerReview.bind({ runId: reviewItem.runId, workspace: reviewItem.workspace, requestId: `run:${reviewItem.runId}`, task: reviewItem.task,
+        catalogDigest: reviewItem.catalog.digest, turn: event.turn, agent: reviewAgent, eligible,
+        current: () => { const item = currentSession(event.sessionId); return item?.runId === reviewItem.runId && item.nativeAgent === reviewAgent && item.nativeSession === reviewAgent.session && agents?.get(reviewAgent.id) === reviewAgent && sessions?.get(event.sessionId) === reviewAgent.session },
+        settled: async () => {
+          const item = currentSession(event.sessionId)
+          if (!item || item.runId !== reviewItem.runId || item.closed || (reviewAgent as any).status === 'running') return
+          const intent = await resolveIdleClose(item.agentId,item.sessionId,item.nativeSession,item.nativeAgent)
+          if (intent) await retireSupersededRun?.(item,intent.status)
+        },
+      })
+    }
     if (result.admitted && result.prepared.run.status === 'active' && currentSession(event.sessionId)?.prepareGeneration === generation && !delegation.isChild(event.nativeAgent ?? {})) {
       await runtime.withDatabase(db => {
         if (currentSession(event.sessionId)?.prepareGeneration !== generation) return
@@ -977,9 +1003,21 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           throw new KiokukoError('CONFLICT', 'dsh continued turn was reused with different bound input')
         }
         this.assertCatalog(cached.result.catalog, event.capabilities)
+        if (!hasHumanInput(event.nativeMessages ?? []) && event.nativeMessages?.some(message => objectRecord(objectRecord(message)?.source)?.form === ANSWER_REVIEW_FORM)) {
+          if (!event.nativeAgent || !await answerReview.accept(event.nativeAgent as ReviewAgent, event.nativeMessages, event.turn, event.capabilities.digest)) throw new Error('Stale answer review continuation')
+        }
         return event.signal.aborted ? { ...cached.result, admitted: false } : this.choose(event, cached.result)
       }
       const previous = currentForAgentEvent(event.agent.id, event.sessionId, undefined, event.nativeSession, event.nativeAgent)
+      const reviewMessages = event.nativeMessages ?? []
+      if (hasHumanInput(reviewMessages)) answerReview.humanInput(event.sessionId, event.turn)
+      if (!hasHumanInput(reviewMessages) && reviewMessages.some(message => objectRecord(objectRecord(message)?.source)?.form === ANSWER_REVIEW_FORM)) {
+        if (!previous || !event.nativeAgent || !await answerReview.accept(event.nativeAgent as ReviewAgent, reviewMessages, event.turn, event.capabilities.digest)) throw new Error('Unbound answer review continuation')
+        const continued = { admitted: true, prepared: previous.prepared, catalog: previous.catalog }
+        continuedTurns.set(cacheKey, { fingerprint, result: continued, nativeAgent: event.nativeAgent, ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }) })
+        await bindAndRecord(event, continued, generation)
+        return continued
+      }
       if (previous !== undefined && previous.turn === event.turn && !previous.closed) {
         // Model routing prepares before native pre-step. Reuse that exact
         // intake result instead of treating its newly active run as a cold
@@ -1127,6 +1165,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         }),
       }
       if (humanPresent) {
+        answerReview.humanInput(event.sessionId, event.turn)
+        nativeDecision = { ...nativeDecision, messages: nativeDecision.messages.filter(message => objectRecord(objectRecord(message)?.source)?.form !== ANSWER_REVIEW_FORM) }
         boundaryWorker.cancelSession(event.sessionId)
         const previous = currentSession(event.sessionId)
         if (previous) ennoMemory.invalidate(previous.runId)
@@ -1204,6 +1244,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         return { ...nativeDecision, messages: [...executionSupport.projectMessages(event.sessionId, nativeDecision.messages), ...messages] }
       } catch (error) {
         if (error instanceof ExecutionSelectionPending) return { kind: 'reject' }
+        if (!humanPresent && nativeMessages.some(message => objectRecord(objectRecord(message)?.source)?.form === ANSWER_REVIEW_FORM)) return { kind: 'reject' }
         // The native message array is authoritative. Kiokuko degradation must
         // not turn a claimed user prompt into a rejected/empty DSH step.
         return nativeDecision
@@ -1374,6 +1415,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     if (boundSession !== undefined && boundSession.id !== sessionId) throw new Error('kiokuko-dsh native session identity is inconsistent')
     const cwd = boundSession?.header?.cwd
     if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('kiokuko-dsh native session cwd is unavailable')
+    if (!currentSession(sessionId) && boundSession && !delegation.isChild(payload.agent)) await answerReview.recover(payload.agent as ReviewAgent, async row => {
+      await sessions?.flush?.(boundSession)
+      await sessionMirror.checkpointAfterNativeFlush(boundSession as DshMirrorEventSession)
+      await runLifecycle.closeTurn({ runId: row.runId, status: row.status, ...(row.endSeq === undefined ? {} : { sourceEndSeq: row.endSeq }) })
+    })
     const sourceStartSeq = dshTurnBoundarySeq(sessionEventSource(boundSession as object | undefined), payload.turn, 'start')
     const bound = currentForAgentEvent(payload.agent.id, sessionId, payload.turn, boundSession as object | undefined, payload.agent as object)
     const previous = bound === undefined
@@ -1389,20 +1435,22 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     // human task. The native conversation retains the new user message for the
     // model, while any supplied step-local user text still replaces this
     // fallback and is recorded as the continuation instruction.
-    const task = bound === undefined ? textFromMessages(payload.messages, previous?.task) : bound.task
+    const reviewing = !hasHumanInput(payload.messages) && payload.messages.some(message => objectRecord(objectRecord(message)?.source)?.form === ANSWER_REVIEW_FORM)
+    const task = bound?.task ?? (reviewing && previous ? previous.task : textFromMessages(payload.messages, previous?.task))
     let profile = (() => {
       if (bound !== undefined) return bound.profileHints
+      if (reviewing && previous) return previous.profileHints
       if (previous === undefined) return undefined
       const inferred = resolveGroundedIntakeProfile({ task, cwd }).profileHints.taskType
       const previousType = selections.get(previous.runId)?.value.discussion ? 'chat' : previous.prepared.intake.profile.taskType
       return inferred === null || previousType === 'chat' && inferred === 'chat' ? { taskType: previousType } : undefined
     })()
-    if (bound === undefined && !delegation.isChild(payload.agent)) {
+    if (!reviewing && bound === undefined && !delegation.isChild(payload.agent)) {
       const taskType = await classifyTask(decisions, dshTurnRequestId({ dshSessionId: sessionId, turn: payload.turn }), task, profile?.taskType, payload.signal)
       if (taskType) profile = { ...profile, taskType }
     }
     const lispCoding = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
-    if (lispCoding && bound === undefined && !previous?.prepared.ennoOduno.applicable && !delegation.isChild(payload.agent)) {
+    if (lispCoding && !reviewing && bound === undefined && !previous?.prepared.ennoOduno.applicable && !delegation.isChild(payload.agent)) {
       const grounded = resolveGroundedIntakeProfile({ task, cwd, ...(profile === undefined ? {} : { profileHints: profile }) })
       const choice = await lispCoding.prepare({ agent: payload.agent, task, taskType: grounded.profileHints.taskType,
         turn: payload.turn, signal: payload.signal })
@@ -1508,6 +1556,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const selection = selections.get(item.runId)?.value
       if (selection && selection.status !== 'ready' && !selection.discussion && item.prepared.intake.profile.taskType !== 'chat') selectionBlocked.add(agent)
       const role = modelRoleForState(item.prepared.ennoOduno)
+      const reviewModel = answerReview.model(agent as ReviewAgent)
+      if (reviewModel) return reviewModel
       return selection?.mode === 'enno' && selection.status === 'ready' && role ? selection.configuration?.roles[role] : undefined
     }, {
       load: () => {
@@ -2386,6 +2436,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     }
   }
   const rehydrateBoundarySession = async (nativeAgent: NativeAgent): Promise<void> => {
+    if (nativeAgent.session?.snapshotEvents && agents?.get(nativeAgent.id) === nativeAgent && sessions?.get(nativeAgent.session.id) === nativeAgent.session) await answerReview.recover(nativeAgent as ReviewAgent, async row => {
+      await sessions?.flush?.(nativeAgent.session!)
+      await sessionMirror.checkpointAfterNativeFlush(nativeAgent.session as DshMirrorEventSession)
+      await runLifecycle.closeTurn({ runId: row.runId, status: row.status, ...(row.endSeq === undefined ? {} : { sourceEndSeq: row.endSeq }) })
+    })
     const nativeSession = nativeAgent.session ?? sessions?.get(nativeAgent.id)
     const sessionId = nativeSession?.id
     const cwd = nativeSession?.header?.cwd
@@ -2452,6 +2507,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     await deliverCompletionReport(nativeSession)
     const item = currentForAgentEvent(agentId, sessionId, undefined, nativeSession, nativeAgent)
     if (item === undefined || item.closed || executionSupport.paused(item.sessionId)) return undefined
+    if (nativeAgent && answerReview.hold(nativeAgent as ReviewAgent)) return undefined
     const selection = selections.get(item.runId)?.value
     if (selection?.discussion) return undefined
     if (selection && (selection.status !== 'ready' && item.prepared.intake.profile.taskType !== 'chat' || item.failed && selection.mode === 'normal')) return undefined
@@ -2477,6 +2533,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     return item?.closed === true ? undefined : item?.runId
   }
   const resolveSessionClose = async (sessionId: string, nativeSession: object): Promise<DshCloseIntent | undefined> => {
+    answerReview.cancel(sessionId)
     const item = currentSession(sessionId)
     if (item === undefined || item.closed || item.nativeSession !== nativeSession) return undefined
     if (executionSupport.paused(item.sessionId) || selections.get(item.runId)?.value.status !== undefined && selections.get(item.runId)?.value.status !== 'ready') {
@@ -2541,6 +2598,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         ...(item.nativeAgent === undefined ? {} : { nativeAgent: item.nativeAgent }),
         ...(item.nativeSession === undefined ? {} : { nativeSession: item.nativeSession }),
       })
+      if (item.nativeAgent) await answerReview.finish(item.nativeAgent as ReviewAgent)
       item.closed = true
       ennoMemory.clear(item.runId)
       executionSupport.clear(item.sessionId)
@@ -2636,6 +2694,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     } catch { /* optional evidence never changes native tool completion */ }
   })
   const errorDisposer = (ctx as any).on('agent/error', (event: { agent: { id: string; session?: { id: string }; sessionId?: string }; error?: unknown }) => {
+    if (event.agent.session?.id) answerReview.cancel(event.agent.session.id)
     const item = currentForAgentEvent(event.agent.id, event.agent.session?.id ?? event.agent.sessionId, undefined, event.agent.session, event.agent)
     if (item !== undefined) item.failed = true
     if (isModelAvailabilityFailure(event.error)) void markModelUnavailable(event.agent).catch(() => {
@@ -2644,6 +2703,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   })
   const sessionEventDisposer = (ctx as any).on('session/event', (session: { id: string }, event: { type?: unknown; seq?: unknown; data?: unknown }) => {
     const item = currentSession(session.id)
+    if (event.type === 'user/message' && hasHumanInput([event.data])) answerReview.humanInput(session.id, objectRecord(event.data)?.turn as number | undefined)
     if(event.type==='user/message'&&typeof event.seq==='number'){
       const input=humanInput(event as DshLogEvent)
       if(input)void runtime.withDatabase(db=>resolveProjectWorkspaceReadOnly(db,root,{allowDirectory:true})).then(project=>project?autoReview.acceptInput(project.workspace,session.id,input.text):undefined).catch(()=>undefined)
@@ -2946,6 +3006,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   return {
     host,
     dispose: () => disposePromise ??= (async () => {
+      await answerReview.dispose()
       semanticCompaction.stop()
       await semanticCompaction.drain()
       await deepPlanning.stop()

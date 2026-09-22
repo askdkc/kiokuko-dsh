@@ -39,6 +39,17 @@ function baseCandidate(reply: Extract<QualityReply, {kind:'quality-candidate'}>)
   const { findings: _findings, ...rest } = reply
   return CandidateSchema.parse({ ...rest, kind: 'candidate', evidence: [...rest.evidence, ...reply.findings.flatMap(f => f.evidence)].filter((ref, i, all) => all.findIndex(r => r.artifactId === ref.artifactId && r.quote === ref.quote) === i) })
 }
+function assertCheckRequirements(checks: readonly { requirementId: string }[], requirementIds: readonly string[]): void {
+  exactQualityIds([...new Set(checks.map(check => check.requirementId))], requirementIds, 'check requirements')
+}
+function assertDecompositionChecks(checks: QualityNode['checks'], children: Extract<QualityReply, {kind:'quality-plan'}>['children']): void {
+  for (const child of children) {
+    exactQualityIds(child.checkKeys, [...new Set(child.checkKeys)], 'child check keys')
+    if (child.checkKeys.some(key => !checks.some(check => check.key === key))) throw new Error('Child changed quality obligations')
+    assertCheckRequirements(checks.filter(check => child.checkKeys.includes(check.key)), child.requirementIds)
+  }
+  exactQualityIds([...new Set(children.flatMap(child => child.checkKeys))], checks.map(check => check.key), 'decomposition coverage')
+}
 interface Transitions {
   legacy(reply: AgentReply, children: readonly string[]): void
   replan(reason: string): void
@@ -48,27 +59,26 @@ interface Transitions {
 export function applyQualityReply(node: GoalNode, reply: QualityReply, job: DeepJob, attemptId: string, childIds: readonly string[], transitions: Transitions): void {
   assertQualityJob(node, job)
   const q = node.quality!, phase = q.phase
+  // Saved/inherited state must satisfy the same coverage rule as a new plan.
+  if (phase !== 'plan') assertCheckRequirements(q.checks, node.requirementIds)
   if (reply.kind === 'quality-plan' && phase === 'plan') {
     if (reply.decision === 'blocked') { node.status = 'unresolved'; node.reason = reply.reason; return }
+    let checks: QualityNode['checks']
     if (q.inheritedChecks.length) {
       if (reply.checks.length) throw new Error('Inherited quality checks are immutable')
-      q.checks = structuredClone(q.inheritedChecks)
+      checks = structuredClone(q.inheritedChecks)
     } else {
-      exactQualityIds([...new Set(reply.checks.map(c => c.requirementId))], node.requirementIds, 'check requirements')
       exactQualityIds(reply.checks.map(c => c.key), [...new Set(reply.checks.map(c => c.key))], 'check keys')
-      q.checks = reply.checks.map((check, index) => ({ ...check, id: `${node.id}:v${node.revision}:check:${index+1}` }))
+      checks = reply.checks.map((check, index) => ({ ...check, id: `${node.id}:v${node.revision}:check:${index+1}` }))
     }
-    if (!q.checks.length) throw new Error('Quality plan has no checks')
+    assertCheckRequirements(checks, node.requirementIds)
+    if (!checks.length) throw new Error('Quality plan has no checks')
     if (reply.decision === 'leaf' && reply.children.length) throw new Error('Leaf plan cannot contain children')
     if (reply.decision === 'decompose') {
-      for (const child of reply.children) {
-        exactQualityIds(child.checkKeys, [...new Set(child.checkKeys)], 'child check keys')
-        if (child.checkKeys.some(key => !q.checks.some(check => check.key === key && child.requirementIds.includes(check.requirementId)))) throw new Error('Child changed quality obligations')
-      }
-      exactQualityIds([...new Set(reply.children.flatMap(child => child.checkKeys))], q.checks.map(c => c.key), 'decomposition coverage')
+      assertDecompositionChecks(checks, reply.children)
       transitions.legacy({ kind: 'decompose', synthesis: reply.synthesis, children: reply.children.map(({checkKeys: _keys, ...child}) => child) }, [])
     } else node.proposal = { kind: 'leaf', reason: reply.reason }
-    q.plan = reply; q.phase = 'plan-review'; node.status = 'verifying-plan'; node.reason = reply.reason
+    q.checks = checks; q.plan = reply; q.phase = 'plan-review'; node.status = 'verifying-plan'; node.reason = reply.reason
     return
   }
   if (reply.kind === 'quality-plan-review' && phase === 'plan-review') {
@@ -78,6 +88,7 @@ export function applyQualityReply(node: GoalNode, reply: QualityReply, job: Deep
     if (reply.verdict === 'unresolved') { node.status = 'unresolved'; node.reason = reply.reason; return }
     if (q.plan?.decision === 'leaf') { q.phase = 'draft-a'; node.status = 'ready' }
     else if (q.plan?.decision === 'decompose') {
+      assertDecompositionChecks(q.checks, q.plan.children)
       transitions.legacy({ kind: 'supported', requirementIds: reply.requirementIds, reason: reply.reason, evidence: reply.evidence }, childIds)
       for (const [index, child] of transitions.children().entries()) {
         const keys = q.plan.children[index]!.checkKeys

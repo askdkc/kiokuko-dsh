@@ -35,3 +35,56 @@ test('a plan cannot omit original requirements or rewrite inherited checks',()=>
   reply.checks[0]!.requirementId='invented'
   assert.throws(()=>acceptDeepReply(state,node,job,'attempt',reply,[],[]),/requirements/)
 })
+
+for (const complete of [false, true]) test(`child requirement coverage is ${complete ? 'complete even when shared' : 'not replaced by sibling coverage'}`, () => {
+  const state = initial(), root = state.nodes[0]!
+  root.requirementIds = ['R1', 'R2']
+  const job = jobFor(state, root, 'planner', []), plan = qualityResponse(qualityInput(job))
+  assert.equal(plan.kind, 'quality-plan'); if (plan.kind !== 'quality-plan') return
+  plan.decision = 'decompose'
+  plan.children = [
+    { key: 'a', question: 'Check both requirements', requirementIds: ['R1', 'R2'], acceptanceCriteria: ['Cover R1 and R2'], assumptions: [], dependsOn: [], checkKeys: plan.checks.filter(c => complete || c.requirementId === 'R1').map(c => c.key) },
+    { key: 'b', question: 'Check R2 independently', requirementIds: ['R2'], acceptanceCriteria: ['Cover R2'], assumptions: [], dependsOn: [], checkKeys: plan.checks.filter(c => c.requirementId === 'R2').map(c => c.key) },
+  ]
+  if (!complete) {
+    assert.throws(() => acceptDeepReply(state, root, job, 'plan', plan, [], []), /requirements/)
+    assert.equal(state.nodes.length, 1)
+    assert.equal(root.proposal, null)
+    assert.equal(root.receipt, null)
+    return
+  }
+  acceptDeepReply(state, root, job, 'plan', plan, [], [])
+  const reviewJob = jobFor(state, root, 'critic', [])
+  acceptDeepReply(state, root, reviewJob, 'review', qualityResponse(qualityInput(reviewJob)), [], ['a', 'b'])
+  for (const child of state.nodes.slice(1)) {
+    for (let i = 0; i < 5; i++) {
+      const next = jobFor(state, child, 'planner', [])
+      acceptDeepReply(state, child, next, `${child.id}-${i}`, qualityResponse(qualityInput(next)), [], [])
+    }
+    assert.equal(child.status, 'accepted')
+    assert.deepEqual(new Set(child.quality!.checks.map(c => c.requirementId)), new Set(child.requirementIds))
+  }
+})
+
+test('inherited checks cannot omit one of the child requirements', () => {
+  const state = initial(), node = state.nodes[0]!
+  node.requirementIds.push('missing')
+  node.quality!.inheritedChecks = [{ id: 'inherited', key: 'one', requirementId: 'request', text: 'One check', evidenceNeeded: 'Source' }]
+  const job = jobFor(state, node, 'planner', [])
+  assert.throws(() => acceptDeepReply(state, node, job, 'plan', qualityResponse(qualityInput(job)), [], []), /requirements/)
+})
+
+for (const [phase, precedingJobs] of [['plan-review', 1], ['draft-a', 2], ['compare', 4]] as const) {
+  test(`saved incomplete checks cannot pass ${phase}`, () => {
+    const state = initial(), node = state.nodes[0]!
+    for (let i = 0; i < precedingJobs; i++) {
+      const job = jobFor(state, node, 'planner', [])
+      acceptDeepReply(state, node, job, `preceding-${i}`, qualityResponse(qualityInput(job)), [], [])
+    }
+    assert.equal(node.quality!.phase, phase)
+    node.requirementIds.push('missing')
+    const before = structuredClone(node), job = jobFor(state, node, 'planner', [])
+    assert.throws(() => acceptDeepReply(state, node, job, 'invalid', qualityResponse(qualityInput(job)), [], []), /requirements/)
+    assert.deepEqual(node, before)
+  })
+}

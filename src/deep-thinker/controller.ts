@@ -96,7 +96,8 @@ export class DeepPlanningController {
             intent ??= await this.store.intent(session.id)
             if (!intent) return { kind: 'success', text: 'Deepの予約・作業はありません。' }
             const pending = await this.store.pending(session.id)
-            const report = (await this.reports.snapshot(session.id)).filter(item => item.kind === 'report').at(-1)
+            const reportId = intent.runId ? `deep-report:${intent.runId}` : undefined
+            const report = reportId ? (await this.reports.snapshot(session.id)).find(item => item.kind === 'report' && item.id === reportId) : undefined
             return { kind: 'success', text: `${intent.runId ? deepStatusText(await this.store.read(intent.runId)) : intent.status === 'armed' ? '予約中：次の人間による通常入力を待っています。' : `設定・入力待ち：${intent.problem}`} ${pending.length ? '\n配送待ちの記録があります。Deepの回答から表示できます。' : ''}${report ? `\n\n${report.text}` : ''}` }
           }
           if (command.kind === 'cancel') {
