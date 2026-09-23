@@ -56,7 +56,24 @@ export class AutoMemoryReviewCoordinator {
   async bind(binding:ReviewBinding):Promise<void>{
     if(this.#closed||binding.session.header?.origin==='subagent')return
     // Only the exact native indexed API qualifies; no full-history snapshot fallback.
+    const admittedAfter=Math.max(binding.startSeq,binding.session.inheritedEventCount??0)-1
+    const unchanged=(sourceGeneration:string)=>this.options.runtime.withDatabase(db=>{
+      const state=reviewState(db,binding.runId),settings=reviewSettings(db,binding.workspace)
+      const run=db.prepare('SELECT workspace,dsh_session_id,status FROM ledger_runs WHERE run_id=?')
+        .get<{workspace:string;dsh_session_id:string;status:string}>(binding.runId)
+      return state?.workspace===binding.workspace && state.session_id===binding.session.id
+        && state.source_generation===sourceGeneration && state.admitted_after_seq===admittedAfter
+        && run?.workspace===binding.workspace && run.dsh_session_id===binding.session.id
+        && ['active','intake'].includes(run.status) && settings?.generation===this.#generations.get(binding.workspace)
+        && settings!==undefined && canonicalContentHash(settings.config)===canonicalContentHash(this.#config)
+        && capturePolicy(db,binding.workspace,binding.session.id).mode==='allowed'
+    })
     const first=binding.session.eventAt?.(0)
+    // A repeated bind must not rewrite the first mirrored event merely to rediscover its identity.
+    if(first && await this.options.mirror.matchesEvent(binding.session.id,first).catch(()=>false)) {
+      const previousGeneration=await this.options.mirror.sourceGeneration(binding.session.id).catch(()=>undefined)
+      if(previousGeneration && await unchanged(previousGeneration)){this.worker.kick(binding.workspace);return}
+    }
     if(first)await this.options.mirror.observe(binding.session.id,first)
     const sourceGeneration=await this.options.mirror.sourceGeneration(binding.session.id)
     await this.options.runtime.withDatabase(db=>withImmediateTransaction(db,()=>{
@@ -85,7 +102,7 @@ export class AutoMemoryReviewCoordinator {
     const previous=this.#tails.get(binding.runId)??Promise.resolve()
     const operation=previous.catch(()=>undefined).then(()=>this.scan(binding,throughSeq,origin)).catch(async error=>{
       const reason=error instanceof Error&&['source_unavailable','input_too_large','capture_excluded','run_terminal','host_capability_missing','review_off'].includes(error.message)?error.message:'review_deferred'
-      await this.options.runtime.withDatabase(db=>db.prepare('UPDATE memory_review_states SET reason=? WHERE run_id=?').run(reason,binding.runId))
+      await this.options.runtime.withDatabase(db=>db.prepare('UPDATE memory_review_states SET reason=? WHERE run_id=? AND reason IS NOT ?').run(reason,binding.runId,reason))
     }).finally(()=>{if(this.#tails.get(binding.runId)===operation)this.#tails.delete(binding.runId)})
     this.#tails.set(binding.runId,operation)
     void operation.catch(()=>undefined)
@@ -98,21 +115,28 @@ export class AutoMemoryReviewCoordinator {
     if(state.terminal_outcome)throw new Error('run_terminal')
     const settings=await runtime.withDatabase(db=>reviewSettings(db,binding.workspace)!)
     if(settings.config.mode==='off')throw new Error('review_off')
-    if(!this.options.flush||!binding.session.eventAt)throw new Error('host_capability_missing')
-    if(await this.options.flush(binding.session)===false)throw new Error('host_capability_missing')
-    if(this.#closed)return
-    // Catch missed notifications from the exact indexed native range, never snapshot the prefix.
     const checkpoint=await mirror.checkpoint(binding.session.id)
-    for(let seq=Math.max(state.scanned_through_seq+1,checkpoint.mirroredThrough+1);seq<=throughSeq;seq++){
-      const event=binding.session.eventAt(seq);if(!event)throw new Error('source_unavailable')
-      await mirror.observe(binding.session.id,event)
-    }
-    const confirmed=await mirror.checkpointThroughAfterNativeFlush(binding.session,throughSeq,Math.min(throughSeq,state.scanned_through_seq+1))
-    if((confirmed.rangeConfirmedThrough??-1)<throughSeq||confirmed.error)throw new Error('source_unavailable')
-    if(await mirror.sourceGeneration(binding.session.id)!==state.source_generation)throw new Error('source_unavailable')
-    if(throughSeq>state.scanned_through_seq){
-      const classified=await completedReviewTurns(mirror.streamRange(binding.session.id,state.scanned_through_seq+1,throughSeq))
-      await runtime.withDatabase(db=>withImmediateTransaction(db,()=>recordReviewTurns(db,state,classified.turns,classified.scanned)))
+    const boundaryEvent=binding.session.eventAt?.(throughSeq)
+    const alreadyClassified = throughSeq<=state.scanned_through_seq && checkpoint.nativeDurableThrough>=throughSeq
+      && checkpoint.confirmedThrough>=throughSeq && !checkpoint.error && checkpoint.health==='healthy'
+      && boundaryEvent!==undefined && await mirror.matchesEvent(binding.session.id,boundaryEvent)
+      && await mirror.sourceGeneration(binding.session.id)===state.source_generation
+    if(!alreadyClassified){
+      if(!this.options.flush||!binding.session.eventAt)throw new Error('host_capability_missing')
+      if(await this.options.flush(binding.session)===false)throw new Error('host_capability_missing')
+      if(this.#closed)return
+      // Catch missed notifications from the exact indexed native range, never snapshot the prefix.
+      for(let seq=Math.max(state.scanned_through_seq+1,checkpoint.mirroredThrough+1);seq<=throughSeq;seq++){
+        const event=binding.session.eventAt(seq);if(!event)throw new Error('source_unavailable')
+        await mirror.observe(binding.session.id,event)
+      }
+      const confirmed=await mirror.checkpointThroughAfterNativeFlush(binding.session,throughSeq,Math.min(throughSeq,state.scanned_through_seq+1))
+      if((confirmed.rangeConfirmedThrough??-1)<throughSeq||confirmed.error)throw new Error('source_unavailable')
+      if(await mirror.sourceGeneration(binding.session.id)!==state.source_generation)throw new Error('source_unavailable')
+      if(throughSeq>state.scanned_through_seq){
+        const classified=await completedReviewTurns(mirror.streamRange(binding.session.id,state.scanned_through_seq+1,throughSeq))
+        await runtime.withDatabase(db=>withImmediateTransaction(db,()=>recordReviewTurns(db,state,classified.turns,classified.scanned)))
+      }
     }
     const range=await runtime.withDatabase(db=>{
       const current=reviewState(db,binding.runId)!

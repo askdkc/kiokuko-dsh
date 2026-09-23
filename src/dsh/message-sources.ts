@@ -106,7 +106,7 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
   const directive = directiveSource(input.directive)
   if (directive !== null) sources.push(directive)
   if (input.memoryPolicy.memoryReasoningRequired && !input.memoryPolicy.contextWithheld) {
-    sources.push({ kind: 'memory-reasoning', name: 'memory-reasoning', text: `${await readSkill('memory-reasoning')}\n\n${MEMORY_APPLICATION_GUIDANCE}`, trust: 'system' })
+    sources.push({ kind: 'memory-reasoning', name: 'memory-reasoning', text: `${await readSkill('memory-reasoning')}${input.context?.items.length ? `\n\n${MEMORY_APPLICATION_GUIDANCE}` : ''}`, trust: 'system' })
   }
   for (const skillName of input.routeSkillNames ?? []) {
     if (skillName === 'kiokuko-soul' || skillName === 'memory-reasoning') continue

@@ -162,8 +162,13 @@ test('real DSH registry: session tools, nested/child/late-tool denial, unload fe
     const summary = JSON.parse(presented)
     assert.ok(Buffer.byteLength(presented) <= 16384); assert.equal(summary.changeSummary.states.APPLIED, 1)
     assert.equal(summary.proposals, undefined)
+    const journalCount = db.prepare('SELECT COUNT(*) AS n FROM dsh_lisp_operations').get<{n:number}>()!.n
     const evidence = await call('lisp_inspect', parent, false, { operationId: 'saved-proof', resultOperationId: summary.operationId, section: 'changes' })
     assert.equal(evidence.isError, false); assert.match(JSON.stringify(evidence), /APPLIED/)
+    assert.equal((await call('lisp_inspect', parent, false, { operationId: 'saved-proof-next', resultOperationId: summary.operationId, section: 'changes', offset: 1 })).isError, false)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_lisp_operations').get<{n:number}>()!.n, journalCount,
+      'saved result paging must not create Lisp binding operations')
+    assert.equal((await call('lisp_inspect', outsider, false, { operationId: 'foreign-proof', resultOperationId: summary.operationId, section: 'changes' })).isError, true)
     await writeFile(join(workspace, 'keep.txt'), 'keep')
     const denied = await call('lisp_eval', parent, false, {operationId:'deny-delete',code:'(kioku.files:propose-delete "keep.txt")'})
     assert.equal(asked, 1, 'must reach native human question service with the actual live agent')

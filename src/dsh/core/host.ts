@@ -246,7 +246,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         })
         const result = await nextInput()
         if (result.kind !== 'enter') return result
-        const guidance: string[] = memoryApplicationMode(task.profile) === 'none' ? [] : [MEMORY_APPLICATION_GUIDANCE]
+        const guidance: string[] = memoryApplicationMode(task.profile) === 'none' || !task.context?.items.length ? [] : [MEMORY_APPLICATION_GUIDANCE]
         for (const name of task.selectedSkills ?? []) {
           if (name === 'kiokuko-soul') continue
           const loaded = await prompts.get(name)

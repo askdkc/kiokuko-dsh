@@ -105,6 +105,10 @@ test('phase-only changes rebind delivery without retrieval or intake mutation', 
     const initialProfile = structuredClone(f.prepared.intake.profile)
     await f.service.refresh(f.binding())
     const oldDelivery = f.prepared.context!.deliveryId
+    const oldMetadata = readRefreshMetadata(f.db, f.prepared.run.runId)
+    await f.service.refresh(f.binding())
+    assert.equal(f.prepared.context!.deliveryId, oldDelivery, 'identical refresh must keep the current delivery')
+    assert.deepEqual(readRefreshMetadata(f.db, f.prepared.run.runId), oldMetadata, 'identical refresh must not reserve again')
     const response = submitOdunoIdeal(f.db, { runId: f.prepared.run.runId, workspace: f.prepared.project.workspace,
       orchestrationId: f.prepared.intake.sessionId, expectedRevision: 1, idempotencyKey: 'phase-only',
       ideal: { objective: 'Implement source', principles: ['Verify'], skillContributions: [], successSignals: ['verified'] } })

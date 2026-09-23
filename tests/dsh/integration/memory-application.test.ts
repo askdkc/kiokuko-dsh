@@ -20,6 +20,39 @@ import { recordContextFeedback } from '../../../src/context/feedback.js'
 import { queryScopedContextGated } from '../../../src/context/scoped-broker.js'
 
 const capabilities = ['kiokuko-soul', 'memory-reasoning'].map(name => ({ kind: 'skill' as const, name }))
+test('empty application has no write transaction or result observer after five effectful calls', async () => {
+  const f = await fixture()
+  try {
+    const identity = { ...f.identity }
+    f.db.prepare('DELETE FROM task_memory_bindings WHERE run_id=?').run(f.task.runId)
+    bindMemoryApplication(f.db, identity, f.task.profile, null, 'no_match')
+    const counts = { writes: 0, reads: 0 }
+    const database = { filePath: f.db.filePath, close: () => {}, exec(sql: string) {
+      if (sql === 'BEGIN IMMEDIATE') counts.writes++
+      f.db.exec(sql)
+    }, prepare(sql: string) { const statement = f.db.prepare(sql); return {
+      get: (...args: any[]) => { counts.reads++; return statement.get(...args) },
+      all: (...args: any[]) => { counts.reads++; return statement.all(...args) },
+      run: (...args: any[]) => statement.run(...args),
+    } } } as typeof f.db
+    const listeners = new Map<string, any>()
+    const dispose = mountMemoryApplication({ tools: { register: () => () => {} }, on(name, handler) {
+      listeners.set(name, handler); return () => listeners.delete(name)
+    } }, { runtime: { withDatabase: async (operation: any) => operation(database) } as any,
+      resolve: execution => execution.agent === identity ? identity : undefined, refresh: async () => undefined })
+    try {
+      for (let n = 0; n < 5; n++) {
+        const execution = { callId: `empty-${n}`, name: 'Bash', arguments: { command: 'true' }, agent: identity, signal: new AbortController().signal }
+        await listeners.get('tools/pre-execute')(execution, async () => undefined)
+        const reads = counts.reads
+        await listeners.get('tools/result')(execution, { value: { exitCode: 0 } })
+        assert.equal(counts.reads, reads, 'untracked result must not access SQLite')
+      }
+      assert.equal(counts.writes, 0)
+      assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_executions WHERE run_id=?').get<{n:number}>(f.task.runId)?.n, 0)
+    } finally { dispose() }
+  } finally { await f.close() }
+})
 async function fixture(taskType: 'build' | 'review' = 'build', automatic = false) {
   const directory = await mkdtemp(join(tmpdir(), 'memory-application-')), root = realpathSync(join(directory))
   await mkdir(join(root, '.git')); await mkdir(join(root, 'migrations'))

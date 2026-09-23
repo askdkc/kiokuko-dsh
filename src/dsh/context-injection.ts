@@ -89,12 +89,14 @@ export async function injectDshContext(input: {
   /** Native DSH already carries the human message; emit only additional intake facts. */
   readonly userTaskInConversation?: boolean
 }): Promise<readonly DshModelMessage[]> {
+  let fingerprint: ReturnType<typeof resolveProjectFingerprint> | undefined
   const assertMemoryCurrent = input.runtime === undefined || input.prepared.context === null
     ? undefined
     : async (item: (NonNullable<PreparedAgentTask['context']>['items'])[number]): Promise<void> => {
       await input.runtime!.withDatabase((database) => {
-        const fingerprint = resolveProjectFingerprint(database, input.prepared.project,
-          captureProjectManifestSnapshot(input.prepared.project), { readOnly: true })
+        if (fingerprint === undefined && (item.origin === 'ecosystem' || item.origin === 'global'))
+          fingerprint = resolveProjectFingerprint(database, input.prepared.project,
+            captureProjectManifestSnapshot(input.prepared.project), { readOnly: true })
         currentScopedEntry(database, input.prepared.project.workspace, item, fingerprint)
       })
     }

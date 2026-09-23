@@ -20,6 +20,7 @@ import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './request-surfa
 import { mountLispHttp } from './http.js'
 import { createLispCiAdapter } from './ci.js'
 import { createLispMemoryVerification } from './memory-verification.js'
+import { isSavedLispResultRead } from '../memory-application.js'
 import { attachmentInput, type LispAttachmentSession, type LispAttachmentStore } from './attachment-input.js'
 import { HttpTypeSafeClient } from '../typesafe/client.js'
 import { typeSafeCredentials } from '../typesafe/command.js'
@@ -208,7 +209,8 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
           try {
             const binding = owner(execution.agent), parsed = ToolInput.parse(args)
             if (name === 'lisp_cancel') { identifier.parse(parsed.operationId); identifier.parse(parsed.generation) }
-            if (name !== 'lisp_status') parsed.operationId = await store.bind(binding.owner, identifier.parse(execution.callId), identifier.parse(parsed.operationId), { name, input: parsed })
+            if (name !== 'lisp_status' && !isSavedLispResultRead({ name, arguments: parsed, parent: undefined }))
+              parsed.operationId = await store.bind(binding.owner, identifier.parse(execution.callId), identifier.parse(parsed.operationId), { name, input: parsed })
             return await manager.execute(binding.owner, name, parsed, execution.signal)
           }
           catch (error) { return failure(error) }
