@@ -35,6 +35,7 @@ export * from './context-injection.js'
 export * from './directive-projection.js'
 export * from './tools.js'
 export * from './tool-policy.js'
+export * from './tool-exposure.js'
 export * from './composition.js'
 export * from './host-adapter.js'
 export * from './session-memory-finalizer.js'
@@ -99,6 +100,8 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       else if (resolvedConfig.efficiency.observe || resolvedConfig.finalization.inputMode !== 'prefix_reuse') {
         throw new Error('The explicit Kiokuko host does not support efficiency/finalization configuration')
       }
+      if (host.configureToolExposure !== undefined) host.configureToolExposure(resolvedConfig.toolExposure)
+      else if (resolvedConfig.toolExposure.mode !== 'full' && (host.tools !== undefined || host.toolHost !== undefined)) console.warn('[kiokuko-dsh] [warn] toolExposure left the explicit host surface unchanged: unsupported_runtime')
       let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
       let disposeOrcaCommand: (() => void) | undefined
       let disposeExport: (() => Promise<void>) | undefined
@@ -137,7 +140,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx, { answerReview: resolvedConfig.answerReview, typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, observationPack: resolvedConfig.observationPack, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
+    const adapter = createDshHostAdapter(ctx, { answerReview: resolvedConfig.answerReview, typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, observationPack: resolvedConfig.observationPack, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, toolExposure: resolvedConfig.toolExposure, modelRoutes: resolvedConfig.modelRoutes,
       ennoMemory: resolvedConfig.ennoMemory, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, autoGlobalization: resolvedConfig.autoGlobalization, memoryReview: resolvedConfig.memoryReview })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined

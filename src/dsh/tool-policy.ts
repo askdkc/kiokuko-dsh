@@ -63,6 +63,30 @@ function publicReason(code: DshToolPolicyDenyCode): string {
   return `Kiokuko dsh tool denied (${code.toLowerCase()})`
 }
 
+/** Shared policy decision used by execution guards and model-facing projection. */
+export function operationStateDenyCode(state: DshToolPolicyState, operation: typeof DSH_MODEL_FACING_OPERATIONS[number], origin: 'model' | 'host' | undefined): DshToolPolicyDenyCode | undefined {
+  if (state.nextAction !== undefined && origin !== 'host') {
+    const expected = directiveOperation[state.nextAction]
+    if (expected === undefined) return 'STALE_STATE'
+    if (expected !== operation && !(expected === 'enno_plan_submit' && operation === 'enno_plan_review') && !(expected === 'enno_work_report' && operation === 'enno_delegate')) return 'WRONG_DIRECTIVE'
+  }
+  const allowedOperations = phaseAllowlist[state.phase]
+  if (allowedOperations === undefined) return 'STALE_STATE'
+  if (!allowedOperations.includes(operation)) return 'WRONG_PHASE'
+  if ((operation === 'enno_work_report' || operation === 'enno_delegate')
+    && (state.currentWorkUnitId === undefined || state.workUnitId !== state.currentWorkUnitId || state.leaseToken === undefined)) return 'LEASE_REQUIRED'
+  return undefined
+}
+
+/** Unknown serialized phase/action values must never be interpreted as an empty allowlist. */
+export function hasKnownDshToolPolicyState(state: DshToolPolicyState): boolean {
+  if (!Object.prototype.hasOwnProperty.call(phaseAllowlist, state.phase)) return false
+  const action = state.nextAction
+  return action === undefined || Object.prototype.hasOwnProperty.call(directiveOperation, action)
+    || action === 'answer_intake' || action === 'ask_user_confirmation' || action === 'run_final_verification' || action === 'report_blocker' || action === 'complete'
+}
+
+
 /** Own the monotonic policy decision without granting authority to the caller. */
 export class DshToolPolicy {
   #state: DshToolPolicyState | undefined
@@ -151,20 +175,9 @@ export class DshToolPolicy {
     if (!isDshModelFacingOperation(execution.name)) {
       return denied('UNKNOWN_TOOL', publicReason('UNKNOWN_TOOL'))
     }
-    if (state.nextAction !== undefined && execution.origin !== 'host') {
-      const expected = directiveOperation[state.nextAction]
-      if (expected === undefined) return denied('STALE_STATE', publicReason('STALE_STATE'))
-      if (expected !== execution.name && !(expected === 'enno_plan_submit' && execution.name === 'enno_plan_review') && !(expected === 'enno_work_report' && execution.name === 'enno_delegate')) return denied('WRONG_DIRECTIVE', publicReason('WRONG_DIRECTIVE'))
-    }
-    const allowedOperations = phaseAllowlist[state.phase]
-    if (allowedOperations === undefined) return denied('STALE_STATE', publicReason('STALE_STATE'))
-    if (!allowedOperations.includes(execution.name)) {
-      return denied('WRONG_PHASE', publicReason('WRONG_PHASE'))
-    }
-    if ((execution.name === 'enno_work_report' || execution.name === 'enno_delegate')
-      && (state.currentWorkUnitId === undefined || state.workUnitId !== state.currentWorkUnitId || state.leaseToken === undefined)) {
-      return denied('LEASE_REQUIRED', publicReason('LEASE_REQUIRED'))
-    }
+    const stateDenial = operationStateDenyCode(state, execution.name, execution.origin)
+    if (stateDenial !== undefined) return denied(stateDenial, publicReason(stateDenial))
+
     if (execution.agent !== undefined && state.dshSessionId !== undefined
       && execution.agent.dshSessionId !== state.dshSessionId && execution.origin !== 'host') {
       return denied('STALE_STATE', publicReason('STALE_STATE'))

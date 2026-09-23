@@ -34,6 +34,7 @@ export class SemanticCompactionCoordinator {
   private readonly failed = new WeakSet<CompactionSession>()
   private readonly routes = new WeakMap<CompactionAgent, { provider: string; model: string }>()
   private readonly toolSurfaces = new WeakMap<CompactionAgent, readonly unknown[]>()
+  private readonly deferredToolSurfaces = new WeakSet<CompactionAgent>()
   private readonly disposeCreated: () => void
   private readonly disposeRemoved: () => void
   constructor(private readonly ctx: Host, private readonly decisions: DecisionService, private readonly root: string, observationPack?: z.input<typeof ObservationPackConfig>) {
@@ -65,7 +66,7 @@ export class SemanticCompactionCoordinator {
     const disposeAssembly = agent.ctx.on('system-prompt/assemble', async (_assembly: unknown, _context: unknown, next: () => Promise<any>) => {
       const assembly = await next()
       this.recordRoute(agent, assembly.variables ?? {})
-      this.recordTools(agent, assembly.tools)
+      if (!this.deferredToolSurfaces.has(agent)) this.recordTools(agent, assembly.tools)
       return assembly
     }, { prepend: true })
     const disposeStep = agent.ctx.on('agent/pre-step', async (step: Step, next: () => Promise<unknown>) => {
@@ -94,6 +95,11 @@ export class SemanticCompactionCoordinator {
   recordRoute(agent: CompactionAgent, variables: Record<string, string | undefined>): void {
     if (variables.provider && variables.model) this.routes.set(agent, { provider: variables.provider, model: variables.model })
     else this.routes.delete(agent)
+  }
+  deferToolSurfaceRecording(agent: CompactionAgent): () => void {
+    this.deferredToolSurfaces.add(agent)
+    let active = true
+    return () => { if (active) { active = false; this.deferredToolSurfaces.delete(agent) } }
   }
   recordTools(agent: CompactionAgent, tools: unknown): void {
     this.observations.assembled(agent, tools)

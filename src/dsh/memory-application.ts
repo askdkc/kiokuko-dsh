@@ -4,15 +4,16 @@ import { resolve } from 'node:path'
 import type { DshCoreRuntime } from './core-runtime.js'
 import type { DshNativeCommandDefinition } from './commands.js'
 import { beginMemoryExecution, completeMemoryExecution, memoryApplicationReviewSchema,
-  memoryApplicationStatus, recordMemoryApplicationReview, type MemoryApplicationIdentity } from '../memory/application.js'
+  memoryApplicationStatus, recordMemoryApplicationReview, recordMemoryApplicationReviewBatch, type MemoryApplicationIdentity } from '../memory/application.js'
 import { autoGlobalizationStatus } from '../memory/auto-globalization.js'
 
 const inputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('status') }).strict(),
   z.object({ action: z.literal('review'), review: memoryApplicationReviewSchema }).strict(),
+  z.object({ action: z.literal('review_batch'), reviews: z.array(memoryApplicationReviewSchema).min(1).max(32) }).strict(),
   z.object({ action: z.literal('refresh'), query: z.string().trim().min(1).max(4000) }).strict(),
 ])
-export const MEMORY_APPLICATION_GUIDANCE = 'For selected actionable memory, use task_memory_review(action=status), then record adopted/not_applicable/contradicted with current source paths and grounds. Adoption needs an invariant, counterexample and verification method. Code changes also need the exact Bash command before running it through the native tool, or an existing approved Enno verifier expressed as executable and arguments joined by single spaces (repository-root cwd). Only a typed successful foreground result on unchanged declared sources counts as observed proof. Changed deliveries, entries or files require review/verification again. Use action=refresh when a concrete error or target changes the search; it keeps the current run. Missing proof cannot complete successfully. Judgments are model-reported, not automatically proven.'
+export const MEMORY_APPLICATION_GUIDANCE = 'Use task_memory_review(action=status) once, then submit independent pending decisions with action=review_batch (up to 32); action=review remains available for one. Adoption and contradiction require relevant source paths. Adoption also needs an invariant, counterexample, method and command: an exact foreground Bash command at repository-root cwd, or an approved Enno verifier expressed as executable and arguments joined by single spaces. For topic-based non-applicability, use paths:[]; supply paths when the judgment depends on current source. Refresh retains decisions when delivered entry revisions and mode stay unchanged; a revised entry or mode change starts a new review generation. New entries need decisions, and changed delivery invalidates execution proof. Only a typed successful foreground result on unchanged declared sources counts as observed proof. Use action=refresh for a concrete new error or target; it keeps the run. Missing proof cannot complete successfully. Judgments are model-reported.'
 
 interface NativeExecution { callId: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
 interface SurfaceContext {
@@ -69,6 +70,7 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
         execution.signal.throwIfAborted()
         if (host.resolve(execution)?.runId !== identity.runId) throw new Error('Native task changed')
         if (input.action === 'review') recordMemoryApplicationReview(db, identity, execution.callId, input.review)
+        if (input.action === 'review_batch') return recordMemoryApplicationReviewBatch(db, identity, execution.callId, input.reviews)
         return memoryApplicationStatus(db, identity.runId)
       })
     } }))

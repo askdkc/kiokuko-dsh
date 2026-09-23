@@ -17,7 +17,7 @@ import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingConte
 import { DshIntakeGate, type DshPreStepDecision, type DshPreStepEvent, type DshPreStepContext } from './intake-gate.js'
 import { mountDshIdleLifecycle, mountDshSessionLifecycle, type DshCloseIntent, type DshIdleLifecycleContext, type DshNativeSession, type DshRunLifecycle, type DshSessionLifecycleContext } from './session-bridge.js'
 import { mountDshToolPolicy, type DshToolPolicy } from './tool-policy.js'
-import { mountDshModelTools, type DshToolHost, type DshToolRegistrationContext } from './tools.js'
+import { mountDshModelTools, type DshToolDefinition, type DshToolHost, type DshToolRegistrationContext } from './tools.js'
 import { DshPonytailModes, mountDshPonytailCommand, type DshPonytailCommandContext } from './commands.js'
 import { mountStandardSkillProvider, type DshSkillContext } from './standard-skill-provider.js'
 import { mountSoulPrompt } from './prompt-policy.js'
@@ -61,6 +61,8 @@ export interface DshCompositionHost {
   readonly skillPrompts?: DshSkillPrompts
   readonly configureSkillPrompts?: (prompts: DshSkillPrompts) => void
   readonly configureEnnoMemory?: (config: import('./config.js').EnnoMemoryConfig) => void
+  readonly configureToolExposure?: (config: import('./tool-exposure.js').ToolExposureConfig) => void
+  readonly modelToolDefinitionsChanged?: (definitions: readonly DshToolDefinition[]) => void
   readonly deepPlanning?: import('../deep-thinker/controller.js').DeepPlanningController
   readonly memoryReview?: { start?:()=>Promise<void>; configure:(config:import('../memory/review/contracts.js').ReviewConfig)=>Promise<void>; command:(session:DshNativeSession,raw:string)=>Promise<Record<string,unknown>> }
   readonly memoryEvolution?: { configure: (config: import('../memory/evolution/contracts.js').EvolutionConfig) => void; status: (sessionId: string) => Promise<Record<string, unknown>> }
@@ -336,7 +338,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
         tools: { guard: tools.guard },
         on: (name, listener, options) => ctx.on(name as never, listener as never, options),
       }, host.toolPolicy))
-      ingressDisposers.push(mountDshModelTools({ tools: registration }, host.toolHost))
+      ingressDisposers.push(mountDshModelTools({ tools: registration }, host.toolHost, host.modelToolDefinitionsChanged))
     }
     if (host.intakeGate !== undefined) {
       if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')
