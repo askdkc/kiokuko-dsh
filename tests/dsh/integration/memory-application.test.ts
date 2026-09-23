@@ -267,7 +267,7 @@ test('model reports, skip, unknown, failure, background and stale files never sa
   } finally { await f.close() }
 })
 
-test('reviews bind revisions, reject conflicting retry and foreign identities, and refresh cannot erase prior obligations', async () => {
+test('reviews bind revisions, reject conflicting retry and foreign identities, and refresh retains unchanged decisions', async () => {
   const f = await fixture()
   try {
     const review = f.review('not_applicable')
@@ -277,16 +277,105 @@ test('reviews bind revisions, reject conflicting retry and foreign identities, a
     assert.throws(() => recordMemoryApplicationReview(f.db, f.identity, 'other', review), /revision changed/)
     assert.throws(() => recordMemoryApplicationReview(f.db, { ...f.identity, sessionId: 'forged' }, 'x', review), /identity changed/)
     assert.equal(f.status().ready, true, 'a justified historical fixed-version fixture is allowed')
+    const initial = f.status()
+    assert.ok(initial.supported)
+    const generation = initial.generation
     await f.tasks.refresh(f.task, 'unrelated-query-that-matches-nothing', new AbortController().signal)
-    assert.equal(f.status().ready, false)
-    assert.throws(() => recordMemoryApplicationReview(f.db, f.identity, 'stale', review), /delivery changed/)
-    recordMemoryApplicationReview(f.db, f.identity, 'current', f.review('contradicted'))
-    assert.equal(f.status().ready, true)
+    const refreshed = f.status()
+    assert.ok(refreshed.supported)
+    assert.equal(refreshed.generation, generation)
+    assert.equal(refreshed.ready, true)
+    assert.equal(refreshed.items[0]?.decision, 'not_applicable')
+    assert.throws(() => recordMemoryApplicationReview(f.db, f.identity, 'stale', review), /revision changed/)
     updateCandidateEntry(f.db, { workspace: f.task.workspace, entryId: f.memory.id, expectedRevision: 1, kind: f.memory.kind, title: f.memory.title, body: 'migration expectations updated', actor: 'fixture' })
     assert.equal(f.status().ready, false)
+    await f.tasks.refresh(f.task, 'migration expectations updated', new AbortController().signal)
+    const revised = f.status()
+    assert.ok(revised.supported)
+    assert.equal(revised.generation, generation + 1)
+    assert.equal(revised.items[0]?.problem, 'decision_missing')
     await f.tasks.finish(f.task, 'cancelled')
     assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'cancelled')
   } finally { await f.close() }
+})
+
+test('refresh reviews only new entries while invalidating prior execution proof', async () => {
+  const f = await fixture()
+  try {
+    recordMemoryApplicationReview(f.db, f.identity, 'original-review', f.review())
+    beginMemoryExecution(f.db, f.identity, 'original-proof', 'node check.mjs')
+    completeMemoryExecution(f.db, f.identity, 'original-proof', { value: { exitCode: 0 } })
+    assert.equal(f.status().ready, true)
+    const initial = f.status()
+    assert.ok(initial.supported)
+    const generation = initial.generation
+    const added = recordEntry(f.db, { workspace: f.task.workspace, kind: 'lesson', title: 'batching signal',
+      body: 'The batching signal requires an independent current-source decision.', createdBy: 'fixture', scope: { visibility: 'project' } })
+    await f.tasks.refresh(f.task, 'batching signal', new AbortController().signal)
+    const refreshed = f.status()
+    assert.ok(refreshed.supported)
+    assert.equal(refreshed.generation, generation)
+    assert.equal(refreshed.items.find(item => item.entryId === f.memory.id)?.decision, 'adopted')
+    assert.equal(refreshed.items.find(item => item.entryId === f.memory.id)?.problem, 'verification_missing_failed_or_stale')
+    assert.equal(refreshed.items.find(item => item.entryId === added.id)?.problem, 'decision_missing')
+    assert.throws(() => beginMemoryExecution(f.db, f.identity, 'blocked', null), /resolve memory decisions/)
+    recordMemoryApplicationReview(f.db, f.identity, 'added-review', { generation, entryId: added.id,
+      entryRevision: added.revision, expectedRevision: 0, decision: 'not_applicable',
+      basis: 'The batching signal is unrelated to migration checks.', paths: [] })
+    beginMemoryExecution(f.db, f.identity, 'new-proof', 'node check.mjs')
+    completeMemoryExecution(f.db, f.identity, 'new-proof', { value: { exitCode: 0 } })
+    assert.equal(f.status().ready, true)
+  } finally { await f.close() }
+})
+
+test('topic-based non-applicability survives unrelated edits while source-backed decisions expire', async () => {
+  const f = await fixture()
+  try {
+    const topicReview = { ...f.review('not_applicable'), paths: [],
+      basis: 'The delivered migration lesson does not apply to this separate task.' }
+    recordMemoryApplicationReview(f.db, f.identity, 'topic-review', topicReview)
+    assert.equal(f.status().ready, true)
+    await writeFile(join(f.root, 'check.mjs'), 'process.exit(0)')
+    assert.equal(f.status().ready, true, 'an unrelated edit cannot stale a decision with no source dependency')
+    recordMemoryApplicationReview(f.db, f.identity, 'source-review', {
+      ...f.review('not_applicable'), expectedRevision: 1,
+      basis: 'The current check.mjs has no migration assertion.' })
+    await writeFile(join(f.root, 'check.mjs'), 'process.exit(1)')
+    const changed = f.status()
+    assert.ok(changed.supported)
+    assert.equal(changed.items[0]?.problem, 'basis_changed', 'a source-backed decision still expires')
+    assert.throws(() => recordMemoryApplicationReview(f.db, f.identity, 'empty-adoption', {
+      ...f.review(), expectedRevision: 2, paths: [] }), /path|Path|Array/u)
+  } finally { await f.close() }
+})
+
+test('native batch reviews multiple memories atomically with exact replay', async () => {
+  const f = await fixture(), tools: any[] = [], agent = {}
+  const dispose = mountMemoryApplication({ tools: { register(tool) { tools.push(tool); return () => {} } }, on() { return () => {} } }, {
+    runtime: f.runtime as any, resolve: execution => execution.agent === agent ? f.identity : undefined,
+    refresh: async () => undefined,
+  })
+  try {
+    const added = recordEntry(f.db, { workspace: f.task.workspace, kind: 'lesson', title: 'batch review',
+      body: 'A distinct lesson for an independent review.', createdBy: 'fixture', scope: { visibility: 'project' } })
+    await f.tasks.refresh(f.task, 'batch review', new AbortController().signal)
+    const status = f.status()
+    assert.ok(status.supported)
+    assert.equal(status.items.length, 2)
+    const original = { ...f.review('not_applicable'), generation: status.generation, paths: [] }
+    const second = { generation: status.generation, entryId: added.id, entryRevision: added.revision,
+      expectedRevision: 0, decision: 'not_applicable', basis: 'The second lesson is unrelated.', paths: [] }
+    const execution = (callId: string) => ({ callId, name: 'task_memory_review', agent, signal: new AbortController().signal })
+    await assert.rejects(tools[0].execute({ action: 'review_batch', reviews: [original, { ...second, entryRevision: 99 }] }, execution('bad')))
+    const afterRejection = f.status()
+    assert.ok(afterRejection.supported)
+    assert.equal(afterRejection.items.every(item => item.decision === null), true, 'invalid batch must write no decisions')
+    const result = await tools[0].execute({ action: 'review_batch', reviews: [original, second] }, execution('batch'))
+    assert.equal(result.ready, true)
+    assert.equal(result.items.length, 2)
+    assert.equal((await tools[0].execute({ action: 'review_batch', reviews: [original, second] }, execution('batch'))).ready, true)
+    await assert.rejects(tools[0].execute({ action: 'review_batch', reviews: [{ ...original, basis: 'changed' }, second] }, execution('batch')), /different input/)
+  } finally { dispose(); await f.close() }
 })
 
 test('superseding an ordinary reviewed memory blocks further effects and completion without a revision change', async () => {

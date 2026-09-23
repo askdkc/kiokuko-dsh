@@ -154,6 +154,7 @@
     "test:evaluation:memory-reuse": "node --import tsx scripts/run-memory-reuse-evaluation.mjs",
     "probe:lisp:p0": "node --import tsx scripts/probe-lisp-p0.ts",
     "test:integration": "node scripts/run-tests.mjs tests/dsh/integration",
+    "test:integration:tool-exposure": "node scripts/run-tests.mjs tests/dsh/integration/tool-exposure-native.test.ts",
     "test:sqlite-vec": "node --import tsx tests/ci/sqlite-vec-package-smoke.ts",
     "test:evaluation": "npm run build && node scripts/run-retrieval-evaluation.mjs",
     "test:benchmark": "npm run build && node scripts/run-retrieval-benchmark.mjs",

@@ -22,11 +22,14 @@ const relativePath = z.string().min(1).max(512).refine(value => !path.isAbsolute
 export const memoryApplicationReviewSchema = z.object({
   generation: z.number().int().positive(), entryId: z.string().min(1).max(256), entryRevision: z.number().int().positive(),
   expectedRevision: z.number().int().nonnegative(), decision: z.enum(['adopted', 'not_applicable', 'contradicted']),
-  basis: text, paths: z.array(relativePath).min(1).max(32),
+  basis: text, paths: z.array(relativePath).max(32),
   invariant: text.optional(), counterexample: text.optional(), method: text.optional(), command: text.optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.decision === 'adopted' && (!value.invariant || !value.counterexample || !value.method)) {
     ctx.addIssue({ code: 'custom', message: 'Adoption requires an invariant, counterexample and verification method' })
+  }
+  if (value.decision !== 'not_applicable' && value.paths.length === 0) {
+    ctx.addIssue({ code: 'custom', path: ['paths'], message: 'Source-dependent decisions require paths' })
   }
 })
 export type MemoryApplicationReview = z.infer<typeof memoryApplicationReviewSchema>
@@ -95,18 +98,33 @@ export function bindMemoryApplication(db: SqliteDatabase, identity: MemoryApplic
         .map(item => ({ entryId: item.entryId, revision: item.entryRevision, deliveryId }))
     }
     const previous = binding(db, identity.runId)
+    let invalidateReviews = previous !== undefined && previous.mode !== mode
     // A narrower follow-up query cannot erase an already delivered obligation.
+    // Re-delivery of the same entry revision does not undo its existing decision.
     if (previous && mode !== 'none') {
+      const previousRequired = JSON.parse(previous.required_json) as RequiredMemory[]
+      const previousById = new Map(previousRequired.map(item => [item.entryId, item]))
+      required = required.map(item => {
+        const earlier = previousById.get(item.entryId)
+        if (!earlier) return item
+        if (earlier.revision !== item.revision) {
+          invalidateReviews = true
+          return item
+        }
+        return earlier
+      })
       const selected = new Set(required.map(item => item.entryId))
-      required.push(...(JSON.parse(previous.required_json) as RequiredMemory[]).filter(item => !selected.has(item.entryId)))
+      required.push(...previousRequired.filter(item => !selected.has(item.entryId)))
     }
     if (required.length > 128) conflict('Memory application obligation budget exceeded')
     const requiredJson = JSON.stringify(required)
     if (previous) {
       assertIdentity(db, identity)
-      if (previous.delivery_id === deliveryId && previous.required_json === requiredJson && previous.mode === mode && previous.retrieval === retrieval) return
-      db.prepare('UPDATE task_memory_bindings SET delivery_id=?,generation=generation+1,mode=?,retrieval=?,required_json=?,epoch=epoch+1,fingerprint_json=? WHERE run_id=?')
-        .run(deliveryId, mode, retrieval, requiredJson, fingerprintJson, identity.runId)
+      if (previous.delivery_id === deliveryId && previous.required_json === requiredJson && previous.mode === mode
+        && previous.retrieval === retrieval && previous.fingerprint_json === fingerprintJson) return
+      // A new delivery invalidates execution proof, but only a changed entry revision or mode invalidates decisions.
+      db.prepare('UPDATE task_memory_bindings SET delivery_id=?,generation=generation+?,mode=?,retrieval=?,required_json=?,epoch=epoch+1,fingerprint_json=? WHERE run_id=?')
+        .run(deliveryId, invalidateReviews ? 1 : 0, mode, retrieval, requiredJson, fingerprintJson, identity.runId)
     } else db.prepare('INSERT INTO task_memory_bindings(run_id,workspace,session_id,repository_root,delivery_id,generation,mode,retrieval,required_json,fingerprint_json) VALUES(?,?,?,?,?,1,?,?,?,?)')
       .run(identity.runId, identity.workspace, identity.sessionId, root, deliveryId, mode, retrieval, requiredJson, fingerprintJson)
   })
@@ -156,29 +174,45 @@ function assertEntryCurrent(db: SqliteDatabase, item: RequiredMemory): void {
   const entry = workspace ? readEntry(db, { entryId: item.entryId, workspace }) : undefined
   if (!entry || entry.status === 'superseded' || entry.revision !== item.revision || !isRetrievableEntry(db, entry)) conflict('Memory entry changed; refresh its delivery and review')
 }
+function recordMemoryApplicationReviewInTransaction(db: SqliteDatabase, identity: MemoryApplicationIdentity,
+  requestId: string, review: MemoryApplicationReview): unknown {
+  if (!requestId || requestId.length > 256) conflict('Invalid memory review request identity')
+  const current = assertIdentity(db, identity), requestHash = canonicalContentHash(review)
+  const replay = db.prepare('SELECT request_hash,review_revision FROM task_memory_reviews WHERE run_id=? AND request_id=?').get(identity.runId, requestId)
+  if (replay) {
+    if (replay.request_hash !== requestHash) conflict('Memory review request identity reused with different input')
+    if (current.generation !== review.generation) conflict('Memory delivery changed')
+    return { revision: replay.review_revision, provenance: 'model_reported' }
+  }
+  if (current.generation !== review.generation) conflict('Memory delivery changed')
+  const selected = (JSON.parse(current.required_json) as RequiredMemory[]).find(item => item.entryId === review.entryId && item.revision === review.entryRevision)
+  if (!selected) conflict('Memory was not selected for this delivery')
+  assertEntryCurrent(db, selected)
+  if (current.mode === 'code' && review.decision === 'adopted' && !review.command) conflict('Code memory adoption requires an exact native command')
+  const previous = reviews(db, current).find(row => row.entry_id === review.entryId)
+  if ((previous?.review_revision ?? 0) !== review.expectedRevision) conflict('Memory review revision changed')
+  const revision = review.expectedRevision + 1
+  db.prepare('INSERT INTO task_memory_reviews(run_id,generation,entry_id,entry_revision,review_revision,request_id,request_hash,review_json,source_digest) VALUES(?,?,?,?,?,?,?,?,?)')
+    .run(identity.runId, current.generation, review.entryId, review.entryRevision, revision, requestId, requestHash, JSON.stringify(review), applicationSourceDigest(current.repository_root, review.paths))
+  if (review.decision === 'contradicted') enqueueAutoGlobalRecheck(db, review.entryId, review.entryRevision)
+  return { revision, provenance: 'model_reported' }
+}
 export function recordMemoryApplicationReview(db: SqliteDatabase, identity: MemoryApplicationIdentity, requestId: string, raw: unknown): unknown {
   const review = memoryApplicationReviewSchema.parse(raw)
+  return withImmediateTransaction(db, () => recordMemoryApplicationReviewInTransaction(db, identity, requestId, review))
+}
+
+/** One native call can resolve several independent decisions; any failure rolls them all back. */
+export function recordMemoryApplicationReviewBatch(db: SqliteDatabase, identity: MemoryApplicationIdentity,
+  requestId: string, raw: unknown): unknown {
+  const batch = z.array(memoryApplicationReviewSchema).min(1).max(32).parse(raw)
   if (!requestId || requestId.length > 256) conflict('Invalid memory review request identity')
   return withImmediateTransaction(db, () => {
-    const current = assertIdentity(db, identity), requestHash = canonicalContentHash(review)
-    const replay = db.prepare('SELECT request_hash,review_revision FROM task_memory_reviews WHERE run_id=? AND request_id=?').get(identity.runId, requestId)
-    if (replay) {
-      if (replay.request_hash !== requestHash) conflict('Memory review request identity reused with different input')
-      if (current.generation !== review.generation) conflict('Memory delivery changed')
-      return { revision: replay.review_revision, provenance: 'model_reported' }
+    for (const [index, review] of batch.entries()) {
+      recordMemoryApplicationReviewInTransaction(db, identity,
+        `batch:${canonicalContentHash({ requestId, index })}`, review)
     }
-    if (current.generation !== review.generation) conflict('Memory delivery changed')
-    const selected = (JSON.parse(current.required_json) as RequiredMemory[]).find(item => item.entryId === review.entryId && item.revision === review.entryRevision)
-    if (!selected) conflict('Memory was not selected for this delivery')
-    assertEntryCurrent(db, selected)
-    if (current.mode === 'code' && review.decision === 'adopted' && !review.command) conflict('Code memory adoption requires an exact native command')
-    const previous = reviews(db, current).find(row => row.entry_id === review.entryId)
-    if ((previous?.review_revision ?? 0) !== review.expectedRevision) conflict('Memory review revision changed')
-    const revision = review.expectedRevision + 1
-    db.prepare('INSERT INTO task_memory_reviews(run_id,generation,entry_id,entry_revision,review_revision,request_id,request_hash,review_json,source_digest) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(identity.runId, current.generation, review.entryId, review.entryRevision, revision, requestId, requestHash, JSON.stringify(review), applicationSourceDigest(current.repository_root, review.paths))
-    if (review.decision === 'contradicted') enqueueAutoGlobalRecheck(db, review.entryId, review.entryRevision)
-    return { revision, provenance: 'model_reported' }
+    return memoryApplicationStatus(db, identity.runId)
   })
 }
 

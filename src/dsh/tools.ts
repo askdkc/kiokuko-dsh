@@ -297,10 +297,24 @@ export function mountDshTools(ctx: DshToolRegistrationContext, host: DshToolHost
   return () => { for (const dispose of disposers.reverse()) dispose() }
 }
 
-/** Native dsh composition boundary: expose only model-facing operations. */
-export function mountDshModelTools(ctx: DshToolRegistrationContext, host: DshToolHost): () => void {
-  const disposers = createDshModelToolDefinitions(host).map((definition) => ctx.tools.register(definition))
-  return () => { for (const dispose of disposers.reverse()) dispose() }
+/** Register model-facing definitions and report their exact identities to the host owner. */
+export function mountDshModelTools(ctx: DshToolRegistrationContext, host: DshToolHost, onDefinitions?: (definitions: readonly DshToolDefinition[]) => void): () => void {
+  const definitions = createDshModelToolDefinitions(host)
+  const disposers: (() => void)[] = []
+  try {
+    for (const definition of definitions) disposers.push(ctx.tools.register(definition))
+    onDefinitions?.(definitions)
+  } catch (error) {
+    for (const dispose of disposers.reverse()) dispose()
+    throw error
+  }
+  let active = true
+  return () => {
+    if (!active) return
+    active = false
+    for (const dispose of disposers.reverse()) dispose()
+    onDefinitions?.([])
+  }
 }
 
 export function isDshModelFacingOperation(name: string): name is DshModelFacingOperation {

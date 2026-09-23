@@ -17,6 +17,7 @@ export { LispConfig }
 import { ContinuityConfig } from '../context/continuity-view.js'
 export { ContinuityConfig }
 import { ModelRouteSchema } from './model-configuration.js'
+import { ToolExposureConfig } from './tool-exposure.js'
 import { DeepThinkerConfigSchema } from '../deep-thinker/core/contracts.js'
 
 const limit = (value: number) => z.number().int().positive().max(Number.MAX_SAFE_INTEGER).default(value)
@@ -67,6 +68,7 @@ export const Config = z.object({
   deepPlanning: DeepThinkerConfigSchema.prefault({}),
   modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),
   orca: OrcaConfig.prefault({}),
+  toolExposure: ToolExposureConfig.prefault({}),
   efficiency: EfficiencyConfig.prefault({}),
   continuity: ContinuityConfig.prefault({}),
   ennoMemory: EnnoMemoryConfig.prefault({}),

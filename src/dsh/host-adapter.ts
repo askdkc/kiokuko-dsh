@@ -60,9 +60,11 @@ import type { PreparedAgentTask } from './task-intake.js'
 import { deriveAkinatorReasoning } from '../akinator/reasoning.js'
 import { resolveCapabilities } from '../akinator/capabilities.js'
 import { readAkinatorSession, readRunIntakeLink } from '../akinator/store.js'
-import { DshToolPolicy, type DshToolPolicyState } from './tool-policy.js'
+import { DshToolPolicy, hasKnownDshToolPolicyState, type DshToolPolicyState } from './tool-policy.js'
+import { ToolExposureConfig, projectToolsForPhase } from './tool-exposure.js'
 import {
   DSH_MODEL_FACING_OPERATIONS,
+  type DshToolDefinition,
   type DshToolExecution,
   type DshToolHostBinding,
   type DshNativeToolExecution,
@@ -209,6 +211,7 @@ export interface DshHostAdapterOptions {
   readonly modelRoutes?: readonly ModelRoute[]
   readonly modelCompatibility?: DshModelCompatibility
   readonly orca?: import('zod').z.input<typeof OrcaConfig>
+  readonly toolExposure?: import('zod').z.input<typeof ToolExposureConfig>
   readonly databasePath?: string
   readonly migrationsDirectory?: string
   readonly repositoryRoot?: string
@@ -464,6 +467,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   let skillPrompts = options.skillPrompts ?? new DshSkillPrompts()
   const systemSkillNames = new WeakMap<object, ReadonlySet<string>>()
   const akinatorMemoryConfig = AkinatorMemoryConfig.parse(options.akinatorMemory ?? {})
+  let toolExposureConfig = ToolExposureConfig.parse(options.toolExposure ?? {})
+  const reportedToolExposureFallbacks = new Set<string>()
+  const reportToolExposureFallback = (fallback: string): void => {
+    if (toolExposureConfig.mode !== 'phase' || reportedToolExposureFallbacks.has(fallback)) return
+    reportedToolExposureFallbacks.add(fallback)
+    console.warn(`[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: ${fallback}`)
+  }
   const efficiencyConfig = EfficiencyConfig.parse(options.efficiency ?? {})
   const continuityConfig = ContinuityConfig.parse(options.continuity ?? {})
   const evolutionConfig = MemoryEvolutionConfig.parse(options.memoryEvolution ?? {})
@@ -472,6 +482,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const skills = native.get('skills', false) as NativeSkills | undefined
   const systemPrompt = native.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] | undefined
   const tools = native.get('tools', false) as NativeTools | undefined
+  const ownedModelToolDefinitions = new Map<string, { readonly execute: unknown }>()
+  const modelToolDefinitionsChanged = (definitions: readonly DshToolDefinition[]) => {
+    ownedModelToolDefinitions.clear()
+    for (const definition of definitions) if (operationName(definition.name)) ownedModelToolDefinitions.set(definition.name, { execute: definition.execute })
+  }
   const commands = native.get('commands', false) as NativeCommands | undefined
   const userQuestions = native.get('userQuestions', false) as DshUserQuestions | undefined
   const sessions = native.get('sessions', false) as NativeSessions | undefined
@@ -1501,6 +1516,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const routingDisposers = new Map<object, () => void>()
   const installRouting = (agent: RoutableAgent) => {
     if (routingDisposers.has(agent) || !agent.ctx) return
+    const releaseToolSurfaceRecording = semanticCompaction.deferToolSurfaceRecording(agent as unknown as CompactionAgent)
     semanticCompaction.attach(agent as unknown as CompactionAgent, async () => {
       const childModel = await delegation.restoreOrPersist(agent)
       if (childModel) {
@@ -1525,6 +1541,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       pruneDshMemorySurface(agent.session, allowed)
       return request
     }, { prepend: true })
+    const disposeClaim = agent.ctx.on('agent/inbox/claimed', (event: { agent: RoutableAgent; turn: number; message: unknown }) => {
+      if (event.agent !== agent) return
+      const previous = assemblyClaims.get(agent)
+      if (previous?.turn === event.turn) previous.messages.push(event.message)
+      else assemblyClaims.set(agent, { turn: event.turn, messages: [event.message] })
+    })
     const disposeRouting = installDshModelRouting(agent, async signal => {
       const deep = await deepPlanning.beforeAssembly(agent, signal)
       if (deep.owned) { assemblyClaims.delete(agent); return deep.model }
@@ -1536,7 +1558,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const current = agent.session ? currentSession(agent.session.id) : undefined
       if (current) await selectionFailures.get(current.runId)
       const turn = claim?.turn ?? current?.turn
-      if (turn === undefined) return undefined
+      if (turn === undefined) {
+        reportToolExposureFallback('pre_step_missing_turn')
+        return undefined
+      }
       const messages = claim?.messages ?? []
       // DSH claims input before assembly. Persist it before showing any UI so
       // cancellation and restart cannot lose a prompt before the native log append.
@@ -1547,10 +1572,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         const event = await mapPreStep({ agent, messages, turn, step: 0, signal })
         await gate.prepare(event)
       } catch (error) {
-        if (error instanceof ExecutionSelectionPending) selectionBlocked.add(agent)
+        if (error instanceof ExecutionSelectionPending) { selectionBlocked.add(agent); reportToolExposureFallback('pre_step_selection_pending') }
         else {
           const existing = agent.session ? currentSession(agent.session.id) : undefined
           if (existing && selections.has(existing.runId)) throw error
+          const failure = error instanceof KiokukoError ? error.code.toLowerCase() : error instanceof Error ? error.name.toLowerCase() : 'unknown'
+          reportToolExposureFallback(`pre_step_${failure}`)
+
           // Optional intake enrichment retains its existing degraded behavior.
         }
       }
@@ -1581,6 +1609,70 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         semanticCompaction.recordRoute(agent as unknown as CompactionAgent, assembly.variables)
         const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
         if (lisp) assembly = lisp.project(agent, assembly)
+        if (toolExposureConfig.mode === 'phase') {
+          let fallback: string | undefined
+          const surface = (assembly as { tools?: unknown }).tools
+          const runtimeTools = tools as unknown as { get?: (name: string, scope?: unknown) => unknown; schemas?: (...args: unknown[]) => unknown } | undefined
+          if (!Array.isArray(surface) || typeof runtimeTools?.get !== 'function' || typeof runtimeTools.schemas !== 'function') fallback = 'unsupported_runtime'
+          else if (surface.some(value => typeof value === 'object' && value !== null && !Array.isArray(value) && (value as { name?: unknown }).name === 'run_code')) fallback = 'unsupported_presentation'
+          else {
+            const session = agent.session
+            const item = session ? currentSession(session.id) : undefined
+            const selectionRecord = item ? selections.get(item.runId) : undefined
+            const selection = selectionRecord?.value
+            const state = item ? states.get(item.runId) : undefined
+            const prepared = item?.prepared
+            const unboundReason = !item ? 'turn_record_missing'
+              : !session ? 'native_session_missing'
+              : !selectionRecord || !selection ? 'selection_missing'
+              : !state ? 'policy_state_missing'
+              : !prepared ? 'prepared_state_missing'
+              : selection.status !== 'ready' ? 'selection_not_ready'
+              : selection.discussion ? 'discussion_pending'
+              : selection.mode !== 'normal' && selection.mode !== 'enno' ? 'unsupported_selection_mode'
+              : item.closed ? 'session_closed'
+              : item.failed ? 'session_failed'
+              : prepared.run.status !== 'active' ? 'run_not_active'
+              : currentSession(item.sessionId) !== item ? 'stale_turn_record'
+              : item.nativeAgent !== agent ? 'agent_identity'
+              : item.nativeSession !== session ? 'session_identity'
+              : agents?.get(agent.id) !== agent ? 'agent_registry'
+              : sessions?.get(session.id) !== session ? 'session_registry'
+              : delegation.isChild(agent) ? 'delegated_agent'
+              : deepPlanning.executor.isChild(agent) ? 'deep_planning_agent'
+              : state.runId !== item.runId || state.workspace !== item.workspace || state.orchestrationId !== item.orchestrationId || state.dshSessionId !== item.sessionId || state.nativeTurn !== item.turn ? 'policy_binding'
+              : !hasKnownDshToolPolicyState(state) ? 'unknown_policy_state'
+              : 'unbound'
+            if (!item || !session || !selectionRecord || !selection || !state || !prepared
+              || selection.status !== 'ready' || selection.discussion || (selection.mode !== 'normal' && selection.mode !== 'enno')
+              || item.closed || item.failed || prepared.run.status !== 'active'
+              || currentSession(item.sessionId) !== item || item.nativeAgent !== agent || item.nativeSession !== session
+              || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session
+              || delegation.isChild(agent) || deepPlanning.executor.isChild(agent)
+              || state.runId !== item.runId || state.workspace !== item.workspace || state.orchestrationId !== item.orchestrationId
+              || state.dshSessionId !== item.sessionId || state.nativeTurn !== item.turn || !hasKnownDshToolPolicyState(state)) fallback = `unbound:${unboundReason}`
+            else {
+              const generation = item.prepareGeneration
+              const current = () => currentSession(item.sessionId) === item && !item.closed && !item.failed
+                && item.nativeAgent === agent && item.nativeSession === session && item.prepared === prepared
+                && item.prepareGeneration === generation && selections.get(item.runId) === selectionRecord
+                && states.get(item.runId) === state && agents?.get(agent.id) === agent && sessions?.get(session.id) === session
+                && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent)
+              const projection = projectToolsForPhase(surface as readonly { name: string }[], state, ownedModelToolDefinitions, name => {
+                const definition = runtimeTools.get!.call(tools, name, agent)
+                return typeof definition === 'object' && definition !== null && typeof (definition as { execute?: unknown }).execute === 'function'
+                  ? definition as { execute: unknown } : undefined
+              })
+              if (!current()) fallback = 'unbound:assembly_binding_changed'
+              else if (projection.reason === 'ownership_unknown' || projection.reason === 'unknown_state') fallback = projection.reason
+              else if (projection.reason === 'projected') assembly = Object.assign({}, assembly, { tools: projection.tools })
+            }
+          }
+          if (fallback !== undefined && !reportedToolExposureFallbacks.has(fallback)) {
+            reportedToolExposureFallbacks.add(fallback)
+            console.warn(`[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: ${fallback}`)
+          }
+        }
         semanticCompaction.recordTools(agent as unknown as CompactionAgent, (assembly as { tools?: unknown }).tools)
         const delivered = new Set<string>()
         for (const [name, sectionName] of [['kiokuko-soul','kiokuko:soul'], ['natural-japanese-output','kiokuko:natural-japanese-output'], ['kiokuko-lisp','kiokuko:lisp']]) {
@@ -1605,7 +1697,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       }
       yield* next()
     })())
-    routingDisposers.set(agent, () => { disposeRouting(); disposeMemory(); disposeMemoryFence() })
+    routingDisposers.set(agent, () => { releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeClaim() })
   }
   const routingCreatedDisposer = (ctx as any).on('agent/created', (event: { agent: RoutableAgent }) => {
     delegation.created(event.agent)
@@ -1619,12 +1711,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     await markModelUnavailable(event.agent)
     return undefined // No native automatic retry or provider substitution.
   }, { prepend: true })
-  const routingClaimDisposer = (ctx as any).on('agent/inbox/claimed', (event: { agent: RoutableAgent; turn: number; message: unknown }) => {
-    installRouting(event.agent)
-    const previous = assemblyClaims.get(event.agent)
-    if (previous?.turn === event.turn) previous.messages.push(event.message)
-    else assemblyClaims.set(event.agent, { turn: event.turn, messages: [event.message] })
-  })
   for (const agent of agents?.list?.() ?? []) installRouting(agent)
   const contextMessages = async (event: DshPreStepEvent, pending: readonly unknown[]): Promise<readonly unknown[]> => {
     const item = currentForAgentEvent(event.agent.id, event.sessionId, event.turn, event.nativeSession, event.nativeAgent)
@@ -2939,6 +3025,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     get skillPrompts() { return skillPrompts },
     configureSkillPrompts(prompts) { skillPrompts = prompts },
     configureEnnoMemory: config => ennoMemory.configure(config),
+    configureToolExposure: config => { toolExposureConfig = ToolExposureConfig.parse(config) },
+    modelToolDefinitionsChanged,
     memoryReview: {
       async start(){const project=await runtime.withDatabase(db=>resolveProjectWorkspaceReadOnly(db,root,{allowDirectory:true}));if(project)await autoReview.start(project.workspace)},
       configure:config=>autoReview.configure(config),
@@ -3018,7 +3106,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       await memoryFinalizer.dispose()
       await deepPlanning.dispose()
       routingCreatedDisposer()
-      routingClaimDisposer()
       modelErrorDisposer()
       childGuardDisposer?.()
       discussionGuardDisposer?.()
