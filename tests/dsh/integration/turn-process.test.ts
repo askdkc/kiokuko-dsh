@@ -89,7 +89,7 @@ test('Enno completion atomically creates the turn receipt, handoff, boundary job
     assert.equal(outbox[0]?.continuationId, intent.continuationId)
     assert.equal(outbox[0]?.messageForm, 'continuation')
     assert.deepEqual((outbox[0]?.message as { source?: unknown }).source, {
-      kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions',
+      kind: 'plugin:kiokuko-dsh', form: 'instructions',
     })
 
     // Enno replay does not duplicate any process effect.
@@ -187,7 +187,7 @@ test('outbox migration normalizes pending legacy messages and preserves dispatch
     `).get<{ messageForm: string; messageJson: string }>(dispatchedRow.continuationId)
     assert.equal(pending?.messageForm, 'loop-recovery')
     assert.deepEqual(JSON.parse(pending?.messageJson ?? '{}').source, {
-      kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions',
+      kind: 'plugin:kiokuko-dsh', form: 'instructions',
     })
     assert.equal(retained?.messageForm, 'continuation')
     assert.equal(retained?.messageJson, oldDispatchedMessage)
@@ -229,7 +229,7 @@ test('unsubmitted and expected-failure continuations emit schema-safe plugin sou
     assert.equal(outbox.length, 2)
     for (const item of outbox) {
       assert.deepEqual((item.message as { source?: unknown }).source, {
-        kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions',
+        kind: 'plugin:kiokuko-dsh', form: 'instructions',
       })
       assert.equal(Object.hasOwn((item.message as Record<string, unknown>)['source'] as object, 'deliveryId'), false)
       assert.equal(item.messageForm, 'continuation')

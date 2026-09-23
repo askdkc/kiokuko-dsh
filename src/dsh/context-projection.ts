@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { DshModelMessage } from './context-injection.js'
 import type { DshLogEvent } from './session-memory-finalizer.js'
 import { surfaceRange } from './surface-range.js'
+import { isKiokukoDshSource, KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 
 interface ContextSession {
   readonly surface?: { readonly nodes: readonly number[] }
@@ -54,7 +55,7 @@ export function projectDshContext(
   ]) {
     const message = record(value)
     const source = record(message?.source)
-    if (message?.role !== 'user' || source?.kind !== 'plugin' || source.plugin !== 'kiokuko-dsh'
+    if (message?.role !== 'user' || !isKiokukoDshSource(source)
       || source.form !== 'snapshot' || !Array.isArray(source.sections) || source.sections.length !== 1) continue
     const section = record(source.sections[0])
     const content = message.content
@@ -71,7 +72,7 @@ export function projectDshContext(
       id: randomUUID(),
       role: message.role,
       content: [{ type: 'text', text: message.content }],
-      source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'snapshot', sections: [{ name, text: message.content }] },
+      source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'snapshot', sections: [{ name, text: message.content }] },
     }]
   })
 }

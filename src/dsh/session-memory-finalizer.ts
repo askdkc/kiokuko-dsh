@@ -6,6 +6,7 @@ import { FinalizerResult, type MemoryOperation, type ReviewEvidence, type Memory
 import { abortableStream } from '../deep-thinker/abortable-stream.js'
 import { EVOLUTION_OBSERVATION_EVENT, observationMatchesResult, type EvolutionObservation, type EvolutionObservationBinding } from './evolution-observation.js'
 import { readEvolutionObservation } from './plugin-records.js'
+import { isSyntheticContextSource } from './plugin-source.js'
 import { MemoryEvolutionConfig, evidenceReferences, supportingEvidenceDigest, episodeSignature, episodeSignals, parseEpisodeDraft, type EpisodeEvidence, type EpisodeDraft, type EvolutionConfig } from '../memory/evolution/contracts.js'
 import { configureEvolution, saveEpisode, scheduleEvolution, evolutionSettings } from '../memory/evolution/store.js'
 import { EvolutionWorker } from '../memory/evolution/worker.js'
@@ -787,7 +788,7 @@ function checkedInputMode(value: unknown): FinalizationInputMode {
 
 function boundedEvidenceEvent(event: DshLogEvent): boolean {
   // Plugin snapshots and cross-run compaction summaries can contain earlier tasks.
-  if (event.type === 'user/message') return record(record(event.data)?.source)?.kind !== 'plugin'
+  if (event.type === 'user/message') return !isSyntheticContextSource(record(event.data)?.source)
   return ['assistant/message', 'tool/call', 'tool/result', 'goal/change', 'todo/write', 'turn/end'].includes(event.type)
 }
 
@@ -1335,7 +1336,7 @@ Override the legacy memory output format: return only schemaVersion 3 with memor
 /** Only native evidence is eligible; plugin snapshots and assistant assertions are excluded. */
 export function episodeEvidenceForEvent(event: DshLogEvent, boundToolName?: string, proof?: EvolutionObservation): EpisodeEvidence | undefined {
   const data = record(event.data)
-  if (!data || record(data.source)?.kind === 'plugin' || record(record(data.message)?.source)?.kind === 'plugin') return undefined
+  if (!data || isSyntheticContextSource(data.source) || isSyntheticContextSource(record(data.message)?.source)) return undefined
   const kind = event.type === 'user/message' ? 'user' : event.type === 'tool/call' ? 'action' : event.type === 'tool/result' ? 'result' : undefined
   if (!kind || kind === 'result' && boundToolName === undefined) return undefined
   // Memory/control tools must not recycle previous knowledge into new supporting evidence.

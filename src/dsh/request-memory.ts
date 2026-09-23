@@ -6,6 +6,7 @@ import { projectMemoryEntry, renderMemoryFields } from '../context/memory-projec
 import { canonicalContentHash } from '../serialization/validate.js'
 import { randomUUID } from 'node:crypto'
 import { retainedEvents } from './context-projection.js'
+import { isKiokukoDshSource, KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 
 /** Revalidate at the final request seam, including snapshots retained in native history. */
 export function currentRequestMemory(db: SqliteDatabase, prepared: PreparedAgentTask): ReadonlyMap<string, string> {
@@ -29,7 +30,7 @@ export function filterRequestMemory<T>(messages: readonly T[], allowed: Readonly
   const seen = new Set<string>()
   return messages.filter(value => {
     const message = value as any
-    if (message?.source?.kind !== 'plugin' || message.source.plugin !== 'kiokuko-dsh' || message.source.form !== 'snapshot') return true
+    if (!isKiokukoDshSource(message?.source) || message.source.form !== 'snapshot') return true
     const sections = message.source.sections
     if (!Array.isArray(sections) || !sections.some((section: any) => typeof section?.name === 'string' && section.name.startsWith('memory:memory:'))) return true
     if (sections.length !== 1 || message.content?.length !== 1) return false
@@ -51,7 +52,7 @@ export function pruneDshMemorySurface(session: Parameters<typeof retainedEvents>
     const text = 'Obsolete Kiokuko memory was removed from the active context.'
     const v3 = ((session as {header?:{version?:number}}).header?.version ?? 0) >= 3
     session.append('user/message', { id: randomUUID(), role: 'user', content: [{type:'text',text}],
-      source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'snapshot', sections: [{name:'memory-status',text}] } },
+      source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'snapshot', sections: [{name:'memory-status',text}] } },
     { surfaceOp: v3 ? { op: 'replace', startSeq: event.seq, endSeq: event.seq } : { op: 'replace', start: event.seq, end: event.seq }, sourceEventSeqs: [event.seq] })
   }
 }

@@ -13,6 +13,8 @@ test('native proof references reject unknown, assistant and wrong-kind verificat
   wrong.events[2]!.evidence=[999]; assert.throws(()=>parseEpisodeDraft(wrong,evidence('a')),/unknown_evidence/)
   assert.equal(episodeEvidenceForEvent({seq:1,time:0,type:'assistant/message',data:{message:{content:[{type:'text',text:'Tests passed'}]}}}),undefined)
   assert.equal(episodeEvidenceForEvent({seq:1,time:0,type:'user/message',data:{source:{kind:'plugin'},content:[{type:'text',text:'Old memory'}]}}),undefined)
+  assert.equal(episodeEvidenceForEvent({seq:2,time:0,type:'user/message',data:{source:{kind:'plugin:kiokuko-dsh'},content:[{type:'text',text:'Current memory'}]}}),undefined)
+  assert.equal(episodeEvidenceForEvent({seq:3,time:0,type:'user/message',data:{source:{kind:'runtime-context'},content:[{type:'text',text:'Runtime snapshot'}]}}),undefined)
   assert.equal(episodeSignals(draft(),evidence('a').map(e=>({...e,outcome:'unknown'}))).successful,false)
 })
 test('v2 episode failure can be isolated without rejecting valid v1 memories', () => {

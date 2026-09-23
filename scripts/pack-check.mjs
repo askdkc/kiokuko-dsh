@@ -19,6 +19,8 @@ const requiredFiles = [
   'migrations/023_memory_application.sql',
   'migrations/024_decision_selection.sql',
   'migrations/025_answer_review.sql',
+  'migrations/027_v4_message_sources.sql',
+  'dist/dsh/plugin-source.js',
   'dist/dsh/answer-review/coordinator.js',
   'docs/answer-review.md',
   'scripts/evaluate-answer-review.mjs',

@@ -10,6 +10,7 @@ import { mountDeepReportSurface } from '../deep-thinker/report-surface.js'
 import { mountDshNoticeSurface } from './session-notice-surface.js'
 import { mountSessionHistoryCompatibility, type SessionHistoryCheck } from './session-history-compatibility.js'
 import { randomUUID } from 'node:crypto'
+import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { DshSkillPrompts } from './skill-prompts.js'
 import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingContext } from './enno-controller.js'
@@ -167,7 +168,7 @@ function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshE
         id: randomUUID(),
         role: 'user',
         content: [{ type: 'text', text: message.content }],
-        source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
+        source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' },
       }),
       ...(payload.agent.cancel === undefined ? {} : { cancel: (reason: string) => payload.agent.cancel!(reason) }),
     }

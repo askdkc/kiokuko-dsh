@@ -1,4 +1,5 @@
 import { ObservationPackConfig } from './observation-pack/policy.js'
+import { isKiokukoDshSource, KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import { bindMemoryApplication, memoryApplicationStatus, memoryRetrievalStatus } from '../memory/application.js'
 import { mountMemoryApplication } from './memory-application.js'
 import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
@@ -297,7 +298,7 @@ const CONTINUATION_ID = /^[0-9a-f]{64}$/u
 export function pluginContinuationId(value: unknown): string | undefined {
   const message = objectRecord(value)
   const source = objectRecord(message?.source)
-  if (source?.kind !== 'plugin' || source.plugin !== 'kiokuko-dsh') return undefined
+  if (!isKiokukoDshSource(source)) return undefined
   const messageId = message?.id
   if (source.form === 'instructions' && typeof messageId === 'string' && CONTINUATION_ID.test(messageId)) {
     return messageId
@@ -309,7 +310,7 @@ export function pluginContinuationId(value: unknown): string | undefined {
 
 function isLoopRecoveryMessage(value: unknown): boolean {
   const source = objectRecord(objectRecord(value)?.source)
-  return source?.kind === 'plugin' && source.plugin === 'kiokuko-dsh' && source.form === 'loop-recovery'
+  return isKiokukoDshSource(source) && source?.form === 'loop-recovery'
 }
 
 export function recoveryMessage(continuationId: string, answer: string): unknown {
@@ -320,7 +321,7 @@ export function recoveryMessage(continuationId: string, answer: string): unknown
       type: 'text',
       text: `The user reviewed the stopped Kiokuko loop and supplied this recovery instruction:\n\n${answer}`,
     }],
-    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
+    source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' },
   })
 }
 
@@ -359,7 +360,7 @@ export function continuationMessage(continuationId: string, nextAction: EnnoNext
     id: continuationId,
     role: 'user',
     content: [{ type: 'text', text: work }],
-    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
+    source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' },
   })
 }
 
@@ -1223,7 +1224,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
           // attachment and other pending inputs must never be consumed here.
           if (!humanPresent && event.nativeMessages?.length === 0 && nativeDecision.messages.every(message => {
             const source = objectRecord(objectRecord(message)?.source)
-            return source?.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt' && source.form === 'snapshot'
+            return (source?.kind === 'runtime-context' || source?.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt') && source.form === 'snapshot'
           })) {
             const paused = await executionSupport.pauseAtBoundary(event.sessionId, async (id, text) => {
               const session = event.nativeSession as { snapshotEvents?: () => readonly DshLogEvent[] } | undefined

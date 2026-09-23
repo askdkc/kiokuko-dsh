@@ -1,4 +1,5 @@
 import type { DecisionService } from '../dsh/decisions/service.js'
+import { isSyntheticContextSource } from '../dsh/plugin-source.js'
 import { createMemoryReuseRuntime } from '../dsh/memory-reuse.js'
 import { emptyQualityNode } from './core/quality.js'
 import { randomUUID } from 'node:crypto'
@@ -192,7 +193,7 @@ export class DeepPlanningController {
         })
       }
       if (intent.runId) {
-        const additional = claim?.messages.filter(m => message(m).id !== intent.messageId && (ordinaryHuman(m) || message(m).source?.kind === 'plugin')) ?? []
+        const additional = claim?.messages.filter(m => message(m).id !== intent.messageId && (ordinaryHuman(m) || isSyntheticContextSource(message(m).source))) ?? []
         if (additional.length) {
           await this.#saveAdditional(intent, additional)
           await this.#resume(intent, agent, signal, true)
