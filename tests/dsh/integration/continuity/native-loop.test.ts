@@ -113,12 +113,12 @@ test(`real DSH continuity ${continuity}: final requests after compaction and sam
     // Native retained-surface replacement, keeping the old snapshots in append-only history.
     for (const seq of [...agent.session.surface.nodes]) {
       const event = agent.session.eventAt(seq)
-      if (event?.data?.source?.plugin !== '@deepseek-ai/dsh-system-prompt') continue
+      if (event?.data?.source?.kind !== 'runtime-context') continue
       const replacement = llm.createUserMessage({ content: [{ type: 'text', text: 'Runtime context compacted.' }],
-        source: { kind: 'plugin', plugin: 'continuity-fixture', form: 'snapshot', sections: [{ name: 'summary', text: 'Runtime context compacted.' }] } })
+        source: { kind: 'plugin:continuity-fixture', form: 'snapshot', sections: [{ name: 'summary', text: 'Runtime context compacted.' }] } })
       agent.session.append('user/message', replacement, { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] })
     }
-    assert.ok(agent.session.snapshotEvents().some((event: any) => event.data?.source?.plugin === '@deepseek-ai/dsh-system-prompt'))
+    assert.ok(agent.session.snapshotEvents().some((event: any) => event.data?.source?.kind === 'runtime-context'))
     const beforeObservations = adapter.host.efficiency!.snapshot()
     if (continuity === 'off') assert.equal(beforeObservations.continuity.length, 0)
     else assert.ok(beforeObservations.continuity.length > 0)

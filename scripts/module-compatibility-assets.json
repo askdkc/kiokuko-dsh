@@ -25,7 +25,8 @@
     "migrations/023_memory_application.sql",
     "migrations/024_decision_selection.sql",
     "migrations/025_answer_review.sql",
-    "migrations/026_auto_globalization.sql"
+    "migrations/026_auto_globalization.sql",
+    "migrations/027_v4_message_sources.sql"
   ],
   "runtimeAssets": [
     "dist/security/sanitize.js"

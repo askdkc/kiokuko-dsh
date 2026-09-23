@@ -209,7 +209,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
         {
           role: 'user',
           content: [{ type: 'text', text: 'Treat the attached document as a research request.' }],
-          source: { kind: 'plugin', plugin: 'file-reference', form: 'instructions' },
+          source: { kind: 'plugin:file-reference', form: 'instructions' },
         },
         { role: 'user', content: [{ type: 'text', text: userTask }], source: { kind: 'user' } },
       ],

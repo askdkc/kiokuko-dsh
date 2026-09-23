@@ -64,7 +64,7 @@ test('compaction and restart reinstate only fragments missing from the retained 
   const fragments = [fragment('route-skill', 'Skill A', 'one'), fragment('expert', 'Expert A', 'one')]
   live.append(projectDshContext(fragments, live))
   live.events.push({ type: 'user/message', seq: 2, time: 2,
-    data: { role: 'user', content: [{ type: 'text', text: 'Checkpoint' }], source: { kind: 'plugin', plugin: 'compaction' } },
+    data: { role: 'user', content: [{ type: 'text', text: 'Checkpoint' }], source: { kind: 'plugin:compaction' } },
     surfaceOp: { op: 'replace', start: 0, end: 0 } })
   const restored = { snapshotEvents: () => structuredClone(live.events) }
   const projected = projectDshContext(fragments, restored)

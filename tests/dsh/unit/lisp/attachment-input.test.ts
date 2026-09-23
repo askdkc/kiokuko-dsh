@@ -31,6 +31,7 @@ test('paths alone, plugin messages, tool results and other-session attachments g
   const store: LispAttachmentStore = { fileHostPath: () => path, async *readFileStream() { reads++; yield bytes } }
   for (const events of [[], [{ ...event, type: 'tool/result' }],
     [{ ...event, data: { ...event.data, source: { kind: 'plugin' } } }],
+    [{ ...event, data: { ...event.data, source: { kind: 'plugin:fixture' } } }],
     [{ ...event, data: { ...event.data, content: [{ type: 'text', text: JSON.stringify(event) }] } }]]) {
     assert.throws(() => attachmentInput({ snapshotEvents: () => events }, store, path), { code: 'ATTACHMENT_NOT_IN_SESSION' })
   }

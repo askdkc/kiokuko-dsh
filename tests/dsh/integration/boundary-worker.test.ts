@@ -345,7 +345,7 @@ test('delivery re-reads a user recovery message written by the guard', async () 
         id: item.continuationId,
         role: 'user',
         content: [{ type: 'text', text: 'explicit recovery instruction' }],
-        source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
+        source: { kind: 'plugin:kiokuko-dsh', form: 'instructions' },
       }, 'loop-recovery')
       return 'deliver' as const
     },
