@@ -5,6 +5,7 @@ import { withImmediateTransaction } from '../db/transaction.js';
 import { KiokukoError } from '../errors.js';
 import { sanitizeJson } from '../security/sanitize.js';
 import { canonicalContentHash } from '../serialization/validate.js';
+import { autoGlobalizationInstalled, enqueueAutoGlobalRecheck } from '../memory/auto-global-queue.js';
 import { entryOriginMatchesWorkspace, isContextEntryOrigin } from './origin.js';
 import {
   CONTEXT_FEEDBACK_VERDICTS,
@@ -603,6 +604,14 @@ function writeContextFeedback(database: SqliteDatabase, input: ValidatedContextF
   );
   const row = selectContextByKey(database, input);
   if (!row) integrity();
+  if (autoGlobalizationInstalled(database) && ['irrelevant', 'stale', 'conflicting'].includes(input.verdict)) {
+    const target = database.prepare('SELECT entry_revision FROM context_delivery_entries WHERE delivery_id=? AND entry_id=?')
+      .get<{entry_revision:number}>(input.deliveryId, input.entryId);
+    if (target) enqueueAutoGlobalRecheck(database, input.entryId, target.entry_revision, input.createdAt);
+    const origin = database.prepare('SELECT entry_id,entry_revision FROM auto_global_projections WHERE global_entry_id=?')
+      .get<{entry_id:string;entry_revision:number}>(input.entryId);
+    if (origin) enqueueAutoGlobalRecheck(database, origin.entry_id, origin.entry_revision, input.createdAt);
+  }
   return rowToContextFeedback(row, input.workspace);
 }
 

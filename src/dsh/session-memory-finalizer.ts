@@ -9,6 +9,7 @@ import { readEvolutionObservation } from './plugin-records.js'
 import { MemoryEvolutionConfig, evidenceReferences, supportingEvidenceDigest, episodeSignature, episodeSignals, parseEpisodeDraft, type EpisodeEvidence, type EpisodeDraft, type EvolutionConfig } from '../memory/evolution/contracts.js'
 import { configureEvolution, saveEpisode, scheduleEvolution, evolutionSettings } from '../memory/evolution/store.js'
 import { EvolutionWorker } from '../memory/evolution/worker.js'
+import { AutoGlobalizationWorker } from '../memory/auto-globalization.js'
 import { DeepMemoryFinalizer } from '../deep-thinker/memory-finalizer.js'
 import { DeepStore } from '../deep-thinker/store.js'
 import { createHash } from 'node:crypto'
@@ -84,6 +85,7 @@ export interface DshLlm {
 export interface DshMemoryFinalizerOptions {
   readonly onDeepFinalized?: (sessionId: string) => PromiseLike<unknown>
   readonly memoryEvolution?: EvolutionConfig
+  readonly autoGlobalizationEnabled?: boolean
   readonly inputMode?: FinalizationInputMode
   readonly onObservation?: (observation: EfficiencyObservation) => void | PromiseLike<void>
   readonly runtime: Pick<DshRuntime, 'withDatabase'>
@@ -874,6 +876,8 @@ export class DshMemoryFinalizer {
   #onObservation: DshMemoryFinalizerOptions['onObservation']
   #evolutionConfig: EvolutionConfig
   #evolutionWorker: EvolutionWorker | undefined
+  #autoGlobalWorker: AutoGlobalizationWorker | undefined
+  #autoGlobalEnabled: boolean
   #startup: Promise<void> | undefined
   #configured = false
   #drain: Promise<void> | undefined
@@ -885,6 +889,7 @@ export class DshMemoryFinalizer {
   constructor(options: DshMemoryFinalizerOptions) {
     this.#deep = new DeepMemoryFinalizer(new DeepStore(options.runtime), options.llm, options.onDeepFinalized)
     this.#evolutionConfig = options.memoryEvolution ?? MemoryEvolutionConfig.parse({})
+    this.#autoGlobalEnabled = options.autoGlobalizationEnabled ?? true
     this.#runtime = options.runtime
     this.#sessionQuery = options.sessionQuery
     this.#llm = options.llm
@@ -906,6 +911,11 @@ export class DshMemoryFinalizer {
   configureMemoryEvolution(config: EvolutionConfig): void {
     if (this.#configured) throw new KiokukoError('CONFLICT', 'Evolution configuration already started')
     this.#evolutionConfig = config
+  }
+
+  configureAutoGlobalization(enabled: boolean): void {
+    if (this.#configured) throw new KiokukoError('CONFLICT', 'Auto globalization configuration already started')
+    this.#autoGlobalEnabled = enabled
   }
 
   get lastDrainError(): unknown { return this.#lastDrainError }
@@ -932,6 +942,8 @@ export class DshMemoryFinalizer {
     this.#evolutionWorker = new EvolutionWorker({ runtime: this.#runtime, config: this.#evolutionConfig,
       ...(this.#llm === undefined ? {} : { llm: this.#llm }), now: this.#now })
     this.#evolutionWorker.kick()
+    this.#autoGlobalWorker = new AutoGlobalizationWorker(this.#runtime, this.#autoGlobalEnabled)
+    this.#autoGlobalWorker.kick()
     this.kick()
   }
 
@@ -973,6 +985,7 @@ export class DshMemoryFinalizer {
   /** Schedule a background drain after the enclosing transaction commits. */
   kick(): void {
     if (this.#closed) return
+    this.#autoGlobalWorker?.kick()
     if (this.#drain !== undefined) {
       this.#rerunRequested = true
       return
@@ -996,6 +1009,7 @@ export class DshMemoryFinalizer {
       await Promise.resolve()
     }
     await this.#evolutionWorker?.whenIdle()
+    await this.#autoGlobalWorker?.whenIdle()
   }
 
   /** Explicitly retry one contained failure without changing DSH session state. */
@@ -1314,6 +1328,7 @@ Override the legacy memory output format: return only schemaVersion 3 with memor
     this.#abort?.abort(new KiokukoError('SERVICE_UNAVAILABLE', 'DSH memory finalizer is closing'))
     await this.#drain
     await this.#evolutionWorker?.dispose()
+    await this.#autoGlobalWorker?.dispose()
   }
 }
 

@@ -93,6 +93,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       else if (resolvedConfig.ennoMemory.mode !== 'off') throw new Error('The explicit Kiokuko host does not support ennoMemory')
       host.intakeGate?.configureMemory(resolvedConfig.akinatorMemory)
       host.memoryEvolution?.configure(resolvedConfig.memoryEvolution)
+      host.autoGlobalization?.configure(resolvedConfig.autoGlobalization.enabled)
       await host.memoryReview?.configure(resolvedConfig.memoryReview)
       if (host.configureEfficiency !== undefined) host.configureEfficiency({ observe: resolvedConfig.efficiency.observe, inputMode: resolvedConfig.finalization.inputMode })
       else if (resolvedConfig.efficiency.observe || resolvedConfig.finalization.inputMode !== 'prefix_reuse') {
@@ -137,7 +138,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
     const adapter = createDshHostAdapter(ctx, { answerReview: resolvedConfig.answerReview, typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, observationPack: resolvedConfig.observationPack, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, modelRoutes: resolvedConfig.modelRoutes,
-      ennoMemory: resolvedConfig.ennoMemory, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, memoryReview: resolvedConfig.memoryReview })
+      ennoMemory: resolvedConfig.ennoMemory, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, autoGlobalization: resolvedConfig.autoGlobalization, memoryReview: resolvedConfig.memoryReview })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined
     let disposeExport: (() => Promise<void>) | undefined

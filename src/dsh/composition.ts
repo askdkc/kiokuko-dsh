@@ -63,6 +63,7 @@ export interface DshCompositionHost {
   readonly deepPlanning?: import('../deep-thinker/controller.js').DeepPlanningController
   readonly memoryReview?: { start?:()=>Promise<void>; configure:(config:import('../memory/review/contracts.js').ReviewConfig)=>Promise<void>; command:(session:DshNativeSession,raw:string)=>Promise<Record<string,unknown>> }
   readonly memoryEvolution?: { configure: (config: import('../memory/evolution/contracts.js').EvolutionConfig) => void; status: (sessionId: string) => Promise<Record<string, unknown>> }
+  readonly autoGlobalization?: { configure: (enabled: boolean) => void }
   readonly efficiency?: import('./efficiency.js').DshEfficiencyObserver | undefined
   readonly configureEfficiency?: (config: { observe: boolean; inputMode: import('./efficiency.js').FinalizationInputMode }) => void
   readonly orca?: import('./orca-types.js').DshOrcaHostServices

@@ -64,6 +64,11 @@ const PROVENANCE_FIELDS = new Set([
   'sourcePaths',
   'clientKind',
   'timestamp',
+  'sourceRevision',
+  'sourceContentHash',
+  'evidenceDigest',
+  'supportRunIds',
+  'algorithmVersion',
 ]);
 
 function validation(message: string, details: Record<string, unknown> = {}): never {
@@ -193,12 +198,13 @@ function validateProvenance(value: unknown): JsonObject {
       'deliveryId',
       'clientKind',
       'timestamp',
+      'algorithmVersion',
     ] as const) {
       if (provenance[field] !== undefined && !isNonEmptyString(provenance[field])) {
         validation(`provenance.${field} must be a non-empty string`);
       }
     }
-    for (const field of ['requirementScopeHash'] as const) {
+    for (const field of ['requirementScopeHash', 'sourceContentHash', 'evidenceDigest'] as const) {
       if (provenance[field] !== undefined && !/^[0-9a-f]{64}$/u.test(provenance[field] as string)) {
         validation(`provenance.${field} must be a lowercase SHA-256 hash`);
       }
@@ -206,7 +212,10 @@ function validateProvenance(value: unknown): JsonObject {
     if (provenance.sourceChunkIndex !== undefined && (typeof provenance.sourceChunkIndex !== 'number' || !Number.isSafeInteger(provenance.sourceChunkIndex) || provenance.sourceChunkIndex < 0)) {
       validation('provenance.sourceChunkIndex must be a non-negative integer');
     }
-    for (const field of ['evidenceIds', 'sourcePaths'] as const) {
+    if (provenance.sourceRevision !== undefined && (typeof provenance.sourceRevision !== 'number' || !Number.isSafeInteger(provenance.sourceRevision) || provenance.sourceRevision < 1)) {
+      validation('provenance.sourceRevision must be a positive integer');
+    }
+    for (const field of ['evidenceIds', 'sourcePaths', 'supportRunIds'] as const) {
       const values = provenance[field];
       if (values !== undefined) {
         if (!Array.isArray(values) || values.length > 200 || values.some((item) => !isNonEmptyString(item))) {

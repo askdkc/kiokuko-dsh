@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
@@ -20,14 +20,19 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 'session', agentId: 'agent', root }
   let approvals = 0, approve = true
+  const observedWorkspace: Array<{operationId:string;generation:string;state:unknown}> = []
   const adapter = createLispCiAdapter({ ask: async request => {
     approvals++
     assert.match(request.questions[0]!.detail!, /npm test/u)
-    assert.match(request.questions[0]!.detail!, /scratch\/project/u)
+    assert.match(request.questions[0]!.detail!, /scratch\/project|workspace/u)
     return { answers: [{ id: request.questions[0]!.id, selected: [request.questions[0]!.options![approve ? 1 : 0]!.label] }] }
   } })
   const manager = new LispManager({ store, config: LispConfig.parse({ enabled: true, startupTimeoutMs: 60000 }),
-    dataRoot: join(base, 'data'), ciCall: adapter })
+    dataRoot: join(base, 'data'), ciCall: adapter,
+    verifiedCall: async (_owner, operationId, generation, request, result) => {
+      if (request.kind === 'verify' && request.location !== 'scratch')
+        observedWorkspace.push({operationId,generation,state:(result as {state?:unknown}).state})
+    } })
   const evaluate = (operationId: string, code: string) => manager.execute(owner, 'lisp_eval', { operationId, code }) as Promise<any>
   const put = (path: string, text: string) => `(let ((p (merge-pathnames ${JSON.stringify(path)} (kioku.files:scratch)))) (ensure-directories-exist p) (kioku.files:write-text p ${JSON.stringify(text)}))`
   try {
@@ -102,6 +107,15 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     assert.equal(verified.value.json.code, 0); assert.equal(verified.value.json.cwd, join(scratch, 'project'))
     assert.match(verified.value.json.stdout, /pass 1/u)
     assert.equal((await evaluate('npm-test', verify)).replay, true); assert.equal(approvals, 2)
+    await writeFile(join(root, 'package.json'), JSON.stringify({scripts:{test:'node -e "process.exit(0)"'}}))
+    const workspaceVerify = '(kioku.ci:verify :test :location :workspace)'
+    const workspaceResult = await evaluate('workspace-verify', workspaceVerify)
+    assert.equal(workspaceResult.value.json.state, 'SUCCEEDED')
+    assert.equal(observedWorkspace.length, 1, JSON.stringify(workspaceResult))
+    assert.equal(observedWorkspace[0]?.operationId, 'workspace-verify')
+    assert.equal(observedWorkspace[0]?.state, 'SUCCEEDED')
+    assert.equal((await evaluate('workspace-verify', workspaceVerify)).replay, true)
+    assert.equal(observedWorkspace.length, 1, 'replay cannot create a second observed verification')
     await evaluate('break-test', put('project/src/index.mjs', 'export const value = 0;'))
     const failed = await evaluate('npm-test-fails', verify)
     assert.equal(failed.value.json.state, 'FAILED'); assert.notEqual(failed.value.json.code, 0)

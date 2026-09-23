@@ -202,6 +202,7 @@ export interface DshHostAdapterOptions {
   readonly ennoMemory?: import('zod').z.input<typeof EnnoMemoryConfig>
   readonly continuity?: import('zod').z.input<typeof ContinuityConfig>
   readonly memoryEvolution?: import('zod').z.input<typeof MemoryEvolutionConfig>
+  readonly autoGlobalization?: { enabled?: boolean }
   readonly memoryReview?: import('zod').z.input<typeof MemoryReviewConfig>
   readonly finalization?: import('zod').z.input<typeof FinalizationConfig>
   readonly modelRoutes?: readonly ModelRoute[]
@@ -668,6 +669,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const memoryFinalizer = new DshMemoryFinalizer({
     onDeepFinalized: sessionId => deepPlanning.deliver(sessionId),
     memoryEvolution: evolutionConfig,
+    autoGlobalizationEnabled: options.autoGlobalization?.enabled ?? true,
     runtime,
     sessionQuery: finalizationQuery,
     onFinalized: (sessionId) => sessionMirror.markFinalized(sessionId),
@@ -2974,6 +2976,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         })
       },
     },
+    autoGlobalization: { configure(enabled: boolean) { memoryFinalizer.configureAutoGlobalization(enabled) } },
     ...(orca === undefined ? {} : { orca }),
     ...(skills === undefined ? {} : { skills: skills as any }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
