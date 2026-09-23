@@ -19,6 +19,7 @@ import { createLispCodingChoice, LISP_CODING_SERVICE } from './coding-choice.js'
 import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './request-surface.js'
 import { mountLispHttp } from './http.js'
 import { createLispCiAdapter } from './ci.js'
+import { createLispMemoryVerification } from './memory-verification.js'
 import { attachmentInput, type LispAttachmentSession, type LispAttachmentStore } from './attachment-input.js'
 import { HttpTypeSafeClient } from '../typesafe/client.js'
 import { typeSafeCredentials } from '../typesafe/command.js'
@@ -75,11 +76,17 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const databasePath = await runtime.withDatabase(db => db.filePath)
   const store = new LispStore(fn => runtime.withDatabase(db => fn(db)))
   const typesafe = new HttpTypeSafeClient(typeSafeCredentials(ctx))
+  const ciAdapter = createLispCiAdapter(ownerQuestions)
+  const memoryVerification = createLispMemoryVerification(runtime)
   const manager = new LispManager({ store, config,
     ...(skillPrompts ? { skillPrompts } : {}),
     dataRoot: join(dirname(databasePath), 'lisp'), protectedRoots: [databasePath, `${databasePath}-wal`, `${databasePath}-shm`],
     ...(ownerQuestions ? { questions: ownerQuestions } : {}),
-    ciCall: createLispCiAdapter(ownerQuestions),
+    ciCall: async (owner, request, signal, scratchRoot) => {
+      await memoryVerification.beforeCall(owner, request)
+      return ciAdapter(owner, request, signal, scratchRoot)
+    },
+    verifiedCall: memoryVerification.afterEval,
     decisionCall: async (owner, method, args, context) => {
       const agent = agents.get(owner.agentId)
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', 'Decision session identity changed.')

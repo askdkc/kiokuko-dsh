@@ -61,10 +61,10 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
       yield { type: 'finish', reason: { kind: 'stop' } }
     } } })
   const composition = await mountDshComposition(ctx, adapter.host)
-  const memory = (request: any, id: string) => request.messages.filter((message: any) => message.source?.plugin === 'kiokuko-dsh'
+  const memory = (request: any, id: string) => request.messages.filter((message: any) => message.source?.kind === 'plugin:kiokuko-dsh'
     && message.source.sections?.some((section: any) => section.name === `memory:memory:${id}`))
   const checkedRequest = (request: any, expected: boolean) => {
-    assert.equal(memory(request, b.id).length, expected ? 1 : 0, JSON.stringify({ b: b.id, memory: request.messages.filter((m: any) => m.source?.plugin === 'kiokuko-dsh' && m.source.sections?.some((s: any) => s.name.startsWith('memory:'))), observations: adapter.host.efficiency!.snapshot().ennoMemory.slice(-2) }))
+    assert.equal(memory(request, b.id).length, expected ? 1 : 0, JSON.stringify({ b: b.id, memory: request.messages.filter((m: any) => m.source?.kind === 'plugin:kiokuko-dsh' && m.source.sections?.some((s: any) => s.name.startsWith('memory:'))), observations: adapter.host.efficiency!.snapshot().ennoMemory.slice(-2) }))
     assert.equal(memory(request, privateEntry.id).length, 0)
     if (expected) {
       assert.match(JSON.stringify(memory(request, b.id)), /FIFO_ONLY.*DO_NOT_APPLY_TO_DAMAGE/s)
@@ -114,7 +114,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
       for (const seq of [...agent.session.surface.nodes]) {
         const event = agent.session.eventAt(seq)
         if (!event?.data?.source?.sections?.some((s: any) => s.name === `memory:memory:${b.id}`)) continue
-        const replacement = llm.createUserMessage({ content: [{ type: 'text', text: 'Compacted.' }], source: { kind: 'plugin', plugin: 'test-compaction' } })
+        const replacement = llm.createUserMessage({ content: [{ type: 'text', text: 'Compacted.' }], source: { kind: 'plugin:test-compaction' } })
         agent.session.append('user/message', replacement, { surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq }, sourceEventSeqs: [seq] })
       }
       return mock.toolCallResponse('failure-3', 'fail_queue', {})

@@ -1,4 +1,5 @@
 import { currentScopedEntry } from '../context/scoped-memory-gate.js'
+import { captureProjectManifestSnapshot, resolveProjectFingerprint } from '../repository/project-fingerprint.js'
 import type { PreparedAgentTask } from './task-intake.js'
 import type { DshRuntime } from './runtime.js'
 import type { DshExpertReference, DshMessageSource, DshMessageSourceInput } from './message-sources.js'
@@ -92,7 +93,9 @@ export async function injectDshContext(input: {
     ? undefined
     : async (item: (NonNullable<PreparedAgentTask['context']>['items'])[number]): Promise<void> => {
       await input.runtime!.withDatabase((database) => {
-        currentScopedEntry(database, input.prepared.project.workspace, item)
+        const fingerprint = resolveProjectFingerprint(database, input.prepared.project,
+          captureProjectManifestSnapshot(input.prepared.project), { readOnly: true })
+        currentScopedEntry(database, input.prepared.project.workspace, item, fingerprint)
       })
     }
   const sources = await buildDshMessageSources({

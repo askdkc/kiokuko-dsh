@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { DecisionQuestion } from '../decisions/contracts.js'
+import { isKiokukoDshSource } from '../plugin-source.js'
 
 export const AnswerReviewConfig = z.object({
   mode: z.enum(['off', 'auto']).default('auto'),
@@ -31,7 +32,7 @@ export interface ReviewAgent {
 }
 export interface ReviewModel { provider: string; model: string; reasoningEffort?: string }
 export function reviewMessageId(value: any): string | undefined {
-  return value?.role === 'user' && value?.source?.kind === 'plugin' && value.source.plugin === 'kiokuko-dsh'
+  return value?.role === 'user' && isKiokukoDshSource(value.source)
     && value.source.form === ANSWER_REVIEW_FORM && typeof value.id === 'string' && /^answer-review:[a-f0-9]{64}$/.test(value.id) ? value.id : undefined
 }
 export function hasHumanInput(messages: readonly any[]): boolean {

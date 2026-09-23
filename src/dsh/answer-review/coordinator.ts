@@ -4,6 +4,7 @@ import { withImmediateTransaction } from '../../db/transaction.js'
 import type { DecisionService } from '../decisions/service.js'
 import { DecisionError } from '../decisions/contracts.js'
 import { answerReviewInput } from './evidence.js'
+import { KIOKUKO_DSH_SOURCE_KIND } from '../plugin-source.js'
 import { ANSWER_REVIEW_FORM, ANSWER_REVIEW_POLICY, answerReviewQuestions, hasHumanInput, reviewMessageId, type AnswerReviewConfiguration, type ReviewAgent, type ReviewModel } from './contracts.js'
 
 interface Binding {
@@ -151,7 +152,7 @@ export class AnswerReviewCoordinator {
         `Review dimensions: ${findings.map(id => answerReviewQuestions.find(question => question.id === id)!.instructions).join('\n')}`,
         `Original answer event: ${input.answerSeq}. Current-run tool result references: ${input.evidenceRefs.join(', ') || 'none'}. Input completeness: ${completeness}.`,
         'Check the original request and evidence in this conversation. Accept or reject each concern on that evidence. If warranted, provide a correction; otherwise briefly confirm the original answer. Preserve the user scope, permissions and existing verification requirements. Do not repeat completed side effects just to satisfy this suggestion. This is the only automatic reconsideration.',
-      ].join('\n') }], source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: ANSWER_REVIEW_FORM } }
+      ].join('\n') }], source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: ANSWER_REVIEW_FORM } }
       const reserved = await this.runtime.withDatabase(db => {
         if (!this.safe(entry)) return false
         return db.prepare(`UPDATE dsh_answer_reviews SET status='reserved',continuation_id=?,message_digest=?,findings_json=?,evidence_refs_json=?,updated_at=?

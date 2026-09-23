@@ -5,6 +5,7 @@ import { KiokukoError, storedMemoryIntegrityError } from '../errors.js';
 import { enqueueCurrentEntryEmbeddingInTransaction } from '../embedding/jobs.js';
 import { canonicalEntryRevisionContentHash, canonicalJson, type JsonObject, validateRecordInput, requireWorkspace, type EntryKind, type EntryStatus, type TrustLevel, type ValidatedRecordInput } from '../serialization/validate.js';
 import { recordAuditEvent } from './audit.js';
+import { enqueueAutoGlobalRecheck } from './auto-global-queue.js';
 import { findSecret } from './secrets.js';
 import { syncEntrySearchProjection } from './structured-memory.js';
 import { decodeStoredMemoryRow, insertEntryRevisionInTransaction, normalizeStructuredScopeInput, type DecodeStoredMemoryOptions } from './revisions.js';
@@ -436,6 +437,7 @@ function updateCandidateEntryInTransactionInternal(database: SqliteDatabase, inp
   );
   const pointer = database.prepare('SELECT current_revision FROM entries WHERE id = ? AND workspace = ?').get<{ current_revision: number }>(input.entryId, workspace);
   if (!pointer || Number(pointer.current_revision) !== nextRevision) throw new KiokukoError('CONFLICT', 'Entry revision is stale');
+  enqueueAutoGlobalRecheck(database, input.entryId, input.expectedRevision, now);
   syncEntrySearchProjection(database, {
     entryId: input.entryId,
     title: validated.title,

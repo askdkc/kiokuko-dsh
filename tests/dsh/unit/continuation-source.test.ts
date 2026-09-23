@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { eventContinuationId, pluginContinuationId } from '../../../src/dsh/host-adapter.js'
+import { KIOKUKO_DSH_SOURCE_KIND } from '../../../src/dsh/plugin-source.js'
 
 const continuationId = 'a'.repeat(64)
 
@@ -9,9 +10,10 @@ function message(source: Record<string, unknown>, id = continuationId): Record<s
 }
 
 test('recognizes schema-safe continuation messages by their 64-hex message id', () => {
-  const value = message({ kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' })
+  const value = message({ kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' })
   assert.equal(pluginContinuationId(value), continuationId)
   assert.equal(eventContinuationId({ message: value }), continuationId)
+  assert.equal(pluginContinuationId(message({ kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' })), continuationId)
 })
 
 test('salvages legacy continuation source deliveryId without accepting unrelated sources', () => {

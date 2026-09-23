@@ -14,16 +14,21 @@ import { LedgerStore } from '../../../src/ledger/store.js'
 import { mountMemoryApplication } from '../../../src/dsh/memory-application.js'
 import { runMemoryAwareVerifiers } from '../../../src/enno-oduno/memory-verification.js'
 import { memoryApplicationStatus, recordMemoryApplicationReview, beginMemoryExecution, completeMemoryExecution, bindMemoryApplication, applicationSourceDigest } from '../../../src/memory/application.js'
+import { AutoGlobalizationWorker, autoGlobalizationStatus, autoGlobalApplicable } from '../../../src/memory/auto-globalization.js'
+import { readEntry } from '../../../src/memory/entries.js'
+import { recordContextFeedback } from '../../../src/context/feedback.js'
+import { queryScopedContextGated } from '../../../src/context/scoped-broker.js'
 
 const capabilities = ['kiokuko-soul', 'memory-reasoning'].map(name => ({ kind: 'skill' as const, name }))
-async function fixture(taskType: 'build' | 'review' = 'build') {
+async function fixture(taskType: 'build' | 'review' = 'build', automatic = false) {
   const directory = await mkdtemp(join(tmpdir(), 'memory-application-')), root = realpathSync(join(directory))
   await mkdir(join(root, '.git')); await mkdir(join(root, 'migrations'))
   await writeFile(join(root, 'migrations', '001.sql'), 'SELECT 1;')
+  if (automatic) await writeFile(join(root, 'package.json'), '{"name":"memory-fixture","private":true}')
   await writeFile(join(root, 'check.mjs'), 'import assert from "node:assert/strict"; import { readdirSync } from "node:fs"; assert.deepEqual(readdirSync("migrations"), ["001.sql"]);')
   let db = openConnection(join(root, 'state.sqlite3')); migrateDatabase(db)
   const project = (await resolveProjectWorkspace(db, root))!
-  const memory = recordEntry(db, { workspace: project.workspace, kind: 'lesson', title: 'migration expectations', body: 'Derive current migration expectations from the bundled migrations, including the next migration. Fixed historical schema fixtures may use fixed versions.', createdBy: 'fixture', scope: { visibility: 'project' } })
+  const memory = recordEntry(db, { workspace: project.workspace, kind: 'lesson', title: 'migration expectations', body: 'Derive current migration expectations from the bundled migrations, including the next migration. Fixed historical schema fixtures may use fixed versions.', createdBy: 'fixture', scope: { visibility: 'project', ...(automatic ? { applicability: { languages: ['JavaScript'] } } : {}) } })
   const runtime = { withDatabase: async (fn: any) => fn(db) }
   const tasks = new CoreTasks(runtime as any)
   const task = await tasks.prepare({ requestId: 'request', sessionId: 'session', turn: 1, task: 'migration expectations code', cwd: root, capabilities,
@@ -85,6 +90,157 @@ test('native path blocks missing decisions, observes failing next-migration regr
     await f.tasks.finish(f.task, 'completed')
     assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'completed')
   } finally { dispose(); await f.close() }
+})
+
+test('three completed native and Enno applications create one source-verified Global and a fourth remains idempotent', async () => {
+  const f = await fixture('build', true)
+  const worker = new AutoGlobalizationWorker(f.runtime as any, true)
+  const concurrentWorker = new AutoGlobalizationWorker(f.runtime as any, true)
+  const disabledWorker = new AutoGlobalizationWorker(f.runtime as any, false)
+  try {
+    for (let number = 1; number <= 4; number++) {
+      const task = number === 1 ? f.task : await f.tasks.prepare({
+        requestId: `request-${number}`, sessionId: 'session', turn: number,
+        task: 'migration expectations code', cwd: f.root, capabilities,
+        profileHints: { taskType: 'build', target: 'migration code tests', expected: 'Handle the next migration', constraints: 'Preserve past schemas' },
+        signal: new AbortController().signal,
+      })
+      const identity = { runId: task.runId, workspace: task.workspace, sessionId: task.sessionId, repositoryRoot: f.root }
+      const status = memoryApplicationStatus(f.db, task.runId)
+      assert.equal(status.supported, true)
+      assert.equal(status.items.length, 1)
+      const review = { generation: status.generation, entryId: f.memory.id, entryRevision: f.memory.revision,
+        expectedRevision: 0, decision: 'adopted' as const, basis: 'Current migration fixture is checked.',
+        paths: ['check.mjs', 'migrations'], invariant: 'Migration expectations follow bundled files.',
+        counterexample: 'A fixed list misses new migration files.', method: 'Run the repository check.',
+        command: number === 2 ? `${process.execPath} check.mjs` : 'node check.mjs' }
+      recordMemoryApplicationReview(f.db, identity, `review-${number}`, review)
+      if (number === 2) {
+        const spec = { id:'regression', kind:'test' as const, executable:process.execPath,
+          args:['check.mjs'], cwd:'.', timeoutMs:5000 }
+        assert.equal((await runMemoryAwareVerifiers(f.db, task.runId, [spec], f.root, {descendantSettleMs:0}))[0]?.status, 'passed')
+      } else {
+        beginMemoryExecution(f.db, identity, `verify-${number}`, 'node check.mjs')
+        const result = spawnSync(process.execPath, ['check.mjs'], { cwd: f.root, encoding: 'utf8' })
+        assert.equal(result.status, 0)
+        completeMemoryExecution(f.db, identity, `verify-${number}`, { value: { exitCode: result.status } })
+      }
+      await f.tasks.finish(task, 'completed')
+      if (number === 1) {
+        const before = f.db.prepare('SELECT completed_at,receipt_digest FROM auto_global_application_receipts WHERE entry_id=? AND run_id=?')
+          .get<{completed_at:string;receipt_digest:string}>(f.memory.id,task.runId)
+        new LedgerStore(f.db).updateRunStatus(task.runId,'completed','2099-01-01T00:00:00.000Z')
+        assert.deepEqual(f.db.prepare('SELECT completed_at,receipt_digest FROM auto_global_application_receipts WHERE entry_id=? AND run_id=?')
+          .get(f.memory.id,task.runId),before,'repeated completion cannot rewrite immutable proof')
+      }
+      if (number === 3) {
+        f.db.exec("CREATE TRIGGER abort_auto_mapping BEFORE INSERT ON auto_global_projections BEGIN SELECT RAISE(ABORT,'injected projection failure'); END")
+        worker.kick()
+        await assert.rejects(worker.whenIdle(), /injected projection failure/)
+        assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM entries WHERE workspace='global'")
+          .get<{count:number}>()!.count,0,'projection failure rolls back the generated entry')
+        assert.equal(f.db.prepare('SELECT state FROM auto_global_queue WHERE entry_id=? AND entry_revision=?')
+          .get<{state:string}>(f.memory.id,f.memory.revision)?.state,'pending')
+        f.db.exec('DROP TRIGGER abort_auto_mapping')
+      }
+      worker.kick()
+      if (number === 3) concurrentWorker.kick()
+      await Promise.all([worker.whenIdle(),concurrentWorker.whenIdle()])
+      const auto = autoGlobalizationStatus(f.db, f.memory.id, f.memory.revision)
+      assert.equal('successfulRuns' in auto && auto.successfulRuns, number)
+      const projections = f.db.prepare('SELECT global_entry_id FROM auto_global_projections WHERE entry_id=?').all<{global_entry_id:string}>(f.memory.id)
+      assert.equal(projections.length, number < 3 ? 0 : 1)
+      if (number >= 3) {
+        const global = readEntry(f.db, { workspace: 'global', entryId: projections[0]!.global_entry_id })
+        assert.equal(global.trustLevel, 'source_verified')
+        assert.equal(global.provenance.type, 'auto_curator_globalize')
+        assert.equal(autoGlobalApplicable(f.db, global, JSON.parse(f.db.prepare('SELECT fingerprint_json FROM task_memory_bindings WHERE run_id=?').get<{fingerprint_json:string}>(task.runId)!.fingerprint_json)), true)
+      }
+    }
+    const projectionId = f.db.prepare('SELECT global_entry_id FROM auto_global_projections WHERE entry_id=?')
+      .get<{global_entry_id:string}>(f.memory.id)!.global_entry_id
+    const global = readEntry(f.db, { workspace: 'global', entryId: projectionId })
+    const accepted = JSON.parse(f.db.prepare('SELECT fingerprint_json FROM task_memory_bindings WHERE run_id=?')
+      .get<{fingerprint_json:string}>(f.task.runId)!.fingerprint_json)
+    assert.equal(autoGlobalApplicable(f.db, global, {...accepted, languages:['Python']}), false, JSON.stringify({source:f.memory.scope, global:global.scope}))
+    assert.equal(autoGlobalApplicable(f.db, global), false)
+    const nextRoot = realpathSync(await mkdtemp(join(tmpdir(),'auto-global-next-')))
+    try {
+      await mkdir(join(nextRoot,'.git'))
+      await writeFile(join(nextRoot,'package.json'),'{"name":"other-javascript-project","private":true}')
+      await resolveProjectWorkspace(f.db,nextRoot)
+      const next = await f.tasks.prepare({requestId:'other-project-request',sessionId:'other-session',turn:1,
+        task:'migration expectations code',cwd:nextRoot,capabilities,
+        profileHints:{taskType:'build',target:'migration code tests',expected:'Handle migration expectations',constraints:'Preserve tests'},
+        signal:new AbortController().signal})
+      const preview = await queryScopedContextGated(f.db,{project:next.context!.project!,
+        task:'migration expectations code',taskProfile:next.profile,runId:next.runId,
+        limit:5,characterBudget:4000},candidate => ({persist:false,value:candidate}))
+      assert.equal((preview.value as NonNullable<typeof next.context>).items.some(item => item.entryId === global.id),true,
+        'the normal DSH scoped selection can deliver the generated Global to a matching next request')
+      await f.tasks.finish(next,'interrupted')
+    } finally { await rm(nextRoot,{recursive:true,force:true}) }
+    updateCandidateEntry(f.db, { workspace:f.memory.workspace, entryId:f.memory.id, expectedRevision:1,
+      kind:f.memory.kind, title:f.memory.title, body:`${f.memory.body} Revised.`,
+      scope:f.memory.scope, actor:'fixture' })
+    assert.equal(autoGlobalApplicable(f.db, global, accepted), false, 'stale selections are blocked before worker runs')
+    worker.kick(); await worker.whenIdle()
+    assert.equal(f.db.prepare('SELECT state FROM auto_global_projections WHERE global_entry_id=?')
+      .get<{state:string}>(projectionId)?.state, 'quarantined')
+    let latestDelivery = ''
+    let latestRun = ''
+    for (let number = 5; number <= 7; number++) {
+      const task = await f.tasks.prepare({requestId:`request-${number}`,sessionId:'session',turn:number,
+        task:'migration expectations code',cwd:f.root,capabilities,
+        profileHints:{taskType:'build',target:'migration code tests',expected:'Handle the next migration',constraints:'Preserve past schemas'},
+        signal:new AbortController().signal})
+      const status = memoryApplicationStatus(f.db,task.runId)
+      assert.equal(status.supported,true); assert.equal(status.items.length,1)
+      assert.equal(status.items[0]?.revision,2)
+      assert.ok(status.deliveryId)
+      latestDelivery = status.deliveryId; latestRun = task.runId
+      const identity = {runId:task.runId,workspace:task.workspace,sessionId:task.sessionId,repositoryRoot:f.root}
+      recordMemoryApplicationReview(f.db,identity,`review-${number}`,{generation:status.generation,
+        entryId:f.memory.id,entryRevision:2,expectedRevision:0,decision:'adopted',
+        basis:'Current migration fixture is checked.',paths:['check.mjs','migrations'],
+        invariant:'Migration expectations follow bundled files.',counterexample:'A fixed list misses new files.',
+        method:'Run the repository check.',command:'node check.mjs'})
+      beginMemoryExecution(f.db,identity,`verify-${number}`,'node check.mjs')
+      const result = spawnSync(process.execPath,['check.mjs'],{cwd:f.root,encoding:'utf8'})
+      assert.equal(result.status,0)
+      completeMemoryExecution(f.db,identity,`verify-${number}`,{value:{exitCode:0}})
+      await f.tasks.finish(task,'completed'); disabledWorker.kick(); await disabledWorker.whenIdle()
+      const newProjection = f.db.prepare('SELECT global_entry_id FROM auto_global_projections WHERE entry_id=? AND entry_revision=2')
+        .get<{global_entry_id:string}>(f.memory.id)
+      assert.equal(!!newProjection,false,'disabled configuration cannot create a projection')
+    }
+    assert.equal(autoGlobalizationStatus(f.db,f.memory.id,2).successfulRuns,3)
+    worker.kick(); await worker.whenIdle()
+    const replacementId = f.db.prepare('SELECT global_entry_id FROM auto_global_projections WHERE entry_id=? AND entry_revision=2')
+      .get<{global_entry_id:string}>(f.memory.id)!.global_entry_id
+    assert.equal(f.db.prepare('SELECT state FROM auto_global_projections WHERE global_entry_id=?')
+      .get<{state:string}>(projectionId)?.state,'replaced')
+    const replacement = readEntry(f.db,{workspace:'global',entryId:replacementId})
+    assert.equal(autoGlobalApplicable(f.db,replacement,accepted),true)
+    let command: any
+    const unmount = mountMemoryApplication({tools:{register:() => () => {}},on:() => () => {},
+      commands:{register:(definition:any) => {command=definition; return () => {}}}} as any,
+    {runtime:f.runtime as any,resolve:() => undefined,
+      session:() => ({sessionId:'session',repositoryRoot:f.root}),refresh:async () => undefined})
+    try {
+      const reported = await command.handler({rawInput:'status --json',agent:{},signal:new AbortController().signal})
+      const status = JSON.parse(reported.text)
+      assert.equal(status.globalization[0].successfulRuns,3)
+      assert.equal(status.globalization[0].globalEntryId,replacementId)
+    } finally { unmount() }
+    recordContextFeedback(f.db,{workspace:f.memory.workspace,feedbackId:'negative-auto-global',
+      deliveryId:latestDelivery,entryId:f.memory.id,entryRevision:2,runId:latestRun,
+      verdict:'conflicting',actor:'fixture',idempotencyKey:'negative-auto-global',createdAt:new Date().toISOString()})
+    assert.equal(autoGlobalApplicable(f.db,replacement,accepted),false,'negative feedback blocks stale selections immediately')
+    worker.kick(); await worker.whenIdle()
+    assert.equal(f.db.prepare('SELECT state FROM auto_global_projections WHERE global_entry_id=?')
+      .get<{state:string}>(replacementId)?.state,'quarantined')
+  } finally { await disabledWorker.dispose(); await concurrentWorker.dispose(); await worker.dispose(); await f.close() }
 })
 
 test('model reports, skip, unknown, failure, background and stale files never satisfy observed verification', async () => {

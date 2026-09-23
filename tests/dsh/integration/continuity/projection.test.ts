@@ -30,7 +30,7 @@ test('off and shadow have identical requests, DB work and guard counts; active r
     assert.match(active.text('session'), /Continuity \(host projection/)
     assert.doesNotMatch(active.text('session'), /Recent evidence presentation/)
     const user = { id: 'human', role: 'user', content: [{ type: 'image', url: 'fixture' }, { type: 'text', text: '{{literal}}' }] }
-    const snapshot = { id: 'current', role: 'user', source: { plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot', sections: [{ name: 'other', text: 'CURRENT OTHER' }] } }
+    const snapshot = { id: 'current', role: 'user', source: { kind: 'runtime-context', form: 'snapshot', sections: [{ name: 'other', text: 'CURRENT OTHER' }] } }
     const request = active.projectMessages('session', [user, snapshot])
     assert.equal(request[0], user)
     assert.match(request[1].content[0].text, /CURRENT OTHER/)
@@ -98,7 +98,7 @@ test('late refresh and delayed results cannot overwrite steering or mix sessions
 test('retained fallback respects compacted ranges and current sections without a surface API', async () => {
   const f = await fixture({ continuity: { mode: 'active' } })
   try {
-    const old = f.support.projectMessages('session', [{ source: { plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot', sections: [{ name: 'old', text: 'STALE OTHER' }] } }])[0]
+    const old = f.support.projectMessages('session', [{ source: { kind: 'runtime-context', form: 'snapshot', sections: [{ name: 'old', text: 'STALE OTHER' }] } }])[0]
     const events = [{ seq: 1, type: 'user/message', surfaceOp: 'append', data: old },
       { seq: 2, type: 'user/message', surfaceOp: { op: 'replace', startSeq: 1, endSeq: 1 }, data: { content: [{ type: 'text', text: 'compressed' }] } }]
     await f.support.refresh({ ...f.binding, nativeSession: { snapshotEvents: () => events } }, false)

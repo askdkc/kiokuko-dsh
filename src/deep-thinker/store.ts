@@ -7,6 +7,7 @@ import { canonicalContentHash } from '../serialization/validate.js'
 import { LedgerStore } from '../ledger/store.js'
 import type { DshRuntime } from '../dsh/runtime.js'
 import { claimExecutionOwner, readExecutionOwner } from '../dsh/orchestration/execution-owner.js'
+import { KIOKUKO_DSH_SOURCE_KIND } from '../dsh/plugin-source.js'
 import { DeepArtifactSchema, DeepConfigurationSchema, DeepStateSchema, GoalNodeSchema, terminal, type DeepState, type DeepArtifact, type DeepRole } from './core/contracts.js'
 import { budgetProblem, stopClock } from './core/budget.js'
 
@@ -105,7 +106,7 @@ export class DeepStore {
       db.prepare('INSERT INTO dsh_deep_intents(start_id,workspace,dsh_session_id,command_id,command_digest,message_id,input_digest,state_json,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
         .run(intent.startId, intent.workspace, intent.sessionId, intent.commandId, canonicalContentHash({task: input.task, armed: input.status === 'armed'}), intent.messageId, canonicalContentHash({ task: intent.task }), JSON.stringify(intent), intent.status, this.now())
       this.enqueue(db, { id: `deep-intent:${intent.startId}`, startId: intent.startId, runId: null, sessionId: intent.sessionId, kind: 'status', payload: { phase: intent.status, text: intent.status === 'armed' ? 'Deep予約中：次の人間による通常入力を待っています。' : 'Deepへの入力を保存しました。' } })
-      if (intent.status === 'pending' && !intent.messages.length) this.enqueue(db, { id: `deep-input:${intent.startId}`, startId: intent.startId, runId: null, sessionId: intent.sessionId, kind: 'input', payload: { message: { id: intent.messageId, role: 'user', content: [{ type: 'text', text: intent.task }], source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' } } } })
+      if (intent.status === 'pending' && !intent.messages.length) this.enqueue(db, { id: `deep-input:${intent.startId}`, startId: intent.startId, runId: null, sessionId: intent.sessionId, kind: 'input', payload: { message: { id: intent.messageId, role: 'user', content: [{ type: 'text', text: intent.task }], source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' } } } })
       return intent
     })
   }

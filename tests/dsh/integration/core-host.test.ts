@@ -85,6 +85,8 @@ test('core native path handles conversation, research, writing and project memor
       const output = await f.listeners.get('agent/pre-step')!(input, async () => { calls++; return { kind: 'enter', messages } })
       assert.equal(output.kind, 'enter'); assert.equal(calls, 1)
       assert.equal(output.messages[0], messages[0], 'native message and attachments remain owned by DSH')
+      assert.ok(output.messages.slice(1).some((message: any) => message.source?.kind === 'plugin:kiokuko-dsh'))
+      assert.ok(output.messages.every((message: any) => message.source?.kind !== 'plugin'))
       if (index === 2) assert.match(JSON.stringify(output.messages), /見出しを短くする/)
       f.events.push({ type: 'turn/end', data: { turn: index + 1, reason: { kind: 'completed' } } })
       await f.listeners.get('agent/idle')!({ agent: f.agent })

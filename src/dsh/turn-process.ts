@@ -3,6 +3,7 @@ import type { SqliteDatabase } from '../db/adapter.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 import { KiokukoError, type ErrorCode } from '../errors.js'
 import type { AkinatorQuestion } from '../akinator/types.js'
+import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 
 export const DSH_TURN_HANDOFF_MAX_BYTES = 32 * 1024
 export const DSH_TURN_FAILURE_MAX_BYTES = 8 * 1024
@@ -342,7 +343,7 @@ export function enqueueUnsubmittedTurn(database: SqliteDatabase, input: PrepareT
       VALUES (?, ?, ?, 'classify_boundary', 'pending', ?, ?, ?)`).run(intent.boundaryJobId, intent.receiptId, input.runId, now, now, now)
     const message = { id: intent.continuationId, role: 'user', content: [{ type: 'text',
       text: `The phase has not been submitted. Continue from the current host directive: ${input.nextAction}.` }],
-      source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' } }
+      source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' } }
     database.prepare(`INSERT INTO dsh_continuation_outbox(continuation_id, receipt_id, run_id, dsh_session_id,
       causal_revision, message_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
       .run(intent.continuationId, intent.receiptId, input.runId, input.dshSessionId, input.contractRevision, JSON.stringify(message), now, now)
@@ -464,7 +465,7 @@ export function commitExpectedFailureInTransaction(
     content: [{ type: 'text', text: clarify
       ? `Kiokuko needs clarification after repeated ${intent.phase} validation: ${reason.message}`
       : `Retry Kiokuko ${intent.phase} using the recorded validation fact: ${reason.message}` }],
-    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
+    source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' },
   }
   database.prepare(`
     INSERT INTO dsh_continuation_outbox (

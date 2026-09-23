@@ -8,6 +8,7 @@ import { effectiveRetrievalScope, hasExplicitApplicability } from '../memory/str
 import { entryOriginMatchesWorkspace } from './origin.js';
 import { isExternalSkillReference } from '../skills/store.js';
 import { isCuratorManagedGlobalMemory } from '../memory/curator-trust.js';
+import { autoGlobalApplicable } from '../memory/auto-globalization.js';
 import { contextFeedbackSignals } from './feedback.js';
 import { hasActionableMemorySelection, type MemoryUseSignal } from '../akinator/capabilities.js';
 import type { ScopedContextItem, ScopedContextResult } from './scoped-broker.js';
@@ -41,6 +42,9 @@ export function currentScopedEntry(
   if (item.origin === 'global'
     && (entry.scope.visibility !== 'global' || effectiveRetrievalScope(entry.scope) !== 'global')) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Scoped context global entry scope is invalid');
+  }
+  if (item.origin === 'global' && fingerprint !== undefined && !autoGlobalApplicable(database, entry, fingerprint)) {
+    throw new KiokukoError('CONFLICT', 'Scoped global applicability changed');
   }
   if (item.origin === 'ecosystem'
     && (!Object.hasOwn(entry.scope, 'retrievalScope')
@@ -95,4 +99,3 @@ export function assertScopedMemoryUseSignal(
     throw new KiokukoError('CONFLICT', 'Scoped memory capability decision changed before context persistence');
   }
 }
-

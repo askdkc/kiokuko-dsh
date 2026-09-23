@@ -19,13 +19,15 @@ import type { DshSkillPrompts } from '../skill-prompts.js'
 import type { AttachmentInput } from './attachment-input.js'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus
-  slotReserved?: boolean; hostBusy?: boolean; idleSince?: number; idleTimer?: ReturnType<typeof setTimeout>; suspension?: Promise<void>; resumed?: boolean; disposed?: boolean }
+  slotReserved?: boolean; hostBusy?: boolean; idleSince?: number; idleTimer?: ReturnType<typeof setTimeout>; suspension?: Promise<void>; resumed?: boolean; disposed?: boolean;
+  currentVerification?: { operationId: string; generation: string; results: Array<{ request: LispCiRequest; result: unknown }> } }
 export interface ManagerOptions {
   skillPrompts?: DshSkillPrompts
   store: LispStore; config: LispConfiguration; dataRoot: string; library?: string; protectedRoots?: string[]; questions?: DshUserQuestions
   notify?: (owner: LispOwner, message: string) => void
   toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>) => Promise<unknown>
   ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal, scratchRoot?: string) => Promise<unknown>
+  verifiedCall?: (owner: LispOwner, operationId: string, generation: string, request: LispCiRequest, result: unknown) => Promise<void>
   attachmentInput?: (owner: LispOwner, path: string, signal: AbortSignal) => AttachmentInput
   decisionCall?: (owner: LispOwner, method: 'decisions-status' | 'decisions-evaluate', args: unknown, context: LispRpcContext) => Promise<unknown>
   typesafeCall?: (owner: LispOwner, method: 'typesafe-status' | 'typesafe-evaluate', args: unknown, context: LispRpcContext) => Promise<unknown>
@@ -256,7 +258,11 @@ export class LispManager {
             directory: z.string().min(1).max(4096).optional(), location: z.enum(['workspace', 'scratch']).optional() }).strict().parse(args) }
       const active = [...state.active]
       if (active.length !== 1) fail('HOST_STATE', 'CI 呼び出しの実行主体を一意に確認できません。')
-      return this.options.ciCall(state.owner, request, active[0]!.signal, state.worker.layout.scratch)
+      const result = await this.options.ciCall(state.owner, request, active[0]!.signal, state.worker.layout.scratch)
+      if (request.kind === 'verify' && state.currentVerification?.generation === context.generation) {
+        state.currentVerification.results.push({ request, result })
+      }
+      return result
     }
     if (method === 'artifact') {
       const { path } = z.object({ path: z.string().min(1).max(4096) }).strict().parse(args)
@@ -423,6 +429,7 @@ export class LispManager {
           args = { code: parsed.code, inputs }
         } else args = tool === 'lisp_describe' ? { symbol: typeof input.symbol === 'string' ? input.symbol : '' } : { ref: identifier.parse(input.ref) }
         await this.#store.reserve(owner, id, tool, hash, worker.generation, payload); reserved = true
+        if (tool === 'lisp_eval') state.currentVerification = { operationId: id, generation: worker.generation, results: [] }
         const response = await worker.request(tool === 'lisp_eval' ? 'eval' : tool === 'lisp_describe' ? 'describe' : 'inspect', args, timeout, combined)
         const result = { ok: response.ok, operationId: id, value: response.value, output: worker.output(), generation: worker.generation, proposals: response.proposals }
         evidence = { ...result, state: response.ok ? 'RUNNING' : 'FAILED' }
@@ -436,6 +443,13 @@ export class LispManager {
         const finished = { ...result, ok: complete, state: uncertain ? 'UNKNOWN' : complete ? 'SUCCEEDED' : 'FAILED', changes: applied }
         evidence = finished
         await this.#store.transition(owner, id, ['RUNNING'], finished.state, finished)
+        if (finished.state === 'SUCCEEDED' && response.proposals.length === 0 && this.options.verifiedCall
+          && state.currentVerification?.operationId === id && state.currentVerification.generation === worker.generation) {
+          for (const verified of state.currentVerification.results) {
+            try { await this.options.verifiedCall(owner, id, worker.generation, verified.request, verified.result) }
+            catch { /* Proof is optional; a failed observation cannot change the Lisp operation's durable result. */ }
+          }
+        }
         return finished
       } catch (error) {
         let outcome: Record<string, unknown> = { ...(reserved ? { output: worker.output(), generation: worker.generation } : {}), ...evidence, ...failure(error), operationId: id, state: reserved ? 'UNKNOWN' : 'FAILED' }
@@ -451,7 +465,7 @@ export class LispManager {
         } else if (!worker.healthy) { try { await worker.stop() } catch (stop) { error = stop }; this.halted(state, error) }
         else if (state.state === 'EVALUATING') state.state = 'READY'
         return outcome
-      } finally { state.active.delete(abort) }
+      } finally { state.active.delete(abort); if (state.currentVerification?.operationId === id) delete state.currentVerification }
     } catch (error) { return failure(error) }
   }
   private async replay(owner: LispOwner, old: import('./store.js').Operation): Promise<unknown> {

@@ -1,5 +1,6 @@
 import type { DshLlm, PreparedFinalizationLog } from './session-memory-finalizer.js'
 import { requestSize, type FinalizationInputMode, type EfficiencyObservation } from './efficiency.js'
+import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 
 export interface FinalizationRequestJob {
   readonly extractionVersion?: 1 | 2
@@ -55,7 +56,7 @@ export function buildFinalizationRequest(job: FinalizationRequestJob, prepared: 
   const user = (text: string) => ({
     id: `kiokuko-memory-finalization:${job.runId}`,
     role: 'user', content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' },
+    source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' },
   })
   const common = { provider: envelope.provider, model: envelope.model,
     ...(envelope.reasoningEffort === undefined ? {} : { reasoningEffort: envelope.reasoningEffort }),

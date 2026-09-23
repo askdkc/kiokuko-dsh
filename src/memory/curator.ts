@@ -5,6 +5,7 @@ import { canonicalJson, canonicalTagOrder, compareCanonicalStrings, requireWorks
 import { recordEntryInTransaction, readEntry, type EntryRecord } from './entries.js';
 import {
   buildStructuredScope,
+  hasExplicitApplicability,
   MEMORY_CLASSES,
   validateApplicability,
   validateSignals,
@@ -18,6 +19,7 @@ import { analyzePortability, containsProjectSpecificData as containsPortableProj
 import { isExternalSkillReference } from '../skills/store.js';
 import { normalizeSearchSignal } from './retrieval-query.js';
 import { recordAuditEvent } from './audit.js';
+import { autoGlobalizationInstalled } from './auto-global-queue.js';
 import {
   CURATOR_DRAFT_VERSION,
   CURATOR_MEMORY_ACTOR,
@@ -619,7 +621,7 @@ export function curatorFacets(database: SqliteDatabase, input: { includeGlobaliz
   };
 }
 
-function safeGlobalScope(entry: EntryRecord, metadata: StructuredMetadata): JsonObject {
+function safeGlobalScope(entry: EntryRecord, metadata: StructuredMetadata, automatic = false): JsonObject {
   const signals = metadata.signals === undefined ? undefined : Object.fromEntries(
     Object.entries(metadata.signals)
       .filter(([key, value]) => key !== 'paths' && Array.isArray(value) && value.length > 0)
@@ -634,8 +636,26 @@ function safeGlobalScope(entry: EntryRecord, metadata: StructuredMetadata): Json
     memoryClass,
     ...(applicability === undefined ? {} : { applicability }),
     ...(signals === undefined || Object.keys(signals).length === 0 ? {} : { signals }),
-    ...(applicability === undefined ? { portableReason: 'User-confirmed reusable knowledge through kiokuko curator' } : {}),
+    ...(applicability === undefined ? { portableReason: automatic
+      ? 'Three independently observed successful applications across repositories'
+      : 'User-confirmed reusable knowledge through kiokuko curator' } : {}),
   });
+}
+
+/** Share only deterministic draft generation with the automatic route. */
+export function autoCuratorProjection(source: EntryRecord): { draft: CuratorDraft; scope: JsonObject; tags: string[] } {
+  const metadata = readStructuredMetadata(source);
+  // Legacy project scopes may carry an explicit applicability without schemaVersion 3.
+  // The automatic path must preserve it, or a single-project proof would become unscoped Global memory.
+  if (!metadata.applicability && hasExplicitApplicability(source.scope)) {
+    metadata.applicability = validateApplicability(source.scope.applicability);
+  }
+  return {
+    draft: regenerateCuratorDraft(source, metadata),
+    scope: safeGlobalScope(source, metadata, true),
+    tags: canonicalTagOrder([...source.tags.filter((tag) => !containsProjectSpecificData(tag, source)),
+      'global', 'auto-globalized', `curator:${CURATOR_DRAFT_VERSION}`]),
+  };
 }
 
 function safeGlobalTags(entry: EntryRecord): string[] {
@@ -747,6 +767,8 @@ export function globalizeCuratorCandidate(database: SqliteDatabase, input: Globa
     const metadata = scoreEntry(source).metadata;
     const existing = existingGlobalEntry(database, source, candidate, metadata);
     if (existing) {
+      if (autoGlobalizationInstalled(database)) database.prepare(`UPDATE auto_global_projections SET state='replaced',reason='manual_approval',updated_at=?
+        WHERE entry_id=? AND entry_revision=? AND state='active'`).run(now, source.id, source.revision);
       return { candidate, global: existing, idempotent: true };
     }
     const provenance = expectedGlobalProvenance(source, now);
@@ -770,6 +792,8 @@ export function globalizeCuratorCandidate(database: SqliteDatabase, input: Globa
     if (persisted?.id !== global.id) {
       throw new KiokukoError('INTEGRITY_ERROR', 'Curator globalization was not persisted exactly once');
     }
+    if (autoGlobalizationInstalled(database)) database.prepare(`UPDATE auto_global_projections SET state='replaced',reason='manual_approval',updated_at=?
+      WHERE entry_id=? AND entry_revision=? AND state='active'`).run(now, source.id, source.revision);
     return { candidate, global, idempotent: false };
   });
 }

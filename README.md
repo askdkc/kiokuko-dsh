@@ -13,6 +13,7 @@ Automatic memory review saves or updates useful project candidates after eight c
 - **Deep planning** — Run bounded, read-only investigation with four roles. [Usage](docs/deep-planning.md)
 - **Continuity** — Disabled by default. Set `continuity.mode: active` to summarize recent execution evidence for the model. [Setup](docs/continuity.md)
 - **Memory evolution** — Turn completed work into reusable episode and lesson candidates. [Settings](docs/memory-evolution.md)
+- **Verified automatic Global memory** — Three independent, host-observed successful applications can create a scoped `source_verified` Global memory. [Conditions and opt-out](docs/auto-globalization.md)
 - **OrcaReplay** — Record model/tool activity and export it as HTML. [Settings and commands](docs/orca-recording.md)
 - **Japanese output** — Give supported models a bundled Skill for natural Japanese. [Details](docs/japanese-output.md)
 

@@ -4,12 +4,15 @@ import { z } from 'zod'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 import { KiokukoError } from '../errors.js'
+import { captureProjectManifestSnapshot, resolveProjectFingerprint } from '../repository/project-fingerprint.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { findSecret } from './secrets.js'
 import { readEntry } from './entries.js'
 import { isRetrievableEntry, retrievableWorkspaceEntryCount } from './hybrid-retrieval.js'
 import { hasActionableMemorySelection, memoryReasoningRequired, hasExplicitCodingIntent } from '../akinator/capabilities.js'
 import { readContextDelivery } from '../context/delivery.js'
+import { capturePolicy } from './capture-policy.js'
+import { autoGlobalizationInstalled, enqueueAutoGlobalRecheck } from './auto-global-queue.js'
 import type { ScopedContextResult } from '../context/scoped-broker.js'
 import type { TaskProfile } from '../akinator/types.js'
 
@@ -30,7 +33,7 @@ export type MemoryApplicationReview = z.infer<typeof memoryApplicationReviewSche
 export interface MemoryApplicationIdentity { runId: string; workspace: string; sessionId: string; repositoryRoot: string }
 interface Binding extends Record<string, unknown> {
   run_id: string; workspace: string; session_id: string; repository_root: string; delivery_id: string | null;
-  generation: number; mode: 'code' | 'plan' | 'none'; retrieval: string; required_json: string; epoch: number
+  generation: number; mode: 'code' | 'plan' | 'none'; retrieval: string; required_json: string; epoch: number; fingerprint_json: string | null
 }
 interface RequiredMemory { entryId: string; revision: number; deliveryId: string }
 interface ReviewRow extends Record<string, unknown> { entry_id: string; review_revision: number; request_hash: string; review_json: string; source_digest: string }
@@ -74,6 +77,15 @@ export function bindMemoryApplication(db: SqliteDatabase, identity: MemoryApplic
     const run = db.prepare('SELECT workspace,dsh_session_id,status FROM ledger_runs WHERE run_id=?').get(identity.runId)
     if (run?.workspace !== identity.workspace || run.dsh_session_id !== identity.sessionId || run.status !== 'active') conflict('Memory admission identity changed')
     const root = realpathSync(identity.repositoryRoot), mode = memoryApplicationMode(profile)
+    const repository = db.prepare('SELECT repository_id FROM repositories WHERE workspace=?').get<{repository_id:string}>(identity.workspace)
+    let fingerprintJson: string | null = null
+    if (repository !== undefined) {
+      try {
+        fingerprintJson = JSON.stringify(resolveProjectFingerprint(db,
+          { repositoryRoot: root, repositoryId: repository.repository_id, workspace: identity.workspace, source: 'local-path' },
+          captureProjectManifestSnapshot({ repositoryRoot: root, repositoryId: repository.repository_id }), { readOnly: true }))
+      } catch { /* An unavailable fingerprint withholds automatic proof without blocking the task. */ }
+    }
     const deliveryId = context?.deliveryId ?? null
     let required: RequiredMemory[] = []
     if (deliveryId) {
@@ -93,10 +105,10 @@ export function bindMemoryApplication(db: SqliteDatabase, identity: MemoryApplic
     if (previous) {
       assertIdentity(db, identity)
       if (previous.delivery_id === deliveryId && previous.required_json === requiredJson && previous.mode === mode && previous.retrieval === retrieval) return
-      db.prepare('UPDATE task_memory_bindings SET delivery_id=?,generation=generation+1,mode=?,retrieval=?,required_json=?,epoch=epoch+1 WHERE run_id=?')
-        .run(deliveryId, mode, retrieval, requiredJson, identity.runId)
-    } else db.prepare('INSERT INTO task_memory_bindings(run_id,workspace,session_id,repository_root,delivery_id,generation,mode,retrieval,required_json) VALUES(?,?,?,?,?,1,?,?,?)')
-      .run(identity.runId, identity.workspace, identity.sessionId, root, deliveryId, mode, retrieval, requiredJson)
+      db.prepare('UPDATE task_memory_bindings SET delivery_id=?,generation=generation+1,mode=?,retrieval=?,required_json=?,epoch=epoch+1,fingerprint_json=? WHERE run_id=?')
+        .run(deliveryId, mode, retrieval, requiredJson, fingerprintJson, identity.runId)
+    } else db.prepare('INSERT INTO task_memory_bindings(run_id,workspace,session_id,repository_root,delivery_id,generation,mode,retrieval,required_json,fingerprint_json) VALUES(?,?,?,?,?,1,?,?,?,?)')
+      .run(identity.runId, identity.workspace, identity.sessionId, root, deliveryId, mode, retrieval, requiredJson, fingerprintJson)
   })
 }
 
@@ -165,6 +177,7 @@ export function recordMemoryApplicationReview(db: SqliteDatabase, identity: Memo
     const revision = review.expectedRevision + 1
     db.prepare('INSERT INTO task_memory_reviews(run_id,generation,entry_id,entry_revision,review_revision,request_id,request_hash,review_json,source_digest) VALUES(?,?,?,?,?,?,?,?,?)')
       .run(identity.runId, current.generation, review.entryId, review.entryRevision, revision, requestId, requestHash, JSON.stringify(review), applicationSourceDigest(current.repository_root, review.paths))
+    if (review.decision === 'contradicted') enqueueAutoGlobalRecheck(db, review.entryId, review.entryRevision)
     return { revision, provenance: 'model_reported' }
   })
 }
@@ -211,6 +224,59 @@ export function memoryApplicationStatus(db: SqliteDatabase, runId: string) {
 export function assertMemoryApplicationComplete(db: SqliteDatabase, runId: string): void {
   const status = memoryApplicationStatus(db, runId)
   if (!status.ready) throw new KiokukoError('CONFLICT', 'Memory application or regression verification is incomplete', { memoryApplication: status })
+}
+
+/** Record only newly completed, host-observed applications in the run's transaction. */
+export function recordCompletedMemoryApplicationsInTransaction(db: SqliteDatabase, runId: string, completedAt: string): void {
+  if (!autoGlobalizationInstalled(db)) return
+  const current = binding(db, runId)
+  if (!current || current.mode !== 'code' || !current.fingerprint_json) return
+  if (capturePolicy(db, current.workspace, current.session_id).mode !== 'allowed') return
+  const state = memoryApplicationStatus(db, runId)
+  if (!state.supported || !state.ready) return
+  const repositoryId = db.prepare('SELECT repository_id FROM repositories WHERE workspace=?')
+    .get<{repository_id:string}>(current.workspace)?.repository_id
+  if (!repositoryId) return
+  let rootRunId = runId
+  const ancestors = new Set<string>()
+  for (let depth = 0; depth < 32; depth++) {
+    if (ancestors.has(rootRunId)) throw new KiokukoError('INTEGRITY_ERROR', 'Run parent chain has a cycle')
+    ancestors.add(rootRunId)
+    const parent = db.prepare('SELECT parent_run_id FROM ledger_runs WHERE run_id=?').get<{parent_run_id:string|null}>(rootRunId)
+    if (!parent) throw new KiokukoError('INTEGRITY_ERROR', 'Run parent chain is incomplete')
+    if (!parent.parent_run_id) break
+    rootRunId = parent.parent_run_id
+    if (depth === 31) throw new KiokukoError('INTEGRITY_ERROR', 'Run parent chain exceeds bound')
+  }
+  const latestReviews = reviews(db, current)
+  for (const item of state.items) {
+    if (item.decision !== 'adopted' || item.verification !== 'client_observed' || !item.evidenceCallId || item.problem) continue
+    const workspace = db.prepare('SELECT workspace FROM entries WHERE id=?').get<{workspace:string}>(item.entryId)?.workspace
+    if (!workspace || workspace === 'global') continue
+    const entry = readEntry(db, {workspace, entryId:item.entryId})
+    if (entry.status !== 'candidate' || entry.revision !== item.revision) continue
+    const review = latestReviews.find(row => row.entry_id === item.entryId)
+    if (!review) continue
+    const execution = db.prepare('SELECT * FROM task_memory_executions WHERE run_id=? AND call_id=?')
+      .get<ExecutionRow>(runId, item.evidenceCallId)
+    if (!execution || execution.outcome !== 'passed' || !execution.result_hash || execution.generation !== current.generation
+      || execution.epoch !== current.epoch || execution.source_digest !== review.source_digest) continue
+    const receipt = {entry_id:item.entryId, entry_revision:item.revision, run_id:runId,
+      root_run_id:rootRunId, workspace:current.workspace, repository_id:repositoryId,
+      session_id:current.session_id, delivery_id:item.deliveryId, generation:current.generation,
+      epoch:current.epoch, review_hash:review.request_hash, source_digest:review.source_digest,
+      execution_call_id:execution.call_id, result_hash:execution.result_hash,
+      fingerprint_json:current.fingerprint_json, completed_at:completedAt}
+    const digest = canonicalContentHash(receipt)
+    db.prepare(`INSERT OR IGNORE INTO auto_global_application_receipts
+      (entry_id,entry_revision,run_id,root_run_id,workspace,repository_id,session_id,delivery_id,
+       generation,epoch,review_hash,source_digest,execution_call_id,result_hash,fingerprint_json,completed_at,receipt_digest)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(...Object.values(receipt),digest)
+    const persisted = db.prepare('SELECT receipt_digest FROM auto_global_application_receipts WHERE entry_id=? AND entry_revision=? AND run_id=?')
+      .get<{receipt_digest:string}>(item.entryId,item.revision,runId)
+    if (persisted?.receipt_digest !== digest) throw new KiokukoError('INTEGRITY_ERROR', 'Memory application receipt conflicts with completed run')
+    enqueueAutoGlobalRecheck(db, item.entryId, item.revision, completedAt)
+  }
 }
 
 /** Host pre-execution: unknown effectful calls invalidate prior proof, including concurrent work. */

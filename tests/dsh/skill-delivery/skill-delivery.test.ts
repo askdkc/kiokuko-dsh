@@ -97,7 +97,7 @@ test('compiled Skill delivery: reload, full rollback, model switch and compacted
     const before=f.agent.session.snapshotEvents().length
     const nodes=[...f.agent.session.surface.nodes]
     for(const seq of nodes){const event=f.agent.session.eventAt(seq);if(event.type!=='user/message')continue
-      f.agent.session.append('user/message',f.llm.createUserMessage({content:[{type:'text',text:'Earlier conversation compacted.'}],source:{kind:'plugin',plugin:'test-compaction'}}),
+      f.agent.session.append('user/message',f.llm.createUserMessage({content:[{type:'text',text:'Earlier conversation compacted.'}],source:{kind:'plugin:test-compaction'}}),
         {surfaceOp:{op:'replace',startSeq:seq,endSeq:seq},sourceEventSeqs:[seq]})}
     f.responses.push(f.mock.textResponse('継続'));await f.turn();requireBody(f.model.requests.at(-1),'kiokuko-soul')
     assert.ok(f.agent.session.snapshotEvents().length>before)

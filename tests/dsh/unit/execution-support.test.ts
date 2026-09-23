@@ -140,11 +140,12 @@ test('native snapshot is refreshed at intake, retains other context and treats u
   const f = await fixture()
   try {
     const user = { id: 'user', role: 'user', content: [{ type: 'text', text: '日本語\n{{not_a_variable}}' }], source: { kind: 'user' } }
-    const snapshot = { id: 'native', role: 'user', content: [], source: { kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot', sections: [{ name: 'other', text: 'Other current context' }] } }
+    const snapshot = { id: 'native', role: 'user', content: [], source: { kind: 'runtime-context', form: 'snapshot', sections: [{ name: 'other', text: 'Other current context' }] } }
     await f.support.refresh({ ...f.binding, task: f.binding.task + '\n{{not_a_variable}}' }, true)
     const projected = f.support.projectMessages('session', [user, snapshot])
     assert.equal(projected[0], user)
     assert.equal(projected.length, 2)
+    assert.equal(projected[1].source.kind, 'runtime-context')
     assert.equal(projected[1].source.sections.length, 2)
     assert.match(projected[1].content[0].text, /Other current context/)
     const again = f.support.projectMessages('session', projected)

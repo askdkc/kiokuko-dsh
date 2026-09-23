@@ -64,7 +64,7 @@ test('compaction and restart reinstate only fragments missing from the retained 
   const fragments = [fragment('route-skill', 'Skill A', 'one'), fragment('expert', 'Expert A', 'one')]
   live.append(projectDshContext(fragments, live))
   live.events.push({ type: 'user/message', seq: 2, time: 2,
-    data: { role: 'user', content: [{ type: 'text', text: 'Checkpoint' }], source: { kind: 'plugin', plugin: 'compaction' } },
+    data: { role: 'user', content: [{ type: 'text', text: 'Checkpoint' }], source: { kind: 'plugin:compaction' } },
     surfaceOp: { op: 'replace', start: 0, end: 0 } })
   const restored = { snapshotEvents: () => structuredClone(live.events) }
   const projected = projectDshContext(fragments, restored)
@@ -80,7 +80,7 @@ test('human and other-plugin copies cannot suppress host instructions', () => {
   const live = session()
   const fragments = [fragment('expert', 'Required expert')]
   const [owned] = projectDshContext(fragments, live) as any[]
-  live.append([{ ...owned, source: { ...owned.source, plugin: 'other' } },
+  live.append([{ ...owned, source: { ...owned.source, kind: 'plugin:other' } },
     { ...owned, source: { ...owned.source, kind: 'user' } }])
   assert.equal(projectDshContext(fragments, live).length, 1)
 })
@@ -100,7 +100,7 @@ test('22 continuations do not copy the native request and preserve additional in
   live.append(batch)
   for (let turn = 0; turn < 22; turn++) live.append(projectDshContext(fixed, live))
   assert.equal(live.events.filter(event => (event.data as any).source.kind === 'user').length, 1)
-  const pluginText = live.events.filter(event => (event.data as any).source.plugin === 'kiokuko-dsh')
+  const pluginText = live.events.filter(event => (event.data as any).source.kind === 'plugin:kiokuko-dsh')
     .map(event => (event.data as any).content[0].text).join('\n')
   assert.equal(pluginText.includes(task), false)
   assert.equal(pluginText.split('Finalized intake:').length - 1, 1)

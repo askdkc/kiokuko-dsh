@@ -19,7 +19,7 @@ test('Skill upgrades replace owned surface snapshots, preserve audit history and
   assert.deepEqual(projectDshContext([fragment('current')],session),[])
   assert.equal(retainedEvents(session)[1]!.data,unrelated)
   const seq=retainedEvents(session)[0]!.seq
-  session.append('user/message',{role:'user',content:[{type:'text',text:'summary'}],source:{kind:'plugin',plugin:'compaction'}},{surfaceOp:{op:'replace',start:seq,end:seq}})
+  session.append('user/message',{role:'user',content:[{type:'text',text:'summary'}],source:{kind:'plugin:compaction'}},{surfaceOp:{op:'replace',start:seq,end:seq}})
   assert.equal(projectDshContext([fragment('current')],session).length,1)
 })
 test('only currently confirmed system guidance retires a duplicate Skill snapshot',()=>{

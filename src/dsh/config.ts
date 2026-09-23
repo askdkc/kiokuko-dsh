@@ -72,6 +72,7 @@ export const Config = z.object({
   ennoMemory: EnnoMemoryConfig.prefault({}),
   finalization: FinalizationConfig.prefault({}),
   memoryEvolution: MemoryEvolutionConfig.prefault({}),
+  autoGlobalization: z.object({ enabled: z.boolean().default(true) }).strict().prefault({}),
   memoryReview: MemoryReviewConfig.prefault({}),
 })
 export type Config = z.input<typeof Config>

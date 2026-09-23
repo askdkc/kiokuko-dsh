@@ -5,6 +5,7 @@ import type { DshCoreRuntime } from './core-runtime.js'
 import type { DshNativeCommandDefinition } from './commands.js'
 import { beginMemoryExecution, completeMemoryExecution, memoryApplicationReviewSchema,
   memoryApplicationStatus, recordMemoryApplicationReview, type MemoryApplicationIdentity } from '../memory/application.js'
+import { autoGlobalizationStatus } from '../memory/auto-globalization.js'
 
 const inputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('status') }).strict(),
@@ -44,11 +45,15 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
       const status = await host.runtime.withDatabase(db => {
         const row = db.prepare('SELECT run_id FROM task_memory_bindings WHERE session_id=? AND repository_root=? ORDER BY rowid DESC LIMIT 1')
           .get<{run_id:string}>(session.sessionId, session.repositoryRoot)
-        return { integration: 'native_active', ...(row ? memoryApplicationStatus(db, row.run_id) : { supported: false, ready: false, verification: 'unobserved' }) }
+        const application = row ? memoryApplicationStatus(db, row.run_id) : { supported: false as const, ready: false, verification: 'unobserved' as const }
+        const globalization = application.supported && 'items' in application
+          ? application.items.map(item => ({ entryId: item.entryId, revision: item.revision,
+            ...autoGlobalizationStatus(db, item.entryId, item.revision) })) : []
+        return { integration: 'native_active', ...application, globalization }
       })
       if (invocation.rawInput.includes('--json')) return { kind: 'success', text: JSON.stringify(status, null, 2) }
       return { kind: 'success', text: !status.supported ? '記憶適用の連携は稼働中です。この会話で準備済みの依頼はありません。'
-        : `記憶適用: ${status.ready ? '未処理なし' : '確認が必要'}\n取得: ${'retrieval' in status ? status.retrieval : 'unavailable'}\n検証: ${status.verification}\n未処理: ${'pending' in status ? status.pending.length : 0}\n実行中・終了未確認: ${'running' in status ? status.running : 0}\nモデルによる判断の正しさは自動認定しません。詳細は status --json で確認できます。` }
+        : `記憶適用: ${status.ready ? '未処理なし' : '確認が必要'}\n取得: ${'retrieval' in status ? status.retrieval : 'unavailable'}\n検証: ${status.verification}\n未処理: ${'pending' in status ? status.pending.length : 0}\n実行中・終了未確認: ${'running' in status ? status.running : 0}\n自動Global化: ${status.globalization.map(item => `${item.entryId}@${item.revision}: ${'successfulRuns' in item ? item.successfulRuns : 0}/3, ${'reason' in item ? item.reason ?? item.state : '未対応'}, ${'globalEntryId' in item ? item.globalEntryId ?? '未生成' : '未生成'}`).join(' / ') || '対象なし'}\n詳細は status --json で確認できます。` }
     } }))
   disposers.push(ctx.tools.register({ name: 'task_memory_review', modelFacing: true,
     description: MEMORY_APPLICATION_GUIDANCE,

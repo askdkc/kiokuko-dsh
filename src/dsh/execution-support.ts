@@ -244,7 +244,8 @@ export class DshExecutionSupport {
       const state = this.#states.get(sessionId)
       if (!state || state.binding.chat) return messages
       const text = this.text(sessionId)
-      const isSnapshot = (message: any) => message?.source?.plugin === '@deepseek-ai/dsh-system-prompt'
+      const isSnapshot = (message: any) => (message?.source?.kind === 'runtime-context'
+        || message?.source?.kind === 'plugin' && message.source.plugin === '@deepseek-ai/dsh-system-prompt')
         && message.source.form === 'snapshot' && Array.isArray(message.source.sections)
       const current = [...messages].reverse().find(isSnapshot)
       const retained: any = current ? undefined : [...retainedEvents((state.binding.nativeSession ?? {}) as any)].reverse().find((event: any) =>
@@ -257,7 +258,7 @@ export class DshExecutionSupport {
       if (!current && before?.content?.[0]?.text === body) return messages
       const snapshot = { ...(current ?? { id: randomUUID(), role: 'user' }),
         content: [{ type: 'text', text: body }], source: {
-          kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot', sections,
+          kind: 'runtime-context', form: 'snapshot', sections,
         } }
       return current ? messages.map(message => message === current ? snapshot : message) : [...messages, snapshot]
     } catch { return messages }

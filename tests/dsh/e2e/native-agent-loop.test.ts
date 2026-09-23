@@ -529,7 +529,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     assert.equal(confirmationDetails.every((detail) => /^# 計画の確認$/mu.test(detail)), true)
     assert.equal(confirmationDetails.every((detail) => /^## 作業項目$/mu.test(detail)), true)
     const injectedTexts = liveAgent.session.snapshotEvents()
-      .filter((event: any) => event.type === 'user/message' && event.data.source?.plugin === 'kiokuko-dsh')
+      .filter((event: any) => event.type === 'user/message' && event.data.source?.kind === 'plugin:kiokuko-dsh')
       .flatMap((event: any) => event.data.content)
       .flatMap((block: any) => block.type === 'text' ? [block.text] : [])
     assert.equal(injectedTexts.some((text: string) => text.includes('# Kiokuko SOUL router')), false,
@@ -559,7 +559,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       assert.equal(injectedTexts.some((text: string) => text.includes(`Checked ${disposition.slotId}.`)), true)
     }
     const taskContexts = liveAgent.session.snapshotEvents()
-      .filter((event: any) => event.type === 'user/message' && event.data.source?.plugin === 'kiokuko-dsh'
+      .filter((event: any) => event.type === 'user/message' && event.data.source?.kind === 'plugin:kiokuko-dsh'
         && event.data.source.sections?.[0]?.name === 'user-task:user-task')
       .map((event: any) => event.data.content[0].text as string)
     assert.ok(taskContexts.some((text: string) => text.includes('変更を検証し、結果を報告してください。')),

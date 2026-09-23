@@ -1,4 +1,4 @@
-import { assertMemoryApplicationComplete } from '../memory/application.js';
+import { assertMemoryApplicationComplete, recordCompletedMemoryApplicationsInTransaction } from '../memory/application.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { withImmediateTransaction } from '../db/transaction.js';
@@ -221,12 +221,14 @@ export class LedgerStore {
     if (!current) notFound('Ledger run not found');
     if (validatedStatus === 'completed' && current.status !== 'completed') assertMemoryApplicationComplete(this.database, runId);
     if (TERMINAL_RUN_STATUSES.includes(current.status as (typeof TERMINAL_RUN_STATUSES)[number]) && current.status !== validatedStatus) conflict('Terminal ledger run cannot change status');
+    if (TERMINAL_RUN_STATUSES.includes(current.status as (typeof TERMINAL_RUN_STATUSES)[number])) return rowToRun(current);
     this.database.prepare('UPDATE ledger_runs SET status = ?, ended_at = ?, updated_at = ? WHERE run_id = ?').run(
       validatedStatus,
       TERMINAL_RUN_STATUSES.includes(validatedStatus as (typeof TERMINAL_RUN_STATUSES)[number]) ? timestamp : null,
       timestamp,
       runId,
     );
+    if (validatedStatus === 'completed') recordCompletedMemoryApplicationsInTransaction(this.database, runId, timestamp);
     const updated = this.database.prepare('SELECT * FROM ledger_runs WHERE run_id = ?').get<RunRow>(runId);
     if (!updated) notFound('Ledger run not found');
     return rowToRun(updated);
