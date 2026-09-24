@@ -7,7 +7,8 @@ import { readContextRunRetrievalState } from '../context/run-state.js'
 import { contextRetrievalStateHash } from '../context/selection-state.js'
 import { scopedMemoryUseSignal, assertScopedMemoryUseSignal } from '../context/scoped-memory-gate.js'
 import { queryScopedContextGated, type ScopedContextQuery } from '../context/scoped-broker.js'
-import { captureProjectManifestSnapshot } from '../repository/project-fingerprint.js'
+import { captureProjectManifestSnapshot, resolveProjectFingerprint } from '../repository/project-fingerprint.js'
+import { currentRequestMemory } from './request-memory.js'
 import { GLOBAL_WORKSPACE } from '../memory/workspaces.js'
 import { readEnnoSnapshot, assertExecutionLeaseInTransaction } from '../enno-oduno/store.js'
 import { stateForSnapshot } from '../enno-oduno/service.js'
@@ -40,8 +41,10 @@ interface Owner {
   corpus: string | null; manifest: string | null; config: string; fullCount: number; cold: boolean
   baseline: Pick<PreparedAgentTask, 'context' | 'memoryPolicy'>; selected: Pick<PreparedAgentTask, 'context' | 'memoryPolicy'>
   verifierCursor: number; unit: WorkUnit | null; inFlight?: Promise<void>; apply: RefreshBinding['apply']
+  deliveryIdentity?: string | undefined
 }
 const emptySignals = (): MemorySignals => ({ errors: [], paths: [], identifiers: [] })
+const deliveryDigest = (value: unknown): string => canonicalContentHash(JSON.parse(JSON.stringify(value)))
 const allowedStates = new Set(['oduno_ideal', 'zenki_planning', 'goki_executing', 'enno_verifying'])
 
 /** One bounded owner registry; no new lease, queue, model request or memory body store. */
@@ -162,6 +165,8 @@ export class DshEnnoMemoryRefresh {
           root: snapshot.repositoryRoot, signals: owner.signals, constraints: input.constraints, characterBudget: 8000 })
         if(verifiers.length&&input.query!==undefined)focus={...focus,retrievalDomainDigest:canonicalContentHash({focus:focus.retrievalDomainDigest,query:input.query})}
         const manifest = captureProjectManifestSnapshot(input.prepared.project).manifestDigest
+        const fingerprint = resolveProjectFingerprint(db, input.prepared.project,
+          captureProjectManifestSnapshot(input.prepared.project), { readOnly: true })
         const corpusStart = performance.now()
         const corpus = contextRetrievalStateHash(db, [snapshot.workspace, GLOBAL_WORKSPACE], { includeEcosystem: true })
         metric.corpusValidationMs = performance.now()-corpusStart
@@ -178,6 +183,21 @@ export class DshEnnoMemoryRefresh {
           errorSignatures: focus.observedErrorSignals, changedPaths: focus.targetPaths,
           focus: { objective: focus.workUnitObjective, identifiers: focus.observedIdentifiers, constraints: focus.constraints,
             retrievalDomainDigest: focus.retrievalDomainDigest, rankingFocusDigest: focus.rankingFocusDigest } }
+        const deliveryIdentity = deliveryDigest({ run: run.stateHash, authority: snapshot, lease: input.leaseToken ?? null,
+          query, corpus, manifest, fingerprint, metadata, capabilities: input.capabilities, config: configDigest,
+          context: owner.selected.context?.queryHash ?? null, delivery: owner.selected.context?.deliveryId ?? null })
+        if (decision.decision === 'reuse' && owner.selected.context && owner.deliveryIdentity === deliveryIdentity) {
+          assertAuthority()
+          let current = false
+          try { current = currentRequestMemory(db, { ...input.prepared, context: owner.selected.context }).size === owner.selected.context.items.length }
+          catch { /* Revalidate through the existing broker when an identity read is unavailable. */ }
+          if (current) {
+            await input.validateCapabilities?.()
+            assertAuthority()
+            input.apply(owner.selected)
+            return
+          }
+        }
         const ticket = reserveMemoryRefresh(db, { runId: input.runId, config: configDigest, full: decision.decision === 'full',
           maxFull: config.maxFullSearchesPerRun, assertCurrent: assertAuthority })
         if (!ticket) { metric.decision = 'skip'; metric.reason = 'budget_exhausted'; return }
@@ -201,6 +221,9 @@ export class DshEnnoMemoryRefresh {
         Object.assign(metric, timings)
         assertLive()
         owner.selected = { context: gated.context, memoryPolicy: gated.value }
+        owner.deliveryIdentity = gated.context ? deliveryDigest({ run: run.stateHash, authority: snapshot, lease: input.leaseToken ?? null,
+          query, corpus, manifest, fingerprint, metadata: readRefreshMetadata(db, input.runId), capabilities: input.capabilities, config: configDigest,
+          context: gated.context.queryHash, delivery: gated.context.deliveryId }) : undefined
         owner.focus = focus.retrievalDomainDigest; owner.corpus = corpus; owner.manifest = manifest; owner.config = configDigest; owner.cold = false
         const deliveryStart = performance.now()
         input.apply(owner.selected)

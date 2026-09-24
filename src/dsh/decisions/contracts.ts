@@ -11,7 +11,7 @@ export const DecisionQuestionSchema = z.object({
 }).strict().refine(q => new Set(q.choices.map(c => c.id)).size === q.choices.length && q.choices.some(c => c.id === q.abstainId), 'Choices must be unique and include abstention')
 export type DecisionQuestion = z.infer<typeof DecisionQuestionSchema>
 export const DecisionBatchSchema = z.object({
-  purpose: z.enum(['akinator', 'skills', 'enno-check', 'lisp', 'memory-reuse', 'compaction', 'answer-review']), state: z.unknown(),
+  purpose: z.enum(['akinator', 'skills', 'enno-check', 'lisp', 'memory-reuse', 'compaction', 'model-handoff', 'answer-review']), state: z.unknown(),
   questions: z.array(DecisionQuestionSchema).min(1).max(256),
 }).strict().refine(b => new Set(b.questions.map(q => q.id)).size === b.questions.length, 'Question IDs must be unique')
 export type DecisionBatch = z.infer<typeof DecisionBatchSchema>

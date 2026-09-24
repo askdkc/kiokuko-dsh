@@ -343,7 +343,14 @@ export class DshSessionLogMirror implements DshSessionQuery {
 
   async #writeCoreHealth(checkpoint: DshMirrorCheckpoint): Promise<void> {
     try {
-      await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+      await this.#runtime.withDatabase((database) => {
+        const old = database.prepare(`SELECT observed_through AS observedThrough,mirrored_through AS mirroredThrough,
+          native_durable_through AS nativeDurableThrough,health,last_error_code AS errorCode,last_error_message AS errorMessage
+          FROM dsh_session_cache_health WHERE dsh_session_id=?`).get<{observedThrough:number;mirroredThrough:number;nativeDurableThrough:number;health:string;errorCode:string|null;errorMessage:string|null}>(checkpoint.sessionId)
+        if (old && old.observedThrough >= checkpoint.observedThrough && old.mirroredThrough >= checkpoint.mirroredThrough
+          && old.nativeDurableThrough >= checkpoint.nativeDurableThrough && old.health === checkpoint.health
+          && old.errorCode === (checkpoint.error?.code ?? null) && old.errorMessage === (checkpoint.error?.message ?? null)) return
+        withImmediateTransaction(database, () => {
         database.prepare(`
           INSERT INTO dsh_session_cache_health (
             dsh_session_id, observed_through, mirrored_through,
@@ -368,7 +375,8 @@ export class DshSessionLogMirror implements DshSessionQuery {
           checkpoint.error?.message ?? null,
           this.#now(),
         )
-      }))
+        })
+      })
     } catch {
       // Health reporting is itself non-vetoing.
     }
@@ -485,6 +493,15 @@ export class DshSessionLogMirror implements DshSessionQuery {
         const bytes = Buffer.byteLength(eventJson, 'utf8')
         const eventDigest = createHash('sha256').update(eventJson).digest('hex')
         const attachmentRefs = dshEventAttachmentRefs(event)
+        const prior = database.prepare('SELECT digest FROM session_events WHERE session_id=? AND seq=?')
+          .get<{digest:string}>(sessionId,event.seq)
+        const current = this.#checkpoint(sessionId)
+        if (prior?.digest === eventDigest && current.health === 'healthy' && current.observedThrough >= event.seq
+          && attachmentRefs.every(ref => {
+            const stored = database.prepare("SELECT state,ref_json AS refJson FROM session_attachments WHERE session_id=? AND attachment_id=?")
+              .get<{state:string;refJson:string}>(sessionId,ref.attachmentId)
+            return stored?.state === 'stored' && stored.refJson === JSON.stringify(ref)
+          })) { result = current; return }
         const now = this.#now()
         withImmediateTransaction(database, () => {
           const existing = database.prepare(`
@@ -633,7 +650,7 @@ export class DshSessionLogMirror implements DshSessionQuery {
     if (before.error) return before
     const coverage=database.prepare('SELECT count(*) AS n FROM session_events WHERE session_id=? AND seq>=? AND seq<=?').get<{n:number}>(sessionId,rangeStartSeq,throughSeq)!.n
     if(coverage!==throughSeq-rangeStartSeq+1)return before
-    database.prepare('UPDATE session_watermarks SET native_durable_through=max(native_durable_through,?),updated_at=? WHERE session_id=?')
+    if (before.nativeDurableThrough < throughSeq) database.prepare('UPDATE session_watermarks SET native_durable_through=max(native_durable_through,?),updated_at=? WHERE session_id=?')
       .run(throughSeq, this.#now(), sessionId)
     const checkpoint = this.#checkpoint(sessionId)
     await this.#writeCoreHealth(checkpoint)
@@ -645,6 +662,14 @@ export class DshSessionLogMirror implements DshSessionQuery {
     const row = this.#database?.prepare("SELECT event_json AS eventJson FROM session_events WHERE session_id=? AND json_extract(event_json,'$.type')=? AND seq<=? ORDER BY seq DESC LIMIT 1")
       .get<{eventJson:string}>(validSessionId(sessionId),type,throughSeq)
     return row ? JSON.parse(row.eventJson) as DshLogEvent : undefined
+  }
+
+  /** Compare the native boundary without touching cache watermarks. */
+  async matchesEvent(sessionId: string, event: DshLogEvent): Promise<boolean> {
+    await this.start(); await this.#tail
+    const row = this.#database?.prepare('SELECT digest FROM session_events WHERE session_id=? AND seq=?')
+      .get<{digest:string}>(validSessionId(sessionId), event.seq)
+    return row?.digest === createHash('sha256').update(JSON.stringify(validEvent(event))).digest('hex')
   }
 
   async sourceGeneration(sessionId: string): Promise<string> {
@@ -686,6 +711,9 @@ export class DshSessionLogMirror implements DshSessionQuery {
       await this.#tail
       const database = this.#database
       if (database === undefined) return this.#degrade(sessionId, this.#lastError ?? new Error('session cache database is unavailable'), maximum)
+      const existing = this.#checkpoint(sessionId)
+      if (existing.health === 'healthy' && existing.nativeDurableThrough >= maximum
+        && existing.mirroredThrough >= maximum && existing.observedThrough >= maximum) return existing
       const now = this.#now()
       withImmediateTransaction(database, () => {
         database.prepare(`

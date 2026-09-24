@@ -22,8 +22,8 @@ async function setup(options: {mode?:'active'|'observe'|'off'; llm?:DshLlm; time
     yield {type:'finish',reason:{kind:'stop'},usage:{inputTokens:100,outputTokens:50}}
   }}
   const config=MemoryReviewConfig.parse({...(options.mode?{mode:options.mode}:{}),...(options.timeoutMs?{timeoutMs:options.timeoutMs}:{}),...(options.dailyCalls?{dailyCalls:options.dailyCalls}:{})})
-  let flushed=-1
-  const coordinator=new AutoMemoryReviewCoordinator({runtime:f.runtime,mirror,llm,config,now:()=>NOW,flush:async s=>{assert.equal(s,session);flushed=events.length-1;return true}})
+  let flushed=-1,flushCount=0
+  const coordinator=new AutoMemoryReviewCoordinator({runtime:f.runtime,mirror,llm,config,now:()=>NOW,flush:async s=>{assert.equal(s,session);flushed=events.length-1;flushCount++;return true}})
   await coordinator.bind({workspace:'project:test',runId:'review',session,startSeq:1})
   const binding={workspace:'project:test',runId:'review',session,startSeq:1}
   let turn=0
@@ -35,8 +35,21 @@ async function setup(options: {mode?:'active'|'observe'|'off'; llm?:DshLlm; time
     const end=events.length-1
     coordinator.notify(binding,end);await coordinator.whenIdle();return end
   }
-  return {...f,events,session,mirror,coordinator,binding,add,calls:()=>calls,flushed:()=>flushed,llm,config,async close(){await coordinator.dispose();await mirror.close();f.db.close()}}
+  return {...f,events,session,mirror,coordinator,binding,add,calls:()=>calls,flushed:()=>flushed,flushCount:()=>flushCount,llm,config,async close(){await coordinator.dispose();await mirror.close();f.db.close()}}
 }
+test('unchanged review binding and classified range avoid repeat writes and flush',async()=>{
+  const f=await setup()
+  try{
+    const writes=f.db.prepare('SELECT total_changes() AS n').get<{n:number}>()!.n
+    await f.coordinator.bind(f.binding)
+    assert.equal(f.db.prepare('SELECT total_changes() AS n').get<{n:number}>()!.n,writes)
+    for(let i=0;i<3;i++)await f.add()
+    const flushes=f.flushCount()
+    await f.coordinator.scan(f.binding,f.events.length-1,'boundary')
+    assert.equal(f.flushCount(),flushes,'classified prefix needs no second native flush')
+    assert.equal(f.calls(),0,'boundary still evaluates the unscheduled-turn threshold')
+  }finally{await f.close()}
+})
 test('T01/T02/T03: eight human turns save without closing the run; internal turns do not count; duplicate hints do not resend',async()=>{
   const f=await setup()
   try{

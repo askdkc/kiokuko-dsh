@@ -100,6 +100,24 @@ export class LispStore {
   operations(sessionId: string): Promise<Operation[]> {
     return this.database(db => db.prepare("SELECT * FROM dsh_lisp_operations WHERE session_id=? AND kind!='binding' ORDER BY CASE WHEN state IN ('RUNNING','APPLYING','UNKNOWN','AWAITING_APPROVAL') THEN 0 ELSE 1 END, updated_at DESC").all<Operation>(sessionId))
   }
+  operationSummaries(sessionId: string, offset?: number): Promise<{ operations: Pick<Operation, 'operation_id' | 'agent_id' | 'kind' | 'state' | 'updated_at'>[]; count: number; pendingStates: Record<string, number> }> {
+    return this.database(db => {
+      const where = "session_id=? AND kind!='binding'"
+      const count = db.prepare(`SELECT COUNT(*) AS count FROM dsh_lisp_operations WHERE ${where}`).get<{count:number}>(sessionId)!.count
+      const states = db.prepare(`SELECT state,COUNT(*) AS count FROM dsh_lisp_operations WHERE ${where} AND state IN ('RUNNING','UNKNOWN','APPLYING','AWAITING_APPROVAL') GROUP BY state`)
+        .all<{state:string;count:number}>(sessionId)
+      const operations = db.prepare(`SELECT operation_id,agent_id,kind,state,updated_at FROM dsh_lisp_operations WHERE ${where}
+        ORDER BY CASE WHEN state IN ('RUNNING','APPLYING','UNKNOWN','AWAITING_APPROVAL') THEN 0 ELSE 1 END,updated_at DESC${offset === undefined ? '' : ' LIMIT 10 OFFSET ?'}`)
+        .all<Pick<Operation, 'operation_id' | 'agent_id' | 'kind' | 'state' | 'updated_at'>>(sessionId, ...(offset === undefined ? [] : [offset]))
+      return { operations, count, pendingStates: Object.fromEntries(states.map(row => [row.state,row.count])) }
+    })
+  }
+  hasPending(sessionId: string): Promise<boolean> {
+    return this.database(db => db.prepare("SELECT 1 FROM dsh_lisp_operations WHERE session_id=? AND state IN ('RUNNING','UNKNOWN','APPLYING','AWAITING_APPROVAL') LIMIT 1").get(sessionId) !== undefined)
+  }
+  countByKind(sessionId: string, kind: string): Promise<number> {
+    return this.database(db => db.prepare('SELECT COUNT(*) AS count FROM dsh_lisp_operations WHERE session_id=? AND kind=?').get<{count:number}>(sessionId,kind)!.count)
+  }
   proposalReceipts(owner: LispOwner, evalId: string): Promise<{ id: string; state: string; path: string; result: string | null }[]> {
     return this.database(db => db.prepare(`SELECT operation_id AS id,state,json_extract(payload,'$.request.path') AS path,result
       FROM dsh_lisp_operations WHERE session_id=? AND agent_id=? AND kind='proposal'

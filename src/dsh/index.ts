@@ -8,6 +8,7 @@ import { Config, type Config as DshConfig } from './config.js'
 import type { DshRuntime } from './runtime.js'
 import { KIOKUKO_DSH_HOST_SERVICE, mountDshComposition, type DshCompositionHost } from './composition.js'
 import { createDshHostAdapter } from './host-adapter.js'
+import { ModelHandoff } from './model-handoff.js'
 import { setupDshOnLoad } from './setup.js'
 import { DshSkillPrompts } from './skill-prompts.js'
 export { DshSkillPrompts } from './skill-prompts.js'
@@ -90,6 +91,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       }
       if (resolvedConfig.answerReview.mode === 'auto') host.decisions?.reportAnswerReview({ ...resolvedConfig.answerReview, state: 'skipped', reason: 'native_capability_unavailable' })
       if (host.decisions && !host.semanticCompaction) host = { ...host, semanticCompaction: new SemanticCompactionCoordinator(ctx as any, host.decisions, realpathSync(process.cwd()), resolvedConfig.observationPack) }
+      const modelHandoff = host.decisions ? new ModelHandoff(ctx as any, host.decisions, realpathSync(process.cwd()), resolvedConfig.modelHandoff) : undefined
       if (host.configureEnnoMemory) host.configureEnnoMemory(resolvedConfig.ennoMemory)
       else if (resolvedConfig.ennoMemory.mode !== 'off') throw new Error('The explicit Kiokuko host does not support ennoMemory')
       host.intakeGate?.configureMemory(resolvedConfig.akinatorMemory)
@@ -109,10 +111,12 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       const shutdownHost = host
       const cleanup = () => shutdown ??= (async () => {
         composition?.stopIngress()
+        modelHandoff?.stop()
         disposeOrcaCommand?.()
         const failures: unknown[] = []
         try { await shutdownHost.orca?.shutdown() } catch (error) { failures.push(error) }
         try { await disposeExport?.() } catch (error) { failures.push(error) }
+        try { await modelHandoff?.drain() } catch (error) { failures.push(error) }
         try { await composition?.dispose() } catch (error) { failures.push(error) }
         if (failures.length) throw new AggregateError(failures, 'kiokuko-dsh explicit host unload failed')
       })()
@@ -140,7 +144,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx, { answerReview: resolvedConfig.answerReview, typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, observationPack: resolvedConfig.observationPack, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, toolExposure: resolvedConfig.toolExposure, modelRoutes: resolvedConfig.modelRoutes,
+    const adapter = createDshHostAdapter(ctx, { answerReview: resolvedConfig.answerReview, typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, modelHandoff: resolvedConfig.modelHandoff, observationPack: resolvedConfig.observationPack, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, toolExposure: resolvedConfig.toolExposure, modelRoutes: resolvedConfig.modelRoutes,
       ennoMemory: resolvedConfig.ennoMemory, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, autoGlobalization: resolvedConfig.autoGlobalization, memoryReview: resolvedConfig.memoryReview })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined

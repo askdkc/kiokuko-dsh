@@ -220,35 +220,46 @@ export function memoryApplicationStatus(db: SqliteDatabase, runId: string) {
   const current = binding(db, runId)
   if (!current) return { supported: false as const, ready: true, pending: [], verification: 'unobserved' as const }
   const required = JSON.parse(current.required_json) as RequiredMemory[], stored = reviews(db, current)
+  const parsed = new Map(stored.map(row => [row.entry_id, JSON.parse(row.review_json) as MemoryApplicationReview]))
+  const sourceDigests = new Map<string, string>()
+  const digestFor = (paths: readonly string[]): string => {
+    const key = JSON.stringify([...new Set(paths)].sort())
+    let value = sourceDigests.get(key)
+    if (value === undefined) { value = applicationSourceDigest(current.repository_root, paths); sourceDigests.set(key, value) }
+    return value
+  }
+  const evidenceByCommand = new Map<string, { latest: ExecutionRow | undefined; reviewHash: string; sourceDigest: string }>()
   const items = required.map(item => {
     const row = stored.find(candidate => candidate.entry_id === item.entryId)
     let problem: string | null = null, verification = 'not_required', evidenceCallId: string | null = null
     try { assertEntryCurrent(db, item) } catch { problem = 'entry_changed' }
     if (!row) problem ??= 'decision_missing'
     else {
-      const review = JSON.parse(row.review_json) as MemoryApplicationReview
+      const review = parsed.get(item.entryId)!
       try {
-        const digest = applicationSourceDigest(current.repository_root, review.paths)
+        const digest = digestFor(review.paths)
         if (review.decision !== 'adopted' || current.mode !== 'code') {
           if (digest !== row.source_digest) problem ??= 'basis_changed'
           verification = 'model_reported'
         } else {
-          const selected = stored.filter(row => {
-            const value = JSON.parse(row.review_json) as MemoryApplicationReview
-            return value.decision === 'adopted' && value.command === review.command
-          })
-          const latest = db.prepare(`SELECT * FROM task_memory_executions WHERE run_id=? AND generation=? AND epoch=? AND command_hash=? ORDER BY rowid DESC LIMIT 1`)
-            .get<ExecutionRow>(runId, current.generation, current.epoch, canonicalContentHash(review.command))
-          const evidence = latest?.outcome === 'passed'
-            && latest.review_hash === canonicalContentHash(selected.map(row => row.request_hash))
-            && latest.source_digest === applicationSourceDigest(current.repository_root, selected.flatMap(row => (JSON.parse(row.review_json) as MemoryApplicationReview).paths)) ? latest : undefined
+          let group = evidenceByCommand.get(review.command!)
+          if (!group) {
+            const selected = stored.filter(candidate => { const value = parsed.get(candidate.entry_id)!; return value.decision === 'adopted' && value.command === review.command })
+            group = { latest: db.prepare(`SELECT * FROM task_memory_executions WHERE run_id=? AND generation=? AND epoch=? AND command_hash=? ORDER BY rowid DESC LIMIT 1`)
+              .get<ExecutionRow>(runId, current.generation, current.epoch, canonicalContentHash(review.command)),
+              reviewHash: canonicalContentHash(selected.map(candidate => candidate.request_hash)),
+              sourceDigest: digestFor(selected.flatMap(candidate => parsed.get(candidate.entry_id)!.paths)) }
+            evidenceByCommand.set(review.command!, group)
+          }
+          const evidence = group.latest?.outcome === 'passed' && group.latest.review_hash === group.reviewHash
+            && group.latest.source_digest === group.sourceDigest ? group.latest : undefined
           verification = evidence ? 'client_observed' : 'missing_failed_or_stale'
           evidenceCallId = evidence?.call_id ?? null
           if (!evidence) problem ??= 'verification_missing_failed_or_stale'
         }
       } catch { problem ??= 'source_unavailable' }
     }
-    return { ...item, reviewRevision: row?.review_revision ?? 0, decision: row ? (JSON.parse(row.review_json) as MemoryApplicationReview).decision : null, problem, verification, evidenceCallId }
+    return { ...item, reviewRevision: row?.review_revision ?? 0, decision: row ? parsed.get(item.entryId)!.decision : null, problem, verification, evidenceCallId }
   })
   const running = db.prepare("SELECT COUNT(*) AS count FROM task_memory_executions WHERE run_id=? AND outcome='running'").get<{count:number}>(runId)!.count
   return { supported: true as const, running, generation: current.generation, deliveryId: current.delivery_id, mode: current.mode,
@@ -314,10 +325,12 @@ export function recordCompletedMemoryApplicationsInTransaction(db: SqliteDatabas
 }
 
 /** Host pre-execution: unknown effectful calls invalidate prior proof, including concurrent work. */
-export function beginMemoryExecution(db: SqliteDatabase, identity: MemoryApplicationIdentity, callId: string, command: string | null): void {
-  withImmediateTransaction(db, () => {
+export function beginMemoryExecution(db: SqliteDatabase, identity: MemoryApplicationIdentity, callId: string, command: string | null): boolean {
+  const initial = assertIdentity(db, identity)
+  if ((JSON.parse(initial.required_json) as RequiredMemory[]).length === 0) return false
+  return withImmediateTransaction(db, () => {
     const current = assertIdentity(db, identity), status = memoryApplicationStatus(db, identity.runId)
-    if (!status.supported || !status.items.length) return
+    if (!status.supported || !status.items.length) return false
     if (status.items.some(item => item.problem === 'decision_missing' || item.problem === 'entry_changed' || item.problem === 'basis_changed' || item.problem === 'source_unavailable')) conflict('Use task_memory_review to resolve memory decisions before executing or editing')
     const old = db.prepare('SELECT * FROM task_memory_executions WHERE run_id=? AND call_id=?').get<ExecutionRow>(identity.runId, callId)
     if (old) conflict('Native tool call was already observed; do not replay effects')
@@ -330,6 +343,7 @@ export function beginMemoryExecution(db: SqliteDatabase, identity: MemoryApplica
     db.prepare('INSERT INTO task_memory_executions(run_id,call_id,generation,epoch,command_hash,review_hash,source_digest,outcome) VALUES(?,?,?,?,?,?,?,?)')
       .run(identity.runId, callId, current.generation, epoch, canonicalContentHash(command), canonicalContentHash(selected.map(row => row.request_hash)),
         applicationSourceDigest(current.repository_root, selected.flatMap(row => (JSON.parse(row.review_json) as MemoryApplicationReview).paths)), 'running')
+    return true
   })
 }
 /** Typed native result only. Text claiming success is not an observation. */

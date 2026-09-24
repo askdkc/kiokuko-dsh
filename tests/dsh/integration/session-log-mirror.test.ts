@@ -72,6 +72,11 @@ test('mirror preserves a larger-than-ledger event, backfills gaps, and streams o
         FROM dsh_session_cache_health WHERE dsh_session_id = ?
     `).get<{ observedThrough: number; mirroredThrough: number; nativeDurableThrough: number; health: string }>(session.id)
     assert.deepEqual({ ...health }, { observedThrough: 2, mirroredThrough: 2, nativeDurableThrough: 2, health: 'healthy' })
+    const before = f.core.prepare('SELECT total_changes() AS n').get<{n:number}>()!.n
+    assert.equal((await f.mirror.observe(session.id, large)).health, 'healthy')
+    assert.equal((await f.mirror.checkpointAfterNativeFlush(session)).confirmedThrough, 2)
+    assert.equal(f.core.prepare('SELECT total_changes() AS n').get<{n:number}>()!.n, before,
+      'repeating a confirmed snapshot must not rewrite the Core health projection')
   } finally {
     await f.cleanup()
   }

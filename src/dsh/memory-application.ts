@@ -32,6 +32,12 @@ export interface ApplicationHost {
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status'])
 const CONTROL_TOOLS = new Set(['task_memory_review', 'memory_checkpoint', 'curator_check', 'enno_finish', 'enno_work_report', 'enno_plan_review', 'enno_plan_submit', 'enno_ideal_submit', 'enno_meditation_submit'])
 
+/** Only saved-result paging is a read; ref inspection can run a live worker. */
+export function isSavedLispResultRead(execution: Pick<NativeExecution, 'name' | 'arguments' | 'parent'>): boolean {
+  return execution.name === 'lisp_inspect' && execution.parent === undefined
+    && typeof execution.arguments?.resultOperationId === 'string' && execution.arguments.ref === undefined
+}
+
 /** Mount on the actual DSH pre-execute/result path; it never grants native permission. */
 export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHost): () => void {
   const pending = new WeakMap<object, MemoryApplicationIdentity>()
@@ -76,7 +82,7 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
     } }))
   disposers.push(ctx.on('tools/pre-execute', async (execution: NativeExecution, next: () => Promise<unknown>) => {
     const identity = host.resolve(execution)
-    if (!identity || READ_TOOLS.has(execution.name) || CONTROL_TOOLS.has(execution.name)) return next()
+    if (!identity || READ_TOOLS.has(execution.name) || CONTROL_TOOLS.has(execution.name) || isSavedLispResultRead(execution)) return next()
     // A child without its own admitted binding cannot borrow its parent's proof.
     let command: string | null = null
     const args = execution.arguments
@@ -89,12 +95,12 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
           && realpathSync(resolve(identity.repositoryRoot, directory)) === identity.repositoryRoot)) command = args.command
       } catch { /* a different/unavailable cwd cannot produce proof */ }
     }
-    await host.runtime.withDatabase(db => {
+    const tracked = await host.runtime.withDatabase(db => {
       execution.signal.throwIfAborted()
       if (host.resolve(execution)?.runId !== identity.runId) throw new Error('Native task changed')
-      beginMemoryExecution(db, identity, execution.callId, command)
+      return beginMemoryExecution(db, identity, execution.callId, command)
     })
-    pending.set(execution, identity)
+    if (tracked) pending.set(execution, identity)
     return next()
   }, { prepend: true }))
   disposers.push(ctx.on('tools/result', (execution: NativeExecution, result: unknown) => {

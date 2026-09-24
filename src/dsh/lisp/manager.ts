@@ -178,7 +178,7 @@ export class LispManager {
     state.state = 'STOPPING' // claim before awaiting the journal or process exit
     const suspension = (async () => {
       try {
-        const pending = (await this.#store.operations(state.owner.sessionId)).some(o => ['RUNNING', 'APPLYING', 'UNKNOWN', 'AWAITING_APPROVAL'].includes(o.state))
+        const pending = await this.#store.hasPending(state.owner.sessionId)
         if (pending) { state.state = 'READY'; return }
         await state.worker!.stop()
         state.state = 'SUSPENDED'; delete state.error; delete state.worker
@@ -210,7 +210,7 @@ export class LispManager {
     for (const state of states) { state.disposed = true; clearTimeout(state.idleTimer) }
     const stopped = await Promise.allSettled(states.map(state => this.cancel(state)))
     await Promise.allSettled([...this.#executions].filter(([, session]) => session === sessionId).map(([promise]) => promise))
-    const pending = (await this.#store.operations(sessionId)).some(o => ['RUNNING', 'APPLYING', 'UNKNOWN', 'AWAITING_APPROVAL'].includes(o.state))
+    const pending = await this.#store.hasPending(sessionId)
     for (const state of states) {
       state.hostBusy = false; state.disposed = false
       if (!pending && resumable.includes(state) && state.state === 'RECOVERY_REQUIRED' && state.worker?.stopped !== false) {
@@ -273,7 +273,7 @@ export class LispManager {
       this.#artifactReserved += reservation
       try {
       if (await backupUsage(root) + this.#artifactReserved > 1024 ** 3) fail('ARTIFACT_LIMIT', '成果物の保存上限です。')
-      if ((await this.#store.operations(state.owner.sessionId)).filter(o => o.kind === 'artifact').length >= 1000) fail('ARTIFACT_LIMIT', 'このセッションの成果物数が上限です。')
+      if (await this.#store.countByKind(state.owner.sessionId, 'artifact') >= 1000) fail('ARTIFACT_LIMIT', 'このセッションの成果物数が上限です。')
       const id = `artifact-${randomUUID()}`, target = join(root, id)
       await this.#store.reserve(state.owner, id, 'artifact', digest(source), state.worker.generation, { source, target })
       const file = await open(target, 'wx', 0o600)
@@ -289,15 +289,15 @@ export class LispManager {
     if (!this.enabled.has(owner.sessionId)) return { enabled: false, state: 'DISABLED', recovery: '/kioku-lisp enable' }
     const state = this.entry(owner)
     if (state.state === 'READY' && !state.worker?.healthy) this.halted(state, new LispError('WORKER_EXITED', 'Lisp が終了しています。新しい Lisp の起動前に状態を確認してください。'))
-    const operations = (await this.#store.operations(owner.sessionId)).map(o => ({ id: o.operation_id, agent: o.agent_id, kind: o.kind, state: o.state, updatedAt: o.updated_at }))
-    const pending = operations.filter(o => ['RUNNING', 'UNKNOWN', 'APPLYING', 'AWAITING_APPROVAL'].includes(o.state))
+    const summary = await this.#store.operationSummaries(owner.sessionId, offset)
+    const operations = summary.operations.map(o => ({ id: o.operation_id, agent: o.agent_id, kind: o.kind, state: o.state, updatedAt: o.updated_at }))
     return { enabled: true, state: state.state, generation: state.worker?.generation ?? null, error: state.error ?? null,
       jobs: state.worker?.jobStatus() ?? [],
       compilation: state.compilation ?? null, resumed: state.resumed ?? false,
       limits: { timeoutMs: this.#config.timeoutMs, maxOutputBytes: this.#config.maxOutputBytes, maxWorkers: this.#config.maxWorkers, idleTimeoutMs: this.#config.idleTimeoutMs,
         aggregateMemory: 'unavailable', aggregateCpu: 'unavailable', scratchQuota: 'unavailable', termination: 'supervised', fileBoundary: process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap' },
-      operations: offset === undefined ? operations : operations.slice(offset, offset + 10),
-      ...(offset === undefined ? {} : { operationCount: operations.length, pendingCount: pending.length, pendingStates: Object.fromEntries([...new Set(pending.map(o => o.state))].map(state => [state, pending.filter(o => o.state === state).length])), offset, nextOffset: offset + 10 < operations.length ? offset + 10 : null }),
+      operations,
+      ...(offset === undefined ? {} : { operationCount: summary.count, pendingCount: Object.values(summary.pendingStates).reduce((a,b) => a+b,0), pendingStates: summary.pendingStates, offset, nextOffset: offset + 10 < summary.count ? offset + 10 : null }),
       recovery: state.state === 'SUSPENDED' ? 'Lisp は休止中です。次の利用時に自動起動します。変数・関数定義は保持されません。' : state.state === 'READY' ? null : '停止理由と操作履歴を確認し、/kioku-lisp recover を実行してください。' }
   }
   async diagnostics(owner: LispOwner, id?: string): Promise<unknown> {
@@ -529,7 +529,7 @@ export class LispManager {
   async disable(owner: LispOwner): Promise<unknown> {
     for (const state of this.#agents.values()) if (state.owner.sessionId === owner.sessionId) await this.cancel(state)
     await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
-    if ((await this.#store.operations(owner.sessionId)).some(o => ['RUNNING', 'APPLYING', 'UNKNOWN', 'AWAITING_APPROVAL'].includes(o.state))) fail('RECOVERY_REQUIRED', '未確定の処理を /kioku-lisp recover で確認してから解除してください。')
+    if (await this.#store.hasPending(owner.sessionId)) fail('RECOVERY_REQUIRED', '未確定の処理を /kioku-lisp recover で確認してから解除してください。')
     await this.#store.disable(owner.sessionId); this.enabled.delete(owner.sessionId)
     for (const [key, state] of this.#agents) if (state.owner.sessionId === owner.sessionId) this.#agents.delete(key)
     return { ok: true, state: 'DISABLED' }
