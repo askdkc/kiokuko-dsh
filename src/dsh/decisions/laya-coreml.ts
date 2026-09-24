@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { canonicalJson } from '../../serialization/validate.js'
 import { LAYA_MODELS, LAYA_POLICY_VERSION, TypedDecisionsConfig, resolveDecisionConfiguration, type DecisionConfiguration, type LayaSettings } from './config.js'
-import { DECISION_BYTES, DecisionError, parseDecisionBatch, parseDecisionResult, type DecisionBatch, type DecisionBatchResult, type DecisionProvider } from './contracts.js'
+import { DECISION_BYTES, DecisionError, parseDecisionBatch, parseDecisionResult, requireChoice, type DecisionBatch, type DecisionBatchResult, type DecisionProvider } from './contracts.js'
 import { requestLaya, type LayaTransport } from './laya-transport.js'
 
 const probability = z.number().finite().min(0).max(1)
@@ -70,7 +70,7 @@ export async function discoverLayaConfiguration(config: DecisionConfiguration, r
 /** Construct ordered object members directly; JSON.stringify(object) reorders integer-like IDs. */
 export function layaRequestBody(op: 'predict' | 'preflight' | 'predict_strict', batch: DecisionBatch, settings: LayaSettings, budgetMs: number): string {
   const state = typeof batch.state === 'string' ? batch.state : canonicalJson(batch.state)
-  const questions = batch.questions.map(q => `${JSON.stringify(q.id)}:{"type":"choice","instructions":${JSON.stringify(q.instructions)},"criteria":{${q.choices.map(c => `${JSON.stringify(c.id)}:${JSON.stringify(c.description)}`).join(',')}}}`).join(',')
+  const questions = batch.questions.map(question => { const q = requireChoice(question); return `${JSON.stringify(q.id)}:{"type":"choice","instructions":${JSON.stringify(q.instructions)},"criteria":{${q.choices.map(c => `${JSON.stringify(c.id)}:${JSON.stringify(c.description)}`).join(',')}}}` }).join(',')
   const runtime = op === 'predict' ? '' : `,"model":${JSON.stringify(settings.model)},"expectedRuntimeFingerprint":${JSON.stringify(settings.runtimeFingerprint)},"budgetMs":${budgetMs}`
   return `{"version":1,"op":${JSON.stringify(op)}${runtime},"state":${JSON.stringify(state)},"questions":{${questions}}}`
 }
@@ -90,7 +90,7 @@ export class LayaCoreMLDecisionProvider implements DecisionProvider {
     const batch = parseDecisionBatch(input), settings = this.settings
     if (signal.aborted) throw new DecisionError('CANCELLED')
     if (!settings?.model || !settings.runtimeFingerprint) throw new DecisionError('UNAVAILABLE')
-    if (batch.questions.length > 1 || batch.questions.some(q => q.choices.length > 32)) throw new DecisionError('TOO_LARGE')
+    if (batch.questions.length > 1 || batch.questions.some(q => requireChoice(q).choices.length > 32)) throw new DecisionError('TOO_LARGE')
     const deadline = performance.now() + settings.timeoutMs
     // Validate the complete envelope before even a health request.
     if (Buffer.byteLength(layaRequestBody(op, batch, settings, settings.timeoutMs)) > DECISION_BYTES) throw new DecisionError('TOO_LARGE')
@@ -131,7 +131,7 @@ export function decodeLayaResult(value: unknown, batch: DecisionBatch, settings:
   const parsed = resultSchema.safeParse(value)
   if (!parsed.success || parsed.data.usage.input_tokens < 1 || Object.keys(parsed.data.answers).length !== batch.questions.length) throw new DecisionError('MALFORMED_RESPONSE')
   const result = parsed.data
-  const answers = batch.questions.map(q => {
+  const answers = batch.questions.map(question => { const q = requireChoice(question)
     const answer = result.answers[q.id]
     if (!answer || Object.keys(answer.probabilities).length !== q.choices.length || !Object.hasOwn(answer.probabilities, answer.choice)
       || q.choices.some(c => !Object.hasOwn(answer.probabilities, c.id))) throw new DecisionError('MALFORMED_RESPONSE')

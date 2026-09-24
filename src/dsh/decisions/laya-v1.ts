@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { DECISION_BYTES, DecisionError, parseDecisionBatch, parseDecisionResult, type DecisionBatch, type DecisionBatchResult, type DecisionProvider } from './contracts.js'
+import { DECISION_BYTES, DecisionError, parseDecisionBatch, parseDecisionResult, requireChoice, type DecisionBatch, type DecisionBatchResult, type DecisionProvider } from './contracts.js'
 import { LAYA_POLICY_VERSION, type LayaSettings } from './config.js'
 import { decodeLayaResult, layaRequestBody, parseLayaV1Health, workerError } from './laya-coreml.js'
 import { requestLaya, type LayaTransport } from './laya-transport.js'
@@ -16,7 +16,7 @@ export class LayaV1DecisionProvider implements DecisionProvider {
     const batch = parseDecisionBatch(input)
     if (signal.aborted) throw new DecisionError('CANCELLED')
     if (this.settings.protocol !== 'v1' || this.settings.model !== 'laya-rl-agent' || this.settings.runtimeFingerprint) throw new DecisionError('UNSUPPORTED')
-    if (batch.questions.length !== 1 || batch.questions.some(q => q.choices.length > this.capabilities.maxChoices)) throw new DecisionError('TOO_LARGE')
+    if (batch.questions.length !== 1 || batch.questions.some(q => requireChoice(q).choices.length > this.capabilities.maxChoices)) throw new DecisionError('TOO_LARGE')
     const body = layaRequestBody('predict', batch, this.settings, this.settings.timeoutMs)
     if (Buffer.byteLength(body) > DECISION_BYTES) throw new DecisionError('TOO_LARGE')
     const deadline = performance.now() + this.settings.timeoutMs

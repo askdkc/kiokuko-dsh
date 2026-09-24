@@ -45,7 +45,7 @@ for (const kind of ['typesafe', 'nimble'] as const) {
     assert.ok((await selectInstalledSkills(service, 'skills', 'debug', catalog, resolution, signal())).includes('fixture-debugger'))
     const body = choiceBody(batch, 'model')
     assert.ok(body.indexOf('"20":') < body.indexOf('"2":'))
-    await service.evaluate('request', { ...batch, questions: [{ ...batch.questions[0], choices: [...batch.questions[0]!.choices].reverse() }] }, signal())
+    await service.evaluate('request', { ...batch, questions: [{ ...batch.questions[0], choices: [...('choices' in batch.questions[0]! ? batch.questions[0]!.choices : [])].reverse() }] }, signal())
     assert.equal(calls, 4)
   })
   test(`${kind}: failures, abstentions, uncertainty and cancellation never execute fallback effects`, async () => {
@@ -126,4 +126,70 @@ test('adapters preserve absence of returned model, revision and usage metadata',
     const result = await provider(kind, async () => Response.json({ answers: { '10': { type: 'choice', choice: '20', probabilities: { '20': 1, '2': 0, abstain: 0 }, confidence: 1 } } })).evaluate(batch, signal())
     assert.equal(result.returnedModel, undefined); assert.equal(result.revision, undefined); assert.equal(result.usage, undefined); assert.ok(result.requestedModel)
   }
+})
+
+test('TypeSafe evaluates mixed typed questions and rejects Score corruption before caching', async () => {
+  const typed: DecisionBatch = { purpose: 'skills', state: 'evidence', questions: [
+    { id: 'score', type: 'score', instructions: 'Rate', criteria: ['No', 'Maybe', 'Yes'] },
+    { id: 'noul', type: 'noul', instructions: 'True?' },
+  ] }
+  let calls = 0
+  const backend = new TypeSafeDecisionProvider(config('typesafe').typesafe, async () => 'fixture-key', async (_url, init) => {
+    calls++
+    const sent = JSON.parse(String(init?.body))
+    assert.deepEqual(sent.questions.score.criteria, ['No', 'Maybe', 'Yes'])
+    return Response.json({ model: 'jev-versioned', answers: {
+      score: { type: 'score', score: 1.5, probabilities: { 0: 0, 1: .5, 2: .5 }, legend: { 0: 'No', 1: 'Maybe', 2: 'Yes' }, confidence: .8 },
+      noul: { type: 'noul', noul: .7 },
+    }, usage: { input_tokens: 12, output_tokens: 3 } })
+  })
+  const service = new DecisionService(config('typesafe'), () => backend)
+  const outcome = await service.evaluate('mixed', typed, signal())
+  assert.equal(outcome.status, 'completed')
+  if (outcome.status === 'completed') assert.deepEqual(outcome.result.answers[0],
+    { id: 'score', status: 'measured', type: 'score', score: 1.5, probabilities: [0, .5, .5], confidence: .8 })
+  await service.evaluate('mixed', typed, signal()); assert.equal(calls, 1)
+  const unsupported = new DecisionService(config('nimble'), () => provider('nimble', async () => { throw Error('must not send') }))
+  assert.deepEqual(await unsupported.evaluate('mixed', typed, signal()), { status: 'fallback', reason: 'DECISION_UNSUPPORTED' })
+})
+
+test('opt-in Score ranks installed optional Skills while preserving mandatory and baseline fallback', async () => {
+  const scoreConfig = TypedDecisionsConfig.parse({ skillSelection: { mode: 'score', minScore: 2, minConfidence: .8 } })
+  const catalog = [
+    { kind: 'skill' as const, name: 'kiokuko-soul' },
+    { kind: 'skill' as const, name: 'strong-debug', description: 'debug failure' },
+    { kind: 'skill' as const, name: 'weak-debug', description: 'debug failure' },
+    { kind: 'skill' as const, name: 'uncertain-debug', description: 'debug failure' },
+  ]
+  const resolution = { recommendations: [
+    { kind: 'skill' as const, name: 'kiokuko-soul', source: 'akinator_policy' as const },
+    { kind: 'skill' as const, name: 'uncertain-debug', source: 'catalog_similarity' as const },
+  ] } as ReturnType<typeof resolveCapabilities>
+  const fake: DecisionProvider = { capabilities: { maxQuestions: 2, maxChoices: 26, maxBytes: 262144, questionTypes: ['score'], maxScoreLevels: 10 },
+    evaluate: async request => ({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'typed-decisions-v1',
+      answers: request.questions.map(q => ({ id: q.id, status: 'measured' as const, type: 'score' as const,
+        score: q.id === 'skill-0' ? 3 : q.id === 'skill-2' ? 1 : 2.5,
+        probabilities: [0, 0, 0, 1], confidence: q.id === 'skill-1' ? .3 : .9 })) }) }
+  const service = new DecisionService(scoreConfig, () => fake)
+  const names = await selectInstalledSkills(service, 'score-skills', 'debug failure', catalog, resolution, signal())
+  assert.deepEqual(names, ['kiokuko-soul', 'strong-debug', 'uncertain-debug'])
+  const fallback = new DecisionService(scoreConfig, () => ({ ...fake, capabilities: { ...fake.capabilities, questionTypes: ['choice'] } }))
+  assert.deepEqual(await selectInstalledSkills(fallback, 'fallback-skills', 'debug failure', catalog, resolution, signal()),
+    ['kiokuko-soul', 'uncertain-debug'])
+})
+
+test('decision observations are bounded, omit evidence and do not double-count cached usage', async () => {
+  const input = { ...batch, state: 'PRIVATE_FIXTURE_EVIDENCE' }
+  const seen: unknown[] = []
+  const backend: DecisionProvider = { capabilities: { maxQuestions: 64, maxChoices: 26, maxBytes: 262144 }, evaluate: async request => ({
+    provider: 'fixture', requestedModel: 'fixture', policyVersion: 'finite-choice-v1', usage: { input_tokens: 3, output_tokens: 1 },
+    answers: request.questions.map(q => ({ id: q.id, status: 'abstained' as const, reason: 'insufficient' as const })),
+  }) }
+  const service = new DecisionService(config('typesafe'), () => backend, undefined, { onEvaluation: observation => { seen.push(observation); throw Error('observer failed') } })
+  assert.equal((await service.evaluate('observed', input, signal())).status, 'completed')
+  assert.equal((await service.evaluate('observed', input, signal())).status, 'completed')
+  const observations = (service.status() as { decisionObservations: { cacheHit: boolean; inputTokens: number | null }[] }).decisionObservations
+  assert.deepEqual(observations.map(o => o.cacheHit), [false, true])
+  assert.deepEqual(observations.map(o => o.inputTokens), [3, null])
+  assert.equal(JSON.stringify(seen).includes('PRIVATE_FIXTURE_EVIDENCE'), false)
 })
