@@ -434,6 +434,37 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
   } finally { await handle.dispose(); globalThis.fetch = originalFetch; await f.cleanup() }
 })
 
+test('core Score selection reaches model context through native pre-step', async () => {
+  const f = await fixture(), originalFetch = globalThis.fetch
+  f.services.credentials = { resolve: async () => ({ value: 'fixture-key', source: 'file' }) }
+  const snapshot = f.services.skills.snapshot
+  f.services.skills.snapshot = async () => ({ ...(await snapshot()), skills: [...(await snapshot()).skills,
+    { name: 'fixture-writing', description: 'Rewrite prose clearly', invocation: { modelInvocable: true } },
+    { name: 'excluded-skill', description: 'Writing', invocation: { modelInvocable: false } }] })
+  let scoreCalls = 0
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init!.body))
+    return Response.json({ model: request.model, answers: Object.fromEntries(Object.entries(request.questions).map(([id, q]: [string, any]) => {
+      if (q.type === 'score') {
+        scoreCalls++
+        const positive = q.instructions.includes('fixture-writing')
+        return [id, { type: 'score', score: positive ? 3 : 0, probabilities: positive ? { 0: 0, 1: 0, 2: 0, 3: 1 } : { 0: 1, 1: 0, 2: 0, 3: 0 },
+          legend: Object.fromEntries(q.criteria.map((level: string, index: number) => [index, level])), confidence: 1 }]
+      }
+      const choice = id === 'task-type' ? 'writing' : Object.keys(q.criteria)[0]
+      return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
+    })) })
+  }
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
+    typedDecisions: { provider: 'typesafe', skillSelection: { mode: 'score', minScore: 2, minConfidence: .8 } } })
+  try {
+    const messages = [{ role: 'user', content: '文章を読みやすく修正して' }]
+    const output = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    assert.equal(output.kind, 'enter'); assert.match(JSON.stringify(output.messages), /fixture-writing/)
+    assert.ok(!JSON.stringify(output.messages).includes('excluded-skill')); assert.ok(scoreCalls > 0)
+  } finally { await handle.dispose(); globalThis.fetch = originalFetch; await f.cleanup() }
+})
+
 
 test('core connects to an existing start-laya v1 worker without credentials or replacement scripts', { skip: process.platform === 'win32' }, async t => {
   const f = await fixture(), commands: any[] = []

@@ -23,6 +23,10 @@ const endpoint = z.string().max(4096).transform((value, ctx) => {
 })
 export const TypedDecisionsConfig = z.object({
   mode: z.enum(['auto', 'off']).default('auto'), provider: z.enum(['typesafe', 'nimble', 'laya-coreml']).default('typesafe'),
+  skillSelection: z.discriminatedUnion('mode', [
+    z.object({ mode: z.literal('choice') }).strict(),
+    z.object({ mode: z.literal('score'), policyVersion: z.literal('skills-score-v1').default('skills-score-v1'), minScore: z.number().finite().min(0).max(3), minConfidence: probability }).strict(),
+  ]).optional(),
   typesafe: z.object({ model: model.default('jev-latest'), timeoutMs: timeout,
     acceptance: z.object({ minConfidence: probability.default(0.8) }).strict().prefault({}),
   }).strict().prefault({}),

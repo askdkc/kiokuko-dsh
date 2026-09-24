@@ -1,0 +1,14 @@
+[
+  { "id": "debug-en", "language": "en", "risk": "low", "task": "Debug a failing test", "gold": ["fixture-debug"], "skills": [
+    { "name": "fixture-debug", "description": "Inspect failing tests and their causes" },
+    { "name": "fixture-write", "description": "Edit prose and documentation" }] },
+  { "id": "debug-ja", "language": "ja", "risk": "low", "task": "失敗するテストの原因を調べる", "gold": ["fixture-debug"], "skills": [
+    { "name": "fixture-debug", "description": "失敗したテストを調査する" },
+    { "name": "fixture-write", "description": "文章を校正する" }] },
+  { "id": "write-en", "language": "en", "risk": "low", "task": "Rewrite the documentation", "gold": ["fixture-write"], "skills": [
+    { "name": "fixture-debug", "description": "Inspect failing tests" },
+    { "name": "fixture-write", "description": "Rewrite prose and documentation" }] },
+  { "id": "write-ja", "language": "ja", "risk": "low", "task": "ドキュメントの文章を校正する", "gold": ["fixture-write"], "skills": [
+    { "name": "fixture-debug", "description": "失敗したテストを調査する" },
+    { "name": "fixture-write", "description": "文章を校正する" }] }
+]

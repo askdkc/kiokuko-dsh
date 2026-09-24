@@ -3,7 +3,7 @@ import { evaluateCompactionBatches } from './compaction-batches.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { abortable } from '../http-json.js'
-import { DecisionError, parseDecisionBatch, parseDecisionResult, type DecisionProvider, type DecisionBatchResult } from './contracts.js'
+import { DecisionError, parseDecisionBatch, parseDecisionResult, questionType, type DecisionProvider, type DecisionBatchResult, type DecisionBatch } from './contracts.js'
 import { TypedDecisionsConfig, selectedDecisionSettings, decisionConfigurationIssue, resolveDecisionConfiguration, LAYA_POLICY_VERSION, type DecisionConfiguration } from './config.js'
 import { POLICY_VERSION } from './providers.js'
 import { DecisionReadinessMonitor, type ReadinessOptions } from './readiness.js'
@@ -13,6 +13,9 @@ import { MemoryDecisionConcurrency } from './concurrency.js'
 import type { DecisionSelectionStore } from './selection-store.js'
 
 export type DecisionOutcome = { status: 'completed'; result: DecisionBatchResult } | { status: 'fallback'; reason: string }
+export interface DecisionObservation { purpose: DecisionBatch['purpose']; questionTypes: Record<string, number>; provider: string; requestedModel: string | null;
+  returnedModel: string | null; policyVersion: string; cacheHit: boolean; selected: number; measured: number; abstained: number;
+  fallbackReason: string | null; elapsedMs: number; inputBytes: number; inputTokens: number | null; outputTokens: number | null }
 export interface DecisionStore {
   binding?(id: string): Promise<DecisionConfiguration | undefined>
   bind(id: string, config: DecisionConfiguration): Promise<DecisionConfiguration>
@@ -51,6 +54,7 @@ export class DecisionService {
   readonly memoryReuse: MemoryReuseConfiguration
   readonly semanticCompaction: SemanticCompactionConfiguration
   private readonly compactionMetrics = { calls: 0, inputBytes: 0, elapsedMs: 0, inputTokens: 0, outputTokens: 0, usageReports: 0 }
+  private readonly decisionObservations: DecisionObservation[] = []
   private observationStatus: unknown = null
   private answerReviewStatus: unknown = { mode: 'off', state: 'idle', reason: null }
   private modelHandoffStatus: { mode: string; supported: boolean; last: unknown } = { mode: 'off', supported: false, last: null }
@@ -68,7 +72,8 @@ export class DecisionService {
   private lastFallback: string | null = null
   constructor(private config: DecisionConfiguration, private readonly provider: (config: DecisionConfiguration) => DecisionProvider, private readonly store?: DecisionStore,
     private readonly options: ReadinessOptions & { memoryReuse?: MemoryReuseConfiguration; semanticCompaction?: SemanticCompactionConfiguration; repositoryRoot?: string;
-      selectionStore?: DecisionSelectionStore; resolveConfiguration?: (config: DecisionConfiguration, signal: AbortSignal) => Promise<DecisionConfiguration> } = {}) {
+      selectionStore?: DecisionSelectionStore; resolveConfiguration?: (config: DecisionConfiguration, signal: AbortSignal) => Promise<DecisionConfiguration>;
+      onEvaluation?: (observation: DecisionObservation) => void } = {}) {
     this.config = resolveDecisionConfiguration(config, options.repositoryRoot ?? process.cwd())
     this.baseConfig = structuredClone(this.config)
     this.memoryReuse = MemoryReuseConfig.parse(options.memoryReuse ?? {})
@@ -146,6 +151,24 @@ export class DecisionService {
   }
   invalidateReadiness(): void { this.readiness.invalidate() }
   configurationDigest(): string { return canonicalContentHash({ config: this.config, semanticCompaction: this.semanticCompaction, policyVersion: POLICY_VERSION }) }
+  async skillSelection(requestId: string, signal: AbortSignal): Promise<DecisionConfiguration['skillSelection']> { return (await this.bind(requestId, signal)).skillSelection }
+  private observe(batch: DecisionBatch, config: DecisionConfiguration, outcome: DecisionOutcome, cacheHit: boolean, elapsedMs: number): void {
+    const answers = outcome.status === 'completed' ? outcome.result.answers : []
+    const observation: DecisionObservation = {
+      purpose: batch.purpose, questionTypes: Object.fromEntries(['choice', 'noul', 'score'].map(type => [type, batch.questions.filter(q => questionType(q) === type).length])),
+      provider: config.provider, requestedModel: outcome.status === 'completed' ? outcome.result.requestedModel : selectedDecisionSettings(config)?.model ?? null,
+      returnedModel: outcome.status === 'completed' ? outcome.result.returnedModel ?? null : null,
+      policyVersion: outcome.status === 'completed' ? outcome.result.policyVersion : batch.contractVersion ?? POLICY_VERSION,
+      cacheHit, selected: answers.filter(a => a.status === 'selected').length, measured: answers.filter(a => a.status === 'measured').length,
+      abstained: answers.filter(a => a.status === 'abstained').length, fallbackReason: outcome.status === 'fallback' ? outcome.reason : null,
+      elapsedMs: Math.round(elapsedMs), inputBytes: Buffer.byteLength(JSON.stringify(batch)),
+      inputTokens: cacheHit ? null : outcome.status === 'completed' ? outcome.result.usage?.input_tokens ?? null : null,
+      outputTokens: cacheHit ? null : outcome.status === 'completed' ? outcome.result.usage?.output_tokens ?? null : null,
+    }
+    this.decisionObservations.push(observation)
+    if (this.decisionObservations.length > 128) this.decisionObservations.shift()
+    try { this.options.onEvaluation?.(structuredClone(observation)) } catch { /* Observation cannot change a decision. */ }
+  }
   async bind(requestId: string, signal = new AbortController().signal): Promise<DecisionConfiguration> {
     if (!requestId || requestId.length > 512) throw new Error('Invalid decision request identity')
     await this.initialize()
@@ -186,9 +209,11 @@ export class DecisionService {
       modelHandoff: { ...this.modelHandoffStatus, active: this.modelHandoffStatus.mode === 'auto' && this.modelHandoffStatus.supported
         && this.config.mode !== 'off' && ['typesafe', 'laya-coreml'].includes(this.config.provider) && this.readiness.status(this.config).state === 'ready' },
       semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, metrics: this.compactionMetrics, lastPreemptive: this.lastPreemptive, preemptiveActive: this.semanticCompaction.preemptive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready', active: this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },
-      readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' } }
+      readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' },
+      decisionObservations: structuredClone(this.decisionObservations) }
   }
   async evaluate(requestId: string, input: unknown, signal: AbortSignal, catalogDigest = ''): Promise<DecisionOutcome> {
+    const started = performance.now()
     if (signal.aborted) throw new DecisionError('CANCELLED')
     const config = await this.bind(requestId, signal)
     if (signal.aborted) throw new DecisionError('CANCELLED')
@@ -199,7 +224,7 @@ export class DecisionService {
     }
     const semantic = batch.purpose === 'compaction' || batch.purpose === 'model-handoff'
     const managed = semantic || batch.purpose === 'memory-reuse'
-    const digest = canonicalContentHash({ batch, config, catalogDigest, policyVersion: POLICY_VERSION,
+    const digest = canonicalContentHash({ batch, config, catalogDigest, policyVersion: batch.contractVersion ?? POLICY_VERSION,
       ...(batch.purpose === 'compaction' ? { semanticCompaction: this.semanticCompaction } : {}) })
     const key = `${requestId}:${digest}`
     const cached = this.results.get(key) ?? await this.store?.read(requestId, digest)
@@ -218,6 +243,7 @@ export class DecisionService {
           return { status: 'fallback', reason: budget.aborted ? 'DECISION_TIMEOUT' : (error as DecisionError).code }
         }
       }
+      this.observe(batch, config, cached, true, performance.now() - started)
       return structuredClone(cached)
     }
     const existing = this.pending.get(key)
@@ -230,14 +256,16 @@ export class DecisionService {
       let outcome: DecisionOutcome
       try {
         if (decisionConfigurationIssue(config)) throw new DecisionError('UNAVAILABLE')
+        const provider = managed ? this.memoryProvider(config) : this.provider(config), limits = provider.capabilities
+        if (!Number.isSafeInteger(limits.maxQuestions) || limits.maxQuestions < 1) throw new DecisionError('UNSUPPORTED')
+        if (batch.questions.some(q => !(limits.questionTypes ?? ['choice']).includes(questionType(q)))) throw new DecisionError('UNSUPPORTED')
+        if (batch.questions.some(q => 'type' in q && q.type === 'score' && (!limits.maxScoreLevels || q.criteria.length > limits.maxScoreLevels))) throw new DecisionError('UNSUPPORTED')
+        if (batch.questions.some(q => 'choices' in q && q.choices.length > limits.maxChoices) || Buffer.byteLength(JSON.stringify(batch)) > limits.maxBytes) throw new DecisionError('TOO_LARGE')
         if (managed) {
           if ((batch.purpose === 'compaction' ? this.semanticCompaction : batch.purpose === 'model-handoff' ? { mode: 'auto' } : this.memoryReuse).mode === 'off') throw new DecisionError('UNAVAILABLE')
           const ready = await this.readiness.probe(config, combined)
           if (ready.state !== 'ready') throw new DecisionError(ready.reason === 'DECISION_AUTH' || ready.reason === 'missing_credential' ? 'AUTH' : 'UNAVAILABLE')
         }
-        const provider = managed ? this.memoryProvider(config) : this.provider(config), limits = provider.capabilities
-        if (!Number.isSafeInteger(limits.maxQuestions) || limits.maxQuestions < 1) throw new DecisionError('UNSUPPORTED')
-        if (batch.questions.some(q => q.choices.length > limits.maxChoices) || Buffer.byteLength(JSON.stringify(batch)) > limits.maxBytes) throw new DecisionError('TOO_LARGE')
         const parts: DecisionBatchResult[] = []
         // Each question is independent and retains the complete evidence and its alternatives.
         if (semantic) parts.push(...await evaluateCompactionBatches(provider, batch, combined))
@@ -276,6 +304,7 @@ export class DecisionService {
       await this.store?.write(requestId, digest, outcome)
       if (signal.aborted) throw new DecisionError('CANCELLED')
       this.results.set(key, structuredClone(outcome))
+      this.observe(batch, config, outcome, false, performance.now() - started)
       return outcome
     })()
     this.pending.set(key, operation)

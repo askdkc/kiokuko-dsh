@@ -5,6 +5,14 @@ installed Skill relevance, past memory reuse, Zenki draft review, [post-display 
 The selected adapter owns its transport protocol and uncertainty policy. Domain
 workflows consume `selected` or `abstained`; they do not depend on model names.
 
+The common API also accepts explicit `noul` (yes probability) and `score`
+(ordered rubric) questions. Their validated answers have `status: "measured"`;
+they grant no permission. The existing Choice request and answer shapes remain
+valid. TypeSafe can evaluate all three question types in one batch. Nimble and
+Laya accept Choice only and return `DECISION_UNSUPPORTED` before inference for
+other kinds. The separate Lisp `kioku.typesafe:evaluate` API retains its own
+wire contract.
+
 Switch backends in DSH without a restart:
 
 ```text
@@ -37,6 +45,40 @@ typedDecisions:
     acceptance:
       minConfidence: 0.8
 ```
+
+Optional Skill Score selection requires an explicit policy. For example, the
+following thresholds are configuration inputs, **not validated defaults**:
+
+```yaml
+typedDecisions:
+  provider: typesafe
+  skillSelection:
+    mode: score
+    minScore: 2
+    minConfidence: 0.8
+```
+
+With no `skillSelection` section, installed optional Skills retain the current
+Choice selection. Score uses four ordered levels: not applicable, related but
+not materially useful, materially applicable, and directly applicable. The host
+keeps mandatory Skills, excludes uninstalled Skills, and adds at most five
+optional Skills. Low confidence falls back to the existing catalog-similarity
+baseline; a high-confidence Score below `minScore` excludes the candidate.
+Provider failure falls back for the whole batch without a second inference or
+provider switch. Score mode with Nimble or Laya therefore uses the baseline.
+The policy and rubric are bound to the logical request and its result digest.
+
+`/kioku-decisions status` includes up to 128 in-memory decision observations:
+question-kind counts, provider/model identity, policy version, cache hits,
+fallback reason, elapsed time, logical batch JSON bytes, and token usage when
+reported. It does not store question, Skill, state, memory, tool-result or
+credential text. From a source checkout, run
+`npm run test:evaluation:decisions` for synthetic paired Japanese/English Skill
+fixtures. The source-only evaluation script and fixtures are not packaged.
+A live comparison requires explicit
+`--live --model VERSIONED_MODEL --min-score N --min-confidence N` arguments and
+`TYPESAFE_API_KEY`; it sends only the checked-in synthetic fixture and must not
+be interpreted as a production accuracy estimate.
 
 Set the TypeSafe key through DSH, then inspect status:
 

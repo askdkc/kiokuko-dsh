@@ -194,7 +194,8 @@
     "test:modules": "node scripts/run-tests.mjs tests/dsh/unit/core-modules.test.ts tests/dsh/integration/core-host.test.ts && node scripts/verify-module-packages.mjs",
     "test:laya-worker": "python3 -B -m unittest discover -s tests/laya -v",
     "test:answer-review": "node scripts/run-tests.mjs tests/dsh/unit/decisions/answer-review.test.ts tests/dsh/e2e/answer-review-loop.test.ts",
-    "test:evaluation:answer-review": "node scripts/evaluate-answer-review.mjs"
+    "test:evaluation:answer-review": "node scripts/evaluate-answer-review.mjs",
+    "test:evaluation:decisions": "node --import tsx scripts/run-decision-evaluation.mjs"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

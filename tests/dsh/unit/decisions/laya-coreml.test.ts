@@ -54,7 +54,7 @@ test('Laya acceptance uses probabilities, margin and conservative rounding; entr
       return reply
     })
     const answer = (await provider.evaluate(batch, signal())).answers[0]!
-    assert.equal(answer.status === 'selected' ? 'selected' : answer.reason, expected)
+    assert.equal(answer.status === 'selected' ? 'selected' : answer.status === 'abstained' ? answer.reason : 'measured', expected)
   }
   const uniform = { ...batch, questions: [{ ...batch.questions[0]!, choices: Array.from({ length: 32 }, (_, i) => ({ id: `c${i}`, description: '' })), abstainId: 'c31' }] }
   const provider = new LayaCoreMLDecisionProvider(layaConfig()['laya-coreml'], async (_path, json) => {
