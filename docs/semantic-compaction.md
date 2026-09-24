@@ -1,5 +1,17 @@
 # ObservationPack and semantic compaction
 
+## Model and reasoning handoff
+
+When a user changes the DSH model or reasoning effort, Kiokuko can shorten eligible older tool results with the selected Jev or Laya decision provider and ask DSH's configured summarizer to create one native checkpoint. The checkpoint replaces older model-visible conversation; the original events remain in the append-only session history. The last two completed model steps, pending input, and latest user message remain verbatim. Automatic Enno/Deep routing and delegated children do not trigger a handoff.
+
+```yaml
+modelHandoff:
+  mode: auto
+  budgetMs: 30000
+```
+
+`auto` requires a ready selected Jev/Laya provider and DSH's native range-compaction service. It is independent of pressure-triggered `semanticCompaction` and native automatic compaction. `off` prevents new handoffs. The native summarizer uses its configured provider/model, or the previous effective request route; it makes an additional model call. If classification abstains, DSH can still summarize the unshortened history. If readiness or summarization fails, the model switch continues with the retained surface. `/kioku-decisions status` reports the last handoff outcome and measured context reduction.
+
 Kiokuko reduces old tool output through the existing native compaction coordinator. The order is ObservationPack, native token-meter measurement, Jev semantic selection, then DSH's own automatic handling. Original events remain in the native append-only history; no additional database or migration is needed.
 
 Both the full plugin and standalone core default to:

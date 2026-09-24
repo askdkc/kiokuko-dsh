@@ -3,6 +3,7 @@ import { isKiokukoDshSource, KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import { bindMemoryApplication, memoryApplicationStatus, memoryRetrievalStatus } from '../memory/application.js'
 import { mountMemoryApplication } from './memory-application.js'
 import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
+import { ModelHandoff, ModelHandoffConfig } from './model-handoff.js'
 import { SemanticCompactionConfig, type CompactionAgent } from './semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../memory/reuse.js'
 import { createMemoryReuseRuntime } from './memory-reuse.js'
@@ -194,6 +195,7 @@ export interface DshHostAdapterOptions {
   readonly semanticCompactionCoordinator?: SemanticCompactionCoordinator
   readonly observationPack?: import('zod').z.input<typeof ObservationPackConfig>
   readonly semanticCompaction?: import('zod').z.input<typeof SemanticCompactionConfig>
+  readonly modelHandoff?: import('zod').z.input<typeof ModelHandoffConfig>
   readonly typedDecisions?: import('zod').z.input<typeof TypedDecisionsConfig>
   readonly memoryReuse?: import('zod').z.input<typeof MemoryReuseConfig>
   /** An enclosing composition owns and closes this shared runtime. */
@@ -513,6 +515,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}), SemanticCompactionConfig.parse(options.semanticCompaction ?? {}), root)
   const answerReview = new AnswerReviewCoordinator(runtime, decisions, AnswerReviewConfig.parse(options.answerReview ?? {}))
   const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root, options.observationPack)
+  const modelHandoff = new ModelHandoff(ctx as any, decisions, root, options.modelHandoff)
   const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
   const deepPlanning = new DeepPlanningController({ runtime, decisions, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
     sessions, agents, catalog: modelCatalog, questions: userQuestions, routes: options.modelRoutes ?? [], compatibility: modelCompatibility, sessionQuery, config: options.deepPlanning,
@@ -3100,7 +3103,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     dispose: () => disposePromise ??= (async () => {
       await answerReview.dispose()
       semanticCompaction.stop()
+      modelHandoff.stop()
       await semanticCompaction.drain()
+      await modelHandoff.drain()
       await deepPlanning.stop()
       await autoReview.dispose()
       await memoryFinalizer.dispose()

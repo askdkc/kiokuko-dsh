@@ -53,6 +53,8 @@ export class DecisionService {
   private readonly compactionMetrics = { calls: 0, inputBytes: 0, elapsedMs: 0, inputTokens: 0, outputTokens: 0, usageReports: 0 }
   private observationStatus: unknown = null
   private answerReviewStatus: unknown = { mode: 'off', state: 'idle', reason: null }
+  private modelHandoffStatus: { mode: string; supported: boolean; last: unknown } = { mode: 'off', supported: false, last: null }
+  reportModelHandoff(status: { mode: string; supported: boolean; last: unknown }): void { this.modelHandoffStatus = status }
   reportAnswerReview(status: unknown): void { this.answerReviewStatus = status }
   reportObservationPack(mode: string, metrics: Record<string, number>): void { this.observationStatus = { mode, metrics } }
   private lastPreemptive: CompactionOutcome | null = null
@@ -181,6 +183,8 @@ export class DecisionService {
       limits: this.provider(this.config).capabilities, acceptance: selected?.acceptance ?? null, policyVersion: this.config.provider === 'laya-coreml' ? LAYA_POLICY_VERSION : POLICY_VERSION, lastFallback: this.lastFallback,
       observationPack: this.observationStatus,
       answerReview: this.answerReviewStatus,
+      modelHandoff: { ...this.modelHandoffStatus, active: this.modelHandoffStatus.mode === 'auto' && this.modelHandoffStatus.supported
+        && this.config.mode !== 'off' && ['typesafe', 'laya-coreml'].includes(this.config.provider) && this.readiness.status(this.config).state === 'ready' },
       semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, metrics: this.compactionMetrics, lastPreemptive: this.lastPreemptive, preemptiveActive: this.semanticCompaction.preemptive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready', active: this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },
       readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' } }
   }
@@ -193,9 +197,10 @@ export class DecisionService {
       if (!(error instanceof DecisionError)) throw error
       return { status: 'fallback', reason: error.code }
     }
-    const semantic = batch.purpose === 'compaction'
+    const semantic = batch.purpose === 'compaction' || batch.purpose === 'model-handoff'
     const managed = semantic || batch.purpose === 'memory-reuse'
-    const digest = canonicalContentHash({ batch, config, catalogDigest, policyVersion: POLICY_VERSION, ...(semantic ? { semanticCompaction: this.semanticCompaction } : {}) })
+    const digest = canonicalContentHash({ batch, config, catalogDigest, policyVersion: POLICY_VERSION,
+      ...(batch.purpose === 'compaction' ? { semanticCompaction: this.semanticCompaction } : {}) })
     const key = `${requestId}:${digest}`
     const cached = this.results.get(key) ?? await this.store?.read(requestId, digest)
     if (signal.aborted) throw new DecisionError('CANCELLED')
@@ -203,8 +208,8 @@ export class DecisionService {
       if (cached.status === 'completed') parseDecisionResult(cached.result, batch)
       else if (cached.status !== 'fallback' || typeof cached.reason !== 'string') throw new Error('Decision result integrity mismatch')
       if (semantic) {
-        if (this.semanticCompaction.mode === 'off' || config.mode === 'off') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
-        const budget = AbortSignal.any([signal, AbortSignal.timeout(this.semanticCompaction.budgetMs)])
+        if ((batch.purpose === 'compaction' && this.semanticCompaction.mode === 'off') || config.mode === 'off') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
+        const budget = AbortSignal.any([signal, AbortSignal.timeout(batch.purpose === 'model-handoff' ? 5000 : this.semanticCompaction.budgetMs)])
         try {
           if ((await this.readiness.probe(config, budget)).state !== 'ready') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
         } catch (error) {
@@ -219,13 +224,14 @@ export class DecisionService {
     if (existing) return abortable(existing, signal)
     const operation = (async (): Promise<DecisionOutcome> => {
       const timeout = new AbortController(), timeoutMs = selectedDecisionSettings(config)?.timeoutMs ?? 5000
-      const timer = setTimeout(() => timeout.abort(), managed ? Math.min(timeoutMs, semantic ? this.semanticCompaction.budgetMs : this.memoryReuse.budgetMs) : timeoutMs)
+      const timer = setTimeout(() => timeout.abort(), managed ? Math.min(timeoutMs,
+        batch.purpose === 'model-handoff' ? 5000 : semantic ? this.semanticCompaction.budgetMs : this.memoryReuse.budgetMs) : timeoutMs)
       const combined = AbortSignal.any([signal, timeout.signal])
       let outcome: DecisionOutcome
       try {
         if (decisionConfigurationIssue(config)) throw new DecisionError('UNAVAILABLE')
         if (managed) {
-          if ((semantic ? this.semanticCompaction : this.memoryReuse).mode === 'off') throw new DecisionError('UNAVAILABLE')
+          if ((batch.purpose === 'compaction' ? this.semanticCompaction : batch.purpose === 'model-handoff' ? { mode: 'auto' } : this.memoryReuse).mode === 'off') throw new DecisionError('UNAVAILABLE')
           const ready = await this.readiness.probe(config, combined)
           if (ready.state !== 'ready') throw new DecisionError(ready.reason === 'DECISION_AUTH' || ready.reason === 'missing_credential' ? 'AUTH' : 'UNAVAILABLE')
         }

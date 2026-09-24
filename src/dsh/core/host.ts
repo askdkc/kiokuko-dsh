@@ -3,6 +3,7 @@ import { capabilityCatalogDigest } from '../../akinator/capability-binding.js'
 import { memoryApplicationMode } from '../../memory/application.js'
 import { mountMemoryApplication, MEMORY_APPLICATION_GUIDANCE } from '../memory-application.js'
 import { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
+import { ModelHandoff, ModelHandoffConfig } from '../model-handoff.js'
 import { SemanticCompactionConfig } from '../semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../../memory/reuse.js'
 import { classifyTask } from '../decisions/workflows.js'
@@ -48,6 +49,7 @@ export const CoreConfig = z.object({
   answerReview: AnswerReviewConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),
   semanticCompaction: SemanticCompactionConfig.prefault({}),
+  modelHandoff: ModelHandoffConfig.prefault({}),
   observationPack: ObservationPackConfig.prefault({}),
   repositoryRoot: z.string().min(1).optional(),
   databasePath: z.string().min(1).optional(),
@@ -80,6 +82,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const decisions = createDecisionService(ctx, runtime, config.typedDecisions, config.memoryReuse, config.semanticCompaction, root)
   const answerReview = new AnswerReviewCoordinator(runtime, decisions, config.answerReview)
   const semanticCompaction = new SemanticCompactionCoordinator(ctx as any, decisions, root, config.observationPack)
+  const modelHandoff = new ModelHandoff(ctx as any, decisions, root, config.modelHandoff)
   const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions)
   function bind(agent: NativeAgent): void {
     if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || realpathSync(agent.session.header.cwd) !== root) throw new Error('Native task identity mismatch')
@@ -111,6 +114,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     if (stopped) return
     stopped = true
     semanticCompaction.stop()
+    modelHandoff.stop()
     lifecycle.abort(new Error('Kiokuko core stopped'))
     modules.stopIngress()
     for (const dispose of disposers.reverse()) { try { dispose() } catch (error) { stopErrors.push(error) } }
@@ -118,6 +122,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const drain = async () => {
     await answerReview.dispose()
     await semanticCompaction.drain()
+    await modelHandoff.drain()
     await Promise.allSettled([...pending])
     await modules.dispose()
   }

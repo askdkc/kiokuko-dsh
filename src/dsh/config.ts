@@ -1,5 +1,6 @@
 import { ObservationPackConfig } from './observation-pack/policy.js'
 import { SemanticCompactionConfig } from './semantic-compaction/contracts.js'
+import { ModelHandoffConfig } from './model-handoff.js'
 import { MemoryReuseConfig } from '../memory/reuse.js'
 import { TypedDecisionsConfig } from './decisions/config.js'
 import { MemoryReviewConfig } from '../memory/review/contracts.js'
@@ -63,6 +64,7 @@ export const Config = z.object({
   answerReview: AnswerReviewConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),
   semanticCompaction: SemanticCompactionConfig.prefault({}),
+  modelHandoff: ModelHandoffConfig.prefault({}),
   observationPack: ObservationPackConfig.prefault({}),
   akinatorMemory: AkinatorMemoryConfig.prefault({}),
   deepPlanning: DeepThinkerConfigSchema.prefault({}),
