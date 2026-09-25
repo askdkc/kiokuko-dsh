@@ -4,6 +4,10 @@ import { bindMemoryApplication, memoryApplicationStatus, memoryRetrievalStatus }
 import { mountMemoryApplication } from './memory-application.js'
 import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
 import { ModelHandoff, ModelHandoffConfig } from './model-handoff.js'
+import { ModelAutoConfig } from './model-auto/contracts.js'
+import { ModelAutoCoordinator } from './model-auto/coordinator.js'
+import { ModelAutoStore } from './model-auto/store.js'
+import { attachmentTypesFromMessages, nativeContextTokens, projectModelBinding } from './model-auto/policy.js'
 import { SemanticCompactionConfig, type CompactionAgent } from './semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../memory/reuse.js'
 import { createMemoryReuseRuntime } from './memory-reuse.js'
@@ -55,7 +59,7 @@ import {
 import { DshRuntime } from './runtime.js'
 import type { DshCoreRuntime } from './core-runtime.js'
 import { withImmediateTransaction } from '../db/transaction.js'
-import { DshIntakeGate, type DshCapabilityReadContext, type DshIntakeGateResult, type DshPreStepDecision, type DshPreStepEvent } from './intake-gate.js'
+import { DshIntakeGate, assertDshModelAdmitted, type DshCapabilityReadContext, type DshIntakeGateResult, type DshPreStepDecision, type DshPreStepEvent } from './intake-gate.js'
 import { resolveGroundedIntakeProfile } from './intake-profile-resolver.js'
 import type { PreparedAgentTask } from './task-intake.js'
 import { deriveAkinatorReasoning } from '../akinator/reasoning.js'
@@ -198,6 +202,7 @@ export interface DshHostAdapterOptions {
   readonly observationPack?: import('zod').z.input<typeof ObservationPackConfig>
   readonly semanticCompaction?: import('zod').z.input<typeof SemanticCompactionConfig>
   readonly modelHandoff?: import('zod').z.input<typeof ModelHandoffConfig>
+  readonly modelAutoMode?: import('zod').z.input<typeof ModelAutoConfig>
   readonly typedDecisions?: import('zod').z.input<typeof TypedDecisionsConfig>
   readonly memoryReuse?: import('zod').z.input<typeof MemoryReuseConfig>
   /** An enclosing composition owns and closes this shared runtime. */
@@ -526,6 +531,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ...(modelCatalog ? { catalog: modelCatalog } : {}),
   }, reviewConfig) : undefined
   const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}), SemanticCompactionConfig.parse(options.semanticCompaction ?? {}), root)
+  const modelAutoConfig = ModelAutoConfig.parse(options.modelAutoMode ?? {})
+  const modelAuto = new ModelAutoCoordinator(new ModelAutoStore(runtime, modelAutoConfig.mode, canonicalContentHash(modelAutoConfig)), decisions, modelCatalog, modelAutoConfig)
+  const manualModelChanges = new Map<string, Promise<void>>()
   const answerReview = new AnswerReviewCoordinator(runtime, decisions, AnswerReviewConfig.parse(options.answerReview ?? {}))
   const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root, options.observationPack)
   const modelHandoff = new ModelHandoff(ctx as any, decisions, root, options.modelHandoff)
@@ -1563,7 +1571,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (previous?.turn === event.turn) previous.messages.push(event.message)
       else assemblyClaims.set(agent, { turn: event.turn, messages: [event.message] })
     })
+    let autoRoute: { runId: string; sessionId: string; binding: import('./model-configuration.js').ModelBinding } | undefined
     const disposeRouting = installDshModelRouting(agent, async signal => {
+      autoRoute = undefined
       const deep = await deepPlanning.beforeAssembly(agent, signal)
       if (deep.owned) { assemblyClaims.delete(agent); return deep.model }
       const childModel = await delegation.restoreOrPersist(agent)
@@ -1584,9 +1594,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (agent.session && messages.length) {
         await captureInitialInput(agent.session.id, turn, messages)
       }
+      let admitted: DshIntakeGateResult | undefined
       try {
         const event = await mapPreStep({ agent, messages, turn, step: 0, signal })
-        await gate.prepare(event)
+        admitted = await gate.prepare(event)
       } catch (error) {
         if (error instanceof ExecutionSelectionPending) { selectionBlocked.add(agent); reportToolExposureFallback('pre_step_selection_pending') }
         else {
@@ -1605,7 +1616,22 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const role = modelRoleForState(item.prepared.ennoOduno)
       const reviewModel = answerReview.model(agent as ReviewAgent)
       if (reviewModel) return reviewModel
-      return selection?.mode === 'enno' && selection.status === 'ready' && role ? selection.configuration?.roles[role] : undefined
+      if (selection?.mode === 'enno' && selection.status === 'ready' && role) return selection.configuration?.roles[role]
+      if ((native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined)?.enabled(agent as DshUserQuestionAgent)) return { kind: 'native' }
+      if (admitted && !role && !selectionBlocked.has(agent) && (!selection || selection.mode === 'normal' && selection.status === 'ready')
+        && item.nativeAgent === agent && item.nativeSession === agent.session && item.turn === turn && !item.closed
+        && !(agent as ReviewAgent).session.header?.parentSession && (agent as ReviewAgent).session.header?.origin !== 'subagent' && !(agent as ReviewAgent).session.header?.delegationDepth) {
+        assertDshModelAdmitted(admitted)
+        const pendingManual = manualModelChanges.get(item.sessionId)
+        if (pendingManual) await pendingManual
+        const decision = await modelAuto.resolve({ runId: item.runId, sessionId: item.sessionId,
+          requestId: dshTurnRequestId({ dshSessionId: item.sessionId, turn: item.turn }), turn: item.turn,
+          task: item.task, ...(item.prepared.intake.profile.taskType ? { taskType: item.prepared.intake.profile.taskType } : {}),
+          attachmentTypes: attachmentTypesFromMessages(messages), measureContext: () => nativeContextTokens(native, agent.session), admitted: true, signal })
+        if (decision.kind === 'apply') { autoRoute = { runId: item.runId, sessionId: item.sessionId, binding: decision.binding }; return decision.binding }
+        return { kind: 'native' }
+      }
+      return undefined
     }, {
       load: () => {
         const runId = agent.session ? currentSession(agent.session.id)?.runId : undefined
@@ -1614,6 +1640,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       save: async ordinaryModel => {
         const runId = agent.session ? currentSession(agent.session.id)?.runId : undefined
         if (!runId || delegation.isChild(agent)) return
+        await modelAuto.baseline(runId, ordinaryModel)
         await runtime.withDatabase(db => {
           const stored = readExecutionSelection(db, runId)
           if (stored && !stored.value.ordinaryModel) selections.set(runId, writeExecutionSelection(db, runId, stored.revision, { ...stored.value, ordinaryModel }))
@@ -1621,6 +1648,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       },
     }, {
       prompts: () => skillPrompts,
+      owner: () => agent.session ? currentSession(agent.session.id)?.runId : undefined,
+      beforeRequest: async binding => {
+        if (!autoRoute || !binding) return
+        const pendingManual = manualModelChanges.get(autoRoute.sessionId)
+        if (pendingManual) await pendingManual
+        await modelAuto.assertCurrent(autoRoute.runId, autoRoute.sessionId, binding)
+      },
       assembled: async assembly => {
         semanticCompaction.recordRoute(agent as unknown as CompactionAgent, assembly.variables)
         const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
@@ -2808,6 +2842,19 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   })
   const sessionEventDisposer = (ctx as any).on('session/event', (session: { id: string }, event: { type?: unknown; seq?: unknown; data?: unknown }) => {
     const item = currentSession(session.id)
+    if (event.type === 'model/selection' && typeof event.seq === 'number') {
+      const selected = projectModelBinding(event.data)
+      if (selected) {
+        const change = modelAuto.manual(session.id, event.seq, selected)
+        manualModelChanges.set(session.id, change)
+        void change.catch(() => {})
+      }
+    }
+    if (event.type === 'request/header' && item) {
+      const config = objectRecord(objectRecord(event.data)?.header)?.config
+      const selected = projectModelBinding(config)
+      if (selected) void modelAuto.requestHeader(session.id, item.runId, selected).catch(() => {})
+    }
     if (event.type === 'user/message' && hasHumanInput([event.data])) answerReview.humanInput(session.id, objectRecord(event.data)?.turn as number | undefined)
     if(event.type==='user/message'&&typeof event.seq==='number'){
       const input=humanInput(event as DshLogEvent)
@@ -3033,6 +3080,13 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }
   configureEfficiency({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
   const host: DshCompositionHost = {
+    modelAuto: { coordinator: modelAuto, validSession: (agentId, sessionId) => {
+      const currentAgent = agents?.get(agentId) as { session?: object } | undefined
+      const currentNativeSession = sessions?.get(sessionId)
+      try { return Boolean(currentAgent && currentNativeSession && currentAgent.session === currentNativeSession
+        && realpathSync((currentNativeSession as { header: { cwd: string } }).header.cwd) === root) }
+      catch { return false }
+    } },
     ...(diffReview ? { diffReview } : {}),
     decisions,
     semanticCompaction,

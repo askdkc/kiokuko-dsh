@@ -50,6 +50,7 @@ export function nativeModelCatalog(llm: NativeCatalog | undefined, settings?: Na
       })
     },
     listModels: provider => llm.listModels(provider),
-    ...(llm.resolveCallConfig ? { resolveCallConfig: (binding: Parameters<NonNullable<DshModelCatalog['resolveCallConfig']>>[0]) => llm.resolveCallConfig!(binding) } : {}),
+    ...(llm.resolveModelInfo ? { resolveModelInfo: (provider: string, model: string, signal?: AbortSignal) => llm.resolveModelInfo!(provider, model, signal) } : {}),
+    ...(llm.resolveCallConfig ? { resolveCallConfig: (binding: Parameters<NonNullable<DshModelCatalog['resolveCallConfig']>>[0], signal?: AbortSignal) => llm.resolveCallConfig!(binding, signal) } : {}),
   }
 }

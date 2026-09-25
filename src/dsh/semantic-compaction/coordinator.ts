@@ -18,7 +18,8 @@ function freeze<T>(value: T): T {
   return value
 }
 function inspectable(session: CompactionSession): boolean {
-  return session.header?.version === 3 && Number.isSafeInteger(session.seq) && typeof session.eventAt === 'function' && Array.isArray(session.surface?.nodes)
+  return [3, 4].includes(session.header?.version) && Number.isSafeInteger(session.seq)
+    && typeof session.eventAt === 'function' && Array.isArray(session.surface?.nodes)
 }
 
 /** Owns only automatic step-boundary history projection, never manual/overflow compaction. */
@@ -162,7 +163,7 @@ export class SemanticCompactionCoordinator {
     }
     if (requiresRestore && this.failed.has(session)) throw new Error('Observation restoration blocked by a previous partial commit')
     const native = this.ctx.get('compaction', false).config
-    if (session.header.version !== 3 || this.busy.has(session) || this.failed.has(session)) return
+    if (![3, 4].includes(session.header.version) || this.busy.has(session) || this.failed.has(session)) return
     const progress = this.progress.get(session) ?? new SessionProgress(session)
     this.progress.set(session, progress)
     progress.scan(session)

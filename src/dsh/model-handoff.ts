@@ -97,7 +97,12 @@ export function handoffRange(session: Session): { start: number; end: number } |
   for (let index = startIndex; index <= endIndex; index++) {
     const event = events[index]
     if (event?.type === 'assistant/message') for (const block of event.data?.message?.content ?? []) if (block.type === 'tool-call') calls.add(block.id)
-    if (event?.type === 'tool/result') for (const block of event.data?.message?.content ?? []) if (block.type === 'tool-result') results.add(block.toolCallId)
+    if (event?.type === 'tool/result') {
+      const message = event.data?.message
+      if (message?.role === 'tool' && message.source?.kind === 'tool' && message.toolCallId === message.source.callId)
+        results.add(message.toolCallId)
+      else for (const block of message?.content ?? []) if (block.type === 'tool-result') results.add(block.toolCallId)
+    }
   }
   if ([...calls].some(id => !results.has(id)) || [...results].some(id => !calls.has(id))) return
   return { start: nodes[startIndex]!, end: nodes[endIndex]! }

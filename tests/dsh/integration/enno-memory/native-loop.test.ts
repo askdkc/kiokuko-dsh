@@ -16,6 +16,12 @@ import { readRefreshMetadata } from '../../../../src/dsh/enno-memory-refresh-sto
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packages) throw new Error('ennoMemory native coverage requires the pinned DSH package runtime')
+function toolResult(messages: any[], callId: string): any {
+  return messages.flatMap(message => message.role === 'tool' && message.toolCallId === callId
+    ? [message]
+    : (message.content ?? []).filter((block: any) => block.type === 'tool-result' && block.toolCallId === callId))
+    .at(-1)
+}
 for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep and boundary worker: ${mode}, new failure, repeated call, compaction, invalidation and terminal`, {
   skip: packages ? false : 'requires pinned DSH packages', timeout: 60000,
 }, async t => {
@@ -78,8 +84,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
     let resultId = '', attempts = 0
     const call = (args: object) => mock.toolCallResponse(resultId = `memory-review-${++reviewCall}`, 'task_memory_review', args)
     const inspect = (request: any): any => {
-      const result = request.messages.flatMap((message: any) => message.content ?? [])
-        .findLast((block: any) => block.type === 'tool-result' && block.toolCallId === resultId)
+      const result = toolResult(request.messages, resultId)
       assert.ok(++attempts <= 64, 'memory disposition must converge within the bounded refresh budget')
       if (result?.isError && /Memory delivery changed/.test(JSON.stringify(result))) {
         script.unshift(inspect)
@@ -127,8 +132,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
     (request: any) => {
       checkedRequest(request, false)
       if (mode === 'active') {
-        const result = request.messages.flatMap((message: any) => message.content ?? [])
-          .findLast((block: any) => block.type === 'tool-result' && block.toolCallId === 'failure-4')
+        const result = toolResult(request.messages, 'failure-4')
         assert.equal(result?.isError, true, 'a superseded delivered memory must block further execution')
         assert.match(JSON.stringify(result), /resolve memory decisions/)
         invalidationBlocked = true

@@ -63,13 +63,18 @@ export const MODEL_TEMPLATES: readonly ModelTemplate[] = [
   template('orca-deepseek-flash', 'OrcaRouter・DeepSeek V4.1 Flash', 'OrcaRouter', 'orcarouter', 'deepseek/deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash'),
   template('ollama', 'Ollama・ローカル標準', 'Ollama', 'ollama', 'qwen3-coder:30b', 'qwen3-coder:30b'),
 ]
-export interface ConfiguredModel { readonly provider: string; readonly id: string; readonly name: string }
+export interface ConfiguredModel { readonly provider: string; readonly id: string; readonly name: string; readonly inputModalities?: readonly string[] }
+export interface ResolvedModelInfo extends ConfiguredModel {
+  readonly context?: { readonly contextWindow: number }
+  readonly reasoning?: { readonly efforts: readonly { readonly id: string }[] }
+}
 export interface ConfiguredProvider { readonly id: string; readonly name: string; readonly route?: ModelRoute }
 export interface DshModelCatalog {
   listProviders(): readonly ConfiguredProvider[] | PromiseLike<readonly ConfiguredProvider[]>
   listModels(provider: string): PromiseLike<readonly ConfiguredModel[]>
+  resolveModelInfo?(provider: string, model: string, signal?: AbortSignal): PromiseLike<ResolvedModelInfo>
   /** Native adapter validation; protocol and authentication remain owned by DSH. */
-  resolveCallConfig?(binding: ModelBinding): PromiseLike<ModelBinding>
+  resolveCallConfig?(binding: ModelBinding, signal?: AbortSignal): PromiseLike<ModelBinding>
 }
 export interface ModelCatalogSnapshot {
   readonly providers: readonly ConfiguredProvider[]

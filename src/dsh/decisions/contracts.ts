@@ -28,7 +28,7 @@ export function requireChoice(question: DecisionQuestion): Extract<DecisionQuest
   return question
 }
 export const DecisionBatchSchema = z.object({
-  purpose: z.enum(['akinator', 'skills', 'enno-check', 'lisp', 'memory-reuse', 'compaction', 'model-handoff', 'answer-review']), state: z.unknown(),
+  purpose: z.enum(['akinator', 'skills', 'enno-check', 'lisp', 'memory-reuse', 'compaction', 'model-handoff', 'answer-review', 'model-routing']), state: z.unknown(),
   questions: z.array(DecisionQuestionSchema).min(1).max(300), contractVersion: z.literal('typed-decisions-v1').optional(),
 }).strict().refine(b => b.questions.length <= 256 || b.purpose === 'memory-reuse' && b.questions.length <= 300 && b.questions.every(q => questionType(q) === 'noul'), 'Too many questions')
   .refine(b => new Set(b.questions.map(q => q.id)).size === b.questions.length, 'Question IDs must be unique')

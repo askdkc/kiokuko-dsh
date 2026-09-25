@@ -1,5 +1,6 @@
 import type { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
 import { mountDecisionCommand } from './decisions/host.js'
+import { mountModelAutoCommand } from './model-auto/command.js'
 import type { DecisionService } from './decisions/service.js'
 import { formatEvolutionStatus } from '../memory/evolution/status.js'
 import type { mountLispSurface } from './lisp/surface.js'
@@ -61,6 +62,8 @@ export interface DshNativeTurnStoppingPayload {
 export interface DshCompositionHost {
   readonly diffReview?: DiffReviewController
   readonly decisions?: DecisionService
+  readonly modelAuto?: { readonly coordinator: import('./model-auto/coordinator.js').ModelAutoCoordinator;
+    readonly validSession: (agentId: string, sessionId: string) => boolean }
   readonly semanticCompaction?: SemanticCompactionCoordinator
   readonly skillPrompts?: DshSkillPrompts
   readonly configureSkillPrompts?: (prompts: DshSkillPrompts) => void
@@ -250,7 +253,13 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
 
   try {
     await host.decisions?.initialize()
-    if (host.commands && host.decisions && options.typeSafeCommand !== false) ingressDisposers.push(mountDecisionCommand(host.commands, host.decisions))
+    if (host.commands && host.decisions && options.typeSafeCommand !== false) ingressDisposers.push(mountDecisionCommand(host.commands, host.decisions,
+      host.modelAuto ? async invocation => {
+        const sessionId = invocation.agent?.session?.id ?? invocation.agent?.sessionId
+        return sessionId && invocation.agent && host.modelAuto!.validSession(invocation.agent.id, sessionId)
+          ? host.modelAuto!.coordinator.status(sessionId) : { state: 'session_unavailable' }
+      } : undefined))
+    if (host.commands && host.modelAuto) ingressDisposers.push(mountModelAutoCommand(host.commands, host.modelAuto.coordinator, host.modelAuto.validSession))
     if (host.commands && options.typeSafeCommand !== false) ingressDisposers.push(mountTypeSafeCommand(host.commands, typeSafeCredentials(ctx), () => host.decisions?.invalidateReadiness()))
     const historyCompatibility = mountSessionHistoryCompatibility(ctx)
     const historyBackend = typeof ctx.get === 'function' ? ctx.get('sessionPersistence', false) : undefined

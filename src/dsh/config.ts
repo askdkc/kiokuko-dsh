@@ -18,6 +18,7 @@ export { LispConfig }
 import { ContinuityConfig } from '../context/continuity-view.js'
 export { ContinuityConfig }
 import { ModelRouteSchema } from './model-configuration.js'
+import { ModelAutoConfig } from './model-auto/contracts.js'
 import { ToolExposureConfig } from './tool-exposure.js'
 import { DeepThinkerConfigSchema } from '../deep-thinker/core/contracts.js'
 
@@ -79,6 +80,7 @@ export const Config = z.object({
   memoryReuse: MemoryReuseConfig.prefault({}),
   semanticCompaction: SemanticCompactionConfig.prefault({}),
   modelHandoff: ModelHandoffConfig.prefault({}),
+  modelAutoMode: ModelAutoConfig.prefault({}),
   observationPack: ObservationPackConfig.prefault({}),
   akinatorMemory: AkinatorMemoryConfig.prefault({}),
   deepPlanning: DeepThinkerConfigSchema.prefault({}),

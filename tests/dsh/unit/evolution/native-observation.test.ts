@@ -20,6 +20,9 @@ test('native proof requires exact run, workspace, call event and final rendered 
   const data={message:{role:'user',source:{kind:'tool',callId:'c'},content:[{type:'tool-result',toolCallId:'c',content:result.content,isError:false}]}}
   assert.equal(observationMatchesResult(proof,data),true)
   assert.equal(observationMatchesResult(proof,{...data,meta:{changed:true}}),false)
+  const current={message:{role:'tool',source:{kind:'tool',callId:'c'},toolCallId:'c',content:result.content,isError:false}}
+  assert.equal(observationMatchesResult(proof,current),true)
+  assert.equal(observationMatchesResult(proof,{...current,message:{...current.message,toolCallId:'other'}}),false)
   for(const changed of [{}, {runId:'other'}, {workspace:'project:other'}, {callSeq:99}, {exitCode:1,failed:false}, {presentationHash:'0'.repeat(64)}]) {
     async function* stream():AsyncIterable<DshLogEvent> {
       yield {seq:1,time:1,type:'turn/start'}

@@ -48,7 +48,8 @@ export function createDecisionService(ctx: { get(name: string, strict?: boolean)
       } catch { return false }
     } })
 }
-export function mountDecisionCommand(commands: { register(definition: DshNativeCommandDefinition): () => void }, service: DecisionService): () => void {
+export function mountDecisionCommand(commands: { register(definition: DshNativeCommandDefinition): () => void }, service: DecisionService,
+  modelAutoStatus?: (invocation: Parameters<DshNativeCommandDefinition['handler']>[0]) => Promise<unknown>): () => void {
   const usage = '/kioku-decisions use jev | use laya | use nimble | use default | status | probe | install-laya'
   const providers: Record<string, DecisionConfiguration['provider'] | 'default'> = { jev: 'typesafe', typesafe: 'typesafe', laya: 'laya-coreml', 'laya-coreml': 'laya-coreml', nimble: 'nimble', default: 'default' }
   return commands.register({ name: 'kioku-decisions', description: 'Switch Jev / Laya / Nimble or inspect status. install-laya connects to an existing worker or shows setup instructions.', input: { hint: 'use jev | use laya | use nimble | use default | status | probe | install-laya' },
@@ -65,7 +66,8 @@ export function mountDecisionCommand(commands: { register(definition: DshNativeC
           const readiness = await service.probe(invocation.signal, true)
           if (readiness.state !== 'ready') return { kind: 'error', text: `判定を利用できません (${readiness.reason ?? readiness.state})。Layaは start-laya の起動状態、Jevは /kioku-typesafe-key status を確認してください。` }
         } else if (action && action !== 'status') return { kind: 'error', text: usage }
-        const status = JSON.stringify(await service.inspectStatus(invocation.signal), null, 2)
+        const inspected = await service.inspectStatus(invocation.signal) as Record<string, unknown>
+        const status = JSON.stringify({ ...inspected, ...(modelAutoStatus ? { modelAuto: await modelAutoStatus(invocation) } : {}) }, null, 2)
         return { kind: 'success', text: action ? status : `${usage}\n${status}` }
       } catch (error) {
         const code = invocation.signal.aborted ? 'DECISION_CANCELLED' : error instanceof DecisionError ? error.code : 'DECISION_SELECTION_FAILED'

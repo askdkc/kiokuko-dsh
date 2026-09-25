@@ -215,6 +215,8 @@ See [Common Lisp setup and recovery](docs/lisp.md) for commands and limits.
 
 # Configured typed decisions
 
+`modelAutoMode.mode` defaults to `off`. When enabled for an admitted normal task, it sends only that task's text, task type, attachment kinds and configured route descriptions to the selected ready Jev or Laya backend. It requires the registered `openai-codex` provider, live model capability checks and the native token meter. It stores route identities, digests, binding, status and timing in Kiokuko SQLite; it does not duplicate task text or credentials there. `observe` performs the classifier call without changing the DSH request model. A manual picker selection takes priority. No provider substitution, automatic implementation retry or global Web model change occurs. `/kioku-model-auto off` disables the current session; setting `modelAutoMode.mode: off` and restarting disables saved session overrides.
+
 With `typedDecisions.mode: auto` (default), the host may send the current request,
 installed Skill descriptions, sanitized candidate plan or explicitly selected Lisp
 evidence to the configured adapter. TypeSafe uses its fixed HTTPS endpoint and

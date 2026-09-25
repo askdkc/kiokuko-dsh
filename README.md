@@ -106,6 +106,8 @@ See [setup, APIs, limits and recovery](docs/lisp.md).
 
 ## Typed decisions (Jev / Laya / Nimble)
 
+Optional [automatic model selection](docs/model-selection.md#automatic-model-selection) chooses a validated `openai-codex` model and reasoning effort for a new normal task. It defaults to `modelAutoMode.mode: off`; `/kioku-model-auto on | observe | off | status` changes only the current session. `observe` measures a proposal without changing the model. It requires a ready Jev or Laya backend, dsh-codex, native model metadata and a token meter. Failed or unavailable classification keeps the current model; manual model selection takes priority.
+
 [Answer review](docs/answer-review.md) is enabled by default on the full plugin and modular core. It evaluates an already displayed normal answer using the configured Jev, Laya or Nimble provider and may ask the same main model to reconsider once. The defaults are:
 
 ```yaml

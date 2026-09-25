@@ -100,7 +100,8 @@ export class ObservationPack {
       if (source || this.config.mode === 'off' || !progress.exposedTwice(event.seq) || Buffer.byteLength(original.text) <= 10240 || event.sourceEventSeqs?.length !== 1) continue
       const call = session.eventAt(event.sourceEventSeqs[0]!)
       if (call?.type !== 'tool/call' || call.data.callId !== original.callId || !['read', 'glob', 'grep', 'bash'].includes(call.data.name)) continue
-      if (call.data.name === 'bash' && this.proofs.get(session)?.get(call.seq) !== toolPresentationHash({ content: original.message.content[0]!.content, isError: false, meta: event.data.meta, error: event.data.error })) continue
+      const resultContent = original.message.role === 'tool' ? original.message.content : original.message.content[0]!.content
+      if (call.data.name === 'bash' && this.proofs.get(session)?.get(call.seq) !== toolPresentationHash({ content: resultContent, isError: false, meta: event.data.meta, error: event.data.error })) continue
       const replacement = packedMessage(session.id, event), savings = meter.estimateMessage(original.message) - meter.estimateMessage(replacement)
       if (savings > 0) result.push({ id: `o${event.seq}`, tool: call.data.name, callId: original.callId, event, original: original.message, replacement, savings, position })
     }
@@ -109,7 +110,11 @@ export class ObservationPack {
   committed(candidates: readonly ResultCandidate[], restore: boolean): void {
     for (const c of candidates) {
       if (restore) this.stats.restored++
-      else { this.stats.packed++; this.stats.originalBytes += Buffer.byteLength(c.original.content[0]!.content[0].text); this.stats.packedBytes += Buffer.byteLength(c.replacement.content[0]!.content[0].text) }
+      else {
+        const original = c.original.role === 'tool' ? c.original.content[0]!.text : c.original.content[0]!.content[0].text
+        const packed = c.replacement.role === 'tool' ? c.replacement.content[0]!.text : c.replacement.content[0]!.content[0].text
+        this.stats.packed++; this.stats.originalBytes += Buffer.byteLength(original); this.stats.packedBytes += Buffer.byteLength(packed)
+      }
     }
   }
 }

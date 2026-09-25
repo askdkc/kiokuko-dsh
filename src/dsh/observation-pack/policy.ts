@@ -10,7 +10,14 @@ export const ObservationReadInput = z.object({ handle: z.string().regex(/^op1\.\
   offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).default(0), limit: z.number().int().min(1).max(2000).default(2000) }).strict()
 export const textDigest = (text: string): string => createHash('sha256').update(text).digest('hex')
 export function plainResult(event: SurfaceEvent): { message: SurfaceMessage; text: string; callId: string } | undefined {
-  const message = surfaceMessage(event), block = message?.content[0], text = block?.content?.[0]
+  const message = surfaceMessage(event), block = message?.content[0]
+  if (event.type === 'tool/result' && message?.role === 'tool' && message.source.kind === 'tool'
+    && typeof message.toolCallId === 'string' && message.source.callId === message.toolCallId
+    && message.isError === false && event.data.error === undefined && message.content.length === 1
+    && block?.type === 'text' && typeof block.text === 'string'
+    && !Object.keys(block).some(k => !['type', 'text'].includes(k)))
+    return { message, text: block.text, callId: message.toolCallId }
+  const text = block?.content?.[0]
   if (event.type !== 'tool/result' || !message || message.role !== 'user' || message.source.kind !== 'tool' || message.content.length !== 1
     || block?.type !== 'tool-result' || typeof block.toolCallId !== 'string' || message.source.callId !== block.toolCallId
     || block.isError !== false || event.data.error !== undefined || block.content?.length !== 1
@@ -38,7 +45,9 @@ export function observationExcerpt(text: string): string {
 export function packedMessage(sessionId: string, event: SurfaceEvent): SurfaceMessage {
   const result = plainResult(event)!
   const text = `${OBSERVATION_MARKER}\n${JSON.stringify({ session: sessionId, handle: observationHandle(sessionId, event), bytes: Buffer.byteLength(result.text), digest: textDigest(result.text) })}\nUse observation_read for the original (Unicode offset, up to 2000 characters).\n${observationExcerpt(result.text)}`
-  return { ...result.message, content: [{ ...result.message.content[0]!, content: [{ type: 'text', text }] }] }
+  return { ...result.message, content: result.message.role === 'tool'
+    ? [{ type: 'text', text }]
+    : [{ ...result.message.content[0]!, content: [{ type: 'text', text }] }] }
 }
 /** Resolve only a native result, never a caller-supplied path or session. */
 export function resolveObservation(session: CompactionSession, handle: string): SurfaceEvent {

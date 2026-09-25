@@ -120,6 +120,17 @@ export class DecisionService {
       return { state: 'unavailable' as const, reason: error.code, checkedAt: null }
     }
   }
+  /** Probe the configuration already bound to this logical request. */
+  async probeBound(requestId: string, signal: AbortSignal) {
+    const config = await this.bind(requestId, signal)
+    if (config.mode !== 'auto' || !['typesafe', 'laya-coreml'].includes(config.provider))
+      return { state: 'unconfigured' as const, reason: 'decision_off', checkedAt: null }
+    return this.readiness.probe(config, signal)
+  }
+  async modelRoutingAvailable(requestId: string, signal: AbortSignal): Promise<boolean> {
+    const config = await this.bind(requestId, signal)
+    return config.mode === 'auto' && (config.provider === 'typesafe' || config.provider === 'laya-coreml')
+  }
   async inspectStatus(signal: AbortSignal) { await this.initialize(); await this.readiness.inspect(this.config, signal); return this.status() }
   /** Verify before publishing the new selection. Existing request snapshots are never rewritten. */
   async selectProvider(provider: DecisionConfiguration['provider'] | 'default', signal: AbortSignal): Promise<void> {
@@ -254,7 +265,7 @@ export class DecisionService {
       return { status: 'fallback', reason: error.code }
     }
     const semantic = batch.purpose === 'compaction' || batch.purpose === 'model-handoff'
-    const managed = semantic || batch.purpose === 'memory-reuse'
+    const managed = semantic || batch.purpose === 'memory-reuse' || batch.purpose === 'model-routing'
     const digest = canonicalContentHash({ batch, config, catalogDigest, policyVersion: batch.contractVersion ?? POLICY_VERSION,
       ...(batch.purpose === 'compaction' ? { semanticCompaction: this.semanticCompaction } : {}) })
     const key = `${requestId}:${digest}`
@@ -263,9 +274,9 @@ export class DecisionService {
     if (cached) {
       if (cached.status === 'completed') parseDecisionResult(cached.result, batch)
       else if (cached.status !== 'fallback' || typeof cached.reason !== 'string') throw new Error('Decision result integrity mismatch')
-      if (semantic) {
+      if (semantic || batch.purpose === 'model-routing') {
         if ((batch.purpose === 'compaction' && this.semanticCompaction.mode === 'off') || config.mode === 'off') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
-        const budget = AbortSignal.any([signal, AbortSignal.timeout(batch.purpose === 'model-handoff' ? 5000 : this.semanticCompaction.budgetMs)])
+        const budget = AbortSignal.any([signal, AbortSignal.timeout(batch.purpose === 'model-handoff' || batch.purpose === 'model-routing' ? 5000 : this.semanticCompaction.budgetMs)])
         try {
           if ((await this.readiness.probe(config, budget)).state !== 'ready') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
         } catch (error) {
@@ -282,7 +293,7 @@ export class DecisionService {
     const operation = (async (): Promise<DecisionOutcome> => {
       const timeout = new AbortController(), timeoutMs = selectedDecisionSettings(config)?.timeoutMs ?? 5000
       const timer = setTimeout(() => timeout.abort(), managed ? Math.min(timeoutMs,
-        batch.purpose === 'model-handoff' ? 5000 : semantic ? this.semanticCompaction.budgetMs : this.memoryReuse.budgetMs) : timeoutMs)
+        batch.purpose === 'model-handoff' || batch.purpose === 'model-routing' ? 5000 : semantic ? this.semanticCompaction.budgetMs : this.memoryReuse.budgetMs) : timeoutMs)
       const combined = AbortSignal.any([signal, timeout.signal])
       let outcome: DecisionOutcome
       try {
@@ -293,7 +304,7 @@ export class DecisionService {
         if (batch.questions.some(q => 'type' in q && q.type === 'score' && (!limits.maxScoreLevels || q.criteria.length > limits.maxScoreLevels))) throw new DecisionError('UNSUPPORTED')
         if (batch.questions.some(q => 'choices' in q && q.choices.length > limits.maxChoices) || Buffer.byteLength(JSON.stringify(batch)) > limits.maxBytes) throw new DecisionError('TOO_LARGE')
         if (managed) {
-          if ((batch.purpose === 'compaction' ? this.semanticCompaction : batch.purpose === 'model-handoff' ? { mode: 'auto' } : this.memoryReuse).mode === 'off') throw new DecisionError('UNAVAILABLE')
+          if ((batch.purpose === 'compaction' ? this.semanticCompaction : batch.purpose === 'model-handoff' || batch.purpose === 'model-routing' ? { mode: 'auto' } : this.memoryReuse).mode === 'off') throw new DecisionError('UNAVAILABLE')
           const ready = await this.readiness.probe(config, combined)
           if (ready.state !== 'ready') throw new DecisionError(ready.reason === 'DECISION_AUTH' || ready.reason === 'missing_credential' ? 'AUTH' : 'UNAVAILABLE')
         }

@@ -232,7 +232,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
               ? ['plan-one', 'plan-one-repair'] : ['plan-one', 'plan-two', 'plan-two-revised'])[confirmations - 1]
             confirmationSawCompletedPlanResult.push(liveAgent.session.snapshotEvents().some((event: any) => (
               event.type === 'tool/result'
-              && event.data.message.content[0]?.toolCallId === expectedPlanCall
+              && (event.data.message.toolCallId ?? event.data.message.content[0]?.toolCallId) === expectedPlanCall
             )))
             assert.deepEqual(question.options.map((option: any) => option.label), ['approve', 'cancel'])
             if (confirmations === 2 && finalMode !== 'verifier_mutation') {
@@ -505,21 +505,23 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       assert.ok(longAssistantMessage.data.stream?.length, 'V3 keeps the compacted stream in the settlement')
       assert.equal(longAssistantMessage.sourceEventSeqs, undefined, 'V3 forbids legacy chunk references on assistant messages')
     } else assert.ok(longAssistantMessage.sourceEventSeqs?.length > 2_048, 'legacy logs exercise the former bridge source-reference limit')
-    assert.deepEqual(results.map((event: any) => event.data.message.content[0]?.isError), Array(16).fill(false), JSON.stringify({ toolEvents, turnEnds }))
-    const delegation = results.find((event: any) => event.data.message.content[0]?.toolCallId === 'delegate-two')
-    const delegated = JSON.parse(delegation.data.message.content[0].content[0].text)
+    const resultCallId = (event: any) => event.data.message.toolCallId ?? event.data.message.content[0]?.toolCallId
+    const resultContent = (event: any) => event.data.message.role === 'tool' ? event.data.message.content : event.data.message.content[0].content
+    assert.deepEqual(results.map((event: any) => event.data.message.isError ?? event.data.message.content[0]?.isError), Array(16).fill(false), JSON.stringify({ toolEvents, turnEnds }))
+    const delegation = results.find((event: any) => resultCallId(event) === 'delegate-two')
+    const delegated = JSON.parse(resultContent(delegation)[0].text)
     assert.equal(delegated.accepted, false)
     assert.equal(delegated.stopReason, 'completed')
     for (const [callId, model] of [['ideal-two', 'gpt-6-astra'], ['plan-two', 'gpt-6-astra'], ['delegate-two', 'gpt-5.6-sol'], ['work-two', 'gpt-5.6-sol'], ['finish-two', 'gpt-6-astra'], ['meditation-two', 'gpt-6-astra']]) {
       assert.deepEqual(routedTools.filter(t => t.callId === callId).map(t => t.model), [model], 'Reselection must not replay completed tools')
     }
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS n FROM ledger_runs WHERE dsh_session_id = ?').get<{ n: number }>(delegated.childSessionId)?.n), 0)
-    const failedFocusedReport = results.find((event: any) => event.data.message.content[0]?.toolCallId === 'work-one')
-    const failedFocusedPayload = JSON.parse(failedFocusedReport?.data.message.content[0]?.content[0]?.text ?? '{}').value
+    const failedFocusedReport = results.find((event: any) => resultCallId(event) === 'work-one')
+    const failedFocusedPayload = JSON.parse(failedFocusedReport ? resultContent(failedFocusedReport)[0]?.text ?? '{}' : '{}').value
     assert.equal(failedFocusedPayload.verifierResults?.[0]?.status, 'failed')
     assert.equal(failedFocusedPayload.ennoOduno?.nextAction, 'execute_work_unit')
     assert.equal(failedFocusedPayload.executionLease?.workUnitId, 'implement-plan')
-    assert.equal(results.some((event: any) => event.data.message.content[0]?.toolCallId === 'work-one-retry'), true)
+    assert.equal(results.some((event: any) => resultCallId(event) === 'work-one-retry'), true)
     assert.equal(finalReports.length, 2, 'each completed Enno run must emit one visible final assistant report')
     assert.ok(turnEnds.length > 6, 'durable phases execute as separate native turns')
     assert.equal(confirmations, 3)

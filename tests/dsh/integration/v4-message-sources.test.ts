@@ -24,7 +24,7 @@ test('V4 upgrade normalizes only unsent Deep inputs and preserves uncertain deli
       SELECT 'uncertain-input', start_id, run_id, dsh_session_id, kind, ?, 'sending', event_seq, created_at
       FROM dsh_deep_outbox WHERE event_id=?`).run(legacy, row.eventId)
 
-    assert.deepEqual(migrateDatabase(f.db, migrations).applied, [27])
+    assert.deepEqual(migrateDatabase(f.db, migrations).applied, [27, 28])
     const pending = f.db.prepare('SELECT payload_json AS payloadJson FROM dsh_deep_outbox WHERE event_id=?')
       .get<{ payloadJson: string }>(row.eventId)!
     assert.deepEqual(JSON.parse(pending.payloadJson).message.source, { kind: 'plugin:kiokuko-dsh', form: 'instructions' })

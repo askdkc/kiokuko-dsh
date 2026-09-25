@@ -22,7 +22,10 @@ for (const mode of ['auto', 'off'] as const) test(`native read -> two full reque
   await writeFile(join(root, 'source.txt'), source)
   const mock = nativeMock(llm), script: any[] = [], full: string[] = []
   let original = '', handle = '', offset = 0
-  const resultText = (request: any, id = 'source-read') => request.messages.flatMap((m: any) => m.content).find((b: any) => b.type === 'tool-result' && b.toolCallId === id)?.content[0]?.text
+  const resultText = (request: any, id = 'source-read') => request.messages.flatMap((m: any) => m.role === 'tool' && m.toolCallId === id
+    ? [m.content[0]?.text]
+    : m.content.filter((b: any) => b.type === 'tool-result' && b.toolCallId === id).map((b: any) => b.content[0]?.text))
+    .find((text: any) => typeof text === 'string')
   script.push(mock.toolCallResponse('source-read', 'read', { file_path: 'source.txt' }))
   for (let n = 0; n < 2; n++) script.push((request: any) => {
     const text = resultText(request); full.push(text); assert.ok(text.includes('中央の根拠🙂𠮷=verified')); assert.ok(!text.includes(OBSERVATION_MARKER)); original = text
@@ -31,7 +34,20 @@ for (const mode of ['auto', 'off'] as const) test(`native read -> two full reque
   script.push((request: any) => {
     const text = resultText(request)
     if (mode === 'off') { assert.equal(text, original); return mock.toolCallResponse('evidence-write', 'write', { file_path: 'answer.txt', content: original.slice(original.indexOf('中央の根拠')).split('\n')[0] }) }
-    assert.ok(text.startsWith(OBSERVATION_MARKER)); assert.ok(!text.includes('中央の根拠'))
+    assert.ok(text.startsWith(OBSERVATION_MARKER), JSON.stringify({
+      status: d.service.status(),
+      results: agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => ({
+        seq: event.seq, sourceEventSeqs: event.sourceEventSeqs, role: event.data.message.role,
+        callId: event.data.message.toolCallId, recognized: !!plainResult(event),
+      })),
+      assistants: agent.session.snapshotEvents().filter((event: any) => event.type === 'assistant/message').map((event: any) => ({
+        seq: event.seq, stream: Array.isArray(event.data.stream), source: event.data.message?.source?.kind,
+        interrupted: event.data.interrupted,
+      })),
+      available: (coordinator as any).observations.available(agent),
+      exposed: (coordinator as any).progress.get(agent.session)?.exposedTwice(10),
+      version: agent.session.header.version,
+    })); assert.ok(!text.includes('中央の根拠'))
     handle = JSON.parse(text.split('\n')[1]).handle
     offset = Array.from(original.slice(0, original.indexOf('中央の根拠'))).length
     return mock.toolCallResponse('middle-read', 'observation_read', { handle, offset, limit: 100 })

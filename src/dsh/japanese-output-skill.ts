@@ -1,6 +1,5 @@
 import { readFile } from 'node:fs/promises'
 import { standardSkillFrontmatter } from './standard-skill-integrity.js'
-import type { DshSkillPrompts } from './skill-prompts.js'
 
 export const JAPANESE_OUTPUT_SKILL_NAME = 'natural-japanese-output'
 export const JAPANESE_OUTPUT_SKILL_DIRECTORY = 'japanese-translation-for-oss-models'
@@ -37,7 +36,8 @@ export interface PromptAssembly {
 }
 
 /** Apply after routing resolves variables; retain native prompt logging and budget accounting. */
-export async function applyJapaneseOutputSkill<T extends PromptAssembly>(assembly: T, prompts?: DshSkillPrompts): Promise<T & PromptAssembly> {
+export async function applyJapaneseOutputSkill<T extends PromptAssembly>(assembly: T,
+  prompts?: { require(name: string): Promise<string> }): Promise<T & PromptAssembly> {
   const applies = needsJapaneseOutputSkill(assembly.variables.model)
   const previous = assembly.sections.some(section => section.name === JAPANESE_OUTPUT_SECTION)
   if (!applies && !previous) return assembly

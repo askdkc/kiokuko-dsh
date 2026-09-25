@@ -105,6 +105,8 @@ Lisp を選ぶと、Lisp 用ツールで通常実行します。役小角を使�
 
 ## 型付き判定（Jev / Laya / Nimble）
 
+任意の[モデル自動選択](docs/model-selection.ja.md#通常実行のモデル自動選択)は、新しい通常タスクで検証済みの `openai-codex` モデルと推論強度を選びます。既定値は `modelAutoMode.mode: off` です。`/kioku-model-auto on | observe | off | status` は現在のセッションだけを変更します。`observe` は候補を計測し、実モデルは変えません。利用にはJevかLayaの準備完了、dsh-codex、DSHのモデル情報とtoken meterが必要です。判定不能なら現在のモデルを維持し、手動選択を優先します。
+
 [回答の再検討](docs/answer-review.md)は、表示済みの通常回答を評価し、指摘があれば同じ主モデルに一度だけ見直させる機能です。通常版・modular coreで既定で有効です。既定値は次のとおりです。
 
 ```yaml

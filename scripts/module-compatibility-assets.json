@@ -26,7 +26,8 @@
     "migrations/024_decision_selection.sql",
     "migrations/025_answer_review.sql",
     "migrations/026_auto_globalization.sql",
-    "migrations/027_v4_message_sources.sql"
+    "migrations/027_v4_message_sources.sql",
+    "migrations/028_model_auto.sql"
   ],
   "runtimeAssets": [
     "dist/security/sanitize.js"

@@ -46,6 +46,16 @@ test('review input retains whole answer and exact current-turn evidence, never u
   const without=answerReviewInput('Explain',noTools,1,0);assert.ok('batch'in without);assert.equal(without.batch.questions.length,3);assert.deepEqual(without.unassessed,['grounding','verification'])
   assert.deepEqual(answerReviewInput('Run tests',events(),2,0),{skipped:'not_completed'})
 })
+test('current DSH tool-role result is accepted only with its exact native call identity',()=>{
+  const current=events()
+  current[2]={seq:2,type:'tool/result',data:{turn:1,message:{role:'tool',source:{kind:'tool',callId:'check'},toolCallId:'check',
+    content:[{type:'text',text:'Verified sum: four'}],isError:false}}}
+  const input=answerReviewInput('Review',current,1,0)
+  assert.ok('batch'in input)
+  assert.match(JSON.stringify(input.batch.state.evidence),/Verified sum: four/)
+  current[2]!.data.message.source.callId='other'
+  assert.throws(()=>answerReviewInput('Review',current,1,0),/Unbound tool evidence/)
+})
 test('one finding dispatches once, binds original model, and cannot review corrected answer again',async t=>{
   const f=await fixture(t)
   assert.equal(f.coordinator.hold(f.agent),true);f.coordinator.hold(f.agent);await f.wait()
