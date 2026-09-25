@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { realpathSync } from 'node:fs'
 import { fixture, history } from '../../helpers/semantic-compaction.js'
 import { SemanticCompactionCoordinator } from '../../../../src/dsh/semantic-compaction/coordinator.js'
-import { observationExcerpt, observationHandle, plainResult, packedSource, OBSERVATION_MARKER } from '../../../../src/dsh/observation-pack/policy.js'
+import { observationExcerpt, observationHandle, packedMessage, plainResult, packedSource, OBSERVATION_MARKER } from '../../../../src/dsh/observation-pack/policy.js'
 import { selectCandidates } from '../../../../src/dsh/semantic-compaction/policy.js'
 import { Config } from '../../../../src/dsh/config.js'
 import { CoreConfig } from '../../../../src/dsh/core/host.js'
@@ -23,6 +23,19 @@ function setup(tool = 'read', mode: 'auto' | 'off' = 'auto') {
   const original = f.events[8]!, handle = observationHandle(f.session.id, original)
   return { ...f, definitions, listeners, assemble, original, handle, read: (args: unknown, agent = f.agent) => definitions.get('observation_read').execute(args, { agent, signal: new AbortController().signal }) }
 }
+test('current native tool message can be packed and resolved by exact source event', () => {
+  const events = history('long source\n'.repeat(1000))
+  const original = events[7]!
+  original.data.message = { id: 'result', role: 'tool', source: { kind: 'tool', callId: 'call-1' },
+    toolCallId: 'call-1', content: [{ type: 'text', text: 'long source\n'.repeat(1000) }], isError: false }
+  const f = fixture({ events })
+  const replacement = { seq: events.length, type: 'tool/result', data: { message: packedMessage(f.session.id, original) }, sourceEventSeqs: [original.seq] }
+  f.events.push(replacement)
+  assert.equal(plainResult(replacement)?.callId, 'call-1')
+  assert.ok(plainResult(replacement)!.text.startsWith(OBSERVATION_MARKER))
+  assert.equal(packedSource(f.session, replacement), original)
+  f.coordinator.stop()
+})
 test('pack, exact Unicode pages, off-mode historical reader, no second pack, restore without native auto', async () => {
   const f = setup()
   try {

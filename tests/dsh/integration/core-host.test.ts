@@ -100,6 +100,33 @@ test('core native path handles conversation, research, writing and project memor
   assert.equal(f.listeners.size, 0); assert.equal(f.tools.length, 0); assert.equal(f.providers.length, 0)
 })
 
+test('core model-auto intake runs before first prompt assembly and pre-step reuses the exact run', async () => {
+  const f = await fixture(), commands: any[] = [], agentHooks = new Map<string, Function>()
+  ;(f.agent as any).ctx = { on(name: string, listener: Function) { agentHooks.set(name, listener); return () => { agentHooks.delete(name) } } }
+  f.services.commands = { register(command: any) { commands.push(command); return () => commands.splice(commands.indexOf(command), 1) } }
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
+    modelAutoMode: { mode: 'auto' }, typedDecisions: { mode: 'off' } })
+  try {
+    f.listeners.get('agent/created')!({ agent: f.agent })
+    const message = { role: 'user', content: [{ type: 'text', text: 'この資料を調査してください' }], source: { kind: 'user' } }
+    agentHooks.get('agent/inbox/claimed')!({ agent: f.agent, turn: 1, message })
+    const signal = new AbortController().signal
+    const assembled = await agentHooks.get('system-prompt/assemble')!({}, { signal }, async () =>
+      ({ variables: { provider: 'ordinary', model: 'original' }, sections: [], contexts: [] }))
+    assert.equal(assembled.variables.model, 'original')
+    const db = openConnection(join(f.root, 'memory.sqlite3'))
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 1)
+    db.close()
+    const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [message], turn: 1, step: 0, signal },
+      async () => ({ kind: 'enter', messages: [message] }))
+    assert.equal(result.kind, 'enter')
+    const after = openConnection(join(f.root, 'memory.sqlite3'))
+    assert.equal(after.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 1)
+    after.close()
+    assert.ok(commands.some(command => command.name === 'kioku-model-auto'))
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
 test('a local writing feature can prepare and dispose through the same contract without router edits', async () => {
   const f = await fixture(), events: string[] = []
   const feature: DshModule<CoreModuleHost> = { id: 'writing', coreVersion: 1, requires: [], configure: value => value,

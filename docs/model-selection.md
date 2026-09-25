@@ -11,6 +11,32 @@ Normal execution uses the current DSH model, memory, applicable Skills, native
 permissions and focused verification. It creates no Enno contract, WorkUnit,
 plan approval or automatic Enno continuation.
 
+## Automatic model selection
+
+`modelAutoMode` is off by default in both the full plugin and modular core. To try it, install and authenticate dsh-codex in the same DSH profile, configure a Jev or Laya typed-decision backend, then use `observe` before enabling automatic routing:
+
+```yaml
+modelAutoMode:
+  mode: off # off | observe | auto
+  preset: codex-luna-sol-v1
+  budgetMs: 5000
+```
+
+```text
+/kioku-model-auto observe
+/kioku-model-auto status
+/kioku-model-auto on
+/kioku-model-auto off
+```
+
+The command changes only the current native session. `on` also clears its manual model pin; a model selected in DSH's picker pins that session until `on` is run again. Changes apply at the next new task boundary, without changing a request already sent. `/kioku-decisions status` includes the same session projection. To reset session overrides after a configuration change, restart DSH; changing `modelAutoMode.mode` to `off` and restarting disables routing.
+
+The initial preset offers `gpt-6-luna` at low, medium and high effort, plus `gpt-6-sol` at high effort. Up to four exact route bindings can be configured under `modelAutoMode.routes`; each has an `id` from `luna-low`, `luna-medium`, `luna-high`, `sol-high`, and a `binding` with `provider`, `model`, and `reasoningEffort`. These are route labels, so a registered Astra or other GPT model may be assigned explicitly. No new model ID is guessed or substituted. DSH's live `openai-codex` catalog, model context and modality metadata, supported efforts, call-config validation and token meter must all confirm a candidate. Fewer than two valid bindings skips classification.
+
+For a new admitted normal task, Kiokuko sends the current task text, task type, attachment kinds, route IDs and rubric to the selected Jev or Laya backend. It does not send attachment bytes, full history or repository contents for this classification. One Choice result selects a route or abstains. The route is stored against the exact run and reused for continuations; an unknown in-flight decision after restart is retained without another classifier call. `observe` records a proposal but keeps the current model. A failed probe, missing metadata, unsupported effort, timeout, oversized input or abstention also keeps the current model. Cancellation, stale session identity and storage integrity failures stop the request. Dispatch authentication, quota and unavailable-model errors remain ordinary failures; no alternate model is retried automatically.
+
+The status distinguishes the configured mode, readiness, proposal and selected binding from the model observed in a native `request/header`. The initial preset is a rubric, not a claim that it improves quality, elapsed time or subscription usage. Enno, Deep, children, chat, review continuation and protected Lisp execution retain their existing owners. Automatic escalation after a failed implementation pass is not enabled.
+
 On Enno and Deep selection cards, use the displayed **Cmd+1–9** shortcuts on macOS
 or **Ctrl+1–9** on Windows/Linux, then press Enter to confirm. With the card
 focused, you can also type an option number and press Enter to submit. For options

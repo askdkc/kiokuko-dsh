@@ -8,11 +8,13 @@ OrcaReplay로 모델과 도구의 동작을 기록하고, 기록을 확인하거
 
 새 변경 작업에서는 일반 실행 또는 役小角(enno-oduno)를 선택할 수 있습니다. 역할별 모델은 추천 템플릿이나 DSH에 설정된 모델에서 선택합니다. [모델 선택과 연결 제한](docs/model-selection.md).
 
+선택 기능인 [자동 모델 선택](docs/model-selection.md#automatic-model-selection)은 기본적으로 꺼져 있습니다(`modelAutoMode.mode: off`). `/kioku-model-auto on | observe | off | status`는 현재 세션만 바꿉니다. `observe`는 제안만 기록하고 실제 모델은 유지합니다. 일반 작업에서 준비된 Jev 또는 Laya, dsh-codex, DSH 모델 메타데이터와 token meter가 필요합니다. 판정에 실패하면 현재 모델을 유지하고 수동 선택을 우선합니다.
+
 자동 메모리 검토는 기본으로 활성화되며, 사람의 입력을 처리한 여덟 턴마다 대화 모델로 유용한 프로젝트 기억 후보를 저장하거나 갱신합니다. 대화를 닫을 필요가 없습니다. `/kioku-memory-review status`로 상태를 확인하거나 `/kioku-memory-review exclude session`으로 대화 전체를 제외할 수 있습니다. [설정, 비용과 복구](docs/auto-memory-review.md).
 
 ## 설치 및 사용
 
-**DSH 0.1.6-alpha.1**을 지원합니다 ([검증 범위](docs/dsh-plugin.md#compatibility)).
+런타임 호환 대상은 **DSH 0.1.7-rc.2**입니다. 네이티브 요청 경로, 이전 세션 기록 마이그레이션, 패키징된 Web 시작 검사가 로컬에서 통과했습니다 ([검증 범위](docs/dsh-plugin.md#compatibility)).
 
 Node.js **24.16.0 이상**과 pnpm이 필요합니다.
 DSH 소스 디렉터리에서 다음 명령으로 공개된 npm 패키지를 설치하고 시작합니다.

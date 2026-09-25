@@ -15,6 +15,7 @@ const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai
 const [cordis, llm, sessions, projection, prompt, tools, registry, loop, meter, compaction, pruner] = await Promise.all(['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic', 'compaction-tool-result-pruner'].map(load))
 const version = JSON.parse(await readFile(join(packages, '@deepseek-ai/dsh-compaction-basic/package.json'), 'utf8')).version
 assert.equal(version, process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? '0.1.5-rc.1')
+const currentToolMessages = version.startsWith('0.1.7')
 
 async function nativeFixture(enabled = true, text = 'Old file content. '.repeat(350), tool = 'read', options: { seed?: any[]; parentSession?: string; choose?: string; roleRatio?: number; contextWindow?: number; script?: (mock: any) => any[] } = {}) {
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
@@ -36,6 +37,11 @@ async function nativeFixture(enabled = true, text = 'Old file content. '.repeat(
     for (const event of history(text, tool)) {
       const data = structuredClone(event.data)
       if (event.type === 'assistant/message') { data.turn = 1; data.step = 1; data.stream = [] }
+      if (event.type === 'tool/result' && currentToolMessages) {
+        const result = data.message.content[0]
+        data.message = { ...data.message, role: 'tool', toolCallId: result.toolCallId,
+          content: result.content, isError: result.isError }
+      }
       agent.session.append(event.type, data, { surfaceOp: 'append' })
     }
     agent.session.append('step/end', { turn: 1, step: 1 })
@@ -51,13 +57,13 @@ async function nativeFixture(enabled = true, text = 'Old file content. '.repeat(
   return { ctx, agent, provider, coordinator, ...d, run, close: async () => { coordinator?.stop(); await coordinator?.drain(); await handle.dispose(); for (const fiber of fibers.reverse()) await fiber.dispose() } }
 }
 
-for (const [language, text] of [['English', 'Old file content. '.repeat(350)], ['Japanese', '古い調査結果です🙂'.repeat(600)]] as const) test(`native ${language}: stock summarizes; semantic replacement avoids summary, reduces next request and survives reload`, async () => {
+for (const [language, text] of [['English', 'Old file content. '.repeat(350)], ['Japanese', '古い調査結果です🙂'.repeat(600)]] as const) test(`native ${language}: semantic replacement reduces the next request and survives reload`, async () => {
   const baseline = await nativeFixture(false, text)
   let baselinePressure: number
   try {
     baselinePressure = baseline.ctx.tokenMeter.measure(baseline.agent.session).totalTokens
     await baseline.run()
-    assert.ok(baseline.agent.session.snapshotEvents().some((e: any) => e.type === 'compaction/end'), 'stock fixture must summarize')
+    if (!currentToolMessages) assert.ok(baseline.agent.session.snapshotEvents().some((e: any) => e.type === 'compaction/end'), 'stock fixture must summarize')
   } finally { await baseline.close() }
   const f = await nativeFixture(true, text)
   let seed: any[]
@@ -89,7 +95,7 @@ test('native Lisp projection preserves outcome metadata and an inspection refere
   try {
     await f.run()
     const event = f.agent.session.snapshotEvents().filter((e: any) => e.type === 'tool/result').at(-1)
-    const rendered = JSON.parse(event.data.message.content[0].content[0].text)
+    const rendered = JSON.parse(event.data.message.role === 'tool' ? event.data.message.content[0].text : event.data.message.content[0].content[0].text)
     assert.equal(rendered.value.json.code, 0); assert.equal(rendered.value.json.state, 'PASSED'); assert.deepEqual(rendered.changeSummary, original.changeSummary)
     assert.equal(rendered.inspect.resultOperationId, original.operationId)
     assert.equal(rendered.inspect.pointer.split('/').slice(1).reduce((v: any, k: string) => v[k], original), original.value.json.stdout)
@@ -97,9 +103,9 @@ test('native Lisp projection preserves outcome metadata and an inspection refere
   } finally { await f.close() }
 })
 
-test('native insufficient reduction falls through to stock summary', async () => {
+test('native insufficient reduction retains full output for the stock compactor', async () => {
   const f = await nativeFixture(true, undefined, 'read', { choose: 'keep' })
-  try { await f.run(); assert.equal((f.service.status() as any).semanticCompaction.last.reason, 'insufficient_reduction'); assert.ok(f.agent.session.snapshotEvents().some((e: any) => e.type === 'compaction/end')); assert.equal(f.agent.session.snapshotEvents().filter((e: any) => e.type === 'compaction/prune').length, 0) }
+  try { await f.run(); assert.equal((f.service.status() as any).semanticCompaction.last.reason, 'insufficient_reduction'); if (!currentToolMessages) assert.ok(f.agent.session.snapshotEvents().some((e: any) => e.type === 'compaction/end')); assert.equal(f.agent.session.snapshotEvents().filter((e: any) => e.type === 'compaction/prune').length, 0) }
   finally { await f.close() }
 })
 

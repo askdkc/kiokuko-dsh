@@ -177,8 +177,10 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     const call = (name: string, args: object) => mock.toolCallResponse(resultId = `application-${activeRound}-${++applicationCall}`, name, args)
     const start = () => { script.unshift(inspect); return call('task_memory_review', { action: 'status' }) }
     const inspect = (request: any): any => {
-      const result = request.messages.flatMap((message: any) => message.content ?? [])
-        .findLast((block: any) => block.type === 'tool-result' && block.toolCallId === resultId)
+      const result = request.messages.flatMap((message: any) => message.role === 'tool' && message.toolCallId === resultId
+        ? [message]
+        : (message.content ?? []).filter((block: any) => block.type === 'tool-result' && block.toolCallId === resultId))
+        .at(-1)
       assert.ok(result && !result.isError, `Native memory review failed: ${JSON.stringify(result)}`)
       const status = JSON.parse(result.content.find((block: any) => block.type === 'text').text)
       const unresolved = status.items.find((item: any) => item.problem && item.problem !== 'verification_missing_failed_or_stale')
@@ -269,7 +271,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     // Old disposition calls retain entry IDs as native audit history, not fresh
     // memory delivery. Keep checking all other content and this round's status.
     const currentMemoryRequests = JSON.stringify(requests, (_key, value) => {
-      const id = value?.type === 'tool-call' ? value.id : value?.type === 'tool-result' ? value.toolCallId : undefined
+      const id = value?.type === 'tool-call' ? value.id : value?.type === 'tool-result' || value?.role === 'tool' ? value.toolCallId : undefined
       return typeof id === 'string' && id.startsWith('application-') && !id.startsWith(`application-${number}-`) ? undefined : value
     })
     for (const id of fault.forbiddenIds ?? []) assert.ok(!currentMemoryRequests.includes(id), 'invalidated or disabled derived memory reached a current native model request')

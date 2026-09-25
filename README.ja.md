@@ -19,7 +19,7 @@
 
 ## 導入と使い方
 
-対応 DSH: **0.1.6-alpha.1**（[検証範囲](docs/dsh-plugin.md#compatibility)）。
+実行環境の対応対象は **DSH 0.1.7-rc.2** です。ネイティブ要求経路、旧セッション履歴の移行、パッケージ化した Web の起動試験はローカルで通過しました（[検証範囲](docs/dsh-plugin.md#compatibility)）。
 
 Node.js **24.16.0 以上**と pnpm が必要です。
 DSH のソースディレクトリで、公開済み npm パッケージを導入して起動します。
@@ -104,6 +104,8 @@ Lisp を選ぶと、Lisp 用ツールで通常実行します。役小角を使�
 [設定、API、停止・復旧方法](docs/lisp.md)を参照してください。
 
 ## 型付き判定（Jev / Laya / Nimble）
+
+任意の[モデル自動選択](docs/model-selection.ja.md#通常実行のモデル自動選択)は、新しい通常タスクで検証済みの `openai-codex` モデルと推論強度を選びます。既定値は `modelAutoMode.mode: off` です。`/kioku-model-auto on | observe | off | status` は現在のセッションだけを変更します。`observe` は候補を計測し、実モデルは変えません。利用にはJevかLayaの準備完了、dsh-codex、DSHのモデル情報とtoken meterが必要です。判定不能なら現在のモデルを維持し、手動選択を優先します。
 
 [回答の再検討](docs/answer-review.md)は、表示済みの通常回答を評価し、指摘があれば同じ主モデルに一度だけ見直させる機能です。通常版・modular coreで既定で有効です。既定値は次のとおりです。
 

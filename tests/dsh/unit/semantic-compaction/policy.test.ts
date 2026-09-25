@@ -18,6 +18,22 @@ for (const text of ['English log. '.repeat(1000), '日本語🙂𠮷'.repeat(100
   f.coordinator.stop()
 })
 
+test('current native tool messages remain eligible without rewriting the tool identity', () => {
+  const text = 'Old output. '.repeat(1000), events = history(text)
+  events[7]!.data.message = { id: 'result', role: 'tool', source: { kind: 'tool', callId: 'call-1' },
+    toolCallId: 'call-1', content: [{ type: 'text', text }], isError: false }
+  const f = fixture({ events })
+  const [candidate] = selectCandidates(events, f.meter, new Map())
+  assert.ok(candidate)
+  assert.equal(candidate.callId, 'call-1')
+  assert.equal(candidate.replacement.role, 'tool')
+  assert.equal(candidate.replacement.toolCallId, 'call-1')
+  assert.ok(candidate.replacement.content[0]!.text.includes(COMPACTION_MARKER))
+  assert.equal(candidate.original.content[0]!.text, text)
+  assert.ok(JSON.stringify(compactionBatch(events, [], [candidate])).includes('call-1'))
+  f.coordinator.stop()
+})
+
 for (const change of ['first-call', 'recent-result', 'ambiguous', 'multiple-text', 'image', 'unknown-block-field', 'replacement', 'short', 'enno', 'lisp-unknown']) test(`preserves protected content: ${change}`, () => {
   const f = fixture(), result = f.events[7]!.data.message.content[0], call = f.events[6]!.data.message.content[0]
   if (change === 'first-call') f.events.shift()

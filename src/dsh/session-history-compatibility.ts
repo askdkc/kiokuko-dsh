@@ -68,11 +68,11 @@ function refusalPath(error: unknown): string | undefined {
   const refusal = error as { name?: string; location?: { kind?: string; path?: unknown } } | undefined
   return refusal?.name === 'SessionFormatUnsupportedError' && refusal.location?.kind === 'jsonl'
     && typeof refusal.location.path === 'string'
-    && ['session.jsonl.zstd', 'session.jsonl', 'session.v3.jsonl.zstd', 'session.v3.jsonl'].includes(basename(refusal.location.path)) ? refusal.location.path : undefined
+    && ['session.jsonl.zstd', 'session.jsonl', 'session.v3.jsonl.zstd', 'session.v3.jsonl', 'session.v4.jsonl.zstd', 'session.v4.jsonl'].includes(basename(refusal.location.path)) ? refusal.location.path : undefined
 }
 
 /** Validate with the running backend implementation, including its current codec and identity checks. */
-async function validateCandidate(backend: Persistence, header: Header, candidate: Buffer, compression: string, version: 0 | 3, signal?: AbortSignal): Promise<Buffer> {
+async function validateCandidate(backend: Persistence, header: Header, candidate: Buffer, compression: string, version: 0 | 3 | 4, signal?: AbortSignal): Promise<Buffer> {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-history-validation-'))
   const scope = new Context()
   const implementation = Object.getPrototypeOf(backend).constructor
@@ -87,11 +87,12 @@ async function validateCandidate(backend: Persistence, header: Header, candidate
     await validator.persistHeader(header, 0)
     const path = await validator.resolveCurrentLog(header.id, signal)
     if (!path) throw new Error('Native history validator did not materialize its header')
-    const inputPath = version === 0 ? join(dirname(path), basename(path).replace('.v3.', '.')) : path
-    if (version === 0) await rm(path)
-    const file = await open(inputPath, version === 0 ? 'wx' : 'w')
+    const historical = version !== header.version
+    const inputPath = historical ? join(dirname(path), basename(path).replace(`.v${header.version}.`, version === 0 ? '.' : `.v${version}.`)) : path
+    if (historical) await rm(path)
+    const file = await open(inputPath, historical ? 'wx' : 'w')
     try { await file.writeFile(candidate); await file.sync() } finally { await file.close() }
-    if (version === 0) {
+    if (historical) {
       // Let this exact native implementation migrate and publish the candidate
       // in isolation. No private format catalog or reconstructed events.
       const migrated = await validator.open(header.id, 'write', signal ? { signal } : undefined)
@@ -102,7 +103,7 @@ async function validateCandidate(backend: Persistence, header: Header, candidate
       throw new Error('Legacy history compatibility cannot discard a damaged tail')
     }
     if (canonicalJson(restored.meta) !== canonicalJson(header)) throw new Error('Legacy history header changed during validation')
-    return version === 0 ? await readFile(path) : candidate
+    return historical ? await readFile(path) : candidate
   } finally {
     try { await fiber?.dispose() } finally { await rm(root, { recursive: true, force: true }) }
   }
@@ -123,19 +124,23 @@ async function retainBackup(path: string, original: Buffer, mode: number): Promi
   try { await file.writeFile(original); await file.sync() } finally { await file.close() }
 }
 
-/** Repair the exact rejected artifact under DSH's lock; historical v0 sources stay immutable. */
+/** Repair the exact rejected artifact under DSH's lock; historical sources stay immutable. */
 async function repairHistory(backend: Persistence, id: string, rejectedPath: string, signal?: AbortSignal): Promise<boolean> {
   signal?.throwIfAborted()
-  const version = ['session.jsonl', 'session.jsonl.zstd'].includes(basename(rejectedPath)) ? 0 : 3
+  const version = ['session.jsonl', 'session.jsonl.zstd'].includes(basename(rejectedPath)) ? 0
+    : basename(rejectedPath).startsWith('session.v4.') ? 4 : 3
   const snapshot = await backend.stat(id, signal ? { signal } : undefined)
-  if (!snapshot || snapshot.header.id !== id || snapshot.header.version !== 3) throw new LegacyIdentityMismatch('Legacy session identity mismatch')
-  if (version === 0 && snapshot.revision === undefined) throw new Error('Legacy source revision is unavailable')
+  if (!snapshot || snapshot.header.id !== id) throw new LegacyIdentityMismatch('Legacy session identity mismatch')
+  if (snapshot.header.version !== 3 && snapshot.header.version !== 4) throw new Error('Unsupported native session generation')
+  const historical = version !== snapshot.header.version
+  if (historical && version !== 0 && version !== 3) throw new Error('Unsupported historical session generation')
+  if (historical && snapshot.revision === undefined) throw new Error('Legacy source revision is unavailable')
   const current = await backend.resolveCurrentLog(id, signal)
-  const location = version === 0 ? backend.locate?.(snapshot.header) : undefined
-  const target = version === 0 && location?.kind === 'jsonl' ? location.path : current
-  if (!target || !['session.v3.jsonl', 'session.v3.jsonl.zstd'].includes(basename(target))) throw new Error('Native current-generation location is unavailable')
-  const path = version === 0 ? join(dirname(target), basename(target).replace('.v3.', '.')) : target
-  if (path !== rejectedPath || (version === 0 && current !== undefined)) throw new Error('Legacy compatibility requires the exact native source artifact')
+  const location = historical ? backend.locate?.(snapshot.header) : undefined
+  const target = historical && location?.kind === 'jsonl' ? location.path : current
+  if (!target || ![`session.v${snapshot.header.version}.jsonl`, `session.v${snapshot.header.version}.jsonl.zstd`].includes(basename(target))) throw new Error('Native current-generation location is unavailable')
+  const path = historical ? join(dirname(target), basename(target).replace(`.v${snapshot.header.version}.`, version === 0 ? '.' : `.v${version}.`)) : target
+  if (path !== rejectedPath || (historical && current !== undefined)) throw new Error('Legacy compatibility requires the exact native source artifact')
   const lease = await backend.acquireWriteLease(snapshot.header)
   try {
     signal?.throwIfAborted()
@@ -165,7 +170,7 @@ async function repairHistory(backend: Persistence, id: string, rejectedPath: str
     const candidate = await validateCandidate(backend, snapshot.header, compressed ? encodeSessionLog(plaintext) : plaintext, compressed ? 'zstd' : 'none', version, signal)
     signal?.throwIfAborted()
     if (await backend.resolveCurrentLog(id, signal) !== current
-      || (version === 0 && (await backend.stat(id, signal ? { signal } : undefined))?.revision !== snapshot.revision)
+      || (historical && (await backend.stat(id, signal ? { signal } : undefined))?.revision !== snapshot.revision)
       || await realpath(dirname(path)) !== parent
       || !(await readFile(path)).equals(original)) throw new Error('Legacy history changed before replacement')
     await retainBackup(path, original, status.mode & 0o777)
@@ -179,7 +184,7 @@ async function repairHistory(backend: Persistence, id: string, rejectedPath: str
         || !(await readFile(path)).equals(original)) throw new Error('Legacy history changed while staging compatibility update')
       // Publish a new generation without replacing the historical source or
       // overwriting a concurrently created successor.
-      if (version === 0) await link(temporary, target)
+      if (historical) await link(temporary, target)
       else await rename(temporary, path)
       if (process.platform !== 'win32') {
         const directory = await open(dirname(path), 'r')

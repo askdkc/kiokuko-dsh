@@ -87,11 +87,12 @@
       "patch": "./dsh/cordis.patch.yml"
     },
     "compatibility": {
-      "dsh": "0.1.6-alpha.1",
+      "dsh": "0.1.7-rc.2",
       "dshReleases": {
         "0.1.2-rc.1": "compatible",
         "0.1.5-rc.1": "compatible",
-        "0.1.6-alpha.1": "compatible"
+        "0.1.6-alpha.1": "compatible",
+        "0.1.7-rc.2": "compatible"
       },
       "profiles": [
         "web"

@@ -141,7 +141,7 @@ test('a terminal Enno tool result stays in the native turn until a visible assis
     const events = agent.session.snapshotEvents()
     const toolResultIndex = events.findIndex((event: any) => (
       event.type === 'tool/result'
-      && event.data.message.content[0]?.toolCallId === 'terminal-meditation'
+      && (event.data.message.toolCallId ?? event.data.message.content[0]?.toolCallId) === 'terminal-meditation'
     ))
     const finalMessageIndex = events.findIndex((event: any) => (
       event.type === 'assistant/message'
@@ -152,8 +152,9 @@ test('a terminal Enno tool result stays in the native turn until a visible assis
     assert.ok(toolResultIndex >= 0)
     assert.ok(finalMessageIndex > toolResultIndex, 'the visible assistant report must follow the terminal tool result')
     assert.ok(turnEndIndex > finalMessageIndex, 'the native turn must end only after the visible assistant report')
-    const renderedResult = events[toolResultIndex].data.message.content[0].content
-    assert.match(renderedResult[1]?.text ?? '', /visible final assistant response/u)
+    const message = events[toolResultIndex].data.message
+    const renderedResult = message.role === 'tool' ? message.content : message.content[0].content
+    assert.match(renderedResult.map((block: any) => block.text ?? '').join('\n'), /visible final assistant response/u)
     assert.equal(executions, 1)
     assert.equal(adapter.requests.length, 2)
   } finally {

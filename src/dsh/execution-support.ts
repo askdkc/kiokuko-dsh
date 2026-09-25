@@ -312,7 +312,10 @@ export class DshExecutionSupport {
       try {
         const state = this.#states.get(session?.id)
         if (!state || state.binding.nativeSession !== session || event.type !== 'tool/result') return
-        const callId = event.data?.message?.content?.[0]?.toolCallId
+        const message = event.data?.message
+        const callId = message?.role === 'tool' && message.source?.kind === 'tool'
+          ? message.toolCallId === message.source.callId ? message.toolCallId : undefined
+          : message?.content?.[0]?.toolCallId
         if (typeof event.seq !== 'number' || typeof callId !== 'string') return
         for (const item of [...state.pending, ...state.evidence]) {
           if (item.callId === callId && item.turn === event.data?.turn) item.sourceSeq = event.seq
@@ -356,7 +359,9 @@ export class DshExecutionSupport {
               for (const block of message.content) {
                 if ((block.type === 'tool_result' || block.type === 'tool-result') && (block.toolCallId ?? block.callId) === evidence.callId) visible = block.content
               }
-              if (message.source?.callId === evidence.callId) visible = message.content?.[0]?.content
+              if (message.role === 'tool' && message.source?.kind === 'tool'
+                && message.toolCallId === evidence.callId && message.source.callId === evidence.callId) visible = message.content
+              else if (message.source?.callId === evidence.callId) visible = message.content?.[0]?.content
             }
             evidence.presentation = visible === undefined ? 'unknown' : evidencePresentation(visible, evidence.digest)
           }

@@ -8,11 +8,13 @@ OrcaReplay 可记录模型和工具活动，查看记录并导出 HTML。
 
 新的修改任务可以选择普通执行或役小角(enno-oduno)。役小角支持推荐模板，也可从DSH已配置的模型中为各角色选择模型。[模型选择与连接限制](docs/model-selection.md)。
 
+可选的[自动模型选择](docs/model-selection.md#automatic-model-selection)默认关闭（`modelAutoMode.mode: off`）。`/kioku-model-auto on | observe | off | status` 仅更改当前会话；`observe` 只记录建议，不更换模型。普通任务需要已就绪的 Jev 或 Laya、dsh-codex，以及 DSH 的模型元数据和 token meter。判定失败时保留当前模型，手动选择优先。
+
 自动记忆审查默认启用：每完成八个人类输入回合，使用会话模型保存或更新有用的项目记忆候选，无需关闭会话。使用 `/kioku-memory-review status` 查看状态，或用 `/kioku-memory-review exclude session` 排除整个会话。[设置、费用和恢复](docs/auto-memory-review.md)。
 
 ## 安装与使用
 
-支持 **DSH 0.1.6-alpha.1**（[验证范围](docs/dsh-plugin.md#compatibility)）。
+运行时兼容目标为 **DSH 0.1.7-rc.2**。原生请求路径、旧会话历史迁移和打包后的 Web 启动检查均已在本地通过（[验证范围](docs/dsh-plugin.md#compatibility)）。
 
 需要 Node.js **24.16.0 以上**和 pnpm。
 在 DSH 源码目录中运行以下命令，安装已发布的 npm 包并启动：

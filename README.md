@@ -19,7 +19,7 @@ Automatic memory review saves or updates useful project candidates after eight c
 
 ## Install and use
 
-Supports **DSH 0.1.6-alpha.1** ([verification scope](docs/dsh-plugin.md#compatibility)).
+Runtime compatibility target: **DSH 0.1.7-rc.2**. Native request paths, legacy session migration, and a packed Web lifecycle pass locally ([verification scope](docs/dsh-plugin.md#compatibility)).
 
 Requires Node.js **24.16.0+** and pnpm.
 Run these commands from the DSH source directory to install the published npm package and start:
@@ -105,6 +105,8 @@ Deletion and replacement of existing files require human confirmation.
 See [setup, APIs, limits and recovery](docs/lisp.md).
 
 ## Typed decisions (Jev / Laya / Nimble)
+
+Optional [automatic model selection](docs/model-selection.md#automatic-model-selection) chooses a validated `openai-codex` model and reasoning effort for a new normal task. It defaults to `modelAutoMode.mode: off`; `/kioku-model-auto on | observe | off | status` changes only the current session. `observe` measures a proposal without changing the model. It requires a ready Jev or Laya backend, dsh-codex, native model metadata and a token meter. Failed or unavailable classification keeps the current model; manual model selection takes priority.
 
 [Answer review](docs/answer-review.md) is enabled by default on the full plugin and modular core. It evaluates an already displayed normal answer using the configured Jev, Laya or Nimble provider and may ask the same main model to reconsider once. The defaults are:
 

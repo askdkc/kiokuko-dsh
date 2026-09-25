@@ -10,6 +10,32 @@ DSHの権限判定、必要な検証を維持し、役小角の契約・WorkUnit
 自動継続を作りません。継続・再試行・再計画は同じ論理作業の選択を引き継ぎます。
 取消・未回答では作業を保持します。再開の入力後に選択を続けられ、最初の依頼も復元します。
 
+## 通常実行のモデル自動選択
+
+通常版・modular coreとも `modelAutoMode.mode: off` が既定です。同じDSHプロファイルにdsh-codexを登録して認証し、JevかLayaの判定を準備したうえで、まず `observe` で選択案を確認します。
+
+```yaml
+modelAutoMode:
+  mode: off # off | observe | auto
+  preset: codex-luna-sol-v1
+  budgetMs: 5000
+```
+
+```text
+/kioku-model-auto observe
+/kioku-model-auto status
+/kioku-model-auto on
+/kioku-model-auto off
+```
+
+コマンドは現在のnativeセッションだけを変更します。`on` は手動のモデル指定も解除します。DSHのpickerでモデルを手動選択すると、同じセッションで `on` を再実行するまで手動指定が優先します。変更は次の新しいタスクから反映し、送信済みの要求を途中で切り替えません。`/kioku-decisions status` にも同じ状態を表示します。設定を `off` に変更してDSHを再起動すれば、保存済みのセッション指定も無効になります。
+
+初期候補は `gpt-6-luna` の low・medium・high と `gpt-6-sol` の high です。`modelAutoMode.routes` には最大4件、`id`（`luna-low`、`luna-medium`、`luna-high`、`sol-high`）と `binding`（`provider`、`model`、`reasoningEffort`）を指定できます。IDは経路のラベルなので、登録済みのAstraなども正確なbindingで割り当てられます。候補はDSHの現在の `openai-codex` 一覧、文脈容量・入力形式・推論強度、要求設定の検証、token meterを通ったものに限定します。有効なbindingが2件未満なら判定しません。
+
+新しい受付済みの通常タスクでは、現在の依頼文、タスク種別、添付の種類、経路IDと判定基準を選択中のJevかLayaへ送ります。この判定のために添付の内容、全履歴、リポジトリ全体は送信しません。Choice 1問の結果をrunに保存し、継続では同じ経路を使います。再起動時に判定結果が不明なら再送せず元のモデルを維持します。`observe`、棄権、probe失敗、metadata不足、非対応effort、timeout、入力超過でも元のモデルを維持します。取消、セッション同一性の不一致、保存の整合性エラーでは要求を止めます。認証・利用枠・モデル利用不可によるdispatch失敗を別モデルへ自動再送しません。
+
+状態表示では、設定・準備状態・選択案・適用したbindingと、nativeの `request/header` で確認した実モデルを区別します。初期候補は判定基準であり、品質・時間・利用枠の改善を保証しません。Enno、Deep、子、雑談、回答の再検討、保護されたLisp実行は既存の経路を使います。実装失敗後の自動昇格は初期版に含めません。
+
 選択カードでは数字キーで選び、Enterで送信できます。10番以上は数字を続けて入力します
 （例：`1`→`2`→`Enter`で12番）。Backspaceで番号を訂正できます。
 検索欄に入力中の数字は検索語として扱い、Enterで検索します。IME変換中のEnterや

@@ -2,8 +2,9 @@ import { normalizeTaskType } from '../../akinator/domain.js'
 import { TASK_TYPES, type TaskType } from '../../akinator/types.js'
 import { ExecutionSelectionPending } from '../execution-pending.js'
 import { createDshIntakeAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from '../intake-questions.js'
+import { LISP_CODING_SERVICE } from '../lisp-service-key.js'
 
-export const LISP_CODING_SERVICE = 'kiokukoLispCoding'
+export { LISP_CODING_SERVICE }
 export interface LispCodingInput {
   agent: DshUserQuestionAgent; turn: number; task: string; taskType: TaskType | null; signal: AbortSignal
 }

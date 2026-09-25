@@ -6,10 +6,14 @@ import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
+import { mountCore } from '../../../src/dsh/core/host.js'
+import { openConnection } from '../../../src/db/connection.js'
 import { installDshModelRouting } from '../../../src/dsh/model-routing.js'
 import { MODEL_ROLES, MODEL_TEMPLATES, type ModelBinding } from '../../../src/dsh/model-configuration.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { loadJapaneseOutputSkill } from '../../../src/dsh/japanese-output-skill.js'
+import { DecisionService } from '../../../src/dsh/decisions/service.js'
+import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
@@ -161,6 +165,124 @@ test('native routing delivers the full Japanese Skill to selected OSS models and
     assert.equal(provider.requests.at(-1)!.model,'gpt-4.1')
     assert.equal(systemText(provider.requests.at(-1)).includes(skill.content),false)
   } finally {dispose();await h.dispose()}
+})
+test('native model-auto applies the selected effort to first prompt and request, then manual selection pins the next task', {
+  skip: !packageRoot && !sourceRoot, timeout: 30_000,
+}, async () => {
+  const h = await harness()
+  let classified = 0
+  const decisions = new DecisionService(TypedDecisionsConfig.parse({ mode: 'auto' }), () => ({
+    capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 },
+    evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'fixture',
+      answers: batch.questions.map(question => ({ id: question.id, status: 'selected' as const,
+        choiceId: batch.purpose === 'memory-reuse' ? 'apple' : batch.purpose === 'model-routing' ? (++classified, 'luna-high') : 'retain' })) }),
+  }))
+  const meter = h.ctx.plugin({ name: 'model-auto-meter', apply(ctx: any) {
+    return ctx.provide('tokenMeter', { measure: () => ({ totalTokens: 100, logRevision: 0, nodes: [] }) })
+  } }); await meter
+  const questions = h.ctx.plugin({ name: 'model-auto-ui', apply(ctx: any) {
+    return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) =>
+      ({ id: q.id, selected: [q.id === 'enno-execution-mode' ? '通常実行' : q.options?.[0]?.label ?? 'build'] })) }) })
+  } }); await questions
+  class CodexAdapter extends h.mock.MockAdapter {
+    override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model,
+      context: { contextWindow: 200_000 }, inputModalities: ['text', 'image'],
+      reasoning: { efforts: ['low', 'medium', 'high'].map(id => ({ id, name: id })) } } }
+  }
+  const codex = new CodexAdapter([h.mock.toolCallResponse('edit-1', 'edit_once', {}), h.mock.textResponse('done')], ['gpt-6-luna', 'gpt-6-sol'])
+  const ordinary = new h.mock.MockAdapter([h.mock.textResponse('manual task')])
+  h.ctx.llm.registerAdapter(['openai-codex'], codex)
+  h.ctx.llm.registerAdapter(['ordinary'], ordinary)
+  const adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
+    migrationsDirectory: join(process.cwd(), 'migrations'), decisions, modelAutoMode: { mode: 'auto' },
+    llm: { async *stream() { throw new Error('Optional memory backend unavailable') } } })
+  const composition = await mountDshComposition(h.ctx, adapter.host)
+  const agent = await h.ctx.agentLoop.create(h.session.SessionId('model-auto-session'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+  const { installModelSelection } = await import(modulePath('dsh-agent', 'packages/core/agent'))
+  const picker = { current: { provider: 'ordinary', model: 'mock' }, assembled: undefined }
+  const stopPicker = installModelSelection(agent.ctx, picker)
+  const prompts: any[] = []
+  const watch = agent.ctx.on('system-prompt/assemble', async (_a: unknown, _c: unknown, next: () => Promise<any>) => {
+    const result = await next(); prompts.push(result.variables); return result
+  }, { prepend: true })
+  const edit = h.ctx.tools.register({ name: 'edit_once', description: 'Apply one edit.', parameters: { type: 'object', properties: {} },
+    output: { schema: { type: 'string' }, render: () => [{ type: 'text', text: 'done' }] }, execute: async () => 'done' })
+  try {
+    await turn(h, agent, 'README.mdを修正してください。通常実行で。')
+    assert.equal(classified, 1)
+    assert.equal(codex.requests.length, 2)
+    assert.equal(codex.requests[0].provider, 'openai-codex')
+    assert.equal(codex.requests[0].model, 'gpt-6-luna')
+    assert.equal(codex.requests[0].reasoningEffort, 'high')
+    assert.equal(codex.requests[1].model, 'gpt-6-luna')
+    assert.equal(prompts[0].model, 'gpt-6-luna')
+    const headers = agent.session.snapshotEvents().filter((event: any) => event.type === 'request/header')
+    assert.equal(headers[0].data.header.config.model, 'gpt-6-luna')
+    assert.equal(headers[0].data.header.config.reasoningEffort, 'high')
+    agent.session.append('model/selection', { provider: 'ordinary', model: 'mock' })
+    await turn(h, agent, '次のREADME修正をしてください。通常実行で。')
+    assert.equal(classified, 1)
+    assert.equal(ordinary.requests.length, 1)
+    assert.equal(ordinary.requests[0].model, 'mock')
+  } finally { edit(); watch(); stopPicker(); await composition.dispose(); await adapter.dispose(); await questions.dispose(); await meter.dispose(); await h.dispose() }
+})
+test('native modular core applies model-auto to its first prompt and request', {
+  skip: !packageRoot && !sourceRoot, timeout: 30_000,
+}, async () => {
+  const h = await harness(), originalFetch = globalThis.fetch
+  const questions = h.ctx.plugin({ name: 'core-model-auto-ui', apply(ctx: any) {
+    return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) =>
+      ({ id: q.id, selected: [q.options?.[0]?.label ?? 'build'] })) }) })
+  } }); await questions
+  const credentials = h.ctx.plugin({ name: 'core-model-auto-credentials', apply(ctx: any) {
+    return ctx.provide('credentials', { resolve: async () => ({ value: 'fixture-key', source: 'file' }) })
+  } }); await credentials
+  const decisionCalls: string[] = []
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init!.body))
+    decisionCalls.push(Object.keys(request.questions).join(','))
+    return Response.json({ model: request.model, answers: Object.fromEntries(Object.entries(request.questions).map(([id, q]: [string, any]) => {
+      const keys = Object.keys(q.criteria), choice = id === 'model-route' ? 'luna-high'
+        : id === 'task-type' ? 'research' : keys[0]
+      return [id, { type: 'choice', choice, probabilities: Object.fromEntries(keys.map(key => [key, key === choice ? 1 : 0])), confidence: 1 }]
+    })) })
+  }
+  class CodexAdapter extends h.mock.MockAdapter {
+    override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model,
+      context: { contextWindow: 200_000 }, inputModalities: ['text'],
+      reasoning: { efforts: ['low', 'medium', 'high'].map(id => ({ id, name: id })) } } }
+  }
+  const codex = new CodexAdapter([h.mock.textResponse('調査しました。')], ['gpt-6-luna', 'gpt-6-sol'])
+  const meter = h.ctx.plugin({ name: 'core-model-auto-meter', apply(ctx: any) {
+    return ctx.provide('tokenMeter', { measure: () => ({ totalTokens: 100, logRevision: 0, nodes: [] }) })
+  } }); await meter
+  h.ctx.llm.registerAdapter(['openai-codex'], codex)
+  h.ctx.llm.registerAdapter(['ordinary'], new h.mock.MockAdapter([h.mock.textResponse('baseline')]))
+  const core = await mountCore(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
+    migrationsDirectory: join(process.cwd(), 'migrations'), modelAutoMode: { mode: 'auto' }, typedDecisions: { mode: 'auto' } })
+  const agent = await h.ctx.agentLoop.create(h.session.SessionId('core-model-auto-native'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+  const prompts: any[] = []
+  const errors: string[] = []
+  const watchErrors = h.ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
+  const watch = agent.ctx.on('system-prompt/assemble', async (_a: unknown, _c: unknown, next: () => Promise<any>) => {
+    const result = await next(); prompts.push(result.variables); return result
+  }, { prepend: true })
+  try {
+    await turn(h, agent, 'この資料を調査してください。通常実行で。')
+    const db = openConnection(join(h.root, 'state.sqlite3'))
+    const routes = db.prepare('SELECT status,reason FROM dsh_model_auto_routes').all()
+    db.close()
+    assert.equal(codex.requests.length, 1, JSON.stringify({ routes, decisionCalls, errors,
+      end: agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1),
+      headers: agent.session.snapshotEvents().filter((event: any) => event.type === 'request/header').map((event: any) => event.data.header.config) }))
+    assert.equal(codex.requests[0].provider, 'openai-codex')
+    assert.equal(codex.requests[0].model, 'gpt-6-luna')
+    assert.equal(codex.requests[0].reasoningEffort, 'high')
+    assert.equal(prompts[0].model, 'gpt-6-luna')
+    const headers = agent.session.snapshotEvents().filter((event: any) => event.type === 'request/header')
+    assert.equal(headers[0].data.header.config.model, 'gpt-6-luna')
+    assert.equal(headers[0].data.header.config.reasoningEffort, 'high')
+  } finally { watchErrors(); watch(); await core.dispose(); globalThis.fetch = originalFetch; await meter.dispose(); await credentials.dispose(); await questions.dispose(); await h.dispose() }
 })
 test('native README normal execution: cancel, plugin reload, original input recovery, write, verification and fresh next-task choice', {
   skip: !packageRoot && !sourceRoot, timeout: 30_000,

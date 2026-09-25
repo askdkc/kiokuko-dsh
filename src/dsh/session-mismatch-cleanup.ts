@@ -21,7 +21,7 @@ export function supportsMismatchCleanup(value: unknown): value is MismatchCleanu
 function matchesNativeLocation(location: { kind: string; path?: string }, header: Header, path: string): boolean {
   if (location.kind !== 'jsonl' || !location.path || !isAbsolute(path)) return false
   const current = /^session\.v(3|4)\.jsonl(\.zstd)?$/u.exec(basename(location.path))
-  const source = /^session(?:\.v(3))?\.jsonl(\.zstd)?$/u.exec(basename(path))
+  const source = /^session(?:\.v(3|4))?\.jsonl(\.zstd)?$/u.exec(basename(path))
   return current !== null && source !== null && Number(current[1]) === header.version
     && dirname(location.path) === dirname(path) && current[2] === source[2]
     && Number(source[1] ?? 0) <= header.version
@@ -31,7 +31,7 @@ function matchesNativeLocation(location: { kind: string; path?: string }, header
 async function isSelectedGeneration(path: string): Promise<boolean> {
   const name = basename(path)
   const selectedVersion = name === 'session.jsonl' || name === 'session.jsonl.zstd'
-    ? 0 : Number(/^session\.v(3)\.jsonl(?:\.zstd)?$/u.exec(name)?.[1])
+    ? 0 : Number(/^session\.v(3|4)\.jsonl(?:\.zstd)?$/u.exec(name)?.[1])
   if (!Number.isInteger(selectedVersion)) return false
   const compressed = name.endsWith('.zstd')
   let latest = -1
@@ -76,7 +76,7 @@ async function removeMismatchHistory(backend: MismatchCleanupBackend, mismatch: 
     }
     const current = await backend.stat(id)
     if (current && (current.header.id !== id || current.header.version !== header.version)) throw new Error('Session identity changed')
-    if (current && header.version === 3) throw new Error('Session identity now matches; refusing cleanup')
+    if (current) throw new Error('Session identity now matches; refusing cleanup')
     const source = await lstat(path, { bigint: true })
     if (!source.isFile() || source.isSymbolicLink() || !matchesScannedFile(source, identity)) {
       throw new Error('Session log changed since the compatibility check')

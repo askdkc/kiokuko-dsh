@@ -2,7 +2,7 @@ import type { ConfiguredProvider, DshModelCatalog, ModelRoute } from './model-co
 
 interface ProviderDirectoryEntry { provider: string; settingsNs: string; settingsPath: readonly string[]; declared?: boolean }
 interface NativeCatalog extends DshModelCatalog { listConfigurableProviders?(): readonly ProviderDirectoryEntry[] }
-interface NativeSettings { get(namespace: string): unknown }
+interface NativeSettings { describe(options: { redactSecrets: true }): readonly { ns: string; value: unknown }[] }
 const object = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 const families: Readonly<Record<string, ModelRoute['family']>> = {
   openai: 'openai', 'openai-codex': 'openai', deepseek: 'deepseek', 'deepseek-official': 'deepseek',
@@ -11,11 +11,11 @@ const families: Readonly<Record<string, ModelRoute['family']>> = {
 }
 
 /** Read only connection metadata; never copy credentials, headers or whole profiles. */
-function providerRoute(provider: string, entry: ProviderDirectoryEntry | undefined, settings: NativeSettings | undefined): ModelRoute | undefined {
+function providerRoute(provider: string, entry: ProviderDirectoryEntry | undefined, descriptions: readonly { ns: string; value: unknown }[]): ModelRoute | undefined {
   if (!entry) return undefined
   if (entry.settingsNs === 'llm-deepseek' && provider === 'deepseek-official') return { provider, family: 'deepseek', connection: 'api', protocol: 'chat-completions' }
   if (entry.settingsNs !== 'llm-pi-ai') return undefined
-  let profile: unknown = settings?.get(entry.settingsNs)
+  let profile: unknown = descriptions.find(item => item.ns === entry.settingsNs)?.value
   for (const key of entry.settingsPath) profile = object(profile)?.[key]
   const config = object(profile)
   let endpoint: URL | undefined
@@ -40,12 +40,17 @@ export function nativeModelCatalog(llm: NativeCatalog | undefined, settings?: Na
     async listProviders() {
       const providers = await llm.listProviders()
       const directory = llm.listConfigurableProviders?.() ?? []
+      let descriptions: readonly { ns: string; value: unknown }[] = []
+      if (directory.some(entry => entry.settingsNs === 'llm-pi-ai') && settings) {
+        try { descriptions = settings.describe({ redactSecrets: true }) } catch { /* Optional metadata must not prevent model discovery. */ }
+      }
       return providers.map((provider): ConfiguredProvider => {
-        const route = providerRoute(provider.id, directory.find(entry => entry.provider === provider.id), settings)
+        const route = providerRoute(provider.id, directory.find(entry => entry.provider === provider.id), descriptions)
         return { ...provider, ...(route ? { route } : {}) }
       })
     },
     listModels: provider => llm.listModels(provider),
-    ...(llm.resolveCallConfig ? { resolveCallConfig: (binding: Parameters<NonNullable<DshModelCatalog['resolveCallConfig']>>[0]) => llm.resolveCallConfig!(binding) } : {}),
+    ...(llm.resolveModelInfo ? { resolveModelInfo: (provider: string, model: string, signal?: AbortSignal) => llm.resolveModelInfo!(provider, model, signal) } : {}),
+    ...(llm.resolveCallConfig ? { resolveCallConfig: (binding: Parameters<NonNullable<DshModelCatalog['resolveCallConfig']>>[0], signal?: AbortSignal) => llm.resolveCallConfig!(binding, signal) } : {}),
   }
 }

@@ -24,6 +24,9 @@ export function executionObservation(binding: EvolutionObservationBinding, callI
 export function observationMatchesResult(observation: EvolutionObservation, data: unknown): boolean {
   const r=record(data),message=record(r?.message),content=message?.content
   if (!Array.isArray(content) || content.length!==1) return false
+  const source=record(message?.source)
+  if (message?.role==='tool' && source?.kind==='tool' && source.callId===observation.callId
+    && message.toolCallId===observation.callId) return toolPresentationHash({content,isError:message.isError===true,meta:r?.meta,error:r?.error})===observation.presentationHash
   const block=record(content[0])
   return block?.type==='tool-result' && block.toolCallId===observation.callId &&
     toolPresentationHash({content:block.content,isError:block.isError===true,meta:r?.meta,error:r?.error})===observation.presentationHash
