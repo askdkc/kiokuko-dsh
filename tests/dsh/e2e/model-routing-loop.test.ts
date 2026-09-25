@@ -234,7 +234,7 @@ test('native model-auto command accepts its exact session in another workspace',
   const h = await harness()
   const workspace = join(h.root, 'workspace')
   await mkdir(workspace)
-  const commands = await import(modulePath('dsh-commands', 'packages/core/commands'))
+  const commands = await import(modulePath('dsh-commands', 'packages/interaction/commands'))
   const commandFiber = h.ctx.plugin(commands.default); await commandFiber
   h.ctx.llm.registerAdapter(['ordinary'], new h.mock.MockAdapter([]))
   const adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
