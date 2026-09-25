@@ -1,7 +1,7 @@
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { access, mkdtemp, readFile, readdir, rm, writeFile, symlink, rename, truncate } from 'node:fs/promises'
+import { access, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile, symlink, rename, truncate } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import * as dshPlugin from '../../../src/dsh/index.js'
 import { mountSessionHistoryCompatibility } from '../../../src/dsh/session-history-compatibility.js'
+import { cleanupSessionMismatches } from '../../../src/dsh/session-mismatch-cleanup.js'
 import { readHistoricalDshSession } from '../../../src/dsh/session-history-lookup.js'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { DshMemoryFinalizer } from '../../../src/dsh/session-memory-finalizer.js'
@@ -693,6 +694,51 @@ test('startup removes only confirmed identity mismatches and keeps workspace fil
     assert.deepEqual(await readFile(healthy.path), healthy.original)
     assert.deepEqual(await readFile(unrelated.path), unrelated.original)
   } finally { f.backend.stat = originalStat; await f.close() }
+})
+
+test('v4 native location deletes only the selected historical generation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'kiokuko-v4-mismatch-'))
+  try {
+    const userFile = join(root, 'user-notes.txt')
+    await writeFile(userFile, 'keep this file')
+    for (const sourceName of ['session.jsonl.zstd', 'session.v3.jsonl.zstd']) {
+      const id = `v4-${sourceName}`
+      const dir = join(root, id)
+      await mkdir(dir)
+      const path = join(dir, sourceName)
+      const currentPath = join(dir, 'session.v4.jsonl.zstd')
+      await writeFile(path, 'historical log')
+      const header = { id, version: 4 }
+      const backend = {
+        root,
+        async list() { return [{ header }] },
+        async stat() { return { header } },
+        locate() { return { kind: 'jsonl', path: currentPath } },
+        async resolveCurrentLog() { return access(currentPath).then(() => currentPath, () => undefined) },
+        async acquireWriteLease() { return { async release() {} } },
+      }
+      const check = async () => {
+        const file = await lstat(path, { bigint: true })
+        return { supported: true, listed: 1, checked: 1, repaired: 0, failed: 1,
+          cancelled: false, failures: [], mismatches: [{ id, path, identity: {
+            dev: String(file.dev), ino: String(file.ino), size: String(file.size),
+            mtimeNs: String(file.mtimeNs), ctimeNs: String(file.ctimeNs),
+          } }] }
+      }
+      await cleanupSessionMismatches(backend, await check(), new AbortController().signal)
+      await assert.rejects(access(path), { code: 'ENOENT' })
+      await writeFile(path, 'replacement log')
+      const stale = await check()
+      await writeFile(path, 'changed replacement log')
+      await cleanupSessionMismatches(backend, stale, new AbortController().signal)
+      assert.equal(await readFile(path, 'utf8'), 'changed replacement log', 'a source changed after scanning is preserved')
+      await writeFile(currentPath, 'healthy current log')
+      await cleanupSessionMismatches(backend, await check(), new AbortController().signal)
+      assert.equal(await readFile(path, 'utf8'), 'changed replacement log', 'a newer generation protects the source')
+      assert.equal(await readFile(currentPath, 'utf8'), 'healthy current log')
+    }
+    assert.equal(await readFile(userFile, 'utf8'), 'keep this file')
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
 
 test('interrupted cleanup keeps the file and retries it on the next mount', options, async () => {

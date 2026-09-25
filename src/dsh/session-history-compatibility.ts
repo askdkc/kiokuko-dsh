@@ -34,14 +34,23 @@ export interface SessionHistoryCheck {
   readonly cancelled: boolean
   /** Bounded diagnostics contain session IDs and errors, never message bodies. */
   readonly failures: readonly { id: string; error: string }[]
-  /** Exact native log paths rejected by the compatibility identity check. */
-  readonly mismatches: readonly { id: string; path: string }[]
+  /** Exact native log artifacts rejected by the compatibility identity check. */
+  readonly mismatches: readonly { id: string; path: string; identity: LogIdentity }[]
   readonly enumerationError?: string
 }
+interface LogIdentity { readonly dev: string; readonly ino: string; readonly size: string; readonly mtimeNs: string; readonly ctimeNs: string }
 interface Installation { owners: number; ready: Promise<SessionHistoryCheck>; stop(): void; drain(): Promise<void> }
 const unsupportedCheck: SessionHistoryCheck = { supported: false, listed: 0, checked: 0, repaired: 0, failed: 0, cancelled: false, failures: [], mismatches: [] }
 
 class LegacyIdentityMismatch extends Error {}
+
+async function logIdentity(path: string): Promise<LogIdentity | undefined> {
+  const file = await lstat(path, { bigint: true }).catch(() => undefined)
+  return file?.isFile() && !file.isSymbolicLink() ? {
+    dev: String(file.dev), ino: String(file.ino), size: String(file.size),
+    mtimeNs: String(file.mtimeNs), ctimeNs: String(file.ctimeNs),
+  } : undefined
+}
 
 class LegacyHistoryFailure extends Error {
   constructor(readonly path: string, cause: unknown) {
@@ -185,7 +194,7 @@ async function repairHistory(backend: Persistence, id: string, rejectedPath: str
 /** Check every native session ID once per plugin load, including first load after an update. */
 async function checkStoredSessionIds(backend: Persistence, repairedIds: ReadonlySet<string>, signal: AbortSignal): Promise<SessionHistoryCheck> {
   const result = { supported: true, listed: 0, checked: 0, repaired: 0, failed: 0, cancelled: false,
-    failures: [] as { id: string; error: string }[], mismatches: [] as { id: string; path: string }[], enumerationError: undefined as string | undefined }
+    failures: [] as { id: string; error: string }[], mismatches: [] as { id: string; path: string; identity: LogIdentity }[], enumerationError: undefined as string | undefined }
   console.info('[kiokuko-dsh] [info] Checking stored session IDs')
   try {
     const snapshots = await backend.list({ signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]) })
@@ -203,7 +212,8 @@ async function checkStoredSessionIds(backend: Persistence, repairedIds: Readonly
         if (signal.aborted) break
         result.failed++
         if (error instanceof LegacyHistoryFailure && error.cause instanceof LegacyIdentityMismatch) {
-          result.mismatches.push({ id, path: error.path })
+          const identity = await logIdentity(error.path)
+          if (identity) result.mismatches.push({ id, path: error.path, identity })
         }
         if (result.failures.length < 20) result.failures.push({ id, error: error instanceof Error ? error.message : String(error) })
       }
