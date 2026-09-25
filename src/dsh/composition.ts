@@ -8,6 +8,8 @@ import { ExecutionSelectionPending } from './model-selection-ui.js'
 import type { LispConfiguration } from './lisp/contracts.js'
 import { mountDeepReportSurface } from '../deep-thinker/report-surface.js'
 import { mountDshNoticeSurface } from './session-notice-surface.js'
+import { mountDiffReviewSurface } from './diff-review-surface.js'
+import type { DiffReviewController } from '../diff-review/controller.js'
 import { mountSessionHistoryCompatibility, type SessionHistoryCheck } from './session-history-compatibility.js'
 import { randomUUID } from 'node:crypto'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
@@ -56,6 +58,7 @@ export interface DshNativeTurnStoppingPayload {
 }
 
 export interface DshCompositionHost {
+  readonly diffReview?: DiffReviewController
   readonly decisions?: DecisionService
   readonly semanticCompaction?: SemanticCompactionCoordinator
   readonly skillPrompts?: DshSkillPrompts
@@ -254,6 +257,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     if (host.deepPlanning && host.commands) ingressDisposers.push(host.commands.register(host.deepPlanning.command()))
     if (host.deepPlanning) ingressDisposers.push(mountDeepReportSurface(ctx, host.deepPlanning))
     if (host.deepPlanning) ingressDisposers.push(mountDshNoticeSurface(ctx, host.deepPlanning))
+    if (host.diffReview) ingressDisposers.push(mountDiffReviewSurface(ctx, host.diffReview))
     if (host.runtime !== undefined) {
       const disposer = await mountRuntime(host.runtime)
       if (host.runtimeOwner !== 'external') setupResourceDisposers.push(disposer)
