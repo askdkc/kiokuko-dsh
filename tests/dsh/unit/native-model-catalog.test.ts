@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { nativeModelCatalog } from '../../../src/dsh/native-model-catalog.js'
 import { modelBindingProblems, modelRoutesForCatalog, readModelCatalog, type ModelBinding } from '../../../src/dsh/model-configuration.js'
+import { ExecutionSelectionPending, selectExecution } from '../../../src/dsh/model-selection-ui.js'
+import type { StoredExecutionSelection } from '../../../src/dsh/execution-selection.js'
 
 test('native connection metadata recognizes aliases without reading credentials or guessing a protocol', async () => {
   const profiles = {
@@ -26,9 +28,13 @@ test('native connection metadata recognizes aliases without reading credentials 
       { provider: 'deepseek-official', settingsNs: 'llm-deepseek', settingsPath: [] },
     ],
   }
-  const catalog = await readModelCatalog(nativeModelCatalog(llm, { get(namespace) {
-    assert.equal(namespace, 'llm-pi-ai'); return { providers: profiles }
+  let descriptions = 0
+  const catalog = await readModelCatalog(nativeModelCatalog(llm, { describe(options) {
+    assert.deepEqual(options, { redactSecrets: true })
+    descriptions++
+    return [{ ns: 'llm-pi-ai', value: { providers: profiles } }]
   } })!)
+  assert.equal(descriptions, 1, 'read redacted connection metadata once per catalog')
   const routes = modelRoutesForCatalog(catalog, [{ provider: 'my-orca', family: 'openai', connection: 'api', protocol: 'responses' }])
   const route = (provider: string) => routes.find(r => r.provider === provider)
   assert.deepEqual(route('my-orca'), { provider: 'my-orca', family: 'orcarouter', connection: 'api', protocol: 'chat-completions' })
@@ -42,6 +48,42 @@ test('native connection metadata recognizes aliases without reading credentials 
   assert.equal(route('deepseek-official')?.family, 'deepseek')
   assert.equal(route('custom-plugin'), undefined)
   assert.equal(routes.filter(r => r.provider === 'my-orca').length, 1)
+})
+
+test('a live settings descriptor allows the recommended template to reach review without losing the draft', async () => {
+  const provider = 'openai'
+  const llm = {
+    listProviders: () => [{ id: provider, name: 'OpenAI' }],
+    listConfigurableProviders: () => [{ provider, settingsNs: 'llm-pi-ai', settingsPath: ['providers', provider], declared: true }],
+    listModels: async () => ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-luna'].map(id => ({ provider, id, name: id })),
+  }
+  const catalog = nativeModelCatalog(llm, { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { openai: { baseURL: 'https://api.openai.com/v1', api: 'openai-responses' } } } }] })!
+  let stored: StoredExecutionSelection = { revision: 0, value: { mode: 'enno', status: 'selecting' } }
+  const seen: string[] = []
+  await assert.rejects(selectExecution({ task: 'Fix model selection', signal: new AbortController().signal, routes: [], llm: catalog, stored,
+    save: async (revision, value) => { assert.equal(revision, stored.revision); return stored = { revision: revision + 1, value } },
+    questions: { ask: async request => {
+      const question = request.questions[0]!
+      seen.push(question.id)
+      if (question.id === 'enno-template') assert.ok(question.options?.some(option => option.label === 'OpenAI — 適用可能'))
+      const selected = question.id === 'enno-model-source' ? 'おすすめテンプレートから選ぶ'
+        : question.id === 'enno-template' ? 'OpenAI — 適用可能' : '取消・作業を保持'
+      return { answers: [{ id: question.id, selected: [selected] }] }
+    } },
+  }), ExecutionSelectionPending)
+  assert.deepEqual(seen, ['enno-model-source', 'enno-template', 'enno-model-review'])
+  assert.equal(stored.value.draft?.roles.ideal?.model, 'gpt-6-astra')
+})
+
+test('optional settings metadata failure cannot block the DSH model catalog', async () => {
+  const llm = {
+    listProviders: () => [{ id: 'openai', name: 'OpenAI' }],
+    listConfigurableProviders: () => [{ provider: 'openai', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openai'] }],
+    listModels: async () => [{ provider: 'openai', id: 'gpt-6-astra', name: 'Astra' }],
+  }
+  const catalog = await readModelCatalog(nativeModelCatalog(llm, { describe: () => { throw new Error('settings unavailable') } })!)
+  assert.deepEqual(catalog.providers, [{ id: 'openai', name: 'OpenAI', route: { provider: 'openai', family: 'other', connection: 'api', protocol: 'unknown' } }])
+  assert.deepEqual(catalog.models, [{ provider: 'openai', id: 'gpt-6-astra', name: 'Astra' }])
 })
 
 test('DSH validation keeps the native service receiver and rejects unavailable or substituted models', async () => {

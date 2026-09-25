@@ -502,7 +502,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const reviewConfig = DiffReviewConfig.parse(options.diffReview ?? {})
   const advisory = options.advisory ?? native.get('dshAdvisory', false) as DshAdvisoryHost | undefined
   const modelCatalog = nativeModelCatalog(native.get('llm', false) as DshModelCatalog | undefined,
-    native.get('settings', false) as { get(namespace: string): unknown } | undefined)
+    native.get('settings', false) as { describe(options: { redactSecrets: true }): readonly { ns: string; value: unknown }[] } | undefined)
   const modelCompatibility = options.modelCompatibility ?? native.get('dshModelCompatibility', false) as DshModelCompatibility | undefined
   const selections = new Map<string, StoredExecutionSelection>()
   const selectionFailures = new Map<string, Promise<void>>()
