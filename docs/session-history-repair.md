@@ -18,10 +18,20 @@ Affected v3 chats have the five historical informational types below marked
 ignorable before users need to open them individually. The startup log reports
 checked/repaired/failed counts and the IDs of failures (up to 20 diagnostics).
 A failed history does not prevent the remaining IDs from being checked.
+After the startup scan, Kiokuko automatically removes only histories classified
+as `Legacy session identity mismatch`. This label can also result from the
+compatibility check's v3 version requirement when DSH reports a translated v4
+header for a historical log; it does not prove the physical ID is corrupt.
+Cleanup rechecks each ID, the selected generation, and the native log path
+under DSH's write lease before deleting the history file. Other failures,
+healthy histories, and files in the session working directory remain untouched.
+An interrupted scan or cleanup is safe to repeat on the next plugin load. The
+first startup log may still show the mismatch found before deletion; after Web
+restarts, those removed IDs no longer appear in the scan.
 Output labels distinguish `[info]` progress and summaries, `[warn]` individual
 histories left unrepaired, `[error]` failure to enumerate the session store,
 and `[crit]` failure to start the Kiokuko plugin. A session warning means DSH
-can continue running, but that session still failed validation.
+can continue running, but that session failed validation during the scan.
 No manual repair command or separate setup step is required. The installed
 bundle loads the public plugin entrypoint, which mounts the compatibility
 adapter and starts the scan automatically. The adapter uses that profile's

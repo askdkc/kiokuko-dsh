@@ -112,7 +112,7 @@
         "Configured Kiokuko database and pre-migration backups",
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",
         ".orca/runs and .orca/exports inside verified session workspaces, or the configured Kiokuko data directory",
-        "Legacy history compatibility under DSH's native write lease: exact rejected v3 file or validated new v3 generation from retained v0, identical .bak, and disposable validation artifacts",
+        "Legacy history compatibility under DSH's native write lease: exact rejected v3 file or validated new v3 generation from retained v0, identical .bak, disposable validation artifacts, and automatic deletion of confirmed identity-mismatched native logs",
         "Opt-in Lisp scratch, input snapshots, verified compiled bundle cache, durable operation journal, and approved file changes with host backups"
       ],
       "commands": [

@@ -34,10 +34,29 @@ export interface SessionHistoryCheck {
   readonly cancelled: boolean
   /** Bounded diagnostics contain session IDs and errors, never message bodies. */
   readonly failures: readonly { id: string; error: string }[]
+  /** Exact native log artifacts rejected by the compatibility identity check. */
+  readonly mismatches: readonly { id: string; path: string; identity: LogIdentity }[]
   readonly enumerationError?: string
 }
+interface LogIdentity { readonly dev: string; readonly ino: string; readonly size: string; readonly mtimeNs: string; readonly ctimeNs: string }
 interface Installation { owners: number; ready: Promise<SessionHistoryCheck>; stop(): void; drain(): Promise<void> }
-const unsupportedCheck: SessionHistoryCheck = { supported: false, listed: 0, checked: 0, repaired: 0, failed: 0, cancelled: false, failures: [] }
+const unsupportedCheck: SessionHistoryCheck = { supported: false, listed: 0, checked: 0, repaired: 0, failed: 0, cancelled: false, failures: [], mismatches: [] }
+
+class LegacyIdentityMismatch extends Error {}
+
+async function logIdentity(path: string): Promise<LogIdentity | undefined> {
+  const file = await lstat(path, { bigint: true }).catch(() => undefined)
+  return file?.isFile() && !file.isSymbolicLink() ? {
+    dev: String(file.dev), ino: String(file.ino), size: String(file.size),
+    mtimeNs: String(file.mtimeNs), ctimeNs: String(file.ctimeNs),
+  } : undefined
+}
+
+class LegacyHistoryFailure extends Error {
+  constructor(readonly path: string, cause: unknown) {
+    super(`Kiokuko legacy history compatibility failed (raw log: ${path}): ${cause instanceof Error ? cause.message : String(cause)}; original history retained or backed up`, { cause })
+  }
+}
 
 function nativeBackend(value: unknown): value is Persistence {
   if (!value || typeof value !== 'object') return false
@@ -109,7 +128,7 @@ async function repairHistory(backend: Persistence, id: string, rejectedPath: str
   signal?.throwIfAborted()
   const version = ['session.jsonl', 'session.jsonl.zstd'].includes(basename(rejectedPath)) ? 0 : 3
   const snapshot = await backend.stat(id, signal ? { signal } : undefined)
-  if (!snapshot || snapshot.header.id !== id || snapshot.header.version !== 3) throw new Error('Legacy session identity mismatch')
+  if (!snapshot || snapshot.header.id !== id || snapshot.header.version !== 3) throw new LegacyIdentityMismatch('Legacy session identity mismatch')
   if (version === 0 && snapshot.revision === undefined) throw new Error('Legacy source revision is unavailable')
   const current = await backend.resolveCurrentLog(id, signal)
   const location = version === 0 ? backend.locate?.(snapshot.header) : undefined
@@ -175,7 +194,7 @@ async function repairHistory(backend: Persistence, id: string, rejectedPath: str
 /** Check every native session ID once per plugin load, including first load after an update. */
 async function checkStoredSessionIds(backend: Persistence, repairedIds: ReadonlySet<string>, signal: AbortSignal): Promise<SessionHistoryCheck> {
   const result = { supported: true, listed: 0, checked: 0, repaired: 0, failed: 0, cancelled: false,
-    failures: [] as { id: string; error: string }[], enumerationError: undefined as string | undefined }
+    failures: [] as { id: string; error: string }[], mismatches: [] as { id: string; path: string; identity: LogIdentity }[], enumerationError: undefined as string | undefined }
   console.info('[kiokuko-dsh] [info] Checking stored session IDs')
   try {
     const snapshots = await backend.list({ signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]) })
@@ -192,6 +211,10 @@ async function checkStoredSessionIds(backend: Persistence, repairedIds: Readonly
       } catch (error) {
         if (signal.aborted) break
         result.failed++
+        if (error instanceof LegacyHistoryFailure && error.cause instanceof LegacyIdentityMismatch) {
+          const identity = await logIdentity(error.path)
+          if (identity) result.mismatches.push({ id, path: error.path, identity })
+        }
         if (result.failures.length < 20) result.failures.push({ id, error: error instanceof Error ? error.message : String(error) })
       }
       result.checked++
@@ -232,8 +255,7 @@ export function mountSessionHistoryCompatibility(ctx: Context): { ready: Promise
         pending.set(id, operation)
         try { await operation } catch (cause) {
           options?.signal?.throwIfAborted()
-          const detail = cause instanceof Error ? cause.message : String(cause)
-          throw new Error(`Kiokuko legacy history compatibility failed (raw log: ${path}): ${detail}; original history retained or backed up`, { cause })
+          throw new LegacyHistoryFailure(path, cause)
         } finally { if (pending.get(id) === operation) pending.delete(id) }
         options?.signal?.throwIfAborted()
         return original.call(this, id, access, options)
