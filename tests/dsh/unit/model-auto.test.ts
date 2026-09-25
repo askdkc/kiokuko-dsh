@@ -9,7 +9,7 @@ import { ModelAutoCoordinator } from '../../../src/dsh/model-auto/coordinator.js
 import { ModelAutoStore } from '../../../src/dsh/model-auto/store.js'
 import { modelAutoCandidates } from '../../../src/dsh/model-auto/candidates.js'
 import { ModelAutoConfig } from '../../../src/dsh/model-auto/contracts.js'
-import type { DecisionBatch } from '../../../src/dsh/decisions/contracts.js'
+import { DecisionError, type DecisionBatch } from '../../../src/dsh/decisions/contracts.js'
 import type { DshModelCatalog, ModelBinding } from '../../../src/dsh/model-configuration.js'
 import { canonicalContentHash } from '../../../src/serialization/validate.js'
 
@@ -22,16 +22,16 @@ const catalog = (): DshModelCatalog => ({
     context: { contextWindow: 200_000 }, reasoning: { efforts: ['low', 'medium', 'high'].map(id => ({ id })) } }),
   resolveCallConfig: async binding => binding,
 })
-async function fixture(choice = 'luna-medium', mode: 'off' | 'observe' | 'auto' = 'auto') {
+async function fixture(choice = 'luna-medium', mode: 'off' | 'observe' | 'auto' = 'auto', timeoutMs = 5000) {
   const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
   db.exec("CREATE TABLE ledger_runs(run_id TEXT PRIMARY KEY); INSERT INTO ledger_runs(run_id) VALUES ('r1'),('r2'),('r3')")
   db.exec(readFileSync(new URL('../../../migrations/028_model_auto.sql', import.meta.url), 'utf8'))
   const runtime = { withDatabase: async <T>(fn: (database: NodeSqliteAdapter) => T) => fn(db) }
   let calls = 0, decide: ((batch: DecisionBatch) => Promise<string>) | undefined
-  const service = new DecisionService(TypedDecisionsConfig.parse({}), () => ({ capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 },
+  const service = new DecisionService(TypedDecisionsConfig.parse({ typesafe: { timeoutMs } }), () => ({ capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 },
     evaluate: async batch => {
       calls++
-      const selected = batch.purpose === 'memory-reuse' ? 'apple' : decide ? await decide(batch) : choice
+      const selected = batch.questions[0]?.id === 'fruit' ? 'apple' : decide ? await decide(batch) : choice
       return { provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'fixture',
         answers: batch.questions.map(question => ({ id: question.id, status: 'selected' as const, choiceId: selected })) }
     },
@@ -41,8 +41,32 @@ async function fixture(choice = 'luna-medium', mode: 'off' | 'observe' | 'auto' 
   const coordinator = new ModelAutoCoordinator(store, service, catalog(), config)
   const input = (runId = 'r1', turn = 1) => ({ runId, sessionId: 's1', requestId: `request-${turn}`, turn,
     task: 'Implement a small TypeScript change and verify it.', taskType: 'build', admitted: true, measureContext: () => 0, signal })
-  return { db, runtime, store, coordinator, input, calls: () => calls, setDecision: (fn: (batch: DecisionBatch) => Promise<string>) => { decide = fn }, close: () => db.close() }
+  return { db, runtime, store, service, coordinator, input, calls: () => calls, setDecision: (fn: (batch: DecisionBatch) => Promise<string>) => { decide = fn }, close: () => db.close() }
 }
+
+test('a timed-out memory batch does not block a ready model-routing decision', async t => {
+  const f = await fixture('luna-medium', 'auto', 20); t.after(f.close)
+  assert.equal((await f.service.probe(signal)).state, 'ready')
+  f.setDecision(async batch => batch.purpose === 'model-routing' ? 'luna-medium' : new Promise<string>(() => {}))
+  const memoryBatch: DecisionBatch = { purpose: 'memory-reuse', state: { task: 'Find relevant evidence', constraints: '', memories: { memory_0: 'Evidence' } },
+    questions: [{ id: 'memory_0', instructions: 'Is this evidence relevant?',
+      choices: [{ id: 'yes', description: 'Relevant' }, { id: 'no', description: 'Irrelevant' }, { id: 'unknown', description: 'Unclear' }], abstainId: 'unknown' }] }
+  assert.deepEqual(await f.service.evaluate('memory-timeout', memoryBatch, signal), { status: 'fallback', reason: 'DECISION_TIMEOUT' })
+  assert.equal((f.service.status() as { readiness: { state: string } }).readiness.state, 'ready')
+  assert.deepEqual(await f.coordinator.resolve(f.input()), { kind: 'apply', binding: luna('medium'), reason: 'selected' })
+})
+
+test('an unavailable provider still blocks model routing after a memory batch fails', async t => {
+  const f = await fixture(); t.after(f.close)
+  assert.equal((await f.service.probe(signal)).state, 'ready')
+  f.setDecision(async () => { throw new DecisionError('UNAVAILABLE') })
+  const memoryBatch: DecisionBatch = { purpose: 'memory-reuse', state: { task: 'Find evidence', constraints: '', memories: { memory_0: 'Evidence' } },
+    questions: [{ id: 'memory_0', instructions: 'Is this relevant?',
+      choices: [{ id: 'yes', description: 'Relevant' }, { id: 'no', description: 'Irrelevant' }, { id: 'unknown', description: 'Unclear' }], abstainId: 'unknown' }] }
+  assert.deepEqual(await f.service.evaluate('memory-unavailable', memoryBatch, signal), { status: 'fallback', reason: 'DECISION_UNAVAILABLE' })
+  assert.equal((f.service.status() as { readiness: { state: string } }).readiness.state, 'unavailable')
+  assert.deepEqual(await f.coordinator.resolve(f.input()), { kind: 'native', reason: 'decision_unavailable' })
+})
 
 test('off makes no decision or catalog call; auto freezes one route across replay and records actual header separately', async t => {
   const f = await fixture('luna-medium', 'off'); t.after(f.close)

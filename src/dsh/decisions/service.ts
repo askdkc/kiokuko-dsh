@@ -337,8 +337,10 @@ export class DecisionService {
         const reason = timeout.signal.aborted ? 'DECISION_TIMEOUT' : (error as DecisionError).code
         const wasReady = this.readiness.status(config).state === 'ready'
         if (reason === 'DECISION_AUTH' && (wasReady || !managed)) this.invalidateReadiness()
-        if (managed && !['DECISION_TOO_LARGE', 'DECISION_INVALID_INPUT', 'DECISION_CANCELLED', 'DECISION_UNSUPPORTED'].includes(reason)
-          && (wasReady || reason === 'DECISION_TIMEOUT')) this.readiness.failed(config, reason)
+        // A batch can exhaust its own budget while the provider remains healthy.
+        // Do not make later, smaller decisions unavailable for that batch's timeout.
+        if (managed && wasReady && !['DECISION_TIMEOUT', 'DECISION_TOO_LARGE', 'DECISION_INVALID_INPUT', 'DECISION_CANCELLED', 'DECISION_UNSUPPORTED'].includes(reason))
+          this.readiness.failed(config, reason)
         this.lastFallback = reason
         outcome = { status: 'fallback', reason }
       } finally { clearTimeout(timer) }
