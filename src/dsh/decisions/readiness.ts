@@ -19,6 +19,11 @@ const PROBE: DecisionBatch = {
     choices: [{ id: 'apple', description: 'Apple' }, { id: 'pear', description: 'Pear' }, { id: 'unknown', description: 'Not known' }], abstainId: 'unknown' }],
 }
 type Pending = { promise: Promise<DecisionReadiness>; controller: AbortController; users: number }
+function readinessKey(config: DecisionConfiguration): string {
+  const providerConfig = { ...config }
+  delete providerConfig.memorySelection
+  return canonicalContentHash(providerConfig)
+}
 
 /** Process-local availability evidence. Probes never create decision bindings or results. */
 export class DecisionReadinessMonitor {
@@ -35,11 +40,11 @@ export class DecisionReadinessMonitor {
     if (current.state === 'unconfigured' && current.reason !== 'missing_credential') return current
     if (!this.options.configurationCheck) return current
     const configured = await abortable(this.options.configurationCheck(config, signal), signal)
-    const key = canonicalContentHash(config), previous = this.configurations.get(key)
+    const key = readinessKey(config), previous = this.configurations.get(key)
     if (!configured) {
       this.invalidate()
       const value: DecisionReadiness = { state: 'unconfigured', reason: 'missing_credential', checkedAt: null }
-      this.cache.set(canonicalContentHash(config), { value, expires: this.now() + 30_000 })
+      this.cache.set(key, { value, expires: this.now() + 30_000 })
       return value
     }
     if (current.reason === 'missing_credential' || previous !== undefined && previous !== configured) this.invalidate()
@@ -49,7 +54,7 @@ export class DecisionReadinessMonitor {
   status(config: DecisionConfiguration): DecisionReadiness {
     const issue = decisionConfigurationIssue(config)
     if (issue) return { state: 'unconfigured', reason: issue, checkedAt: null }
-    const key = canonicalContentHash(config), cached = this.cache.get(key)
+    const key = readinessKey(config), cached = this.cache.get(key)
     if (this.pending.has(key)) return { state: 'probing', reason: null, checkedAt: null }
     return cached && cached.expires > this.now() ? { ...cached.value } : { state: 'unverified', reason: null, checkedAt: cached?.value.checkedAt ?? null }
   }
@@ -61,11 +66,11 @@ export class DecisionReadinessMonitor {
     this.pending.clear()
   }
   failed(config: DecisionConfiguration, reason: string): void {
-    this.cache.set(canonicalContentHash(config), { value: { state: 'unavailable', reason, checkedAt: new Date(this.now()).toISOString() }, expires: this.now() + 30_000 })
+    this.cache.set(readinessKey(config), { value: { state: 'unavailable', reason, checkedAt: new Date(this.now()).toISOString() }, expires: this.now() + 30_000 })
   }
   async probe(config: DecisionConfiguration, signal: AbortSignal, force = false): Promise<DecisionReadiness> {
     signal.throwIfAborted()
-    const current = await this.inspect(config, signal), key = canonicalContentHash(config)
+    const current = await this.inspect(config, signal), key = readinessKey(config)
     if (current.state === 'unconfigured') return current
     if (!force && ['ready', 'unavailable'].includes(current.state)) return current
     let pending = this.pending.get(key)

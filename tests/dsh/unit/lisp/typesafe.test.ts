@@ -61,7 +61,7 @@ test('validate answer identity, type, choices, distributions, confidence, score 
     o => { o.answers.relevant.noul = 2 }, o => { o.answers.category.choice = 'absent' }, o => { o.answers.category.choice = 'bug' },
     o => { delete o.answers.category.probabilities.bug }, o => { o.answers.category.probabilities.bug = -0.25 },
     o => { o.answers.category.probabilities.bug = 0.5 }, o => { o.answers.category.confidence = 1.1 },
-    o => { o.answers.severity.score = 2 }, o => { o.answers.severity.legend['1'] = 'wrong rubric' },
+    o => { o.answers.severity.score = 2 }, o => { o.answers.severity.score = 1 }, o => { o.answers.severity.legend['1'] = 'wrong rubric' },
     o => { o.answers.severity.probabilities['2'] = 0 }, o => { o.usage.input_tokens = -1 },
     o => { o.model = '' }, o => { o.debug = 'unexpected response field' },
   ]

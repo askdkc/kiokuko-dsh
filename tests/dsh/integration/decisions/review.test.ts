@@ -59,7 +59,7 @@ for (const kind of ['typesafe', 'nimble'] as const) test(`${kind}: reviewed cand
     assert.equal(f.db.prepare('SELECT status FROM enno_plan_drafts').get()?.status, 'submitted')
     // Reloaded service still uses the original configuration snapshot.
     const changed = new DecisionService(TypedDecisionsConfig.parse({ provider: kind === 'typesafe' ? 'nimble' : 'typesafe' }), () => { throw new Error('Must not evaluate') }, store)
-    assert.deepEqual(await changed.bind('request'), config)
+    assert.deepEqual(await changed.bind('request'), { ...config, memorySelection: { mode: 'choice' } })
     const replay = await reviewPlanDecisions({ service: changed, requestId: 'request', context: reviewedContext, signal: new AbortController().signal,
       check: { identity: {}, verifyReadOnly: () => { throw new Error('Completed persisted result must replay') }, execute: async () => ({}) } })
     assert.equal(replay.backend.provider, kind); assert.equal(calls, 1); assert.equal(fallback, 0)

@@ -15,7 +15,8 @@ import type { DecisionSelectionStore } from './selection-store.js'
 export type DecisionOutcome = { status: 'completed'; result: DecisionBatchResult } | { status: 'fallback'; reason: string }
 export interface DecisionObservation { purpose: DecisionBatch['purpose']; questionTypes: Record<string, number>; provider: string; requestedModel: string | null;
   returnedModel: string | null; policyVersion: string; cacheHit: boolean; selected: number; measured: number; abstained: number;
-  fallbackReason: string | null; elapsedMs: number; inputBytes: number; inputTokens: number | null; outputTokens: number | null }
+  fallbackReason: string | null; elapsedMs: number; inputBytes: number; inputTokens: number | null; outputTokens: number | null;
+  memoryCandidates?: { policy: string; attempted: number; applicable: number; excluded: number; uncertain: number; unassessed: number } }
 export interface DecisionStore {
   binding?(id: string): Promise<DecisionConfiguration | undefined>
   bind(id: string, config: DecisionConfiguration): Promise<DecisionConfiguration>
@@ -152,8 +153,32 @@ export class DecisionService {
   invalidateReadiness(): void { this.readiness.invalidate() }
   configurationDigest(): string { return canonicalContentHash({ config: this.config, semanticCompaction: this.semanticCompaction, policyVersion: POLICY_VERSION }) }
   async skillSelection(requestId: string, signal: AbortSignal): Promise<DecisionConfiguration['skillSelection']> { return (await this.bind(requestId, signal)).skillSelection }
-  private observe(batch: DecisionBatch, config: DecisionConfiguration, outcome: DecisionOutcome, cacheHit: boolean, elapsedMs: number): void {
+  private observe(batch: DecisionBatch, config: DecisionConfiguration, outcome: DecisionOutcome, cacheHit: boolean, elapsedMs: number,
+    memoryCandidateTotal?: number): void {
     const answers = outcome.status === 'completed' ? outcome.result.answers : []
+    const selection = config.memorySelection ?? { mode: 'choice' as const }
+    const memoryCandidates = batch.purpose === 'memory-reuse' ? {
+      policy: selection.mode === 'noul' ? selection.policyVersion : 'memory-reuse-v1',
+      attempted: selection.mode === 'noul' ? Math.floor(batch.questions.length / 3) : batch.questions.length,
+      applicable: 0, excluded: 0, uncertain: 0, unassessed: 0,
+    } : undefined
+    if (memoryCandidates && outcome.status === 'completed') {
+      if (Number.isSafeInteger(memoryCandidateTotal) && memoryCandidateTotal! >= memoryCandidates.attempted)
+        memoryCandidates.unassessed = memoryCandidateTotal! - memoryCandidates.attempted
+      if (selection.mode === 'noul') for (let index = 0; index < answers.length; index += 3) {
+        const group = answers.slice(index, index + 3)
+        if (group.every(answer => answer?.status === 'abstained' && answer.reason === 'unassessed')) memoryCandidates.unassessed++
+        else if (group.some(answer => answer?.status === 'measured' && answer.type === 'noul' && answer.probability <= selection.rejectProbability)) memoryCandidates.excluded++
+        else if (group.every(answer => answer?.status === 'measured' && answer.type === 'noul' && answer.probability >= selection.acceptProbability)) memoryCandidates.applicable++
+        else memoryCandidates.uncertain++
+      }
+      else for (const answer of answers) {
+        if (answer.status === 'abstained' && answer.reason === 'unassessed') memoryCandidates.unassessed++
+        else if (answer.status === 'selected' && answer.choiceId === 'applicable') memoryCandidates.applicable++
+        else if (answer.status === 'selected' && answer.choiceId === 'not_applicable') memoryCandidates.excluded++
+        else memoryCandidates.uncertain++
+      }
+    }
     const observation: DecisionObservation = {
       purpose: batch.purpose, questionTypes: Object.fromEntries(['choice', 'noul', 'score'].map(type => [type, batch.questions.filter(q => questionType(q) === type).length])),
       provider: config.provider, requestedModel: outcome.status === 'completed' ? outcome.result.requestedModel : selectedDecisionSettings(config)?.model ?? null,
@@ -164,6 +189,7 @@ export class DecisionService {
       elapsedMs: Math.round(elapsedMs), inputBytes: Buffer.byteLength(JSON.stringify(batch)),
       inputTokens: cacheHit ? null : outcome.status === 'completed' ? outcome.result.usage?.input_tokens ?? null : null,
       outputTokens: cacheHit ? null : outcome.status === 'completed' ? outcome.result.usage?.output_tokens ?? null : null,
+      ...(memoryCandidates ? { memoryCandidates } : {}),
     }
     this.decisionObservations.push(observation)
     if (this.decisionObservations.length > 128) this.decisionObservations.shift()
@@ -179,10 +205,15 @@ export class DecisionService {
         const existing = await this.store?.binding?.(requestId)
         if (existing) return existing
         let config = structuredClone(current)
+        // Only a new binding gets a materialized default. An older stored binding
+        // without this field continues to mean Choice after restart or aliasing.
+        config.memorySelection ??= { mode: 'choice' }
+        const memorySelection = config.memorySelection
         if (config.provider === 'laya-coreml' && decisionConfigurationIssue(config) === 'missing_laya_model_or_fingerprint') {
           try { config = await this.resolved(config, signal); if (this.config === current) this.config = config }
           catch (error) { if (signal.aborted) throw new DecisionError('CANCELLED'); if (!(error instanceof DecisionError)) throw error; this.lastFallback = error.code }
         }
+        config.memorySelection = memorySelection
         if (signal.aborted) throw new DecisionError('CANCELLED')
         return this.store ? this.store.bind(requestId, config) : config
       })()
@@ -212,7 +243,7 @@ export class DecisionService {
       readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' },
       decisionObservations: structuredClone(this.decisionObservations) }
   }
-  async evaluate(requestId: string, input: unknown, signal: AbortSignal, catalogDigest = ''): Promise<DecisionOutcome> {
+  async evaluate(requestId: string, input: unknown, signal: AbortSignal, catalogDigest = '', memoryCandidateTotal?: number): Promise<DecisionOutcome> {
     const started = performance.now()
     if (signal.aborted) throw new DecisionError('CANCELLED')
     const config = await this.bind(requestId, signal)
@@ -243,7 +274,7 @@ export class DecisionService {
           return { status: 'fallback', reason: budget.aborted ? 'DECISION_TIMEOUT' : (error as DecisionError).code }
         }
       }
-      this.observe(batch, config, cached, true, performance.now() - started)
+      this.observe(batch, config, cached, true, performance.now() - started, memoryCandidateTotal)
       return structuredClone(cached)
     }
     const existing = this.pending.get(key)
@@ -295,7 +326,7 @@ export class DecisionService {
         const reason = timeout.signal.aborted ? 'DECISION_TIMEOUT' : (error as DecisionError).code
         const wasReady = this.readiness.status(config).state === 'ready'
         if (reason === 'DECISION_AUTH' && (wasReady || !managed)) this.invalidateReadiness()
-        if (managed && !['DECISION_TOO_LARGE', 'DECISION_INVALID_INPUT', 'DECISION_CANCELLED'].includes(reason)
+        if (managed && !['DECISION_TOO_LARGE', 'DECISION_INVALID_INPUT', 'DECISION_CANCELLED', 'DECISION_UNSUPPORTED'].includes(reason)
           && (wasReady || reason === 'DECISION_TIMEOUT')) this.readiness.failed(config, reason)
         this.lastFallback = reason
         outcome = { status: 'fallback', reason }
@@ -304,7 +335,7 @@ export class DecisionService {
       await this.store?.write(requestId, digest, outcome)
       if (signal.aborted) throw new DecisionError('CANCELLED')
       this.results.set(key, structuredClone(outcome))
-      this.observe(batch, config, outcome, false, performance.now() - started)
+      this.observe(batch, config, outcome, false, performance.now() - started, memoryCandidateTotal)
       return outcome
     })()
     this.pending.set(key, operation)

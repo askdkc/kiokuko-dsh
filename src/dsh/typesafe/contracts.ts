@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { HostServiceError } from '../service-error.js'
+import { consistentScore } from '../decisions/score-consistency.js'
 
 export const TYPESAFE_BYTES = 256 * 1024
 export const TYPESAFE_MODEL = 'jev-latest'
@@ -77,7 +78,8 @@ export function parseTypeSafeResponse(value: unknown, input: TypeSafeRequest): T
       if (!sameKeys(a.probabilities, keys) || Math.abs(Object.values(a.probabilities).reduce((sum, p) => sum + p, 0) - 1) > 0.001) throw new Error()
       if (a.type === 'choice' && (!keys.includes(a.choice) || a.probabilities[a.choice]! + 0.001 < Math.max(...Object.values(a.probabilities)))) throw new Error()
       if (a.type === 'score' && q.type === 'score') {
-        if (a.score < 0 || a.score > q.criteria.length - 1 || !sameKeys(a.legend, keys) || keys.some(k => a.legend[k] !== q.criteria[Number(k)])) throw new Error()
+        if (a.score < 0 || a.score > q.criteria.length - 1 || !sameKeys(a.legend, keys) || keys.some(k => a.legend[k] !== q.criteria[Number(k)])
+          || !consistentScore(a.score, keys.map(k => a.probabilities[k]!))) throw new Error()
       }
     }
     return parsed

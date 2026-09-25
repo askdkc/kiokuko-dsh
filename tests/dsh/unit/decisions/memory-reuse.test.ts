@@ -5,15 +5,25 @@ import { DecisionService, type DecisionStore } from '../../../../src/dsh/decisio
 import { TypeSafeDecisionProvider, NimbleDecisionProvider } from '../../../../src/dsh/decisions/providers.js'
 import { createMemoryReuseRuntime } from '../../../../src/dsh/memory-reuse.js'
 import { MemoryReuseConfig } from '../../../../src/memory/reuse.js'
+import { DecisionError, type DecisionProvider } from '../../../../src/dsh/decisions/contracts.js'
+import { evaluateMemoryBatches } from '../../../../src/dsh/decisions/memory-batches.js'
 import { mountTypeSafeCommand } from '../../../../src/dsh/typesafe/command.js'
 import { TypeSafeCredentials } from '../../../../src/dsh/typesafe/credentials.js'
 
 const signal = () => new AbortController().signal
 const input = (count = 24) => ({ task: 'Resolve SQLITE_BUSY without deleting data.', constraints: 'Preserve data', binding: 'fixture',
   candidates: Array.from({ length: count }, (_, index) => ({ entryId: `entry-${index}`, revision: 1, projectionHash: `projection-${index}`, text: `SQLITE_BUSY evidence ${index}` })) })
+test('Noul thresholds are finite and keep a strict uncertain interval', () => {
+  for (const [rejectProbability, acceptProbability] of [[-.01, .9], [0, .5], [.5, .9], [.9, .9], [.1, 1.01], [NaN, .9], [.1, Infinity]])
+    assert.throws(() => TypedDecisionsConfig.parse({ memorySelection: { mode: 'noul', policyVersion: 'memory-reuse-noul-v1',
+      rejectProbability, acceptProbability } }))
+  assert.equal(TypedDecisionsConfig.parse({}).memorySelection, undefined)
+})
 function harness(kind: 'typesafe' | 'nimble', options: { configured?: boolean; timeout?: number; now?: () => number;
-  reply?: (body: any) => Response | Promise<Response>; store?: DecisionStore; off?: boolean } = {}) {
-  const config = TypedDecisionsConfig.parse({ provider: kind, typesafe: { timeoutMs: options.timeout ?? 5000 }, nimble: { endpoint: 'http://127.0.0.1:9000/v1/systemone', model: 'fixture', timeoutMs: options.timeout ?? 5000 } })
+  reply?: (body: any) => Response | Promise<Response>; store?: DecisionStore; off?: boolean;
+  memorySelection?: { mode: 'noul'; policyVersion: 'memory-reuse-noul-v1'; acceptProbability: number; rejectProbability: number } } = {}) {
+  const config = TypedDecisionsConfig.parse({ provider: kind, ...(options.memorySelection ? { memorySelection: options.memorySelection } : {}),
+    typesafe: { timeoutMs: options.timeout ?? 5000 }, nimble: { endpoint: 'http://127.0.0.1:9000/v1/systemone', model: 'fixture', timeoutMs: options.timeout ?? 5000 } })
   const calls: any[] = []; let active = 0, maximum = 0
   const request: typeof fetch = async (_url, init) => {
     const body = JSON.parse(String(init!.body)); calls.push(body); active++; maximum = Math.max(maximum, active)
@@ -95,6 +105,165 @@ test('a late service failure discards earlier parts and remembers the whole fall
   assert.equal((await runtime.select(input())).status, 'fallback')
   const calls = h.calls.length
   assert.equal((await runtime.select(input())).status, 'fallback'); assert.equal(h.calls.length, calls)
+})
+
+test('Noul memory groups retain uncertain candidates and never split three propositions', async () => {
+  const selection = { mode: 'noul' as const, policyVersion: 'memory-reuse-noul-v1' as const,
+    acceptProbability: .9, rejectProbability: .1 }
+  const h = harness('typesafe', { memorySelection: selection, reply: body => Response.json({ model: body.model,
+    answers: Object.fromEntries(Object.entries(body.questions).map(([id, question]: [string, any]) => {
+      if (id === 'fruit') return [id, { type: 'choice', choice: 'apple', confidence: 1,
+        probabilities: Object.fromEntries(Object.keys(question.criteria).map(key => [key, key === 'apple' ? 1 : 0])) }]
+      const probability = id.startsWith('memory_1:') && id.endsWith(':constraints') ? .1 : id.startsWith('memory_2:') ? .5 : .9
+      return [id, { type: 'noul', noul: probability }]
+    })) }) })
+  const runtime = (await createMemoryReuseRuntime(h.service, 'noul-groups', signal()))!
+  const selected = await runtime.select(input(100))
+  assert.equal(selected.status, 'completed')
+  if (selected.status === 'completed') assert.deepEqual(selected.verdicts.slice(0, 3), ['applicable', 'not_applicable', 'uncertain'])
+  const observation = (h.service.status() as any).decisionObservations.at(-1)
+  assert.deepEqual(observation.memoryCandidates, { policy: 'memory-reuse-noul-v1', attempted: 100,
+    applicable: 98, excluded: 1, uncertain: 1, unassessed: 0 })
+  assert.equal(JSON.stringify(observation).includes('SQLITE_BUSY evidence'), false)
+  const parts = h.calls.slice(1)
+  assert.equal(parts.length, 13)
+  for (const part of parts) {
+    assert.ok(Object.keys(part.questions).length <= 24)
+    assert.equal(Object.keys(part.questions).length % 3, 0)
+    assert.equal(Object.keys(part.state.memories).length * 3, Object.keys(part.questions).length)
+  }
+  assert.deepEqual(await runtime.select(input(100)), selected)
+  assert.equal(h.calls.length, 14)
+})
+
+test('memory observations count candidates withheld before inference without saving their text', async () => {
+  const h = harness('typesafe', { memorySelection: { mode: 'noul', policyVersion: 'memory-reuse-noul-v1', acceptProbability: .9, rejectProbability: .1 },
+    reply: body => body.questions.fruit ? success(body) : Response.json({ model: body.model,
+      answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { type: 'noul', noul: 1 }])) }) })
+  const runtime = (await createMemoryReuseRuntime(h.service, 'withheld-observation', signal()))!
+  const value = input(2); value.candidates[0]!.text = 'password=super-secret-password'
+  const outcome = await runtime.select(value)
+  assert.deepEqual(outcome, { status: 'completed', verdicts: ['uncertain', 'applicable'] })
+  const observation = (h.service.status() as any).decisionObservations.at(-1)
+  assert.deepEqual(observation.memoryCandidates, { policy: 'memory-reuse-noul-v1', attempted: 1,
+    applicable: 1, excluded: 0, uncertain: 0, unassessed: 1 })
+  assert.equal(JSON.stringify(observation).includes('super-secret-password'), false)
+})
+
+test('explicit Noul on Nimble falls back before inference without poisoning Choice readiness', async () => {
+  const h = harness('nimble', { memorySelection: { mode: 'noul', policyVersion: 'memory-reuse-noul-v1', acceptProbability: .9, rejectProbability: .1 } })
+  await h.service.probe(signal())
+  const runtime = (await createMemoryReuseRuntime(h.service, 'unsupported-noul', signal()))!
+  assert.deepEqual(await runtime.select(input(2)), { status: 'fallback', reason: 'DECISION_UNSUPPORTED' })
+  assert.equal(h.calls.length, 1, 'only the Choice readiness probe may use the provider')
+  assert.equal((h.service.status() as any).readiness.state, 'ready')
+})
+
+test('stored memory policy survives restart and legacy bindings remain Choice', async () => {
+  const configs = new Map<string, ReturnType<typeof TypedDecisionsConfig.parse>>()
+  const store: DecisionStore = { binding: async id => configs.get(id), bind: async (id, config) => {
+    if (!configs.has(id)) configs.set(id, config)
+    return configs.get(id)!
+  }, read: async () => undefined, write: async () => {} }
+  configs.set('legacy', TypedDecisionsConfig.parse({ provider: 'typesafe' }))
+  const selection = { mode: 'noul' as const, policyVersion: 'memory-reuse-noul-v1' as const,
+    acceptProbability: .9, rejectProbability: .1 }
+  const first = harness('typesafe', { store, memorySelection: selection })
+  const legacy = (await createMemoryReuseRuntime(first.service, 'legacy', signal()))!
+  assert.equal((await legacy.select(input(1))).status, 'completed')
+  assert.ok(first.calls.at(-1)?.questions.memory_0)
+  const fresh = (await createMemoryReuseRuntime(first.service, 'fresh', signal()))!
+  assert.equal(configs.get('fresh')?.memorySelection?.mode, 'noul')
+  await first.service.alias('run-alias', 'fresh')
+  assert.deepEqual(configs.get('run-alias')?.memorySelection, selection)
+  const restarted = harness('typesafe', { store })
+  const resumed = (await createMemoryReuseRuntime(restarted.service, 'fresh', signal()))!
+  assert.equal(resumed.identity, fresh.identity)
+  assert.equal(configs.get('legacy')?.memorySelection, undefined)
+})
+
+test('later preflight failure prevents every memory inference', async () => {
+  let preflights = 0, memoryCalls = 0
+  const provider: DecisionProvider = { capabilities: { maxQuestions: 64, maxChoices: 26, maxBytes: 262144, questionTypes: ['choice', 'noul'] },
+    preflight: async () => { if (++preflights === 2) throw new DecisionError('UNAVAILABLE') },
+    evaluate: async batch => {
+      if (batch.purpose === 'memory-reuse' && batch.questions[0]?.id !== 'fruit') memoryCalls++
+      return { provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture',
+        answers: batch.questions.map(q => q.id === 'fruit' ? { id: q.id, status: 'selected' as const, choiceId: 'apple' }
+          : { id: q.id, status: 'measured' as const, type: 'noul' as const, probability: 1 }) }
+    } }
+  const config = TypedDecisionsConfig.parse({ memorySelection: { mode: 'noul', policyVersion: 'memory-reuse-noul-v1', acceptProbability: .9, rejectProbability: .1 } })
+  const service = new DecisionService(config, () => provider)
+  const runtime = (await createMemoryReuseRuntime(service, 'preflight', signal()))!
+  assert.deepEqual(await runtime.select(input(9)), { status: 'fallback', reason: 'DECISION_UNAVAILABLE' })
+  assert.equal(preflights, 2)
+  assert.equal(memoryCalls, 0)
+})
+
+test('Noul mapping rejects missing, extra, and mismatched references before inference', async () => {
+  let calls = 0
+  const provider: DecisionProvider = { capabilities: { maxQuestions: 64, maxChoices: 26, maxBytes: 262144, questionTypes: ['noul'] },
+    evaluate: async () => { calls++; throw new Error('must not infer') } }
+  const questions = ['applicability', 'constraints', 'prerequisites'].map(name => ({ id: `memory_0:${name}`, type: 'noul' as const, instructions: name }))
+  const state = { task: 'task', constraints: '', memories: { memory_0: 'projected' },
+    questionMemory: Object.fromEntries(questions.map(q => [q.id, 'memory_0'])) }
+  for (const bad of [
+    { ...state, questionMemory: { ...state.questionMemory, 'memory_0:constraints': 'memory_1' } },
+    { ...state, questionMemory: { ...state.questionMemory, extra: 'memory_0' } },
+    { ...state, questionMemory: { 'memory_0:applicability': 'memory_0', 'memory_0:constraints': 'memory_0' } },
+  ]) await assert.rejects(evaluateMemoryBatches(provider, { purpose: 'memory-reuse', questions, state: bad }, 'typesafe', signal()), { code: 'DECISION_INVALID_INPUT' })
+  assert.equal(calls, 0)
+})
+
+test('an overlarge single Noul candidate is retained as unassessed', async () => {
+  let calls = 0
+  const provider: DecisionProvider = { capabilities: { maxQuestions: 64, maxChoices: 26, maxBytes: 262144, questionTypes: ['noul'] },
+    preflight: async () => { throw new DecisionError('TOO_LARGE') },
+    evaluate: async () => { calls++; throw new Error('must not infer') } }
+  const questions = ['applicability', 'constraints', 'prerequisites'].map(name => ({ id: `memory_0:${name}`, type: 'noul' as const, instructions: name }))
+  const state = { task: 'task', constraints: '', memories: { memory_0: 'projected' },
+    questionMemory: Object.fromEntries(questions.map(q => [q.id, 'memory_0'])) }
+  const result = await evaluateMemoryBatches(provider, { purpose: 'memory-reuse', questions, state }, 'typesafe', signal())
+  assert.deepEqual(result.answers.map(a => a.status), ['abstained', 'abstained', 'abstained'])
+  assert.deepEqual(result.answers.map(a => a.status === 'abstained' && a.reason), ['unassessed', 'unassessed', 'unassessed'])
+  assert.equal(result.requestedModel, 'unassessed')
+  assert.equal(calls, 0)
+})
+
+test('preflight isolates an overlarge candidate and checks every final part before inference', async () => {
+  const questions = Array.from({ length: 9 }, (_, index) => ['applicability', 'constraints', 'prerequisites'].map(name =>
+    ({ id: `memory_${index}:${name}`, type: 'noul' as const, instructions: name }))).flat()
+  const memories = Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`memory_${index}`, `projected-${index}`]))
+  const questionMemory = Object.fromEntries(questions.map(q => [q.id, q.id.split(':')[0]]))
+  let inference = 0, preflight = 0, finalPreflights = 0
+  const provider: DecisionProvider = { capabilities: { maxQuestions: 64, maxChoices: 26, maxBytes: 262144, questionTypes: ['noul'] },
+    preflight: async part => { preflight++; if (Object.hasOwn((part.state as any).memories, 'memory_3')) throw new DecisionError('TOO_LARGE'); finalPreflights++ },
+    evaluate: async part => { inference++; assert.ok(finalPreflights > 0)
+      return { provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture', answers: part.questions.map(q =>
+        ({ id: q.id, status: 'measured', type: 'noul', probability: 1 })) } } }
+  const result = await evaluateMemoryBatches(provider, { purpose: 'memory-reuse', questions,
+    state: { task: 'task', constraints: '', memories, questionMemory } }, 'typesafe', signal())
+  assert.ok(preflight > 2)
+  assert.ok(inference > 0)
+  assert.deepEqual(result.answers.slice(9, 12).map(answer => answer.status === 'abstained' && answer.reason),
+    ['unassessed', 'unassessed', 'unassessed'])
+  assert.equal(result.answers.filter(answer => answer.status === 'measured').length, 24)
+})
+
+test('a model or revision change between Noul parts rejects every partial result', async () => {
+  const questions = Array.from({ length: 2 }, (_, index) => ['applicability', 'constraints', 'prerequisites'].map(name =>
+    ({ id: `memory_${index}:${name}`, type: 'noul' as const, instructions: name }))).flat()
+  const state = { task: 'task', constraints: '', memories: { memory_0: 'first', memory_1: 'second' },
+    questionMemory: Object.fromEntries(questions.map(q => [q.id, q.id.split(':')[0]])) }
+  for (const changing of ['returnedModel', 'revision'] as const) {
+    const provider: DecisionProvider = { capabilities: { maxQuestions: 3, maxChoices: 26, maxBytes: 262144, questionTypes: ['noul'] },
+      evaluate: async part => ({ provider: 'fixture', requestedModel: 'fixed', policyVersion: 'fixture',
+        returnedModel: changing === 'returnedModel' && part.questions[0]!.id.startsWith('memory_1:') ? 'changed' : 'fixed',
+        revision: changing === 'revision' && part.questions[0]!.id.startsWith('memory_1:') ? 'changed' : 'fixed',
+        answers: part.questions.map(q => ({ id: q.id, status: 'measured', type: 'noul', probability: 1 })) }) }
+    await assert.rejects(evaluateMemoryBatches(provider, { purpose: 'memory-reuse', questions, state }, 'typesafe', signal()),
+      { code: 'DECISION_MALFORMED_RESPONSE' })
+  }
 })
 
 test('the two-request limit is shared across simultaneous logical requests', async () => {
