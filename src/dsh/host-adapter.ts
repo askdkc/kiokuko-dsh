@@ -63,6 +63,8 @@ import { resolveCapabilities } from '../akinator/capabilities.js'
 import { readAkinatorSession, readRunIntakeLink } from '../akinator/store.js'
 import { DshToolPolicy, hasKnownDshToolPolicyState, type DshToolPolicyState } from './tool-policy.js'
 import { ToolExposureConfig, projectToolsForPhase } from './tool-exposure.js'
+import { DiffReviewConfig } from './config.js'
+import { DiffReviewController } from '../diff-review/controller.js'
 import {
   DSH_MODEL_FACING_OPERATIONS,
   type DshToolDefinition,
@@ -214,6 +216,7 @@ export interface DshHostAdapterOptions {
   readonly modelCompatibility?: DshModelCompatibility
   readonly orca?: import('zod').z.input<typeof OrcaConfig>
   readonly toolExposure?: import('zod').z.input<typeof ToolExposureConfig>
+  readonly diffReview?: import('zod').z.input<typeof DiffReviewConfig>
   readonly databasePath?: string
   readonly migrationsDirectory?: string
   readonly repositoryRoot?: string
@@ -496,6 +499,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const attachments = native.get('attachments', false) as NativeAttachments | undefined
   const sessionQuery = options.sessionQuery ?? native.get('sessionQuery', false) as DshSessionQuery | undefined
   const llm = options.llm ?? native.get('llm', false) as DshLlm | undefined
+  const reviewConfig = DiffReviewConfig.parse(options.diffReview ?? {})
   const advisory = options.advisory ?? native.get('dshAdvisory', false) as DshAdvisoryHost | undefined
   const modelCatalog = nativeModelCatalog(native.get('llm', false) as DshModelCatalog | undefined,
     native.get('settings', false) as { get(namespace: string): unknown } | undefined)
@@ -512,6 +516,15 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     autoRegisterRepository: true,
     ...(options.now === undefined ? {} : { now: options.now }),
   })
+  const diffReview = reviewConfig.enabled ? new DiffReviewController({
+    runtime,
+    ...(sessions ? { sessions: sessions as any } : {}),
+    ...(native.get('sessionPersistence', false) ? { persistence: native.get('sessionPersistence', false) as any } : {}),
+    ...(native.get('subprocess', false) ? { subprocess: native.get('subprocess', false) as any } : {}),
+    ...(native.get('workspaceChanges', false) ? { workspaceChanges: native.get('workspaceChanges', false) as any } : {}),
+    ...(llm ? { llm } : {}),
+    ...(modelCatalog ? { catalog: modelCatalog } : {}),
+  }, reviewConfig) : undefined
   const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}), SemanticCompactionConfig.parse(options.semanticCompaction ?? {}), root)
   const answerReview = new AnswerReviewCoordinator(runtime, decisions, AnswerReviewConfig.parse(options.answerReview ?? {}))
   const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root, options.observationPack)
@@ -3020,6 +3033,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   }
   configureEfficiency({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
   const host: DshCompositionHost = {
+    ...(diffReview ? { diffReview } : {}),
     decisions,
     semanticCompaction,
     deepPlanning,
@@ -3101,6 +3115,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   return {
     host,
     dispose: () => disposePromise ??= (async () => {
+      await diffReview?.dispose()
       await answerReview.dispose()
       semanticCompaction.stop()
       modelHandoff.stop()

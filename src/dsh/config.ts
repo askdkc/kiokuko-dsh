@@ -55,6 +55,20 @@ export const EnnoMemoryConfig = z.object({
   rerank: z.literal(false).default(false),
 }).strict()
 export type EnnoMemoryConfig = z.infer<typeof EnnoMemoryConfig>
+export const DiffReviewConfig = z.object({
+  enabled: z.boolean().default(true),
+  maxFiles: z.number().int().min(1).max(1000).default(200),
+  maxFileBytes: z.number().int().min(1024).max(4_194_304).default(262_144),
+  maxSnapshotBytes: z.number().int().min(65_536).max(16_777_216).default(2_097_152),
+  maxInputBytes: z.number().int().min(4096).max(131_072).default(32_768),
+  maxChunks: z.number().int().min(1).max(16).default(4),
+  maxOutputTokens: z.number().int().min(128).max(8192).default(2048),
+  deadlineMs: z.number().int().min(1000).max(600_000).default(120_000),
+  timeoutMs: z.number().int().min(1000).max(120_000).default(15_000),
+  maxCacheBytes: z.number().int().min(1_048_576).max(268_435_456).default(33_554_432),
+  ttlMs: z.number().int().min(60_000).max(86_400_000).default(1_800_000),
+}).strict()
+export type DiffReviewConfig = z.infer<typeof DiffReviewConfig>
 /** Runtime configuration accepted by the dsh bundle entrypoint. */
 export const Config = z.object({
   enabled: z.boolean().default(true),
@@ -78,5 +92,6 @@ export const Config = z.object({
   memoryEvolution: MemoryEvolutionConfig.prefault({}),
   autoGlobalization: z.object({ enabled: z.boolean().default(true) }).strict().prefault({}),
   memoryReview: MemoryReviewConfig.prefault({}),
+  diffReview: DiffReviewConfig.prefault({}),
 })
 export type Config = z.input<typeof Config>

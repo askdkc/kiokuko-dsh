@@ -17,6 +17,10 @@ Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
 
 - Reads configured Kiokuko SQLite state, registered project roots, and
   repository metadata.
+- When a user opens Diff review, reads only the selected native session's
+  workspace identity and bounded repository status/diffs. Untracked file
+  content is read only after explicit selection. Review results remain in
+  process memory until expiry unless the user downloads them.
 - Writes the configured Kiokuko database and pre-migration backups, including
   DSH leases, receipts, retrieval state, and embedding state.
 - Stores the first native input batch of each governed turn in that database
@@ -59,6 +63,10 @@ Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
   subprocesses only when the corresponding Kiokuko operation explicitly
   requests them. The plugin does not provide an implicit model-facing shell
   tool.
+- Diff review runs fixed-argument, read-only Git subprocesses. A user-started
+  analysis sends the selected, sanitized snapshot and limited Kiokuko context
+  to the exact DSH model connection chosen in the review UI. It supplies no
+  tools and does not automatically retry or choose another model.
 - Skill discovery and source retrieval can contact GitHub or skills.sh when
   enabled by configuration.
 - Remote embedding requests can contact the configured endpoint. Remote

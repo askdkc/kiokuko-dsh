@@ -14,6 +14,7 @@
 - **Continuity** — 既定では無効です。`continuity.mode: active` にすると、最近の実行記録を短くまとめてモデルへ渡します。[設定方法](docs/continuity.ja.md)
 - **記憶学習** — 完了した作業から再利用できる episode・教訓候補を作ります。[設定](docs/memory-evolution.md)
 - **OrcaReplay** — モデル・ツールの動作を記録し、HTML に出力できます。[設定とコマンド](docs/orca-recording.md)
+- **Diff レビュー** — DSH の右ペインで、選択した差分と Kiokuko の文脈を根拠付きで確認できます。分析は明示操作です。[使い方と制限](docs/diff-review.ja.md)
 - **日本語出力** — 対応モデルへ自然な日本語を書く同梱 Skill を渡します。[詳細](docs/japanese-output.md)
 
 ## 導入と使い方

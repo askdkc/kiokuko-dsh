@@ -30,7 +30,11 @@ interface DshClientContext {
   readonly uiConversation: { readonly events: { register(definition: unknown): unknown } }
   readonly locale: {
     register(namespace: string, dictionaries: Record<string, Record<string, string>>): unknown
+    bind?(namespace: string): (key: string) => string
   }
+  readonly sidebarRightTabs?: { register(definition: unknown): () => unknown }
+  readonly sidebarRight?: { openTab(kind: string): void; openResource?(address: string): void }
+  inject?(services: readonly string[], callback: (scope: DshClientContext) => void): unknown
   readonly slots: {
     inject(name: string, register: () => unknown): unknown
     register(
@@ -53,8 +57,8 @@ interface DshClientContext {
 // Supplied by the DSH lazy-CJS wrapper generated after tsc. These deliberately
 // remain type-only: cross-plugin value imports break the browser module table.
 declare const createSnapshotStore: <T>(initial: T) => SnapshotStore<T>
-declare const jsx: (component: unknown, props: Record<string, unknown>) => unknown
-declare const jsxs: (component: unknown, props: Record<string, unknown>) => unknown
+declare const jsx: (component: unknown, props: Record<string, unknown>, key?: string | number) => unknown
+declare const jsxs: (component: unknown, props: Record<string, unknown>, key?: string | number) => unknown
 declare const Fragment: unknown
 declare const useState: <T>(initial: T | (() => T)) => [T, (value: T) => void]
 declare const useRef: <T>(initial: T) => { current: T }
@@ -81,6 +85,8 @@ const en = {
   'review.copy': 'Copy',
   'review.copied': 'Copied',
   'review.footnotes': 'Footnotes',
+  'review.title': 'Diff review',
+  'review.description': 'Review changes with repository facts and Kiokuko context.',
 }
 
 const ja: Record<keyof typeof en, string> = {
@@ -96,6 +102,8 @@ const ja: Record<keyof typeof en, string> = {
   'review.copy': 'コピー',
   'review.copied': 'コピーしました',
   'review.footnotes': '脚注',
+  'review.title': 'Diff レビュー',
+  'review.description': '差分をリポジトリの事実と Kiokuko の文脈で確認します。',
 }
 
 const zh: Record<keyof typeof en, string> = {
@@ -111,6 +119,8 @@ const zh: Record<keyof typeof en, string> = {
   'review.copy': '复制',
   'review.copied': '已复制',
   'review.footnotes': '脚注',
+  'review.title': 'Diff 审查',
+  'review.description': '结合仓库事实和 Kiokuko 上下文查看更改。',
 }
 
 function hostBase(): string {
@@ -705,8 +715,381 @@ function installIntakeStyle(): (() => void) | undefined {
   return () => style.remove()
 }
 
+type ReviewMode = 'current' | 'staged' | 'unstaged' | 'turn'
+interface ReviewFileView { fileId: string; layer: string; displayPath: string; kind: string; reason?: string; newDigest?: string; hunks: { id: string; oldStart: number; newStart: number; lines: string[] }[] }
+interface ReviewView { reviewId: string; state: string; freshness: string; summary?: string; errors: string[]; claims: { text: string; evidenceIds: string[]; confidence: string; unverifiedAssumptions: string[]; anchor?: { fileId: string; hunkId: string; side: string; startLine: number } }[];
+  analysis?: { overallRisk: string; impact: string[]; breakingChanges: string[]; testGaps: string[]; memoryConflicts: string[]; assumptions: string[] };
+  analyzedFileIds: string[]; unanalyzedFileIds: string[]; excludedFileIds?: string[];
+  context: { source: string; memory: string; task?: string; reviewInput?: string; reason?: string; execution?: { command: string; status: string; snapshotMatch: string }[]; candidates?: { runId: string; task: string; status: string }[] };
+  snapshot: { snapshotId: string; capturedAt: string; mode: string; totalFiles: number; files: ReviewFileView[] } }
+interface ReviewSessionView { loading: boolean; busy: boolean; error: string; availability: string; models: { provider: string; model: string }[];
+  untracked: string[]; turns: number[]; review?: ReviewView | undefined; mode: ReviewMode; turnSeq?: number | undefined; selected: string[]; selectedUntracked: string[];
+  modelKey: string; purpose: string; runId: string; activeFileId: string; fileListOpen: boolean }
+interface ReviewClientState { bySession: Record<string, ReviewSessionView | undefined> }
+const REVIEW_NS = 'kiokuko-session-log-download'
+const REVIEW_KIND = 'kiokuko-diff-review'
+const REVIEW_TAB_ID = 'kiokuko-dsh/diff-review'
+const REVIEW_ERRORS: Record<string, string> = {
+  repository_changed: '差分の取得中または取得後に変更がありました。取得し直してください。',
+  file_changed: '現在のファイルは取得済みの差分と一致しません。差分内の内容を確認してください。',
+  file_link_unavailable: 'この差分から現在のファイルへは移動できません。',
+  turn_snapshot_unavailable: 'このターンの差分記録は利用できません。現在の差分を選んで取得してください。',
+  repo_unavailable: 'このセッションの Git リポジトリを確認できません。',
+  session_unavailable: '選択中のセッションを確認できません。開き直してください。',
+  session_workspace_mismatch: 'セッションと作業場所が一致しません。',
+  diff_too_large: '差分が上限を超えました。対象を絞って取得してください。',
+  git_timeout: 'Git の読み取りが時間内に終わりませんでした。',
+  git_unavailable: 'Git の読み取りサービスを利用できません。',
+  model_unavailable: '選択したモデルを利用できません。モデルの設定を確認してください。',
+  analysis_in_progress: 'このセッションでは分析が進行中です。完了または停止後に再試行してください。',
+  capture_in_progress: '差分を取得中です。完了後に再試行してください。',
+  review_expired: '結果の保存期間が過ぎました。差分を取得し直してください。',
+  unmerged_conflict: '競合中のファイルがあります。解決してから分析してください。',
+  unsafe_review_input: 'レビューの目的に秘密情報らしい内容があります。削除して再試行してください。',
+  analysis_timeout: '分析が時間内に終わりませんでした。取得済みの差分は表示しています。',
+  provider_failure: 'モデルへの接続に失敗しました。取得済みの差分は表示しています。',
+  invalid_model_json: 'モデルの出力を読み取れませんでした。取得済みの差分は表示しています。',
+  invalid_model_schema: 'モデルの出力形式が一致しません。取得済みの差分は表示しています。',
+  model_incomplete: 'モデルの回答が完了しませんでした。取得済みの差分は表示しています。',
+  invalid_evidence_reference: '存在しない根拠を参照する説明を除外しました。',
+  context_limit: '文脈が入力上限を超え、分析できませんでした。',
+  chunk_or_hunk_limit: '入力上限により一部の変更を分析していません。',
+  cancelled: '分析を停止しました。取得済みの差分は表示しています。',
+}
+
+function reviewErrorMessage(code: string): string { return REVIEW_ERRORS[code] ?? `レビューを続行できません（${code}）。` }
+const REVIEW_STATES: Record<string, string> = { 'facts-only': '差分のみ', analyzing: '分析中', analyzed: '分析完了', partial: '一部未分析', cancelled: '停止', failed: '分析失敗' }
+const REVIEW_CONTEXT_SOURCES: Record<string, string> = { 'current-run': '実行中のタスク', 'completed-run': '完了済みタスク', 'review-input': '利用者入力', unavailable: '取得不可' }
+const REVIEW_MEMORY_STATES: Record<string, string> = { available: '取得済み', empty: '該当なし', unavailable: '取得不可', withheld: '保留', mismatch: '不一致' }
+const REVIEW_FRESHNESS: Record<string, string> = { current: '現在と一致', stale: '取得後に変更あり', unknown: '現在との一致は未確認' }
+
+function initialReviewSession(): ReviewSessionView {
+  return { loading: false, busy: false, error: '', availability: 'unknown', models: [], untracked: [], turns: [], mode: 'current',
+    selected: [], selectedUntracked: [], modelKey: '', purpose: '', runId: '', activeFileId: '', fileListOpen: true }
+}
+
+class DiffReviewClientController {
+  readonly store = createSnapshotStore<ReviewClientState>({ bySession: {} })
+  private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly generations = new Map<string, number>()
+  private closed = false
+
+  private nextGeneration(sessionId: string): number {
+    const next = (this.generations.get(sessionId) ?? 0) + 1
+    this.generations.set(sessionId, next)
+    return next
+  }
+
+  private current(sessionId: string): ReviewSessionView { return this.store.getSnapshot().bySession[sessionId] ?? initialReviewSession() }
+  private publish(sessionId: string, next: ReviewSessionView): void {
+    if (this.closed) return
+    this.store.update(state => { state.bySession = { ...state.bySession, [sessionId]: next } })
+  }
+  change(sessionId: string, changes: Partial<ReviewSessionView>): void { this.publish(sessionId, { ...this.current(sessionId), ...changes }) }
+
+  private url(sessionId: string, reviewId?: string): URL {
+    const url = new URL('/api/kiokuko.diff-review', hostBase())
+    url.searchParams.set('sessionId', sessionId)
+    if (reviewId) url.searchParams.set('reviewId', reviewId)
+    return url
+  }
+
+  private async json(url: URL, body?: object): Promise<Record<string, unknown>> {
+    const response = await fetch(url, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {})
+    const value = await response.json() as Record<string, unknown>
+    if (!response.ok) throw new Error(typeof value.code === 'string' ? reviewErrorMessage(value.code) : `HTTP ${response.status}`)
+    return value
+  }
+
+  async load(sessionId: string): Promise<void> {
+    const generation = this.nextGeneration(sessionId)
+    this.change(sessionId, { loading: true, error: '' })
+    try {
+      const response = await this.json(this.url(sessionId))
+      if (this.generations.get(sessionId) !== generation) return
+      const review = response.review as ReviewView | undefined
+      const models = response.models as ReviewSessionView['models'] ?? []
+      const current = this.current(sessionId)
+      this.change(sessionId, { loading: false, availability: String(response.availability), models, review,
+        untracked: response.untracked as string[] ?? [], turns: response.turns as number[] ?? [],
+        ...(review ? { selected: current.review?.reviewId === review.reviewId && current.selected.length ? current.selected : review.snapshot.files.filter(file => file.kind === 'text').map(file => file.fileId),
+          activeFileId: current.review?.reviewId === review.reviewId && current.activeFileId ? current.activeFileId : review.snapshot.files[0]?.fileId || '' } : {}),
+        modelKey: current.modelKey || (models[0] ? JSON.stringify([models[0].provider, models[0].model]) : ''),
+        error: !review && current.review ? '保存期間が過ぎました。差分を取得し直してください。' : '' })
+      if (review?.state === 'analyzing') this.poll(sessionId, review.reviewId)
+    } catch (error) { if (this.generations.get(sessionId) === generation) this.change(sessionId, { loading: false, error: messageOf(error) }) }
+  }
+
+  async capture(sessionId: string): Promise<void> {
+    const current = this.current(sessionId)
+    if (current.busy) return
+    const generation = this.nextGeneration(sessionId)
+    this.change(sessionId, { busy: true, error: '' })
+    try {
+      const review = await this.json(this.url(sessionId), { action: 'capture', sessionId, mode: current.mode,
+        ...(current.mode === 'turn' ? { turnSeq: current.turnSeq } : {}), untracked: current.selectedUntracked, requestId: crypto.randomUUID() }) as unknown as ReviewView
+      if (this.generations.get(sessionId) !== generation) return
+      this.change(sessionId, { loading: false, busy: false, review, selected: review.snapshot.files.filter(file => file.kind === 'text').map(file => file.fileId),
+        activeFileId: review.snapshot.files[0]?.fileId ?? '', fileListOpen: false })
+    } catch (error) { if (this.generations.get(sessionId) === generation) this.change(sessionId, { loading: false, busy: false, error: messageOf(error) }) }
+  }
+
+  async analyze(sessionId: string): Promise<void> {
+    const current = this.current(sessionId)
+    if (current.busy || !current.review || !current.modelKey) return
+    let provider: string, model: string
+    try { [provider, model] = JSON.parse(current.modelKey) as [string, string] }
+    catch { return }
+    if (!provider || !model) return
+    const generation = this.nextGeneration(sessionId)
+    this.change(sessionId, { busy: true, error: '' })
+    try {
+      const review = await this.json(this.url(sessionId), { action: 'analyze', sessionId, reviewId: current.review.reviewId,
+        requestId: crypto.randomUUID(), selectedFileIds: current.selected, provider, model,
+        ...(current.purpose.trim() ? { purpose: current.purpose.trim() } : {}), ...(current.runId ? { runId: current.runId } : {}) }) as unknown as ReviewView
+      if (this.generations.get(sessionId) !== generation) return
+      this.change(sessionId, { loading: false, review })
+      this.poll(sessionId, review.reviewId)
+    } catch (error) { if (this.generations.get(sessionId) === generation) this.change(sessionId, { busy: false, error: messageOf(error) }) }
+  }
+
+  private poll(sessionId: string, reviewId: string): void {
+    clearTimeout(this.timers.get(sessionId))
+    const tick = async () => {
+      try {
+        const review = await this.json(this.url(sessionId, reviewId)) as unknown as ReviewView
+        if (this.current(sessionId).review?.reviewId !== reviewId) return
+        this.change(sessionId, { review, busy: review.state === 'analyzing', error: '' })
+        if (review.state === 'analyzing') this.timers.set(sessionId, setTimeout(() => void tick(), document.hidden ? 5000 : 1000))
+      } catch (error) { this.change(sessionId, { busy: false, error: messageOf(error) }) }
+    }
+    this.timers.set(sessionId, setTimeout(() => void tick(), 500))
+  }
+
+  async refreshReview(sessionId: string, reviewId: string): Promise<void> {
+    const generation = this.generations.get(sessionId)
+    try {
+      const review = await this.json(this.url(sessionId, reviewId)) as unknown as ReviewView
+      if (this.generations.get(sessionId) === generation && this.current(sessionId).review?.reviewId === reviewId) this.change(sessionId, { review })
+    } catch (error) {
+      if (this.generations.get(sessionId) === generation && this.current(sessionId).review?.reviewId === reviewId) this.change(sessionId, { error: messageOf(error) })
+    }
+  }
+
+  async cancel(sessionId: string, reviewId: string): Promise<void> {
+    try {
+      const review = await this.json(this.url(sessionId), { action: 'cancel', sessionId, reviewId }) as unknown as ReviewView
+      this.change(sessionId, { review, busy: false })
+    } catch (error) { this.change(sessionId, { error: messageOf(error) }) }
+  }
+
+  exportUrl(sessionId: string, reviewId: string, format: 'markdown' | 'json'): string {
+    const url = this.url(sessionId, reviewId)
+    url.searchParams.set('format', format)
+    return url.toString()
+  }
+
+  async openCurrentFile(sessionId: string, reviewId: string, fileId: string, openFile: (address: string) => boolean): Promise<void> {
+    try {
+      const url = this.url(sessionId, reviewId)
+      url.searchParams.set('format', 'file-link')
+      url.searchParams.set('fileId', fileId)
+      const response = await this.json(url)
+      if (typeof response.address !== 'string' || !response.address.startsWith('dsh-resource://file/session/') || !openFile(response.address)) {
+        throw new Error('ファイルタブを開けません。取得済みの差分を確認してください。')
+      }
+    } catch (error) { this.change(sessionId, { error: messageOf(error) }) }
+  }
+
+  async dispose(): Promise<void> {
+    this.closed = true
+    for (const timer of this.timers.values()) clearTimeout(timer)
+    this.timers.clear()
+  }
+}
+
+function SnapshotDiff(props: { file: ReviewFileView; snapshotId: string }): unknown {
+  return jsxs('div', { className: 'kiokuko-review-diff', children: props.file.hunks.map(hunk => {
+    let oldLine = hunk.oldStart, newLine = hunk.newStart
+    return jsxs('section', { id: `kiokuko-review-${props.file.fileId}-${hunk.id}`, children: [
+      jsx('h4', { children: `@@ -${hunk.oldStart} +${hunk.newStart} @@` }),
+      jsx('pre', { children: hunk.lines.map((line, index) => {
+        const prefix = line[0]
+        const old = prefix === '+' || prefix === '\\' ? '' : String(oldLine++)
+        const next = prefix === '-' || prefix === '\\' ? '' : String(newLine++)
+        return jsx('div', { className: prefix === '+' ? 'added' : prefix === '-' ? 'removed' : '',
+          'data-snapshot-id': props.snapshotId, 'data-file-id': props.file.fileId, 'data-hunk-id': hunk.id,
+          ...(old ? { 'data-old-line': old } : {}), ...(next ? { 'data-new-line': next } : {}),
+          children: `${old.padStart(5)} ${next.padStart(5)} ${line}` }, index)
+      }) }),
+    ] }, hunk.id)
+  }) })
+}
+
+function DiffReviewTab(props: Record<string, unknown>): unknown {
+  const sessionId = String(props.sessionId)
+  const useReview = props.useDiffReview as (selector: (state: ReviewClientState) => ReviewSessionView | undefined) => ReviewSessionView | undefined
+  const controller = props.reviewController as DiffReviewClientController
+  const openFile = props.openCurrentFile as (address: string) => boolean
+  const useTabInfo = props.useTabInfo as () => { tab: { signal: AbortSignal; visible: boolean } }
+  const { tab } = useTabInfo()
+  const state = useReview(value => value.bySession[sessionId]) ?? initialReviewSession()
+  useEffect(() => { void controller.load(sessionId) }, [sessionId])
+  useEffect(() => { if (tab.visible && state.review) void controller.refreshReview(sessionId, state.review.reviewId) }, [sessionId, tab.visible, state.review?.reviewId])
+  useEffect(() => {
+    const onClose = () => { const reviewId = controller.store.getSnapshot().bySession[sessionId]?.review?.reviewId; if (reviewId) void controller.cancel(sessionId, reviewId) }
+    tab.signal.addEventListener('abort', onClose, { once: true })
+    return () => tab.signal.removeEventListener('abort', onClose)
+  }, [sessionId, tab.signal])
+  const review = state.review
+  const active = review?.snapshot.files.find(file => file.fileId === state.activeFileId) ?? review?.snapshot.files[0]
+  const selectFile = (fileId: string) => controller.change(sessionId, { selected: state.selected.includes(fileId)
+    ? state.selected.filter(id => id !== fileId) : [...state.selected, fileId] })
+  const visitEvidence = (id: string, anchor?: { fileId: string; hunkId: string; side: string; startLine: number }) => {
+    const [fileId, hunkId] = id.split(':')
+    if (!fileId || !review?.snapshot.files.some(file => file.fileId === fileId)) return
+    controller.change(sessionId, { activeFileId: fileId, fileListOpen: false })
+    if (hunkId) requestAnimationFrame(() => {
+      const section = document.getElementById(`kiokuko-review-${fileId}-${hunkId}`)
+      const line = anchor?.fileId === fileId && anchor.hunkId === hunkId
+        ? [...(section?.querySelectorAll<HTMLElement>('[data-old-line],[data-new-line]') ?? [])].find(element =>
+          element.dataset[anchor.side === 'old' ? 'oldLine' : 'newLine'] === String(anchor.startLine)) : undefined
+      ;(line ?? section)?.scrollIntoView({ block: 'center' })
+    })
+  }
+  const analysisGroups: { label: string; items: string[] }[] = review?.analysis ? [
+    { label: '影響', items: review.analysis.impact },
+    { label: '破壊的変更', items: review.analysis.breakingChanges },
+    { label: 'テストの不足', items: review.analysis.testGaps },
+    { label: '過去判断との不一致', items: review.analysis.memoryConflicts },
+    { label: '仮定', items: review.analysis.assumptions },
+  ] : []
+  return jsxs('section', { className: 'kiokuko-review', 'aria-label': 'Diff レビュー', children: [
+    jsx('h2', { children: 'Diff レビュー' }),
+    jsxs('div', { className: 'kiokuko-review-controls', children: [
+      jsxs('label', { children: ['比較対象', jsx('select', { value: state.mode, onChange: (event: { target: { value: ReviewMode } }) => controller.change(sessionId, { mode: event.target.value }), children: [
+        jsx('option', { value: 'current', children: '未コミット全体' }), jsx('option', { value: 'staged', children: 'ステージ済み' }),
+        jsx('option', { value: 'unstaged', children: '未ステージ' }), jsx('option', { value: 'turn', children: 'このターン' }),
+      ] })] }),
+      ...(state.mode === 'turn' ? [jsxs('label', { children: ['ターン差分', jsx('select', { value: String(state.turnSeq ?? ''), onChange: (event: { target: { value: string } }) => controller.change(sessionId, { turnSeq: event.target.value === '' ? undefined : Number(event.target.value) }),
+        children: [jsx('option', { value: '', children: '選択' }), ...state.turns.map(seq => jsx('option', { value: String(seq), children: `seq ${seq}` }, seq))] })] }, 'turn')] : []),
+      jsx('button', { type: 'button', disabled: state.busy || state.loading || state.mode === 'turn' && state.turnSeq === undefined, onClick: () => void controller.capture(sessionId), children: review ? '取得し直す' : '差分を取得' }),
+      review ? jsx('button', { type: 'button', disabled: state.busy, onClick: () => void controller.refreshReview(sessionId, review.reviewId), children: '鮮度を確認' }) : null,
+    ] }),
+    state.untracked.length ? jsxs('fieldset', { children: [jsx('legend', { children: '未追跡ファイル（明示選択）' }), ...state.untracked.map(path => jsxs('label', { children: [jsx('input', { type: 'checkbox', checked: state.selectedUntracked.includes(path), onChange: () => controller.change(sessionId, { selectedUntracked: state.selectedUntracked.includes(path) ? state.selectedUntracked.filter(item => item !== path) : [...state.selectedUntracked, path] }) }), path] }, path))] }) : null,
+    jsx('p', { role: 'status', 'aria-live': 'polite', children: state.loading ? '確認中' : state.busy ? '処理中' : state.error || (state.availability === 'repo_unavailable' ? 'Git リポジトリを確認できません' : '') }),
+    review ? jsxs(Fragment, { children: [
+      jsx('p', { children: `${review.snapshot.capturedAt} / ${review.snapshot.mode} / ${REVIEW_STATES[review.state] ?? review.state} / 鮮度: ${REVIEW_FRESHNESS[review.freshness] ?? review.freshness}` }),
+      jsx('p', { children: `文脈: ${REVIEW_CONTEXT_SOURCES[review.context.source] ?? review.context.source} / メモリ: ${REVIEW_MEMORY_STATES[review.context.memory] ?? review.context.memory}${review.context.reason ? ` (${review.context.reason})` : ''}` }),
+      review.context.task ? jsx('p', { children: `タスク: ${review.context.task}` }) : null,
+      review.context.reviewInput ? jsx('p', { children: `このレビューの目的（利用者入力）: ${review.context.reviewInput}` }) : null,
+      ...(review.context.candidates?.length ? [jsxs('label', { children: ['タスク', jsx('select', { value: state.runId, onChange: (event: { target: { value: string } }) => controller.change(sessionId, { runId: event.target.value }), children: [jsx('option', { value: '', children: '指定なし' }), ...review.context.candidates.map(item => jsx('option', { value: item.runId, children: `${item.task} (${item.status})` }, item.runId))] })] }, 'runs')] : []),
+      jsx('p', { children: `変更ファイル: ${review.snapshot.files.length} / ${review.snapshot.totalFiles}` }),
+      review.snapshot.totalFiles > review.snapshot.files.length ? jsx('p', { role: 'status', children: `${review.snapshot.totalFiles - review.snapshot.files.length} 件は取得上限で未収集です。全体リスクは未確定です。` }) : null,
+      jsx('p', { children: `送信対象: ${state.selected.length} ファイル / ${review.snapshot.files.filter(file => file.kind !== 'text').length} ファイルはテキスト分析対象外` }),
+      jsxs('div', { className: 'kiokuko-review-analysis-controls', children: [
+        jsxs('label', { children: ['モデル', jsx('select', { value: state.modelKey, onChange: (event: { target: { value: string } }) => controller.change(sessionId, { modelKey: event.target.value }),
+          children: [jsx('option', { value: '', children: '選択' }), ...state.models.map(item => jsx('option', { value: JSON.stringify([item.provider, item.model]), children: `${item.provider}/${item.model}` }, `${item.provider}:${item.model}`))] })] }),
+        jsxs('label', { children: ['レビューの目的（任意）', jsx('textarea', { value: state.purpose, maxLength: 4000, onChange: (event: { target: { value: string } }) => controller.change(sessionId, { purpose: event.target.value }) })] }),
+        jsx('button', { type: 'button', disabled: state.busy || !state.selected.length || !state.modelKey, onClick: () => void controller.analyze(sessionId), children: '分析する' }),
+        review.state === 'analyzing' ? jsx('button', { type: 'button', onClick: () => void controller.cancel(sessionId, review.reviewId), children: '停止' }) : null,
+      ] }),
+      jsx('button', { type: 'button', className: 'kiokuko-review-list-toggle', onClick: () => {
+        controller.change(sessionId, { fileListOpen: !state.fileListOpen })
+        requestAnimationFrame(() => document.getElementById(`kiokuko-review-${review.reviewId}-${state.fileListOpen ? 'detail' : 'files'}`)?.focus())
+      },
+        children: state.fileListOpen ? '差分に戻る' : '変更ファイル一覧' }),
+      jsxs('div', { className: 'kiokuko-review-main', 'data-list-open': String(state.fileListOpen), children: [
+        jsxs('nav', { id: `kiokuko-review-${review.reviewId}-files`, tabIndex: -1, 'aria-label': '変更ファイル', children: [jsx('h3', { children: '変更ファイル' }), ...review.snapshot.files.map(file => jsxs('div', { className: 'kiokuko-review-file-row', children: [
+          jsx('input', { type: 'checkbox', 'aria-label': `${file.displayPath} を分析対象にする`, checked: state.selected.includes(file.fileId), disabled: file.kind !== 'text', onChange: () => selectFile(file.fileId) }),
+          jsx('button', { type: 'button', 'aria-current': active?.fileId === file.fileId ? 'true' : undefined, onClick: () => {
+            controller.change(sessionId, { activeFileId: file.fileId, fileListOpen: false })
+            requestAnimationFrame(() => document.getElementById(`kiokuko-review-${review.reviewId}-detail`)?.focus())
+          }, children: `${file.displayPath} (${file.layer}, ${file.kind})` }),
+        ] }, file.fileId))] }),
+        active ? jsxs('article', { id: `kiokuko-review-${review.reviewId}-detail`, tabIndex: -1, children: [jsx('h3', { children: active.displayPath }),
+          active.kind === 'text' && active.newDigest && review.snapshot.mode !== 'turn' ? jsx('button', { type: 'button',
+            onClick: () => void controller.openCurrentFile(sessionId, review.reviewId, active.fileId, openFile), children: '現在のファイルへ' }) : null,
+          active.reason ? jsx('p', { children: `除外・制限: ${active.reason}` }) : null,
+          jsx(SnapshotDiff, { file: active, snapshotId: review.snapshot.snapshotId })] }) : jsx('p', { children: '変更はありません' }),
+      ] }),
+      review.context.execution?.length ? jsxs('section', { children: [jsx('h3', { children: '記録された実行証拠' }), ...review.context.execution.map((item, index) => jsx('p', { children: `${item.command}: ${item.status} / 今回の差分との一致: ${item.snapshotMatch}` }, index))] }) : null,
+      jsxs('section', { children: [jsx('h3', { children: 'AI の解釈' }), jsx('p', { children: review.summary || '分析なし' }),
+        review.analysis ? jsx('p', { children: `全体リスク: ${review.analysis.overallRisk}` }) : null,
+        ...analysisGroups.filter(group => group.items.length).map(group => jsxs('section', { children: [jsx('h4', { children: group.label }), jsx('ul', { children: group.items.map((item, index) => jsx('li', { children: item }, index)) })] }, group.label)),
+        ...review.claims.map((claim, index) => jsxs('p', { children: [claim.text, ` (確信度: ${claim.confidence}) `,
+          ...claim.evidenceIds.map(id => jsx('button', { type: 'button', onClick: () => visitEvidence(id, claim.anchor), children: `根拠 ${id}` }, id)),
+          ...(claim.unverifiedAssumptions.length ? [jsx('span', { children: ` 未検証の仮定: ${claim.unverifiedAssumptions.join('、')}` })] : [])] }, index))] }),
+      review.unanalyzedFileIds?.length ? jsx('p', { children: `未分析: ${review.unanalyzedFileIds.map(id => review.snapshot.files.find(file => file.fileId === id)?.displayPath ?? id).join('、')}` }) : null,
+      review.errors.length ? jsx('p', { role: 'status', children: `未検証: ${review.errors.map(reviewErrorMessage).join(' ')}` }) : null,
+      jsxs('div', { className: 'kiokuko-review-exports', children: [jsx('a', { href: controller.exportUrl(sessionId, review.reviewId, 'markdown'), children: 'Markdown を保存' }), jsx('a', { href: controller.exportUrl(sessionId, review.reviewId, 'json'), children: 'JSON を保存' })] }),
+    ] }) : null,
+  ] })
+}
+
+function DiffReviewHeaderAction(props: Record<string, unknown>): unknown {
+  const openPane = props.openDiffReview as () => boolean
+  const [open, setOpen] = useState(false)
+  const dialog = useRef<HTMLDialogElement | null>(null)
+  const trigger = useRef<HTMLButtonElement | null>(null)
+  const fallbackAbort = useRef(new AbortController())
+  useEffect(() => {
+    if (open && dialog.current && !dialog.current.open) dialog.current.showModal()
+    if (!open && dialog.current?.open) { dialog.current.close(); trigger.current?.focus() }
+  }, [open])
+  const close = () => { fallbackAbort.current.abort(); setOpen(false); trigger.current?.focus() }
+  const openReview = () => {
+    if (openPane()) return
+    fallbackAbort.current = new AbortController()
+    setOpen(true)
+  }
+  return jsxs(Fragment, { children: [
+    jsx('button', { ref: trigger, type: 'button', className: 'kiokuko-session-log-button', onClick: openReview, children: 'Diff レビュー' }),
+    open ? jsxs('dialog', { ref: dialog, onCancel: close, onClose: close, 'aria-label': 'Diff レビュー',
+      className: 'kiokuko-review-fallback', children: [
+        jsx('button', { type: 'button', onClick: close, children: '閉じる' }),
+        jsx(DiffReviewTab, { ...props, useTabInfo: () => ({ tab: { signal: fallbackAbort.current.signal, visible: true } }) }),
+      ] }) : null,
+  ] })
+}
+
+function installReviewStyle(): () => void {
+  const style = document.createElement('style')
+  style.dataset.pluginCss = 'kiokuko-diff-review'
+  style.textContent = `.kiokuko-review-fallback{width:min(1000px,95vw);height:min(85vh,900px);padding:8px;box-sizing:border-box}.kiokuko-review{box-sizing:border-box;height:100%;overflow:auto;padding:12px;color:var(--dsw-alias-label-primary,CanvasText);background:var(--dsw-alias-background-primary,Canvas);font:13px/1.5 var(--dsw-font-family,system-ui)}.kiokuko-review h2{margin:0 0 12px;font-size:17px}.kiokuko-review h3{font-size:14px}.kiokuko-review button,.kiokuko-review select,.kiokuko-review textarea{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,#888);border-radius:6px;padding:6px;min-height:36px}.kiokuko-review button{cursor:pointer}.kiokuko-review button:disabled{opacity:.55;cursor:default}.kiokuko-review :focus-visible{outline:2px solid Highlight;outline-offset:2px}.kiokuko-review-controls,.kiokuko-review-analysis-controls,.kiokuko-review-exports{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:8px 0}.kiokuko-review label{display:flex;flex-direction:column;gap:3px}.kiokuko-review fieldset label{display:inline-flex;flex-direction:row;align-items:center;margin:4px 8px}.kiokuko-review-main{display:grid;grid-template-columns:minmax(130px,32%) minmax(0,1fr);gap:10px;min-width:0}.kiokuko-review-main nav{overflow:auto;min-width:0;max-height:55vh}.kiokuko-review-main article{overflow:auto;min-width:0}.kiokuko-review-file-row{display:flex;align-items:center;overflow-wrap:anywhere}.kiokuko-review-file-row button{text-align:left;border:0;overflow-wrap:anywhere}.kiokuko-review-file-row button[aria-current=true]{font-weight:700;text-decoration:underline}.kiokuko-review-diff pre{font:12px/1.4 ui-monospace,monospace;overflow:auto;white-space:pre}.kiokuko-review-diff .added{background:color-mix(in srgb,green 15%,transparent)}.kiokuko-review-diff .removed{background:color-mix(in srgb,red 15%,transparent)}.kiokuko-review-exports a{color:inherit;text-decoration:underline}@media(max-width:600px){.kiokuko-review-main{grid-template-columns:1fr}.kiokuko-review-main nav{max-height:180px}}`
+  style.textContent += '.kiokuko-review{container-type:inline-size}.kiokuko-review-list-toggle{display:none}@container (max-width:600px){.kiokuko-review-main{grid-template-columns:1fr}.kiokuko-review-list-toggle{display:block}.kiokuko-review-main[data-list-open=false] nav{display:none}.kiokuko-review-main[data-list-open=true] article{display:none}}'
+  document.head.appendChild(style)
+  return () => style.remove()
+}
+
 /** Register Kiokuko's streaming Session-export browser surface. */
 export function apply(ctx: DshClientContext): void {
+  const reviewController = new DiffReviewClientController()
+  let rightSidebar: DshClientContext['sidebarRight']
+  ctx.effect(() => async () => reviewController.dispose(), 'kiokuko-dsh: diff review browser lifecycle')
+  ctx.effect(installReviewStyle, 'kiokuko-dsh: diff review style')
+  ctx.inject?.(['sidebarRightTabs', 'sidebarRight'], scope => {
+    const t = scope.locale.bind?.(REVIEW_NS) ?? ((key: string) => key)
+    scope.effect(() => { rightSidebar = scope.sidebarRight; return () => { if (rightSidebar === scope.sidebarRight) rightSidebar = undefined } }, 'kiokuko-dsh: diff review pane availability')
+    scope.effect(() => {
+      const dispose = scope.sidebarRightTabs!.register({
+      id: REVIEW_TAB_ID, kind: REVIEW_KIND, priority: 'extension', title: () => t('review.title'),
+      guide: [{ id: 'open', order: 30, title: () => t('review.title'), description: () => t('review.description') }],
+      })
+      return () => { void dispose() }
+    }, 'kiokuko-dsh: diff review page')
+    scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+      name: 'sidebar.right.pane.tab', key: REVIEW_TAB_ID, locale: REVIEW_NS,
+      inject: () => ({ hooks: { diffReview: reviewController.store }, reviewController,
+        openCurrentFile: (address: string) => { if (!rightSidebar?.openResource) return false; try { rightSidebar.openResource(address); return true } catch { return false } } }),
+    }, DiffReviewTab)) as () => void, 'kiokuko-dsh: diff review tab body')
+  })
+  ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
+    name: 'conversation.session.header.utilities', id: 'kiokuko-diff-review-open', locale: REVIEW_NS,
+    inject: () => ({ hooks: { diffReview: reviewController.store }, reviewController,
+      openDiffReview: () => { if (!rightSidebar) return false; try { rightSidebar.openTab(REVIEW_KIND); return true } catch { return false } },
+      openCurrentFile: (address: string) => { if (!rightSidebar?.openResource) return false; try { rightSidebar.openResource(address); return true } catch { return false } } }),
+  }, DiffReviewHeaderAction))
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
     name: 'conversation.input.left', id: 'kiokuko-lisp-status', locale: LOCALE_NAMESPACE,
   }, LispSessionStatus))
