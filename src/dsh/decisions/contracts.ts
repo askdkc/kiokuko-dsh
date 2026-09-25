@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { HostServiceError } from '../service-error.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { findSecretInValue } from '../../memory/secrets.js'
+import { consistentScore } from './score-consistency.js'
 
 export const DECISION_BYTES = 256 * 1024
 const id = z.string().min(1).max(256).refine(s => !/[\p{Cc}\p{Cf}]/u.test(s) && !['__proto__', 'constructor', 'prototype'].includes(s))
@@ -28,18 +29,19 @@ export function requireChoice(question: DecisionQuestion): Extract<DecisionQuest
 }
 export const DecisionBatchSchema = z.object({
   purpose: z.enum(['akinator', 'skills', 'enno-check', 'lisp', 'memory-reuse', 'compaction', 'model-handoff', 'answer-review']), state: z.unknown(),
-  questions: z.array(DecisionQuestionSchema).min(1).max(256), contractVersion: z.literal('typed-decisions-v1').optional(),
-}).strict().refine(b => new Set(b.questions.map(q => q.id)).size === b.questions.length, 'Question IDs must be unique')
+  questions: z.array(DecisionQuestionSchema).min(1).max(300), contractVersion: z.literal('typed-decisions-v1').optional(),
+}).strict().refine(b => b.questions.length <= 256 || b.purpose === 'memory-reuse' && b.questions.length <= 300 && b.questions.every(q => questionType(q) === 'noul'), 'Too many questions')
+  .refine(b => new Set(b.questions.map(q => q.id)).size === b.questions.length, 'Question IDs must be unique')
 export type DecisionBatch = z.infer<typeof DecisionBatchSchema>
 export interface DecisionCapabilities { maxQuestions: number; maxChoices: number; maxBytes: number; maxPromptTokens?: number; questionTypes?: readonly QuestionType[]; maxScoreLevels?: number }
 export const DecisionAnswerSchema = z.union([
   z.object({ id, status: z.literal('selected'), choiceId: id }).strict(),
-  z.object({ id, status: z.literal('abstained'), reason: z.enum(['insufficient', 'uncertain', 'tie']) }).strict(),
+  z.object({ id, status: z.literal('abstained'), reason: z.enum(['insufficient', 'uncertain', 'tie', 'unassessed']) }).strict(),
   z.object({ id, status: z.literal('measured'), type: z.literal('noul'), probability: z.number().finite().min(0).max(1) }).strict(),
   z.object({ id, status: z.literal('measured'), type: z.literal('score'), score: z.number().finite(), probabilities: z.array(z.number().finite().min(0).max(1)).min(2).max(10), confidence: z.number().finite().min(0).max(1) }).strict(),
 ])
 const resultSchema = z.object({
-  answers: z.array(DecisionAnswerSchema).max(256), provider: id, requestedModel: id,
+  answers: z.array(DecisionAnswerSchema).max(300), provider: id, requestedModel: id,
   returnedModel: id.optional(), revision: id.optional(), policyVersion: id,
   usage: z.object({ input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative() }).strict().optional(),
 }).strict()
@@ -76,11 +78,12 @@ export function parseDecisionResult(value: unknown, batch: DecisionBatch): Decis
     for (const [index, question] of batch.questions.entries()) {
       const answer = result.answers[index]!
       if (answer.id !== question.id) throw new Error()
+      if (answer.status === 'abstained' && answer.reason === 'unassessed' && batch.purpose !== 'memory-reuse') throw new Error()
       if (questionType(question) === 'choice') {
         if (answer.status === 'measured' || answer.status === 'selected' && (!('choices' in question) || answer.choiceId === question.abstainId || !question.choices.some(c => c.id === answer.choiceId))) throw new Error()
       } else if (answer.status === 'selected' || answer.status === 'measured' && answer.type !== questionType(question)) throw new Error()
       if ('type' in question && question.type === 'score' && answer.status === 'measured' && answer.type === 'score' &&
-        (answer.score < 0 || answer.score > question.criteria.length - 1 || answer.probabilities.length !== question.criteria.length || Math.abs(answer.probabilities.reduce((n, p) => n + p, 0) - 1) > .001)) throw new Error()
+        (answer.score < 0 || answer.score > question.criteria.length - 1 || answer.probabilities.length !== question.criteria.length || Math.abs(answer.probabilities.reduce((n, p) => n + p, 0) - 1) > .001 || !consistentScore(answer.score, answer.probabilities))) throw new Error()
     }
     return result
   } catch { throw new DecisionError('MALFORMED_RESPONSE') }

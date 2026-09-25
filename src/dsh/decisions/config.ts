@@ -27,6 +27,12 @@ export const TypedDecisionsConfig = z.object({
     z.object({ mode: z.literal('choice') }).strict(),
     z.object({ mode: z.literal('score'), policyVersion: z.literal('skills-score-v1').default('skills-score-v1'), minScore: z.number().finite().min(0).max(3), minConfidence: probability }).strict(),
   ]).optional(),
+  memorySelection: z.discriminatedUnion('mode', [
+    z.object({ mode: z.literal('choice') }).strict(),
+    z.object({ mode: z.literal('noul'), policyVersion: z.literal('memory-reuse-noul-v1'),
+      acceptProbability: z.number().finite().gt(0.5).max(1),
+      rejectProbability: z.number().finite().min(0).lt(0.5) }).strict(),
+  ]).optional(),
   typesafe: z.object({ model: model.default('jev-latest'), timeoutMs: timeout,
     acceptance: z.object({ minConfidence: probability.default(0.8) }).strict().prefault({}),
   }).strict().prefault({}),

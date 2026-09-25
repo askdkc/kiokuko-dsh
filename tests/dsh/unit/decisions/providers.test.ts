@@ -169,7 +169,8 @@ test('opt-in Score ranks installed optional Skills while preserving mandatory an
     evaluate: async request => ({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'typed-decisions-v1',
       answers: request.questions.map(q => ({ id: q.id, status: 'measured' as const, type: 'score' as const,
         score: q.id === 'skill-0' ? 3 : q.id === 'skill-2' ? 1 : 2.5,
-        probabilities: [0, 0, 0, 1], confidence: q.id === 'skill-1' ? .3 : .9 })) }) }
+        probabilities: q.id === 'skill-0' ? [0, 0, 0, 1] : q.id === 'skill-2' ? [0, 1, 0, 0] : [0, 0, .5, .5],
+        confidence: q.id === 'skill-1' ? .3 : .9 })) }) }
   const service = new DecisionService(scoreConfig, () => fake)
   const names = await selectInstalledSkills(service, 'score-skills', 'debug failure', catalog, resolution, signal())
   assert.deepEqual(names, ['kiokuko-soul', 'strong-debug', 'uncertain-debug'])

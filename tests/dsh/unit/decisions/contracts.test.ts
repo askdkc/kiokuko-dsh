@@ -25,7 +25,18 @@ test('Noul and Score retain measured values and reject type, rubric and probabil
     [{ ...answers[0], probability: -1 }, answers[1]],
     [answers[0], { ...answers[1], probabilities: [0, .4, .5] }],
     [answers[0], { ...answers[1], score: 3 }],
+    [answers[0], { ...answers[1], score: 0 }],
     [answers[0], { ...answers[1], type: 'noul' }],
   ]) assert.throws(() => parseDecisionResult(result(corrupt), batch), { code: 'DECISION_MALFORMED_RESPONSE' })
   assert.throws(() => parseDecisionBatch({ ...batch, questions: [{ ...score, criteria: ['duplicate', 'duplicate'] }] }), DecisionError)
+})
+
+test('only memory reuse Noul accepts 300 questions and answers', () => {
+  const questions = Array.from({ length: 300 }, (_, index) => ({ id: `memory_${Math.floor(index / 3)}:${['applicability', 'constraints', 'prerequisites'][index % 3]}`,
+    type: 'noul', instructions: 'Judge the proposition' }))
+  const batch = parseDecisionBatch({ purpose: 'memory-reuse', state: 'projected', questions })
+  assert.equal(parseDecisionResult(result(questions.map(q => ({ id: q.id, status: 'measured', type: 'noul', probability: 1 }))), batch).answers.length, 300)
+  assert.throws(() => parseDecisionBatch({ purpose: 'skills', state: 'projected', questions }), { code: 'DECISION_INVALID_INPUT' })
+  assert.throws(() => parseDecisionBatch({ purpose: 'memory-reuse', state: 'projected',
+    questions: Array.from({ length: 257 }, (_, index) => ({ ...choice, id: `choice_${index}` })) }), { code: 'DECISION_INVALID_INPUT' })
 })

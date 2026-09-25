@@ -102,6 +102,8 @@ jobs:
 
       - name: Check typed decision Skill evaluation fixtures
         run: npm run test:evaluation:decisions
+      - name: Check memory reuse Choice and Noul evaluation fixtures
+        run: npm run test:evaluation:memory-reuse -- --mode=all
 
       - name: Verify sqlite-vec package and production composition
         run: npm run test:sqlite-vec

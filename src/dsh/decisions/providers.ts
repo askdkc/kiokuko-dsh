@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { abortable, readBoundedJson } from '../http-json.js'
 import { DECISION_BYTES, DecisionError, parseDecisionBatch, parseDecisionResult, requireChoice, questionType, type DecisionProvider, type DecisionBatch, type DecisionBatchResult } from './contracts.js'
 import { decisionEndpoint, type DecisionConfiguration } from './config.js'
+import { consistentScore } from './score-consistency.js'
 
 const probability = z.number().finite().min(0).max(1)
 const responseSchema = z.object({ model: z.string().min(1).max(256).optional(),
@@ -45,6 +46,7 @@ function decodeTyped(value: unknown, batch: DecisionBatch, model: string, minCon
     if (a.type === 'score') {
       if (!('type' in q) || q.type !== 'score' || a.score < 0 || a.score > q.criteria.length - 1 || Object.keys(a.legend).length !== keys.length
         || keys.some((k, i) => a.legend[k] !== q.criteria[i])) throw new DecisionError('MALFORMED_RESPONSE')
+      if (!consistentScore(a.score, keys.map(k => a.probabilities[k]!))) throw new DecisionError('MALFORMED_RESPONSE')
       return { id: q.id, status: 'measured' as const, type: 'score' as const, score: a.score,
         probabilities: keys.map(k => a.probabilities[k]!), confidence: a.confidence }
     }

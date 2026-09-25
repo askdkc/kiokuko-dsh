@@ -68,10 +68,14 @@ Provider failure falls back for the whole batch without a second inference or
 provider switch. Score mode with Nimble or Laya therefore uses the baseline.
 The policy and rubric are bound to the logical request and its result digest.
 
+Memory reuse accepts an explicit `typedDecisions.memorySelection` policy: `choice`, or `noul` with a policy version and separate accept/reject probabilities. Noul evaluates usefulness, constraint compatibility, and prerequisites. Choice remains the default pending live quality evaluation. Existing request bindings without this field remain Choice. Nimble and Laya reject explicit Noul before inference. See [memory reuse](memory-reuse.md).
+
 `/kioku-decisions status` includes up to 128 in-memory decision observations:
 question-kind counts, provider/model identity, policy version, cache hits,
 fallback reason, elapsed time, logical batch JSON bytes, and token usage when
-reported. It does not store question, Skill, state, memory, tool-result or
+available. Memory reuse also records candidate-level applicable, excluded,
+uncertain, and unassessed counts. Observations do not store question, Skill,
+state, memory, tool-result or
 credential text. From a source checkout, run
 `npm run test:evaluation:decisions` for synthetic paired Japanese/English Skill
 fixtures. The source-only evaluation script and fixtures are not packaged.
