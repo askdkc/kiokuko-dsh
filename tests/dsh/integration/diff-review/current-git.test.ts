@@ -145,6 +145,37 @@ test('HTTP rejects cross-origin mutation before invoking the controller', async 
   assert.deepEqual(await response.json(), { code: 'origin_mismatch' })
 })
 
+test('review availability distinguishes registered models from catalog failures and missing services', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'kiokuko-review-models-'))
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: directory })
+    const root = await realpath(directory)
+    const runtime = { withDatabase: async (read: (db: unknown) => unknown) => read({ prepare: () => ({ get: () => undefined }) }) }
+    const base = { runtime: runtime as never, sessions: { get: (id: string) => ({ id, header: { cwd: root } }) }, llm: {} as never }
+    const limits = { maxFiles: 200, maxFileBytes: 262144, maxSnapshotBytes: 2097152, timeoutMs: 15000,
+      maxInputBytes: 32768, maxChunks: 4, maxOutputTokens: 2048, deadlineMs: 120000, maxCacheBytes: 33554432, ttlMs: 1800000 }
+    const catalog = { listProviders: () => [{ id: 'configured', name: 'Configured' }],
+      listModels: async (provider: string) => [{ provider, id: 'review-model', name: 'Review Model' }] }
+    const ready = new DiffReviewController({ ...base, catalog }, limits)
+    const response = await diffReviewResponse(ready, new Request('http://dsh.internal/api/kiokuko.diff-review?sessionId=session'))
+    assert.equal(response.status, 200)
+    const body = await response.json() as { modelAvailability: string; models: unknown }
+    assert.deepEqual({ modelAvailability: body.modelAvailability, models: body.models },
+      { modelAvailability: 'available', models: [{ provider: 'configured', model: 'review-model' }] })
+    await ready.dispose()
+
+    const broken = new DiffReviewController({ ...base, catalog: { ...catalog, listModels: async () => { throw new Error('catalog down') } } }, limits)
+    assert.equal((await broken.availability('session')).modelAvailability, 'catalog_error')
+    await broken.dispose()
+    const empty = new DiffReviewController({ ...base, catalog: { ...catalog, listProviders: () => [] } }, limits)
+    assert.equal((await empty.availability('session')).modelAvailability, 'no_models')
+    await empty.dispose()
+    const missing = new DiffReviewController({ runtime: base.runtime, sessions: base.sessions, catalog }, limits)
+    assert.equal((await missing.availability('session')).modelAvailability, 'service_unavailable')
+    await missing.dispose()
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
+
 test('saved native session metadata binds a completed-session review to its current repository', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'kiokuko-review-binding-'))
   try {

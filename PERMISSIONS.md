@@ -53,6 +53,10 @@ Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
   isolation, and publishes a new v3 generation under the same native lease.
   Retains the original v0 file and an identical `.bak`; never overwrites an
   existing successor or reconstructs missing turn-ending events.
+- After startup validation, automatically deletes a native history file only
+  when the compatibility check confirmed `Legacy session identity mismatch`.
+  It rechecks the ID and exact path under DSH's write lease. Other failures,
+  healthy histories, and session working-directory files are left untouched.
 - Does not rewrite host configuration or repository instruction files.
   Repository identity, run identity, lease, revision, and integrity mismatches
   fail closed.

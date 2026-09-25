@@ -34,11 +34,11 @@ export class DiffReviewController {
     return resolveReviewSession(this.host.runtime, this.host.sessions, this.host.persistence, sessionId)
   }
 
-  async availability(sessionId: string): Promise<{ availability: 'available' | 'repo_unavailable'; models: { provider: string; model: string }[]; untracked: string[]; turns: number[]; review?: DiffReview }> {
+  async availability(sessionId: string): Promise<{ availability: 'available' | 'repo_unavailable'; modelAvailability: 'available' | 'no_models' | 'service_unavailable' | 'catalog_error'; models: { provider: string; model: string }[]; untracked: string[]; turns: number[]; review?: DiffReview }> {
     let binding: ReviewSessionBinding
     try { binding = await this.binding(sessionId) }
     catch (error) {
-      if (error instanceof DiffReviewError && error.code === 'repo_unavailable') return { availability: 'repo_unavailable', models: [], untracked: [], turns: [] }
+      if (error instanceof DiffReviewError && error.code === 'repo_unavailable') return { availability: 'repo_unavailable', modelAvailability: 'service_unavailable', models: [], untracked: [], turns: [] }
       throw error
     }
     const git = this.host.subprocess ? new GitReader(this.host.subprocess, binding.repositoryRoot, this.limits) : undefined
@@ -47,13 +47,17 @@ export class DiffReviewController {
     const live = this.host.sessions?.get(sessionId) as { snapshotEvents?: () => { type: string; seq: number }[] } | undefined
     const turns = live?.snapshotEvents?.().filter(event => event.type === 'workspace/changes').map(event => event.seq).slice(-20).reverse() ?? []
     let models: { provider: string; model: string }[] = []
+    let modelAvailability: 'available' | 'no_models' | 'service_unavailable' | 'catalog_error' = 'service_unavailable'
     if (this.host.catalog && this.host.llm) {
-      try { models = (await readModelCatalog(this.host.catalog)).models.map(item => ({ provider: item.provider, model: item.id })) }
-      catch { /* facts remain available without the model catalog */ }
+      try {
+        const catalog = await readModelCatalog(this.host.catalog)
+        models = catalog.models.map(item => ({ provider: item.provider, model: item.id }))
+        modelAvailability = models.length ? 'available' : catalog.failures.length ? 'catalog_error' : 'no_models'
+      } catch { modelAvailability = 'catalog_error' }
     }
     this.prune()
     const latest = [...this.reviews.values()].reverse().find(item => item.binding.sessionId === sessionId && item.binding.workspace === binding.workspace && item.binding.repositoryRoot === binding.repositoryRoot)
-    return { availability: available ? 'available' : 'repo_unavailable', models, untracked, turns, ...(latest ? { review: structuredClone(latest.review) } : {}) }
+    return { availability: available ? 'available' : 'repo_unavailable', modelAvailability, models, untracked, turns, ...(latest ? { review: structuredClone(latest.review) } : {}) }
   }
 
   private prune(): void {

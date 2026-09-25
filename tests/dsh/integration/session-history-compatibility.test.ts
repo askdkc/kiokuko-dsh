@@ -500,7 +500,7 @@ for (const compression of ['zstd', 'none'] as const) test(`normal history open r
     const first = await f.old('legacy-first'), second = await f.old('legacy-second'), untouched = await f.old('legacy-unopened')
     await assert.rejects(() => restored(f.backend, first.id), /unknown to this harness/)
     const composition = await f.mount()
-    assert.deepEqual(await composition.historyCheck, { supported: true, listed: 3, checked: 3, repaired: 3, failed: 0, cancelled: false, failures: [] })
+    assert.deepEqual(await composition.historyCheck, { supported: true, listed: 3, checked: 3, repaired: 3, failed: 0, cancelled: false, failures: [], mismatches: [] })
     for (const old of [first, second]) {
       const loaded = await restored(f.ctx.sessionPersistence, old.id)
       const expected = old.events.map(row => types.includes(row.type) ? { ...row, ignorable: true } : row)
@@ -656,6 +656,146 @@ test('startup continues past a failed ID and runs again on plugin reload', optio
     assert.deepEqual(await readFile(`${next.path}.bak`), next.original)
     assert.deepEqual(await readFile(`${legacy.path}.bak`), legacy.original)
   } finally { await f.close() }
+})
+
+test('startup removes only confirmed identity mismatches and keeps workspace files', options, async () => {
+  const f = await fixture()
+  const originalStat = f.backend.stat
+  try {
+    const broken = [
+      await f.old('mismatch-cleanup-broken-1'),
+      await f.old('mismatch-cleanup-broken-2'),
+      await f.legacy('mismatch-cleanup-broken-3'),
+      await f.legacy('mismatch-cleanup-broken-4'),
+    ]
+    const brokenIds = new Set(broken.map(item => item.id))
+    const healthy = await f.old('mismatch-cleanup-healthy', rows().slice(0, 1))
+    const unrelated = await f.old('mismatch-cleanup-other-failure', [...rows(), { type: 'other/required', seq: 6, time: 8, data: {} }])
+    const userFile = join(f.root, 'user-notes.txt')
+    await writeFile(userFile, 'keep this file')
+    f.backend.stat = async (id: string, ...args: any[]) => brokenIds.has(id) ? undefined : originalStat.call(f.backend, id, ...args)
+    const mounted = await f.mount()
+    const check = await mounted.historyCheck
+    assert.equal(check.failed, 5)
+    assert.equal(check.failures.filter(failure => brokenIds.has(failure.id) && /Legacy session identity mismatch/.test(failure.error)).length, 4)
+    assert.deepEqual(new Set(check.mismatches.map(item => item.id)), brokenIds)
+    for (const item of broken) await assert.rejects(access(item.path), { code: 'ENOENT' })
+    assert.deepEqual(await readFile(healthy.path), healthy.original)
+    assert.deepEqual(await readFile(unrelated.path), unrelated.original)
+    assert.equal(await readFile(userFile, 'utf8'), 'keep this file')
+    f.backend.stat = originalStat
+    await mounted.dispose()
+    const restarted = await f.mount()
+    const second = await restarted.historyCheck
+    assert.equal(second.checked, 2)
+    assert.equal(second.failed, 1)
+    assert.deepEqual(second.mismatches, [])
+    assert.deepEqual(await readFile(healthy.path), healthy.original)
+    assert.deepEqual(await readFile(unrelated.path), unrelated.original)
+  } finally { f.backend.stat = originalStat; await f.close() }
+})
+
+test('interrupted cleanup keeps the file and retries it on the next mount', options, async () => {
+  const f = await fixture()
+  const originalStat = f.backend.stat
+  const originalLease = f.backend.acquireWriteLease
+  try {
+    const old = await f.old('mismatch-cleanup-interrupted')
+    f.backend.stat = async (id: string, ...args: any[]) => id === old.id ? undefined : originalStat.call(f.backend, id, ...args)
+    let started!: () => void, resume!: () => void
+    const entered = new Promise<void>(resolve => { started = resolve })
+    const gate = new Promise<void>(resolve => { resume = resolve })
+    f.backend.acquireWriteLease = async (header: any) => {
+      if (header.id === old.id) { started(); await gate }
+      return originalLease.call(f.backend, header)
+    }
+    const first = await mountDshComposition(f.ctx, {})
+    f.disposers.push(first.dispose)
+    await entered
+    const disposing = first.dispose()
+    resume()
+    await disposing
+    assert.deepEqual(await readFile(old.path), old.original)
+    f.backend.acquireWriteLease = originalLease
+    const second = await f.mount()
+    assert.deepEqual((await second.historyCheck).mismatches.map(item => item.id), [old.id])
+    await assert.rejects(access(old.path), { code: 'ENOENT' })
+    await second.dispose()
+    f.backend.stat = originalStat
+    const third = await f.mount()
+    assert.equal((await third.historyCheck).listed, 0)
+  } finally { f.backend.stat = originalStat; f.backend.acquireWriteLease = originalLease; await f.close() }
+})
+
+test('cleanup includes identity mismatches beyond the 20 displayed diagnostics', options, async () => {
+  const f = await fixture('none')
+  const originalStat = f.backend.stat
+  try {
+    const broken = []
+    for (let index = 0; index < 21; index++) broken.push(await f.old(`mismatch-over-limit-${index}`))
+    const ids = new Set(broken.map(item => item.id))
+    f.backend.stat = async (id: string, ...args: any[]) => ids.has(id) ? undefined : originalStat.call(f.backend, id, ...args)
+    const mounted = await f.mount()
+    const check = await mounted.historyCheck
+    assert.equal(check.failures.length, 20)
+    assert.equal(check.mismatches.length, 21)
+    for (const item of broken) await assert.rejects(access(item.path), { code: 'ENOENT' })
+  } finally { f.backend.stat = originalStat; await f.close() }
+})
+
+test('startup cleanup refuses a session whose native identity has recovered', options, async () => {
+  const f = await fixture()
+  const originalStat = f.backend.stat
+  const originalLease = f.backend.acquireWriteLease
+  try {
+    const old = await f.old('mismatch-cleanup-recovered')
+    f.backend.stat = async () => undefined
+    let started!: () => void, resume!: () => void
+    const entered = new Promise<void>(resolve => { started = resolve })
+    const gate = new Promise<void>(resolve => { resume = resolve })
+    f.backend.acquireWriteLease = async (header: any) => {
+      if (header.id === old.id) { started(); await gate }
+      return originalLease.call(f.backend, header)
+    }
+    const mounted = await mountDshComposition(f.ctx, {})
+    f.disposers.push(mounted.dispose)
+    await entered
+    f.backend.stat = originalStat
+    resume()
+    const result = await mounted.historyCheck
+    assert.deepEqual(result.mismatches.map(item => item.id), [old.id])
+    assert.deepEqual(await readFile(old.path), old.original)
+  } finally { f.backend.stat = originalStat; f.backend.acquireWriteLease = originalLease; await f.close() }
+})
+
+test('startup cleanup refuses a native log path changed after the scan', options, async () => {
+  const f = await fixture()
+  const originalStat = f.backend.stat
+  const originalLease = f.backend.acquireWriteLease
+  const originalLocate = f.backend.locate
+  try {
+    const old = await f.old('mismatch-cleanup-moved')
+    f.backend.stat = async () => undefined
+    let started!: () => void, resume!: () => void
+    const entered = new Promise<void>(resolve => { started = resolve })
+    const gate = new Promise<void>(resolve => { resume = resolve })
+    f.backend.acquireWriteLease = async (header: any) => {
+      if (header.id === old.id) { started(); await gate }
+      return originalLease.call(f.backend, header)
+    }
+    const mounted = await mountDshComposition(f.ctx, {})
+    f.disposers.push(mounted.dispose)
+    await entered
+    f.backend.locate = (header: any) => ({ ...originalLocate.call(f.backend, header), path: `${old.path}.changed` })
+    resume()
+    await mounted.historyCheck
+    assert.deepEqual(await readFile(old.path), old.original)
+  } finally {
+    f.backend.stat = originalStat
+    f.backend.acquireWriteLease = originalLease
+    f.backend.locate = originalLocate
+    await f.close()
+  }
 })
 
 test('unload cancels and drains the startup check before any repair writes', options, async () => {

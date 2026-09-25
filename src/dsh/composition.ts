@@ -11,6 +11,7 @@ import { mountDshNoticeSurface } from './session-notice-surface.js'
 import { mountDiffReviewSurface } from './diff-review-surface.js'
 import type { DiffReviewController } from '../diff-review/controller.js'
 import { mountSessionHistoryCompatibility, type SessionHistoryCheck } from './session-history-compatibility.js'
+import { cleanupSessionMismatches, supportsMismatchCleanup } from './session-mismatch-cleanup.js'
 import { randomUUID } from 'node:crypto'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import type { Context } from '@deepseek-ai/cordis'
@@ -216,10 +217,12 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   let ingressStopped = false
   let disposePromise: Promise<void> | undefined
   let historyCheck: Promise<SessionHistoryCheck>
+  const mismatchCleanup = new AbortController()
 
   const stopIngress = (): void => {
     if (ingressStopped) return
     ingressStopped = true
+    mismatchCleanup.abort(new Error('Kiokuko mismatch cleanup stopped on plugin unload'))
     host.semanticCompaction?.stop()
     for (const dispose of ingressDisposers.reverse()) {
       try { dispose() } catch (error) { stopErrors.push(error) }
@@ -250,10 +253,16 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     if (host.commands && host.decisions && options.typeSafeCommand !== false) ingressDisposers.push(mountDecisionCommand(host.commands, host.decisions))
     if (host.commands && options.typeSafeCommand !== false) ingressDisposers.push(mountTypeSafeCommand(host.commands, typeSafeCredentials(ctx), () => host.decisions?.invalidateReadiness()))
     const historyCompatibility = mountSessionHistoryCompatibility(ctx)
-    historyCheck = historyCompatibility.ready
+    const historyBackend = typeof ctx.get === 'function' ? ctx.get('sessionPersistence', false) : undefined
+    historyCheck = historyCompatibility.ready.then(async check => {
+      if (supportsMismatchCleanup(historyBackend)) await cleanupSessionMismatches(historyBackend, check, mismatchCleanup.signal)
+      return check
+    })
     ingressDisposers.push(historyCompatibility.stop)
     setupResourceDisposers.push(historyCompatibility.dispose)
     cleanupDisposers.push(historyCompatibility.dispose)
+    setupResourceDisposers.push(() => historyCheck.then(() => {}))
+    cleanupDisposers.push(() => historyCheck.then(() => {}))
     if (host.deepPlanning && host.commands) ingressDisposers.push(host.commands.register(host.deepPlanning.command()))
     if (host.deepPlanning) ingressDisposers.push(mountDeepReportSurface(ctx, host.deepPlanning))
     if (host.deepPlanning) ingressDisposers.push(mountDshNoticeSurface(ctx, host.deepPlanning))
