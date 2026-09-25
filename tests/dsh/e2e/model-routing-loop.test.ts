@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -197,7 +197,9 @@ test('native model-auto applies the selected effort to first prompt and request,
     migrationsDirectory: join(process.cwd(), 'migrations'), decisions, modelAutoMode: { mode: 'auto' },
     llm: { async *stream() { throw new Error('Optional memory backend unavailable') } } })
   const composition = await mountDshComposition(h.ctx, adapter.host)
-  const agent = await h.ctx.agentLoop.create(h.session.SessionId('model-auto-session'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+  const workspace = join(h.root, 'workspace')
+  await mkdir(workspace)
+  const agent = await h.ctx.agentLoop.create(h.session.SessionId('model-auto-session'), { provider: 'ordinary', model: 'mock' }, { cwd: workspace })
   const { installModelSelection } = await import(modulePath('dsh-agent', 'packages/core/agent'))
   const picker = { current: { provider: 'ordinary', model: 'mock' }, assembled: undefined }
   const stopPicker = installModelSelection(agent.ctx, picker)
@@ -225,6 +227,34 @@ test('native model-auto applies the selected effort to first prompt and request,
     assert.equal(ordinary.requests.length, 1)
     assert.equal(ordinary.requests[0].model, 'mock')
   } finally { edit(); watch(); stopPicker(); await composition.dispose(); await adapter.dispose(); await questions.dispose(); await meter.dispose(); await h.dispose() }
+})
+test('native model-auto command accepts its exact session in another workspace', {
+  skip: !packageRoot && !sourceRoot, timeout: 30_000,
+}, async () => {
+  const h = await harness()
+  const workspace = join(h.root, 'workspace')
+  await mkdir(workspace)
+  const commands = await import(modulePath('dsh-commands', 'packages/core/commands'))
+  const commandFiber = h.ctx.plugin(commands.default); await commandFiber
+  h.ctx.llm.registerAdapter(['ordinary'], new h.mock.MockAdapter([]))
+  const adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
+    migrationsDirectory: join(process.cwd(), 'migrations'), modelAutoMode: { mode: 'off' } })
+  const composition = await mountDshComposition(h.ctx, adapter.host)
+  const agent = await h.ctx.agentLoop.create(h.session.SessionId('model-auto-command'),
+    { provider: 'ordinary', model: 'mock' }, { cwd: workspace })
+  try {
+    const signal = new AbortController().signal
+    assert.equal(adapter.host.modelAuto!.validSession(agent.id, agent.session.id), true)
+    assert.equal(adapter.host.modelAuto!.validSession(agent.id, 'different-session'), false)
+    const status = await h.ctx.commands.execute(agent, '/kioku-model-auto status', [], signal)
+    assert.equal(status?.result.kind, 'success', status?.result.text)
+    const observe = await h.ctx.commands.execute(agent, '/kioku-model-auto observe', [], signal)
+    assert.equal(observe?.result.kind, 'success', observe?.result.text)
+    assert.equal((await adapter.host.modelAuto!.coordinator.status(agent.session.id)).mode, 'observe')
+    const auto = await h.ctx.commands.execute(agent, '/kioku-model-auto on', [], signal)
+    assert.equal(auto?.result.kind, 'success', auto?.result.text)
+    assert.equal((await adapter.host.modelAuto!.coordinator.status(agent.session.id)).mode, 'auto')
+  } finally { await composition.dispose(); await adapter.dispose(); await commandFiber.dispose(); await h.dispose() }
 })
 test('native modular core applies model-auto to its first prompt and request', {
   skip: !packageRoot && !sourceRoot, timeout: 30_000,

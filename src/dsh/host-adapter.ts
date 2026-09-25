@@ -3083,9 +3083,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     modelAuto: { coordinator: modelAuto, validSession: (agentId, sessionId) => {
       const currentAgent = agents?.get(agentId) as { session?: object } | undefined
       const currentNativeSession = sessions?.get(sessionId)
-      try { return Boolean(currentAgent && currentNativeSession && currentAgent.session === currentNativeSession
-        && realpathSync((currentNativeSession as { header: { cwd: string } }).header.cwd) === root) }
-      catch { return false }
+      // Web sessions can belong to a workspace other than DSH's launch directory.
+      return Boolean(currentAgent && currentNativeSession && currentAgent.session === currentNativeSession)
     } },
     ...(diffReview ? { diffReview } : {}),
     decisions,
