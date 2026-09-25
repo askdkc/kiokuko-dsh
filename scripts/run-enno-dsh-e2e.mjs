@@ -113,7 +113,10 @@ async function runCordisComposition() {
   }
   const baseTests = (await readdir(join(root, 'tests/dsh/e2e'))).filter(name => name.endsWith('.test.ts') && name !== 'repeated-memory-lifecycle.test.ts').map(name => `tests/dsh/e2e/${name}`)
   baseTests.push('tests/dsh/integration/enno-memory/native-loop.test.ts')
-  const result = await run(process.execPath, ['scripts/run-tests.mjs', ...baseTests], nativeEnvironment)
+  // The native e2e suite runs the whole tests/dsh/e2e directory against a pinned
+  // runtime; on macOS runners it exceeds the 180 s default and was killed while
+  // still passing. Give the suite its own, larger budget.
+  const result = await run(process.execPath, ['scripts/run-tests.mjs', ...baseTests], nativeEnvironment, 600_000)
   if (requireDshCli && /\bskipped [1-9]\d*/u.test(result.stdout)) {
     throw new Error(`Mandatory native workflow tests were skipped:\n${result.stdout}`)
   }
