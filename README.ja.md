@@ -19,7 +19,7 @@
 
 ## 導入と使い方
 
-対応 DSH: **0.1.6-alpha.1**（[検証範囲](docs/dsh-plugin.md#compatibility)）。
+実行環境の対応対象は **DSH 0.1.7-rc.2** です。ネイティブ要求経路、旧セッション履歴の移行、パッケージ化した Web の起動試験はローカルで通過しました（[検証範囲](docs/dsh-plugin.md#compatibility)）。
 
 Node.js **24.16.0 以上**と pnpm が必要です。
 DSH のソースディレクトリで、公開済み npm パッケージを導入して起動します。

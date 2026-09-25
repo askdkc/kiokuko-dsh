@@ -14,7 +14,7 @@ OrcaReplay 可记录模型和工具活动，查看记录并导出 HTML。
 
 ## 安装与使用
 
-支持 **DSH 0.1.6-alpha.1**（[验证范围](docs/dsh-plugin.md#compatibility)）。
+运行时兼容目标为 **DSH 0.1.7-rc.2**。原生请求路径、旧会话历史迁移和打包后的 Web 启动检查均已在本地通过（[验证范围](docs/dsh-plugin.md#compatibility)）。
 
 需要 Node.js **24.16.0 以上**和 pnpm。
 在 DSH 源码目录中运行以下命令，安装已发布的 npm 包并启动：

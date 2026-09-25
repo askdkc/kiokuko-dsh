@@ -7,7 +7,9 @@ import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 
-const catalogPath = join(process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules'), '@deepseek-ai/dsh-session-format-catalog/lib/index.js')
+// These artifacts are historical v0/v3 fixtures. Validate them with the released
+// catalog that accepted those formats, independently of the active DSH runtime.
+const catalogPath = join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules/@deepseek-ai/dsh-session-format-catalog/lib/index.js')
 
 function frame(value: string | Buffer): Buffer {
   return zstdCompressSync(typeof value === 'string' ? Buffer.from(value, 'utf8') : value, {

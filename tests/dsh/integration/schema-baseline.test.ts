@@ -149,6 +149,8 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_loop_guard_states',
         'dsh_memory_finalization_entries',
         'dsh_memory_finalizations',
+        'dsh_model_auto_routes',
+        'dsh_model_auto_sessions',
         'dsh_orca_session_choices',
         'dsh_orca_trace_run_links',
         'dsh_orca_traces',

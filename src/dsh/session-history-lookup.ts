@@ -100,13 +100,13 @@ export async function readHistoricalDshSession(value: unknown, sessionId: string
   const store = value as HistoricalStore
   const before = await store.stat(sessionId)
   if (!before || await store.resolveCurrentLog(sessionId) !== undefined) return undefined
-  if (before.header.id !== sessionId || before.header.version !== 3 || before.revision === undefined) {
+  if (before.header.id !== sessionId || (before.header.version !== 3 && before.header.version !== 4) || before.revision === undefined) {
     throw integrity('Historical lookup requires a native identity and revision')
   }
   const location = store.locate(before.header)
   if (location.kind !== 'jsonl' || !location.path || !isAbsolute(location.path)) return undefined
   const name = basename(location.path)
-  if (name !== 'session.v3.jsonl' && name !== 'session.v3.jsonl.zstd') return undefined
+  if (name !== `session.v${before.header.version}.jsonl` && name !== `session.v${before.header.version}.jsonl.zstd`) return undefined
   const suffix = name.endsWith('.zstd') ? '.jsonl.zstd' : '.jsonl'
   let selected: { path: string; version: number } | undefined
   for (const version of [2, 1, 0]) {

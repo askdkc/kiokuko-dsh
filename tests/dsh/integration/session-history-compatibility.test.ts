@@ -19,6 +19,7 @@ import { realpathSync } from 'node:fs'
 import { decodeSessionLog, encodeSessionLog, parseJsonl } from '../../../scripts/session-history-codec.mjs'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
+const currentVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION?.startsWith('0.1.7') ? 4 : 3
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 const sourceModules: Record<string, string> = { cordis: 'vendor/cordis', 'dsh-session': 'packages/core/session',
   'dsh-session-persistence-jsonl': 'packages/session/session-persistence-jsonl', 'dsh-session-query': 'packages/session-query/session-query' }
@@ -55,7 +56,7 @@ async function fixture(compression: 'zstd' | 'none' = 'zstd') {
   const decode = (data: Buffer) => compression === 'zstd' ? decodeSessionLog(data) : data
   return { ctx, backend, root, jsonl, session, cordis, encode, decode, disposers,
     async old(id: string, events: any[] = rows(), extraHeader = {}) {
-      const header = { version: 3, id, createdAt: 1, delegationDepth: 0, isSeeded: false, cwd: root, ...extraHeader }
+      const header = { version: currentVersion, id, createdAt: 1, delegationDepth: 0, isSeeded: false, cwd: root, ...extraHeader }
       await backend.persistHeader(header, 0)
       const path = await backend.resolveCurrentLog(id)
       const physical = parseJsonl(decode(await readFile(path))).records[0]
@@ -63,13 +64,13 @@ async function fixture(compression: 'zstd' | 'none' = 'zstd') {
       await writeFile(path, original)
       return { id, path, original, header, events }
     },
-    async legacy(id: string, events: any[] = legacyRows(), version: 0 | 1 | 2 = 0) {
-      const header = { version: 3, id, createdAt: 1, delegationDepth: 0, isSeeded: false, cwd: root }
+    async legacy(id: string, events: any[] = legacyRows(), version: 0 | 1 | 2 | 3 = 0) {
+      const header = { version: currentVersion, id, createdAt: 1, delegationDepth: 0, isSeeded: false, cwd: root }
       await backend.persistHeader(header, 0)
       const currentPath = await backend.resolveCurrentLog(id)
-      const path = currentPath.replace('session.v3.', version === 0 ? 'session.' : `session.v${version}.`)
+      const path = currentPath.replace(`session.v${currentVersion}.`, version === 0 ? 'session.' : `session.v${version}.`)
       const { isSeeded: _seeded, ...physical } = header
-      const original = encode(Buffer.from([{ ...physical, ...(version === 2 ? { isSeeded: false } : {}), type: 'session', version }, ...events].map(row => JSON.stringify(row)).join('\n') + '\n'))
+      const original = encode(Buffer.from([{ ...physical, ...(version >= 2 ? { isSeeded: false } : {}), type: 'session', version }, ...events].map(row => JSON.stringify(row)).join('\n') + '\n'))
       await rm(currentPath)
       await writeFile(path, original)
       return { id, path, currentPath, original, header, events }
@@ -109,16 +110,20 @@ for (const compression of ['zstd', 'none'] as const) test(`startup migrates lega
     const composition = await f.mount()
     assert.equal((await composition.historyCheck).repaired, 1)
     const result = await restored(f.backend, old.id)
-    assert.equal(result.header.version, 3)
+    assert.equal(result.header.version, currentVersion)
     const message = result.state.events.find((event: any) => event.type === 'user/message')
     assert.deepEqual(message.data.content, [{ type: 'text', text: 'Original continuation' }])
-    assert.deepEqual(message.data.source, { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' })
+    assert.deepEqual(message.data.source, currentVersion === 4
+      ? { kind: 'plugin:kiokuko-dsh', form: 'instructions' }
+      : { kind: 'plugin', plugin: 'kiokuko-dsh', form: 'instructions' })
     assert.deepEqual(result.state.events.at(-1).data.reason, { kind: 'aborted', reason: { kind: 'parent' } })
     assert.deepEqual(await readFile(old.path), old.original)
     assert.deepEqual(await readFile(`${old.path}.bak`), old.original)
     const migrated = await readFile(old.currentPath)
     const writer = await f.backend.open(old.id, 'write')
-    try { await writer.append([{ type: 'session/title', seq: result.state.events.length, time: 20, data: { title: 'Resume migrated history' } }]); await writer.flush() }
+    try { await writer.append([{ type: 'session/title', seq: result.state.events.length, time: 20, data: {
+      title: 'Resume migrated history', ...(currentVersion === 4 ? { messageSeqs: [], source: { kind: 'user' } } : {}),
+    } }]); await writer.flush() }
     finally { await writer.close() }
     await composition.dispose()
     const reloaded = await f.mount()
@@ -126,6 +131,21 @@ for (const compression of ['zstd', 'none'] as const) test(`startup migrates lega
     assert.deepEqual(await readFile(old.path), old.original)
     assert.deepEqual(await readFile(`${old.path}.bak`), old.original)
     assert.notDeepEqual(await readFile(old.currentPath), migrated)
+  } finally { await f.close() }
+})
+
+test('current DSH repairs a v3 source before native v4 migration without changing the original', {
+  ...options, skip: currentVersion === 4 ? options.skip : 'requires DSH v4',
+}, async () => {
+  const f = await fixture()
+  try {
+    const old = await f.legacy('legacy-v3-source', rows(), 3)
+    const mounted = await f.mount()
+    assert.equal((await mounted.historyCheck).repaired, 1)
+    assert.deepEqual(await readFile(old.path), old.original)
+    assert.deepEqual(await readFile(`${old.path}.bak`), old.original)
+    assert.equal((await restored(f.backend, old.id)).header.version, 4)
+    await access(old.currentPath)
   } finally { await f.close() }
 })
 
@@ -227,7 +247,7 @@ for (const version of [0, 1, 2] as const) for (const customEvents of [false, tru
     } else {
       const result = await f.ctx.sessionQuery.readSession(old.id)
       assert.equal(result.session.id, old.id)
-      assert.equal(result.session.version, 3)
+      assert.equal(result.session.version, currentVersion)
       assert.equal(result.events[0].data.title, old.events[0].data.title)
     }
     assert.deepEqual(await readFile(old.path), old.original)
@@ -402,7 +422,7 @@ test('historical lookup selects the newest stored generation and never falls bac
   const f = await fixture()
   try {
     const old = await f.legacy('multiple-generations', [{ type: 'kiokuko/completion-report', seq: 0, time: 1, data: { text: 'v0' } }])
-    const newerPath = old.currentPath.replace('.v3.', '.v2.')
+    const newerPath = old.currentPath.replace(`.v${currentVersion}.`, '.v2.')
     const physical = { type: 'session', ...old.header, version: 2 }
     const event = { type: 'kiokuko/completion-report', seq: 0, time: 2, data: { text: 'v2' } }
     await writeFile(newerPath, f.encode(Buffer.from([physical, event].map(row => JSON.stringify(row)).join('\n') + '\n')))
@@ -513,7 +533,9 @@ for (const compression of ['zstd', 'none'] as const) test(`normal history open r
       assert.deepEqual(await readFile(old.path), repaired, 'a second open does not rewrite history')
       const writer = await f.backend.open(old.id, 'write')
       try {
-        await writer.append([{ type: 'session/title', seq: expected.length, time: 20, data: { title: 'Resumed chat' } }])
+        await writer.append([{ type: 'session/title', seq: expected.length, time: 20, data: {
+          title: 'Resumed chat', ...(currentVersion === 4 ? { messageSeqs: [], source: { kind: 'user' } } : {}),
+        } }])
         await writer.flush()
       } finally { await writer.close() }
     }
@@ -580,7 +602,7 @@ test('public plugin startup repairs unopened histories on first load and reload'
     assert.deepEqual(await readFile(next.path), next.original)
     assert.deepEqual(await readFile(legacy.currentPath), migrated)
     assert.deepEqual(await readFile(current.path), repaired)
-    assert.equal((await restored(f.backend, next.id)).header.version, 3)
+    assert.equal((await restored(f.backend, next.id)).header.version, currentVersion)
   } finally {
     t.signal.removeEventListener('abort', cancel)
     await f.close()
@@ -712,7 +734,7 @@ test('v4 native location deletes only the selected historical generation', async
       const backend = {
         root,
         async list() { return [{ header }] },
-        async stat() { return { header } },
+        async stat() { return undefined },
         locate() { return { kind: 'jsonl', path: currentPath } },
         async resolveCurrentLog() { return access(currentPath).then(() => currentPath, () => undefined) },
         async acquireWriteLease() { return { async release() {} } },

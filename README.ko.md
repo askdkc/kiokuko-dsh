@@ -14,7 +14,7 @@ OrcaReplay로 모델과 도구의 동작을 기록하고, 기록을 확인하거
 
 ## 설치 및 사용
 
-**DSH 0.1.6-alpha.1**을 지원합니다 ([검증 범위](docs/dsh-plugin.md#compatibility)).
+런타임 호환 대상은 **DSH 0.1.7-rc.2**입니다. 네이티브 요청 경로, 이전 세션 기록 마이그레이션, 패키징된 Web 시작 검사가 로컬에서 통과했습니다 ([검증 범위](docs/dsh-plugin.md#compatibility)).
 
 Node.js **24.16.0 이상**과 pnpm이 필요합니다.
 DSH 소스 디렉터리에서 다음 명령으로 공개된 npm 패키지를 설치하고 시작합니다.

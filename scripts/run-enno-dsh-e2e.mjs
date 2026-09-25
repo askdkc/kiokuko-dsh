@@ -14,6 +14,8 @@ const profile = 'web'
 const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? packageManifest.dsh.compatibility.dsh
 const requireDshCli = process.env.KIOKUKO_REQUIRE_DSH_CLI === '1'
+const cliOnly = process.env.KIOKUKO_DSH_CLI_ONLY === '1'
+if (cliOnly && !requireDshCli) throw new Error('CLI-only lifecycle verification requires KIOKUKO_REQUIRE_DSH_CLI=1')
 
 async function run(command, args, env = {}, timeout = 180_000) {
   return exec(command, args, {
@@ -232,12 +234,9 @@ async function verifyBrowserBundle(tokenUrl) {
   const boot = readBootManifest(html)
   const kiokuko = boot.entries.filter(entry => entry?.id === 'kiokuko-dsh')
   if (kiokuko.length !== 1) throw new Error(`DSH Web manifest contained ${kiokuko.length} Kiokuko client entries`)
-  const application = boot.batches.find(batch => batch?.phase === 'application')
-  if (typeof application?.url !== 'string') throw new Error('DSH Web manifest did not contain an application bundle')
-  const response = await fetch(new URL(application.url, rootUrl), { headers: { cookie } })
-  const source = await response.text()
-  if (!response.ok) {
-    throw new Error(`DSH application client bundle returned HTTP ${response.status}: ${source.slice(0, 4096)}`)
+  const applications = boot.batches.filter(batch => batch?.phase === 'application')
+  if (applications.length === 0 || applications.some(batch => typeof batch.url !== 'string')) {
+    throw new Error('DSH Web manifest did not contain valid application bundles')
   }
   const registrations = new Map()
   const window = {
@@ -250,9 +249,18 @@ async function verifyBrowserBundle(tokenUrl) {
       },
     },
   }
-  new Script(source, { filename: 'dsh-application-client.js' }).runInNewContext({ window }, { timeout: 15_000 })
+  let bytes = 0
+  for (const application of applications) {
+    const response = await fetch(new URL(application.url, rootUrl), { headers: { cookie } })
+    const source = await response.text()
+    if (!response.ok) {
+      throw new Error(`DSH application client bundle returned HTTP ${response.status}: ${source.slice(0, 4096)}`)
+    }
+    bytes += Buffer.byteLength(source)
+    new Script(source, { filename: 'dsh-application-client.js' }).runInNewContext({ window }, { timeout: 15_000 })
+  }
   const handoff = registrations.get('kiokuko-dsh')
-  if (handoff === undefined) throw new Error('DSH application bundle did not register the Kiokuko client')
+  if (handoff === undefined) throw new Error('DSH application bundles did not register the Kiokuko client')
   const requested = []
   const client = handoff.factory((specifier) => {
     requested.push(specifier)
@@ -270,7 +278,7 @@ async function verifyBrowserBundle(tokenUrl) {
   if (JSON.stringify(requested) !== JSON.stringify(expected)) {
     throw new Error(`Kiokuko client requested an unexpected DSH browser module set: ${JSON.stringify(requested)}`)
   }
-  return { bytes: Buffer.byteLength(source), registrations: registrations.size, reportAndExportHttpRoutes: 'complete' }
+  return { bytes, registrations: registrations.size, reportAndExportHttpRoutes: 'complete' }
 }
 
 async function stopWebProfile(processHandle) {
@@ -369,7 +377,7 @@ async function runCliLifecycle(nativeDependencies) {
       workingTreeClean,
       packageIntegrity: packageMetadata.integrity,
       install: 'complete',
-      orca: 'enabled-native-scenarios-no-skips',
+      orca: cliOnly ? 'not_run_cli_only' : 'enabled-native-scenarios-no-skips',
       web: 'browser-bundle-loaded-and-materialized',
       browserBundle,
       reload: 'browser-bundle-loaded-and-materialized',
@@ -399,5 +407,5 @@ async function runCliLifecycle(nativeDependencies) {
 
 await access(join(root, 'dist/dsh/index.js'))
 await access(join(root, 'dsh/cordis.patch.yml'))
-const nativeDependencies = await runCordisComposition()
+const nativeDependencies = cliOnly ? null : await runCordisComposition()
 await runCliLifecycle(nativeDependencies)

@@ -193,6 +193,55 @@ jobs:
           path: ${{ runner.temp }}/kiokuko-dsh-evidence.json
           if-no-files-found: ignore
 
+  dsh-current-native:
+    name: DSH 0.1.7 native and Web compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+          cache: npm
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - run: npm ci
+      - run: npm ci --prefix tests/fixtures/dsh-runtime
+      - run: npm ci --prefix tests/fixtures/dsh-runtime-current
+      - name: Verify current full suite
+        run: npm test
+        env:
+          KIOKUKO_DSH_PACKAGE_ROOT: ${{ github.workspace }}/tests/fixtures/dsh-runtime-current/node_modules
+          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.7-rc.2
+          KIOKUKO_REQUIRE_DSH_NATIVE: "1"
+      - run: npm run build
+      - name: Verify current native request and history contracts
+        run: |
+          node scripts/run-tests.mjs \
+            tests/dsh/e2e/model-routing-loop.test.ts \
+            tests/dsh/e2e/answer-review-loop.test.ts \
+            tests/dsh/e2e/evolution-native.test.ts \
+            tests/dsh/e2e/execution-support-loop.test.ts \
+            tests/dsh/e2e/native-agent-loop.test.ts \
+            tests/dsh/integration/enno-memory/native-loop.test.ts \
+            tests/dsh/integration/model-handoff/native.test.ts \
+            tests/dsh/integration/session-history-compatibility.test.ts \
+            tests/dsh/integration/semantic-compaction/native.test.ts \
+            tests/dsh/integration/semantic-compaction/observation-native.test.ts
+        env:
+          KIOKUKO_DSH_PACKAGE_ROOT: ${{ github.workspace }}/tests/fixtures/dsh-runtime-current/node_modules
+          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.7-rc.2
+          KIOKUKO_REQUIRE_DSH_NATIVE: "1"
+      - name: Verify current packed Web lifecycle
+        run: node scripts/run-enno-dsh-e2e.mjs
+        env:
+          DSH_BIN: ${{ github.workspace }}/tests/fixtures/dsh-runtime-current/node_modules/.bin/dsh
+          KIOKUKO_DSH_PACKAGE_ROOT: ${{ github.workspace }}/tests/fixtures/dsh-runtime-current/node_modules
+          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.7-rc.2
+          KIOKUKO_REQUIRE_DSH_CLI: "1"
+          KIOKUKO_DSH_CLI_ONLY: "1"
+
   semantic-platform-smoke:
     name: Semantic smoke (${{ matrix.platform }})
     strategy:

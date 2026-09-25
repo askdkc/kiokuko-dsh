@@ -11,9 +11,9 @@ not remove files or dependencies from an installed full package.
 
 ## Compatibility
 
-The current target is **DSH 0.1.6-alpha.1**, verified against source commit `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720`. Disposable-profile checks cover replacing Kiokuko 0.1.51, removal of the old DSH dependency graph, Web startup and client discovery, session listing, `session/control`, and Kiokuko HTTP routes. All 63 history compatibility tests also passed against that checkout.
+The current runtime target is **DSH 0.1.7-rc.2**. Local native tests cover request routing and legacy v0/v3 session migration to v4. A packed plugin was installed, started, reloaded, and removed in a disposable Web profile. The earlier **0.1.6-alpha.1** source checkout at `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720` also passed its disposable-profile and 63 history checks.
 
-CI retains the pinned DSH 0.1.5-rc.1 fixture for backward compatibility. The 0.1.6-alpha.1 evidence above is local verification, not a completed CI run or verification of an npm `--latest` update. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version.
+CI retains the pinned DSH 0.1.5-rc.1 fixture for the full legacy-history and Web lifecycle series. A separate exact 0.1.7-rc.2 fixture and CI job run the full suite, a native series with no skips for routing, answer review, execution evidence, Enno memory, model handoff, semantic compaction, ObservationPack, and all 70 history compatibility cases, plus packed Web install/start/reload/remove. Locally, the full suite passed (1210 passed, 34 optional skips, 0 failed), as did the native and Web checks; the new remote job has not run yet. The historical source-repair CLI tests deliberately use the pinned legacy catalog that accepted v0/v3 fixtures. Local testing does not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
 
 ## Install
 

@@ -19,7 +19,7 @@ Automatic memory review saves or updates useful project candidates after eight c
 
 ## Install and use
 
-Supports **DSH 0.1.6-alpha.1** ([verification scope](docs/dsh-plugin.md#compatibility)).
+Runtime compatibility target: **DSH 0.1.7-rc.2**. Native request paths, legacy session migration, and a packed Web lifecycle pass locally ([verification scope](docs/dsh-plugin.md#compatibility)).
 
 Requires Node.js **24.16.0+** and pnpm.
 Run these commands from the DSH source directory to install the published npm package and start:
