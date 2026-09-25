@@ -13,6 +13,14 @@ const inputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('review_batch'), reviews: z.array(memoryApplicationReviewSchema).min(1).max(32) }).strict(),
   z.object({ action: z.literal('refresh'), query: z.string().trim().min(1).max(4000) }).strict(),
 ])
+// Model providers require an object at the root of every tool schema. Keep
+// action-specific validation in inputSchema after the native tool call arrives.
+const transportSchema = z.object({
+  action: z.enum(['status', 'review', 'review_batch', 'refresh']),
+  review: memoryApplicationReviewSchema.optional(),
+  reviews: z.array(memoryApplicationReviewSchema).min(1).max(32).optional(),
+  query: z.string().trim().min(1).max(4000).optional(),
+}).strict()
 export const MEMORY_APPLICATION_GUIDANCE = 'Use task_memory_review(action=status) once, then submit independent pending decisions with action=review_batch (up to 32); action=review remains available for one. Adoption and contradiction require relevant source paths. Adoption also needs an invariant, counterexample, method and command: an exact foreground Bash command at repository-root cwd, or an approved Enno verifier expressed as executable and arguments joined by single spaces. For topic-based non-applicability, use paths:[]; supply paths when the judgment depends on current source. Refresh retains decisions when delivered entry revisions and mode stay unchanged; a revised entry or mode change starts a new review generation. New entries need decisions, and changed delivery invalidates execution proof. Only a typed successful foreground result on unchanged declared sources counts as observed proof. Use action=refresh for a concrete new error or target; it keeps the run. Missing proof cannot complete successfully. Judgments are model-reported.'
 
 interface NativeExecution { callId: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
@@ -65,7 +73,7 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
   disposers.push(ctx.tools.register({ name: 'task_memory_review', modelFacing: true,
     description: MEMORY_APPLICATION_GUIDANCE,
     // Zod attaches non-enumerable ~standard metadata; DSH requires plain JSON.
-    parameters: JSON.parse(JSON.stringify(z.toJSONSchema(inputSchema))), output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
+    parameters: JSON.parse(JSON.stringify(z.toJSONSchema(transportSchema))), output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args: unknown, execution: NativeExecution) => {
       const identity = host.resolve(execution)
       if (!identity || execution.parent !== undefined || execution.name !== 'task_memory_review') throw new Error('No active native task for memory application')

@@ -87,6 +87,9 @@ test('native path blocks missing decisions, observes failing next-migration regr
   try {
     assert.deepEqual(Reflect.ownKeys(tools[0].parameters), Object.keys(tools[0].parameters),
       'native DSH schema projection rejects non-enumerable or symbol properties')
+    assert.equal(tools[0].parameters.type, 'object', 'model provider requires an object-root tool schema')
+    assert.deepEqual(tools[0].parameters.required, ['action'])
+    assert.deepEqual(tools[0].parameters.properties.action.enum, ['status', 'review', 'review_batch', 'refresh'])
     assert.equal(f.status().ready, false)
     const pendingStatus = f.status()
     for (const name of ['read', 'Read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status']) {
