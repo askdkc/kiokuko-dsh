@@ -34,8 +34,10 @@ import { readPendingOutbox, readTurnSeal, replacePendingOutboxMessageInTransacti
 import { claimAutomaticContinuationInTransaction, claimBoundaryEffectInTransaction, claimLoopRecoveryQuestionInTransaction, ennoInstructionDigest, resetBoundaryEffectGuardInTransaction, resetLoopGuardForUserInTransaction } from '../loop-guard.js'
 import { boundaryFailureCopy } from '../user-interaction.js'
 import { KiokukoError } from '../../errors.js'
+import { isNativeSubagent } from '../native-subagent.js'
 
 interface BoundaryDependencies {
+  readonly isGenericNativeChild: (agent: NativeAgent) => boolean
   readonly ctx: Context
   readonly runtime: DshCoreRuntime
   readonly now: (() => string) | undefined
@@ -71,6 +73,7 @@ interface BoundaryDependencies {
 }
 
 export function createBoundaries(deps: BoundaryDependencies) {
+  const { isGenericNativeChild } = deps
   const { ctx, runtime, now, agents, sessions, skills, tools, userQuestions, gate, delegation, executionSupport,
     answerReview, sessionMirror, currentSession, currentForAgentEvent, stateForRun, systemSkillsFor,
     refreshEnnoMemory, confirmationAnswerer, assertTurnBoundary, advisoryRunner, submitAdvisory,
@@ -333,6 +336,12 @@ export function createBoundaries(deps: BoundaryDependencies) {
 
   const boundaryWorker = new DshBoundaryWorker({
     runtime,
+    shouldProcessSession: sessionId => {
+      const agent = (boundaryAgents.get(sessionId) ?? agents?.get(sessionId)) as NativeAgent | undefined
+      if (agent !== undefined) return !isGenericNativeChild(agent)
+      const session = sessions?.get(sessionId)
+      return session === undefined || !isNativeSubagent({ session })
+    },
     ...(now === undefined ? {} : { now: now }),
     bindNativeAgent: (sessionId, nativeAgent) => {
       const item = currentSession(sessionId)
@@ -611,6 +620,7 @@ export function createBoundaries(deps: BoundaryDependencies) {
     }
   }
   const rehydrateBoundarySession = async (nativeAgent: NativeAgent): Promise<void> => {
+    if (isGenericNativeChild(nativeAgent)) return
     if (nativeAgent.session?.snapshotEvents && agents?.get(nativeAgent.id) === nativeAgent && sessions?.get(nativeAgent.session.id) === nativeAgent.session) await answerReview.recover(nativeAgent as ReviewAgent, async row => {
       await sessions?.flush?.(nativeAgent.session!)
       await sessionMirror.checkpointAfterNativeFlush(nativeAgent.session as DshMirrorEventSession)

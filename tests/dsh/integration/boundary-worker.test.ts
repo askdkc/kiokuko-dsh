@@ -76,6 +76,25 @@ test('one kick drains classified context and durable delivery as separate exactl
   }
 })
 
+test('a native child cannot claim an older durable boundary job', async () => {
+  const f = await fixture()
+  let processed = 0
+  const worker = new DshBoundaryWorker({
+    runtime: f.runtime,
+    shouldProcessSession: sessionId => sessionId !== 'boundary-session',
+    process: () => { processed++; return { kind: 'completed' } },
+    flush: () => undefined,
+    dispatch: () => undefined,
+  })
+  try {
+    const before = f.database.prepare('SELECT job_id, status FROM dsh_boundary_jobs ORDER BY job_id').all()
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    assert.equal(processed, 0)
+    assert.deepEqual(f.database.prepare('SELECT job_id, status FROM dsh_boundary_jobs ORDER BY job_id').all(), before)
+  } finally { await worker.dispose(); await f.cleanup() }
+})
+
 test('disposal during an in-flight claim does not start a new job', async () => {
   const f = await fixture()
   let signalClaimed!: () => void

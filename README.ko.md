@@ -4,6 +4,7 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)에 프로젝트 기억, 작업 계획, 검증 지원을 추가합니다.
 OrcaReplay로 모델과 도구의 동작을 기록하고, 기록을 확인하거나 HTML로 내보낼 수 있습니다.
+DSH 표준 agent preset은 `subagent`와 `subagent_fork`를 제공합니다. 일반 하위 agent에서는 Kiokuko 실행 방식을 다시 묻지 않습니다. [설정](docs/dsh-plugin.md#subagents).
 
 
 새 변경 작업에서는 일반 실행 또는 役小角(enno-oduno)를 선택할 수 있습니다. 역할별 모델은 추천 템플릿이나 DSH에 설정된 모델에서 선택합니다. [모델 선택과 연결 제한](docs/model-selection.md).

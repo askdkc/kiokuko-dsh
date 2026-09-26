@@ -30,6 +30,7 @@ export interface DshBoundaryWorkerOptions {
   /** Best-effort notification after retries are durably exhausted. Never retried by this worker. */
   readonly onWaitingUser?: (job: DshBoundaryJob, error: unknown, signal: AbortSignal) => boolean | PromiseLike<boolean>
   readonly bindNativeAgent?: (sessionId: string, nativeAgent: object) => void
+  readonly shouldProcessSession?: (sessionId: string) => boolean
   readonly now?: () => string
 }
 
@@ -47,6 +48,7 @@ export class DshBoundaryWorker {
   readonly #onWaitingUser: DshBoundaryWorkerOptions['onWaitingUser']
   readonly #now: () => string
   readonly #bindNativeAgent: DshBoundaryWorkerOptions['bindNativeAgent']
+  readonly #shouldProcessSession: DshBoundaryWorkerOptions['shouldProcessSession']
   readonly #tails = new Map<string, Promise<void>>()
   readonly #controllers = new Map<string, AbortController>()
   #disposed = false
@@ -60,11 +62,13 @@ export class DshBoundaryWorker {
     this.#beforeDelivery = options.beforeDelivery
     this.#onWaitingUser = options.onWaitingUser
     this.#bindNativeAgent = options.bindNativeAgent
+    this.#shouldProcessSession = options.shouldProcessSession
     this.#now = options.now ?? (() => new Date().toISOString())
   }
 
   kick(sessionId?: string, nativeAgent?: object): void {
     if (this.#disposed) return
+    if (sessionId !== undefined && this.#shouldProcessSession?.(sessionId) === false) return
     if (sessionId !== undefined && nativeAgent !== undefined) this.#bindNativeAgent?.(sessionId, nativeAgent)
     if (sessionId === undefined) return
     const tail = (this.#tails.get(sessionId) ?? Promise.resolve())
@@ -95,6 +99,7 @@ export class DshBoundaryWorker {
 
   async #drain(sessionId: string): Promise<void> {
     while (!this.#disposed) {
+      if (this.#shouldProcessSession?.(sessionId) === false) return
       const ownerNonce = randomUUID()
       const job = await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => (
         claimBoundaryJobInTransaction(database, ownerNonce, this.#now(), sessionId)

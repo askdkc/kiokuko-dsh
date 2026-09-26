@@ -4,7 +4,7 @@ import { dshTurnBoundarySeq, type DshSessionEventSource } from './session-memory
 /** Minimal native DSH session identity used only at terminal checkpoints. */
 export interface DshNativeSession {
   readonly id: string
-  readonly header?: { readonly createdAt?: number; readonly cwd?: string }
+  readonly header?: { readonly createdAt?: number; readonly cwd?: string; readonly parentSession?: string; readonly origin?: string; readonly delegationDepth?: number }
   readonly snapshotEvents?: DshSessionEventSource['snapshotEvents']
 }
 

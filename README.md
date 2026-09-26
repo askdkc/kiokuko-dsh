@@ -11,6 +11,7 @@ Automatic memory review saves or updates useful project candidates after eight c
 - **Execution modes** — Choose normal execution or 役小角(enno-oduno) for role-based planning and verification. [Details](docs/model-selection.md)
 - **Project memory** — Retrieve useful project knowledge for later work. [Concepts](docs/concepts.md)
 - **Deep planning** — Run bounded, read-only investigation with four roles. [Usage](docs/deep-planning.md)
+- **DSH subagents** — The standard preset provides `subagent` and `subagent_fork`; native children do not repeat Kiokuko's execution-mode choice. [Configuration](docs/dsh-plugin.md#subagents)
 - **Continuity** — Disabled by default. Set `continuity.mode: active` to summarize recent execution evidence for the model. [Setup](docs/continuity.md)
 - **Memory evolution** — Turn completed work into reusable episode and lesson candidates. [Settings](docs/memory-evolution.md)
 - **Verified automatic Global memory** — Three independent, host-observed successful applications can create a scoped `source_verified` Global memory. [Conditions and opt-out](docs/auto-globalization.md)
