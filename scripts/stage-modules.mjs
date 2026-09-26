@@ -53,7 +53,7 @@ async function walk(directory, prefix = '') {
   }
   return files.sort()
 }
-function forbiddenCore(path) { return /(?:^|\/)(?:enno-oduno|deep-thinker|lisp)\/|\/dsh\/(?:host-adapter|composition|tool-policy|runtime)\.js$/.test(path) }
+function forbiddenCore(path) { return /(?:^|\/)(?:enno-oduno|deep-thinker|lisp)\/|\/dsh\/host-adapter(?:\/|\.js$)|\/dsh\/(?:composition|tool-policy|runtime)\.js$/.test(path) }
 async function copyFile(source, target) { await mkdir(dirname(target), { recursive: true }); await cp(source, target) }
 
 export async function stageModules(output) {

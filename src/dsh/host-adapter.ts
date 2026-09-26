@@ -1,182 +1,119 @@
 import { ObservationPackConfig } from './observation-pack/policy.js'
+import { createTurnState, policyState, type TurnRecord } from './host-adapter/turn-state.js'
+import { createRouting } from './host-adapter/routing.js'
+import { createAdmission } from './host-adapter/admission.js'
+import { createSessionObservation } from './host-adapter/session-observation.js'
+import { createContextMessages } from './host-adapter/context.js'
+import { createToolHost } from './host-adapter/tool-host.js'
+import { createBoundaries } from './host-adapter/boundaries.js'
+import { createLifecycle } from './host-adapter/lifecycle.js'
+import { mountHostMemoryApplication } from './host-adapter/memory-application-host.js'
+import { createEfficiencyHost } from './host-adapter/efficiency-host.js'
+import { createMemoryReviewHost } from './host-adapter/memory-review-host.js'
+import { createEnnoMemoryHost } from './host-adapter/enno-memory-host.js'
+import { createSessionAccess } from './host-adapter/session-access.js'
+import { createEvolutionHost } from './host-adapter/evolution-host.js'
+import { onNativeEvent, onNativeServiceEvent } from './host-adapter/native-events.js'
+import type { NativeSkills, NativeTools, NativeCommands, NativeSessions, NativeAgent, NativeAgents, NativeAttachments, AdapterContext } from './host-adapter/native-events.js'
 import { isKiokukoDshSource, KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
-import { bindMemoryApplication, memoryApplicationStatus, memoryRetrievalStatus } from '../memory/application.js'
-import { mountMemoryApplication } from './memory-application.js'
+
+
 import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
 import { ModelHandoff, ModelHandoffConfig } from './model-handoff.js'
 import { ModelAutoConfig } from './model-auto/contracts.js'
 import { ModelAutoCoordinator } from './model-auto/coordinator.js'
 import { ModelAutoStore } from './model-auto/store.js'
-import { attachmentTypesFromMessages, nativeContextTokens, projectModelBinding } from './model-auto/policy.js'
-import { SemanticCompactionConfig, type CompactionAgent } from './semantic-compaction/contracts.js'
+
+import { SemanticCompactionConfig } from './semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../memory/reuse.js'
-import { createMemoryReuseRuntime } from './memory-reuse.js'
-import { reviewPlanDecisions } from './decisions/plan-review.js'
-import { executeCheckModel } from './decisions/check-model.js'
+
+
+
 import { createDecisionService } from './decisions/host.js'
 import { TypedDecisionsConfig } from './decisions/config.js'
 import type { DecisionService } from './decisions/service.js'
-import { dshTurnRequestId } from './intake-profile-resolver.js'
-import { reviewEnnoPlan } from '../enno-oduno/service.js'
-import { classifyTask, selectInstalledSkills } from './decisions/workflows.js'
-import { humanInput } from '../memory/review/evidence.js'
+
+
+
+
 import { AnswerReviewCoordinator } from './answer-review/coordinator.js'
-import { AnswerReviewConfig, ANSWER_REVIEW_FORM, hasHumanInput, type ReviewAgent } from './answer-review/contracts.js'
+import { AnswerReviewConfig } from './answer-review/contracts.js'
 import { AutoMemoryReviewCoordinator, type ReviewNativeSession } from './auto-memory-review.js'
 import { MemoryReviewConfig } from '../memory/review/contracts.js'
-import { handoffReview } from '../memory/review/store.js'
-import { assertCaptureAllowed } from '../memory/capture-policy.js'
-import { refreshContinuedTaskContext } from './task-intake.js'
+
+
+
 import { DshEnnoMemoryRefresh } from './enno-memory-refresh.js'
 import { EnnoMemoryConfig } from './config.js'
-import { executionObservation } from './evolution-observation.js'
-import { saveEvolutionObservation, saveSessionNotice } from './plugin-records.js'
+
+import { saveSessionNotice } from './plugin-records.js'
 import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution/contracts.js'
 import { evolutionStatus } from '../memory/evolution/store.js'
 import { OrcaConfig, EfficiencyConfig, FinalizationConfig, AkinatorMemoryConfig, ContinuityConfig } from './config.js'
-import { DshEfficiencyObserver, mountDshEfficiencyObserver, type FinalizationInputMode } from './efficiency.js'
-import { explicitExecutionMode, initializeExecutionSelection, readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
-import { selectExecution, ExecutionSelectionPending } from './model-selection-ui.js'
+
+import { type StoredExecutionSelection } from './execution-selection.js'
+
 import { LISP_CODING_SERVICE, type LispCodingService } from './lisp/coding-choice.js'
-import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './lisp/request-surface.js'
-import { installDshModelRouting, modelRoleForState, isModelAvailabilityFailure, type RoutableAgent } from './model-routing.js'
+
+
 import { DshSkillPrompts } from './skill-prompts.js'
-import { refreshDshSkillSnapshots } from './skill-snapshot.js'
+
 import type { ModelRoute, DshModelCatalog, DshModelCompatibility } from './model-configuration.js'
 import { nativeModelCatalog } from './native-model-catalog.js'
-import { ennoStateForPreparedTask } from '../enno-oduno/service.js'
+
 import { DshEnnoDelegation, type DshSpawnBackend } from './enno-delegation.js'
 import { createDshOrcaHost } from './orca-host.js'
 import { fileURLToPath } from 'node:url'
 import { realpathSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+
 import { Context } from '@deepseek-ai/cordis'
-import {
-  KIOKUKO_DSH_HOST_SERVICE,
-  type DshCompositionHost,
-  type DshNativePreStepPayload,
-} from './composition.js'
+import { KIOKUKO_DSH_HOST_SERVICE, type DshCompositionHost } from './composition.js'
 import { DshRuntime } from './runtime.js'
 import type { DshCoreRuntime } from './core-runtime.js'
-import { withImmediateTransaction } from '../db/transaction.js'
-import { DshIntakeGate, assertDshModelAdmitted, type DshCapabilityReadContext, type DshIntakeGateResult, type DshPreStepDecision, type DshPreStepEvent } from './intake-gate.js'
-import { resolveGroundedIntakeProfile } from './intake-profile-resolver.js'
-import type { PreparedAgentTask } from './task-intake.js'
-import { deriveAkinatorReasoning } from '../akinator/reasoning.js'
-import { resolveCapabilities } from '../akinator/capabilities.js'
-import { readAkinatorSession, readRunIntakeLink } from '../akinator/store.js'
-import { DshToolPolicy, hasKnownDshToolPolicyState, type DshToolPolicyState } from './tool-policy.js'
-import { ToolExposureConfig, projectToolsForPhase } from './tool-exposure.js'
+
+import { type DshCapabilityReadContext } from './intake-gate.js'
+
+
+
+
+
+import { DshToolPolicy } from './tool-policy.js'
+import { ToolExposureConfig } from './tool-exposure.js'
 import { DiffReviewConfig } from './config.js'
 import { DiffReviewController } from '../diff-review/controller.js'
-import {
-  DSH_MODEL_FACING_OPERATIONS,
-  type DshToolDefinition,
-  type DshToolExecution,
-  type DshToolHostBinding,
-  type DshNativeToolExecution,
-  type DshToolHost,
-} from './tools.js'
-import { DshRunLifecycle, type DshCloseIntent, type DshRunClose } from './session-bridge.js'
-import { DshMemoryFinalizer, dshTurnBoundarySeq, type DshLlm, type DshLogEvent, type DshSessionEventSource, type DshSessionQuery } from './session-memory-finalizer.js'
-import { DshConfirmationController, DshEnnoController } from './enno-controller.js'
-import { DshAdvisoryRunner, type DshAdvisoryCall, type DshAdvisoryRoundResult } from './advisory-runner.js'
-import { DshPonytailModes, dshPonytailOwnerKey } from './commands.js'
-import { boundaryFailureCopy, createDshIntakeAnswerer, createDshConfirmationAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from './user-interaction.js'
+
+import { DshMemoryFinalizer, type DshLlm, type DshSessionEventSource, type DshSessionQuery } from './session-memory-finalizer.js'
+
+import { type DshAdvisoryCall } from './advisory-runner.js'
+import { DshPonytailModes } from './commands.js'
+import { createDshConfirmationAnswerer, type DshUserQuestions } from './user-interaction.js'
 import { createDshCapabilityCatalog, type DshCapabilityCatalog } from './capability-catalog.js'
 import { STANDARD_SKILL_MANIFESTS } from './standard-skills.js'
 import { canonicalContentHash, compareCanonicalStrings } from '../serialization/validate.js'
 import { KiokukoError } from '../errors.js'
-import { injectDshContext, selectDshDirectiveSources } from './context-injection.js'
-import { projectDshContext } from './context-projection.js'
-import { currentRequestMemory, pruneDshMemorySurface, filterRequestMemory } from './request-memory.js'
-import { projectDshDirective } from './directive-projection.js'
-import { submitOdunoIdeal, submitEnnoPlan, submitEnnoAdvice, readPendingEnnoAdvice, reportEnnoWork, finishEnno, submitOdunoMeditation, answerEnno, prepareEnnoVerification, stateForSnapshot, inapplicableEnnoState, type EnnoOperationResponse } from '../enno-oduno/service.js'
-import { claimExecutionLeaseInTransaction, readEnnoSnapshot, terminalizeLedgerRunInTransaction } from '../enno-oduno/store.js'
-import { decideDshContinuation } from './continuation.js'
-import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
+
+
+
+
+import { stateForSnapshot } from '../enno-oduno/service.js'
+import { readEnnoSnapshot } from '../enno-oduno/store.js'
+
+
 import { DeepPlanningController } from '../deep-thinker/controller.js'
-import { curateMemoryCandidates } from '../memory/curator.js'
-import { checkpointDshMemory, type ScopedCheckpointInput } from '../memory/scoped-memory.js'
-import { LedgerStore } from '../ledger/store.js'
-import { ENNO_APPLICABLE_TASK_TYPES, type EnnoExecutionLease, type EnnoNextAction, type EnnoOdunoState } from '../enno-oduno/types.js'
-import {
-  commitExpectedFailure,
-  ennoReceiptOperation,
-  enqueueUnsubmittedTurn,
-  isExpectedTurnFailure,
-  phaseForOperation,
-  prepareTurnIntent,
-  readPendingOutbox,
-  readTurnSeal,
-  markOutboxObservedInTransaction,
-  appliedTurnOutcome,
-  replacePendingOutboxMessageInTransaction,
-  supersedeBoundaryJobsAtOrBeforeRevisionInTransaction,
-  supersedeOutboxAtOrBeforeRevisionInTransaction,
-  type DshBoundaryJob,
-} from './turn-process.js'
-import {
-  backupInputClaimInTransaction,
-  readInputClaim,
-  markClaimProgressInTransaction,
-  settleInputClaimInTransaction,
-  takeRecoverableInputClaimInTransaction,
-  unexecutedRunInput,
-} from './input-claim.js'
-import { DshSessionLogMirror, type DshImageAttachmentRef, type DshMirrorEventSession } from './session-log-mirror.js'
+
+
+
+import { type EnnoNextAction, type EnnoOdunoState } from '../enno-oduno/types.js'
+
+
+import { DshSessionLogMirror, type DshMirrorEventSession } from './session-log-mirror.js'
 import { readHistoricalDshSession } from './session-history-lookup.js'
-import { abortable, DshBoundaryWorker } from './boundary-worker.js'
+
 import { DshSessionLogExportService } from './session-log-export.js'
-import { DshCompletionReporter } from './completion-report.js'
-import { verificationBoundaryKey } from './verification-identity.js'
-import { DshExecutionSupport, type ExecutionBinding } from './execution-support.js'
-import {
-  claimAutomaticContinuationInTransaction,
-  claimBoundaryEffectInTransaction,
-  claimLoopRecoveryQuestionInTransaction,
-  ennoInstructionDigest,
-  resetBoundaryEffectGuardInTransaction,
-  resetLoopGuardForUserInTransaction,
-} from './loop-guard.js'
 
-interface NativeSkills {
-  registerProvider(create: (control: { readonly signal: AbortSignal }) => unknown): () => void
-  snapshot?(options?: unknown): Promise<{
-    readonly skills: readonly { name: string; description?: string; invocation?: { modelInvocable?: boolean } }[]
-    readonly complete: boolean
-  }>
-}
 
-interface NativeTools {
-  register(definition: unknown): () => void
-  guard(guard: (execution: unknown) => string | undefined): () => void
-  schemas?(scope?: unknown): readonly { name: string; description?: string }[] | PromiseLike<readonly { name: string; description?: string }[]>
-}
+import { DshExecutionSupport } from './execution-support.js'
 
-interface NativeCommands { register(...args: any[]): () => void }
-interface NativeSessions {
-  get(id: string): { id: string; header?: { cwd?: string }; snapshotEvents?: () => readonly DshLogEvent[] } | undefined
-  flush?(session: object): PromiseLike<unknown>
-}
-interface NativeAgent {
-  readonly id: string
-  readonly status?: string
-  readonly session?: { readonly id: string; readonly header?: { readonly cwd?: string }; snapshotEvents?: () => readonly DshLogEvent[] }
-  readonly inject?: (message: unknown) => void
-  readonly steer?: (message: unknown) => void
-  readonly followup?: (message: unknown) => void
-}
-interface NativeAgents {
-  get(id: string): NativeAgent | undefined
-  list?(): readonly NativeAgent[]
-}
-interface NativeAttachments {
-  readImage(ref: DshImageAttachmentRef, signal?: AbortSignal): Promise<{
-    readonly ref: DshImageAttachmentRef
-    readonly data: Uint8Array
-  }>
-}
 
 function sessionEventSource(value: object | undefined): DshSessionEventSource {
   const source = value as Partial<DshSessionEventSource> | undefined
@@ -189,10 +126,6 @@ function sessionEventSource(value: object | undefined): DshSessionEventSource {
 export interface DshAdvisoryHost {
   readonly verifyReadOnly: (call: DshAdvisoryCall) => boolean | PromiseLike<boolean>
   readonly execute: (call: DshAdvisoryCall) => Promise<unknown>
-}
-
-interface AdapterContext extends Context {
-  get(name: string, strict?: boolean): unknown
 }
 
 export interface DshHostAdapterOptions {
@@ -238,28 +171,6 @@ export interface DshHostAdapterOptions {
 export interface DshHostAdapter {
   readonly host: DshCompositionHost
   readonly dispose: () => Promise<void>
-}
-
-interface TurnRecord {
-  readonly agentId: string
-  readonly sessionId: string
-  readonly runId: string
-  readonly workspace: string
-  readonly orchestrationId: string
-  readonly repositoryRoot: string
-  readonly cwd: string
-  readonly profileHints?: DshPreStepEvent['profileHints']
-  nativeAgent?: DshUserQuestionAgent
-  nativeSession?: object
-  task: string
-  turn: number
-  prepared: DshIntakeGateResult['prepared']
-  catalog: DshCapabilityCatalog
-  /** Monotonic host generation assigned before each prepare begins. */
-  prepareGeneration: number
-  memoryInput?: string
-  failed: boolean
-  closed: boolean
 }
 
 function textFromMessages(messages: readonly unknown[], fallback?: string): string {
@@ -377,47 +288,6 @@ export function continuationMessage(continuationId: string, nextAction: EnnoNext
   })
 }
 
-function phaseForState(state: EnnoOdunoState): DshToolPolicyState['phase'] {
-  if (!state.applicable) return 'completed'
-  if (state.status === 'intake') return 'intake'
-  if (state.status === 'oduno_ideal') return 'ideal'
-  if (state.status === 'zenki_planning') return 'planning'
-  if (state.status === 'needs_confirmation') return 'confirmation'
-  if (state.status === 'goki_executing') return 'goki'
-  if (state.status === 'enno_verifying') return 'verifying'
-  if (state.status === 'oduno_meditation') return 'meditation'
-  if (state.status === 'blocked') return 'blocked'
-  if (state.status === 'cancelled') return 'cancelled'
-  return 'completed'
-}
-
-function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState): boolean {
-  if (state.status !== 'oduno_ideal') return false
-  const incomingType = resolveGroundedIntakeProfile({
-    task: event.task,
-    cwd: event.cwd,
-    ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
-  }).profileHints.taskType
-  return incomingType !== null && !ENNO_APPLICABLE_TASK_TYPES.includes(incomingType as (typeof ENNO_APPLICABLE_TASK_TYPES)[number])
-}
-
-function policyState(state: EnnoOdunoState, record: TurnRecord, sessionId: string, lease?: EnnoOperationResponse['executionLease']): DshToolPolicyState {
-  return {
-    phase: phaseForState(state),
-    runId: record.runId,
-    workspace: record.workspace,
-    orchestrationId: record.orchestrationId,
-    ...(record.prepared.context?.deliveryId === null || record.prepared.context?.deliveryId === undefined ? {} : { deliveryId: record.prepared.context.deliveryId }),
-    revision: state.contractRevision ?? 1,
-    routeEpoch: lease?.routeEpoch ?? state.routeEpoch ?? 0,
-    ...(state.advisoryPhaseState.state === 'aggregated' ? { advisoryRoundDigest: state.advisoryPhaseState.inputDigest } : {}),
-    ...(lease === undefined ? {} : { leaseToken: lease.leaseToken, workUnitId: lease.workUnitId, currentWorkUnitId: lease.workUnitId }),
-    dshSessionId: sessionId,
-    nativeTurn: record.turn,
-    ...(state.nextAction === undefined ? {} : { nextAction: state.nextAction }),
-  }
-}
-
 async function capabilityCatalog(
   skills: NativeSkills | undefined,
   tools: NativeTools | undefined,
@@ -451,31 +321,8 @@ async function capabilityCatalog(
   return createDshCapabilityCatalog({ skills: skillDescriptors, tools: toolDescriptors })
 }
 
-function operationInput(
-  args: unknown,
-  binding: DshToolHostBinding,
-  cwd: string,
-  operation: string,
-  catalog: DshCapabilityCatalog,
-): Record<string, unknown> {
-  const source = typeof args === 'object' && args !== null && !Array.isArray(args) ? args as Record<string, unknown> : {}
-  const identity = { runId: binding.runId, workspace: binding.workspace, orchestrationId: binding.orchestrationId, expectedRevision: binding.revision, idempotencyKey: binding.idempotencyKey }
-  const advisory = binding.advisoryRoundDigest === undefined ? {} : { advisoryRoundDigest: binding.advisoryRoundDigest }
-  if (operation === 'enno_work_report') return { ...source, ...identity, leaseToken: binding.leaseToken, routeEpoch: binding.routeEpoch, workUnitId: binding.workUnitId }
-  if (operation === 'enno_plan_review') return { ...source, ...identity, capabilities: [...catalog.skills, ...catalog.tools] }
-  if (operation === 'enno_plan_submit') return { ...source, ...identity, ...advisory, capabilities: [...catalog.skills, ...catalog.tools] }
-  if (operation === 'curator_check') return { ...source, cwd, workspace: binding.workspace }
-  if (operation === 'memory_checkpoint') return { ...source, cwd, runId: binding.runId, ...(binding.deliveryId === undefined ? {} : { deliveryId: binding.deliveryId }) }
-  return { ...source, ...identity, ...advisory }
-}
-
-function operationName(value: string): value is typeof DSH_MODEL_FACING_OPERATIONS[number] {
-  return (DSH_MODEL_FACING_OPERATIONS as readonly string[]).includes(value)
-}
-
 export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOptions = {}): DshHostAdapter {
   let skillPrompts = options.skillPrompts ?? new DshSkillPrompts()
-  const systemSkillNames = new WeakMap<object, ReadonlySet<string>>()
   const akinatorMemoryConfig = AkinatorMemoryConfig.parse(options.akinatorMemory ?? {})
   let toolExposureConfig = ToolExposureConfig.parse(options.toolExposure ?? {})
   const reportedToolExposureFallbacks = new Set<string>()
@@ -492,11 +339,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const skills = native.get('skills', false) as NativeSkills | undefined
   const systemPrompt = native.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] | undefined
   const tools = native.get('tools', false) as NativeTools | undefined
-  const ownedModelToolDefinitions = new Map<string, { readonly execute: unknown }>()
-  const modelToolDefinitionsChanged = (definitions: readonly DshToolDefinition[]) => {
-    ownedModelToolDefinitions.clear()
-    for (const definition of definitions) if (operationName(definition.name)) ownedModelToolDefinitions.set(definition.name, { execute: definition.execute })
-  }
   const commands = native.get('commands', false) as NativeCommands | undefined
   const userQuestions = native.get('userQuestions', false) as DshUserQuestions | undefined
   const sessions = native.get('sessions', false) as NativeSessions | undefined
@@ -510,8 +352,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     native.get('settings', false) as { describe(options: { redactSecrets: true }): readonly { ns: string; value: unknown }[] } | undefined)
   const modelCompatibility = options.modelCompatibility ?? native.get('dshModelCompatibility', false) as DshModelCompatibility | undefined
   const selections = new Map<string, StoredExecutionSelection>()
-  const selectionFailures = new Map<string, Promise<void>>()
-  const selectionBlocked = new WeakSet<object>()
   const root = realpathSync(options.repositoryRoot ?? process.cwd())
   const runtime = options.runtime ?? new DshRuntime({
     repositoryRoot: root,
@@ -533,7 +373,6 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const decisions = options.decisions ?? createDecisionService(ctx, runtime, TypedDecisionsConfig.parse(options.typedDecisions ?? {}), MemoryReuseConfig.parse(options.memoryReuse ?? {}), SemanticCompactionConfig.parse(options.semanticCompaction ?? {}), root)
   const modelAutoConfig = ModelAutoConfig.parse(options.modelAutoMode ?? {})
   const modelAuto = new ModelAutoCoordinator(new ModelAutoStore(runtime, modelAutoConfig.mode, canonicalContentHash(modelAutoConfig)), decisions, modelCatalog, modelAutoConfig)
-  const manualModelChanges = new Map<string, Promise<void>>()
   const answerReview = new AnswerReviewCoordinator(runtime, decisions, AnswerReviewConfig.parse(options.answerReview ?? {}))
   const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root, options.observationPack)
   const modelHandoff = new ModelHandoff(ctx as any, decisions, root, options.modelHandoff)
@@ -549,7 +388,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     const execution = value as { agent?: object; name?: string; arguments?: unknown }
     return execution.agent ? delegation.toolDenial(execution.agent, execution.name ?? '', execution.arguments) : undefined
   })
-  const childExecutionDisposer = (ctx as any).on('tools/execute', async (execution: { agent?: object; name: string; arguments: unknown }, next: () => Promise<unknown>) => {
+  const childExecutionDisposer = onNativeEvent(ctx, 'tools/execute', async (execution: { agent?: object; name: string; arguments: unknown }, next: () => Promise<unknown>) => {
     if (execution.agent && delegation.isChild(execution.agent)) {
       await delegation.assertCurrent(execution.agent)
       const denial = delegation.toolDenial(execution.agent, execution.name, execution.arguments)
@@ -565,147 +404,25 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ...(attachments === undefined ? {} : { readAttachment: attachments.readImage.bind(attachments) }),
     ...(options.now === undefined ? {} : { now: options.now }),
   })
-  async function importLegacySession(sessionId: string) {
-    if (sessionQuery === undefined) throw new KiokukoError('NOT_FOUND', 'DSH session is unavailable')
-    // Preserve historical coordinates before the native query attempts migration.
-    // Live sessions must still use their native view rather than an older disk log.
-    const historical = sessions !== undefined && sessions.get(sessionId) === undefined
-      ? await readHistoricalDshSession(native.get('sessionPersistence', false), sessionId) : undefined
-    const snapshot = historical ?? await sessionQuery.readSession(sessionId)
-    // Bound the materializing native fallback before copying into the mirror.
-    let bytes = 0
-    for (const event of snapshot.events) {
-      bytes += Buffer.byteLength(JSON.stringify(event), 'utf8') + 1
-      if (bytes > 32 * 1024 * 1024) {
-        throw new KiokukoError('VALIDATION_ERROR', 'legacy DSH log exceeds the bounded one-time import limit', {
-          httpStatus: 413,
-          code: 'legacy_log_too_large',
-        })
-      }
-      await sessionMirror.observe(sessionId, event)
-    }
-    return snapshot
-  }
-  const finalizationQuery: DshSessionQuery = {
-    cachePromptLayout: (layout) => sessionMirror.cachePromptLayout(layout),
-    streamSession: async (sessionId) => {
-      try {
-        return await sessionMirror.streamSession(sessionId)
-      } catch (error) {
-        if (!(error instanceof KiokukoError) || error.code !== 'NOT_FOUND') throw error
-      }
-      const snapshot = await importLegacySession(sessionId)
-      return Object.freeze({
-        session: snapshot.session,
-        inheritedEventCount: snapshot.inheritedEventCount,
-        events: (async function* () { for (const event of snapshot.events) yield event })(),
-      })
-    },
-    readSession: async (sessionId) => {
-      try {
-        return await sessionMirror.readSession(sessionId)
-      } catch (error) {
-        if (!(error instanceof KiokukoError) || error.code !== 'NOT_FOUND') throw error
-      }
-      return importLegacySession(sessionId)
-    },
-  }
-  const sessionExport = new DshSessionLogExportService(sessionMirror, {
-    ensureNativeDurable: async (sessionId) => {
-      const liveSession = sessions?.get(sessionId)
-      if (liveSession !== undefined) {
-        if (sessions?.flush === undefined || typeof liveSession.snapshotEvents !== 'function') {
-          throw new KiokukoError('SERVICE_UNAVAILABLE', 'The live DSH session cannot be durably flushed for export')
-        }
-        await sessions.flush(liveSession)
-        // Mirror checkpointing is non-vetoing. Its structured degraded health
-        // is evaluated by the export service after this durability barrier.
-        await sessionMirror.checkpointAfterNativeFlush(liveSession as DshMirrorEventSession)
-        return
-      }
-      const current = await sessionMirror.checkpoint(sessionId)
-      if (current.error !== undefined
-        || (current.confirmedThrough >= current.observedThrough && current.observedThrough >= 0)) return
-      if (sessionQuery === undefined) return
-      const snapshot = await importLegacySession(sessionId)
-      // Cold lookup returns the already persisted DSH source log;
-      // unlike a live Session, it does not require another sessions.flush().
-      await sessionMirror.checkpointAfterNativeFlush({
-        id: sessionId,
-        header: snapshot.session,
-        snapshotEvents: () => snapshot.events,
-      })
-    },
-  })
-  const turns = new Map<string, TurnRecord>()
-  const latestBySession = new Map<string, TurnRecord>()
-  const states = new Map<string, DshToolPolicyState>()
-  const activeModeRequests = new Map<string, string>()
-  const advisoryRounds = new Map<string, {
-    readonly stateDigest: string
-    readonly result: DshAdvisoryRoundResult
-  }>()
-  const resumedLeases = new Map<string, NonNullable<EnnoOperationResponse['executionLease']>>()
+  const { finalizationQuery, sessionExport } = createSessionAccess({ native, sessions, sessionQuery, sessionMirror })
   const policy = new DshToolPolicy({ phase: 'intake', runId: 'pending', workspace: 'pending', orchestrationId: 'pending', revision: 1, routeEpoch: 0 })
+  const modes = new DshPonytailModes()
+  const turnState = createTurnState(modes, policy, runId => selections.get(runId))
+  const currentSession = turnState.currentSession
+  const currentForAgentEvent = turnState.currentForAgentEvent
   const executionSupport = new DshExecutionSupport(runtime, { continuity: continuityConfig,
-    observe: value => efficiency?.recordContinuity(value) })
-  executionSupport.mount({ on: (name, listener, options) => (ctx as any).on(name, listener, options),
+    observe: value => efficiencyHost.efficiency?.recordContinuity(value) })
+  executionSupport.mount({ on: (name, listener, options) => onNativeServiceEvent(ctx, name, listener, options),
     ...(tools === undefined ? {} : { tools: { guard: tools.guard.bind(tools) } }) })
   const ennoMemory = new DshEnnoMemoryRefresh(runtime, EnnoMemoryConfig.parse(options.ennoMemory ?? {}),
-    value => efficiency?.recordEnnoMemory(value))
-  const memoryCalls = new WeakMap<object, Map<string, { name: string; runId: string; agent: object; turn: number; seq: number }>>()
-  const refreshEnnoMemory = async (item: TurnRecord, signal: AbortSignal): Promise<void> => {
-    if (!ennoMemory.enabled || !item.nativeAgent || !item.nativeSession || item.closed || executionSupport.paused(item.sessionId)
-      || delegation.isChild(item.nativeAgent) || selections.get(item.runId)?.value.status !== 'ready') return
-    const prepared = item.prepared, catalog = item.catalog, generation = item.prepareGeneration
-    const policySnapshot = states.get(item.runId)
-    const input = item.memoryInput ?? item.prepared.intake.profile.constraints ?? ''
-    const nativeAgent = item.nativeAgent, nativeSession = item.nativeSession
-    const inboxIdentity = () => canonicalContentHash([
-      ...((nativeAgent as any).inbox?.nextStep ?? []), ...((nativeAgent as any).inbox?.nextTurn ?? []),
-    ].filter(isHumanMessage))
-    const pendingInput = inboxIdentity()
-    const current = () => currentSession(item.sessionId) === item && !item.closed && item.prepareGeneration === generation
-      && item.catalog === catalog && item.nativeAgent === nativeAgent && item.nativeSession === nativeSession
-      && item.prepared.ennoOduno === prepared.ennoOduno && states.get(item.runId) === policySnapshot
-      && (item.memoryInput ?? item.prepared.intake.profile.constraints ?? '') === input
-      && !executionSupport.paused(item.sessionId) && inboxIdentity() === pendingInput
-    await ennoMemory.refresh({ runId: item.runId, sessionId: item.sessionId, nativeAgent, nativeSession,
-      prepared, capabilities: [...catalog.skills, ...catalog.tools], constraints: input, query:item.task, signal, isCurrent: current,
-      validateCapabilities: async () => {
-        const fresh = await capabilityCatalog(skills, tools, { agent: { id: item.agentId }, nativeAgent, cwd: item.cwd, signal })
-        gate.assertTurnStoppingCatalog(catalog, fresh)
-      },
-      ...(policySnapshot?.leaseToken === undefined ? {} : { leaseToken: policySnapshot.leaseToken }),
-      apply: value => {
-        if (item.closed || currentSession(item.sessionId)?.runId !== item.runId
-          || currentSession(item.sessionId)?.nativeAgent !== nativeAgent || currentSession(item.sessionId)?.nativeSession !== nativeSession) return
-        const target = currentSession(item.sessionId)!
-        target.prepared = { ...target.prepared, ...value }
-        const activePolicy = states.get(item.runId)
-        if (activePolicy) {
-          const { deliveryId: _previousDelivery, ...authority } = activePolicy
-          const next = { ...authority, ...(value.context?.deliveryId ? { deliveryId: value.context.deliveryId } : {}) }
-          states.set(item.runId, next); policy.setState(next)
-        }
-      } })
-    const refreshed = currentSession(item.sessionId)
-    if (refreshed && !refreshed.closed && refreshed.nativeAgent === nativeAgent && refreshed.nativeSession === nativeSession) {
-      await runtime.withDatabase(db => bindMemoryApplication(db, { runId: refreshed.runId, workspace: refreshed.workspace, sessionId: refreshed.sessionId, repositoryRoot: refreshed.repositoryRoot },
-        refreshed.prepared.intake.profile, refreshed.prepared.context, memoryRetrievalStatus(db, refreshed.workspace, refreshed.prepared.context, refreshed.prepared.memoryPolicy.contextWithheld)))
-    }
-  }
-  const executionBinding = (item: TurnRecord): ExecutionBinding => ({
-    runId: item.runId, sessionId: item.sessionId, nativeAgent: item.nativeAgent, nativeSession: item.nativeSession,
-    cwd: item.cwd, task: item.task, turn: item.turn,
-    ennoState: item.prepared.ennoOduno,
-    chat: item.prepared.intake.profile.taskType === 'chat' || !!selections.get(item.runId)?.value.discussion,
-    terminal: item.closed || ['complete', 'report_blocker'].includes(item.prepared.ennoOduno.nextAction)
-      && item.prepared.ennoOduno.applicable,
-    generation: canonicalContentHash({ revision: item.prepared.ennoOduno.contractRevision,
-      route: item.prepared.ennoOduno.routeEpoch ?? null, action: item.prepared.ennoOduno.nextAction,
-      lease: states.get(item.runId)?.leaseToken ?? null }),
+    value => efficiencyHost.efficiency?.recordEnnoMemory(value))
+  const { refreshEnnoMemory } = createEnnoMemoryHost({
+    ennoMemory, runtime, executionSupport, delegation, getSelection: runId => selections.get(runId),
+    turnState, currentSession, capabilityCatalog, skills, tools,
+    assertTurnStoppingCatalog: (expected, actual) => gate.assertTurnStoppingCatalog(expected, actual),
+    isHumanMessage,
   })
+  const executionBinding = turnState.executionBinding
   const memoryFinalizer = new DshMemoryFinalizer({
     onDeepFinalized: sessionId => deepPlanning.deliver(sessionId),
     memoryEvolution: evolutionConfig,
@@ -727,587 +444,33 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ...(sessions?.flush?{flush:session=>sessions.flush!(session)}:{}),...(options.now?{now:options.now}:{}) })
   const reviewBinding = (item:TurnRecord,session:object) => ({workspace:item.workspace,runId:item.runId,session:session as ReviewNativeSession,startSeq:0})
   deepPlanning.attachFinalizer(() => memoryFinalizer.kick())
-  const modes = new DshPonytailModes()
   const confirmationAnswerer = userQuestions === undefined ? undefined : createDshConfirmationAnswerer(userQuestions)
-  let prepareGeneration = 0
-  const continuedTurns = new Map<string, {
-    readonly fingerprint: string
-    readonly profileHints?: DshPreStepEvent['profileHints']
-    readonly result: DshIntakeGateResult
-    readonly nativeAgent?: object
-    readonly nativeSession?: object
-  }>()
-  const resumedTurns = new Map<string, {
-    readonly fingerprint: string
-    readonly profileHints?: DshPreStepEvent['profileHints']
-    readonly result: DshIntakeGateResult
-    readonly nativeAgent?: object
-    readonly nativeSession?: object
-  }>()
-  const inMemoryClaims = new Map<string, {
-    messages: readonly unknown[]
-    providerStarted: boolean
-    sideEffectStarted: boolean
-    recovered: boolean
-  }>()
-  const captureInitialInput = async (sessionId: string, turn: number, messages: readonly unknown[]): Promise<void> => {
-    const key = `${sessionId}\u0000${turn}`
-    let initial = inMemoryClaims.get(key)
-    if (!initial) {
-      if (messages.length === 0) return
-      initial = { messages: Object.freeze([...messages]), providerStarted: false, sideEffectStarted: false, recovered: false }
-      inMemoryClaims.set(key, initial)
-    }
-    // Inbox claims are step-local. Preserve the first turn input and monotonic
-    // execution flags across assembly, pre-step, steering, and plugin reload.
-    const snapshot = initial
-    try {
-      const stored = await runtime.withDatabase(database => withImmediateTransaction(database, () => (
-        readInputClaim(database, sessionId, turn) ?? backupInputClaimInTransaction(database, {
-          dshSessionId: sessionId, nativeTurn: turn, messages: snapshot.messages,
-        })
-      )))
-      snapshot.messages = stored.messages
-      snapshot.providerStarted ||= stored.providerStarted
-      snapshot.sideEffectStarted ||= stored.sideEffectStarted
-      snapshot.recovered ||= stored.recoveryCount !== 0 || (stored.status !== 'claimed' && stored.status !== 'recoverable')
-    } catch {
-      // Auxiliary persistence cannot veto native assembly or admission. The
-      // original process-local snapshot still covers a pre-provider failure.
-    }
-  }
+  const observation = createSessionObservation(runtime)
+  const captureInitialInput = observation.captureInitialInput
   let retireSupersededRun: ((item: TurnRecord, status: 'completed' | 'failed' | 'cancelled') => Promise<void>) | undefined
-  let resumeExistingRun: ((event: DshPreStepEvent) => Promise<DshIntakeGateResult | undefined>) | undefined
 
-  const identityKey = (agentId: string, sessionId: string): string => dshPonytailOwnerKey(agentId, sessionId)
-  const turnKey = (agentId: string, sessionId: string, turn: number): string => `${identityKey(agentId, sessionId)}\u0000${turn}`
-  const record = (event: DshPreStepEvent, result: DshIntakeGateResult, generation: number): void => {
-    const run = result.prepared.run.runId
-    const latest = latestBySession.get(event.sessionId)
-    if (latest !== undefined && (latest.nativeAgent !== event.nativeAgent || latest.nativeSession !== event.nativeSession)) {
-      throw new Error('kiokuko-dsh session identity changed while the previous native session is active')
-    }
-    if (latest !== undefined && latest.turn > event.turn) return
-    const key = turnKey(event.agent.id, event.sessionId, event.turn)
-    const previous = turns.get(key)
-    if (previous !== undefined && previous.runId !== run) throw new Error('kiokuko-dsh logical turn changed run identity')
-    if (previous !== undefined && (previous.nativeAgent !== event.nativeAgent || previous.nativeSession !== event.nativeSession)) {
-      throw new Error('kiokuko-dsh logical turn changed native agent or session identity')
-    }
-    const incomingRevision = result.prepared.ennoOduno.contractRevision ?? 0
-    const previousRevision = previous?.prepared.ennoOduno.contractRevision ?? 0
-    if (previous !== undefined && (incomingRevision < previousRevision
-      || incomingRevision === previousRevision && generation <= previous.prepareGeneration)) return
-    const item: TurnRecord = previous ?? {
-      agentId: event.agent.id,
-      sessionId: event.sessionId,
-      runId: run,
-      workspace: result.prepared.project.workspace,
-      orchestrationId: result.prepared.intake.sessionId,
-      repositoryRoot: result.prepared.project.repositoryRoot,
-      cwd: event.cwd,
-      task: event.task,
-      ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
-      turn: event.turn,
-      prepared: result.prepared,
-      catalog: result.catalog,
-      prepareGeneration: generation,
-      ...(latest?.runId === run && latest.memoryInput !== undefined ? { memoryInput: latest.memoryInput } : {}),
-      failed: false,
-      closed: false,
-    }
-    if (event.nativeAgent !== undefined) item.nativeAgent = event.nativeAgent
-    if (event.nativeSession !== undefined) item.nativeSession = event.nativeSession
-    item.turn = event.turn
-    const sameRevision = previous !== undefined && incomingRevision === previousRevision
-      && previous.prepared.ennoOduno.applicable === result.prepared.ennoOduno.applicable
-    if (sameRevision) {
-      // A newer prepare may carry a newer context delivery while Enno has not
-      // advanced its revision. Preserve the active lease and other policy
-      // state; only replace the authoritative prepared context and delivery.
-      item.prepared = { ...item.prepared, context: result.prepared.context, memoryPolicy: result.prepared.memoryPolicy }
-    } else {
-      item.prepared = result.prepared
-    }
-    item.prepareGeneration = generation
-    item.task = event.task
-    item.catalog = result.catalog
-    turns.set(key, item)
-    latestBySession.set(event.sessionId, item)
-    const modeRequest = `dsh:${event.agent.id}:${event.sessionId}:${event.turn}`
-    const modeKey = identityKey(event.agent.id, event.sessionId)
-    const activeModeRequest = activeModeRequests.get(modeKey)
-    if (activeModeRequest !== modeRequest) {
-      if (activeModeRequest !== undefined) modes.end(activeModeRequest)
-      modes.begin(modeRequest, modeKey)
-      activeModeRequests.set(modeKey, modeRequest)
-    }
-    const existingState = states.get(item.runId)
-    if (existingState !== undefined && existingState.revision === incomingRevision
-      && existingState.phase === phaseForState(result.prepared.ennoOduno)) {
-      // A continued native turn for the same Enno revision must retain the
-      // active WorkUnit lease and route epoch. Rebuilding policy from the
-      // public prepared projection would silently discard those host-only
-      // credentials and make the first report after recovery fail with
-      // lease_required. The operation path already advances this state when
-      // Enno changes phase; at pre-step only the delivery and authoritative
-      // native turn can legitimately be refreshed without a new contract
-      // revision.
-      const { deliveryId: _previousDeliveryId, ...withoutDeliveryId } = existingState
-      const deliveryId = result.prepared.context?.deliveryId
-      const next = deliveryId === null || deliveryId === undefined
-        ? { ...withoutDeliveryId, nativeTurn: event.turn }
-        : { ...withoutDeliveryId, deliveryId, nativeTurn: event.turn }
-      states.set(item.runId, next)
-      policy.setState(next)
-    } else {
-      const next = policyState(result.prepared.ennoOduno, item, event.sessionId, resumedLeases.get(run))
-      resumedLeases.delete(run)
-      states.set(item.runId, next)
-      policy.setState(next)
-    }
-    if (selections.get(item.runId)?.value.mode === 'normal') {
-      const { nextAction: _unused, ...ordinaryState } = states.get(item.runId)!
-      const next: DshToolPolicyState = { ...ordinaryState, phase: 'normal' }
-      states.set(item.runId, next)
-      policy.setState(next)
-    }
-  }
-  const bindAndRecord = async (event: DshPreStepEvent, result: DshIntakeGateResult, generation: number): Promise<void> => {
-    const sourceStartSeq = event.sourceStartSeq
-      ?? dshTurnBoundarySeq(sessionEventSource(event.nativeSession), event.turn, 'start')
-    await memoryFinalizer.bindRunStart({
-      runId: result.prepared.run.runId,
-      workspace: result.prepared.project.workspace,
-      dshSessionId: event.sessionId,
-      sourceStartSeq,
-      sourceStartTurn: event.turn,
-    })
-    record(event, result, generation)
-    const reviewItem = currentSession(event.sessionId)
-    const reviewAgent = event.nativeAgent as ReviewAgent | undefined
-    if (reviewItem && reviewAgent?.session && typeof reviewAgent.session.snapshotEvents === 'function') {
-      const eligible = () => {
-        const item = currentSession(event.sessionId), selection = selections.get(reviewItem.runId)?.value
-        const header = reviewAgent.session.header
-        return item?.runId === reviewItem.runId && !item.closed && !item.failed && item.prepared.run.status === 'active'
-          && !item.prepared.ennoOduno.applicable && !selection?.discussion && (!selection || selection.mode === 'normal' && selection.status === 'ready')
-          && !delegation.isChild(reviewAgent) && !deepPlanning.executor.isChild(reviewAgent) && !header?.parentSession && header?.origin !== 'subagent' && !header?.delegationDepth
-          && !executionSupport.paused(event.sessionId)
-      }
-      answerReview.bind({ runId: reviewItem.runId, workspace: reviewItem.workspace, requestId: `run:${reviewItem.runId}`, task: reviewItem.task,
-        catalogDigest: reviewItem.catalog.digest, turn: event.turn, agent: reviewAgent, eligible,
-        current: () => { const item = currentSession(event.sessionId); return item?.runId === reviewItem.runId && item.nativeAgent === reviewAgent && item.nativeSession === reviewAgent.session && agents?.get(reviewAgent.id) === reviewAgent && sessions?.get(event.sessionId) === reviewAgent.session },
-        settled: async () => {
-          const item = currentSession(event.sessionId)
-          if (!item || item.runId !== reviewItem.runId || item.closed || (reviewAgent as any).status === 'running') return
-          const intent = await resolveIdleClose(item.agentId,item.sessionId,item.nativeSession,item.nativeAgent)
-          if (intent) await retireSupersededRun?.(item,intent.status)
-        },
-      })
-    }
-    if (result.admitted && result.prepared.run.status === 'active' && currentSession(event.sessionId)?.prepareGeneration === generation && !delegation.isChild(event.nativeAgent ?? {})) {
-      await runtime.withDatabase(db => {
-        if (currentSession(event.sessionId)?.prepareGeneration !== generation) return
-        bindMemoryApplication(db, {
-        runId: result.prepared.run.runId, workspace: result.prepared.project.workspace,
-        sessionId: event.sessionId, repositoryRoot: result.prepared.project.repositoryRoot,
-      }, result.prepared.intake.profile, result.prepared.context,
-      memoryRetrievalStatus(db, result.prepared.project.workspace, result.prepared.context, result.prepared.memoryPolicy.contextWithheld))
-      })
-    }
-    if(event.nativeSession && !delegation.isChild(event.nativeAgent??{})) {
-      try { await autoReview.bind({workspace:result.prepared.project.workspace,runId:result.prepared.run.runId,session:event.nativeSession as ReviewNativeSession,startSeq:sourceStartSeq}) }
-      catch { /* Unsupported or unavailable review source must not veto a native request. */ }
-    }
-  }
-
-  const refreshContinuedWorkLease = async (
-    item: TurnRecord,
-    expected: EnnoOdunoState,
-  ): Promise<{ state: EnnoOdunoState; lease: EnnoExecutionLease } | undefined> => {
-    const expectedWorkUnitId = expected.nextAction === 'execute_work_unit'
-      ? expected.directive?.workUnit?.id
-      : undefined
-    if (expectedWorkUnitId === undefined) return undefined
-    return runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-      const snapshot = readEnnoSnapshot(database, {
-        runId: item.runId,
-        workspace: item.workspace,
-        orchestrationId: item.orchestrationId,
-      })
-      const state = stateForSnapshot(snapshot)
-      const workUnitId = state.nextAction === 'execute_work_unit'
-        ? state.directive?.workUnit?.id
-        : undefined
-      if (state.contractRevision !== expected.contractRevision || workUnitId !== expectedWorkUnitId) {
-        throw new KiokukoError('CONFLICT', 'Enno WorkUnit changed before DSH turn recovery')
-      }
-      if (snapshot.dshSessionId !== item.sessionId) {
-        throw new KiokukoError('CONFLICT', 'Enno DSH route changed before WorkUnit recovery')
-      }
-      return {
-        state,
-        lease: claimExecutionLeaseInTransaction(database, snapshot, workUnitId, {
-          dshSessionId: item.sessionId,
-        }),
-      }
-    }))
-  }
-
-  class CapturingGate extends DshIntakeGate {
-    async choose(event: DshPreStepEvent, result: DshIntakeGateResult): Promise<DshIntakeGateResult> {
-      const runId = result.prepared.run.runId
-      let stored = await runtime.withDatabase(db => readExecutionSelection(db, runId))
-      if (result.admitted && result.prepared.selectedSkills === undefined) {
-        const task = await runtime.withDatabase(db => readAkinatorSession(db, { workspace: result.prepared.project.workspace, sessionId: result.prepared.intake.sessionId }).task)
-        result.prepared.selectedSkills = await selectInstalledSkills(decisions, `run:${runId}`, task, [...event.capabilities.skills, ...event.capabilities.tools], result.prepared.capabilities, event.signal)
-      }
-      // Legacy accepted plans keep their original execution contract. A draft
-      // awaiting the new review gate must first acquire an explicit check binding.
-      if (!stored && result.prepared.ennoOduno.status === 'zenki_planning') {
-        stored = await runtime.withDatabase(db => {
-          initializeExecutionSelection(db, runId)
-          const current = readExecutionSelection(db, runId)!
-          return current.value.mode === 'pending' ? writeExecutionSelection(db, runId, current.revision, { mode: 'enno', status: 'selecting' }) : current
-        })
-      }
-      if (!stored) return result
-      const discussion = stored.value.discussion
-      if (discussion && event.turn > discussion.turn) {
-        const incomingType = resolveGroundedIntakeProfile({ task: event.task, cwd: event.cwd,
-          ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
-        }).profileHints.taskType
-        const requestedMode = explicitExecutionMode(event.task)
-        if (requestedMode !== undefined || incomingType !== null && incomingType !== 'chat') {
-          const { discussion: _answered, ...value } = stored.value
-          const revision = stored.revision
-          stored = await runtime.withDatabase(db => writeExecutionSelection(db, runId, revision,
-            requestedMode === undefined ? value : { ...value, mode: 'pending' }))
-        }
-      }
-      if (!ENNO_APPLICABLE_TASK_TYPES.includes(result.prepared.intake.profile.taskType as typeof ENNO_APPLICABLE_TASK_TYPES[number])) {
-        const revision = stored.revision
-        if (stored.value.mode === 'pending') await runtime.withDatabase(db => db.prepare('DELETE FROM dsh_execution_selections WHERE run_id = ? AND revision = ?').run(runId, revision))
-        return result
-      }
-      selections.set(runId, stored)
-      const lispCoding = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
-      if (stored.value.mode === 'pending' && !stored.value.discussion && event.nativeAgent && lispCoding?.enabled(event.nativeAgent)) {
-        if (explicitExecutionMode(event.task) === 'enno') throw new ExecutionSelectionPending('Lispモードでは役小角を使えません。/kioku-lisp disable で解除してから選択してください。')
-        stored = await runtime.withDatabase(db => writeExecutionSelection(db, runId, stored!.revision, {
-          mode: 'normal', status: 'ready', ...(stored!.value.ordinaryModel ? { ordinaryModel: stored!.value.ordinaryModel } : {}),
-        }))
-        selections.set(runId, stored)
-      }
-      const selected = await selectExecution({
-        task: event.task, turn: event.turn, signal: event.signal, stored, routes: options.modelRoutes ?? [],
-        ...(event.nativeAgent ? { agent: event.nativeAgent } : {}),
-        ...(userQuestions ? { questions: userQuestions } : {}),
-        ...(modelCatalog ? { llm: modelCatalog } : {}),
-        ...(modelCompatibility ? { compatibility: modelCompatibility } : {}),
-        save: async (revision, value) => {
-          const saved = await runtime.withDatabase(db => writeExecutionSelection(db, runId, revision, value))
-          selections.set(runId, saved)
-          return saved
-        },
-      })
-      selections.set(runId, selected)
-      const ennoOduno = selected.value.discussion ? result.prepared.ennoOduno
-        : await runtime.withDatabase(db => ennoStateForPreparedTask(db, result.prepared, event.sessionId))
-      return { ...result, prepared: { ...result.prepared, ennoOduno } }
-    }
-    override async prepare(event: DshPreStepEvent): Promise<DshIntakeGateResult> {
-      // Capture completion ordering before any asynchronous database or intake
-      // work. Revision ordering alone cannot distinguish two same-revision
-      // context deliveries that finish out of order.
-      const generation = ++prepareGeneration
-      const reviewProject=await runtime.withDatabase((database) => resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true }))
-      if(reviewProject)await autoReview.acceptInput(reviewProject.workspace,event.sessionId,event.task)
-      const cacheKey = `${event.sessionId}\u0000${event.turn}`
-      const fingerprint = canonicalContentHash({
-        sessionId: event.sessionId,
-        agentId: event.agent.id,
-        turn: event.turn,
-        sourceStartSeq: event.sourceStartSeq ?? null,
-        task: event.task,
-        cwd: event.cwd,
-        profileHints: event.profileHints ?? null,
-        evidence: event.evidence ?? null,
-        skillDiscoveryMode: event.skillDiscoveryMode ?? null,
-        catalogDigest: event.capabilities.digest,
-      })
-      const cached = continuedTurns.get(cacheKey) ?? resumedTurns.get(cacheKey)
-      if (cached !== undefined) {
-        if (cached.fingerprint !== fingerprint
-          || cached.nativeAgent !== event.nativeAgent
-          || cached.nativeSession !== event.nativeSession) {
-          throw new KiokukoError('CONFLICT', 'dsh continued turn was reused with different bound input')
-        }
-        this.assertCatalog(cached.result.catalog, event.capabilities)
-        if (!hasHumanInput(event.nativeMessages ?? []) && event.nativeMessages?.some(message => objectRecord(objectRecord(message)?.source)?.form === ANSWER_REVIEW_FORM)) {
-          if (!event.nativeAgent || !await answerReview.accept(event.nativeAgent as ReviewAgent, event.nativeMessages, event.turn, event.capabilities.digest)) throw new Error('Stale answer review continuation')
-        }
-        return event.signal.aborted ? { ...cached.result, admitted: false } : this.choose(event, cached.result)
-      }
-      const previous = currentForAgentEvent(event.agent.id, event.sessionId, undefined, event.nativeSession, event.nativeAgent)
-      const reviewMessages = event.nativeMessages ?? []
-      if (hasHumanInput(reviewMessages)) answerReview.humanInput(event.sessionId, event.turn)
-      if (!hasHumanInput(reviewMessages) && reviewMessages.some(message => objectRecord(objectRecord(message)?.source)?.form === ANSWER_REVIEW_FORM)) {
-        if (!previous || !event.nativeAgent || !await answerReview.accept(event.nativeAgent as ReviewAgent, reviewMessages, event.turn, event.capabilities.digest)) throw new Error('Unbound answer review continuation')
-        const continued = { admitted: true, prepared: previous.prepared, catalog: previous.catalog }
-        continuedTurns.set(cacheKey, { fingerprint, result: continued, nativeAgent: event.nativeAgent, ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }) })
-        await bindAndRecord(event, continued, generation)
-        return continued
-      }
-      if (previous !== undefined && previous.turn === event.turn && !previous.closed) {
-        // Model routing prepares before native pre-step. Reuse that exact
-        // intake result instead of treating its newly active run as a cold
-        // resume (which deliberately starts without historical context).
-        const prepared = await super.prepare(event)
-        if (prepared.prepared.run.runId !== previous.runId) throw new KiokukoError('CONFLICT', 'The prepared native turn changed run identity')
-        const selected = await this.choose(event, prepared)
-        if (selected.admitted) await bindAndRecord(event, selected, generation)
-        return selected
-      }
-      if (previous !== undefined && previous.turn < event.turn) {
-        if (event.signal.aborted) return { admitted: false, prepared: previous.prepared, catalog: event.capabilities }
-        let previousState = await runtime.withDatabase((database) => stateForRun(database, previous))
-        // DSH's dedicated plan-review card returns the composer to the user
-        // when they choose "Chat about it". The next human message is the
-        // requested plan revision; settle it host-side before Zenki resumes.
-        // This keeps enno_answer host-only and avoids reopening Akinator.
-        if (previousState.nextAction === 'ask_user_confirmation' && previousState.contractRevision !== null) {
-          const expectedRevision = previousState.contractRevision
-          const requestedChanges = event.task.trim()
-          if (requestedChanges.length === 0) throw new KiokukoError('VALIDATION_ERROR', 'Plan revision feedback is empty')
-          const revised = await runtime.withDatabase((database) => answerEnno(database, {
-            runId: previous.runId,
-            workspace: previous.workspace,
-            orchestrationId: previous.orchestrationId,
-            expectedRevision,
-            idempotencyKey: `dsh-confirmation-feedback:${canonicalContentHash({
-              runId: previous.runId,
-              revision: expectedRevision,
-              sessionId: event.sessionId,
-              turn: event.turn,
-              requestedChanges,
-            })}`,
-            action: 'revise',
-            requestedChanges,
-          }))
-          previous.prepared = { ...previous.prepared, ennoOduno: revised.ennoOduno }
-          const next = policyState(revised.ennoOduno, previous, previous.sessionId, revised.executionLease)
-          states.set(previous.runId, next)
-          policy.setState(next)
-          previousState = revised.ennoOduno
-        }
-        const previousWasChat = previous.prepared.intake.profile.taskType === 'chat'
-        const superseded = previous.prepared.ennoOduno.applicable && supersedesUnstartedEnno(event, previousState)
-        const selection = selections.get(previous.runId)?.value
-        const continuePrevious = selection && (selection.status !== 'ready' || selection.mode === 'normal' && previous.failed)
-          ? true : previousWasChat
-          ? event.profileHints?.taskType === 'chat'
-          : !superseded
-            && previousState.status !== 'completed'
-            && previousState.status !== 'blocked'
-            && previousState.status !== 'cancelled'
-            && (previousState.nextAction !== 'complete' || executionSupport.paused(previous.sessionId))
-        if (continuePrevious) {
-          this.assertCatalog(previous.catalog, event.capabilities)
-          const refreshedWork = await refreshContinuedWorkLease(previous, previousState)
-          if (refreshedWork !== undefined) {
-            previous.prepared = { ...previous.prepared, ennoOduno: refreshedWork.state }
-            const next = policyState(refreshedWork.state, previous, previous.sessionId, refreshedWork.lease)
-            states.set(previous.runId, next)
-            policy.setState(next)
-          }
-          let continuedMemory:Pick<PreparedAgentTask,'context'|'memoryPolicy'>|undefined
-          if(!ennoMemory.ownsActiveRefresh(previous.prepared.ennoOduno)) {
-            const captured=previous.prepared, started=performance.now()
-            const inboxIdentity=()=>canonicalContentHash([...((event.nativeAgent as any)?.inbox?.nextStep??[]),...((event.nativeAgent as any)?.inbox?.nextTurn??[])].filter(isHumanMessage))
-            const pendingInput=inboxIdentity()
-            const assertCurrent=()=>{
-              event.signal.throwIfAborted()
-              if(inboxIdentity()!==pendingInput||previous.closed||previous.prepared!==captured||currentSession(event.sessionId)!==previous||prepareGeneration!==generation)
-                throw new KiokukoError('CONFLICT', 'continued_memory_stale')
-              if(event.nativeSession!==previous.nativeSession||event.nativeAgent!==previous.nativeAgent)throw new KiokukoError('CONFLICT', 'continued_memory_owner_changed')
-              if(performance.now()-started>1000+(decisions.memoryReuse.mode==='auto'?decisions.memoryReuse.budgetMs:0))throw new Error('continued_memory_deadline')
-            }
-            try { continuedMemory=await runtime.withDatabase(async (database,embedding)=>{
-              if(embedding.mode==='required')throw new Error('required_embedding_unavailable')
-              return refreshContinuedTaskContext({database, memoryReuse: await createMemoryReuseRuntime(decisions, `run:${captured.run.runId}`, event.signal), prepared:captured,task:event.task,capabilities:[...event.capabilities.skills,...event.capabilities.tools],assertCurrent,
-                validateCapabilities:async()=>{const fresh=await capabilityCatalog(skills,tools,{agent:event.agent,...(event.nativeAgent?{nativeAgent:event.nativeAgent}:{}),cwd:event.cwd,signal:event.signal});this.assertCatalog(event.capabilities,fresh);assertCurrent()}})
-            }) } catch (error) {
-              if(event.signal.aborted || error instanceof KiokukoError && ['CONFLICT','SECURITY_REJECTION','AUTHENTICATION_ERROR','INTEGRITY_ERROR'].includes(error.code))throw error
-              /* Optional retrieval failure retains the previous delivery, whose state is validated before injection. */
-            }
-          }
-          const continued = await this.choose(event, { admitted: !event.signal.aborted, prepared: continuedMemory?{...previous.prepared,...continuedMemory}:previous.prepared, catalog: event.capabilities })
-          if (continued.admitted) {
-            continuedTurns.set(cacheKey, {
-              fingerprint,
-              result: continued,
-              ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
-              ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
-              ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
-            })
-            await bindAndRecord(event, continued, generation)
-          }
-          return continued
-        }
-        if (event.signal.aborted) return { admitted: false, prepared: previous.prepared, catalog: event.capabilities }
-        if (retireSupersededRun === undefined) throw new Error('kiokuko-dsh run lifecycle is unavailable')
-        await retireSupersededRun(
-          previous,
-          superseded || previousState.status === 'cancelled' ? 'cancelled' : previousState.status === 'blocked' ? 'failed' : 'completed',
-        )
-      }
-      const resumed = await resumeExistingRun?.(event)
-      if (resumed !== undefined) {
-        resumedTurns.set(cacheKey, {
-          fingerprint,
-          result: resumed,
-          ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
-          ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
-          ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }),
-        })
-        await bindAndRecord(event, resumed, generation)
-        const selected = await this.choose(event, resumed)
-        await bindAndRecord(event, selected, ++prepareGeneration)
-        return selected
-      }
-      const prepared = await super.prepare(event)
-      if (!prepared.admitted) return prepared
-      await bindAndRecord(event, prepared, generation)
-      const selected = await this.choose(event, prepared)
-      await bindAndRecord(event, selected, ++prepareGeneration)
-      return selected
-    }
-    override async preStep(event: DshPreStepEvent, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> {
-      if (event.nativeAgent && delegation.isChild(event.nativeAgent)) return next()
-      // The native chain owns admission and the original message ordering.
-      // Run it before any Kiokuko storage or classification work so an
-      // auxiliary database failure cannot delay or rewrite its decision.
-      const downstream = await next()
-      if (downstream.kind !== 'enter') return downstream
-      if (event.nativeAgent && selectionBlocked.has(event.nativeAgent)) return { kind: 'reject' }
-      const nativeMessages = Object.freeze([...(event.nativeMessages ?? [])])
-      await captureInitialInput(event.sessionId, event.turn, nativeMessages)
-      const humanPresent = nativeMessages.some(isHumanMessage) || downstream.messages.some(isHumanMessage)
-      const seenContinuations = new Set<string>()
-      let nativeDecision: DshPreStepDecision = {
-        ...downstream,
-        messages: downstream.messages.filter((message) => {
-          const deliveryId = pluginContinuationId(message)
-          if (deliveryId === undefined) return true
-          if (humanPresent || seenContinuations.has(deliveryId)) return false
-          seenContinuations.add(deliveryId)
-          return true
-        }),
-      }
-      if (humanPresent) {
-        answerReview.humanInput(event.sessionId, event.turn)
-        nativeDecision = { ...nativeDecision, messages: nativeDecision.messages.filter(message => objectRecord(objectRecord(message)?.source)?.form !== ANSWER_REVIEW_FORM) }
-        boundaryWorker.cancelSession(event.sessionId)
-        const previous = currentSession(event.sessionId)
-        if (previous) ennoMemory.invalidate(previous.runId)
-        const state = previous === undefined ? undefined : states.get(previous.runId)
-        if (previous !== undefined) {
-          try {
-            await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-              if (state !== undefined) {
-                const now = options.now?.() ?? new Date().toISOString()
-                supersedeOutboxAtOrBeforeRevisionInTransaction(database, event.sessionId, state.revision, now)
-                supersedeBoundaryJobsAtOrBeforeRevisionInTransaction(database, event.sessionId, state.revision, now)
-              }
-              resetLoopGuardForUserInTransaction(database, {
-                runId: previous.runId,
-                dshSessionId: event.sessionId,
-                resolution: 'manual_user',
-                ...(options.now === undefined ? {} : { now: options.now() }),
-              })
-            }))
-          } catch {
-            // Human input remains authoritative in the current native batch;
-            // stale durable outbox cleanup will be retried on a later kick.
-          }
-        }
-      }
-      try {
-        const result = await this.prepare(event)
-        if (!result.admitted) return nativeDecision
-        const item = currentSession(event.sessionId)
-        if (item !== undefined) {
-          if (selections.get(item.runId)?.value.status === 'ready' || selections.get(item.runId)?.value.discussion) {
-            const original = await runtime.withDatabase(db => unexecutedRunInput(db, item.runId, item.sessionId))
-            const deliveredIds = new Set(sessionEventSource(event.nativeSession).snapshotEvents()
-              .filter(e => e.type === 'user/message').map(e => objectRecord(e.data)?.id))
-            const currentIds = new Set(nativeDecision.messages.map(m => objectRecord(m)?.id))
-            const missing = original.filter(m => {
-              const id = objectRecord(m)?.id
-              return typeof id === 'string' && !deliveredIds.has(id) && !currentIds.has(id)
-            })
-            if (missing.length) nativeDecision = { ...nativeDecision, messages: [...missing, ...nativeDecision.messages] }
-          }
-          const humanMessages = [...new Map([...nativeMessages, ...nativeDecision.messages].filter(isHumanMessage)
-            .map(message => [objectRecord(message)?.id ?? canonicalContentHash(message), message])).values()]
-          const humanTask = humanPresent ? textFromMessages(humanMessages, event.task) : undefined
-          if (humanTask !== undefined) item.memoryInput = humanTask
-          await executionSupport.refresh({ ...executionBinding(item), ...(humanTask === undefined ? {} : {
-            // Steering within a native turn must update optional conditions,
-            // without changing the logical-turn intake/receipt identity.
-            task: humanTask, humanInput: canonicalContentHash({ turn: event.turn, messages: humanMessages }),
-          }) }, humanPresent)
-          // Only an empty, automatic step can be deliberately paused. Human,
-          // attachment and other pending inputs must never be consumed here.
-          if (!humanPresent && event.nativeMessages?.length === 0 && nativeDecision.messages.every(message => {
-            const source = objectRecord(objectRecord(message)?.source)
-            return (source?.kind === 'runtime-context' || source?.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt') && source.form === 'snapshot'
-          })) {
-            const paused = await executionSupport.pauseAtBoundary(event.sessionId, async (id, text) => {
-              const session = event.nativeSession as { snapshotEvents?: () => readonly DshLogEvent[] } | undefined
-              if (!session?.snapshotEvents || !sessions?.flush) throw new Error('Pause notice delivery unavailable')
-              await runtime.withDatabase(db => saveSessionNotice(db, { id, runId: item.runId, sessionId: item.sessionId,
-                rootPath: item.cwd, kind: 'status', text, anchorSeq: session.snapshotEvents!().at(-1)?.seq ?? 0 }))
-              await sessions.flush(session)
-              event.signal.throwIfAborted()
-              // A human can arrive while the native log flush is in flight.
-              const inbox = (event.nativeAgent as any)?.inbox
-              if ([...(inbox?.nextStep ?? []), ...(inbox?.nextTurn ?? [])].some(isHumanMessage)) {
-                throw new Error('Human input takes priority over exploration pause')
-              }
-            })
-            if (paused) return { kind: 'reject' }
-          }
-        }
-        if (item !== undefined && !selections.get(item.runId)?.value.discussion) await refreshEnnoMemory(item, event.signal)
-        const messages = await contextMessages(event, nativeDecision.messages)
-        return { ...nativeDecision, messages: [...executionSupport.projectMessages(event.sessionId, nativeDecision.messages), ...messages] }
-      } catch (error) {
-        if (error instanceof ExecutionSelectionPending) return { kind: 'reject' }
-        if (!humanPresent && nativeMessages.some(message => objectRecord(objectRecord(message)?.source)?.form === ANSWER_REVIEW_FORM)) return { kind: 'reject' }
-        // The native message array is authoritative. Kiokuko degradation must
-        // not turn a claimed user prompt into a rejected/empty DSH step.
-        return nativeDecision
-      }
-    }
-    override clearTurn(sessionId: string, turn: number): void {
-      super.clearTurn(sessionId, turn)
-      continuedTurns.delete(`${sessionId}\u0000${turn}`)
-      resumedTurns.delete(`${sessionId}\u0000${turn}`)
-    }
-  }
-
-  const gate = new CapturingGate(
-    runtime,
-    userQuestions === undefined ? undefined : createDshIntakeAnswerer(userQuestions),
-    (context) => capabilityCatalog(skills, tools, context),
-    true,
-    akinatorMemoryConfig,
-    decisions,
-  )
-  const currentSession = (sessionId: string): TurnRecord | undefined => latestBySession.get(sessionId)
+  const admission = createAdmission({
+    native, skills, tools, userQuestions, sessions, agents, deepPlanning, modelCatalog, modelCompatibility,
+    modelRoutes: options.modelRoutes, now: options.now, runtime, decisions, answerReview,
+    delegation, executionSupport, ennoMemory, memoryFinalizer, autoReview, sessionMirror,
+    akinatorMemoryConfig, turnState,
+    getSelection: runId => selections.get(runId), setSelection: (runId, value) => { selections.set(runId, value) },
+    refreshEnnoMemory, executionBinding, captureInitialInput,
+    contextMessages: (event, pending) => contextMessages(event, pending),
+    resolveIdleClose: (agentId, sessionId, nativeSession, nativeAgent) => resolveIdleClose(agentId, sessionId, nativeSession, nativeAgent),
+    retireSupersededRun: (item, status) => {
+      if (retireSupersededRun === undefined) throw new Error('kiokuko-dsh run lifecycle is unavailable')
+      return retireSupersededRun(item, status)
+    },
+    cancelBoundarySession: sessionId => boundaryWorker.cancelSession(sessionId),
+    isSelectionBlocked: agent => routing.isSelectionBlocked(agent),
+    closeTurn: input => runLifecycle.closeTurn(input),
+    readStateForRun: item => runtime.withDatabase(db => stateForRun(db, item)),
+    capabilityCatalog, sessionEventSource, objectRecord, isHumanMessage,
+    textFromMessages, pluginContinuationId, isLoopRecoveryMessage,
+  })
+  const gate = admission.gate
+  const mapPreStep = admission.mapPreStep
   const discussionGuardDisposer = tools?.guard((value) => {
     const agent = (value as { agent?: NativeAgent }).agent
     if (!agent?.session) return undefined
@@ -1319,1715 +482,58 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     }
     return undefined
   })
-  const currentForAgentEvent = (agentId: string, sessionId?: string, turn?: number, nativeSession?: object, nativeAgent?: object): TurnRecord | undefined => {
-    // The session is the authoritative route key. Agent ID alone is not
-    // sufficient because an agent can own multiple sessions over its life.
-    if (sessionId === undefined) return undefined
-    const matchesNativeIdentity = (item: TurnRecord): boolean => {
-      const sessionMatches = item.nativeSession === undefined ? nativeSession === undefined : nativeSession !== undefined && item.nativeSession === nativeSession
-      const agentMatches = item.nativeAgent === undefined ? nativeAgent === undefined : nativeAgent !== undefined && item.nativeAgent === nativeAgent
-      return sessionMatches && agentMatches
-    }
-    const item = currentSession(sessionId)
-    return item?.agentId === agentId && (turn === undefined || item.turn === turn) && matchesNativeIdentity(item) ? item : undefined
-  }
-  const advisoryEvidenceFor = async (item: TurnRecord, state: EnnoOdunoState): Promise<{
-    readonly phase: DshAdvisoryRoundResult['phase']
-    readonly contributions: DshAdvisoryRoundResult['contributions']
-  } | undefined> => {
-    const advisoryState = state.advisoryPhaseState
-    const contractRevision = state.contractRevision
-    if (advisoryState.state !== 'aggregated' || contractRevision === null) return undefined
-    let round = advisoryRounds.get(item.runId)
-    if (round?.stateDigest !== advisoryState.inputDigest) {
-      const restored = await runtime.withDatabase((database) => readPendingEnnoAdvice(database, {
-        runId: item.runId,
-        workspace: item.workspace,
-        orchestrationId: item.orchestrationId,
-        expectedRevision: contractRevision,
-        advisoryRoundDigest: advisoryState.inputDigest,
-      }))
-      round = {
-        stateDigest: restored.advisoryRound.inputDigest,
-        result: {
-          phase: restored.advisoryRound.phase,
-          inputDigest: restored.advisoryRound.inputDigest,
-          contributions: restored.advisoryRound.contributions,
-          degraded: restored.advisoryRound.degraded,
-        },
-      }
-      advisoryRounds.set(item.runId, round)
-    }
-    return { phase: round.result.phase, contributions: round.result.contributions }
-  }
-  resumeExistingRun = async (event): Promise<DshIntakeGateResult | undefined> => runtime.withDatabase(async (database) => {
-    const project = await resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true })
-    if (project === undefined) return undefined
-    const candidates = database.prepare(`
-      SELECT lr.run_id AS runId, ec.orchestration_session_id AS orchestrationId
-      FROM ledger_runs AS lr
-      LEFT JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
-      LEFT JOIN dsh_exploration_states AS es ON es.run_id = lr.run_id
-      LEFT JOIN dsh_execution_selections AS xs ON xs.run_id = lr.run_id
-      WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active'
-        AND ((ec.repository_root = ? AND ec.status NOT IN ('completed', 'cancelled', 'blocked'))
-          OR (ec.run_id IS NULL AND (json_extract(es.state_json, '$.paused') = 1 OR xs.run_id IS NOT NULL)))
-      ORDER BY lr.created_at, lr.run_id LIMIT 2
-    `).all<{ runId: string; orchestrationId: string | null }>(project.workspace, event.sessionId, project.repositoryRoot)
-    if (candidates.length === 0) return undefined
-    if (candidates.length !== 1) throw new KiokukoError('CONFLICT', 'Multiple active runs match this session; refusing to guess')
-    const candidate = candidates[0]!
-    const runId = candidate.runId
-    const snapshot = candidate.orchestrationId === null ? undefined : readEnnoSnapshot(database, {
-      runId, workspace: project.workspace, orchestrationId: candidate.orchestrationId,
-    })
-    if (snapshot && !event.signal.aborted && supersedesUnstartedEnno(event, stateForSnapshot(snapshot))) {
-      terminalizeLedgerRunInTransaction(database, runId, 'cancelled')
-      return undefined
-    }
-    const automaticMessage = event.nativeMessages?.find((message) => {
-      const continuationId = pluginContinuationId(message)
-      if (continuationId === undefined) return false
-      const outbox = database.prepare(`
-        SELECT message_form AS messageForm
-          FROM dsh_continuation_outbox
-         WHERE continuation_id = ?
-      `).get<{ messageForm: 'continuation' | 'loop-recovery' }>(continuationId)
-      return outbox === undefined ? !isLoopRecoveryMessage(message) : outbox.messageForm !== 'loop-recovery'
-    })
-    const automaticClaimId = automaticMessage === undefined ? undefined : pluginContinuationId(automaticMessage)
-    const decision = snapshot ? decideDshContinuation(database, {
-      dshSessionId: event.sessionId, cwd: event.cwd,
-      ...(automaticClaimId === undefined ? {} : { claimId: automaticClaimId }),
-    }, runId) : undefined
-    if (decision && (!decision.continue || decision.runId !== runId)) {
-      throw new KiokukoError('CONFLICT', decision.warning ?? 'The active run cannot be resumed by this DSH session')
-    }
-    const intakeLink = readRunIntakeLink(database, { workspace: project.workspace, runId })
-    const intake = readAkinatorSession(database, { workspace: project.workspace, sessionId: intakeLink.sessionId })
-    if (intake.status === 'active') throw new KiokukoError('INTEGRITY_ERROR', 'Resumable Enno-Oduno run has unfinished intake')
-    const capabilityEntries = [...event.capabilities.skills, ...event.capabilities.tools]
-    const capabilityResolution = resolveCapabilities({
-      task: intake.task,
-      profile: intake.profile,
-      recommendedTags: intakeLink.recommendedTags,
-      capabilities: capabilityEntries,
-      memoryUse: 'none',
-    })
-    const canonicalCwd = realpathSync(event.cwd)
-    const prepared: PreparedAgentTask = {
-      project,
-      executionContext: {
-        canonicalCwd,
-        repositoryRoot: project.repositoryRoot,
-        cwdIsRepositoryRoot: canonicalCwd === project.repositoryRoot,
-        pathPolicy: 'canonical_absolute_under_repository_root',
-      },
-      intake: {
-        status: intake.status,
-        sessionId: intake.id,
-        profile: intake.profile,
-        question: null,
-        missingFields: [],
-        recommendedTags: intakeLink.recommendedTags,
-        reasoning: deriveAkinatorReasoning(intake.task, intake.profile),
-      },
-      capabilities: capabilityResolution,
-      run: { runId, status: 'active' },
-      skillDiscovery: { attempted: false, mode: 'off', requirements: [], queries: [], cacheHits: 0, candidates: 0, selected: [], failures: [] },
-      context: null,
-      memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false, withheldReason: null, deliveryEmpty: true },
-      warnings: capabilityResolution.warnings,
-      nextAction: 'proceed',
-      securityNotice: 'This resumed DSH run uses only current repository evidence and the current host capability catalog; previously delivered ordinary memory is not replayed implicitly. Active ennoMemory may make a new bounded selection under current authority.',
-      ennoOduno: snapshot ? stateForSnapshot(snapshot) : inapplicableEnnoState(),
-    }
-    if (decision?.executionLease) resumedLeases.set(runId, decision.executionLease)
-    return { admitted: !event.signal.aborted, prepared, catalog: event.capabilities }
+  const routing = createRouting({
+    ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview, semanticCompaction, delegation, deepPlanning,
+    getSkillPrompts: () => skillPrompts,
+    getToolExposureConfig: () => toolExposureConfig, reportToolExposureFallback,
+    getSelection: runId => selections.get(runId), setSelection: (runId, value) => { selections.set(runId, value) },
+    hasSelection: runId => selections.has(runId), getPolicyState: runId => turnState.policyState(runId),
+    captureInitialInput, prepareTurn: event => gate.prepare(event), mapPreStep, currentSession,
+    readStateForRun: item => runtime.withDatabase(db => stateForRun(db, item)),
   })
-  const mapPreStep = async (payload: DshNativePreStepPayload): Promise<DshPreStepEvent> => {
-    const nativeSession = payload.agent.session
-    const registered = nativeSession === undefined && payload.agent.sessionId === undefined
-      ? sessions?.get(payload.agent.id)
-      : undefined
-    const sessionId = nativeSession?.id ?? payload.agent.sessionId ?? registered?.id
-    if (typeof sessionId !== 'string' || sessionId.length === 0) throw new Error('kiokuko-dsh native agent session identity is unavailable')
-    const registeredSession = nativeSession === undefined ? sessions?.get(sessionId) : undefined
-    const boundSession = nativeSession ?? registeredSession ?? registered
-    if (boundSession !== undefined && boundSession.id !== sessionId) throw new Error('kiokuko-dsh native session identity is inconsistent')
-    const cwd = boundSession?.header?.cwd
-    if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('kiokuko-dsh native session cwd is unavailable')
-    if (!currentSession(sessionId) && boundSession && !delegation.isChild(payload.agent)) await answerReview.recover(payload.agent as ReviewAgent, async row => {
-      await sessions?.flush?.(boundSession)
-      await sessionMirror.checkpointAfterNativeFlush(boundSession as DshMirrorEventSession)
-      await runLifecycle.closeTurn({ runId: row.runId, status: row.status, ...(row.endSeq === undefined ? {} : { sourceEndSeq: row.endSeq }) })
-    })
-    const sourceStartSeq = dshTurnBoundarySeq(sessionEventSource(boundSession as object | undefined), payload.turn, 'start')
-    const bound = currentForAgentEvent(payload.agent.id, sessionId, payload.turn, boundSession as object | undefined, payload.agent as object)
-    const previous = bound === undefined
-      ? currentForAgentEvent(payload.agent.id, sessionId, undefined, boundSession as object | undefined, payload.agent as object)
-      : undefined
-    // DSH supplies only the messages claimed for this particular step. After
-    // the first step that batch may contain steering/injected context rather
-    // than the original user task, so the established logical-turn record is
-    // the authoritative task projection.
-    // After a turn was deliberately paused, DSH may consume the next-turn
-    // inbox item before pre-step and expose an empty step-local message batch.
-    // The durable Enno run is still authoritative, so fall back to its last
-    // human task. The native conversation retains the new user message for the
-    // model, while any supplied step-local user text still replaces this
-    // fallback and is recorded as the continuation instruction.
-    const reviewing = !hasHumanInput(payload.messages) && payload.messages.some(message => objectRecord(objectRecord(message)?.source)?.form === ANSWER_REVIEW_FORM)
-    const task = bound?.task ?? (reviewing && previous ? previous.task : textFromMessages(payload.messages, previous?.task))
-    let profile = (() => {
-      if (bound !== undefined) return bound.profileHints
-      if (reviewing && previous) return previous.profileHints
-      if (previous === undefined) return undefined
-      const inferred = resolveGroundedIntakeProfile({ task, cwd }).profileHints.taskType
-      const previousType = selections.get(previous.runId)?.value.discussion ? 'chat' : previous.prepared.intake.profile.taskType
-      return inferred === null || previousType === 'chat' && inferred === 'chat' ? { taskType: previousType } : undefined
-    })()
-    if (!reviewing && bound === undefined && !delegation.isChild(payload.agent)) {
-      const taskType = await classifyTask(decisions, dshTurnRequestId({ dshSessionId: sessionId, turn: payload.turn }), task, profile?.taskType, payload.signal)
-      if (taskType) profile = { ...profile, taskType }
-    }
-    const lispCoding = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
-    if (lispCoding && !reviewing && bound === undefined && !previous?.prepared.ennoOduno.applicable && !delegation.isChild(payload.agent)) {
-      const grounded = resolveGroundedIntakeProfile({ task, cwd, ...(profile === undefined ? {} : { profileHints: profile }) })
-      const choice = await lispCoding.prepare({ agent: payload.agent, task, taskType: grounded.profileHints.taskType,
-        turn: payload.turn, signal: payload.signal })
-      profile = { ...profile, taskType: choice.taskType, ...(choice.clarification ? { constraints: choice.clarification } : {}) }
-    }
-    // Lisp changes the scoped tool surface. Bind capabilities only after its
-    // explicit selection and activation, never mutate an already-bound catalog.
-    const catalog = await capabilityCatalog(skills, tools, {
-      agent: { id: payload.agent.id }, nativeAgent: payload.agent, cwd, signal: payload.signal,
-    })
-    return {
-      agent: { id: payload.agent.id },
-      nativeAgent: payload.agent,
-      sessionId,
-      ...(boundSession === undefined ? {} : { nativeSession: boundSession as object }),
-      turn: payload.turn,
-      sourceStartSeq,
-      step: payload.step,
-      nativeMessages: payload.messages,
-      task,
-      cwd,
-      ...(profile === undefined ? {} : { profileHints: profile }),
-      capabilities: catalog,
-      signal: payload.signal,
-    }
-  }
-  const assemblyClaims = new WeakMap<object, { turn: number; messages: unknown[] }>()
-  const markModelUnavailable = (agent: RoutableAgent): Promise<void> => {
-    const owner = delegation.parent(agent) ?? agent
-    const item = owner.session ? currentSession(owner.session.id) : undefined
-    if (!item || selections.get(item.runId)?.value.mode !== 'enno' || !modelRoleForState(item.prepared.ennoOduno)) return Promise.resolve()
-    const existing = selectionFailures.get(item.runId)
-    if (existing) return existing
-    const current = selections.get(item.runId)!
-    const value = { ...current.value, status: 'reselect' as const, problem: '選択したモデルで認証・利用上限・モデル利用可否のエラーが発生しました。完了済みの作業を保持しています。次の要求に使う構成を選び直してください。' }
-    selections.set(item.runId, { ...current, value })
-    const pending = runtime.withDatabase(db => {
-      const stored = readExecutionSelection(db, item.runId)
-      if (!stored) throw new KiokukoError('INTEGRITY_ERROR', 'Model selection disappeared')
-      selections.set(item.runId, writeExecutionSelection(db, item.runId, stored.revision, { ...stored.value, status: 'reselect', problem: value.problem }))
-    }).finally(() => selectionFailures.delete(item.runId))
-    selectionFailures.set(item.runId, pending)
-    return pending
-  }
-  const routingDisposers = new Map<object, () => void>()
-  const installRouting = (agent: RoutableAgent) => {
-    if (routingDisposers.has(agent) || !agent.ctx) return
-    const releaseToolSurfaceRecording = semanticCompaction.deferToolSurfaceRecording(agent as unknown as CompactionAgent)
-    semanticCompaction.attach(agent as unknown as CompactionAgent, async () => {
-      const childModel = await delegation.restoreOrPersist(agent)
-      if (childModel) {
-        const authority = await delegation.authorityFingerprint(agent)
-        return { child: delegation.observationBinding(agent), childSessionId: agent.session?.id, model: childModel, authority }
-      }
-      const header = (agent as unknown as CompactionAgent).session?.header
-      if (header?.parentSession || header?.origin === 'subagent' || header?.delegationDepth) return undefined
-      const item = agent.session ? currentSession(agent.session.id) : undefined
-      return item ? { runId: item.runId, sessionId: item.sessionId, selection: selections.get(item.runId) ?? null,
-        state: await runtime.withDatabase(db => stateForRun(db, item)) } : { sessionId: agent.session?.id }
-    })
-    const disposeMemory = agent.ctx.on('agent/request', async (_event: unknown, next: () => Promise<any>) => {
-      const request = await next()
-      if (delegation.isChild(agent)) return request
-      const prepared = agent.session ? currentSession(agent.session.id)?.prepared : undefined
-      if (!prepared || !agent.session) return request
-      // A unavailable memory catalog degrades to no owned memory, never to a
-      // stale snapshot retained by the native session's historical surface.
-      let allowed: ReadonlyMap<string, string> = new Map()
-      try { allowed = await runtime.withDatabase(db => currentRequestMemory(db, prepared)) } catch { /* no memory is safer than stale memory */ }
-      pruneDshMemorySurface(agent.session, allowed)
-      return request
-    }, { prepend: true })
-    const disposeClaim = agent.ctx.on('agent/inbox/claimed', (event: { agent: RoutableAgent; turn: number; message: unknown }) => {
-      if (event.agent !== agent) return
-      const previous = assemblyClaims.get(agent)
-      if (previous?.turn === event.turn) previous.messages.push(event.message)
-      else assemblyClaims.set(agent, { turn: event.turn, messages: [event.message] })
-    })
-    let autoRoute: { runId: string; sessionId: string; binding: import('./model-configuration.js').ModelBinding } | undefined
-    const disposeRouting = installDshModelRouting(agent, async signal => {
-      autoRoute = undefined
-      const deep = await deepPlanning.beforeAssembly(agent, signal)
-      if (deep.owned) { assemblyClaims.delete(agent); return deep.model }
-      const childModel = await delegation.restoreOrPersist(agent)
-      if (childModel) { await delegation.assertCurrent(agent); return childModel }
-      selectionBlocked.delete(agent)
-      const claim = assemblyClaims.get(agent)
-      assemblyClaims.delete(agent)
-      const current = agent.session ? currentSession(agent.session.id) : undefined
-      if (current) await selectionFailures.get(current.runId)
-      const turn = claim?.turn ?? current?.turn
-      if (turn === undefined) {
-        reportToolExposureFallback('pre_step_missing_turn')
-        return undefined
-      }
-      const messages = claim?.messages ?? []
-      // DSH claims input before assembly. Persist it before showing any UI so
-      // cancellation and restart cannot lose a prompt before the native log append.
-      if (agent.session && messages.length) {
-        await captureInitialInput(agent.session.id, turn, messages)
-      }
-      let admitted: DshIntakeGateResult | undefined
-      try {
-        const event = await mapPreStep({ agent, messages, turn, step: 0, signal })
-        admitted = await gate.prepare(event)
-      } catch (error) {
-        if (error instanceof ExecutionSelectionPending) { selectionBlocked.add(agent); reportToolExposureFallback('pre_step_selection_pending') }
-        else {
-          const existing = agent.session ? currentSession(agent.session.id) : undefined
-          if (existing && selections.has(existing.runId)) throw error
-          const failure = error instanceof KiokukoError ? error.code.toLowerCase() : error instanceof Error ? error.name.toLowerCase() : 'unknown'
-          reportToolExposureFallback(`pre_step_${failure}`)
-
-          // Optional intake enrichment retains its existing degraded behavior.
-        }
-      }
-      const item = agent.session ? currentSession(agent.session.id) : undefined
-      if (!item || item.closed) return undefined
-      const selection = selections.get(item.runId)?.value
-      if (selection && selection.status !== 'ready' && !selection.discussion && item.prepared.intake.profile.taskType !== 'chat') selectionBlocked.add(agent)
-      const role = modelRoleForState(item.prepared.ennoOduno)
-      const reviewModel = answerReview.model(agent as ReviewAgent)
-      if (reviewModel) return reviewModel
-      if (selection?.mode === 'enno' && selection.status === 'ready' && role) return selection.configuration?.roles[role]
-      if ((native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined)?.enabled(agent as DshUserQuestionAgent)) return { kind: 'native' }
-      if (admitted && !role && !selectionBlocked.has(agent) && (!selection || selection.mode === 'normal' && selection.status === 'ready')
-        && item.nativeAgent === agent && item.nativeSession === agent.session && item.turn === turn && !item.closed
-        && !(agent as ReviewAgent).session.header?.parentSession && (agent as ReviewAgent).session.header?.origin !== 'subagent' && !(agent as ReviewAgent).session.header?.delegationDepth) {
-        assertDshModelAdmitted(admitted)
-        const pendingManual = manualModelChanges.get(item.sessionId)
-        if (pendingManual) await pendingManual
-        const decision = await modelAuto.resolve({ runId: item.runId, sessionId: item.sessionId,
-          requestId: dshTurnRequestId({ dshSessionId: item.sessionId, turn: item.turn }), turn: item.turn,
-          task: item.task, ...(item.prepared.intake.profile.taskType ? { taskType: item.prepared.intake.profile.taskType } : {}),
-          attachmentTypes: attachmentTypesFromMessages(messages), measureContext: () => nativeContextTokens(native, agent.session), admitted: true, signal })
-        if (decision.kind === 'apply') { autoRoute = { runId: item.runId, sessionId: item.sessionId, binding: decision.binding }; return decision.binding }
-        return { kind: 'native' }
-      }
-      return undefined
-    }, {
-      load: () => {
-        const runId = agent.session ? currentSession(agent.session.id)?.runId : undefined
-        return runId ? selections.get(runId)?.value.ordinaryModel : undefined
-      },
-      save: async ordinaryModel => {
-        const runId = agent.session ? currentSession(agent.session.id)?.runId : undefined
-        if (!runId || delegation.isChild(agent)) return
-        await modelAuto.baseline(runId, ordinaryModel)
-        await runtime.withDatabase(db => {
-          const stored = readExecutionSelection(db, runId)
-          if (stored && !stored.value.ordinaryModel) selections.set(runId, writeExecutionSelection(db, runId, stored.revision, { ...stored.value, ordinaryModel }))
-        })
-      },
-    }, {
-      prompts: () => skillPrompts,
-      owner: () => agent.session ? currentSession(agent.session.id)?.runId : undefined,
-      beforeRequest: async binding => {
-        if (!autoRoute || !binding) return
-        const pendingManual = manualModelChanges.get(autoRoute.sessionId)
-        if (pendingManual) await pendingManual
-        await modelAuto.assertCurrent(autoRoute.runId, autoRoute.sessionId, binding)
-      },
-      assembled: async assembly => {
-        semanticCompaction.recordRoute(agent as unknown as CompactionAgent, assembly.variables)
-        const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
-        if (lisp) assembly = lisp.project(agent, assembly)
-        if (toolExposureConfig.mode === 'phase') {
-          let fallback: string | undefined
-          const surface = (assembly as { tools?: unknown }).tools
-          const runtimeTools = tools as unknown as { get?: (name: string, scope?: unknown) => unknown; schemas?: (...args: unknown[]) => unknown } | undefined
-          if (!Array.isArray(surface) || typeof runtimeTools?.get !== 'function' || typeof runtimeTools.schemas !== 'function') fallback = 'unsupported_runtime'
-          else if (surface.some(value => typeof value === 'object' && value !== null && !Array.isArray(value) && (value as { name?: unknown }).name === 'run_code')) fallback = 'unsupported_presentation'
-          else {
-            const session = agent.session
-            const item = session ? currentSession(session.id) : undefined
-            const selectionRecord = item ? selections.get(item.runId) : undefined
-            const selection = selectionRecord?.value
-            const state = item ? states.get(item.runId) : undefined
-            const prepared = item?.prepared
-            const unboundReason = !item ? 'turn_record_missing'
-              : !session ? 'native_session_missing'
-              : !selectionRecord || !selection ? 'selection_missing'
-              : !state ? 'policy_state_missing'
-              : !prepared ? 'prepared_state_missing'
-              : selection.status !== 'ready' ? 'selection_not_ready'
-              : selection.discussion ? 'discussion_pending'
-              : selection.mode !== 'normal' && selection.mode !== 'enno' ? 'unsupported_selection_mode'
-              : item.closed ? 'session_closed'
-              : item.failed ? 'session_failed'
-              : prepared.run.status !== 'active' ? 'run_not_active'
-              : currentSession(item.sessionId) !== item ? 'stale_turn_record'
-              : item.nativeAgent !== agent ? 'agent_identity'
-              : item.nativeSession !== session ? 'session_identity'
-              : agents?.get(agent.id) !== agent ? 'agent_registry'
-              : sessions?.get(session.id) !== session ? 'session_registry'
-              : delegation.isChild(agent) ? 'delegated_agent'
-              : deepPlanning.executor.isChild(agent) ? 'deep_planning_agent'
-              : state.runId !== item.runId || state.workspace !== item.workspace || state.orchestrationId !== item.orchestrationId || state.dshSessionId !== item.sessionId || state.nativeTurn !== item.turn ? 'policy_binding'
-              : !hasKnownDshToolPolicyState(state) ? 'unknown_policy_state'
-              : 'unbound'
-            if (!item || !session || !selectionRecord || !selection || !state || !prepared
-              || selection.status !== 'ready' || selection.discussion || (selection.mode !== 'normal' && selection.mode !== 'enno')
-              || item.closed || item.failed || prepared.run.status !== 'active'
-              || currentSession(item.sessionId) !== item || item.nativeAgent !== agent || item.nativeSession !== session
-              || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session
-              || delegation.isChild(agent) || deepPlanning.executor.isChild(agent)
-              || state.runId !== item.runId || state.workspace !== item.workspace || state.orchestrationId !== item.orchestrationId
-              || state.dshSessionId !== item.sessionId || state.nativeTurn !== item.turn || !hasKnownDshToolPolicyState(state)) fallback = `unbound:${unboundReason}`
-            else {
-              const generation = item.prepareGeneration
-              const current = () => currentSession(item.sessionId) === item && !item.closed && !item.failed
-                && item.nativeAgent === agent && item.nativeSession === session && item.prepared === prepared
-                && item.prepareGeneration === generation && selections.get(item.runId) === selectionRecord
-                && states.get(item.runId) === state && agents?.get(agent.id) === agent && sessions?.get(session.id) === session
-                && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent)
-              const projection = projectToolsForPhase(surface as readonly { name: string }[], state, ownedModelToolDefinitions, name => {
-                const definition = runtimeTools.get!.call(tools, name, agent)
-                return typeof definition === 'object' && definition !== null && typeof (definition as { execute?: unknown }).execute === 'function'
-                  ? definition as { execute: unknown } : undefined
-              })
-              if (!current()) fallback = 'unbound:assembly_binding_changed'
-              else if (projection.reason === 'ownership_unknown' || projection.reason === 'unknown_state') fallback = projection.reason
-              else if (projection.reason === 'projected') assembly = Object.assign({}, assembly, { tools: projection.tools })
-            }
-          }
-          if (fallback !== undefined && !reportedToolExposureFallbacks.has(fallback)) {
-            reportedToolExposureFallbacks.add(fallback)
-            console.warn(`[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: ${fallback}`)
-          }
-        }
-        semanticCompaction.recordTools(agent as unknown as CompactionAgent, (assembly as { tools?: unknown }).tools)
-        const delivered = new Set<string>()
-        for (const [name, sectionName] of [['kiokuko-soul','kiokuko:soul'], ['natural-japanese-output','kiokuko:natural-japanese-output'], ['kiokuko-lisp','kiokuko:lisp']]) {
-          const section = assembly.sections.find(section => section.name === sectionName)
-          if (!section) continue
-          const text = section.text.replace(/\{\{([^{}]+)\}\}/gu, (_match, variable: string) => assembly.variables[variable] ?? '')
-          if (text.includes(await skillPrompts.require(name!))) delivered.add(name!)
-        }
-        systemSkillNames.set(agent, delivered)
-        return assembly
-      },
-    })
-    const disposeMemoryFence = agent.ctx.on('llm/stream', (request: any, next: () => AsyncIterable<any>) => (async function* () {
-      const item = agent.session ? currentSession(agent.session.id) : undefined
-      if (item && !item.closed && !delegation.isChild(agent) && request.sessionId === agent.session?.id && request.purpose !== 'compaction') {
-        let allowed: ReadonlyMap<string,string> = new Map()
-        try { allowed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared)) } catch { /* fail closed for owned memory */ }
-        if (filterRequestMemory(request.messages, allowed).length !== request.messages.length) {
-          pruneDshMemorySurface(agent.session!, allowed)
-          throw new KiokukoError('CONFLICT', 'Memory changed after native request assembly; rebuild the request')
-        }
-      }
-      yield* next()
-    })())
-    routingDisposers.set(agent, () => { releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeClaim() })
-  }
-  const routingCreatedDisposer = (ctx as any).on('agent/created', (event: { agent: RoutableAgent }) => {
-    delegation.created(event.agent)
-    installRouting(event.agent)
+  const contextMessages = createContextMessages({
+    ctx, runtime, deepPlanning, executionSupport, continuityMode: continuityConfig.mode,
+    getSkillPrompts: () => skillPrompts, systemSkillsFor: routing.systemSkillsFor,
+    getSelection: runId => selections.get(runId), currentForAgentEvent, advisoryEvidenceFor: (item, state) => toolHostModule.advisoryEvidenceFor(item, state),
+    executionBinding, sessionEventSource,
   })
-  const modelErrorDisposer = (ctx as any).on('agent/request-error', async (event: { agent: RoutableAgent; failure: unknown }, next: () => Promise<unknown>) => {
-    if (!isModelAvailabilityFailure(event.failure)) return next()
-    const owner = delegation.parent(event.agent) ?? event.agent
-    const item = owner.session ? currentSession(owner.session.id) : undefined
-    if (!item || selections.get(item.runId)?.value.mode !== 'enno' || !modelRoleForState(item.prepared.ennoOduno)) return next()
-    await markModelUnavailable(event.agent)
-    return undefined // No native automatic retry or provider substitution.
-  }, { prepend: true })
-  for (const agent of agents?.list?.() ?? []) installRouting(agent)
-  const contextMessages = async (event: DshPreStepEvent, pending: readonly unknown[]): Promise<readonly unknown[]> => {
-    const item = currentForAgentEvent(event.agent.id, event.sessionId, event.turn, event.nativeSession, event.nativeAgent)
-    if (item === undefined || item.sessionId !== event.sessionId) throw new Error('kiokuko-dsh turn identity is not bound')
-    if (event.nativeSession !== undefined && item.nativeSession !== event.nativeSession) throw new Error('kiokuko-dsh native session identity is not bound')
-    // The intake cache is intentionally stable for the logical turn, while
-    // Enno operations advance item.prepared after each tool result. Always
-    // inject from that current host state instead of replaying the intake-time
-    // directive from the cached gate result.
-    const discussion = selections.get(item.runId)?.value.discussion
-    const prepared = discussion ? { ...item.prepared, ennoOduno: inapplicableEnnoState() } : item.prepared
-    const directive = projectDshDirective(prepared.ennoOduno)
-    const selection = directive === null ? { routeSkillNames: [], expertRefs: [] } : selectDshDirectiveSources(directive)
-    const advisoryEvidence = await advisoryEvidenceFor(item, prepared.ennoOduno)
-    const messages = await injectDshContext({
-      skillPrompts,
-      systemSkillNames: systemSkillNames.get(event.nativeAgent ?? event.agent) ?? new Set(),
-      prepared,
-      task: event.task,
-      routeSkillNames: selection.routeSkillNames,
-      expertRefs: selection.expertRefs,
-      ...(directive === null ? {} : { directive }),
-      ...(advisoryEvidence === undefined ? {} : { advisoryEvidence }),
-      runtime,
-      soulInSystemPrompt: ctx.get('systemPrompt', false) !== undefined,
-      userTaskInConversation: true,
-    })
-    const previousReport = await deepPlanning.previousReport(event.sessionId)
-    if (continuityConfig.mode !== 'off' && prepared.ennoOduno.applicable && !executionBinding(item).terminal && !executionSupport.paused(event.sessionId)) {
-      // One service read at the request boundary; reuse its verdict without running verifiers.
-      try {
-        const snapshot = await runtime.withDatabase(db => readEnnoSnapshot(db, {
-          runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
-        }))
-        if (item.prepared === prepared) executionSupport.ennoSource(event.sessionId, snapshot, stateForSnapshot(snapshot))
-      } catch { /* Optional projection is unavailable; existing authority guards still apply. */ }
-    }
-    const executionSelection = selections.get(item.runId)?.value
-    const discussionText = discussion
-      ? `実行方式・モデル選択の質問（${discussion.questionId}）に対するユーザーの自由入力:\n\n${discussion.text}\n\n実行方式・モデル構成はまだ承認されていません。まずこの発言に会話として回答してください。ツールを使った作業や同じ選択質問の繰り返しは行わないでください。`
-      : executionSelection?.status === 'ready'
-        ? '実行方式・モデル構成の選択が確定しました。自由入力への会話のみという制限は解除されています。直近のユーザーの依頼と現在の実行指示に従ってください。'
-        : undefined
-    const discussionMessages = discussionText ? [{
-      role: 'user' as const, source: 'user-task' as const, name: 'execution-selection-discussion',
-      content: discussionText,
-    }] : []
-    refreshDshSkillSnapshots(messages, sessionEventSource(event.nativeSession), systemSkillNames.get(event.nativeAgent ?? event.agent))
-    return projectDshContext([...messages, ...previousReport, ...discussionMessages], sessionEventSource(event.nativeSession), pending)
-  }
-
-  const toolHost: DshToolHost = {
-    bind: (execution) => {
-      const sessionId = execution.agent?.dshSessionId
-      if (sessionId === undefined) throw new Error('kiokuko-dsh tool session identity is unavailable')
-      const item = currentSession(sessionId)
-      if (item === undefined || item.closed) throw new Error('kiokuko-dsh tool session is not bound to an active run')
-      if (item.nativeSession !== execution.agent?.nativeSession) throw new Error('kiokuko-dsh tool native session identity is stale')
-      if (execution.agent?.turn !== undefined && execution.agent.turn !== item.turn) throw new Error('kiokuko-dsh tool turn identity is stale')
-      const state = states.get(item.runId)
-      if (state === undefined || state.dshSessionId !== sessionId) throw new Error('kiokuko-dsh tool state is unavailable')
-      return {
-        dshSessionId: sessionId,
-        runId: state.runId,
-        workspace: state.workspace,
-        orchestrationId: state.orchestrationId,
-        ...(state.deliveryId === undefined ? {} : { deliveryId: state.deliveryId }),
-        revision: state.revision,
-        routeEpoch: state.routeEpoch,
-        ...(state.advisoryRoundDigest === undefined ? {} : { advisoryRoundDigest: state.advisoryRoundDigest }),
-        ...(state.leaseToken === undefined ? {} : { leaseToken: state.leaseToken }),
-        ...(state.workUnitId === undefined ? {} : { workUnitId: state.workUnitId }),
-      }
-    },
-    execute: async (operation, args, binding, signal) => {
-      if (!operationName(operation)) throw new Error('Unsupported Kiokuko dsh operation')
-      const run = [...turns.values()]
-        .filter((item) => item.runId === binding.runId && item.sessionId === binding.dshSessionId && !item.closed)
-        .sort((left, right) => right.turn - left.turn)[0]
-      const currentState = run === undefined ? undefined : states.get(run.runId)
-      if (binding.dshSessionId === undefined || run === undefined || run.closed
-        || binding.workspace !== run.workspace
-        || binding.orchestrationId !== run.orchestrationId
-        || currentState === undefined
-        || binding.revision !== currentState.revision
-        || binding.routeEpoch !== currentState.routeEpoch
-        || binding.advisoryRoundDigest !== currentState.advisoryRoundDigest) throw new Error('kiokuko-dsh tool binding is not authoritative')
-      if (signal?.aborted) throw signal.reason
-      const cwd = run.cwd
-      const operationSignal = signal ?? new AbortController().signal
-      const currentCatalog = await capabilityCatalog(skills, tools, {
-        agent: { id: run.agentId },
-        ...(run.nativeAgent === undefined ? {} : { nativeAgent: run.nativeAgent }),
-        cwd,
-        signal: operationSignal,
-      })
-      gate.assertTurnStoppingCatalog(run.catalog, currentCatalog)
-      if (operation === 'enno_delegate') {
-        if (!run.nativeAgent) throw new KiokukoError('INTEGRITY_ERROR', 'Native parent is unavailable')
-        return delegation.execute(run.nativeAgent, args, binding, currentCatalog.tools.map(tool => tool.name), operationSignal)
-      }
-      const phase = phaseForOperation(operation)
-      const receiptOperation = ennoReceiptOperation(operation)
-      const inputDigest = canonicalContentHash({
-        operation,
-        arguments: args,
-        revision: binding.revision,
-        routeEpoch: binding.routeEpoch,
-        workUnitId: binding.workUnitId ?? null,
-      })
-      if (phase !== undefined && receiptOperation !== undefined) {
-        const executionAttempt = operation === 'enno_work_report'
-          ? await runtime.withDatabase(database => readEnnoSnapshot(database, {
-            runId: run.runId, workspace: run.workspace, orchestrationId: run.orchestrationId,
-          }).workUnits.find(unit => unit.workUnit.id === binding.workUnitId)?.attemptCount ?? 0)
-          : 0
-        await runtime.withDatabase((database) => prepareTurnIntent(database, {
-          runId: run.runId,
-          dshSessionId: run.sessionId,
-          nativeTurn: run.turn,
-          phase,
-          contractRevision: binding.revision,
-          executionAttempt,
-          ...(binding.workUnitId === undefined ? {} : { workUnitId: binding.workUnitId }),
-          inputDigest,
-          operation: receiptOperation,
-          idempotencyKey: binding.idempotencyKey,
-        }))
-      }
-      let response: EnnoOperationResponse | unknown
-      try {
-        response = await runtime.withDatabase(async (database) => {
-          const input = operationInput(args, binding, cwd, operation, run.catalog)
-          if (operation === 'enno_ideal_submit') return submitOdunoIdeal(database, input)
-          if (operation === 'enno_plan_review') {
-            const selected = readExecutionSelection(database, run.runId)
-            if (selected?.value.mode !== 'enno' || selected.value.status !== 'ready') throw new Error('Plan review has no admitted model configuration')
-            const check = selected.value.configuration?.roles.check
-            const selectionDigest = canonicalContentHash(selected?.value.configuration ?? null)
-            const assertCurrent = async () => {
-              operationSignal.throwIfAborted()
-              const catalog = await capabilityCatalog(skills, tools, { agent: { id: run.agentId }, ...(run.nativeAgent ? { nativeAgent: run.nativeAgent } : {}), cwd, signal: operationSignal })
-              gate.assertTurnStoppingCatalog(run.catalog, catalog)
-              if (run.closed || currentSession(run.sessionId) !== run || sessions?.get(run.sessionId) !== run.nativeSession || agents?.get(run.agentId) !== run.nativeAgent || readExecutionSelection(database, run.runId)?.revision !== selected.revision || canonicalContentHash(readExecutionSelection(database, run.runId)?.value.configuration ?? null) !== selectionDigest) throw new Error('Plan review binding changed')
-            }
-            return reviewEnnoPlan(database, input, (context, reviewSignal) => reviewPlanDecisions({ service: decisions,
-              requestId: `run:${run.runId}`, context, signal: reviewSignal,
-              check: { identity: { provider: check?.provider ?? null, requestedModel: check?.model ?? null, source: 'roles.check' },
-                verifyReadOnly: async () => {
-                  if (!check || !llm) return false
-                  if (modelCatalog?.resolveCallConfig) {
-                    const resolved = await modelCatalog.resolveCallConfig(check)
-                    if (canonicalContentHash(resolved) !== canonicalContentHash(check)) throw new Error('Configured check model binding changed')
-                  }
-                  return true
-                },
-                execute: call => { if (!check || !llm) throw new Error('Configured check model is unavailable'); return executeCheckModel(llm, check, call) },
-              } }), operationSignal, assertCurrent)
-          }
-          if (operation === 'enno_plan_submit') return submitEnnoPlan(database, input)
-          if (operation === 'enno_work_report') return reportEnnoWork(database, input)
-          if (operation === 'enno_finish') return finishEnno(database, input)
-          if (operation === 'enno_meditation_submit') {
-            // The native DSH turn still has a tool result, final assistant
-            // message, step end, and turn end to commit. Keep the ledger open
-            // until the idle lifecycle flushes that ordered suffix.
-            return submitOdunoMeditation(database, input, { deferLedgerTerminalization: true })
-          }
-          if (operation === 'curator_check') return curateMemoryCandidates(database, input)
-          return checkpointDshMemory(database, input as unknown as ScopedCheckpointInput, signal)
-        }) as EnnoOperationResponse | unknown
-      } catch (error) {
-        if (phase === undefined || receiptOperation === undefined || !isExpectedTurnFailure(error)) throw error
-        response = await runtime.withDatabase((database) => commitExpectedFailure(database, {
-          runId: run.runId,
-          dshSessionId: run.sessionId,
-          nativeTurn: run.turn,
-          phase,
-          contractRevision: binding.revision,
-          ...(binding.workUnitId === undefined ? {} : { workUnitId: binding.workUnitId }),
-          inputDigest,
-          operation: receiptOperation,
-          idempotencyKey: binding.idempotencyKey,
-          error,
-        }))
-      }
-      const ennoResponse = isAppliedEnnoOutcome(response) ? response.value : response
-      if (run !== undefined && isEnnoResponse(ennoResponse)) {
-        if (binding.advisoryRoundDigest !== undefined) advisoryRounds.delete(run.runId)
-        run.prepared = { ...run.prepared, ennoOduno: ennoResponse.ennoOduno }
-        const next = policyState(ennoResponse.ennoOduno, run, run.sessionId, ennoResponse.executionLease)
-        states.set(run.runId, next)
-        policy.setState(next)
-        await executionSupport.refresh(executionBinding(run), false)
-        if (operation === 'enno_ideal_submit' || operation === 'enno_plan_submit') {
-          await executionSupport.proposals(run.sessionId, objectRecord(args)?.executionHints,
-            ennoResponse.ennoOduno.contractRevision ?? binding.revision)
-        }
-      }
-      if (phase !== undefined && isEnnoResponse(ennoResponse) && !isTurnOutcome(response)) {
-        response = appliedTurnOutcome(ennoResponse, {
-          schemaVersion: 1,
-          runId: run.runId,
-          phase,
-          revision: binding.revision,
-          nextAction: ennoResponse.ennoOduno.nextAction,
-        })
-      }
-      if (phase !== undefined) {
-        const seal = await runtime.withDatabase((database) => readTurnSeal(database, run.sessionId, run.turn))
-        if (seal === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Committed DSH phase has no turn seal')
-        policy.sealSession(run.sessionId, run.turn, seal.receiptId)
-      }
-      return response
-    },
-  }
-
-  const advisoryRunner = new DshAdvisoryRunner({
-    verifyReadOnly: advisory?.verifyReadOnly ?? (() => false),
-    execute: advisory?.execute ?? (async () => { throw new Error('kiokuko-dsh advisory host is unavailable') }),
+  const toolHostModule = createToolHost({
+    runtime, turnState, currentSession, currentForAgentEvent, skills, tools,
+    sessions, agents, gate, decisions, delegation, llm, modelCatalog,
+    executionSupport, executionBinding, policy, advisory, capabilityCatalog, objectRecord,
   })
-  const assertTurnBoundary = async (event: {
-    readonly agent: { readonly id: string; readonly sessionId?: string; readonly nativeSession?: object; readonly nativeAgent?: DshUserQuestionAgent }
-    readonly turn: number
-    readonly signal: AbortSignal
-  }): Promise<TurnRecord> => {
-    const item = currentForAgentEvent(
-      event.agent.id,
-      event.agent.sessionId,
-      event.turn,
-      event.agent.nativeSession,
-      event.agent.nativeAgent,
-    )
-    if (item === undefined || item.closed) throw new Error('kiokuko-dsh turn boundary identity is stale')
-    const currentCatalog = await capabilityCatalog(skills, tools, {
-      agent: { id: event.agent.id },
-      ...(event.agent.nativeAgent === undefined ? {} : { nativeAgent: event.agent.nativeAgent }),
-      cwd: item.cwd,
-      signal: event.signal,
-    })
-    gate.assertTurnStoppingCatalog(item.catalog, currentCatalog)
-    return item
-  }
-  const submitAdvisory = async (result: DshAdvisoryRoundResult, input: { readonly event: { readonly agent: { readonly id: string; readonly sessionId?: string; readonly nativeSession?: object; readonly nativeAgent?: DshUserQuestionAgent }; readonly turn: number; readonly signal: AbortSignal }; readonly state: EnnoOdunoState }): Promise<EnnoOdunoState> => {
-    // Advisory execution is asynchronous. Revalidate the live Agent/catalog
-    // after it settles and immediately before committing its contribution.
-    const item = await assertTurnBoundary(input.event)
-    const directive = input.state.directive?.advisoryRound
-    if (directive === undefined || input.state.contractRevision === null) throw new Error('kiokuko-dsh advisory directive is unavailable')
-    const response = await runtime.withDatabase((database) => {
-      const snapshot = readEnnoSnapshot(database, { runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId })
-      if (snapshot.revision !== input.state.contractRevision || snapshot.mutationRevision < 0) throw new Error('kiokuko-dsh advisory state changed')
-      return submitEnnoAdvice(database, {
-        runId: item.runId,
-        workspace: item.workspace,
-        orchestrationId: item.orchestrationId,
-        expectedRevision: snapshot.revision,
-        mutationRevision: snapshot.mutationRevision,
-        idempotencyKey: `dsh-advice:${canonicalContentHash({ runId: item.runId, revision: snapshot.revision, mutationRevision: snapshot.mutationRevision, phase: result.phase, inputDigest: result.inputDigest })}`,
-        phase: result.phase,
-        allowlistedContext: directive.context,
-        contributions: result.contributions,
-      })
-    })
-    item.prepared = { ...item.prepared, ennoOduno: response.ennoOduno }
-    if (response.ennoOduno.advisoryPhaseState.state !== 'aggregated') {
-      throw new Error('kiokuko-dsh advisory submission did not produce an aggregated round')
-    }
-    advisoryRounds.set(item.runId, {
-      stateDigest: response.ennoOduno.advisoryPhaseState.inputDigest,
-      result,
-    })
-    const next = policyState(response.ennoOduno, item, item.sessionId)
-    states.set(item.runId, next)
-    policy.setState(next)
-    return response.ennoOduno
-  }
-
-  const boundaryAgents = new Map<string, object>()
-  const boundarySignals = new Map<string, AbortSignal>()
-  const boundaryEvent = (item: TurnRecord, signal = boundarySignals.get(item.sessionId) ?? new AbortController().signal) => ({
-    agent: {
-      id: item.agentId,
-      sessionId: item.sessionId,
-      ...(item.nativeAgent === undefined ? {} : { nativeAgent: item.nativeAgent }),
-      ...(item.nativeSession === undefined ? {} : { nativeSession: item.nativeSession }),
-      steer: () => undefined,
-    },
-    turn: item.turn,
-    signal,
+  const { toolHost, advisoryRunner, assertTurnBoundary, submitAdvisory } = toolHostModule
+  const advisoryEvidenceFor = toolHostModule.advisoryEvidenceFor
+  const boundaries = createBoundaries({
+    ctx, runtime, now: options.now, agents, sessions, skills, tools, userQuestions, gate,
+    delegation, executionSupport, answerReview, sessionMirror, currentSession, currentForAgentEvent,
+    stateForRun, systemSkillsFor: routing.systemSkillsFor, getSkillPrompts: () => skillPrompts,
+    refreshEnnoMemory, confirmationAnswerer, assertTurnBoundary, advisoryRunner, submitAdvisory,
+    advisoryEvidenceFor, applyPolicy: turnState.applyPolicy, capabilityCatalog,
+    closeTurn: input => runLifecycle.closeTurn(input), sessionEventSource,
+    boundedUtf8Text, boundedMessageText, recoveryMessage, continuationMessage,
   })
-  const readBoundaryState = async (item: TurnRecord): Promise<EnnoOdunoState> => (
-    runtime.withDatabase((database) => stateForRun(database, item))
-  )
-  const askForRecoveryInstruction = async (input: {
-    readonly item: TurnRecord
-    readonly questionId: string
-    readonly title: string
-    readonly detail: string
-    readonly header?: string
-  }): Promise<string | undefined> => {
-    const agent = input.item.nativeAgent ?? agents?.get(input.item.agentId)
-    const signal = boundarySignals.get(input.item.sessionId) ?? new AbortController().signal
-    if (userQuestions === undefined || agent === undefined) return undefined
-    try {
-      const result = await abortable(userQuestions.ask({
-        questions: [{
-          id: input.questionId,
-          header: input.header ?? 'Kiokuko stopped',
-          question: input.title,
-          detail: input.detail,
-        }],
-        agent,
-        signal,
-      }), signal)
-      signal.throwIfAborted()
-      const answer = result.answers[0]
-      if (answer === undefined || answer.id !== input.questionId) return undefined
-      const value = answer.custom?.trim() || answer.selected[0]?.trim()
-      return value === undefined || value.length === 0 ? undefined : boundedUtf8Text(value, 8 * 1024)
-    } catch {
-      signal.throwIfAborted()
-      // A broken/dismissed question surface must never become another retry
-      // loop. The durable waiting_user state remains the recovery boundary.
-      return undefined
-    }
-  }
-  const loopRecoveryDetail = (snapshot: ReturnType<typeof readEnnoSnapshot>, state: EnnoOdunoState, reason: string, recoveryInstruction?: string): string => {
-    const workUnitId = state.directive?.workUnit?.id ?? null
-    const workUnit = workUnitId === null
-      ? null
-      : snapshot.workUnits.find((candidate) => candidate.workUnit.id === workUnitId) ?? null
-    const latestVerifier = snapshot.finalEvidence.at(-1)
-    return [
-      `Host status: phase=${snapshot.status}; nextAction=${state.nextAction}; role=${state.currentRole ?? 'none'}.`,
-      `Revision=${snapshot.revision}; mutationRevision=${snapshot.mutationRevision}; attempts=${snapshot.attempts}/${snapshot.contract.maxAttempts}.`,
-      workUnit === null
-        ? 'WorkUnit: none.'
-        : `WorkUnit ${workUnit.workUnit.id}: ${workUnit.workUnit.objective} (status=${workUnit.status}, attempts=${workUnit.attemptCount}).`,
-      latestVerifier === undefined
-        ? 'Latest verifier: none.'
-        : `Latest verifier ${latestVerifier.verifier.id}: ${latestVerifier.status}.`,
-      reason,
-      recoveryInstruction ?? 'Enter the actual current handling status and the concrete instruction to execute next. If work should stop, say so explicitly.',
-    ].join('\n')
-  }
-  const guardBoundaryEffect = async (item: TurnRecord, job: DshBoundaryJob): Promise<boolean> => {
-    const guarded = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-      const snapshot = readEnnoSnapshot(database, {
-        runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
-      })
-      const state = stateForSnapshot(snapshot)
-      const claim = claimBoundaryEffectInTransaction(
-        database,
-        job,
-        ennoInstructionDigest(snapshot, state.directive),
-        options.now?.() ?? new Date().toISOString(),
-      )
-      return { snapshot, state, claim }
-    }))
-    if (guarded.claim.decision === 'deliver') return true
-    const answer = await askForRecoveryInstruction({
-      item,
-      questionId: `effect-${job.jobId.slice(0, 16)}`,
-      title: 'Kiokuko stopped before a fourth stateful boundary operation without progress.',
-      detail: loopRecoveryDetail(
-        guarded.snapshot,
-        guarded.state,
-        `${job.kind} completed or was re-entered three times without authoritative Enno progress.`,
-      ),
-    })
-    if (answer === undefined) {
-      await sessionMirror.markWaitingUser(item.sessionId)
-      return false
-    }
-    await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-      resetBoundaryEffectGuardInTransaction(database, job, options.now?.() ?? new Date().toISOString())
-      resetLoopGuardForUserInTransaction(database, {
-        runId: item.runId,
-        dshSessionId: item.sessionId,
-        resolution: 'manual_user',
-        ...(options.now === undefined ? {} : { now: options.now() }),
-      })
-    }))
-    return true
-  }
-  const confirmBoundary = async (item: TurnRecord, state: EnnoOdunoState): Promise<'submitted' | 'dismissed'> => {
-    const originalConfirmation = state.directive?.userFacingConfirmation
-    const conditions = executionSupport.confirmation(item.sessionId, state.contractRevision ?? 0)
-    const confirmation = originalConfirmation === undefined ? undefined : {
-      ...originalConfirmation, ...(conditions.length ? { executionConditions: conditions } : {}),
-    }
-    if (confirmation === undefined || state.contractRevision === null) throw new Error('kiokuko-dsh confirmation directive is unavailable')
-    const event = boundaryEvent(item)
-    let response: EnnoOperationResponse | undefined
-    const controller = new DshConfirmationController({
-      ...(confirmationAnswerer === undefined ? {} : { answerer: confirmationAnswerer }),
-      readRevision: async () => {
-        await assertTurnBoundary(event)
-        return runtime.withDatabase((database) => readEnnoSnapshot(database, {
-          runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
-        }).revision)
-      },
-      submit: async (answer) => {
-        event.signal.throwIfAborted()
-        response = await runtime.withDatabase((database) => answerEnno(database, {
-          runId: item.runId,
-          workspace: item.workspace,
-          orchestrationId: item.orchestrationId,
-          expectedRevision: answer.expectedRevision,
-          idempotencyKey: `dsh-confirm:${canonicalContentHash({ runId: item.runId, revision: answer.expectedRevision, action: answer.action, requestedChanges: answer.requestedChanges ?? null })}`,
-          action: answer.action,
-          ...(answer.requestedChanges === undefined ? {} : { requestedChanges: answer.requestedChanges }),
-        }))
-        if (answer.action === 'approve') await executionSupport.approve(item.sessionId, answer.expectedRevision)
-      },
-    })
-    const decision = await controller.confirm({
-      confirmation,
-      expectedRevision: state.contractRevision,
-      signal: event.signal,
-      ...(item.nativeAgent === undefined ? {} : { agent: item.nativeAgent }),
-    })
-    if (decision.kind === 'dismissed') return 'dismissed'
-    if (decision.kind !== 'submitted' || response === undefined) {
-      throw new Error(`kiokuko-dsh confirmation could not advance: ${decision.kind === 'blocked' ? decision.reason : 'missing_response'}`)
-    }
-    item.prepared = { ...item.prepared, ennoOduno: response.ennoOduno }
-    const next = policyState(response.ennoOduno, item, item.sessionId, response.executionLease)
-    states.set(item.runId, next)
-    policy.setState(next)
-    return 'submitted'
-  }
-  const injectBoundaryContext = async (item: TurnRecord, state: EnnoOdunoState): Promise<void> => {
-    const event = boundaryEvent(item)
-    await assertTurnBoundary(event)
-    if (state.directive === null) throw new Error('kiokuko-dsh boundary context has no directive')
-    await refreshEnnoMemory(item, event.signal)
-    const selection = selectDshDirectiveSources(state.directive)
-    const exactNativeAgent = item.nativeAgent as { readonly inject?: (message: unknown) => void } | undefined
-    const agent = exactNativeAgent === undefined ? agents?.get(item.agentId) : exactNativeAgent
-    if (agent?.inject === undefined) throw new Error('kiokuko-dsh native agent injection is unavailable')
-    const projectedDirective = projectDshDirective({ nextAction: state.nextAction, directive: state.directive })
-    const advisoryEvidence = await advisoryEvidenceFor(item, state)
-    const messages = await injectDshContext({
-      skillPrompts,
-      systemSkillNames: systemSkillNames.get(item.nativeAgent ?? agent ?? {}) ?? new Set(),
-      prepared: item.prepared,
-      task: item.task,
-      routeSkillNames: selection.routeSkillNames,
-      expertRefs: selection.expertRefs,
-      ...(projectedDirective === null ? {} : { directive: projectedDirective }),
-      ...(advisoryEvidence === undefined ? {} : { advisoryEvidence }),
-      runtime,
-      soulInSystemPrompt: ctx.get('systemPrompt', false) !== undefined,
-      userTaskInConversation: true,
-    })
-    event.signal.throwIfAborted()
-    const pending = (agent as { readonly inbox?: { readonly nextStep?: readonly unknown[] } }).inbox?.nextStep ?? []
-    refreshDshSkillSnapshots(messages, sessionEventSource(item.nativeSession), systemSkillNames.get(item.nativeAgent ?? agent ?? {}))
-    for (const message of projectDshContext(messages, sessionEventSource(item.nativeSession), pending)) {
-      agent.inject(message)
-    }
-  }
-  const runFinalVerificationBoundary = async (item: TurnRecord): Promise<void> => {
-    await assertTurnBoundary(boundaryEvent(item))
-    const state = await readBoundaryState(item)
-    if (state.contractRevision === null) throw new Error('kiokuko-dsh verification revision is unavailable')
-    const response = await runtime.withDatabase((database) => {
-      const snapshot = readEnnoSnapshot(database, {
-        runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
-      })
-      return prepareEnnoVerification(database, {
-        runId: item.runId,
-        workspace: item.workspace,
-        orchestrationId: item.orchestrationId,
-        expectedRevision: snapshot.revision,
-        idempotencyKey: verificationBoundaryKey(snapshot),
-      })
-    })
-    item.prepared = { ...item.prepared, ennoOduno: response.ennoOduno }
-    const next = policyState(response.ennoOduno, item, item.sessionId)
-    states.set(item.runId, next)
-    policy.setState(next)
-  }
-
-  // Retained as a public compatibility implementation, but production host
-  // mounting below uses the durable worker instead of the native callback.
-  const ennoController = new DshEnnoController({
-    readState: async (event) => {
-      const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
-      if (item === undefined) throw new Error('kiokuko-dsh agent is not bound to a run')
-      return readBoundaryState(item)
-    },
-    validateBoundary: async ({ event }) => { await assertTurnBoundary(event) },
-    requestLoopRecovery: async ({ event, state, automaticCount }) => {
-      const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
-      if (item === undefined) return undefined
-      const snapshot = await runtime.withDatabase((database) => readEnnoSnapshot(database, {
-        runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
-      }))
-      const answer = await askForRecoveryInstruction({
-        item,
-        questionId: `legacy-loop-${item.runId.slice(0, 12)}`,
-        title: 'Kiokuko stopped before a fourth identical automatic continuation.',
-        detail: loopRecoveryDetail(
-          snapshot,
-          state,
-          `The legacy turn controller continued the same instruction ${automaticCount} times without authoritative Enno progress.`,
-        ),
-      })
-      if (answer === undefined) await sessionMirror.markWaitingUser(item.sessionId)
-      return answer
-    },
-    confirmUser: async ({ event, state }) => {
-      const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
-      if (item === undefined) throw new Error('kiokuko-dsh confirmation turn is not bound')
-      return confirmBoundary(item, state)
-    },
-    injectNextStepContext: async ({ event, state }) => {
-      const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
-      if (item === undefined) throw new Error('kiokuko-dsh turn identity is not bound')
-      await injectBoundaryContext(item, state)
-    },
-    runFinalVerification: async ({ event }) => {
-      const item = currentForAgentEvent(event.agent.id, event.agent.sessionId, event.turn, event.agent.nativeSession, event.agent.nativeAgent)
-      if (item === undefined) throw new Error('kiokuko-dsh verification turn identity is not bound')
-      await runFinalVerificationBoundary(item)
-      return readBoundaryState(item)
-    },
-    advisoryRunner,
-    submitAdvisory,
+  const { boundaryWorker, ennoController, deliverCompletionReport, boundarySessionStartDisposer } = boundaries
+  const applicationDisposer = mountHostMemoryApplication({
+    ctx, runtime, tools, commands, skills, agents, sessions, delegation, currentSession,
+    turnState, gate, capabilityCatalog,
   })
-
-  const boundaryWorker = new DshBoundaryWorker({
-    runtime,
-    ...(options.now === undefined ? {} : { now: options.now }),
-    bindNativeAgent: (sessionId, nativeAgent) => {
-      const item = currentSession(sessionId)
-      if (item !== undefined && item.nativeAgent !== undefined && item.nativeAgent !== nativeAgent) {
-        throw new Error('kiokuko-dsh boundary agent identity changed')
-      }
-      boundaryAgents.set(sessionId, nativeAgent)
-    },
-    process: async (job: DshBoundaryJob, signal) => {
-      boundarySignals.set(job.dshSessionId, signal)
-      const item = currentSession(job.dshSessionId)
-      if (item === undefined || item.closed || item.runId !== job.runId || item.turn < job.nativeTurn) {
-        throw new Error('kiokuko-dsh boundary job has no exact live run binding')
-      }
-      if ((job.kind === 'confirmation' || job.kind === 'final_verification' || job.kind === 'advisory')
-        && !await guardBoundaryEffect(item, job)) {
-        return { kind: 'waiting_user' }
-      }
-      if (job.kind.startsWith('retry_')) {
-        return { kind: 'completed', nextKind: 'delivery' }
-      }
-      if (job.kind === 'ask_akinator') {
-        const snapshot = await runtime.withDatabase((database) => readEnnoSnapshot(database, {
-          runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
-        }))
-        const state = stateForSnapshot(snapshot)
-        const pending = await runtime.withDatabase((database) => readPendingOutbox(database, item.sessionId)
-          .find((candidate) => candidate.receiptId === job.receiptId))
-        const validationFact = boundedMessageText(pending?.message)
-        const answer = await askForRecoveryInstruction({
-          item,
-          questionId: `validation-${job.receiptId.slice(0, 16)}`,
-          title: 'Kiokuko validation repeatedly failed and needs your instruction.',
-          detail: loopRecoveryDetail(
-            snapshot,
-            state,
-            validationFact ?? 'The same validation constraint was rejected repeatedly.',
-          ),
-        })
-        if (answer === undefined) {
-          await sessionMirror.markWaitingUser(item.sessionId)
-          return { kind: 'waiting_user' }
-        }
-        await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-          resetLoopGuardForUserInTransaction(database, {
-            runId: item.runId,
-            dshSessionId: item.sessionId,
-            resolution: 'manual_user',
-            ...(options.now === undefined ? {} : { now: options.now() }),
-          })
-          const outbox = readPendingOutbox(database, item.sessionId).find((candidate) => candidate.receiptId === job.receiptId)
-          if (outbox !== undefined) {
-            replacePendingOutboxMessageInTransaction(
-              database,
-              job.receiptId,
-              recoveryMessage(outbox.continuationId, answer),
-              'loop-recovery',
-              options.now?.() ?? new Date().toISOString(),
-            )
-          }
-        }))
-        return { kind: 'completed', nextKind: 'delivery' }
-      }
-      if (job.kind === 'classify_boundary') {
-        const state = await readBoundaryState(item)
-        if (state.status === 'completed' || state.status === 'blocked' || state.status === 'cancelled'
-          || state.nextAction === 'complete' || state.nextAction === 'report_blocker') {
-          const hostTerminal = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-            // Host-only verification can terminate without a model phase
-            // receipt. Bind its report to the causal receipt before retiring
-            // the continuation, so an idle session cannot hide the result.
-            const seal = readTurnSeal(database, job.dshSessionId, job.nativeTurn)
-            const needsReport = (state.status === 'blocked' || state.status === 'completed')
-              && seal?.nextAction !== 'complete' && seal?.nextAction !== 'report_blocker'
-            if (needsReport) {
-              database.prepare(`INSERT OR IGNORE INTO dsh_completion_reports
-                (run_id, receipt_id, dsh_session_id, native_turn) VALUES (?, ?, ?, ?)`)
-                .run(job.runId, job.receiptId, job.dshSessionId, job.nativeTurn)
-            }
-            database.prepare(`UPDATE dsh_continuation_outbox SET status = 'superseded', updated_at = ? WHERE receipt_id = ? AND status IN ('pending', 'dispatched')`)
-              .run(options.now?.() ?? new Date().toISOString(), job.receiptId)
-            return needsReport
-          }))
-          if (hostTerminal) await deliverCompletionReport(item.nativeSession)
-          return { kind: 'superseded' }
-        }
-        if (state.nextAction === 'ask_user_confirmation') return { kind: 'completed', nextKind: 'confirmation' }
-        if (state.nextAction === 'run_final_verification') return { kind: 'completed', nextKind: 'final_verification' }
-        if (state.directive?.advisoryRound !== undefined && state.advisoryPhaseState.state !== 'aggregated') {
-          return { kind: 'completed', nextKind: 'advisory' }
-        }
-        return { kind: 'completed', nextKind: 'context' }
-      }
-      if (job.kind === 'confirmation') {
-        const outcome = await confirmBoundary(item, await readBoundaryState(item))
-        if (outcome === 'dismissed') {
-          await sessionMirror.markWaitingUser(item.sessionId)
-          return { kind: 'waiting_user' }
-        }
-        return { kind: 'completed', nextKind: 'classify_boundary' }
-      }
-      if (job.kind === 'final_verification') {
-        await runFinalVerificationBoundary(item)
-        return { kind: 'completed', nextKind: 'classify_boundary' }
-      }
-      if (job.kind === 'advisory') {
-        const state = await readBoundaryState(item)
-        const directive = state.directive?.advisoryRound
-        if (directive === undefined) return { kind: 'completed', nextKind: 'classify_boundary' }
-        const result = await advisoryRunner.run({ directive, signal })
-        signal.throwIfAborted()
-        await submitAdvisory(result, { event: boundaryEvent(item), state })
-        return { kind: 'completed', nextKind: 'classify_boundary' }
-      }
-      if (job.kind === 'context') {
-        const state = await readBoundaryState(item)
-        await assertTurnBoundary(boundaryEvent(item))
-        if (state.directive === null) throw new Error('kiokuko-dsh boundary context has no directive')
-        // The worker can finish before the causal native turn ends. Injecting
-        // next-step context here would reopen that sealed turn. The admitted
-        // next turn projects its current directive, Skills and memory through
-        // CapturingGate.preStep, after binding its new native turn identity.
-        await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-          const outbox = readPendingOutbox(database, item.sessionId).find((candidate) => candidate.receiptId === job.receiptId)
-          if (outbox !== undefined) replacePendingOutboxMessageInTransaction(
-            database,
-            job.receiptId,
-            continuationMessage(outbox.continuationId, state.nextAction),
-            'continuation',
-          )
-        }))
-        return { kind: 'completed', nextKind: 'delivery' }
-      }
-      throw new Error(`unsupported DSH boundary job kind: ${job.kind}`)
-    },
-    flush: async (job) => {
-      const item = currentSession(job.dshSessionId)
-      const nativeSession = item?.nativeSession ?? sessions?.get(job.dshSessionId)
-      if (nativeSession === undefined || sessions?.flush === undefined) {
-        throw new Error('kiokuko-dsh native session flush is unavailable for boundary delivery')
-      }
-      await sessions.flush(nativeSession)
-      try { await sessionMirror.checkpointAfterNativeFlush(nativeSession as DshMirrorEventSession) } catch { /* non-vetoing cache */ }
-    },
-    beforeDelivery: async (job, outbox, signal) => {
-      boundarySignals.set(job.dshSessionId, signal)
-      if (outbox.messageForm === 'loop-recovery') return 'deliver'
-      const item = currentSession(job.dshSessionId)
-      if (item === undefined || item.closed || item.runId !== job.runId) return 'superseded'
-      if (executionSupport.paused(item.sessionId)) return 'waiting_user'
-      const guarded = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-        const snapshot = readEnnoSnapshot(database, {
-          runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
-        })
-        const state = stateForSnapshot(snapshot)
-        const claim = claimAutomaticContinuationInTransaction(database, {
-          claimId: outbox.continuationId,
-          runId: item.runId,
-          dshSessionId: item.sessionId,
-          instructionDigest: ennoInstructionDigest(snapshot, state.directive),
-          ...(options.now === undefined ? {} : { now: options.now() }),
-        })
-        const shouldAsk = claim.decision === 'wait_user'
-          && claimLoopRecoveryQuestionInTransaction(
-            database,
-            claim.claimId,
-            options.now?.() ?? new Date().toISOString(),
-          )
-        return { snapshot, state, claim, shouldAsk }
-      }))
-      if (guarded.claim.decision === 'deliver') return 'deliver'
-      if (!guarded.shouldAsk) {
-        await sessionMirror.markWaitingUser(item.sessionId)
-        return 'waiting_user'
-      }
-      const answer = await askForRecoveryInstruction({
-        item,
-        questionId: `loop-${guarded.claim.claimId.slice(0, 16)}`,
-        title: 'Kiokuko stopped before a fourth identical automatic continuation.',
-        detail: loopRecoveryDetail(
-          guarded.snapshot,
-          guarded.state,
-          [
-            `The same instruction was automatically continued ${guarded.claim.ordinal - 1} times without authoritative Enno progress.`,
-            boundedMessageText(outbox.message),
-          ].filter((value): value is string => value !== undefined).join('\n'),
-        ),
-      })
-      if (answer === undefined) {
-        await sessionMirror.markWaitingUser(item.sessionId)
-        return 'waiting_user'
-      }
-      await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-        resetLoopGuardForUserInTransaction(database, {
-          runId: item.runId,
-          dshSessionId: item.sessionId,
-          resolution: 'user_answer',
-          claimId: guarded.claim.claimId,
-          ...(options.now === undefined ? {} : { now: options.now() }),
-        })
-        replacePendingOutboxMessageInTransaction(
-          database,
-          job.receiptId,
-          recoveryMessage(outbox.continuationId, answer),
-          'loop-recovery',
-          options.now?.() ?? new Date().toISOString(),
-        )
-      }))
-      return 'deliver'
-    },
-    dispatch: async (job, outbox) => {
-      const item = currentSession(job.dshSessionId)
-      const nativeAgent = (boundaryAgents.get(job.dshSessionId) ?? agents?.get(job.dshSessionId)) as NativeAgent | undefined
-      if ((item !== undefined && (item.closed || item.runId !== job.runId)) || nativeAgent?.followup === undefined) {
-        throw new Error('kiokuko-dsh native boundary delivery agent is unavailable')
-      }
-      nativeAgent.followup(outbox.message)
-    },
-    onWaitingUser: async (job, error, signal) => {
-      boundarySignals.set(job.dshSessionId, signal)
-      const item = currentSession(job.dshSessionId)
-      if (item === undefined || item.closed || item.runId !== job.runId) return false
-      await sessionMirror.markWaitingUser(item.sessionId)
-      const snapshot = await runtime.withDatabase((database) => readEnnoSnapshot(database, {
-        runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
-      }))
-      const copy = boundaryFailureCopy(snapshot.userFacingLanguage)
-      const answer = await askForRecoveryInstruction({
-        item,
-        questionId: `boundary-${job.jobId.slice(0, 16)}`,
-        header: copy.header,
-        title: copy.title,
-        detail: loopRecoveryDetail(
-          snapshot,
-          stateForSnapshot(snapshot),
-          `Last boundary error: ${(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
-          copy.recoveryInstruction,
-        ),
-      })
-      if (answer === undefined) return false
-      await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-        resetLoopGuardForUserInTransaction(database, {
-          runId: item.runId,
-          dshSessionId: item.sessionId,
-          resolution: 'manual_user',
-          ...(options.now === undefined ? {} : { now: options.now() }),
-        })
-        const outbox = readPendingOutbox(database, item.sessionId).find((candidate) => candidate.receiptId === job.receiptId)
-        if (outbox !== undefined) {
-          replacePendingOutboxMessageInTransaction(
-            database,
-            job.receiptId,
-            recoveryMessage(outbox.continuationId, answer),
-            'loop-recovery',
-            options.now?.() ?? new Date().toISOString(),
-          )
-        }
-        database.prepare(`
-          UPDATE dsh_boundary_jobs
-             SET status = 'pending', attempt_count = 0, available_at = ?,
-                 last_error_code = NULL, last_error_message = NULL, updated_at = ?
-           WHERE job_id = ? AND status = 'waiting_user'
-        `).run(options.now?.() ?? new Date().toISOString(), options.now?.() ?? new Date().toISOString(), job.jobId)
-      }))
-      return true
-    },
+  const observationMount = observation.install({
+    ctx, ennoMemory, evolutionConfig, currentSession, currentForAgentEvent,
+    answerReview, markModelUnavailable: agent => routing.markModelUnavailable(agent),
+    recordManualChange: (sessionId, pending) => routing.recordManualChange(sessionId, pending),
+    modelAuto, root, autoReview, reviewBinding, sessionMirror, executionSupport,
+    kickBoundary: (sessionId, agent) => boundaryWorker.kick(sessionId, agent),
+    stateForRun, objectRecord, isHumanMessage, eventContinuationId,
   })
-
-  const completionReporter = new DshCompletionReporter(runtime, async session => {
-    if (sessions?.flush === undefined) throw new Error('Native report flush is unavailable')
-    await sessions.flush(session)
+  const lifecycle = createLifecycle({
+    runtime, sessions, sessionMirror, memoryFinalizer, autoReview, answerReview, ennoController,
+    ennoMemory, executionSupport, gate, turnState, getSelection: runId => selections.get(runId),
+    currentSession, currentForAgentEvent, stateForRun, deliverCompletionReport, reviewBinding,
+    evolutionConfig, clearToolRun: toolHostModule.clearRun, sessionEventSource,
   })
-  const deliverCompletionReport = async (session: object | undefined): Promise<void> => {
-    if (session !== undefined && typeof (session as { append?: unknown }).append === 'function') {
-      await completionReporter.deliver(session as Parameters<DshCompletionReporter['deliver']>[0])
-    }
-  }
-  const rehydrateBoundarySession = async (nativeAgent: NativeAgent): Promise<void> => {
-    if (nativeAgent.session?.snapshotEvents && agents?.get(nativeAgent.id) === nativeAgent && sessions?.get(nativeAgent.session.id) === nativeAgent.session) await answerReview.recover(nativeAgent as ReviewAgent, async row => {
-      await sessions?.flush?.(nativeAgent.session!)
-      await sessionMirror.checkpointAfterNativeFlush(nativeAgent.session as DshMirrorEventSession)
-      await runLifecycle.closeTurn({ runId: row.runId, status: row.status, ...(row.endSeq === undefined ? {} : { sourceEndSeq: row.endSeq }) })
-    })
-    const nativeSession = nativeAgent.session ?? sessions?.get(nativeAgent.id)
-    const sessionId = nativeSession?.id
-    const cwd = nativeSession?.header?.cwd
-    if (sessionId === undefined || cwd === undefined || typeof nativeSession?.snapshotEvents !== 'function') return
-    if (nativeAgent.status === 'running') return
-    await deliverCompletionReport(nativeSession)
-    const terminal = await runtime.withDatabase(database => database.prepare(`
-      SELECT report.run_id AS runId, report.native_turn AS nativeTurn, contract.status
-      FROM dsh_completion_reports AS report JOIN ledger_runs AS run ON run.run_id = report.run_id
-      JOIN enno_contracts AS contract ON contract.run_id = report.run_id
-      WHERE report.dsh_session_id = ? AND report.status = 'delivered' AND run.status = 'active'
-        AND contract.status IN ('completed', 'blocked', 'cancelled')
-    `).all<{ runId: string; nativeTurn: number; status: string }>(sessionId))
-    for (const restored of terminal) {
-      if (currentSession(sessionId)?.runId === restored.runId) continue
-      const end = dshTurnBoundarySeq(nativeSession as DshSessionEventSource, restored.nativeTurn, 'end')
-      if (end === undefined) continue
-      await runLifecycle.closeTurn({ runId: restored.runId,
-        status: restored.status === 'completed' ? 'completed' : restored.status === 'cancelled' ? 'cancelled' : 'failed',
-        sourceEndSeq: end,
-      })
-    }
-    const pending = await runtime.withDatabase((database) => database.prepare(`
-      SELECT receipt.run_id AS runId, receipt.native_turn AS nativeTurn,
-             intake.task_text AS task
-        FROM dsh_boundary_jobs AS job
-        JOIN dsh_turn_receipts AS receipt ON receipt.receipt_id = job.receipt_id
-        JOIN ledger_runs AS run ON run.run_id = receipt.run_id
-        JOIN run_intakes AS link ON link.run_id = run.run_id
-        JOIN akinator_sessions AS intake ON intake.id = link.session_id
-       WHERE receipt.dsh_session_id = ?
-         AND job.status IN ('pending', 'processing', 'failed_retryable')
-         AND run.status IN ('intake', 'active')
-       ORDER BY job.created_at, job.job_id LIMIT 2
-    `).all<{ runId: string; nativeTurn: number; task: string }>(sessionId))
-    if (pending.length === 0) return
-    if (new Set(pending.map(row => row.runId)).size !== 1) {
-      throw new KiokukoError('CONFLICT', 'Multiple durable boundary runs target one live DSH session')
-    }
-    const first = pending[0]!
-    const catalog = await capabilityCatalog(skills, tools, {
-      agent: { id: nativeAgent.id }, nativeAgent, cwd, signal: new AbortController().signal,
-    })
-    await gate.prepare({
-      agent: { id: nativeAgent.id }, nativeAgent, sessionId, nativeSession,
-      turn: first.nativeTurn, step: 1, task: first.task, cwd, capabilities: catalog,
-      sourceStartSeq: dshTurnBoundarySeq(nativeSession as DshSessionEventSource, first.nativeTurn, 'start'),
-      signal: new AbortController().signal,
-    })
-    boundaryWorker.kick(sessionId, nativeAgent)
-  }
-  const boundarySessionStartDisposer = (ctx as any).on('agent/session-start', (payload: { agent: NativeAgent }) => {
-    if (delegation.isChild(payload.agent)) return
-    void rehydrateBoundarySession(payload.agent).catch(() => {
-      // Durable jobs remain retryable. A later pre-step/status kick retries
-      // once the exact live Agent and its capabilities are available.
-    })
-  })
-  for (const nativeAgent of agents?.list?.() ?? []) {
-    void rehydrateBoundarySession(nativeAgent).catch(() => undefined)
-  }
-
-  const resolveIdleClose = async (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object): Promise<DshCloseIntent | undefined> => {
-    await deliverCompletionReport(nativeSession)
-    const item = currentForAgentEvent(agentId, sessionId, undefined, nativeSession, nativeAgent)
-    if (item === undefined || item.closed || executionSupport.paused(item.sessionId)) return undefined
-    if (nativeAgent && answerReview.hold(nativeAgent as ReviewAgent)) return undefined
-    const selection = selections.get(item.runId)?.value
-    if (selection?.discussion) return undefined
-    if (selection && (selection.status !== 'ready' && item.prepared.intake.profile.taskType !== 'chat' || item.failed && selection.mode === 'normal')) return undefined
-    const state = await runtime.withDatabase((database) => stateForRun(database, item))
-    if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
-    if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
-    // A chat run spans the quiet time between user messages. Enno's
-    // inapplicable `complete` means that no orchestration is required for this
-    // turn; it does not mean that the persistent conversation has ended.
-    if (item.prepared.intake.profile.taskType === 'chat') return undefined
-    if (state.status === 'completed' || state.nextAction === 'complete') {
-      // A provider failure while wording the final response cannot undo
-      // already verified completion. The durable host report covers it.
-      return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
-    }
-    // Idle means the driver has no active work, not that Enno reached a
-    // terminal state. Keep only genuinely resumable active states open.
-    return undefined
-  }
-  const resolveSessionRunId = (session: { id: string }): string | undefined => {
-    const item = currentSession(session.id)
-    if (item?.nativeSession !== undefined && item.nativeSession !== session) return undefined
-    return item?.closed === true ? undefined : item?.runId
-  }
-  const resolveSessionClose = async (sessionId: string, nativeSession: object): Promise<DshCloseIntent | undefined> => {
-    answerReview.cancel(sessionId)
-    const item = currentSession(sessionId)
-    if (item === undefined || item.closed || item.nativeSession !== nativeSession) return undefined
-    if (executionSupport.paused(item.sessionId) || selections.get(item.runId)?.value.status !== undefined && selections.get(item.runId)?.value.status !== 'ready') {
-      const end=await sessionMirror.latestEvent(sessionId,'turn/end',Number.MAX_SAFE_INTEGER)
-      if(end)autoReview.notify(reviewBinding(item,nativeSession as ReviewNativeSession),end.seq,'boundary')
-      return undefined
-    }
-    const state = await runtime.withDatabase((database) => stateForRun(database, item))
-    if (state.status === 'completed') {
-      await deliverCompletionReport(nativeSession)
-      return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
-    }
-    if (item.failed) return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
-    if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
-    if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
-    if (item.prepared.intake.profile.taskType === 'chat' || state.nextAction === 'complete') {
-      return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
-    }
-    return { runId: item.runId, status: 'cancelled' }
-  }
-  const closeRun = async (input: DshRunClose): Promise<void> => {
-    if (input.status === 'completed' && !await runtime.withDatabase(db => memoryApplicationStatus(db, input.runId).ready)) input = { ...input, status: 'failed' }
-    let scheduled = false
-    let scheduledSessionId: string | undefined
-    await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-      const store = new LedgerStore(database)
-      const before = store.readRun(input.runId)
-      if (before === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Run close target does not exist')
-      if (before.status === 'intake' || before.status === 'active') {
-        terminalizeLedgerRunInTransaction(database, input.runId, input.status)
-      } else if (before.status !== input.status) {
-        throw new KiokukoError('CONFLICT', 'Run close status is immutable')
-      }
-      const failedExtractable = input.status === 'failed' && evolutionConfig.mode !== 'off' && input.sourceEndSeq !== undefined &&
-        database.prepare('SELECT 1 FROM dsh_run_log_boundaries WHERE run_id=? AND workspace=? AND dsh_session_id=?').get(before.runId, before.workspace, before.dshSessionId) !== undefined
-      if (input.status === 'failed' && !failedExtractable) database.prepare('INSERT OR IGNORE INTO memory_evolution_skips(run_id,workspace,reason) VALUES(?,?,?)')
-        .run(before.runId, before.workspace, evolutionConfig.mode === 'off' ? 'disabled' : 'missing_log_boundary')
-      if (input.status === 'completed' || failedExtractable) {
-        if (input.sourceEndSeq === undefined) {
-          throw new KiokukoError('INTEGRITY_ERROR', 'Completed DSH run has no checkpointed log end')
-        }
-        memoryFinalizer.scheduleInTransaction(database, {
-          runId: before.runId,
-          workspace: before.workspace,
-          dshSessionId: before.dshSessionId,
-          sourceEndSeq: input.sourceEndSeq,
-        })
-        scheduled = true
-        scheduledSessionId = before.dshSessionId
-      }
-      handoffReview(database,input.runId,input.status)
-    }))
-    autoReview.worker.abort(input.runId)
-    if (scheduled) {
-      if (scheduledSessionId === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Completed run has no DSH session identity')
-      await sessionMirror.markUnfinalized(scheduledSessionId)
-      memoryFinalizer.kick()
-    }
-    const items = [...turns.values()].filter((candidate) => candidate.runId === input.runId)
-    for (const item of items) {
-      ennoController.retire({
-        ...(item.nativeAgent === undefined ? {} : { nativeAgent: item.nativeAgent }),
-        ...(item.nativeSession === undefined ? {} : { nativeSession: item.nativeSession }),
-      })
-      if (item.nativeAgent) await answerReview.finish(item.nativeAgent as ReviewAgent)
-      item.closed = true
-      ennoMemory.clear(item.runId)
-      executionSupport.clear(item.sessionId)
-      gate.clearTurn(item.sessionId, item.turn)
-      const modeKey = identityKey(item.agentId, item.sessionId)
-      const modeRequest = `dsh:${item.agentId}:${item.sessionId}:${item.turn}`
-      if (activeModeRequests.get(modeKey) === modeRequest) {
-        modes.end(modeRequest)
-        activeModeRequests.delete(modeKey)
-      }
-      turns.delete(turnKey(item.agentId, item.sessionId, item.turn))
-      if (latestBySession.get(item.sessionId) === item) latestBySession.delete(item.sessionId)
-    }
-    for (const sessionId of new Set(items.map((item) => item.sessionId))) {
-      if (![...turns.values()].some((candidate) => candidate.sessionId === sessionId && !candidate.closed)) policy.clearSession(sessionId)
-    }
-    if (![...turns.values()].some((candidate) => candidate.runId === input.runId)) states.delete(input.runId)
-    advisoryRounds.delete(input.runId)
-    resumedLeases.delete(input.runId)
-  }
-  const applicationDisposer = tools ? mountMemoryApplication({ tools: tools as any, on: (ctx as any).on.bind(ctx), ...(commands ? { commands: commands as any } : {}) }, {
-    runtime,
-    session(value) {
-      const agent = value as NativeAgent | undefined
-      if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || typeof agent.session.header?.cwd !== 'string') return undefined
-      return { sessionId: agent.session.id, repositoryRoot: realpathSync(agent.session.header.cwd) }
-    },
-    resolve(execution) {
-      const agent = execution.agent, session = agent?.session
-      const item = session ? currentSession(session.id) : undefined
-      if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || delegation.isChild(agent)) return undefined
-      return { runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot }
-    },
-    async refresh(execution, query) {
-      const item = currentSession(execution.agent.session.id)!
-      const captured = item.prepared
-      const assertCurrent = () => {
-        execution.signal.throwIfAborted()
-        if (item.closed || item.prepared !== captured || currentSession(item.sessionId) !== item) throw new Error('Memory refresh task changed')
-      }
-      const result = await runtime.withDatabase(async database => {
-        const value = await refreshContinuedTaskContext({ database, prepared: captured, task: query,
-          capabilities: [...item.catalog.skills, ...item.catalog.tools], assertCurrent,
-          validateCapabilities: async () => {
-            assertCurrent()
-            const fresh = await capabilityCatalog(skills, tools, { agent: { id: item.agentId }, nativeAgent: execution.agent, cwd: item.cwd, signal: execution.signal })
-            gate.assertTurnStoppingCatalog(item.catalog, fresh)
-          } })
-        assertCurrent()
-        bindMemoryApplication(database, { runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot }, captured.intake.profile, value.context,
-          memoryRetrievalStatus(database, item.workspace, value.context, value.memoryPolicy.contextWithheld))
-        return value
-      })
-      assertCurrent()
-      item.prepared = { ...captured, ...result }
-      const activePolicy = states.get(item.runId)
-      if (activePolicy) {
-        const { deliveryId: _previous, ...state } = activePolicy
-        const next = { ...state, ...(result.context?.deliveryId ? { deliveryId: result.context.deliveryId } : {}) }
-        states.set(item.runId, next); policy.setState(next)
-      }
-      return result
-    },
-  }) : undefined
-  const observationDisposer = (ctx as any).on('tools/result', (execution: any, result: unknown) => {
-    try {
-      if (ennoMemory.enabled && execution.parent === undefined) {
-        const agent = execution.agent, session = agent?.session, item = session ? currentSession(session.id) : undefined
-        const calls = session ? memoryCalls.get(session) : undefined
-        const call = calls?.get(execution.callId)
-        calls?.delete(execution.callId)
-        if (item && !item.closed && item.nativeAgent === agent && item.nativeSession === session && call
-          && call.runId === item.runId && call.agent === agent && call.turn === item.turn && call.name === execution.name) {
-          ennoMemory.observeResult(item.runId, agent, session, item.repositoryRoot, result)
-        }
-      }
-      if (evolutionConfig.mode === 'off' || execution.parent !== undefined) return
-      const agent = execution.agent, session = agent?.session, item = session ? currentSession(session.id) : undefined
-      if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || typeof session.eventAt !== 'function' || !Number.isSafeInteger(session.seq)) return
-      let call: any
-      // Bound lookup even in million-event sessions. Missing correlation stays unknown.
-      for (let seq=session.seq-1;seq>=Math.max(0,session.seq-4096);seq--) {
-        const event=session.eventAt(seq)
-        if (event?.type==='tool/call' && event.data?.callId===execution.callId) {call=event;break}
-      }
-      if (!call || call.data.name !== execution.name || call.data.turn !== item.turn) return
-      const observation = executionObservation({runId:item.runId,workspace:item.workspace,sessionId:item.sessionId},execution.callId,call.seq,result)
-      // Enqueued before turn completion; the finalizer reads the same queue.
-      // Native logs cannot safely carry external event types on supported DSH.
-      if (observation) void runtime.withDatabase(db => saveEvolutionObservation(db, observation)).catch(() => {
-        // Missing proof remains unknown and cannot veto native tool completion.
-      })
-    } catch { /* optional evidence never changes native tool completion */ }
-  })
-  const errorDisposer = (ctx as any).on('agent/error', (event: { agent: { id: string; session?: { id: string }; sessionId?: string }; error?: unknown }) => {
-    if (event.agent.session?.id) answerReview.cancel(event.agent.session.id)
-    const item = currentForAgentEvent(event.agent.id, event.agent.session?.id ?? event.agent.sessionId, undefined, event.agent.session, event.agent)
-    if (item !== undefined) item.failed = true
-    if (isModelAvailabilityFailure(event.error)) void markModelUnavailable(event.agent).catch(() => {
-      // Keep the in-memory reselect fence if durable storage is unavailable.
-    })
-  })
-  const sessionEventDisposer = (ctx as any).on('session/event', (session: { id: string }, event: { type?: unknown; seq?: unknown; data?: unknown }) => {
-    const item = currentSession(session.id)
-    if (event.type === 'model/selection' && typeof event.seq === 'number') {
-      const selected = projectModelBinding(event.data)
-      if (selected) {
-        const change = modelAuto.manual(session.id, event.seq, selected)
-        manualModelChanges.set(session.id, change)
-        void change.catch(() => {})
-      }
-    }
-    if (event.type === 'request/header' && item) {
-      const config = objectRecord(objectRecord(event.data)?.header)?.config
-      const selected = projectModelBinding(config)
-      if (selected) void modelAuto.requestHeader(session.id, item.runId, selected).catch(() => {})
-    }
-    if (event.type === 'user/message' && hasHumanInput([event.data])) answerReview.humanInput(session.id, objectRecord(event.data)?.turn as number | undefined)
-    if(event.type==='user/message'&&typeof event.seq==='number'){
-      const input=humanInput(event as DshLogEvent)
-      if(input)void runtime.withDatabase(db=>resolveProjectWorkspaceReadOnly(db,root,{allowDirectory:true})).then(project=>project?autoReview.acceptInput(project.workspace,session.id,input.text):undefined).catch(()=>undefined)
-    }
-    const data = objectRecord(event.data)
-    const eventTurn = typeof data?.turn === 'number' && Number.isSafeInteger(data.turn) ? data.turn : item?.turn
-    if (ennoMemory.enabled && item && item.nativeSession === session && event.type === 'user/message' && isHumanMessage(event.data)) {
-      ennoMemory.invalidate(item.runId)
-    }
-    const ownsTurn = item !== undefined && !item.closed && eventTurn === item.turn && typeof event.type === 'string'
-    if (ennoMemory.enabled && ownsTurn && item.nativeSession === session && item.nativeAgent && event.type === 'tool/call'
-      && data?.turn === item.turn && Number.isSafeInteger(event.seq) && typeof data?.callId === 'string' && typeof data.name === 'string'
-      && !/^(?:enno_|oduno_|kiokuko|deep_)/u.test(data.name)) {
-      let calls = memoryCalls.get(session)
-      if (!calls) { calls = new Map(); memoryCalls.set(session, calls) }
-      if (calls.size >= 256) calls.delete(calls.keys().next().value!)
-      calls.set(data.callId, { name: data.name, runId: item.runId, agent: item.nativeAgent, turn: item.turn, seq: event.seq as number })
-    }
-    if(event.type==='turn/end'&&typeof event.seq==='number'&&item?.nativeSession===session&&!item.closed) autoReview.notify(reviewBinding(item,session),event.seq)
-    const claimKey = `${session.id}\u0000${eventTurn}`
-    const fallback = ownsTurn ? inMemoryClaims.get(claimKey) : undefined
-    const providerStarted = event.type === 'request/header' || event.type === 'request/context'
-      || event.type === 'assistant/chunk' || event.type === 'assistant/message'
-    const sideEffectStarted = event.type === 'tool/call'
-    // Observe execution synchronously, before the mirror can yield or fail.
-    // A later step/end callback must never see an earlier execution as unstarted.
-    if (fallback) {
-      fallback.providerStarted ||= providerStarted
-      fallback.sideEffectStarted ||= sideEffectStarted
-    }
-    // This observer is deliberately fire-and-contain. DSH persistence and the
-    // model turn must never depend on Kiokuko claim bookkeeping.
-    void (async () => {
-      if (typeof event.type === 'string' && typeof event.seq === 'number') {
-        try { await sessionMirror.observe(session.id, event as DshLogEvent) } catch { /* claim bookkeeping remains independent */ }
-        const continuationId = eventContinuationId(event.data)
-        if (continuationId !== undefined) {
-          try {
-            await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-              markOutboxObservedInTransaction(database, continuationId, event.seq as number)
-            }))
-          } catch {
-            // Delivery observation is durable bookkeeping. A missed callback
-            // is recovered by delivery-id deduplication at the next pre-step.
-          }
-        }
-      }
-      if (!ownsTurn || item === undefined) return
-      if (providerStarted || sideEffectStarted) {
-        try {
-          await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-            markClaimProgressInTransaction(database, {
-              dshSessionId: item.sessionId,
-              nativeTurn: item.turn,
-              providerStarted,
-              sideEffectStarted,
-            })
-          }))
-        } catch {
-          // The process-local flags remain monotonic.
-        }
-      }
-      if (event.type !== 'turn/end') return
-      const reason = objectRecord(data?.reason)
-      const turnEndedWithError = reason?.kind === 'error'
-      let durableRecoverable = false
-      let durableUnavailable = true
-      try {
-        const settled = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-          // Earlier observer writes may still be pending. Persist all execution
-          // already observed locally before deciding whether replay is safe.
-          markClaimProgressInTransaction(database, {
-            dshSessionId: item.sessionId, nativeTurn: item.turn,
-            providerStarted: fallback?.providerStarted === true, sideEffectStarted: fallback?.sideEffectStarted === true,
-          })
-          return settleInputClaimInTransaction(database, {
-            dshSessionId: item.sessionId,
-            nativeTurn: item.turn,
-            turnEndedWithError,
-          })
-        }))
-        durableRecoverable = settled?.status === 'recoverable'
-        durableUnavailable = settled === undefined
-      } catch {
-        // Fall through to the process-local decision.
-      }
-      const locallyRecoverable = turnEndedWithError
-        && fallback !== undefined
-        && !fallback.providerStarted
-        && !fallback.sideEffectStarted
-        && !fallback.recovered
-      const steer = (item.nativeAgent as { steer?: (message: unknown) => void } | undefined)?.steer
-      const recoveryAllowed = (fallback === undefined || locallyRecoverable)
-        && (durableRecoverable || durableUnavailable && locallyRecoverable)
-      if (recoveryAllowed && steer !== undefined) {
-        let messages: readonly unknown[] | undefined
-        // Reserve locally before awaiting the durable consumer; duplicate end
-        // notifications cannot enqueue the same input again.
-        if (fallback) fallback.recovered = true
-        if (durableRecoverable) {
-          try {
-            const claim = await runtime.withDatabase((database) => withImmediateTransaction(database, () => (
-              takeRecoverableInputClaimInTransaction(database, item.sessionId, item.turn)
-            )))
-            messages = claim?.messages
-          } catch {
-            // Use the exact in-memory batch if the durable consumer failed.
-            messages = fallback?.messages
-          }
-        } else {
-          messages = fallback?.messages
-        }
-        if (messages !== undefined && messages.length > 0) {
-          for (const message of messages) steer(message)
-        }
-      }
-      if (!turnEndedWithError || !recoveryAllowed) inMemoryClaims.delete(claimKey)
-      if (reason?.kind === 'completed' && item.prepared.ennoOduno.applicable && !executionSupport.paused(item.sessionId)) {
-        await runtime.withDatabase(database => {
-          const state = stateForRun(database, item)
-          if (state.nextAction === 'complete' || state.nextAction === 'report_blocker'
-            || state.status === 'cancelled' || state.contractRevision === null) return
-          const phase = state.nextAction === 'submit_ideal' ? 'ideal'
-            : state.nextAction === 'review_plan' || state.nextAction === 'submit_plan' || state.nextAction === 'ask_user_confirmation' ? 'planning'
-            : state.nextAction === 'execute_work_unit' ? 'work_unit'
-            : state.nextAction === 'submit_meditation' ? 'meditation' : 'final_review'
-          const operation = phase === 'ideal' ? 'ideal_submit' : phase === 'planning' ? 'plan_submit'
-            : phase === 'work_unit' ? 'work_report' : phase === 'meditation' ? 'meditation_submit' : 'finish'
-          enqueueUnsubmittedTurn(database, {
-            runId: item.runId, dshSessionId: item.sessionId, nativeTurn: item.turn,
-            phase, operation, contractRevision: state.contractRevision,
-            ...(state.directive?.workUnit?.id === undefined ? {} : { workUnitId: state.directive.workUnit.id }),
-            inputDigest: canonicalContentHash({ nextAction: state.nextAction, source: 'unsubmitted_turn' }),
-            idempotencyKey: `dsh-unsubmitted:${item.turn}`, nextAction: state.nextAction,
-          })
-        })
-      }
-      boundaryWorker.kick(item.sessionId, item.nativeAgent)
-    })().catch(() => {
-      // Observe-only DSH listeners must never veto the native event.
-    })
-  })
-  const reviewIdleDisposer=(ctx as any).on('agent/idle',(agent:NativeAgent)=>{
-    const session=agent.session as ReviewNativeSession|undefined
-    const item=session?currentSession(session.id):undefined
-    if(item&&session&&item.nativeSession===session&&!item.closed) void sessionMirror.latestEvent(session.id,'turn/end',Number.MAX_SAFE_INTEGER).then(end=>{if(end)autoReview.notify(reviewBinding(item,session),end.seq)}).catch(()=>undefined)
-  })
-  const runLifecycle = new DshRunLifecycle({ closeRun })
-  const failedBoundary = async (item: TurnRecord): Promise<{ sourceEndSeq?: number }> => {
-    try {
-      if (item.nativeSession === undefined || sessions?.flush === undefined) return {}
-      await sessions.flush(item.nativeSession)
-      await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession)
-      return { sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end') }
-    } catch { return {} }
-  }
-  retireSupersededRun = async (item, status) => {
-    if (status !== 'completed') {
-      await runLifecycle.closeTurn({ runId: item.runId, status, ...(status === 'failed' ? await failedBoundary(item) : {}) })
-      return
-    }
-    if (item.nativeSession === undefined || sessions?.flush === undefined) {
-      throw new KiokukoError('CONFLICT', 'Completed DSH run requires its exact native session checkpoint')
-    }
-    await sessions.flush(item.nativeSession)
-    await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession)
-    await runLifecycle.closeTurn({
-      runId: item.runId,
-      status,
-      sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end'),
-    })
-  }
+  const { runLifecycle, resolveIdleClose, resolveSessionRunId, resolveSessionClose } = lifecycle
+  retireSupersededRun = lifecycle.retireSupersededRun
 
   const orcaConfig = OrcaConfig.parse(options.orca ?? {})
   const orca = !orcaConfig.enabled ? undefined : createDshOrcaHost(ctx, orcaConfig, runtime, {
@@ -3038,47 +544,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     recordingParent: agent => deepPlanning.executor.recordingParent(agent),
   })
   let disposePromise: Promise<void> | undefined
-  let efficiency: DshEfficiencyObserver | undefined
-  let efficiencyDisposers: (() => void)[] = []
-  const closeEfficiency = () => {
-    for (const dispose of efficiencyDisposers.reverse()) { try { dispose() } catch { efficiency?.unavailable() } }
-    efficiencyDisposers = []
-    efficiency?.close()
-  }
-  const configureEfficiency = (config: { observe: boolean; inputMode: FinalizationInputMode }) => {
-    const observer = config.observe ? new DshEfficiencyObserver() : undefined
-    memoryFinalizer.configure(config.inputMode, observer === undefined ? undefined : observation => observer.record(observation))
-    closeEfficiency()
-    efficiency = observer
-    if (observer === undefined) return
-    const scope = (ctx.root ?? ctx) as any
-    const observedAgents = new Map<string, NativeAgent>()
-    const bind = (agent: NativeAgent | undefined) => {
-      if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session) return
-      if (observedAgents.size >= 2048 && !observedAgents.has(agent.session.id)) observedAgents.delete(observedAgents.keys().next().value!)
-      observedAgents.set(agent.session.id, agent)
-    }
-    try {
-      efficiencyDisposers.push(scope.on('agent/pre-step', (payload: { agent?: NativeAgent }, next: () => unknown) => {
-        try { bind(payload.agent) } catch { /* optional attribution */ }
-        return next()
-      }, { global: true }))
-      efficiencyDisposers.push(scope.on('agent/session-start', (payload: { agent?: NativeAgent }) => { try { bind(payload.agent) } catch { /* optional attribution */ } }, { global: true }))
-      efficiencyDisposers.push(scope.on('session/disposed', (session: { id: string }) => {
-        if (observedAgents.get(session.id)?.session === session) observedAgents.delete(session.id)
-      }, { global: true }))
-      efficiencyDisposers.push(mountDshEfficiencyObserver(scope, observer, (sessionId, request) => {
-        const agent = observedAgents.get(sessionId)
-        if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(sessionId) !== agent.session) return undefined
-        const child = delegation.observationBinding(agent) ?? deepPlanning.executor.observationBinding(agent)
-        if (child !== undefined) return { sessionId, ...child, task: 'child' }
-        const owner = currentSession(sessionId)
-        if (owner === undefined || owner.nativeSession !== agent.session) return undefined
-        return { sessionId, runId: owner.runId, task: request.purpose === undefined ? 'main' : 'auxiliary' }
-      }))
-    } catch { observer.unavailable(); closeEfficiency() }
-  }
-  configureEfficiency({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
+  const efficiencyHost = createEfficiencyHost({ ctx, memoryFinalizer, agents, sessions, delegation, deepPlanning, currentSession })
+  efficiencyHost.configure({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
   const host: DshCompositionHost = {
     modelAuto: { coordinator: modelAuto, validSession: (agentId, sessionId) => {
       const currentAgent = agents?.get(agentId) as { session?: object } | undefined
@@ -3090,51 +557,16 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     decisions,
     semanticCompaction,
     deepPlanning,
-    get efficiency() { return efficiency },
-    configureEfficiency,
+    get efficiency() { return efficiencyHost.efficiency },
+    configureEfficiency: efficiencyHost.configure,
     get skillPrompts() { return skillPrompts },
     configureSkillPrompts(prompts) { skillPrompts = prompts },
     configureEnnoMemory: config => ennoMemory.configure(config),
     configureToolExposure: config => { toolExposureConfig = ToolExposureConfig.parse(config) },
-    modelToolDefinitionsChanged,
-    memoryReview: {
-      async start(){const project=await runtime.withDatabase(db=>resolveProjectWorkspaceReadOnly(db,root,{allowDirectory:true}));if(project)await autoReview.start(project.workspace)},
-      configure:config=>autoReview.configure(config),
-      async command(session,raw) {
-        const item=currentSession(session.id)
-        if(item&&item.nativeSession!==session)throw new Error('session_owner_unavailable')
-        const sessionRoot=objectRecord(objectRecord(session)?.header)?.cwd
-        const workspace=item?.workspace??(await runtime.withDatabase(db=>resolveProjectWorkspaceReadOnly(db,typeof sessionRoot==='string'?sessionRoot:root,{allowDirectory:true})))?.workspace
-        if(!workspace)throw new Error('workspace_unavailable')
-        const args=raw.trim().split(/\s+/)
-        if(!raw.trim()||args[0]==='status')return autoReview.status(workspace,session.id)
-        if(args[0]==='mode'&&args.length===2&&['off','observe','active'].includes(args[1]!)){await autoReview.setMode(workspace,args[1] as 'off'|'observe'|'active');return autoReview.status(workspace,session.id)}
-        if(raw.trim()==='exclude session') {await autoReview.exclude(workspace,session.id);return {state:'excluded',message:'この会話の自動メモリ生成を除外しました。保存済み記憶と会話ログは残ります。'}}
-        if(!item)throw new Error('session_owner_unavailable')
-        if(args[0]==='retry'&&args.length===2){const job=await autoReview.retry(item.workspace,args[1]!);return {jobId:job.id,state:job.state,reason:job.reason}}
-        if(args[0]==='retry-finalizer'&&args.length===2){
-          await runtime.withDatabase(db=>{const job=db.prepare('SELECT workspace,dsh_session_id,status,attempt_count FROM dsh_memory_finalizations WHERE run_id=?').get<{workspace:string;dsh_session_id:string;status:string;attempt_count:number}>(args[1]!);if(!job||job.workspace!==item.workspace)throw new Error('finalizer_not_found');assertCaptureAllowed(db,job.workspace,job.dsh_session_id);if(job.status!=='failed'||job.attempt_count>=3)throw new Error('finalizer_retry_unavailable')})
-          await memoryFinalizer.retryFailed(args[1]!);return {runId:args[1],state:'queued'}
-        }
-        if(raw.trim()==='run'){
-          const end=await sessionMirror.latestEvent(session.id,'turn/end',Number.MAX_SAFE_INTEGER)
-          if(!end)return {state:'no_confirmed_turns'}
-          const job=await autoReview.scan(reviewBinding(item,session),end.seq,'manual')
-          return job?{jobId:job.id,state:job.state}:{state:'no_unscheduled_turns'}
-        }
-        throw new Error('invalid_command')
-      },
-    },
-    memoryEvolution: {
-      configure(config: EvolutionConfig) { memoryFinalizer.configureMemoryEvolution(config); Object.assign(evolutionConfig, config) },
-      async status(sessionId: string) {
-        return runtime.withDatabase(db => {
-          const workspaces = db.prepare('SELECT DISTINCT workspace FROM ledger_runs WHERE dsh_session_id=? LIMIT 2').all<{ workspace: string }>(sessionId)
-          if (workspaces.length !== 1) throw new Error('Evolution status requires an unambiguous session workspace')
-          return evolutionStatus(db, workspaces[0]!.workspace)
-        })
-      },
-    },
+    modelToolDefinitionsChanged: routing.modelToolDefinitionsChanged,
+    memoryReview: createMemoryReviewHost({ runtime, autoReview, root, currentSession, objectRecord,
+      memoryFinalizer, sessionMirror, reviewBinding }),
+    memoryEvolution: createEvolutionHost({ runtime, memoryFinalizer, evolutionConfig }),
     autoGlobalization: { configure(enabled: boolean) { memoryFinalizer.configureAutoGlobalization(enabled) } },
     ...(orca === undefined ? {} : { orca }),
     ...(skills === undefined ? {} : { skills: skills as any }),
@@ -3178,103 +610,40 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       await autoReview.dispose()
       await memoryFinalizer.dispose()
       await deepPlanning.dispose()
-      routingCreatedDisposer()
-      modelErrorDisposer()
       childGuardDisposer?.()
       discussionGuardDisposer?.()
       childExecutionDisposer()
-      for (const dispose of routingDisposers.values()) dispose()
-      routingDisposers.clear()
+      routing.dispose()
       const failures: unknown[] = []
       try { await orca?.shutdown() } catch (error) { failures.push(error) }
-      const pausedSessions = new Set([...latestBySession.keys()].filter(id => executionSupport.paused(id)))
+      const pausedSessions = new Set(turnState.sessionIds().filter(id => executionSupport.paused(id)))
       ennoMemory.close()
       executionSupport.dispose()
-      try { errorDisposer?.() } catch (error) { failures.push(error) }
-      try { sessionEventDisposer?.() } catch (error) { failures.push(error) }
+      try { observationMount.disposeError() } catch (error) { failures.push(error) }
+      try { observationMount.disposeSession() } catch (error) { failures.push(error) }
       try { boundarySessionStartDisposer?.() } catch (error) { failures.push(error) }
       try { policy.dispose() } catch (error) { failures.push(error) }
       try { modes.dispose() } catch (error) { failures.push(error) }
       try { ennoController.dispose() } catch (error) { failures.push(error) }
       try { await boundaryWorker.dispose() } catch (error) { failures.push(error) }
-      const remainingRuns = [...new Map(
-        [...turns.values()]
-          .filter((item) => !item.closed && !pausedSessions.has(item.sessionId))
-          .map((item) => [item.runId, item]),
-      ).values()]
-      for (const item of remainingRuns) {
-        try {
-          const selected = selections.get(item.runId)?.value
-          if (selected) {
-            const state = await runtime.withDatabase(db => stateForRun(db, item))
-            if (selected.status !== 'ready'
-              || selected.mode === 'enno' && !['completed', 'blocked', 'cancelled'].includes(state.status ?? '')
-              || selected.mode === 'normal' && (item.failed || (item.nativeAgent as NativeAgent | undefined)?.status === 'running')) continue
-          }
-          let status: 'completed' | 'failed' | 'cancelled'
-          if (item.prepared.intake.profile.taskType === 'chat') status = item.failed ? 'failed' : 'cancelled'
-          else {
-            const state = await runtime.withDatabase((database) => stateForRun(database, item))
-            status = state.status === 'completed' || state.nextAction === 'complete'
-              ? 'completed'
-              : item.failed || state.status === 'blocked' || state.nextAction === 'report_blocker'
-                ? 'failed'
-                : 'cancelled'
-          }
-          if (status === 'completed') {
-            await deliverCompletionReport(item.nativeSession)
-            if (item.nativeSession === undefined || sessions?.flush === undefined) {
-              throw new KiokukoError('CONFLICT', 'Completed DSH run requires its exact native session checkpoint')
-            }
-            await sessions.flush(item.nativeSession)
-            await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession)
-          }
-          await runLifecycle.closeTurn({
-            runId: item.runId,
-            status,
-            ...(status !== 'completed' ? status === 'failed' ? await failedBoundary(item) : {} : {
-              sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end'),
-            }),
-          })
-        } catch (error) { failures.push(error) }
-      }
+      failures.push(...await lifecycle.closeRemainingRuns(pausedSessions))
       try { await runLifecycle.dispose() } catch (error) { failures.push(error) }
-      try { reviewIdleDisposer?.(); await autoReview.dispose() } catch (error) { failures.push(error) }
+      try { observationMount.disposeIdle(); await autoReview.dispose() } catch (error) { failures.push(error) }
       try { await memoryFinalizer.dispose() } catch (error) { failures.push(error) }
-      closeEfficiency()
+      efficiencyHost.close()
       try { applicationDisposer?.() } catch (error) { failures.push(error) }
-      try { observationDisposer() } catch (error) { failures.push(error) }
+      try { observationMount.disposeResult() } catch (error) { failures.push(error) }
       try { await sessionMirror.close() } catch (error) { failures.push(error) }
       try { if (!options.runtime) await runtime.close() } catch (error) { failures.push(error) }
-      turns.clear()
-      latestBySession.clear()
-      states.clear()
-      activeModeRequests.clear()
-      advisoryRounds.clear()
-      boundaryAgents.clear()
-      boundarySignals.clear()
-      resumedTurns.clear()
-      resumedLeases.clear()
-      inMemoryClaims.clear()
+      turnState.clear()
+      toolHostModule.clear()
+      boundaries.clear()
+      admission.clear()
+      observation.clear()
       if (failures.length === 1) throw failures[0]
       if (failures.length > 1) throw new AggregateError(failures, 'kiokuko-dsh adapter disposal failed')
     })(),
   }
-}
-
-function isEnnoResponse(value: unknown): value is EnnoOperationResponse {
-  return typeof value === 'object' && value !== null && 'ennoOduno' in value && typeof (value as { ennoOduno?: unknown }).ennoOduno === 'object'
-}
-
-function isTurnOutcome(value: unknown): value is { readonly kind: 'applied' | 'retry' | 'clarify' | 'waiting_user' | 'infrastructure_error' } {
-  if (typeof value !== 'object' || value === null) return false
-  const kind = (value as { kind?: unknown }).kind
-  return kind === 'applied' || kind === 'retry' || kind === 'clarify' || kind === 'waiting_user' || kind === 'infrastructure_error'
-}
-
-function isAppliedEnnoOutcome(value: unknown): value is { readonly kind: 'applied'; readonly value: EnnoOperationResponse } {
-  return isTurnOutcome(value) && value.kind === 'applied'
-    && 'value' in value && isEnnoResponse((value as { value?: unknown }).value)
 }
 
 function stateForRun(database: any, item: TurnRecord): EnnoOdunoState {

@@ -1,12 +1,28 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { openConnection } from '../../../src/db/connection.js'
 import { migrateDatabase } from '../../../src/db/migrate.js'
 import { DshSessionLogMirror } from '../../../src/dsh/session-log-mirror.js'
 import type { DshDatabaseOperation, DshRuntime } from '../../../src/dsh/runtime.js'
+
+test('in-memory mirror does not create an attachment directory in a disposable cwd', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'kiokuko-memory-cwd-'))
+  try {
+    await promisify(execFile)(process.execPath, [
+      '--import', fileURLToPath(import.meta.resolve('tsx')),
+      fileURLToPath(new URL('../helpers/session-log-memory-cwd.ts', import.meta.url)),
+      process.cwd(),
+    ], { cwd, timeout: 30_000 })
+  } finally {
+    await rm(cwd, { recursive: true, force: true })
+  }
+})
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-session-mirror-'))
