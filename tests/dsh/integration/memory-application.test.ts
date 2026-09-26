@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -13,6 +13,7 @@ import { CoreTasks } from '../../../src/dsh/core/tasks.js'
 import { LedgerStore } from '../../../src/ledger/store.js'
 import { mountMemoryApplication } from '../../../src/dsh/memory-application.js'
 import { runMemoryAwareVerifiers } from '../../../src/enno-oduno/memory-verification.js'
+import { createMemoryReviewPresentation } from '../../../src/dsh/memory-review-presentation.js'
 import { memoryApplicationStatus, recordMemoryApplicationReview, beginMemoryExecution, completeMemoryExecution, bindMemoryApplication, applicationSourceDigest } from '../../../src/memory/application.js'
 import { AutoGlobalizationWorker, autoGlobalizationStatus, autoGlobalApplicable } from '../../../src/memory/auto-globalization.js'
 import { readEntry } from '../../../src/memory/entries.js'
@@ -126,6 +127,87 @@ test('native path blocks missing decisions, observes failing next-migration regr
     await f.tasks.finish(f.task, 'completed')
     assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'completed')
   } finally { dispose(); await f.close() }
+})
+
+test('PTC transport stays blocked until direct review, then gates nested effects', async () => {
+  const f = await fixture(), listeners = new Map<string, any>(), tools: any[] = []
+  const agent = { session: {} }
+  const dispose = mountMemoryApplication({ tools: { register(tool) { tools.push(tool); return () => {} } },
+    on(name, handler) { listeners.set(name, handler); return () => listeners.delete(name) } }, {
+    runtime: f.runtime as any, resolve: execution => execution.agent === agent ? f.identity : undefined,
+    refresh: async () => undefined,
+  })
+  const execution = (callId: string, name: string, parent?: unknown) => ({ callId, rootCallId: 'ptc-root', name,
+    arguments: {}, agent, signal: new AbortController().signal, ...(parent === undefined ? {} : { parent }) })
+  try {
+    let transportRuns = 0, effects = 0
+    const root = execution('ptc-root', 'run_code')
+    await assert.rejects(listeners.get('tools/pre-execute')(root, async () => { transportRuns++ }), /resolve memory decisions/)
+    assert.equal(transportRuns, 0, 'model-written PTC code must not run before review')
+    assert.equal(f.status().ready, false)
+    const parent = Symbol('ptc-parent')
+    const statusCall = execution('direct-status', 'task_memory_review')
+    const status = await tools[0].execute({ action: 'status' }, statusCall)
+    assert.equal(status.pending[0]?.problem, 'decision_missing')
+    await assert.rejects(tools[0].execute({ action: 'status' }, execution('foreign:ptc:1', 'task_memory_review', parent)), /No active native task/)
+    await assert.rejects(listeners.get('tools/pre-execute')(execution('ptc-root:ptc:2', 'bash', parent),
+      async () => { effects++ }), /resolve memory decisions/)
+    assert.equal(effects, 0)
+    await tools[0].execute({ action: 'review', review: f.review('not_applicable') }, execution('direct-review', 'task_memory_review'))
+    assert.equal(f.status().ready, true)
+    await listeners.get('tools/pre-execute')(root, async () => { transportRuns++ })
+    await listeners.get('tools/result')(root, { value: { logs: [], result: null } })
+    assert.equal(transportRuns, 1)
+    assert.equal((await tools[0].execute({ action: 'status' }, execution('ptc-root:ptc:3', 'task_memory_review', parent))).ready, true)
+    await listeners.get('tools/pre-execute')(execution('ptc-root:ptc:4', 'bash', parent), async () => { effects++ })
+    assert.equal(effects, 1)
+  } finally { dispose(); await f.close() }
+})
+
+test('pending memory review presents native tools for a PTC agent and restores PTC after review', {
+  skip: !process.env.KIOKUKO_DSH_PACKAGE_ROOT && 'requires pinned native DSH',
+}, async () => {
+  const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT!
+  const { pathToFileURL } = await import('node:url')
+  const [cordis, prompt, toolModule, scope] = await Promise.all(
+    ['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope']
+      .map(name => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)))
+  const f = await fixture()
+  const ctx = new cordis.Context(), fibers: any[] = []
+  let scoped: any, presentation: ReturnType<typeof createMemoryReviewPresentation> | undefined
+  const runtimeName = existsSync(join(packages, '@deepseek-ai', 'dsh-ptc-runtime-node')) ? 'ptcRuntime' : 'codeRuntime'
+  const releaseRuntime = ctx.provide(runtimeName, { language: 'typescript' })
+  try {
+    fibers.push(await ctx.plugin(prompt.default, {}), await ctx.plugin(toolModule.default, { mode: 'ptc' }))
+    const session = { id: 'session' }, agent: any = { id: 'ordinary-agent', session }
+    scoped = scope.createScope(ctx, agent); agent.ctx = scoped.ctx
+    const tools = scoped.ctx.get('tools')
+    tools.register(toolModule.defineTool({ name: 'task_memory_review', description: 'Review memory', parameters: {},
+      output: { schema: { type: 'json' }, render: () => [] }, execute: async () => ({}) }))
+    presentation = createMemoryReviewPresentation(agent, f.runtime as any)
+    assert.equal(tools.modeFor(agent), 'ptc')
+    await presentation.sync(f.task.runId)
+    assert.equal(tools.modeFor(agent), 'native')
+    assert.deepEqual(tools.wireSchemas(agent).schemas.map((schema: any) => schema.name), ['task_memory_review'])
+    presentation.dispose() // agent idle: release the temporary mode before a later Lisp choice
+    assert.equal(tools.modeFor(agent), 'ptc')
+    const releaseLisp = tools.presentAs('native')
+    await presentation.sync(f.task.runId)
+    assert.equal(tools.modeFor(agent), 'native', 'an existing native owner needs no second declaration')
+    releaseLisp()
+    await presentation.sync(f.task.runId)
+    assert.equal(tools.modeFor(agent), 'native')
+    recordMemoryApplicationReview(f.db, f.identity, 'review', f.review('not_applicable'))
+    await presentation.sync(f.task.runId)
+    assert.equal(tools.modeFor(agent), 'ptc')
+    assert.deepEqual(tools.wireSchemas(agent).schemas.map((schema: any) => schema.name), ['run_code'])
+  } finally {
+    presentation?.dispose()
+    await scoped?.dispose()
+    for (const fiber of fibers.reverse()) await fiber.dispose()
+    releaseRuntime()
+    await f.close()
+  }
 })
 
 test('three completed native and Enno applications create one source-verified Global and a fourth remains idempotent', async () => {

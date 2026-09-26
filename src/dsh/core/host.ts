@@ -2,6 +2,7 @@ import { ObservationPackConfig } from '../observation-pack/policy.js'
 import { capabilityCatalogDigest } from '../../akinator/capability-binding.js'
 import { memoryApplicationMode } from '../../memory/application.js'
 import { mountMemoryApplication, MEMORY_APPLICATION_GUIDANCE } from '../memory-application.js'
+import { createMemoryReviewPresentation } from '../memory-review-presentation.js'
 import { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
 import { ModelHandoff, ModelHandoffConfig } from '../model-handoff.js'
 import { ModelAutoConfig } from '../model-auto/contracts.js'
@@ -281,6 +282,10 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       listen('agent/created', ({ agent }: { agent: NativeAgent }) => {
         if (!agent.ctx) return
         let autoRoute: { runId: string; sessionId: string; binding: ModelBinding } | undefined
+        const memoryReviewPresentation = createMemoryReviewPresentation(agent as NativeAgent & { ctx: { get(name: string): unknown } }, runtime)
+        const releaseMemoryReviewIdle = agent.ctx.on('agent/status', (event: { agent: NativeAgent; status: string }) => {
+          if (event.agent === agent && event.status === 'idle') memoryReviewPresentation.dispose()
+        })
         const claim = agent.ctx.on('agent/inbox/claimed', (event: { agent: NativeAgent; turn: number; message: any }) => {
           if (event.agent !== agent) return
           const previous = claims.get(agent)
@@ -291,18 +296,21 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           autoRoute = undefined
           bind(agent)
           const selected = answerReview.model(agent as ReviewAgent)
-          if (selected) return selected
+          if (selected) { memoryReviewPresentation.dispose(); return selected }
           const currentClaim = claims.get(agent)
           if (currentClaim) claims.delete(agent)
           let owner = active.get(agent.session.id)
           const mode = (await modelAuto.store.session(agent.session.id)).mode
-          if (mode === 'off') return undefined
-          if (currentClaim && owner?.turn !== currentClaim.turn) {
+          const ptc = typeof tools.modeFor === 'function' && tools.modeFor(agent) === 'ptc'
+          if (currentClaim && owner?.turn !== currentClaim.turn && (mode !== 'off' || ptc)) {
             const task = await prepareCoreTask({ agent, messages: currentClaim.messages, turn: currentClaim.turn, step: 0, signal },
               AbortSignal.any([signal, lifecycle.signal]))
             if (!task.admitted) throw new Error('Core task is not admitted before model routing')
             owner = active.get(agent.session.id)
           }
+          await memoryReviewPresentation.sync(owner && owner.agent === agent && owner.task.admitted && !owner.failed && !owner.checkpointed
+            ? owner.task.runId : undefined)
+          if (mode === 'off') return undefined
           if (!owner || owner.agent !== agent || !owner.task.admitted || owner.failed || owner.checkpointed
             || agent.session.header.parentSession || agent.session.header.origin === 'subagent' || agent.session.header.delegationDepth)
             return { kind: 'native' }
@@ -330,7 +338,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
             await modelAuto.assertCurrent(autoRoute.runId, autoRoute.sessionId, binding)
           },
         })
-        routedAgents.set(agent, () => { route(); claim() })
+        routedAgents.set(agent, () => { memoryReviewPresentation.dispose(); releaseMemoryReviewIdle(); route(); claim() })
       })
       listen('agent/disposed', ({ agent }: { agent: NativeAgent }) => { routedAgents.get(agent)?.(); routedAgents.delete(agent) })
       disposers.push(() => { for (const dispose of routedAgents.values()) dispose(); routedAgents.clear() })

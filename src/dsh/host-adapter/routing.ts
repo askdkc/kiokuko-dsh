@@ -14,6 +14,7 @@ import { projectToolsForPhase, type ToolExposureConfig } from '../tool-exposure.
 import type { DshUserQuestionAgent } from '../user-interaction.js'
 import { KiokukoError } from '../../errors.js'
 import { currentRequestMemory, pruneDshMemorySurface, filterRequestMemory } from '../request-memory.js'
+import { createMemoryReviewPresentation } from '../memory-review-presentation.js'
 import type { DshNativePreStepPayload } from '../composition.js'
 import type { DshCoreRuntime } from '../core-runtime.js'
 import type { ModelAutoCoordinator } from '../model-auto/coordinator.js'
@@ -120,13 +121,17 @@ export function createRouting({
       if (previous?.turn === event.turn) previous.messages.push(event.message)
       else assemblyClaims.set(agent, { turn: event.turn, messages: [event.message] })
     })
+    const memoryReviewPresentation = createMemoryReviewPresentation(agent, runtime)
+    const disposeMemoryReviewIdle = agent.ctx.on('agent/status', (event: { agent: RoutableAgent; status: string }) => {
+      if (event.agent === agent && event.status === 'idle') memoryReviewPresentation.dispose()
+    })
     let autoRoute: { runId: string; sessionId: string; binding: import('../model-configuration.js').ModelBinding } | undefined
     const disposeRouting = installDshModelRouting(agent, async signal => {
       autoRoute = undefined
       const deep = await deepPlanning.beforeAssembly(agent, signal)
-      if (deep.owned) { assemblyClaims.delete(agent); return deep.model }
+      if (deep.owned) { memoryReviewPresentation.dispose(); assemblyClaims.delete(agent); return deep.model }
       const childModel = await delegation.restoreOrPersist(agent)
-      if (childModel) { await delegation.assertCurrent(agent); return childModel }
+      if (childModel) { memoryReviewPresentation.dispose(); await delegation.assertCurrent(agent); return childModel }
       selectionBlocked.delete(agent)
       const claim = assemblyClaims.get(agent)
       assemblyClaims.delete(agent)
@@ -159,6 +164,8 @@ export function createRouting({
         }
       }
       const item = agent.session ? currentSession(agent.session.id) : undefined
+      await memoryReviewPresentation.sync(item && !item.closed && item.nativeAgent === agent && item.nativeSession === agent.session
+        ? item.runId : undefined)
       if (!item || item.closed) return undefined
       const selection = getSelection(item.runId)?.value
       if (selection && selection.status !== 'ready' && !selection.discussion && item.prepared.intake.profile.taskType !== 'chat') selectionBlocked.add(agent)
@@ -293,7 +300,7 @@ export function createRouting({
       }
       yield* next()
     })())
-    routingDisposers.set(agent, () => { releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeClaim() })
+    routingDisposers.set(agent, () => { disposeMemoryReviewIdle(); memoryReviewPresentation.dispose(); releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeClaim() })
   }
   const routingCreatedDisposer = onNativeEvent(ctx, 'agent/created', (event: { agent: RoutableAgent }) => {
     delegation.created(event.agent)
