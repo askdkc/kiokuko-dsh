@@ -162,6 +162,12 @@ dsh plugin --profile web remove kiokuko-dsh
 
 ## Usage
 
+### Subagents
+
+DSH's standard agent preset provides `subagent` (the in-process `spawn` provider) and `subagent_fork` (the `fork` provider). Both default to continuable background execution. The preset is shipped at `@deepseek-ai/dsh-web-app/presets/standard.patch.yml`; Kiokuko injects the host `subagents` service and does not duplicate either model-facing tool. A native generic child of a normal Kiokuko turn runs without a second Kiokuko intake or execution-mode question.
+
+Custom agent presets must configure the corresponding DSH tool rows and providers. Kiokuko does not edit profiles or user presets. `deepPlanning.maxConcurrentAgentsTotal` and Deep's `budget.maxConcurrentAgents` apply only to Deep Planning, not ordinary subagent tools. Parallel execution requires multiple model tool calls and an available DSH provider. The fixed-runtime test checks wiring and lifecycle with a fake model; it does not establish how often a real model delegates or whether delegation saves time, tokens, or money.
+
 Skill prompts default to full source. The optional deterministic compiler and
 its native/package delivery checks are documented in [Skill prompt compiler](skill-compiler.md).
 

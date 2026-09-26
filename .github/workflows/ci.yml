@@ -216,6 +216,12 @@ jobs:
           KIOKUKO_EXPECTED_DSH_VERSION: 0.1.7-rc.2
           KIOKUKO_REQUIRE_DSH_NATIVE: "1"
       - run: npm run build
+      - name: Verify standard preset subagents with current DSH
+        run: node scripts/run-tests.mjs tests/dsh/integration/subagent-standard-preset-native.test.ts
+        env:
+          KIOKUKO_DSH_PACKAGE_ROOT: ${{ github.workspace }}/tests/fixtures/dsh-runtime-current/node_modules
+          KIOKUKO_EXPECTED_DSH_VERSION: 0.1.7-rc.2
+          KIOKUKO_REQUIRE_DSH_NATIVE: "1"
       - name: Verify current native request and history contracts
         run: |
           node scripts/run-tests.mjs \

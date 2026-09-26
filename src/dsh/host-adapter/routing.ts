@@ -42,6 +42,7 @@ interface RoutingDependencies {
   readonly semanticCompaction: SemanticCompactionCoordinator
   readonly delegation: DshEnnoDelegation
   readonly deepPlanning: DeepPlanningController
+  readonly isGenericNativeChild: (agent: RoutableAgent) => boolean
   readonly getSkillPrompts: () => DshSkillPrompts
   readonly getToolExposureConfig: () => ToolExposureConfig
   readonly reportToolExposureFallback: (reason: string) => void
@@ -58,7 +59,7 @@ interface RoutingDependencies {
 
 export function createRouting({
   ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview,
-  semanticCompaction, delegation, deepPlanning, getSkillPrompts,
+  semanticCompaction, delegation, deepPlanning, isGenericNativeChild, getSkillPrompts,
   getToolExposureConfig, reportToolExposureFallback,
   getSelection, setSelection, hasSelection,
   getPolicyState, captureInitialInput, prepareTurn, mapPreStep, currentSession,
@@ -132,6 +133,7 @@ export function createRouting({
       if (deep.owned) { memoryReviewPresentation.dispose(); assemblyClaims.delete(agent); return deep.model }
       const childModel = await delegation.restoreOrPersist(agent)
       if (childModel) { memoryReviewPresentation.dispose(); await delegation.assertCurrent(agent); return childModel }
+      if (isGenericNativeChild(agent)) { memoryReviewPresentation.dispose(); assemblyClaims.delete(agent); return { kind: 'native' } }
       selectionBlocked.delete(agent)
       const claim = assemblyClaims.get(agent)
       assemblyClaims.delete(agent)

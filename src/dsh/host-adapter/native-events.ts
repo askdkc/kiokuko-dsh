@@ -19,13 +19,13 @@ export interface NativeTools {
 
 export interface NativeCommands { register(...args: any[]): () => void }
 export interface NativeSessions {
-  get(id: string): { id: string; header?: { cwd?: string }; snapshotEvents?: () => readonly DshLogEvent[] } | undefined
+  get(id: string): { id: string; header?: { cwd?: string; parentSession?: string; origin?: string; delegationDepth?: number }; snapshotEvents?: () => readonly DshLogEvent[] } | undefined
   flush?(session: object): PromiseLike<unknown>
 }
 export interface NativeAgent {
   readonly id: string
   readonly status?: string
-  readonly session?: { readonly id: string; readonly header?: { readonly cwd?: string }; snapshotEvents?: () => readonly DshLogEvent[] }
+  readonly session?: { readonly id: string; readonly header?: { readonly cwd?: string; readonly parentSession?: string; readonly origin?: string; readonly delegationDepth?: number }; snapshotEvents?: () => readonly DshLogEvent[] }
   readonly inject?: (message: unknown) => void
   readonly steer?: (message: unknown) => void
   readonly followup?: (message: unknown) => void

@@ -6,6 +6,7 @@ import { createSessionObservation } from './host-adapter/session-observation.js'
 import { createContextMessages } from './host-adapter/context.js'
 import { createToolHost } from './host-adapter/tool-host.js'
 import { createBoundaries } from './host-adapter/boundaries.js'
+import { isNativeSubagent } from './native-subagent.js'
 import { createLifecycle } from './host-adapter/lifecycle.js'
 import { mountHostMemoryApplication } from './host-adapter/memory-application-host.js'
 import { createEfficiencyHost } from './host-adapter/efficiency-host.js'
@@ -384,6 +385,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       return [...catalog.skills, ...catalog.tools]
     },
   })
+  const isGenericNativeChild = (agent: { session?: { header?: { parentSession?: string; origin?: string; delegationDepth?: number } } }): boolean =>
+    isNativeSubagent(agent) && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent)
   const childGuardDisposer = tools?.guard((value) => {
     const execution = value as { agent?: object; name?: string; arguments?: unknown }
     return execution.agent ? delegation.toolDenial(execution.agent, execution.name ?? '', execution.arguments) : undefined
@@ -483,7 +486,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     return undefined
   })
   const routing = createRouting({
-    ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview, semanticCompaction, delegation, deepPlanning,
+    ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview, semanticCompaction, delegation, deepPlanning, isGenericNativeChild,
     getSkillPrompts: () => skillPrompts,
     getToolExposureConfig: () => toolExposureConfig, reportToolExposureFallback,
     getSelection: runId => selections.get(runId), setSelection: (runId, value) => { selections.set(runId, value) },
@@ -505,6 +508,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const { toolHost, advisoryRunner, assertTurnBoundary, submitAdvisory } = toolHostModule
   const advisoryEvidenceFor = toolHostModule.advisoryEvidenceFor
   const boundaries = createBoundaries({
+    isGenericNativeChild,
     ctx, runtime, now: options.now, agents, sessions, skills, tools, userQuestions, gate,
     delegation, executionSupport, answerReview, sessionMirror, currentSession, currentForAgentEvent,
     stateForRun, systemSkillsFor: routing.systemSkillsFor, getSkillPrompts: () => skillPrompts,
@@ -523,7 +527,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     answerReview, markModelUnavailable: agent => routing.markModelUnavailable(agent),
     recordManualChange: (sessionId, pending) => routing.recordManualChange(sessionId, pending),
     modelAuto, root, autoReview, reviewBinding, sessionMirror, executionSupport,
-    kickBoundary: (sessionId, agent) => boundaryWorker.kick(sessionId, agent),
+    kickBoundary: (sessionId, agent) => {
+      if (agent && isGenericNativeChild(agent as NativeAgent)) return
+      const nativeAgent = agents?.get(agent?.id ?? sessionId)
+      if (!nativeAgent || !isGenericNativeChild(nativeAgent)) boundaryWorker.kick(sessionId, agent)
+    },
     stateForRun, objectRecord, isHumanMessage, eventContinuationId,
   })
   const lifecycle = createLifecycle({
@@ -547,6 +555,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const efficiencyHost = createEfficiencyHost({ ctx, memoryFinalizer, agents, sessions, delegation, deepPlanning, currentSession })
   efficiencyHost.configure({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
   const host: DshCompositionHost = {
+    bypassNativeIntake: isGenericNativeChild,
     modelAuto: { coordinator: modelAuto, validSession: (agentId, sessionId) => {
       const currentAgent = agents?.get(agentId) as { session?: object } | undefined
       const currentNativeSession = sessions?.get(sessionId)

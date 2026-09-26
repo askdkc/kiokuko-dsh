@@ -92,6 +92,7 @@ export interface DshCompositionHost {
   readonly toolPolicy?: DshToolPolicy
   readonly intakeGate?: DshIntakeGate
   readonly mapPreStep?: (payload: DshNativePreStepPayload) => DshPreStepEvent | PromiseLike<DshPreStepEvent>
+  readonly bypassNativeIntake?: (agent: DshNativePreStepPayload['agent']) => boolean
   /** Read-only exact active run binding; never used to mirror session events. */
   readonly resolveSessionRunId?: (session: { readonly id: string }) => string | undefined
   readonly memoryFinalizer?: Pick<DshMemoryFinalizer, 'start' | 'dispose' | 'whenIdle'>
@@ -144,9 +145,11 @@ function mountNativeIntakeGate(
   mapPreStep: (payload: DshNativePreStepPayload) => DshPreStepEvent | PromiseLike<DshPreStepEvent>,
   worker?: Pick<DshBoundaryWorker, 'kick'>,
   deep?: import('../deep-thinker/controller.js').DeepPlanningController,
+  bypassIntake?: (agent: DshNativePreStepPayload['agent']) => boolean,
 ): () => void {
   return ctx.on('agent/pre-step', async (payload: DshNativePreStepPayload, next) => {
     if (deep?.executor.isChild(payload.agent)) return next()
+    if (bypassIntake?.(payload.agent)) return next()
     if (await deep?.preStep(payload)) {
       void deep!.kick(payload.agent).catch(() => {})
       return { kind: 'reject', reason: 'Deep owns and has preserved this input.' }
@@ -188,8 +191,10 @@ function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshE
 function mountNativeBoundaryKick(
   ctx: { on(name: string, listener: (payload: DshNativeTurnStoppingPayload) => void, options?: { readonly prepend?: boolean }): () => void },
   worker: Pick<DshBoundaryWorker, 'kick'>,
+  bypassIntake?: (agent: DshNativeTurnStoppingPayload['agent']) => boolean,
 ): readonly (() => void)[] {
   const kick = (payload: DshNativeTurnStoppingPayload): void => {
+    if (bypassIntake?.(payload.agent)) return
     // No validation, LLM call, context construction, or delivery is allowed
     // inside the native turn-stopping callback. The durable worker owns it.
     worker.kick(payload.agent.session?.id ?? payload.agent.sessionId, payload.agent)
@@ -364,13 +369,13 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     }
     if (host.intakeGate !== undefined) {
       if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')
-      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep, host.boundaryWorker, host.deepPlanning))
+      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep, host.boundaryWorker, host.deepPlanning, host.bypassNativeIntake))
     }
     if (host.boundaryWorker !== undefined && host.ennoController !== undefined) {
       throw new Error('kiokuko-dsh must not mount both the durable boundary worker and the legacy turn-stopping controller')
     }
     if (host.boundaryWorker !== undefined) {
-      ingressDisposers.push(...mountNativeBoundaryKick(ctx as unknown as Parameters<typeof mountNativeBoundaryKick>[0], host.boundaryWorker))
+      ingressDisposers.push(...mountNativeBoundaryKick(ctx as unknown as Parameters<typeof mountNativeBoundaryKick>[0], host.boundaryWorker, host.bypassNativeIntake))
     } else if (host.ennoController !== undefined) {
       ingressDisposers.push(mountNativeEnnoController(ctx as unknown as DshTurnStoppingContext, host.ennoController))
     }
