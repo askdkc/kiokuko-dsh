@@ -8,7 +8,7 @@ import { isModelAvailabilityFailure } from '../../../src/dsh/model-routing.js'
 const signal = new AbortController().signal
 const catalog = {
   providers: [{ id: 'api-one', name: 'Same name' }, { id: 'oauth-two', name: 'Same name' }],
-  models: ['api-one', 'oauth-two'].flatMap(provider => ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-luna'].map(id => ({ provider, id, name: 'Same model' }))), failures: [],
+  models: ['api-one', 'oauth-two'].flatMap(provider => ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].map(id => ({ provider, id, name: 'Same model' }))), failures: [],
 }
 const llm = { listProviders: () => catalog.providers, listModels: async (provider: string) => catalog.models.filter(m => m.provider === provider) }
 const routes: ModelRoute[] = ['api-one', 'oauth-two'].map(provider => ({ provider, family: 'openai', connection: provider === 'api-one' ? 'api' : 'codex', protocol: 'responses' }))
@@ -47,35 +47,35 @@ test('custom configuration chooses the provider once and only models for subsequ
     ['enno-model-ideal', 'Same model [gpt-6-astra]'],
     ...MODEL_ROLES.filter(role => role !== 'ideal').flatMap(role => [
       ['enno-model-review', `${ROLE_LABELS[role]}を変更`] as const,
-      [`enno-model-${role}`, 'Same model [gpt-5.6-luna]'] as const,
+      [`enno-model-${role}`, 'Same model [gpt-6-luna]'] as const,
     ]),
     ['enno-model-review', 'この構成で開始'],
   ])
   assert.equal(result?.value.status, 'ready')
   for (const role of MODEL_ROLES) assert.deepEqual(result?.value.configuration?.roles[role], {
-    provider: 'oauth-two', model: role === 'ideal' ? 'gpt-6-astra' : 'gpt-5.6-luna',
+    provider: 'oauth-two', model: role === 'ideal' ? 'gpt-6-astra' : 'gpt-6-luna',
   })
 })
 
 test('editing uses the role connection, supports explicit connection changes and preserves drafts on back and cancel', async () => {
   const initial: StoredExecutionSelection = { revision: 3, value: { mode: 'enno', status: 'selecting', draft: {
-    roles: { ideal: { provider: 'api-one', model: 'gpt-6-astra' }, zenki: { provider: 'oauth-two', model: 'gpt-5.6-sol' } },
+    roles: { ideal: { provider: 'api-one', model: 'gpt-6-astra' }, zenki: { provider: 'oauth-two', model: 'gpt-6-sol' } },
     custom: true, maxConcurrentChildren: 4,
   } } }
   const { stored, saved } = await selectWithAnswers(initial, [
     ['enno-model-review', '前鬼 (Zenki)を変更'],
-    ['enno-model-zenki', 'Same model [gpt-5.6-luna]'],
+    ['enno-model-zenki', 'Same model [gpt-6-luna]'],
     ['enno-model-review', '前鬼 (Zenki)を変更'],
     ['enno-model-zenki', '接続を変更'],
     ['enno-provider-zenki', 'Same name [api-one]'],
-    ['enno-model-zenki', 'Same model [gpt-5.6-sol]'],
+    ['enno-model-zenki', 'Same model [gpt-6-sol]'],
     ['enno-model-review', '前鬼 (Zenki)を変更'],
     ['enno-model-zenki', '戻る'],
     ['enno-model-review', '後鬼 (Goki) ヘッドを変更'],
     ['enno-model-goki', '取消・作業を保持'],
   ])
-  assert.deepEqual(saved[0]?.value.draft?.roles.zenki, { provider: 'oauth-two', model: 'gpt-5.6-luna' })
-  assert.deepEqual(stored.value.draft?.roles, { ...initial.value.draft!.roles, zenki: { provider: 'api-one', model: 'gpt-5.6-sol' } })
+  assert.deepEqual(saved[0]?.value.draft?.roles.zenki, { provider: 'oauth-two', model: 'gpt-6-luna' })
+  assert.deepEqual(stored.value.draft?.roles, { ...initial.value.draft!.roles, zenki: { provider: 'api-one', model: 'gpt-6-sol' } })
   assert.equal(stored.revision, 5)
   assert.equal(initial.value.draft?.roles.zenki?.provider, 'oauth-two')
 })

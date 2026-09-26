@@ -8,7 +8,7 @@ import type { DshUserQuestionRequest } from '../../../src/dsh/user-interaction.j
 type Question = DshUserQuestionRequest['questions'][0]
 type Step = readonly [id: string, answer: string | { custom: string } | null, check?: (question: Question) => void]
 const codexProvider = { id: 'openai-codex', name: 'OpenAI Codex' }
-const modelIds = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-luna']
+const modelIds = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']
 const codexCatalog: DshModelCatalog = {
   listProviders: () => [codexProvider],
   listModels: async provider => modelIds.map(id => ({ provider, id, name: id })),
@@ -76,10 +76,10 @@ test('execution-mode free text ends the question loop without authorizing execut
 test('discussion preserves the latest model draft and cancellation stores no discussion', async () => {
   const { result } = await navigate([
     ['enno-model-review', 'enno-idealを変更'],
-    ['enno-model-ideal', 'gpt-5.6-sol [gpt-5.6-sol]'],
+    ['enno-model-ideal', 'gpt-6-sol [gpt-6-sol]'],
     ['enno-model-review', { custom: 'この構成について説明して' }],
   ], { stored: initial(roleDraft) })
-  assert.equal(result?.value.draft?.roles.ideal?.model, 'gpt-5.6-sol')
+  assert.equal(result?.value.draft?.roles.ideal?.model, 'gpt-6-sol')
   assert.equal(result?.value.discussion?.text, 'この構成について説明して')
   const cancelled = await navigate([['enno-model-review', '取消・作業を保持']], { stored: initial(roleDraft) })
   assert.equal(cancelled.result, undefined)
@@ -100,11 +100,11 @@ test('numeric free-text remains a model search and empty results can be cleared'
     ['enno-model-ideal', { custom: '5.6' }],
     ['enno-model-ideal', { custom: 'missing' }, q => assert.equal(q.options?.some(o => o.label.includes('astra')), false)],
     ['enno-model-ideal', '検索をクリア', q => { hasChoice('検索をクリア')(q); assert.match(q.detail ?? '', /該当するモデルがありません/u) }],
-    ['enno-model-ideal', { custom: '5' }],
-    ['enno-model-ideal', 'gpt-5.6-sol [gpt-5.6-sol]', q => assert.equal(q.options?.some(o => o.label.includes('astra')), false)],
+    ['enno-model-ideal', { custom: '6' }],
+    ['enno-model-ideal', 'gpt-6-sol [gpt-6-sol]', q => assert.equal(q.options?.some(o => o.label.includes('astra')), true)],
     ['enno-model-review', null],
   ], { stored: initial(roleDraft) })
-  assert.equal(stored.value.draft?.roles.ideal?.model, 'gpt-5.6-sol')
+  assert.equal(stored.value.draft?.roles.ideal?.model, 'gpt-6-sol')
 })
 
 test('one provider/model selection returns directly to review and survives cancellation', async () => {
@@ -137,7 +137,7 @@ test('dsh-codex recommendation binds its exact plugin route and starts without r
   assert.deepEqual(result?.value.configuration?.routeBindings, [codexRoute])
   assert.deepEqual(result?.value.configuration?.template, { id: 'openai-codex', version: 1 })
   assert.deepEqual(Object.fromEntries(Object.entries(result!.value.configuration!.roles).map(([role, binding]) => [role, binding.model])), {
-    ideal: 'gpt-6-astra', zenki: 'gpt-6-astra', goki: 'gpt-5.6-sol', worker: 'gpt-5.6-luna', check: 'gpt-6-astra',
+    ideal: 'gpt-6-astra', zenki: 'gpt-6-astra', goki: 'gpt-6-sol', worker: 'gpt-6-luna', check: 'gpt-6-astra',
   })
 })
 
@@ -162,10 +162,10 @@ test('model-list failure can be refreshed inside the picker', async () => {
   const { stored } = await navigate([
     ['enno-model-review', 'enno-idealを変更'],
     ['enno-model-ideal', '一覧を再取得', hasChoice('一覧を再取得')],
-    ['enno-model-ideal', 'gpt-5.6-sol [gpt-5.6-sol]'],
+    ['enno-model-ideal', 'gpt-6-sol [gpt-6-sol]'],
     ['enno-model-review', null],
   ], { stored: initial(roleDraft), llm })
-  assert.equal(stored.value.draft?.roles.ideal?.model, 'gpt-5.6-sol')
+  assert.equal(stored.value.draft?.roles.ideal?.model, 'gpt-6-sol')
 })
 
 test('provider and model pagination, numeric selections, searches and reset stay on the intended list', async () => {
@@ -266,7 +266,7 @@ test('catalog changes at final adoption return to review with no ready selection
     ['enno-model-review', null, q => assert.equal(q.options?.some(o => o.label === 'この構成で開始'), false)],
   ], { routes: [], llm: { ...codexCatalog, listModels: async provider => {
     const models = await codexCatalog.listModels(provider)
-    return ++reads < 3 ? models : models.filter(m => m.id !== 'gpt-5.6-luna')
+    return ++reads < 3 ? models : models.filter(m => m.id !== 'gpt-6-luna')
   } } })
   assert.equal(result, undefined)
   assert.equal(saved.some(s => s.value.status === 'ready'), false)

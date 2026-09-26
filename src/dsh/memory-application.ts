@@ -23,7 +23,7 @@ const transportSchema = z.object({
 }).strict()
 export const MEMORY_APPLICATION_GUIDANCE = 'Use task_memory_review(action=status) once, then submit independent pending decisions with action=review_batch (up to 32); action=review remains available for one. Adoption and contradiction require relevant source paths. Adoption also needs an invariant, counterexample, method and command: an exact foreground Bash command at repository-root cwd, or an approved Enno verifier expressed as executable and arguments joined by single spaces. For topic-based non-applicability, use paths:[]; supply paths when the judgment depends on current source. Refresh retains decisions when delivered entry revisions and mode stay unchanged; a revised entry or mode change starts a new review generation. New entries need decisions, and changed delivery invalidates execution proof. Only a typed successful foreground result on unchanged declared sources counts as observed proof. Use action=refresh for a concrete new error or target; it keeps the run. Missing proof cannot complete successfully. Judgments are model-reported.'
 
-interface NativeExecution { callId: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
+interface NativeExecution { callId: string; rootCallId?: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
 interface SurfaceContext {
   tools: { register(tool: any): () => void }
   commands?: { register(command: DshNativeCommandDefinition): () => void }
@@ -39,6 +39,12 @@ export interface ApplicationHost {
 // Exact native read tools only; never classify arbitrary shell strings as read-only.
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status'])
 const CONTROL_TOOLS = new Set(['task_memory_review', 'memory_checkpoint', 'curator_check', 'enno_finish', 'enno_work_report', 'enno_plan_review', 'enno_plan_submit', 'enno_ideal_submit', 'enno_meditation_submit'])
+
+function isPtcSubcall(execution: NativeExecution): boolean {
+  return execution.parent !== undefined && typeof execution.rootCallId === 'string'
+    && execution.callId.startsWith(`${execution.rootCallId}:ptc:`)
+    && /^[1-9]\d*$/u.test(execution.callId.slice(execution.rootCallId.length + 5))
+}
 
 /** Only saved-result paging is a read; ref inspection can run a live worker. */
 export function isSavedLispResultRead(execution: Pick<NativeExecution, 'name' | 'arguments' | 'parent'>): boolean {
@@ -76,7 +82,7 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
     parameters: JSON.parse(JSON.stringify(z.toJSONSchema(transportSchema))), output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args: unknown, execution: NativeExecution) => {
       const identity = host.resolve(execution)
-      if (!identity || execution.parent !== undefined || execution.name !== 'task_memory_review') throw new Error('No active native task for memory application')
+      if (!identity || execution.parent !== undefined && !isPtcSubcall(execution) || execution.name !== 'task_memory_review') throw new Error('No active native task for memory application')
       execution.signal.throwIfAborted()
       const input = inputSchema.parse(args)
       if (input.action === 'refresh') return host.refresh(execution, input.query)

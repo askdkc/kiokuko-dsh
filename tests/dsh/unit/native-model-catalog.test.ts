@@ -55,7 +55,7 @@ test('a live settings descriptor allows the recommended template to reach review
   const llm = {
     listProviders: () => [{ id: provider, name: 'OpenAI' }],
     listConfigurableProviders: () => [{ provider, settingsNs: 'llm-pi-ai', settingsPath: ['providers', provider], declared: true }],
-    listModels: async () => ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-luna'].map(id => ({ provider, id, name: id })),
+    listModels: async () => ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].map(id => ({ provider, id, name: id })),
   }
   const catalog = nativeModelCatalog(llm, { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { openai: { baseURL: 'https://api.openai.com/v1', api: 'openai-responses' } } } }] })!
   let stored: StoredExecutionSelection = { revision: 0, value: { mode: 'enno', status: 'selecting' } }

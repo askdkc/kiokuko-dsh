@@ -266,6 +266,10 @@ export function memoryApplicationStatus(db: SqliteDatabase, runId: string) {
     retrieval: current.retrieval, ready: running === 0 && items.every(item => item.problem === null), pending: items.filter(item => item.problem !== null), items,
     verification: items.some(item => item.verification === 'client_observed') ? 'client_observed' : 'unobserved' }
 }
+export function memoryApplicationDecisionsPending(status: ReturnType<typeof memoryApplicationStatus>): boolean {
+  return status.supported && status.items.some(item => item.problem === 'decision_missing' || item.problem === 'entry_changed'
+    || item.problem === 'basis_changed' || item.problem === 'source_unavailable')
+}
 export function assertMemoryApplicationComplete(db: SqliteDatabase, runId: string): void {
   const status = memoryApplicationStatus(db, runId)
   if (!status.ready) throw new KiokukoError('CONFLICT', 'Memory application or regression verification is incomplete', { memoryApplication: status })
@@ -331,7 +335,7 @@ export function beginMemoryExecution(db: SqliteDatabase, identity: MemoryApplica
   return withImmediateTransaction(db, () => {
     const current = assertIdentity(db, identity), status = memoryApplicationStatus(db, identity.runId)
     if (!status.supported || !status.items.length) return false
-    if (status.items.some(item => item.problem === 'decision_missing' || item.problem === 'entry_changed' || item.problem === 'basis_changed' || item.problem === 'source_unavailable')) conflict('Use task_memory_review to resolve memory decisions before executing or editing')
+    if (memoryApplicationDecisionsPending(status)) conflict('Use task_memory_review to resolve memory decisions before executing or editing')
     const old = db.prepare('SELECT * FROM task_memory_executions WHERE run_id=? AND call_id=?').get<ExecutionRow>(identity.runId, callId)
     if (old) conflict('Native tool call was already observed; do not replay effects')
     const selected = command ? reviews(db, current).filter(row => {

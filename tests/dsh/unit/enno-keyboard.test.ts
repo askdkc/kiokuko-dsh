@@ -399,7 +399,7 @@ test('keyboard-only native card answers drive the Codex template selector throug
   const seen: string[] = []
   try {
     const selected = await selectExecution({ stored, task: 'Fix selection', routes: [], signal: new AbortController().signal,
-      llm: { listProviders: () => [{ id: 'openai-codex', name: 'Codex' }], listModels: async provider => ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-luna'].map(id => ({ id, name: id, provider })) },
+      llm: { listProviders: () => [{ id: 'openai-codex', name: 'Codex' }], listModels: async provider => ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].map(id => ({ id, name: id, provider })) },
       save: async (revision, value) => stored = { revision: revision + 1, value },
       questions: { ask: async request => {
         const q = request.questions[0], label = answers.get(q.id)

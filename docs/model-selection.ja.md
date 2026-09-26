@@ -45,8 +45,8 @@ modelAutoMode:
 
 | グループ／テンプレート | enno-ideal・Zenki | Gokiヘッド | 子 | enno-check・振り返り |
 | --- | --- | --- | --- | --- |
-| OpenAI | `gpt-6-astra` | `gpt-5.6-sol` | `gpt-5.6-luna` | `gpt-6-astra` |
-| OpenAI Codex・推奨（dsh-codex） | `gpt-6-astra` | `gpt-5.6-sol` | `gpt-5.6-luna` | `gpt-6-astra` |
+| OpenAI | `gpt-6-astra` | `gpt-6-sol` | `gpt-6-luna` | `gpt-6-astra` |
+| OpenAI Codex・推奨（dsh-codex） | `gpt-6-astra` | `gpt-6-sol` | `gpt-6-luna` | `gpt-6-astra` |
 | DeepSeek・V4.1 Flash | `deepseek-flash` | `deepseek-flash` | `deepseek-flash` | `deepseek-flash` |
 | OpenCode Go・DeepSeek V4.1 Flash | `deepseek-v4.1-flash` | `deepseek-v4.1-flash` | `deepseek-v4.1-flash` | `deepseek-v4.1-flash` |
 | OpenCode Go・GLM | `glm-5.3` | `glm-5.3` | `glm-5.3-flash` | `glm-5.3` |

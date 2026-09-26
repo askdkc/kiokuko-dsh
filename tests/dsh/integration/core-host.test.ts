@@ -127,6 +127,49 @@ test('core model-auto intake runs before first prompt assembly and pre-step reus
   } finally { await handle.dispose(); await f.cleanup() }
 })
 
+test('core PTC mode prepares memory before assembly and exposes direct review until decided', async () => {
+  const f = await fixture(), hooks = new Map<string, Function>()
+  let presentation: 'ptc' | 'native' = 'ptc'
+  f.services.tools.modeFor = () => presentation
+  f.services.tools.presentAs = (mode: 'native') => {
+    assert.equal(mode, 'native')
+    presentation = mode
+    return () => { presentation = 'ptc' }
+  }
+  ;(f.agent as any).ctx = {
+    get: (name: string) => f.services[name],
+    on(name: string, listener: Function) { hooks.set(name, listener); return () => { hooks.delete(name) } },
+  }
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
+    modelAutoMode: { mode: 'off' }, typedDecisions: { mode: 'off' } })
+  try {
+    const db = openConnection(join(f.root, 'memory.sqlite3'))
+    const workspace = db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
+    recordEntry(db, { workspace, kind: 'lesson', title: 'migration expectations',
+      body: 'Current migration expectations must include the next migration.', createdBy: 'fixture' })
+    db.close()
+    f.listeners.get('agent/created')!({ agent: f.agent })
+    const message = { role: 'user', content: [{ type: 'text', text: 'Implement migration expectations' }], source: { kind: 'user' } }
+    hooks.get('agent/inbox/claimed')!({ agent: f.agent, turn: 1, message })
+    const routingAssemble = hooks.get('system-prompt/assemble')!
+    const assemble = () => routingAssemble({}, { signal: new AbortController().signal },
+      async () => ({ variables: {}, sections: [], contexts: [] }))
+    await assemble()
+    assert.equal(presentation, 'native')
+    const review = f.tools.find(tool => tool.name === 'task_memory_review')
+    const execution = { callId: 'review-status', name: 'task_memory_review', agent: f.agent, signal: new AbortController().signal }
+    const status = await review.execute({ action: 'status' }, execution)
+    assert.equal(status.pending[0]?.problem, 'decision_missing')
+    await review.execute({ action: 'review', review: { generation: status.generation, entryId: status.pending[0].entryId,
+      entryRevision: status.pending[0].revision, expectedRevision: 0, decision: 'not_applicable', paths: [],
+      basis: 'This stored lesson does not apply to the isolated fixture task.' } }, { ...execution, callId: 'review-decision' })
+    const afterReview = await review.execute({ action: 'status' }, { ...execution, callId: 'review-after' })
+    assert.equal(afterReview.pending.length, 0, JSON.stringify(afterReview.pending))
+    await assemble()
+    assert.equal(presentation, 'ptc')
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
 test('a local writing feature can prepare and dispose through the same contract without router edits', async () => {
   const f = await fixture(), events: string[] = []
   const feature: DshModule<CoreModuleHost> = { id: 'writing', coreVersion: 1, requires: [], configure: value => value,

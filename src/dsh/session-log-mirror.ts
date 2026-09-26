@@ -254,7 +254,7 @@ function contiguousMirroredThrough(database: SqliteDatabase, sessionId: string, 
 export class DshSessionLogMirror implements DshSessionQuery {
   readonly #runtime: DshSessionLogMirrorOptions['runtime']
   readonly #databasePath: string
-  readonly #attachmentDirectory: string
+  readonly #attachmentDirectory: string | undefined
   readonly #readAttachment: DshSessionLogMirrorOptions['readAttachment']
   readonly #now: () => string
   readonly #openDatabase: (path: string) => SqliteDatabase
@@ -267,7 +267,8 @@ export class DshSessionLogMirror implements DshSessionQuery {
   constructor(options: DshSessionLogMirrorOptions) {
     this.#runtime = options.runtime
     this.#databasePath = options.databasePath ?? getDshSessionCachePath(options)
-    this.#attachmentDirectory = options.attachmentDirectory ?? `${this.#databasePath}.attachments`
+    this.#attachmentDirectory = options.attachmentDirectory
+      ?? (this.#databasePath === ':memory:' ? undefined : `${this.#databasePath}.attachments`)
     this.#readAttachment = options.readAttachment
     this.#now = options.now ?? (() => new Date().toISOString())
     this.#openDatabase = options.openDatabase ?? openConnection
@@ -315,7 +316,7 @@ export class DshSessionLogMirror implements DshSessionQuery {
     this.#startPromise = (async () => {
       let opened: SqliteDatabase | undefined
       try {
-        await mkdir(this.#attachmentDirectory, { recursive: true, mode: 0o700 })
+        if (this.#attachmentDirectory !== undefined) await mkdir(this.#attachmentDirectory, { recursive: true, mode: 0o700 })
         if (this.#closed) return
         opened = this.#openDatabase(this.#databasePath)
         opened.exec(CACHE_SCHEMA)
@@ -454,8 +455,10 @@ export class DshSessionLogMirror implements DshSessionQuery {
   async #resetCorruptSession(sessionId: string): Promise<void> {
     const database = this.#database
     if (database === undefined) return
-    const directory = join(this.#attachmentDirectory, createHash('sha256').update(sessionId).digest('hex'))
-    await rm(directory, { recursive: true, force: true })
+    if (this.#attachmentDirectory !== undefined) {
+      const directory = join(this.#attachmentDirectory, createHash('sha256').update(sessionId).digest('hex'))
+      await rm(directory, { recursive: true, force: true })
+    }
     withImmediateTransaction(database, () => {
       database.prepare('DELETE FROM session_events WHERE session_id = ?').run(sessionId)
       database.prepare('DELETE FROM session_attachments WHERE session_id = ?').run(sessionId)
@@ -587,6 +590,13 @@ export class DshSessionLogMirror implements DshSessionQuery {
         SELECT state FROM session_attachments WHERE session_id = ? AND attachment_id = ?
       `).get<{ state: string }>(sessionId, ref.attachmentId)?.state
       if (state === 'stored') continue
+      if (this.#attachmentDirectory === undefined) {
+        database.prepare(`
+          UPDATE session_attachments SET state = 'failed', last_error = ?
+           WHERE session_id = ? AND attachment_id = ?
+        `).run('Session cache attachment directory is not configured', sessionId, ref.attachmentId)
+        continue
+      }
       if (this.#readAttachment === undefined) {
         database.prepare(`
           UPDATE session_attachments SET state = 'failed', last_error = ?
@@ -880,6 +890,9 @@ export class DshSessionLogMirror implements DshSessionQuery {
         }
         const identityDigest = createHash('sha256').update(row.attachmentId).digest('hex').slice(0, 16)
         const archivePath = `attachments/${identityDigest}-${row.digest}.${extension[row.mediaType]}`
+        if (this.#attachmentDirectory === undefined) {
+          throw new KiokukoError('SERVICE_UNAVAILABLE', 'Session cache attachment directory is not configured')
+        }
         const absolutePath = join(this.#attachmentDirectory, row.relativePath)
         const expectedDigest = row.digest
         const expectedBytes = row.byteCount
@@ -973,7 +986,7 @@ export class DshSessionLogMirror implements DshSessionQuery {
            ORDER BY expires_at, last_accessed_at, session_id
         `).all<{ sessionId: string }>(now)
         const remove = (sessionId: string): void => {
-          attachmentDirectories.push(join(this.#attachmentDirectory, createHash('sha256').update(sessionId).digest('hex')))
+          if (this.#attachmentDirectory !== undefined) attachmentDirectories.push(join(this.#attachmentDirectory, createHash('sha256').update(sessionId).digest('hex')))
           database.prepare('DELETE FROM session_events WHERE session_id = ?').run(sessionId)
           database.prepare('DELETE FROM session_attachments WHERE session_id = ?').run(sessionId)
           database.prepare('DELETE FROM session_watermarks WHERE session_id = ?').run(sessionId)
