@@ -165,7 +165,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     mock.toolCallResponse('review-two-revised', 'enno_plan_review', plan),
     mock.toolCallResponse('plan-two-revised', 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
     mock.toolCallResponse('delegate-two', 'enno_delegate', { instruction: 'Inspect the current WorkUnit and return verification evidence. Do not edit files.' }),
-    (request: any) => { assert.equal(request.model, 'gpt-5.6-luna'); assert.notEqual(request.sessionId, 'real-loop-session'); return mock.textResponse('Child evidence: no additional changes are required.') },
+    (request: any) => { assert.equal(request.model, 'gpt-6-luna'); assert.notEqual(request.sessionId, 'real-loop-session'); return mock.textResponse('Child evidence: no additional changes are required.') },
     ...secondFlow.slice(5, 6),
     () => { throw new llm.LlmError('Selected model is unavailable', 'MODEL_NOT_FOUND') },
     ...secondFlow.slice(6),
@@ -512,7 +512,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     const delegated = JSON.parse(resultContent(delegation)[0].text)
     assert.equal(delegated.accepted, false)
     assert.equal(delegated.stopReason, 'completed')
-    for (const [callId, model] of [['ideal-two', 'gpt-6-astra'], ['plan-two', 'gpt-6-astra'], ['delegate-two', 'gpt-5.6-sol'], ['work-two', 'gpt-5.6-sol'], ['finish-two', 'gpt-6-astra'], ['meditation-two', 'gpt-6-astra']]) {
+    for (const [callId, model] of [['ideal-two', 'gpt-6-astra'], ['plan-two', 'gpt-6-astra'], ['delegate-two', 'gpt-6-sol'], ['work-two', 'gpt-6-sol'], ['finish-two', 'gpt-6-astra'], ['meditation-two', 'gpt-6-astra']]) {
       assert.deepEqual(routedTools.filter(t => t.callId === callId).map(t => t.model), [model], 'Reselection must not replay completed tools')
     }
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS n FROM ledger_runs WHERE dsh_session_id = ?').get<{ n: number }>(delegated.childSessionId)?.n), 0)
