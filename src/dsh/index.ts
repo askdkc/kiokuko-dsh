@@ -77,7 +77,7 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
 async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
   const resolvedConfig = Config.parse(config)
   if (!resolvedConfig.enabled) return
-  const tuiProfile = (ctx.get('profileContext', false) as { name?: string } | undefined)?.name === 'dsh-tui'
+  const tuiProfile = (ctx.get?.('profileContext', false) as { name?: string } | undefined)?.name === 'dsh-tui'
   const skillPrompts = new DshSkillPrompts(resolvedConfig.skillPrompts)
 
   console.info('[kiokuko-dsh] [info] plugin loaded')

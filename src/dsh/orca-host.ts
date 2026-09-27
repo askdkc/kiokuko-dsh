@@ -23,7 +23,7 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
 }): DshOrcaHostServices {
   // Web keeps observers alive through recorder drain. TUI forbids a plugin
   // from registering on the composition root, so use its own scoped context.
-  const profile = (ctx.get('profileContext', false) as { name?: string } | undefined)?.name
+  const profile = (ctx.get?.('profileContext', false) as { name?: string } | undefined)?.name
   const observerContext = profile === 'dsh-tui' ? ctx : ctx.root ?? ctx
   const bindings = new Map<string, { agent: object; session: object; binding: DshOrcaBinding }>()
   let accepting = true
