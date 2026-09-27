@@ -39,11 +39,16 @@ KIOKUKO_REQUIRE_DSH_NATIVE=1 \
 KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" \
 npm run test:answer-review
 npm run build
+node scripts/evaluate-answer-review.mjs
 node scripts/evaluate-answer-review.mjs --live --provider jev
 node scripts/evaluate-answer-review.mjs --live --provider laya
 ```
 
 実モデル評価は明示的な `--live` が必須です。Jevは環境変数 `TYPESAFE_API_KEY`、Layaは起動済みのworkerを使います。異なるソケットは `--socket PATH` で指定します。既存の資格情報ファイルを読み回ったり、workerを起動・交換したりしません。出力保存には `--output PATH` を使えます。
+
+引数なしの評価は固定応答を使い、ホストの証拠抽出からproviderの応答解析・集計までをオフラインで検証します。モデルの精度を測るものではありません。`npm run test:evaluation:answer-review` はビルド後にこれを実行します。`--config PATH` は既存の `typedDecisions` 設定形式のJSONを読み、`--provider` と矛盾する設定を拒否します。`--repetitions N`（既定1）、`--seed N`（既定0）、`--warmup N`（既定0）で試行条件を固定できます。ウォームアップは集計に含めません。オフラインではLaya v1の固定応答を使います。
+
+評価レポートv2は、受理前の選択肢・確率・受理条件と棄権理由を質問別に記録します。混同行列と各率は完了ケースだけで算出し、失敗件数・理由と完了率を併記します。元の本文・資格情報は診断情報に保存しません。Laya v1では内部切り詰めと実モデルfingerprintを検証できず、`unverified_v1` のままです。strictの `strict_preflight` は全質問のpreflightと評価が成功した場合だけ記録します。
 
 日英の同じ正例・誤答・根拠不足を使い、誤指摘率（非finding正解のうちfindingを返した割合）、検出率（finding正解のうちfindingを返した割合）、棄権率、評価時間を言語ごとに報告します。失敗したケースを正解に算入しません。これは小規模な固定データの測定で、製品全体の精度・費用・速度の証明には使いません。nativeテストのmock結果と実モデルの結果、ローカル検証とリモートCIは別の証拠です。
 

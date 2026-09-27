@@ -1,0 +1,4 @@
+{
+  "input": ["INFO: ok", "ERROR: missing", "WARN: quoted ERROR: is not a failure", "ERROR: invalid"],
+  "expected": ["ERROR: missing", "ERROR: invalid"]
+}

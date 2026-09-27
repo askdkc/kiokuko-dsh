@@ -102,6 +102,8 @@ jobs:
 
       - name: Check typed decision Skill evaluation fixtures
         run: npm run test:evaluation:decisions
+      - name: Check Answer Review evaluation pipeline offline
+        run: npm run test:evaluation:answer-review
       - name: Check memory reuse Choice and Noul evaluation fixtures
         run: npm run test:evaluation:memory-reuse -- --mode=all
 
@@ -194,7 +196,7 @@ jobs:
           if-no-files-found: ignore
 
   dsh-current-native:
-    name: DSH 0.1.7 native and Web compatibility
+    name: DSH 0.1.7 native, Web and TUI core compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -205,10 +207,11 @@ jobs:
           cache: npm
       - uses: pnpm/action-setup@v6
         with:
-          version: 11.7.0
+          version: 11.24.0
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/dsh-runtime
       - run: npm ci --prefix tests/fixtures/dsh-runtime-current
+      - run: pnpm --dir tests/fixtures/dsh-tui-runtime-current install --frozen-lockfile --ignore-scripts
       - name: Verify current full suite
         run: npm test
         env:
@@ -247,6 +250,17 @@ jobs:
           KIOKUKO_EXPECTED_DSH_VERSION: 0.1.7-rc.2
           KIOKUKO_REQUIRE_DSH_CLI: "1"
           KIOKUKO_DSH_CLI_ONLY: "1"
+      - name: Verify current packed TUI core lifecycle
+        run: npm run test:e2e:dsh:tui
+        env:
+          KIOKUKO_DSH_EVIDENCE_PATH: ${{ runner.temp }}/kiokuko-dsh-tui-evidence.json
+      - name: Upload TUI core lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiokuko-dsh-tui-evidence-linux
+          path: ${{ runner.temp }}/kiokuko-dsh-tui-evidence.json
+          if-no-files-found: ignore
 
   semantic-platform-smoke:
     name: Semantic smoke (${{ matrix.platform }})

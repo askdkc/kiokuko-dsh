@@ -1,6 +1,6 @@
 ---
 name: kiokuko-lisp
-description: Compose reusable task tools with Common Lisp functions in a persistent, protected DSH session.
+description: Compose reusable Common Lisp task tools in protected disposable workers or use the legacy persistent session.
 ---
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-lisp -->
@@ -10,7 +10,9 @@ description: Compose reusable task tools with Common Lisp functions in a persist
 
 ## Admission and boundaries
 
-Enable via coding choice or `/kioku-lisp enable`. Never spoof the host-bound
+Enable persistent Lisp via coding choice or `/kioku-lisp enable`. For generated
+task tools, start a separate session with `/kioku-lisp enable-task`; this mode
+uses a fresh protected worker for each definition or call. Never spoof the host-bound
 session/agent/directory/generation. Missing runtime or failed protection blocks
 admission. Native read/glob/grep/skill retain DSH permissions; ordinary bash,
 mutation and delegation remain blocked.
@@ -22,7 +24,35 @@ cannot expand permissions; use proposals/audited brokers, never retry outside pr
 ## Tools and identity
 
 - `lisp_eval`: `{operationId, code, inputs?: [relativeFileOrAttachmentPath], timeoutMs?}`.
-- `lisp_describe`: `{operationId, symbol?}`. Omit symbol for the API/verifier map
+- `lisp_define`: `{operationId, name, description, source, inputSchema, outputSchema,
+  dependencies?: [{binding,toolRef}], examples?: [{input,expected}], firstInput?}`.
+  The source is one Lisp lambda form. The host saves an immutable toolRef only
+  after compilation and declared examples pass in protected workers.
+- `lisp_call`: `{operationId, toolRef, input}` or `{operationId, toolRef, inputRef}`;
+  optionally select bounded `fields` with JSON pointers. Its resultRef can be
+  passed to another tool without sending the body through the conversation.
+- `lisp_observe`: `{operationId, paths:[workspaceRelativePath], format?:"text"|"json"}`.
+  Explicit files are checked and saved as one resultRef; response shows paths,
+  byte digests and coverage, not file bodies. Use lisp_call.inputRef to process it.
+- `lisp_stage`: `{operationId, resultRef, baseRef}` converts a generated proposal
+  result into a frozen candidate. The result must descend from that exact observed
+  baseRef. This does not write the workspace.
+- `lisp_verify`: `{operationId, candidateRef, target, script?}` builds a private
+  project from the captured bytes, applies the candidate there, then invokes an
+  approved host verifier. It records a candidate-bound receipt. Include all files
+  needed by the verifier in the observation, including `package.json`; missing
+  dependencies or scripts fail or return NOT_APPLIED. `testStatus:unknown` never
+  proves that tests ran, even when a command exits zero.
+- `lisp_apply`: `{operationId, candidateRef, verificationRef?}` applies one staged
+  candidate through existing host approval and rechecks the observed read set and
+  frozen targets. A verificationRef must belong to the same candidate and have a
+  successful command exit. Without it, the receipt says `not-run`. Never treat
+  a generated `passed` field as host verification.
+- `lisp_compare`: `{operationId, leftRef, rightRef}` compares two saved candidates'
+  bases and per-path operation/content hashes. It never executes either candidate
+  and does not infer verification from a generated value.
+- `lisp_describe`: `{operationId, symbol?}` or `{toolRef}` for the saved task
+  manifest without its source. Omit symbol for the API/verifier map
   (also during recovery); package names list exports, functions give arguments/docs.
   Normal query limits apply.
 - `lisp_inspect`: `{operationId, ref}` for a current-generation object, or
@@ -31,9 +61,10 @@ cannot expand permissions; use proposals/audited brokers, never retry outside pr
   `changes`. Keep `pointer` with `section=result`; Unicode offsets, limit 1–2000.
   `nextOffset` pages without execution.
 - `lisp_status`: `{offset?: 0}` reads state/limits/pending counts and 10 operation
-  summaries without Lisp. Page via `nextOffset` as needed; absent OS quotas remain unknown.
-- `lisp_cancel`: `{operationId, generation}` stops the worker and managed jobs without
-  waiting for evaluation.
+  summaries without Lisp. Task mode reports TASK_READY when no worker is needed.
+  Page via `nextOffset` as needed; absent OS quotas remain unknown.
+- `lisp_cancel`: `{operationId, generation}` in persistent mode or `{operationId}`
+  in task mode stops workers and managed jobs without waiting for evaluation.
 - `lisp_reset`: `{operationId}` replaces a healthy worker after confirmed stop;
   use human recovery for failures, never reset to bypass it.
 
@@ -42,7 +73,8 @@ Exact concurrent replay gives IN_PROGRESS; changed input gives ID_CONFLICT.
 After transport loss, retry only the same request/ID; never replace RUNNING/UNKNOWN
 IDs. Results may expire after 30 days; identity tombstones return RESULT_EXPIRED.
 Lisp errors fail evaluations. Timeout, broken frames or exit need human recovery.
-Reset/replacement/loss discards definitions/references; rebuild them, never effects.
+Persistent worker reset/replacement/loss discards heap definitions/references;
+task tool artifacts and saved results remain owner-bound until expiry. Never replay effects.
 
 ## Build task tools
 
@@ -53,11 +85,24 @@ First enable compiles; later starts reuse verified code, never session state.
 Compile/cache failure stops startup: report `/kioku-lisp recover`; never modify
 compiled files or replay effects.
 
-Define/test/use cohesive task-specific `defun` tools in one lisp_eval, then reuse
+In task mode, generate a lambda whose JSON input and output match bounded schemas.
+Use exact dependency toolRefs with local binding names for Lisp function composition.
+The host recompiles saved source in a fresh worker; do not rely on heap state,
+global variables, process RPC or old worker references. A saved resultRef stays
+available across worker/host restart for 30 days under the same owner. A failed
+or expired ref does not fall back to workspace's current contents. Task mode's
+`lisp_eval` is a disposable scratch experiment: its variables and references
+do not survive. Use `lisp_observe` for workspace input; legacy `inputs` and
+proposals are unavailable in this mode. Use persistent mode when arbitrary
+Lisp work needs the same worker generation.
+`lisp_status` lists recent task tool, result and candidate refs plus unresolved
+attempts for the current owner. `lisp_inspect` reads saved receipts without replay.
+
+In persistent mode, define/test/use cohesive task-specific `defun` tools in one lisp_eval, then reuse
 with new inputs. Batch known reads/transforms/checks; return compact evidence.
 Split at new decisions, approvals or limits; never preprogram guesses or eval data.
 Use macros only as needed. Definitions persist per generation; lisp_describe
-`kioku.user` lists them and exact names give arguments/docs. Six native tools stay fixed.
+`kioku.user` lists them and exact names give arguments/docs. Native tool entries stay fixed.
 
 ## Files and outcomes
 

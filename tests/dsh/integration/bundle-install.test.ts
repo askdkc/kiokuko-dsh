@@ -79,7 +79,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   assert.equal(patch[1]?.insert?.length, 1)
   assert.equal(patch[1]?.insert?.[0]?.id, 'kiokuko-dsh')
   assert.equal(patch[1]?.insert?.[0]?.name, 'kiokuko-dsh')
-  assert.ok(patch[1]?.insert?.[0]?.inject?.includes('connection'))
+  assert.ok(!patch[1]?.insert?.[0]?.inject?.includes('connection'), 'Web connection must not gate TUI core startup')
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('attachments'))
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('sessionPersistence'))
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('subagents'))

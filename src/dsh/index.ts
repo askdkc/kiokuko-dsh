@@ -77,6 +77,7 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
 async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
   const resolvedConfig = Config.parse(config)
   if (!resolvedConfig.enabled) return
+  const tuiProfile = (ctx.get('profileContext', false) as { name?: string } | undefined)?.name === 'dsh-tui'
   const skillPrompts = new DshSkillPrompts(resolvedConfig.skillPrompts)
 
   console.info('[kiokuko-dsh] [info] plugin loaded')
@@ -125,7 +126,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       try {
         composition = await mountDshComposition(ctx, host, resolvedConfig.lisp, skillPrompts)
         disposeOrcaCommand = host.commands === undefined ? undefined : mountDshOrcaCommand({ commands: host.commands }, resolvedConfig.orca.enabled, host.orca)
-        disposeExport = host.sessionExport === undefined ? undefined
+        disposeExport = host.sessionExport === undefined || tuiProfile ? undefined
           : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, host.sessionExport)
         return cleanup
       } catch (error) { await cleanup(); throw error }
@@ -166,7 +167,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     try {
       composition = await mountDshComposition(ctx, adapter.host, resolvedConfig.lisp, skillPrompts)
       disposeOrcaCommand = adapter.host.commands === undefined ? undefined : mountDshOrcaCommand({ commands: adapter.host.commands }, resolvedConfig.orca.enabled, adapter.host.orca)
-      disposeExport = adapter.host.sessionExport === undefined ? undefined
+      disposeExport = adapter.host.sessionExport === undefined || tuiProfile ? undefined
         : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, adapter.host.sessionExport)
       return cleanup
     } catch (error) { await cleanup(); throw error }

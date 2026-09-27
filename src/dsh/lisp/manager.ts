@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, open, readFile, realpath, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readFile, realpath, rm, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import type { DshUserQuestions } from '../user-interaction.js'
@@ -17,6 +17,8 @@ import { inspectSavedResult } from './inspection.js'
 import { recordedResult } from './recorded-result.js'
 import type { DshSkillPrompts } from '../skill-prompts.js'
 import type { AttachmentInput } from './attachment-input.js'
+import { CallInput, DefineInput, TaskToolCatalog, selectFields, validateValue } from './task-tools.js'
+import { ApplyInput, CompareInput, StageInput, VerifyInput, candidateFromResult, compareCandidates, loadCandidate, loadVerification, materializeCandidate, stageCandidate } from './candidate.js'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus
   slotReserved?: boolean; hostBusy?: boolean; idleSince?: number; idleTimer?: ReturnType<typeof setTimeout>; suspension?: Promise<void>; resumed?: boolean; disposed?: boolean;
@@ -42,6 +44,7 @@ export class LispManager {
   readonly #store: LispStore
   readonly #library: string
   readonly #compiled: CompiledLispCache
+  readonly #taskTools: TaskToolCatalog
   #closed = false
   #lock = false
   #artifactReserved = 0
@@ -52,6 +55,7 @@ export class LispManager {
     this.#proposals = new LispProposalBatch({ store: options.store, backupRoot: join(options.dataRoot, 'backups'), protectedRoots: () => this.protectedRoots(), ...(options.questions ? { questions: options.questions } : {}), stopped: () => this.#closed })
     this.#library = options.library ?? fileURLToPath(new URL('../../../lisp/', import.meta.url))
     this.#compiled = new CompiledLispCache(join(options.dataRoot, 'compiled'), this.#library, this.#config)
+    this.#taskTools = new TaskToolCatalog(options.store)
   }
   async start(): Promise<void> {
     await verifyLispVendor(this.#library)
@@ -86,6 +90,7 @@ export class LispManager {
   private protectedRoots(): string[] { return [this.options.dataRoot, dirname(this.#library), ...this.options.protectedRoots ?? []] }
   async enable(owner: LispOwner, hostBusy = false, signal?: AbortSignal): Promise<unknown> {
     signal?.throwIfAborted()
+    if (await this.isTaskMode(owner)) fail('TASK_MODE_ACTIVE', 'このセッションは作業用ツール形態です。Lisp worker 形態へ切り替えるには一度 disable してください。')
     if (!this.#config.enabled) fail('LISP_DISABLED', '設定の lisp.enabled を true にしてプラグインを再読み込みしてください。')
     if (this.#closed) fail('HOST_STOPPED', 'プラグインが停止しています。')
     if (this.enabled.has(owner.sessionId)) { this.setAgentBusy(owner, hostBusy); return this.prepare(owner) }
@@ -97,6 +102,93 @@ export class LispManager {
     state.hostBusy = hostBusy
     await this.startWorker(state)
     return this.status(owner)
+  }
+  async enableTask(owner: LispOwner, signal?: AbortSignal): Promise<unknown> {
+    signal?.throwIfAborted()
+    if (!this.#config.enabled || this.#closed) fail('LISP_DISABLED', 'Lisp の設定と状態を確認してください。')
+    if (await realpath(owner.root) !== owner.root) fail('SCOPE_CONFLICT', '作業ディレクトリを確認できません。')
+    if ([...this.#agents.values()].some(s => s.owner.sessionId === owner.sessionId && s.worker && !s.worker.stopped))
+      fail('TASK_MODE_BUSY', '稼働中の Lisp worker があるため実行形態を切り替えられません。')
+    await this.#store.enable(owner); this.enabled.set(owner.sessionId, owner.root)
+    const epoch = (await this.#store.session(owner.sessionId))?.epoch
+    if (!epoch) fail('TASK_MODE_CONFLICT', 'セッション世代を確認できません。')
+    const modeId = `task-mode-${epoch}`
+    const modeOwner = { ...owner, agentId: '__session__' }
+    const old = await this.#store.get(modeOwner, modeId)
+    if (!old) {
+      await this.#store.reserve(modeOwner, modeId, 'task_mode', digest({ root: owner.root, epoch }), 'host', { root: owner.root, epoch })
+      await this.#store.transition(modeOwner, modeId, ['RUNNING'], 'SUCCEEDED', { mode: 'task' })
+    } else if (old.kind !== 'task_mode' || old.digest !== digest({ root: owner.root, epoch }) || old.state !== 'SUCCEEDED')
+      fail('TASK_MODE_CONFLICT', '実行形態を確認できません。')
+    return { ok: true, state: 'TASK_READY' }
+  }
+  async isTaskMode(owner: LispOwner): Promise<boolean> {
+    const epoch = (await this.#store.session(owner.sessionId))?.epoch
+    if (!epoch) return false
+    const record = await this.#store.get({ ...owner, agentId: '__session__' }, `task-mode-${epoch}`)
+    return record?.kind === 'task_mode' && record.state === 'SUCCEEDED' && record.digest === digest({ root: owner.root, epoch })
+  }
+  private async stopTaskWorkers(sessionId: string): Promise<void> {
+    const active = [...this.#agents].filter(([key, state]) => state.owner.sessionId === sessionId && (JSON.parse(key) as string[])[2] === 'task')
+    const stopped = await Promise.allSettled(active.map(async ([key, state]) => {
+      state.state = 'STOPPING'
+      try { await state.worker?.stop(); this.#agents.delete(key) }
+      catch (error) { state.state = 'STOP_UNCONFIRMED'; state.error = failure(error); throw error }
+    }))
+    const failed = stopped.find(result => result.status === 'rejected')
+    if (failed?.status === 'rejected') throw failed.reason
+  }
+  /** A managed call uses the same admission queue and OS sandbox as legacy Lisp. */
+  private async runTask(owner: LispOwner, code: string, input: unknown, signal?: AbortSignal, mode: 'call' | 'compile' | 'eval' = 'call'): Promise<{ value: unknown; output: unknown; generation: string }> {
+    if ([...this.#agents.values()].some(s => s.owner.sessionId === owner.sessionId && s.state === 'STOP_UNCONFIRMED'))
+      fail('STOP_UNCONFIRMED', '停止未確認の Lisp worker があります。新しい実行を開始できません。')
+    const state: AgentState = { owner, state: 'PREFLIGHT', active: new Set(), hostBusy: true }
+    const key = JSON.stringify([owner.sessionId, owner.agentId, 'task', randomUUID()])
+    this.#agents.set(key, state)
+    let worker: LispWorker | undefined
+    try {
+      await this.reserveSlot(state)
+      const compiled = await this.#compiled.ensure(signal ?? new AbortController().signal, () => {})
+      signal?.throwIfAborted()
+      const base = await mkdtemp(join(this.options.dataRoot, 'w-'))
+      const layout = await prepareLayout(base, this.#library)
+      layout.compiled = compiled.path
+      worker = new LispWorker(layout, this.#config, undefined, () => false)
+      state.worker = worker
+      await worker.start()
+      const canary = join(base, 'host-canary')
+      await writeFile(canary, 'protected', { mode: 0o600 })
+      const probe = await worker.request('eval', { inputs: [], code: `(let ((read-denied (handler-case (progn (with-open-file (s ${JSON.stringify(canary)}) (read-char s)) nil) (file-error () t))) (delete-denied (handler-case (progn (delete-file ${JSON.stringify(canary)}) nil) (file-error () t)))) (unless (and read-denied delete-denied) (error "ISOLATION_FAILED")) :protected)` }, this.#config.startupTimeoutMs, signal)
+      if (!probe.ok || await readFile(canary, 'utf8') !== 'protected') fail('ISOLATION_FAILED', 'OS によるファイル保護を確認できません。')
+      if (mode === 'compile') {
+        const checked = await worker.request('task-compile', { code }, this.#config.timeoutMs, signal)
+        if (!checked.ok || checked.proposals.length) fail('TASK_COMPILE_FAILED', String(checked.value).slice(0, 1000))
+        return { value: null, output: worker.output(), generation: worker.generation }
+      }
+      if (mode === 'eval') {
+        const evaluated = await worker.request('eval', { code, inputs: [] }, this.#config.timeoutMs, signal)
+        if (!evaluated.ok || evaluated.proposals.length) fail('TASK_EVAL_FAILED', String(evaluated.value).slice(0, 1000))
+        const value = evaluated.value as { printed?: string; json?: unknown }
+        return { value: { printed: value.printed, json: value.json }, output: worker.output(), generation: worker.generation }
+      }
+      const encoded = JSON.stringify(input)
+      if (!encoded || Buffer.byteLength(encoded) > 64 * 1024 * 1024) fail('TASK_INPUT_LIMIT', 'Task input is too large.')
+      const inputPath = join(layout.inputs, randomUUID())
+      await writeFile(inputPath, encoded, { flag: 'wx', mode: 0o400 })
+      state.state = 'EVALUATING'
+      const response = await worker.request('task', { code, input: inputPath }, this.#config.timeoutMs, signal)
+      if (!response.ok || response.proposals.length) fail('TASK_EXECUTION_FAILED', String(response.value).slice(0, 1000))
+      const result = await snapshot(layout.scratch, 'task-result.json', [])
+      if (!result.exists) fail('TASK_RESULT_MISSING', 'Task result was not saved.')
+      const bytes = await checkedBytes(result)
+      return { value: JSON.parse(bytes.toString('utf8')) as unknown, output: worker.output(), generation: worker.generation }
+    } finally {
+      if (worker) {
+        try { await worker.stop() }
+        catch (error) { state.state = 'STOP_UNCONFIRMED'; state.error = failure(error); throw error }
+      }
+      this.#agents.delete(key)
+    }
   }
   private async startWorker(state: AgentState): Promise<LispWorker> {
     if (state.admission) return state.admission
@@ -205,6 +297,7 @@ export class LispManager {
   }
   /** Disposed sessions retain their fence/journal but cannot admit new work. */
   async disposeSession(sessionId: string): Promise<void> {
+    await this.stopTaskWorkers(sessionId)
     const states = [...this.#agents.values()].filter(state => state.owner.sessionId === sessionId)
     const resumable = states.filter(state => state.state === 'READY' || state.state === 'SUSPENDED')
     for (const state of states) { state.disposed = true; clearTimeout(state.idleTimer) }
@@ -288,17 +381,22 @@ export class LispManager {
   async status(owner: LispOwner, offset?: number): Promise<unknown> {
     if (!this.enabled.has(owner.sessionId)) return { enabled: false, state: 'DISABLED', recovery: '/kioku-lisp enable' }
     const state = this.entry(owner)
+    const taskMode = await this.isTaskMode(owner)
+    const unconfirmed = [...this.#agents.values()].find(s => s.owner.sessionId === owner.sessionId && s.state === 'STOP_UNCONFIRMED')
     if (state.state === 'READY' && !state.worker?.healthy) this.halted(state, new LispError('WORKER_EXITED', 'Lisp が終了しています。新しい Lisp の起動前に状態を確認してください。'))
     const summary = await this.#store.operationSummaries(owner.sessionId, offset)
+    const taskSummary = taskMode ? await this.#store.taskSummary(owner) : undefined
     const operations = summary.operations.map(o => ({ id: o.operation_id, agent: o.agent_id, kind: o.kind, state: o.state, updatedAt: o.updated_at }))
-    return { enabled: true, state: state.state, generation: state.worker?.generation ?? null, error: state.error ?? null,
+    return { enabled: true, state: unconfirmed ? 'STOP_UNCONFIRMED' : taskMode && state.state === 'RECOVERY_REQUIRED' && !state.worker ? 'TASK_READY' : state.state,
+      generation: state.worker?.generation ?? null, error: unconfirmed?.error ?? (taskMode && !state.worker ? null : state.error ?? null),
       jobs: state.worker?.jobStatus() ?? [],
       compilation: state.compilation ?? null, resumed: state.resumed ?? false,
       limits: { timeoutMs: this.#config.timeoutMs, maxOutputBytes: this.#config.maxOutputBytes, maxWorkers: this.#config.maxWorkers, idleTimeoutMs: this.#config.idleTimeoutMs,
         aggregateMemory: 'unavailable', aggregateCpu: 'unavailable', scratchQuota: 'unavailable', termination: 'supervised', fileBoundary: process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap' },
       operations,
+      ...(taskSummary ? { task: taskSummary } : {}),
       ...(offset === undefined ? {} : { operationCount: summary.count, pendingCount: Object.values(summary.pendingStates).reduce((a,b) => a+b,0), pendingStates: summary.pendingStates, offset, nextOffset: offset + 10 < summary.count ? offset + 10 : null }),
-      recovery: state.state === 'SUSPENDED' ? 'Lisp は休止中です。次の利用時に自動起動します。変数・関数定義は保持されません。' : state.state === 'READY' ? null : '停止理由と操作履歴を確認し、/kioku-lisp recover を実行してください。' }
+      recovery: unconfirmed ? '停止と操作記録を照合してください。自動再実行しません。' : taskMode && !state.worker ? null : state.state === 'SUSPENDED' ? 'Lisp は休止中です。次の利用時に自動起動します。変数・関数定義は保持されません。' : state.state === 'READY' ? null : '停止理由と操作履歴を確認し、/kioku-lisp recover を実行してください。' }
   }
   async diagnostics(owner: LispOwner, id?: string): Promise<unknown> {
     this.entry(owner)
@@ -331,6 +429,22 @@ export class LispManager {
     try {
       if (tool === 'lisp_status') return await this.status(owner, z.number().int().nonnegative().parse(input.offset ?? 0))
       const state = this.entry(owner)
+      if (tool === 'lisp_describe' && typeof input.toolRef === 'string') {
+        const { source: _source, ...manifest } = await this.#taskTools.get(owner, input.toolRef)
+        return { ok: true, manifest }
+      }
+      if (tool === 'lisp_describe' && !input.symbol && await this.isTaskMode(owner)) return {
+        ok: true, state: 'TASK_READY', api: {
+          define: 'lisp_define saves one lambda, exact dependency refs and bounded JSON schemas.',
+          call: 'lisp_call accepts JSON input or a saved resultRef; fields selects bounded JSON pointers.',
+          observe: 'lisp_observe copies explicit workspace paths to a saved inputRef without returning bodies.',
+          stage: 'lisp_stage freezes a generated proposal against an observed baseRef without writing the workspace.',
+          verify: 'lisp_verify materializes exact observed bytes and one candidate in private scratch before approved host verification. testStatus stays unknown without a reporter.',
+          apply: 'lisp_apply uses the existing approval path, rechecks the read set and rejects a verificationRef for another candidate.',
+          compare: 'lisp_compare reports two candidates\' common base and per-path intent hashes without executing them.',
+          inspect: 'lisp_inspect pages saved results without re-executing them.',
+          eval: 'lisp_eval is a disposable scratch experiment; inputs and proposals are unavailable.',
+        } }
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
         packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.typesafe', 'kioku.decisions'],
         api: { scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
@@ -354,6 +468,10 @@ export class LispManager {
         throw new LispError('INVALID_INSPECTION', '範囲や項目の指定には resultOperationId が必要です。', 'ref による取得とは分けて指定してください。')
       }
       if (tool === 'lisp_cancel') {
+        if (await this.isTaskMode(owner)) {
+          await this.stopTaskWorkers(owner.sessionId)
+          return { ok: true, state: 'TASK_READY' }
+        }
         if (input.operationId !== undefined) {
           const id = identifier.parse(input.operationId), hash = digest(input), old = await this.#store.get(owner, id)
           if (old) { if (old.kind !== tool || old.digest !== hash) fail('ID_CONFLICT', '取消 ID の内容が異なります。'); return await this.replay(owner, old) }
@@ -373,6 +491,195 @@ export class LispManager {
       if (old) {
         if (old.digest !== hash || old.kind !== tool) fail('ID_CONFLICT', '同じ操作 ID の内容を変えることはできません。')
         return await this.replay(owner, old)
+      }
+      if (tool === 'lisp_define' || tool === 'lisp_call' || tool === 'lisp_observe') {
+        if (!await this.isTaskMode(owner)) fail('TASK_MODE_REQUIRED', '作業用ツールには /kioku-lisp enable-task を使用してください。')
+        if (tool === 'lisp_observe') {
+          const request = z.object({ paths: z.array(z.string().min(1).max(4096)).min(1).max(100), format: z.enum(['text', 'json']).default('text') }).strict()
+            .parse(Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'operationId')))
+          if (new Set(request.paths).size !== request.paths.length) fail('INPUT_DUPLICATE', '同じ入力pathが複数あります。')
+          const items: Array<{ path: string; digest: string; content: unknown }> = []
+          const frozenBytes: Array<{ path: string; digest: string; base64: string }> = []
+          const snapshots = []
+          let totalBytes = 0
+          for (const path of request.paths) {
+            signal?.throwIfAborted()
+            const source = await snapshot(owner.root, path, this.protectedRoots())
+            if (!source.exists) fail('INPUT_MISSING', `入力ファイルがありません: ${path}`)
+            snapshots.push(source)
+            const bytes = await checkedBytes(source)
+            totalBytes += bytes.length
+            if (totalBytes > 64 * 1024 * 1024) fail('INPUT_LIMIT', '観測する入力が 64 MiB を超えます。')
+            let decoded: string
+            try { decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes) }
+            catch { fail('INPUT_ENCODING', '観測入力は正しい UTF-8 テキストである必要があります。') }
+            const content: unknown = request.format === 'json' ? JSON.parse(decoded) : decoded
+            const bytesDigest = createHash('sha256').update(bytes).digest('hex')
+            items.push({ path, digest: bytesDigest, content })
+            frozenBytes.push({ path, digest: bytesDigest, base64: bytes.toString('base64') })
+          }
+          const value = { items, coverage: { complete: true, returned: items.length, total: items.length }, consistency: 'checked' }
+          const ref = randomUUID()
+          await this.#store.reserve(owner, id, tool, hash, 'host', { request, policyVersion: 3 })
+          await this.#store.reserve(owner, ref, 'task_result', digest(value), 'host', { source: 'workspace.observe', operationId: id,
+            sourceRefs: [ref], snapshots, frozenBytes })
+          await this.#store.transition(owner, ref, ['RUNNING'], 'SUCCEEDED', { value })
+          const result = { ok: true, operationId: id, resultRef: ref, coverage: value.coverage, consistency: value.consistency,
+            items: items.map(({ path, digest: bytesDigest }) => ({ path, digest: bytesDigest })) }
+          await this.#store.transition(owner, id, ['RUNNING'], 'SUCCEEDED', result)
+          return result
+        }
+        if (tool === 'lisp_define') {
+          const definition = DefineInput.parse(Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'operationId')))
+          const code = await this.#taskTools.executable(owner, definition)
+          await this.#store.reserve(owner, id, tool, hash, 'host', { name: definition.name, sourceDigest: digest(definition.source), policyVersion: 3 })
+          try {
+            await this.runTask(owner, code, null, signal, 'compile')
+            for (const example of definition.examples) {
+              validateValue(definition.inputSchema, example.input)
+              const checked = await this.runTask(owner, code, example.input, signal)
+              validateValue(definition.outputSchema, checked.value)
+              if (digest(checked.value) !== digest(example.expected)) fail('TASK_EXAMPLE_FAILED', 'Generated tool failed a declared example.')
+            }
+            let firstResult: unknown
+            if (definition.firstInput !== undefined) {
+              validateValue(definition.inputSchema, definition.firstInput)
+              const first = await this.runTask(owner, code, definition.firstInput, signal)
+              validateValue(definition.outputSchema, first.value)
+              firstResult = first.value
+            }
+            const artifact = await this.#taskTools.save(owner, definition)
+            const response: Record<string, unknown> = { ok: true, toolRef: artifact.toolRef, checks: artifact.checks }
+            if (definition.firstInput !== undefined) {
+              const ref = randomUUID()
+              await this.#store.reserve(owner, ref, 'task_result', digest(firstResult), 'host', { toolRef: artifact.toolRef, operationId: id })
+              await this.#store.transition(owner, ref, ['RUNNING'], 'SUCCEEDED', { value: firstResult })
+              response.firstResultRef = ref
+              response.firstResult = Buffer.byteLength(JSON.stringify(firstResult)) <= 8192 ? firstResult : { omitted: true, resultRef: ref }
+            }
+            await this.#store.transition(owner, id, ['RUNNING'], 'SUCCEEDED', response)
+            return response
+          } catch (error) {
+            const problem = failure(error)
+            await this.#store.transition(owner, id, ['RUNNING'], problem.code === 'STOP_UNCONFIRMED' ? 'UNKNOWN' : 'FAILED', problem)
+            return problem
+          }
+        }
+        const call = CallInput.parse(Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'operationId')))
+        const artifact = await this.#taskTools.get(owner, call.toolRef)
+        const data = call.inputRef ? await this.taskResult(owner, call.inputRef) : call.input
+        validateValue(artifact.inputSchema, data)
+        const code = await this.#taskTools.executable(owner, artifact)
+        await this.#store.reserve(owner, id, tool, hash, 'host', { toolRef: artifact.toolRef, inputDigest: digest(data), policyVersion: 3 })
+        try {
+          const executed = await this.runTask(owner, code, data, signal)
+          validateValue(artifact.outputSchema, executed.value)
+          const ref = randomUUID()
+          const source = call.inputRef ? await this.#store.get(owner, call.inputRef) : undefined
+          const lineage = source ? JSON.parse(source.payload) as { sourceRefs?: string[] } : undefined
+          await this.#store.reserve(owner, ref, 'task_result', digest(executed.value), 'host', { toolRef: artifact.toolRef, operationId: id,
+            sourceRefs: call.inputRef ? [...new Set([call.inputRef, ...(lineage?.sourceRefs ?? [])])] : [] })
+          await this.#store.transition(owner, ref, ['RUNNING'], 'SUCCEEDED', { value: executed.value })
+          const response = { ok: true, operationId: id, resultRef: ref,
+            value: call.fields?.length ? selectFields(executed.value, call.fields, ref) : executed.value,
+            output: executed.output, generation: executed.generation }
+          await this.#store.transition(owner, id, ['RUNNING'], 'SUCCEEDED', response)
+          return response
+        } catch (error) {
+          const problem = failure(error)
+          await this.#store.transition(owner, id, ['RUNNING'], problem.code === 'STOP_UNCONFIRMED' ? 'UNKNOWN' : 'FAILED', problem)
+          return problem
+        }
+      }
+      if (tool === 'lisp_stage' || tool === 'lisp_verify' || tool === 'lisp_apply' || tool === 'lisp_compare') {
+        if (!await this.isTaskMode(owner)) fail('TASK_MODE_REQUIRED', '候補操作には作業用ツール形態が必要です。')
+        if (tool === 'lisp_compare') {
+          const request = CompareInput.parse(Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'operationId')))
+          const result = { ok: true, ...await compareCandidates(owner, this.#store, request.leftRef, request.rightRef) }
+          await this.#store.reserve(owner, id, tool, hash, 'host', request)
+          await this.#store.transition(owner, id, ['RUNNING'], 'SUCCEEDED', result)
+          return result
+        }
+        if (tool === 'lisp_stage') {
+          const request = StageInput.parse(Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'operationId')))
+          const candidate = await candidateFromResult(owner, this.#store, request.resultRef, request.baseRef, this.protectedRoots())
+          await this.#store.reserve(owner, id, tool, hash, 'host', { resultRef: request.resultRef, baseRef: request.baseRef })
+          try {
+            const staged = await stageCandidate(owner, this.#store, candidate)
+            const result = { ok: true, ...staged, verification: 'not-run' }
+            await this.#store.transition(owner, id, ['RUNNING'], 'SUCCEEDED', result)
+            return result
+          } catch (error) {
+            const problem = failure(error)
+            await this.#store.transition(owner, id, ['RUNNING'], 'UNKNOWN', problem)
+            return problem
+          }
+        }
+        if (tool === 'lisp_verify') {
+          const request = VerifyInput.parse(Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'operationId')))
+          const candidate = await loadCandidate(owner, this.#store, request.candidateRef)
+          if (!this.options.ciCall) fail('HOST_ADAPTER_UNAVAILABLE', 'このホストには検証アダプターがありません。')
+          await this.#store.reserve(owner, id, tool, hash, 'host', { ...request, candidateDigest: digest(candidate) })
+          let scratchRoot: string | undefined
+          try {
+            scratchRoot = await materializeCandidate(owner, this.#store, candidate, this.options.dataRoot)
+            const execution = await this.options.ciCall(owner, { kind: 'verify', target: request.target,
+              ...(request.script ? { script: request.script } : {}), location: 'scratch', directory: '.' },
+              signal ?? new AbortController().signal, scratchRoot)
+            const recorded = { candidateRef: request.candidateRef, candidateDigest: digest(candidate), execution,
+              testStatus: 'unknown', independent: true }
+            await this.#store.transition(owner, id, ['RUNNING'], 'SUCCEEDED', recorded)
+            const command = execution && typeof execution === 'object' ? execution as { state?: string; code?: number; reason?: string } : {}
+            return { ok: command.state === 'SUCCEEDED' && command.code === 0, operationId: id,
+              candidateRef: request.candidateRef, commandState: command.state ?? 'unknown', exitCode: command.code ?? null,
+              reason: command.reason ?? null, testStatus: 'unknown', logOperationId: id }
+          } catch (error) {
+            const problem = failure(error)
+            await this.#store.transition(owner, id, ['RUNNING'], 'UNKNOWN', problem)
+            return problem
+          } finally { if (scratchRoot) await rm(scratchRoot, { recursive: true, force: true }) }
+        }
+        const request = ApplyInput.parse(Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'operationId')))
+        const candidate = await loadCandidate(owner, this.#store, request.candidateRef)
+        const verification = request.verificationRef ? await loadVerification(owner, this.#store, request.verificationRef, request.candidateRef, candidate)
+          : { commandState: 'not-run', testStatus: 'not-run' }
+        await this.#store.reserve(owner, id, tool, hash, 'host', { candidateRef: request.candidateRef })
+        let claimed = false
+        try {
+          await this.#store.transition(owner, request.candidateRef, ['STAGED'], 'APPLYING', { applyOperationId: id }); claimed = true
+          const outcomes = await this.#proposals.apply(owner, id, 'task', candidate.changes, signal ?? new AbortController().signal,
+            undefined, { readSet: candidate.readSet, targets: candidate.targets })
+          const applied = outcomes.every(change => ['APPLIED', 'UNCHANGED'].includes(change.state))
+          const untouched = outcomes.every(change => ['NOT_APPLIED', 'UNCHANGED'].includes(change.state))
+          const candidateState = applied ? 'APPLIED' : untouched ? 'STAGED' : 'UNKNOWN'
+          const result = { ok: applied, candidateRef: request.candidateRef, state: candidateState, verification, changes: outcomes }
+          await this.#store.transition(owner, request.candidateRef, ['APPLYING'], candidateState, result)
+          await this.#store.transition(owner, id, ['RUNNING'], candidateState === 'UNKNOWN' ? 'UNKNOWN' : applied ? 'SUCCEEDED' : 'FAILED', result)
+          return result
+        } catch (error) {
+          const problem = failure(error)
+          if (claimed) {
+            try { await this.#store.transition(owner, request.candidateRef, ['APPLYING'], 'UNKNOWN', problem) } catch { /* Keep existing journal state for recovery. */ }
+          }
+          try { await this.#store.transition(owner, id, ['RUNNING'], 'UNKNOWN', problem) } catch { /* Existing RUNNING is still not success. */ }
+          return problem
+        }
+      }
+      if (await this.isTaskMode(owner)) {
+        if (tool !== 'lisp_eval') fail('TASK_MODE_UNSUPPORTED', 'この実行形態では lisp_define、lisp_call、lisp_observe、保存結果の参照を使用してください。')
+        const evaluation = EvalInput.parse({ code: input.code, timeoutMs: input.timeoutMs, inputs: input.inputs ?? [] })
+        if (evaluation.inputs.length) fail('TASK_MODE_INPUT', '作業用ツール形態の一回限り評価では lisp_observe と inputRef を使用してください。')
+        await this.#store.reserve(owner, id, tool, hash, 'host', { codeDigest: digest(evaluation.code), policyVersion: 3 })
+        try {
+          const executed = await this.runTask(owner, evaluation.code, null, signal, 'eval')
+          const result = { ok: true, operationId: id, value: executed.value, output: executed.output, generation: executed.generation }
+          await this.#store.transition(owner, id, ['RUNNING'], 'SUCCEEDED', result)
+          return result
+        } catch (error) {
+          const problem = failure(error)
+          await this.#store.transition(owner, id, ['RUNNING'], problem.code === 'STOP_UNCONFIRMED' ? 'UNKNOWN' : 'FAILED', problem)
+          return problem
+        }
       }
       if (state.suspension || state.state === 'SUSPENDED') {
         const prepared = await this.prepare(owner) as { state: string }
@@ -468,6 +775,14 @@ export class LispManager {
       } finally { state.active.delete(abort); if (state.currentVerification?.operationId === id) delete state.currentVerification }
     } catch (error) { return failure(error) }
   }
+  private async taskResult(owner: LispOwner, ref: string): Promise<unknown> {
+    const row = await this.#store.get(owner, ref)
+    if (!row || row.kind !== 'task_result' || row.state !== 'SUCCEEDED' || !row.result) fail('TASK_RESULT_MISSING', '保存結果がありません。')
+    if (Date.now() - Date.parse(row.updated_at) > 30 * 86400_000) fail('TASK_RESULT_EXPIRED', '保存結果の期限が切れました。')
+    const value = (JSON.parse(row.result) as { value: unknown }).value
+    if (digest(value) !== row.digest) fail('TASK_RESULT_CORRUPT', '保存結果が変化しました。')
+    return value
+  }
   private async replay(owner: LispOwner, old: import('./store.js').Operation): Promise<unknown> {
     return { replay: true, operationId: old.operation_id, state: old.state,
       code: old.state === 'RUNNING' ? 'IN_PROGRESS' : !old.result && ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(old.state) ? 'RESULT_EXPIRED' : old.state,
@@ -489,6 +804,16 @@ export class LispManager {
     catch (error) { this.halted(state, error); throw error }
   }
   async recover(owner: LispOwner, signal?: AbortSignal): Promise<unknown> {
+    if (await this.isTaskMode(owner)) {
+      await this.stopTaskWorkers(owner.sessionId)
+      await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
+      const pending = (await this.#store.operations(owner.sessionId)).filter(o => ['RUNNING', 'UNKNOWN', 'APPLYING', 'AWAITING_APPROVAL'].includes(o.state))
+      if (pending.some(o => o.kind === 'proposal')) fail('RECONCILIATION_REQUIRED', '未確定のファイル変更を先に照合してください。')
+      for (const op of pending) await this.#store.transition({ ...owner, agentId: op.agent_id }, op.operation_id, [op.state], 'ABANDONED',
+        { ok: false, state: 'ABANDONED', reexecuted: false })
+      signal?.throwIfAborted()
+      return this.status(owner)
+    }
     const state = this.entry(owner)
     await this.cancel(state)
     await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
@@ -527,6 +852,14 @@ export class LispManager {
     try { return await result } finally { this.#executions.delete(result); state.active.delete(abort) }
   }
   async disable(owner: LispOwner): Promise<unknown> {
+    await this.stopTaskWorkers(owner.sessionId)
+    if (await this.isTaskMode(owner)) {
+      await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
+      if (await this.#store.hasPending(owner.sessionId)) fail('RECOVERY_REQUIRED', '未確定の処理を照合してから解除してください。')
+      await this.#store.disable(owner.sessionId); this.enabled.delete(owner.sessionId)
+      for (const [key, state] of this.#agents) if (state.owner.sessionId === owner.sessionId) this.#agents.delete(key)
+      return { ok: true, state: 'DISABLED' }
+    }
     for (const state of this.#agents.values()) if (state.owner.sessionId === owner.sessionId) await this.cancel(state)
     await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
     if (await this.#store.hasPending(owner.sessionId)) fail('RECOVERY_REQUIRED', '未確定の処理を /kioku-lisp recover で確認してから解除してください。')
@@ -536,6 +869,7 @@ export class LispManager {
   }
   async dispose(): Promise<void> {
     this.#closed = true
+    for (const sessionId of new Set([...this.#agents.values()].map(state => state.owner.sessionId))) await this.stopTaskWorkers(sessionId)
     await Promise.all([...this.#agents.values()].map(state => this.cancel(state)))
     await Promise.allSettled([...this.#executions.keys(), ...[...this.#agents.values()].map(state => state.admission)])
     if (this.#lock) { await unlink(join(this.options.dataRoot, 'host.lock')); this.#lock = false }

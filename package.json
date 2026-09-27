@@ -42,7 +42,9 @@
     "scripts/smoke-typesafe.mjs",
     "scripts/laya-worker.py",
     "scripts/smoke-laya-coreml.mjs",
-    "scripts/evaluate-answer-review.mjs"
+    "scripts/evaluate-answer-review.mjs",
+    "scripts/answer-review-evaluation.mjs",
+    "scripts/answer-review-evaluation.d.mts"
   ],
   "exports": {
     ".": {
@@ -95,7 +97,8 @@
         "0.1.7-rc.2": "compatible"
       },
       "profiles": [
-        "web"
+        "web",
+        "dsh-tui"
       ]
     },
     "permissions": {
@@ -165,6 +168,7 @@
     "test:benchmark:dsh-log": "npm run build && node scripts/run-dsh-million-event-benchmark.mjs",
     "test:efficiency": "node --import tsx scripts/run-token-efficiency-evaluation.mjs",
     "test:e2e:dsh": "npm run build && node scripts/run-enno-dsh-e2e.mjs",
+    "test:e2e:dsh:tui": "npm run build && node --test tests/dsh/unit/dsh-tui-e2e-assertions.test.mjs && node scripts/run-dsh-tui-e2e.mjs",
     "verify:prepare": "node scripts/verify-prepare-reproducibility.mjs",
     "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko-dsh.sqlite3",
     "test:sampledb": "npm run build && node --import tsx tests/ci/verify-sample-database.ts",
@@ -198,8 +202,8 @@
     "build:modules": "npm run build && node scripts/stage-modules.mjs",
     "test:modules": "node scripts/run-tests.mjs tests/dsh/unit/core-modules.test.ts tests/dsh/integration/core-host.test.ts && node scripts/verify-module-packages.mjs",
     "test:laya-worker": "python3 -B -m unittest discover -s tests/laya -v",
-    "test:answer-review": "node scripts/run-tests.mjs tests/dsh/unit/decisions/answer-review.test.ts tests/dsh/e2e/answer-review-loop.test.ts",
-    "test:evaluation:answer-review": "node scripts/evaluate-answer-review.mjs",
+    "test:answer-review": "node scripts/run-tests.mjs tests/dsh/unit/decisions/answer-review.test.ts tests/dsh/unit/decisions/answer-review-evaluation.test.ts tests/dsh/e2e/answer-review-loop.test.ts",
+    "test:evaluation:answer-review": "npm run build && node scripts/evaluate-answer-review.mjs",
     "test:evaluation:decisions": "node --import tsx scripts/run-decision-evaluation.mjs"
   },
   "dependencies": {

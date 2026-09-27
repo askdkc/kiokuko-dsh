@@ -54,7 +54,14 @@ function text(value: unknown): string {
   if (result.message) return `${result.message}\n${result.recovery ?? ''}`
   return `Lisp: ${result.state ?? (result.ok ? '処理完了' : '状態不明')}\n${result.error?.message ?? ''}\n${result.error?.recovery ?? result.recovery ?? ''}\n${result.operations?.map(o => `${o.id}: ${o.state}`).join('\n') ?? ''}`.trim()
 }
-const ToolInput = z.object({ operationId: identifier.optional(), code: z.string().max(262144).optional(), inputs: z.array(z.string().max(4096)).max(100).optional(),
+export const ToolInput = z.object({ operationId: identifier.optional(), code: z.string().max(262144).optional(), inputs: z.array(z.string().max(4096)).max(100).optional(),
+  name: z.string().max(64).optional(), description: z.string().max(1000).optional(), source: z.string().max(262144).optional(),
+  inputSchema: z.unknown().optional(), outputSchema: z.unknown().optional(), dependencies: z.unknown().optional(), examples: z.unknown().optional(), firstInput: z.unknown().optional(),
+  toolRef: z.string().uuid().optional(), input: z.unknown().optional(), inputRef: z.string().uuid().optional(), fields: z.unknown().optional(),
+  paths: z.array(z.string().min(1).max(4096)).max(100).optional(), format: z.enum(['text', 'json']).optional(),
+  resultRef: z.string().uuid().optional(), baseRef: z.string().uuid().optional(), candidateRef: z.string().uuid().optional(),
+  verificationRef: identifier.optional(), leftRef: z.string().uuid().optional(), rightRef: z.string().uuid().optional(),
+  target: z.enum(['typecheck', 'lisp', 'test', 'build', 'package', 'vendor']).optional(), script: z.string().max(256).optional(),
   timeoutMs: z.number().int().min(100).max(600000).optional(), symbol: z.string().max(256).optional(), ref: identifier.optional(), generation: identifier.optional(),
   resultOperationId: identifier.optional(), section: z.enum(['result', 'value', 'stdout', 'stderr', 'changes']).optional(),
   pointer: z.string().max(1024).optional(),
@@ -208,7 +215,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string }) => {
           try {
             const binding = owner(execution.agent), parsed = ToolInput.parse(args)
-            if (name === 'lisp_cancel') { identifier.parse(parsed.operationId); identifier.parse(parsed.generation) }
+            if (name === 'lisp_cancel' && !await manager.isTaskMode(binding.owner)) { identifier.parse(parsed.operationId); identifier.parse(parsed.generation) }
             if (name !== 'lisp_status' && !isSavedLispResultRead({ name, arguments: parsed, parent: undefined }))
               parsed.operationId = await store.bind(binding.owner, identifier.parse(execution.callId), identifier.parse(parsed.operationId), { name, input: parsed })
             return await manager.execute(binding.owner, name, parsed, execution.signal)
@@ -226,6 +233,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   fence.prepareAgent = async candidate => {
     const binding = owner(candidate)
     manager.setAgentBusy(binding.owner, true)
+    if (await manager.isTaskMode(binding.owner)) {
+      binding.signal.throwIfAborted()
+      register(binding.agent)
+      return true
+    }
     const status = await manager.prepare(binding.owner) as { state: string; generation?: string; resumed?: boolean }
     binding.signal.throwIfAborted()
     register(binding.agent)
@@ -306,14 +318,15 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     if (recover && manager.enabled.has(sessionId)) register(binding.agent)
     return binding.owner
   }))
-  disposers.push(commands.register({ name: 'kioku-lisp', description: 'Common Lisp の開始・状態・停止・復旧', input: { hint: 'enable | status [--json] | cancel | recover | abandon ID | restore ID | disable' },
+  disposers.push(commands.register({ name: 'kioku-lisp', description: 'Common Lisp の開始・状態・停止・復旧', input: { hint: 'enable | enable-task | status [--json] | cancel | recover | abandon ID | restore ID | disable' },
     handler: async invocation => {
       try {
         const binding = owner(invocation.agent)
         const [action = 'status', argument, ...extra] = invocation.rawInput.trim().split(/\s+/u).filter(Boolean)
-        if (extra.length || (argument && !['status', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|status|diagnostics|cancel|recover|abandon ID|restore ID|disable')
+        if (extra.length || (argument && !['status', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|enable-task|status|diagnostics|cancel|recover|abandon ID|restore ID|disable')
         let result: unknown
         if (action === 'enable') result = await enable(binding)
+        else if (action === 'enable-task') { result = await manager.enableTask(binding.owner, binding.signal); register(binding.agent) }
         else if (action === 'disable') { result = await manager.disable(binding.owner); unregister(binding.agent) }
         else if (action === 'cancel') result = await manager.execute(binding.owner, 'lisp_cancel', {})
         else if (action === 'recover') {
@@ -339,7 +352,14 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }
 }
 function description(name: LispTool): string {
-  return ({ lisp_eval: 'Build and call reusable task functions in persistent Common Lisp. Compose reads, transforms and checks into one useful operation per call; return decision-ready results instead of issuing one call per primitive. Use a new operationId for new work; exact replay never re-evaluates. Host writes use proposals and native approval.',
+  return ({ lisp_eval: 'Evaluate Common Lisp. In persistent mode, define and reuse cohesive functions in one worker generation; proposals require host approval. In enable-task mode, each evaluation is a disposable scratch experiment without workspace inputs or proposals. Exact operationId replay never re-evaluates.',
+    lisp_define: 'Save a generated Lisp lambda and exact dependency refs as a reusable task tool. Requires /kioku-lisp enable-task. Compiles in an isolated worker and checks declared examples.',
+    lisp_call: 'Run a saved task tool with JSON input or a saved resultRef. Exact retries return the journal result; new calls use isolated workers.',
+    lisp_observe: 'Capture explicitly named workspace files as immutable task input, returning a resultRef without sending contents to the model.',
+    lisp_stage: 'Turn a generated result into a guarded, immutable workspace change candidate bound to an observed baseRef. No workspace write.',
+    lisp_verify: 'Materialize one candidate from frozen observed bytes in private scratch, then run an approved host verifier. The receipt remains bound to that candidate; unknown test reporting is not a pass.',
+    lisp_apply: 'Apply one staged candidate through existing host approval. Reject changed evidence, duplicate attempts and unknown effects.',
+    lisp_compare: 'Compare two immutable candidates by common base and per-path intent hashes without rerunning either tool or claiming a verifier pass.',
     lisp_describe: 'Describe Lisp APIs or task functions. symbol="kioku.user" lists this worker\'s functions; symbol="kioku.user::name" returns arguments and documentation. No symbol returns the bundled API/verifier map.', lisp_inspect: 'Read a retained object or a page of saved evidence; never executes the original operation.', lisp_status: 'Read current host state and paged operation summaries without contacting Lisp.',
     lisp_cancel: 'Stop Lisp and all managed jobs without waiting for evaluation.', lisp_reset: 'Stop a healthy worker and start a new generation. Never use to bypass recovery.' })[name]
 }
@@ -348,7 +368,14 @@ export function lispToolSchema(name: LispTool): object {
   const required = Object.keys(properties)
   if (name === 'lisp_status') properties.offset = { type: 'integer', minimum: 0, description: 'Read the next 10 operation summaries using nextOffset.' }
   if (name === 'lisp_eval') { Object.assign(properties, { code: { type: 'string', maxLength: 262144 }, inputs: { type: 'array', items: { type: 'string' }, maxItems: 100, description: 'Workspace-relative files or exact host paths of files uploaded by the user in this session. Copied read-only; other absolute paths are refused.' }, timeoutMs: { type: 'integer', minimum: 100, maximum: 600000 } }); required.push('code') }
-  if (name === 'lisp_describe') properties.symbol = { type: 'string', maxLength: 256 }
+  if (name === 'lisp_define') { Object.assign(properties, { name: { type: 'string', maxLength: 64 }, description: { type: 'string', maxLength: 1000 }, source: { type: 'string', maxLength: 262144 }, inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, dependencies: { type: 'array', items: { type: 'object' }, maxItems: 32 }, examples: { type: 'array', items: { type: 'object' }, maxItems: 10 }, firstInput: {} }); required.push('name', 'description', 'source', 'inputSchema', 'outputSchema') }
+  if (name === 'lisp_call') { Object.assign(properties, { toolRef: { type: 'string', format: 'uuid' }, input: {}, inputRef: { type: 'string', format: 'uuid' }, fields: { type: 'array', items: { type: 'string' }, maxItems: 20 } }); required.push('toolRef') }
+  if (name === 'lisp_observe') { Object.assign(properties, { paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 }, format: { type: 'string', enum: ['text', 'json'] } }); required.push('paths') }
+  if (name === 'lisp_stage') { Object.assign(properties, { resultRef: { type: 'string', format: 'uuid' }, baseRef: { type: 'string', format: 'uuid' } }); required.push('resultRef', 'baseRef') }
+  if (name === 'lisp_verify') { Object.assign(properties, { candidateRef: { type: 'string', format: 'uuid' }, target: { type: 'string', enum: ['typecheck', 'lisp', 'test', 'build', 'package', 'vendor'] }, script: { type: 'string', maxLength: 256 } }); required.push('candidateRef', 'target') }
+  if (name === 'lisp_apply') { Object.assign(properties, { candidateRef: { type: 'string', format: 'uuid' }, verificationRef: { type: 'string', maxLength: 256 } }); required.push('candidateRef') }
+  if (name === 'lisp_compare') { Object.assign(properties, { leftRef: { type: 'string', format: 'uuid' }, rightRef: { type: 'string', format: 'uuid' } }); required.push('leftRef', 'rightRef') }
+  if (name === 'lisp_describe') { properties.symbol = { type: 'string', maxLength: 256 }; properties.toolRef = { type: 'string', format: 'uuid' } }
   if (name === 'lisp_inspect') Object.assign(properties, {
     ref: { type: 'string', maxLength: 256, description: 'Worker reference; use either ref or resultOperationId.' },
     resultOperationId: { type: 'string', maxLength: 256, description: 'Saved operation from this session and agent. Reads evidence without executing again.' },
@@ -357,6 +384,6 @@ export function lispToolSchema(name: LispTool): object {
     offset: { type: 'integer', minimum: 0, description: 'Unicode character offset; use the returned nextOffset.' },
     limit: { type: 'integer', minimum: 1, maximum: 2000 },
   })
-  if (name === 'lisp_cancel') { properties.generation = { type: 'string', maxLength: 256 }; required.push('generation') }
+  if (name === 'lisp_cancel') properties.generation = { type: 'string', maxLength: 256, description: 'Required for a persistent worker; omit in task mode.' }
   return { type: 'object', properties, required, additionalProperties: false }
 }

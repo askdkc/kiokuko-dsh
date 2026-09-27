@@ -3,6 +3,7 @@ import { DECISION_BYTES, DecisionError, parseDecisionBatch, parseDecisionResult,
 import { LAYA_POLICY_VERSION, type LayaSettings } from './config.js'
 import { decodeLayaResult, layaRequestBody, parseLayaV1Health, workerError } from './laya-coreml.js'
 import { requestLaya, type LayaTransport } from './laya-transport.js'
+import type { ChoiceDiagnosticObserver } from './choice-diagnostics.js'
 
 const responseSchema = z.object({ version: z.literal(1), ok: z.literal(true), result: z.unknown(),
   server: z.object({ predict_ms: z.number().finite().nonnegative() }) })
@@ -10,7 +11,7 @@ const responseSchema = z.object({ version: z.literal(1), ok: z.literal(true), re
 /** Direct client for an already running start-laya worker. No claimed preflight or runtime fingerprint. */
 export class LayaV1DecisionProvider implements DecisionProvider {
   readonly capabilities = Object.freeze({ maxQuestions: 1, maxChoices: 32, maxBytes: DECISION_BYTES })
-  constructor(private readonly settings: LayaSettings, private readonly request: LayaTransport = requestLaya) {}
+  constructor(private readonly settings: LayaSettings, private readonly request: LayaTransport = requestLaya, private readonly observer?: ChoiceDiagnosticObserver) {}
 
   async evaluate(input: DecisionBatch, signal: AbortSignal): Promise<DecisionBatchResult> {
     const batch = parseDecisionBatch(input)
@@ -29,7 +30,7 @@ export class LayaV1DecisionProvider implements DecisionProvider {
     workerError(value)
     const parsed = responseSchema.safeParse(value)
     if (!parsed.success) throw new DecisionError('MALFORMED_RESPONSE')
-    const decoded = decodeLayaResult(parsed.data.result, batch, this.settings)
+    const decoded = decodeLayaResult(parsed.data.result, batch, this.settings, this.observer)
     return parseDecisionResult({ ...decoded, provider: 'laya-coreml', requestedModel: 'laya-rl-agent', returnedModel: 'laya-rl-agent', policyVersion: LAYA_POLICY_VERSION }, batch)
   }
 }
