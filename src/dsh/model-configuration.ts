@@ -407,6 +407,8 @@ export async function modelBindingProblems(
           resolved.model !== binding.model
         )
           throw new Error("DSH returned a different provider/model");
+        if (binding.reasoningEffort !== undefined && resolved.reasoningEffort !== binding.reasoningEffort)
+          throw new Error("DSH returned a different reasoning effort");
       } catch (error) {
         problems.push(
           `${label}: DSHのモデル設定を確認してください (${binding.provider} / ${binding.model}): ${error instanceof Error ? error.message : String(error)}`,

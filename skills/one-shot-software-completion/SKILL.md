@@ -40,10 +40,10 @@ applicable even when no reference is needed.
 | Choosing evidence, reviewing the diff or checking delivery | [Verification and completion](references/verification-and-completion.md) |
 | A check fails or progress stalls | [Failure recovery](references/failure-recovery.md) |
 
-Keep context bounded: read relevant symbols and regions, expanding only for
-dependencies. Track requirements, contracts, risks and check results. Bytes are
-not model tokens; use tokenizer or host usage, never advertised capacity, to
-estimate the remaining budget.
+In ordinary work, use the current agent unless the user or host requires
+delegation. Read the target first; widen or re-read only for new evidence,
+failed checks, or lost context. Track requirements and results. Use host token
+usage, not bytes or advertised capacity, for token budgets.
 
 ## Completion contract
 

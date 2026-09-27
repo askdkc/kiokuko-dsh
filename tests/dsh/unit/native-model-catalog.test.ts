@@ -111,3 +111,20 @@ test('DSH validation keeps the native service receiver and rejects unavailable o
   assert.match((await modelBindingProblems([{ label: '解決', binding: { ...binding, model: 'missing' } }], catalog, []))[0]!, /設定済みモデルがありません/u)
   assert.equal(calls, 3, 'missing catalog models never reach the adapter')
 })
+
+test('DSH validation rejects a dropped or changed explicit reasoning effort', async () => {
+  const binding: ModelBinding = { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high' }
+  let resolvedEffort: string | undefined = 'high'
+  const catalog = await readModelCatalog(nativeModelCatalog({
+    listProviders: () => [{ id: binding.provider, name: 'DeepSeek' }],
+    listModels: async () => [{ provider: binding.provider, id: binding.model, name: 'Flash' }],
+    resolveCallConfig: async (input: ModelBinding) => ({ ...input, reasoningEffort: resolvedEffort }),
+  })!)
+  const check = (requested: ModelBinding) => modelBindingProblems([{ label: '解決', binding: requested }], catalog, [])
+  assert.deepEqual(await check(binding), [])
+  resolvedEffort = undefined
+  assert.match((await check(binding))[0]!, /different reasoning effort/u)
+  resolvedEffort = 'low'
+  assert.match((await check(binding))[0]!, /different reasoning effort/u)
+  assert.deepEqual(await check({ provider: binding.provider, model: binding.model }), [])
+})
