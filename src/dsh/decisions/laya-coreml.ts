@@ -3,6 +3,7 @@ import { canonicalJson } from '../../serialization/validate.js'
 import { LAYA_MODELS, LAYA_POLICY_VERSION, TypedDecisionsConfig, resolveDecisionConfiguration, type DecisionConfiguration, type LayaSettings } from './config.js'
 import { DECISION_BYTES, DecisionError, parseDecisionBatch, parseDecisionResult, requireChoice, type DecisionBatch, type DecisionBatchResult, type DecisionProvider } from './contracts.js'
 import { requestLaya, type LayaTransport } from './laya-transport.js'
+import { emitChoiceDiagnostic, type ChoiceDiagnosticObserver, type ChoiceDiagnostic } from './choice-diagnostics.js'
 
 const probability = z.number().finite().min(0).max(1)
 const runtimeSchema = z.object({
@@ -78,7 +79,7 @@ export function layaRequestBody(op: 'predict' | 'preflight' | 'predict_strict', 
 export class LayaCoreMLDecisionProvider implements DecisionProvider {
   readonly capabilities
   private verified = false
-  constructor(private readonly settings: LayaSettings | undefined, private readonly request: LayaTransport = requestLaya) {
+  constructor(private readonly settings: LayaSettings | undefined, private readonly request: LayaTransport = requestLaya, private readonly observer?: ChoiceDiagnosticObserver) {
     this.capabilities = Object.freeze({ maxQuestions: 1, maxChoices: 32, maxBytes: DECISION_BYTES,
       ...(settings?.model && settings.model !== 'laya-rl-agent' ? { maxPromptTokens: LAYA_MODELS[settings.model] } : {}) })
   }
@@ -120,30 +121,34 @@ export class LayaCoreMLDecisionProvider implements DecisionProvider {
     this.checkRuntime(runtime)
     if (result.usage.input_tokens < 1 || result.usage.input_tokens > runtime.limits.maxPromptTokens
       || Object.keys(result.answers).length !== batch.questions.length) throw new DecisionError('MALFORMED_RESPONSE')
-    const { answers } = decodeLayaResult(result, batch, this.settings!)
+    const { answers } = decodeLayaResult(result, batch, this.settings!, this.observer)
     return parseDecisionResult({ answers, provider: 'laya-coreml', requestedModel: this.settings!.model, returnedModel: runtime.model,
       revision: runtime.runtimeFingerprint, policyVersion: LAYA_POLICY_VERSION, usage: result.usage }, batch)
   }
 }
 
 /** Validate the same finite-choice result contract for both worker protocols. */
-export function decodeLayaResult(value: unknown, batch: DecisionBatch, settings: LayaSettings) {
+export function decodeLayaResult(value: unknown, batch: DecisionBatch, settings: LayaSettings, observer?: ChoiceDiagnosticObserver) {
   const parsed = resultSchema.safeParse(value)
   if (!parsed.success || parsed.data.usage.input_tokens < 1 || Object.keys(parsed.data.answers).length !== batch.questions.length) throw new DecisionError('MALFORMED_RESPONSE')
   const result = parsed.data
+  const diagnostics: ChoiceDiagnostic[] = []
   const answers = batch.questions.map(question => { const q = requireChoice(question)
     const answer = result.answers[q.id]
     if (!answer || Object.keys(answer.probabilities).length !== q.choices.length || !Object.hasOwn(answer.probabilities, answer.choice)
       || q.choices.some(c => !Object.hasOwn(answer.probabilities, c.id))) throw new DecisionError('MALFORMED_RESPONSE')
     const probabilities = q.choices.map(c => answer.probabilities[c.id]!)
     if (Math.abs(probabilities.reduce((sum, p) => sum + p, 0) - 1) > q.choices.length * 0.00005 + 1e-12) throw new DecisionError('MALFORMED_RESPONSE')
-    const [top, runnerUp] = probabilities.sort((a, b) => b - a) as [number, number, ...number[]]
+    const [top, runnerUp] = [...probabilities].sort((a, b) => b - a) as [number, number, ...number[]]
     if (answer.probabilities[answer.choice] !== top) throw new DecisionError('MALFORMED_RESPONSE')
-    if (answer.choice === q.abstainId) return { id: q.id, status: 'abstained' as const, reason: 'insufficient' as const }
-    if (top === runnerUp) return { id: q.id, status: 'abstained' as const, reason: 'tie' as const }
     const acceptance = settings.acceptance
-    if (top - 0.00005 < acceptance.minProbability || top - runnerUp - 0.0001 < acceptance.minMargin) return { id: q.id, status: 'abstained' as const, reason: 'uncertain' as const }
-    return { id: q.id, status: 'selected' as const, choiceId: answer.choice }
+    const failedChecks: ChoiceDiagnostic['failedChecks'] = []
+    if (top - 0.00005 < acceptance.minProbability) failedChecks.push('probability')
+    if (top - runnerUp - 0.0001 < acceptance.minMargin) failedChecks.push('margin')
+    const reason = answer.choice === q.abstainId ? 'insufficient' : top === runnerUp ? 'tie' : failedChecks.length ? 'uncertain' : undefined
+    diagnostics.push({ questionId: q.id, choice: answer.choice, probabilities: q.choices.map((c, i) => ({ id: c.id, probability: probabilities[i]! })), topProbability: top, runnerUpProbability: runnerUp, margin: top - runnerUp, confidence: answer.confidence, gate: 'probability_margin', acceptance: { ...acceptance }, status: reason ? 'abstained' : 'selected', ...(reason ? { reason } : {}), failedChecks })
+    return reason ? { id: q.id, status: 'abstained' as const, reason } : { id: q.id, status: 'selected' as const, choiceId: answer.choice }
   })
+  for (const diagnostic of diagnostics) emitChoiceDiagnostic(observer, diagnostic)
   return { answers, usage: result.usage }
 }

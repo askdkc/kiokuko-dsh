@@ -378,7 +378,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root, options.observationPack)
   const modelHandoff = new ModelHandoff(ctx as any, decisions, root, options.modelHandoff)
   const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
-  const deepPlanning = new DeepPlanningController({ runtime, decisions, ctx: (ctx.root ?? ctx) as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
+  const deepPlanning = new DeepPlanningController({ runtime, decisions, ctx: ctx as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
     sessions, agents, catalog: modelCatalog, questions: userQuestions, routes: options.modelRoutes ?? [], compatibility: modelCompatibility, sessionQuery, config: options.deepPlanning,
     capabilities: async (agent, signal) => {
       const catalog = await capabilityCatalog(skills, tools, { cwd: root, signal, agent, nativeAgent: agent })

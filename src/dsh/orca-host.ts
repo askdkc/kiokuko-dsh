@@ -21,9 +21,10 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
   recordingRun?(agent: object): string | undefined
   recordingParent?(agent: object): { agent: object; session: object } | undefined
 }): DshOrcaHostServices {
-  // Cordis releases plugin-owned listeners before its async effect cleanup.
-  // Root-owned observers are explicitly released only after recorder drain.
-  const observerContext = ctx.root ?? ctx
+  // Web keeps observers alive through recorder drain. TUI forbids a plugin
+  // from registering on the composition root, so use its own scoped context.
+  const profile = (ctx.get?.('profileContext', false) as { name?: string } | undefined)?.name
+  const observerContext = profile === 'dsh-tui' ? ctx : ctx.root ?? ctx
   const bindings = new Map<string, { agent: object; session: object; binding: DshOrcaBinding }>()
   let accepting = true
   const withIndex: WithOrcaIndex = operation => runtime.withDatabase(async db => await operation(new DshOrcaStore(db)))

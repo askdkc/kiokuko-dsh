@@ -30,7 +30,8 @@ export class LispWorker {
   #stdout: Buffer[] = []
   #stderr: Buffer[] = []
   constructor(readonly layout: SandboxLayout, readonly config: LispConfiguration,
-    readonly hostCall?: (method: string, args: unknown, context: LispRpcContext) => Promise<unknown>) {}
+    readonly hostCall?: (method: string, args: unknown, context: LispRpcContext) => Promise<unknown>,
+    readonly rpcAllowed: (method: string) => boolean = () => true) {}
   get busy(): boolean { return this.#pending !== undefined }
   get healthy(): boolean { return !this.#closed && !this.#fatal && this.#child !== undefined }
   get hasRunningJobs(): boolean { return [...this.jobs.values()].some(job => !job.settled) }
@@ -125,6 +126,7 @@ export class LispWorker {
   private async rpc(rpc: z.infer<typeof Rpc>): Promise<void> {
     try {
       if (!this.#pending || this.#pending.id !== rpc.request) throw new Error('RPC outside evaluation')
+      if (!this.rpcAllowed(rpc.method)) throw new LispError('CAPABILITY_DENIED', 'この作業用ツールからは host RPC を実行できません。')
       let value: unknown
       if (['tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate'].includes(rpc.method)) {
         if (!this.hostCall) throw new Error('HOST_ADAPTER_UNAVAILABLE')

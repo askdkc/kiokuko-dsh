@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import type { DshUserQuestions } from '../user-interaction.js'
 import { confirm } from './approval.js'
 import { digest, fail, failure, LispError, type LispOwner, type ProposalInput } from './contracts.js'
-import { applyChange, backupUsage, checkedBytes, freezeChange, restoreBytes, sameFile, snapshot, type FrozenChange, type CreatedParents } from './files.js'
+import { applyChange, backupUsage, checkedBytes, freezeChange, restoreBytes, sameFile, snapshot, type FrozenChange, type CreatedParents, type FileSnapshot } from './files.js'
 import type { LispStore } from './store.js'
 
 export interface ChangeOutcome {
@@ -32,7 +32,7 @@ export class LispProposalBatch {
   constructor(readonly options: { store: LispStore; backupRoot: string; protectedRoots: () => string[]; questions?: DshUserQuestions; stopped: () => boolean }) {}
 
   async apply(owner: LispOwner, evalId: string, generation: string, requests: readonly ProposalInput[], signal: AbortSignal,
-    restoration?: FrozenChange['restoration']): Promise<ChangeOutcome[]> {
+    restoration?: FrozenChange['restoration'], expected?: { readSet: FileSnapshot[]; targets: Record<string, FileSnapshot> }): Promise<ChangeOutcome[]> {
     requests = requests.map(request => ({ ...request }))
     if (!requests.length) return []
     const { store, backupRoot } = this.options, roots = this.options.protectedRoots()
@@ -49,6 +49,9 @@ export class LispProposalBatch {
       const pending = await store.pendingTargets()
       for (const request of requests) {
         const c = await freezeChange(owner, request, backupRoot, roots)
+        const expectedTarget = expected?.targets[request.path]
+        if (expected && (!expectedTarget || !sameFile(c.before, expectedTarget)))
+          fail('BASE_CHANGED', '候補作成時の対象が変わりました。')
         if (restoration) { await restoreBytes(restoration); c.restoration = restoration }
         if (this.#targets.has(c.before.path) || pending.some(o => (JSON.parse(o.payload) as FrozenChange).before.path === c.before.path)) fail('TARGET_LOCKED', '対象に未確定の変更があります。新しい変更は適用していません。')
         this.#targets.add(c.before.path); changes.push(c)
@@ -62,6 +65,10 @@ export class LispProposalBatch {
       }
       const active = changes.filter(c => reserved.has(id(c)))
       if (!active.length) return outcomes
+      if (expected) for (const before of expected.readSet) {
+        const relative = before.path.slice(owner.root.length + 1)
+        if (!sameFile(before, await snapshot(owner.root, relative, roots))) fail('BASE_CHANGED', '候補の根拠が変わりました。')
+      }
       backupReservation = active.reduce((sum, c) => sum + (c.before.size ?? 0), 0)
       this.#backupReserved += backupReservation
       if (await backupUsage(backupRoot) + this.#backupReserved > 1024 ** 3) fail('BACKUP_LIMIT', 'バックアップが 1 GiB に達するため変更を適用していません。')
@@ -86,6 +93,10 @@ export class LispProposalBatch {
         }
       }
       // Validate the entire frozen batch before the first filesystem effect.
+      if (expected) for (const before of expected.readSet) {
+        const relative = before.path.slice(owner.root.length + 1)
+        if (!sameFile(before, await snapshot(owner.root, relative, roots))) throw new LispError('BASE_CHANGED', '確認中に候補の根拠が変わりました。')
+      }
       for (const c of active) if (!sameFile(c.before, await snapshot(owner.root, c.request.path, roots))) throw new LispError('TARGET_CHANGED', '確認中に対象が変わったため、この変更群を適用していません。', '変更後の内容を読み、新しい差分を作成してください。')
       const createdParents: CreatedParents = new Map()
       for (const c of active) {

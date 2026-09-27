@@ -1,6 +1,6 @@
 ---
 name: kiokuko-lisp
-description: Compose reusable task tools with Common Lisp functions in a persistent, protected DSH session.
+description: Compose reusable Common Lisp task tools in protected disposable workers or use the legacy persistent session.
 ---
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-lisp -->
@@ -10,7 +10,9 @@ description: Compose reusable task tools with Common Lisp functions in a persist
 
 ## Admission and boundaries
 
-Enable via coding choice or `/kioku-lisp enable`. Never spoof the host-bound
+Enable persistent Lisp via coding choice or `/kioku-lisp enable`. For generated
+task tools, start a separate session with `/kioku-lisp enable-task`; this mode
+uses a fresh protected worker for each definition or call. Never spoof the host-bound
 session/agent/directory/generation. Missing runtime or failed protection blocks
 admission. Native read/glob/grep/skill retain DSH permissions; ordinary bash,
 mutation and delegation remain blocked.
@@ -21,88 +23,84 @@ cannot expand permissions; use proposals/audited brokers, never retry outside pr
 
 ## Tools and identity
 
-- `lisp_eval`: `{operationId, code, inputs?: [relativeFileOrAttachmentPath], timeoutMs?}`.
-- `lisp_describe`: `{operationId, symbol?}`. Omit symbol for the API/verifier map
-  (also during recovery); package names list exports, functions give arguments/docs.
-  Normal query limits apply.
-- `lisp_inspect`: `{operationId, ref}` for a current-generation object, or
-  `{operationId, resultOperationId, section?, pointer?, offset?, limit?}` for saved
-  evidence; never combine forms. Sections: `result`, `value`, `stdout`, `stderr`,
-  `changes`. Keep `pointer` with `section=result`; Unicode offsets, limit 1–2000.
-  `nextOffset` pages without execution.
-- `lisp_status`: `{offset?: 0}` reads state/limits/pending counts and 10 operation
-  summaries without Lisp. Page via `nextOffset` as needed; absent OS quotas remain unknown.
-- `lisp_cancel`: `{operationId, generation}` stops the worker and managed jobs without
-  waiting for evaluation.
-- `lisp_reset`: `{operationId}` replaces a healthy worker after confirmed stop;
-  use human recovery for failures, never reset to bypass it.
+Native schemas give exact arguments; `lisp_describe` without a symbol gives the
+API/verifier map, including during recovery. Never guess a signature.
+Persistent mode: `lisp_eval` evaluates declared inputs; `lisp_describe` discovers
+functions; `lisp_inspect` pages evidence; `lisp_status` reads state;
+`lisp_cancel` stops work. `lisp_reset` requires a healthy, confirmed-stopped
+worker and never bypasses recovery.
+Task mode: `lisp_define` saves a protected, example-checked lambda;
+`lisp_call` uses inline input or a saved inputRef; `lisp_observe` captures explicit
+workspace files without exposing bodies; `lisp_stage` freezes a result against
+its observed baseRef; `lisp_verify` checks that candidate in private scratch;
+`lisp_apply` requires host approval and rechecks frozen targets; `lisp_compare`
+compares without execution. `lisp_status` and `lisp_inspect` inspect refs/receipts.
+Unknown test status and generated `passed` fields are never host verification.
 
 New work needs a unique operationId; native call ID binds it to a host ID.
 Exact concurrent replay gives IN_PROGRESS; changed input gives ID_CONFLICT.
 After transport loss, retry only the same request/ID; never replace RUNNING/UNKNOWN
 IDs. Results may expire after 30 days; identity tombstones return RESULT_EXPIRED.
 Lisp errors fail evaluations. Timeout, broken frames or exit need human recovery.
-Reset/replacement/loss discards definitions/references; rebuild them, never effects.
+Persistent worker reset/replacement/loss discards heap definitions/references;
+task tool artifacts and saved results remain owner-bound until expiry. Never replay effects.
 
 ## Build task tools
 
-Use Common Lisp, CL-PPCRE, CL-CSV and YASON through
-`kioku.tools`, `kioku.data`, `kioku.files`, `kioku.process`, `kioku.objects`,
-`kioku.environment`, `kioku.ci`, `kioku.decisions` and `kioku.typesafe`; no runtime Quicklisp/network downloads.
+Use Common Lisp, CL-PPCRE, CL-CSV and YASON through `kioku.tools`, `kioku.data`,
+`kioku.files`, `kioku.process`, `kioku.objects`, `kioku.environment`, `kioku.ci`,
+`kioku.decisions` and `kioku.typesafe`; no runtime Quicklisp/network downloads.
 First enable compiles; later starts reuse verified code, never session state.
-Compile/cache failure stops startup: report `/kioku-lisp recover`; never modify
+Compile/cache failure blocks startup: report `/kioku-lisp recover`; never modify
 compiled files or replay effects.
 
-Define/test/use cohesive task-specific `defun` tools in one lisp_eval, then reuse
-with new inputs. Batch known reads/transforms/checks; return compact evidence.
-Split at new decisions, approvals or limits; never preprogram guesses or eval data.
-Use macros only as needed. Definitions persist per generation; lisp_describe
-`kioku.user` lists them and exact names give arguments/docs. Six native tools stay fixed.
+Task mode uses bounded JSON schemas and exact dependency toolRefs. Each call
+gets a fresh protected worker: no heap state or old worker references survive.
+`lisp_eval` is disposable scratch; workspace input requires `lisp_observe`, not
+legacy inputs/proposals. Saved refs remain owner-bound until expiry; expired
+refs never fall back to current files. Use persistent mode for shared heap state.
+
+Persistent mode: define/test/use cohesive task-specific `defun` tools in one
+`lisp_eval`, then reuse with new inputs. Batch known work; return compact evidence.
+Split at decisions, approvals or limits; never preprogram guesses or eval data.
+Definitions persist per generation; `lisp_describe` lists `kioku.user` exports
+and exact function arguments/docs. Native tool entries stay fixed.
 
 ## Files and outcomes
 
-Declare workspace-relative or exact current-session upload paths in `inputs`.
-DSH verifies uploads (identity/size/digest) and copies read-only; other absolute
-paths fail. Limits: 64 MiB/file, 256 MiB/generation. `(kioku.files:input 0)` returns
-the first copy. `(kioku.files:scratch)` takes no args; read/write-text works there.
-Unzip into scratch through the broker; use Lisp file helpers. Workspace reads need
-inputs. Reimport applied files for full comparisons. Stay within authorized scope;
-export only when authorized. Proposals require successful evaluation, durable
-recording and relative paths: `(kioku.files:propose-write "src/a.mjs" content)`.
+Persistent-mode `inputs` accepts workspace-relative or exact current-session
+upload paths. DSH verifies identity/size/digest and copies read-only; other
+absolute paths fail. Limits: 64 MiB/file, 256 MiB/generation. Read copies with
+`kioku.files:input`; use `kioku.files:scratch` for writable scratch and unzip.
+Reimport applied files for comparison; export only when authorized. Proposals
+require successful evaluation, durable recording and relative paths via
+`kioku.files:propose-write`.
 
-Deletion/replacement requires confirmation of frozen targets/diffs. Duplicate
-targets fail; unchanged writes have no effect. Refusal/skip/UI failure/cancellation
-never authorizes. Trust host outcomes: APPLIED, UNCHANGED, NOT_APPLIED (reason),
-UNKNOWN. Partial failure stops later writes; never retry unknown effects.
-Protected paths/databases/links are refused. New files may create parents; no
-recursive deletion or database mutation. Backups are independent, never auto-pruned.
-RUNNING lasts until receipts are saved. Failed finalization cannot report SUCCEEDED;
-restart recovers receipts without reapplying effects.
+Deletion/replacement needs confirmation of frozen targets/diffs. Duplicate
+targets fail; unchanged writes do nothing. Refusal/skip/UI failure/cancellation
+never authorizes. Trust APPLIED, UNCHANGED, NOT_APPLIED and UNKNOWN receipts;
+partial failure stops later writes. Never retry unknown effects. Protected
+paths/databases/links are refused; no recursive deletion or database mutation.
+Backups are independent, never auto-pruned. RUNNING lasts until receipts are
+saved; restart recovers failed finalization without reapplying effects.
 
 ## Programs and verifiers
 
-`kioku.process:run`/`start-job`: program, argument list, :timeout-ms, :directory
-(scratch-relative, default "."; no links/traversal). Python takes source; manage
-jobs with job-status/cancel-job. macOS denies fork: use Lisp helpers/direct brokers,
-not shell chains/npm/multiprocessing. Node uses empty OpenSSL config;
---test --experimental-test-isolation=none (22.8+) avoids children, unlike npm test.
-Linux uses Bubblewrap PID namespaces. Jobs have count/time/output limits and no
-credentials/inherited environment.
+`kioku.process:run`/`start-job` accepts program, args, timeout and scratch-relative
+directory (no links/traversal); manage jobs with job-status/cancel-job. macOS
+denies fork: use Lisp helpers/direct brokers, not shell/npm/multiprocessing.
+Node needs `--test --experimental-test-isolation=none` (22.8+) to avoid children.
+Linux uses Bubblewrap PID namespaces. Jobs are bounded and inherit no credentials.
 
-`kioku.ci:list-runs :limit 10`/`failed-log` (numeric run ID) use host gh/auth only for
-the bound repository; credentials never enter the worker.
-`verify` accepts only `:typecheck`, `:lisp`, `:test`, `:build`, `:package`, `:vendor`,
-never a shell string. Scripts are checked before asking/running. Typecheck uses
-`typecheck`, falling back to `check` only when absent. Focused tests use
-`(kioku.ci:verify :test :script "test:unit")`; :script is only for an existing test
-or test:* script. Prefer focused repair checks, then broader final verification.
-`:directory "project"` selects a workspace subproject; extracted projects use
-`(kioku.ci:verify :test :location :scratch :directory "extract/project")`.
-Approved npm/lifecycle scripts run on the host without workspace copying. Roots
-are host-bound; absolute paths, traversal and links fail. Discovery describes only
-the workspace root. Native confirmation covers executable/args/cwd/timeout;
-refusal/cancellation/missing UI gives NOT_APPLIED. Exact lisp_eval ID replay never
-reruns; conflicting reuse fails.
+`kioku.ci:list-runs :limit 10`/`failed-log` use host gh/auth for the bound repo;
+credentials never enter Lisp. `verify` accepts only `:typecheck`, `:lisp`,
+`:test`, `:build`, `:package`, `:vendor`, never shell text. Scripts are checked;
+`:script` selects an existing test or test:* script. Typecheck falls back to
+`check` only when `typecheck` is absent. Prefer focused then broader checks.
+`:directory` selects a workspace subproject; `:location :scratch` selects an
+extracted project. Approved scripts run on the host; roots are bound, and links,
+absolute paths and traversal fail. Native confirmation covers command/args/cwd/
+timeout; refusal or missing UI yields NOT_APPLIED. Exact ID replay never reruns.
 
 Evaluation ok=true is not process success: check result-code and verifier state/code.
 Report only observed results; partial reads do not prove byte equality. Distinguish
@@ -127,25 +125,25 @@ Disable requires confirmed stop/reconciliation; unload retains protection.
 
 ### Configured semantic decisions
 
-Use `kioku.decisions:status`, `evaluate`, `assess-relevance`, `classify-failure`,
-`assess-change` for applicable semantic choices. The host selects provider/model.
-Evaluate takes evidence and ordered id/instructions/choices/abstainId objects;
-helpers take requirement/candidates, evidence/actions, or requirement/before/after.
-Candidates/actions are id/description vectors. Consume status then result.answers:
-selected has choiceId; abstained/fallback means ordinary inspection/reasoning.
-Cancellation stops work. Helpers have no file/process/proposal effects and never
-replace validation, tests, permissions or approval. Do not compare provider scores.
+For semantic choices use `kioku.decisions:status`, `evaluate`, `assess-relevance`,
+`classify-failure`, `assess-change`. The host selects the provider/model. Pass
+evidence and ordered id/instructions/choices/abstainId questions, or the helper's
+requirement/candidates, evidence/actions, or requirement/before/after; candidates
+and actions are id/description vectors. Consume `result.answers`: selected has
+choiceId; abstained/fallback requires ordinary reasoning. Cancellation stops work.
+These helpers cannot edit files or replace validation, tests, permissions or
+approval. Never compare provider scores.
 
 ### TypeSafe
 
 `(kioku.typesafe:status)`; `(kioku.typesafe:evaluate state questions :model
-"jev-latest" :timeout-ms 30000)`. JSON uses strings/hash tables/vectors; returns
-answers/model/usage. `/kioku-typesafe-key <key>|status|clear` manages credentials;
-input is visible but unrecorded. Never put keys in Lisp.
-Filter locally; batch narrow noul/choice/score questions over selected material.
-256 KiB each way; no retries/substitution. Catch `kioku.typesafe:service-error`.
-Uncaught errors discard proposals. Confidence/probabilities are not correctness;
-keep arithmetic, permissions and tests deterministic. Cutoffs are task-specific.
+"jev-latest" :timeout-ms 30000)` returns answers/model/usage using JSON strings,
+hash tables and vectors. `/kioku-typesafe-key <key>|status|clear` manages visible,
+unrecorded credentials; never put keys in Lisp. Batch narrow noul/choice/score
+questions over selected material (256 KiB each way). No retry/substitution;
+catch `kioku.typesafe:service-error` or proposals are discarded. Confidence is
+not correctness; keep arithmetic, permissions and tests deterministic. Set
+task-specific cutoffs.
 
 Example: consume a choice before inspection. Existing approvals remain authoritative.
 
@@ -168,6 +166,45 @@ refused. stdout/stderr are bounded.
 <!-- /kiokuko:runtime -->
 
 <!-- kiokuko:documentation examples -->
+## Task-mode API details
+
+Native tool schemas remain authoritative for exact arguments.
+
+- `lisp_define`: `{operationId, name, description, source, inputSchema,
+  outputSchema, dependencies?: [{binding,toolRef}], examples?: [{input,expected}],
+  firstInput?}`. Source is one Lisp lambda. The host saves an immutable toolRef
+  only after protected compilation and declared examples pass.
+- `lisp_call`: `{operationId, toolRef, input}` or `{operationId, toolRef, inputRef}`.
+  Select bounded `fields` with JSON pointers when the full body is unnecessary;
+  pass its resultRef to later calls without sending that body through the model.
+- `lisp_observe`: `{operationId, paths:[workspaceRelativePath], format?:"text"|"json"}`.
+  It saves checked files as a resultRef and reports paths, digests and coverage,
+  not file bodies. Pass the ref as `lisp_call.inputRef`.
+- `lisp_stage`: `{operationId, resultRef, baseRef}` freezes a generated proposal
+  descended from the exact observed baseRef. It does not write the workspace.
+- `lisp_verify`: `{operationId, candidateRef, target, script?}` materializes the
+  captured bytes in private scratch and runs an approved host verifier. Observe
+  all required files, including `package.json`; missing dependencies/scripts
+  fail or return NOT_APPLIED. `testStatus:unknown` is not a passing test.
+- `lisp_apply`: `{operationId, candidateRef, verificationRef?}` requires host
+  approval, rechecks the read set and frozen targets, and accepts only a successful
+  verification receipt for the same candidate. Without one, it reports `not-run`.
+- `lisp_compare`: `{operationId, leftRef, rightRef}` compares saved bases and
+  operation/content hashes without executing either candidate.
+
+The task worker recompiles saved source for each call. Global variables and
+process RPC cannot carry state between calls. Saved resultRefs remain owner-bound
+for up to 30 days across worker/host restart; expired refs do not read live files.
+`lisp_status` lists recent refs and unresolved attempts; `lisp_inspect` reads
+receipts without replay. Persistent `lisp_inspect` accepts a current-generation
+ref or a paged saved-evidence query, never both. `lisp_cancel` needs a generation
+in persistent mode and only an operationId in task mode.
+
+For persistent-mode process calls, Python receives source, and Node runs with an
+empty OpenSSL config. Use explicit `(kioku.ci:verify :test :script "test:unit")`
+for a declared test script, or add `:location :scratch :directory "extract/project"`
+for an extracted project.
+
 ### Provider-independent semantic decisions
 
 Use `kioku.decisions` for applicable semantic decisions in task functions:

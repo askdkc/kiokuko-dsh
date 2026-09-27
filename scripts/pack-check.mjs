@@ -28,6 +28,7 @@ const requiredFiles = [
   'dist/dsh/model-auto/store.js',
   'docs/answer-review.md',
   'scripts/evaluate-answer-review.mjs',
+  'scripts/answer-review-evaluation.mjs',
   'dist/memory/application.js',
   'dist/dsh/memory-application.js',
   'dist/enno-oduno/memory-verification.js',

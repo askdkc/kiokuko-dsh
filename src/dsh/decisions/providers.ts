@@ -3,6 +3,7 @@ import { abortable, readBoundedJson } from '../http-json.js'
 import { DECISION_BYTES, DecisionError, parseDecisionBatch, parseDecisionResult, requireChoice, questionType, type DecisionProvider, type DecisionBatch, type DecisionBatchResult } from './contracts.js'
 import { decisionEndpoint, type DecisionConfiguration } from './config.js'
 import { consistentScore } from './score-consistency.js'
+import { emitChoiceDiagnostic, type ChoiceDiagnosticObserver, type ChoiceDiagnostic } from './choice-diagnostics.js'
 
 const probability = z.number().finite().min(0).max(1)
 const responseSchema = z.object({ model: z.string().min(1).max(256).optional(),
@@ -32,10 +33,11 @@ const typedResponse = z.object({ model: z.string().min(1).max(256).optional(),
     z.object({ type: z.literal('score'), score: z.number().finite(), legend: z.record(z.string(), z.string()), probabilities: z.record(z.string(), probability), confidence: probability }).strict(),
   ])), usage: z.object({ input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative() }).strict().optional(),
 }).strict()
-function decodeTyped(value: unknown, batch: DecisionBatch, model: string, minConfidence: number): DecisionBatchResult {
+function decodeTyped(value: unknown, batch: DecisionBatch, model: string, minConfidence: number, observer?: ChoiceDiagnosticObserver): DecisionBatchResult {
   const parsed = typedResponse.safeParse(value)
   if (!parsed.success || Object.keys(parsed.data.answers).length !== batch.questions.length) throw new DecisionError('MALFORMED_RESPONSE')
   const response = parsed.data
+  const diagnostics: ChoiceDiagnostic[] = []
   const answers = batch.questions.map(q => {
     const a = response.answers[q.id]
     if (!a || a.type !== questionType(q)) throw new DecisionError('MALFORMED_RESPONSE')
@@ -52,19 +54,21 @@ function decodeTyped(value: unknown, batch: DecisionBatch, model: string, minCon
     }
     const choice = requireChoice(q), values = Object.values(a.probabilities).sort((x, y) => y - x)
     if (!keys.includes(a.choice) || a.probabilities[a.choice] !== values[0]) throw new DecisionError('MALFORMED_RESPONSE')
-    if (a.choice === choice.abstainId) return { id: q.id, status: 'abstained' as const, reason: 'insufficient' as const }
-    if (values[0] === values[1]) return { id: q.id, status: 'abstained' as const, reason: 'tie' as const }
-    return a.confidence >= minConfidence ? { id: q.id, status: 'selected' as const, choiceId: a.choice } : { id: q.id, status: 'abstained' as const, reason: 'uncertain' as const }
+    const reason = a.choice === choice.abstainId ? 'insufficient' : values[0] === values[1] ? 'tie' : a.confidence < minConfidence ? 'uncertain' : undefined
+    diagnostics.push({ questionId: q.id, choice: a.choice, probabilities: keys.map(id => ({ id, probability: a.probabilities[id]! })), topProbability: values[0]!, runnerUpProbability: values[1]!, margin: values[0]! - values[1]!, confidence: a.confidence, gate: 'confidence', acceptance: { minConfidence }, status: reason ? 'abstained' : 'selected', ...(reason ? { reason } : {}), failedChecks: a.confidence < minConfidence ? ['confidence'] : [] })
+    return reason ? { id: q.id, status: 'abstained' as const, reason } : { id: q.id, status: 'selected' as const, choiceId: a.choice }
   })
+  for (const diagnostic of diagnostics) emitChoiceDiagnostic(observer, diagnostic)
   return parseDecisionResult({ answers, provider: 'typesafe', requestedModel: model,
     ...(response.model ? { returnedModel: response.model } : {}), policyVersion: 'typed-decisions-v1',
     ...(response.usage ? { usage: response.usage } : {}) }, batch)
 }
-function decode(value: unknown, batch: DecisionBatch, provider: string, model: string, accept: (confidence: number, top: number, runnerUp: number) => boolean): DecisionBatchResult {
+function decode(value: unknown, batch: DecisionBatch, provider: string, model: string, accept: (confidence: number, top: number, runnerUp: number) => boolean, acceptance: ChoiceDiagnostic['acceptance'], observer?: ChoiceDiagnosticObserver): DecisionBatchResult {
   const parsed = responseSchema.safeParse(value)
   if (!parsed.success) throw new DecisionError('MALFORMED_RESPONSE')
   const response = parsed.data
   if (Object.keys(response.answers).length !== batch.questions.length) throw new DecisionError('MALFORMED_RESPONSE')
+  const diagnostics: ChoiceDiagnostic[] = []
   const answers = batch.questions.map(question => { const q = requireChoice(question)
     const a = response.answers[q.id]
     if (!a || Object.keys(a.probabilities).length !== q.choices.length || q.choices.some(c => !Object.hasOwn(a.probabilities, c.id))
@@ -72,11 +76,13 @@ function decode(value: unknown, batch: DecisionBatch, provider: string, model: s
     const ranked = Object.values(a.probabilities).sort((a, b) => b - a)
     const top = ranked[0]!, runnerUp = ranked[1]!
     if (a.probabilities[a.choice] !== top) throw new DecisionError('MALFORMED_RESPONSE')
-    if (a.choice === q.abstainId) return { id: q.id, status: 'abstained' as const, reason: 'insufficient' as const }
-    if (top === runnerUp) return { id: q.id, status: 'abstained' as const, reason: 'tie' as const }
-    if (!accept(a.confidence, top, runnerUp)) return { id: q.id, status: 'abstained' as const, reason: 'uncertain' as const }
-    return { id: q.id, status: 'selected' as const, choiceId: a.choice }
+    const reason = a.choice === q.abstainId ? 'insufficient' : top === runnerUp ? 'tie' : !accept(a.confidence, top, runnerUp) ? 'uncertain' : undefined
+    const failedChecks: ChoiceDiagnostic['failedChecks'] = acceptance.minConfidence !== undefined ? a.confidence < acceptance.minConfidence ? ['confidence'] : [] : [
+      ...(top < acceptance.minProbability! ? ['probability' as const] : []), ...(top - runnerUp < acceptance.minMargin! ? ['margin' as const] : [])]
+    diagnostics.push({ questionId: q.id, choice: a.choice, probabilities: q.choices.map(c => ({ id: c.id, probability: a.probabilities[c.id]! })), topProbability: top, runnerUpProbability: runnerUp, margin: top - runnerUp, confidence: a.confidence, gate: acceptance.minConfidence !== undefined ? 'confidence' : 'probability_margin', acceptance, status: reason ? 'abstained' : 'selected', ...(reason ? { reason } : {}), failedChecks })
+    return reason ? { id: q.id, status: 'abstained' as const, reason } : { id: q.id, status: 'selected' as const, choiceId: a.choice }
   })
+  for (const diagnostic of diagnostics) emitChoiceDiagnostic(observer, diagnostic)
   return parseDecisionResult({ answers, provider, requestedModel: model, ...(response.model ? { returnedModel: response.model } : {}), policyVersion: POLICY_VERSION,
     ...(response.usage ? { usage: response.usage } : {}) }, batch)
 }
@@ -106,23 +112,23 @@ async function evaluateHttp(settings: HttpSettings, batch: DecisionBatch, signal
 }
 export class TypeSafeDecisionProvider implements DecisionProvider {
   readonly capabilities = TYPESAFE_LIMITS
-  constructor(private readonly config: DecisionConfiguration['typesafe'], private readonly credential: () => Promise<string>, private readonly request: typeof fetch = fetch) {}
+  constructor(private readonly config: DecisionConfiguration['typesafe'], private readonly credential: () => Promise<string>, private readonly request: typeof fetch = fetch, private readonly observer?: ChoiceDiagnosticObserver) {}
   async evaluate(batch: DecisionBatch, signal: AbortSignal): Promise<DecisionBatchResult> {
     if (batch.questions.some(q => 'choices' in q ? q.choices.length > 255 : q.type === 'score' && q.criteria.length > 10)) throw new DecisionError('TOO_LARGE')
     const value = await evaluateHttp({ endpoint: 'https://api.typesafe.ai/v1/systemone', model: this.config.model, credential: this.credential, request: this.request }, batch, signal,
       s => new DecisionError(s === 401 || s === 403 ? 'AUTH' : s === 413 ? 'TOO_LARGE' : s === 422 ? 'INVALID_INPUT' : 'UNAVAILABLE'))
-    return batch.contractVersion || batch.questions.some(q => questionType(q) !== 'choice') ? decodeTyped(value, batch, this.config.model, this.config.acceptance.minConfidence) : decode(value, batch, 'typesafe', this.config.model, confidence => confidence >= this.config.acceptance.minConfidence)
+    return batch.contractVersion || batch.questions.some(q => questionType(q) !== 'choice') ? decodeTyped(value, batch, this.config.model, this.config.acceptance.minConfidence, this.observer) : decode(value, batch, 'typesafe', this.config.model, confidence => confidence >= this.config.acceptance.minConfidence, this.config.acceptance, this.observer)
   }
 }
 export class NimbleDecisionProvider implements DecisionProvider {
   readonly capabilities = NIMBLE_LIMITS
-  constructor(private readonly config: DecisionConfiguration['nimble'], private readonly credential: () => Promise<string | undefined>, private readonly request: typeof fetch = fetch) {}
+  constructor(private readonly config: DecisionConfiguration['nimble'], private readonly credential: () => Promise<string | undefined>, private readonly request: typeof fetch = fetch, private readonly observer?: ChoiceDiagnosticObserver) {}
   async evaluate(batch: DecisionBatch, signal: AbortSignal): Promise<DecisionBatchResult> {
     if (!this.config.endpoint || !this.config.model) throw new DecisionError('UNAVAILABLE')
     if (batch.questions.length > 64 || batch.questions.some(q => requireChoice(q).choices.length > 26)) throw new DecisionError('TOO_LARGE')
     const value = await evaluateHttp({ endpoint: decisionEndpoint(this.config.endpoint), model: this.config.model, credential: this.credential, request: this.request }, batch, signal,
       s => new DecisionError(s === 401 || s === 403 ? 'AUTH' : s === 413 || s === 422 ? 'TOO_LARGE' : s === 504 ? 'TIMEOUT' : s === 499 ? 'CANCELLED' : 'UNAVAILABLE'))
     // Nimble confidence is entropy-derived. Acceptance uses selected probability and margin instead.
-    return decode(value, batch, 'nimble', this.config.model!, (_confidence, top, runnerUp) => top >= this.config.acceptance.minProbability && top - runnerUp >= this.config.acceptance.minMargin)
+    return decode(value, batch, 'nimble', this.config.model!, (_confidence, top, runnerUp) => top >= this.config.acceptance.minProbability && top - runnerUp >= this.config.acceptance.minMargin, this.config.acceptance, this.observer)
   }
 }

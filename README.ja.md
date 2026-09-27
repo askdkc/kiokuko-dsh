@@ -31,6 +31,9 @@ pnpm dsh web
 ```
 
 グローバルにインストールした `dsh` CLI を使う場合は、各コマンドから `pnpm` を外してください。
+dsh-TUI `0.11.1` では `dsh plugin --profile dsh-tui add kiokuko-dsh` で
+別途導入します。検証対象はDSHネイティブのコア機能で、ブラウザUIはWeb専用です。
+詳しくは[互換性の範囲](docs/dsh-plugin.md#compatibility)を参照してください。
 起動後は普通に依頼を入力します。Kiokuko 専用の setup 操作は不要です。
 GitHub・ローカルからの導入は [プラグインガイド](docs/dsh-plugin.md) を参照してください。
 

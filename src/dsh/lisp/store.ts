@@ -45,6 +45,8 @@ export class LispStore {
     const cutoff = new Date(now.getTime() - 30 * 86400000).toISOString()
     return this.database(db => {
       db.prepare("UPDATE dsh_lisp_operations SET result=NULL WHERE kind IN ('lisp_eval','lisp_describe','lisp_inspect','lisp_reset','lisp_cancel') AND state IN ('SUCCEEDED','FAILED','CANCELLED') AND updated_at<? AND result IS NOT NULL").run(cutoff)
+      db.prepare("UPDATE dsh_lisp_operations SET result=NULL WHERE kind IN ('lisp_define','lisp_call','lisp_observe','task_result') AND state IN ('SUCCEEDED','FAILED','CANCELLED') AND updated_at<? AND result IS NOT NULL").run(cutoff)
+      db.prepare("UPDATE dsh_lisp_operations SET payload='{}',result=NULL WHERE kind='task_tool' AND state='SUCCEEDED' AND updated_at<? AND payload!='{}'").run(cutoff)
     })
   }
   session(id: string): Promise<Session | undefined> { return this.database(db => db.prepare('SELECT * FROM dsh_lisp_sessions WHERE session_id=?').get<Session>(id)) }
@@ -99,6 +101,18 @@ export class LispStore {
   }
   operations(sessionId: string): Promise<Operation[]> {
     return this.database(db => db.prepare("SELECT * FROM dsh_lisp_operations WHERE session_id=? AND kind!='binding' ORDER BY CASE WHEN state IN ('RUNNING','APPLYING','UNKNOWN','AWAITING_APPROVAL') THEN 0 ELSE 1 END, updated_at DESC").all<Operation>(sessionId))
+  }
+  taskSummary(owner: LispOwner): Promise<{ tools: unknown[]; results: unknown[]; candidates: unknown[]; unresolved: unknown[] }> {
+    return this.database(db => {
+      const rows = db.prepare(`SELECT operation_id,kind,state,updated_at,result FROM dsh_lisp_operations
+        WHERE session_id=? AND agent_id=? AND kind IN ('task_tool','task_result','task_candidate','lisp_verify','lisp_apply')
+        ORDER BY updated_at DESC LIMIT 100`).all<Pick<Operation,'operation_id'|'kind'|'state'|'updated_at'|'result'>>(owner.sessionId, owner.agentId)
+      const summarize = (kind: string, limit = 5) => rows.filter(row => row.kind === kind).slice(0, limit)
+        .map(row => ({ ref: row.operation_id, state: row.state, updatedAt: row.updated_at, available: row.result !== null }))
+      return { tools: summarize('task_tool'), results: summarize('task_result'), candidates: summarize('task_candidate'),
+        unresolved: rows.filter(row => ['UNKNOWN','RUNNING','APPLYING'].includes(row.state)).slice(0, 5)
+          .map(row => ({ ref: row.operation_id, kind: row.kind, state: row.state })) }
+    })
   }
   operationSummaries(sessionId: string, offset?: number): Promise<{ operations: Pick<Operation, 'operation_id' | 'agent_id' | 'kind' | 'state' | 'updated_at'>[]; count: number; pendingStates: Record<string, number> }> {
     return this.database(db => {

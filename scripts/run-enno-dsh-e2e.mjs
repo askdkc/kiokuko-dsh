@@ -27,6 +27,10 @@ async function run(command, args, env = {}, timeout = 180_000) {
   })
 }
 
+async function runIsolated(command, args, env, cwd, timeout = 180_000) {
+  return exec(command, args, { cwd, env, maxBuffer: 8 * 1024 * 1024, timeout, killSignal: 'SIGTERM' })
+}
+
 function dumpedRows(result, label) {
   const document = YAML.parseDocument(result.stdout, { strict: true })
   if (document.errors.length > 0) {
@@ -158,8 +162,8 @@ async function runCordisComposition() {
 
 function startWebProfile(env) {
   const child = spawn(dsh, ['--profile', profile, '--patch', env.KIOKUKO_ORCA_E2E_PATCH, '--no-open', '--port', '0'], {
-    cwd: root,
-    env: { ...process.env, ...env },
+    cwd: env.KIOKUKO_E2E_WORKSPACE,
+    env,
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -321,12 +325,23 @@ async function runCliLifecycle(nativeDependencies) {
   const profileDirectory = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-home-'))
   const output = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-pack-'))
   const cache = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-cache-'))
+  const workspace = join(profileDirectory, 'workspace')
+  const home = join(profileDirectory, 'home')
   const dataDirectory = join(profileDirectory, 'kiokuko-data')
-  const env = { DSH_HOME: profileDirectory, KIOKUKO_DATA_DIR: dataDirectory, npm_config_cache: cache, KIOKUKO_ORCA_E2E_PATCH: join(profileDirectory, 'orca-test.patch.yml') }
+  const env = { PATH: process.env.PATH ?? '', HOME: home, USERPROFILE: home, DSH_HOME: profileDirectory,
+    XDG_CONFIG_HOME: join(profileDirectory, 'xdg/config'), XDG_CACHE_HOME: join(profileDirectory, 'xdg/cache'),
+    XDG_DATA_HOME: join(profileDirectory, 'xdg/data'), XDG_STATE_HOME: join(profileDirectory, 'xdg/state'),
+    PNPM_HOME: join(profileDirectory, 'pnpm-home'), COREPACK_HOME: join(profileDirectory, 'corepack'),
+    npm_config_store_dir: join(profileDirectory, 'pnpm-store'), DSH_TELEMETRY_DISABLED: '1',
+    KIOKUKO_E2E_WORKSPACE: workspace, KIOKUKO_DATA_DIR: dataDirectory, npm_config_cache: cache,
+    KIOKUKO_ORCA_E2E_PATCH: join(profileDirectory, 'orca-test.patch.yml') }
   let web
   try {
+    await mkdir(workspace, { recursive: true })
+    await mkdir(home, { recursive: true })
+    await runIsolated('git', ['init', '-q'], env, workspace)
     try {
-      await run(dsh, ['--help'], env)
+      await runIsolated(dsh, ['--help'], env, workspace)
     } catch (error) {
       if (error?.code === 'ENOENT') {
         if (requireDshCli) throw new Error('DSH CLI is required for this verification but dsh is not installed')
@@ -335,13 +350,13 @@ async function runCliLifecycle(nativeDependencies) {
       }
       throw error
     }
-    const version = await run(dsh, ['--version'], env)
+    const version = await runIsolated(dsh, ['--version'], env, workspace)
     const dshVersion = `${version.stdout}${version.stderr}`.trim()
     if (!dshVersion.includes(expectedDshVersion)) throw new Error(`expected DSH ${expectedDshVersion}, got ${dshVersion}`)
     const packageCommit = (await run('git', ['rev-parse', 'HEAD'], env)).stdout.trim()
     if (!/^[0-9a-f]{40}$/u.test(packageCommit)) throw new Error('git did not return an exact package Commit')
     const workingTreeClean = (await run('git', ['status', '--porcelain'], env)).stdout.trim().length === 0
-    const packed = JSON.parse((await run('npm', ['pack', '--json', '--pack-destination', output], env)).stdout)
+    const packed = JSON.parse((await runIsolated('npm', ['pack', '--json', '--pack-destination', output], env, root)).stdout)
     const packageMetadata = packed[0]
     const filename = packageMetadata?.filename
     if (typeof filename !== 'string') throw new Error('npm pack did not return a tarball')
@@ -349,9 +364,9 @@ async function runCliLifecycle(nativeDependencies) {
     if (typeof packageMetadata?.integrity !== 'string' || packageMetadata.integrity.length === 0) throw new Error('npm pack did not return artifact integrity')
     const tarball = join(output, filename)
     await access(tarball)
-    await run(dsh, ['plugin', '--profile', profile, 'add', tarball], env)
+    await runIsolated(dsh, ['plugin', '--profile', profile, 'add', tarball], env, workspace)
     await writeFile(env.KIOKUKO_ORCA_E2E_PATCH, '- id: kiokuko-dsh\n  config:\n    enabled: true\n    orca:\n      enabled: true\n    efficiency:\n      observe: true\n    finalization:\n      inputMode: bounded_evidence\n', { mode: 0o600 })
-    const dumped = await run(dsh, ['--profile', profile, '--patch', env.KIOKUKO_ORCA_E2E_PATCH, '--dump-config'], env)
+    const dumped = await runIsolated(dsh, ['--profile', profile, '--patch', env.KIOKUKO_ORCA_E2E_PATCH, '--dump-config'], env, workspace)
     assertInstalledDump(dumped)
     web = startWebProfile(env)
     const ready = await web.ready
@@ -364,8 +379,8 @@ async function runCliLifecycle(nativeDependencies) {
     await verifyBrowserBundle(reloaded.url)
     await awaitUiVerification(reloaded.url, profileDirectory, env.KIOKUKO_ORCA_E2E_PATCH, 'reloaded')
     await stopWebProfile(web)
-    await run(dsh, ['plugin', '--profile', profile, 'remove', 'kiokuko-dsh'], env)
-    const afterRemove = await run(dsh, ['--profile', profile, '--dump-config'], env)
+    await runIsolated(dsh, ['plugin', '--profile', profile, 'remove', 'kiokuko-dsh'], env, workspace)
+    const afterRemove = await runIsolated(dsh, ['--profile', profile, '--dump-config'], env, workspace)
     assertRemovedDump(afterRemove)
     const evidence = {
       timestamp: new Date().toISOString(),

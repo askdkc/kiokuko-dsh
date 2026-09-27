@@ -32,7 +32,8 @@ export function createEfficiencyHost(deps: EfficiencyHostDependencies) {
     closeEfficiency()
     efficiency = observer
     if (observer === undefined) return
-    const scope = (ctx.root ?? ctx) as Context
+    const profile = (ctx.get?.('profileContext', false) as { name?: string } | undefined)?.name
+    const scope = profile === 'dsh-tui' ? ctx : (ctx.root ?? ctx) as Context
     const observedAgents = new Map<string, NativeAgent>()
     const bind = (agent: NativeAgent | undefined) => {
       if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session) return
