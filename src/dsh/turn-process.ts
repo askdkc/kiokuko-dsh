@@ -8,6 +8,9 @@ import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 export const DSH_TURN_HANDOFF_MAX_BYTES = 32 * 1024
 export const DSH_TURN_FAILURE_MAX_BYTES = 8 * 1024
 export const DSH_BOUNDARY_JOB_MAX_ATTEMPTS = 3
+const RETRYABLE_BOUNDARY_ERRORS = new Set(['NATIVE_FLUSH_FAILED', 'NATIVE_FLUSH_TIMEOUT', 'DATABASE_ERROR',
+  'BACKPRESSURE', 'SERVICE_UNAVAILABLE', 'SQLITE_BUSY', 'CRASH_CUT', 'BOUNDARY_BINDING_UNAVAILABLE'])
+export function retryableBoundaryErrorCode(code: string): boolean { return RETRYABLE_BOUNDARY_ERRORS.has(code) }
 
 export type DshTurnPhase =
   | 'intake'
@@ -659,7 +662,7 @@ export function failBoundaryJobInTransaction(
   const item = typeof error === 'object' && error !== null ? error as { code?: unknown } : undefined
   const code = typeof item?.code === 'string' ? item.code.slice(0, 128) : 'BOUNDARY_JOB_FAILED'
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 2_000)
-  if (job.attemptCount >= DSH_BOUNDARY_JOB_MAX_ATTEMPTS) {
+  if (!retryableBoundaryErrorCode(code) || job.attemptCount >= DSH_BOUNDARY_JOB_MAX_ATTEMPTS) {
     database.prepare(`
       UPDATE dsh_boundary_jobs
          SET status = 'waiting_user', owner_nonce = NULL, lease_expires_at = NULL,

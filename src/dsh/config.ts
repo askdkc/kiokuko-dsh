@@ -20,6 +20,8 @@ export { ContinuityConfig }
 import { ModelRouteSchema } from './model-configuration.js'
 import { ModelAutoConfig } from './model-auto/contracts.js'
 import { ToolExposureConfig } from './tool-exposure.js'
+import { CompletionConfig } from './task-completion.js'
+export { CompletionConfig }
 import { DeepThinkerConfigSchema } from '../deep-thinker/core/contracts.js'
 
 const limit = (value: number) => z.number().int().positive().max(Number.MAX_SAFE_INTEGER).default(value)
@@ -77,6 +79,7 @@ export const Config = z.object({
   lisp: LispConfig.prefault({}),
   typedDecisions: TypedDecisionsConfig.prefault({}),
   answerReview: AnswerReviewConfig.prefault({}),
+  completion: CompletionConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),
   semanticCompaction: SemanticCompactionConfig.prefault({}),
   modelHandoff: ModelHandoffConfig.prefault({}),

@@ -456,6 +456,8 @@ export interface VerifierRunResult {
   stderrDigest: string;
   /** Stream-observed skipped/pending checks, not inferred from exit status. */
   skipped?: boolean;
+  /** Complete Node TAP trailer when the selected verifier used explicit TAP output. */
+  tapSummary?: import('../dsh/node-tap-summary.js').TapSummary;
   repositoryStatePolicyVersion?: number | undefined;
   repositoryStateDigest?: string | undefined;
   changedDuringVerification?: boolean | undefined;
@@ -475,6 +477,8 @@ export interface EnnoRunSnapshot {
   confirmationState: 'not_required' | 'pending' | 'approved' | 'revision_requested' | 'cancelled';
   attempts: number;
   mutationRevision: number;
+  /** Changes only when an approved criterion-to-verifier mapping changes. */
+  completionBindingDigest?: string;
   routeEpoch?: number | undefined;
   ideal: OdunoIdeal | null;
   meditation: OdunoMeditation | null;

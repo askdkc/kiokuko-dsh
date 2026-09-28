@@ -7,6 +7,11 @@ accept **>=0.2.1** as ordinary dependencies and are installed automatically with
 This range includes 0.3 and later stable releases; future API compatibility is not guaranteed.
 Lockfiles retain the tested resolution (currently 0.2.1); they do not refresh on each launch.
 The trace manifest records the installed core version.
+Each recorded final model request also includes a bounded manifest of host-owned
+context sections still present in that request: section ID, digest, byte count,
+omitted count, and coverage. It stores no extra section text, and an unobserved
+section is never described as delivered. This is request-side provenance, not
+proof that a provider processed the bytes.
 For manual dependency updates and restarting DSH, see [the update guide](dsh-plugin.md#update).
 The integration is tested against **DSH 0.1.2-rc.1**. The native E2E verifies
 installed package versions before executing. The trace labels that version as

@@ -62,6 +62,24 @@ test('concurrent model calls share a writer, retain identity and causal seqs, pr
     assert.ok((await f.reader.export(f.binding, row.orca_run_id)).endsWith('.html'))
   } finally { await f.dispose() }
 })
+
+test('the recorded final model request carries bounded provenance for the host section it received', async () => {
+  const f = await orcaFixture({ capture: { content: 'metadata' } })
+  try {
+    const text = 'The current runtime contract'
+    const options = { ...request, messages: [{ role: 'user', content: [{ type: 'text', text }],
+      source: { kind: 'plugin:kiokuko-dsh', form: 'snapshot', sections: [{ name: 'route-skill:kiokuko-soul', text }] } }] }
+    await collect(f.recorder.stream(f.binding, options, () => chunks(response())))
+    await f.recorder.closeSessionRecording(f.binding.sessionId, 'manual')
+    const row = (await f.reader.list(f.binding))[0]!
+    const page = await f.reader.show(f.binding, row.orca_run_id)
+    const model = page.events.find(event => event.type === 'model.request')!
+    const payload = model.payload as any
+    assert.equal(payload.sources.items[0].id, 'route-skill:kiokuko-soul')
+    assert.equal(payload.sources.coverage, 'observed')
+    assert.doesNotMatch(JSON.stringify(payload), /The current runtime contract/)
+  } finally { await f.dispose() }
+})
 test('unknown sessions and auxiliary calls are excluded without guessing', async () => {
   const f = await orcaFixture()
   try {

@@ -156,6 +156,7 @@
     "build": "npm run clean:dist && tsc -p tsconfig.build.json && node scripts/compile-skill-prompts.mjs && node scripts/build-dsh-client.mjs && node scripts/build-history-codecs.mjs && node scripts/build-plugin-entry.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs tests/dsh",
+    "test:harness": "node --import tsx scripts/run-harness-evaluation.mjs",
     "test:unit": "node scripts/run-tests.mjs tests/dsh/unit",
     "test:memory-reuse": "node scripts/run-tests.mjs tests/dsh/unit/decisions/memory-reuse.test.ts tests/dsh/integration/memory-reuse.test.ts",
     "test:evaluation:memory-reuse": "node --import tsx scripts/run-memory-reuse-evaluation.mjs",
@@ -204,7 +205,8 @@
     "test:laya-worker": "python3 -B -m unittest discover -s tests/laya -v",
     "test:answer-review": "node scripts/run-tests.mjs tests/dsh/unit/decisions/answer-review.test.ts tests/dsh/unit/decisions/answer-review-evaluation.test.ts tests/dsh/e2e/answer-review-loop.test.ts",
     "test:evaluation:answer-review": "npm run build && node scripts/evaluate-answer-review.mjs",
-    "test:evaluation:decisions": "node --import tsx scripts/run-decision-evaluation.mjs"
+    "test:evaluation:decisions": "node --import tsx scripts/run-decision-evaluation.mjs",
+    "test:evaluation:model-routing": "node --import tsx scripts/run-model-routing-evaluation.mjs"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

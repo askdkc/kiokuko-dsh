@@ -75,7 +75,9 @@ export function observeExploration(previous: ExplorationState, evidence: Executi
   if (Object.keys(state.counts).length > 256) delete state.counts[Object.keys(state.counts)[0]!]
   if (count === 3 && !state.warned.includes(key)) {
     state.warned = [...state.warned, key].slice(-256)
-    state.notice = 'The same read/search produced the same result three times. Use the evidence already collected; narrow the next question or explain what is missing. Do not repeat that operation unchanged.'
+    state.notice = evidence.toolSucceeded === false
+      ? 'The same structured tool failed three times with the same result. Inspect the failure and change the input or stop; do not repeat it unchanged.'
+      : 'The same read/search produced the same result three times. Use the evidence already collected; narrow the next question or explain what is missing. Do not repeat that operation unchanged.'
   } else if (count > 3 && state.warned.includes(key) && evidence.afterCorrection === true) {
     state.pauseKey = key
   } else if (state.total % 24 === 0) {

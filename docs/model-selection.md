@@ -37,6 +37,25 @@ For a new admitted normal task, Kiokuko sends the current task text, task type, 
 
 The status distinguishes the configured mode, readiness, proposal and selected binding from the model observed in a native `request/header`. The initial preset is a rubric, not a claim that it improves quality, elapsed time or subscription usage. Enno, Deep, children, chat, review continuation and protected Lisp execution retain their existing owners. Automatic escalation after a failed implementation pass is not enabled.
 
+### Routing evaluation and decision cache
+
+From a source checkout, run the offline routing contract check without credentials or provider calls:
+
+```text
+npm run test:evaluation:model-routing
+```
+
+To measure how a configured Jev or Laya classifier handles the same 16 fixed Japanese/English cases, explicitly opt in to live requests:
+
+```text
+npm run test:evaluation:model-routing -- --live --provider jev --config PATH
+npm run test:evaluation:model-routing -- --live --provider laya --config PATH
+```
+
+`PATH` is a JSON file in the `typedDecisions` configuration shape. Jev requires a versioned `typesafe.model` and `TYPESAFE_API_KEY`; Laya uses an already running worker. Live evaluation makes classifier requests, including a readiness probe, but never starts a generation turn or changes the active session model. Optional `--repetitions 1..10` (default 1), `--seed UINT32` (default 0), and `--output PATH` control repeatable JSON reporting. Offline output checks the evaluation pipeline and reports `quality: null`. Live results compare fixed cases with the current rubric; they do not establish model capability, real-work quality, cost, or provider cache savings. Laya v1 input completeness remains unverified.
+
+The shared decision service keeps at most 256 completed request bindings and 256 completed results in memory when it can reload them from persistent storage. It does not delete stored decisions. This applies to decisions used by normal execution, Enno review, and Lisp `kioku.decisions:*`; automatic model routing and this evaluation remain specific to normal execution.
+
 On Enno and Deep selection cards, use the displayed **Cmd+1–9** shortcuts on macOS
 or **Ctrl+1–9** on Windows/Linux, then press Enter to confirm. With the card
 focused, you can also type an option number and press Enter to submit. For options

@@ -49,6 +49,7 @@ import type { NativeSkills, NativeTools, NativeSessions, NativeAgents, AdapterCo
 import type { TurnRecord } from './turn-state.js'
 
 interface AdmissionDependencies {
+  readonly completionMode: import('../task-completion.js').CompletionMode
   readonly native: AdapterContext
   readonly skills: NativeSkills | undefined
   readonly tools: NativeTools | undefined
@@ -101,7 +102,7 @@ interface AdmissionOwner {
 export function createAdmission({
   native, skills, tools, userQuestions, sessions, agents, deepPlanning, modelCatalog, modelCompatibility,
   modelRoutes, now, runtime, decisions, answerReview, delegation, executionSupport,
-  ennoMemory, memoryFinalizer, autoReview, sessionMirror, akinatorMemoryConfig,
+  ennoMemory, memoryFinalizer, autoReview, sessionMirror, akinatorMemoryConfig, completionMode,
   turnState, getSelection, setSelection, refreshEnnoMemory, executionBinding,
   captureInitialInput, contextMessages, resolveIdleClose, retireSupersededRun,
   cancelBoundarySession, isSelectionBlocked, closeTurn, readStateForRun,
@@ -566,6 +567,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
     true,
     akinatorMemoryConfig,
     decisions,
+    completionMode,
   )
   resumeExistingRun = async (event): Promise<DshIntakeGateResult | undefined> => runtime.withDatabase(async (database) => {
     const project = await resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true })

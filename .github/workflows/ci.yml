@@ -97,6 +97,19 @@ jobs:
       - name: Run test suite
         run: npm test
 
+      - name: Check fixed harness scenarios
+        run: npm run test:harness
+        env:
+          KIOKUKO_HARNESS_REPORT: ${{ runner.temp }}/kiokuko-harness-report.json
+
+      - name: Upload harness scenario report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiokuko-harness-report
+          path: ${{ runner.temp }}/kiokuko-harness-report.json
+          if-no-files-found: error
+
       - name: Run semantic retrieval evaluation
         run: npm run test:evaluation
 

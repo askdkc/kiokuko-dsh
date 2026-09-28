@@ -4,6 +4,7 @@ import { TypedDecisionsConfig } from '../src/dsh/decisions/config.ts'
 import { DecisionService } from '../src/dsh/decisions/service.ts'
 import { TypeSafeDecisionProvider } from '../src/dsh/decisions/providers.ts'
 import { selectInstalledSkills } from '../src/dsh/decisions/workflows.ts'
+import { scoreConfidenceBands } from './score-confidence-bands.ts'
 
 const args = process.argv.slice(2), live = args.includes('--live')
 const value = flag => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1] }
@@ -79,10 +80,7 @@ const report = { version: 1, mode: live ? 'live-synthetic' : 'fixture-oracle', m
     falseNegatives: completed.filter(r => r.mode === 'choice').reduce((n, r) => n + r.baselineFn, 0) },
   byModeAndLanguage: Object.fromEntries(['choice', 'score'].map(mode => [mode,
     Object.fromEntries(['ja', 'en'].map(language => [language, rates(completed.filter(r => r.mode === mode && r.language === language))]))])),
-  scoreConfidenceBands: Object.fromEntries(['[0,.5)', '[.5,.8)', '[.8,1]'].map((band, i) => {
-    const values = completed.flatMap(r => r.scoreConfidence).filter(value => i === 0 ? value.confidence < .5 : i === 1 ? value.confidence < .8 : value.confidence <= 1)
-    return [band, { count: values.length, accuracy: values.length ? values.filter(value => value.correct).length / values.length : null }]
-  })),
+  scoreConfidenceBands: scoreConfidenceBands(completed.flatMap(r => r.scoreConfidence)),
   cost: null, rows }
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 if (rows.some(row => row.status !== 'completed') || !live && rows.some(row => row.fp || row.fn)) process.exitCode = 1

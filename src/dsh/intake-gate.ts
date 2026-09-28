@@ -3,6 +3,7 @@ import type { DecisionService } from './decisions/service.js'
 import { classifyTask, selectInstalledSkills } from './decisions/workflows.js'
 import { AkinatorMemoryConfig, type ProbeConfig } from '../akinator/memory-probe-types.js'
 import { answerAgentTask, prepareAgentTask, type PreparedAgentTask } from './task-intake.js'
+import type { CompletionMode } from './task-completion.js'
 import type { TaskProfile } from '../akinator/types.js'
 import { KiokukoError } from '../errors.js'
 import { canonicalContentHash } from '../serialization/validate.js'
@@ -103,6 +104,7 @@ export class DshIntakeGate {
     private readonly executionSelection = false,
     private akinatorMemory: ProbeConfig = AkinatorMemoryConfig.parse({}),
     private decisions?: DecisionService,
+    private readonly completionMode: CompletionMode = 'shadow',
   ) {
     this.#runtime = runtime
     this.#answerer = answerer
@@ -171,6 +173,7 @@ export class DshIntakeGate {
       let prepared = await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
         requestId, memoryReuse,
         executionSelection: this.executionSelection,
+        completionMode: this.completionMode,
         sessionOwnership: true,
         task: grounded.task,
         cwd: grounded.cwd,

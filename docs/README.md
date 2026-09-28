@@ -10,7 +10,7 @@ Choose a guide by what you need to do:
 - [TypeSafe from Lisp](typesafe.md) — credential setup, semantic decisions, examples and explicit live smoke.
 
 Implementation references: [architecture](architecture.md), [database](database.md),
-[execution ledger](execution-ledger.md), and [retrieval evaluation](retrieval-evaluation.md).
+[execution ledger](execution-ledger.md), [harness map](harness-map.md), and [retrieval evaluation](retrieval-evaluation.md).
 
 The Japanese user guides are available from the [日本語目次](README.ja.md).
 

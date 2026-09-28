@@ -65,6 +65,7 @@ import { discoverSkills } from '../skills/discovery-service.js';
 import type { SkillDiscoverySummary, SkillDiscoveryMode } from '../skills/types.js';
 import { canonicalDirectory } from '../repository/detect-root.js';
 import { ennoStateForPreparedTask } from '../enno-oduno/service.js';
+import { initializeTaskCompletion, type CompletionMode } from './task-completion.js';
 import { prepareEmbeddingSearchRuntime } from '../embedding/runtime.js';
 import type { EmbeddingRuntime } from '../embedding/types.js';
 import {
@@ -77,6 +78,7 @@ export interface PrepareAgentTaskInput {
   memoryReuse?: MemoryReuseRuntime | undefined;
   /** Native host owns the explicit choice; old direct callers retain legacy behavior. */
   executionSelection?: boolean;
+  completionMode?: CompletionMode;
   sessionOwnership?: boolean;
   deepSelection?: { startId: string; configuration: import('../deep-thinker/core/contracts.js').DeepConfiguration };
   requestId: string;
@@ -868,6 +870,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
   const intakeService = new DshRunIntakeService(database, {
     akinatorMemory: memoryConfig, memoryScope: scope,
     onRunCreatedInTransaction: ({ database: transactionDatabase, runId, workspace, dshSessionId, now }) => {
+      if (input.completionMode) initializeTaskCompletion(transactionDatabase, runId, input.completionMode);
       if (input.executionSelection) initializeExecutionSelection(transactionDatabase, runId);
       if (input.sessionOwnership || input.deepSelection) claimExecutionOwner(transactionDatabase, {
         sessionId: dshSessionId, workspace, mode: input.deepSelection ? 'deep-thinker' : 'normal',

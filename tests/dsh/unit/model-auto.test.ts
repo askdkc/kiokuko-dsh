@@ -8,8 +8,9 @@ import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
 import { ModelAutoCoordinator } from '../../../src/dsh/model-auto/coordinator.js'
 import { ModelAutoStore } from '../../../src/dsh/model-auto/store.js'
 import { modelAutoCandidates } from '../../../src/dsh/model-auto/candidates.js'
-import { ModelAutoConfig } from '../../../src/dsh/model-auto/contracts.js'
-import { DecisionError, type DecisionBatch } from '../../../src/dsh/decisions/contracts.js'
+import { DEFAULT_MODEL_AUTO_ROUTES, ModelAutoConfig } from '../../../src/dsh/model-auto/contracts.js'
+import { buildModelRoutingBatch } from '../../../src/dsh/model-auto/batch.js'
+import { DecisionError, parseDecisionBatch, type DecisionBatch } from '../../../src/dsh/decisions/contracts.js'
 import type { DshModelCatalog, ModelBinding } from '../../../src/dsh/model-configuration.js'
 import { canonicalContentHash } from '../../../src/serialization/validate.js'
 
@@ -43,6 +44,17 @@ async function fixture(choice = 'luna-medium', mode: 'off' | 'observe' | 'auto' 
     task: 'Implement a small TypeScript change and verify it.', taskType: 'build', admitted: true, measureContext: () => 0, signal })
   return { db, runtime, store, service, coordinator, input, calls: () => calls, setDecision: (fn: (batch: DecisionBatch) => Promise<string>) => { decide = fn }, close: () => db.close() }
 }
+
+test('native model-auto sends the shared evaluation batch unchanged', async t => {
+  const f = await fixture(); t.after(f.close)
+  let seen: DecisionBatch | undefined
+  f.setDecision(async batch => {
+    if (batch.purpose === 'model-routing') seen = batch
+    return 'luna-medium'
+  })
+  await f.coordinator.resolve(f.input())
+  assert.deepEqual(seen, parseDecisionBatch(buildModelRoutingBatch({ task: f.input().task, taskType: 'build', attachmentTypes: [], routes: DEFAULT_MODEL_AUTO_ROUTES })))
+})
 
 test('a timed-out memory batch does not block a ready model-routing decision', async t => {
   const f = await fixture('luna-medium', 'auto', 20); t.after(f.close)

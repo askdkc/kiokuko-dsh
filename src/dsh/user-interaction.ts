@@ -19,15 +19,22 @@ export interface DshConfirmationAnswerer {
 }
 
 /** Internal host failures are not missing task requirements. Keep recovery explicit. */
-export function boundaryFailureCopy(language: UserFacingLanguage) {
+export function boundaryFailureCopy(language: UserFacingLanguage, attempts = 3, retryable = true) {
+  const repeated = attempts >= 3
   return language === 'ja' ? {
     header: 'Kiokukoが停止しました',
-    title: 'Kiokukoの内部処理が3回失敗したため、自動処理を停止しました。',
-    recoveryInstruction: 'これは依頼内容が不足しているという意味ではありません。下記の内部エラーの原因を解消してから再開する必要があります。既に行った対処と再開の指示、または停止の指示を入力してください。原因が未解消なら、再開しても同じエラーで停止する可能性があります。空欄・取消では停止したままになります。',
+    title: repeated ? 'Kiokukoの内部処理が3回失敗したため、自動処理を停止しました。'
+      : 'Kiokukoの内部処理を安全に続けられないため、自動処理を停止しました。',
+    recoveryInstruction: retryable
+      ? 'これは依頼内容が不足しているという意味ではありません。下記の内部エラーの原因を解消した後、行った対処と「再試行」を明記してください。「続行」だけでは再実行しません。原因が未解消なら再び停止する可能性があります。空欄・取消では停止したままです。'
+      : 'この失敗は同じ入力で自動再試行できません。権限・整合性・未対応操作など原因を確認してください。入力だけで元の操作を再開しません。',
   } : {
     header: 'Kiokuko stopped',
-    title: 'Kiokuko stopped after three internal processing failures.',
-    recoveryInstruction: 'This does not mean your task description is incomplete. Resolve the internal error below before retrying. Describe any corrective action already taken and whether to resume or stop. Retrying without resolving the cause may fail again. An empty answer or cancellation leaves processing stopped.',
+    title: repeated ? 'Kiokuko stopped after three internal processing failures.'
+      : 'Kiokuko stopped because the internal operation cannot safely continue.',
+    recoveryInstruction: retryable
+      ? 'This does not mean your task description is incomplete. After resolving the internal error below, describe the correction and explicitly say retry. Continue alone will not replay the operation. An empty answer or cancellation leaves processing stopped.'
+      : 'This operation cannot safely replay with the same input. Inspect the permission, integrity, or unsupported-operation cause. An answer alone does not resume the operation.',
   }
 }
 

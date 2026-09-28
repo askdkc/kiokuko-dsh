@@ -115,6 +115,7 @@ import {
 } from './plan-recovery.js';
 import { ennoValidationError } from './validation-errors.js';
 import { captureRepositoryState } from './repository-state.js';
+import { saveTaskCompletionReceipt, taskCompletionBlocksClose } from '../dsh/task-completion.js';
 import {
   sanitizeEnnoAnswer,
   sanitizeFinishRequest,
@@ -1622,6 +1623,10 @@ export async function finishEnno(
       verifierIds: current.contract.finalVerifiers.map((verifier) => verifier.id),
     });
     const passed = results.length > 0 && results.every((result) => result.status === 'passed');
+    if (passed && input.review.decision === 'accept'
+      && taskCompletionBlocksClose(saveTaskCompletionReceipt(database, input.runId))) {
+      throw new KiokukoError('CONFLICT', 'Approved acceptance criteria require fresh bound verification evidence');
+    }
     const unsafe = results.some((result) => result.status === 'spawn_failed');
     const attempts = current.attempts + 1;
     const accepted = passed && input.review.decision === 'accept';
@@ -1700,6 +1705,33 @@ export function submitOdunoMeditation(
     assertExpected(current, input.expectedRevision, ['oduno_meditation']);
     if (current.ideal === null) throw new KiokukoError('INTEGRITY_ERROR', 'Oduno meditation requires a persisted ideal');
     const operationOwner = startOperationInTransaction(database, input.runId, operation);
+    const repositoryDigest = captureRepositoryState(current.repositoryRoot).digest;
+    const acceptedResults = readFreshFinalVerifierResults(database, {
+      runId: input.runId,
+      revision: current.revision,
+      mutationRevision: current.mutationRevision,
+      verifiers: current.contract.finalVerifiers,
+      repositoryDigest,
+    });
+    if (acceptedResults === undefined || acceptedResults.some(result => result.status !== 'passed')) {
+      updateContractInTransaction(database, current, {
+        contract: current.contract,
+        status: 'enno_verifying',
+        confirmationState: current.confirmationState,
+        blocker: 'Final verification evidence became stale after acceptance',
+      });
+      appendEnnoEventInTransaction(database, input.runId, 'enno.verification_failed', 'enno-oduno', 'stale', {
+        contractRevision: current.revision,
+        mutationRevision: current.mutationRevision,
+        reason: 'repository_changed_after_acceptance',
+      });
+      const response = { ennoOduno: stateForSnapshot(readEnnoSnapshot(database, identity(database, input))) };
+      completeOperationInTransaction(database, input.runId, operation, operationOwner, response);
+      return response;
+    }
+    if (taskCompletionBlocksClose(saveTaskCompletionReceipt(database, input.runId))) {
+      throw new KiokukoError('CONFLICT', 'Accepted completion criteria became unresolved before the terminal transition');
+    }
     updateContractInTransaction(database, current, {
       contract: current.contract,
       status: 'completed',

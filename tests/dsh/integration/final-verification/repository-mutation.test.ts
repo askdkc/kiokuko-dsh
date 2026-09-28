@@ -12,17 +12,20 @@ import { verificationBoundaryKey } from '../../../../src/dsh/verification-identi
 import { answerEnno, finishEnno, prepareEnnoVerification, reportEnnoWork, submitOdunoIdeal, submitOdunoMeditation } from '../../../../src/enno-oduno/service.js'
 import { captureRepositoryState } from '../../../../src/enno-oduno/repository-state.js'
 import { readEnnoSnapshot } from '../../../../src/enno-oduno/store.js'
+import { assessTaskCompletion, bindTaskCriterion, initializeTaskCompletion } from '../../../../src/dsh/task-completion.js'
 
 const capabilities = [
   { kind: 'skill', name: 'kiokuko-soul', description: 'Routes work.' },
   { kind: 'skill', name: 'kiokuko-single-purpose-functions', description: 'Focuses functions.' },
 ]
 
-async function fixture(command: string, maxAttempts = 8, git = true) {
+async function fixture(command: string, maxAttempts = 8, git = true, tapSkip = false) {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-final-evidence-'))
   const repository = join(root, 'repo')
   await mkdir(repository)
   await writeFile(join(repository, 'source.txt'), 'original')
+  if (tapSkip) await writeFile(join(repository, 'check.test.mjs'),
+    "import test from 'node:test'; test('required check', { skip: true }, () => {});\n")
   if (git) execFileSync('git', ['init', '-q', repository])
   // Keep Kiokuko's own DB outside the repository under verification.
   const database = openConnection(join(root, 'state.sqlite3'))
@@ -46,8 +49,8 @@ async function fixture(command: string, maxAttempts = 8, git = true) {
         acceptanceCriteria: ['Verified'], focusedVerifiers: [{ id: 'focused', kind: 'test', executable: process.execPath,
           args: ['--eval', 'process.exit(0)'], cwd: '.', timeoutMs: 5_000 }],
       }] },
-      skillRequirements: [], finalVerifiers: [{ id: 'final-build', kind: 'build', executable: process.execPath,
-        args: ['--eval', command], cwd: '.', timeoutMs: 5_000 }], maxAttempts, capabilities,
+      skillRequirements: [], finalVerifiers: [{ id: 'final-build', kind: tapSkip ? 'test' : 'build', executable: process.execPath,
+        args: tapSkip ? ['--test', '--test-reporter=tap', 'check.test.mjs'] : ['--eval', command], cwd: '.', timeoutMs: 5_000 }], maxAttempts, capabilities,
       provenance: { scope: 'explicit_user', exclusions: 'explicit_user', acceptanceCriteria: 'explicit_user',
         workPlan: 'inferred', skillSet: 'repository_evidence', finalVerifiers: 'repository_evidence', maxAttempts: 'inferred' },
     })
@@ -78,6 +81,78 @@ test('a successful last allowed work attempt can verify, accept and complete med
     const done = submitOdunoMeditation(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'meditate-last',
       meditation: { summary: 'No deletion candidates.', inspectedPaths: ['source.txt'], deletionCandidates: [] } })
     assert.equal(done.ennoOduno.nextAction, 'complete')
+  } finally { await f.cleanup() }
+})
+
+test('stream-observed skipped checks remain visible after final evidence is persisted and reloaded', async () => {
+  const f = await fixture('console.log("# skipped 1"); process.exit(0)')
+  try {
+    const prepared = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
+    assert.equal(prepared.verifierResults?.[0]?.status, 'passed')
+    assert.equal(prepared.verifierResults?.[0]?.skipped, true)
+    assert.equal(f.snapshot().finalEvidence[0]?.skipped, true)
+  } finally { await f.cleanup() }
+})
+
+test('an external edit after acceptance returns meditation to verification', async () => {
+  const f = await fixture('process.exit(0)')
+  try {
+    await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
+    const accepted = await finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'accept-before-edit',
+      review: { decision: 'accept', summary: 'Evidence was fresh at review.' } })
+    assert.equal(accepted.ennoOduno.nextAction, 'submit_meditation')
+    await writeFile(join(f.repository, 'source.txt'), 'edited after acceptance')
+    const result = submitOdunoMeditation(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'meditate-after-edit',
+      meditation: { summary: 'Inspected source.', inspectedPaths: ['source.txt'], deletionCandidates: [] } })
+    assert.equal(result.ennoOduno.nextAction, 'run_final_verification')
+    assert.equal(f.snapshot().finalEvidenceReady, false)
+    assert.equal(f.database.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(f.identity.runId)?.status, 'active')
+  } finally { await f.cleanup() }
+})
+
+test('opted-in Enno acceptance requires a pre-bound fresh verifier for every criterion', async () => {
+  const f = await fixture('process.exit(0)')
+  try {
+    initializeTaskCompletion(f.database, f.identity.runId, 'enforce')
+    await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
+    const request = { ...f.identity, expectedRevision: 2, idempotencyKey: 'accept-with-criterion',
+      review: { decision: 'accept' as const, summary: 'Checks succeeded.' } }
+    await assert.rejects(finishEnno(f.database, request), /require fresh bound verification evidence/)
+    const criterionId = assessTaskCompletion(f.database, f.identity.runId).criteria[0]!.criterionId
+    const method = { kind: 'enno_verifier', verifierId: 'final-build', assertion: 'exit_zero' }
+    assert.equal(bindTaskCriterion(f.database, { runId: f.identity.runId, callId: 'propose-final-verifier', criterionId,
+      method, approved: false }).approved, false)
+    await assert.rejects(finishEnno(f.database, request), /require fresh bound verification evidence/)
+    assert.equal(bindTaskCriterion(f.database, { runId: f.identity.runId, callId: 'approve-final-verifier', criterionId,
+      method, approved: true }).approved, true)
+    assert.equal(f.snapshot().finalEvidenceReady, false, 'approval after execution invalidates that earlier proof')
+    assert.equal(assessTaskCompletion(f.database, f.identity.runId).criteria[0]?.state, 'stale')
+    await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
+    assert.equal(f.database.prepare('SELECT count(*) AS n FROM enno_verifier_runs WHERE work_unit_id IS NULL').get<{ n: number }>()?.n, 2)
+    const verifiedKey = f.input().idempotencyKey
+    bindTaskCriterion(f.database, { runId: f.identity.runId, callId: 'repeat-approved-final-verifier', criterionId,
+      method, approved: true })
+    assert.equal(f.input().idempotencyKey, verifiedKey)
+    assert.equal(f.snapshot().finalEvidenceReady, true)
+    assert.equal((await finishEnno(f.database, request)).ennoOduno.nextAction, 'submit_meditation')
+  } finally { await f.cleanup() }
+})
+
+test('opted-in Enno selected-test criterion rejects an exit-zero run with a skipped required test', async () => {
+  const f = await fixture('process.exit(0)', 8, true, true)
+  try {
+    initializeTaskCompletion(f.database, f.identity.runId, 'enforce')
+    const criterionId = assessTaskCompletion(f.database, f.identity.runId).criteria[0]!.criterionId
+    bindTaskCriterion(f.database, { runId: f.identity.runId, callId: 'approved-selected-tap', criterionId,
+      method: { kind: 'enno_verifier', verifierId: 'final-build', assertion: 'selected_tests_pass' }, approved: true })
+    const verified = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
+    assert.equal(verified.verifierResults?.[0]?.status, 'passed')
+    assert.equal(verified.verifierResults?.[0]?.skipped, true)
+    assert.equal(verified.verifierResults?.[0]?.tapSummary?.skipped, 1)
+    assert.equal(f.snapshot().finalEvidence[0]?.tapSummary?.skipped, 1)
+    assert.equal(assessTaskCompletion(f.database, f.identity.runId).criteria[0]?.state, 'unmet')
+    await assert.rejects(finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'reject-skipped',
+      review: { decision: 'accept', summary: 'The check exited zero.' } }), /require fresh bound verification evidence/)
   } finally { await f.cleanup() }
 })
 
