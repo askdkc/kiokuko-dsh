@@ -1,0 +1,57 @@
+[
+  {
+    "id": "format-only", "family": "bounded", "consequence": "routine", "expected": "luna-low",
+    "rationale": "Whitespace-only formatting is reversible and does not change behavior.",
+    "taskType": "build",
+    "ja": "次のJSONのインデントだけを整えてください。キーと値は変更しません。",
+    "en": "Format the indentation of this JSON only. Do not change keys or values."
+  },
+  {
+    "id": "extract-name", "family": "bounded", "consequence": "routine", "expected": "luna-low",
+    "rationale": "Extracting a name already present in the supplied text needs no design or effects.",
+    "taskType": "analysis",
+    "ja": "提示したコードからexportされている関数名だけを抜き出してください。",
+    "en": "Extract only the exported function names from the supplied code."
+  },
+  {
+    "id": "scoped-feature", "family": "implementation", "consequence": "routine", "expected": "luna-medium",
+    "rationale": "The feature has a clear boundary and explicit acceptance behavior.",
+    "taskType": "build",
+    "ja": "既存の設定画面に通知音のオン・オフを追加してください。保存先は既存の設定ストアで、初期値はオフです。",
+    "en": "Add a notification-sound toggle to the existing settings screen. Use the existing settings store and default it to off."
+  },
+  {
+    "id": "interacting-debug", "family": "diagnosis", "consequence": "routine", "expected": "luna-high",
+    "rationale": "The failure combines asynchronous state and an integration boundary.",
+    "taskType": "debug",
+    "ja": "保存直後に画面を切り替えると古いデータが表示されます。非同期更新とキャッシュのどちらが原因か調べて修正してください。",
+    "en": "After saving and switching screens, stale data appears. Diagnose whether the async update or cache is responsible, then fix it."
+  },
+  {
+    "id": "concurrency-design", "family": "high-consequence", "consequence": "high", "expected": "sol-high",
+    "rationale": "Uncertain concurrent writes require careful design and verification.",
+    "taskType": "build",
+    "ja": "同じ注文を複数workerが同時に確定しても二重請求されないよう、処理を設計して実装してください。",
+    "en": "Design and implement order finalization so concurrent workers cannot charge the same order twice."
+  },
+  {
+    "id": "one-line-authorization", "family": "high-consequence", "consequence": "high", "expected": "sol-high",
+    "rationale": "A small edit affects authorization and needs careful verification.",
+    "taskType": "build",
+    "ja": "この一行の条件式を直し、他人の請求書を閲覧できないようにしてください。認可の境界も検証してください。",
+    "en": "Fix this one-line condition so users cannot view another person's invoices. Verify the authorization boundary."
+  },
+  {
+    "id": "destructive-migration", "family": "high-consequence", "consequence": "high", "expected": "sol-high",
+    "rationale": "A short migration can destroy production data and needs rollback planning.",
+    "taskType": "devops",
+    "ja": "本番DBの古い列を削除する短いmigrationを書いてください。既存データとrollbackも確認してください。",
+    "en": "Write a short migration to drop an old production database column. Check existing data and rollback."
+  },
+  {
+    "id": "underspecified", "family": "uncertain", "consequence": "unknown", "expected": "retain",
+    "rationale": "Neither the target nor the expected result is stated, so no route is justified.",
+    "ja": "例の件、いい感じに対応してください。",
+    "en": "Please handle that thing appropriately."
+  }
+]

@@ -8,6 +8,7 @@ import { canonicalDirectory } from '../repository/detect-root.js';
 import { captureRepositoryState, repositoryStatePaths, repositoryPathDigest } from './repository-state.js';
 import { assertVerifierCwd, parseVerifierSpec } from './schemas.js';
 import type { VerifierRunResult, VerifierSpec } from './types.js';
+import { parseNodeTapSummary, selectedNodeTestCommand } from '../dsh/node-tap-summary.js';
 
 const MAX_PREVIEW_BYTES = 8 * 1024;
 const DESCENDANT_SETTLE_MS = 500;
@@ -125,6 +126,7 @@ export async function runVerifier(
   let stdoutPreview: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let stderrPreview: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let skipped = false;
+  let tapTail = '';
   const tails = { stdout: '', stderr: '' };
   const observeSkip = (lane: keyof typeof tails, chunk: Buffer | string): void => {
     const value = tails[lane] + chunk.toString();
@@ -133,8 +135,14 @@ export async function runVerifier(
   };
   let child: ChildProcessByStdio<null, Readable, Readable>;
   try {
+    const environment = { ...process.env };
+    // A host launched from node:test may verify a separate Node test process.
+    // The parent's private test context must not turn that child into a
+    // recursive in-process test runner with an empty, exit-zero result.
+    delete environment.NODE_TEST_CONTEXT;
     child = (dependencies.spawn ?? spawn)(normalized.executable, normalized.args, {
       cwd: normalized.cwd,
+      env: environment,
       detached: process.platform !== 'win32',
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -157,6 +165,7 @@ export async function runVerifier(
   child.stdout.on('data', (chunk: Buffer | string) => {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     observeSkip('stdout', bytes);
+    tapTail = (tapTail + bytes.toString('utf8')).slice(-4096);
     stdoutHash.update(bytes);
     stdoutPreview = appendPreview(stdoutPreview, bytes);
   });
@@ -225,6 +234,8 @@ export async function runVerifier(
     verifier: { ...verifier, args: [...verifier.args] },
     ...completion,
     skipped,
+    ...(selectedNodeTestCommand([normalized.executable, ...normalized.args].join(' '))
+      && parseNodeTapSummary(tapTail) ? { tapSummary: parseNodeTapSummary(tapTail)! } : {}),
     durationMs: Math.max(0, Math.round((dependencies.now?.() ?? performance.now()) - start)),
     stdoutPreview: stdoutPreview.toString('utf8'),
     stderrPreview: stderrPreview.toString('utf8'),

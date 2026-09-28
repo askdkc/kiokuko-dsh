@@ -2,6 +2,8 @@ import type { EventInit } from '@orcareplay/core'
 import type { OrcaConfig } from './config.js'
 import { projectOrcaJson, scrubOrcaText } from './orca-security.js'
 import { OrcaError } from './orca-types.js'
+import { canonicalContentHash } from '../serialization/validate.js'
+import { isKiokukoDshSource } from './plugin-source.js'
 
 export const ORCA_CAPTURE = Object.freeze({ format: 'dsh.observation.v1', httpCapture: false, filesystemSnapshot: false, exactReplay: false,
   shellFrames: false, mcpTransport: false, environment: false, replayState: false, attachments: false })
@@ -26,11 +28,47 @@ export function projectBlocks(value: unknown, config: OrcaConfig): unknown[] {
     return { type: label(block.type), omitted: true }
   })
 }
+
+/** Hash only host-attributed sections still present at the final request seam. */
+export function requestSourceManifest(messages: unknown, config: OrcaConfig): {
+  coverage: 'observed' | 'partial' | 'unknown'; omittedCount: number;
+  items: { kind: string; id: string; digest: string; bytes: number }[]
+} {
+  if (!Array.isArray(messages)) return { coverage: 'unknown', omittedCount: 0, items: [] }
+  const items: { kind: string; id: string; digest: string; bytes: number }[] = []
+  let omittedCount = 0
+  const limit = Math.min(16_384, Math.floor(config.maxQueuedBytesPerTrace / 8))
+  for (const value of messages) {
+    const message = record(value), source = record(message.source)
+    const host = message.role === 'user' && source.form === 'snapshot'
+      && (isKiokukoDshSource(source) || source.kind === 'runtime-context')
+    if (!host || !Array.isArray(source.sections) || !Array.isArray(message.content)) continue
+    const rendered = message.content.find((block: unknown) => record(block).type === 'text')
+    const body = record(rendered).text
+    if (typeof body !== 'string') continue
+    for (const candidate of source.sections) {
+      const section = record(candidate)
+      if (typeof section.name !== 'string' || typeof section.text !== 'string'
+        || section.name.length > 256 || !body.includes(section.text)) continue
+      if (source.kind === 'runtime-context' && section.name !== 'kiokuko:execution') continue
+      if (source.kind !== 'runtime-context' && !/^(?:soul|directive|memory-reasoning|route-skill|expert|advisory|memory|user-task):/u.test(section.name)) continue
+      const kind = source.kind === 'runtime-context' ? 'execution' : section.name.split(':', 1)[0]!
+      const item = { kind, id: label(section.name), digest: canonicalContentHash(section.text),
+        bytes: Buffer.byteLength(section.text) }
+      if (items.length >= 64 || Buffer.byteLength(JSON.stringify({ coverage: 'partial', omittedCount: omittedCount + 1,
+        items: [...items, item] })) > limit) { omittedCount++; continue }
+      items.push(item)
+    }
+  }
+  return { coverage: omittedCount ? 'partial' : items.length ? 'observed' : 'unknown', omittedCount, items }
+}
 export function modelRequest(options: Record<string, any>, id: string, config: OrcaConfig): EventInit {
   const messages = Array.isArray(options.messages) ? options.messages : []
   if (messages.length * 64 > config.maxQueuedBytesPerTrace) throw new OrcaError('queue_limit')
-  const payload = config.capture.content === 'metadata' ? { format: 'dsh.llm.request.v1' } : {
+  const sources = requestSourceManifest(options.messages, config)
+  const payload = config.capture.content === 'metadata' ? { format: 'dsh.llm.request.v1', sources } : {
     format: 'dsh.llm.request.v1', system: options.system,
+    sources,
     messages: messages.map(item => ({ role: label(record(item).role), content: projectBlocks(record(item).content, config) })),
     tools: Array.isArray(options.tools) ? options.tools.map(item => ({ name: label(record(item).name) })) : [],
   }

@@ -38,7 +38,20 @@ export interface ApplicationHost {
 }
 // Exact native read tools only; never classify arbitrary shell strings as read-only.
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status'])
-const CONTROL_TOOLS = new Set(['task_memory_review', 'memory_checkpoint', 'curator_check', 'enno_finish', 'enno_work_report', 'enno_plan_review', 'enno_plan_submit', 'enno_ideal_submit', 'enno_meditation_submit'])
+const CONTROL_TOOLS = new Set(['task_memory_review', 'task_completion', 'memory_checkpoint', 'curator_check', 'enno_finish', 'enno_work_report', 'enno_plan_review', 'enno_plan_submit', 'enno_ideal_submit', 'enno_meditation_submit'])
+
+/** Only an exact foreground native Bash invocation at the bound repository root is proof-eligible. */
+export function foregroundNativeCommand(execution: Pick<NativeExecution, 'name' | 'arguments' | 'parent'>, repositoryRoot: string): string | null {
+  const args = execution.arguments
+  if (execution.parent !== undefined || !['Bash', 'bash'].includes(execution.name)
+    || typeof args?.command !== 'string' || args.background === true || args.run_in_background === true) return null
+  try {
+    const directories = ['cwd', 'workdir', 'workingDirectory', 'working_directory']
+      .filter(key => args[key] !== undefined).map(key => args[key])
+    return directories.every(directory => typeof directory === 'string'
+      && realpathSync(resolve(repositoryRoot, directory)) === repositoryRoot) ? args.command : null
+  } catch { return null }
+}
 
 function isPtcSubcall(execution: NativeExecution): boolean {
   return execution.parent !== undefined && typeof execution.rootCallId === 'string'
@@ -98,17 +111,7 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
     const identity = host.resolve(execution)
     if (!identity || READ_TOOLS.has(execution.name) || CONTROL_TOOLS.has(execution.name) || isSavedLispResultRead(execution)) return next()
     // A child without its own admitted binding cannot borrow its parent's proof.
-    let command: string | null = null
-    const args = execution.arguments
-    if (execution.parent === undefined && ['Bash', 'bash'].includes(execution.name)
-      && typeof args?.command === 'string' && args.background !== true && args.run_in_background !== true) {
-      try {
-        const directories = ['cwd', 'workdir', 'workingDirectory', 'working_directory']
-          .filter(key => args[key] !== undefined).map(key => args[key])
-        if (directories.every(directory => typeof directory === 'string'
-          && realpathSync(resolve(identity.repositoryRoot, directory)) === identity.repositoryRoot)) command = args.command
-      } catch { /* a different/unavailable cwd cannot produce proof */ }
-    }
+    const command = foregroundNativeCommand(execution, identity.repositoryRoot)
     const tracked = await host.runtime.withDatabase(db => {
       execution.signal.throwIfAborted()
       if (host.resolve(execution)?.runId !== identity.runId) throw new Error('Native task changed')

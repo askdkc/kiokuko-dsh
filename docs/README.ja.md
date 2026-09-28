@@ -8,7 +8,7 @@
 - [Semantic retrieval](semantic-retrieval.ja.md) — embedding runtime、運用、offline、fallback。
 - [Security and trust](security-and-trust.ja.md) — secret拒否、記憶の境界、External Skills、公開エラー。
 
-実装者向けは[architecture](architecture.md)、[database](database.md)、[execution ledger](execution-ledger.md)、
+実装者向けは[architecture](architecture.md)、[database](database.md)、[execution ledger](execution-ledger.md)、[harness map](harness-map.md)、
 [retrieval evaluation](retrieval-evaluation.md)を参照してください。
 英語目次は[こちら](README.md)です。
 

@@ -102,6 +102,29 @@ test('repeat correction, duplicate replay, parallel children, durable pause and 
   } finally { await f.close() }
 })
 
+test('repeated structured write failures pause without counting successful writes or duplicate delivery', async () => {
+  const f = await fixture()
+  try {
+    const failed = { isError: true, content: [{ type: 'text', text: 'write rejected' }] }
+    const completed = { isError: false, content: [{ type: 'text', text: 'written' }] }
+    const write = (id: string, result: object) => {
+      const execution = { name: 'write', arguments: { file_path: 'src/facts.md', content: 'new' }, agent: f.agent, callId: id }
+      assert.equal(f.guard(execution), undefined)
+      f.callbacks.get('tools/result')!(execution, result)
+    }
+    write('ok', completed)
+    for (const id of ['a', 'b', 'c']) write(id, failed)
+    write('a', failed)
+    await f.assemble()
+    assert.match(f.support.text('session'), /three times/)
+    f.stream()
+    write('d', failed)
+    await f.assemble()
+    assert.equal(await f.support.pauseAtBoundary('session', async () => undefined), true)
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_execution_evidence').get<{ n: number }>()!.n, 4)
+  } finally { await f.close() }
+})
+
 test('operation refusal preserves reports, unsupported tools, other sessions, and original successful results', async () => {
   const f = await fixture()
   try {
@@ -113,12 +136,69 @@ test('operation refusal preserves reports, unsupported tools, other sessions, an
     const before = structuredClone(f.result)
     f.read('ok'); f.fail(true); await f.assemble()
     assert.deepEqual(f.result, before)
-    assert.match(f.support.text('session'), /degraded/)
+    assert.match(f.support.text('session'), /unavailable/)
     assert.match(f.guard({ name: 'read', arguments: { file_path: 'src/facts.md' }, agent: f.agent, callId: 'unavailable' })!, /unavailable/)
     assert.equal(await f.support.pauseAtBoundary('session', async () => { throw new Error('must not notify') }), false)
     f.fail(false); await f.assemble()
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_execution_evidence').get<{ n: number }>()!.n, 1)
   } finally { await f.close() }
+})
+
+test('cold-start policy read failure blocks structured file operations until the saved frame is restored', async () => {
+  const f = await fixture()
+  const cold = new DshExecutionSupport(f.runtime)
+  let guard!: (execution: any) => string | undefined
+  try {
+    cold.mount({ on: () => () => undefined, tools: { guard(fn) { guard = fn; return () => undefined } } })
+    f.fail(true)
+    await cold.refresh(f.binding, false)
+    assert.match(guard({ name: 'write', arguments: { file_path: 'src/facts.md' }, agent: f.agent })!, /unavailable/)
+    assert.equal(guard({ name: 'memory_checkpoint', arguments: {}, agent: f.agent }), undefined)
+    f.fail(false)
+    await cold.refresh(f.binding, false)
+    assert.equal(guard({ name: 'write', arguments: { file_path: 'src/facts.md' }, agent: f.agent }), undefined)
+    assert.match(guard({ name: 'write', arguments: { file_path: '../outside' }, agent: f.agent })!, /outside/)
+  } finally { cold.dispose(); await f.close() }
+})
+
+test('corrupt exploration state does not erase a valid saved path policy', async () => {
+  const f = await fixture()
+  const cold = new DshExecutionSupport(f.runtime)
+  let guard!: (execution: any) => string | undefined
+  try {
+    f.db.prepare("UPDATE dsh_exploration_states SET state_json = '{\"version\":99}' WHERE run_id = ?").run(f.binding.runId)
+    cold.mount({ on: () => () => undefined, tools: { guard(fn) { guard = fn; return () => undefined } } })
+    await cold.refresh(f.binding, false)
+    assert.equal(guard({ name: 'write', arguments: { file_path: 'src/facts.md' }, agent: f.agent }), undefined)
+    assert.match(guard({ name: 'write', arguments: { file_path: '../outside' }, agent: f.agent })!, /outside/)
+  } finally { cold.dispose(); await f.close() }
+})
+
+test('an observation write failure keeps a verified path policy usable', async () => {
+  const f = await fixture()
+  try {
+    f.db.prepare("CREATE TRIGGER reject_optional_monitor BEFORE UPDATE ON dsh_exploration_states BEGIN SELECT RAISE(ABORT, 'injected observation failure'); END").run()
+    await f.support.refresh({ ...f.binding, turn: 2, task: '続行' }, true)
+    assert.match(f.support.text('session'), /evidence is degraded/)
+    assert.equal(f.guard({ name: 'read', arguments: { file_path: 'src/facts.md' }, agent: f.agent }), undefined)
+    assert.match(f.guard({ name: 'write', arguments: { file_path: '../outside' }, agent: f.agent })!, /outside/)
+  } finally { await f.close() }
+})
+
+test('a resumed run with a missing saved frame cannot recreate authority from continue', async () => {
+  const f = await fixture()
+  const cold = new DshExecutionSupport(f.runtime)
+  let guard!: (execution: any) => string | undefined
+  try {
+    f.db.prepare('DELETE FROM dsh_execution_frames WHERE run_id = ?').run(f.binding.runId)
+    cold.mount({ on: () => () => undefined, tools: { guard(fn) { guard = fn; return () => undefined } } })
+    await cold.refresh({ ...f.binding, turn: 1, task: '続行' }, true)
+    assert.match(guard({ name: 'write', arguments: { file_path: 'src/facts.md' }, agent: f.agent })!, /unavailable/)
+    assert.equal(readExecutionFrame(f.db, f.binding.runId), undefined)
+    await cold.refresh({ ...f.binding, turn: 3, task: 'write paths: src', humanInput: 'restated-policy' }, true)
+    assert.equal(guard({ name: 'write', arguments: { file_path: 'src/facts.md' }, agent: f.agent }), undefined)
+    assert.match(guard({ name: 'write', arguments: { file_path: '../outside' }, agent: f.agent })!, /outside/)
+  } finally { cold.dispose(); await f.close() }
 })
 
 test('approval binds the exact shown proposals; optional malformed metadata never replaces user conditions', async () => {

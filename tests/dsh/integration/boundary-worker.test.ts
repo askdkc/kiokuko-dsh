@@ -150,7 +150,7 @@ test('an early kick retains the durable retry wake-up', async () => {
   let attempts = 0
   const worker = new DshBoundaryWorker({
     runtime: f.runtime,
-    process: async () => { if (++attempts === 1) throw new Error('transient'); return { kind: 'completed' } },
+    process: async () => { if (++attempts === 1) throw Object.assign(new Error('transient'), { code: 'SERVICE_UNAVAILABLE' }); return { kind: 'completed' } },
     flush: () => undefined, dispatch: () => undefined,
   })
   try {
@@ -247,6 +247,53 @@ test('native durability failure prevents continuation dispatch and leaves a retr
   }
 })
 
+test('an unresponsive native flush times out without dispatch or an overlapping retry', async () => {
+  const f = await fixture()
+  let flushes = 0
+  let dispatched = 0
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const worker = new DshBoundaryWorker({
+    runtime: f.runtime,
+    flushTimeoutMs: 20,
+    process: job => job.kind === 'classify_boundary' ? { kind: 'completed', nextKind: 'delivery' } : { kind: 'completed' },
+    flush: () => { flushes++; return held },
+    dispatch: () => { dispatched++ },
+  })
+  try {
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    assert.equal(flushes, 1)
+    assert.equal(dispatched, 0)
+    assert.deepEqual({ ...f.database.prepare("SELECT status, attempt_count AS attempts, last_error_code AS code FROM dsh_boundary_jobs WHERE kind = 'delivery'").get() },
+      { status: 'failed_retryable', attempts: 1, code: 'NATIVE_FLUSH_TIMEOUT' })
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    assert.equal(flushes, 1)
+    await worker.dispose()
+    release()
+    await Promise.resolve()
+    assert.equal(dispatched, 0)
+  } finally { release(); await worker.dispose(); await f.cleanup() }
+})
+
+test('an unknown boundary failure waits after one attempt instead of repeating unchanged work', async () => {
+  const f = await fixture()
+  let calls = 0
+  const worker = new DshBoundaryWorker({
+    runtime: f.runtime,
+    process: () => { calls++; throw new Error('unknown permanent failure') },
+    flush: () => undefined,
+    dispatch: () => undefined,
+  })
+  try {
+    worker.kick('boundary-session')
+    await worker.whenIdle()
+    assert.equal(calls, 1)
+    assert.equal(f.database.prepare('SELECT status FROM dsh_boundary_jobs').get<{ status: string }>()?.status, 'waiting_user')
+  } finally { await worker.dispose(); await f.cleanup() }
+})
+
 test('dispatch-before-observed crash survives worker restart with the same deterministic delivery id', async () => {
   const f = await fixture()
   const deliveries: string[] = []
@@ -297,7 +344,7 @@ test('a boundary job stops after three failures and does not schedule a fourth a
     process: async (job) => job.kind === 'classify_boundary'
       ? { kind: 'completed', nextKind: 'delivery' }
       : { kind: 'completed' },
-    flush: async () => { flushes += 1; throw new Error('persistent native failure') },
+    flush: async () => { flushes += 1; throw Object.assign(new Error('persistent native failure'), { code: 'NATIVE_FLUSH_FAILED' }) },
     dispatch: async () => undefined,
     onWaitingUser: async () => { waitingNotifications += 1; return false },
   })

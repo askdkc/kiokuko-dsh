@@ -9,6 +9,7 @@ export function verificationBoundaryKey(snapshot: EnnoRunSnapshot): string {
     runId: snapshot.runId,
     revision: snapshot.revision,
     mutationRevision: snapshot.mutationRevision,
+    ...(snapshot.completionBindingDigest === undefined ? {} : { completionBindingDigest: snapshot.completionBindingDigest }),
     verifiers: snapshot.contract.finalVerifiers,
     repository: captureRepositoryState(snapshot.repositoryRoot),
   })}`

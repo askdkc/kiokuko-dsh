@@ -23,6 +23,19 @@ export interface DecisionStore {
   read(id: string, digest: string): Promise<DecisionOutcome | undefined>
   write(id: string, digest: string, result: DecisionOutcome): Promise<void>
 }
+const DEFAULT_CACHE_MAX_ENTRIES = 256
+
+function remember<K, V>(cache: Map<K, V>, key: K, value: V, limit: number | undefined): void {
+  cache.delete(key)
+  cache.set(key, value)
+  if (limit !== undefined && cache.size > limit) cache.delete(cache.keys().next().value!)
+}
+
+function recent<K, V>(cache: Map<K, V>, key: K, limit: number | undefined): V | undefined {
+  const value = cache.get(key)
+  if (value !== undefined && limit !== undefined) remember(cache, key, value, limit)
+  return value
+}
 /** Store only bounded results and configuration; request evidence is represented by a digest. */
 export function databaseDecisionStore(runtime: { withDatabase<T>(operation: (db: SqliteDatabase) => T): Promise<T> }): DecisionStore {
   return {
@@ -68,13 +81,18 @@ export class DecisionService {
   private readonly readiness: DecisionReadinessMonitor
   private readonly memoryConcurrency = new MemoryDecisionConcurrency()
   private readonly bindings = new Map<string, Promise<DecisionConfiguration>>()
+  private readonly bindingPending = new Map<string, Promise<DecisionConfiguration>>()
   private readonly results = new Map<string, DecisionOutcome>()
   private readonly pending = new Map<string, Promise<DecisionOutcome>>()
+  private readonly cacheMaxEntries: number
   private lastFallback: string | null = null
   constructor(private config: DecisionConfiguration, private readonly provider: (config: DecisionConfiguration) => DecisionProvider, private readonly store?: DecisionStore,
     private readonly options: ReadinessOptions & { memoryReuse?: MemoryReuseConfiguration; semanticCompaction?: SemanticCompactionConfiguration; repositoryRoot?: string;
       selectionStore?: DecisionSelectionStore; resolveConfiguration?: (config: DecisionConfiguration, signal: AbortSignal) => Promise<DecisionConfiguration>;
-      onEvaluation?: (observation: DecisionObservation) => void } = {}) {
+      onEvaluation?: (observation: DecisionObservation) => void; cacheMaxEntries?: number } = {}) {
+    if (options.cacheMaxEntries !== undefined && (!Number.isSafeInteger(options.cacheMaxEntries) || options.cacheMaxEntries < 1))
+      throw new Error('Invalid decision cache capacity')
+    this.cacheMaxEntries = options.cacheMaxEntries ?? DEFAULT_CACHE_MAX_ENTRIES
     this.config = resolveDecisionConfiguration(config, options.repositoryRoot ?? process.cwd())
     this.baseConfig = structuredClone(this.config)
     this.memoryReuse = MemoryReuseConfig.parse(options.memoryReuse ?? {})
@@ -209,10 +227,11 @@ export class DecisionService {
   async bind(requestId: string, signal = new AbortController().signal): Promise<DecisionConfiguration> {
     if (!requestId || requestId.length > 512) throw new Error('Invalid decision request identity')
     await this.initialize()
-    let binding = this.bindings.get(requestId)
+    let binding = recent(this.bindings, requestId, this.store?.binding ? this.cacheMaxEntries : undefined)
+      ?? this.bindingPending.get(requestId)
     if (!binding) {
       const current = this.config
-      binding = (async () => {
+      binding = this.startBinding(requestId, async () => {
         const existing = await this.store?.binding?.(requestId)
         if (existing) return existing
         let config = structuredClone(current)
@@ -227,18 +246,26 @@ export class DecisionService {
         config.memorySelection = memorySelection
         if (signal.aborted) throw new DecisionError('CANCELLED')
         return this.store ? this.store.bind(requestId, config) : config
-      })()
-      this.bindings.set(requestId, binding)
-      const pending = binding
-      void pending.catch(() => { if (this.bindings.get(requestId) === pending) this.bindings.delete(requestId) })
+      })
     }
     try { return structuredClone(await abortable(binding, signal)) }
     catch (error) { if (signal.aborted) throw new DecisionError('CANCELLED'); throw error }
   }
+  private startBinding(requestId: string, resolve: () => Promise<DecisionConfiguration>): Promise<DecisionConfiguration> {
+    const operation = resolve()
+    this.bindingPending.set(requestId, operation)
+    void operation.then(config => {
+      if (this.bindingPending.get(requestId) !== operation) return
+      remember(this.bindings, requestId, Promise.resolve(config), this.store?.binding ? this.cacheMaxEntries : undefined)
+      this.bindingPending.delete(requestId)
+    }, () => { if (this.bindingPending.get(requestId) === operation) this.bindingPending.delete(requestId) })
+    return operation
+  }
   async alias(requestId: string, sourceId: string): Promise<void> {
     const config = await this.bind(sourceId)
-    if (!this.bindings.has(requestId)) this.bindings.set(requestId, this.store ? this.store.bind(requestId, config) : Promise.resolve(config))
-    await this.bindings.get(requestId)
+    const existing = recent(this.bindings, requestId, this.store?.binding ? this.cacheMaxEntries : undefined)
+      ?? this.bindingPending.get(requestId)
+    await (existing ?? this.startBinding(requestId, () => this.store ? this.store.bind(requestId, config) : Promise.resolve(config)))
   }
   status(): unknown {
     const selected = selectedDecisionSettings(this.config)
@@ -269,28 +296,30 @@ export class DecisionService {
     const digest = canonicalContentHash({ batch, config, catalogDigest, policyVersion: batch.contractVersion ?? POLICY_VERSION,
       ...(batch.purpose === 'compaction' ? { semanticCompaction: this.semanticCompaction } : {}) })
     const key = `${requestId}:${digest}`
-    const cached = this.results.get(key) ?? await this.store?.read(requestId, digest)
-    if (signal.aborted) throw new DecisionError('CANCELLED')
-    if (cached) {
-      if (cached.status === 'completed') parseDecisionResult(cached.result, batch)
-      else if (cached.status !== 'fallback' || typeof cached.reason !== 'string') throw new Error('Decision result integrity mismatch')
-      if (semantic || batch.purpose === 'model-routing') {
-        if ((batch.purpose === 'compaction' && this.semanticCompaction.mode === 'off') || config.mode === 'off') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
-        const budget = AbortSignal.any([signal, AbortSignal.timeout(batch.purpose === 'model-handoff' || batch.purpose === 'model-routing' ? 5000 : this.semanticCompaction.budgetMs)])
-        try {
-          if ((await this.readiness.probe(config, budget)).state !== 'ready') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
-        } catch (error) {
-          if (signal.aborted) throw new DecisionError('CANCELLED')
-          if (!budget.aborted && !(error instanceof DecisionError)) throw error
-          return { status: 'fallback', reason: budget.aborted ? 'DECISION_TIMEOUT' : (error as DecisionError).code }
-        }
-      }
-      this.observe(batch, config, cached, true, performance.now() - started, memoryCandidateTotal)
-      return structuredClone(cached)
-    }
     const existing = this.pending.get(key)
     if (existing) return abortable(existing, signal)
     const operation = (async (): Promise<DecisionOutcome> => {
+      const cached = recent(this.results, key, this.store ? this.cacheMaxEntries : undefined)
+        ?? await this.store?.read(requestId, digest)
+      if (signal.aborted) throw new DecisionError('CANCELLED')
+      if (cached) {
+        if (cached.status === 'completed') parseDecisionResult(cached.result, batch)
+        else if (cached.status !== 'fallback' || typeof cached.reason !== 'string') throw new Error('Decision result integrity mismatch')
+        if (semantic || batch.purpose === 'model-routing') {
+          if ((batch.purpose === 'compaction' && this.semanticCompaction.mode === 'off') || config.mode === 'off') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
+          const budget = AbortSignal.any([signal, AbortSignal.timeout(batch.purpose === 'model-handoff' || batch.purpose === 'model-routing' ? 5000 : this.semanticCompaction.budgetMs)])
+          try {
+            if ((await this.readiness.probe(config, budget)).state !== 'ready') return { status: 'fallback', reason: 'DECISION_UNAVAILABLE' }
+          } catch (error) {
+            if (signal.aborted) throw new DecisionError('CANCELLED')
+            if (!budget.aborted && !(error instanceof DecisionError)) throw error
+            return { status: 'fallback', reason: budget.aborted ? 'DECISION_TIMEOUT' : (error as DecisionError).code }
+          }
+        }
+        remember(this.results, key, structuredClone(cached), this.store ? this.cacheMaxEntries : undefined)
+        this.observe(batch, config, cached, true, performance.now() - started, memoryCandidateTotal)
+        return structuredClone(cached)
+      }
       const timeout = new AbortController(), timeoutMs = selectedDecisionSettings(config)?.timeoutMs ?? 5000
       const timer = setTimeout(() => timeout.abort(), managed ? Math.min(timeoutMs,
         batch.purpose === 'model-handoff' || batch.purpose === 'model-routing' ? 5000 : semantic ? this.semanticCompaction.budgetMs : this.memoryReuse.budgetMs) : timeoutMs)
@@ -347,7 +376,7 @@ export class DecisionService {
       if (signal.aborted) throw new DecisionError('CANCELLED')
       await this.store?.write(requestId, digest, outcome)
       if (signal.aborted) throw new DecisionError('CANCELLED')
-      this.results.set(key, structuredClone(outcome))
+      remember(this.results, key, structuredClone(outcome), this.store ? this.cacheMaxEntries : undefined)
       this.observe(batch, config, outcome, false, performance.now() - started, memoryCandidateTotal)
       return outcome
     })()

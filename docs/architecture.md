@@ -18,12 +18,20 @@ arguments never select a run, repository, route epoch, resume token, lease, or
 idempotency key. A route may move to another DSH session only when the run is
 unambiguous and no current execution lease belongs to the previous session.
 
-The model-visible registry contains exactly nine operations:
+The core model-visible registry contains nine operations:
 `enno_ideal_submit`, `enno_plan_review`, `enno_plan_submit`, `enno_work_report`,
 `enno_delegate`, `enno_finish`,
 `enno_meditation_submit`, `curator_check`, and `memory_checkpoint`. Intake,
 advisory fanout, confirmation, final verification, and globalization are host
 operations and are not published as model tools.
+
+The native task-completion and memory-application surfaces register their own
+model tools, `task_completion` and `task_memory_review`, outside that core registry.
+Their calls are bound to the exact native Agent, Session, and run; proposals do
+not execute commands or supply verification results. Completion mode is frozen
+when a new run is created (`shadow` by default). A missing row is a legacy
+shadow run. Host-observed command results and Enno verifier receipts provide
+condition evidence; unresolved opted-in conditions keep a normal run active.
 
 Capability catalogs use version 2 exclusively, with the native `skill | tool`
 vocabulary. Bindings carrying any other catalog version are rejected as

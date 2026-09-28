@@ -32,6 +32,8 @@ export interface DshBoundaryWorkerOptions {
   readonly bindNativeAgent?: (sessionId: string, nativeAgent: object) => void
   readonly shouldProcessSession?: (sessionId: string) => boolean
   readonly now?: () => string
+  /** Deadline for the native flush barrier only; user questions have no deadline. */
+  readonly flushTimeoutMs?: number
 }
 
 /**
@@ -49,7 +51,9 @@ export class DshBoundaryWorker {
   readonly #now: () => string
   readonly #bindNativeAgent: DshBoundaryWorkerOptions['bindNativeAgent']
   readonly #shouldProcessSession: DshBoundaryWorkerOptions['shouldProcessSession']
+  readonly #flushTimeoutMs: number
   readonly #tails = new Map<string, Promise<void>>()
+  readonly #unsettledFlushes = new Map<string, Promise<void>>()
   readonly #controllers = new Map<string, AbortController>()
   #disposed = false
   readonly #retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -64,6 +68,10 @@ export class DshBoundaryWorker {
     this.#bindNativeAgent = options.bindNativeAgent
     this.#shouldProcessSession = options.shouldProcessSession
     this.#now = options.now ?? (() => new Date().toISOString())
+    this.#flushTimeoutMs = options.flushTimeoutMs ?? 30_000
+    if (!Number.isSafeInteger(this.#flushTimeoutMs) || this.#flushTimeoutMs < 1 || this.#flushTimeoutMs > 300_000) {
+      throw new RangeError('Native flush timeout must be between 1 and 300000 ms')
+    }
   }
 
   kick(sessionId?: string, nativeAgent?: object): void {
@@ -99,6 +107,9 @@ export class DshBoundaryWorker {
 
   async #drain(sessionId: string): Promise<void> {
     while (!this.#disposed) {
+      // A timed-out Promise does not stop the native flush. Never overlap it
+      // with another flush in this process; settlement wakes the durable job.
+      if (this.#unsettledFlushes.has(sessionId)) return
       if (this.#shouldProcessSession?.(sessionId) === false) return
       const ownerNonce = randomUUID()
       const job = await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => (
@@ -137,7 +148,28 @@ export class DshBoundaryWorker {
             if (gate !== 'deliver') {
               completion = { kind: gate }
             } else {
-              await this.#flush(job)
+              const flush = Promise.resolve().then(() => this.#flush(job)).then(() => undefined).catch(error => {
+                if (typeof error === 'object' && error !== null && typeof (error as { code?: unknown }).code === 'string') throw error
+                throw Object.assign(new Error(error instanceof Error ? error.message : String(error)), { code: 'NATIVE_FLUSH_FAILED' })
+              })
+              this.#unsettledFlushes.set(sessionId, flush)
+              void flush.then(() => {
+                if (this.#unsettledFlushes.get(sessionId) === flush) this.#unsettledFlushes.delete(sessionId)
+                this.kick(sessionId)
+              }, () => {
+                if (this.#unsettledFlushes.get(sessionId) === flush) this.#unsettledFlushes.delete(sessionId)
+                this.kick(sessionId)
+              })
+              let timeout: ReturnType<typeof setTimeout> | undefined
+              try {
+                await Promise.race([
+                  abortable(flush, signal),
+                  new Promise<never>((_, reject) => {
+                    timeout = setTimeout(() => reject(Object.assign(new Error('Native flush deadline exceeded'),
+                      { code: 'NATIVE_FLUSH_TIMEOUT' })), this.#flushTimeoutMs)
+                  }),
+                ])
+              } finally { if (timeout !== undefined) clearTimeout(timeout) }
               signal.throwIfAborted()
               const delivered = await this.#runtime.withDatabase(async database => {
                 const owned = database.prepare(`SELECT job_id FROM dsh_boundary_jobs

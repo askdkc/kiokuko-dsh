@@ -21,6 +21,9 @@ import { LedgerStore } from '../../ledger/store.js'
 import { terminalizeLedgerRunInTransaction } from '../../enno-oduno/store.js'
 import { handoffReview } from '../../memory/review/store.js'
 import { KiokukoError } from '../../errors.js'
+import { saveTaskCompletionReceipt, taskCompletionBlocksClose } from '../task-completion.js'
+import { saveSessionNotice } from '../plugin-records.js'
+import { canonicalContentHash } from '../../serialization/validate.js'
 import { DshRunLifecycle, type DshCloseIntent, type DshRunClose } from '../session-bridge.js'
 
 interface LifecycleDependencies {
@@ -52,6 +55,22 @@ export function createLifecycle(deps: LifecycleDependencies) {
     stateForRun, deliverCompletionReport, reviewBinding, evolutionConfig, clearToolRun,
     sessionEventSource } = deps
   const getSelection = deps.getSelection
+  const completionReady = async (item: TurnRecord): Promise<boolean> => runtime.withDatabase(database => {
+    try {
+      const assessment = saveTaskCompletionReceipt(database, item.runId)
+      if (!taskCompletionBlocksClose(assessment)) return true
+      const unresolved = assessment.criteria.filter(criterion => criterion.state !== 'satisfied')
+      const text = `完了条件の検証待ちです。未確認: ${unresolved.map(criterion => criterion.description).join(' / ').slice(0, 4000)}。task_completion status で根拠を確認し、検証方法を登録してください。`
+      saveSessionNotice(database, { id: `completion-wait:${canonicalContentHash({ runId: item.runId, unresolved })}`,
+        runId: item.runId, sessionId: item.sessionId, rootPath: item.cwd, kind: 'status', text, anchorSeq: 0 })
+      return false
+    } catch {
+      // A missing or corrupt new completion assessment never grants an opted-in
+      // enforce run a verified terminal state. Legacy/shadow close as before.
+      return database.prepare('SELECT mode FROM dsh_completion_runs WHERE run_id = ?')
+        .get<{ mode: string }>(item.runId)?.mode !== 'enforce'
+    }
+  })
   const resolveIdleClose = async (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object): Promise<DshCloseIntent | undefined> => {
     await deliverCompletionReport(nativeSession)
     const item = currentForAgentEvent(agentId, sessionId, undefined, nativeSession, nativeAgent)
@@ -68,6 +87,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
     // turn; it does not mean that the persistent conversation has ended.
     if (item.prepared.intake.profile.taskType === 'chat') return undefined
     if (state.status === 'completed' || state.nextAction === 'complete') {
+      if (!await completionReady(item)) return undefined
       // A provider failure while wording the final response cannot undo
       // already verified completion. The durable host report covers it.
       return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
@@ -92,6 +112,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
     }
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
     if (state.status === 'completed') {
+      if (!await completionReady(item)) return undefined
       await deliverCompletionReport(nativeSession)
       return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
@@ -99,11 +120,19 @@ export function createLifecycle(deps: LifecycleDependencies) {
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
     if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
     if (item.prepared.intake.profile.taskType === 'chat' || state.nextAction === 'complete') {
+      if (item.prepared.intake.profile.taskType !== 'chat' && !await completionReady(item)) return undefined
       return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
     return { runId: item.runId, status: 'cancelled' }
   }
   const closeRun = async (input: DshRunClose): Promise<void> => {
+    const completionBlocked = await runtime.withDatabase(db => {
+      try { return taskCompletionBlocksClose(saveTaskCompletionReceipt(db, input.runId)) }
+      catch { return db.prepare('SELECT mode FROM dsh_completion_runs WHERE run_id = ?').get<{ mode: string }>(input.runId)?.mode === 'enforce' }
+    })
+    if (input.status === 'completed' && completionBlocked) {
+      throw new KiokukoError('CONFLICT', 'Required task completion evidence is unresolved')
+    }
     if (input.status === 'completed' && !await runtime.withDatabase(db => memoryApplicationStatus(db, input.runId).ready)) input = { ...input, status: 'failed' }
     let scheduled = false
     let scheduledSessionId: string | undefined
@@ -209,6 +238,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
             : 'cancelled'
       }
       if (status === 'completed') {
+        if (!await completionReady(item)) continue
         await deliverCompletionReport(item.nativeSession)
         if (item.nativeSession === undefined || sessions?.flush === undefined) {
           throw new KiokukoError('CONFLICT', 'Completed DSH run requires its exact native session checkpoint')

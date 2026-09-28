@@ -9,6 +9,7 @@ import { createBoundaries } from './host-adapter/boundaries.js'
 import { isNativeSubagent } from './native-subagent.js'
 import { createLifecycle } from './host-adapter/lifecycle.js'
 import { mountHostMemoryApplication } from './host-adapter/memory-application-host.js'
+import { mountTaskCompletion } from './task-completion-host.js'
 import { createEfficiencyHost } from './host-adapter/efficiency-host.js'
 import { createMemoryReviewHost } from './host-adapter/memory-review-host.js'
 import { createEnnoMemoryHost } from './host-adapter/enno-memory-host.js'
@@ -46,6 +47,7 @@ import { MemoryReviewConfig } from '../memory/review/contracts.js'
 
 import { DshEnnoMemoryRefresh } from './enno-memory-refresh.js'
 import { EnnoMemoryConfig } from './config.js'
+import { CompletionConfig } from './task-completion.js'
 
 import { saveSessionNotice } from './plugin-records.js'
 import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution/contracts.js'
@@ -130,6 +132,7 @@ export interface DshAdvisoryHost {
 }
 
 export interface DshHostAdapterOptions {
+  readonly completion?: import('zod').z.input<typeof CompletionConfig>
   readonly answerReview?: import('zod').z.input<typeof AnswerReviewConfig>
   readonly decisions?: DecisionService
   readonly semanticCompactionCoordinator?: SemanticCompactionCoordinator
@@ -348,6 +351,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const sessionQuery = options.sessionQuery ?? native.get('sessionQuery', false) as DshSessionQuery | undefined
   const llm = options.llm ?? native.get('llm', false) as DshLlm | undefined
   const reviewConfig = DiffReviewConfig.parse(options.diffReview ?? {})
+  const completionMode = CompletionConfig.parse(options.completion ?? {}).mode
   const advisory = options.advisory ?? native.get('dshAdvisory', false) as DshAdvisoryHost | undefined
   const modelCatalog = nativeModelCatalog(native.get('llm', false) as DshModelCatalog | undefined,
     native.get('settings', false) as { describe(options: { redactSecrets: true }): readonly { ns: string; value: unknown }[] } | undefined)
@@ -456,7 +460,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     native, skills, tools, userQuestions, sessions, agents, deepPlanning, modelCatalog, modelCompatibility,
     modelRoutes: options.modelRoutes, now: options.now, runtime, decisions, answerReview,
     delegation, executionSupport, ennoMemory, memoryFinalizer, autoReview, sessionMirror,
-    akinatorMemoryConfig, turnState,
+    akinatorMemoryConfig, completionMode, turnState,
     getSelection: runId => selections.get(runId), setSelection: (runId, value) => { selections.set(runId, value) },
     refreshEnnoMemory, executionBinding, captureInitialInput,
     contextMessages: (event, pending) => contextMessages(event, pending),
@@ -522,6 +526,33 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ctx, runtime, tools, commands, skills, agents, sessions, delegation, currentSession,
     turnState, gate, capabilityCatalog,
   })
+  const completionDisposer = tools ? mountTaskCompletion({ tools: tools as any,
+    on: (name, listener, options) => onNativeServiceEvent(ctx, name, listener, options) }, {
+    runtime,
+    resolve(execution) {
+      const agent = execution.agent as NativeAgent | undefined
+      const session = agent?.session
+      const item = session ? currentSession(session.id) : undefined
+      if (!agent || !session || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session
+        || !item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session
+        || delegation.isChild(agent) || isGenericNativeChild(agent)) return undefined
+      return { runId: item.runId, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot, agent }
+    },
+    async approve(identity, criterion, method, signal) {
+      const check = method.kind === 'native_command' ? method.command : method.verifierId
+      if (criterion.description.trim() === check) return true
+      if (!userQuestions) return false
+      const result = await userQuestions.ask({ agent: identity.agent, signal, questions: [{
+        id: `task-completion-${criterion.criterionId}`,
+        header: '完了条件の確認',
+        question: 'この完了条件と検証方法の対応を承認しますか？',
+        detail: `条件: ${criterion.description}\n検証: ${check}${method.kind === 'native_command' ? `\n対象: ${method.sourcePaths.join(', ')}` : ''}\nこの確認はコマンドを実行しません。`,
+        options: [{ label: '承認する' }, { label: '保留する' }],
+      }] })
+      return result.answers?.[0]?.id === `task-completion-${criterion.criterionId}`
+        && result.answers[0].selected?.[0] === '承認する'
+    },
+  }) : undefined
   const observationMount = observation.install({
     ctx, ennoMemory, evolutionConfig, currentSession, currentForAgentEvent,
     answerReview, markModelUnavailable: agent => routing.markModelUnavailable(agent),
@@ -641,6 +672,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       try { await memoryFinalizer.dispose() } catch (error) { failures.push(error) }
       efficiencyHost.close()
       try { applicationDisposer?.() } catch (error) { failures.push(error) }
+      try { completionDisposer?.() } catch (error) { failures.push(error) }
       try { observationMount.disposeResult() } catch (error) { failures.push(error) }
       try { await sessionMirror.close() } catch (error) { failures.push(error) }
       try { if (!options.runtime) await runtime.close() } catch (error) { failures.push(error) }

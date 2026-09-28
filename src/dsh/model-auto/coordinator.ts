@@ -4,6 +4,7 @@ import type { DshModelCatalog, ModelBinding } from '../model-configuration.js'
 import { DEFAULT_MODEL_AUTO_ROUTES, ModelAutoConfig, MODEL_AUTO_POLICY, type ModelAutoConfiguration, type ModelAutoInput,
   type ModelAutoReason, type ModelAutoSelection } from './contracts.js'
 import { modelAutoCandidates } from './candidates.js'
+import { buildModelRoutingBatch } from './batch.js'
 import { ModelAutoStore, type AutoRoute } from './store.js'
 import type { z } from 'zod'
 
@@ -106,12 +107,8 @@ export class ModelAutoCoordinator {
     try {
       if (candidates.reason && reason !== 'decision_timeout') reason = candidates.reason
       else {
-        const state = { task: input.task, taskType: input.taskType ?? null, attachmentTypes: input.attachmentTypes ?? [] }
-        const batch = { purpose: 'model-routing' as const, contractVersion: 'typed-decisions-v1' as const, state,
-          questions: [{ id: 'model-route', type: 'choice' as const,
-            instructions: 'Choose one route for this complete task. luna-low: small precise edit or extraction; luna-medium: ordinary work with clear steps; luna-high: diagnosis or interacting constraints; sol-high: uncertain design, broad impact, or careful verification. Choose retain when evidence is insufficient. Never infer authorization or change the task.',
-            choices: [...candidates.routes.map(route => ({ id: route.id, description: `${route.binding.model} / ${route.binding.reasoningEffort}` })),
-              { id: 'retain', description: 'Keep the current model when no candidate is justified.' }], abstainId: 'retain' }] }
+        const batch = buildModelRoutingBatch({ task: input.task, taskType: input.taskType,
+          attachmentTypes: input.attachmentTypes, routes: candidates.routes })
         if (Buffer.byteLength(JSON.stringify(batch)) > 256 * 1024) reason = 'input_too_large'
         else {
           const ready = await this.decisions.probeBound(input.requestId, signal)

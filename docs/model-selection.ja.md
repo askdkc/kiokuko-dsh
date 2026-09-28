@@ -36,6 +36,25 @@ modelAutoMode:
 
 状態表示では、設定・準備状態・選択案・適用したbindingと、nativeの `request/header` で確認した実モデルを区別します。初期候補は判定基準であり、品質・時間・利用枠の改善を保証しません。Enno、Deep、子、雑談、回答の再検討、保護されたLisp実行は既存の経路を使います。実装失敗後の自動昇格は初期版に含めません。
 
+### モデル選択の評価と判定キャッシュ
+
+ソースのチェックアウトでは、認証情報や外部の判定サービスを使わずに評価経路を確認できます。
+
+```text
+npm run test:evaluation:model-routing
+```
+
+設定したJevかLayaで日英16件の固定ケースを評価する場合は、live実行を明示します。
+
+```text
+npm run test:evaluation:model-routing -- --live --provider jev --config PATH
+npm run test:evaluation:model-routing -- --live --provider laya --config PATH
+```
+
+`PATH` には `typedDecisions` と同じ形式のJSON設定ファイルを指定します。Jevには版を固定した `typesafe.model` と `TYPESAFE_API_KEY` が必要です。Layaは起動済みのworkerを使います。live実行は準備状態のprobeを含む判定リクエストを送りますが、生成タスクの開始や現在のセッションのモデル変更はしません。`--repetitions 1..10`（既定1）、`--seed UINT32`（既定0）、`--output PATH` で反復とJSON出力を指定できます。offlineの結果は評価経路の確認だけを表し、`quality: null` と表示します。liveの結果も固定ケースと現在の判定基準との一致を測るもので、実作業の品質、費用、providerのキャッシュ節約を証明しません。Laya v1では入力が完全に処理されたか確認できません。
+
+共有の判定サービスは、保存データから再取得できる完了済みの要求設定と結果を、それぞれ最大256件だけメモリに保持します。保存済みの判定は削除しません。通常実行、Ennoのレビュー、Lispの `kioku.decisions:*` が使う判定に適用されます。モデル自動選択とこの評価は通常実行が対象です。
+
 選択カードでは数字キーで選び、Enterで送信できます。10番以上は数字を続けて入力します
 （例：`1`→`2`→`Enter`で12番）。Backspaceで番号を訂正できます。
 検索欄に入力中の数字は検索語として扱い、Enterで検索します。IME変換中のEnterや

@@ -9,7 +9,7 @@ import type { DshRuntime } from './runtime.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { executionFrameText, executionPathDenial, executionProposals, readExecutionFrame, saveExecutionFrame,
-  updateExecutionFrame, type TaskExecutionFrame } from './execution-frame.js'
+  updateExecutionFrame, extractExecutionConditions, type TaskExecutionFrame } from './execution-frame.js'
 import { explorationOperation, newExplorationState, observeExploration, recordObject, evidencePresentation, acquiredReadRange,
   type ExecutionEvidence, type ExplorationState } from './exploration.js'
 
@@ -31,6 +31,7 @@ export interface ExecutionBinding {
 interface SupportState {
   binding: ExecutionBinding
   frame?: TaskExecutionFrame
+  policyReady: boolean
   degraded: boolean
   monitor: ExplorationState
   pending: ExecutionEvidence[]
@@ -73,7 +74,7 @@ export class DshExecutionSupport {
     if (this.#disposed) return
     const previous = this.#states.get(binding.sessionId)
     let state = previous?.binding.runId === binding.runId ? previous : undefined
-    if (!state) state = { binding, degraded: false, monitor: newExplorationState(binding.generation), pending: [], pendingIds: new Set(), evidence: [], loaded: false, serial: 0, confirmations: new Map() }
+    if (!state) state = { binding, policyReady: false, degraded: false, monitor: newExplorationState(binding.generation), pending: [], pendingIds: new Set(), evidence: [], loaded: false, serial: 0, confirmations: new Map() }
     state.binding = binding
     delete state.enno
     delete state.projection
@@ -81,9 +82,32 @@ export class DshExecutionSupport {
     if (binding.chat) return
     const current = state
     const serial = ++current.serial
+    current.policyReady = false
     if (this.#config.mode !== 'off') {
       delete current.canonicalWorkspace
       try { current.canonicalWorkspace = realpathSync(binding.cwd) } catch { /* Only the supplemental owner is unavailable. */ }
+    }
+    try {
+      const frame = await this.runtime.withDatabase(database => withImmediateTransaction(database, () => {
+        if (this.#disposed || current.binding !== binding || current.serial !== serial) return undefined
+        const stored = readExecutionFrame(database, binding.runId)
+        // Intake persists the first frame. An absent frame is unknown policy,
+        // even if a resumed native turn happens to be numbered one.
+        const explicitRestatement = human && extractExecutionConditions(binding.task).some(item =>
+          item.approval === 'explicit' && ['readPaths', 'writePaths', 'excludedPaths'].includes(item.field))
+        if (!stored && !explicitRestatement) {
+          throw new Error('Saved task path policy is missing')
+        }
+        const next = human || !stored ? updateExecutionFrame(stored, binding.cwd, binding.task) : stored
+        saveExecutionFrame(database, binding.runId, next)
+        return next
+      }))
+      if (!frame || this.#disposed || current.binding !== binding || current.serial !== serial) return
+      current.frame = frame
+      current.policyReady = true
+    } catch {
+      if (current.binding === binding && !this.#disposed) current.degraded = true
+      return
     }
     try {
       const pending = [...current.pending]
@@ -103,9 +127,6 @@ export class DshExecutionSupport {
           evidenceList = database.prepare('SELECT evidence_json AS json FROM dsh_execution_evidence WHERE run_id = ? ORDER BY rowid DESC LIMIT 32')
             .all<{ json: string }>(binding.runId).reverse().map(row => JSON.parse(row.json) as ExecutionEvidence)
         }
-        const stored = readExecutionFrame(database, binding.runId)
-        const frame = human || !stored ? updateExecutionFrame(stored, binding.cwd, binding.task) : stored
-        saveExecutionFrame(database, binding.runId, frame)
         if (human && (binding.humanInput ? binding.humanInput !== monitor.humanInput : binding.turn > (monitor.humanTurn ?? 0))) {
           monitor = { ...newExplorationState(binding.generation, monitor.humanEpoch + 1), humanTurn: binding.turn,
             ...(binding.humanInput === undefined ? {} : { humanInput: binding.humanInput }) }
@@ -124,10 +145,10 @@ export class DshExecutionSupport {
         database.prepare(`INSERT INTO dsh_exploration_states VALUES (?, ?, ?)
           ON CONFLICT(run_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`)
           .run(binding.runId, JSON.stringify(monitor), new Date().toISOString())
-        return { frame, monitor, evidenceList }
+        return { monitor, evidenceList }
       }))
       if (!committed || this.#disposed || current.binding !== binding || current.serial !== serial) return
-      current.frame = committed.frame; current.monitor = committed.monitor; current.evidence = committed.evidenceList
+      current.monitor = committed.monitor; current.evidence = committed.evidenceList
       if (human) current.confirmations.clear()
       const consumed = new Set(pending.map(item => item.id))
       current.pending = current.pending.filter(item => !consumed.has(item.id))
@@ -213,7 +234,9 @@ export class DshExecutionSupport {
   text(sessionId: string): string {
     const state = this.#states.get(sessionId)
     if (!state || state.binding.chat) return ''
-    if (state.degraded) return 'Kiokuko execution support is degraded. Do not claim path enforcement or evidence coverage is complete. Preserve the user request; explain any affected operation separately.'
+    if (!state.policyReady) return 'Kiokuko task path policy is unavailable. Structured file operations are paused; conversation and recovery remain available.'
+    if (state.degraded) return [state.frame ? executionFrameText(state.frame) : '',
+      'Kiokuko exploration evidence is degraded. Do not claim evidence coverage is complete.'].filter(Boolean).join('\n')
     const evidence = state.evidence.slice(-16).map(item => `${item.id.slice(0, 12)} ${item.operation.paths.join(', ').slice(0, 512)} ${JSON.stringify(item.operation.range).slice(0, 256)}: ${item.presentation} (tool success: ${item.toolSucceeded ?? 'unknown'}; acquired range: ${JSON.stringify(item.acquiredRange ?? null)}; acquired: ${item.acquisition ?? 'unknown'}; source event: ${item.sourceSeq ?? 'unknown'}; result digest: ${item.digest.slice(0, 12)})`)
     const legacy = [state.frame ? executionFrameText(state.frame) : '', state.binding.terminal ? 'Terminal state: report recorded results now. Do not run more tools.' : state.monitor.notice ?? '',
       evidence.length ? `Recent evidence presentation (specified ranges only):\n${evidence.join('\n').slice(0, 4096)}` : ''].filter(Boolean).join('\n')
@@ -278,11 +301,11 @@ export class DshExecutionSupport {
         })
         const operation = explorationOperation(execution.name, execution.arguments, state.binding.cwd)
         if (!operation) return undefined
-        if (state.degraded && state.frame?.conditions.some(item => item.approval !== 'proposed' && ['readPaths', 'writePaths', 'excludedPaths'].includes(item.field))) {
+        if (!state.policyReady) {
           return 'Kiokuko: the existing task path policy is unavailable for this operation. Conversation and recovery remain available.'
         }
-        return state.frame ? executionPathDenial(state.frame, operation.kind, operation.paths) : undefined
-      } catch { return undefined }
+        return executionPathDenial(state.frame!, operation.kind, operation.paths)
+      } catch { return 'Kiokuko: the task path policy could not be checked for this operation. Conversation and recovery remain available.' }
     }))
     this.#disposers.push(ctx.on('tools/result', (execution: any, result: any) => {
       try {
@@ -292,7 +315,7 @@ export class DshExecutionSupport {
         if (!started || started.binding.runId !== state.binding.runId || started.binding.turn !== state.binding.turn
           || started.binding.generation !== state.binding.generation || started.epoch !== state.monitor.humanEpoch) return
         const operation = explorationOperation(execution.name, execution.arguments, state.binding.cwd)
-        if (!operation || operation.kind !== 'read') return
+        if (!operation || operation.kind === 'write' && !result.isError) return
         const id = canonicalContentHash({ runId: state.binding.runId, turn: state.binding.turn, callId: execution.callId })
         if (state.pendingIds.has(id)) return
         state.pendingIds.add(id)

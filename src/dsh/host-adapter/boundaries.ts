@@ -30,7 +30,7 @@ import { projectDshDirective } from '../directive-projection.js'
 import { projectDshContext } from '../context-projection.js'
 import { refreshDshSkillSnapshots } from '../skill-snapshot.js'
 import { verificationBoundaryKey } from '../verification-identity.js'
-import { readPendingOutbox, readTurnSeal, replacePendingOutboxMessageInTransaction, type DshBoundaryJob } from '../turn-process.js'
+import { readPendingOutbox, readTurnSeal, replacePendingOutboxMessageInTransaction, retryableBoundaryErrorCode, type DshBoundaryJob } from '../turn-process.js'
 import { claimAutomaticContinuationInTransaction, claimBoundaryEffectInTransaction, claimLoopRecoveryQuestionInTransaction, ennoInstructionDigest, resetBoundaryEffectGuardInTransaction, resetLoopGuardForUserInTransaction } from '../loop-guard.js'
 import { boundaryFailureCopy } from '../user-interaction.js'
 import { KiokukoError } from '../../errors.js'
@@ -353,9 +353,10 @@ export function createBoundaries(deps: BoundaryDependencies) {
     process: async (job: DshBoundaryJob, signal) => {
       boundarySignals.set(job.dshSessionId, signal)
       const item = currentSession(job.dshSessionId)
-      if (item === undefined || item.closed || item.runId !== job.runId || item.turn < job.nativeTurn) {
-        throw new Error('kiokuko-dsh boundary job has no exact live run binding')
-      }
+      if (item?.closed || item?.runId !== undefined && item.runId !== job.runId) return { kind: 'superseded' }
+      if (item === undefined || item.turn < job.nativeTurn) throw Object.assign(
+        new Error('kiokuko-dsh boundary job is waiting for its exact live run binding'),
+        { code: 'BOUNDARY_BINDING_UNAVAILABLE' })
       if ((job.kind === 'confirmation' || job.kind === 'final_verification' || job.kind === 'advisory')
         && !await guardBoundaryEffect(item, job)) {
         return { kind: 'waiting_user' }
@@ -488,9 +489,12 @@ export function createBoundaries(deps: BoundaryDependencies) {
     },
     beforeDelivery: async (job, outbox, signal) => {
       boundarySignals.set(job.dshSessionId, signal)
-      if (outbox.messageForm === 'loop-recovery') return 'deliver'
       const item = currentSession(job.dshSessionId)
-      if (item === undefined || item.closed || item.runId !== job.runId) return 'superseded'
+      if (item === undefined) throw Object.assign(
+        new Error('kiokuko-dsh delivery is waiting for its exact live run binding'),
+        { code: 'BOUNDARY_BINDING_UNAVAILABLE' })
+      if (item.closed || item.runId !== job.runId) return 'superseded'
+      if (outbox.messageForm === 'loop-recovery') return 'deliver'
       if (executionSupport.paused(item.sessionId)) return 'waiting_user'
       const guarded = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
         const snapshot = readEnnoSnapshot(database, {
@@ -555,8 +559,9 @@ export function createBoundaries(deps: BoundaryDependencies) {
     dispatch: async (job, outbox) => {
       const item = currentSession(job.dshSessionId)
       const nativeAgent = (boundaryAgents.get(job.dshSessionId) ?? agents?.get(job.dshSessionId)) as NativeAgent | undefined
-      if ((item !== undefined && (item.closed || item.runId !== job.runId)) || nativeAgent?.followup === undefined) {
-        throw new Error('kiokuko-dsh native boundary delivery agent is unavailable')
+      if (!item || item.closed || item.runId !== job.runId || nativeAgent?.session?.id !== job.dshSessionId
+        || item.nativeAgent !== undefined && item.nativeAgent !== nativeAgent || nativeAgent?.followup === undefined) {
+        throw new KiokukoError('CONFLICT', 'kiokuko-dsh native boundary delivery has no exact live run and agent binding')
       }
       nativeAgent.followup(outbox.message)
     },
@@ -568,7 +573,10 @@ export function createBoundaries(deps: BoundaryDependencies) {
       const snapshot = await runtime.withDatabase((database) => readEnnoSnapshot(database, {
         runId: item.runId, workspace: item.workspace, orchestrationId: item.orchestrationId,
       }))
-      const copy = boundaryFailureCopy(snapshot.userFacingLanguage)
+      const failureCode = typeof error === 'object' && error !== null && typeof (error as { code?: unknown }).code === 'string'
+        ? (error as { code: string }).code : 'BOUNDARY_JOB_FAILED'
+      const retryable = retryableBoundaryErrorCode(failureCode)
+      const copy = boundaryFailureCopy(snapshot.userFacingLanguage, job.attemptCount, retryable)
       const answer = await askForRecoveryInstruction({
         item,
         questionId: `boundary-${job.jobId.slice(0, 16)}`,
@@ -582,6 +590,9 @@ export function createBoundaries(deps: BoundaryDependencies) {
         ),
       })
       if (answer === undefined) return false
+      // A user message cannot repair an integrity/permission fault or make an
+      // unsupported stage executable. Only a named transient may be retried.
+      if (!retryable || !/(?:retry|recovered|再試行|解消|修復)/iu.test(answer)) return false
       await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
         resetLoopGuardForUserInTransaction(database, {
           runId: item.runId,
@@ -603,8 +614,8 @@ export function createBoundaries(deps: BoundaryDependencies) {
           UPDATE dsh_boundary_jobs
              SET status = 'pending', attempt_count = 0, available_at = ?,
                  last_error_code = NULL, last_error_message = NULL, updated_at = ?
-           WHERE job_id = ? AND status = 'waiting_user'
-        `).run(now?.() ?? new Date().toISOString(), now?.() ?? new Date().toISOString(), job.jobId)
+           WHERE job_id = ? AND status = 'waiting_user' AND last_error_code = ?
+        `).run(now?.() ?? new Date().toISOString(), now?.() ?? new Date().toISOString(), job.jobId, failureCode)
       }))
       return true
     },

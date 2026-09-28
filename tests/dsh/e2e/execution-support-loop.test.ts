@@ -117,9 +117,13 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
       db.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(running.id)?.status === 'completed'))
     assert.equal(reads, 5, 'only the explicitly resumed read ran')
     const evidence = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT evidence_json AS json FROM dsh_execution_evidence').all<{ json: string }>())
-    assert.equal(evidence.length, 5)
-    for (const row of evidence) {
-      const item = JSON.parse(row.json)
+    const recorded = evidence.map(row => JSON.parse(row.json))
+    const readEvidence = recorded.filter(item => item.operation.kind === 'read')
+    const refusedWrites = recorded.filter(item => item.operation.kind === 'write')
+    assert.equal(readEvidence.length, 5)
+    assert.equal(refusedWrites.length, 1, 'the denied structured write is retained as failure evidence')
+    assert.equal(refusedWrites[0].toolSucceeded, false)
+    for (const item of readEvidence) {
       assert.equal(typeof item.sourceSeq, 'number', 'actual native append supplies the source cursor')
       assert.equal(item.acquiredRange.firstLine, 1)
       assert.equal(item.acquiredRange.lastLine, 2)

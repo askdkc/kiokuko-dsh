@@ -94,6 +94,8 @@ interface VerifierResultRow extends SqliteRow {
   stderr_preview: string;
   stdout_digest: string;
   stderr_digest: string;
+  skipped: number | null;
+  tap_summary_json: string | null;
   repository_state_policy_version: number | null;
   pre_repository_digest: string | null;
   post_repository_digest: string | null;
@@ -391,6 +393,10 @@ export function readEnnoSnapshot(database: SqliteDatabase, identity: EnnoIdentit
         ...(currentRepositoryDigest === undefined ? {} : { repositoryDigest: currentRepositoryDigest }),
       }) ?? []
     : [];
+  const completionBindings = database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_completion_bindings'").get()
+    ? database.prepare(`SELECT criterion_id, method_digest, updated_at FROM dsh_completion_bindings
+      WHERE run_id = ? AND criterion_revision = ? AND approved = 1 ORDER BY criterion_id`)
+      .all(row.run_id, row.revision) : [];
   const snapshot: EnnoRunSnapshot = {
     runId: row.run_id,
     workspace: row.workspace,
@@ -404,6 +410,7 @@ export function readEnnoSnapshot(database: SqliteDatabase, identity: EnnoIdentit
     confirmationState: row.confirmation_state,
     attempts: row.attempts,
     mutationRevision: row.mutation_revision,
+    ...(completionBindings.length ? { completionBindingDigest: canonicalContentHash(completionBindings) } : {}),
     routeEpoch: row.route_epoch,
     ideal,
     meditation,
@@ -830,7 +837,7 @@ export function finishVerifierRunsInTransaction(
     const updated = database.prepare(`
       UPDATE enno_verifier_runs
       SET status = ?, exit_code = ?, signal = ?, duration_ms = ?,
-          stdout_preview = ?, stderr_preview = ?, stdout_digest = ?, stderr_digest = ?,
+          stdout_preview = ?, stderr_preview = ?, stdout_digest = ?, stderr_digest = ?, skipped = ?, tap_summary_json = ?,
           post_repository_digest = ?, changed_during_verification = ?, finished_at = ?
       WHERE verifier_run_id = ? AND status = 'started'
       RETURNING verifier_run_id AS verifierRunId
@@ -843,6 +850,8 @@ export function finishVerifierRunsInTransaction(
       result.stderrPreview,
       result.stdoutDigest,
       result.stderrDigest,
+      result.skipped === undefined ? null : result.skipped ? 1 : 0,
+      result.tapSummary === undefined ? null : JSON.stringify(result.tapSummary),
       repositoryEvidence?.postDigest ?? null,
       repositoryEvidence === undefined ? null : repositoryEvidence.changedDuringVerification ? 1 : 0,
       finishedAt,
@@ -862,7 +871,7 @@ export function readFreshFinalVerifierResults(database: SqliteDatabase, input: {
   if (input.verifiers.length === 0) return undefined;
   const rows = database.prepare(`
     SELECT verifier_id, verifier_json, status, exit_code, signal, duration_ms,
-           stdout_preview, stderr_preview, stdout_digest, stderr_digest,
+           stdout_preview, stderr_preview, stdout_digest, stderr_digest, skipped, tap_summary_json,
            repository_state_policy_version, pre_repository_digest, post_repository_digest,
            verifier_spec_digest, changed_during_verification, finished_at
     FROM enno_verifier_runs
@@ -885,6 +894,20 @@ export function readFreshFinalVerifierResults(database: SqliteDatabase, input: {
         || row.post_repository_digest !== input.repositoryDigest
         || row.verifier_spec_digest !== canonicalContentHash(input.verifiers))) return undefined;
   }
+  // A criterion-to-verifier mapping approved after a verifier finished cannot
+  // turn that earlier execution into proof. The next host verification must
+  // run again against the approved mapping, even if repository bytes are same.
+  if (database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_completion_bindings'").get()) {
+    const bindings = database.prepare(`SELECT method_json, updated_at FROM dsh_completion_bindings
+      WHERE run_id = ? AND approved = 1 AND criterion_revision = ?`).all<{ method_json: string; updated_at: string }>(input.runId, input.revision);
+    for (const binding of bindings) {
+      let method: { kind?: unknown; verifierId?: unknown };
+      try { method = JSON.parse(binding.method_json); } catch { return undefined; }
+      if (method.kind !== 'enno_verifier') continue;
+      if (typeof method.verifierId !== 'string' || !byId.get(method.verifierId)?.finished_at
+        || byId.get(method.verifierId)!.finished_at! <= binding.updated_at) return undefined;
+    }
+  }
   return input.verifiers.map((verifier) => {
     const row = byId.get(verifier.id)!;
     const storedVerifier = parseVerifierSpec(parseCanonicalJson(row.verifier_json, 'Stored Enno verifier is invalid'));
@@ -898,6 +921,8 @@ export function readFreshFinalVerifierResults(database: SqliteDatabase, input: {
       stderrPreview: row.stderr_preview,
       stdoutDigest: row.stdout_digest,
       stderrDigest: row.stderr_digest,
+      ...(row.skipped === null ? {} : { skipped: row.skipped === 1 }),
+      ...(row.tap_summary_json === null ? {} : { tapSummary: JSON.parse(row.tap_summary_json) }),
       ...(row.repository_state_policy_version === null ? {} : { repositoryStatePolicyVersion: row.repository_state_policy_version }),
       ...(row.post_repository_digest === null ? {} : { repositoryStateDigest: row.post_repository_digest }),
       ...(row.changed_during_verification === null ? {} : { changedDuringVerification: row.changed_during_verification === 1 }),
