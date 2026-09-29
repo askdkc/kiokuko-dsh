@@ -7,7 +7,7 @@ import { abortableStream } from '../deep-thinker/abortable-stream.js'
 import { EVOLUTION_OBSERVATION_EVENT, observationMatchesResult, type EvolutionObservation, type EvolutionObservationBinding } from './evolution-observation.js'
 import { readEvolutionObservation } from './plugin-records.js'
 import { isSyntheticContextSource } from './plugin-source.js'
-import { MemoryEvolutionConfig, evidenceReferences, supportingEvidenceDigest, episodeSignature, episodeSignals, parseEpisodeDraft, type EpisodeEvidence, type EpisodeDraft, type EvolutionConfig } from '../memory/evolution/contracts.js'
+import { MemoryEvolutionConfig, digest, evidenceReferences, supportingEvidenceDigest, episodeSignature, episodeSignals, parseEpisodeDraft, type EpisodeEvidence, type EpisodeDraft, type EvolutionConfig } from '../memory/evolution/contracts.js'
 import { configureEvolution, saveEpisode, scheduleEvolution, evolutionSettings } from '../memory/evolution/store.js'
 import { EvolutionWorker } from '../memory/evolution/worker.js'
 import { AutoGlobalizationWorker } from '../memory/auto-globalization.js'
@@ -689,7 +689,8 @@ export async function reduceDshFinalizationLog(
     const resultCallId = record(record(nativeData?.message)?.source)?.callId ?? nativeData?.callId
     const toolName = typeof resultCallId === 'string' ? nativeCalls.get(resultCallId)?.name : undefined
     const proof = typeof resultCallId === 'string' ? nativeProofs.get(resultCallId) : undefined
-    const observation = episodeEvidenceForEvent(event, toolName, proof && observationMatchesResult(proof,event.data) ? proof : undefined)
+    const observation = episodeEvidenceForEvent(event, toolName, proof && observationMatchesResult(proof,event.data) ? proof : undefined,
+      identity?.sessionId)
     if (evidenceSelectionVersion === 2) {
       const callId = event.type === 'tool/call' ? nativeData?.callId : resultCallId
       const text = boundedEvidenceEvent(event) ? redactDshSourceText(eventText(event)) : null
@@ -1334,7 +1335,7 @@ Override the legacy memory output format: return only schemaVersion 3 with memor
 }
 
 /** Only native evidence is eligible; plugin snapshots and assistant assertions are excluded. */
-export function episodeEvidenceForEvent(event: DshLogEvent, boundToolName?: string, proof?: EvolutionObservation): EpisodeEvidence | undefined {
+export function episodeEvidenceForEvent(event: DshLogEvent, boundToolName?: string, proof?: EvolutionObservation, sessionId?: string): EpisodeEvidence | undefined {
   const data = record(event.data)
   if (!data || isSyntheticContextSource(data.source) || isSyntheticContextSource(record(data.message)?.source)) return undefined
   const kind = event.type === 'user/message' ? 'user' : event.type === 'tool/call' ? 'action' : event.type === 'tool/result' ? 'result' : undefined
@@ -1349,5 +1350,14 @@ export function episodeEvidenceForEvent(event: DshLogEvent, boundToolName?: stri
   const toolError = Array.isArray(content) && content.some(block => record(block)?.type === 'tool-result' && record(block)?.isError === true)
   const outcome = kind !== 'result' ? 'unknown' : proof ? proof.failed ? 'failed' : 'passed' : toolError || record(data.error) !== undefined || execution.timedOut === true || execution.aborted === true || execution.signal !== undefined && execution.signal !== null || Number.isSafeInteger(exitCode) && exitCode !== 0
     ? 'failed' : exitCode === 0 ? 'passed' : 'unknown'
-  return { seq: event.seq, kind, text, outcome }
+  const occurred = sessionId === undefined || !Number.isSafeInteger(event.time) || event.time < 0
+    || event.time > 8_640_000_000_000_000 || !Number.isSafeInteger(event.seq) || event.seq < 0
+    ? undefined : {
+    version: 1 as const,
+    timeMs: event.time,
+    sessionId,
+    nativeSequence: event.seq,
+    sourceDigest: digest(event),
+  }
+  return { seq: event.seq, kind, text, outcome, ...(occurred === undefined ? {} : { occurred }) }
 }

@@ -133,6 +133,8 @@ export interface ScopedRecallInput {
   limit?: number;
   maxChars?: number;
   readOnly?: boolean;
+  /** Structured bounds override any natural-language date parsed from query. */
+  timeConstraint?: import('./retrieval-contracts.js').MemoryTimeConstraint;
 }
 
 export type ScopedRecallResult = FederatedRecallResult;
@@ -435,6 +437,7 @@ export async function recallScopedMemory(
   runtime: HybridSearchRuntime = {},
   memoryReuse?: ProjectMemoryReuseEffect,
 ): Promise<ScopedRecallResult> {
+  const effectiveRuntime = input.timeConstraint === undefined ? runtime : { ...runtime, timeConstraint: input.timeConstraint }
   const baseline = await retrieveFederatedMemory(database, {
     query: input.query,
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
@@ -444,10 +447,10 @@ export async function recallScopedMemory(
     ...(input.limit === undefined ? {} : { limit: input.limit }),
     ...(input.maxChars === undefined ? {} : { maxChars: input.maxChars }),
     ...(input.readOnly === undefined ? {} : { readOnly: input.readOnly }),
-  }, runtime);
+  }, effectiveRuntime);
   if (memoryReuse && input.scope === 'project' && baseline.project) {
     return reuseProjectMemory(database, { project: baseline.project.target, query: input.query,
-      limit: Math.min(input.limit ?? 5, 10), maxChars: input.maxChars ?? 8000 }, baseline, runtime, memoryReuse);
+      limit: Math.min(input.limit ?? 5, 10), maxChars: input.maxChars ?? 8000 }, baseline, effectiveRuntime, memoryReuse);
   }
   return baseline;
 }

@@ -17,6 +17,7 @@ import { isRetrievableEntry, type HybridSearchRuntime } from './hybrid-retrieval
 import { autoGlobalApplicable } from './auto-globalization.js';
 import { isExternalSkillReference } from '../skills/store.js';
 import { compareCanonicalStrings } from '../serialization/validate.js';
+import { memoryTimePredicate } from './retrieval-sql.js'
 
 export type FederatedOrigin = 'project' | 'ecosystem' | 'global';
 export type FederatedScope = 'auto' | FederatedOrigin;
@@ -212,6 +213,8 @@ function semanticWorkspaceCandidates(
     queryVector: query.vector,
     distanceCeiling: query.distanceCeiling,
     excludedWorkspaces: [project.workspace, GLOBAL_WORKSPACE],
+    ...(runtime.memoryRetrieval?.mode === 'active' && runtime.timeConstraint !== undefined
+      ? { timeConstraint: runtime.timeConstraint } : {}),
     limit: MAX_SEMANTIC_WORKSPACE_CANDIDATES,
   });
   if (!Array.isArray(hits) || hits.length > MAX_SEMANTIC_WORKSPACE_CANDIDATES) {
@@ -252,6 +255,7 @@ function ecosystemEntries(
   const fingerprint = suppliedFingerprint
     ?? resolveProjectFingerprint(database, project, captureProjectManifestSnapshot(project), { readOnly });
   const targets = signalTargets(fingerprint, query).filter((item) => item.value.length > 0);
+  const time = runtime.memoryRetrieval?.mode === 'active' ? memoryTimePredicate(runtime.timeConstraint) : undefined
   const externalMarker = externalSkillReferenceCandidateSql();
   const activeExternal = activeExternalSkillReferenceCandidateSql();
   const rows: CandidateRow[] = targets.length === 0
@@ -264,15 +268,17 @@ function ecosystemEntries(
         SELECT e.workspace, e.id,
                SUM(CASE ${targets.map((target) => `WHEN s.signal_type = '${target.type}' AND s.normalized_value = '${target.value.replaceAll("'", "''")}' THEN ${target.weight}`).join(' ')} ELSE 0 END) AS signal_score
           FROM entries AS e
+          JOIN entry_revisions AS r ON r.entry_id = e.id AND r.revision = e.current_revision
           JOIN entry_search_signals AS s ON s.entry_id = e.id
          WHERE e.workspace <> ? AND e.workspace <> ?
            AND e.status <> 'superseded'
            AND (${pairSql})
            AND (NOT ${externalMarker} OR ${activeExternal})
+           AND ${time?.sql ?? '1=1'}
          GROUP BY e.workspace, e.id
          ORDER BY signal_score DESC, e.updated_at DESC, e.id ASC
          LIMIT ?
-      `).all<CandidateRow>(...parameters, policy.ecosystem.maxWorkspaces * policy.ecosystem.maxEntriesPerWorkspace * 20);
+      `).all<CandidateRow>(...parameters, ...(time?.parameters ?? []), policy.ecosystem.maxWorkspaces * policy.ecosystem.maxEntriesPerWorkspace * 20);
     })();
   const workspaceCounts = new Map<string, number>();
   const candidateIds = new Set<string>();

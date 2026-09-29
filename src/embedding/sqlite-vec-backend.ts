@@ -4,6 +4,7 @@ import { requireWorkspace } from '../serialization/validate.js';
 import { decodeVector, encodeVector, normalizeVector } from './vector.js';
 import { MAX_VECTOR_SEARCH_LIMIT } from './javascript-backend.js';
 import type { VectorHit, VectorSearchBackend, VectorSearchInput } from './types.js';
+import { memoryTimePredicate } from '../memory/retrieval-sql.js'
 
 export const SQLITE_VEC_BACKEND_ID = 'sqlite-vec' as const;
 
@@ -81,6 +82,8 @@ export class SqliteVecVectorSearchBackend implements VectorSearchBackend {
       clauses.push(`e.workspace NOT IN (${normalized.excludedWorkspaces.map(() => '?').join(', ')})`);
       parameters.push(...normalized.excludedWorkspaces);
     }
+    const time = memoryTimePredicate(input.timeConstraint)
+    if (time) { clauses.push(time.sql); parameters.push(...time.parameters) }
     parameters.push(normalized.limit);
 
     let rows: VectorRow[];

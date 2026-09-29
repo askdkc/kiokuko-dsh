@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { executionObservation, observationMatchesResult, EVOLUTION_OBSERVATION_EVENT } from '../../../../src/dsh/evolution-observation.js'
-import { reduceDshFinalizationLog, type DshLogEvent } from '../../../../src/dsh/session-memory-finalizer.js'
+import { episodeEvidenceForEvent, reduceDshFinalizationLog, type DshLogEvent } from '../../../../src/dsh/session-memory-finalizer.js'
+import { digest } from '../../../../src/memory/evolution/contracts.js'
 
 test('native execution values distinguish timeout/cancellation from a passing exit code', () => {
   const identity={runId:'r',workspace:'project:p',sessionId:'s'}
@@ -60,4 +61,34 @@ test('sidecar proof uses the same result binding and missing proof stays unknown
     })
     assert.equal(prepared.episodeEvidence!.find(e => e.seq === 5)?.outcome, value === proof ? 'passed' : 'unknown')
   }
+})
+
+test('occurred proof binds epoch-millisecond native time to session, sequence and event digest', () => {
+  const event: DshLogEvent = { seq: 7, time: Date.parse('2026-09-10T12:34:56.789Z'), type: 'user/message',
+    data: { source: 'user', content: [{ type: 'text', text: 'Fix the migration lock' }] } }
+  const evidence = episodeEvidenceForEvent(event, undefined, undefined, 'session-native')!
+  assert.deepEqual(evidence.occurred, { version: 1, timeMs: event.time, sessionId: 'session-native',
+    nativeSequence: event.seq, sourceDigest: digest(event) })
+  const unbound = episodeEvidenceForEvent(event)
+  assert.ok(unbound)
+  assert.equal(unbound.occurred, undefined)
+  // Legacy streams accept finite fractional timestamps; they stay stored as
+  // legacy evidence, but cannot establish a verified epoch-millisecond basis.
+  const unverifiedTime = episodeEvidenceForEvent({ ...event, time: event.time + 0.5 }, undefined, undefined, 'session-native')!
+  assert.equal(unverifiedTime.occurred, undefined)
+})
+
+test('finite legacy timestamps remain accepted but do not establish occurred time', async () => {
+  const identity = { runId: 'legacy-time', workspace: 'project:p', sessionId: 'session-legacy-time' }
+  async function* events(): AsyncIterable<DshLogEvent> {
+    yield { seq: 1, time: 1.5, type: 'turn/start' }
+    yield { seq: 2, time: 2.5, type: 'request/header', data: { header: { config: { provider: 'p', model: 'm' } } } }
+    yield { seq: 3, time: 3.5, type: 'request/context', data: { contextWindow: 100_000 } }
+    yield { seq: 4, time: 4.5, type: 'user/message', data: { source: 'user', content: [{ type: 'text', text: 'Keep the legacy record' }] } }
+    yield { seq: 5, time: 5.5, type: 'turn/end' }
+  }
+  const prepared = await reduceDshFinalizationLog(events(), 1, 5, 'prefix_reuse', identity)
+  const evidence = prepared.episodeEvidence?.find(item => item.seq === 4)
+  assert.ok(evidence)
+  assert.equal(evidence.occurred, undefined)
 })

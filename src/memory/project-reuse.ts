@@ -27,7 +27,7 @@ export async function reuseProjectMemory(database: SqliteDatabase, input: {
   const ranked = rankedEntryHits(database, { workspace: project.workspace, query: input.query, limit: 100 }, runtime)
   const candidates = ranked.hits.flatMap(hit => {
     const entry = readEntry(database, { workspace: project.workspace, entryId: hit.entryId })
-    const projection = projectMemoryEntry(database, entry)
+    const projection = projectMemoryEntry(database, entry, { includeEvidence: runtime.memoryRetrieval?.mode === 'active' })
     return projection === null ? [] : [{ hit, entry, projection }]
   })
   const selected = candidates.filter(c => !applicabilityCompatibility(c.entry, fingerprint).incompatible).slice(0, effect.runtime.maxCandidates)

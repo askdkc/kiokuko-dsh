@@ -23,6 +23,9 @@ import type { SqliteDatabase } from '../../db/adapter.js'
 import type { DshCoreRuntime } from '../core-runtime.js'
 import type { DshIntakeAnswerer, DshUserQuestionAgent } from '../intake-questions.js'
 import type { TaskProfile } from '../../akinator/types.js'
+import { MemoryRetrievalConfig, timeConstraintForRequest, type MemoryRetrievalConfig as MemoryRetrievalConfiguration } from '../../memory/retrieval-contracts.js'
+import type { MemoryTimeConstraint } from '../../memory/retrieval-contracts.js'
+import { reportMemoryRetrievalObservation } from '../memory-retrieval-observer.js'
 
 export interface CoreTaskInput {
   readonly requestId: string
@@ -32,6 +35,7 @@ export interface CoreTaskInput {
   readonly cwd: string
   readonly capabilities: readonly { kind: 'skill' | 'tool'; name: string; description?: string }[]
   readonly profileHints?: Partial<TaskProfile>
+  readonly timeConstraint?: MemoryTimeConstraint
   readonly signal: AbortSignal
   readonly agent?: DshUserQuestionAgent
 }
@@ -82,8 +86,10 @@ function recallView(db: SqliteDatabase, context: ScopedContextResult | null): Sc
 
 /** Ordinary task/memory path over the existing ledger and Akinator; no model/provider selection. */
 export class CoreTasks {
-  constructor(private readonly runtime: DshCoreRuntime, private readonly answerer?: DshIntakeAnswerer, private readonly moduleIds: readonly string[] = [], private readonly decisions?: DecisionService) {}
+  constructor(private readonly runtime: DshCoreRuntime, private readonly answerer?: DshIntakeAnswerer, private readonly moduleIds: readonly string[] = [], private readonly decisions?: DecisionService,
+    private readonly memoryRetrieval: MemoryRetrievalConfiguration = MemoryRetrievalConfig.parse({})) {}
   async prepare(input: CoreTaskInput): Promise<CoreTask> {
+    const retrievalAnchorTimeMs = Date.now()
     input.signal.throwIfAborted()
     const cwd = realpathSync(input.cwd)
     const taskType = await classifyTask(this.decisions, input.requestId, input.task, input.profileHints?.taskType, input.signal)
@@ -131,7 +137,8 @@ export class CoreTasks {
             }
             assertCurrent()
             memory = (await queryScopedContextGated(db, { project, projectOnly: true, task: input.task, taskProfile: state.session.profile,
-              runId: opened.runId, limit: 5, characterBudget: 4000 }, () => ({ persist: true, value: null, assertBeforePersist: assertCurrent }), {},
+              runId: opened.runId, limit: 5, characterBudget: 4000 }, () => ({ persist: true, value: null, assertBeforePersist: assertCurrent }),
+              retrievalRuntimeForRequest(this.memoryRetrieval, input.task, retrievalAnchorTimeMs, input.timeConstraint),
               { beforeCommit: async () => { assertCurrent() }, ...(memoryReuse ? { memoryReuse: { runtime: memoryReuse, authorize: () => { assertCurrent(); return true } } } : {}) })).context
           }
         }
@@ -146,7 +153,8 @@ export class CoreTasks {
       }
     })
   }
-  async refresh(task: CoreTask, query: string, signal: AbortSignal, validateCapabilities?: () => Promise<void>): Promise<Pick<CoreTask, 'memory' | 'context'>> {
+  async refresh(task: CoreTask, query: string, signal: AbortSignal, validateCapabilities?: () => Promise<void>, timeConstraint?: MemoryTimeConstraint): Promise<Pick<CoreTask, 'memory' | 'context'>> {
+    const retrievalAnchorTimeMs = Date.now()
     return this.runtime.withDatabase(async db => {
       signal.throwIfAborted()
       const assertCurrent = () => {
@@ -160,7 +168,8 @@ export class CoreTasks {
       if (!project || project.workspace !== task.workspace) throw new Error('Task refresh repository changed')
       const policy = deriveMemoryPolicy(task.profile, 'actionable', task.capabilities)
       const result = await queryScopedContextGated(db, { project, projectOnly: true, task: query, taskProfile: task.profile, runId: task.runId, limit: 5, characterBudget: 4000 },
-        () => ({ persist: !policy.contextWithheld, value: null, assertBeforePersist: assertCurrent }), {},
+        () => ({ persist: !policy.contextWithheld, value: null, assertBeforePersist: assertCurrent }),
+        retrievalRuntimeForRequest(this.memoryRetrieval, query, retrievalAnchorTimeMs, timeConstraint),
         { ...(validateCapabilities ? { beforeCommit: validateCapabilities } : {}) })
       assertCurrent()
       bindMemoryApplication(db, { ...task, repositoryRoot: project.repositoryRoot }, task.profile, result.context,
@@ -181,4 +190,12 @@ export class CoreTasks {
     if (!task.admitted && outcome === 'completed') throw new Error('Task is not admitted')
     await this.runtime.withDatabase(db => finishCoreTask(db, task, outcome))
   }
+}
+
+function retrievalRuntimeForRequest(config: MemoryRetrievalConfiguration, task: string, anchorTimeMs: number, structuredConstraint?: MemoryTimeConstraint) {
+  const memoryRetrieval = MemoryRetrievalConfig.parse(config)
+  if (memoryRetrieval.mode === 'off') return {}
+  const timeConstraint = structuredConstraint ?? timeConstraintForRequest(task, memoryRetrieval, anchorTimeMs)
+  return { memoryRetrieval, ...(timeConstraint === undefined ? {} : { timeConstraint }),
+    ...(memoryRetrieval.mode === 'observe' ? { onMemoryRetrievalObservation: reportMemoryRetrievalObservation } : {}) }
 }

@@ -16,6 +16,7 @@ import {
 import { dshTurnRequestId, resolveGroundedIntakeProfile } from './intake-profile-resolver.js'
 import type { DshIntakeAnswerer, DshUserQuestionAgent } from './user-interaction.js'
 import type { SkillDiscoveryMode } from '../skills/types.js'
+import { MemoryRetrievalConfig, type MemoryRetrievalConfig as MemoryRetrievalConfiguration } from '../memory/retrieval-contracts.js'
 
 export interface DshPreStepEvent {
   readonly agent: { readonly id: string }
@@ -105,6 +106,7 @@ export class DshIntakeGate {
     private akinatorMemory: ProbeConfig = AkinatorMemoryConfig.parse({}),
     private decisions?: DecisionService,
     private readonly completionMode: CompletionMode = 'shadow',
+    private readonly memoryRetrieval: MemoryRetrievalConfiguration = MemoryRetrievalConfig.parse({}),
   ) {
     this.#runtime = runtime
     this.#answerer = answerer
@@ -184,6 +186,7 @@ export class DshIntakeGate {
           dshLogStart: { sourceStartSeq: event.sourceStartSeq, sourceStartTurn: event.turn },
         }),
         ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
+        memoryRetrieval: this.memoryRetrieval,
         signal: event.signal,
       }, { akinatorMemory: this.akinatorMemory }))
       await this.decisions?.alias(`run:${prepared.run.runId}`, requestId)
@@ -220,6 +223,7 @@ export class DshIntakeGate {
           cwd: grounded.cwd,
           capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
           ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
+          memoryRetrieval: this.memoryRetrieval,
           signal: event.signal,
         }, { akinatorMemory: this.akinatorMemory }))
       }

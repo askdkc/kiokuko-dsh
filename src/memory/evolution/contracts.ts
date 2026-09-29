@@ -42,6 +42,14 @@ export interface EpisodeEvidence {
   kind: 'user' | 'action' | 'result'
   text: string
   outcome: 'passed' | 'failed' | 'unknown'
+  /** Native event time proof. Missing legacy values are deliberately unknown. */
+  occurred?: {
+    version: 1
+    timeMs: number
+    sessionId: string
+    nativeSequence: number
+    sourceDigest: string
+  }
   selectionVersion?: 2
   callId?: string
   actionSeq?: number

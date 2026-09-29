@@ -1,4 +1,5 @@
 import type { SqliteDatabase } from '../db/adapter.js';
+import type { MemoryTimeConstraint } from '../memory/retrieval-contracts.js'
 
 export type EmbeddingMode = 'off' | 'optional' | 'required';
 export type VectorBackendPreference = 'auto' | 'javascript' | 'sqlite-vec';
@@ -97,6 +98,8 @@ export interface VectorSearchInput {
   readonly distanceCeiling: number;
   readonly workspace?: string;
   readonly excludedWorkspaces?: readonly string[];
+  /** Restricts the candidate corpus before the vector backend applies its top-k. */
+  readonly timeConstraint?: MemoryTimeConstraint;
   readonly limit: number;
 }
 

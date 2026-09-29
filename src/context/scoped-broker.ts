@@ -29,9 +29,10 @@ import { readContextRunRetrievalState } from './run-state.js';
 import type { PreparedSemanticQuery } from '../embedding/types.js';
 import type { HybridSearchRuntime } from '../memory/hybrid-retrieval.js';
 import { projectMemoryEntry, type MemoryProjectionReceipt } from './memory-projection.js';
+import { MemoryRetrievalConfig, validateMemoryTimeConstraint } from '../memory/retrieval-contracts.js';
 
 export const SCOPED_CONTEXT_POLICY_VERSION = 'context-ranking-v7' as const;
-export type ScopedContextPolicy = typeof SCOPED_CONTEXT_POLICY_VERSION | 'context-ranking-v8' | 'context-ranking-v9';
+export type ScopedContextPolicy = typeof SCOPED_CONTEXT_POLICY_VERSION | 'context-ranking-v8' | 'context-ranking-v9' | 'context-ranking-v10';
 export const SCOPED_CONTEXT_DEFAULT_CHARACTER_BUDGET = 8_000;
 export const SCOPED_CONTEXT_MAX_CHARACTER_BUDGET = 100_000;
 
@@ -51,6 +52,8 @@ export interface ScopedContextQuery {
   /** Host-only focus: never changes the intake profile or execution authority. */
   focus?: { objective: string | null; identifiers: readonly string[]; constraints: string;
     retrievalDomainDigest: string; rankingFocusDigest: string };
+  /** Structured time bounds take precedence over parsing task text. */
+  timeConstraint?: import('../memory/retrieval-contracts.js').MemoryTimeConstraint;
 
 }
 
@@ -105,7 +108,10 @@ export interface ScopedContextGateDecision<T> {
   assertBeforePersist?: () => void;
 }
 
-export interface ScopedContextTimings { retrievalMs: number; rankingMs: number; deliveryMs: number }
+export interface ScopedContextTimings {
+  retrievalMs: number; rankingMs: number; deliveryMs: number;
+  memoryRetrievalObservations?: import('../memory/hybrid-retrieval.js').MemoryRetrievalObservation[];
+}
 
 export interface ScopedContextGatedResult<T> {
   context: ScopedContextResult | null;
@@ -203,16 +209,28 @@ function semanticQueryIdentity(runtime: HybridSearchRuntime): Record<string, unk
 }
 
 function snapshotSemanticRuntime(runtime: HybridSearchRuntime): HybridSearchRuntime {
-  if (runtime.semantic === undefined) return {};
-  return {
-    semantic: {
+  const snapshot: HybridSearchRuntime = {
+    ...(runtime.semantic === undefined ? {} : { semantic: {
       backend: runtime.semantic.backend,
       query: {
         ...runtime.semantic.query,
         vector: new Float32Array(runtime.semantic.query.vector),
       },
-    },
+    } }),
   };
+  const memoryRetrieval = runtime.memoryRetrieval === undefined ? undefined : MemoryRetrievalConfig.parse(runtime.memoryRetrieval)
+  if (memoryRetrieval?.mode !== 'active' && memoryRetrieval?.mode !== 'observe') return snapshot;
+  return {
+    ...snapshot,
+    memoryRetrieval,
+    ...(runtime.timeConstraint === undefined ? {} : { timeConstraint: validateMemoryTimeConstraint(runtime.timeConstraint) }),
+    ...(runtime.onMemoryRetrievalObservation === undefined ? {} : { onMemoryRetrievalObservation: runtime.onMemoryRetrievalObservation }),
+  };
+}
+
+function runtimePolicy(runtime: HybridSearchRuntime, focused: boolean): ScopedContextPolicy {
+  if (runtime.memoryRetrieval?.mode === 'active') return 'context-ranking-v10';
+  return focused ? 'context-ranking-v8' : SCOPED_CONTEXT_POLICY_VERSION;
 }
 
 function normalize(value: string): string {
@@ -536,7 +554,8 @@ function storedScopedItems(database: SqliteDatabase, delivery: ContextDeliveryVi
       revision: item.entryRevision,
     });
     const scoreComponents = item.scoreComponents as ScopedContextItem['scoreComponents'];
-    const projection = delivery.policyVersion === 'context-ranking-v6' ? null : projectMemoryEntry(database, current);
+    const projection = delivery.policyVersion === 'context-ranking-v6' ? null : projectMemoryEntry(database, current,
+      { includeEvidence: delivery.policyVersion === 'context-ranking-v10' });
     if (delivery.policyVersion !== 'context-ranking-v6' && (projection === null || canonicalContentHash(projection.projection) !== canonicalContentHash(item.projection))) {
       throw new KiokukoError('INTEGRITY_ERROR', 'Stored scoped memory projection no longer matches');
     }
@@ -616,19 +635,26 @@ async function collectScopedCandidates(
 ): Promise<ScopedContextItem[]> {
   const candidates = new Map<string, ScopedContextItem>();
   const retrievalStarted = timings === undefined ? 0 : performance.now();
+  const observedRuntime = timings && runtime.memoryRetrieval?.mode === 'observe' ? {
+    ...runtime,
+    onMemoryRetrievalObservation: (observation: import('../memory/hybrid-retrieval.js').MemoryRetrievalObservation) => {
+      (timings.memoryRetrievalObservations ??= []).push(observation)
+      runtime.onMemoryRetrievalObservation?.(observation)
+    },
+  } : runtime;
   const federated = project === undefined ? [] : await federatedEntries(database, {
     project,
     ...(fingerprint === undefined ? {} : { fingerprint }),
     query: queryText,
     projectOnly,
     limit: 200,
-  }, runtime);
+  }, observedRuntime);
   if (timings) timings.retrievalMs = performance.now() - retrievalStarted;
   for (const hit of federated) {
     const entry = hit.entry;
     if (reuseIneligible && fingerprint && applicabilityCompatibility(entry, fingerprint).incompatible) reuseIneligible.add(entry.id);
     const item = entryScore(entry, hit.origin, hit.score, hit.selectionReasons.includes('exact_signal_match'), queryText);
-    const projection = projectMemoryEntry(database, entry);
+    const projection = projectMemoryEntry(database, entry, { includeEvidence: runtime.memoryRetrieval?.mode === 'active' });
     if (projection === null) { omissions.push({ entryId: entry.id, reason: 'secret' }); continue; }
     Object.assign(item, projection);
     item.selectionReasons.push(...hit.selectionReasons);
@@ -652,8 +678,10 @@ async function prepareScopedContext(
   timings?: ScopedContextTimings,
   memoryReuse?: ScopedMemoryReuseEffect,
 ): Promise<PreparedScopedContext> {
-  let policyVersion: ScopedContextPolicy = raw.focus === undefined ? SCOPED_CONTEXT_POLICY_VERSION : 'context-ranking-v8';
-  const runtime = snapshotSemanticRuntime(requestedRuntime);
+  const runtime = snapshotSemanticRuntime(raw.timeConstraint === undefined ? requestedRuntime : {
+    ...requestedRuntime, timeConstraint: validateMemoryTimeConstraint(raw.timeConstraint),
+  });
+  let policyVersion: ScopedContextPolicy = runtimePolicy(runtime, raw.focus !== undefined);
   const semanticIdentity = semanticQueryIdentity(runtime);
   const taskProfileHash = canonicalContentHash(raw.taskProfile);
   const run = scopedRunContext(database, raw.runId);
@@ -703,7 +731,7 @@ async function prepareScopedContext(
     taskProfileHash, queryHash: '', policyVersion, items: baseline, deliveryId: null, truncated: false, untrusted: true });
   const reuseIdentity = reuseAllowed ? { runtime: memoryReuse!.runtime.identity,
     candidates: reuseCandidates.map(item => ({ entryId: item.entryId, revision: item.revision, projection: item.projection })) } : null;
-  if (reuseAllowed) policyVersion = 'context-ranking-v9';
+  if (reuseAllowed) policyVersion = runtime.memoryRetrieval?.mode === 'active' ? 'context-ranking-v10' : 'context-ranking-v9';
   const queryHash = canonicalContentHash({
     ...(reuseIdentity === null ? {} : { memoryReuse: reuseIdentity }),
     ...(raw.focus === undefined ? {} : { focus: raw.focus }),
@@ -726,6 +754,11 @@ async function prepareScopedContext(
     retrievalStateHash,
     runStateHash: run?.stateHash ?? null,
     semanticQuery: semanticIdentity,
+    ...(runtime.memoryRetrieval?.mode === 'active' ? { memoryRetrieval: {
+      settings: runtime.memoryRetrieval,
+      timeConstraint: runtime.timeConstraint ?? null,
+      projectionGeneration: retrievalStateHash,
+    } } : {}),
   });
   const replay = replayableDelivery(
     database,

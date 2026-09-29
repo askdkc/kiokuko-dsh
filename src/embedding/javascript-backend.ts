@@ -3,6 +3,7 @@ import { KiokukoError } from '../errors.js';
 import { requireWorkspace } from '../serialization/validate.js';
 import { decodeVector, cosineDistance, normalizeVector } from './vector.js';
 import type { VectorHit, VectorSearchBackend, VectorSearchInput } from './types.js';
+import { memoryTimePredicate } from '../memory/retrieval-sql.js'
 
 export const JAVASCRIPT_BACKEND_ID = 'javascript';
 export const MAX_JAVASCRIPT_BACKEND_ENTRIES = 10_000;
@@ -143,6 +144,8 @@ export class JavaScriptVectorSearchBackend implements VectorSearchBackend {
       clauses.push(`e.workspace NOT IN (${normalized.excludedWorkspaces.map(() => '?').join(', ')})`);
       parameters.push(...normalized.excludedWorkspaces);
     }
+    const time = memoryTimePredicate(input.timeConstraint)
+    if (time) { clauses.push(time.sql); parameters.push(...time.parameters) }
     parameters.push(MAX_JAVASCRIPT_BACKEND_ENTRIES + 1);
     const rows = database.prepare(`
       SELECT ee.entry_id, ee.dimensions, ee.embedding, ee.vector_hash

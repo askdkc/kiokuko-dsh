@@ -16,6 +16,7 @@ import { attachmentTypesFromMessages, nativeContextTokens, projectModelBinding }
 import { LISP_CODING_SERVICE } from '../lisp-service-key.js'
 import { SemanticCompactionConfig } from '../semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../../memory/reuse.js'
+import { MemoryRetrievalConfig } from '../../memory/retrieval-contracts.js'
 import { classifyTask } from '../decisions/workflows.js'
 import { TypedDecisionsConfig } from '../decisions/config.js'
 import { createDecisionService, mountDecisionCommand } from '../decisions/host.js'
@@ -59,6 +60,7 @@ export const CoreConfig = z.object({
   typedDecisions: TypedDecisionsConfig.prefault({}),
   answerReview: AnswerReviewConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),
+  memoryRetrieval: MemoryRetrievalConfig.prefault({}),
   semanticCompaction: SemanticCompactionConfig.prefault({}),
   modelHandoff: ModelHandoffConfig.prefault({}),
   modelAutoMode: ModelAutoConfig.prefault({}),
@@ -101,7 +103,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const answerReview = new AnswerReviewCoordinator(runtime, decisions, config.answerReview)
   const semanticCompaction = new SemanticCompactionCoordinator(ctx as any, decisions, root, config.observationPack)
   const modelHandoff = new ModelHandoff(ctx as any, decisions, root, config.modelHandoff)
-  const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions)
+  const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions, config.memoryRetrieval)
   function bind(agent: NativeAgent): void {
     if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || realpathSync(agent.session.header.cwd) !== root) throw new Error('Native task identity mismatch')
   }
@@ -258,7 +260,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           return current && current.agent === execution.agent && current.task.admitted && !current.checkpointed
             ? { ...current.task, repositoryRoot: root } : undefined
         },
-        async refresh(execution, query) {
+        async refresh(execution, query, timeConstraint) {
           bind(execution.agent)
           const current = active.get(execution.agent.session.id)
           if (!current || current.agent !== execution.agent) throw new Error('No task for memory refresh')
@@ -270,7 +272,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
             const capabilities = [...snapshot.skills.filter((skill: any) => skill.invocation?.modelInvocable !== false).map((skill: any) => ({ kind: 'skill', name: skill.name, ...(skill.description ? { description: skill.description } : {}) })),
               ...schemas.map((tool: any) => ({ kind: 'tool', name: tool.name, ...(tool.description ? { description: tool.description } : {}) }))]
             if (capabilityCatalogDigest(capabilities) !== capabilityCatalogDigest(current.task.capabilities)) throw new Error('Native capabilities changed during memory refresh')
-          })
+          }, timeConstraint)
           current.task = { ...current.task, ...memory }
           return memory
         },

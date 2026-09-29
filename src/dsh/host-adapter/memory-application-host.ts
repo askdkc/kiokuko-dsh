@@ -11,6 +11,7 @@ import type { DshCapabilityCatalog } from '../capability-catalog.js'
 import { mountMemoryApplication } from '../memory-application.js'
 import { refreshContinuedTaskContext } from '../task-intake.js'
 import { bindMemoryApplication, memoryRetrievalStatus } from '../../memory/application.js'
+import type { MemoryRetrievalConfig } from '../../memory/retrieval-contracts.js'
 
 interface MemoryApplicationHostDependencies {
   readonly ctx: Context
@@ -25,11 +26,12 @@ interface MemoryApplicationHostDependencies {
   readonly turnState: ReturnType<typeof createTurnState>
   readonly gate: DshIntakeGate
   readonly capabilityCatalog: (skills: NativeSkills | undefined, tools: NativeTools | undefined, context: DshCapabilityReadContext) => Promise<DshCapabilityCatalog>
+  readonly memoryRetrievalConfig: MemoryRetrievalConfig
 }
 
 export function mountHostMemoryApplication(deps: MemoryApplicationHostDependencies): (() => void) | undefined {
   const { ctx, runtime, tools, commands, skills, agents, sessions, delegation,
-    currentSession, turnState, gate, capabilityCatalog } = deps
+    currentSession, turnState, gate, capabilityCatalog, memoryRetrievalConfig } = deps
   return tools ? mountMemoryApplication({ tools: tools as any, on: (name: string, listener: (...args: any[]) => unknown, options?: { prepend?: boolean }) => onNativeServiceEvent(ctx, name, listener, options), ...(commands ? { commands: commands as any } : {}) }, {
     runtime,
     session(value) {
@@ -43,7 +45,7 @@ export function mountHostMemoryApplication(deps: MemoryApplicationHostDependenci
       if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || delegation.isChild(agent)) return undefined
       return { runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot }
     },
-    async refresh(execution, query) {
+    async refresh(execution, query, timeConstraint) {
       const item = currentSession(execution.agent.session.id)!
       const captured = item.prepared
       const assertCurrent = () => {
@@ -51,7 +53,8 @@ export function mountHostMemoryApplication(deps: MemoryApplicationHostDependenci
         if (item.closed || item.prepared !== captured || currentSession(item.sessionId) !== item) throw new Error('Memory refresh task changed')
       }
       const result = await runtime.withDatabase(async database => {
-        const value = await refreshContinuedTaskContext({ database, prepared: captured, task: query,
+        const value = await refreshContinuedTaskContext({ database, prepared: captured, task: query, memoryRetrieval: memoryRetrievalConfig,
+          ...(timeConstraint === undefined ? {} : { timeConstraint }),
           capabilities: [...item.catalog.skills, ...item.catalog.tools], assertCurrent,
           validateCapabilities: async () => {
             assertCurrent()

@@ -148,7 +148,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
     const adapter = createDshHostAdapter(ctx, { answerReview: resolvedConfig.answerReview, completion: resolvedConfig.completion, typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, modelHandoff: resolvedConfig.modelHandoff, modelAutoMode: resolvedConfig.modelAutoMode, observationPack: resolvedConfig.observationPack, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, toolExposure: resolvedConfig.toolExposure, modelRoutes: resolvedConfig.modelRoutes, diffReview: resolvedConfig.diffReview,
-      ennoMemory: resolvedConfig.ennoMemory, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, autoGlobalization: resolvedConfig.autoGlobalization, memoryReview: resolvedConfig.memoryReview })
+      ennoMemory: resolvedConfig.ennoMemory, memoryRetrieval: resolvedConfig.memoryRetrieval, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, autoGlobalization: resolvedConfig.autoGlobalization, memoryReview: resolvedConfig.memoryReview })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined
     let disposeExport: (() => Promise<void>) | undefined

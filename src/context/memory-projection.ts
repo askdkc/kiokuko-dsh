@@ -2,14 +2,14 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { SqliteDatabase } from '../db/adapter.js';
 import type { EntryRecord } from '../memory/entries.js';
+import { readEntry } from '../memory/entries.js';
 import type { Episode } from '../memory/evolution/contracts.js';
 import { digest } from '../memory/evolution/contracts.js';
 import { findSecret } from '../memory/secrets.js';
 import { KiokukoError } from '../errors.js';
 
 export const MEMORY_PROJECTION_VERSION = 1 as const;
-export const MemoryProjectionReceipt = z.object({
-  version: z.literal(MEMORY_PROJECTION_VERSION),
+const MemoryProjectionReceiptBase = {
   selectedFields: z.array(z.enum(['title', 'summary', 'body', 'episode-manifest'])).min(1).max(4),
   sourceRevision: z.number().int().positive(),
   sourceDigest: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -17,7 +17,16 @@ export const MemoryProjectionReceipt = z.object({
   textDigest: z.string().regex(/^[a-f0-9]{64}$/u),
   characters: z.number().int().nonnegative(),
   bytes: z.number().int().nonnegative(),
-}).strict();
+}
+const ProjectionSource = z.object({ entryId: z.string().min(1).max(256), revision: z.number().int().positive(), hash: z.string().regex(/^[a-f0-9]{64}$/u) }).strict()
+const ProjectionEpisode = z.object({ runId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256), start: z.number().int().nonnegative(), end: z.number().int().nonnegative(),
+  logDigest: z.string().regex(/^[a-f0-9]{64}$/u), evidenceDigest: z.string().regex(/^[a-f0-9]{64}$/u) }).strict()
+export const MemoryProjectionReceipt = z.union([
+  z.object({ version: z.literal(1), ...MemoryProjectionReceiptBase }).strict(),
+  z.object({ version: z.literal(2), ...MemoryProjectionReceiptBase,
+    episodes: z.array(ProjectionEpisode).max(6), sources: z.array(ProjectionSource).max(32),
+    evidenceReceiptDigest: z.string().regex(/^[a-f0-9]{64}$/u) }).strict(),
+]);
 export type MemoryProjectionReceipt = z.infer<typeof MemoryProjectionReceipt>;
 
 const INTERNAL_ID = /\b(?:run|entry|delivery|session|work[_-]?unit|orchestration|request)[_-]?(?:id)?\s*[:=]\s*[A-Za-z0-9._:-]{4,}\b/giu;
@@ -42,7 +51,7 @@ export function memoryTextDigest(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-export function projectMemoryEntry(database: SqliteDatabase, entry: EntryRecord): {
+export function projectMemoryEntry(database: SqliteDatabase, entry: EntryRecord, options: { includeEvidence?: boolean } = {}): {
   title: string; summary: string | null; bodyPreview: string; projection: MemoryProjectionReceipt;
 } | null {
   if (redactDshSourceText([entry.title, entry.summary ?? '', entry.body].join('\n')) === null) return null;
@@ -50,11 +59,14 @@ export function projectMemoryEntry(database: SqliteDatabase, entry: EntryRecord)
   let summary = entry.summary;
   let manifestDigest: string | null = null;
   let derived = false;
+  let episodes: Episode[] = []
+  let projectionEpisodes: z.infer<typeof ProjectionEpisode>[] = []
+  let projectionSources: z.infer<typeof ProjectionSource>[] = []
   if (entry.provenance.type === 'memory-evolution') {
     const row = database.prepare('SELECT manifest_json,input_digest,kind,algorithm FROM memory_derivations WHERE entry_id=? AND revision=?')
       .get<{ manifest_json: string; input_digest: string; kind: string; algorithm: string }>(entry.id, entry.revision);
     if (!row) throw new KiokukoError('INTEGRITY_ERROR', 'Memory projection requires its bound derivation');
-    const episodes = JSON.parse(row.manifest_json) as Episode[];
+    episodes = JSON.parse(row.manifest_json) as Episode[];
     if (!Array.isArray(episodes) || episodes.length < 1 || episodes.length > 6 || digest({ version: row.algorithm, kind: row.kind, episodes }) !== row.input_digest) {
       throw new KiokukoError('INTEGRITY_ERROR', 'Memory projection manifest is invalid');
     }
@@ -74,6 +86,25 @@ export function projectMemoryEntry(database: SqliteDatabase, entry: EntryRecord)
       observed: { successful: episode.successful, procedureSupported: episode.procedureSupported, recovered: episode.recovered },
     }));
     bodyPreview = `未検証の教訓候補 / Unverified ${row.kind === 'episode' ? 'episode' : 'lesson'}\nEach observation has its own conditions; association is not causal proof.\n${[...new Set(observations.map(value => JSON.stringify(value)))].join('\n')}`;
+    if (options.includeEvidence) {
+      const sourceMap = new Map<string, { entryId: string; revision: number; hash: string }>()
+      for (const source of episodes.flatMap(episode => episode.sources)) {
+        const key = `${source.entryId}\u0000${source.revision}\u0000${source.hash}`
+        sourceMap.set(key, source)
+      }
+      const sources = [...sourceMap.values()].sort((left, right) => left.entryId.localeCompare(right.entryId) || left.revision - right.revision)
+      projectionEpisodes = episodes.map(episode => ({ runId: episode.runId, sessionId: episode.sessionId, start: episode.start, end: episode.end,
+        logDigest: episode.logDigest, evidenceDigest: episode.evidenceDigest }))
+      projectionSources = sources
+      const citations = sources.map((source, index) => {
+        const sourceEntry = readEntry(database, { workspace: entry.workspace, entryId: source.entryId })
+        if (sourceEntry.revision !== source.revision || sourceEntry.contentHash !== source.hash) throw new KiokukoError('CONFLICT', 'Memory projection source revision changed')
+        const title = redactDshSourceText(sourceEntry.title)
+        return `Source ${index + 1}: ${title ?? 'stored source'} (revision ${source.revision}, hash ${source.hash.slice(0, 12)})`
+      })
+      const episodeReferences = episodes.map((episode, index) => `Episode ${index + 1}: native sequence ${episode.start}-${episode.end}, log ${episode.logDigest.slice(0, 12)}`)
+      bodyPreview += `\nEvidence references:\n${[...episodeReferences, ...citations].join('\n')}`
+    }
     summary = null;
     manifestDigest = row.input_digest;
     derived = true;
@@ -86,8 +117,15 @@ export function projectMemoryEntry(database: SqliteDatabase, entry: EntryRecord)
   for (const [key, value] of [['title', entry.title], ['summary', summary], [derived ? 'episode-manifest' : 'body', bodyPreview]] as const) {
     if (value && !seen.has(value)) { seen.add(value); selectedFields.push(key); }
   }
-  return { ...fields, projection: { version: MEMORY_PROJECTION_VERSION, selectedFields, sourceRevision: entry.revision,
-    sourceDigest: entry.contentHash, manifestDigest, textDigest: memoryTextDigest(text), characters: Array.from(text).length, bytes: Buffer.byteLength(text) } };
+  const base = { selectedFields, sourceRevision: entry.revision,
+    sourceDigest: entry.contentHash, manifestDigest, textDigest: memoryTextDigest(text), characters: Array.from(text).length, bytes: Buffer.byteLength(text) }
+  const projection: MemoryProjectionReceipt = options.includeEvidence ? {
+    version: 2, ...base,
+    episodes: projectionEpisodes,
+    sources: projectionSources,
+    evidenceReceiptDigest: digest({ episodes: projectionEpisodes, sources: projectionSources }),
+  } : { version: MEMORY_PROJECTION_VERSION, ...base }
+  return { ...fields, projection };
 }
 
 export function assertMemoryProjection(item: { title: string; summary: string | null; bodyPreview: string; projection?: MemoryProjectionReceipt }): void {
@@ -96,5 +134,8 @@ export function assertMemoryProjection(item: { title: string; summary: string | 
   const text = renderMemoryFields(item);
   if (text === null || receipt.textDigest !== memoryTextDigest(text) || receipt.characters !== Array.from(text).length || receipt.bytes !== Buffer.byteLength(text)) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Memory projection differs from its delivery receipt');
+  }
+  if (receipt.version === 2 && receipt.evidenceReceiptDigest !== digest({ episodes: receipt.episodes, sources: receipt.sources })) {
+    throw new KiokukoError('INTEGRITY_ERROR', 'Memory projection provenance differs from its delivery receipt');
   }
 }

@@ -42,6 +42,7 @@ import { AnswerReviewCoordinator } from './answer-review/coordinator.js'
 import { AnswerReviewConfig } from './answer-review/contracts.js'
 import { AutoMemoryReviewCoordinator, type ReviewNativeSession } from './auto-memory-review.js'
 import { MemoryReviewConfig } from '../memory/review/contracts.js'
+import { MemoryRetrievalConfig } from '../memory/retrieval-contracts.js'
 
 
 
@@ -142,6 +143,7 @@ export interface DshHostAdapterOptions {
   readonly modelAutoMode?: import('zod').z.input<typeof ModelAutoConfig>
   readonly typedDecisions?: import('zod').z.input<typeof TypedDecisionsConfig>
   readonly memoryReuse?: import('zod').z.input<typeof MemoryReuseConfig>
+  readonly memoryRetrieval?: import('zod').z.input<typeof MemoryRetrievalConfig>
   /** An enclosing composition owns and closes this shared runtime. */
   readonly runtime?: DshCoreRuntime
   readonly skillPrompts?: DshSkillPrompts
@@ -339,6 +341,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const continuityConfig = ContinuityConfig.parse(options.continuity ?? {})
   const evolutionConfig = MemoryEvolutionConfig.parse(options.memoryEvolution ?? {})
   const finalizationConfig = FinalizationConfig.parse(options.finalization ?? {})
+  const memoryRetrievalConfig = MemoryRetrievalConfig.parse(options.memoryRetrieval ?? {})
   const native = ctx as unknown as AdapterContext
   const skills = native.get('skills', false) as NativeSkills | undefined
   const systemPrompt = native.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] | undefined
@@ -460,7 +463,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     native, skills, tools, userQuestions, sessions, agents, deepPlanning, modelCatalog, modelCompatibility,
     modelRoutes: options.modelRoutes, now: options.now, runtime, decisions, answerReview,
     delegation, executionSupport, ennoMemory, memoryFinalizer, autoReview, sessionMirror,
-    akinatorMemoryConfig, completionMode, turnState,
+    akinatorMemoryConfig, memoryRetrievalConfig, completionMode, turnState,
     getSelection: runId => selections.get(runId), setSelection: (runId, value) => { selections.set(runId, value) },
     refreshEnnoMemory, executionBinding, captureInitialInput,
     contextMessages: (event, pending) => contextMessages(event, pending),
@@ -524,7 +527,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const { boundaryWorker, ennoController, deliverCompletionReport, boundarySessionStartDisposer } = boundaries
   const applicationDisposer = mountHostMemoryApplication({
     ctx, runtime, tools, commands, skills, agents, sessions, delegation, currentSession,
-    turnState, gate, capabilityCatalog,
+    turnState, gate, capabilityCatalog, memoryRetrievalConfig,
   })
   const completionDisposer = tools ? mountTaskCompletion({ tools: tools as any,
     on: (name, listener, options) => onNativeServiceEvent(ctx, name, listener, options) }, {

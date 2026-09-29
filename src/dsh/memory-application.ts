@@ -6,12 +6,13 @@ import type { DshNativeCommandDefinition } from './commands.js'
 import { beginMemoryExecution, completeMemoryExecution, memoryApplicationReviewSchema,
   memoryApplicationStatus, recordMemoryApplicationReview, recordMemoryApplicationReviewBatch, type MemoryApplicationIdentity } from '../memory/application.js'
 import { autoGlobalizationStatus } from '../memory/auto-globalization.js'
+import { MemoryTimeConstraint } from '../memory/retrieval-contracts.js'
 
 const inputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('status') }).strict(),
   z.object({ action: z.literal('review'), review: memoryApplicationReviewSchema }).strict(),
   z.object({ action: z.literal('review_batch'), reviews: z.array(memoryApplicationReviewSchema).min(1).max(32) }).strict(),
-  z.object({ action: z.literal('refresh'), query: z.string().trim().min(1).max(4000) }).strict(),
+  z.object({ action: z.literal('refresh'), query: z.string().trim().min(1).max(4000), timeConstraint: MemoryTimeConstraint.optional() }).strict(),
 ])
 // Model providers require an object at the root of every tool schema. Keep
 // action-specific validation in inputSchema after the native tool call arrives.
@@ -20,6 +21,7 @@ const transportSchema = z.object({
   review: memoryApplicationReviewSchema.optional(),
   reviews: z.array(memoryApplicationReviewSchema).min(1).max(32).optional(),
   query: z.string().trim().min(1).max(4000).optional(),
+  timeConstraint: MemoryTimeConstraint.optional(),
 }).strict()
 export const MEMORY_APPLICATION_GUIDANCE = 'Use task_memory_review(action=status) once, then submit independent pending decisions with action=review_batch (up to 32); action=review remains available for one. Adoption and contradiction require relevant source paths. Adoption also needs an invariant, counterexample, method and command: an exact foreground Bash command at repository-root cwd, or an approved Enno verifier expressed as executable and arguments joined by single spaces. For topic-based non-applicability, use paths:[]; supply paths when the judgment depends on current source. Refresh retains decisions when delivered entry revisions and mode stay unchanged; a revised entry or mode change starts a new review generation. New entries need decisions, and changed delivery invalidates execution proof. Only a typed successful foreground result on unchanged declared sources counts as observed proof. Use action=refresh for a concrete new error or target; it keeps the run. Missing proof cannot complete successfully. Judgments are model-reported.'
 
@@ -34,7 +36,7 @@ export interface ApplicationHost {
   /** Exact native Agent and Session matching is the caller's responsibility. */
   resolve(execution: NativeExecution): MemoryApplicationIdentity | undefined
   session?(agent: unknown): { sessionId: string; repositoryRoot: string } | undefined
-  refresh(execution: NativeExecution, query: string): Promise<unknown>
+  refresh(execution: NativeExecution, query: string, timeConstraint?: import('../memory/retrieval-contracts.js').MemoryTimeConstraint): Promise<unknown>
 }
 // Exact native read tools only; never classify arbitrary shell strings as read-only.
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status'])
@@ -98,7 +100,7 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
       if (!identity || execution.parent !== undefined && !isPtcSubcall(execution) || execution.name !== 'task_memory_review') throw new Error('No active native task for memory application')
       execution.signal.throwIfAborted()
       const input = inputSchema.parse(args)
-      if (input.action === 'refresh') return host.refresh(execution, input.query)
+      if (input.action === 'refresh') return host.refresh(execution, input.query, input.timeConstraint)
       return host.runtime.withDatabase(db => {
         execution.signal.throwIfAborted()
         if (host.resolve(execution)?.runId !== identity.runId) throw new Error('Native task changed')

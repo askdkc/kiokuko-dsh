@@ -7,14 +7,30 @@ import { parseRetrievalQuery, normalizeSearchSignal, type ParsedRetrievalQuery }
 import { compareCanonicalStrings, ENTRY_KINDS, ENTRY_STATUSES, type EntryKind, type EntryStatus } from '../serialization/validate.js';
 import { readEntry, type EntryRecord } from './entries.js';
 import { isExternalSkillReference, readExternalSkill } from '../skills/store.js';
+import { MemoryRetrievalConfig, type MemoryTimeConstraint, validateMemoryTimeConstraint } from './retrieval-contracts.js';
+import { memoryTimePredicate } from './retrieval-sql.js';
 
-export type RetrievalLane = 'exact-signal' | 'word-fts' | 'trigram' | 'like' | 'tag' | 'semantic';
+export type RetrievalLane = 'exact-signal' | 'word-fts' | 'trigram' | 'like' | 'tag' | 'semantic' | 'related';
+
+export interface MemoryRetrievalObservation {
+  readonly workspace: string;
+  readonly mode: 'observe';
+  readonly timeBasis: MemoryTimeConstraint['basis'] | null;
+  readonly baselineCandidates: number;
+  readonly restrictedCandidates: number;
+  readonly relatedCandidates: number;
+  readonly addedByRelated: number;
+}
 
 export interface HybridSearchRuntime {
   readonly semantic?: {
     readonly query: PreparedSemanticQuery;
     readonly backend: VectorSearchBackend;
   };
+  readonly memoryRetrieval?: MemoryRetrievalConfig;
+  readonly timeConstraint?: MemoryTimeConstraint;
+  /** Optional count-only diagnostics. Observer failures never affect retrieval. */
+  readonly onMemoryRetrievalObservation?: (observation: MemoryRetrievalObservation) => void;
 }
 
 export interface HybridSearchInput {
@@ -25,6 +41,8 @@ export interface HybridSearchInput {
   status?: EntryStatus;
   tag?: string;
   includeSuperseded?: boolean;
+  /** Bound by the request and applied in SQL before each lane limit. */
+  timeConstraint?: MemoryTimeConstraint;
 }
 
 export interface RetrievalCandidate {
@@ -39,6 +57,9 @@ interface SearchRow extends SqliteRow {
   id: string;
   score?: number;
   cjkWindow?: boolean;
+  seed_id?: string;
+  signal_type?: string;
+  signal_value?: string;
 }
 
 const MAX_LANE_CANDIDATES = 120;
@@ -51,6 +72,7 @@ const LANE_WEIGHTS: Record<RetrievalLane, number> = {
   like: 0.75,
   tag: 3,
   semantic: 2.5,
+  related: 1.5,
 };
 
 interface ExternalMappingRow extends SqliteRow {
@@ -171,6 +193,8 @@ function hasCanonicalWordMatch(database: SqliteDatabase, input: HybridSearchInpu
 function filterSql(input: HybridSearchInput, parameters: Array<string | number>): string {
   const clauses = ['e.workspace = ?'];
   parameters.push(input.workspace);
+  const time = memoryTimePredicate(input.timeConstraint)
+  if (time) { clauses.push(time.sql); parameters.push(...time.parameters) }
   return clauses.join(' AND ');
 }
 
@@ -336,6 +360,7 @@ function semanticLane(database: SqliteDatabase, input: HybridSearchInput, runtim
     queryVector: query.vector,
     distanceCeiling: query.distanceCeiling,
     workspace: input.workspace,
+    ...(input.timeConstraint === undefined ? {} : { timeConstraint: input.timeConstraint }),
     limit: MAX_LANE_CANDIDATES,
   });
   if (!Array.isArray(hits) || hits.length > MAX_LANE_CANDIDATES) {
@@ -355,6 +380,59 @@ function semanticLane(database: SqliteDatabase, input: HybridSearchInput, runtim
   return [...canonical.entries()]
     .sort((left, right) => left[1] - right[1] || compareCanonicalStrings(left[0], right[0]))
     .map(([id]) => ({ id }));
+}
+
+function canonicalSignalValues(entry: EntryRecord, type: string): Set<string> {
+  const scope = entry.scope as Record<string, unknown>
+  const signals = typeof scope.signals === 'object' && scope.signals !== null && !Array.isArray(scope.signals)
+    ? scope.signals as Record<string, unknown> : {}
+  const structured = signals[type === 'path' ? 'paths' : 'symbols']
+  const stored = Array.isArray(structured) ? structured.filter((value): value is string => typeof value === 'string') : []
+  const text = [entry.title, entry.body, entry.summary ?? ''].join('\n')
+  const pattern = type === 'path'
+    ? /\/[A-Za-z0-9_./-]{2,}/gu
+    : /(?:@[A-Za-z][\w.-]*|\$[A-Za-z_][\w$]*|[A-Za-z_$][\w$]*(?:::|->)[\w$:.()\\-]+)/gu
+  return new Set([...stored, ...(text.match(pattern) ?? [])].map(value => value.normalize('NFKC')))
+}
+
+function relatedLane(database: SqliteDatabase, input: HybridSearchInput, seedIds: readonly string[], runtime: HybridSearchRuntime): SearchRow[] {
+  const retrieval = runtime.memoryRetrieval
+  if ((retrieval?.mode !== 'active' && retrieval?.mode !== 'observe') || seedIds.length === 0) return []
+  const seeds = [...new Set(seedIds)].slice(0, 24)
+  const parameters: Array<string | number> = []
+  const filters = filterSql(input, parameters)
+  const rows = database.prepare(`
+    SELECT e.id, seed.id AS seed_id, s1.signal_type AS signal_type,
+           s1.normalized_value AS signal_value, COUNT(*) AS score
+      FROM entries AS seed
+      JOIN entry_search_signals AS s1 ON s1.entry_id = seed.id
+      JOIN entry_search_signals AS s2 ON s2.signal_type = s1.signal_type AND s2.normalized_value = s1.normalized_value
+      JOIN entries AS e ON e.id = s2.entry_id AND e.workspace = seed.workspace
+      JOIN entry_revisions AS r ON r.entry_id = e.id AND r.revision = e.current_revision
+     WHERE seed.id IN (${seeds.map(() => '?').join(', ')})
+       AND seed.workspace = ? AND e.id <> seed.id AND ${filters}
+     GROUP BY e.id, seed.id, s1.signal_type, s1.normalized_value
+     ORDER BY score DESC, ${rankSql()}
+     LIMIT ?
+  `).all<SearchRow>(...seeds, input.workspace, ...parameters, retrieval.maxRelatedCandidates * 12)
+  const cache = new Map<string, EntryRecord>()
+  const entry = (id: string): EntryRecord => {
+    let value = cache.get(id)
+    if (!value) { value = readEntry(database, { workspace: input.workspace, entryId: id }); cache.set(id, value) }
+    return value
+  }
+  const verified = new Map<string, number>()
+  for (const row of rows) {
+    if (!row.seed_id || !row.signal_type || !row.signal_value) continue
+    if (row.signal_type === 'path' || row.signal_type === 'symbol') {
+      const left = canonicalSignalValues(entry(row.seed_id), row.signal_type)
+      const right = canonicalSignalValues(entry(row.id), row.signal_type)
+      if (![...left].some(value => right.has(value) && normalizeSearchSignal(value) === row.signal_value)) continue
+    }
+    verified.set(row.id, (verified.get(row.id) ?? 0) + 1)
+  }
+  return [...verified.entries()].sort((left, right) => right[1] - left[1] || compareCanonicalStrings(left[0], right[0]))
+    .slice(0, retrieval.maxRelatedCandidates).map(([id, score]) => ({ id, score }))
 }
 
 function laneRows(
@@ -387,6 +465,10 @@ export function hybridSearch(
   if (input.kind !== undefined && !ENTRY_KINDS.includes(input.kind)) invalid();
   if (input.status !== undefined && !ENTRY_STATUSES.includes(input.status)) invalid();
   if (input.tag !== undefined && (typeof input.tag !== 'string' || input.tag.length === 0)) invalid();
+  const memoryRetrieval = runtime.memoryRetrieval === undefined ? MemoryRetrievalConfig.parse({}) : MemoryRetrievalConfig.parse(runtime.memoryRetrieval)
+  const timeConstraint = runtime.timeConstraint === undefined ? undefined : validateMemoryTimeConstraint(runtime.timeConstraint)
+  const effectiveRuntime: HybridSearchRuntime = { ...runtime, memoryRetrieval, ...(timeConstraint ? { timeConstraint } : {}) }
+  const effectiveInput = memoryRetrieval.mode === 'active' && timeConstraint ? { ...input, timeConstraint } : input
   const parsed = parseRetrievalQuery(input.query);
   if (parsed.normalized.length === 0) return [];
   // Treat SQL/FTS-looking operator soup as data, not as a broad OR query. A
@@ -394,7 +476,9 @@ export function hybridSearch(
   const lexicalAllowed = !/(?:--|\/\*|\*\/|["']\s*(?:OR|AND)\b|\b(?:OR|AND)\s+\d+\s*[=<>])/iu.test(parsed.normalized)
     || parsed.exactSignals.length > 0;
   const merged = new Map<string, RetrievalCandidate>();
-  for (const [lane, rows] of laneRows(database, input, parsed, runtime, lexicalAllowed)) {
+  const lanes = laneRows(database, effectiveInput, parsed, effectiveRuntime, lexicalAllowed)
+  const baselineIds = new Set(lanes.flatMap(([, rows]) => rows.map(row => row.id)))
+  for (const [lane, rows] of lanes) {
     const seen = new Set<string>();
     let rank = 0;
     for (const row of rows) {
@@ -417,6 +501,35 @@ export function hybridSearch(
       merged.set(row.id, existing);
       if (merged.size >= MAX_MERGED_CANDIDATES) break;
     }
+  }
+  const seedIds = [...merged.values()]
+    .sort((left, right) => right.fusedScore - left.fusedScore || compareCanonicalStrings(left.entryId, right.entryId))
+    .slice(0, 24).map(candidate => candidate.entryId)
+  if (memoryRetrieval.mode === 'active') {
+    const related = relatedLane(database, effectiveInput, seedIds, effectiveRuntime)
+    for (let index = 0; index < related.length; index += 1) {
+      const row = related[index]!
+      const rank = index + 1
+      const candidate = merged.get(row.id) ?? { entryId: row.id, fusedScore: 0, laneRanks: {}, matchedSignals: [], reasons: [] }
+      candidate.fusedScore += LANE_WEIGHTS.related / (RRF_K + rank)
+      candidate.laneRanks.related = Math.min(candidate.laneRanks.related ?? rank, rank)
+      candidate.reasons.push('related_signal_match')
+      merged.set(row.id, candidate)
+    }
+  } else if (memoryRetrieval.mode === 'observe' && runtime.onMemoryRetrievalObservation) {
+    // Shadow the bounded feature lanes without changing the ordinary result.
+    // Search vectors are already prepared by the caller; this adds no model call.
+    const shadowInput = timeConstraint === undefined ? input : { ...input, timeConstraint }
+    const shadowLanes = timeConstraint === undefined ? lanes : laneRows(database, shadowInput, parsed, effectiveRuntime, lexicalAllowed)
+    const restrictedIds = new Set(shadowLanes.flatMap(([, rows]) => rows.map(row => row.id)))
+    const related = relatedLane(database, shadowInput, seedIds, effectiveRuntime)
+    const shadowIds = new Set([...restrictedIds, ...related.map(row => row.id)])
+    try {
+      runtime.onMemoryRetrievalObservation({ workspace: input.workspace, mode: 'observe',
+        timeBasis: timeConstraint?.basis ?? null, baselineCandidates: baselineIds.size,
+        restrictedCandidates: restrictedIds.size, relatedCandidates: related.length,
+        addedByRelated: [...shadowIds].filter(id => !baselineIds.has(id)).length })
+    } catch { /* Diagnostics cannot affect normal retrieval. */ }
   }
   const candidates = [...merged.values()]
     .map((candidate) => ({

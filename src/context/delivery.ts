@@ -303,7 +303,12 @@ function deliveryPolicyVersion(): string {
 }
 
 function storedDeliveryPolicyMatches(policyVersion: string): boolean {
-  return policyVersion === deliveryPolicyVersion() || policyVersion === 'context-ranking-v6' || policyVersion === 'context-ranking-v8' || policyVersion === 'context-ranking-v9';
+  return policyVersion === deliveryPolicyVersion() || policyVersion === 'context-ranking-v6' || policyVersion === 'context-ranking-v8'
+    || policyVersion === 'context-ranking-v9' || policyVersion === 'context-ranking-v10';
+}
+
+function policyRequiresProjection(policyVersion: string): boolean {
+  return policyVersion === deliveryPolicyVersion() || policyVersion === 'context-ranking-v10'
 }
 
 function storedNonNegativeSafeInteger(value: unknown): number {
@@ -447,7 +452,10 @@ function validateContextDeliveryInput(value: unknown): ValidatedContextDeliveryI
     const createdAt = timestamp(readField(object, 'createdAt'));
     if (!storedDeliveryPolicyMatches(policyVersion)) validation();
     const items = validateDeliveryItems(readField(object, 'items'));
-    if (policyVersion === deliveryPolicyVersion() && (items.some(item => !item.projection || item.projection.sourceRevision !== item.entryRevision) || items.reduce((sum,item) => sum + item.projection!.characters, 0) !== charCount)) validation();
+    if (policyRequiresProjection(policyVersion) && (items.some(item => !item.projection || item.projection.sourceRevision !== item.entryRevision
+      || policyVersion === 'context-ranking-v10' && item.projection.version !== 2
+      || policyVersion === deliveryPolicyVersion() && item.projection.version !== 1)
+      || items.reduce((sum,item) => sum + item.projection!.characters, 0) !== charCount)) validation();
     if (policyVersion === 'context-ranking-v6' && items.some(item => item.projection !== undefined)) validation();
     return {
       workspace,
@@ -638,7 +646,9 @@ function assertRunForWrite(database: SqliteDatabase, input: ValidatedContextDeli
     if (candidate.revision_workspace !== entryWorkspace) integrity();
     const entry = strictCurrentEntry(database, entryWorkspace, item.entryId, origin !== 'project');
     if (entry.revision !== item.entryRevision) conflict();
-    if (input.policyVersion === deliveryPolicyVersion() && canonicalJson(projectMemoryEntry(database, entry)?.projection ?? null) !== canonicalJson(item.projection ?? null)) conflict();
+    if (policyRequiresProjection(input.policyVersion)
+      && canonicalJson(projectMemoryEntry(database, entry, { includeEvidence: input.policyVersion === 'context-ranking-v10' })?.projection ?? null)
+        !== canonicalJson(item.projection ?? null)) conflict();
     if (!isRetrievableEntry(database, entry) || entry.status === 'superseded') conflict();
     if (!entryOriginMatchesWorkspace({ origin, runWorkspace: input.workspace, entryWorkspace: entry.workspace })) notFound();
     if (origin === 'global') {
@@ -751,7 +761,9 @@ function validateStoredEntries(database: SqliteDatabase, header: ContextDelivery
     if (row.projection_json !== null) {
       try { projection = MemoryProjectionReceipt.parse(validateStoredJson(row.projection_json)); } catch { integrity(); }
     }
-    if (header.policyVersion === deliveryPolicyVersion() && (!projection || projection.sourceRevision !== entryRevision)) integrity();
+    if (policyRequiresProjection(header.policyVersion) && (!projection || projection.sourceRevision !== entryRevision
+      || header.policyVersion === 'context-ranking-v10' && projection.version !== 2
+      || header.policyVersion === deliveryPolicyVersion() && projection.version !== 1)) integrity();
     if (header.policyVersion === 'context-ranking-v6' && projection !== undefined) integrity();
     return { entryId, entryRevision, rank, scoreComponents: score, selectionReasons: reasons, ...(origin === 'project' ? {} : { origin }), ...(projection === undefined ? {} : { projection }) };
   });

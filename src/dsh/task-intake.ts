@@ -68,6 +68,8 @@ import { ennoStateForPreparedTask } from '../enno-oduno/service.js';
 import { initializeTaskCompletion, type CompletionMode } from './task-completion.js';
 import { prepareEmbeddingSearchRuntime } from '../embedding/runtime.js';
 import type { EmbeddingRuntime } from '../embedding/types.js';
+import { MemoryRetrievalConfig, timeConstraintForRequest, validateMemoryTimeConstraint, type MemoryTimeConstraint } from '../memory/retrieval-contracts.js';
+import { reportMemoryRetrievalObservation } from './memory-retrieval-observer.js';
 import {
   ENNO_MAX_EXTERNAL_SKILLS,
   ENNO_MAX_TOTAL_SKILL_QUERIES,
@@ -92,6 +94,9 @@ export interface PrepareAgentTaskInput {
   skillDiscoveryMode?: SkillDiscoveryMode;
   fetchImpl?: typeof fetch;
   embeddingRuntime?: EmbeddingRuntime;
+  memoryRetrieval?: import('../memory/retrieval-contracts.js').MemoryRetrievalConfig;
+  /** Structured bounds win over dates inferred from task text. */
+  timeConstraint?: MemoryTimeConstraint;
   signal?: AbortSignal;
 }
 
@@ -108,6 +113,9 @@ export interface AnswerAgentTaskInput {
   skillDiscoveryMode?: SkillDiscoveryMode;
   fetchImpl?: typeof fetch;
   embeddingRuntime?: EmbeddingRuntime;
+  memoryRetrieval?: import('../memory/retrieval-contracts.js').MemoryRetrievalConfig;
+  /** Structured bounds win over dates inferred from the answer/task text. */
+  timeConstraint?: MemoryTimeConstraint;
   signal?: AbortSignal;
 }
 
@@ -459,6 +467,9 @@ interface FinalizeAgentTaskInput {
   discoveryMode: SkillDiscoveryMode;
   fetchImpl?: typeof fetch;
   embeddingRuntime?: EmbeddingRuntime;
+  memoryRetrieval?: import('../memory/retrieval-contracts.js').MemoryRetrievalConfig;
+  timeConstraint?: MemoryTimeConstraint;
+  retrievalAnchorTimeMs: number;
   signal?: AbortSignal;
 }
 
@@ -488,7 +499,23 @@ async function searchRuntime(
   input: FinalizeAgentTaskInput,
   query: TaskContextQuery,
 ): Promise<import('../memory/hybrid-retrieval.js').HybridSearchRuntime> {
-  return prepareEmbeddingSearchRuntime(input.embeddingRuntime, input.database, renderScopedRetrievalQuery(query));
+  const semantic = await prepareEmbeddingSearchRuntime(input.embeddingRuntime, input.database, renderScopedRetrievalQuery(query));
+  return { ...semantic, ...retrievalRuntimeForRequest(input.memoryRetrieval, query.task, input.retrievalAnchorTimeMs, input.timeConstraint) };
+}
+
+function retrievalRuntimeForRequest(
+  configuration: import('../memory/retrieval-contracts.js').MemoryRetrievalConfig | undefined,
+  task: string,
+  anchorTimeMs = Date.now(),
+  structuredConstraint?: MemoryTimeConstraint,
+): import('../memory/hybrid-retrieval.js').HybridSearchRuntime {
+  const memoryRetrieval = MemoryRetrievalConfig.parse(configuration ?? {});
+  if (memoryRetrieval.mode === 'off') return {};
+  const timeConstraint = structuredConstraint === undefined
+    ? timeConstraintForRequest(task, memoryRetrieval, anchorTimeMs)
+    : validateMemoryTimeConstraint(structuredConstraint);
+  return { memoryRetrieval, ...(timeConstraint === undefined ? {} : { timeConstraint }),
+    ...(memoryRetrieval.mode === 'observe' ? { onMemoryRetrievalObservation: reportMemoryRetrievalObservation } : {}) };
 }
 
 async function drainEmbeddingsBeforeRetrieval(
@@ -669,8 +696,11 @@ interface FinalTaskContextInput {
 
 export async function refreshContinuedTaskContext(input: {
   database: SqliteDatabase; prepared: PreparedAgentTask; task: string; capabilities: readonly unknown[]; memoryReuse?: MemoryReuseRuntime | undefined;
+  memoryRetrieval?: import('../memory/retrieval-contracts.js').MemoryRetrievalConfig;
+  timeConstraint?: MemoryTimeConstraint;
   assertCurrent: () => void; validateCapabilities: () => Promise<void>
 }): Promise<Pick<PreparedAgentTask, 'context' | 'memoryPolicy'>> {
+  const retrievalAnchorTimeMs = Date.now();
   const { database, prepared } = input
   const snapshot = captureProjectManifestSnapshot(prepared.project)
   const runState=readContextRunRetrievalState(database,prepared.run.runId)
@@ -685,7 +715,7 @@ export async function refreshContinuedTaskContext(input: {
     const capabilities=resolveCapabilities({task:input.task,profile:prepared.intake.profile,recommendedTags:prepared.intake.recommendedTags,capabilities:input.capabilities,memoryUse})
     return {persist:!policy.contextWithheld&&!hasBlockingRequiredCapability(capabilities),value:policy,
       assertBeforePersist:()=>{assertCurrent();assertScopedMemoryUseSignal(database,prepared.project.workspace,candidate,memoryUse)}}
-  },{}, {beforeCommit:input.validateCapabilities, ...(input.memoryReuse ? {memoryReuse:{runtime:input.memoryReuse, authorize: baseline => {
+  }, retrievalRuntimeForRequest(input.memoryRetrieval, input.task, retrievalAnchorTimeMs, input.timeConstraint), {beforeCommit:input.validateCapabilities, ...(input.memoryReuse ? {memoryReuse:{runtime:input.memoryReuse, authorize: baseline => {
     assertCurrent();
     const memoryUse=scopedMemoryUseSignal(database,prepared.project.workspace,baseline);
     return !deriveMemoryPolicy(prepared.intake.profile,memoryUse,input.capabilities).contextWithheld
@@ -842,6 +872,7 @@ function preparedEnnoState(
 }
 
 export async function prepareAgentTask(database: SqliteDatabase, input: PrepareAgentTaskInput, host: { akinatorMemory?: ProbeConfig } = {}): Promise<PreparedAgentTask> {
+  const retrievalAnchorTimeMs = Date.now();
   const requestId = taskRequestId(input.requestId);
   const maxContextChars = taskContextCharacterBudget(input.maxContextChars);
   const { project, executionContext } = await requireProject(database, input.cwd);
@@ -926,6 +957,9 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
       maxContextChars,
       discoveryMode,
       memoryReuse: input.memoryReuse,
+      ...(input.memoryRetrieval === undefined ? {} : { memoryRetrieval: input.memoryRetrieval }),
+      ...(input.timeConstraint === undefined ? {} : { timeConstraint: input.timeConstraint }),
+      retrievalAnchorTimeMs,
       ...(input.embeddingRuntime === undefined ? {} : { embeddingRuntime: input.embeddingRuntime }),
       ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
@@ -946,6 +980,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
 }
 
 export async function answerAgentTask(database: SqliteDatabase, input: AnswerAgentTaskInput, host: { akinatorMemory?: ProbeConfig } = {}): Promise<PreparedAgentTask> {
+  const retrievalAnchorTimeMs = Date.now();
   const maxContextChars = taskContextCharacterBudget(input.maxContextChars);
   const { project, executionContext } = await requireRegisteredProjectReadOnly(database, input.cwd);
   await drainEmbeddingsBeforeRetrieval(input.embeddingRuntime, project.workspace);
@@ -991,6 +1026,9 @@ export async function answerAgentTask(database: SqliteDatabase, input: AnswerAge
       maxContextChars,
       discoveryMode,
       memoryReuse: input.memoryReuse,
+      ...(input.memoryRetrieval === undefined ? {} : { memoryRetrieval: input.memoryRetrieval }),
+      ...(input.timeConstraint === undefined ? {} : { timeConstraint: input.timeConstraint }),
+      retrievalAnchorTimeMs,
       ...(input.embeddingRuntime === undefined ? {} : { embeddingRuntime: input.embeddingRuntime }),
       ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),

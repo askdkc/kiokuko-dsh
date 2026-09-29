@@ -109,6 +109,10 @@ export function saveEpisode(db: SqliteDatabase, episode: Episode, now: string, n
     return
   }
   if (!nativeEvidence) throw new Error('episode_native_evidence_required')
+  if (nativeEvidence.some(e => e.occurred !== undefined && (e.occurred.version !== 1
+    || !Number.isSafeInteger(e.occurred.timeMs) || e.occurred.timeMs < 0 || e.occurred.timeMs > 8_640_000_000_000_000
+    || e.occurred.sessionId !== episode.sessionId || e.occurred.nativeSequence !== e.seq
+    || !/^[a-f0-9]{64}$/u.test(e.occurred.sourceDigest)))) throw new Error('episode_occurred_evidence_invalid')
   parseEpisodeDraft(episode.draft, nativeEvidence)
   if (nativeEvidence.some(e => e.seq < episode.start || e.seq > episode.end) ||
     digest(episode.evidence) !== digest(evidenceReferences(nativeEvidence)) ||

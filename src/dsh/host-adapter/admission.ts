@@ -71,6 +71,7 @@ interface AdmissionDependencies {
   readonly autoReview: AutoMemoryReviewCoordinator
   readonly sessionMirror: DshSessionLogMirror
   readonly akinatorMemoryConfig: import('zod').z.infer<typeof AkinatorMemoryConfig>
+  readonly memoryRetrievalConfig: import('zod').z.infer<typeof import('../../memory/retrieval-contracts.js').MemoryRetrievalConfig>
   readonly turnState: ReturnType<typeof createTurnState>
   readonly getSelection: (runId: string) => StoredExecutionSelection | undefined
   readonly setSelection: (runId: string, value: StoredExecutionSelection) => void
@@ -102,7 +103,7 @@ interface AdmissionOwner {
 export function createAdmission({
   native, skills, tools, userQuestions, sessions, agents, deepPlanning, modelCatalog, modelCompatibility,
   modelRoutes, now, runtime, decisions, answerReview, delegation, executionSupport,
-  ennoMemory, memoryFinalizer, autoReview, sessionMirror, akinatorMemoryConfig, completionMode,
+  ennoMemory, memoryFinalizer, autoReview, sessionMirror, akinatorMemoryConfig, memoryRetrievalConfig, completionMode,
   turnState, getSelection, setSelection, refreshEnnoMemory, executionBinding,
   captureInitialInput, contextMessages, resolveIdleClose, retireSupersededRun,
   cancelBoundarySession, isSelectionBlocked, closeTurn, readStateForRun,
@@ -398,7 +399,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
             }
             try { continuedMemory=await runtime.withDatabase(async (database,embedding)=>{
               if(embedding.mode==='required')throw new Error('required_embedding_unavailable')
-              return refreshContinuedTaskContext({database, memoryReuse: await createMemoryReuseRuntime(decisions, `run:${captured.run.runId}`, event.signal), prepared:captured,task:event.task,capabilities:[...event.capabilities.skills,...event.capabilities.tools],assertCurrent,
+              return refreshContinuedTaskContext({database, memoryReuse: await createMemoryReuseRuntime(decisions, `run:${captured.run.runId}`, event.signal), memoryRetrieval: memoryRetrievalConfig, prepared:captured,task:event.task,capabilities:[...event.capabilities.skills,...event.capabilities.tools],assertCurrent,
                 validateCapabilities:async()=>{const fresh=await capabilityCatalog(skills,tools,{agent:event.agent,...(event.nativeAgent?{nativeAgent:event.nativeAgent}:{}),cwd:event.cwd,signal:event.signal});this.assertCatalog(event.capabilities,fresh);assertCurrent()}})
             }) } catch (error) {
               if(event.signal.aborted || error instanceof KiokukoError && ['CONFLICT','SECURITY_REJECTION','AUTHENTICATION_ERROR','INTEGRITY_ERROR'].includes(error.code))throw error
@@ -568,6 +569,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
     akinatorMemoryConfig,
     decisions,
     completionMode,
+    memoryRetrievalConfig,
   )
   resumeExistingRun = async (event): Promise<DshIntakeGateResult | undefined> => runtime.withDatabase(async (database) => {
     const project = await resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true })
