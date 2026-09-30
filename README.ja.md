@@ -47,16 +47,19 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
 ```
 
-Kiokuko は更新頻度が高く、pnpm 11 では公開後24時間未満のバージョンを
+公開から24時間以内のバージョンへ更新する場合は、pnpm 11 の既定の
 [`minimumReleaseAge`](https://pnpm.io/settings/dependency-resolution#minimumreleaseage)
-により既定で選びません。`update --latest` を実行しても旧版のままになる場合は、
-`~/.dsh/profiles/web/pnpm-workspace.yaml`（`pnpm-lock.yaml` ではありません）の
-`minimumReleaseAgeExclude` に次を追加し、更新コマンドを再実行します。
+チェックを無効にし、Kiokuko 本体と依存パッケージを更新します。
+2行目の出力が `0` であることを確認してから、更新してください。
 
-```yaml
-minimumReleaseAgeExclude:
-  - kiokuko-dsh
+```bash
+pnpm config set --location=global --json minimumReleaseAge 0
+pnpm config get minimumReleaseAge
+pnpm dsh plugin --profile web update kiokuko-dsh --latest
 ```
+
+この設定はグローバルに保存され、以後の pnpm のインストール・更新でも公開後の
+待機期間チェックを無効にします。更新が成功したら DSH を再起動してください。
 
 起動時に、日本語出力を含む全9 Skillと参照ファイルを `~/.agents/skills/` へ同期します。不足分を作成し、管理対象の旧版を更新します。非管理ファイルは上書きしません。他のエージェントではSkillカタログの再読み込みが必要です。
 

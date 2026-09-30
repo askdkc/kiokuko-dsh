@@ -46,16 +46,19 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
 ```
 
-Kiokuko releases frequently, and pnpm 11 applies a 24-hour
+To update a release published within the last 24 hours, disable pnpm 11's default
 [`minimumReleaseAge`](https://pnpm.io/settings/dependency-resolution#minimumreleaseage)
-by default. If `update --latest` keeps the previous version, add Kiokuko to
-`minimumReleaseAgeExclude` in `~/.dsh/profiles/web/pnpm-workspace.yaml` (not
-`pnpm-lock.yaml`), then run the update command again:
+check for Kiokuko and its dependencies. Confirm that the second command prints `0`,
+then update:
 
-```yaml
-minimumReleaseAgeExclude:
-  - kiokuko-dsh
+```bash
+pnpm config set --location=global --json minimumReleaseAge 0
+pnpm config get minimumReleaseAge
+pnpm dsh plugin --profile web update kiokuko-dsh --latest
 ```
+
+This setting persists globally and disables the release-age check for future pnpm
+installs and updates as well. Restart DSH after the update succeeds.
 
 At startup, all nine bundled Skills (including Japanese output) and their references are synchronized to `~/.agents/skills/`. Missing files are created and managed copies are updated; unmanaged files are preserved. Other agents must reload their Skill catalog.
 

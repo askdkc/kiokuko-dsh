@@ -47,16 +47,19 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
 ```
 
-Kiokuko는 자주 업데이트되며, pnpm 11은 기본적으로
-[`minimumReleaseAge`](https://pnpm.io/settings/dependency-resolution#minimumreleaseage)를
-적용해 공개 후 24시간이 지나지 않은 버전을 선택하지 않습니다. `update --latest`를 실행해도
-이전 버전이 유지되면 `~/.dsh/profiles/web/pnpm-workspace.yaml`(`pnpm-lock.yaml`이 아님)의
-`minimumReleaseAgeExclude`에 다음 설정을 추가한 뒤 업데이트 명령을 다시 실행하세요.
+공개 후 24시간이 지나지 않은 버전으로 업데이트하려면 pnpm 11의 기본
+[`minimumReleaseAge`](https://pnpm.io/settings/dependency-resolution#minimumreleaseage)
+검사를 끄고 Kiokuko와 의존 패키지를 업데이트하세요.
+두 번째 명령의 출력이 `0`인지 확인한 뒤 업데이트하세요.
 
-```yaml
-minimumReleaseAgeExclude:
-  - kiokuko-dsh
+```bash
+pnpm config set --location=global --json minimumReleaseAge 0
+pnpm config get minimumReleaseAge
+pnpm dsh plugin --profile web update kiokuko-dsh --latest
 ```
+
+이 설정은 전역으로 저장되며 이후 pnpm 설치와 업데이트에서도 공개 후 대기 기간 검사를
+끕니다. 업데이트가 성공하면 DSH를 다시 시작하세요.
 
 시작 시 일본어 출력 Skill을 포함한 번들 Skill 9개와 참조 파일을 `~/.agents/skills/`에 동기화합니다. 누락된 파일을 만들고 관리 대상 복사본을 업데이트하며, 비관리 파일은 덮어쓰지 않습니다. 다른 에이전트에서는 Skill 카탈로그를 다시 로드해야 합니다.
 
