@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Config } from '../../../src/dsh/config.js'
-import { eligibleDshModelTools, projectToolsForLean, projectToolsForPhase, supportsLeanToolExposureRoute, ToolExposureConfig } from '../../../src/dsh/tool-exposure.js'
+import { projectToolsForMinimal, resolveToolExposureMode, eligibleDshModelTools, projectToolsForLean, projectToolsForPhase, supportsLeanToolExposureRoute, ToolExposureConfig } from '../../../src/dsh/tool-exposure.js'
 import { hasKnownDshToolPolicyState, type DshToolPhase, type DshToolPolicyState } from '../../../src/dsh/tool-policy.js'
 import { DSH_LEAN_DESCRIPTION_OPERATIONS, DSH_MODEL_FACING_OPERATIONS, createDshToolDefinitions, leanDshToolDescription } from '../../../src/dsh/tools.js'
 
@@ -85,9 +85,9 @@ test('unknown policy state fails open to the unchanged surface, never an empty p
   assert.strictEqual(result.tools, tools)
 })
 
-test('configuration defaults to full and rejects unknown modes', () => {
-  assert.equal(ToolExposureConfig.parse({}).mode, 'full')
-  assert.equal(Config.parse({}).toolExposure.mode, 'full')
+test('configuration defaults to auto and rejects unknown modes', () => {
+  assert.equal(ToolExposureConfig.parse({}).mode, 'auto')
+  assert.equal(Config.parse({}).toolExposure.mode, 'auto')
   assert.equal(ToolExposureConfig.parse({ mode: 'lean' }).mode, 'lean')
   assert.throws(() => ToolExposureConfig.parse({ mode: 'guess' }))
 })
@@ -165,4 +165,31 @@ test('lean projection fails closed on changed description schema and ownership',
   const ownershipUnknown = projectToolsForLean(tools, state('normal'), registered, () => undefined)
   assert.equal(ownershipUnknown.reason, 'ownership_unknown')
   assert.strictEqual(ownershipUnknown.tools, tools)
+})
+
+const autoRoute = { provider: 'openai', family: 'openai', connection: 'api', protocol: 'responses' } as const
+for (const taskType of ['chat', 'research', 'analysis', 'writing', 'review', 'build', 'debug', 'devops'] as const) {
+  test(`auto selects task capability before phase for ${taskType}`, () => {
+    const minimal = ['chat', 'research', 'analysis', 'writing', 'review'].includes(taskType)
+    assert.equal(resolveToolExposureMode({ mode: 'auto', taskType, selectionMode: 'normal', state: state(minimal ? 'completed' : 'normal'), route: autoRoute }).mode, minimal ? 'minimal' : 'lean')
+    assert.equal(resolveToolExposureMode({ mode: 'auto', taskType, selectionMode: 'enno', state: state('planning', { nextAction: 'review_plan' }), route: autoRoute }).mode, 'lean')
+  })
+}
+test('auto conservatively retains surface for unknown task, state or route; explicit modes remain overrides', () => {
+  const input = { mode: 'auto', taskType: null, selectionMode: 'normal', state: state('normal'), route: autoRoute } as const
+  assert.equal(resolveToolExposureMode(input).mode, 'full')
+  assert.equal(resolveToolExposureMode({ ...input, taskType: 'chat', route: undefined }).mode, 'full')
+  assert.equal(resolveToolExposureMode({ ...input, taskType: 'chat', state: state('future' as DshToolPhase) }).mode, 'full')
+  for (const mode of ['full', 'phase', 'lean'] as const) assert.equal(resolveToolExposureMode({ ...input, mode }).mode, mode)
+})
+test('minimal removes owned tools without changing external definitions or accepting collisions', () => {
+  const execute = async () => undefined
+  const external = { name: 'web_search', description: 'Search', parameters: { type: 'object' } }
+  const tools = [external, { name: 'curator_check' }]
+  const registered = new Map([['curator_check', { execute }]])
+  const result = projectToolsForMinimal(tools, state('normal'), registered, () => ({ execute }))
+  assert.deepEqual(result.tools, [external]); assert.strictEqual(result.tools[0], external)
+  assert.equal(result.metrics.taskFilteredCount, 1); assert.equal(result.metrics.phaseFilteredCount, 0)
+  assert.equal(tools.length, 2)
+  assert.strictEqual(projectToolsForMinimal(tools, state('normal'), registered, () => ({ execute: async () => undefined })).tools, tools)
 })

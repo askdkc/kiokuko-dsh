@@ -19,6 +19,8 @@
 - **Diff レビュー** — DSH の右ペインで、選択した差分と Kiokuko の文脈を根拠付きで確認できます。分析は明示操作です。[使い方と制限](docs/diff-review.ja.md)
 - **日本語出力** — 対応モデルへ自然な日本語を書く同梱 Skill を渡します。[詳細](docs/japanese-output.md)
 
+Tool exposure の既定値は `auto`。タスク種別と現在の phase に応じて Kiokuko の model tools を絞る。native tools は保持し、`full` で明示的に互換動作へ戻せる。[詳細](docs/tool-exposure.md)。
+
 ## 導入と使い方
 
 実行環境の対応対象は **DSH 0.1.7-rc.2** です。ネイティブ要求経路、旧セッション履歴の移行、パッケージ化した Web の起動試験はローカルで通過しました（[検証範囲](docs/dsh-plugin.md#compatibility)）。

@@ -42,6 +42,7 @@ test('native full-mode baseline captures Kiokuko tool definitions after the real
   const pi = await import(modulePath('dsh-llm-pi-ai', 'packages/llm/llm-pi-ai'))
   const requests: { url: string; bodyText: string; body: Record<string, any> }[] = []
   const toolCalls: unknown[] = []
+  let toolCallAt = 3
   const sse = (events: readonly Record<string, unknown>[]) => new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } })
   const nativeFetch = globalThis.fetch
   globalThis.fetch = async (input, init) => {
@@ -49,7 +50,7 @@ test('native full-mode baseline captures Kiokuko tool definitions after the real
     assert.equal(new URL(request.url).hostname, 'api.openai.com')
     const bodyText = await request.text()
     requests.push({ url: request.url, bodyText, body: JSON.parse(bodyText) })
-    if (requests.length === 3) {
+    if (requests.length === toolCallAt) {
       const item = { id: 'fc_fixture_external', type: 'function_call', status: 'completed', call_id: 'call_fixture_external', name: 'fixture_external', arguments: '{"message":"payload-1"}' }
       return sse([
         { type: 'response.created', response: { id: 'resp_fixture_tool_call' } },
@@ -60,7 +61,7 @@ test('native full-mode baseline captures Kiokuko tool definitions after the real
         { type: 'response.completed', response: { id: 'resp_fixture_tool_call', status: 'completed', output: [item], usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } } },
       ])
     }
-    if (requests.length === 4) {
+    if (requests.length === toolCallAt + 1) {
       const item = { id: 'msg_fixture_final', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: 'Tool result received.' }] }
       return sse([
         { type: 'response.created', response: { id: 'resp_fixture_final' } },
@@ -72,8 +73,9 @@ test('native full-mode baseline captures Kiokuko tool definitions after the real
     }
     return new Response(JSON.stringify({ error: { message: 'intentional recording fixture response' } }), { status: 400, headers: { 'content-type': 'application/json' } })
   }
+  let fixtureTaskType = 'build'
   const questions = h.ctx.plugin({ name: 'tool-exposure-baseline-ui', apply(ctx: any) {
-    return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((question: any) => ({ id: question.id, selected: [({ taskType: 'build', target: 'src/dsh/tool-exposure.ts', expected: 'phase-eligible tools are the only Kiokuko tools in the native request' } as Record<string, string>)[question.id] ?? '通常実行'] })) }) })
+    return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((question: any) => ({ id: question.id, selected: [({ taskType: fixtureTaskType, target: 'src/dsh/tool-exposure.ts', expected: 'phase-eligible tools are the only Kiokuko tools in the native request' } as Record<string, string>)[question.id] ?? '通常実行'] })) }) })
   } }); await questions
   const credentials = h.ctx.plugin({ name: 'tool-exposure-baseline-credentials', apply(ctx: any) {
     return ctx.provide('credentials', { resolve: async () => ({ value: 'fixture-token' }), read: async () => undefined, list: async () => [], registerOwner: () => () => {} })
@@ -89,7 +91,7 @@ test('native full-mode baseline captures Kiokuko tool definitions after the real
   try {
     wire = h.ctx.plugin(pi, { providers: { 'fixture-openai': { api: 'openai-responses', baseURL: 'https://api.openai.com/v1', apiKeyEnv: 'KIOKUKO_FIXTURE_TOKEN', retryPolicy: { mode: 'normal', maxRetries: 0 }, models: [{ id: 'gpt-6-astra', contextWindow: 32768, maxTokens: 1024 }] } } })
     await wire
-    adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
+    adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), toolExposure: { mode: 'full' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
     composition = await mountDshComposition(h.ctx, adapter.host)
     disposeExternalTool = (h.ctx as any).get('tools').register({
       name: 'fixture_external', description: 'Fixture-owned tool description must stay intact.',
@@ -163,6 +165,29 @@ test('native full-mode baseline captures Kiokuko tool definitions after the real
       assert.ok(lean.toolsBytes < phase.toolsBytes)
       assert.ok(lean.bodyBytes < phase.bodyBytes)
       leanSavings = { tools: phase.toolsBytes - lean.toolsBytes, body: phase.bodyBytes - lean.bodyBytes }
+    }
+    if (runtimeVersion === '0.2.0-rc.2') {
+      for (const taskType of ['build', 'research', 'analysis', 'writing', 'review', 'chat']) {
+        fixtureTaskType = taskType
+        await composition?.dispose(); composition = undefined
+        await adapter?.dispose(); adapter = undefined
+        adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
+        composition = await mountDshComposition(h.ctx, adapter.host)
+        const autoAgent = await h.ctx.agentLoop.create(h.session.SessionId(`tool-exposure-auto-${taskType}`), { provider: 'fixture-openai', model: 'gpt-6-astra' }, { cwd: h.root })
+        const before: number = requests.length
+        if (taskType === 'research') toolCallAt = before + 1
+        try { await turn(h, autoAgent, taskType === 'chat' ? 'Hello' : 'Inspect the repository and report the result.') } catch { /* Capture precedes intentional HTTP 400. */ }
+        assert.equal(requests.length, before + (taskType === 'research' ? 2 : 1), taskType)
+        if (taskType === 'research') {
+          assert.equal(toolCalls.length, 2)
+          assert.deepEqual(modelFacingNames(requests[before + 1]!.body), [])
+          assert.ok(JSON.stringify(requests[before + 1]!.body).includes('payload-1'))
+        }
+        const body: Record<string, any> = requests[before]!.body
+        assert.deepEqual(modelFacingNames(body), taskType === 'build' ? ['curator_check', 'memory_checkpoint'] : [], taskType)
+        const external = (body.tools as any[]).find(tool => tool.name === 'fixture_external')
+        assert.equal(external.description, 'Fixture-owned tool description must stay intact.')
+      }
     }
     const report = { runtime: runtimeVersion, presentation: 'native', cases: lean ? ['normal-first-request', 'tool-call-result-final-answer'] : ['normal-first-request'], requests: { full, phase, ...(lean ? { lean } : {}) }, byteSavings: { phaseVsFull: { tools: full.toolsBytes - phase.toolsBytes, body: full.bodyBytes - phase.bodyBytes }, ...(leanSavings ? { leanVsPhase: leanSavings } : {}) }, ...(lean ? { appObservation: { transformedDescriptionCount: 2, unownedSurfaceReductionCount: 0, unownedSurfaceReductionReason: 'registration_provenance_unavailable' }, providerUsage: 'not measured; requests were intercepted before OpenAI' } : { providerUsage: 'unavailable' }), skipReason: null }
     console.info('TOOL_EXPOSURE_WIRE_REPORT', JSON.stringify(report))
