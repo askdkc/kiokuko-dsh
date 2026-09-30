@@ -18,6 +18,8 @@ Automatic memory review saves or updates useful project candidates after eight c
 - **OrcaReplay** — Record model/tool activity and export it as HTML. [Settings and commands](docs/orca-recording.md)
 - **Japanese output** — Give supported models a bundled Skill for natural Japanese. [Details](docs/japanese-output.md)
 
+Tool exposure defaults to `auto`: task type and current phase determine the Kiokuko model tools shown. Native tools stay available; `full` is an explicit compatibility override. See [tool exposure](docs/tool-exposure.md).
+
 ## Install and use
 
 Runtime compatibility target: **DSH 0.1.7-rc.2**. Native request paths, legacy session migration, and a packed Web lifecycle pass locally ([verification scope](docs/dsh-plugin.md#compatibility)).

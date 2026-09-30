@@ -340,9 +340,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     reportedToolExposureFallbacks.add(fallback)
     console.warn(`[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: ${fallback}`)
   }
-  const reportToolExposureProjection = (mode: 'lean', reason: string, metrics: ToolExposureMetrics): void => {
-    if (toolExposureConfig.mode !== 'lean') return
-    const diagnostic = { mode, reason, ...metrics }
+  const reportToolExposureProjection = (mode: 'lean' | 'minimal', reason: string, metrics: ToolExposureMetrics): void => {
+    if (toolExposureConfig.mode !== 'lean' && toolExposureConfig.mode !== 'auto') return
+    const diagnostic = { requestedMode: toolExposureConfig.mode, mode, reason, ...metrics }
     const key = JSON.stringify(diagnostic)
     if (reportedToolExposureProjections.has(key)) return
     reportedToolExposureProjections.add(key)

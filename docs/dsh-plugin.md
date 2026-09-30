@@ -43,7 +43,10 @@ CI keeps the pinned DSH 0.1.5-rc.1 fixture for legacy-history and Web lifecycle 
 
 ## Model tool exposure
 
-`toolExposure.mode` defaults to `full`, which preserves the native tool surface.
+`toolExposure.mode` defaults to `auto`. On verified OpenAI API routes, normal
+chat/research/analysis/writing/review omit Kiokuko model tools; build/debug/devops
+and active Enno use phase/nextAction filtering with lean descriptions. Native
+and external tools remain available. Explicit `full` preserves the surface.
 `phase` removes only verified Kiokuko tools that are unavailable in the current
 execution phase. Opt-in `lean` applies the same phase policy and removes the
 exact duplicate `Business payload` schema text from seven Kiokuko tool
@@ -55,7 +58,7 @@ the public registry does not expose registration provenance.
 
 ```yaml
 toolExposure:
-  mode: lean
+  mode: auto
 ```
 
 The native fixture reports serialized request bytes and app-level transformation

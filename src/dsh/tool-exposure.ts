@@ -1,10 +1,32 @@
 import { z } from 'zod'
 import { DSH_LEAN_DESCRIPTION_OPERATIONS, DSH_MODEL_FACING_OPERATIONS, leanDshToolDescription } from './tools.js'
 import { hasKnownDshToolPolicyState, operationStateDenyCode, type DshToolPolicyState } from './tool-policy.js'
+import { TASK_TYPES, type TaskType } from '../akinator/types.js'
 import type { ModelRoute } from './model-configuration.js'
 
-export const ToolExposureConfig = z.object({ mode: z.enum(['full', 'phase', 'lean']).default('full') }).strict()
+export const ToolExposureConfig = z.object({ mode: z.enum(['auto', 'full', 'phase', 'lean']).default('auto') }).strict()
 export type ToolExposureConfig = z.infer<typeof ToolExposureConfig>
+
+export type ResolvedToolExposureMode = 'full' | 'phase' | 'lean' | 'minimal'
+export interface ToolExposureDecision {
+  readonly mode: ResolvedToolExposureMode
+  readonly reason: string
+}
+
+/** Decide presentation only; admission, ownership and runtime bindings are host concerns. */
+export function resolveToolExposureMode(input: {
+  mode: ToolExposureConfig['mode']; taskType: TaskType | null
+  selectionMode: 'normal' | 'enno'; state: DshToolPolicyState; route: ModelRoute | undefined
+}): ToolExposureDecision {
+  if (input.mode !== 'auto') return { mode: input.mode, reason: 'explicit' }
+  if (!hasKnownDshToolPolicyState(input.state)) return { mode: 'full', reason: 'unknown_state' }
+  if (!supportsLeanToolExposureRoute(input.route)) return { mode: 'full', reason: 'unsupported_route' }
+  if (input.selectionMode === 'enno') return { mode: 'lean', reason: 'enno' }
+  if (input.taskType === null || !TASK_TYPES.includes(input.taskType)) return { mode: 'full', reason: 'unknown_task' }
+  if (['chat', 'research', 'analysis', 'writing', 'review'].includes(input.taskType)) return { mode: 'minimal', reason: 'task_minimal' }
+  if (input.state.phase !== 'normal') return { mode: 'full', reason: 'normal_state_mismatch' }
+  return { mode: 'lean', reason: 'task_execution' }
+}
 
 /** Restrict description compaction to the two pi-ai APIs verified by the native wire fixture. */
 export function supportsLeanToolExposureRoute(route: ModelRoute | undefined): boolean {
@@ -17,6 +39,7 @@ export type ToolExposureProjectionReason = 'projected' | 'unchanged' | 'no_owned
 export interface ToolExposureMetrics {
   readonly toolCountBefore: number
   readonly toolCountAfter: number
+  readonly taskFilteredCount: number
   readonly phaseFilteredCount: number
   readonly descriptionTransformedCount: number
   readonly descriptionBytesBefore: number
@@ -60,12 +83,13 @@ function parameterBytes(tools: readonly PresentedTool[]): number | null {
   }
 }
 
-function metrics<T extends PresentedTool>(original: readonly T[], projected: readonly T[], phaseFilteredCount: number, descriptionTransformedCount: number): ToolExposureMetrics {
+function metrics<T extends PresentedTool>(original: readonly T[], projected: readonly T[], phaseFilteredCount: number, descriptionTransformedCount: number, taskFilteredCount = 0): ToolExposureMetrics {
   const before = parameterBytes(original)
   const after = parameterBytes(projected)
   return {
     toolCountBefore: original.length,
     toolCountAfter: projected.length,
+    taskFilteredCount,
     phaseFilteredCount,
     descriptionTransformedCount,
     descriptionBytesBefore: original.reduce((total, tool) => total + byteLength(tool.description ?? ''), 0),
@@ -159,4 +183,16 @@ export function projectToolsForLean<T extends PresentedTool>(
     reason: phaseFilteredCount === 0 && descriptionTransformedCount === 0 ? 'unchanged' : 'projected',
     metrics: metrics(tools, projected, phaseFilteredCount, descriptionTransformedCount),
   }
+}
+
+/** Remove only identity-verified owned definitions; external tools retain their objects and order. */
+export function projectToolsForMinimal<T extends PresentedTool>(
+  tools: readonly T[], state: DshToolPolicyState,
+  registered: ReadonlyMap<string, { readonly execute: unknown }>,
+  resolve: (name: string) => { readonly execute: unknown } | undefined,
+): ToolExposureProjection<T> {
+  const ownership = verifiedOwnedNames(tools, state, registered, resolve)
+  if (ownership.reason) return unchanged(tools, ownership.reason)
+  const projected = tools.filter(tool => !ownership.owned.has(tool.name))
+  return { tools: projected, reason: 'projected', metrics: metrics(tools, projected, 0, 0, tools.length - projected.length) }
 }
