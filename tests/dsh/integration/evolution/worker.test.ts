@@ -147,6 +147,23 @@ test('a pending v2 job survives database reopen and concurrent workers promote i
     assert.equal(es.length, 3)
   } finally { await a.dispose(); await b.dispose(); other.close(); db.close(); await rm(root, { recursive: true, force: true }) }
 })
+test('an expired v2 claim is safely recovered without a model call', async () => {
+  const f = setup()
+  f.db.prepare("UPDATE memory_evolution_jobs SET state='processing',claim_token='abandoned',attempts=1,lease_until='2000-01-01T00:00:00.000Z'").run()
+  const worker = new EvolutionWorker({ runtime: f.runtime, config: MemoryEvolutionConfig.parse({}), now: () => NOW })
+  try {
+    worker.kick(); await worker.whenIdle()
+    const job = f.db.prepare('SELECT state,reason,attempts,claim_token,lease_until FROM memory_evolution_jobs').get<{ state: string; reason: string | null; attempts: number; claim_token: string | null; lease_until: string | null }>()
+    assert.ok(job)
+    assert.equal(job.state, 'completed')
+    assert.equal(job.reason, null)
+    assert.equal(job.attempts, 2)
+    assert.equal(job.claim_token, null)
+    assert.equal(job.lease_until, null)
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM memory_evolution_calls').get()?.n, 0)
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM memory_derivations WHERE algorithm='reference-promotion-v2'").get()?.n, 1)
+  } finally { await worker.dispose(); f.db.close() }
+})
 test('the UTC-day budget includes failed dispatches and resets only for a new day', async () => {
   const f=fixture();let now=NOW,calls=0
   const worker=new EvolutionWorker({runtime:f.runtime,config:MemoryEvolutionConfig.parse({}),now:()=>now,llm:{async *stream(){calls++;throw new Error('provider failure')}}})

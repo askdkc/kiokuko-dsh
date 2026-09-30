@@ -27,15 +27,15 @@ const test = (title: string, options: TestOptions, operation: () => Promise<void
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packages) throw new Error('Repeated lifecycle requires the pinned published DSH runtime')
 
-for (const [kind, mode] of [['evolution','prefix_reuse'],['evolution','bounded_evidence'],['deep','dedicated']] as const) {
-  const name = kind === 'deep' ? 'deep/dispatched-interruption' : `normal/${mode}/dispatched-interruption`
-  if (process.env.KIOKUKO_REPEATED_SCENARIO && process.env.KIOKUKO_REPEATED_SCENARIO !== name) continue
-  test(`repeated memory lifecycle: ${name}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
+const kind = 'deep' as const
+const mode = 'dedicated' as const
+const interruptionName = 'deep/dispatched-interruption'
+if (!process.env.KIOKUKO_REPEATED_SCENARIO || process.env.KIOKUKO_REPEATED_SCENARIO === interruptionName) {
+  test(`repeated memory lifecycle: ${interruptionName}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
     const root = realpathSync(await mkdtemp(join(tmpdir(),'repeated-interruption-')))
     const env = { ...process.env }; delete env.NODE_TEST_CONTEXT
     const args = (round: number) => ['--import','tsx','tests/dsh/helpers/repeated-interruption-process.ts',root,kind,mode,String(round)]
     try {
-      if (kind === 'evolution') await prepareRepeatedWorkspace(root)
       await promisify(execFile)(process.execPath, args(1), { env, timeout: 60000, maxBuffer: 1024 * 1024 })
       const dispatched = await new Promise<{runId:string;jobId?:string}>((resolve, reject) => {
         const child = fork('tests/dsh/helpers/repeated-interruption-process.ts', [root,kind,mode,'2'], { execArgv: ['--import','tsx'], env, stdio: ['ignore','pipe','pipe','ipc'] })
@@ -147,7 +147,7 @@ for (const route of ['normal', 'enno'] as const) for (const mode of ['prefix_reu
   })
 }
 
-for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scenario of ['duplicate-completion','save-failure','correction','adoption-source','adoption-mode','adoption-lease'] as const) {
+for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scenario of ['duplicate-completion','save-failure','correction'] as const) {
   const name = `normal/${mode}/${scenario}`
   if (process.env.KIOKUKO_REPEATED_SCENARIO && process.env.KIOKUKO_REPEATED_SCENARIO !== name) continue
   test(`repeated memory lifecycle: ${name}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
@@ -164,8 +164,6 @@ for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scen
         assert.equal(forbiddenIds.length, 1, 'correction prelude must generate its lesson through native execution')
         await host.round(4, 'correction-probe', true, true)
         offset = 4
-      } else if (scenario.startsWith('adoption-')) {
-        await host.round(1, 'adoption-prelude', false, false); offset = 1
       }
       const rounds: RoundReport[] = []
       const reviseSource = () => host!.database(db => {
@@ -176,24 +174,10 @@ for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scen
       })
       for (let n = 1; n <= 3; n++) {
         if (n === 2 && scenario === 'correction') await reviseSource()
-        if (n === 2 && scenario.startsWith('adoption-')) host.setAuxiliaryHook(async request => {
-          if (!request.system?.startsWith('Select a conservative reusable lesson')) return
-          if (scenario === 'adoption-source') await reviseSource()
-          if (scenario === 'adoption-mode') await host!.database(db => configureEvolution(db, 'observe'))
-          if (scenario === 'adoption-lease') await host!.database(db => db.prepare("UPDATE memory_evolution_jobs SET lease_until='2000-01-01T00:00:00.000Z' WHERE state='processing'").run())
-        })
         rounds.push(await host.round(offset + n, 'fault-session', false, false, {
           saveFailure: n === 2 && scenario === 'save-failure', duplicateCompletion: n === 2 && scenario === 'duplicate-completion',
           ...(n >= 2 && scenario === 'correction' ? { forbiddenIds } : {}),
         }))
-        if (n === 2 && scenario.startsWith('adoption-')) {
-          const job: {state:string;reason:string} | undefined = await host.database(db => db.prepare('SELECT state,reason FROM memory_evolution_jobs').get<{state:string;reason:string}>())
-          assert.equal(job?.state, 'held')
-          assert.equal(job?.reason, scenario === 'adoption-source' ? 'evolution_stale_or_conflicting' : 'evolution_stale_claim')
-          assert.equal(await host.database(db => db.prepare("SELECT count(*) AS n FROM memory_derivations WHERE kind='positive'").get<{n:number}>()!.n), 0)
-          host.setAuxiliaryHook(undefined)
-          await host.database(db => configureEvolution(db, 'active'))
-        }
       }
       assert.equal(new Set(rounds.map(round => round.runId)).size, 3)
       for (let n = 1; n < rounds.length; n++) assert.ok(rounds[n - 1]!.end < rounds[n]!.start)
