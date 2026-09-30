@@ -1,3 +1,5 @@
+import { MemoryIndexReasoningConfig, type IndexReasoningConfig } from '../memory/index-reasoning/contracts.js'
+import { IndexReasoningService } from '../memory/index-reasoning/service.js'
 import { assertCaptureAllowed, capturePolicy, watchCapture } from '../memory/capture-policy.js'
 import { acquireMemoryLease, assertMemoryLease, releaseMemoryLease, reviewState } from '../memory/review/store.js'
 import { adoptMemories, memorySnapshots } from '../memory/review/adoption.js'
@@ -85,6 +87,7 @@ export interface DshLlm {
 
 export interface DshMemoryFinalizerOptions {
   readonly onDeepFinalized?: (sessionId: string) => PromiseLike<unknown>
+  readonly memoryIndexReasoning?: IndexReasoningConfig
   readonly memoryEvolution?: EvolutionConfig
   readonly autoGlobalizationEnabled?: boolean
   readonly inputMode?: FinalizationInputMode
@@ -446,9 +449,14 @@ function latestEnvelope(events: readonly DshLogEvent[]): RequestEnvelope {
   let contextWindow: number | undefined
   for (const event of events) {
     const data = record(event.data)
-    if (event.type === 'request/header') header = record(data?.header)
-    if (event.type === 'request/context' && Number.isSafeInteger(data?.contextWindow) && (data?.contextWindow as number) > 0) {
-      contextWindow = data?.contextWindow as number
+    if (event.type === 'request/header') {
+      const next = record(data?.header)
+      const previousConfig = record(header?.config), nextConfig = record(next?.config)
+      if (previousConfig?.provider !== nextConfig?.provider || previousConfig?.model !== nextConfig?.model) contextWindow = undefined
+      header = next
+    }
+    if (event.type === 'request/context') {
+      contextWindow = Number.isSafeInteger(data?.contextWindow) && (data?.contextWindow as number) > 0 ? data?.contextWindow as number : undefined
     }
   }
   const config = record(header?.config)
@@ -877,6 +885,8 @@ export class DshMemoryFinalizer {
   #inputMode: FinalizationInputMode
   #onObservation: DshMemoryFinalizerOptions['onObservation']
   #evolutionConfig: EvolutionConfig
+  #indexService: IndexReasoningService | undefined
+  #indexConfig: IndexReasoningConfig
   #evolutionWorker: EvolutionWorker | undefined
   #autoGlobalWorker: AutoGlobalizationWorker | undefined
   #autoGlobalEnabled: boolean
@@ -890,6 +900,7 @@ export class DshMemoryFinalizer {
 
   constructor(options: DshMemoryFinalizerOptions) {
     this.#deep = new DeepMemoryFinalizer(new DeepStore(options.runtime), options.llm, options.onDeepFinalized)
+    this.#indexConfig = options.memoryIndexReasoning ?? MemoryIndexReasoningConfig.parse({})
     this.#evolutionConfig = options.memoryEvolution ?? MemoryEvolutionConfig.parse({})
     this.#autoGlobalEnabled = options.autoGlobalizationEnabled ?? true
     this.#runtime = options.runtime
@@ -914,11 +925,19 @@ export class DshMemoryFinalizer {
     if (this.#configured) throw new KiokukoError('CONFLICT', 'Evolution configuration already started')
     this.#evolutionConfig = config
   }
+  configureMemoryIndexReasoning(config: IndexReasoningConfig): void {
+    if (this.#configured) throw new KiokukoError('CONFLICT', 'Index reasoning configuration already started')
+    this.#indexConfig = config
+  }
 
   configureAutoGlobalization(enabled: boolean): void {
     if (this.#configured) throw new KiokukoError('CONFLICT', 'Auto globalization configuration already started')
     this.#autoGlobalEnabled = enabled
   }
+
+  async observeIndexRequest(workspace:string,sessionId:string,events:readonly DshLogEvent[]):Promise<void> {try{await this.admitIndex(workspace,sessionId,latestEnvelope(events))}catch{/* optional enrichment never vetoes native work */}}
+  async admitIndex(workspace:string,sessionId:string,envelope:unknown):Promise<void> {await this.#indexService?.admitIndex(workspace,sessionId,envelope)}
+  async indexCommand(sessionId:string,raw:string):Promise<Record<string,unknown>> {await this.start();return this.#indexService!.indexCommand(sessionId,raw)}
 
   get lastDrainError(): unknown { return this.#lastDrainError }
 
@@ -941,6 +960,8 @@ export class DshMemoryFinalizer {
     })
     await this.#runtime.withDatabase(database => configureEvolution(database, this.#evolutionConfig.mode))
     if (this.#closed) return
+    this.#indexService = new IndexReasoningService(this.#runtime,this.#indexConfig,this.#llm)
+    await this.#indexService.start()
     this.#evolutionWorker = new EvolutionWorker({ runtime: this.#runtime, config: this.#evolutionConfig,
       ...(this.#llm === undefined ? {} : { llm: this.#llm }), now: this.#now })
     this.#evolutionWorker.kick()
@@ -1010,6 +1031,7 @@ export class DshMemoryFinalizer {
       await drain
       await Promise.resolve()
     }
+    await this.#indexService?.whenIdle()
     await this.#evolutionWorker?.whenIdle()
     await this.#autoGlobalWorker?.whenIdle()
   }
@@ -1285,6 +1307,7 @@ Override the legacy memory output format: return only schemaVersion 3 with memor
           job.runId,
         )
       }))
+      try { await this.admitIndex(job.workspace, job.dshSessionId, prepared.envelope) } catch { /* enrichment cannot veto committed finalization */ }
       completed = true
       this.#evolutionWorker?.kick()
       try { await this.#onFinalized?.(job.dshSessionId) } catch { /* cache retention is non-vetoing */ }
@@ -1329,6 +1352,7 @@ Override the legacy memory output format: return only schemaVersion 3 with memor
     this.#closed = true
     this.#abort?.abort(new KiokukoError('SERVICE_UNAVAILABLE', 'DSH memory finalizer is closing'))
     await this.#drain
+    await this.#indexService?.dispose()
     await this.#evolutionWorker?.dispose()
     await this.#autoGlobalWorker?.dispose()
   }

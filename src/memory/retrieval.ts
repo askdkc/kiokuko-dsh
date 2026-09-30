@@ -3,8 +3,11 @@ import { KiokukoError } from '../errors.js';
 import { readEntry, type EntryRecord } from './entries.js';
 import { requireWorkspace, type EntryKind, type EntryStatus } from '../serialization/validate.js';
 import { hybridSearch, type HybridSearchRuntime } from './hybrid-retrieval.js';
+import { projectMemoryEntry } from '../context/memory-projection.js';
 
 export interface SearchEntriesInput {
+  /** Host candidate partition; independent limits keep original evidence available. */
+  indexRole?: 'ordinary' | 'derived';
   workspace: string;
   query: string;
   limit?: number;
@@ -150,14 +153,17 @@ export function recallEntryHits(database: SqliteDatabase, input: RecallEntriesIn
 
   for (const row of rows) {
     const entry = readEntry(database, { workspace: input.workspace, entryId: row.entryId });
-    const fullSource = entry.summary ?? entry.body;
+    const derived = entry.provenance.type === 'memory-index-reasoning';
+    const fullSource = derived ? projectMemoryEntry(database, entry)?.bodyPreview : entry.summary ?? entry.body;
+    if (fullSource === undefined) { truncated = true; continue; }
     const titleCost = characterCount(entry.title) + 1;
     const remaining = maxChars - characters - titleCost;
     if (remaining <= 0) {
       truncated = true;
       break;
     }
-    const snippet = recallSnippet(entry, remaining);
+    if (derived && characterCount(fullSource) > remaining) { truncated = true; continue; }
+    const snippet = derived ? fullSource : recallSnippet(entry, remaining);
     if (characterCount(snippet) < characterCount(fullSource)
       || characterCount(entry.body) > characterCount(snippet)) truncated = true;
     items.push({

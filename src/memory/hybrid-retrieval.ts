@@ -1,3 +1,4 @@
+import { indexInstalled, indexSettings, indexFactEligible } from './index-reasoning/store.js'
 import { evolutionEntryState } from './evolution/store.js';
 import { autoGlobalProjectionActive } from './auto-globalization.js';
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
@@ -43,6 +44,7 @@ export interface HybridSearchInput {
   includeSuperseded?: boolean;
   /** Bound by the request and applied in SQL before each lane limit. */
   timeConstraint?: MemoryTimeConstraint;
+  indexRole?: 'ordinary' | 'derived';
 }
 
 export interface RetrievalCandidate {
@@ -81,6 +83,7 @@ interface ExternalMappingRow extends SqliteRow {
 
 /** Decide eligibility only after the entry and the complete parent snapshot decode. */
 export function isRetrievableEntry(database: SqliteDatabase, entry: EntryRecord): boolean {
+  if (!indexFactEligible(database, entry)) return false;
   if (!autoGlobalProjectionActive(database, entry)) return false;
   if (!evolutionEntryState(database, entry).eligible) return false;
   const mappingRows = database.prepare(`
@@ -192,6 +195,7 @@ function hasCanonicalWordMatch(database: SqliteDatabase, input: HybridSearchInpu
 
 function filterSql(input: HybridSearchInput, parameters: Array<string | number>): string {
   const clauses = ['e.workspace = ?'];
+  if(input.indexRole)clauses.push(`${input.indexRole==='ordinary'?'NOT ':''}EXISTS(SELECT 1 FROM memory_index_facts ix WHERE ix.entry_id=e.id AND ix.revision=e.current_revision)`);
   parameters.push(input.workspace);
   const time = memoryTimePredicate(input.timeConstraint)
   if (time) { clauses.push(time.sql); parameters.push(...time.parameters) }
@@ -360,6 +364,7 @@ function semanticLane(database: SqliteDatabase, input: HybridSearchInput, runtim
     queryVector: query.vector,
     distanceCeiling: query.distanceCeiling,
     workspace: input.workspace,
+    ...(input.indexRole === undefined ? {} : { indexRole: input.indexRole }),
     ...(input.timeConstraint === undefined ? {} : { timeConstraint: input.timeConstraint }),
     limit: MAX_LANE_CANDIDATES,
   });
@@ -476,7 +481,7 @@ export function hybridSearch(
   const lexicalAllowed = !/(?:--|\/\*|\*\/|["']\s*(?:OR|AND)\b|\b(?:OR|AND)\s+\d+\s*[=<>])/iu.test(parsed.normalized)
     || parsed.exactSignals.length > 0;
   const merged = new Map<string, RetrievalCandidate>();
-  const lanes = laneRows(database, effectiveInput, parsed, effectiveRuntime, lexicalAllowed)
+  const lanes = input.indexRole ? (input.indexRole==='derived'&&indexSettings(database,input.workspace)?.mode!=='active'?[]:laneRows(database,effectiveInput,parsed,effectiveRuntime,lexicalAllowed)) : indexInstalled(database) ? [...laneRows(database,{...effectiveInput,indexRole:'ordinary'},parsed,effectiveRuntime,lexicalAllowed),...(indexSettings(database,input.workspace)?.mode==='active'?laneRows(database,{...effectiveInput,indexRole:'derived'},parsed,effectiveRuntime,lexicalAllowed):[])] : laneRows(database, effectiveInput, parsed, effectiveRuntime, lexicalAllowed)
   const baselineIds = new Set(lanes.flatMap(([, rows]) => rows.map(row => row.id)))
   for (const [lane, rows] of lanes) {
     const seen = new Set<string>();
@@ -542,6 +547,7 @@ export function hybridSearch(
   // applied only to the canonical decoded record.
   return candidates.filter((candidate) => {
     const entry = readEntry(database, { workspace: input.workspace, entryId: candidate.entryId });
+    if(input.indexRole&&((entry.provenance.type==='memory-index-reasoning')!==(input.indexRole==='derived')))return false;
     if (!isRetrievableEntry(database, entry)) return false;
     if (!input.includeSuperseded && entry.status === 'superseded') return false;
     if (input.kind !== undefined && entry.kind !== input.kind) return false;

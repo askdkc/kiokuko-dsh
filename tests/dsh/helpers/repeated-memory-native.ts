@@ -128,6 +128,14 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     modelRoutes: mockModelRoutes, orca: { enabled: false }, efficiency: { observe: true }, finalization: { inputMode },
     advisory: { verifyReadOnly: () => true, execute: async call => ({ slotId: call.slotId, outcome: 'completed', summary: 'Reviewed the immutable fixture contract.', recommendations: [], risks: [], evidence: [] }) },
     llm: { async *stream(request) {
+      if (/^(Extract up to|Return JSON array|Check each supplied)/.test(request.system ?? '')) {
+        // Keep the default index worker active without counting its distinct
+        // calls as legacy finalization/evolution or invoking their fault hooks.
+        assert.deepEqual(request.tools, [])
+        yield { type: 'text-delta', text: '[]' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+        return
+      }
       auxiliaryCalls++
       const review = fixturePlanReview(request)
       if (review) {

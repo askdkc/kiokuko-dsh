@@ -96,6 +96,12 @@ jobs:
 
       - name: Run test suite
         run: npm test
+      - name: Verify index reasoning and native model delivery
+        run: npm run test:index-reasoning
+        env:
+          KIOKUKO_REQUIRE_DSH_NATIVE: "1"
+      - name: Evaluate fixed index reasoning delivery offline
+        run: npm run test:evaluation:index-reasoning
 
       - name: Check fixed harness scenarios
         run: npm run test:harness

@@ -1,3 +1,5 @@
+import { IndexManifest, indexDigest } from '../memory/index-reasoning/contracts.js'
+import { readIndexManifest, indexFactEligible } from '../memory/index-reasoning/store.js'
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { SqliteDatabase } from '../db/adapter.js';
@@ -23,6 +25,7 @@ const ProjectionSource = z.object({ entryId: z.string().min(1).max(256), revisio
 const ProjectionEpisode = z.object({ runId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256), start: z.number().int().nonnegative(), end: z.number().int().nonnegative(),
   logDigest: z.string().regex(/^[a-f0-9]{64}$/u), evidenceDigest: z.string().regex(/^[a-f0-9]{64}$/u) }).strict()
 export const MemoryProjectionReceipt = z.union([
+  z.object({ version: z.literal(3), ...MemoryProjectionReceiptBase, indexReasoning: IndexManifest }).strict(),
   z.object({ version: z.literal(1), ...MemoryProjectionReceiptBase }).strict(),
   z.object({ version: z.literal(2), ...MemoryProjectionReceiptBase,
     episodes: z.array(ProjectionEpisode).max(6), sources: z.array(ProjectionSource).max(32),
@@ -57,6 +60,8 @@ export function projectMemoryEntry(database: SqliteDatabase, entry: EntryRecord,
   title: string; summary: string | null; bodyPreview: string; projection: MemoryProjectionReceipt;
 } | null {
   if (redactDshSourceText([entry.title, entry.summary ?? '', entry.body].join('\n')) === null) return null;
+  const indexManifest = readIndexManifest(database, entry);
+  if (!indexFactEligible(database, entry)) return null;
   let bodyPreview = entry.body;
   let summary = entry.summary;
   let manifestDigest: string | null = null;
@@ -118,6 +123,7 @@ export function projectMemoryEntry(database: SqliteDatabase, entry: EntryRecord,
     manifestDigest = row.input_digest;
     derived = true;
   }
+  if(indexManifest){summary=null;bodyPreview=`未検証の${indexManifest.role}候補\n${entry.body}\n適用条件: ${indexManifest.applicability ?? '出典の条件に従う'}\n${indexManifest.sources.map((source,i)=>`Source ${i+1}: ${source.supportingText} (revision ${source.revision})`).join('\n')}`;manifestDigest=indexManifest.inputDigest}
   const fields = { title: entry.title, summary, bodyPreview };
   const text = renderMemoryFields(fields);
   if (text === null) return null;
@@ -135,7 +141,7 @@ export function projectMemoryEntry(database: SqliteDatabase, entry: EntryRecord,
     sources: projectionSources,
     evidenceReceiptDigest: digest({ episodes: projectionEpisodes, sources: projectionSources }),
   } : undefined
-  const projection: MemoryProjectionReceipt = evidenceReceipt
+  const projection: MemoryProjectionReceipt = indexManifest ? { version: 3, ...base, indexReasoning: indexManifest } : evidenceReceipt
     ? { version: 2, ...base, ...evidenceReceipt, ...(referenceManifestDigest ? {
       referenceReceiptDigest: digest({ manifestDigest: referenceManifestDigest, textDigest: memoryTextDigest(text) }),
     } : {}) }
@@ -149,6 +155,10 @@ export function assertMemoryProjection(item: { title: string; summary: string | 
   const text = renderMemoryFields(item);
   if (text === null || receipt.textDigest !== memoryTextDigest(text) || receipt.characters !== Array.from(text).length || receipt.bytes !== Buffer.byteLength(text)) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Memory projection differs from its delivery receipt');
+  }
+  if (receipt.version === 3) {
+    const {inputDigest,...bound}=receipt.indexReasoning
+    if(indexDigest(bound)!==inputDigest||receipt.manifestDigest!==inputDigest)throw new KiokukoError('INTEGRITY_ERROR','Index reasoning provenance differs from its delivery receipt')
   }
   if (receipt.version === 2 && receipt.evidenceReceiptDigest !== digest({ episodes: receipt.episodes, sources: receipt.sources })) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Memory projection provenance differs from its delivery receipt');

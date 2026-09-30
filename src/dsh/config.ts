@@ -1,3 +1,4 @@
+import { MemoryIndexReasoningConfig } from '../memory/index-reasoning/contracts.js'
 import { ObservationPackConfig } from './observation-pack/policy.js'
 import { SemanticCompactionConfig } from './semantic-compaction/contracts.js'
 import { ModelHandoffConfig } from './model-handoff.js'
@@ -97,6 +98,7 @@ export const Config = z.object({
   ennoMemory: EnnoMemoryConfig.prefault({}),
   finalization: FinalizationConfig.prefault({}),
   memoryEvolution: MemoryEvolutionConfig.prefault({}),
+  memoryIndexReasoning: MemoryIndexReasoningConfig.prefault({}),
   autoGlobalization: z.object({ enabled: z.boolean().default(true) }).strict().prefault({}),
   memoryReview: MemoryReviewConfig.prefault({}),
   diffReview: DiffReviewConfig.prefault({}),

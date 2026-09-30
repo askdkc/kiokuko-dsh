@@ -1,3 +1,4 @@
+import { indexSettings } from '../memory/index-reasoning/store.js'
 import { applyMemoryReuse, type MemoryReuseRuntime } from '../memory/reuse.js';
 import { renderMemoryFields } from './memory-projection.js';
 import { renderScopedRetrievalQuery } from './retrieval-query.js';
@@ -32,7 +33,7 @@ import { projectMemoryEntry, type MemoryProjectionReceipt } from './memory-proje
 import { MemoryRetrievalConfig, validateMemoryTimeConstraint } from '../memory/retrieval-contracts.js';
 
 export const SCOPED_CONTEXT_POLICY_VERSION = 'context-ranking-v7' as const;
-export type ScopedContextPolicy = typeof SCOPED_CONTEXT_POLICY_VERSION | 'context-ranking-v8' | 'context-ranking-v9' | 'context-ranking-v10';
+export type ScopedContextPolicy = typeof SCOPED_CONTEXT_POLICY_VERSION | 'context-ranking-v8' | 'context-ranking-v9' | 'context-ranking-v10' | 'context-ranking-v11';
 export const SCOPED_CONTEXT_DEFAULT_CHARACTER_BUDGET = 8_000;
 export const SCOPED_CONTEXT_MAX_CHARACTER_BUDGET = 100_000;
 
@@ -375,16 +376,25 @@ function fitLegacyScopedItems(ordered: ScopedContextItem[], limit: number, chara
 }
 
 /** Never split a procedure from its conditions. Exact hits reserve space first. */
-function fitScopedItems(ordered: ScopedContextItem[], limit: number, characterBudget: number): FittedScopedItems {
+export function fitScopedItems(ordered: ScopedContextItem[], limit: number, characterBudget: number): FittedScopedItems {
   const selected = new Set<string>();
+  const content = new Set<string>();
   let charCount = 0;
-  const prioritized = [...ordered.filter(item => item.selectionReasons.includes('exact_signal_match')),
-    ...ordered.filter(item => !item.selectionReasons.includes('exact_signal_match'))];
+  const bridges=ordered.filter(item=>item.projection?.version===3&&item.projection.indexReasoning.role==='bridge');
+  const ordinary=ordered.filter(item=>!bridges.includes(item));
+  let bridgeCount=0,bridgeChars=0;
+  const bridgeLimit=Math.min(3,Math.floor(limit*.3));
+  const exact = ordinary.filter(item => item.projection?.version !== 3 && item.selectionReasons.includes('exact_signal_match'));
+  const prioritized = [...exact, ...bridges, ...ordinary.filter(item => !exact.includes(item))];
   for (const item of prioritized) {
     const cost = item.projection?.characters;
     if (cost === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'New context requires a complete memory projection');
     if (selected.size >= limit || cost + charCount > characterBudget) continue;
+    const key = (item.projection?.version === 3 ? item.bodyPreview.split('\n').slice(1).join('\n').split('\n適用条件:')[0]! : item.bodyPreview).normalize('NFKC').trim().replace(/\s+/gu, ' ');
+    if (content.has(key)) continue;
+    if(bridges.includes(item)){if(bridgeCount>=bridgeLimit||bridgeChars+cost>characterBudget*.3)continue;bridgeCount++;bridgeChars+=cost;}
     selected.add(item.entryId);
+    content.add(key);
     charCount += cost;
   }
   return { items: ordered.filter(item => selected.has(item.entryId)), charCount, truncated: selected.size < ordered.length };
@@ -555,7 +565,7 @@ function storedScopedItems(database: SqliteDatabase, delivery: ContextDeliveryVi
     });
     const scoreComponents = item.scoreComponents as ScopedContextItem['scoreComponents'];
     const projection = delivery.policyVersion === 'context-ranking-v6' ? null : projectMemoryEntry(database, current,
-      { includeEvidence: delivery.policyVersion === 'context-ranking-v10' });
+      { includeEvidence: ['context-ranking-v10','context-ranking-v11'].includes(delivery.policyVersion) });
     if (delivery.policyVersion !== 'context-ranking-v6' && (projection === null || canonicalContentHash(projection.projection) !== canonicalContentHash(item.projection))) {
       throw new KiokukoError('INTEGRITY_ERROR', 'Stored scoped memory projection no longer matches');
     }
@@ -573,7 +583,11 @@ function storedScopedItems(database: SqliteDatabase, delivery: ContextDeliveryVi
       metadata: { storedData: true, untrusted: true, instructions: false },
     };
   });
-  const fitted = (delivery.policyVersion === 'context-ranking-v6' ? fitLegacyScopedItems : fitScopedItems)(fullItems, fullItems.length || 1, delivery.charBudget);
+  // Selection quotas used the requested limit, which may exceed the number of
+  // stored items. Replay validates receipts and accounting without selecting anew.
+  const fitted = delivery.policyVersion === 'context-ranking-v6'
+    ? fitLegacyScopedItems(fullItems, fullItems.length || 1, delivery.charBudget)
+    : { items: fullItems, charCount: fullItems.reduce((sum,item)=>sum+item.projection!.characters,0), truncated: false };
   if (fitted.charCount !== delivery.charCount
     || fitted.items.length !== delivery.items.length
     || (fitted.truncated && !delivery.truncated)) {
@@ -654,7 +668,7 @@ async function collectScopedCandidates(
     const entry = hit.entry;
     if (reuseIneligible && fingerprint && applicabilityCompatibility(entry, fingerprint).incompatible) reuseIneligible.add(entry.id);
     const item = entryScore(entry, hit.origin, hit.score, hit.selectionReasons.includes('exact_signal_match'), queryText);
-    const projection = projectMemoryEntry(database, entry, { includeEvidence: runtime.memoryRetrieval?.mode === 'active' });
+    const projection = projectMemoryEntry(database, entry, { includeEvidence: runtime.memoryRetrieval?.mode === 'active' || project !== undefined && indexSettings(database, project.workspace)?.mode === 'active' });
     if (projection === null) { omissions.push({ entryId: entry.id, reason: 'secret' }); continue; }
     Object.assign(item, projection);
     item.selectionReasons.push(...hit.selectionReasons);
@@ -696,6 +710,7 @@ async function prepareScopedContext(
   if (raw.fingerprint !== undefined && project === undefined) {
     throw new KiokukoError('VALIDATION_ERROR', 'Scoped context fingerprint requires a project');
   }
+  if(project && indexSettings(database,project.workspace)?.mode==='active')policyVersion='context-ranking-v11';
   const manifestSnapshot = project === undefined ? undefined : captureProjectManifestSnapshot(project);
   if (raw.fingerprint !== undefined
     && manifestSnapshot !== undefined
@@ -731,7 +746,7 @@ async function prepareScopedContext(
     taskProfileHash, queryHash: '', policyVersion, items: baseline, deliveryId: null, truncated: false, untrusted: true });
   const reuseIdentity = reuseAllowed ? { runtime: memoryReuse!.runtime.identity,
     candidates: reuseCandidates.map(item => ({ entryId: item.entryId, revision: item.revision, projection: item.projection })) } : null;
-  if (reuseAllowed) policyVersion = runtime.memoryRetrieval?.mode === 'active' ? 'context-ranking-v10' : 'context-ranking-v9';
+  if (reuseAllowed && policyVersion!=='context-ranking-v11') policyVersion = runtime.memoryRetrieval?.mode === 'active' ? 'context-ranking-v10' : 'context-ranking-v9';
   const queryHash = canonicalContentHash({
     ...(reuseIdentity === null ? {} : { memoryReuse: reuseIdentity }),
     ...(raw.focus === undefined ? {} : { focus: raw.focus }),

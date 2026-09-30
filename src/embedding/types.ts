@@ -92,6 +92,7 @@ export interface EmbeddingDocument {
 }
 
 export interface VectorSearchInput {
+  indexRole?: 'ordinary' | 'derived';
   readonly profileId: string;
   readonly dimensions: number;
   readonly queryVector: Float32Array;

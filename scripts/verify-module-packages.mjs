@@ -57,6 +57,8 @@ try {
   const packed = {}
   for (const name of ['core', 'enno', 'lisp']) packed[name] = await pack(join(staged, name), join(work, `pack-${name}`))
   const coreFiles = new Set(packed.core.files.map(file => file.path))
+  for (const path of ['migrations/030_memory_index_reasoning.sql', 'dist/memory/index-reasoning/contracts.js', 'dist/memory/index-reasoning/store.js', 'dist/memory/index-reasoning/worker.js', 'dist/memory/index-reasoning/service.js', 'docs/index-reasoning.md'])
+    assert.ok(coreFiles.has(path), `Missing index reasoning core asset: ${path}`)
   for (const path of ['migrations/025_answer_review.sql', 'dist/dsh/answer-review/coordinator.js', 'docs/answer-review.md', 'scripts/evaluate-answer-review.mjs', 'scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'dist/dsh/decisions/laya-coreml.js', 'dist/dsh/decisions/laya-v1.js', 'dist/dsh/decisions/laya-transport.js']) {
     assert.ok(coreFiles.has(path), `Missing Laya core asset: ${path}`)
   }

@@ -1,3 +1,4 @@
+import { indexInstalled } from '../memory/index-reasoning/store.js'
 import { evolutionEntryState, evolutionInstalled, evolutionSettings } from '../memory/evolution/store.js';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { withContextReadSnapshot } from './read-snapshot.js';
@@ -429,8 +430,13 @@ export function ordinaryContextSelectionStateHash(
     includeTrustedCurator: false,
     includeSemantic: false,
   });
+  const index = indexInstalled(database) ? relevantWorkspaces.flatMap(workspace => {
+    const settings = database.prepare('SELECT mode,generation,index_generation,config_digest FROM memory_index_settings WHERE workspace=?').get(workspace);
+    return settings ? [settings] : [];
+  }) : [];
   return canonicalContentHash({
     evolution: evolutionInstalled(database) ? evolutionSettings(database) : null,
+    ...(index.length ? { index } : {}),
     workspaces: state.workspaces,
     includeEcosystem: options.includeEcosystem === true,
     entries: state.entries,
@@ -460,6 +466,8 @@ export function contextRetrievalStateHash(
     workspaces: state.workspaces,
     includeEcosystem,
     semantic: state.semantic,
+    ...(indexInstalled(database) && relevantWorkspaces.some(workspace => database.prepare('SELECT 1 FROM memory_index_settings WHERE workspace=?').get(workspace))
+      ? { index: relevantWorkspaces.map(workspace => database.prepare('SELECT mode,generation,index_generation,config_digest FROM memory_index_settings WHERE workspace=?').get(workspace) ?? null) } : {}),
     entries: state.entries,
   });
 }

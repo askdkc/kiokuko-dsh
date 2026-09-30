@@ -31,6 +31,11 @@ for(const mode of ['off','observe','active'] as const)test(`native T01/T06/T11/T
           reviewCalls++;assert.deepEqual(request.tools,[])
           const input=JSON.parse(request.messages[0].content[0].text)
           yield*mock.textResponse(JSON.stringify({schemaVersion:1,proposals:[{action:'add',kind:'preference',title:'EMBERLANG 日本語',body:'EMBERLANGプロジェクトの応答言語設定は日本語。',evidenceIds:[input.evidence[0].id]}]}))
+        }else if(request.purpose==='compaction'&&/^(Extract up to|Return JSON array|Check each supplied)/.test(request.system??'')){
+          // Default index reasoning is active; its background calls are separate
+          // from ordinary responses and Memory Review's own extraction.
+          assert.deepEqual(request.tools,[])
+          yield*mock.textResponse('[]')
         }else{mainCalls++;yield*mock.textResponse('回答しました。')}
       }
     }

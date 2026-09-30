@@ -6,9 +6,9 @@ Kiokuko operation.
 
 This document describes the full compatibility package. The
 [configured core](docs/core-modules.md) synchronizes only its selected managed
-Skills and uses the shared database, intake, ledger and scoped memory. It does
-not mount Orca, Deep, advanced-memory workers, session-history repair or the
-full browser client. Enno retains the existing compatibility host adapter;
+Skills and uses the shared database, intake, ledger and scoped memory. It mounts
+source-backed index reasoning by default. Orca, Deep, other advanced-memory workers,
+session-history repair and the full browser client are optional. Enno retains the existing compatibility host adapter;
 Lisp adds protected execution and its existing explicit approval boundaries.
 Omitted managed Skills are preserved on disk. Configured startup rejects unsafe
 Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
@@ -62,6 +62,13 @@ Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
   fail closed.
 
 ## Processes and network
+
+- Source-backed index reasoning is active by default in both compatibility and
+  configured core: admitted DSH provider/model, up to eight bounded calls per
+  workspace per UTC day across extraction, bridging and entailment checking.
+  It sends permitted project memory, never uses a substitute model, adds no
+  generation call during retrieval, and holds uncertain sends for explicit
+  retry. [Modes, budgets and controls](docs/index-reasoning.md).
 
 - Repository-relative final verifiers and backup operations may run restricted
   subprocesses only when the corresponding Kiokuko operation explicitly

@@ -7,6 +7,8 @@ import { canonicalContentHash } from '../serialization/validate.js'
 import { randomUUID } from 'node:crypto'
 import { retainedEvents } from './context-projection.js'
 import { isKiokukoDshSource, KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
+import type { ScopedContextItem } from '../context/scoped-broker.js'
+import type { ProjectFingerprint } from '../repository/project-fingerprint.js'
 
 /** Revalidate at the final request seam, including snapshots retained in native history. */
 export function currentRequestMemory(db: SqliteDatabase, prepared: PreparedAgentTask): ReadonlyMap<string, string> {
@@ -14,10 +16,15 @@ export function currentRequestMemory(db: SqliteDatabase, prepared: PreparedAgent
   if (prepared.memoryPolicy.contextWithheld) return allowed
   const fingerprint = prepared.context?.items.some(item => item.origin === 'ecosystem')
     ? resolveProjectFingerprint(db, prepared.project, captureProjectManifestSnapshot(prepared.project), { readOnly: true }) : undefined
-  for (const item of prepared.context?.items ?? []) {
+  return currentContextMemory(db,prepared.project.workspace,prepared.context?.items??[],fingerprint)
+}
+
+export function currentContextMemory(db:SqliteDatabase,workspace:string,items:readonly ScopedContextItem[],fingerprint?:ProjectFingerprint):ReadonlyMap<string,string> {
+  const allowed=new Map<string,string>()
+  for (const item of items) {
     let entry
-    try { entry = currentScopedEntry(db, prepared.project.workspace, item, fingerprint) } catch { continue }
-    const projected = projectMemoryEntry(db, entry)
+    let projected
+    try { entry = currentScopedEntry(db, workspace, item, fingerprint);projected = projectMemoryEntry(db, entry, {includeEvidence:item.projection?.version===2 || item.projection?.version===3}) } catch { continue }
     if (!projected || item.projection && canonicalContentHash(item.projection) !== canonicalContentHash(projected.projection)) continue
     const text = renderMemoryFields(item)
     if (text !== null) allowed.set(`memory:memory:${item.entryId}`, text)

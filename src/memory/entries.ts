@@ -1,3 +1,4 @@
+import { enqueueIndexSource } from './index-reasoning/store.js'
 import { randomUUID } from 'node:crypto';
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { withImmediateTransaction } from '../db/transaction.js';
@@ -337,6 +338,7 @@ export function recordEntryInTransaction(database: SqliteDatabase, input: Record
 
   const record = selectEntry(database, validated.workspace, id);
   if (!record) throw new KiokukoError('INTEGRITY_ERROR', 'Recorded entry could not be read back');
+  enqueueIndexSource(database, record);
   return record;
 }
 
@@ -468,6 +470,7 @@ function updateCandidateEntryInTransactionInternal(database: SqliteDatabase, inp
   });
   const updated = selectEntry(database, workspace, input.entryId);
   if (!updated) throw new KiokukoError('INTEGRITY_ERROR', 'Updated entry could not be read back');
+  enqueueIndexSource(database, updated);
   return updated;
 }
 

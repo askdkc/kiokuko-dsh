@@ -31,6 +31,7 @@ import type { NativeAgent } from './native-events.js'
 interface ObservationDependencies {
   readonly ctx: Context
   readonly ennoMemory: DshEnnoMemoryRefresh
+  readonly memoryFinalizer: import('../session-memory-finalizer.js').DshMemoryFinalizer
   readonly evolutionConfig: EvolutionConfig
   readonly currentSession: (sessionId: string) => TurnRecord | undefined
   readonly currentForAgentEvent: (agentId: string, sessionId?: string, turn?: number, nativeSession?: object, nativeAgent?: object) => TurnRecord | undefined
@@ -85,7 +86,7 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
     }
   }
   const install = ({
-    ctx, ennoMemory, evolutionConfig, currentSession, currentForAgentEvent,
+    ctx, ennoMemory, evolutionConfig, memoryFinalizer, currentSession, currentForAgentEvent,
     answerReview, markModelUnavailable, recordManualChange, modelAuto, root,
     autoReview, reviewBinding, sessionMirror, executionSupport, kickBoundary,
     stateForRun, objectRecord, isHumanMessage, eventContinuationId,
@@ -138,6 +139,7 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
         void change.catch(() => {})
       }
     }
+    if(event.type==='request/context'&&item&&typeof (session as any).snapshotEvents==='function')void memoryFinalizer.observeIndexRequest(item.workspace,session.id,(session as any).snapshotEvents()).catch(()=>{})
     if (event.type === 'request/header' && item) {
       const config = objectRecord(objectRecord(event.data)?.header)?.config
       const selected = projectModelBinding(config)

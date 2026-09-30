@@ -73,6 +73,7 @@ export class SqliteVecVectorSearchBackend implements VectorSearchBackend {
       'ee.revision = e.current_revision',
       'ee.content_hash = r.content_hash',
     ];
+    if (input.indexRole) clauses.push(`${input.indexRole === 'ordinary' ? 'NOT ' : ''}EXISTS(SELECT 1 FROM memory_index_facts ix WHERE ix.entry_id=e.id AND ix.revision=e.current_revision)`);
     const parameters: Array<string | number | Uint8Array> = [normalized.queryBlob, normalized.profileId, normalized.dimensions];
     if (normalized.workspace !== undefined) {
       clauses.push('e.workspace = ?');

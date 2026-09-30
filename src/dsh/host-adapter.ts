@@ -1,3 +1,4 @@
+import { MemoryIndexReasoningConfig } from '../memory/index-reasoning/contracts.js'
 import { ObservationPackConfig } from './observation-pack/policy.js'
 import { createTurnState, policyState, type TurnRecord } from './host-adapter/turn-state.js'
 import { createRouting } from './host-adapter/routing.js'
@@ -152,6 +153,7 @@ export interface DshHostAdapterOptions {
   readonly efficiency?: import('zod').z.input<typeof EfficiencyConfig>
   readonly ennoMemory?: import('zod').z.input<typeof EnnoMemoryConfig>
   readonly continuity?: import('zod').z.input<typeof ContinuityConfig>
+  readonly memoryIndexReasoning?: import('zod').z.input<typeof MemoryIndexReasoningConfig>
   readonly memoryEvolution?: import('zod').z.input<typeof MemoryEvolutionConfig>
   readonly autoGlobalization?: { enabled?: boolean }
   readonly memoryReview?: import('zod').z.input<typeof MemoryReviewConfig>
@@ -445,6 +447,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const memoryFinalizer = new DshMemoryFinalizer({
     onDeepFinalized: sessionId => deepPlanning.deliver(sessionId),
     memoryEvolution: evolutionConfig,
+    memoryIndexReasoning: MemoryIndexReasoningConfig.parse(options.memoryIndexReasoning ?? {}),
     autoGlobalizationEnabled: options.autoGlobalization?.enabled ?? true,
     runtime,
     sessionQuery: finalizationQuery,
@@ -566,7 +569,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     },
   }) : undefined
   const observationMount = observation.install({
-    ctx, ennoMemory, evolutionConfig, currentSession, currentForAgentEvent,
+    ctx, ennoMemory, evolutionConfig, memoryFinalizer, currentSession, currentForAgentEvent,
     answerReview, markModelUnavailable: agent => routing.markModelUnavailable(agent),
     recordManualChange: (sessionId, pending) => routing.recordManualChange(sessionId, pending),
     modelAuto, root, autoReview, reviewBinding, sessionMirror, executionSupport,
@@ -618,6 +621,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     modelToolDefinitionsChanged: routing.modelToolDefinitionsChanged,
     memoryReview: createMemoryReviewHost({ runtime, autoReview, root, currentSession, objectRecord,
       memoryFinalizer, sessionMirror, reviewBinding }),
+    memoryIndexReasoning: {configure:config=>memoryFinalizer.configureMemoryIndexReasoning(config),command:(sessionId,raw)=>memoryFinalizer.indexCommand(sessionId,raw)},
     memoryEvolution: createEvolutionHost({ runtime, memoryFinalizer, evolutionConfig }),
     autoGlobalization: { configure(enabled: boolean) { memoryFinalizer.configureAutoGlobalization(enabled) } },
     ...(orca === undefined ? {} : { orca }),

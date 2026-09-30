@@ -304,11 +304,11 @@ function deliveryPolicyVersion(): string {
 
 function storedDeliveryPolicyMatches(policyVersion: string): boolean {
   return policyVersion === deliveryPolicyVersion() || policyVersion === 'context-ranking-v6' || policyVersion === 'context-ranking-v8'
-    || policyVersion === 'context-ranking-v9' || policyVersion === 'context-ranking-v10';
+    || policyVersion === 'context-ranking-v9' || policyVersion === 'context-ranking-v10' || policyVersion === 'context-ranking-v11';
 }
 
 function policyRequiresProjection(policyVersion: string): boolean {
-  return policyVersion === deliveryPolicyVersion() || policyVersion === 'context-ranking-v10'
+  return policyVersion === deliveryPolicyVersion() || policyVersion === 'context-ranking-v10' || policyVersion === 'context-ranking-v11'
 }
 
 function storedNonNegativeSafeInteger(value: unknown): number {
@@ -647,7 +647,7 @@ function assertRunForWrite(database: SqliteDatabase, input: ValidatedContextDeli
     const entry = strictCurrentEntry(database, entryWorkspace, item.entryId, origin !== 'project');
     if (entry.revision !== item.entryRevision) conflict();
     if (policyRequiresProjection(input.policyVersion)
-      && canonicalJson(projectMemoryEntry(database, entry, { includeEvidence: input.policyVersion === 'context-ranking-v10' })?.projection ?? null)
+      && canonicalJson(projectMemoryEntry(database, entry, { includeEvidence: ['context-ranking-v10','context-ranking-v11'].includes(input.policyVersion) })?.projection ?? null)
         !== canonicalJson(item.projection ?? null)) conflict();
     if (!isRetrievableEntry(database, entry) || entry.status === 'superseded') conflict();
     if (!entryOriginMatchesWorkspace({ origin, runWorkspace: input.workspace, entryWorkspace: entry.workspace })) notFound();

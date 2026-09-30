@@ -72,6 +72,7 @@ export interface DshCompositionHost {
   readonly modelToolDefinitionsChanged?: (definitions: readonly DshToolDefinition[]) => void
   readonly deepPlanning?: import('../deep-thinker/controller.js').DeepPlanningController
   readonly memoryReview?: { start?:()=>Promise<void>; configure:(config:import('../memory/review/contracts.js').ReviewConfig)=>Promise<void>; command:(session:DshNativeSession,raw:string)=>Promise<Record<string,unknown>> }
+  readonly memoryIndexReasoning?: {configure?: (config: import('../memory/index-reasoning/contracts.js').IndexReasoningConfig) => void; command:(sessionId:string,raw:string)=>Promise<Record<string,unknown>>}
   readonly memoryEvolution?: { configure: (config: import('../memory/evolution/contracts.js').EvolutionConfig) => void; status: (sessionId: string) => Promise<Record<string, unknown>> }
   readonly autoGlobalization?: { configure: (enabled: boolean) => void }
   readonly efficiency?: import('./efficiency.js').DshEfficiencyObserver | undefined
@@ -318,6 +319,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
           }catch(error){const code=error instanceof Error&&/^[a-z_]+$/.test(error.message)?error.message:'review_unavailable';return {kind:'error',text:`自動メモリ操作を実行できません（${code}）。/kioku-memory-review status --json で状態を確認してください。`}}
         }}))
     }
+    if(host.memoryIndexReasoning&&host.commands)ingressDisposers.push(host.commands.register({name:'kioku-index-reasoning',description:'Index reasoning status, mode, backfill, retry',handler:async invocation=>{const id=invocation.agent?.session?.id??invocation.agent?.sessionId;if(!id)return {kind:'error',text:'Current session required'};try{return {kind:'success',text:JSON.stringify(await host.memoryIndexReasoning!.command(id,invocation.rawInput))}}catch{return {kind:'error',text:'索引操作を実行できません。status --json で確認してください。'}}}}))
     if (host.memoryEvolution && host.commands) {
       ingressDisposers.push(host.commands.register({ name: 'kioku-evolution', description: 'Memory evolution status for this project',
         handler: async invocation => {

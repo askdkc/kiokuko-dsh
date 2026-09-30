@@ -18,6 +18,7 @@ import { autoGlobalApplicable } from './auto-globalization.js';
 import { isExternalSkillReference } from '../skills/store.js';
 import { compareCanonicalStrings } from '../serialization/validate.js';
 import { memoryTimePredicate } from './retrieval-sql.js'
+import { indexInstalled, indexSettings } from './index-reasoning/store.js'
 
 export type FederatedOrigin = 'project' | 'ecosystem' | 'global';
 export type FederatedScope = 'auto' | FederatedOrigin;
@@ -505,7 +506,12 @@ export async function federatedEntries(
   input: { project: ResolvedProjectWorkspace; query: string; limit: number; fingerprint?: ProjectFingerprint; projectOnly?: boolean },
   runtime: HybridSearchRuntime = {},
 ): Promise<FederatedEntry[]> {
-  const ranked = (workspace: string): RankedRecallHit[] => rankedEntryHits(database, { workspace, query: input.query, limit: Math.min(input.limit, 100) }, runtime).hits;
+  const ranked = (workspace: string): RankedRecallHit[] => {
+    const query={workspace,query:input.query,limit:Math.min(input.limit,100)};
+    if(!indexInstalled(database))return rankedEntryHits(database,query,runtime).hits;
+    return [...rankedEntryHits(database,{...query,indexRole:'ordinary'},runtime).hits,
+      ...(indexSettings(database,workspace)?.mode==='active'?rankedEntryHits(database,{...query,indexRole:'derived'},runtime).hits:[])];
+  };
   const current = ranked(input.project.workspace).map((hit) => ({
     entry: readEntry(database, { workspace: input.project.workspace, entryId: hit.entryId }),
     origin: 'project' as const,

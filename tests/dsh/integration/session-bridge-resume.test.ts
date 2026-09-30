@@ -5,6 +5,7 @@ import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
+import { MemoryIndexReasoningConfig } from '../../../src/memory/index-reasoning/contracts.js'
 import { openConnection } from '../../../src/db/connection.js'
 import type { SqliteDatabase } from '../../../src/db/adapter.js'
 import { migrateDatabase } from '../../../src/db/migrate.js'
@@ -137,7 +138,7 @@ test('completed run finalizes once from an archived DSH log and stores a self-co
   const f = await fixture()
   const calls: Array<Record<string, unknown>> = []
   let reads = 0
-  const finalizer = new DshMemoryFinalizer({
+  const finalizer = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}),
     runtime: runtime(f.database),
     sessionQuery: { async readSession(sessionId) { reads += 1; assert.equal(sessionId, 'archived-dsh-session'); return snapshot() } },
     llm: { async * stream(options) {
@@ -219,7 +220,7 @@ test('completed run finalizes once from an archived DSH log and stores a self-co
 test('summary failure is contained, leaves the DSH run completed, and can be retried', async () => {
   const f = await fixture()
   let fail = true
-  const finalizer = new DshMemoryFinalizer({
+  const finalizer = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}),
     runtime: runtime(f.database),
     sessionQuery: { async readSession() { return snapshot() } },
     llm: { async * stream() {
@@ -259,7 +260,7 @@ test(`finalizer observes consumed usage after ${failure} failure without changin
   let entered!: () => void
   const streaming = new Promise<void>(resolve => { entered = resolve })
   const observer = new DshEfficiencyObserver()
-  const finalizer = new DshMemoryFinalizer({ runtime: runtime(f.database), inputMode: 'bounded_evidence',
+  const finalizer = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}), runtime: runtime(f.database), inputMode: 'bounded_evidence',
     sessionQuery: { async readSession() { return snapshot() } },
     onObservation: observation => { observations.push(observation); throw new Error('telemetry sink failed') },
     llm: { stream: options => observer.stream(options, { sessionId: 'archived-dsh-session', task: 'auxiliary' }, async function* () {
@@ -310,8 +311,8 @@ test('bounded finalization keeps latest surface evidence and its persisted mode 
       }] }) }
       yield { type: 'finish', reason: { kind: 'stop' } }
     } } }
-  const first = new DshMemoryFinalizer({ ...common, inputMode: 'bounded_evidence' })
-  const second = new DshMemoryFinalizer({ ...common, inputMode: 'prefix_reuse' })
+  const first = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}), ...common, inputMode: 'bounded_evidence' })
+  const second = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}), ...common, inputMode: 'prefix_reuse' })
   try {
     await first.bindRunStart({ runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceStartSeq: 0, sourceStartTurn: 1 })
     withImmediateTransaction(f.database, () => {
