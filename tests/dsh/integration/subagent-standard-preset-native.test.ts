@@ -20,7 +20,7 @@ if (!existsSync(dshManifest) && explicitRuntime) throw new Error('Current DSH na
 const available = existsSync(dshManifest)
 if (available) {
   const version = JSON.parse(readFileSync(dshManifest, 'utf8')).version
-  if (version !== '0.1.7-rc.2') throw new Error(`Subagent test requires DSH 0.1.7-rc.2, received ${version}`)
+  if (version !== '0.2.0-rc.2') throw new Error(`Subagent test requires DSH 0.2.0-rc.2, received ${version}`)
 }
 const current = available
 const moduleUrl = (name: string) => pathToFileURL(join(packageRoot, '@deepseek-ai', name, 'lib/index.js')).href
@@ -45,7 +45,7 @@ function continuableIds(agent: any): string[] {
 }
 
 for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(`shipped standard preset ${mode} runs without Kiokuko child intake`, {
-  skip: current ? false : 'requires the pinned DSH 0.1.7-rc.2 runtime', timeout: 120_000,
+  skip: current ? false : 'requires the pinned DSH 0.2.0-rc.2 runtime', timeout: 120_000,
 }, async () => {
   const [cordis, appBoot, llm, session, cmdline] = await Promise.all([
     import(moduleUrl('cordis')), import(moduleUrl('dsh-app-boot')),

@@ -89,12 +89,13 @@
       "patch": "./dsh/cordis.patch.yml"
     },
     "compatibility": {
-      "dsh": "0.1.7-rc.2",
+      "dsh": "0.2.0-rc.2",
       "dshReleases": {
         "0.1.2-rc.1": "compatible",
         "0.1.5-rc.1": "compatible",
         "0.1.6-alpha.1": "compatible",
-        "0.1.7-rc.2": "compatible"
+        "0.1.7-rc.2": "compatible",
+        "0.2.0-rc.2": "compatible"
       },
       "profiles": [
         "web",
@@ -181,6 +182,7 @@
     "test:memory-review": "node scripts/run-tests.mjs tests/dsh/unit/memory-review tests/dsh/integration/memory-review",
     "test:evolution": "node scripts/run-tests.mjs tests/dsh/unit/evolution tests/dsh/integration/evolution",
     "test:evaluation:evolution": "node --import tsx scripts/run-evolution-evaluation.mjs",
+    "test:evaluation:evolution:tasks": "node --import tsx scripts/run-evolution-task-evaluation.mjs",
     "setup:dsh": "node scripts/setup-dsh.mjs",
     "memory:backfill:akinator": "node scripts/backfill-akinator-memory.mjs",
     "test:evaluation:akinator": "npm run build && node scripts/run-akinator-memory-evaluation.mjs",

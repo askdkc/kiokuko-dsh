@@ -55,3 +55,5 @@ scripted providerのnative試験が示すのは、制御・保存・記憶伝達
 状態収集benchmarkは20件と1,000件で旧読み取り方式と共有方式を交互に測定する。状態収集のp95改善率を、タスク全体の短縮率と呼ばない。fixture bytes、scripted usage、検索ヒット率を実token削減・実費用・タスク成功の代用にしない。
 
 実モデルとembeddingの固定設定がない場合、`test:evaluation:evolution`は通信を行わず `unmeasured` を返す。有用性の採否には、同じ開始条件でのpaired比較によるタスク成功・誤適用・主処理と補助処理を合算したtoken・費用の別測定が必要になる。
+
+実行結果での比較には `test:evaluation:evolution:tasks` を使う。記憶なし・現行v1投影・v2投影を同じ固定LLMと作業・予算で4回ずつ実行し、受け入れテスト成功率を測る。固定LLM設定がなければ `unmeasured` を返して通信しない。これはSQLite再試行の狭いコーディング課題なので、一般の変更作業へ改善を外挿しない。

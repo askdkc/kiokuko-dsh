@@ -10,7 +10,8 @@ import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from '../lisp/request
 import { installDshModelRouting, modelRoleForState, isModelAvailabilityFailure, type RoutableAgent } from '../model-routing.js'
 import { assertDshModelAdmitted, type DshIntakeGateResult, type DshPreStepEvent } from '../intake-gate.js'
 import { hasKnownDshToolPolicyState, type DshToolPolicyState } from '../tool-policy.js'
-import { projectToolsForPhase, type ToolExposureConfig } from '../tool-exposure.js'
+import { projectToolsForLean, projectToolsForPhase, supportsLeanToolExposureRoute, type ToolExposureConfig, type ToolExposureMetrics } from '../tool-exposure.js'
+import type { NativeModelCatalog } from '../native-model-catalog.js'
 import type { DshUserQuestionAgent } from '../user-interaction.js'
 import { KiokukoError } from '../../errors.js'
 import { currentRequestMemory, pruneDshMemorySurface, filterRequestMemory } from '../request-memory.js'
@@ -46,6 +47,8 @@ interface RoutingDependencies {
   readonly getSkillPrompts: () => DshSkillPrompts
   readonly getToolExposureConfig: () => ToolExposureConfig
   readonly reportToolExposureFallback: (reason: string) => void
+  readonly reportToolExposureProjection: (mode: 'lean', reason: string, metrics: ToolExposureMetrics) => void
+  readonly modelCatalog: NativeModelCatalog | undefined
   readonly getSelection: (runId: string) => StoredExecutionSelection | undefined
   readonly setSelection: (runId: string, selection: StoredExecutionSelection) => void
   readonly hasSelection: (runId: string) => boolean
@@ -60,7 +63,7 @@ interface RoutingDependencies {
 export function createRouting({
   ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview,
   semanticCompaction, delegation, deepPlanning, isGenericNativeChild, getSkillPrompts,
-  getToolExposureConfig, reportToolExposureFallback,
+  getToolExposureConfig, reportToolExposureFallback, reportToolExposureProjection, modelCatalog,
   getSelection, setSelection, hasSelection,
   getPolicyState, captureInitialInput, prepareTurn, mapPreStep, currentSession,
   readStateForRun,
@@ -217,7 +220,8 @@ export function createRouting({
         semanticCompaction.recordRoute(agent as unknown as CompactionAgent, assembly.variables)
         const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
         if (lisp) assembly = lisp.project(agent, assembly)
-        if (getToolExposureConfig().mode === 'phase') {
+        const exposureMode = getToolExposureConfig().mode
+        if (exposureMode !== 'full') {
           let fallback: string | undefined
           const surface = (assembly as { tools?: unknown }).tools
           const runtimeTools = tools as unknown as { get?: (name: string, scope?: unknown) => unknown; schemas?: (...args: unknown[]) => unknown } | undefined
@@ -266,14 +270,41 @@ export function createRouting({
                 && item.prepareGeneration === generation && getSelection(item.runId) === selectionRecord
                 && getPolicyState(item.runId) === state && agents?.get(agent.id) === agent && sessions?.get(session.id) === session
                 && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent)
-              const projection = projectToolsForPhase(surface as readonly { name: string }[], state, ownedModelToolDefinitions, name => {
-                const definition = runtimeTools.get!.call(tools, name, agent)
-                return typeof definition === 'object' && definition !== null && typeof (definition as { execute?: unknown }).execute === 'function'
-                  ? definition as { execute: unknown } : undefined
-              })
-              if (!current()) fallback = 'unbound:assembly_binding_changed'
-              else if (projection.reason === 'ownership_unknown' || projection.reason === 'unknown_state') fallback = projection.reason
-              else if (projection.reason === 'projected') assembly = Object.assign({}, assembly, { tools: projection.tools })
+              let routeAllowed = exposureMode === 'phase'
+              if (exposureMode === 'lean') {
+                const exposureRole = modelRoleForState(item.prepared.ennoOduno)
+                const selectedBinding = autoRoute?.runId === item.runId && autoRoute.sessionId === item.sessionId
+                  ? autoRoute.binding
+                  : selection?.mode === 'enno' && exposureRole ? selection.configuration?.roles[exposureRole] : undefined
+                const variables = (assembly as { variables?: Record<string, unknown> }).variables
+                const provider = variables?.provider
+                const model = variables?.model
+                const assemblyBinding = typeof provider === 'string' && typeof model === 'string' ? { provider, model } : undefined
+                if (!assemblyBinding || (selectedBinding && (assemblyBinding.provider !== selectedBinding.provider || assemblyBinding.model !== selectedBinding.model))) fallback = 'lean:model_binding_unavailable'
+                else if (!modelCatalog?.resolveToolExposureRoute) fallback = 'lean:model_route_unavailable'
+                else {
+                  const route = await modelCatalog.resolveToolExposureRoute(assemblyBinding)
+                  if (!supportsLeanToolExposureRoute(route)) fallback = route ? `lean:unsupported_route:${route.family}:${route.protocol}` : 'lean:model_route_unavailable'
+                  else routeAllowed = true
+                }
+              }
+              if (fallback === undefined && !routeAllowed) fallback = 'lean:unsupported_route'
+              if (fallback === undefined) {
+                const resolver = (name: string) => {
+                  const definition = runtimeTools.get!.call(tools, name, agent)
+                  return typeof definition === 'object' && definition !== null && typeof (definition as { execute?: unknown }).execute === 'function'
+                    ? definition as { execute: unknown } : undefined
+                }
+                const projection = exposureMode === 'lean'
+                  ? projectToolsForLean(surface as readonly { name: string; description?: string; parameters?: unknown }[], state, ownedModelToolDefinitions, resolver)
+                  : projectToolsForPhase(surface as readonly { name: string; description?: string; parameters?: unknown }[], state, ownedModelToolDefinitions, resolver)
+                if (!current()) fallback = 'unbound:assembly_binding_changed'
+                else if (projection.reason === 'ownership_unknown' || projection.reason === 'unknown_state' || projection.reason === 'unsupported_schema') fallback = projection.reason
+                else {
+                  if (projection.reason === 'projected') assembly = Object.assign({}, assembly, { tools: projection.tools })
+                  if (exposureMode === 'lean') reportToolExposureProjection('lean', projection.reason, projection.metrics)
+                }
+              }
             }
           }
           if (fallback !== undefined) reportToolExposureFallback(fallback)

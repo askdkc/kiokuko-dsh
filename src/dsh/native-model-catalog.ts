@@ -1,8 +1,12 @@
-import type { ConfiguredProvider, DshModelCatalog, ModelRoute } from './model-configuration.js'
+import type { ConfiguredProvider, DshModelCatalog, ModelBinding, ModelRoute } from './model-configuration.js'
 
 interface ProviderDirectoryEntry { provider: string; settingsNs: string; settingsPath: readonly string[]; declared?: boolean }
 interface NativeCatalog extends DshModelCatalog { listConfigurableProviders?(): readonly ProviderDirectoryEntry[] }
 interface NativeSettings { describe(options: { redactSecrets: true }): readonly { ns: string; value: unknown }[] }
+export interface NativeModelCatalog extends DshModelCatalog {
+  /** Resolve only an exact pi-ai model whose effective API is explicit in its redacted profile. */
+  resolveToolExposureRoute(binding: ModelBinding): Promise<ModelRoute | undefined>
+}
 const object = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 const families: Readonly<Record<string, ModelRoute['family']>> = {
   openai: 'openai', 'openai-codex': 'openai', deepseek: 'deepseek', 'deepseek-official': 'deepseek',
@@ -34,20 +38,59 @@ function providerRoute(provider: string, entry: ProviderDirectoryEntry | undefin
 }
 
 /** Keep live catalogs and call validation bound to their native DSH service. */
-export function nativeModelCatalog(llm: NativeCatalog | undefined, settings?: NativeSettings): DshModelCatalog | undefined {
+export function nativeModelCatalog(llm: NativeCatalog | undefined, settings?: NativeSettings): NativeModelCatalog | undefined {
   if (!llm) return undefined
+  const configurable = () => llm.listConfigurableProviders?.() ?? []
+  const describe = () => settings?.describe({ redactSecrets: true }) ?? []
+  const profileFor = (entry: ProviderDirectoryEntry, descriptions: readonly { ns: string; value: unknown }[]): Record<string, unknown> | undefined => {
+    if (entry.settingsNs !== 'llm-pi-ai') return undefined
+    let profile: unknown = descriptions.find(item => item.ns === entry.settingsNs)?.value
+    for (const key of entry.settingsPath) profile = object(profile)?.[key]
+    return object(profile)
+  }
   return {
     async listProviders() {
       const providers = await llm.listProviders()
-      const directory = llm.listConfigurableProviders?.() ?? []
+      const directory = configurable()
       let descriptions: readonly { ns: string; value: unknown }[] = []
       if (directory.some(entry => entry.settingsNs === 'llm-pi-ai') && settings) {
-        try { descriptions = settings.describe({ redactSecrets: true }) } catch { /* Optional metadata must not prevent model discovery. */ }
+        try { descriptions = describe() } catch { /* Optional metadata must not prevent model discovery. */ }
       }
       return providers.map((provider): ConfiguredProvider => {
         const route = providerRoute(provider.id, directory.find(entry => entry.provider === provider.id), descriptions)
         return { ...provider, ...(route ? { route } : {}) }
       })
+    },
+    async resolveToolExposureRoute(binding) {
+      try {
+        const entries = configurable().filter(entry => entry.provider === binding.provider)
+        if (entries.length !== 1 || entries[0]!.settingsNs !== 'llm-pi-ai' || !settings) return undefined
+        const descriptions = describe()
+        const profile = profileFor(entries[0]!, descriptions)
+        const api = profile?.api
+        if (api !== 'openai-responses' && api !== 'openai-completions') return undefined
+        const modelOverrides = object(profile?.modelOverrides)
+        const modelOverride = object(modelOverrides?.[binding.model])
+        if (modelOverride?.api !== undefined && modelOverride.api !== api) return undefined
+        if (Array.isArray(profile?.models)) {
+          const configured = profile.models.filter(value => object(value)?.id === binding.model)
+          if (configured.length > 1) return undefined
+          const modelApi = object(configured[0])?.api
+          if (modelApi !== undefined && modelApi !== api) return undefined
+        }
+        const providers = await llm.listProviders()
+        if (providers.filter(provider => provider.id === binding.provider).length !== 1) return undefined
+        const models = await llm.listModels(binding.provider)
+        if (models.filter(model => model.provider === binding.provider && model.id === binding.model).length !== 1) return undefined
+        if (llm.resolveCallConfig) {
+          const resolved = await llm.resolveCallConfig({ provider: binding.provider, model: binding.model })
+          if (resolved.provider !== binding.provider || resolved.model !== binding.model) return undefined
+        }
+        const route = providerRoute(binding.provider, entries[0], descriptions)
+        return route?.protocol === (api === 'openai-responses' ? 'responses' : 'chat-completions') ? route : undefined
+      } catch {
+        return undefined
+      }
     },
     listModels: provider => llm.listModels(provider),
     ...(llm.resolveModelInfo ? { resolveModelInfo: (provider: string, model: string, signal?: AbortSignal) => llm.resolveModelInfo!(provider, model, signal) } : {}),

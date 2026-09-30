@@ -45,15 +45,6 @@ function methodFor(episode: Episode, kind: ReferenceLessonKind): { procedure: st
   return avoidance ? { procedure: exactText(avoidance.alternative), verification: exactText(avoidance.verification) } : undefined
 }
 
-function displaySize(episode: Episode, kind: ReferenceLessonKind): number {
-  const method = methodFor(episode, kind)!
-  const avoidance = kind === 'avoidance' ? episode.draft.avoidance : null
-  return Buffer.byteLength(canonicalJson({
-    condition: conditionFor(episode, kind), procedure: method.procedure, verification: method.verification,
-    avoidance: avoidance ? { trigger: exactText(avoidance.trigger), avoid: exactText(avoidance.avoid), alternative: exactText(avoidance.alternative), verification: exactText(avoidance.verification) } : null,
-  }))
-}
-
 /**
  * Select a complete observed field set from one episode. Conflicting methods
  * under the same conditions are withheld; no cross-episode synthesis occurs.
@@ -67,33 +58,41 @@ export function buildReferenceLesson(input: readonly Episode[], kind: ReferenceL
   const methods = new Set(episodes.map(episode => canonicalJson(methodFor(episode, kind))))
   if (methods.size !== 1) return undefined
 
-  const selected = [...episodes].sort((left, right) => displaySize(left, kind) - displaySize(right, kind)
-    || (left.runId < right.runId ? -1 : left.runId > right.runId ? 1 : 0))[0]!
-  const method = methodFor(selected, kind)!
-  const selectedAvoidance = kind === 'avoidance' ? selected.draft.avoidance : null
   const unresolved = episodes.flatMap(episode => episode.draft.unresolved.length
     ? [{ runId: episode.runId, items: [...new Set(episode.draft.unresolved.map(exactText))].sort() }]
     : []).sort((left, right) => left.runId < right.runId ? -1 : left.runId > right.runId ? 1 : 0)
   const corrections = episodes.flatMap(episode => episode.draft.events
     .filter(event => event.kind === 'correction')
     .map(event => ({ runId: episode.runId, description: exactText(event.description), evidenceSeqs: [...new Set(event.evidence)].sort((a, b) => a - b) })))
-    .sort((left, right) => left.runId < right.runId ? -1 : left.runId > right.runId ? 1 : left.evidenceSeqs[0]! - right.evidenceSeqs[0]!)
+    .sort((left, right) => left.runId < right.runId ? -1 : left.runId > right.runId ? 1 : (left.evidenceSeqs[0] ?? -1) - (right.evidenceSeqs[0] ?? -1))
 
-  return {
-    version: 2,
-    kind,
-    selectedFromRunId: selected.runId,
-    supportRunIds: episodes.map(episode => episode.runId).sort(),
-    condition: { applicability: exactText(selectedAvoidance?.trigger ?? selected.draft.applicability), anchors: selected.draft.anchors, boundary: exactText(selected.draft.boundary) },
-    procedure: method.procedure,
-    verification: method.verification,
-    ...(selectedAvoidance ? { avoidance: {
-      trigger: exactText(selectedAvoidance.trigger), avoid: exactText(selectedAvoidance.avoid),
-      alternative: exactText(selectedAvoidance.alternative), verification: exactText(selectedAvoidance.verification),
-    } } : {}),
-    unresolved,
-    corrections,
+  const lessonFor = (episode: Episode): ReferenceLesson => {
+    const method = methodFor(episode, kind)!
+    const avoidance = kind === 'avoidance' ? episode.draft.avoidance : null
+    return {
+      version: 2,
+      kind,
+      selectedFromRunId: episode.runId,
+      supportRunIds: episodes.map(item => item.runId).sort(),
+      condition: { applicability: exactText(avoidance?.trigger ?? episode.draft.applicability),
+        anchors: { error: exactText(episode.draft.anchors.error), tool: exactText(episode.draft.anchors.tool),
+          target: exactText(episode.draft.anchors.target), version: exactText(episode.draft.anchors.version) },
+        boundary: exactText(episode.draft.boundary) },
+      procedure: method.procedure,
+      verification: method.verification,
+      ...(avoidance ? { avoidance: {
+        trigger: exactText(avoidance.trigger), avoid: exactText(avoidance.avoid),
+        alternative: exactText(avoidance.alternative), verification: exactText(avoidance.verification),
+      } } : {}),
+      unresolved,
+      corrections,
+    }
   }
+  const selected = [...episodes].map(episode => lessonFor(episode))
+    .sort((left, right) => Buffer.byteLength(`${left.kind === 'avoidance' ? 'Avoidance' : 'Lesson'}: ${exactText(episodes.find(item => item.runId === left.selectedFromRunId)!.draft.goal)}\n${renderReferenceLesson(left)}`)
+      - Buffer.byteLength(`${right.kind === 'avoidance' ? 'Avoidance' : 'Lesson'}: ${exactText(episodes.find(item => item.runId === right.selectedFromRunId)!.draft.goal)}\n${renderReferenceLesson(right)}`)
+      || (left.selectedFromRunId < right.selectedFromRunId ? -1 : left.selectedFromRunId > right.selectedFromRunId ? 1 : 0))[0]!
+  return selected
 }
 
 export function renderReferenceLesson(lesson: ReferenceLesson): string {

@@ -5,6 +5,7 @@ import { buildStructuredScope } from '../structured-memory.js'
 import { canonicalJson, type JsonObject } from '../../serialization/validate.js'
 import { KiokukoError } from '../../errors.js'
 import { digest, evidenceReferences, type EpisodeEvidence, supportingEvidenceDigest, episodeSignature, episodeSignals, parseEpisodeDraft, EVOLUTION_VERSION, eligibleAvoidance, independentEpisodes, inductionKind, type Episode, type EvolutionMode, type LessonDraft } from './contracts.js'
+import { buildReferenceLesson, ReferenceLesson, referencePromotionSignature, REFERENCE_PROMOTION_VERSION, renderReferenceLesson } from './reference-promotion.js'
 
 export function evolutionInstalled(db: SqliteDatabase): boolean {
   return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_episodes'").get()
@@ -58,11 +59,14 @@ export function evolutionEntryState(db: SqliteDatabase, entry: Pick<EntryRecord,
 }
 
 function recordDerived(db: SqliteDatabase, input: {
-  episodes: Episode[]; kind: 'episode' | 'positive' | 'avoidance'; title: string; body: string; now: string
+  episodes: Episode[]; kind: 'episode' | 'positive' | 'avoidance'; title: string; body: string; now: string;
+  algorithm?: string; signature?: string
 }): EntryRecord {
   const episode = input.episodes[0]!
+  const algorithm = input.algorithm ?? EVOLUTION_VERSION
+  const signature = input.signature ?? episode.signature
   const manifest = canonicalJson(input.episodes)
-  const inputDigest = digest({ version: EVOLUTION_VERSION, kind: input.kind, episodes: input.episodes })
+  const inputDigest = digest({ version: algorithm, kind: input.kind, episodes: input.episodes })
   const duplicate = db.prepare(`SELECT e.id FROM memory_derivations d JOIN entries e ON e.id=d.entry_id AND e.current_revision=d.revision
     WHERE d.workspace=? AND d.input_digest=? AND d.kind=?`).get<{ id: string }>(episode.workspace, inputDigest, input.kind)
   if (duplicate) {
@@ -78,10 +82,10 @@ function recordDerived(db: SqliteDatabase, input: {
     runId: episode.runId, timestamp: input.now }
   const data = { workspace: episode.workspace, kind: input.kind === 'episode' ? 'reference' as const : 'lesson' as const,
     title: input.title.slice(0, 200), body: input.body, summary: input.body.slice(0, 2000), scope, provenance,
-    tags: ['episode-evolution', input.kind, EVOLUTION_VERSION], createdBy: 'kiokuko-evolution', actor: 'kiokuko-evolution' }
+    tags: ['episode-evolution', input.kind, algorithm], createdBy: 'kiokuko-evolution', actor: 'kiokuko-evolution' }
   const prior = input.kind === 'episode' ? undefined : db.prepare(`SELECT d.entry_id AS id FROM memory_derivations d JOIN entries e
-    ON e.id=d.entry_id AND e.current_revision=d.revision WHERE d.workspace=? AND d.signature=? AND d.kind=? ORDER BY e.updated_at DESC LIMIT 1`)
-    .get<{ id: string }>(episode.workspace, episode.signature, input.kind)
+    ON e.id=d.entry_id AND e.current_revision=d.revision WHERE d.workspace=? AND d.signature=? AND d.kind=? AND d.algorithm=? ORDER BY e.updated_at DESC LIMIT 1`)
+    .get<{ id: string }>(episode.workspace, signature, input.kind, algorithm)
   let entry: EntryRecord
   if (prior) {
     const current = readEntry(db, { workspace: episode.workspace, entryId: prior.id })
@@ -89,7 +93,7 @@ function recordDerived(db: SqliteDatabase, input: {
     entry = updateCandidateEntryInTransaction(db, { ...data, entryId: current.id, expectedRevision: current.revision, now: input.now })
   } else entry = recordEntryInTransaction(db, { ...data, status: 'candidate', trustLevel: 'untrusted', confidence: 0.5 }, { now: input.now })
   db.prepare(`INSERT INTO memory_derivations(entry_id,revision,workspace,signature,kind,algorithm,manifest_json,input_digest,state)
-    VALUES(?,?,?,?,?,?,?,?,'ready')`).run(entry.id, entry.revision, entry.workspace, episode.signature, input.kind, EVOLUTION_VERSION, manifest, inputDigest)
+    VALUES(?,?,?,?,?,?,?,?,'ready')`).run(entry.id, entry.revision, entry.workspace, signature, input.kind, algorithm, manifest, inputDigest)
   for (const e of input.episodes) db.prepare('INSERT OR IGNORE INTO memory_episode_entries(run_id,entry_id) VALUES(?,?)').run(e.runId, entry.id)
   return entry
 }
@@ -137,28 +141,48 @@ export function scheduleEvolution(db: SqliteDatabase, runId: string, model: Evol
   if (!current || evolutionSettings(db).mode === 'off') return
   const trigger = JSON.parse(current.episode_json) as Episode
   if (db.prepare('SELECT 1 FROM memory_evolution_jobs WHERE trigger_run=?').get(runId)) return
-  const episodes = independentEpisodes(db.prepare(`SELECT episode_json FROM memory_episodes WHERE workspace=? AND signature=? ORDER BY created_at DESC LIMIT 120`)
+  const recent = independentEpisodes(db.prepare(`SELECT episode_json FROM memory_episodes WHERE workspace=? AND signature=? ORDER BY created_at DESC LIMIT 120`)
     .all<{ episode_json: string }>(trigger.workspace, trigger.signature).map(row => JSON.parse(row.episode_json) as Episode).filter(e => episodeCurrent(db, e)))
   const skip = (reason: string) => db.prepare('INSERT INTO memory_evolution_skips(run_id,workspace,reason) VALUES(?,?,?) ON CONFLICT(run_id) DO UPDATE SET reason=excluded.reason').run(runId, trigger.workspace, reason)
-  const kind = inductionKind(episodes)
-  if (!kind) { skip('insufficient_independent_support'); return }
-  const procedures = new Set(episodes.flatMap(e => kind === 'positive' ? [e.draft.procedure] : e.draft.avoidance ? [e.draft.avoidance.alternative] : []))
-  if (procedures.size > 1) { skip('conflicting_procedures'); return }
-  const previous = db.prepare(`SELECT seen_json FROM memory_evolution_jobs WHERE workspace=? AND signature=? AND kind=? AND algorithm=?`)
-    .all<{ seen_json: string }>(trigger.workspace, trigger.signature, kind, EVOLUTION_VERSION)
-  const seen = new Set(previous.flatMap(row => JSON.parse(row.seen_json) as string[]))
-  if (previous.length && episodes.filter(e => !seen.has(e.evidenceDigest)).length < 3) { skip('waiting_for_three_new_episodes'); return }
-  // Reserve the required support, then include new failures as well as successes.
-  // Otherwise six old successes can permanently hide later failed observations.
-  const ordered = [...episodes].sort((a,b) => Number(seen.has(a.evidenceDigest)) - Number(seen.has(b.evidenceDigest)) || a.runId.localeCompare(b.runId))
-  const support = kind === 'positive' ? ordered.filter(e => e.successful && e.procedureSupported).slice(0,2)
-    : ordered.filter(e => eligibleAvoidance(e)).sort((a,b) => Number(b.corrective || b.recovered) - Number(a.corrective || a.recovered)).slice(0,2)
-  const selected = [...new Map([...support, ...ordered].map(e => [e.runId,e])).values()].slice(0,6)
-  if (inductionKind(selected) !== kind) { skip('bounded_support_insufficient'); return }
-  db.prepare('DELETE FROM memory_evolution_skips WHERE run_id=?').run(runId)
-  const inputDigest = digest({ version: EVOLUTION_VERSION, kind, episodes: selected })
-  db.prepare(`INSERT OR IGNORE INTO memory_evolution_jobs(id,workspace,trigger_run,signature,kind,input_json,seen_json,input_digest,model_json,algorithm,state,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(inputDigest, trigger.workspace, runId, trigger.signature, kind, canonicalJson(selected), canonicalJson(episodes.map(e => e.evidenceDigest)), inputDigest, canonicalJson({ provider: model.provider, model: model.model, sessionId: trigger.sessionId, ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }), ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }) }), EVOLUTION_VERSION, now, now)
+  for (const kind of ['avoidance', 'positive'] as const) {
+    const signature = referencePromotionSignature(trigger, kind)
+    const episodes = recent.filter(episode => referencePromotionSignature(episode, kind) === signature
+      && (kind === 'avoidance' ? eligibleAvoidance(episode) : !eligibleAvoidance(episode)))
+    if (inductionKind(episodes) !== kind) continue
+    const previous = db.prepare(`SELECT seen_json FROM memory_evolution_jobs WHERE workspace=? AND signature=? AND kind=? AND algorithm=?`)
+      .all<{ seen_json: string }>(trigger.workspace, signature, kind, REFERENCE_PROMOTION_VERSION)
+    const seen = new Set(previous.flatMap(row => JSON.parse(row.seen_json) as string[]))
+    if (previous.length && episodes.filter(e => !seen.has(e.evidenceDigest)).length < 3) {
+      skip('waiting_for_three_new_episodes'); return
+    }
+    // Reserve the required support, then include new observations without exceeding six.
+    const ordered = [...episodes].sort((a,b) => Number(seen.has(a.evidenceDigest)) - Number(seen.has(b.evidenceDigest))
+      || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
+    const support = kind === 'positive' ? ordered.filter(e => e.successful && e.procedureSupported).slice(0,2)
+      : ordered.filter(e => eligibleAvoidance(e)).slice(0,2)
+    const selected = [...new Map([...support, ...ordered].map(e => [e.runId,e])).values()].slice(0,6)
+    if (inductionKind(selected) !== kind || !buildReferenceLesson(selected, kind)) {
+      skip('conflicting_procedures'); return
+    }
+    const inputDigest = digest({ version: REFERENCE_PROMOTION_VERSION, kind, episodes: selected })
+    db.prepare('DELETE FROM memory_evolution_skips WHERE run_id=?').run(runId)
+    db.prepare(`INSERT OR IGNORE INTO memory_evolution_jobs(id,workspace,trigger_run,signature,kind,input_json,seen_json,input_digest,model_json,algorithm,state,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(inputDigest, trigger.workspace, runId, signature, kind, canonicalJson(selected), canonicalJson(episodes.map(e => e.evidenceDigest)), inputDigest,
+        canonicalJson({ provider: model.provider, model: model.model, sessionId: trigger.sessionId, ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }), ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }) }), REFERENCE_PROMOTION_VERSION, now, now)
+    return
+  }
+  skip(inductionKind(recent) ? 'condition_mismatch' : 'insufficient_independent_support')
+}
+
+/** Persist a deterministic v2 reference card after rechecking all source revisions. */
+export function saveReferenceLesson(db: SqliteDatabase, episodes: Episode[], kind: 'positive' | 'avoidance', now: string): EntryRecord {
+  if (episodes.length < 1 || episodes.length > 6 || episodes.some(episode => !episodeCurrent(db, episode))) throw new Error('evolution_stale_or_conflicting')
+  const lesson: ReferenceLesson | undefined = buildReferenceLesson(episodes, kind)
+  if (!lesson || lesson.supportRunIds.length !== episodes.length) throw new Error('evolution_support_not_met')
+  const signature = referencePromotionSignature(episodes[0]!, kind)
+  return recordDerived(db, { episodes, kind, now, algorithm: REFERENCE_PROMOTION_VERSION, signature,
+    title: `${kind === 'avoidance' ? 'Avoidance' : 'Lesson'}: ${episodes.find(episode => episode.runId === lesson.selectedFromRunId)!.draft.goal}`,
+    body: renderReferenceLesson(lesson) })
 }
 
 export function saveLesson(db: SqliteDatabase, episodes: Episode[], kind: 'positive' | 'avoidance', draft: LessonDraft, now: string): EntryRecord {
@@ -185,18 +209,23 @@ export function diversifyEpisodes<T extends { entryId: string; selectionReasons:
   if (!evolutionInstalled(db) || evolutionSettings(db).mode !== 'active') return items
   const membership = new Map(items.map(item => [item.entryId,
     db.prepare('SELECT run_id AS id FROM memory_episode_entries WHERE entry_id=?').all<{ id: string }>(item.entryId)]))
-  const kinds = new Map(items.map(item => [item.entryId,
-    db.prepare(`SELECT d.kind FROM memory_derivations d JOIN entries e ON e.id=d.entry_id AND e.current_revision=d.revision
-      WHERE d.entry_id=?`).get<{ kind: string }>(item.entryId)?.kind]))
-  const lessonRuns = new Set(items.filter(item => (packedIds === undefined || packedIds.has(item.entryId)) && ['positive', 'avoidance'].includes(kinds.get(item.entryId) ?? ''))
+  const derived = new Map(items.map(item => [item.entryId,
+    db.prepare(`SELECT d.kind,d.algorithm FROM memory_derivations d JOIN entries e ON e.id=d.entry_id AND e.current_revision=d.revision
+      WHERE d.entry_id=?`).get<{ kind: string; algorithm: string }>(item.entryId)]))
+  const runKey = (entryId: string) => membership.get(entryId)!.map(run => run.id).sort().join('\u0000')
+  const v2LessonRuns = new Set(items.filter(item => membership.get(item.entryId)!.length > 0 && derived.get(item.entryId)?.algorithm === REFERENCE_PROMOTION_VERSION
+    && ['positive', 'avoidance'].includes(derived.get(item.entryId)?.kind ?? '')).map(item => runKey(item.entryId)))
+  const lessonRuns = new Set(items.filter(item => (packedIds === undefined || packedIds.has(item.entryId)) && ['positive', 'avoidance'].includes(derived.get(item.entryId)?.kind ?? ''))
     .flatMap(item => membership.get(item.entryId)!.map(run => run.id)))
   const counts = new Map<string, number>()
   return items.filter(item => {
     const runs = membership.get(item.entryId)!
+    const row = derived.get(item.entryId)
+    if (row && runs.length > 0 && row.algorithm !== REFERENCE_PROMOTION_VERSION && ['positive', 'avoidance'].includes(row.kind) && v2LessonRuns.has(runKey(item.entryId))) return false
     if (!item.selectionReasons.includes('exact_signal_match')) {
       // A matching lesson represents its own source overviews. Otherwise the
       // ordinary memory + overview can exhaust every slot before the lesson.
-      if (kinds.get(item.entryId) === 'episode' && runs.length && runs.every(run => lessonRuns.has(run.id))) return false
+      if (row?.kind === 'episode' && runs.length && runs.every(run => lessonRuns.has(run.id))) return false
       if (runs.some(r => (counts.get(r.id) ?? 0) >= 2)) return false
     }
     runs.forEach(r => counts.set(r.id, (counts.get(r.id) ?? 0) + 1))
@@ -212,8 +241,8 @@ export function evolutionStatus(db: SqliteDatabase, workspace: string): Record<s
     const eligible = row.state === 'ready' && (JSON.parse(row.manifest_json) as Episode[]).every(e => episodeCurrent(db,e)) && !adverseFeedback(db,row.entry_id,row.revision)
     derivations[eligible ? 'ready' : 'held']++
   }
-  return { ...evolutionSettings(db), derivations, quality: 'real_model_evaluation_unmeasured',
-    jobs: db.prepare('SELECT state,reason,COUNT(*) AS count FROM memory_evolution_jobs WHERE workspace=? GROUP BY state,reason').all(workspace),
+  return { ...evolutionSettings(db), derivations, quality: 'real_model_evaluation_unmeasured', promotionAlgorithm: REFERENCE_PROMOTION_VERSION,
+    jobs: db.prepare('SELECT algorithm,state,reason,COUNT(*) AS count FROM memory_evolution_jobs WHERE workspace=? GROUP BY algorithm,state,reason').all(workspace),
     episodes: db.prepare('SELECT COUNT(*) AS count FROM memory_episodes WHERE workspace=?').get(workspace),
     calls: db.prepare('SELECT COUNT(*) AS count,SUM(input_tokens) AS inputTokens,SUM(output_tokens) AS outputTokens,SUM(duration_ms) AS durationMs FROM memory_evolution_calls WHERE workspace=?').get(workspace),
     skips: db.prepare('SELECT reason,COUNT(*) AS count FROM memory_evolution_skips WHERE workspace=? GROUP BY reason').all(workspace),

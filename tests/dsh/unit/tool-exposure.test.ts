@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Config } from '../../../src/dsh/config.js'
-import { eligibleDshModelTools, projectToolsForPhase, ToolExposureConfig } from '../../../src/dsh/tool-exposure.js'
+import { eligibleDshModelTools, projectToolsForLean, projectToolsForPhase, supportsLeanToolExposureRoute, ToolExposureConfig } from '../../../src/dsh/tool-exposure.js'
 import { hasKnownDshToolPolicyState, type DshToolPhase, type DshToolPolicyState } from '../../../src/dsh/tool-policy.js'
-import { DSH_MODEL_FACING_OPERATIONS } from '../../../src/dsh/tools.js'
+import { DSH_LEAN_DESCRIPTION_OPERATIONS, DSH_MODEL_FACING_OPERATIONS, createDshToolDefinitions, leanDshToolDescription } from '../../../src/dsh/tools.js'
 
 function state(phase: DshToolPhase, overrides: Partial<DshToolPolicyState> = {}): DshToolPolicyState {
   return { runId: 'run-1', workspace: 'workspace-1', orchestrationId: 'orchestration-1', revision: 1, routeEpoch: 0, phase, ...overrides }
@@ -88,5 +88,81 @@ test('unknown policy state fails open to the unchanged surface, never an empty p
 test('configuration defaults to full and rejects unknown modes', () => {
   assert.equal(ToolExposureConfig.parse({}).mode, 'full')
   assert.equal(Config.parse({}).toolExposure.mode, 'full')
+  assert.equal(ToolExposureConfig.parse({ mode: 'lean' }).mode, 'lean')
   assert.throws(() => ToolExposureConfig.parse({ mode: 'guess' }))
+})
+
+test('lean mode admits only explicit OpenAI pi-ai HTTP protocols', () => {
+  assert.equal(supportsLeanToolExposureRoute({ provider: 'openai', family: 'openai', connection: 'api', protocol: 'responses' }), true)
+  assert.equal(supportsLeanToolExposureRoute({ provider: 'openai', family: 'openai', connection: 'api', protocol: 'chat-completions' }), true)
+  assert.equal(supportsLeanToolExposureRoute({ provider: 'openrouter', family: 'openrouter', connection: 'api', protocol: 'chat-completions' }), false)
+  assert.equal(supportsLeanToolExposureRoute({ provider: 'openai', family: 'openai', connection: 'local', protocol: 'responses' }), false)
+  assert.equal(supportsLeanToolExposureRoute(undefined), false)
+})
+
+test('lean projection removes only exact duplicate input-schema descriptions and never mutates execution definitions', () => {
+  const definitions = createDshToolDefinitions({
+    bind: () => ({ runId: 'run-1', workspace: 'workspace-1', orchestrationId: 'orchestration-1', revision: 1, routeEpoch: 0 }),
+    execute: async () => undefined,
+  })
+  const byName = new Map<string, typeof definitions[number]>(definitions.map(definition => [definition.name, definition]))
+  const registered = new Map(definitions.map(definition => [definition.name, { execute: definition.execute }]))
+  const external = { name: 'read', description: 'Read a file.', parameters: { type: 'object', properties: { path: { type: 'string' } } } }
+  const tools = [external, ...definitions.map(({ name, description, parameters }) => ({ name, description, parameters }))]
+  const originalDescriptions = tools.map(tool => tool.description)
+  const originalParameters = new Map(definitions.map(definition => [definition.name, definition.parameters]))
+  const result = projectToolsForLean(tools, state('normal'), registered, name => {
+    const definition = byName.get(name)
+    return definition ? { execute: definition.execute } : undefined
+  })
+
+  assert.equal(result.reason, 'projected')
+  assert.deepEqual(result.tools.map(tool => tool.name), ['read', 'curator_check', 'memory_checkpoint'])
+  assert.strictEqual(result.tools[0], external)
+  assert.ok(!result.tools.find(tool => tool.name === 'curator_check')!.description!.includes('Business payload:'))
+  assert.strictEqual(result.tools.find(tool => tool.name === 'curator_check')!.parameters, originalParameters.get('curator_check'))
+  assert.strictEqual(result.tools.find(tool => tool.name === 'memory_checkpoint')!.parameters, originalParameters.get('memory_checkpoint'))
+  assert.deepEqual(tools.map(tool => tool.description), originalDescriptions)
+  assert.deepEqual(definitions.map(definition => definition.description), originalDescriptions.slice(1))
+  assert.equal(result.metrics.phaseFilteredCount, definitions.length - 2)
+  assert.equal(result.metrics.descriptionTransformedCount, 2)
+  assert.ok(result.metrics.descriptionBytesAfter < result.metrics.descriptionBytesBefore)
+  assert.equal(result.metrics.parameterBytesBefore, Buffer.byteLength(JSON.stringify(external.parameters))
+    + definitions.reduce((total, definition) => total + Buffer.byteLength(JSON.stringify(definition.parameters)), 0))
+  assert.equal(result.metrics.parameterBytesAfter, Buffer.byteLength(JSON.stringify(external.parameters))
+    + Buffer.byteLength(JSON.stringify(byName.get('curator_check')!.parameters))
+    + Buffer.byteLength(JSON.stringify(byName.get('memory_checkpoint')!.parameters)))
+  assert.equal(result.metrics.unownedSurfaceReductionCount, 0)
+  assert.equal(result.metrics.unownedSurfaceReductionReason, 'registration_provenance_unavailable')
+
+  for (const operation of DSH_LEAN_DESCRIPTION_OPERATIONS) {
+    const definition = byName.get(operation)!
+    const compact = leanDshToolDescription(operation, definition.description)
+    assert.ok(compact)
+    assert.ok(!compact.includes('Business payload:'))
+  }
+  for (const operation of ['enno_plan_review', 'enno_delegate']) {
+    const definition = byName.get(operation)!
+    assert.equal(leanDshToolDescription(operation, definition.description), undefined)
+  }
+})
+
+test('lean projection fails closed on changed description schema and ownership', () => {
+  const definitions = createDshToolDefinitions({
+    bind: () => ({ runId: 'run-1', workspace: 'workspace-1', orchestrationId: 'orchestration-1', revision: 1, routeEpoch: 0 }),
+    execute: async () => undefined,
+  })
+  const registered = new Map(definitions.map(definition => [definition.name, { execute: definition.execute }]))
+  const tools = definitions.map(({ name, description, parameters }) => ({ name, description, parameters }))
+  const changed = tools.map(tool => tool.name === 'curator_check' ? { ...tool, description: `${tool.description} changed` } : tool)
+  const unsupportedSchema = projectToolsForLean(changed, state('normal'), registered, name => {
+    const definition = definitions.find(item => item.name === name)
+    return definition ? { execute: definition.execute } : undefined
+  })
+  assert.equal(unsupportedSchema.reason, 'unsupported_schema')
+  assert.strictEqual(unsupportedSchema.tools, changed)
+
+  const ownershipUnknown = projectToolsForLean(tools, state('normal'), registered, () => undefined)
+  assert.equal(ownershipUnknown.reason, 'ownership_unknown')
+  assert.strictEqual(ownershipUnknown.tools, tools)
 })

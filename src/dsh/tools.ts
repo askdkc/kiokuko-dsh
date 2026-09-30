@@ -15,6 +15,17 @@ export const DSH_MODEL_FACING_OPERATIONS = [
   'memory_checkpoint',
 ] as const satisfies readonly ModelToolOperationName[]
 
+/** Operations whose description repeats the same input schema already published in `parameters`. */
+export const DSH_LEAN_DESCRIPTION_OPERATIONS = [
+  'enno_plan_submit',
+  'enno_ideal_submit',
+  'enno_work_report',
+  'enno_finish',
+  'enno_meditation_submit',
+  'curator_check',
+  'memory_checkpoint',
+] as const satisfies readonly ModelToolOperationName[]
+
 export type DshModelFacingOperation = (typeof DSH_MODEL_FACING_OPERATIONS)[number]
 
 const modelFacingSet = new Set<string>(DSH_MODEL_FACING_OPERATIONS)
@@ -209,6 +220,16 @@ function descriptionFor(operation: ModelToolOperationName): string {
   if (operation === 'enno_plan_review') return 'Review the complete candidate plan before submission. The host selects the configured typed provider or exact check model. No execution is approved. Read findings, supply dispositions, then enno_plan_submit the identical reviewed candidate; changed drafts require review again. Ordinary review failure is recoverable.'
   if (operation === 'enno_delegate') return 'Delegate a bounded part of the CURRENT approved WorkUnit to a native DSH spawn child. Supply instruction only. The host chooses the approved worker model and scope. No grandchildren. Review the returned evidence, run focused verification, then submit enno_work_report yourself. Child completion does not accept the WorkUnit.'
   return `Use native JSON types; never encode an object or array as a JSON string. The host supplies identity, routing, lease and idempotency. Returns TurnOutcome: applied.value is the business response; applied.handoff is next-turn state. Predictable rejections return retry or clarify, not transport errors. Business payload: ${JSON.stringify(modelFacingInputSchema(operation))}`
+}
+
+/** Return a compact presentation only when the registered description still has its exact built-in schema suffix. */
+export function leanDshToolDescription(operation: string, description: string): string | undefined {
+  if (!(DSH_LEAN_DESCRIPTION_OPERATIONS as readonly string[]).includes(operation)) return undefined
+  const expected = descriptionFor(operation as ModelToolOperationName)
+  const marker = ' Business payload: '
+  const markerIndex = expected.lastIndexOf(marker)
+  if (markerIndex < 0 || description !== expected) return undefined
+  return expected.slice(0, markerIndex)
 }
 
 function ennoNextAction(value: unknown): string | undefined {

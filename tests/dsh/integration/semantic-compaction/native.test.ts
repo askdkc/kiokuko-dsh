@@ -15,7 +15,7 @@ const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai
 const [cordis, llm, sessions, projection, prompt, tools, registry, loop, meter, compaction, pruner] = await Promise.all(['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic', 'compaction-tool-result-pruner'].map(load))
 const version = JSON.parse(await readFile(join(packages, '@deepseek-ai/dsh-compaction-basic/package.json'), 'utf8')).version
 assert.equal(version, process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? '0.1.5-rc.1')
-const currentToolMessages = version.startsWith('0.1.7')
+const currentToolMessages = version.startsWith('0.1.7') || version.startsWith('0.2.')
 
 async function nativeFixture(enabled = true, text = 'Old file content. '.repeat(350), tool = 'read', options: { seed?: any[]; parentSession?: string; choose?: string; roleRatio?: number; contextWindow?: number; script?: (mock: any) => any[] } = {}) {
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)

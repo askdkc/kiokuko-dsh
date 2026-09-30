@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { seed,fixture,NOW } from './fixture.js'
-import { configureEvolution, saveEpisode, saveLesson, evolutionEntryState, diversifyEpisodes } from '../../../../src/memory/evolution/store.js'
+import { configureEvolution, saveEpisode, saveLesson, saveReferenceLesson, evolutionEntryState, diversifyEpisodes } from '../../../../src/memory/evolution/store.js'
 import { readEntry,updateCandidateEntry } from '../../../../src/memory/entries.js'
 import { searchEntries } from '../../../../src/memory/retrieval.js'
 import { contextRetrievalStateHash } from '../../../../src/context/selection-state.js'
@@ -58,6 +58,18 @@ test('lessons preserve candidate trust and reject invented repairs and incomplet
     assert.deepEqual(diversifyEpisodes(db,ranked).map(i=>i.entryId),[...originals.map(i=>i.entryId),saved.id])
     assert.ok(diversifyEpisodes(db,ranked.map(i=>({...i,selectionReasons:['exact_signal_match']}))).some(i=>i.entryId===overviews[0]!.entryId))
     assert.deepEqual(diversifyEpisodes(db,[...originals,...overviews]),[...originals,...overviews])
+  } finally {db.close()}
+})
+test('v2 lesson replaces same-evidence v1 lesson and episode overview in packed context', () => {
+  const {db}=fixture()
+  try {
+    const es=['prefer-a','prefer-b','prefer-c'].map(id=>seed(db,id)),d=es[0]!.draft
+    const legacy=withImmediateTransaction(db,()=>saveLesson(db,es,'positive',{applicability:d.applicability,procedure:d.procedure,verification:d.verification,boundary:d.boundary,evidence:es.map(e=>e.runId),conflict:false},NOW))
+    const reference=withImmediateTransaction(db,()=>saveReferenceLesson(db,es,'positive',NOW))
+    configureEvolution(db,'active')
+    const overviews=es.map(e=>({entryId:db.prepare('SELECT overview_entry_id AS id FROM memory_episodes WHERE run_id=?').get<{id:string}>(e.runId)!.id,selectionReasons:[] as string[]}))
+    const packed=diversifyEpisodes(db,[{entryId:legacy.id,selectionReasons:[]},{entryId:reference.id,selectionReasons:[]},...overviews])
+    assert.deepEqual(packed.map(item=>item.entryId),[reference.id])
   } finally {db.close()}
 })
 test('feedback is revision-bound and propagates from an episode overview to its lesson', () => {

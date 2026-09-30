@@ -1,0 +1,9 @@
+{
+  "name": "kiokuko-dsh-current-ci-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Isolated DSH 0.1.7 runtime for current native compatibility tests",
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.7-rc.2"
+  }
+}

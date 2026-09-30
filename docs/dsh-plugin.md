@@ -37,9 +37,29 @@ does not install it into `dsh-tui`. The test command is
 `npm run test:e2e:dsh:tui`; it requires the pinned fixture dependencies and
 pnpm. It does not use credentials or the user's profile.
 
-The current runtime target is **DSH 0.1.7-rc.2**. Local native tests cover request routing and legacy v0/v3 session migration to v4. A packed plugin was installed, started, reloaded, and removed in a disposable Web profile. The earlier **0.1.6-alpha.1** source checkout at `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720` also passed its disposable-profile and 63 history checks.
+The current runtime target is **DSH 0.2.0-rc.2**. The prior **0.1.7-rc.2** runtime remains pinned in `tests/fixtures/dsh-runtime-0.1.7`, and the TUI lifecycle fixture still exercises DSH 0.1.7-rc.2 with dsh-TUI 0.11.1. The earlier **0.1.6-alpha.1** source checkout at `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720` also passed its disposable-profile and 63 history checks.
 
-CI retains the pinned DSH 0.1.5-rc.1 fixture for the full legacy-history and Web lifecycle series. A separate exact 0.1.7-rc.2 fixture and CI job run the full suite, a native series with no skips for routing, answer review, execution evidence, Enno memory, model handoff, semantic compaction, ObservationPack, and all 70 history compatibility cases, plus packed Web install/start/reload/remove. Locally, the full suite passed (1210 passed, 34 optional skips, 0 failed), as did the native and Web checks; the new remote job has not run yet. The historical source-repair CLI tests deliberately use the pinned legacy catalog that accepted v0/v3 fixtures. Local testing does not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
+CI keeps the pinned DSH 0.1.5-rc.1 fixture for legacy-history and Web lifecycle coverage. The DSH 0.2.0-rc.2 job runs the full suite, native routing/history coverage, and packed Web lifecycle; its TUI core lifecycle step uses the separate pinned DSH 0.1.7-rc.2 / dsh-TUI 0.11.1 fixture. The historical source-repair CLI tests deliberately use the legacy catalog that accepted v0/v3 fixtures. Local tests do not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
+
+## Model tool exposure
+
+`toolExposure.mode` defaults to `full`, which preserves the native tool surface.
+`phase` removes only verified Kiokuko tools that are unavailable in the current
+execution phase. Opt-in `lean` applies the same phase policy and removes the
+exact duplicate `Business payload` schema text from seven Kiokuko tool
+descriptions when the selected pi-ai route is an explicitly configured OpenAI
+Responses or Chat Completions route. The `parameters` schemas and registered
+execution definitions remain unchanged. Unknown ownership, route, or schema
+falls back to the original surface; unowned DSH tools are never removed because
+the public registry does not expose registration provenance.
+
+```yaml
+toolExposure:
+  mode: lean
+```
+
+The native fixture reports serialized request bytes and app-level transformation
+counts. Those measurements do not represent provider token usage or cost.
 
 ## Install
 

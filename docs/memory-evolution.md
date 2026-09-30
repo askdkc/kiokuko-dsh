@@ -67,6 +67,7 @@ npm run build
 npm run publint
 npm run pack:check
 npm run test:evaluation:evolution
+npm run test:evaluation:evolution:tasks
 ```
 
 最後のコマンドは接続設定なしでは `unmeasured` を返し、モデルを呼びません。実評価では固定したモデルを提供する OpenAI 互換 endpoint を明示します。次の JSON のモデル名・revision・次元数・容量は、実際に提供している値へ置き換えてください。
@@ -92,6 +93,7 @@ npm run test:evaluation:evolution
 
 ```bash
 npm run test:evaluation:evolution -- --config evolution-evaluation.local.json --output evolution-evaluation-results
+npm run test:evaluation:evolution:tasks -- --config evolution-evaluation.local.json --report evolution-task-results.json
 ```
 
 必要なら各モデルに `apiKeyEnv` を指定し、その環境変数に credential を渡します。endpoint URL や結果ファイルには含めません。remote endpoint の利用には `allowRemote: true` が必要です。このコマンドは最大90件ずつの通常要約と v2 要約、上限内の追加生成、実 embedding を実行します。モデルによって時間・費用が発生します。評価用データ以外のセッションや既存 DB は使用しません。
@@ -99,6 +101,8 @@ npm run test:evaluation:evolution -- --config evolution-evaluation.local.json --
 `tests/fixtures/evolution-evaluation/manifest.json` が30シナリオ・90 episode・120質問の hash と分割を固定します。10シナリオが調整用、20が固定評価用です。「現状」「episode のみ」「教訓まで」「全機能」を同じモデル・距離閾値・8,000文字の注入予算で比較します。旧来の人工ベクトル評価は別の回帰テストとして残しています。
 
 `report.json` は Recall@5、完全一致の順位劣化件数、同一経験の3件目以降による注入文字数、scope 混入、根拠失効後の注入、呼び出し数、報告された token、生成／embedding／検索時間を出力します。日次8回の生成上限は評価でも維持します。モデルの返す名前は一致検査しますが、endpoint の実際の重み revision は運用者側で固定・記録する必要があります。
+
+`test:evaluation:evolution:tasks` は、記憶なし・現行v1投影・v2投影を同じ固定モデル、同じSQLite再試行タスク、同じ2048 token/要求・8要求・12操作の上限で各4回実行します。実際のコード編集と受け入れテスト成功率を主指標にし、境界テスト失敗、操作数、入出力token、記憶文字数、v1準備時の生成token・時間も報告します。検索・ランキングの品質とは分離して、生成済みの現行/v2投影を直接渡す狭いタスク評価です。設定なしでは `unmeasured` を返し、通信しません。実モデルでのこの評価結果を、広い開発作業全般の効果とは解釈しません。
 
 存在する証拠参照だけでは内容の正しさは証明できません。`candidates.json` を人が確認し、全候補について根拠のない成功断定がないことをレビューします。レビュー結果は次の形式です。
 

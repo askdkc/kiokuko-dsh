@@ -13,6 +13,7 @@ import { DshMemoryFinalizer, type DshLlm } from '../../../../src/dsh/session-mem
 import { prepareAgentTask } from '../../../../src/dsh/task-intake.js'
 import { injectDshContext } from '../../../../src/dsh/context-injection.js'
 import { readEntry, updateCandidateEntry } from '../../../../src/memory/entries.js'
+import { assertMemoryProjection, projectMemoryEntry } from '../../../../src/context/memory-projection.js'
 import type { DshRuntime } from '../../../../src/dsh/runtime.js'
 
 test('default host startup reuses an observed lesson in a new session after reopening the database', async () => {
@@ -43,7 +44,7 @@ test('default host startup reuses an observed lesson in a new session after reop
     await host.start()
     await host.whenIdle()
     const lessonId = db.prepare("SELECT entry_id AS id FROM memory_derivations WHERE kind='positive'").get<{ id: string }>()!.id
-    assert.equal(calls, 1)
+    assert.equal(calls, 0, 'Reference promotion is deterministic and must not call the model')
     assert.equal(evolutionSettings(db).mode, 'observe')
     await host.dispose()
     db.close()
@@ -56,7 +57,7 @@ test('default host startup reuses an observed lesson in a new session after reop
     await host.whenIdle()
     assert.equal(evolutionSettings(db).mode, 'active')
     assert.equal(evolutionSettings(db).generation, generation + 1)
-    assert.equal(calls, 1, 'Stored candidates must not need another model request')
+    assert.equal(calls, 0, 'Startup and retrieval must not call the lesson-generation model')
 
     const task = 'Diagnose SQLITE_BUSY in sqlite migration 3.46 using prior observations.'
     const prepare = (session: string) => prepareAgentTask(db, {
@@ -72,10 +73,19 @@ test('default host startup reuses an observed lesson in a new session after reop
     const memory = messages.filter(message => message.source === 'memory').map(message => message.content).join('\n')
     assert.ok(memory.includes(draft.procedure), 'The observed procedure must reach the model context')
     assert.match(memory, /Unverified|未検証/u)
-    assert.equal(calls, 1, 'Retrieval and injection do not call the generation model')
+    assert.equal(calls, 0, 'Retrieval and injection do not call the generation model')
+    assert.match(memory, /When: SQLITE_BUSY sqlite migration 3\.46/u)
+    assert.match(memory, /Do: Release the write transaction before retrying migration\./u)
+    assert.match(memory, /Verify: Run the migration test\./u)
     const lesson = readEntry(db, { workspace: project.workspace, entryId: lessonId })
     assert.equal(lesson.status, 'candidate')
     assert.equal(lesson.trustLevel, 'untrusted')
+    const receipt = projectMemoryEntry(db, lesson, { includeEvidence: true })!
+    assertMemoryProjection(receipt)
+    assert.equal(receipt.projection.version, 2)
+    assert.ok(receipt.projection.selectedFields.includes('reference-lesson'))
+    assert.ok('referenceReceiptDigest' in receipt.projection)
+    assert.throws(() => assertMemoryProjection({ ...receipt, bodyPreview: `${receipt.bodyPreview} changed` }), /receipt/u)
 
     configureEvolution(db, 'off')
     await assert.rejects(injectDshContext({ prepared, task, runtime }), /no longer retrievable/u)

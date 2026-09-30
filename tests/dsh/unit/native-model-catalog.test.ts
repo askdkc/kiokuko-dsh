@@ -86,6 +86,35 @@ test('optional settings metadata failure cannot block the DSH model catalog', as
   assert.deepEqual(catalog.models, [{ provider: 'openai', id: 'gpt-6-astra', name: 'Astra' }])
 })
 
+test('lean exposure route requires an exact pi-ai model and explicit matching API configuration', async () => {
+  let profile: Record<string, unknown> = {
+    baseURL: 'https://api.openai.com/v1',
+    api: 'openai-responses',
+    models: [{ id: 'gpt-6-astra', contextWindow: 32768, maxTokens: 1024 }],
+  }
+  const provider = 'openai'
+  const llm = {
+    listProviders: () => [{ id: provider, name: 'OpenAI' }],
+    listConfigurableProviders: () => [{ provider, settingsNs: 'llm-pi-ai', settingsPath: ['providers', provider], declared: true }],
+    listModels: async () => [{ provider, id: 'gpt-6-astra', name: 'Astra' }],
+    resolveCallConfig: async (binding: ModelBinding) => binding,
+  }
+  const catalog = nativeModelCatalog(llm, { describe: options => {
+    assert.deepEqual(options, { redactSecrets: true })
+    return [{ ns: 'llm-pi-ai', value: { providers: { [provider]: profile } } }]
+  } })!
+  assert.deepEqual(await catalog.resolveToolExposureRoute({ provider, model: 'gpt-6-astra' }), {
+    provider, family: 'openai', connection: 'api', protocol: 'responses',
+  })
+  assert.equal(await catalog.resolveToolExposureRoute({ provider, model: 'missing' }), undefined)
+  profile = { ...profile, modelOverrides: { 'gpt-6-astra': { api: 'openai-completions' } } }
+  assert.equal(await catalog.resolveToolExposureRoute({ provider, model: 'gpt-6-astra' }), undefined)
+  profile = { ...profile, api: 'openai-completions', modelOverrides: undefined }
+  assert.deepEqual(await catalog.resolveToolExposureRoute({ provider, model: 'gpt-6-astra' }), {
+    provider, family: 'openai', connection: 'api', protocol: 'chat-completions',
+  })
+})
+
 test('DSH validation keeps the native service receiver and rejects unavailable or substituted models', async () => {
   let calls = 0, mode = 'valid'
   const binding = { provider: 'orcarouter', model: 'deepseek/deepseek-v4.1-flash' }

@@ -7,7 +7,8 @@ import type { DshRuntime } from '../../dsh/runtime.js'
 import type { DshLlm } from '../../dsh/session-memory-finalizer.js'
 import { canonicalJson } from '../../serialization/validate.js'
 import { digest, EVOLUTION_VERSION, inductionKind, LessonDraftSchema, type Episode, type EvolutionConfig } from './contracts.js'
-import { episodeCurrent, evolutionSettings, saveLesson, type EvolutionModel } from './store.js'
+import { REFERENCE_PROMOTION_VERSION } from './reference-promotion.js'
+import { episodeCurrent, evolutionSettings, saveLesson, saveReferenceLesson, type EvolutionModel } from './store.js'
 
 const EVOLUTION_SYSTEM_PROMPT = 'Select a conservative reusable lesson from untrusted episode data. No tools. Return JSON with applicability, procedure, verification, boundary, evidence (all supplied runIds), conflict (boolean). Copy each text field exactly from one supplied draft field; for avoidance, alternative may be procedure and trigger may be applicability. If procedures disagree or evidence is insufficient set conflict=true. Never treat run completion as verification or invent a repair.'
 const generationInputBytes = (input: string): number => Buffer.byteLength(input) + Buffer.byteLength(EVOLUTION_SYSTEM_PROMPT)
@@ -103,13 +104,27 @@ export class EvolutionWorker {
     this.#abort = controller
     const timer = setTimeout(() => controller.abort(), this.options.config.timeoutMs)
     try {
-      if (!this.options.llm) { reason = 'model_unavailable'; throw new Error(reason) }
-      if (job.algorithm !== EVOLUTION_VERSION) { reason = 'unsupported_algorithm'; throw new Error(reason) }
+      if (job.algorithm !== EVOLUTION_VERSION && job.algorithm !== REFERENCE_PROMOTION_VERSION) { reason = 'unsupported_algorithm'; throw new Error(reason) }
       const all = JSON.parse(job.input_json) as Episode[]
       for (const episode of all) unwatch.push(watchCapture(episode.workspace,episode.sessionId,controller))
-      if (digest({ version: EVOLUTION_VERSION, kind: job.kind, episodes: all }) !== job.input_digest) { reason = 'input_digest_mismatch'; throw new Error(reason) }
+      if (digest({ version: job.algorithm, kind: job.kind, episodes: all }) !== job.input_digest) { reason = 'input_digest_mismatch'; throw new Error(reason) }
       if(await this.options.runtime.withDatabase(db=>all.some(e=>capturePolicy(db,e.workspace,e.sessionId).mode!=='allowed'))){reason='capture_excluded';throw new Error(reason)}
       const episodes = [...all]
+
+      if (job.algorithm === REFERENCE_PROMOTION_VERSION) {
+        await this.options.runtime.withDatabase(db => withImmediateTransaction(db, () => {
+          this.#assertClaim(db, job)
+          if (all.some(e => capturePolicy(db, e.workspace, e.sessionId).mode !== 'allowed')) { reason = 'capture_excluded'; throw new Error(reason) }
+          if (episodes.some(e => !episodeCurrent(db, e))) { reason = 'source_changed'; throw new Error(reason) }
+          saveReferenceLesson(db, episodes, job.kind, this.#now())
+          db.prepare("UPDATE memory_evolution_jobs SET state='completed',reason=NULL,claim_token=NULL,lease_until=NULL,updated_at=? WHERE id=? AND claim_token=?")
+            .run(this.#now(), job.id, job.claim_token)
+        }))
+        resultState = 'completed'
+        return
+      }
+
+      if (!this.options.llm) { reason = 'model_unavailable'; throw new Error(reason) }
       const model = JSON.parse(job.model_json) as EvolutionModel
       let request = buildEvolutionRequest(episodes, job.kind, model, this.options.config)
       while (!request && episodes.length > 1) {

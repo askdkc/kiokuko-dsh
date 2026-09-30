@@ -9,7 +9,8 @@ import assert from 'node:assert/strict'
 import { fixture, seed, NOW } from './fixture.js'
 import { scheduleEvolution, configureEvolution } from '../../../../src/memory/evolution/store.js'
 import { EvolutionWorker } from '../../../../src/memory/evolution/worker.js'
-import { MemoryEvolutionConfig } from '../../../../src/memory/evolution/contracts.js'
+import { canonicalJson } from '../../../../src/serialization/validate.js'
+import { digest, EVOLUTION_VERSION, MemoryEvolutionConfig } from '../../../../src/memory/evolution/contracts.js'
 import { withImmediateTransaction } from '../../../../src/db/transaction.js'
 import type { DshLlm } from '../../../../src/dsh/session-memory-finalizer.js'
 
@@ -21,8 +22,32 @@ function setup(contextWindow: number | undefined = 100000) {
   withImmediateTransaction(f.db,()=>scheduleEvolution(f.db,'c',{provider:'original-provider',model:'original-model',...(contextWindow===0?{}:{contextWindow})},NOW))
   return { ...f, es, response }
 }
+/** Queue an immutable legacy job so these tests exercise the retained v1 LLM route. */
+function setupLegacy(contextWindow: number | undefined = 100000) {
+  const f = setup(contextWindow)
+  const kind = 'positive' as const
+  const input = canonicalJson(f.es)
+  const inputDigest = digest({ version: EVOLUTION_VERSION, kind, episodes: f.es })
+  const model = { provider: 'original-provider', model: 'original-model', sessionId: 'session-c', ...(contextWindow === 0 ? {} : { contextWindow }) }
+  f.db.prepare('DELETE FROM memory_evolution_jobs').run()
+  f.db.prepare(`INSERT INTO memory_evolution_jobs(id,workspace,trigger_run,signature,kind,input_json,seen_json,input_digest,model_json,algorithm,state,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(inputDigest, f.es[0]!.workspace, 'c', f.es[0]!.signature, kind, input,
+      canonicalJson(f.es.map(e => e.evidenceDigest)), inputDigest, canonicalJson(model), EVOLUTION_VERSION, NOW, NOW)
+  return f
+}
+
+function queueLegacy(db: SqliteDatabase, episodes: ReturnType<typeof seed>[], triggerRun: string, now: string) {
+  const kind = 'positive' as const
+  const input = canonicalJson(episodes)
+  const inputDigest = digest({ version: EVOLUTION_VERSION, kind, episodes })
+  const model = { provider: 'p', model: 'm', sessionId: episodes.find(e => e.runId === triggerRun)!.sessionId, contextWindow: 100000 }
+  db.prepare('DELETE FROM memory_evolution_jobs WHERE trigger_run=?').run(triggerRun)
+  db.prepare(`INSERT INTO memory_evolution_jobs(id,workspace,trigger_run,signature,kind,input_json,seen_json,input_digest,model_json,algorithm,state,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(inputDigest, episodes[0]!.workspace, triggerRun, episodes[0]!.signature, kind, input,
+      canonicalJson(episodes.map(e => e.evidenceDigest)), inputDigest, canonicalJson(model), EVOLUTION_VERSION, now, now)
+}
 test('parallel workers dispatch once, retain the trigger model and persist measured usage', async () => {
-  const f=setup(); let calls=0
+  const f=setupLegacy(); let calls=0
   const llm: DshLlm={async *stream(request) {
     calls++; assert.equal(request.model,'original-model');assert.equal(request.provider,'original-provider')
     assert.equal(request.sessionId,'session-c'); assert.equal(request.maxTokens,2048);assert.equal(request.tools,undefined)
@@ -42,7 +67,7 @@ test('parallel workers dispatch once, retain the trigger model and persist measu
 })
 test('source revision changes and mode changes during model execution reject adoption', async () => {
   for (const mutation of ['source','off'] as const) {
-    const f=setup()
+    const f=setupLegacy()
     const worker=new EvolutionWorker({runtime:f.runtime,config:MemoryEvolutionConfig.parse({}),now:()=>NOW,llm:{async *stream() {
       if(mutation==='off') configureEvolution(f.db,'off')
       else {
@@ -61,7 +86,7 @@ test('source revision changes and mode changes during model execution reject ado
 })
 test('timeouts and invalid JSON remain bounded and never resend a dispatched trigger', async () => {
   for (const failure of ['timeout','json']) {
-    const f=setup();let calls=0
+    const f=setupLegacy();let calls=0
     const worker=new EvolutionWorker({runtime:f.runtime,config:MemoryEvolutionConfig.parse({timeoutMs:100}),now:()=>NOW,llm:{async *stream(request) {
       calls++
       if(failure==='timeout') await new Promise(resolve=>request.signal!.addEventListener('abort',resolve,{once:true}))
@@ -76,7 +101,7 @@ test('timeouts and invalid JSON remain bounded and never resend a dispatched tri
   }
 })
 test('unknown model context and unavailable provider do not dispatch or fall back', async () => {
-  const f=setup(0);let calls=0
+  const f=setupLegacy(0);let calls=0
   const worker=new EvolutionWorker({runtime:f.runtime,config:MemoryEvolutionConfig.parse({}),llm:{async *stream(){calls++;throw new Error('must not dispatch')}}})
   try {worker.kick();await worker.whenIdle();assert.equal(calls,0);assert.equal(f.db.prepare('SELECT reason FROM memory_evolution_jobs').get()?.reason,'context_budget_or_support')}
   finally {await worker.dispose();f.db.close()}
@@ -90,13 +115,46 @@ test('new generation requires three unseen episodes after the previous schedulin
     assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM memory_evolution_jobs').get()?.n,2)
   } finally {f.db.close()}
 })
+test('v2 reference promotion completes without a model call or evolution-call receipt', async () => {
+  const f = setup()
+  const worker = new EvolutionWorker({ runtime: f.runtime, config: MemoryEvolutionConfig.parse({}), now: () => NOW })
+  try {
+    worker.kick(); await worker.whenIdle()
+    assert.equal(f.db.prepare('SELECT state,algorithm FROM memory_evolution_jobs').get()?.state, 'completed')
+    assert.equal(f.db.prepare('SELECT algorithm FROM memory_evolution_jobs').get()?.algorithm, 'reference-promotion-v2')
+    assert.equal(f.db.prepare('SELECT algorithm FROM memory_derivations WHERE kind=\'positive\'').get()?.algorithm, 'reference-promotion-v2')
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM memory_evolution_calls').get()?.n, 0)
+  } finally { await worker.dispose(); f.db.close() }
+})
+test('a pending v2 job survives database reopen and concurrent workers promote it once', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'evolution-v2-restart-'))
+  const file = path.join(root, 'state.sqlite3')
+  let f = fixture(file)
+  const es = ['restart-a', 'restart-b', 'restart-c'].map(id => seed(f.db, id))
+  withImmediateTransaction(f.db, () => scheduleEvolution(f.db, 'restart-c', { provider: 'p', model: 'm', contextWindow: 100000 }, NOW))
+  assert.equal(f.db.prepare('SELECT state FROM memory_evolution_jobs').get()?.state, 'pending')
+  f.db.close()
+  const db = openConnection(file), other = openConnection(file)
+  const runtime = (database: SqliteDatabase) => ({ withDatabase: async <T>(operation: (db: SqliteDatabase, embedding: never) => T | PromiseLike<T>) => await operation(database, undefined as never) })
+  const a = new EvolutionWorker({ runtime: runtime(db), config: MemoryEvolutionConfig.parse({}), now: () => NOW })
+  const b = new EvolutionWorker({ runtime: runtime(other), config: MemoryEvolutionConfig.parse({}), now: () => NOW })
+  try {
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memory_evolution_jobs').get()?.n, 1)
+    a.kick(); b.kick(); await Promise.all([a.whenIdle(), b.whenIdle()])
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM memory_derivations WHERE algorithm='reference-promotion-v2'").get()?.n, 1)
+    assert.equal(db.prepare('SELECT state FROM memory_evolution_jobs').get()?.state, 'completed')
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memory_evolution_calls').get()?.n, 0)
+    assert.equal(es.length, 3)
+  } finally { await a.dispose(); await b.dispose(); other.close(); db.close(); await rm(root, { recursive: true, force: true }) }
+})
 test('the UTC-day budget includes failed dispatches and resets only for a new day', async () => {
   const f=fixture();let now=NOW,calls=0
   const worker=new EvolutionWorker({runtime:f.runtime,config:MemoryEvolutionConfig.parse({}),now:()=>now,llm:{async *stream(){calls++;throw new Error('provider failure')}}})
   const schedule=(n:number)=>{
     const ids=Array.from({length:3},(_,i)=>`batch-${n}-${i}`)
-    ids.forEach(id=>seed(f.db,id))
+    const episodes=ids.map(id=>seed(f.db,id))
     withImmediateTransaction(f.db,()=>scheduleEvolution(f.db,ids[2]!,{provider:'p',model:'m',contextWindow:100000},now))
+    queueLegacy(f.db,episodes,ids[2]!,now)
   }
   try {
     for(let i=0;i<9;i++){schedule(i);worker.kick();await worker.whenIdle()}
@@ -109,7 +167,7 @@ test('the UTC-day budget includes failed dispatches and resets only for a new da
 })
 test('expired undispatched claims recover, while ambiguous dispatched claims never resend', async () => {
   for(const dispatched of [false,true]) {
-    const f=setup();let calls=0
+    const f=setupLegacy();let calls=0
     const job=f.db.prepare('SELECT id,trigger_run,workspace FROM memory_evolution_jobs').get<{id:string;trigger_run:string;workspace:string}>()!
     f.db.prepare("UPDATE memory_evolution_jobs SET state='processing',claim_token='old',attempts=1,lease_until='2026-09-09T00:00:00.000Z'").run()
     if(dispatched)f.db.prepare("INSERT INTO memory_evolution_calls(id,job_id,trigger_run,workspace,utc_day,input_bytes,outcome,created_at) VALUES('old',?,?,?,'2026-09-09',10,'unknown',?)").run(job.id,job.trigger_run,job.workspace,NOW)
@@ -128,6 +186,7 @@ test('independent SQLite connections cannot both dispatch the same durable job',
   const f=fixture(path.join(root,'state.sqlite3')),other=openConnection(path.join(root,'state.sqlite3'))
   const es=['a','b','c'].map(id=>seed(f.db,id)),d=es[0]!.draft
   withImmediateTransaction(f.db,()=>scheduleEvolution(f.db,'c',{provider:'p',model:'m',contextWindow:100000},NOW))
+  queueLegacy(f.db,es,'c',NOW)
   let entered!:()=>void,release!:()=>void,calls=0
   const started=new Promise<void>(resolve=>{entered=resolve}),waiting=new Promise<void>(resolve=>{release=resolve})
   const llm:DshLlm={async *stream(){calls++;entered();await waiting;yield {type:'text-delta',text:JSON.stringify({applicability:d.applicability,procedure:d.procedure,verification:d.verification,boundary:d.boundary,evidence:es.map(e=>e.runId),conflict:false})};yield {type:'finish',reason:{kind:'stop'}}}}

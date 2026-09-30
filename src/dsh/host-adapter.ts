@@ -82,7 +82,7 @@ import { type DshCapabilityReadContext } from './intake-gate.js'
 
 
 import { DshToolPolicy } from './tool-policy.js'
-import { ToolExposureConfig } from './tool-exposure.js'
+import { ToolExposureConfig, type ToolExposureMetrics } from './tool-exposure.js'
 import { DiffReviewConfig } from './config.js'
 import { DiffReviewController } from '../diff-review/controller.js'
 
@@ -332,10 +332,19 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const akinatorMemoryConfig = AkinatorMemoryConfig.parse(options.akinatorMemory ?? {})
   let toolExposureConfig = ToolExposureConfig.parse(options.toolExposure ?? {})
   const reportedToolExposureFallbacks = new Set<string>()
+  const reportedToolExposureProjections = new Set<string>()
   const reportToolExposureFallback = (fallback: string): void => {
-    if (toolExposureConfig.mode !== 'phase' || reportedToolExposureFallbacks.has(fallback)) return
+    if (toolExposureConfig.mode === 'full' || reportedToolExposureFallbacks.has(fallback)) return
     reportedToolExposureFallbacks.add(fallback)
     console.warn(`[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: ${fallback}`)
+  }
+  const reportToolExposureProjection = (mode: 'lean', reason: string, metrics: ToolExposureMetrics): void => {
+    if (toolExposureConfig.mode !== 'lean') return
+    const diagnostic = { mode, reason, ...metrics }
+    const key = JSON.stringify(diagnostic)
+    if (reportedToolExposureProjections.has(key)) return
+    reportedToolExposureProjections.add(key)
+    console.info(`[kiokuko-dsh] toolExposure projection ${key}`)
   }
   const efficiencyConfig = EfficiencyConfig.parse(options.efficiency ?? {})
   const continuityConfig = ContinuityConfig.parse(options.continuity ?? {})
@@ -495,7 +504,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const routing = createRouting({
     ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview, semanticCompaction, delegation, deepPlanning, isGenericNativeChild,
     getSkillPrompts: () => skillPrompts,
-    getToolExposureConfig: () => toolExposureConfig, reportToolExposureFallback,
+    getToolExposureConfig: () => toolExposureConfig, reportToolExposureFallback, reportToolExposureProjection, modelCatalog,
     getSelection: runId => selections.get(runId), setSelection: (runId, value) => { selections.set(runId, value) },
     hasSelection: runId => selections.has(runId), getPolicyState: runId => turnState.policyState(runId),
     captureInitialInput, prepareTurn: event => gate.prepare(event), mapPreStep, currentSession,

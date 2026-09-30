@@ -19,7 +19,8 @@ import { realpathSync } from 'node:fs'
 import { decodeSessionLog, encodeSessionLog, parseJsonl } from '../../../scripts/session-history-codec.mjs'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
-const currentVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION?.startsWith('0.1.7') ? 4 : 3
+const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? ''
+const currentVersion = expectedDshVersion.startsWith('0.1.7') || expectedDshVersion.startsWith('0.2.') ? 4 : 3
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 const sourceModules: Record<string, string> = { cordis: 'vendor/cordis', 'dsh-session': 'packages/core/session',
   'dsh-session-persistence-jsonl': 'packages/session/session-persistence-jsonl', 'dsh-session-query': 'packages/session-query/session-query' }
