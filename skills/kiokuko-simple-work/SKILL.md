@@ -24,10 +24,10 @@ Stop at the first rung that holds:
 3. **Stdlib does it?** Use it.
 4. **Native platform feature covers it?** `<input type="date">` over a picker library, CSS over JS, a database constraint over application code.
 5. **An already-installed dependency solves it?** Use it; never add a new one for what a few lines can do.
-6. **Can it be one line?** One line.
+6. **Can the flow be clearer?** Prefer named concepts and cohesive operations over compressed expressions.
 7. **Only then:** the minimum code that works.
 
-The ladder is a reflex, not a research project, and it runs *after* you understand the problem: read the task and the code it touches, trace the real flow end to end, then take the highest rung that holds. The first lazy solution that works is the right one once you know what the change has to touch.
+The ladder runs after understanding the problem: trace the real flow, then choose the simplest cohesive solution that satisfies behavior, required implementation method, compatibility and verification. Passing tests alone does not establish those conditions.
 
 **A bug fix targets the root cause, not the symptom.** A report names a symptom. Before editing shared behavior, inspect its callers far enough to establish the affected boundary and the root cause, then fix the shared cause at that boundary when the evidence supports the contract. Never patch only the reported path or change unrelated caller behavior.
 
@@ -35,18 +35,18 @@ The ladder is a reflex, not a research project, and it runs *after* you understa
 
 - No unrequested abstractions, boilerplate, or scaffolding "for later": no interface with one implementation, no factory for one product, no config for a value that never changes.
 - Deletion over addition. Boring over clever.
-- Fewest files possible, shortest working diff — but only once you understand the problem, because the smallest change in the wrong place is a second bug.
-- Complex request? Ship the lazy version and question it in the same response ("Did X; Y covers it. Need full X? Say so."). Never stall on an answer you can default.
+- Minimize unnecessary work, not file count or line count. Keep readable responsibility and ownership boundaries.
+- Complex request? Complete the requested behavior and method. If a simplification omits a requirement, explain the constraint and obtain a scope decision before substituting it. Resolve routine choices from current evidence.
 - Two stdlib options of the same size? Take the one that is correct on edge cases. Lazy means less code, not the flimsier algorithm.
 - Mark a deliberate simplification that cuts a real corner with a known ceiling (global lock, O(n²) scan, naive heuristic) using a comment that names the ceiling and the upgrade path: `# ponytail: global lock, per-account locks if throughput matters`.
 
 ## Output
 
-Code first, then at most three short lines: what was skipped and when to add it. No essays, no feature tours, and no paragraph defending a simplification — that is complexity smuggled back in as prose. A report, walkthrough, or per-phase notes the user explicitly asked for is not debt; give it in full.
+Report changed behavior, verification evidence and remaining uncertainty proportionally. Brevity must not hide omissions or blockers; no fixed output-length quota.
 
 Pattern: `[code] → skipped: [X], add when [Y].`
 
-Intensity: **lite** builds what was asked and names the lazier alternative in one line so the user can choose; **full** enforces the ladder, stdlib and native first, shortest diff and shortest explanation; **ultra** is YAGNI-extremist — deletion before addition, with the remaining requirement challenged in the same breath.
+Intensity: **lite** applies the ladder locally; **full** checks reuse and unnecessary work across the changed flow; **ultra** also challenges speculative abstractions and retention. Every mode preserves explicit requirements, readability, error handling and required verification.
 
 ## When not to be lazy
 
@@ -62,5 +62,5 @@ Lazy code without its check is unfinished. Non-trivial logic — a branch, a loo
 
 Ponytail governs what you build, not how you talk. "stop ponytail" or "normal mode" reverts it for the current request, and the level never carries into a new logical request without fresh SOUL routing.
 
-The shortest path to done is the right path.
+Completion requires the requested result and matching evidence.
 <!-- /kiokuko:runtime -->

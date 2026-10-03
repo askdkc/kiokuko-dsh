@@ -50,6 +50,17 @@ If review causes edits, rerun the checks whose evidence those edits invalidate.
 
 ## Completion decision
 
+Required methods are observable contracts too. A scene requiring 3D objects
+needs geometry inspection and changed-view evidence; a screenshot alone cannot
+distinguish geometry from raster billboards. Likewise, a helper test does not
+prove a registered feature. Inspect the representation and its actual consumer.
+
+When changing tests, identify the requirement or pre-existing contract that
+justifies the new expectation. Do not derive it from the implementation under
+review. Keep failures visible until the implementation or independently incorrect
+expectation is repaired. Review empty branches and apparently dead functions;
+dynamic registrations and intentional no-ops require evidence before deletion.
+
 The request is complete when its observable behavior has matching evidence,
 required integration and compatibility are covered, relevant boundaries and
 failure cases are handled, required checks have no unexplained new failures,

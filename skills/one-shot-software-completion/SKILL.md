@@ -8,11 +8,9 @@ description: Complete repository code changes through requirement discovery, int
 <!-- kiokuko:runtime contract -->
 # One-Shot Software Completion
 
-Make the first delivered result satisfy the user's observable requirements,
-including reachable integration and evidence. "One-shot" describes the delivery
-goal; it promises neither success in one model turn nor permission to act beyond
-the request. Repository evidence supplies defaults, not authority to override
-user intent, permissions, or host safety, identity and integrity checks.
+Deliver observable requirements with reachable integration and evidence.
+"One-shot" is a goal, not a one-turn guarantee or extra authority. Repository
+defaults never override intent, permissions or host integrity checks.
 
 ## Credo
 
@@ -27,11 +25,9 @@ Completion means meeting the user's requirements, not processing everything.
 
 ## Read economically
 
-Read this entire index. It is sufficient for a bounded change with clear callers
-and checks. For unresolved risks, select the matching reference below; read one
-at a time, usually one or two per work unit. Do not preload all references or
-load them again solely because the phase changed. All core obligations remain
-applicable even when no reference is needed.
+Read this index completely. For unresolved risks, read matching references one
+at a time, usually one or two per work unit. Do not preload or reread merely for
+a phase change. Deferring references never waives core obligations.
 
 | Read when | Reference |
 | --- | --- |
@@ -40,12 +36,19 @@ applicable even when no reference is needed.
 | Choosing evidence, reviewing the diff or checking delivery | [Verification and completion](references/verification-and-completion.md) |
 | A check fails or progress stalls | [Failure recovery](references/failure-recovery.md) |
 
-In ordinary work, use the current agent unless the user or host requires
-delegation. Read the target first; widen or re-read only for new evidence,
-failed checks, or lost context. Track requirements and results. Use host token
-usage, not bytes or advertised capacity, for token budgets.
+Use the current agent unless delegation is required. Widen reads for new evidence,
+failures or lost context. Token budgets use host usage, not bytes or capacity.
 
 ## Completion contract
+
+Bind behavior, required method, preserved contracts and evidence before editing.
+No unapproved proxy: raster for required geometry, hardcoded output, mocks or
+disconnected helpers. Tests are evidence, not specification; expectation changes
+need independent contract evidence. Review diff and callers for dead code, empty
+branches, stale comments, duplication and weakened checks; justify intentional
+no-ops and dynamic registration. Map requirements to implementation and evidence:
+executed, source-inspected, environment-blocked or unverified. Rerun checks
+invalidated by review edits; repeating a checklist proves nothing.
 
 1. **Frame:** State "when X, Y becomes observable." Resolve routine choices from
    current analogs and project conventions. Ask only when unresolved intent,
@@ -98,7 +101,4 @@ the recovery reference before changing strategy. Do not retry an unchanged
 failed operation or hide failures by weakening checks. Stop on completion or a
 specific blocker requiring unavailable access, evidence or user action.
 
-Report the changed behavior, material assumptions, checks and their results,
-and anything unverified or deliberately excluded. Passing a helper test alone
-does not establish a working user workflow.
 <!-- /kiokuko:runtime -->

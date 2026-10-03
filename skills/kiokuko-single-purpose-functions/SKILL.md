@@ -36,6 +36,12 @@ Applies to every created or changed function:
 
 Cohesion is the objective, not smallness. Keep operations together when splitting them would hide sequencing, duplicate policy, or weaken a transaction.
 
+Prefer clear names, dependency direction and ownership over line/file quotas.
+Avoid compressed flow, duplicate wrappers and speculative abstractions. For a
+non-trivial design, identify one nearby extension/recovery, its affected parts
+and preserved contracts; do not build it speculatively. Cite code in reviews;
+no extra design document is required.
+
 When a change spans setup, delivery, persisted state, or runtime handoffs, also
 apply the available `veteran-programmer-skill` before and after implementation
 to check the complete workflow. An isolated edit needs no additional audit.
@@ -62,8 +68,6 @@ Do not load unselected fragments “just in case.” If repository evidence expo
 | `code.protocol.v1` | retry, idempotency, concurrency, revisions, external/public protocols | [protocols-and-idempotency.md](references/protocols-and-idempotency.md) |
 | `code.verification.v1` | regression repair, test design, review, compatibility or failure evidence | [verification.md](references/verification.md) |
 | `code.modeling.v1` | problem shaping, public data design, domain vocabulary, or translation between storage, API, serialization, and UI representations | [problem-shaping-and-language.md](references/problem-shaping-and-language.md) |
-
-Common selections: pure calculation → `code.domain.v1`; request parser → `code.boundary.v1` + `code.verification.v1`; transactional write → `code.effects.v1` + `code.protocol.v1`; public response or API repair → `code.boundary.v1` + `code.protocol.v1` + `code.verification.v1`.
 
 ## Escalation references
 

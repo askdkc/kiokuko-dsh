@@ -211,7 +211,9 @@
     "test:evaluation:decisions": "node --import tsx scripts/run-decision-evaluation.mjs",
     "test:evaluation:model-routing": "node --import tsx scripts/run-model-routing-evaluation.mjs",
     "test:index-reasoning": "node scripts/run-tests.mjs tests/dsh/integration/index-reasoning.test.ts tests/dsh/integration/index-reasoning-native.test.ts tests/dsh/integration/index-reasoning-evaluation.test.ts",
-    "test:evaluation:index-reasoning": "node --import tsx scripts/run-index-reasoning-evaluation.mjs"
+    "test:evaluation:index-reasoning": "node --import tsx scripts/run-index-reasoning-evaluation.mjs",
+    "test:skill-coding:offline": "node --test tests/fixtures/skill-coding/offline.test.mjs",
+    "test:skill-coding": "node scripts/run-skill-coding.mjs"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",

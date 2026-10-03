@@ -56,6 +56,12 @@ limit and select only risks owned by the same cohesive contract.
 
 ## Failure modes
 
+For a non-trivial design, consider one nearby extension or recovery without
+implementing it. For example, after adding a pricing variant, identify where a
+second variant would reuse validation and preserve existing callers. This checks
+the ownership boundary; it does not justify a speculative plugin framework.
+Review concrete names, dependency direction and duplicated rules, not line counts.
+
 - Returning an ORM entity, database row, or framework object directly as a
   public response.
 - Treating storage column names or relations as a stable external API by

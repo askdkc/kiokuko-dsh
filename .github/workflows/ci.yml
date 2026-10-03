@@ -96,6 +96,8 @@ jobs:
 
       - name: Run test suite
         run: npm test
+      - name: Check coding evaluation without model calls
+        run: npm run test:skill-coding:offline
       - name: Verify index reasoning and native model delivery
         run: npm run test:index-reasoning
         env:
