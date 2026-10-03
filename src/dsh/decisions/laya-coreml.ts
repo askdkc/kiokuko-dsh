@@ -141,12 +141,18 @@ export function decodeLayaResult(value: unknown, batch: DecisionBatch, settings:
     if (Math.abs(probabilities.reduce((sum, p) => sum + p, 0) - 1) > q.choices.length * 0.00005 + 1e-12) throw new DecisionError('MALFORMED_RESPONSE')
     const [top, runnerUp] = [...probabilities].sort((a, b) => b - a) as [number, number, ...number[]]
     if (answer.probabilities[answer.choice] !== top) throw new DecisionError('MALFORMED_RESPONSE')
-    const acceptance = settings.acceptance
+    const skillPolicy = batch.purpose === 'skills' ? settings.skillAcceptance : undefined
+    const compaction = batch.purpose === 'compaction' || batch.purpose === 'model-handoff'
+    const acceptance = compaction
+      ? { minProbability: Math.max(.9, settings.acceptance.minProbability), minMargin: Math.max(.2, settings.acceptance.minMargin) }
+      : skillPolicy
+      ? { minProbability: skillPolicy.minProbability, minMargin: skillPolicy.minMargin }
+      : settings.acceptance
     const failedChecks: ChoiceDiagnostic['failedChecks'] = []
     if (top - 0.00005 < acceptance.minProbability) failedChecks.push('probability')
     if (top - runnerUp - 0.0001 < acceptance.minMargin) failedChecks.push('margin')
     const reason = answer.choice === q.abstainId ? 'insufficient' : top === runnerUp ? 'tie' : failedChecks.length ? 'uncertain' : undefined
-    diagnostics.push({ questionId: q.id, choice: answer.choice, probabilities: q.choices.map((c, i) => ({ id: c.id, probability: probabilities[i]! })), topProbability: top, runnerUpProbability: runnerUp, margin: top - runnerUp, confidence: answer.confidence, gate: 'probability_margin', acceptance: { ...acceptance }, status: reason ? 'abstained' : 'selected', ...(reason ? { reason } : {}), failedChecks })
+    diagnostics.push({ questionId: q.id, choice: answer.choice, probabilities: q.choices.map((c, i) => ({ id: c.id, probability: probabilities[i]! })), topProbability: top, runnerUpProbability: runnerUp, margin: top - runnerUp, confidence: answer.confidence, gate: 'probability_margin', acceptance: { ...acceptance }, ...(skillPolicy ? { acceptancePolicy: skillPolicy.policyVersion } : {}), status: reason ? 'abstained' : 'selected', ...(reason ? { reason } : {}), failedChecks })
     return reason ? { id: q.id, status: 'abstained' as const, reason } : { id: q.id, status: 'selected' as const, choiceId: answer.choice }
   })
   for (const diagnostic of diagnostics) emitChoiceDiagnostic(observer, diagnostic)

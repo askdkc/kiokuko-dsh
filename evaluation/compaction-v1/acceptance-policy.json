@@ -1,0 +1,78 @@
+{
+  "version": "compaction-acceptance-v1",
+  "policy": "laya-lossless-task-v3",
+  "C0": {
+    "families": 60,
+    "requests": 120,
+    "positiveRequests": 100,
+    "negativeRequests": 20,
+    "taskItems": 200,
+    "repetitions": 3,
+    "seeds": [
+      11,
+      23,
+      47
+    ]
+  },
+  "C1": {
+    "seed": 20261003,
+    "roundTrips": 10000,
+    "mutations": 500,
+    "violations": 0,
+    "maxCodeUnits": 2000000
+  },
+  "C2": {
+    "inputTokens": 1024,
+    "headTokens": 256,
+    "optionTokens": 48,
+    "inputBytes": 6000,
+    "truncation": 0,
+    "clipping": 0,
+    "unknownChoice": 0,
+    "preflightAllBeforePredict": true
+  },
+  "C3": {
+    "accepted": 60,
+    "acceptedEn": 30,
+    "acceptedJa": 30,
+    "minProbability": 0.9,
+    "minMargin": 0.2
+  },
+  "C4": {
+    "nativeReduction": 0.25,
+    "targetExactReduction": 0.25,
+    "bytesReduction": 0.2,
+    "savedTokensVsD": 0.8
+  },
+  "C5": {
+    "originalSuccess": 196,
+    "criticalSuccess": 100,
+    "layaAtLeastOriginal": true,
+    "criticalRegressions": 0,
+    "unauthorizedActions": 0
+  },
+  "C6": {
+    "netItems": 10,
+    "percentagePoints": 5,
+    "bootstrapReplicates": 10000,
+    "bootstrapSeed": 20261003,
+    "percentileInterval": 0.95,
+    "lowerBoundExclusive": 0
+  },
+  "C7": {
+    "warmups": 20,
+    "requestTrials": 600,
+    "concurrency": 1,
+    "overheadP95Ms": 1000,
+    "overheadP99Ms": 2000,
+    "stepDeadlineMs": 5000,
+    "maxTimeouts": 6,
+    "lateCommits": 0,
+    "e2eMedianVsO": 1.05,
+    "e2eP95VsO": 1.1,
+    "cacheHits": 100,
+    "changedInputs": 100,
+    "cachePredictions": 0,
+    "staleReuse": 0
+  }
+}

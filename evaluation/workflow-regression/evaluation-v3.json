@@ -1,0 +1,242 @@
+[
+  {
+    "id": "queue_deadlock-en",
+    "family": "queue_deadlock",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Fix the worker queue deadlock.",
+    "expected": "debug",
+    "automationEligible": true
+  },
+  {
+    "id": "queue_deadlock-ja",
+    "family": "queue_deadlock",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "ワーカーキューのデッドロックを修正して。",
+    "expected": "debug",
+    "automationEligible": true
+  },
+  {
+    "id": "unicode_parser_failure-en",
+    "family": "unicode_parser_failure",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Diagnose the Unicode parser crash.",
+    "expected": "debug",
+    "automationEligible": true
+  },
+  {
+    "id": "unicode_parser_failure-ja",
+    "family": "unicode_parser_failure",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "Unicodeパーサーのクラッシュを診断して。",
+    "expected": "debug",
+    "automationEligible": true
+  },
+  {
+    "id": "research_archive-en",
+    "family": "research_archive",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Research the history of mechanical clocks.",
+    "expected": "research",
+    "automationEligible": true
+  },
+  {
+    "id": "research_archive-ja",
+    "family": "research_archive",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "機械式時計の歴史を調べて。",
+    "expected": "research",
+    "automationEligible": true
+  },
+  {
+    "id": "research_insulation-en",
+    "family": "research_insulation",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Find reliable information about natural building insulation materials.",
+    "expected": "research",
+    "automationEligible": true
+  },
+  {
+    "id": "research_insulation-ja",
+    "family": "research_insulation",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "天然の建築用断熱材について信頼できる情報を調べて。",
+    "expected": "research",
+    "automationEligible": true
+  },
+  {
+    "id": "compose_exhibit-en",
+    "family": "compose_exhibit",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Draft a museum exhibit caption about meteorites.",
+    "expected": "writing",
+    "automationEligible": true
+  },
+  {
+    "id": "compose_exhibit-ja",
+    "family": "compose_exhibit",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "隕石の博物館展示の説明文を下書きして。",
+    "expected": "writing",
+    "automationEligible": true
+  },
+  {
+    "id": "translate_manual-en",
+    "family": "translate_manual",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Translate this camera manual into English.",
+    "expected": "writing",
+    "automationEligible": true
+  },
+  {
+    "id": "translate_manual-ja",
+    "family": "translate_manual",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "このカメラの説明書を英語に翻訳して。",
+    "expected": "writing",
+    "automationEligible": true
+  },
+  {
+    "id": "excluded_infrastructure-en",
+    "family": "excluded_infrastructure",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Configure the backup server firewall.",
+    "expected": "devops",
+    "automationEligible": false
+  },
+  {
+    "id": "excluded_infrastructure-ja",
+    "family": "excluded_infrastructure",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "バックアップサーバーのファイアウォールを設定して。",
+    "expected": "devops",
+    "automationEligible": false
+  },
+  {
+    "id": "excluded_review_contract-en",
+    "family": "excluded_review_contract",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Review this API contract for breaking changes.",
+    "expected": "review",
+    "automationEligible": false
+  },
+  {
+    "id": "excluded_review_contract-ja",
+    "family": "excluded_review_contract",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "このAPI仕様に破壊的変更がないかレビューして。",
+    "expected": "review",
+    "automationEligible": false
+  },
+  {
+    "id": "excluded_statistics-en",
+    "family": "excluded_statistics",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Calculate the median of the supplied measurements.",
+    "expected": "analysis",
+    "automationEligible": false
+  },
+  {
+    "id": "excluded_statistics-ja",
+    "family": "excluded_statistics",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "提示した測定値の中央値を計算して。",
+    "expected": "analysis",
+    "automationEligible": false
+  },
+  {
+    "id": "quoted_draft-en",
+    "family": "quoted_draft",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "The transcript contains \"write the press release\" but no current request is assigned to you.",
+    "expected": null,
+    "automationEligible": false
+  },
+  {
+    "id": "quoted_draft-ja",
+    "family": "quoted_draft",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "会議録には「プレスリリースを書け」とありますが、あなたへの現在の依頼はありません。",
+    "expected": null,
+    "automationEligible": false
+  },
+  {
+    "id": "negative_fix-en",
+    "family": "negative_fix",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Do not fix the database connection yet.",
+    "expected": null,
+    "automationEligible": false
+  },
+  {
+    "id": "negative_fix-ja",
+    "family": "negative_fix",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "データベース接続はまだ修正しないで。",
+    "expected": null,
+    "automationEligible": false
+  },
+  {
+    "id": "ambiguous_supported_actions-en",
+    "family": "ambiguous_supported_actions",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "en",
+    "task": "Research the protocol or draft its documentation; the next action remains undecided.",
+    "expected": null,
+    "automationEligible": false
+  },
+  {
+    "id": "ambiguous_supported_actions-ja",
+    "family": "ambiguous_supported_actions",
+    "split": "evaluation-v3",
+    "usecase": "akinator",
+    "language": "ja",
+    "task": "プロトコルを調べるか文書を下書きするか、次の作業は未定です。",
+    "expected": null,
+    "automationEligible": false
+  }
+]

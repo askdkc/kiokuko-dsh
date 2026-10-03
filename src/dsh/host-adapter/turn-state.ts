@@ -18,6 +18,7 @@ export interface TurnRecord {
   readonly repositoryRoot: string
   readonly cwd: string
   readonly profileHints?: DshPreStepEvent['profileHints']
+  readonly deferTaskTypeInference?: boolean
   nativeAgent?: DshUserQuestionAgent
   nativeSession?: object
   task: string
@@ -106,6 +107,7 @@ export function createTurnState(
       cwd: event.cwd,
       task: event.task,
       ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
+      ...(event.deferTaskTypeInference ? { deferTaskTypeInference: true } : {}),
       turn: event.turn,
       prepared: result.prepared,
       catalog: result.catalog,

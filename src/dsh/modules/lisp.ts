@@ -16,7 +16,7 @@ export const lispModule: DshModule<CoreModuleHost> = {
     const unregister = host.beforeTask(async input => {
       const coding = host.context.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
       if (!coding || !input.agent) return
-      const profile = resolveGroundedIntakeProfile({ task: input.task, cwd: input.cwd, ...(input.profileHints ? { profileHints: input.profileHints } : {}) })
+      const profile = resolveGroundedIntakeProfile({ task: input.task, cwd: input.cwd, deferTaskTypeInference: input.deferTaskTypeInference === true, ...(input.profileHints ? { profileHints: input.profileHints } : {}) })
       const selected = await coding.prepare({ agent: input.agent, task: input.task, taskType: profile.profileHints.taskType, turn: input.turn, signal: input.signal })
       return { taskType: selected.taskType, ...(selected.clarification ? { constraints: selected.clarification } : {}) }
     })

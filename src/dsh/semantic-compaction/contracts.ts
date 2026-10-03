@@ -58,6 +58,7 @@ export interface ResultCandidate {
   event: SurfaceEvent
   original: SurfaceMessage
   replacement: SurfaceMessage
+  nativeEstimated?: { original: number; replacement: number }
   savings: number
   position: number
 }

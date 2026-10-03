@@ -82,11 +82,13 @@ test('Laya rejects corrupt identity, question/choice sets, probabilities and usa
 
 test('compaction forwards per-part preflight through wrapper before any batch inference, and overflow preserves readiness', async () => {
   let inference = 0, preflight = 0, reject = true
-  const backend: DecisionProvider = { capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144, maxPromptTokens: 96 },
+  const backend: DecisionProvider = { capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144, maxPromptTokens: 1024 },
     preflight: async part => { preflight++; assert.equal(part.questions.length, 1); if (reject && part.questions[0]!.id === 'later') throw new DecisionError('TOO_LARGE') },
-    evaluate: async part => { if (part.purpose === 'compaction') inference++; return { provider: 'laya-coreml', requestedModel: layaRuntime.model, policyVersion: 'fixture', answers: part.questions.map(q => ({ id: q.id, status: 'selected', choiceId: q.id === 'fruit' ? 'apple' : '20' })) } } }
-  const service = new DecisionService(layaConfig(), () => backend)
-  const input: DecisionBatch = { ...batch, purpose: 'compaction', questions: [...batch.questions, { ...batch.questions[0]!, id: 'later' }] }
+    evaluate: async part => { if (part.purpose === 'compaction') inference++; return { provider: 'laya-coreml', requestedModel: layaRuntime.model, policyVersion: 'fixture', answers: part.questions.map(q => ({ id: q.id, status: 'selected', choiceId: q.id === 'fruit' ? 'apple' : 'lossless' })) } } }
+  const config = layaConfig(); config['laya-coreml']!.model = 'aac6fef/laya-multilingual-coreml'; config['laya-coreml']!.compaction = { mode: 'shadow', policyVersion: 'laya-lossless-task-v3' }
+  const service = new DecisionService(config, () => backend)
+  const questions = ['first', 'later'].map(id => ({ id, instructions: 'Choose representation', choices: [{ id: 'keep', description: '' }, { id: 'lossless', description: '' }, { id: 'abstain', description: '' }], abstainId: 'abstain' }))
+  const input: DecisionBatch = { purpose: 'compaction', state: { policy: 'laya-lossless-task-v3', task: { currentRequest: 'Count the log entries', remainingTodos: [] }, results: questions.map(q => ({ id: q.id, callId: q.id, tool: 'read', sourceDigest: q.id, replacement: 'complete fixture envelope', nativeEstimated: { original: 1000, replacement: 200 } })) }, questions }
   assert.deepEqual(await service.evaluate('too-big', input, signal()), { status: 'fallback', reason: 'DECISION_TOO_LARGE' })
   assert.equal(preflight, 2); assert.equal(inference, 0); assert.equal((service.status() as any).readiness.state, 'ready')
   reject = false

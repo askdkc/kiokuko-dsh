@@ -4,6 +4,7 @@ import { canonicalContentHash } from '../serialization/validate.js'
 import { abortable } from './http-json.js'
 import type { DecisionService } from './decisions/service.js'
 import { activeCompaction, compactionBatch, compactionSurface, CompactionFallback, selectCandidates } from './semantic-compaction/policy.js'
+import { layaCompactionStatus } from './decisions/config.js'
 import type { CompactionSession, NativeTokenMeter } from './semantic-compaction/contracts.js'
 
 export const ModelHandoffConfig = z.object({
@@ -218,23 +219,32 @@ export class ModelHandoff {
     let expectedSeq = firstSeq
     let expectedNodes = [...session.surface.nodes]
     try {
-      const readiness = await this.decisions.probe(AbortSignal.any([signal, AbortSignal.timeout(5000)]))
-      if (readiness.state !== 'ready' || !this.status().active) { outcome = 'unavailable'; return }
+      const requestId = `handoff:${session.id}:${selected.seq}:${sourceDigest}`
+      const classifierSignal = AbortSignal.any([signal, AbortSignal.timeout(5000)])
+      const configuration = await this.decisions.bind(requestId, classifierSignal)
+      const lossless = configuration.provider === 'laya-coreml'
+      if (configuration.mode === 'off') { outcome = 'unavailable'; return }
+      // Laya preprocessing has its own stop gate. Native summarization does not
+      // require a Laya readiness prediction when that preprocessing is disabled.
+      if (!lossless) {
+        const readiness = await this.decisions.probe(classifierSignal)
+        if (readiness.state !== 'ready' || !this.status().active) { outcome = 'unavailable'; return }
+      }
       const meter = this.host.get('tokenMeter', false) as NativeTokenMeter | undefined
       if (!meter?.measure || !meter.estimateMessage) { outcome = 'unavailable'; return }
       const before = meter.measure(session).totalTokens
       const old = compactionSurface(session)
       const startPosition = session.surface.nodes.indexOf(range.start), endPosition = session.surface.nodes.indexOf(range.end)
       const included = new Set(session.surface.nodes.slice(startPosition, endPosition + 1))
-      const candidates = selectCandidates(old, meter, new Map(), seq => session.eventAt(seq))
+      const layaPolicy = lossless ? layaCompactionStatus(configuration) : undefined
+      const candidates = layaPolicy && layaPolicy.state !== 'shadow' ? [] : selectCandidates(old, meter, new Map(), seq => session.eventAt(seq), configuration.provider)
         .filter(candidate => included.has(candidate.event.seq))
       if (candidates.length) {
         const decisionStart = performance.now()
         let choice: Awaited<ReturnType<DecisionService['evaluate']>> | undefined
-        const classifierSignal = AbortSignal.any([signal, AbortSignal.timeout(5000)])
         try {
-          const batch = compactionBatch(old, [], candidates)
-          choice = await this.decisions.evaluate(`handoff:${session.id}:${selected.seq}:${sourceDigest}`, { ...batch, purpose: 'model-handoff' }, classifierSignal)
+          const batch = compactionBatch(old, [], candidates, undefined, configuration.provider)
+          choice = await this.decisions.evaluate(requestId, { ...batch, purpose: 'model-handoff' }, classifierSignal)
         } catch (error) {
           if (signal.aborted) throw error
           if (!(error instanceof CompactionFallback) && !classifierSignal.aborted) { integrityError = true; throw error }
@@ -242,7 +252,8 @@ export class ModelHandoff {
         }
         classifierMs = Math.round(performance.now() - decisionStart)
         if (choice?.status === 'completed' && choice.result.usage) classifierTokens = choice.result.usage.input_tokens + choice.result.usage.output_tokens
-        if (choice?.status === 'completed') {
+        // Shadow can measure selection but must pass the original surface to the native summarizer.
+        if (choice?.status === 'completed' && !lossless) {
           for (const candidate of candidates) {
             const answer = choice.result.answers.find(answer => answer.id === candidate.id)
             if (answer?.status !== 'selected' || answer.choiceId !== 'shorten') continue

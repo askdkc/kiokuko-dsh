@@ -35,5 +35,6 @@ export class SessionProgress {
     }
   }
   exposedTwice(seq: number): boolean { return this.completed.length === 2 && this.completed[0]! > seq }
+  remainingTodos(): string[] { return this.previous?.filter(todo => todo.status !== 'completed').map(todo => todo.content) ?? [] }
   takeBoundary(): Boundary | undefined { const boundary = this.boundary; this.boundary = undefined; return boundary }
 }

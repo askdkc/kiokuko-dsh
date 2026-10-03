@@ -105,6 +105,10 @@ export function createRouting({
       if (header?.parentSession || header?.origin === 'subagent' || header?.delegationDepth) return undefined
       const item = agent.session ? currentSession(agent.session.id) : undefined
       return item ? { runId: item.runId, sessionId: item.sessionId, selection: getSelection(item.runId) ?? null,
+        taskEvidence: { currentRequest: item.task,
+          ...(item.prepared.intake.profile.target ? { target: item.prepared.intake.profile.target } : {}),
+          ...(item.prepared.intake.profile.expected ? { successCriteria: item.prepared.intake.profile.expected } : {}),
+          ...(item.prepared.intake.profile.constraints ? { constraints: item.prepared.intake.profile.constraints } : {}) },
         state: await readStateForRun(item) } : { sessionId: agent.session?.id }
     })
     const disposeMemory = onNativeEvent(agent.ctx, 'agent/request', async (_event: unknown, next: () => Promise<any>) => {

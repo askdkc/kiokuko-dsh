@@ -93,6 +93,40 @@ The native packing test prints enabled/disabled request JSON bytes, including to
 
 ## Local Laya
 
+Laya compaction has its own switch under `typedDecisions.laya-coreml`:
+
+```yaml
+typedDecisions:
+  provider: laya-coreml
+  laya-coreml:
+    compaction:
+      mode: off # off | shadow | auto
+      policyVersion: laya-lossless-task-v3
+```
+
+Omission means `off`. It prevents Laya compaction inference and replacement,
+including handoff preprocessing, before reading accepted cache entries.
+ObservationPack, native summaries and other decision providers retain their own
+settings. Existing Laya users must opt in to `shadow` explicitly.
+
+`shadow` evaluates complete current-task evidence and host-generated lossless
+envelopes without appending surface changes. It requires the strict multilingual
+1,024-token worker. The model chooses `keep`, `lossless` or `abstain`; the host
+preserves tool pairing, metadata and the original UTF-16 string. It never asks
+Laya to generate replacement text or infer whether evidence may be deleted.
+
+`auto` is accepted by the schema but remains **unqualified** in this release:
+`experimental_not_qualified` prevents inference and mutation. No configuration
+boolean or readiness probe grants quality qualification. The general acceptance
+floor for compaction stays at probability 0.90 / margin 0.20. Native estimates,
+request bytes and exact target-model tokens are distinct measurements; an
+unavailable target tokenizer cannot qualify compaction.
+
+See the [implementation and evaluation record](evaluations/laya-plan-2026-10-03/RESULTS.ja.md)
+for the frozen policy and remaining C0–C7 evidence. The evaluation CLI currently
+captures native requests with scripted downstream generation; it does not qualify
+a release or claim downstream task success.
+
 [Laya-CoreML](laya-coreml.md) preflights every complete one-question part before
 starting any prediction for the compaction batch. This uses the actual tokenizer
 instead of the legacy byte-minus-512 estimate. A later part that does not fit

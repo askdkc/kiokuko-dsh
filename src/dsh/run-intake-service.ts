@@ -64,6 +64,8 @@ export interface DshRunIntakeResponse {
 }
 
 export interface DshRunIntakeServiceOptions {
+  /** Host-owned abstention: leave taskType unresolved instead of guessing again. */
+  readonly deferTaskTypeInference?: boolean;
   readonly akinatorMemory?: ProbeConfig;
   readonly memoryScope?: MemoryProbeScope;
   readonly now?: () => string;
@@ -333,6 +335,7 @@ export class DshRunIntakeService {
       { workspace: request.workspace, ...(this.options.home === undefined ? {} : { home: this.options.home }) },
     ).value as JsonObject;
     const hashRequest = jsonObject({
+      ...(this.options.deferTaskTypeInference ? { deferTaskTypeInference: true } : {}),
       apiVersion: '1',
       workspace: request.workspace,
       dshSessionId,
@@ -374,7 +377,7 @@ export class DshRunIntakeService {
           throw new KiokukoError('CONFLICT', 'Profile probe scope differs from the current request');
         }
         const config = AkinatorMemoryConfig.parse(this.options.akinatorMemory ?? {});
-        const baseProfile = deriveProfile(task.query, task.profileHints);
+        const baseProfile = deriveProfile(task.query, task.profileHints, { inferTaskType: !this.options.deferTaskTypeInference });
         const memory = probeProfileMemory(this.database, { task: task.query, profile: baseProfile,
           config, ...(this.options.memoryScope ? { scope: this.options.memoryScope } : {}), now });
         const adopted = config.mode === 'resolve'
@@ -386,7 +389,7 @@ export class DshRunIntakeService {
           profileHints: resolvedHints,
           now,
           idFactory: () => sessionId,
-        });
+        }, { inferTaskType: !this.options.deferTaskTypeInference });
         insertRunIntakeLink(this.database, {
           runId,
           sessionId,

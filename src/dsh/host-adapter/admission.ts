@@ -3,7 +3,7 @@ import { bindMemoryApplication, memoryRetrievalStatus } from '../../memory/appli
 import { createMemoryReuseRuntime } from '../memory-reuse.js'
 import type { DecisionService } from '../decisions/service.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
-import { classifyTask, selectInstalledSkills } from '../decisions/workflows.js'
+import { classifyTaskForIntake, selectInstalledSkills } from '../decisions/workflows.js'
 import { humanInput } from '../../memory/review/evidence.js'
 import { AnswerReviewCoordinator } from '../answer-review/coordinator.js'
 import { ANSWER_REVIEW_FORM, hasHumanInput, type ReviewAgent } from '../answer-review/contracts.js'
@@ -118,6 +118,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
   const incomingType = resolveGroundedIntakeProfile({
     task: event.task,
     cwd: event.cwd,
+    deferTaskTypeInference: event.deferTaskTypeInference === true,
     ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
   }).profileHints.taskType
   return incomingType !== null && !ENNO_APPLICABLE_TASK_TYPES.includes(incomingType as (typeof ENNO_APPLICABLE_TASK_TYPES)[number])
@@ -240,7 +241,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       if (!stored) return result
       const discussion = stored.value.discussion
       if (discussion && event.turn > discussion.turn) {
-        const incomingType = resolveGroundedIntakeProfile({ task: event.task, cwd: event.cwd,
+        const incomingType = resolveGroundedIntakeProfile({ task: event.task, cwd: event.cwd, deferTaskTypeInference: event.deferTaskTypeInference === true,
           ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
         }).profileHints.taskType
         const requestedMode = explicitExecutionMode(event.task)
@@ -298,6 +299,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
         task: event.task,
         cwd: event.cwd,
         profileHints: event.profileHints ?? null,
+        ...(event.deferTaskTypeInference ? { deferTaskTypeInference: true } : {}),
         evidence: event.evidence ?? null,
         skillDiscoveryMode: event.skillDiscoveryMode ?? null,
         catalogDigest: event.capabilities.digest,
@@ -698,16 +700,25 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       const previousType = getSelection(previous.runId)?.value.discussion ? 'chat' : previous.prepared.intake.profile.taskType
       return inferred === null || previousType === 'chat' && inferred === 'chat' ? { taskType: previousType } : undefined
     })()
+    let deferTaskTypeInference = bound?.deferTaskTypeInference ?? (reviewing ? previous?.deferTaskTypeInference : false) ?? false
     if (!reviewing && bound === undefined && !delegation.isChild(payload.agent)) {
-      const taskType = await classifyTask(decisions, dshTurnRequestId({ dshSessionId: sessionId, turn: payload.turn }), task, profile?.taskType, payload.signal)
-      if (taskType) profile = { ...profile, taskType }
+      const requestId = dshTurnRequestId({ dshSessionId: sessionId, turn: payload.turn })
+      const configuration = await decisions?.bind(requestId, payload.signal)
+      // This profile is inherited from a previous turn, not a current user choice.
+      // Let Laya assess the new request before applying the legacy continuation fallback.
+      const explicit = configuration?.provider === 'laya-coreml' ? undefined : profile?.taskType
+      const classification = await classifyTaskForIntake(decisions, requestId, task, explicit, payload.signal)
+      deferTaskTypeInference = classification.deferInference
+      if (classification.taskType) profile = { ...profile, taskType: classification.taskType }
+      else if (deferTaskTypeInference && profile) profile = { ...profile, taskType: null }
     }
     const lispCoding = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
     if (lispCoding && !reviewing && bound === undefined && !previous?.prepared.ennoOduno.applicable && !delegation.isChild(payload.agent)) {
-      const grounded = resolveGroundedIntakeProfile({ task, cwd, ...(profile === undefined ? {} : { profileHints: profile }) })
+      const grounded = resolveGroundedIntakeProfile({ task, cwd, deferTaskTypeInference, ...(profile === undefined ? {} : { profileHints: profile }) })
       const choice = await lispCoding.prepare({ agent: payload.agent, task, taskType: grounded.profileHints.taskType,
         turn: payload.turn, signal: payload.signal })
       profile = { ...profile, taskType: choice.taskType, ...(choice.clarification ? { constraints: choice.clarification } : {}) }
+      deferTaskTypeInference = false
     }
     // Lisp changes the scoped tool surface. Bind capabilities only after its
     // explicit selection and activation, never mutate an already-bound catalog.
@@ -726,6 +737,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       task,
       cwd,
       ...(profile === undefined ? {} : { profileHints: profile }),
+      ...(deferTaskTypeInference ? { deferTaskTypeInference: true } : {}),
       capabilities: catalog,
       signal: payload.signal,
     }

@@ -8,6 +8,9 @@ import { abortable } from '../http-json.js'
 import type { DecisionService } from '../decisions/service.js'
 import { COMPACTION_POLICY, type CompactionAgent, type CompactionAuthority, type CompactionOutcome, type CompactionSession, type NativeTokenMeter, type ResultCandidate, type ResultProjector, type SurfaceMessage } from './contracts.js'
 import { activeCompaction, compactionBatch, CompactionFallback, compactionSurface, selectCandidates, surfaceDigest, surfaceMessage, worthwhile } from './policy.js'
+import { verifyLosslessCandidate } from './lossless.js'
+import { layaCompactionStatus } from '../decisions/config.js'
+import { CompactionTaskEvidence } from '../decisions/laya-compaction.js'
 
 interface Host { get(name: string, strict?: boolean): any; on(name: string, handler: (...args: any[]) => any, options?: any): () => void }
 interface Step { agent: CompactionAgent; messages: readonly SurfaceMessage[]; signal: AbortSignal }
@@ -247,16 +250,26 @@ export class SemanticCompactionCoordinator {
         const event = session.eventAt(index)
         if (event?.type === 'compaction/prune') for (const seq of event.data.shadowedSeqs ?? []) pruned.add(seq)
       }
-      const candidates = selectCandidates(events, meter, this.projectors, seq => session.eventAt(seq)).filter(candidate => !pruned.has(candidate.event.seq) && (!preemptive || progress.exposedTwice(candidate.event.seq)))
-      if (!worthwhile(beforeTokens, candidates.reduce((sum, candidate) => sum + candidate.savings, 0), threshold)) { report('skipped', 'insufficient_potential'); return }
       const digest = surfaceDigest(events, step.messages, { effective: header, logged: session.requestHeader() })
       const key = canonicalContentHash({ sessionId: session.id, digest, owner, configDigest, decisionConfig, observationPack: this.observations.config, boundary: preemptive ? boundary : null, policy: COMPACTION_POLICY })
-      const outcome = await abortable(this.track(this.decisions.evaluate(`compaction:${session.id}:${key}`, compactionBatch(events, step.messages, candidates, preemptive ? boundary : undefined), signal, key)), signal)
+      const requestId = `compaction:${session.id}:${key}`
+      const configuration = await abortable(this.track(this.decisions.bind(requestId, signal)), signal)
+      const laya = configuration.provider === 'laya-coreml'
+      if (laya && layaCompactionStatus(configuration).state !== 'shadow') {
+        report('skipped', layaCompactionStatus(configuration).reason); return
+      }
+      const candidates = selectCandidates(events, meter, this.projectors, seq => session.eventAt(seq), configuration.provider).filter(candidate => !pruned.has(candidate.event.seq) && (!preemptive || progress.exposedTwice(candidate.event.seq)))
+      if (!worthwhile(beforeTokens, candidates.reduce((sum, candidate) => sum + candidate.savings, 0), threshold)) { report('skipped', 'insufficient_potential'); return }
+      const hostTask = (owner as { taskEvidence?: unknown }).taskEvidence
+      const taskEvidence = laya && hostTask ? CompactionTaskEvidence.safeParse({ ...(hostTask as object), remainingTodos: progress.remainingTodos() }) : undefined
+      if (taskEvidence && !taskEvidence.success) throw new CompactionFallback('invalid_task_evidence')
+      const outcome = await abortable(this.track(this.decisions.evaluate(requestId, compactionBatch(events, step.messages, candidates, preemptive ? boundary : undefined, configuration.provider, taskEvidence?.success ? taskEvidence.data : undefined), signal, key)), signal)
       if (outcome.status !== 'completed') throw new CompactionFallback(outcome.reason)
-      if (preemptive && !outcome.result.answers.some(answer => answer.id === 'timing' && answer.status === 'selected' && answer.choiceId === 'compact')) { report('skipped', 'timing_deferred'); return }
-      const accepted = new Set(outcome.result.answers.filter(answer => answer.status === 'selected' && answer.choiceId === 'shorten').map(answer => answer.id))
+      if (preemptive && !laya && !outcome.result.answers.some(answer => answer.id === 'timing' && answer.status === 'selected' && answer.choiceId === 'compact')) { report('skipped', 'timing_deferred'); return }
+      const accepted = new Set(outcome.result.answers.filter(answer => answer.status === 'selected' && answer.choiceId === (laya ? 'lossless' : 'shorten')).map(answer => answer.id))
       const replacements = candidates.filter(candidate => accepted.has(candidate.id))
       const savings = replacements.reduce((sum, candidate) => sum + candidate.savings, 0)
+      if (laya) { report('skipped', 'shadow_no_commit', beforeTokens); return }
       if (!worthwhile(beforeTokens, savings, threshold)) { report('fallback', 'insufficient_reduction'); return }
       const currentOwner = await abortable(this.track(this.ownership(agent, session, authority)), signal)
       signal.throwIfAborted()
@@ -266,7 +279,10 @@ export class SemanticCompactionCoordinator {
         || this.decisions.configurationDigest() !== decisionConfig
         || canonicalContentHash(meter.measure(session, header)) !== canonicalContentHash(measurement) || activeCompaction(session)) throw new Error('Semantic compaction source or authority changed')
       // Validate and freeze the entire set before the first append. No await within the commit.
-      const prepared = replacements.map(candidate => this.prepare(session, candidate, meter))
+      const prepared = replacements.map(candidate => {
+        if (configuration.provider === 'laya-coreml') verifyLosslessCandidate(candidate)
+        return this.prepare(session, candidate, meter)
+      })
       signal.throwIfAborted()
       if (performance.now() - started >= this.decisions.semanticCompaction.budgetMs) throw new CompactionFallback('budget_exceeded')
       commitStarted = true

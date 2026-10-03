@@ -182,3 +182,5 @@ TypeSafe または Nimble の利用確認が成功すると、既存検索の候
 ### 過去のツール出力の短縮
 
 ObservationPack（既定値 `observationPack: { mode: auto }`）は、大きな正常終了のツール結果をモデルへ2回提示した後、抜粋と `observation_read` で原文を取得できる参照に置き換えます。[Semantic compaction](docs/semantic-compaction.md) は、TODOの完了境界でも前倒し判定を行い、通常・Enno・Lisp モードで、DSH の自動圧縮前に古いツール出力を選んで短縮します。既定値は `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` です。利用可能と確認された型付き判定バックエンドと、対応するネイティブサービスが必要です。`/kioku-decisions status` で有効状態と直近の結果を確認できます。
+
+Layaの圧縮には独立した設定があり、`typedDecisions.laya-coreml.compaction.mode: off` が既定です。明示的な `shadow` は履歴を変えずに評価し、`auto` は `experimental_not_qualified` として停止します。ObservationPackとnative summaryは既存設定を維持します。Akinatorは検証済みのdebug／research／writingだけを自動判定し、任意Skillは完全な説明を持つ最大4候補から最大1個を選びます。[Layaの設定と評価](docs/semantic-compaction.md#local-laya)を参照してください。

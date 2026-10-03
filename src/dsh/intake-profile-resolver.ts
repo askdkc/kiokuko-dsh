@@ -8,6 +8,8 @@ export interface GroundedIntakeProfileInput {
   readonly task: string
   readonly cwd: string
   readonly profileHints?: Partial<TaskProfile>
+  /** A model abstention must not be replaced with a keyword guess. */
+  readonly deferTaskTypeInference?: boolean
   readonly evidence?: readonly string[]
 }
 
@@ -60,7 +62,7 @@ export function resolveGroundedIntakeProfile(input: GroundedIntakeProfileInput):
     target: optionalText(hints.target) ?? cwd,
     expected: optionalText(hints.expected, true) ?? groundedExpected,
     constraints: optionalText(hints.constraints, true),
-  })
+  }, { inferTaskType: !input.deferTaskTypeInference })
   const evidence = input.evidence ?? []
   if (!Array.isArray(evidence) || evidence.length > 32) validation('evidence must be a bounded string array')
   const boundedEvidence = evidence.map((item) => boundedText(item, 'evidence', 8_192, true))

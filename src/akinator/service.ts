@@ -234,12 +234,13 @@ function localEntries(database: SqliteDatabase, session: AkinatorSessionView, ta
 export function startAkinatorInTransaction(
   database: SqliteDatabase,
   input: StartAkinatorInput,
+  options: { inferTaskType?: boolean } = {},
 ): AkinatorResult {
   const normalized = startInput(input);
   const task = normalized.task.trim();
   rejectSecret(task);
   assertBoundedTask(task);
-  const profile: TaskProfile = deriveProfile(task, normalized.profileHints ?? {});
+  const profile: TaskProfile = deriveProfile(task, normalized.profileHints ?? {}, options);
   assertSafeProfile(profile);
   const evaluation = evaluateProfile(profile, 0);
   const now = normalized.now ?? new Date().toISOString();

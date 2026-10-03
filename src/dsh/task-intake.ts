@@ -87,6 +87,8 @@ export interface PrepareAgentTaskInput {
   task: string;
   cwd?: string;
   profileHints?: Partial<TaskProfile>;
+  /** Host-owned; never grants an answer or permission. */
+  deferTaskTypeInference?: boolean;
   capabilities?: unknown;
   maxContextChars?: number;
   dshSessionId: string;
@@ -891,15 +893,16 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
   const memoryConfig = AkinatorMemoryConfig.parse(host.akinatorMemory ?? {});
   const memoryAllowed = memoryReasoningCapabilityAvailability(input.capabilities) === 'available'
     && !input.signal?.aborted && !hasBlockingRequiredCapability(resolveCapabilities({
-      task: input.task, profile: deriveProfile(input.task, profileHints), recommendedTags: [], capabilities: input.capabilities, memoryUse: 'none',
+      task: input.task, profile: deriveProfile(input.task, profileHints, { inferTaskType: !input.deferTaskTypeInference }), recommendedTags: [], capabilities: input.capabilities, memoryUse: 'none',
     }));
   const scope = { workspace: project.workspace, repositoryId: project.repositoryId,
     repositoryRoot: project.repositoryRoot, allowed: memoryAllowed, verifiedTargets: [] as string[] };
-  if (shouldProbe(deriveProfile(input.task, profileHints), memoryConfig, scope)) {
+  if (shouldProbe(deriveProfile(input.task, profileHints, { inferTaskType: !input.deferTaskTypeInference }), memoryConfig, scope)) {
     scope.verifiedTargets = verifyTaskTargets(input.task, project.repositoryRoot, executionContext.canonicalCwd);
   }
   const intakeService = new DshRunIntakeService(database, {
     akinatorMemory: memoryConfig, memoryScope: scope,
+    deferTaskTypeInference: input.deferTaskTypeInference === true,
     onRunCreatedInTransaction: ({ database: transactionDatabase, runId, workspace, dshSessionId, now }) => {
       if (input.completionMode) initializeTaskCompletion(transactionDatabase, runId, input.completionMode);
       if (input.executionSelection) initializeExecutionSelection(transactionDatabase, runId);

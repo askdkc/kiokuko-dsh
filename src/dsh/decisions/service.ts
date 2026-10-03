@@ -4,7 +4,7 @@ import { canonicalContentHash } from '../../serialization/validate.js'
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { abortable } from '../http-json.js'
 import { DecisionError, parseDecisionBatch, parseDecisionResult, questionType, type DecisionProvider, type DecisionBatchResult, type DecisionBatch } from './contracts.js'
-import { TypedDecisionsConfig, selectedDecisionSettings, decisionConfigurationIssue, resolveDecisionConfiguration, LAYA_POLICY_VERSION, type DecisionConfiguration } from './config.js'
+import { TypedDecisionsConfig, selectedDecisionSettings, decisionConfigurationIssue, resolveDecisionConfiguration, LAYA_POLICY_VERSION, layaCompactionStatus, type DecisionConfiguration } from './config.js'
 import { POLICY_VERSION } from './providers.js'
 import { DecisionReadinessMonitor, type ReadinessOptions } from './readiness.js'
 import { MemoryReuseConfig, type MemoryReuseConfiguration } from '../../memory/reuse.js'
@@ -270,15 +270,17 @@ export class DecisionService {
   }
   status(): unknown {
     const selected = selectedDecisionSettings(this.config)
+    const semanticActive = this.config.provider !== 'laya-coreml'
     return { mode: this.config.mode, provider: this.config.provider, model: selected?.model ?? null, timeoutMs: selected?.timeoutMs ?? null,
       configurationReady: !decisionConfigurationIssue(this.config),
-      ...(this.config.provider === 'laya-coreml' ? { protocol: this.config['laya-coreml']?.protocol ?? (this.config['laya-coreml']?.runtimeFingerprint ? 'strict-v1' : null), runtimeFingerprint: this.config['laya-coreml']?.runtimeFingerprint ?? null } : {}),
+      ...(this.config.provider === 'laya-coreml' ? { protocol: this.config['laya-coreml']?.protocol ?? (this.config['laya-coreml']?.runtimeFingerprint ? 'strict-v1' : null), runtimeFingerprint: this.config['laya-coreml']?.runtimeFingerprint ?? null, skillAcceptance: this.config['laya-coreml']?.skillAcceptance ?? null, layaCompaction: layaCompactionStatus(this.config) } : {}),
       limits: this.provider(this.config).capabilities, acceptance: selected?.acceptance ?? null, policyVersion: this.config.provider === 'laya-coreml' ? LAYA_POLICY_VERSION : POLICY_VERSION, lastFallback: this.lastFallback,
       observationPack: this.observationStatus,
       answerReview: this.answerReviewStatus,
       modelHandoff: { ...this.modelHandoffStatus, active: this.modelHandoffStatus.mode === 'auto' && this.modelHandoffStatus.supported
-        && this.config.mode !== 'off' && ['typesafe', 'laya-coreml'].includes(this.config.provider) && this.readiness.status(this.config).state === 'ready' },
-      semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, metrics: this.compactionMetrics, lastPreemptive: this.lastPreemptive, preemptiveActive: this.semanticCompaction.preemptive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready', active: this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },
+        && this.config.mode !== 'off' && (this.config.provider === 'laya-coreml'
+          || this.config.provider === 'typesafe' && this.readiness.status(this.config).state === 'ready') },
+      semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, metrics: this.compactionMetrics, lastPreemptive: this.lastPreemptive, preemptiveActive: semanticActive && this.semanticCompaction.preemptive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready', active: semanticActive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },
       readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' },
       decisionObservations: structuredClone(this.decisionObservations) }
   }
@@ -294,6 +296,18 @@ export class DecisionService {
     }
     const semantic = batch.purpose === 'compaction' || batch.purpose === 'model-handoff'
     const managed = semantic || batch.purpose === 'memory-reuse' || batch.purpose === 'model-routing'
+    // Before cache lookup or readiness: old accepted results cannot enable this release's compaction.
+    if (semantic && config.provider === 'laya-coreml') {
+      const policy = layaCompactionStatus(config)
+      if (policy.state !== 'shadow') {
+        const outcome: DecisionOutcome = { status: 'fallback', reason: policy.reason }
+        this.observe(batch, config, outcome, false, performance.now() - started)
+        return outcome
+      }
+      const settings = config['laya-coreml']
+      if (settings?.protocol === 'v1' || settings?.model !== 'aac6fef/laya-multilingual-coreml' || !settings.runtimeFingerprint)
+        return { status: 'fallback', reason: 'laya_compaction_strict_runtime_required' }
+    }
     const digest = canonicalContentHash({ batch, config, catalogDigest, policyVersion: batch.contractVersion ?? POLICY_VERSION,
       ...(batch.purpose === 'compaction' ? { semanticCompaction: this.semanticCompaction } : {}) })
     const key = `${requestId}:${digest}`
@@ -335,6 +349,7 @@ export class DecisionService {
         const effective = isolatedGrounding && grounding && grounding.mode !== 'legacy' && config.provider === 'laya-coreml' && config['laya-coreml']
           ? { ...config, 'laya-coreml': { ...config['laya-coreml'], acceptance: { minProbability: grounding.minProbability, minMargin: grounding.minMargin } } } : config
         const provider = managed ? this.memoryProvider(config) : this.provider(effective), limits = provider.capabilities
+        if (semantic && config.provider === 'laya-coreml' && limits.maxPromptTokens !== 1024) throw new DecisionError('UNSUPPORTED')
         if (!Number.isSafeInteger(limits.maxQuestions) || limits.maxQuestions < 1) throw new DecisionError('UNSUPPORTED')
         if (batch.questions.some(q => !(limits.questionTypes ?? ['choice']).includes(questionType(q)))) throw new DecisionError('UNSUPPORTED')
         if (batch.questions.some(q => 'type' in q && q.type === 'score' && (!limits.maxScoreLevels || q.criteria.length > limits.maxScoreLevels))) throw new DecisionError('UNSUPPORTED')
@@ -346,18 +361,23 @@ export class DecisionService {
         }
         const parts: DecisionBatchResult[] = []
         // Each question is independent and retains the complete evidence and its alternatives.
-        if (semantic) parts.push(...await evaluateCompactionBatches(provider, batch, combined))
+        if (semantic) parts.push(...await evaluateCompactionBatches(provider, batch, combined, config.provider))
         else if (batch.purpose === 'memory-reuse') parts.push(await evaluateMemoryBatches(provider, batch, config.provider, combined))
         else {
-          if (batch.purpose === 'answer-review' && provider.preflight) {
-            for (let offset = 0; offset < batch.questions.length; offset += limits.maxQuestions) {
-              await abortable(provider.preflight({ ...batch, questions: batch.questions.slice(offset, offset + limits.maxQuestions) }, combined), combined)
-            }
+          const layaSkills = config.provider === 'laya-coreml' && batch.purpose === 'skills'
+          const size = layaSkills ? 1 : limits.maxQuestions
+          const inputs: DecisionBatch[] = []
+          for (let offset = 0; offset < batch.questions.length; offset += size) {
+            const part = { ...batch, questions: batch.questions.slice(offset, offset + size) }
+            inputs.push(part)
           }
-          for (let offset = 0; offset < batch.questions.length; offset += limits.maxQuestions) {
-          combined.throwIfAborted()
-          const part = { ...batch, questions: batch.questions.slice(offset, offset + limits.maxQuestions) }
-          parts.push(parseDecisionResult(await abortable(provider.evaluate(part, combined), combined), part))
+          // Admit every complete input before starting optional Skill inference.
+          if ((batch.purpose === 'answer-review' || layaSkills) && provider.preflight) {
+            for (const part of inputs) await abortable(provider.preflight(part, combined), combined)
+          }
+          for (const part of inputs) {
+            combined.throwIfAborted()
+            parts.push(parseDecisionResult(await abortable(provider.evaluate(part, combined), combined), part))
           }
         }
         combined.throwIfAborted()

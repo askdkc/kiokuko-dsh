@@ -153,12 +153,12 @@ function validateProfile(value: unknown): TaskProfile {
   };
 }
 
-export function deriveProfile(task: string, profileHints: unknown = {}): TaskProfile {
+export function deriveProfile(task: string, profileHints: unknown = {}, options: { inferTaskType?: boolean } = {}): TaskProfile {
   if (typeof task !== 'string' || task.trim().length === 0) validation('task must be a non-empty string');
   if (!isPlainObject(profileHints)) validation('profile hints must be a JSON object');
   assertKnownFields(profileHints, PROFILE_FIELDS, 'profile');
 
-  let taskType = inferTaskType(task.trim());
+  let taskType = options.inferTaskType === false ? null : inferTaskType(task.trim());
   if (profileHints.taskType !== undefined && profileHints.taskType !== null) {
     if (typeof profileHints.taskType !== 'string') validation('taskType must be a string or null');
     const normalized = normalizeTaskTypeValue(profileHints.taskType);

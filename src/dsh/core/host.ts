@@ -20,7 +20,7 @@ import { LISP_CODING_SERVICE } from '../lisp-service-key.js'
 import { SemanticCompactionConfig } from '../semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../../memory/reuse.js'
 import { MemoryRetrievalConfig } from '../../memory/retrieval-contracts.js'
-import { classifyTask } from '../decisions/workflows.js'
+import { classifyTaskForIntake } from '../decisions/workflows.js'
 import { TypedDecisionsConfig } from '../decisions/config.js'
 import { createDecisionService, mountDecisionCommand } from '../decisions/host.js'
 import type { DecisionService } from '../decisions/service.js'
@@ -180,8 +180,9 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       // Attachment-only turns still require identity, intake and persisted-feature checks.
       let request: CoreTaskInput = { requestId: dshTurnRequestId({ dshSessionId: payload.agent.session.id, turn: payload.turn }), sessionId: payload.agent.session.id,
         turn: payload.turn, task: text || 'User input contains no text.', cwd: root, signal, agent: payload.agent, capabilities: [] }
-      const taskType = await classifyTask(decisions, request.requestId, request.task, undefined, signal)
-      if (taskType) request = { ...request, profileHints: { taskType } }
+      const classification = await classifyTaskForIntake(decisions, request.requestId, request.task, undefined, signal)
+      request = { ...request, deferTaskTypeInference: classification.deferInference,
+        ...(classification.taskType ? { profileHints: { taskType: classification.taskType } } : {}) }
       for (const prepare of beforeTask) {
         const profileHints = await prepare(request)
         if (profileHints) request = { ...request, profileHints: { ...request.profileHints, ...profileHints } }

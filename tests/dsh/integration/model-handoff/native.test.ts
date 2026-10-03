@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ModelHandoff, handoffRange, handoffReceipt, pendingSelection, prefilteredSelection } from '../../../../src/dsh/model-handoff.js'
+import { TypedDecisionsConfig } from '../../../../src/dsh/decisions/config.js'
 import { Config } from '../../../../src/dsh/config.js'
 import { CoreConfig } from '../../../../src/dsh/core/host.js'
 import { decisions } from '../../helpers/semantic-compaction.js'
@@ -15,7 +16,7 @@ const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai
 const [cordis, llm, sessions, projection, prompt, tools, registry, loop, meter, compaction] = await Promise.all(
   ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic'].map(load))
 
-test('native user model and reasoning switch delivers one durable compact checkpoint to the new request', async () => {
+for (const layaMode of [undefined, 'off', 'shadow', 'auto'] as const) test(`native model handoff preserves summary with Laya ${layaMode ?? 'non-Laya'} compaction`, async () => {
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
   class ReasoningAdapter extends mock.MockAdapter {
     override async resolveModel(provider: string, model: string) {
@@ -27,8 +28,8 @@ test('native user model and reasoning switch delivers one durable compact checkp
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   fibers.push(await ctx.plugin(compaction.default, { auto: false }))
   ctx.llm.registerAdapter(['mock'], adapter)
-  const d = decisions({ evaluate: async batch => ({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture',
-    answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: q.id === 'fruit' ? 'apple' : 'shorten' })) }) })
+  const d = decisions({ ...(layaMode ? { decisionConfig: TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { model: 'aac6fef/laya-multilingual-coreml', runtimeFingerprint: `sha256:${'a'.repeat(64)}`, compaction: { mode: layaMode } } }), preflight: async () => {} } : {}), evaluate: async batch => ({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture',
+    answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: q.id === 'fruit' ? 'apple' : layaMode ? 'lossless' : 'shorten' })) }) })
   const handoff = new ModelHandoff(ctx, d.service, realpathSync(process.cwd()))
   const handle = await ctx.agents.create({ sessionId: sessions.SessionId('handoff-native'), agentOptions: { provider: 'mock', model: 'new', reasoningEffort: 'high' }, meta: { cwd: process.cwd() } })
   const agent = handle.agent, original = 'Earlier discussion and observations. '.repeat(300)
@@ -67,8 +68,14 @@ test('native user model and reasoning switch delivers one durable compact checkp
     assert.match(JSON.stringify(request.messages), /Completed stage 2/)
     assert.match(JSON.stringify(request.messages), /Continue from the finished stage/)
     assert.match(JSON.stringify(agent.session.snapshotEvents()), /Earlier discussion and observations/)
-    assert.ok(d.calls.some(batch => batch.purpose === 'model-handoff'))
-    assert.ok(agent.session.snapshotEvents().some((event: any) => event.type === 'compaction/prune'))
+    assert.equal(d.calls.some(batch => batch.purpose === 'model-handoff'), !layaMode || layaMode === 'shadow')
+    if (layaMode === 'off' || layaMode === 'auto') assert.equal(d.calls.length, 0, 'no Laya prediction, including readiness, when preprocessing is stopped')
+    if (layaMode) {
+      const input = adapter.requests.find(request => request.purpose === 'compaction')
+      assert.match(JSON.stringify(input), /Old tool evidence/)
+      assert.doesNotMatch(JSON.stringify(input), /Kiokuko lossless tool output/)
+    }
+    assert.equal(agent.session.snapshotEvents().some((event: any) => event.type === 'compaction/prune'), !layaMode)
     const restored = handoffReceipt({ snapshotEvents: () => JSON.parse(JSON.stringify(agent.session.snapshotEvents())) } as any)
     assert.equal(restored?.version, 1)
     assert.equal(restored?.selectionSeq, selection?.seq)

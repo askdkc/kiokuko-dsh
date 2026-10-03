@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 
 export const LAYA_POLICY_VERSION = 'laya-coreml-choice-v1'
+export const LAYA_COMPACTION_POLICY_VERSION = 'laya-lossless-task-v3'
 export const LAYA_MODELS = {
   'aac6fef/laya-multilingual-coreml': 1024,
   'aac6fef/laya-multilingual-coreml-ane': 96,
@@ -52,11 +53,28 @@ export const TypedDecisionsConfig = z.object({
     runtimeFingerprint: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
     adapterVersion: z.literal(LAYA_POLICY_VERSION).default(LAYA_POLICY_VERSION),
     timeoutMs: timeout,
+    compaction: z.object({ mode: z.enum(['off', 'shadow', 'auto']).default('off'),
+      policyVersion: z.literal(LAYA_COMPACTION_POLICY_VERSION).default(LAYA_COMPACTION_POLICY_VERSION),
+    }).strict().optional(),
     acceptance: z.object({ minProbability: probability.default(0.9), minMargin: probability.default(0.2) }).strict().prefault({}),
+    /** Explicit opt-in for optional Skill selection only; no implicit gate relaxation. */
+    skillAcceptance: z.object({
+      policyVersion: z.literal('laya-skill-shortlist-v2').default('laya-skill-shortlist-v2'),
+      minProbability: probability,
+      minMargin: probability,
+    }).strict().optional(),
   }).strict().optional(),
 }).strict()
 export type DecisionConfiguration = z.infer<typeof TypedDecisionsConfig>
 export type LayaSettings = NonNullable<DecisionConfiguration['laya-coreml']>
+
+/** This source release has no reviewed C0–C7 qualification. Configuration cannot grant it. */
+export function layaCompactionStatus(config: DecisionConfiguration): { mode: 'off' | 'shadow' | 'auto'; state: 'disabled' | 'shadow' | 'unqualified'; reason: string } {
+  const mode = config['laya-coreml']?.compaction?.mode ?? 'off'
+  if (config.mode === 'off' || mode === 'off') return { mode, state: 'disabled', reason: 'laya_compaction_off' }
+  if (mode === 'auto') return { mode, state: 'unqualified', reason: 'experimental_not_qualified' }
+  return { mode, state: 'shadow', reason: 'shadow_no_commit' }
+}
 
 export function selectedDecisionSettings(config: DecisionConfiguration) { return config[config.provider] }
 export function decisionConfigurationIssue(config: DecisionConfiguration): string | undefined {

@@ -8,6 +8,7 @@ export interface ChoiceDiagnostic {
   confidence: number
   gate: 'confidence' | 'probability_margin'
   acceptance: { minConfidence?: number; minProbability?: number; minMargin?: number }
+  acceptancePolicy?: string
   status: 'selected' | 'abstained'
   reason?: 'insufficient' | 'tie' | 'uncertain'
   failedChecks: ('confidence' | 'probability' | 'margin')[]

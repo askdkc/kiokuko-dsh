@@ -5,7 +5,7 @@ import { queryScopedContextGated, type ScopedContextResult } from '../../context
 import type { DecisionService } from '../decisions/service.js'
 import { createMemoryReuseRuntime } from '../memory-reuse.js'
 import { readContextRunRetrievalState } from '../../context/run-state.js'
-import { classifyTask, selectInstalledSkills } from '../decisions/workflows.js'
+import { classifyTaskForIntake, selectInstalledSkills } from '../decisions/workflows.js'
 import { legacyModuleRequirements } from '../modules/legacy-bindings.js'
 import { realpathSync } from 'node:fs'
 import { canonicalContentHash } from '../../serialization/validate.js'
@@ -35,6 +35,7 @@ export interface CoreTaskInput {
   readonly cwd: string
   readonly capabilities: readonly { kind: 'skill' | 'tool'; name: string; description?: string }[]
   readonly profileHints?: Partial<TaskProfile>
+  readonly deferTaskTypeInference?: boolean
   readonly timeConstraint?: MemoryTimeConstraint
   readonly signal: AbortSignal
   readonly agent?: DshUserQuestionAgent
@@ -92,8 +93,10 @@ export class CoreTasks {
     const retrievalAnchorTimeMs = Date.now()
     input.signal.throwIfAborted()
     const cwd = realpathSync(input.cwd)
-    const taskType = await classifyTask(this.decisions, input.requestId, input.task, input.profileHints?.taskType, input.signal)
-    const grounded = resolveGroundedIntakeProfile({ task: input.task, cwd, profileHints: { ...input.profileHints, ...(taskType ? { taskType } : {}) } })
+    const classification = await classifyTaskForIntake(this.decisions, input.requestId, input.task, input.profileHints?.taskType, input.signal)
+    const deferTaskTypeInference = !input.profileHints?.taskType && (input.deferTaskTypeInference || classification.deferInference)
+    const grounded = resolveGroundedIntakeProfile({ task: input.task, cwd, deferTaskTypeInference,
+      profileHints: { ...input.profileHints, ...(classification.taskType ? { taskType: classification.taskType } : {}) } })
     return this.runtime.withDatabase(async db => {
       for (const id of legacyModuleRequirements(db, input.sessionId)) {
         if (!this.moduleIds.includes(id)) throw new Error(`Required module unavailable for persisted session: ${id}`)
@@ -101,6 +104,7 @@ export class CoreTasks {
       const project = await resolveProjectWorkspaceReadOnly(db, cwd, { allowDirectory: true })
       if (!project) throw new Error('Task workspace is not registered')
       const intake = new DshRunIntakeService(db, {
+        deferTaskTypeInference,
         onRunCreatedInTransaction: ({ database, runId }) => claimExecutionOwner(database, { sessionId: input.sessionId, workspace: project.workspace, mode: 'normal', startId: input.requestId, runId }),
       })
       const opened = intake.openRun({ idempotencyKey: `core:${canonicalContentHash({ requestId: input.requestId, sessionId: input.sessionId })}`, dshSessionId: input.sessionId,

@@ -1,6 +1,6 @@
 import { createMemoryReuseRuntime } from './memory-reuse.js'
 import type { DecisionService } from './decisions/service.js'
-import { classifyTask, selectInstalledSkills } from './decisions/workflows.js'
+import { classifyTaskForIntake, selectInstalledSkills } from './decisions/workflows.js'
 import { AkinatorMemoryConfig, type ProbeConfig } from '../akinator/memory-probe-types.js'
 import { answerAgentTask, prepareAgentTask, type PreparedAgentTask } from './task-intake.js'
 import type { CompletionMode } from './task-completion.js'
@@ -35,6 +35,7 @@ export interface DshPreStepEvent {
   readonly task: string
   readonly cwd: string
   readonly profileHints?: Partial<TaskProfile>
+  readonly deferTaskTypeInference?: boolean
   readonly evidence?: readonly string[]
   readonly skillDiscoveryMode?: SkillDiscoveryMode
   readonly capabilities: DshCapabilityCatalog
@@ -129,6 +130,7 @@ export class DshIntakeGate {
     const grounded = resolveGroundedIntakeProfile({
       task: event.task,
       cwd: event.cwd,
+      deferTaskTypeInference: event.deferTaskTypeInference === true,
       ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
       ...(event.evidence === undefined ? {} : { evidence: event.evidence }),
     })
@@ -141,6 +143,7 @@ export class DshIntakeGate {
       sourceStartSeq: event.sourceStartSeq ?? null,
       task: grounded.task,
       cwd: grounded.cwd,
+      ...(event.deferTaskTypeInference ? { deferTaskTypeInference: true } : {}),
       ...(grounded.profileHints === undefined ? {} : { profileHints: grounded.profileHints }),
       ...(event.evidence === undefined ? {} : { evidence: event.evidence }),
       ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
@@ -170,7 +173,8 @@ export class DshIntakeGate {
       return event.signal.aborted ? { ...result, admitted: false } : result
     }
     const operation = (async (): Promise<DshIntakeGateResult> => {
-      const taskType = await classifyTask(this.decisions, requestId, grounded.task, event.profileHints?.taskType, event.signal)
+      const classification = await classifyTaskForIntake(this.decisions, requestId, grounded.task, event.profileHints?.taskType, event.signal)
+      const deferTaskTypeInference = !event.profileHints?.taskType && (event.deferTaskTypeInference || classification.deferInference)
       const memoryReuse = await createMemoryReuseRuntime(this.decisions, requestId, event.signal)
       let prepared = await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
         requestId, memoryReuse,
@@ -179,7 +183,8 @@ export class DshIntakeGate {
         sessionOwnership: true,
         task: grounded.task,
         cwd: grounded.cwd,
-        profileHints: { ...grounded.profileHints, ...(taskType ? { taskType } : {}) },
+        profileHints: { ...grounded.profileHints, ...(classification.taskType ? { taskType: classification.taskType } : deferTaskTypeInference ? { taskType: null } : {}) },
+        deferTaskTypeInference,
         capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
         dshSessionId: event.sessionId,
         ...(event.sourceStartSeq === undefined ? {} : {

@@ -1,0 +1,6 @@
+{
+  "kind": "request-capture-only",
+  "source": "laya-workflow-validation.tar.xz/fixtures/development-lossless.json",
+  "downstreamTaskOracles": "unavailable",
+  "independentHoldout": false
+}

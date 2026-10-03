@@ -16,10 +16,10 @@ export function history(text = 'stale log '.repeat(1400), tool = 'read'): Surfac
   for (let i = 0; i < 6; i++) push('user/message', message(`recent-${i}`, 'Required recent evidence.'))
   return events
 }
-export function decisions(options: { configured?: boolean; typesafeModel?: string; mode?: 'auto' | 'off'; budgetMs?: number; store?: import('../../../src/dsh/decisions/service.js').DecisionStore; evaluate?: (batch: DecisionBatch, signal: AbortSignal) => Promise<DecisionBatchResult> } = {}) {
+export function decisions(options: { configured?: boolean; typesafeModel?: string; mode?: 'auto' | 'off'; budgetMs?: number; decisionConfig?: import('../../../src/dsh/decisions/config.js').DecisionConfiguration; preflight?: (batch: DecisionBatch, signal: AbortSignal) => Promise<void>; store?: import('../../../src/dsh/decisions/service.js').DecisionStore; evaluate?: (batch: DecisionBatch, signal: AbortSignal) => Promise<DecisionBatchResult> } = {}) {
   const calls: DecisionBatch[] = []
   const result = (batch: DecisionBatch): DecisionBatchResult => ({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: q.id === 'fruit' ? 'apple' : q.id === 'timing' ? 'compact' : 'shorten' })) })
-  const service = new DecisionService(TypedDecisionsConfig.parse(options.typesafeModel ? { typesafe: { model: options.typesafeModel } } : {}), () => ({ capabilities: { maxQuestions: 64, maxChoices: 256, maxBytes: 262144 }, evaluate: async (batch, signal) => { calls.push(batch); return options.evaluate ? options.evaluate(batch, signal) : result(batch) } }), options.store,
+  const service = new DecisionService(options.decisionConfig ?? TypedDecisionsConfig.parse(options.typesafeModel ? { typesafe: { model: options.typesafeModel } } : {}), () => ({ capabilities: { maxQuestions: 64, maxChoices: 256, maxBytes: 262144, ...(options.preflight ? { maxPromptTokens: 1024 } : {}) }, ...(options.preflight ? { preflight: options.preflight } : {}), evaluate: async (batch, signal) => { calls.push(batch); return options.evaluate ? options.evaluate(batch, signal) : result(batch) } }), options.store,
     { configurationCheck: async () => options.configured !== false, semanticCompaction: SemanticCompactionConfig.parse({ mode: options.mode ?? 'auto', budgetMs: options.budgetMs ?? 5000 }) })
   return { service, calls, result }
 }
