@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFile } from 'node:fs/promises'
 import { TypedDecisionsConfig } from '../../../../src/dsh/decisions/config.js'
 import { LayaV1DecisionProvider } from '../../../../src/dsh/decisions/laya-v1.js'
 import { answerReviewQuestions } from '../../../../src/dsh/answer-review/contracts.js'
@@ -42,18 +43,37 @@ test('malformed responses emit no diagnostics; observer failures do not alter a 
   assert.equal(outcome.answers[0]?.status, 'selected')
 })
 
-test('evaluation summaries exclude failed cases and preserve class denominators', () => {
+test('evaluation summaries include failed cases and preserve class denominators', () => {
   const cases = [
     { status: 'completed', expected: ['finding','satisfied','abstain'], observed: ['finding','abstain','abstain'], raw: [{status:'selected'}, {status:'abstained',reason:'uncertain'}, {status:'abstained',reason:'insufficient'}], elapsedMs: 10 },
-    { status: 'unavailable', reason: 'DECISION_TIMEOUT', elapsedMs: 20 },
+    { status: 'unavailable', expected: ['finding'], reason: 'DECISION_TIMEOUT', elapsedMs: 20 },
   ]
   const result = summarize(cases)
   assert.equal(result.completionRate, .5)
-  assert.equal(result.detectionRate, 1)
+  assert.equal(result.detectionRate, .5)
+  assert.equal(result.completedDetectionRate, 1)
+  assert.equal(result.allTrialConfusion.finding.failure, 1)
   assert.equal(result.abstentionRateByExpected.satisfied, 1)
   assert.equal(result.statusCountsByReason['unavailable:DECISION_TIMEOUT'], 1)
+  assert.equal(result.meanAttemptedMs, 15)
+  assert.equal(result.p95AttemptedMs, 20)
   assert.equal(result.confusion.finding.finding, 1)
   const examples = [{ id: 'a' }, { id: 'b' }]
   assert.deepEqual(schedule(examples, 3, 9), schedule(examples, 3, 9))
   assert.equal(schedule(examples, 3, 9).length, 12)
+})
+
+test('archive cases stay in tuning groups and translations do not add independent evidence', async () => {
+  const data: { id: string; groupId: string; expected: string[]; split: string; ja: string[]; en: string[] }[] = JSON.parse(await readFile(new URL('../../../fixtures/answer-review/laya-grounding-tune.json', import.meta.url),'utf8'))
+  assert.equal(data.length,18)
+  assert.equal(new Set(data.map((c: any) => c.groupId)).size,18)
+  assert.ok(data.every((c: any) => c.split === 'tune' && c.ja.length === 3 && c.en.length === 3))
+  const rows = schedule(data,1,0).map(({example,language}) => ({id:example.id,groupId:example.groupId,language,expected:[example.expected[1]],status:'unavailable',reason:'DECISION_TOO_LARGE',elapsedMs:1}))
+  const summary = summarize(rows)
+  assert.equal(summary.attempted,36)
+  assert.equal(summary.independentGroups,18)
+  assert.equal(summary.clusterIntervals.independentGroups,18)
+  assert.equal(summary.allTrialConfusion.finding.failure,12)
+  assert.equal(summary.detectionRate,0)
+  assert.equal(summary.failureRate,1)
 })

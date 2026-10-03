@@ -39,3 +39,7 @@ Do not convert a sandbox, listener, DNS, registry, or permission restriction int
 ## Completion
 
 Report exact verifier commands or test names, their result, changed contract scope, and remaining gaps. If only a subset ran, do not claim the full suite passed.
+
+## Focused engineering practice
+
+For a reproducible defect, run the smallest meaningful failing check before repair and confirm it passes afterward. Prefer no new test over a mock-only or implementation-mirroring test. When repeated fixes fail on the same premise, identify the actors and shared state before trying another patch. Prefer validated domain types and exhaustive variants; casts require evidence, not blanket bans. Eliminate unnecessary shared state before adding serialization; preserve required transaction and idempotency guarantees.

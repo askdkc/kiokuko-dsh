@@ -1,0 +1,467 @@
+{
+  "version": 1,
+  "repository": "https://github.com/cursor/plugins",
+  "revision": "23e4138daa01c42d4969f7a5465f82704e64f798",
+  "skills": [
+    {
+      "upstream": "pstack/skills/how/SKILL.md",
+      "destination": "skills/kiokuko-investigate/SKILL.md",
+      "idea": "Trace behavior, investigate design rationale, or explain a subsystem using bounded current evidence.",
+      "changed": "Evidence: cite paths and relevant lines or source links. Record missing sources and contradictions. Stop when the question is answered; do not turn explanation into an unsolicited refactor.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/why/SKILL.md",
+      "destination": "skills/kiokuko-investigate/SKILL.md",
+      "idea": "Trace behavior, investigate design rationale, or explain a subsystem using bounded current evidence.",
+      "changed": "Evidence: cite paths and relevant lines or source links. Record missing sources and contradictions. Stop when the question is answered; do not turn explanation into an unsolicited refactor.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/teach/SKILL.md",
+      "destination": "skills/kiokuko-investigate/SKILL.md",
+      "idea": "Trace behavior, investigate design rationale, or explain a subsystem using bounded current evidence.",
+      "changed": "Evidence: cite paths and relevant lines or source links. Record missing sources and contradictions. Stop when the question is answered; do not turn explanation into an unsolicited refactor.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/architect/SKILL.md",
+      "destination": "skills/kiokuko-architecture/SKILL.md",
+      "idea": "Resolve consequential interface, ownership or domain design choices before implementation.",
+      "changed": "Deliver an interface sketch, decision, rejected alternative and focused verifier. Revisit the design when repeated workarounds expose a false premise. Do not commit broken scaffolding or replace required compatibility with a clean-slate assumption.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/interrogate/SKILL.md",
+      "destination": "skills/kiokuko-review/SKILL.md",
+      "idea": "Review a diff, assess blast radius, or challenge code with concrete counterexamples.",
+      "changed": "Report location, trigger, consequence and evidence for each defect. Separate defects from optional style suggestions. Deduplicate findings. Passing builds and reviewer agreement are not behavioral proof. State unverified paths and missing coverage.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/blast-radius/SKILL.md",
+      "destination": "skills/kiokuko-review/SKILL.md",
+      "idea": "Review a diff, assess blast radius, or challenge code with concrete counterexamples.",
+      "changed": "Report location, trigger, consequence and evidence for each defect. Separate defects from optional style suggestions. Deduplicate findings. Passing builds and reviewer agreement are not behavioral proof. State unverified paths and missing coverage.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/no-comments/SKILL.md",
+      "destination": "skills/kiokuko-review/SKILL.md",
+      "idea": "Review a diff, assess blast radius, or challenge code with concrete counterexamples.",
+      "changed": "Report location, trigger, consequence and evidence for each defect. Separate defects from optional style suggestions. Deduplicate findings. Passing builds and reviewer agreement are not behavioral proof. State unverified paths and missing coverage.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/benchmark-checklist/SKILL.md",
+      "destination": "skills/kiokuko-benchmark/SKILL.md",
+      "idea": "Measure performance or assess a speedup, regression or benchmark claim.",
+      "changed": "Report baseline, candidate, method, sample count, distribution and uncertainty. A faster failure or no-op is not a speedup. Do not select a winner from unequal configurations or noise; explain what further measurement can resolve.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/create-verification-skill/SKILL.md",
+      "destination": "skills/kiokuko-verification/SKILL.md",
+      "idea": "Create or maintain a project-specific recipe that exercises real user-visible behavior.",
+      "changed": "Maintain a feature map with entry points and repeatable recipes. Exercise each claimed covered feature. Distinguish doc drift from product regression; report the latter without rewriting expectations to hide it. Report clean, changed or blocked, plus coverage gaps. Cleanup only resources created by this verification.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/maintain-verification-skill/SKILL.md",
+      "destination": "skills/kiokuko-verification/SKILL.md",
+      "idea": "Create or maintain a project-specific recipe that exercises real user-visible behavior.",
+      "changed": "Maintain a feature map with entry points and repeatable recipes. Exercise each claimed covered feature. Distinguish doc drift from product regression; report the latter without rewriting expectations to hide it. Report clean, changed or blocked, plus coverage gaps. Cleanup only resources created by this verification.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/automate-me/SKILL.md",
+      "destination": "skills/kiokuko-skill-authoring/SKILL.md",
+      "idea": "Create or improve a narrowly triggered skill from explicit preferences or verified reusable lessons.",
+      "changed": "Write compact instructions and load examples only for concrete ambiguity. Test triggering, non-triggering and failure scenarios. Preserve uncertainty and provenance; do not generalize a single anecdote into a universal rule. Editing a skill or globalizing memory needs scope authority, not inferred permission.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/reflect/SKILL.md",
+      "destination": "skills/kiokuko-skill-authoring/SKILL.md",
+      "idea": "Create or improve a narrowly triggered skill from explicit preferences or verified reusable lessons.",
+      "changed": "Write compact instructions and load examples only for concrete ambiguity. Test triggering, non-triggering and failure scenarios. Preserve uncertainty and provenance; do not generalize a single anecdote into a universal rule. Editing a skill or globalizing memory needs scope authority, not inferred permission.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/technical-writing/SKILL.md",
+      "destination": "skills/kiokuko-technical-writing/SKILL.md",
+      "idea": "Write or revise technical explanations, instructions, reference material and change descriptions.",
+      "changed": "Check commands and examples against current evidence. Separate tested behavior from suggestions. Match requested depth; a plain-language rewrite must not erase important failure modes. Report only the artifact unless explanation is useful.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/unslop/SKILL.md",
+      "destination": "skills/kiokuko-technical-writing/SKILL.md",
+      "idea": "Write or revise technical explanations, instructions, reference material and change descriptions.",
+      "changed": "Check commands and examples against current evidence. Separate tested behavior from suggestions. Match requested depth; a plain-language rewrite must not erase important failure modes. Report only the artifact unless explanation is useful.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/bro/SKILL.md",
+      "destination": "skills/kiokuko-technical-writing/SKILL.md",
+      "idea": "Write or revise technical explanations, instructions, reference material and change descriptions.",
+      "changed": "Check commands and examples against current evidence. Separate tested behavior from suggestions. Match requested depth; a plain-language rewrite must not erase important failure modes. Report only the artifact unless explanation is useful.",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/arena/SKILL.md",
+      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
+      "idea": "Compare candidates and partition ownership",
+      "changed": "Host-admitted execution only; no model fallback or automatic fanout",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/swarm/SKILL.md",
+      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
+      "idea": "Compare candidates and partition ownership",
+      "changed": "Host-admitted execution only; no model fallback or automatic fanout",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/SKILL.md",
+      "destination": "skills/kiokuko-soul/SKILL.md",
+      "idea": "Route work and use available models",
+      "changed": "No sticky mode, Cursor configuration or independent model router",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/setup-pstack/SKILL.md",
+      "destination": "skills/kiokuko-soul/SKILL.md",
+      "idea": "Route work and use available models",
+      "changed": "No sticky mode, Cursor configuration or independent model router",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/figure-it-out/SKILL.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "idea": "Hypothesis-driven phases and concise evidence records",
+      "changed": "Reuse existing plan and records; no mandatory log or commits",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/show-me-your-work/SKILL.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "idea": "Hypothesis-driven phases and concise evidence records",
+      "changed": "Reuse existing plan and records; no mandatory log or commits",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/tdd/SKILL.md",
+      "destination": "skills/kiokuko-single-purpose-functions/SKILL.md",
+      "idea": "Behavior regression checks and precise types",
+      "changed": "No blanket type or test mandates",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/typescript-best-practices/SKILL.md",
+      "destination": "skills/kiokuko-single-purpose-functions/SKILL.md",
+      "idea": "Behavior regression checks and precise types",
+      "changed": "No blanket type or test mandates",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/recall/SKILL.md",
+      "destination": "skills/memory-reasoning/SKILL.md",
+      "idea": "Reconstruct current state",
+      "changed": "Only authorized memory and known handoff; no transcript crawling",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/make-bot-ui/SKILL.md",
+      "destination": "skills/kiokuko-ui-design-soul/SKILL.md",
+      "idea": "Observable recoverable bot actions",
+      "changed": "Reject provider-specific webhook and network setup",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-laziness-protocol/SKILL.md",
+      "destination": "skills/kiokuko-simple-work/SKILL.md",
+      "idea": "Apply laziness-protocol subtract-before-you-add minimize-reader-load",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-subtract-before-you-add/SKILL.md",
+      "destination": "skills/kiokuko-simple-work/SKILL.md",
+      "idea": "Apply laziness-protocol subtract-before-you-add minimize-reader-load",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-minimize-reader-load/SKILL.md",
+      "destination": "skills/kiokuko-simple-work/SKILL.md",
+      "idea": "Apply laziness-protocol subtract-before-you-add minimize-reader-load",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-foundational-thinking/SKILL.md",
+      "destination": "skills/kiokuko-architecture/SKILL.md",
+      "idea": "Apply foundational-thinking redesign-from-first-principles exhaust-the-design-space model-the-domain",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-redesign-from-first-principles/SKILL.md",
+      "destination": "skills/kiokuko-architecture/SKILL.md",
+      "idea": "Apply foundational-thinking redesign-from-first-principles exhaust-the-design-space model-the-domain",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-exhaust-the-design-space/SKILL.md",
+      "destination": "skills/kiokuko-architecture/SKILL.md",
+      "idea": "Apply foundational-thinking redesign-from-first-principles exhaust-the-design-space model-the-domain",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-model-the-domain/SKILL.md",
+      "destination": "skills/kiokuko-architecture/SKILL.md",
+      "idea": "Apply foundational-thinking redesign-from-first-principles exhaust-the-design-space model-the-domain",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-boundary-discipline/SKILL.md",
+      "destination": "skills/kiokuko-single-purpose-functions/SKILL.md",
+      "idea": "Apply boundary-discipline type-system-discipline make-operations-idempotent separate-before-serializing-shared-state prove-it-works fix-root-causes test-behavior-not-implementation attack-the-premise",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-type-system-discipline/SKILL.md",
+      "destination": "skills/kiokuko-single-purpose-functions/SKILL.md",
+      "idea": "Apply boundary-discipline type-system-discipline make-operations-idempotent separate-before-serializing-shared-state prove-it-works fix-root-causes test-behavior-not-implementation attack-the-premise",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-make-operations-idempotent/SKILL.md",
+      "destination": "skills/kiokuko-single-purpose-functions/SKILL.md",
+      "idea": "Apply boundary-discipline type-system-discipline make-operations-idempotent separate-before-serializing-shared-state prove-it-works fix-root-causes test-behavior-not-implementation attack-the-premise",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-separate-before-serializing-shared-state/SKILL.md",
+      "destination": "skills/kiokuko-single-purpose-functions/SKILL.md",
+      "idea": "Apply boundary-discipline type-system-discipline make-operations-idempotent separate-before-serializing-shared-state prove-it-works fix-root-causes test-behavior-not-implementation attack-the-premise",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-prove-it-works/SKILL.md",
+      "destination": "skills/kiokuko-single-purpose-functions/SKILL.md",
+      "idea": "Apply boundary-discipline type-system-discipline make-operations-idempotent separate-before-serializing-shared-state prove-it-works fix-root-causes test-behavior-not-implementation attack-the-premise",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-fix-root-causes/SKILL.md",
+      "destination": "skills/kiokuko-single-purpose-functions/SKILL.md",
+      "idea": "Apply boundary-discipline type-system-discipline make-operations-idempotent separate-before-serializing-shared-state prove-it-works fix-root-causes test-behavior-not-implementation attack-the-premise",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-test-behavior-not-implementation/SKILL.md",
+      "destination": "skills/kiokuko-single-purpose-functions/SKILL.md",
+      "idea": "Apply boundary-discipline type-system-discipline make-operations-idempotent separate-before-serializing-shared-state prove-it-works fix-root-causes test-behavior-not-implementation attack-the-premise",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-attack-the-premise/SKILL.md",
+      "destination": "skills/kiokuko-single-purpose-functions/SKILL.md",
+      "idea": "Apply boundary-discipline type-system-discipline make-operations-idempotent separate-before-serializing-shared-state prove-it-works fix-root-causes test-behavior-not-implementation attack-the-premise",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-outcome-oriented-execution/SKILL.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "idea": "Apply outcome-oriented-execution sequence-verifiable-units migrate-callers-then-delete-legacy-apis build-the-lever",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-sequence-verifiable-units/SKILL.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "idea": "Apply outcome-oriented-execution sequence-verifiable-units migrate-callers-then-delete-legacy-apis build-the-lever",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-migrate-callers-then-delete-legacy-apis/SKILL.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "idea": "Apply outcome-oriented-execution sequence-verifiable-units migrate-callers-then-delete-legacy-apis build-the-lever",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-build-the-lever/SKILL.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "idea": "Apply outcome-oriented-execution sequence-verifiable-units migrate-callers-then-delete-legacy-apis build-the-lever",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-experience-first/SKILL.md",
+      "destination": "skills/kiokuko-ui-design-soul/SKILL.md",
+      "idea": "Apply experience-first",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-explain-the-number/SKILL.md",
+      "destination": "skills/kiokuko-benchmark/SKILL.md",
+      "idea": "Apply explain-the-number",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-guard-the-context-window/SKILL.md",
+      "destination": "skills/kiokuko-soul/SKILL.md",
+      "idea": "Apply guard-the-context-window never-block-on-the-human",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-never-block-on-the-human/SKILL.md",
+      "destination": "skills/kiokuko-soul/SKILL.md",
+      "idea": "Apply guard-the-context-window never-block-on-the-human",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    },
+    {
+      "upstream": "pstack/skills/principle-encode-lessons-in-structure/SKILL.md",
+      "destination": "skills/kiokuko-skill-authoring/SKILL.md",
+      "idea": "Apply encode-lessons-in-structure",
+      "changed": "Proportionate to risk; preserve compatibility, authorization and useful evidence",
+      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
+    }
+  ],
+  "playbooks": [
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/authoring-a-skill.md",
+      "destination": "skills/kiokuko-skill-authoring/SKILL.md",
+      "disposition": "Define narrow triggers, outcomes and regression cases; prefer executable enforcement."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/autonomous-run.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/autopilot-full.md",
+      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
+      "disposition": "Independent coverage only when host admitted; no automatic merging."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/autopilot-stack.md",
+      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
+      "disposition": "Respect unit dependencies and verify each accepted increment; no inferred Git authority."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/babysit.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/bug-fix.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/eval.md",
+      "destination": "skills/kiokuko-skill-authoring/SKILL.md",
+      "disposition": "Use fixed baseline, paired cases and blinded review; never claim unmeasured quality."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/feature.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/hillclimb.md",
+      "destination": "skills/kiokuko-benchmark/SKILL.md",
+      "disposition": "Test one hypothesis per measurement; keep correctness gates and stop on the explicit budget."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/investigation.md",
+      "destination": "skills/kiokuko-investigate/SKILL.md",
+      "disposition": "Trace behavior and cite rationale separately from inference."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/multi-phase-plan.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/opening-a-pr.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/orchestrate.md",
+      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
+      "disposition": "Only host-admitted WorkUnits; disjoint ownership and evidence-backed synthesis."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/pause-safely.md",
+      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
+      "disposition": "Preserve completed effects and return through the host pause/recovery contract."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/perf-issue.md",
+      "destination": "skills/kiokuko-benchmark/SKILL.md",
+      "disposition": "Locate the measured bottleneck and compare equivalent successful work."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/prototype.md",
+      "destination": "skills/kiokuko-architecture/SKILL.md",
+      "disposition": "Use a bounded experiment to settle a concrete design uncertainty."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/refactoring.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/runtime-forensics.md",
+      "destination": "skills/kiokuko-investigate/SKILL.md",
+      "disposition": "Collect a bounded reproduction and runtime evidence before assigning a cause."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/session-pickup.md",
+      "destination": "skills/memory-reasoning/SKILL.md",
+      "disposition": "Use the exact known handoff and reconcile with current state; no transcript search."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/shipping.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/trace-forensics.md",
+      "destination": "skills/kiokuko-investigate/SKILL.md",
+      "disposition": "Interpret the supplied trace against current source; distinguish sampling limits from observed behavior."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/visual-parity.md",
+      "destination": "skills/kiokuko-ui-design-soul/SKILL.md",
+      "disposition": "Compare the affected appearance and accessibility while preserving interaction state."
+    },
+    {
+      "upstream": "pstack/skills/poteto-mode/playbooks/worktree-cleanup.md",
+      "destination": "skills/one-shot-software-completion/SKILL.md",
+      "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
+    }
+  ]
+}

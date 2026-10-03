@@ -63,4 +63,8 @@ Lazy code without its check is unfinished. Non-trivial logic — a branch, a loo
 Ponytail governs what you build, not how you talk. "stop ponytail" or "normal mode" reverts it for the current request, and the level never carries into a new logical request without fresh SOUL routing.
 
 Completion requires the requested result and matching evidence.
+
+## Focused engineering practice
+
+Delete only demonstrated redundancy. Minimize reader load without splitting cohesive operations into one-caller wrappers. A tool or codemod must save enough repeated work to justify its setup.
 <!-- /kiokuko:runtime -->

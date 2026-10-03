@@ -323,6 +323,8 @@ export function createRouting({
           }
           if (fallback !== undefined) reportToolExposureFallback(fallback)
         }
+        // Automatic reconsideration uses existing originals only: no repeated tool effects.
+        if (answerReview.reconsidering(agent as unknown as ReviewAgent)) assembly = Object.assign({}, assembly, { tools: [] })
         semanticCompaction.recordTools(agent as unknown as CompactionAgent, (assembly as { tools?: unknown }).tools)
         const delivered = new Set<string>()
         for (const [name, sectionName] of [['kiokuko-soul','kiokuko:soul'], ['natural-japanese-output','kiokuko:natural-japanese-output'], ['kiokuko-lisp','kiokuko:lisp']]) {

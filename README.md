@@ -62,7 +62,7 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 This setting persists globally and disables the release-age check for future pnpm
 installs and updates as well. Restart DSH after the update succeeds.
 
-At startup, all nine bundled Skills (including Japanese output) and their references are synchronized to `~/.agents/skills/`. Missing files are created and managed copies are updated; unmanaged files are preserved. Other agents must reload their Skill catalog.
+At startup, all sixteen bundled Skills (including Japanese output) and their references are synchronized to `~/.agents/skills/`. Missing files are created and managed copies are updated; unmanaged files are preserved. Other agents must reload their Skill catalog.
 
 These are the full-package defaults. The [configured core and optional modules](docs/core-modules.md) build ships only selected resources; core alone provides conversation, research, writing and project memory without Enno/Lisp runtimes.
 

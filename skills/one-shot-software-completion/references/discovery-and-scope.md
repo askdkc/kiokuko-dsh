@@ -65,3 +65,7 @@ does not prove users can select it.
 Establish focused baseline results when existing failures could obscure the
 change. Inspect shared callers before choosing wider checks; preserve exact
 commands and results so new failures can be attributed rather than guessed.
+
+## Focused engineering practice
+
+For substantial work, sequence verifiable units and record consequential choices with evidence in the existing plan or run record. State a hypothesis before changing strategy. Migrate known callers before deleting legacy APIs; preserve public compatibility when consumers cannot migrate together. Do not introduce throwaway tooling unless its measurable benefit warrants it. PR creation, publishing, merging and worktree cleanup require their own authorization. Resume only an explicitly identified handoff; never choose the latest run by directory.

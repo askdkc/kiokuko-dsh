@@ -37,3 +37,7 @@ Review actual interaction behavior, not screenshots alone. Trace discovery, acti
 ## Focused verification
 
 Test destructive scope and cancellation, Undo or recovery, failed save after editing, navigation with unsaved work, permission denial and repeat entry, privacy-sensitive output, and the complete primary flow. Do not approve with a known blocker.
+
+## Focused engineering practice
+
+For bot-triggering controls, keep credentials server-side and treat webhook bodies as untrusted. Define acknowledgment, progress, cancellation and failure recovery. Do not invent a provider endpoint, expose a listener or install a tunnel without authorized configuration.

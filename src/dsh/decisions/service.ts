@@ -224,6 +224,7 @@ export class DecisionService {
     if (this.decisionObservations.length > 128) this.decisionObservations.shift()
     try { this.options.onEvaluation?.(structuredClone(observation)) } catch { /* Observation cannot change a decision. */ }
   }
+  groundingReviewEnabled(): boolean { return !!this.config.groundingReview && this.config.groundingReview.mode !== 'legacy' }
   async bind(requestId: string, signal = new AbortController().signal): Promise<DecisionConfiguration> {
     if (!requestId || requestId.length > 512) throw new Error('Invalid decision request identity')
     await this.initialize()
@@ -327,7 +328,13 @@ export class DecisionService {
       let outcome: DecisionOutcome
       try {
         if (decisionConfigurationIssue(config)) throw new DecisionError('UNAVAILABLE')
-        const provider = managed ? this.memoryProvider(config) : this.provider(config), limits = provider.capabilities
+        const grounding = config.groundingReview
+        const isolatedGrounding = batch.purpose === 'answer-review' && typeof batch.state === 'object' && batch.state !== null
+          && (batch.state as { policy?: unknown }).policy === 'grounding-pairs-v1'
+          && batch.questions.every(q => q.id.startsWith('grounding:'))
+        const effective = isolatedGrounding && grounding && grounding.mode !== 'legacy' && config.provider === 'laya-coreml' && config['laya-coreml']
+          ? { ...config, 'laya-coreml': { ...config['laya-coreml'], acceptance: { minProbability: grounding.minProbability, minMargin: grounding.minMargin } } } : config
+        const provider = managed ? this.memoryProvider(config) : this.provider(effective), limits = provider.capabilities
         if (!Number.isSafeInteger(limits.maxQuestions) || limits.maxQuestions < 1) throw new DecisionError('UNSUPPORTED')
         if (batch.questions.some(q => !(limits.questionTypes ?? ['choice']).includes(questionType(q)))) throw new DecisionError('UNSUPPORTED')
         if (batch.questions.some(q => 'type' in q && q.type === 'score' && (!limits.maxScoreLevels || q.criteria.length > limits.maxScoreLevels))) throw new DecisionError('UNSUPPORTED')

@@ -60,7 +60,7 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 此设置会保存到全局配置，后续 pnpm 安装和更新也会关闭发布时间检查。
 更新成功后，请重启 DSH。
 
-启动时会将包括日语输出在内的全部9个内置 Skill 及其引用文件同步到 `~/.agents/skills/`，创建缺失文件并更新受管理的副本，不覆盖非受管理文件。其他代理需要重新加载 Skill 目录。
+启动时会将包括日语输出在内的全部16个内置 Skill 及其引用文件同步到 `~/.agents/skills/`，创建缺失文件并更新受管理的副本，不覆盖非受管理文件。其他代理需要重新加载 Skill 目录。
 
 以上是完整包的默认行为。[核心与可选模块构建](docs/core-modules.md)仅打包所选资源；核心可独立处理对话、调研、写作和项目记忆，不包含 Enno/Lisp 运行时。
 

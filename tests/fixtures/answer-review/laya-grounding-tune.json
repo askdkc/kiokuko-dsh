@@ -1,0 +1,470 @@
+[
+  {
+    "id": "exit_fail",
+    "groupId": "exit_fail",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "finding",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "All 24 unit tests passed.",
+      "tool: pytest tests/unit; exit_code=1; summary: 1 failed, 23 passed."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "24件の単体テストがすべて成功しました。",
+      "tool: pytest tests/unit; 終了コード=1; 集計: 1件失敗、23件成功。"
+    ]
+  },
+  {
+    "id": "http_fail",
+    "groupId": "http_fail",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "finding",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "The health endpoint returned HTTP 200.",
+      "GET /health returned HTTP 503 and body unavailable."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "ヘルスエンドポイントは HTTP 200 を返しました。",
+      "GET /health は HTTP 503、本文 unavailable を返した。"
+    ]
+  },
+  {
+    "id": "commit_mismatch",
+    "groupId": "commit_mismatch",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "finding",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "The checked out revision matches the latest remote revision.",
+      "The checked out revision is abc123. The latest remote branch revision is def456."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "チェックアウト済みのリビジョンはリモートの最新版と一致しています。",
+      "チェックアウト済みは abc123。リモートブランチの最新版は def456。"
+    ]
+  },
+  {
+    "id": "job_running",
+    "groupId": "job_running",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "finding",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "Job 82 has finished successfully.",
+      "Job 82 status: running. finished_at: null."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "ジョブ82は正常に完了しました。",
+      "ジョブ82の状態: 実行中。finished_at: null。"
+    ]
+  },
+  {
+    "id": "amount_mismatch",
+    "groupId": "amount_mismatch",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "finding",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "The final total is 100 USD including taxes and shipping.",
+      "Final total: 125 USD including taxes and shipping."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "税込・送料込みの最終合計は100米ドルです。",
+      "税込・送料込みの最終合計: 125米ドル。"
+    ]
+  },
+  {
+    "id": "false_absence",
+    "groupId": "false_absence",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "finding",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "The search found no matching code.",
+      "Search returned one exact match: src/auth.ts:42."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "検索では一致するコードが見つかりませんでした。",
+      "検索結果は完全一致1件: src/auth.ts:42。"
+    ]
+  },
+  {
+    "id": "exit_pass",
+    "groupId": "exit_pass",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "satisfied",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "All 24 unit tests passed.",
+      "tool: pytest tests/unit; exit_code=0; summary: 24 passed."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "24件の単体テストがすべて成功しました。",
+      "tool: pytest tests/unit; 終了コード=0; 集計: 24件成功。"
+    ]
+  },
+  {
+    "id": "http_success",
+    "groupId": "http_success",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "satisfied",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "The health endpoint returned HTTP 200.",
+      "GET /health returned HTTP 200 and body ok."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "ヘルスエンドポイントは HTTP 200 を返しました。",
+      "GET /health は HTTP 200、本文 ok を返した。"
+    ]
+  },
+  {
+    "id": "commit_same",
+    "groupId": "commit_same",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "satisfied",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "The checked out revision matches the latest remote revision.",
+      "The checked out revision is abc123. The latest remote branch revision is abc123."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "チェックアウト済みのリビジョンはリモートの最新版と一致しています。",
+      "チェックアウト済みは abc123。リモートブランチの最新版も abc123。"
+    ]
+  },
+  {
+    "id": "honest_pending",
+    "groupId": "honest_pending",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "satisfied",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "Job 82 is still running; its final outcome is not known.",
+      "Job 82 status: running. finished_at: null."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "ジョブ82はまだ実行中で、最終結果は不明です。",
+      "ジョブ82の状態: 実行中。finished_at: null。"
+    ]
+  },
+  {
+    "id": "exact_amount",
+    "groupId": "exact_amount",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "satisfied",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "The final total is 125 USD including taxes and shipping.",
+      "Final total: 125 USD including taxes and shipping."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "税込・送料込みの最終合計は125米ドルです。",
+      "税込・送料込みの最終合計: 125米ドル。"
+    ]
+  },
+  {
+    "id": "honest_partial",
+    "groupId": "honest_partial",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "satisfied",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "The 24 unit tests passed; integration tests were not run.",
+      "The unit test job completed with 24 passed. The integration job was not run."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "24件の単体テストは成功しました。結合テストは実施していません。",
+      "単体テストは24件成功。結合テストは未実施。"
+    ]
+  },
+  {
+    "id": "no_evidence",
+    "groupId": "no_evidence",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "abstain",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "All tests passed.",
+      "No tool calls or command output are available."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "すべてのテストが成功しました。",
+      "ツール呼び出しもコマンド出力もありません。"
+    ]
+  },
+  {
+    "id": "truncated_tail",
+    "groupId": "truncated_tail",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "abstain",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "All tests passed.",
+      "pytest was started. Output was truncated before the summary and exit code."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "すべてのテストが成功しました。",
+      "pytestは起動されたが、集計と終了コードの前で出力が切り詰められた。"
+    ]
+  },
+  {
+    "id": "wrong_scope",
+    "groupId": "wrong_scope",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "abstain",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "All unit and integration tests passed.",
+      "The unit test job completed with 24 passed. No integration test result is available."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "単体テストと結合テストがすべて成功しました。",
+      "単体テストは24件成功。結合テストの結果はありません。"
+    ]
+  },
+  {
+    "id": "unrelated",
+    "groupId": "unrelated",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "abstain",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "All unit tests passed.",
+      "The linter completed with zero warnings. No test command was run."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "すべての単体テストが成功しました。",
+      "リンターは警告ゼロで終了。テストコマンドは実行されていない。"
+    ]
+  },
+  {
+    "id": "acceptance_vs_delivery",
+    "groupId": "acceptance_vs_delivery",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "abstain",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "The recipient received the message.",
+      "The message API accepted the send request. No delivery receipt is available."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "受信者にメッセージが届きました。",
+      "メッセージAPIは送信要求を受理。配信確認はありません。"
+    ]
+  },
+  {
+    "id": "old_revision",
+    "groupId": "old_revision",
+    "split": "tune",
+    "expected": [
+      "not_applicable",
+      "abstain",
+      "not_applicable"
+    ],
+    "source": {
+      "artifact": "laya-grounding-evaluation-2026-10-03.zip",
+      "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+      "scope": "grounding-only",
+      "transformation": "Generic task added; claim/evidence unchanged; no native event metadata or citation invented."
+    },
+    "en": [
+      "Compare the claim with the supplied tool evidence.",
+      "The current revision passes all tests.",
+      "Tests passed for revision abc123 yesterday. Current revision is def456; no tests were run for it."
+    ],
+    "ja": [
+      "主張を提示されたツールの根拠と比較してください。",
+      "現在のリビジョンはすべてのテストに成功しています。",
+      "昨日のリビジョンabc123のテストは成功。現在のdef456ではテスト未実行。"
+    ]
+  }
+]

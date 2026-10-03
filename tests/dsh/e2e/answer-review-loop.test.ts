@@ -13,9 +13,10 @@ import { serveLaya, layaV1Reply } from '../helpers/laya.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packageRoot) throw new Error('Answer review coverage requires the pinned native DSH package runtime')
-for (const host of ['full', 'core'] as const) for (const scenario of ['finding','tool-evidence','no-finding','unavailable','off','superseded','queued-superseded','claimed-superseded','cancelled'] as const) test(`native ${host}: answer review ${scenario}`, {
+for (const host of ['full', 'core'] as const) for (const scenario of ['finding','tool-evidence','paired-candidate','paired-shadow','no-finding','unavailable','off','superseded','queued-superseded','claimed-superseded','cancelled'] as const) test(`native ${host}: answer review ${scenario}`, {
   skip: !packageRoot ? 'requires pinned native DSH package runtime' : false, timeout: 30000,
 }, async t => {
+  const paired = scenario === 'paired-candidate' || scenario === 'paired-shadow'
   const newRequest = scenario === 'superseded' || scenario === 'queued-superseded' || scenario === 'claimed-superseded'
   const [cordis,llm,session,projection,prompt,tools,agents,loop,skills] = await Promise.all(
     ['cordis','dsh-llm','dsh-session','dsh-session-projection','dsh-system-prompt','dsh-tools','dsh-agent','dsh-agent-loop','dsh-skill']
@@ -34,7 +35,8 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
     }
     return layaV1Reply(request, (id, choices) => {
     if (id === 'task-type') { taskTypeCalls++; return 'writing' }
-    if (id === 'request_fit') { reviewCalls++; onReview?.(); onReview = undefined; return scenario === 'no-finding' || reviewCalls > 1 ? 'satisfied' : 'finding' }
+    if (id.startsWith('grounding:')) return 'contradicted'
+    if (id === 'request_fit') { reviewCalls++; onReview?.(); onReview = undefined; return paired || scenario === 'no-finding' || reviewCalls > 1 ? 'satisfied' : 'finding' }
     return choices.includes('abstain') ? 'abstain' : choices[0]!
   })})
   try {
@@ -42,7 +44,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       const fiber = ctx.plugin(plugin,config); fibers.push(fiber); await fiber
     }
     const ui = ctx.plugin({ name:'answer-test-ui', apply(c: any) { return c.provide('userQuestions',{ ask: async (request: any) => { questions++; return { answers:request.questions.map((q:any)=>({id:q.id,selected:['通常実行']})) } } }) } }); fibers.push(ui); await ui
-    const config = { ...(scenario==='off'?{answerReview:{mode:'off' as const}}:{}), typedDecisions:{provider:'laya-coreml' as const,'laya-coreml':{socketPath:socket.path}} }
+    const config = { ...(scenario==='off'?{answerReview:{mode:'off' as const}}:{}), typedDecisions:{...(paired ? {groundingReview:{mode:scenario==='paired-shadow'?'shadow' as const:'candidate' as const,policyVersion:'grounding-pairs-v1' as const,minProbability:.6,minMargin:.25}}:{}),provider:'laya-coreml' as const,'laya-coreml':{socketPath:socket.path}} }
     if (host === 'full') {
       const adapter = createDshHostAdapter(ctx,{...config,repositoryRoot:root,databasePath,orca:{enabled:false},memoryReview:{mode:'off'},deepPlanning:{enabled:false},
         llm:{async *stream(){throw new Error('No auxiliary LLM in this fixture')}}})
@@ -53,7 +55,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       const handle = await mountCore(ctx,{...config,repositoryRoot:root,databasePath}); dispose = ()=>handle.dispose()
     }
     ctx.on('agent/error',(event:any)=>errors.push(event.error))
-    const mock = nativeMock(llm), model = new mock.MockAdapter([...(scenario==='tool-evidence'?[mock.toolCallResponse('check','verify_sum',{})]:[]),mock.textResponse('The answer is five.'),mock.textResponse('Correction: the answer is four.')])
+    const mock = nativeMock(llm), model = new mock.MockAdapter([...(scenario==='tool-evidence'||paired?[mock.toolCallResponse('check','verify_sum',{})]:[]),mock.textResponse(paired ? 'The answer is five. [tool-call:check]' : 'The answer is five.'),mock.textResponse('Correction: the answer is four.')])
     ctx.llm.registerAdapter(['ordinary'],model)
     ctx.tools.register({name:'verify_sum',description:'Return a known sum.',parameters:{type:'object',properties:{}},output:{schema:{type:'string'},render:(_args:unknown,value:string)=>[{type:'text',text:value}]},execute:async()=>{toolCalls++;return 'Verified sum: four'}})
     const agent = await ctx.agentLoop.create(session.SessionId(`answer-${host}`),{provider:'ordinary',model:'mock'},{cwd:root})
@@ -71,7 +73,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
     agent.followup(llm.createUserMessage({content:[{type:'text',text:'What is two plus two? Explain the answer.'}],source:{kind:'user'}}))
     await agent.whenIdle()
     const questionCount = questions
-    const expectedRequests = scenario === 'tool-evidence' ? 3 : scenario === 'finding' || newRequest ? 2 : 1
+    const expectedRequests = paired ? scenario==='paired-candidate'?3:2 : scenario === 'tool-evidence' ? 3 : scenario === 'finding' || newRequest ? 2 : 1
     // The review intentionally finishes after the first native idle notification.
     for (let i=0;i<200;i++) {
       if(model.requests.length>=expectedRequests) {
@@ -96,9 +98,10 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       if(host==='full') assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_memory_finalizations').get()!.n,newRequest?2:1)
       if(expectedRequests>=2) assert.equal(model.requests.at(-1).provider,model.requests[0].provider);if(expectedRequests>=2) assert.equal(model.requests.at(-1).model,model.requests[0].model)
       const answers=agent.session.snapshotEvents().filter((event:any)=>event.type==='assistant/message' && event.data.message.content.some((b:any)=>b.type==='text'))
-      assert.equal(answers.length,scenario==='tool-evidence'?2:expectedRequests);assert.match(JSON.stringify(answers[0]),/five/)
+      assert.equal(answers.length,scenario==='tool-evidence'||paired?expectedRequests-1:expectedRequests);assert.match(JSON.stringify(answers[0]),/five/)
       if(scenario==='finding' || scenario==='tool-evidence') assert.match(JSON.stringify(model.requests.at(-1).messages),/unverified suggestions/)
       if(newRequest) assert.doesNotMatch(JSON.stringify(model.requests[1].messages),/unverified suggestions/)
+      if(paired) { assert.equal(toolCalls,1); if(scenario==='paired-candidate') assert.deepEqual(model.requests.at(-1).tools,[]) }
       if(scenario==='tool-evidence'){assert.equal(toolCalls,1);assert.match(JSON.stringify(reviewInputs[0].evidence),/Verified sum: four/);assert.equal(reviewInputs[0].task,'What is two plus two? Explain the answer.')}
       assert.doesNotMatch(JSON.stringify(rows),/The answer is five|Correction: the answer/)
     } finally {db.close()}

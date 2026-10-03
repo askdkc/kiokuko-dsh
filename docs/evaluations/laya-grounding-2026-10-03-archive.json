@@ -1,0 +1,695 @@
+{
+  "sourceArchive": "laya-grounding-evaluation-2026-10-03.zip",
+  "archiveSha256": "fdc843f18fabb6edac2ccd3e0ec947eb1520f4559e5caecc8d59c009d59d177e",
+  "casesSha256": "57cd73bd72e7350dff05c893fa1b25edca78b4b3259edcddb44376d437c1af57",
+  "sourceCommit": "a2ea52e449af946397afd9cd256307990ca4135e",
+  "model": "convaiinnovations/laya-multilingual",
+  "revision": "e4e9ddf21a7b1903b7acffd8814ad4307bf63a67",
+  "independentGroups": 18,
+  "languageCases": 36,
+  "acceptance": {
+    "minProbability": 0.6,
+    "minMargin": 0.25
+  },
+  "summaries": {
+    "broad4:full": {
+      "reported": {
+        "n": 36,
+        "tp": 0,
+        "fp": 0,
+        "positive_n": 12,
+        "finding_precision": null,
+        "finding_recall": 0.0,
+        "coverage": 0.3611111111111111,
+        "selected": 13,
+        "correct_selected": 6,
+        "false_consistent": 7,
+        "unknown_abstained": 7,
+        "uncertainty_n": 12,
+        "p50_ms": 304.8399974977656,
+        "p95_ms": 379.55212900124025,
+        "mean_tokens": 227.69444444444446,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 6,
+            "contradicts": 0,
+            "uncertain": 6
+          },
+          "contradicts": {
+            "consistent": 2,
+            "contradicts": 0,
+            "uncertain": 10
+          },
+          "uncertain": {
+            "consistent": 5,
+            "contradicts": 0,
+            "uncertain": 7
+          }
+        }
+      },
+      "rawRows": 36,
+      "rawRecountWithProductionRounding": {
+        "consistent": {
+          "consistent": 6,
+          "contradicts": 0,
+          "uncertain": 6
+        },
+        "contradicts": {
+          "consistent": 2,
+          "contradicts": 0,
+          "uncertain": 10
+        },
+        "uncertain": {
+          "consistent": 6,
+          "contradicts": 0,
+          "uncertain": 6
+        }
+      },
+      "matchesReportedConfusion": false,
+      "matchesAfterNoEvidenceFamilyAbstention": true,
+      "diagnosticAbstentionOverrides": [
+        "no_evidence_ja"
+      ]
+    },
+    "broad4:compact": {
+      "reported": {
+        "n": 36,
+        "tp": 0,
+        "fp": 0,
+        "positive_n": 12,
+        "finding_precision": null,
+        "finding_recall": 0.0,
+        "coverage": 0.2777777777777778,
+        "selected": 10,
+        "correct_selected": 5,
+        "false_consistent": 5,
+        "unknown_abstained": 9,
+        "uncertainty_n": 12,
+        "p50_ms": 204.88741600092908,
+        "p95_ms": 266.17510199866956,
+        "mean_tokens": 143.5,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 5,
+            "contradicts": 0,
+            "uncertain": 7
+          },
+          "contradicts": {
+            "consistent": 2,
+            "contradicts": 0,
+            "uncertain": 10
+          },
+          "uncertain": {
+            "consistent": 3,
+            "contradicts": 0,
+            "uncertain": 9
+          }
+        }
+      },
+      "rawRows": 36,
+      "rawRecountWithProductionRounding": {
+        "consistent": {
+          "consistent": 5,
+          "contradicts": 0,
+          "uncertain": 7
+        },
+        "contradicts": {
+          "consistent": 2,
+          "contradicts": 0,
+          "uncertain": 10
+        },
+        "uncertain": {
+          "consistent": 4,
+          "contradicts": 0,
+          "uncertain": 8
+        }
+      },
+      "matchesReportedConfusion": false,
+      "matchesAfterNoEvidenceFamilyAbstention": true,
+      "diagnosticAbstentionOverrides": [
+        "no_evidence_ja"
+      ]
+    },
+    "focused3_new:full": {
+      "reported": {
+        "n": 36,
+        "tp": 3,
+        "fp": 2,
+        "positive_n": 12,
+        "finding_precision": 0.6,
+        "finding_recall": 0.25,
+        "coverage": 0.2777777777777778,
+        "selected": 10,
+        "correct_selected": 8,
+        "false_consistent": 0,
+        "unknown_abstained": 10,
+        "uncertainty_n": 12,
+        "p50_ms": 250.73496749791957,
+        "p95_ms": 319.2645999988599,
+        "mean_tokens": 185.69444444444446,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 5,
+            "contradicts": 0,
+            "uncertain": 7
+          },
+          "contradicts": {
+            "consistent": 0,
+            "contradicts": 3,
+            "uncertain": 9
+          },
+          "uncertain": {
+            "consistent": 0,
+            "contradicts": 2,
+            "uncertain": 10
+          }
+        }
+      },
+      "rawRows": 36,
+      "rawRecountWithProductionRounding": {
+        "consistent": {
+          "consistent": 5,
+          "contradicts": 0,
+          "uncertain": 7
+        },
+        "contradicts": {
+          "consistent": 0,
+          "contradicts": 3,
+          "uncertain": 9
+        },
+        "uncertain": {
+          "consistent": 0,
+          "contradicts": 2,
+          "uncertain": 10
+        }
+      },
+      "matchesReportedConfusion": true,
+      "matchesAfterNoEvidenceFamilyAbstention": true,
+      "diagnosticAbstentionOverrides": []
+    },
+    "focused3_new:compact": {
+      "reported": {
+        "n": 36,
+        "tp": 8,
+        "fp": 8,
+        "positive_n": 12,
+        "finding_precision": 0.5,
+        "finding_recall": 0.6666666666666666,
+        "coverage": 0.7777777777777778,
+        "selected": 28,
+        "correct_selected": 18,
+        "false_consistent": 2,
+        "unknown_abstained": 5,
+        "uncertainty_n": 12,
+        "p50_ms": 151.99510149977868,
+        "p95_ms": 188.61928899787017,
+        "mean_tokens": 101.5,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 10,
+            "contradicts": 1,
+            "uncertain": 1
+          },
+          "contradicts": {
+            "consistent": 2,
+            "contradicts": 8,
+            "uncertain": 2
+          },
+          "uncertain": {
+            "consistent": 0,
+            "contradicts": 7,
+            "uncertain": 5
+          }
+        }
+      },
+      "rawRows": 36,
+      "rawRecountWithProductionRounding": {
+        "consistent": {
+          "consistent": 10,
+          "contradicts": 1,
+          "uncertain": 1
+        },
+        "contradicts": {
+          "consistent": 2,
+          "contradicts": 8,
+          "uncertain": 2
+        },
+        "uncertain": {
+          "consistent": 0,
+          "contradicts": 8,
+          "uncertain": 4
+        }
+      },
+      "matchesReportedConfusion": false,
+      "matchesAfterNoEvidenceFamilyAbstention": true,
+      "diagnosticAbstentionOverrides": [
+        "no_evidence_en"
+      ]
+    },
+    "binary2:full": {
+      "reported": {
+        "n": 36,
+        "tp": 7,
+        "fp": 7,
+        "positive_n": 12,
+        "finding_precision": 0.5,
+        "finding_recall": 0.5833333333333334,
+        "coverage": 0.4722222222222222,
+        "selected": 17,
+        "correct_selected": 10,
+        "false_consistent": 0,
+        "unknown_abstained": 6,
+        "uncertainty_n": 12,
+        "p50_ms": 224.20262950072356,
+        "p95_ms": 273.09266199881677,
+        "mean_tokens": 157.69444444444446,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 3,
+            "contradicts": 1,
+            "uncertain": 8
+          },
+          "contradicts": {
+            "consistent": 0,
+            "contradicts": 7,
+            "uncertain": 5
+          },
+          "uncertain": {
+            "consistent": 0,
+            "contradicts": 6,
+            "uncertain": 6
+          }
+        }
+      },
+      "rawRows": 36,
+      "rawRecountWithProductionRounding": {
+        "consistent": {
+          "consistent": 3,
+          "contradicts": 1,
+          "uncertain": 8
+        },
+        "contradicts": {
+          "consistent": 0,
+          "contradicts": 7,
+          "uncertain": 5
+        },
+        "uncertain": {
+          "consistent": 0,
+          "contradicts": 6,
+          "uncertain": 6
+        }
+      },
+      "matchesReportedConfusion": true,
+      "matchesAfterNoEvidenceFamilyAbstention": true,
+      "diagnosticAbstentionOverrides": []
+    },
+    "binary2:compact": {
+      "reported": {
+        "n": 36,
+        "tp": 10,
+        "fp": 11,
+        "positive_n": 12,
+        "finding_precision": 0.47619047619047616,
+        "finding_recall": 0.8333333333333334,
+        "coverage": 0.8888888888888888,
+        "selected": 32,
+        "correct_selected": 20,
+        "false_consistent": 1,
+        "unknown_abstained": 2,
+        "uncertainty_n": 12,
+        "p50_ms": 118.87118450067646,
+        "p95_ms": 173.21612299929257,
+        "mean_tokens": 73.5,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 10,
+            "contradicts": 1,
+            "uncertain": 1
+          },
+          "contradicts": {
+            "consistent": 1,
+            "contradicts": 10,
+            "uncertain": 1
+          },
+          "uncertain": {
+            "consistent": 0,
+            "contradicts": 10,
+            "uncertain": 2
+          }
+        }
+      },
+      "rawRows": 36,
+      "rawRecountWithProductionRounding": {
+        "consistent": {
+          "consistent": 10,
+          "contradicts": 1,
+          "uncertain": 1
+        },
+        "contradicts": {
+          "consistent": 1,
+          "contradicts": 10,
+          "uncertain": 1
+        },
+        "uncertain": {
+          "consistent": 0,
+          "contradicts": 12,
+          "uncertain": 0
+        }
+      },
+      "matchesReportedConfusion": false,
+      "matchesAfterNoEvidenceFamilyAbstention": true,
+      "diagnosticAbstentionOverrides": [
+        "no_evidence_en",
+        "no_evidence_ja"
+      ]
+    },
+    "noul:full": {
+      "reported": {
+        "n": 36,
+        "tp": 7,
+        "fp": 8,
+        "positive_n": 12,
+        "finding_precision": 0.4666666666666667,
+        "finding_recall": 0.5833333333333334,
+        "coverage": 0.75,
+        "selected": 27,
+        "correct_selected": 17,
+        "false_consistent": 2,
+        "unknown_abstained": 4,
+        "uncertainty_n": 12,
+        "p50_ms": 219.85193299951789,
+        "p95_ms": 324.0918680021423,
+        "mean_tokens": 157.69444444444446,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 10,
+            "contradicts": 0,
+            "uncertain": 2
+          },
+          "contradicts": {
+            "consistent": 2,
+            "contradicts": 7,
+            "uncertain": 3
+          },
+          "uncertain": {
+            "consistent": 0,
+            "contradicts": 8,
+            "uncertain": 4
+          }
+        }
+      },
+      "rawRows": 36
+    },
+    "noul:compact": {
+      "reported": {
+        "n": 36,
+        "tp": 9,
+        "fp": 11,
+        "positive_n": 12,
+        "finding_precision": 0.45,
+        "finding_recall": 0.75,
+        "coverage": 0.9166666666666666,
+        "selected": 33,
+        "correct_selected": 20,
+        "false_consistent": 2,
+        "unknown_abstained": 2,
+        "uncertainty_n": 12,
+        "p50_ms": 118.10269449961197,
+        "p95_ms": 153.00733000185573,
+        "mean_tokens": 73.5,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 11,
+            "contradicts": 1,
+            "uncertain": 0
+          },
+          "contradicts": {
+            "consistent": 2,
+            "contradicts": 9,
+            "uncertain": 1
+          },
+          "uncertain": {
+            "consistent": 0,
+            "contradicts": 10,
+            "uncertain": 2
+          }
+        }
+      },
+      "rawRows": 36
+    },
+    "focused2_user:full": {
+      "reported": {
+        "n": 36,
+        "tp": 4,
+        "fp": 3,
+        "positive_n": 12,
+        "finding_precision": 0.5714285714285714,
+        "finding_recall": 0.3333333333333333,
+        "coverage": 0.4444444444444444,
+        "selected": 16,
+        "correct_selected": 8,
+        "false_consistent": 5,
+        "unknown_abstained": 8,
+        "uncertainty_n": 12,
+        "p50_ms": 238.37170400111063,
+        "p95_ms": 280.4408219999459,
+        "mean_tokens": 164.69444444444446,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 4,
+            "contradicts": 1,
+            "uncertain": 7
+          },
+          "contradicts": {
+            "consistent": 3,
+            "contradicts": 4,
+            "uncertain": 5
+          },
+          "uncertain": {
+            "consistent": 2,
+            "contradicts": 2,
+            "uncertain": 8
+          }
+        }
+      },
+      "rawRows": 36,
+      "rawRecountWithProductionRounding": {
+        "consistent": {
+          "consistent": 4,
+          "contradicts": 1,
+          "uncertain": 7
+        },
+        "contradicts": {
+          "consistent": 3,
+          "contradicts": 4,
+          "uncertain": 5
+        },
+        "uncertain": {
+          "consistent": 2,
+          "contradicts": 2,
+          "uncertain": 8
+        }
+      },
+      "matchesReportedConfusion": true,
+      "matchesAfterNoEvidenceFamilyAbstention": true,
+      "diagnosticAbstentionOverrides": []
+    },
+    "focused2_user:compact": {
+      "reported": {
+        "n": 36,
+        "tp": 4,
+        "fp": 4,
+        "positive_n": 12,
+        "finding_precision": 0.5,
+        "finding_recall": 0.3333333333333333,
+        "coverage": 0.6944444444444444,
+        "selected": 25,
+        "correct_selected": 14,
+        "false_consistent": 7,
+        "unknown_abstained": 6,
+        "uncertainty_n": 12,
+        "p50_ms": 131.81059149974317,
+        "p95_ms": 186.56425600056536,
+        "mean_tokens": 82.5,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 10,
+            "contradicts": 0,
+            "uncertain": 2
+          },
+          "contradicts": {
+            "consistent": 5,
+            "contradicts": 4,
+            "uncertain": 3
+          },
+          "uncertain": {
+            "consistent": 2,
+            "contradicts": 4,
+            "uncertain": 6
+          }
+        }
+      },
+      "rawRows": 36,
+      "rawRecountWithProductionRounding": {
+        "consistent": {
+          "consistent": 10,
+          "contradicts": 0,
+          "uncertain": 2
+        },
+        "contradicts": {
+          "consistent": 5,
+          "contradicts": 4,
+          "uncertain": 3
+        },
+        "uncertain": {
+          "consistent": 4,
+          "contradicts": 4,
+          "uncertain": 4
+        }
+      },
+      "matchesReportedConfusion": false,
+      "matchesAfterNoEvidenceFamilyAbstention": true,
+      "diagnosticAbstentionOverrides": [
+        "no_evidence_en",
+        "no_evidence_ja"
+      ]
+    },
+    "focused3_derived:full": {
+      "reported": {
+        "n": 36,
+        "tp": 2,
+        "fp": 3,
+        "positive_n": 12,
+        "finding_precision": 0.4,
+        "finding_recall": 0.16666666666666666,
+        "coverage": 0.1388888888888889,
+        "selected": 5,
+        "correct_selected": 2,
+        "false_consistent": 0,
+        "unknown_abstained": 10,
+        "uncertainty_n": 12,
+        "p50_ms": 265.1613649977662,
+        "p95_ms": 301.4686310016259,
+        "mean_tokens": 185.69444444444446,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 0,
+            "contradicts": 1,
+            "uncertain": 11
+          },
+          "contradicts": {
+            "consistent": 0,
+            "contradicts": 2,
+            "uncertain": 10
+          },
+          "uncertain": {
+            "consistent": 0,
+            "contradicts": 2,
+            "uncertain": 10
+          }
+        }
+      },
+      "rawRows": 36,
+      "rawRecountWithProductionRounding": {
+        "consistent": {
+          "consistent": 0,
+          "contradicts": 1,
+          "uncertain": 11
+        },
+        "contradicts": {
+          "consistent": 0,
+          "contradicts": 2,
+          "uncertain": 10
+        },
+        "uncertain": {
+          "consistent": 0,
+          "contradicts": 2,
+          "uncertain": 10
+        }
+      },
+      "matchesReportedConfusion": true,
+      "matchesAfterNoEvidenceFamilyAbstention": true,
+      "diagnosticAbstentionOverrides": []
+    },
+    "focused3_derived:compact": {
+      "reported": {
+        "n": 36,
+        "tp": 5,
+        "fp": 5,
+        "positive_n": 12,
+        "finding_precision": 0.5,
+        "finding_recall": 0.4166666666666667,
+        "coverage": 0.5555555555555556,
+        "selected": 20,
+        "correct_selected": 11,
+        "false_consistent": 4,
+        "unknown_abstained": 6,
+        "uncertainty_n": 12,
+        "p50_ms": 156.92370500073594,
+        "p95_ms": 208.57871399857686,
+        "mean_tokens": 103.5,
+        "truncated": 0,
+        "confusion": {
+          "consistent": {
+            "consistent": 6,
+            "contradicts": 1,
+            "uncertain": 5
+          },
+          "contradicts": {
+            "consistent": 2,
+            "contradicts": 5,
+            "uncertain": 5
+          },
+          "uncertain": {
+            "consistent": 2,
+            "contradicts": 4,
+            "uncertain": 6
+          }
+        }
+      },
+      "rawRows": 36,
+      "rawRecountWithProductionRounding": {
+        "consistent": {
+          "consistent": 6,
+          "contradicts": 1,
+          "uncertain": 5
+        },
+        "contradicts": {
+          "consistent": 2,
+          "contradicts": 5,
+          "uncertain": 5
+        },
+        "uncertain": {
+          "consistent": 2,
+          "contradicts": 5,
+          "uncertain": 5
+        }
+      },
+      "matchesReportedConfusion": false,
+      "matchesAfterNoEvidenceFamilyAbstention": true,
+      "diagnosticAbstentionOverrides": [
+        "no_evidence_en"
+      ]
+    }
+  },
+  "limitations": [
+    "Archived real-model outputs, not a run of the modified implementation.",
+    "full/compact layouts must be compared separately.",
+    "All 18 groups are tuning/regression data; none are held-out.",
+    "Native tool identity, call args and typed result metadata are absent. Paired mode must abstain without added citations.",
+    "CoreML numerical/weight parity remains unverified.",
+    "No main-model rechecks, total end-to-end latency or monetary cost were measured.",
+    "Raw-only recounters omit external missing-evidence gating. Replacing predictions for the no_evidence family by abstention reproduces every choice-based archived confusion matrix. This identifies the difference, but the archive has no aggregation source code proving that gate was used. These diagnostic overrides are not runtime implementation rules."
+  ]
+}

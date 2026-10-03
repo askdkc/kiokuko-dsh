@@ -19,19 +19,19 @@ function events(answer='All tests passed.'): ReviewEvent[] {
     {seq:4,type:'turn/end',data:{turn:1,reason:{kind:'completed'}}},
   ]
 }
-async function fixture(t: import('node:test').TestContext, choose: (batch: DecisionBatch, signal: AbortSignal) => Promise<DecisionBatchResult> = async batch => result(batch,'finding'), budgetMs=1000) {
+async function fixture(t: import('node:test').TestContext, choose: (batch: DecisionBatch, signal: AbortSignal) => Promise<DecisionBatchResult> = async batch => result(batch,'finding'), budgetMs=1000, groundingMode?: 'shadow' | 'candidate') {
   const db=new NodeSqliteAdapter(':memory:',new DatabaseSync(':memory:'))
   db.exec("CREATE TABLE ledger_runs(run_id TEXT PRIMARY KEY,workspace TEXT,dsh_session_id TEXT,status TEXT); INSERT INTO ledger_runs VALUES('run','project','session','active')")
   db.exec(await readFile(new URL('../../../../migrations/025_answer_review.sql',import.meta.url),'utf8'))
   const runtime={withDatabase:async<T>(fn:(database:NodeSqliteAdapter)=>T|Promise<T>)=>fn(db)}
   let calls=0,settled=0,live=true,eligible=true,dispatchThrows=false
-  const service=new DecisionService(TypedDecisionsConfig.parse({}),()=>({capabilities:{maxQuestions:64,maxChoices:256,maxBytes:262144},evaluate:(batch,signal)=>{calls++;return choose(batch,signal)}}))
+  const service=new DecisionService(TypedDecisionsConfig.parse(groundingMode ? { groundingReview: { mode: groundingMode, policyVersion: 'grounding-pairs-v1', minProbability: .6, minMargin: .25 } } : {}),()=>({capabilities:{maxQuestions:64,maxChoices:256,maxBytes:262144},evaluate:(batch,signal)=>{calls++;return choose(batch,signal)}}))
   const coordinator=new AnswerReviewCoordinator(runtime,service,AnswerReviewConfig.parse({mode:'auto',budgetMs}))
   const listeners=new Map<string,Function>(), sent:unknown[]=[], source=events()
   const agent:ReviewAgent={id:'agent',session:{id:'session',snapshotEvents:()=>source},ctx:{on(name,fn){listeners.set(name,fn);return()=>{listeners.delete(name)}}},inbox:{nextStep:[],nextTurn:[]},followup(message){if(dispatchThrows)throw new Error('uncertain');sent.push(message)}}
   const bind=()=>coordinator.bind({runId:'run',workspace:'project',requestId:'request',task:'Run the tests and report the result.',catalogDigest:'catalog',turn:1,agent,current:()=>live,eligible:()=>eligible,settled:async()=>{settled++}})
   bind()
-  await listeners.get('agent/request')!({},async()=>({provider:'ordinary',model:'chosen',reasoningEffort:'high'}))
+  await listeners.get('agent/request')!({},async()=>({provider:'ordinary',model:'chosen',reasoningEffort:'high',tools:[]}))
   t.after(async()=>{await coordinator.dispose();db.close()})
   const wait=async()=>{await new Promise(resolve=>setImmediate(resolve));for(let i=0;i<100 && (service.status() as any).answerReview.state==='evaluating';i++)await new Promise(resolve=>setTimeout(resolve,5));await new Promise(resolve=>setImmediate(resolve))}
   return {coordinator,service,db,agent,source,sent,listeners,bind,wait,calls:()=>calls,settled:()=>settled,stop:()=>{live=false},ineligible:()=>{eligible=false},throwDispatch:()=>{dispatchThrows=true}}
@@ -64,7 +64,7 @@ test('one finding dispatches once, binds original model, and cannot review corre
   assert.equal(await f.coordinator.accept(f.agent,f.sent,2,'catalog'),true)
   assert.equal(f.coordinator.hold(f.agent),false)
   const request=await f.listeners.get('agent/request')!({},async()=>({provider:'changed',model:'other',reasoningEffort:'low'}))
-  assert.deepEqual(request,{provider:'ordinary',model:'chosen',reasoningEffort:'high'})
+  assert.deepEqual(request,{provider:'ordinary',model:'chosen',reasoningEffort:'high',tools:[]})
   await assert.rejects(f.coordinator.accept(f.agent,f.sent,3,'catalog'))
   assert.equal(f.calls(),1);assert.equal(f.db.prepare('SELECT status FROM dsh_answer_reviews').get()!.status,'consumed')
   assert.doesNotMatch(JSON.stringify(f.db.prepare('SELECT * FROM dsh_answer_reviews').all()),/All tests passed|FAIL: expected/)
@@ -176,4 +176,33 @@ test('restart with missing persisted answer finalizes as failed without inferenc
   let status:string|undefined
   await restored.recover(f.agent,async row=>{status=row.status;f.db.prepare("UPDATE ledger_runs SET status='failed' WHERE run_id=?").run(row.runId)})
   assert.equal(status,'failed');assert.equal(f.calls(),1)
+})
+
+test('failed shadow inference preserves an existing base finding', async t => {
+  const f = await fixture(t, async batch => {
+    if (batch.questions[0]!.id.startsWith('grounding:')) throw new DecisionError('TIMEOUT')
+    return result(batch,'finding')
+  },1000,'shadow')
+  f.source[3]!.data.message.content[0].text = 'All tests passed. [tool-call:check]'
+  f.coordinator.hold(f.agent); await f.wait()
+  assert.equal(f.sent.length,1)
+  assert.equal((f.service.status() as any).answerReview.grounding.assessed[0].status,'failure')
+})
+
+for (const mode of ['shadow','candidate'] as const) test(`paired ${mode} shares one continuation and never repeats effects`, async t => {
+  const f = await fixture(t, async batch => ({...result(batch,'satisfied'), answers: batch.questions.map(q => ({id:q.id,status:'selected' as const,choiceId:q.id.startsWith('grounding:')?'contradicted':'satisfied'}))}),1000,mode)
+  f.source[3]!.data.message.content[0].text = 'All tests passed. [tool-call:check]'
+  f.coordinator.hold(f.agent); await f.wait()
+  assert.equal(f.calls(),2)
+  assert.equal(f.sent.length,mode==='candidate'?1:0)
+  if (mode==='candidate') {
+    await f.coordinator.accept(f.agent,f.sent,2,'catalog')
+    const request = await f.listeners.get('agent/request')!({},async()=>({provider:'other',model:'other',tools:[{name:'write'}]}))
+    assert.deepEqual(request.tools,[])
+    let effects=0
+    const blocked=await f.listeners.get('tools/pre-execute')!({agent:f.agent},async()=>{effects++;return {kind:'allow'}})
+    assert.equal(blocked.kind,'block');assert.equal(effects,0)
+    assert.equal(f.coordinator.hold(f.agent),false)
+    assert.match(JSON.stringify(f.sent),/tool result 2/)
+  }
 })

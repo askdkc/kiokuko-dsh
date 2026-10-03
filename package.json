@@ -112,7 +112,7 @@
         "Stored native DSH session IDs and histories for startup validation and legacy Kiokuko compatibility"
       ],
       "writePaths": [
-        "Nine bundled managed Skills and references under ~/.agents/skills on enabled plugin load",
+        "Sixteen bundled managed Skills and references under ~/.agents/skills on enabled plugin load",
         "Existing Kiokuko managed block in startup-directory AGENTS.md; instructions outside the markers are preserved",
         "Configured Kiokuko database and pre-migration backups",
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",
@@ -206,7 +206,7 @@
     "build:modules": "npm run build && node scripts/stage-modules.mjs",
     "test:modules": "node scripts/run-tests.mjs tests/dsh/unit/core-modules.test.ts tests/dsh/integration/core-host.test.ts && node scripts/verify-module-packages.mjs",
     "test:laya-worker": "python3 -B -m unittest discover -s tests/laya -v",
-    "test:answer-review": "node scripts/run-tests.mjs tests/dsh/unit/decisions/answer-review.test.ts tests/dsh/unit/decisions/answer-review-evaluation.test.ts tests/dsh/e2e/answer-review-loop.test.ts",
+    "test:answer-review": "node scripts/run-tests.mjs tests/dsh/unit/decisions/answer-review.test.ts tests/dsh/unit/decisions/grounding.test.ts tests/dsh/unit/decisions/answer-review-evaluation.test.ts tests/dsh/e2e/answer-review-loop.test.ts",
     "test:evaluation:answer-review": "npm run build && node scripts/evaluate-answer-review.mjs",
     "test:evaluation:decisions": "node --import tsx scripts/run-decision-evaluation.mjs",
     "test:evaluation:model-routing": "node --import tsx scripts/run-model-routing-evaluation.mjs",

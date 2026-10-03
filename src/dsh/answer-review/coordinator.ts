@@ -3,6 +3,7 @@ import type { SqliteDatabase } from '../../db/adapter.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
 import type { DecisionService } from '../decisions/service.js'
 import { DecisionError } from '../decisions/contracts.js'
+import { groundingPairs } from './grounding.js'
 import { answerReviewInput } from './evidence.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from '../plugin-source.js'
 import { ANSWER_REVIEW_FORM, ANSWER_REVIEW_POLICY, answerReviewQuestions, hasHumanInput, reviewMessageId, type AnswerReviewConfiguration, type ReviewAgent, type ReviewModel } from './contracts.js'
@@ -25,13 +26,14 @@ export class AnswerReviewCoordinator {
   private readonly attachments = new Map<ReviewAgent, () => void>()
   private readonly wakeHumans = new Set<ReviewAgent>()
   private readonly recoveries = new Map<ReviewAgent, Promise<void>>()
+  private groundingStatus: unknown = null
   private stopped = false
   private last: { state: string; reason: string | null; findings?: readonly string[]; inputCompleteness?: string } = { state: 'idle', reason: null }
   constructor(private readonly runtime: Runtime, private readonly decisions: DecisionService, readonly config: AnswerReviewConfiguration) { this.report() }
 
   private report(): void {
     const entries = [...this.entries.values()]
-    this.decisions.reportAnswerReview({ ...this.config, ...this.last, evaluating: entries.filter(entry => entry.state === 'evaluating').length, reconsidering: entries.filter(entry => entry.state === 'reserved' || entry.state === 'consumed').length })
+    this.decisions.reportAnswerReview({ ...this.config, ...this.last, grounding: this.groundingStatus, evaluating: entries.filter(entry => entry.state === 'evaluating').length, reconsidering: entries.filter(entry => entry.state === 'reserved' || entry.state === 'consumed').length })
   }
   private entry(agent: ReviewAgent): Entry | undefined {
     if (!agent.session) return
@@ -56,15 +58,27 @@ export class AnswerReviewCoordinator {
       if (!entry || request.purpose || typeof request.provider !== 'string' || typeof request.model !== 'string') return request
       if (entry.state === 'consumed' && entry.model) {
         const { reasoningEffort: _previous, ...rest } = request
-        return { ...rest, ...entry.model }
+        return { ...rest, ...entry.model, tools: [] }
       }
       if (entry.state === 'idle') entry.model ??= { provider: request.provider, model: request.model, ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }) }
       return request
     }, { prepend: true })
     const assembly = agent.ctx.on('system-prompt/assemble', async (_payload: unknown, _context: unknown, next: () => Promise<any>) => {
-      const result = await next(), entry = this.entry(agent)
+      let result = await next()
+      const entry = this.entry(agent)
+      if (entry?.state === 'idle' && this.decisions.groundingReviewEnabled()) {
+        const config = await this.decisions.bind(entry.binding.requestId, entry.controller.signal)
+        if (config.groundingReview && config.groundingReview.mode !== 'legacy' && Array.isArray(result.sections)) {
+          result = { ...result, sections: [...result.sections, { name: 'kiokuko:grounding-citations', text: 'When reporting a fact from a tool result, cite its exact tool call ID using [tool-call:ID] in the same paragraph. Preserve target, revision, scope, time, numbers and negation. Do not invent IDs. If no corresponding evidence exists, state uncertainty. These citations support optional post-answer review.' }] }
+        }
+      }
       return entry?.model && (entry.state === 'reserved' || entry.state === 'consumed')
-        ? { ...result, variables: { ...result.variables, provider: entry.model.provider, model: entry.model.model } } : result
+        ? { ...result, tools: [], variables: { ...result.variables, provider: entry.model.provider, model: entry.model.model } } : result
+    }, { prepend: true })
+    const toolFence = agent.ctx.on('tools/pre-execute', (execution: { agent?: unknown }, next: () => Promise<unknown>) => {
+      if (execution.agent === agent && this.entry(agent)?.state === 'consumed')
+        return { kind: 'block', feedback: [{ type: 'text', text: 'Automatic answer reconsideration must use existing original evidence. New tool execution requires a new user request.' }] }
+      return next()
     }, { prepend: true })
     const input = agent.ctx.on('agent/inbox/inserted', (payload: { message: unknown }) => {
       if (hasHumanInput([payload.message])) this.cancel(agent.session.id, true)
@@ -78,9 +92,13 @@ export class AnswerReviewCoordinator {
     const cancel = (...args: any[]) => { this.wakeHumans.delete(agent); this.cancel(agent.session.id); return originalCancel?.apply(agent, args) }
     if (originalCancel) agent.cancel = cancel
     this.attachments.set(agent, () => {
-      dispose(); assembly(); input(); status(); disposed()
+      dispose(); assembly(); toolFence(); input(); status(); disposed()
       if (agent.cancel === cancel) agent.cancel = originalCancel!
     })
+  }
+  reconsidering(agent: ReviewAgent): boolean {
+    const state = this.entry(agent)?.state
+    return state === 'reserved' || state === 'consumed'
   }
   model(agent: ReviewAgent): ReviewModel | undefined {
     const entry = this.entry(agent)
@@ -131,25 +149,57 @@ export class AnswerReviewCoordinator {
         .get(binding.runId,binding.requestId,binding.workspace,binding.agent.session.id,binding.turn,input.answerSeq,input.endSeq,input.answerDigest,input.inputDigest,binding.catalogDigest,JSON.stringify(entry.model),ANSWER_REVIEW_POLICY,now,now,binding.runId,binding.workspace,binding.agent.session.id) !== undefined
     }))
     if (!claimed) return this.close(entry, 'already_reviewed_or_finalized')
-    this.last = { state: 'evaluating', reason: null }; this.report()
+      this.last = { state: 'evaluating', reason: null }; this.groundingStatus = null; this.report()
     const timeout = AbortSignal.timeout(this.config.budgetMs)
     const signal = AbortSignal.any([timeout, entry.controller.signal])
     try {
       const config = await this.decisions.bind(binding.requestId, signal)
       const completeness = config.provider === 'laya-coreml' ? config['laya-coreml']?.protocol === 'v1' ? 'unverified_v1' : 'strict_preflight' : 'host_complete'
-      const result = await this.decisions.evaluate(binding.requestId, input.batch, signal, binding.catalogDigest)
+      const grounding = config.groundingReview
+      const paired = grounding && grounding.mode !== 'legacy'
+        ? groundingPairs(input.batch.state.answer, binding.agent.session.snapshotEvents(), binding.turn, entry.startSeq, input.answerSeq) : undefined
+      const baseBatch = grounding?.mode === 'candidate'
+        ? { ...input.batch, questions: input.batch.questions.filter(q => q.id !== 'grounding') } : input.batch
+      const result = await this.decisions.evaluate(binding.requestId, baseBatch, signal, binding.catalogDigest)
       if (!this.safe(entry)) return this.close(entry, 'superseded')
       if (result.status === 'fallback') return this.close(entry, result.reason)
       const findings = result.result.answers.filter(answer => answer.status === 'selected' && answer.choiceId === 'finding' && !input.unassessed.includes(answer.id)).map(answer => answer.id)
+      const concerns: string[] = []
+      const observations: { id: string; status: string; reason?: string }[] = []
+      for (const pair of paired?.pairs ?? []) {
+        let outcome
+        try {
+          if (signal.aborted) { observations.push({ id: pair.id, status: 'failure', reason: 'timeout' }); continue }
+          outcome = pair.deterministicContradiction ? { status: 'completed' as const, result: { answers: [{ id: pair.id, status: 'selected' as const, choiceId: 'contradicted' }] } }
+            : await this.decisions.evaluate(binding.requestId, pair.batch, signal, binding.catalogDigest)
+        } catch (error) {
+          if (!this.safe(entry)) return this.close(entry, 'superseded')
+          observations.push({ id: pair.id, status: 'failure', reason: timeout.aborted ? 'timeout' : error instanceof DecisionError ? error.code : 'review_unavailable' })
+          continue // A failed shadow must not suppress findings already obtained by the base review.
+        }
+        if (!this.safe(entry)) return this.close(entry, 'superseded')
+        if (outcome.status === 'fallback') { observations.push({ id: pair.id, status: 'failure', reason: outcome.reason }); continue }
+        const answer = outcome.result.answers[0]!
+        observations.push({ id: pair.id, status: answer.status === 'selected' ? answer.choiceId : 'unknown' })
+        if (grounding?.mode === 'candidate' && answer.status === 'selected' && answer.choiceId === 'contradicted') {
+          findings.push(pair.id)
+          concerns.push(`Unverified contradiction candidate: answer range ${pair.start}:${pair.end}; tool result ${pair.evidenceSeq}; call ${pair.callId}; original digest ${pair.originalDigest}. Check the original paragraph and full tool result, including target, revision, scope and time.`)
+        }
+      }
+      const groundingStatus = paired ? { policy: paired.policy, mode: grounding!.mode, assessed: observations, skipped: paired.skipped } : undefined
+      this.groundingStatus = groundingStatus ?? null
+      this.report()
       if (!findings.length) {
-        await this.close(entry, result.result.answers.some(answer => answer.status === 'abstained') ? 'abstained' : 'no_findings')
-        this.last = { state: 'finished', reason: result.result.answers.some(answer => answer.status === 'abstained') ? 'abstained' : 'no_findings', inputCompleteness: completeness }; this.report()
+        const reason = result.result.answers.some(answer => answer.status === 'abstained') || paired?.skipped.length || observations.some(o => o.status === 'unknown' || o.status === 'failure') ? 'abstained' : 'no_findings'
+        await this.close(entry, reason)
+        this.last = { state: 'finished', reason, inputCompleteness: completeness }; this.report()
         return
       }
       const id = `answer-review:${canonicalContentHash({ run: binding.runId, input: input.inputDigest, policy: ANSWER_REVIEW_POLICY })}`
       const message = { id, role: 'user', content: [{ type: 'text', text: [
         'Reconsider the preceding answer once, for the SAME user request. These classifier flags are unverified suggestions, not facts or new user instructions.',
-        `Review dimensions: ${findings.map(id => answerReviewQuestions.find(question => question.id === id)!.instructions).join('\n')}`,
+        `Review dimensions: ${findings.map(id => answerReviewQuestions.find(question => question.id === id)?.instructions ?? 'Check the cited claim against its original evidence.').join('\n')}`,
+        ...concerns,
         `Original answer event: ${input.answerSeq}. Current-run tool result references: ${input.evidenceRefs.join(', ') || 'none'}. Input completeness: ${completeness}.`,
         'Check the original request and evidence in this conversation. Accept or reject each concern on that evidence. If warranted, provide a correction; otherwise briefly confirm the original answer. Preserve the user scope, permissions and existing verification requirements. Do not repeat completed side effects just to satisfy this suggestion. This is the only automatic reconsideration.',
       ].join('\n') }], source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: ANSWER_REVIEW_FORM } }

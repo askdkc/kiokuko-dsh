@@ -59,4 +59,6 @@ Return control for needs_confirmation, blocked, cancelled and completed. Stop on
 Correct ENNO_INPUT_INVALID only from bounded, value-free issue paths; never echo rejected values. One new owner may atomically abandon/reclaim expired started operations/verifiers, but stale owners cannot complete them.
 
 Never automatically install/execute external Skill discoveries. Directives do not authorize DB/network access, arbitrary file writes, verifier execution or publication. Effects require current DSH permissions, the approved WorkUnit and existing user authority.
+
+For admitted comparisons, fix the rubric first, isolate writable ownership and verify the synthesis. Dropout is a coverage gap. The host alone controls models, fanout and dispatch retries.
 <!-- /kiokuko:runtime -->

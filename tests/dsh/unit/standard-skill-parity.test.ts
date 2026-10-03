@@ -4,11 +4,11 @@ import test from 'node:test'
 import { loadBundledStandardSkillFiles, STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 import { loadStandardSkillParity, validateStandardSkillParity } from '../../../src/dsh/standard-skill-integrity.js'
 
-test('standard Skill parity is eight skills, 27 Markdown files, and 19 references', async () => {
+test('standard Skill parity matches the complete manifest', async () => {
   const parity = await loadStandardSkillParity()
   assert.deepEqual(parity.skills, STANDARD_SKILL_MANIFESTS.map((manifest) => manifest.name))
-  assert.equal(parity.markdownFileCount, 27)
-  assert.equal(parity.referenceFileCount, 19)
+  assert.equal(parity.markdownFileCount, STANDARD_SKILL_MANIFESTS.reduce((n, m) => n + m.files.length, 0))
+  assert.equal(parity.referenceFileCount, parity.markdownFileCount - parity.skills.length)
   assert.match(parity.contentDigest, /^[0-9a-f]{64}$/u)
 })
 

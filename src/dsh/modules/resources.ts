@@ -13,4 +13,4 @@ export function skillModule<Host>(id: string, names: readonly string[]): DshModu
   return { id, coreVersion: 1, requires: [], resources: bundledResources(names), configure(value) { if (value !== undefined) throw new Error(`Skill-only module has no configuration: ${id}`); return undefined } }
 }
 export const coreSkills = skillModule('core-skills', ['kiokuko-soul', 'memory-reasoning', 'natural-japanese-output'])
-export const codingSkills = skillModule('coding-skills', ['kiokuko-single-purpose-functions', 'one-shot-software-completion', 'kiokuko-simple-work', 'kiokuko-ui-design-soul', 'veteran-programmer-skill'])
+export const codingSkills = skillModule('coding-skills', ['kiokuko-single-purpose-functions', 'one-shot-software-completion', 'kiokuko-simple-work', 'kiokuko-ui-design-soul', 'veteran-programmer-skill', 'kiokuko-investigate', 'kiokuko-architecture', 'kiokuko-review', 'kiokuko-benchmark', 'kiokuko-verification', 'kiokuko-skill-authoring', 'kiokuko-technical-writing'])

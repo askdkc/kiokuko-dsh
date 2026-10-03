@@ -83,7 +83,15 @@ interface StandardSkillManifest {
   readonly files: readonly string[];
 }
 
-export const STANDARD_SKILL_MANIFESTS = [{
+export const STANDARD_SKILL_MANIFESTS = [
+  { name: 'kiokuko-investigate', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-investigate -->', files: ['SKILL.md', 'references/cases.md'] },
+  { name: 'kiokuko-architecture', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-architecture -->', files: ['SKILL.md', 'references/cases.md'] },
+  { name: 'kiokuko-review', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-review -->', files: ['SKILL.md', 'references/cases.md'] },
+  { name: 'kiokuko-benchmark', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-benchmark -->', files: ['SKILL.md', 'references/cases.md'] },
+  { name: 'kiokuko-verification', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-verification -->', files: ['SKILL.md', 'references/cases.md'] },
+  { name: 'kiokuko-skill-authoring', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-skill-authoring -->', files: ['SKILL.md', 'references/cases.md'] },
+  { name: 'kiokuko-technical-writing', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-technical-writing -->', files: ['SKILL.md', 'references/cases.md'] },
+{
   name: STANDARD_UI_SKILL_NAME,
   managedMarker: STANDARD_UI_SKILL_MANAGED_MARKER,
   files: STANDARD_UI_SKILL_FILES,

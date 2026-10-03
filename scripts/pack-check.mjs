@@ -313,7 +313,7 @@ async function createAndSmokeTestTarball() {
         const setupScript = new URL('../../scripts/setup-dsh.mjs', import.meta.resolve('kiokuko-dsh/dsh'));
         const { fileURLToPath } = await import('node:url');
         const checked = JSON.parse(execFileSync(process.execPath, [fileURLToPath(setupScript), '--home', home, '--cwd', process.cwd(), '--check', '--json'], { encoding: 'utf8' }));
-        if (!checked.current || checked.skills.unchanged !== 28) throw new Error('packed setup check failed');
+        if (!checked.current || checked.skills.unchanged !== 42) throw new Error('packed setup check failed');
         if (await fs.readFile(path.join(deployed, 'japanese-translation-for-oss-models', 'SKILL.md'), 'utf8') !== skill.content) {
           throw new Error('packed startup Japanese Skill deployment failed');
         }
