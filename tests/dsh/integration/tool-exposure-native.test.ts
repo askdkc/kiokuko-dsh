@@ -5,14 +5,25 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
-import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
-import { mountDshComposition } from '../../../src/dsh/composition.js'
+import { createDshHostAdapter as sourceAdapter } from '../../../src/dsh/host-adapter.js'
+import { mountDshComposition as sourceComposition } from '../../../src/dsh/composition.js'
 import { DSH_MODEL_FACING_OPERATIONS } from '../../../src/dsh/tools.js'
+
+const packedEntry = process.env.KIOKUKO_TOOL_EXPOSURE_ENTRY
+const packed = packedEntry ? await import(pathToFileURL(packedEntry).href) : undefined
+if (packedEntry) {
+  assert.equal(typeof packed?.createDshHostAdapter, 'function', 'packed public entry must expose the tested adapter')
+  assert.equal(typeof packed?.mountDshComposition, 'function', 'packed public entry must expose the tested composition')
+}
+const createDshHostAdapter: typeof sourceAdapter = packed?.createDshHostAdapter ?? sourceAdapter
+const mountDshComposition: typeof sourceComposition = packed?.mountDshComposition ?? sourceComposition
 
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const nativeAvailable = sourceRoot !== undefined || existsSync(join(packageRoot, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !nativeAvailable) throw new Error('Mandatory native tool-exposure coverage requires the pinned DSH runtime')
+const runtimeVersion = nativeAvailable ? (JSON.parse(await readFile(join(packageRoot, '@deepseek-ai/dsh/package.json'), 'utf8')) as { version?: string }).version ?? 'unknown' : 'unavailable'
+if (process.env.KIOKUKO_EXPECTED_DSH_VERSION) assert.equal(runtimeVersion, process.env.KIOKUKO_EXPECTED_DSH_VERSION)
 function modulePath(name: string, source: string) {
   return pathToFileURL(sourceRoot !== undefined ? join(sourceRoot, source, 'lib/index.js') : join(packageRoot, '@deepseek-ai', name, 'lib/index.js')).href
 }
@@ -38,14 +49,17 @@ async function turn(h: Awaited<ReturnType<typeof harness>>, agent: any, text: st
 }
 
 const protocols = [
-  { name: 'responses', api: 'openai-responses', path: '/v1/responses' },
-  { name: 'chat-completions', api: 'openai-completions', path: '/v1/chat/completions' },
+  { name: 'responses', api: 'openai-responses', host: 'https://api.openai.com', path: '/v1/responses', provider: 'fixture-openai', model: 'gpt-6-astra' },
+  { name: 'chat-completions', api: 'openai-completions', host: 'https://api.openai.com', path: '/v1/chat/completions', provider: 'fixture-unknown', model: 'gpt-6-astra' },
+  { name: 'anthropic', api: 'anthropic-messages', host: 'https://api.anthropic.com', path: '/v1/messages', provider: 'fixture-anthropic', model: 'claude-fixture' },
+  { name: 'deepseek', api: 'native-messages', host: 'https://api.deepseek.com', path: '/anthropic/v1/messages', provider: 'deepseek-official', model: 'deepseek-flash' },
 ] as const
 async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   const h = await harness()
   const pi = await import(modulePath('dsh-llm-pi-ai', 'packages/llm/llm-pi-ai'))
   const requests: { url: string; bodyText: string; body: Record<string, any> }[] = []
   const toolCalls: unknown[] = []
+  const unexpectedRequests: string[] = []
   let roundtrip: 'capture' | 'tool-call' | 'final-answer' = 'capture'
   const completedSessions = new Set<string>()
   const finalAnswers = new Map<string, string>()
@@ -59,7 +73,8 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   const nativeFetch = globalThis.fetch
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init)
-    assert.equal(request.url, `https://api.openai.com${protocol.path}`)
+    if (new URL(request.url).origin + new URL(request.url).pathname !== `${protocol.host}${protocol.path}`) unexpectedRequests.push(request.url)
+    assert.equal(new URL(request.url).origin + new URL(request.url).pathname, `${protocol.host}${protocol.path}`)
     assert.equal(request.method, 'POST')
     const bodyText = await request.text()
     const body = JSON.parse(bodyText)
@@ -68,11 +83,32 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     if (protocol.name === 'responses') {
       assert.ok(Array.isArray(body.input))
       assert.ok(body.tools.every((tool: any) => tool.type === 'function' && typeof tool.name === 'string' && !tool.function))
-    } else {
+    } else if (protocol.name === 'chat-completions') {
       assert.ok(Array.isArray(body.messages))
       assert.ok(body.tools.every((tool: any) => tool.type === 'function' && typeof tool.function?.name === 'string' && !tool.name))
     }
+    if (protocol.name === 'deepseek' || protocol.name === 'anthropic') {
+      assert.ok(Array.isArray(body.messages))
+      assert.ok(body.tools.every((tool: any) => typeof tool.name === 'string' && tool.input_schema))
+    }
     requests.push({ url: request.url, bodyText, body })
+    if ((protocol.name === 'deepseek' || protocol.name === 'anthropic') && roundtrip !== 'capture') {
+      const calling = roundtrip === 'tool-call'
+      roundtrip = calling ? 'final-answer' : 'capture'
+      return sse([
+        { type: 'message_start', message: { id: 'msg_fixture', type: 'message', role: 'assistant', model: protocol.model, content: [], usage: { input_tokens: 10, output_tokens: 0 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Fixture reasoning.' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'fixture-signature' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'content_block_start', index: 1, content_block: calling ? { type: 'tool_use', id: 'call_fixture_external', name: 'fixture_external', input: {} } : { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 1, delta: calling ? { type: 'input_json_delta', partial_json: '{"message":"payload-1"}' } : { type: 'text_delta', text: 'Tool result received.' } },
+        { type: 'content_block_stop', index: 1 },
+        { type: 'message_delta', delta: { stop_reason: calling ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 4 } },
+        { type: 'message_stop' },
+      ])
+    }
+
     if (protocol.name === 'chat-completions' && roundtrip !== 'capture') {
       const calling = roundtrip === 'tool-call'
       roundtrip = calling ? 'final-answer' : 'capture'
@@ -123,12 +159,23 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     settings = h.ctx.plugin({ name: 'tool-exposure-baseline-settings', apply(ctx: any) {
       return ctx.provide('settings', { describe: (options: unknown) => {
         assert.deepEqual(options, { redactSecrets: true })
-        return [{ ns: 'llm-pi-ai', value: { providers: { 'fixture-openai': { api: protocol.api, baseURL: 'https://api.openai.com/v1', models: [{ id: 'gpt-6-astra', contextWindow: 32768, maxTokens: 1024 }] } } } }]
+        throw new Error('Optional settings metadata unavailable')
       } })
     } }); await settings
-    wire = h.ctx.plugin(pi, { providers: { 'fixture-openai': { api: protocol.api, baseURL: 'https://api.openai.com/v1', apiKeyEnv: 'KIOKUKO_FIXTURE_TOKEN', retryPolicy: { mode: 'normal', maxRetries: 0 }, models: [{ id: 'gpt-6-astra', contextWindow: 32768, maxTokens: 1024 }] } } })
+    if (protocol.name === 'deepseek') {
+      const deepseek = await import(modulePath('dsh-llm-deepseek', 'packages/llm/llm-deepseek'))
+      const options = deepseek.resolveAdapterOptions({ baseURL: `${protocol.host}/anthropic`, models: [{ id: protocol.model, contextWindow: 32768, maxTokens: 1024 }], maxTokens: 1024, thinking: 'enabled', reasoningEffort: 'high', retryPolicy: { mode: 'normal', maxRetries: 0 } })
+      wire = h.ctx.plugin({ name: 'fixture-deepseek-wire', inject: ['llm'], apply(ctx: any) {
+        return ctx.llm.registerAdapter([protocol.provider], new deepseek.DeepSeekAdapter({ options: () => options,
+          discoverModels: async (provider: string) => [{ provider, id: protocol.model, name: protocol.model }],
+          resolveAuth: async () => ({ headers: { 'x-api-key': 'fixture-token' } }), resolveUserId: () => 'fixture-user',
+          prepareExtensions: async () => ({ fields: {}, accept: async () => {} }) }))
+      } })
+    } else {
+      wire = h.ctx.plugin(pi, { providers: { [protocol.provider]: { api: protocol.api, baseURL: protocol.name === 'anthropic' ? protocol.host : `${protocol.host}/v1`, apiKeyEnv: 'KIOKUKO_FIXTURE_TOKEN', retryPolicy: { mode: 'normal', maxRetries: 0 }, models: [{ id: protocol.model, contextWindow: 32768, maxTokens: 1024 }] } } })
+    }
     await wire
-    adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), toolExposure: { mode: 'full' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
+    adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'full' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
     composition = await mountDshComposition(h.ctx, adapter.host)
     disposeExternalTool = (h.ctx as any).get('tools').register({
       name: 'fixture_external', description: 'Fixture-owned tool description must stay intact.',
@@ -140,16 +187,16 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
       const names = (Array.isArray(body.tools) ? body.tools : []).map((tool: any) => typeof tool.name === 'string' ? tool.name : tool.function?.name).filter((name: unknown): name is string => typeof name === 'string')
       return [...DSH_MODEL_FACING_OPERATIONS].filter(name => names.includes(name)).sort()
     }
-    const fullAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-baseline'), { provider: 'fixture-openai', model: 'gpt-6-astra' }, { cwd: h.root })
+    const fullAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-baseline'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
     try { await turn(h, fullAgent, 'Inspect the repository and report the result.') } catch { /* The fake provider deliberately returns HTTP 400 after capture. */ }
     const fullBody = requests[0]?.body
     assert.ok(fullBody)
     assert.deepEqual(modelFacingNames(fullBody), [...DSH_MODEL_FACING_OPERATIONS].sort())
     await composition?.dispose(); composition = undefined
     await adapter?.dispose(); adapter = undefined
-    adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), toolExposure: { mode: 'phase' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
+    adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'phase' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
     composition = await mountDshComposition(h.ctx, adapter.host)
-    const phaseAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-phase'), { provider: 'fixture-openai', model: 'gpt-6-astra' }, { cwd: h.root })
+    const phaseAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-phase'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
     const phaseWarnings: string[] = []
     const previousWarn = console.warn
     console.warn = (...args: unknown[]) => { phaseWarnings.push(args.map(String).join(' ')); previousWarn(...args) }
@@ -162,7 +209,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     const externalTools = (body: Record<string, any>) => (body.tools as any[]).filter(tool => !DSH_MODEL_FACING_OPERATIONS.includes(tool.name ?? tool.function?.name))
     const toolFor = (body: Record<string, any>, name: string) => (body.tools as any[]).find(tool => tool.name === name || tool.function?.name === name)
     const descriptionFor = (tool: any) => tool?.description ?? tool?.function?.description
-    const parametersFor = (tool: any) => tool?.parameters ?? tool?.function?.parameters
+    const parametersFor = (tool: any) => tool?.parameters ?? tool?.input_schema ?? tool?.function?.parameters
     const assertExternalTools = (body: Record<string, any>) => assert.deepEqual(externalTools(body), externalTools(fullBody), 'all native/external definitions, schemas and relative order must survive')
     assertExternalTools(phaseBody)
     const assertRoundtrip = (agent: any, before: number, expectedNames: string[]) => {
@@ -179,6 +226,11 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
         const result = next.input.find((item: any) => item.type === 'function_call_output' && item.call_id === 'call_fixture_external')
         assert.ok(result, 'Responses must serialize the external tool result with its call ID')
         assert.ok(result.output.includes('payload-1'))
+      } else if (protocol.name === 'deepseek' || protocol.name === 'anthropic') {
+        const blocks = next.messages.flatMap((message: any) => message.content)
+        assert.ok(blocks.some((block: any) => block.type === 'thinking' && block.thinking === 'Fixture reasoning.' && block.signature === 'fixture-signature'), 'thinking and signature must survive tool-result replay')
+        assert.ok(blocks.some((block: any) => block.type === 'tool_use' && block.id === 'call_fixture_external'))
+        assert.ok(blocks.some((block: any) => block.type === 'tool_result' && block.tool_use_id === 'call_fixture_external' && JSON.stringify(block.content).includes('payload-1')))
       } else {
         const call = next.messages.find((message: any) => message.role === 'assistant' && message.tool_calls?.some((tool: any) => tool.id === 'call_fixture_external' && tool.function.name === 'fixture_external'))
         const result = next.messages.find((message: any) => message.role === 'tool' && message.tool_call_id === 'call_fixture_external')
@@ -187,22 +239,19 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
         assert.ok(JSON.stringify(result.content).includes('payload-1'))
       }
     }
-    const measure = (body: Record<string, any>, bodyText: string, toolNames: string[]) => ({ toolNames, toolCount: body.tools.length, systemBytes: Buffer.byteLength(JSON.stringify(protocol.name === 'responses' ? body.instructions ?? '' : body.messages.filter((message: any) => message.role === 'system' || message.role === 'developer'))), toolsBytes: Buffer.byteLength(JSON.stringify(body.tools ?? [])), messagesBytes: Buffer.byteLength(JSON.stringify(body.input ?? body.messages ?? [])), bodyBytes: Buffer.byteLength(bodyText) })
+    const measure = (body: Record<string, any>, bodyText: string, toolNames: string[]) => ({ toolNames, toolCount: body.tools.length, systemBytes: Buffer.byteLength(JSON.stringify(protocol.name === 'responses' ? body.instructions ?? '' : protocol.name === 'chat-completions' ? body.messages.filter((message: any) => message.role === 'system' || message.role === 'developer') : body.system ?? '')), toolsBytes: Buffer.byteLength(JSON.stringify(body.tools ?? [])), messagesBytes: Buffer.byteLength(JSON.stringify(body.input ?? body.messages ?? [])), bodyBytes: Buffer.byteLength(bodyText) })
     const full = measure(fullBody, requests[0]!.bodyText, modelFacingNames(fullBody))
     const phase = measure(phaseBody, requests[1]!.bodyText, phaseNames)
     assert.ok(phase.toolsBytes < full.toolsBytes)
     assert.ok(phase.bodyBytes < full.bodyBytes)
-    const runtimePackage = JSON.parse(await readFile(join(packageRoot, '@deepseek-ai/dsh/package.json'), 'utf8')) as { version?: string }
-    const runtimeVersion = runtimePackage.version ?? 'unknown'
-    if (process.env.KIOKUKO_EXPECTED_DSH_VERSION) assert.equal(runtimeVersion, process.env.KIOKUKO_EXPECTED_DSH_VERSION)
     let lean: ReturnType<typeof measure> | undefined
     let leanSavings: { tools: number; body: number } | undefined
     if (runtimeVersion === '0.2.0-rc.2') {
       await composition?.dispose(); composition = undefined
       await adapter?.dispose(); adapter = undefined
-      adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), toolExposure: { mode: 'lean' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
+      adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'lean' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
       composition = await mountDshComposition(h.ctx, adapter.host)
-      const leanAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-lean'), { provider: 'fixture-openai', model: 'gpt-6-astra' }, { cwd: h.root })
+      const leanAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-lean'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
       const registry = (h.ctx as any).get('tools')
       const registeredSchemas = registry.schemas(leanAgent)
       const diagnostics: string[] = []
@@ -235,9 +284,9 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
       fixtureTaskType = 'research'
       await composition?.dispose(); composition = undefined
       await adapter?.dispose(); adapter = undefined
-      adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), toolExposure: { mode: 'full' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
+      adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'full' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
       composition = await mountDshComposition(h.ctx, adapter.host)
-      const fullResearchAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-full-research'), { provider: 'fixture-openai', model: 'gpt-6-astra' }, { cwd: h.root })
+      const fullResearchAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-full-research'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
       const fullResearchBefore = requests.length
       try { await turn(h, fullResearchAgent, 'Inspect the repository and report the result.') } catch { /* Capture precedes intentional HTTP 400. */ }
       assert.equal(requests.length, fullResearchBefore + 1)
@@ -252,9 +301,9 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
         fixtureTaskType = taskType
         await composition?.dispose(); composition = undefined
         await adapter?.dispose(); adapter = undefined
-        adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
+        adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
         composition = await mountDshComposition(h.ctx, adapter.host)
-        const autoAgent = await h.ctx.agentLoop.create(h.session.SessionId(`tool-exposure-auto-${taskType}`), { provider: 'fixture-openai', model: 'gpt-6-astra' }, { cwd: h.root })
+        const autoAgent = await h.ctx.agentLoop.create(h.session.SessionId(`tool-exposure-auto-${taskType}`), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
         const before: number = requests.length
         const registry = (h.ctx as any).get('tools')
         const registeredSchemas = registry.schemas(autoAgent)
@@ -287,7 +336,68 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
         auto.push(measurement)
       }
     }
-    const report = { runtime: runtimeVersion, protocol: protocol.name, presentation: 'native', cases: lean ? ['normal-first-request', 'tool-call-result-final-answer'] : ['normal-first-request'], requests: { full, phase, ...(lean ? { lean } : {}), ...(fullResearch ? { fullResearch } : {}), auto }, measurementFields: { system: protocol.name === 'responses' ? 'instructions' : 'system/developer messages', messages: protocol.name === 'responses' ? 'input' : 'messages (including system/developer)' }, byteSavings: { phaseVsFull: { tools: full.toolsBytes - phase.toolsBytes, body: full.bodyBytes - phase.bodyBytes }, ...(leanSavings ? { leanVsPhase: leanSavings } : {}) }, ...(lean ? { appObservation: { transformedDescriptionCount: 2, unownedSurfaceReductionCount: 0, unownedSurfaceReductionReason: 'registration_provenance_unavailable' }, providerUsage: 'not measured; requests were intercepted before OpenAI' } : { providerUsage: 'unavailable' }), skipReason: null }
+    if (runtimeVersion === '0.2.0-rc.2' && protocol.name === 'deepseek') {
+      fixtureTaskType = 'build'
+      for (const mode of ['auto', 'lean', 'phase'] as const) {
+        await composition?.dispose(); composition = undefined
+        await adapter?.dispose(); adapter = undefined
+        adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
+        composition = await mountDshComposition(h.ctx, adapter.host)
+        const registry = (h.ctx as any).get('tools')
+        const originalGet = registry.get
+        const warnings: string[] = []
+        const previousWarn = console.warn
+        console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); previousWarn(...args) }
+        registry.get = function(name: string, ...args: unknown[]) {
+          const definition = originalGet.call(this, name, ...args)
+          return name === 'curator_check' && definition ? { ...definition, execute: async () => undefined } : definition
+        }
+        try {
+          for (let index = 0; index < 2; index++) {
+            const collisionAgent = await h.ctx.agentLoop.create(h.session.SessionId(`tool-exposure-${mode}-collision-${index}`), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+            const before: number = requests.length
+            try { await turn(h, collisionAgent, 'Inspect the repository and report the result.') } catch { /* Capture precedes intentional HTTP 400. */ }
+            assert.equal(requests.length, before + 1)
+            assert.deepEqual(requests[before]!.body.tools, fullBody.tools, 'ownership collisions must retain the entire full surface')
+          }
+          assert.equal(warnings.filter(line => line.includes(`surface unchanged: ${mode}:ownership_unknown`)).length, 1, 'each adapter must warn once with the actual requested mode')
+          assert.ok(warnings.every(line => !/model_route_unavailable|unsupported_route/.test(line)))
+        } finally { registry.get = originalGet; console.warn = previousWarn }
+      }
+      await composition?.dispose(); composition = undefined
+      await adapter?.dispose(); adapter = undefined
+      adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'lean' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
+      composition = await mountDshComposition(h.ctx, adapter.host)
+      for (const failure of ['model_binding_unavailable', 'unsupported_schema', 'unsupported_runtime', 'ptc', 'both'] as const) {
+        const agent = await h.ctx.agentLoop.create(h.session.SessionId(`tool-exposure-fallback-${failure}`), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+        let originalTools: unknown, observedTools: unknown
+        const mutate = agent.ctx.on('system-prompt/assemble', async (_assembly: unknown, _context: unknown, next: () => Promise<any>) => {
+          const result = await next()
+          const runCode = { name: 'run_code', description: 'Execute PTC', parameters: { type: 'object' } }
+          const tools = failure === 'unsupported_schema' ? result.tools.map((tool: any) => tool.name === 'curator_check' ? { ...tool, description: 'Unrecognized description format' } : tool)
+            : failure === 'unsupported_runtime' ? [...result.tools, null]
+            : failure === 'ptc' ? [runCode] : failure === 'both' ? [...result.tools, runCode] : result.tools
+          originalTools = tools
+          return { ...result, tools, ...(failure === 'model_binding_unavailable' ? { variables: { ...result.variables, provider: undefined } } : {}) }
+        })
+        const observe = agent.ctx.on('system-prompt/assemble', async (_assembly: unknown, _context: unknown, next: () => Promise<any>) => {
+          const result = await next(); observedTools = result.tools; return result
+        }, { prepend: true })
+        const warnings: string[] = []
+        const previousWarn = console.warn
+        console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); previousWarn(...args) }
+        try {
+          try { await turn(h, agent, 'Inspect the repository and report the result.') } catch { /* Invalid injected assembly or intentional HTTP 400. */ }
+          assert.ok(originalTools, 'the native assembly must reach the injected failure')
+          assert.strictEqual(observedTools, originalTools, `${failure} must retain the exact native tool array`)
+          const reason = failure === 'ptc' || failure === 'both' ? 'unsupported_presentation' : failure
+          // PTC and both share one reason on this adapter.
+          assert.equal(warnings.filter(line => line.includes(`surface unchanged: lean:${reason}`)).length, failure === 'both' ? 0 : 1)
+        } finally { mutate(); observe(); console.warn = previousWarn }
+      }
+    }
+    const report = { runtime: runtimeVersion, protocol: protocol.name, presentation: 'native', cases: lean ? ['normal-first-request', 'tool-call-result-final-answer'] : ['normal-first-request'], requests: { full, phase, ...(lean ? { lean } : {}), ...(fullResearch ? { fullResearch } : {}), auto }, measurementFields: { system: protocol.name === 'responses' ? 'instructions' : protocol.name === 'chat-completions' ? 'system/developer messages' : 'system', messages: protocol.name === 'responses' ? 'input' : protocol.name === 'chat-completions' ? 'messages (including system/developer)' : 'messages' }, byteSavings: { phaseVsFull: { tools: full.toolsBytes - phase.toolsBytes, body: full.bodyBytes - phase.bodyBytes }, ...(lean && leanSavings ? { leanVsPhase: leanSavings, leanVsFull: { tools: full.toolsBytes - lean.toolsBytes, body: full.bodyBytes - lean.bodyBytes } } : {}) }, ...(lean ? { appObservation: { transformedDescriptionCount: 2, unownedSurfaceReductionCount: 0, unownedSurfaceReductionReason: 'registration_provenance_unavailable' }, providerUsage: 'not measured; requests were intercepted before the provider' } : { providerUsage: 'unavailable' }), skipReason: null }
+    assert.deepEqual(unexpectedRequests, [], 'unexpected external requests must fail even when a host degradation catches the fetch error')
     console.info('TOOL_EXPOSURE_WIRE_REPORT', JSON.stringify(report))
   } finally {
     globalThis.fetch = nativeFetch
@@ -297,7 +407,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   }
 }
 
-// Both cases replace global fetch, so keep protocol cases serial.
+// Each case replaces global fetch, so keep protocol cases serial.
 for (const protocol of protocols) {
-  test(`native ${protocol.name} serializer preserves task-aware tool exposure and external execution`, { concurrency: false, skip: !nativeAvailable ? 'requires the pinned DSH runtime' : false, timeout: 30_000 }, () => verifyNativeToolExposure(protocol))
+  test(`native ${protocol.name} serializer preserves task-aware tool exposure and external execution`, { concurrency: false, skip: !nativeAvailable ? 'requires the pinned DSH runtime' : (protocol.name === 'deepseek' || protocol.name === 'anthropic') && runtimeVersion !== '0.2.0-rc.2' ? 'Messages wire coverage requires the current fixture' : false, timeout: 30_000 }, () => verifyNativeToolExposure(protocol))
 }

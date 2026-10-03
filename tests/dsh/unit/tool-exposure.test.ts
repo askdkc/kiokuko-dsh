@@ -92,7 +92,7 @@ test('configuration defaults to auto and rejects unknown modes', () => {
   assert.throws(() => ToolExposureConfig.parse({ mode: 'guess' }))
 })
 
-test('lean mode admits only explicit OpenAI pi-ai HTTP protocols', () => {
+test('deprecated route query preserves its legacy OpenAI-only result', () => {
   assert.equal(supportsLeanToolExposureRoute({ provider: 'openai', family: 'openai', connection: 'api', protocol: 'responses' }), true)
   assert.equal(supportsLeanToolExposureRoute({ provider: 'openai', family: 'openai', connection: 'api', protocol: 'chat-completions' }), true)
   assert.equal(supportsLeanToolExposureRoute({ provider: 'openrouter', family: 'openrouter', connection: 'api', protocol: 'chat-completions' }), false)
@@ -175,10 +175,10 @@ for (const taskType of ['chat', 'research', 'analysis', 'writing', 'review', 'bu
     assert.equal(resolveToolExposureMode({ mode: 'auto', taskType, selectionMode: 'enno', state: state('planning', { nextAction: 'review_plan' }), route: autoRoute }).mode, 'lean')
   })
 }
-test('auto conservatively retains surface for unknown task, state or route; explicit modes remain overrides', () => {
+test('auto conservatively retains surface for unknown task or state; explicit modes remain overrides', () => {
   const input = { mode: 'auto', taskType: null, selectionMode: 'normal', state: state('normal'), route: autoRoute } as const
   assert.equal(resolveToolExposureMode(input).mode, 'full')
-  assert.equal(resolveToolExposureMode({ ...input, taskType: 'chat', route: undefined }).mode, 'full')
+  assert.equal(resolveToolExposureMode({ ...input, taskType: 'chat', route: undefined }).mode, 'minimal')
   assert.equal(resolveToolExposureMode({ ...input, taskType: 'chat', state: state('future' as DshToolPhase) }).mode, 'full')
   for (const mode of ['full', 'phase', 'lean'] as const) assert.equal(resolveToolExposureMode({ ...input, mode }).mode, mode)
 })
@@ -193,3 +193,13 @@ test('minimal removes owned tools without changing external definitions or accep
   assert.equal(tools.length, 2)
   assert.strictEqual(projectToolsForMinimal(tools, state('normal'), registered, () => ({ execute: async () => undefined })).tools, tools)
 })
+
+for (const family of ['openai', 'deepseek', 'opencode-go', 'opencode-zen', 'openrouter', 'orcarouter', 'ollama', 'other'] as const) {
+  for (const connection of ['api', 'codex', 'local'] as const) {
+    test(`auto ignores ${family}/${connection} route metadata`, () => {
+      const input = { mode: 'auto', taskType: 'build', selectionMode: 'normal', state: state('normal') } as const
+      assert.equal(resolveToolExposureMode(input).mode, 'lean')
+      assert.deepEqual(resolveToolExposureMode({ ...input, route: { provider: 'unknown-provider', family, connection, protocol: 'unknown' } }), resolveToolExposureMode(input))
+    })
+  }
+}

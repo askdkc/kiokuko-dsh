@@ -232,6 +232,16 @@ async function createAndSmokeTestTarball() {
   await symlink(join(root, 'node_modules'), join(packageRoot, 'node_modules'), 'dir')
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
   await assertDshClientArtifact(packageRoot)
+  if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') {
+    const wire = await exec(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/integration/tool-exposure-native.test.ts'], {
+      cwd: root,
+      env: { ...process.env, KIOKUKO_TOOL_EXPOSURE_ENTRY: join(packageRoot, 'dist/dsh/index.js') },
+      timeout: 120_000,
+      maxBuffer: 16 * 1024 * 1024,
+    })
+    process.stdout.write(wire.stdout)
+    process.stderr.write(wire.stderr)
+  }
 
   const smokeCode = `
     const root = await import('kiokuko-dsh');

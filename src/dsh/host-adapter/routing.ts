@@ -10,7 +10,7 @@ import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from '../lisp/request
 import { installDshModelRouting, modelRoleForState, isModelAvailabilityFailure, type RoutableAgent } from '../model-routing.js'
 import { assertDshModelAdmitted, type DshIntakeGateResult, type DshPreStepEvent } from '../intake-gate.js'
 import { hasKnownDshToolPolicyState, type DshToolPolicyState } from '../tool-policy.js'
-import { projectToolsForLean, projectToolsForMinimal, resolveToolExposureMode, projectToolsForPhase, supportsLeanToolExposureRoute, type ToolExposureConfig, type ToolExposureMetrics } from '../tool-exposure.js'
+import { projectToolsForLean, projectToolsForMinimal, resolveToolExposureMode, projectToolsForPhase, type ToolExposureConfig, type ToolExposureMetrics } from '../tool-exposure.js'
 import type { NativeModelCatalog } from '../native-model-catalog.js'
 import type { DshUserQuestionAgent } from '../user-interaction.js'
 import { KiokukoError } from '../../errors.js'
@@ -225,7 +225,9 @@ export function createRouting({
           let fallback: string | undefined
           const surface = (assembly as { tools?: unknown }).tools
           const runtimeTools = tools as unknown as { get?: (name: string, scope?: unknown) => unknown; schemas?: (...args: unknown[]) => unknown } | undefined
-          if (!Array.isArray(surface) || typeof runtimeTools?.get !== 'function' || typeof runtimeTools.schemas !== 'function') fallback = 'unsupported_runtime'
+          if (!Array.isArray(surface) || surface.some(value => typeof value !== 'object' || value === null || Array.isArray(value)
+            || typeof value.name !== 'string' || value.description !== undefined && typeof value.description !== 'string')
+            || typeof runtimeTools?.get !== 'function' || typeof runtimeTools.schemas !== 'function') fallback = 'unsupported_runtime'
           else if (surface.some(value => typeof value === 'object' && value !== null && !Array.isArray(value) && (value as { name?: unknown }).name === 'run_code')) fallback = 'unsupported_presentation'
           else {
             const session = agent.session
@@ -276,7 +278,6 @@ export function createRouting({
                 && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent)
               let effectiveMode: import('../tool-exposure.js').ResolvedToolExposureMode = exposureMode === 'auto' ? 'full' : exposureMode
               let decisionReason = 'explicit'
-              let routeAllowed = exposureMode === 'phase'
               if (exposureMode === 'lean' || exposureMode === 'auto') {
                 const exposureRole = modelRoleForState(item.prepared.ennoOduno)
                 const selectedBinding = autoRoute?.runId === item.runId && autoRoute.sessionId === item.sessionId
@@ -286,25 +287,15 @@ export function createRouting({
                 const provider = variables?.provider
                 const model = variables?.model
                 const assemblyBinding = typeof provider === 'string' && typeof model === 'string' ? { provider, model } : undefined
-                if (!assemblyBinding || (selectedBinding && (assemblyBinding.provider !== selectedBinding.provider || assemblyBinding.model !== selectedBinding.model))) fallback = 'lean:model_binding_unavailable'
-                else if (!modelCatalog?.resolveToolExposureRoute) fallback = 'lean:model_route_unavailable'
+                if (!assemblyBinding || (selectedBinding && (assemblyBinding.provider !== selectedBinding.provider || assemblyBinding.model !== selectedBinding.model))) fallback = 'model_binding_unavailable'
                 else {
-                  // Optional presentation discovery must not veto an admitted native request.
-                  let route: import('../model-configuration.js').ModelRoute | undefined
-                  try { route = await modelCatalog.resolveToolExposureRoute(assemblyBinding) }
-                  catch { fallback = 'lean:model_route_unavailable' }
-                  if (!supportsLeanToolExposureRoute(route)) fallback = route ? `lean:unsupported_route:${route.family}:${route.protocol}` : 'lean:model_route_unavailable'
-                  else {
-                    const decision = resolveToolExposureMode({ mode: exposureMode, taskType: prepared.intake.profile.taskType,
-                      selectionMode: selection?.mode === 'enno' ? 'enno' : 'normal', state, route })
-                    effectiveMode = decision.mode
-                    decisionReason = decision.reason
-                    if (effectiveMode === 'full') fallback = `auto:${decision.reason}`
-                    else routeAllowed = true
-                  }
+                  const decision = resolveToolExposureMode({ mode: exposureMode, taskType: prepared.intake.profile.taskType,
+                    selectionMode: selection?.mode === 'enno' ? 'enno' : 'normal', state })
+                  effectiveMode = decision.mode
+                  decisionReason = decision.reason
+                  if (effectiveMode === 'full') fallback = decision.reason
                 }
               }
-              if (fallback === undefined && !routeAllowed) fallback = 'lean:unsupported_route'
               if (fallback === undefined) {
                 const resolver = (name: string) => {
                   const definition = runtimeTools.get!.call(tools, name, agent)

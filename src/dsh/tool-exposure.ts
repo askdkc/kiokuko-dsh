@@ -16,11 +16,12 @@ export interface ToolExposureDecision {
 /** Decide presentation only; admission, ownership and runtime bindings are host concerns. */
 export function resolveToolExposureMode(input: {
   mode: ToolExposureConfig['mode']; taskType: TaskType | null
-  selectionMode: 'normal' | 'enno'; state: DshToolPolicyState; route: ModelRoute | undefined
+  selectionMode: 'normal' | 'enno'; state: DshToolPolicyState;
+  /** @deprecated Native projection does not depend on provider metadata. */
+  route?: ModelRoute | undefined
 }): ToolExposureDecision {
   if (input.mode !== 'auto') return { mode: input.mode, reason: 'explicit' }
   if (!hasKnownDshToolPolicyState(input.state)) return { mode: 'full', reason: 'unknown_state' }
-  if (!supportsLeanToolExposureRoute(input.route)) return { mode: 'full', reason: 'unsupported_route' }
   if (input.selectionMode === 'enno') return { mode: 'lean', reason: 'enno' }
   if (input.taskType === null || !TASK_TYPES.includes(input.taskType)) return { mode: 'full', reason: 'unknown_task' }
   if (['chat', 'research', 'analysis', 'writing', 'review'].includes(input.taskType)) return { mode: 'minimal', reason: 'task_minimal' }
@@ -28,7 +29,7 @@ export function resolveToolExposureMode(input: {
   return { mode: 'lean', reason: 'task_execution' }
 }
 
-/** Restrict description compaction to the two pi-ai APIs verified by the native wire fixture. */
+/** @deprecated Legacy OpenAI route query; native tool projection no longer uses this whitelist. */
 export function supportsLeanToolExposureRoute(route: ModelRoute | undefined): boolean {
   return route?.family === 'openai' && route.connection === 'api'
     && (route.protocol === 'responses' || route.protocol === 'chat-completions')
