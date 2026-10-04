@@ -1181,7 +1181,12 @@ function DiffReviewTab(props: Record<string, unknown>): unknown {
       ] }) : null,
       jsx('button', { type: 'button', className: 'kiokuko-review-list-toggle', onClick: () => {
         controller.change(sessionId, { fileListOpen: !state.fileListOpen })
-        requestAnimationFrame(() => document.getElementById(`kiokuko-review-${review.reviewId}-${state.fileListOpen ? 'detail' : 'files'}`)?.focus())
+        requestAnimationFrame(() => {
+          const pane = document.getElementById(`kiokuko-review-${review.reviewId}-${state.fileListOpen ? 'detail' : 'files'}`)
+          // The list's keyboard owner is inside the navigation landmark.
+          // Focusing the landmark leaves number/Space events outside that owner.
+          ;(pane?.querySelector<HTMLElement>('[data-kiokuko-shortcuts]') ?? pane)?.focus()
+        })
       },
         children: state.fileListOpen ? '差分に戻る' : '変更ファイル一覧' }),
       jsxs('div', { className: 'kiokuko-review-main', 'data-list-open': String(state.fileListOpen), children: [
