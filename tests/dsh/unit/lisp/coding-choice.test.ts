@@ -73,3 +73,13 @@ test('cancellation, unavailable UI and activation failure never admit coding or 
   })
   await assert.rejects(failed.prepare(f.input), /SBCL startup failed/)
 })
+
+test('choosing conversation once survives unclear follow-ups, but a new coding request gets its own choice', async () => {
+  const f = fixture([{ selected: ['質問、相談、会話'] }, { selected: ['Lispモードを使わない'] }])
+  assert.equal((await f.service.prepare({ ...f.input, taskType: null })).taskType, 'chat')
+  for (const turn of [2, 3, 4]) assert.equal((await f.service.prepare({ ...f.input, task: 'それはどういう意味？', taskType: null, turn })).taskType, 'chat')
+  assert.deepEqual(f.asked, ['taskType'])
+  await f.service.prepare({ ...f.input, task: 'この不具合を修正して', turn: 5, taskType: 'debug' })
+  assert.deepEqual(f.asked, ['taskType', 'lisp-coding-mode'])
+  await assert.rejects(f.service.prepare({ ...f.input, agent: { id: 'other-session' }, turn: 6, taskType: null }), /Unexpected repeated question/)
+})

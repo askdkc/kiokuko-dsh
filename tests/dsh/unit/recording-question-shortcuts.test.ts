@@ -23,7 +23,7 @@ const recordingQuestion = {
   ],
 }
 
-test('every single-select question keeps the numbered option card while unaddressable carriers stay native', async () => {
+test('every question shape keeps the numbered option card', async () => {
   const globals = globalThis as unknown as Record<string, any>
   const names = ['createSnapshotStore', 'jsx', 'jsxs', 'useState', 'useRef', 'useEffect']
   const previous = names.map(name => globals[name])
@@ -98,17 +98,15 @@ test('every single-select question keeps the numbered option card while unaddres
       assert.equal(entry.definition.select({ pendingInteraction: carrier }), carrier,
         'an unlisted single-select question keeps the shortcut card')
     }
-    // Carriers one number key cannot address stay with the native composer.
+    // Multi-select, optionless and long catalogs use the same composer.
     for (const questions of [
       [{ ...recordingQuestion, multiSelect: true }],
       [{ ...recordingQuestion, options: [] }],
       [{ ...recordingQuestion, options: Array.from({ length: 10 }, (_, index) => ({ label: `選択肢${index + 1}` })) }],
     ]) {
-      assert.equal(entry.definition.select({ pendingInteraction: { ...pending, questions } }), null)
+      const carrier = { ...pending, questions }; assert.equal(entry.definition.select({ pendingInteraction: carrier }), carrier)
     }
-    assert.equal(entry.definition.select({
-      pendingInteraction: { ...pending, questions: [recordingQuestion, recordingQuestion] },
-    }), null)
+    const batch = { ...pending, questions: [recordingQuestion, { ...recordingQuestion, id: 'second' }] }; assert.equal(entry.definition.select({ pendingInteraction: batch }), batch)
 
     const wrapper = entry.component({ matched: pending })
     const render = () => { cursor = 0; return wrapper.component(wrapper.props) }

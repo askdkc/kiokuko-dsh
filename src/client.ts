@@ -371,9 +371,9 @@ function LispSessionStatus(props: Record<string, unknown>): unknown {
         ...(error ? [jsx('p', { role: 'alert', children: error })] : []),
         ...(details ? [jsx('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }, children: details })] : []),
         jsx('p', { children: '未確定の変更は自動で再実行・復元しません。詳細は /kioku-lisp diagnostics でも確認できます。' }),
-        jsx('button', { type: 'button', disabled: busy, onClick: () => void act('cancel'), children: '停止する' }),
-        jsx('button', { type: 'button', disabled: busy || ['STOP_UNCONFIRMED', 'SUSPENDED'].includes(status?.state ?? ''), onClick: () => void act('recover'), children: '照合して新しい Lisp を起動' }),
-        jsx('button', { type: 'button', onClick: () => setOpen(false), children: '閉じる' }),
+        jsx(NumberedPicker, { label: 'Lisp の操作', disabled: busy,
+          options: [{ value: 'cancel', label: '停止する' }, { value: 'recover', label: '照合して新しい Lisp を起動', disabled: ['STOP_UNCONFIRMED', 'SUSPENDED'].includes(status?.state ?? '') }, { value: 'close', label: '閉じる' }],
+          onChoose: (value: string) => value === 'close' ? setOpen(false) : void act(value) }),
       ] }) })] })
 }
 /** Read-only, Session-bound display with explicit delivery acknowledgement after render. */
@@ -446,244 +446,301 @@ function DeepSessionReports(props: Record<string, unknown>): unknown {
   ] })
 }
 
-interface IntakePending {
-  readonly key: string
-  readonly kind: 'question' | 'plan-review'
-  readonly questions: readonly [{ id: string; header: string; question: string; detail?: string; options: readonly { label: string; description?: string }[]; multiSelect?: boolean; intent?: { kind: 'plan-review'; approve: string } }]
-  answer(value: { answers: [{ id: string; selected: string[]; custom?: string }] }): Promise<void>
-  cancel(): Promise<void>
+interface IntakeItem {
+  readonly id: string; readonly header?: string; readonly question: string; readonly detail?: string
+  readonly options?: readonly { label: string; description?: string }[]
+  readonly multiSelect?: boolean; readonly intent?: { kind: 'plan-review'; approve: string }
 }
-
-interface IntakeDraft { selected: number | null; custom: string; ordinal?: string }
-const intakeDrafts = new WeakMap<object, IntakeDraft>()
-
+interface IntakeAnswer { id: string; selected: string[]; custom?: string }
+interface PendingSnapshot { state: 'open' | 'continued'; waitState?: string; countdown?: { remainingMs: number; running: boolean }; channel: 'waterfall' | 'rpc' | 'none'; closed: boolean }
+interface IntakePending {
+  readonly key: string; readonly sessionId?: string; readonly kind: 'question' | 'plan-review'
+  readonly questions: readonly IntakeItem[]; readonly review?: readonly IntakeAnswer[]; readonly dismissal?: 'hide' | 'cancel'
+  answer(value: { answers: IntakeAnswer[] }): Promise<void>
+  dismiss?(): Promise<void>; cancel?(): Promise<void>
+  snapshot?(): PendingSnapshot; subscribe?(listener: () => void): () => void
+  holdFocus?(): void; releaseFocus?(): void; engage?(): void
+}
+interface IntakeDraft { selected: number | null; checked: number[]; custom: string; ordinal: string }
+interface IntakeBatch { page: number; drafts: IntakeDraft[] }
+const intakeDrafts = new WeakMap<object, IntakeBatch>()
+// Named native cards may be reconstructed when reopened. Scope drafts to both
+// native session and request identity, with bounded retention for abandoned cards.
+const namedIntakeDrafts = new Map<string, IntakeBatch>()
+const emptyDraft = (): IntakeDraft => ({ selected: null, checked: [], custom: '', ordinal: '' })
+function draftKey(pending: IntakePending): string | undefined {
+  return pending.sessionId && pending.dismissal === 'hide' ? JSON.stringify([pending.sessionId, pending.key]) : undefined
+}
+function readIntakeDraft(pending: IntakePending): IntakeBatch {
+  return intakeDrafts.get(pending) ?? namedIntakeDrafts.get(draftKey(pending) ?? '') ?? { page: 0, drafts: pending.questions.map(emptyDraft) }
+}
+function saveIntakeDraft(pending: IntakePending, batch?: IntakeBatch): void {
+  const key = draftKey(pending)
+  if (!batch) { intakeDrafts.delete(pending); if (key) namedIntakeDrafts.delete(key); return }
+  intakeDrafts.set(pending, batch)
+  if (key) {
+    namedIntakeDrafts.delete(key); namedIntakeDrafts.set(key, batch)
+    if (namedIntakeDrafts.size > 100) namedIntakeDrafts.delete(namedIntakeDrafts.keys().next().value!)
+  }
+}
+function pendingState(pending: IntakePending): PendingSnapshot {
+  return pending.snapshot?.() ?? { state: 'open', channel: 'waterfall', closed: false }
+}
+function dismissQuestion(pending: IntakePending): Promise<void> {
+  // Prefer the host's current semantics; a failed hide must never cancel instead.
+  return pending.dismiss ? pending.dismiss() : pending.cancel!()
+}
 interface IntakeKeyEvent {
   key: string; code?: string; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; repeat?: boolean;
   isComposing?: boolean; keyCode?: number; nativeEvent?: { isComposing?: boolean; keyCode?: number };
+  target?: EventTarget | null | { tagName?: string; isContentEditable?: boolean }; defaultPrevented?: boolean
   preventDefault(): void; stopPropagation(): void;
 }
-
-/** Option count a single number key addresses: the range the shortcut card covers. */
-const DIGIT_ADDRESSABLE_OPTIONS = 9
-
-const ENNO_SELECTION_QUESTIONS = [
-  'enno-execution-mode', 'enno-model-source', 'enno-template', 'enno-template-provider',
-  'enno-template-unavailable', 'enno-bind-provider', 'enno-model-review', 'enno-catalog-retry',
-  'enno-route-provider', 'enno-route-family', 'enno-route-auth', 'enno-route-protocol',
-]
-const DEEP_SELECTION_QUESTIONS = [
-  'deep-configuration', 'deep-budget-field', 'deep-budget-value', 'deep-role-model',
-  'deep-apply-configuration', 'deep-pending-input', 'deep-uncertain',
-]
-function isEnnoSearchQuestion(question: IntakePending['questions'][0]): boolean {
+function composingKey(event: IntakeKeyEvent): boolean {
+  return !!(event.repeat || event.isComposing || event.keyCode === 229 || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229)
+}
+function editingKey(event: IntakeKeyEvent): boolean {
+  const target = event.target as HTMLElement | undefined
+  return !!(target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName ?? ''))
+}
+function shortcutPlatform(): { control: boolean; label: string; aria: string } {
+  const mac = /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? '')
+  const ua = globalThis.navigator?.userAgent ?? ''
+  const control = !mac || /Safari\//u.test(ua) && !/(?:Chrome|Chromium|CriOS|Edg|OPR)\//u.test(ua)
+  return { control, label: control ? 'Ctrl' : 'Cmd', aria: control ? 'Control' : 'Meta' }
+}
+function modifiedKey(event: IntakeKeyEvent): boolean {
+  return !!(shortcutPlatform().control ? event.ctrlKey && !event.metaKey : event.metaKey && !event.ctrlKey)
+}
+function shortcutLabel(index: number, multi = false): string {
+  return index < 9 ? `${shortcutPlatform().label}+${index + 1}` : `${index + 1} → ${multi ? 'Space' : 'Enter'}`
+}
+function shortcutAria(index: number, count: number): Record<string, string> {
+  return index < 9 ? { 'aria-keyshortcuts': `${count <= 9 ? `${index + 1} ` : ''}${shortcutPlatform().aria}+${index + 1}` } : {}
+}
+const shortcutOwners = new WeakMap<Document, HTMLElement[]>()
+/** Only the focused group (or the most recently focused visible group) owns a key. */
+function useShortcutGroup(ref: { current: HTMLElement | null }, handler: (event: IntakeKeyEvent) => void): void {
+  const latest = useRef(handler); latest.current = handler
+  useEffect(() => {
+    const element = ref.current, doc = element?.ownerDocument
+    if (!element || !doc) return
+    const stack = shortcutOwners.get(doc) ?? []; shortcutOwners.set(doc, stack); stack.push(element)
+    const claim = () => { const i = stack.indexOf(element); if (i >= 0) stack.splice(i, 1); stack.push(element) }
+    const listener = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !element.isConnected || !element.getClientRects().length) return
+      const target = event.target as HTMLElement | null
+      if (target?.nodeType && !element.contains(target)) return
+      const group = target?.closest?.('[data-kiokuko-shortcuts]')
+      if (group ? group !== element : stack.filter(item => item.isConnected && item.getClientRects().length).at(-1) !== element) return
+      const dialog = target?.closest?.('dialog,[role="dialog"]')
+      if (dialog && !dialog.contains(element)) return
+      if (group === element) claim()
+      latest.current(event)
+    }
+    element.addEventListener?.('focusin', claim); element.addEventListener?.('pointerdown', claim)
+    doc.addEventListener('keydown', listener, true)
+    return () => {
+      element.removeEventListener?.('focusin', claim); element.removeEventListener?.('pointerdown', claim)
+      doc.removeEventListener('keydown', listener, true)
+      const i = stack.indexOf(element); if (i >= 0) stack.splice(i, 1)
+    }
+  }, [ref])
+}
+function isEnnoSearchQuestion(question: IntakeItem): boolean {
   return question.header === '実行方式とモデル' && /^enno-(?:provider|model)-(?:ideal|zenki|goki|worker|check)$/u.test(question.id)
 }
-function questionInputKind(question: IntakePending['questions'][0]): 'choice' | 'search' | 'value' {
+function questionInputKind(question: IntakeItem): 'choice' | 'search' | 'value' {
   if (isEnnoSearchQuestion(question) || (question.header === 'Deep planning' && question.id === 'deep-role-model')) return 'search'
   if (question.header === 'Deep planning' && question.id === 'deep-budget-value') return 'value'
   return 'choice'
 }
-
-/**
- * Decide whether this plugin's numbered card owns a native question carrier.
- *
- * The card claims every single-select question carrying one to nine options,
- * whoever asked it — Kiokuko's own intake, an Enno or Deep selection, another
- * plugin, or a question the model composed in chat — so a number-key plus Enter
- * shortcut is never missing from a question this composer shows. Longer catalogs
- * are claimed only by the Enno and Deep selection questions, whose typed search
- * and value flows own their own addressing. Multi-select batches, optionless
- * prompts, and multi-question batches have no single number per answer and stay
- * with the native composer.
- */
-function isSupportedQuestion(question: IntakePending['questions'][0] | undefined): boolean {
-  if (question === undefined || question.multiSelect === true) return false
-  const options = question.options?.length ?? 0
-  if (options < 1) return false
-  if (options <= DIGIT_ADDRESSABLE_OPTIONS) return true
-  if (question.header === '実行方式とモデル' && (ENNO_SELECTION_QUESTIONS.includes(question.id) || isEnnoSearchQuestion(question))) return true
-  if (question.header === 'Deep planning' && DEEP_SELECTION_QUESTIONS.includes(question.id)) return true
-  return false
-}
-
 function intakePending(props: Record<string, unknown>): IntakePending | null {
-  const pending = props.pendingInteraction as IntakePending | undefined
-  if (!pending || pending.questions?.length !== 1 || typeof pending.answer !== 'function' || typeof pending.cancel !== 'function') return null
-  const question = pending.questions[0]
-  if (!isSupportedQuestion(question)) return null
-  if (pending.kind === 'question') return pending
-  return pending.kind === 'plan-review' && question.intent?.kind === 'plan-review'
-    && typeof question.detail === 'string' && question.options.length <= 2
-    && question.options.some(option => option.label === question.intent!.approve) ? pending : null
+  const p = props.pendingInteraction as IntakePending | undefined
+  if (!p || !Array.isArray(p.questions) || !p.questions.length || typeof p.answer !== 'function'
+    || typeof p.dismiss !== 'function' && typeof p.cancel !== 'function') return null
+  if (p.sessionId && typeof props.sessionId === 'string' && props.sessionId !== p.sessionId) return null
+  if (!p.questions.every(q => typeof q.id === 'string' && typeof q.question === 'string'
+    && (q.options === undefined || Array.isArray(q.options) && q.options.every((o: { label: string }) => typeof o.label === 'string')))) return null
+  if (p.kind === 'question') return p
+  const q = p.questions[0]!
+  return p.kind === 'plan-review' && p.questions.length === 1 && !q.multiSelect && q.intent?.kind === 'plan-review'
+    && typeof q.detail === 'string' && (q.options?.length ?? 0) <= 2 && q.options?.some((o: { label: string }) => o.label === q.intent!.approve) ? p : null
 }
-
-/**
- * Native pending carrier, plugin-only presentation. The card answers through the
- * carrier's own protocol, so claiming a question does not change what the asker
- * receives — only how the option can be chosen.
- */
 function IntakeQuestion(props: Record<string, unknown>): unknown {
-  const pending = props.matched as IntakePending
-  const t = props.t as (key: string) => string
-  return jsx(IntakeQuestionCard, { key: pending.key, pending,
+  const pending = props.matched as IntakePending, t = props.t as (key: string) => string
+  return jsx(IntakeQuestionCard, { key: `${pending.sessionId ?? ''}:${pending.key}`, pending,
     ...(pending.kind === 'plan-review' ? { reviewCopy: { discuss: t('review.discuss'),
       labels: { code: { copyLabel: t('review.copy'), copiedLabel: t('review.copied') }, footnotes: t('review.footnotes') } } } : {}),
   })
 }
-
 function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const pending = props.pending as IntakePending
-  const reviewing = pending.kind === 'plan-review'
   const reviewCopy = props.reviewCopy as { discuss: string; labels: unknown } | undefined
-  const original = pending.questions[0]
-  // The review's first choice cancels back to discussion. Other choices retain
-  // the host's exact labels; approval stays last, even if supplied first.
-  const question = reviewing ? { ...original, options: [
-    { label: reviewCopy!.discuss },
-    ...original.options.filter(option => option.label !== original.intent!.approve),
-    ...original.options.filter(option => option.label === original.intent!.approve),
-  ] } : original
-  const inputKind = questionInputKind(question)
-  const mac = /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? '')
-  const userAgent = globalThis.navigator?.userAgent ?? ''
-  const safari = mac && /Safari\//u.test(userAgent) && !/(?:Chrome|Chromium|CriOS|Edg|OPR)\//u.test(userAgent)
-  const controlShortcut = !mac || safari
-  const shortcutModifier = controlShortcut ? 'Ctrl' : 'Cmd'
-  const [draft, setDraft] = useState<IntakeDraft>(() => intakeDrafts.get(pending) ?? { selected: null, custom: '' })
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const inFlight = useRef(false)
-  const mounted = useRef(false)
-  const card = useRef<HTMLElement | null>(null)
-  const optionElements = useRef<Array<HTMLElement | null>>([])
+  const reviewing = pending.kind === 'plan-review'
+  const [batch, setBatch] = useState<IntakeBatch>(() => readIntakeDraft(pending))
+  const [snapshot, setSnapshot] = useState(() => pendingState(pending))
+  const [busy, setBusy] = useState(false), [error, setError] = useState('')
+  const inFlight = useRef(false), mounted = useRef(false), sent = useRef(false)
+  const generation = useRef(0)
+  const sentChannel = useRef<PendingSnapshot['channel']>('none')
+  const card = useRef<HTMLElement | null>(null), optionElements = useRef<Array<HTMLElement | null>>([])
+  const original = pending.questions[batch.page]!
+  const options = original.options ?? []
+  const question = { ...original, options: reviewing ? [{ label: reviewCopy!.discuss },
+    ...options.filter(o => o.label !== original.intent!.approve), ...options.filter(o => o.label === original.intent!.approve)] : options }
+  const draft = batch.drafts[batch.page]!, multi = question.multiSelect === true, inputKind = questionInputKind(question)
+  const editable = () => !pending.review && !pendingState(pending).closed && pendingState(pending).channel !== 'none'
   useEffect(() => {
-    mounted.current = true
-    card.current?.focus()
-    return () => { mounted.current = false }
+    generation.current++; mounted.current = true; inFlight.current = false; sent.current = false
+    setBusy(false); setError(''); setBatch(readIntakeDraft(pending))
+    const sync = () => {
+      const next = pendingState(pending); setSnapshot(next)
+      if (next.closed) { saveIntakeDraft(pending); return }
+      if (sent.current && sentChannel.current === 'waterfall' && next.channel === 'rpc') { sent.current = false; inFlight.current = false; setBusy(false) }
+    }
+    const unsubscribe = pending.subscribe?.(sync)
+    sync(); card.current?.focus(); pending.holdFocus?.()
+    const win = card.current?.ownerDocument?.defaultView
+    const release = () => pending.releaseFocus?.()
+    const hold = () => { if (card.current?.contains(card.current.ownerDocument.activeElement)) pending.holdFocus?.() }
+    win?.addEventListener('blur', release); win?.addEventListener('focus', hold)
+    return () => { generation.current++; mounted.current = false; unsubscribe?.(); pending.releaseFocus?.(); win?.removeEventListener('blur', release); win?.removeEventListener('focus', hold) }
   }, [pending])
-  useEffect(() => {
-    if (draft.selected !== null) optionElements.current[draft.selected]?.scrollIntoView({ block: 'nearest' })
-  }, [draft.selected])
+  useEffect(() => { if (draft.selected !== null) optionElements.current[draft.selected]?.scrollIntoView({ block: 'nearest' }) }, [draft.selected])
   const update = (value: IntakeDraft) => {
-    if (inFlight.current) return
-    intakeDrafts.set(pending, value)
-    setDraft(value)
-    setError('')
+    if (inFlight.current || !editable()) return
+    const current = readIntakeDraft(pending), next = { ...current, drafts: current.drafts.map((d, i) => i === current.page ? value : d) }
+    saveIntakeDraft(pending, next); setBatch(next); setError(''); pending.engage?.()
   }
-  const settle = (cancel = false) => {
-    if (inFlight.current) return
-    // Read the synchronous draft: a digit and Enter can arrive before React rerenders.
-    const current = intakeDrafts.get(pending) ?? draft
-    let custom = current.custom.trim()
-    let selected = current.selected
-    if (!cancel && selected === null && custom === '') {
-      setError(reviewing ? '選択肢を選んでから確定してください。' : '選択肢を選ぶか、自由入力してください。')
+  const choose = (index: number) => {
+    const d = readIntakeDraft(pending).drafts[batch.page]!
+    update({ selected: index, checked: multi ? d.checked.includes(index) ? d.checked.filter(n => n !== index) : [...d.checked, index] : [], custom: '', ordinal: '' })
+  }
+  const page = (index: number) => { const next = { ...readIntakeDraft(pending), page: index }; saveIntakeDraft(pending, next); setBatch(next); setError(''); card.current?.focus() }
+  const settle = (cancel = false, all = false) => {
+    if (inFlight.current || !mounted.current || pendingState(pending).closed || !cancel && !editable()) return
+    const current = readIntakeDraft(pending), d = current.drafts[current.page]!
+    const answers: IntakeAnswer[] = []
+    if (!cancel) {
+      for (let i = 0; i <= (all ? pending.questions.length - 1 : current.page); i++) {
+        const q = pending.questions[i]!, value = current.drafts[i]!, opts = reviewing ? question.options : q.options ?? []
+        let selected = q.multiSelect ? value.checked : value.selected === null ? [] : [value.selected]
+        let custom = value.custom.trim()
+        if (value.ordinal && (Number(value.ordinal) < 1 || Number(value.ordinal) > opts.length || q.multiSelect)) {
+          setError(q.multiSelect ? '入力した番号はSpaceでチェックしてください。' : `番号は1〜${opts.length}で入力してください。`); return
+        }
+        if (!reviewing && questionInputKind(q) === 'choice' && opts.length && /^[0-9０-９]+$/u.test(custom)) {
+          const n = Number(custom.normalize('NFKC'))
+          if (n < 1 || n > opts.length) { setError(`番号は1〜${opts.length}で入力してください。`); return }
+          selected = q.multiSelect ? [...new Set([...selected, n - 1])] : [n - 1]; custom = ''
+        }
+        if (!selected.length && !custom) { page(i); setError('選択肢を選ぶか、自由入力してください。'); return }
+        answers.push({ id: q.id, selected: selected.map(n => opts[n]!.label), ...(custom ? { custom } : {}) })
+      }
+      if (!all && current.page < pending.questions.length - 1) { page(current.page + 1); return }
+    }
+    inFlight.current = true; setBusy(true); setError('')
+    const epoch = generation.current
+    const currentCard = () => mounted.current && generation.current === epoch
+    const dismissing = cancel || reviewing && d.selected === 0
+    void Promise.resolve().then(() => {
+      if (!currentCard() || pendingState(pending).closed || !dismissing && !editable()) throw new Error('この質問には現在回答できません。')
+      sentChannel.current = pendingState(pending).channel
+      return dismissing ? dismissQuestion(pending) : pending.answer({ answers })
+    }).then(() => {
+      if (!currentCard()) return
+      if (!pending.snapshot || pendingState(pending).closed || dismissing && pending.dismissal !== 'hide') saveIntakeDraft(pending)
+      if (pending.snapshot && !dismissing && !pendingState(pending).closed) {
+        sent.current = true
+        if (sentChannel.current === 'waterfall' && pendingState(pending).channel === 'rpc') { sent.current = false; inFlight.current = false; if (mounted.current) setBusy(false) }
+      }
+    }).catch(cause => { if (currentCard()) { inFlight.current = false; setBusy(false); setError(cause instanceof Error ? cause.message : String(cause)) } })
+  }
+  const keyDown = (event: IntakeKeyEvent) => {
+    if (event.defaultPrevented || inFlight.current || composingKey(event) || event.altKey || event.shiftKey) return
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); void settle(true); return }
+    if (pending.review && event.key === 'Enter' && !event.ctrlKey && !event.metaKey && (event.target as HTMLElement)?.tagName !== 'BUTTON' && batch.page < pending.questions.length - 1) {
+      event.preventDefault(); event.stopPropagation(); page(batch.page + 1); return
+    }
+    if (!editable()) return
+    if (event.key === 'Enter' && modifiedKey(event)) { event.preventDefault(); event.stopPropagation(); settle(false, true); return }
+    if (editingKey(event)) {
+      if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !(event.target as HTMLElement)?.isContentEditable) {
+        event.preventDefault(); event.stopPropagation(); if (!multi || batch.page < pending.questions.length - 1) settle()
+      }
       return
     }
-    if (!cancel && !reviewing && inputKind === 'choice' && /^[0-9０-９]+$/u.test(custom)) {
-      const ordinal = Number(custom.normalize('NFKC'))
-      if (ordinal < 1 || ordinal > question.options.length) {
-        setError(`番号は1〜${question.options.length}で入力してください。`)
-        return
+    const modified = modifiedKey(event)
+    if ((event.ctrlKey || event.metaKey) && !modified) return
+    const digit = /^(?:Digit|Numpad)([0-9])$/u.exec(event.code ?? '')?.[1] ?? event.key
+    const d = readIntakeDraft(pending).drafts[batch.page]!
+    if (modified && /^[1-9]$/u.test(digit) && Number(digit) <= question.options.length) {
+      event.preventDefault(); event.stopPropagation(); choose(Number(digit) - 1); card.current?.focus(); return
+    }
+    if (modified) return
+    if (question.options.length && (/^[0-9]$/u.test(digit) || event.key === 'Backspace' && d.ordinal)) {
+      if (question.options.length <= 9 && (!/^[1-9]$/u.test(digit) || Number(digit) > question.options.length)) return
+      event.preventDefault(); event.stopPropagation()
+      if (question.options.length <= 9) choose(Number(digit) - 1)
+      else {
+        const ordinal = event.key === 'Backspace' ? d.ordinal.slice(0, -1) : (d.ordinal + digit).slice(0, 9)
+        const n = Number(ordinal), valid = n >= 1 && n <= question.options.length
+        update({ ...d, ordinal, custom: '', selected: !multi && valid ? n - 1 : multi ? d.selected : null })
+        if (ordinal && !valid) setError(`番号「${ordinal}」は範囲外です。Backspaceで訂正してください。`)
       }
-      selected = ordinal - 1
-      custom = ''
+      card.current?.focus(); return
     }
-    inFlight.current = true
-    setBusy(true)
-    setError('')
-    // Enter is a separate confirmation. Typing, key-repeat and IME cannot submit twice.
-    void Promise.resolve().then(() => cancel || (reviewing && selected === 0) ? pending.cancel() : pending.answer({ answers: [{
-      id: question.id,
-      selected: selected === null ? [] : [question.options[selected]!.label],
-      ...(custom ? { custom } : {}),
-    }] })).then(() => { intakeDrafts.delete(pending) }).catch(cause => {
-      if (!mounted.current) return
-      inFlight.current = false
-      setBusy(false)
-      setError(cause instanceof Error ? cause.message : String(cause))
-    })
-  }
-  const selectShortcut = (event: IntakeKeyEvent) => {
-    if (busy || inFlight.current || event.repeat || event.isComposing || event.keyCode === 229
-      || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || event.altKey || event.shiftKey
-      || !(controlShortcut ? event.ctrlKey && !event.metaKey : event.metaKey && !event.ctrlKey)) return false
-    const digit = /^(?:Digit|Numpad)([1-9])$/u.exec(event.code ?? '')?.[1] ?? event.key
-    if (!/^[1-9]$/u.test(digit) || Number(digit) > question.options.length) return false
-    event.preventDefault(); event.stopPropagation()
-    update({ selected: Number(digit) - 1, custom: '' })
-    card.current?.focus()
-    return true
-  }
-  useEffect(() => {
-    const element = card.current
-    const owner = element?.ownerDocument
-    if (!owner) return
-    // Capture before the host's composer handlers, even if it has moved focus.
-    // Only the visible, mounted question owns these modified shortcuts.
-    const listener = (event: KeyboardEvent) => {
-      if (element.isConnected && element.getClientRects().length > 0) selectShortcut(event)
-    }
-    owner.addEventListener('keydown', listener, true)
-    return () => owner.removeEventListener('keydown', listener, true)
-  }, [pending, busy, controlShortcut])
-  const keyDown = (event: IntakeKeyEvent & { target?: { tagName?: string; isContentEditable?: boolean } }) => {
-    if (selectShortcut(event)) return
-    if (busy || inFlight.current || event.repeat || event.isComposing || event.keyCode === 229 || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229
-      || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
-    const editing = event.target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName ?? '')
-    const current = intakeDrafts.get(pending) ?? draft
-    if (!editing && (/^[0-9]$/u.test(event.key) || (event.key === 'Backspace' && current.ordinal))) {
-      const multipleDigits = question.options.length > 9
-      if (!multipleDigits && (!/^[1-9]$/u.test(event.key) || Number(event.key) > question.options.length)) return
+    if (event.key === ' ' && multi && d.ordinal) {
       event.preventDefault(); event.stopPropagation()
-      const ordinal = event.key === 'Backspace' ? current.ordinal!.slice(0, -1) : multipleDigits ? (current.ordinal ?? '') + event.key : event.key
-      const index = Number(ordinal) - 1
-      const valid = ordinal !== '' && index >= 0 && index < question.options.length
-      update({ selected: valid ? index : null, custom: '', ordinal })
-      if (ordinal && !valid) setError(`番号「${ordinal}」は範囲外です。1〜${question.options.length}で入力してください。Backspaceで訂正できます。`)
-      card.current?.focus()
-    } else if (event.key === 'Enter' && event.target?.tagName !== 'BUTTON' && !event.target?.isContentEditable) {
-      event.preventDefault(); event.stopPropagation()
-      settle()
+      const n = Number(d.ordinal); if (n >= 1 && n <= question.options.length) choose(n - 1)
+      return
+    }
+    if (event.key === 'Enter' && (event.target as HTMLElement)?.tagName !== 'BUTTON') {
+      event.preventDefault(); event.stopPropagation(); if (!multi || batch.page < pending.questions.length - 1) settle()
     }
   }
-  const titleId = `kiokuko-intake-${pending.key}`
-  return jsxs('section', {
-    className: 'kiokuko-intake', tabIndex: 0, ref: (element: HTMLElement | null) => { card.current = element },
-    'aria-labelledby': titleId, 'aria-busy': busy, onKeyDown: keyDown,
+  useShortcutGroup(card, keyDown)
+  const disabled = busy || !editable(), titleId = `kiokuko-intake-${pending.key}`
+  const hint = question.options.length ? `${shortcutPlatform().label}+1〜${Math.min(9, question.options.length)}、または数字で${multi ? 'チェック切替' : '選択'}。${question.options.length > 9 ? `10以上は番号を続けて入力、Backspaceで訂正${multi ? '、Spaceでチェック' : ''}。` : ''}${multi ? `${shortcutPlatform().label}+Enterで全回答を送信。` : 'Enterで確定。'}` : `自由入力後、${multi ? shortcutPlatform().label + '+' : ''}Enterで確定。Shift+Enterで改行。`
+  return jsxs('section', { className: 'kiokuko-intake', tabIndex: 0, 'data-kiokuko-shortcuts': '',
+    ref: (el: HTMLElement | null) => { card.current = el }, 'aria-labelledby': titleId, 'aria-busy': busy, onKeyDown: keyDown,
+    onFocusCapture: () => pending.holdFocus?.(),
+    onBlurCapture: (event: { relatedTarget: Node | null }) => { if (!card.current?.contains(event.relatedTarget)) pending.releaseFocus?.() },
     children: [
       jsxs('header', { children: [jsx('h2', { id: titleId, children: question.question }),
-        jsx('button', { type: 'button', disabled: busy, onClick: () => settle(true), 'aria-label': '質問を閉じる', children: '閉じる' })] }),
+        jsx('button', { type: 'button', disabled: busy || snapshot.closed, onClick: () => settle(true), 'aria-label': '質問を閉じる', children: '閉じる（Esc）' })] }),
+      jsx('p', { id: `${titleId}-keys`, children: pending.review ? '回答済みの内容です。Enterで次の質問を表示、Escで閉じます。' : hint }),
       jsxs('div', { className: 'kiokuko-intake-body', children: [
-        reviewing ? jsx(MarkdownText, { text: question.detail, labels: reviewCopy!.labels })
-          : question.detail ? jsx('p', { children: question.detail }) : null,
-        jsx('p', { children: question.options.length > 9
-          ? `${shortcutModifier}+1〜9で選択、Enterで確定。10以上は番号（1〜${question.options.length}）を数字で続けて入力、Backspaceで訂正できます。`
-          : `${shortcutModifier}+1〜${question.options.length}で選択、Enterで確定。` }),
-        jsx('div', { 'aria-label': '選択肢', children: question.options.map((option, index) => jsxs('button', {
-          key: index, type: 'button', className: 'kiokuko-intake-option', disabled: busy,
-          ref: (element: HTMLElement | null) => { optionElements.current[index] = element },
-          'aria-pressed': draft.selected === index,
-          ...(index < 9 ? { 'aria-keyshortcuts': `${question.options.length <= 9 ? `${index + 1} ` : ''}${controlShortcut ? 'Control' : 'Meta'}+${index + 1}` } : {}),
-          onClick: () => update({ selected: index, custom: '' }),
+        reviewing ? jsx(MarkdownText, { text: question.detail, labels: reviewCopy!.labels }) : question.detail ? jsx('p', { children: question.detail }) : null,
+        !pending.review && !snapshot.closed && snapshot.state === 'continued' ? jsx('p', { children: '処理は継続中です。この質問には後から回答できます。' }) : null,
+        snapshot.countdown ? jsx('p', { children: `回答待ち: ${Math.ceil(snapshot.countdown.remainingMs / 1000)}秒${snapshot.countdown.running ? '' : '（操作中は停止）'}` }) : null,
+        pending.review ? jsx('p', { children: `回答済み: ${pending.review.find(a => a.id === question.id)?.selected.join('、') ?? ''} ${pending.review.find(a => a.id === question.id)?.custom ?? ''}` }) : null,
+        !pending.review && !editable() ? jsx('p', { role: 'status', children: snapshot.closed ? 'この質問は終了しました。' : '回答経路の接続を待っています。' }) : null,
+        jsx('div', { 'aria-label': '選択肢', 'aria-describedby': `${titleId}-keys`, children: question.options.map((option, index) => jsxs('button', {
+          type: 'button', className: 'kiokuko-intake-option', disabled,
+          ref: (el: HTMLElement | null) => { optionElements.current[index] = el },
+          ...(multi ? { role: 'checkbox', 'aria-checked': draft.checked.includes(index) } : { 'aria-pressed': draft.selected === index }),
+          ...(!pending.review ? shortcutAria(index, question.options.length) : {}),
+          onClick: () => choose(index),
           onKeyDown: (event: IntakeKeyEvent) => {
-            if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing || event.keyCode === 229 || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229 || (intakeDrafts.get(pending) ?? draft).selected !== index) return
-            event.preventDefault(); event.stopPropagation(); settle()
+            if (event.key === 'Enter' && !multi && !composingKey(event) && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey
+              && readIntakeDraft(pending).drafts[batch.page]!.selected === index) { event.preventDefault(); event.stopPropagation(); settle() }
           },
           children: [jsx('strong', { children: `${index + 1}. ${option.label}` }), option.description ? jsx('span', { children: option.description }) : null,
-            jsx('kbd', { className: 'kiokuko-intake-shortcut', 'aria-hidden': true, children: index < 9 ? `${shortcutModifier}+${index + 1}` : `${index + 1} → Enter` })],
-        })) }),
-        !reviewing ? jsx('label', { htmlFor: `${titleId}-custom`, children: inputKind === 'search' ? '検索（Enterで検索・数字も検索語として入力できます）' : inputKind === 'value' ? '値を入力（Enterで確定）' : '自由入力（任意）' }) : null,
-        inputKind === 'choice' && question.header === '実行方式とモデル'
-          ? jsx('p', { children: '選択肢に当てはまらない内容はAIに渡し、会話に戻ります。実行方式やモデル構成は確定しません。' }) : null,
-        !reviewing ? jsx('textarea', { id: `${titleId}-custom`, rows: 1, disabled: busy, value: draft.custom,
-          onChange: (event: { target: { value: string } }) => update({ selected: null, custom: event.target.value }),
+            !pending.review ? jsx('kbd', { className: 'kiokuko-intake-shortcut', 'aria-hidden': true, children: shortcutLabel(index, multi) }) : null],
+        }, index)) }),
+        !reviewing ? jsx('label', { htmlFor: `${titleId}-custom`, children: inputKind === 'search' ? '検索（数字も検索語として入力できます）' : inputKind === 'value' ? '値を入力' : '自由入力（任意・Shift+Enterで改行）' }) : null,
+        !reviewing ? jsx('textarea', { id: `${titleId}-custom`, rows: 1, disabled, value: draft.custom,
+          onChange: (e: { target: { value: string } }) => update({ ...emptyDraft(), checked: draft.checked, custom: e.target.value }),
         }) : null,
       ] }),
       jsxs('footer', { children: [
-        jsx('span', { role: 'status', 'aria-live': 'polite', children: error || (busy ? '送信中…' : draft.selected === null ? '' : `${draft.selected + 1}. ${question.options[draft.selected]!.label}を選択中`) }),
-        jsx('button', { type: 'button', disabled: busy || (draft.selected === null && !draft.custom.trim()), onClick: () => settle(), children: '確定（Enter）' }),
+        batch.page > 0 ? jsx('button', { type: 'button', disabled: busy, onClick: () => page(batch.page - 1), children: '前の質問' }) : null,
+        pending.questions.length > 1 ? jsx('span', { children: `${batch.page + 1}/${pending.questions.length}` }) : null,
+        jsx('span', { role: 'status', 'aria-live': 'polite', children: error || (busy ? '送信中…' : draft.ordinal ? `入力番号: ${draft.ordinal}` : multi ? `${draft.checked.length}件を選択中` : draft.selected === null ? '' : `${draft.selected + 1}. ${question.options[draft.selected]!.label}を選択中`) }),
+        pending.review ? batch.page < pending.questions.length - 1 ? jsx('button', { type: 'button', onClick: () => page(batch.page + 1), children: '次の質問（Enter）' }) : null
+          : jsx('button', { type: 'button', disabled: disabled || (multi ? !draft.checked.length && !draft.custom.trim() : draft.selected === null && !draft.custom.trim()), onClick: () => settle(), children: batch.page < pending.questions.length - 1 ? '次の質問（Enter）' : `確定（${multi ? shortcutPlatform().label + '+' : ''}Enter）` }),
       ] }),
     ],
   })
@@ -693,6 +750,13 @@ function installIntakeStyle(): (() => void) | undefined {
   if (typeof document === 'undefined') return undefined
   const style = document.createElement('style')
   style.textContent = `
+.kiokuko-numbered-picker{min-width:0;position:relative}
+.kiokuko-numbered-options{border:1px solid var(--dsw-alias-border-l4,#bbb);padding:8px;border-radius:8px;max-height:50dvh;overflow:auto;min-width:0}
+.kiokuko-numbered-options[hidden]{display:none}
+.kiokuko-numbered-options button{display:flex;gap:12px;align-items:center;justify-content:space-between;overflow-wrap:anywhere;text-align:left;min-height:40px;width:100%}
+.kiokuko-numbered-options kbd{white-space:nowrap;font:inherit;font-size:11px}
+.kiokuko-numbered-options [aria-pressed=true]{outline:1px solid currentColor}
+.kiokuko-numbered-picker :focus-visible{outline:2px solid Highlight;outline-offset:2px}
 .kiokuko-intake{box-sizing:border-box;width:100%;max-width:680px;align-self:center;margin-inline:auto;border:1px solid var(--dsw-alias-border-l4,#bbb);border-radius:12px;padding:12px;background:var(--dsw-alias-background-primary,Canvas);color:var(--dsw-alias-label-primary,CanvasText);display:flex;flex-direction:column;min-height:0;max-height:min(480px,70dvh);gap:8px;font-size:14px}
 .kiokuko-intake header,.kiokuko-intake footer{display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex-shrink:0}
 .kiokuko-intake h2{font-size:16px;line-height:1.4;margin:0;flex:1}
@@ -704,12 +768,13 @@ function installIntakeStyle(): (() => void) | undefined {
 .kiokuko-intake-option strong,.kiokuko-intake-option span{grid-column:1}
 .kiokuko-intake-shortcut{grid-column:2;grid-row:1 / span 2;align-self:center;font-family:inherit;font-size:11px;line-height:1.4;white-space:nowrap}
 .kiokuko-intake-option:last-child{margin-bottom:0}
-.kiokuko-intake-option[aria-pressed=true]{border-color:var(--dsw-alias-label-primary,CanvasText);box-shadow:inset 0 0 0 1px currentColor;background:var(--dsw-alias-interactive-bg-hover,#eee)}
+.kiokuko-intake-option[aria-pressed=true],.kiokuko-intake-option[aria-checked=true]{border-color:var(--dsw-alias-label-primary,CanvasText);box-shadow:inset 0 0 0 1px currentColor;background:var(--dsw-alias-interactive-bg-hover,#eee)}
 .kiokuko-intake-option span{font-size:12px;line-height:1.4}
 .kiokuko-intake label{font-size:12px}
 .kiokuko-intake textarea{box-sizing:border-box;width:100%;min-height:36px;max-height:96px;resize:vertical;font:inherit;line-height:1.4;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,#bbb);padding:8px;border-radius:8px}
 .kiokuko-intake :focus-visible,.kiokuko-intake:focus-visible{outline:2px solid Highlight;outline-offset:2px}
 .kiokuko-intake footer [role=status]{flex:1;min-width:0;font-size:12px;overflow-wrap:anywhere}
+@media(max-width:640px){.kiokuko-intake{position:fixed;inset:auto 8px 8px;width:auto;max-width:none;max-height:min(480px,75dvh);z-index:10}}
 `
   document.head.appendChild(style)
   return () => style.remove()
@@ -954,6 +1019,73 @@ function SnapshotDiff(props: { file: ReviewFileView; snapshotId: string }): unkn
   }) })
 }
 
+interface NumberedChoice { value: string; label: string; disabled?: boolean }
+/** A local selection surface: choosing never starts the consumer's operation. */
+function NumberedPicker(props: { label: string; options: NumberedChoice[]; value?: string; checked?: string[]; disabled?: boolean;
+  inline?: boolean; onChoose(value: string): void; onToggle?(value: string): void }): unknown {
+  const [open, setOpen] = useState(false), [index, setIndex] = useState(-1), [ordinal, setOrdinal] = useState('')
+  const buffer = useRef(''), selected = useRef(-1), group = useRef<HTMLElement | null>(null), trigger = useRef<HTMLButtonElement | null>(null)
+  const shown = props.inline || open
+  const close = () => { setOpen(false); buffer.current = ''; setOrdinal(''); trigger.current?.focus() }
+  useEffect(() => { if (shown && !props.inline) group.current?.focus() }, [shown, props.inline])
+  const pick = (n: number, confirm: boolean) => {
+    const option = props.options[n]; if (!option || option.disabled && !props.onToggle) return
+    selected.current = n; setIndex(n)
+    if (props.inline || confirm) props.onChoose(option.value)
+    if (confirm && !props.inline) close()
+  }
+  const keys = (e: IntakeKeyEvent) => {
+    if (!shown || props.disabled || composingKey(e) || editingKey(e) || e.altKey || e.shiftKey || e.defaultPrevented) return
+    if (e.key === 'Escape' && !props.inline) { e.preventDefault(); e.stopPropagation(); close(); return }
+    const optionButton = (e.target as HTMLElement)?.closest?.('button[data-kiokuko-option]') as HTMLElement | null
+    if (e.key === ' ' && props.onToggle && optionButton && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault(); e.stopPropagation()
+      const option = props.options[Number(optionButton.dataset.kiokukoOption)]
+      if (option && !option.disabled) props.onToggle(option.value)
+      return
+    }
+    if ((e.key === 'Enter' || e.key === ' ') && (e.target as HTMLElement)?.tagName === 'BUTTON') return
+    const modified = modifiedKey(e)
+    if ((e.ctrlKey || e.metaKey) && !modified) return
+    const digit = /^(?:Digit|Numpad)([0-9])$/u.exec(e.code ?? '')?.[1] ?? e.key
+    if (/^[0-9]$/u.test(digit) && (!modified || digit !== '0') || !modified && e.key === 'Backspace' && buffer.current) {
+      e.preventDefault(); e.stopPropagation()
+      buffer.current = modified || props.options.length <= 9 ? digit : e.key === 'Backspace' ? buffer.current.slice(0, -1) : (buffer.current + digit).slice(0, 9)
+      setOrdinal(buffer.current); pick(Number(buffer.current) - 1, false); return
+    }
+    if (modified) return
+    if (e.key === 'Enter' || e.key === ' ' && props.onToggle) {
+      e.preventDefault(); e.stopPropagation()
+      const n = buffer.current ? Number(buffer.current) - 1 : selected.current
+      const item = props.options[n]
+      if (!item) return
+      if (e.key === ' ') { if (!item.disabled) props.onToggle?.(item.value) }
+      else pick(n, true)
+      buffer.current = ''; setOrdinal('')
+    }
+  }
+  useShortcutGroup(group, keys)
+  // Keep the group mounted so a popup opened after its parent mounts acquires
+  // the same document listener and relinquishes ownership when hidden.
+  return jsxs('div', { className: 'kiokuko-numbered-picker', children: [
+    !props.inline ? jsx('button', { type: 'button', ref: trigger, disabled: props.disabled, 'aria-haspopup': 'dialog', 'aria-expanded': open,
+      onClick: () => setOpen(!open), children: `${props.label}: ${props.options.find(o => o.value === props.value)?.label ?? '選択'}` }) : null,
+    jsxs('section', { hidden: !shown, tabIndex: 0, ref: (el: HTMLElement | null) => { group.current = el },
+      'data-kiokuko-shortcuts': '', role: props.inline ? 'group' : 'dialog', 'aria-label': props.label, className: 'kiokuko-numbered-options', onKeyDown: keys,
+      children: [jsx('p', { children: `${props.label} — 数字 / ${shortcutPlatform().label}+1〜9で選択。${props.inline ? 'Spaceでチェック切替。' : 'Enterで確定、Escで閉じる。'}10以上は連続入力、Backspaceで訂正。` }),
+        jsx('p', { role: 'status', children: ordinal ? `入力番号: ${ordinal}${Number(ordinal) < 1 || Number(ordinal) > props.options.length ? '（範囲外）' : ''}` : '' }),
+        ...props.options.map((o, n) => jsxs('div', { className: 'kiokuko-review-file-row', children: [
+          props.onToggle ? jsx('input', { type: 'checkbox', checked: props.checked?.includes(o.value) ?? false, disabled: props.disabled || o.disabled,
+            'aria-label': `${o.label} を選択対象にする`, onChange: () => props.onToggle?.(o.value) }) : null,
+          jsxs('button', { type: 'button', 'data-kiokuko-option': n, disabled: props.disabled || !props.onToggle && o.disabled, 'aria-pressed': (index < 0 ? props.value === o.value : index === n), ...shortcutAria(n, props.options.length),
+            onClick: () => { buffer.current = ''; setOrdinal(''); pick(n, !props.inline) },
+            children: [jsx('span', { children: `${n + 1}. ${o.label}` }), jsx('kbd', { children: shortcutLabel(n, !!props.onToggle) })] }),
+        ] }, o.value)),
+        !props.inline ? jsx('button', { type: 'button', onClick: close, children: '閉じる（Esc）' }) : null,
+      ] }),
+  ] })
+}
+
 function DiffReviewTab(props: Record<string, unknown>): unknown {
   const sessionId = String(props.sessionId)
   const useReview = props.useDiffReview as (selector: (state: ReviewClientState) => ReviewSessionView | undefined) => ReviewSessionView | undefined
@@ -1003,23 +1135,29 @@ function DiffReviewTab(props: Record<string, unknown>): unknown {
   return jsxs('section', { className: 'kiokuko-review', 'aria-label': 'Diff レビュー', children: [
     jsx('h2', { children: 'Diff レビュー' }),
     jsxs('div', { className: 'kiokuko-review-controls', children: [
-      jsxs('label', { children: ['比較対象', jsx('select', { value: state.mode, onChange: (event: { target: { value: ReviewMode } }) => controller.change(sessionId, { mode: event.target.value }), children: [
-        jsx('option', { value: 'current', children: '未コミット全体' }), jsx('option', { value: 'staged', children: 'ステージ済み' }),
-        jsx('option', { value: 'unstaged', children: '未ステージ' }), jsx('option', { value: 'turn', children: 'このターン' }),
-      ] })] }),
-      ...(state.mode === 'turn' ? [jsxs('label', { children: ['ターン差分', jsx('select', { value: String(state.turnSeq ?? ''), onChange: (event: { target: { value: string } }) => controller.change(sessionId, { turnSeq: event.target.value === '' ? undefined : Number(event.target.value) }),
-        children: [jsx('option', { value: '', children: '選択' }), ...state.turns.map(seq => jsx('option', { value: String(seq), children: `seq ${seq}` }, seq))] })] }, 'turn')] : []),
+      jsx(NumberedPicker, { label: '比較対象', value: state.mode, options: [
+        { value: 'current', label: '未コミット全体' }, { value: 'staged', label: 'ステージ済み' },
+        { value: 'unstaged', label: '未ステージ' }, { value: 'turn', label: 'このターン' }],
+        onChoose: (value: ReviewMode) => controller.change(sessionId, { mode: value }) }),
+      ...(state.mode === 'turn' ? [jsx(NumberedPicker, { label: 'ターン差分', value: String(state.turnSeq ?? ''),
+        options: [{ value: '', label: '選択' }, ...state.turns.map(seq => ({ value: String(seq), label: `seq ${seq}` }))],
+        onChoose: (value: string) => controller.change(sessionId, { turnSeq: value === '' ? undefined : Number(value) }) }, 'turn')] : []),
       jsx('button', { type: 'button', disabled: state.busy || state.loading || state.cancelling || review?.state === 'analyzing' || state.mode === 'turn' && state.turnSeq === undefined, onClick: () => void controller.capture(sessionId), children: review ? '取得し直す' : '差分を取得' }),
       review ? jsx('button', { type: 'button', disabled: state.loading || state.cancelling || state.busy && review.state !== 'analyzing', onClick: () => void controller.refreshReview(sessionId, review.reviewId), children: '状態を確認' }) : null,
     ] }),
-    state.untracked.length ? jsxs('fieldset', { children: [jsx('legend', { children: '未追跡ファイル（明示選択）' }), ...state.untracked.map(path => jsxs('label', { children: [jsx('input', { type: 'checkbox', checked: state.selectedUntracked.includes(path), onChange: () => controller.change(sessionId, { selectedUntracked: state.selectedUntracked.includes(path) ? state.selectedUntracked.filter(item => item !== path) : [...state.selectedUntracked, path] }) }), path] }, path))] }) : null,
+    state.untracked.length ? jsx(NumberedPicker, { label: '未追跡ファイル（明示選択）', inline: true,
+      options: state.untracked.map(path => ({ value: path, label: path })), checked: state.selectedUntracked,
+      onChoose: () => {}, onToggle: (path: string) => controller.change(sessionId, { selectedUntracked: state.selectedUntracked.includes(path)
+        ? state.selectedUntracked.filter(item => item !== path) : [...state.selectedUntracked, path] }) }) : null,
     jsx('p', { role: 'status', 'aria-live': 'polite', children: state.cancelling ? '分析を停止中' : state.loading ? '確認中' : state.busy ? '処理中' : state.error || (state.availability === 'repo_unavailable' ? 'Git リポジトリを確認できません' : '') }),
     review ? jsxs(Fragment, { children: [
       jsx('p', { children: `${review.snapshot.capturedAt} / ${review.snapshot.mode} / ${REVIEW_STATES[review.state] ?? review.state} / 鮮度: ${REVIEW_FRESHNESS[review.freshness] ?? review.freshness}` }),
       jsx('p', { children: `文脈: ${REVIEW_CONTEXT_SOURCES[review.context.source] ?? review.context.source} / メモリ: ${REVIEW_MEMORY_STATES[review.context.memory] ?? review.context.memory}${review.context.reason ? ` (${review.context.reason})` : ''}` }),
       review.context.task ? jsx('p', { children: `タスク: ${review.context.task}` }) : null,
       review.context.reviewInput ? jsx('p', { children: `このレビューの目的（利用者入力）: ${review.context.reviewInput}` }) : null,
-      ...(review.context.candidates?.length ? [jsxs('label', { children: ['タスク', jsx('select', { value: state.runId, onChange: (event: { target: { value: string } }) => controller.change(sessionId, { runId: event.target.value }), children: [jsx('option', { value: '', children: '指定なし' }), ...review.context.candidates.map(item => jsx('option', { value: item.runId, children: `${item.task} (${item.status})` }, item.runId))] })] }, 'runs')] : []),
+      ...(review.context.candidates?.length ? [jsx(NumberedPicker, { label: 'タスク', value: state.runId,
+        options: [{ value: '', label: '指定なし' }, ...review.context.candidates.map(item => ({ value: item.runId, label: `${item.task} (${item.status})` }))],
+        onChoose: (value: string) => controller.change(sessionId, { runId: value }) }, 'runs')] : []),
       jsx('p', { children: `変更ファイル: ${review.snapshot.files.length} / ${review.snapshot.totalFiles}` }),
       review.snapshot.totalFiles > review.snapshot.files.length ? jsx('p', { role: 'status', children: `${review.snapshot.totalFiles - review.snapshot.files.length} 件は取得上限で未収集です。全体リスクは未確定です。` }) : null,
       jsx('p', { children: `送信対象: ${state.selected.length} ファイル / ${review.snapshot.files.filter(file => file.kind !== 'text').length} ファイルはテキスト分析対象外` }),
@@ -1027,8 +1165,9 @@ function DiffReviewTab(props: Record<string, unknown>): unknown {
       !state.selected.length ? jsx('p', { role: 'status', children: review.snapshot.files.some(file => file.kind === 'text')
         ? '分析するテキストファイルを変更ファイル一覧で選択してください。' : '分析できるテキストファイルがありません。差分は引き続き確認できます。' }) : null,
       jsxs('div', { className: 'kiokuko-review-analysis-controls', children: [
-        jsxs('label', { children: ['モデル', jsx('select', { value: state.modelKey, disabled: state.busy || state.loading || state.cancelling, onChange: (event: { target: { value: string } }) => controller.change(sessionId, { modelKey: event.target.value }),
-          children: [jsx('option', { value: '', children: '選択' }), ...state.models.map(item => jsx('option', { value: JSON.stringify([item.provider, item.model]), children: `${item.provider}/${item.model}` }, `${item.provider}:${item.model}`))] })] }),
+        jsx(NumberedPicker, { label: 'モデル', value: state.modelKey, disabled: state.busy || state.loading || state.cancelling,
+          options: [{ value: '', label: '選択' }, ...state.models.map(item => ({ value: JSON.stringify([item.provider, item.model]), label: `${item.provider}/${item.model}` }))],
+          onChoose: (value: string) => controller.change(sessionId, { modelKey: value }) }),
         jsxs('label', { children: ['レビューの目的（任意）', jsx('textarea', { value: state.purpose, disabled: state.busy || state.loading || state.cancelling, maxLength: 4000, onChange: (event: { target: { value: string } }) => controller.change(sessionId, { purpose: event.target.value }) })] }),
         jsx('button', { type: 'button', disabled: state.busy || state.loading || state.cancelling || review.state === 'analyzing' || !reviewMatchesSelection || !state.selected.length || !state.modelKey, onClick: () => void controller.analyze(sessionId), children: '分析する' }),
         review.state === 'analyzing' ? jsx('button', { type: 'button', disabled: state.cancelling, onClick: () => void controller.cancel(sessionId, review.reviewId), children: state.cancelling ? '停止中' : '停止' }) : null,
@@ -1046,13 +1185,10 @@ function DiffReviewTab(props: Record<string, unknown>): unknown {
       },
         children: state.fileListOpen ? '差分に戻る' : '変更ファイル一覧' }),
       jsxs('div', { className: 'kiokuko-review-main', 'data-list-open': String(state.fileListOpen), children: [
-        jsxs('nav', { id: `kiokuko-review-${review.reviewId}-files`, tabIndex: -1, 'aria-label': '変更ファイル', children: [jsx('h3', { children: '変更ファイル' }), ...review.snapshot.files.map(file => jsxs('div', { className: 'kiokuko-review-file-row', children: [
-          jsx('input', { type: 'checkbox', 'aria-label': `${file.displayPath} を分析対象にする`, checked: state.selected.includes(file.fileId), disabled: file.kind !== 'text', onChange: () => selectFile(file.fileId) }),
-          jsx('button', { type: 'button', 'aria-current': active?.fileId === file.fileId ? 'true' : undefined, onClick: () => {
-            controller.change(sessionId, { activeFileId: file.fileId, fileListOpen: false })
-            requestAnimationFrame(() => document.getElementById(`kiokuko-review-${review.reviewId}-detail`)?.focus())
-          }, children: `${file.displayPath} (${file.layer}, ${file.kind})` }),
-        ] }, file.fileId))] }),
+        jsx('nav', { id: `kiokuko-review-${review.reviewId}-files`, tabIndex: -1, 'aria-label': '変更ファイル', children:
+          jsx(NumberedPicker, { label: '変更ファイル', inline: true, value: active?.fileId, checked: state.selected,
+            options: review.snapshot.files.map(file => ({ value: file.fileId, label: `${file.displayPath} (${file.layer}, ${file.kind})`, disabled: file.kind !== 'text' })),
+            onChoose: (fileId: string) => controller.change(sessionId, { activeFileId: fileId }), onToggle: selectFile }) }),
         active ? jsxs('article', { id: `kiokuko-review-${review.reviewId}-detail`, tabIndex: -1, children: [jsx('h3', { children: active.displayPath }),
           active.kind === 'text' && active.newDigest && review.snapshot.mode !== 'turn' ? jsx('button', { type: 'button',
             onClick: () => void controller.openCurrentFile(sessionId, review.reviewId, active.fileId, openFile), children: '現在のファイルへ' }) : null,

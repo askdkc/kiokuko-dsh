@@ -705,8 +705,9 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       const requestId = dshTurnRequestId({ dshSessionId: sessionId, turn: payload.turn })
       const configuration = await decisions?.bind(requestId, payload.signal)
       // This profile is inherited from a previous turn, not a current user choice.
-      // Let Laya assess the new request before applying the legacy continuation fallback.
-      const explicit = configuration?.provider === 'laya-coreml' ? undefined : profile?.taskType
+      // Let Laya assess new work, but retain the user's chat choice for an
+      // ambiguous continuation instead of asking the same classification again.
+      const explicit = configuration?.provider === 'laya-coreml' && profile?.taskType !== 'chat' ? undefined : profile?.taskType
       const classification = await classifyTaskForIntake(decisions, requestId, task, explicit, payload.signal)
       deferTaskTypeInference = classification.deferInference
       if (classification.taskType) profile = { ...profile, taskType: classification.taskType }

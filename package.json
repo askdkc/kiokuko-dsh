@@ -213,7 +213,8 @@
     "test:index-reasoning": "node scripts/run-tests.mjs tests/dsh/integration/index-reasoning.test.ts tests/dsh/integration/index-reasoning-native.test.ts tests/dsh/integration/index-reasoning-evaluation.test.ts",
     "test:evaluation:index-reasoning": "node --import tsx scripts/run-index-reasoning-evaluation.mjs",
     "test:skill-coding:offline": "node --test tests/fixtures/skill-coding/offline.test.mjs",
-    "test:skill-coding": "node scripts/run-skill-coding.mjs"
+    "test:skill-coding": "node scripts/run-skill-coding.mjs",
+    "test:shortcuts:web": "npm run build && node scripts/verify-shortcuts-web.mjs"
   },
   "dependencies": {
     "@orcareplay/core": ">=0.2.1",
@@ -256,6 +257,7 @@
     "@types/node": "24.13.3",
     "@types/semver": "7.8.0",
     "esbuild": "0.28.2",
+    "playwright": "1.63.0",
     "publint": "0.3.24",
     "sqlite-vec": "0.1.9",
     "tsx": "4.23.13",

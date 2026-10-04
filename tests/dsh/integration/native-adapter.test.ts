@@ -40,8 +40,9 @@ async function fixture(): Promise<{ root: string; databasePath: string }> {
   return { root, databasePath }
 }
 
-test('native adapter mounts model tools and admits a grounded turn without redundant questions', async () => {
+test('native adapter mounts model tools and admits a grounded turn without redundant questions', async t => {
   const f = await fixture()
+  const socket = process.platform === 'win32' ? undefined : await serveLaya(t, request => layaV1Reply(request))
   const registered: any[] = []
   const guards: Array<(execution: any) => string | undefined> = []
   const sections = new Map<string, string>()
@@ -145,6 +146,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   } })
   await hostFiber
   const adapter = createDshHostAdapter(root, {
+    ...(socket ? { typedDecisions: TypedDecisionsConfig.parse({ mode: 'off', 'laya-coreml': { socketPath: socket.path } }) } : {}),
     modelRoutes: mockModelRoutes,
     repositoryRoot: f.root,
     databasePath: f.databasePath,
@@ -544,6 +546,8 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(adapter.host.resolveSessionRunId!(chatSession), firstChatRun)
 
     const questionsAfterFirstChat = questionIds.length
+    if (socket) await adapter.host.decisions!.selectProvider('laya-coreml', event.signal)
+    const classificationCalls = socket?.calls()
     ;(root as any).emit('session/event', chatSession, { type: 'user/message', seq: 2, time: 2, data: { text: 'What do you think about that?' } })
     const secondChatEvent = await adapter.host.mapPreStep!({
       agent: chatAgent,
@@ -600,6 +604,8 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       afterChat.close()
     }
     const questionsBeforePivot = questionIds.length
+    assert.equal(socket?.calls(), classificationCalls, 'Laya must not discard an established conversation choice')
+    if (socket) await adapter.host.decisions!.selectProvider('default', event.signal)
     ;(root as any).emit('session/event', chatSession, { type: 'user/message', seq: 6, time: 6, data: { text: '@PLAN.md を実装' } })
     const pivotEvent = await adapter.host.mapPreStep!({
       agent: chatAgent,

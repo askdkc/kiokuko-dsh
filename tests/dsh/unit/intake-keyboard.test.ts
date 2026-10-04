@@ -45,14 +45,14 @@ test('intake keyboard is scoped, confirms once, preserves drafts, and leaves edi
       questions: [{ ...pending.questions[0], id: 'reflection-method', header: '反映方法' }],
     }
     assert.equal(entry.definition.select({ pendingInteraction: unseen }), unseen)
-    // Carriers a single number key cannot address stay with the native composer.
+    // All question shapes share the numbered composer.
     for (const questions of [
       [{ ...pending.questions[0], multiSelect: true }],
       [{ ...pending.questions[0], options: [] }],
       [{ ...pending.questions[0], options: Array.from({ length: 10 }, (_, index) => ({ label: `選択肢${index + 1}` })) }],
       [pending.questions[0], pending.questions[0]],
     ]) {
-      assert.equal(entry.definition.select({ pendingInteraction: { ...pending, questions } }), null)
+      const carrier = { ...pending, questions }; assert.equal(entry.definition.select({ pendingInteraction: carrier }), carrier)
     }
     const wrapper = entry.component({ matched: pending })
     const render = () => { cursor = 0; return wrapper.component(wrapper.props) }

@@ -33,7 +33,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { DshCoreRuntime } from '../core-runtime.js'
 import { createDshIntakeAnswerer, type DshUserQuestions } from '../intake-questions.js'
-import { dshTurnRequestId } from '../intake-profile-resolver.js'
+import { dshTurnRequestId, resolveGroundedIntakeProfile } from '../intake-profile-resolver.js'
 import { configuredSkillPrompts, configuredSkillProvider } from './skills.js'
 import { DshModules, type ModuleRegistration, type ModuleHandle, type ModuleBinding } from './modules.js'
 import { CoreTasks, type CoreTask, type CoreTaskInput } from './tasks.js'
@@ -110,6 +110,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const semanticCompaction = new SemanticCompactionCoordinator(ctx as any, decisions, root, config.observationPack)
   const modelHandoff = new ModelHandoff(ctx as any, decisions, root, config.modelHandoff)
   const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions, config.memoryRetrieval)
+  const conversationSessions = new WeakSet<object>()
   function bind(agent: NativeAgent): void {
     if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || realpathSync(agent.session.header.cwd) !== root) throw new Error('Native task identity mismatch')
   }
@@ -180,7 +181,9 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       // Attachment-only turns still require identity, intake and persisted-feature checks.
       let request: CoreTaskInput = { requestId: dshTurnRequestId({ dshSessionId: payload.agent.session.id, turn: payload.turn }), sessionId: payload.agent.session.id,
         turn: payload.turn, task: text || 'User input contains no text.', cwd: root, signal, agent: payload.agent, capabilities: [] }
-      const classification = await classifyTaskForIntake(decisions, request.requestId, request.task, undefined, signal)
+      const inferred = resolveGroundedIntakeProfile({ task: request.task, cwd: root }).profileHints.taskType
+      const continuingChat = conversationSessions.has(payload.agent.session) && (inferred === null || inferred === 'chat')
+      const classification = await classifyTaskForIntake(decisions, request.requestId, request.task, continuingChat ? 'chat' : undefined, signal)
       request = { ...request, deferTaskTypeInference: classification.deferInference,
         ...(classification.taskType ? { profileHints: { taskType: classification.taskType } } : {}) }
       for (const prepare of beforeTask) {
@@ -202,6 +205,8 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       active.set(task.sessionId, { agent: payload.agent, turn: payload.turn, task, taskText: request.task,
         attachmentTypes: attachmentTypesFromMessages(payload.messages), failed: false, checkpointed: false, contextDelivered: false })
       if (!task.admitted) return task
+      if (task.profile.taskType === 'chat') conversationSessions.add(payload.agent.session)
+      else conversationSessions.delete(payload.agent.session)
       const owner = active.get(task.sessionId)!
       const reviewAgent = payload.agent as ReviewAgent
       answerReview.bind({ runId: task.runId, workspace: task.workspace, requestId: task.requestId, task: text, catalogDigest: capabilityCatalogDigest(task.capabilities),

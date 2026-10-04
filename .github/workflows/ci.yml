@@ -289,6 +289,30 @@ jobs:
           path: ${{ runner.temp }}/kiokuko-dsh-tui-evidence.json
           if-no-files-found: ignore
 
+  shortcut-browser:
+    name: Keyboard UI (${{ matrix.fixture }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture: [dsh-runtime, dsh-runtime-current]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+          cache: npm
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.24.0
+      - run: npm ci
+      - run: npm ci --prefix tests/fixtures/${{ matrix.fixture }}
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:shortcuts:web
+        env:
+          KIOKUKO_SHORTCUT_RUNTIME: ${{ matrix.fixture }}
+
   semantic-platform-smoke:
     name: Semantic smoke (${{ matrix.platform }})
     strategy:

@@ -25,15 +25,19 @@ export function createLispCodingChoice(input: {
 }): LispCodingService {
   const turns = new WeakMap<object, { turn: number; task: string; result: Promise<LispCodingResult> }>()
   const discussions = new WeakSet<object>()
+  const conversations = new WeakSet<object>()
   const prepare = async (request: LispCodingInput): Promise<LispCodingResult> => {
     request.signal.throwIfAborted()
-    let taskType = request.taskType
+    let taskType = request.taskType ?? (conversations.has(request.agent) ? 'chat' : null)
     if (taskType === null) {
       if (!input.questions) throw new ExecutionSelectionPending()
       taskType = normalizeTaskType(await createDshIntakeAnswerer(input.questions).ask({
         id: 'taskType', prompt: '今回は何をしてほしいですか？', options: [...TASK_TYPES], required: true,
       }, request.signal, request.agent))
     }
+    request.signal.throwIfAborted()
+    if (taskType === 'chat') conversations.add(request.agent)
+    else conversations.delete(request.agent)
     if (taskType !== 'build' && taskType !== 'debug') return { taskType }
     if (input.enabled(request.agent)) {
       await input.enable(request.agent)

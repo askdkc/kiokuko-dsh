@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { nativeQuestionClass } from '../helpers/native-question.js'
 import { apply } from '../../../src/client.js'
 import { MODEL_ROLES } from '../../../src/dsh/model-configuration.js'
 import { selectExecution } from '../../../src/dsh/model-selection-ui.js'
@@ -76,7 +77,7 @@ function clientHarness(platform = 'Linux x86_64', userAgent = '') {
         for (const effect of effects.splice(0)) effect()
         return tree
       }
-      return { render, get focused() { return focused }, get scrolls() { return scrolls } }
+      return { render, replacePending(pending: any) { wrapper.props.pending = pending }, get focused() { return focused }, get scrolls() { return scrolls } }
     },
     restore() {
       unmount()
@@ -138,7 +139,7 @@ test('approval-only review uses two choices; failed submission retains selection
     assert.deepEqual(descendants(tree).filter(node => node.component === 'kbd').map(node => node.props.children), ['Ctrl+1', 'Ctrl+2'])
     tree.props.onKeyDown(key('2', { target: { tagName: 'TEXTAREA' } }))
     assert.equal(descendants(card.render()).some(node => node.props?.['aria-pressed']), false)
-    h.documentKey(key('2', { ctrlKey: true, target: { tagName: 'TEXTAREA' } }))
+    h.documentKey(key('2', { ctrlKey: true, target: { tagName: 'SECTION' } }))
     assert.equal(card.focused, 'section')
     tree.props.onKeyDown(key('Enter')); await flush(); tree = card.render()
     assert.match(descendants(tree).find(node => node.props?.role === 'status').props.children, /Send failed/)
@@ -159,11 +160,11 @@ test('all Enno selection cards use numbered keyboard controls, including lists l
       const pending = { kind: 'question', key: id, questions: [question(id)], answer: async () => {}, cancel: async () => {} }
       assert.equal(h.entry.definition.select({ pendingInteraction: pending }), pending, id)
       for (const q of [{ ...question(id), header: 'Other plugin' }, { ...question(id), multiSelect: true }, { ...question(id), options: [] }]) {
-        assert.equal(h.entry.definition.select({ pendingInteraction: { ...pending, questions: [q] } }), null)
+        const carrier = { ...pending, questions: [q] }; assert.equal(h.entry.definition.select({ pendingInteraction: carrier }), carrier)
       }
     }
     for (const id of ['enno-provider-unknown', 'enno-model-not-a-role', 'enno-other']) {
-      assert.equal(h.entry.definition.select({ pendingInteraction: { kind: 'question', questions: [question(id)], answer() {}, cancel() {} } }), null)
+      const carrier = { kind: 'question', key: id, questions: [question(id)], answer() {}, cancel() {} }; assert.equal(h.entry.definition.select({ pendingInteraction: carrier }), carrier)
     }
   } finally { h.restore() }
 })
@@ -196,7 +197,7 @@ test('execution card forwards typed Japanese through Enter into one durable disc
   } finally { h.restore() }
 })
 
-test('Deep cards use the shortcut renderer while unrelated and multi-select questions stay native', () => {
+test('Deep, unrelated and multi-select cards use the shortcut renderer', () => {
   const h = clientHarness()
   try {
     for (const id of ['deep-configuration', 'deep-budget-field', 'deep-budget-value', 'deep-role-model', 'deep-apply-configuration', 'deep-pending-input', 'deep-uncertain']) {
@@ -205,7 +206,7 @@ test('Deep cards use the shortcut renderer while unrelated and multi-select ques
       const card = h.mount(pending)
       assert.equal(descendants(card.render()).filter(node => node.component === 'kbd').length, 24, id)
       for (const rejected of [{ ...q, header: 'Other plugin' }, { ...q, id: 'deep-unrelated' }, { ...q, multiSelect: true }]) {
-        assert.equal(h.entry.definition.select({ pendingInteraction: { ...pending, questions: [rejected] } }), null)
+        const carrier = { ...pending, questions: [rejected] }; assert.equal(h.entry.definition.select({ pendingInteraction: carrier }), carrier)
       }
     }
   } finally { h.restore() }
@@ -246,7 +247,7 @@ test('platform shortcuts select from outside the card, show matching hints, and 
       // The host may keep focus in an editor outside this card. Plain digits remain text.
       h.documentKey(key('2', { target: { tagName: 'TEXTAREA' } }))
       assert.equal(descendants(card.render()).some(node => node.props?.['aria-pressed']), false)
-      const shortcut = key('2', { ...modifier, target: { tagName: 'TEXTAREA' },
+      const shortcut = key('2', { ...modifier, target: { tagName: 'SECTION' },
         preventDefault() { prevented++ }, stopPropagation() { stopped++ } })
       h.documentKey(shortcut)
       assert.equal(prevented, 1); assert.equal(stopped, 1)
@@ -275,7 +276,7 @@ test('macOS Safari uses Control+digit instead of its reserved Command+digit shor
     let tree = card.render()
     const hints = descendants(tree).filter(node => node.component === 'kbd')
     assert.deepEqual(hints.map(node => node.props.children), ['Ctrl+1', 'Ctrl+2', 'Ctrl+3', 'Ctrl+4'])
-    assert.ok(descendants(tree).some(node => node.props?.children === 'Ctrl+1〜4で選択、Enterで確定。'))
+    assert.ok(descendants(tree).some(node => node.props?.children === 'Ctrl+1〜4、または数字で選択。Enterで確定。'))
 
     h.documentKey(key('2', { metaKey: true, preventDefault() { assert.fail('Safari Command+digit stays reserved') } }))
     assert.equal(descendants(card.render()).some(node => node.props?.['aria-pressed']), false)
@@ -300,7 +301,7 @@ test('modified shortcuts reject IME and unsupported keys, reset long ordinals, a
       { isComposing: true }, { keyCode: 229 }, { nativeEvent: { isComposing: true } }, { nativeEvent: { keyCode: 229 } }]) {
       h.documentKey(key('2', { metaKey: true, ...extra, preventDefault() { assert.fail('must not intercept') } }))
     }
-    for (const value of ['0', 'Enter', 'Backspace']) {
+    for (const value of ['0', 'Backspace']) {
       h.documentKey(key(value, { metaKey: true, preventDefault() { assert.fail('must not intercept') } }))
     }
     h.visible = false
@@ -420,5 +421,129 @@ test('keyboard-only native card answers drive the Codex template selector throug
     assert.deepEqual(seen, [...answers.keys()])
     assert.equal(selected.value.status, 'ready')
     assert.equal(selected.value.configuration?.template?.id, 'openai-codex')
+  } finally { h.restore() }
+})
+
+test('multi-select long ordinals toggle only on Space and batch navigation preserves every draft', async () => {
+  const h = clientHarness(), responses: any[] = []
+  try {
+    const card = h.mount({ kind: 'question', key: 'batch-multi', questions: [question('first', 24), { ...question('second', 24), multiSelect: true }],
+      async answer(value: any) { responses.push(value) }, async dismiss() {} })
+    let tree = card.render()
+    tree.props.onKeyDown(key('2')); tree.props.onKeyDown(key('0')); tree.props.onKeyDown(key('Enter'))
+    tree = card.render(); assert.equal(responses.length, 0)
+    tree.props.onKeyDown(key('1')); tree.props.onKeyDown(key('0'))
+    tree = card.render(); assert.equal(descendants(tree).filter(n => n.props?.['aria-checked']).length, 0)
+    tree.props.onKeyDown(key(' ')); tree = card.render()
+    assert.equal(descendants(tree).filter(n => n.props?.['aria-checked']).length, 1)
+    descendants(tree).find(n => n.props?.children === '前の質問').props.onClick()
+    tree = card.render(); assert.equal(descendants(tree).find(n => n.props?.['aria-pressed']).props.children[0].props.children, '20. Option 20')
+    tree.props.onKeyDown(key('Enter')); tree = card.render()
+    tree.props.onKeyDown(key('Enter', { ctrlKey: true })); await flush()
+    assert.deepEqual(responses, [{ answers: [{ id: 'first', selected: ['Option 20'] }, { id: 'second', selected: ['Option 10'] }] }])
+  } finally { h.restore() }
+})
+
+test('modern channel state and recorded reviews never send stale answers, dismiss has no cancel fallback', async () => {
+  const h = clientHarness(), responses: any[] = [], listeners = new Set<() => void>()
+  let state = { state: 'open', channel: 'none', closed: false }, hides = 0, cancels = 0, edits = 0, focus = 0
+  const p = { kind: 'question', key: 'modern-lifecycle', sessionId: 'session', dismissal: 'hide', questions: [question('question', 4)],
+    snapshot: () => state, subscribe: (fn: () => void) => { listeners.add(fn); return () => listeners.delete(fn) },
+    engage() { edits++ }, holdFocus() { focus++ }, releaseFocus() { focus-- },
+    async answer(value: any) { responses.push(value); throw new Error('retry me') },
+    async dismiss() { hides++; throw new Error('hide failed') }, async cancel() { cancels++ } }
+  const change = (value: Partial<typeof state>) => { state = { ...state, ...value }; for (const fn of listeners) fn() }
+  try {
+    const card = h.mount(p); let tree = card.render()
+    tree.props.onKeyDown(key('2')); tree.props.onKeyDown(key('Enter')); await flush(); assert.equal(responses.length, 0)
+    change({ channel: 'waterfall' }); tree = card.render()
+    tree.props.onKeyDown(key('2')); tree.props.onKeyDown(key('Enter')); await flush(); tree = card.render()
+    assert.equal(edits, 1); assert.equal(responses.length, 1); assert.equal(descendants(tree).filter(n => n.props?.['aria-pressed']).length, 1)
+    change({ state: 'continued', channel: 'rpc' }); tree = card.render()
+    tree.props.onKeyDown(key('Enter')); await flush(); assert.equal(responses.length, 2)
+    tree.props.onKeyDown(key('Escape')); await flush(); assert.equal(hides, 1); assert.equal(cancels, 0)
+    h.unmount(); assert.equal(focus, 0); assert.equal(listeners.size, 0)
+    const reopened = h.mount({ ...p }); tree = reopened.render()
+    assert.equal(descendants(tree).filter(n => n.props?.['aria-pressed']).length, 1, 'named reopen retains draft')
+    change({ closed: true }); tree = reopened.render(); tree.props.onKeyDown(key('Enter')); await flush(); assert.equal(responses.length, 2)
+    const readonly = h.mount({ ...p, key: 'recorded', review: [{ id: 'question', selected: ['Option 1'] }] }); tree = readonly.render()
+    tree.props.onKeyDown(key('2')); tree.props.onKeyDown(key('Enter')); await flush(); assert.equal(responses.length, 2)
+  } finally { h.restore() }
+})
+
+test('search and value editors keep modified digits and IME input as text', () => {
+  const h = clientHarness()
+  try {
+    const card = h.mount({ kind: 'question', key: 'search-safe', questions: [question()], answer: async () => {}, dismiss: async () => {} })
+    card.render()
+    for (const target of [{ tagName: 'TEXTAREA' }, { tagName: 'INPUT' }, { tagName: 'DIV', isContentEditable: true }]) {
+      h.documentKey(key('2', { ctrlKey: true, target, preventDefault() { assert.fail('editing must not select') } }))
+    }
+    assert.equal(descendants(card.render()).filter(n => n.props?.['aria-pressed']).length, 0)
+  } finally { h.restore() }
+})
+
+test('real native carrier answers once, modern RPC failures preserve drafts and accepted replies stay locked', async () => {
+  const Native = nativeQuestionClass(), h = clientHarness(), responses: any[] = []
+  const modern = typeof Native.prototype.dismiss === 'function'
+  const p = new Native('native-session', [question('native', 4)], modern ? 'call-id' : new AbortController().signal)
+  try {
+    if (modern) {
+      const card = h.mount(p); let tree = card.render()
+      tree.props.onKeyDown(key('1')); tree.props.onKeyDown(key('Enter')); await flush()
+      assert.equal(descendants(card.render()).filter(n => n.props?.['aria-pressed']).length, 0)
+      let accept = false
+      p.setState('continued'); p.attachRpc({ answer: async (value: any) => { responses.push(value); return accept } })
+      tree = card.render(); tree.props.onKeyDown(key('1')); tree.props.onKeyDown(key('Enter')); await flush()
+      tree = card.render(); assert.equal(descendants(tree).filter(n => n.props?.['aria-pressed']).length, 1)
+      assert.equal(tree.props['aria-busy'], false)
+      accept = true; tree.props.onKeyDown(key('Enter')); await flush()
+      tree = card.render(); tree.props.onKeyDown(key('Enter')); await flush()
+      assert.equal(responses.length, 2, 'one failed and one accepted reply; no third dispatch')
+      assert.equal(tree.props['aria-busy'], true)
+      p.close()
+    } else {
+      const card = h.mount(p), tree = card.render()
+      tree.props.onKeyDown(key('1')); tree.props.onKeyDown(key('Enter')); tree.props.onKeyDown(key('Enter'))
+      const answer = await p.result
+      assert.equal(answer.answers[0].selected[0], 'Option 1')
+    }
+  } finally { h.restore() }
+})
+
+test('readonly cards can be dismissed, and a multiline multi-select draft needs modified Enter to send', async () => {
+  const h = clientHarness(), responses: any[] = []; let dismissals = 0
+  try {
+    const p = { kind: 'question', key: 'readonly-escape', questions: [question('readonly', 4)],
+      answer: async (value: any) => { responses.push(value) }, dismiss: async () => { dismissals++ } }
+    let card = h.mount({ ...p, questions: [...p.questions, { ...question('second', 2), question: 'Recorded second question' }],
+      review: [{ id: 'readonly', selected: ['Option 1'] }, { id: 'second', selected: ['Option 2'] }] }), tree = card.render()
+    tree.props.onKeyDown(key('2')); tree.props.onKeyDown(key('Enter')); await flush()
+    assert.equal(responses.length, 0)
+    tree = card.render()
+    assert.equal(descendants(tree).find(n => n.component === 'h2').props.children, 'Recorded second question')
+    assert.equal(descendants(tree).some(n => n.component === 'kbd'), false, 'readonly choices do not advertise disabled shortcuts')
+    tree.props.onKeyDown(key('Escape')); await flush(); assert.equal(dismissals, 1)
+    card = h.mount({ ...p, key: 'multi-editor', questions: [{ ...question('multi', 4), multiSelect: true }] }); tree = card.render()
+    descendants(tree).find(n => n.component === 'textarea').props.onChange({ target: { value: 'Other answer' } })
+    tree.props.onKeyDown(key('Enter', { target: { tagName: 'TEXTAREA' } })); await flush()
+    assert.equal(responses.length, 0)
+    tree.props.onKeyDown(key('Enter', { ctrlKey: true, target: { tagName: 'TEXTAREA' } })); await flush()
+    assert.equal(responses[0].answers[0].custom, 'Other answer')
+  } finally { h.restore() }
+})
+
+test('replacing a carrier under the same card key fences the previous pending submission', async () => {
+  const h = clientHarness(), responses: any[] = []
+  try {
+    const pending = { kind: 'question', key: 'same-key', sessionId: 'same-session', questions: [question('replacement', 4)],
+      answer: async (value: any) => { responses.push(value) }, dismiss: async () => {} }
+    const card = h.mount(pending); let tree = card.render()
+    tree.props.onKeyDown(key('1')); tree.props.onKeyDown(key('Enter'))
+    card.replacePending({ ...pending }); card.render(); await flush(); tree = card.render()
+    assert.equal(responses.length, 0, 'a queued answer cannot outlive its original carrier')
+    assert.equal(tree.props['aria-busy'], false)
+    tree.props.onKeyDown(key('2')); tree.props.onKeyDown(key('Enter')); await flush()
+    assert.equal(responses[0].answers[0].selected[0], 'Option 2')
   } finally { h.restore() }
 })

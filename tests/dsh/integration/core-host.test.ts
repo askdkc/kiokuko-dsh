@@ -553,3 +553,28 @@ test('core connects to an existing start-laya v1 worker without credentials or r
     assert.equal(JSON.parse(probe.text).readiness.state, 'ready'); assert.equal(socket.calls(), 5)
   } finally { await handle.dispose(); await f.cleanup() }
 })
+
+test('explicit conversation choice survives completed native turns without repeating task classification', async () => {
+  const asked: string[] = []
+  const f = await fixture({ ask: async (request: any) => {
+    asked.push(request.questions[0].id)
+    return { answers: [{ id: request.questions[0].id, selected: ['質問、相談、会話'] }] }
+  } })
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
+  try {
+    for (const [i, text] of ['その件について', 'それで？', 'もう少し具体的に', 'この資料を調査してください'].entries()) {
+      const turn = i + 1, messages = [{ role: 'user', content: text }]
+      const output = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+      assert.equal(output.kind, 'enter')
+      f.events.push({ type: 'turn/end', data: { turn, reason: { kind: 'completed' } } })
+      await f.listeners.get('agent/idle')!({ agent: f.agent })
+    }
+    assert.deepEqual(asked, ['taskType'])
+    const db = openConnection(join(f.root, 'memory.sqlite3'))
+    try {
+      const profiles = db.prepare('SELECT profile_json FROM akinator_sessions ORDER BY rowid').all() as any[]
+      assert.equal(profiles.length, 4)
+      assert.equal(JSON.parse(profiles[3].profile_json).taskType, 'research', 'new explicit work is not pinned to chat')
+    } finally { db.close() }
+  } finally { await handle.dispose(); await f.cleanup() }
+})
