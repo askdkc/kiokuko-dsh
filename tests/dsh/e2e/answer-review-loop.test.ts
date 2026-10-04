@@ -24,7 +24,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
   const ctx = new cordis.Context(), fibers: any[] = []
   const root = await mkdtemp(join(tmpdir(),'kiokuko-answer-native-')), databasePath = join(root,'state.sqlite3')
   let dispose: (() => Promise<void>) | undefined, questions = 0, reviewCalls = 0, taskTypeCalls = 0
-  let toolCalls=0; const reviewInputs: any[]=[]
+  let toolCalls=0, taskTypeQuestions=0; const reviewInputs: any[]=[]
   let onReview: (() => void) | undefined
   const errors: unknown[] = []; let reviewStatus: () => unknown = () => undefined
   const socket = await serveLaya(t, request => {
@@ -43,7 +43,17 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
     for (const [plugin, config] of [[llm.default],[session.default],[projection.default],[prompt.default,{persona:''}],[tools.default],[agents.default],[skills.default],[loop.default,{agents:[]}]]) {
       const fiber = ctx.plugin(plugin,config); fibers.push(fiber); await fiber
     }
-    const ui = ctx.plugin({ name:'answer-test-ui', apply(c: any) { return c.provide('userQuestions',{ ask: async (request: any) => { questions++; return { answers:request.questions.map((q:any)=>({id:q.id,selected:['通常実行']})) } } }) } }); fibers.push(ui); await ui
+    const ui = ctx.plugin({ name:'answer-test-ui', apply(c: any) { return c.provide('userQuestions',{ ask: async (request: any) => {
+      questions++
+      return { answers:request.questions.map((q:any)=>{
+        // The question-form initial request is outside Laya's direct-intent policy.
+        // Answer its intake explicitly; only the later writing request is automated.
+        const label = q.id === 'taskType' ? '文章作成' : '通常実行'
+        assert.ok(q.options?.some((option:any)=>option.label===label),JSON.stringify(q))
+        if(q.id==='taskType')taskTypeQuestions++
+        return {id:q.id,selected:[label]}
+      }) }
+    } }) } }); fibers.push(ui); await ui
     const config = { ...(scenario==='off'?{answerReview:{mode:'off' as const}}:{}), typedDecisions:{...(paired ? {groundingReview:{mode:scenario==='paired-shadow'?'shadow' as const:'candidate' as const,policyVersion:'grounding-pairs-v1' as const,minProbability:.6,minMargin:.25}}:{}),provider:'laya-coreml' as const,'laya-coreml':{socketPath:socket.path}} }
     if (host === 'full') {
       const adapter = createDshHostAdapter(ctx,{...config,repositoryRoot:root,databasePath,orca:{enabled:false},memoryReview:{mode:'off'},deepPlanning:{enabled:false},
@@ -92,7 +102,8 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       if(!newRequest) assert.equal(questions,questionCount,'correction does not reopen intake or execution choice')
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()!.n,newRequest ? 2 : 1)
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()!.n,0)
-      assert.equal(taskTypeCalls,newRequest?2:1,'classification is not repeated for reconsideration');assert.equal(rows.length,scenario==='off'?0:newRequest ? 2 : 1);assert.equal(reviewCalls,scenario==='off'?0:newRequest ? 2 : 1)
+      assert.equal(taskTypeQuestions,1,'the initial request is classified by the user once')
+      assert.equal(taskTypeCalls,newRequest?1:0,'only the new direct request invokes automated classification');assert.equal(rows.length,scenario==='off'?0:newRequest ? 2 : 1);assert.equal(reviewCalls,scenario==='off'?0:newRequest ? 2 : 1)
       assert.ok(rows.every(row=>row.status==='closed'))
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ledger_runs WHERE status='active'").get()!.n,0)
       if(host==='full') assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_memory_finalizations').get()!.n,newRequest?2:1)

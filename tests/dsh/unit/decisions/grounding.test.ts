@@ -29,6 +29,34 @@ test('missing, multiple, duplicate, truncated and oversized evidence cannot beco
   const large = structuredClone(events); large[1]!.data.message!.content[0]!.text = 'x'.repeat(262144)
   assert.equal(groundingPairs('Claim [tool-result:2]', large, 1, 0, 3).skipped[0]?.reason, 'too_large')
 })
+test('DSH 0.1.5 wrapped and 0.2.0 tool-role results preserve the same cited call', () => {
+  const legacy = structuredClone(events) as any[]
+  const message = legacy[1].data.message
+  legacy[1].data.message = { role: 'user', source: message.source,
+    content: [{ type: 'tool-result', toolCallId: message.toolCallId, content: message.content, isError: false }] }
+  const before = structuredClone(legacy)
+  for (const input of [events, legacy]) {
+    const pair = groundingPairs('Claim [tool-call:one]', input, 1, 0, 3).pairs[0]!
+    assert.equal(pair.callId, 'one')
+    assert.equal(pair.evidenceSeq, 2)
+    assert.deepEqual((pair.batch.state as any).evidence, input[1]!.data.message)
+  }
+  assert.deepEqual(legacy, before)
+  for (const input of [events, legacy]) {
+    const mismatch = structuredClone(input) as any[]
+    mismatch[1].data.message.source.callId = 'other'
+    assert.equal(groundingPairs('Claim [tool-call:one]', mismatch, 1, 0, 3).skipped[0]?.reason, 'ambiguous')
+  }
+  const invalidRole = structuredClone(legacy)
+  invalidRole[1].data.message.role = 'assistant'
+  assert.equal(groundingPairs('Claim [tool-call:one]', invalidRole, 1, 0, 3).skipped[0]?.reason, 'ambiguous')
+  const cut = structuredClone(legacy)
+  cut[1].data.message.content[0].content[0].truncated = true
+  assert.equal(groundingPairs('Claim [tool-call:one]', cut, 1, 0, 3).skipped[0]?.reason, 'incomplete')
+  const missing = structuredClone(legacy)
+  delete missing[1].data.message.content[0].content
+  assert.equal(groundingPairs('Claim [tool-call:one]', missing, 1, 0, 3).skipped[0]?.reason, 'incomplete')
+})
 test('grounding acceptance is bound, cached, and isolated from other dimensions', async () => {
   assert.throws(() => TypedDecisionsConfig.parse({ groundingReview: { mode: 'candidate' } }))
   const config = TypedDecisionsConfig.parse({ provider: 'laya-coreml', groundingReview: { mode: 'candidate', policyVersion: 'grounding-pairs-v1', minProbability: .6, minMargin: .25 }, 'laya-coreml': { model: 'laya-rl-agent', protocol: 'v1' } })

@@ -14,7 +14,7 @@ function events(answer='All tests passed.'): ReviewEvent[] {
   return [
     {seq:0,type:'turn/start',data:{turn:1}},
     {seq:1,type:'tool/call',data:{turn:1,callId:'check',name:'test'}},
-    {seq:2,type:'tool/result',data:{turn:1,message:{role:'tool',content:[{type:'tool-result',toolCallId:'check',content:[{type:'text',text:'FAIL: expected 2, got 3'}],isError:true}]}}},
+    {seq:2,type:'tool/result',data:{turn:1,message:{role:'tool',toolCallId:'check',source:{kind:'tool',callId:'check'},content:[{type:'text',text:'FAIL: expected 2, got 3'}],isError:true}}},
     {seq:3,type:'assistant/message',data:{turn:1,message:{role:'assistant',content:[{type:'text',text:answer}]}}},
     {seq:4,type:'turn/end',data:{turn:1,reason:{kind:'completed'}}},
   ]

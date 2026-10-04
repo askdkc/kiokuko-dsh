@@ -33,17 +33,20 @@ export function groundingPairs(answer: string, events: readonly ReviewEvent[], t
     const results = owned.filter(e => e.type === 'tool/result' && e.seq === refs[0])
     const result = results[0], message = result?.data?.message
     const blocks = message?.content
-    const callIds = message?.source?.kind === 'tool' ? [message.toolCallId]
+    // DSH 0.1.5 wraps tool results in user-role blocks; 0.2.0 uses tool-role messages.
+    const callIds = message?.role === 'tool' ? [message.toolCallId]
       : Array.isArray(blocks) ? blocks.map((b: any) => b?.toolCallId) : []
     const callId = callIds[0]
     const calls = owned.filter(e => e.type === 'tool/call' && e.data?.callId === callId && e.seq < (result?.seq ?? -1))
-    if (message?.source?.kind === 'tool' && (message.source.callId !== callId || message.role !== 'tool')) { skipped.push({ start, end, reason: 'ambiguous' }); continue }
+    if (message?.source?.kind === 'tool' && (message.source.callId !== callId || (message.role !== 'tool' && message.role !== 'user'))) { skipped.push({ start, end, reason: 'ambiguous' }); continue }
     if (results.length !== 1 || typeof callId !== 'string' || callIds.some((id: unknown) => id !== callId) || calls.length !== 1) {
       skipped.push({ start, end, reason: 'ambiguous' }); continue
     }
     // A host truncation marker is never repaired by shortening or by classifier confidence.
     if (result!.data?.truncated === true || message?.truncated === true || !Array.isArray(blocks) || !blocks.length
-      || blocks.some((b: any) => !b || b.truncated === true || (b.type !== 'text' && b.type !== 'tool-result'))) {
+      || blocks.some((b: any) => !b || b.truncated === true || (b.type !== 'text' && b.type !== 'tool-result')
+        || b.type === 'tool-result' && (!Array.isArray(b.content) || !b.content.length
+          || b.content.some((part: any) => !part || part.type !== 'text' || part.truncated === true)))) {
       skipped.push({ start, end, reason: 'incomplete' }); continue
     }
     const originalDigest = canonicalContentHash({ call: calls[0], result })
