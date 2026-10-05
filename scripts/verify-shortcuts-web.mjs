@@ -64,15 +64,19 @@ export async function apply(ctx) {
     page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
     page.on('pageerror', e => console.error('Browser error:', e.message))
     await page.goto(url)
-    await page.waitForTimeout(1500)
-    // Strict selectors deliberately fail when the actual native entry point changes.
-    if (await page.getByRole('button', {name:'Continue',exact:true}).isVisible()) await page.getByRole('button', {name:'Continue',exact:true}).click()
-    await page.waitForTimeout(300)
-    if (await page.getByRole('button', {name:'Configure later',exact:true}).isVisible()) await page.getByRole('button', {name:'Configure later',exact:true}).click()
+    // Both onboarding stages load asynchronously. A one-shot visibility check can
+    // miss the credential dialog and let its autofocus capture the seed command.
+    // Reused profiles may already have acknowledged the welcome notice.
+    const welcome = page.getByRole('button', { name: 'Continue', exact: true })
+    const credentials = page.getByRole('dialog', { name: 'Add an API key to get started', exact: true })
+    await welcome.or(credentials).first().waitFor()
+    if (await welcome.isVisible()) await welcome.click()
+    await credentials.getByRole('button', { name: 'Configure later', exact: true }).click()
+    await credentials.waitFor({ state: 'hidden' })
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
-    await page.waitForTimeout(500)
-    await page.screenshot({ path: join(base, 'initial.png') })
     const editor = page.locator('[contenteditable="true"]').first()
+    await editor.waitFor()
+    await page.screenshot({ path: join(base, 'initial.png') })
     await editor.fill('/shortcut-fixture seed'); await editor.press('Enter')
     await page.getByRole('button',{name:'Diff レビュー',exact:true}).waitFor()
     const records = async () => (await readFile(answers, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
