@@ -165,6 +165,10 @@ host copy: 64 MiB/file, 1000/session, 1 GiB total; registration is not project a
 refused. stdout/stderr are bounded.
 <!-- /kiokuko:runtime -->
 
+<!-- kiokuko:runtime prototype-driven-planning -->
+For Lisp coding, plans or reviews, settle testable doubts with current evidence or authorized target-runtime probes. Choose controls and counterexamples first; record commands, failures, observations and refs in one reasoned plan. Stop when evidence suffices or budgets expire; ask only for needed intent or authority.
+<!-- /kiokuko:runtime -->
+
 <!-- kiokuko:documentation examples -->
 ## Task-mode API details
 

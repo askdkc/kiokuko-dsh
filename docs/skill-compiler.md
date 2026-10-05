@@ -95,6 +95,10 @@ guidance, not an obsolete "already loaded" flag. A confirmed current system
 section prevents duplicate routed guidance; user messages, other plugins and
 tool results are not rewritten.
 
+The Lisp coding runtime also includes an evidence-backed planning contract.
+See [Lisp prototype planning](lisp-prototype-planning.md) for its source-only
+offline/live evaluator and the distinction between delivery and model behavior.
+
 ## Size and quality gates
 
 `npm run test:skill-efficiency` compares fixed representative envelopes with the

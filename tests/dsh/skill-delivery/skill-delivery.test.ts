@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile, writeFile, stat, mkdtemp, rm, realpath } from 'node:fs/promises'
+import { readFile, writeFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { nativeMock } from '../helpers/native-mock.js'
+import { nativeSkillFixture } from '../helpers/skill-native.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 
 isolateSkillHome()
@@ -28,43 +27,33 @@ const textOf = (request: any): string => [request.system ?? '', ...request.messa
   b.type === 'text' ? [b.text] : b.type === 'tool-result' ? b.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text) : []))].join('\n')
 function requireBody(request: any, name: string) { assert.ok(textOf(request).includes(content(name)), `${name}: compiled body absent at adapter boundary`) }
 
-async function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' = 'compiled', extra: object = {}, nativeAnswer?: (request: any) => Promise<any>) {
-  const modules = await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','tool-skill','commands','subagent','subagent-spawn-in-process']
-    .map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
-  const [cordis,llm,session,projection,prompt,tools,agents,loop,skills,skillTool,commands,subagents,spawn]=modules
-  const dir = await realpath(await mkdtemp(join(tmpdir(),'skill-delivery-'))), previousData = process.env.KIOKUKO_DATA_DIR
-  process.env.KIOKUKO_DATA_DIR = dir
-  const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
-  fibers.push(await ctx.plugin({name:'headless-web-connection',apply(c:any){return c.provide('connection',{fetch:{register:()=>()=>{}}})}}))
-  if('lisp' in extra) {
-    if (nativeAnswer) {
-      const questions = await import(pathToFileURL(join(packages!, '@deepseek-ai/dsh-user-questions/lib/index.js')).href)
-      fibers.push(await ctx.plugin(questions.default, {}))
-    } else fibers.push(await ctx.plugin({name:'delivery-intent-answer',apply(c:any){return c.provide('userQuestions',{ask:async(r:any)=>({answers:r.questions.map((q:any)=>{assert.equal(q.id,'taskType');return{id:q.id,selected:['chat']}})})})}}))
-  }
-  const initial=explicit==='prompt-only'?[llm,prompt,skills]:[llm,session,projection,prompt,tools,agents,skills,commands,subagents,skillTool]
-  for(const m of initial) fibers.push(await ctx.plugin(m.default??m, m===prompt?{persona:''}:undefined))
-  if(explicit!=='prompt-only'){fibers.push(await ctx.plugin(loop.default,{agents:[]}));fibers.push(await ctx.plugin(spawn,{providerName:'spawn'}))}
-  const responses: any[] = [], model = new mock.MockAdapter(responses)
-  ctx.llm.registerAdapter(['mock'],model)
-  let adapter: ReturnType<typeof subject.createDshHostAdapter> | undefined
-  if(explicit===true) {
-    adapter = subject.createDshHostAdapter(ctx,{databasePath:join(dir,'state.sqlite3'),repositoryRoot:dir,orca:{enabled:false}})
-    fibers.push(await ctx.plugin({name:'explicit-skill-host',apply(c:any){return c.provide('kiokukoDsh',adapter!.host)}}))
-  }
-  let plugin = await ctx.plugin(subject,{enabled:true,skillPrompts:{mode},orca:{enabled:false},...extra})
-  if(explicit==='prompt-only'){
-    for(const m of [session,projection,tools,agents,commands,skillTool])fibers.push(await ctx.plugin(m.default??m))
-    fibers.push(await ctx.plugin(loop.default,{agents:[]}))
-  }
-  const agent = await ctx.agentLoop.create(session.SessionId('skill-main'),{provider:'mock',model:'qwen3-coder'},{cwd:dir})
-  const offQuestions = nativeAnswer ? agent.ctx.on('user-questions/request', nativeAnswer) : undefined
-  const errors: unknown[]=[]
-  const off=ctx.on('agent/error',(e:any)=>errors.push(e.error))
-  const turn=async(input='この内容を日本語で説明してください。')=>{agent.followup(llm.createUserMessage({content:[{type:'text',text:input}],source:{kind:'user'}}));await agent.whenIdle();assert.deepEqual(errors,[])}
-  return {ctx,agent,model,responses,mock,turn,adapter,dir,llm,
-    async reload(nextMode: 'full'|'compiled') { await plugin.dispose(); plugin=await ctx.plugin(subject,{enabled:true,skillPrompts:{mode:nextMode},orca:{enabled:false},...extra}) },
-    async close(){off();offQuestions?.();await plugin.dispose();await adapter?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();if(previousData===undefined)delete process.env.KIOKUKO_DATA_DIR;else process.env.KIOKUKO_DATA_DIR=previousData;await rm(dir,{recursive:true,force:true})} }
+function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' = 'compiled', extra: object = {}, nativeAnswer?: (request: any) => Promise<any>) {
+  return nativeSkillFixture({ packages: packages!, ...(packageRoot ? { packageRoot } : {}), explicit, mode, extra, ...(nativeAnswer ? { nativeAnswer } : {}) })
+}
+
+for (const mode of ['full', 'compiled'] as const) for (const activation of ['enable', 'enable-task']) {
+  test(`Lisp planning delivery: ${mode}, ${activation}, first/follow-up/reload`, {
+    ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
+  }, async () => {
+    const f = await fixture(false, mode, { lisp: { enabled: true, startupTimeoutMs: 60000 } })
+    try {
+      const source = await readFile(join(packageRoot ?? process.cwd(), 'skills/kiokuko-lisp/SKILL.md'), 'utf8')
+      const expected = mode === 'full' ? source : content('kiokuko-lisp')
+      const contract = source.match(/<!-- kiokuko:runtime prototype-driven-planning -->\n([\s\S]*?)\n<!-- \/kiokuko:runtime -->/u)?.[1]
+      assert.ok(contract)
+      const activated = await f.ctx.commands.execute(f.agent, `/kioku-lisp ${activation}`, [], new AbortController().signal)
+      assert.equal(activated.result.kind, 'success', JSON.stringify(activated.result))
+      for (let turn = 0; turn < 3; turn++) {
+        if (turn === 2) await f.reload(mode)
+        f.responses.push(f.mock.textResponse('現在の契約を確認しました。'))
+        await f.turn('説明してください。')
+        const request = f.model.requests.at(-1)
+        assert.ok(textOf(request).includes(expected))
+        const system = request.system ?? request.messages.filter((m: any) => m.role === 'system').map((m: any) => JSON.stringify(m.content)).join('\n')
+        assert.equal(system.split(contract).length - 1, 1, 'current system contract must appear exactly once')
+      }
+    } finally { await f.close() }
+  })
 }
 
 for(const explicit of [false,true]) test(`compiled Skill delivery: production entrypoint (${explicit?'explicit':'native'} host), every native skill lookup`,native,async()=>{

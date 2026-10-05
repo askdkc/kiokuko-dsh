@@ -195,6 +195,7 @@
     "test:evaluation:enno-memory": "node scripts/run-enno-memory-evaluation.mjs",
     "verify:lisp:vendor": "node scripts/verify-lisp-vendor.mjs",
     "test:lisp": "node scripts/run-tests.mjs tests/dsh/unit/lisp tests/dsh/integration/lisp",
+    "test:lisp:prototype-planning": "node --import tsx scripts/run-lisp-prototype-planning.mjs",
     "test:lisp:efficiency": "node --import tsx scripts/run-lisp-efficiency.mjs",
     "test:lisp:web": "node scripts/verify-lisp-web.mjs",
     "test:diff-review:web": "node scripts/verify-diff-review-web.mjs",

@@ -90,11 +90,11 @@ Assign Frame/Trace/Bound/Implement/Verify/Finish to the admitted role: Zenki
 plans, Goki implements/verifies its WorkUnit, Enno accepts the run. A WorkUnit
 report is not final acceptance. Normal work adds no orchestration approval.
 
-For admitted Lisp, follow its Skill: permitted native reads, scratch → proposals
-→ host confirmation → durable result; allowed verification targets only.
-Distinguish execution, verification and APPLIED/UNCHANGED/NOT_APPLIED/UNKNOWN.
-No replay of RUNNING/UNKNOWN effects or native fallback after protection failure.
-Only the host finalizes run state.
+For admitted Lisp, follow its Skill, with prototype-driven-planning for
+coding/plans: native reads, scratch → proposals → host confirmation → durable
+results; allowed verifiers only. Distinguish execution, verification and
+APPLIED/UNCHANGED/NOT_APPLIED/UNKNOWN. No replay of RUNNING/UNKNOWN effects or
+native fallback after protection failure. Only the host finalizes runs.
 
 Continue authorized work while evidence supports a next step. On failure, read
 the recovery reference before changing strategy. Do not retry an unchanged

@@ -2,7 +2,7 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises'
 import {resolve,join} from 'node:path'
 import {createHash} from 'node:crypto'
 import {isDeepStrictEqual} from 'node:util'
-import {z} from 'zod'
+import {parseEvaluationConfig,createEvaluationBudget} from './skill-evaluation-config.mjs'
 
 const arg=name=>{const i=process.argv.indexOf(name);return i<0?undefined:process.argv[i+1]}
 const digest=value=>createHash('sha256').update(value).digest('hex')
@@ -12,10 +12,7 @@ const fixtures=JSON.parse(fixtureText)
 const configPath=arg('--config')
 if(!configPath){console.log(JSON.stringify({status:'unmeasured',modelRequests:0,defaultMode:'full',reason:'Provide an explicit model, endpoint, credential reference and evaluation budget; no provider was contacted.'}));process.exit(0)}
 const {DshSkillPrompts}=await import('../dist/dsh/skill-prompts.js')
-const config=z.object({model:z.string().min(1).max(256),revision:z.string().min(1).max(256),baseURL:z.string().url(),apiKeyEnv:z.string().regex(/^[A-Z][A-Z0-9_]*$/),allowRemote:z.boolean(),maxRequests:z.number().int().min(1).max(500),maxTokens:z.number().int().positive(),maxDurationMs:z.number().int().min(1000).max(3600000),contextWindow:z.number().int().min(4096).max(1048576),maxOutputTokens:z.number().int().min(64).max(4096),temperature:z.number().min(0).max(2)}).strict().parse(JSON.parse(await readFile(configPath,'utf8')))
-const endpoint=new URL(config.baseURL)
-if(endpoint.username||endpoint.password||endpoint.search||endpoint.hash||!['http:','https:'].includes(endpoint.protocol))throw new Error('Invalid evaluation endpoint')
-if(!['localhost','127.0.0.1','[::1]'].includes(endpoint.hostname)&&(!config.allowRemote||endpoint.protocol!=='https:'))throw new Error('Remote evaluation requires HTTPS and allowRemote:true')
+const config=parseEvaluationConfig(JSON.parse(await readFile(configPath,'utf8')))
 const key=process.env[config.apiKeyEnv];if(!key)throw new Error('Evaluation credential is unavailable')
 const output=resolve(arg('--output')??'skill-quality-results');await mkdir(output,{recursive:true})
 const reportFile=join(output,'report.json');await writeFile(reportFile,JSON.stringify({status:'running'})+'\n',{flag:'wx'})
@@ -31,11 +28,10 @@ const old=name=>{
 const fullPrompts=new DshSkillPrompts({mode:'full'})
 const modes=pstack?['baseline-full','candidate-full','compiled']:['full','compiled']
 const records=[],blind=[],signal=AbortSignal.timeout(config.maxDurationMs)
-let reserved=0,status='measured'
+const budget=createEvaluationBudget(config)
+let status='measured'
 outer:for(const scenario of fixtures.cases)for(let repeat=0;repeat<3;repeat++)for(const mode of modes.map((_,i)=>modes[(i+repeat)%modes.length])){
-  const reserve=config.contextWindow+config.maxOutputTokens
-  if(records.length>=config.maxRequests||reserved+reserve>config.maxTokens||signal.aborted){status='budget_exhausted';break outer}
-  reserved+=reserve
+  if(signal.aborted||!budget.reserve()){status='budget_exhausted';break outer}
   const system=(mode==='full'||mode==='baseline-full'?scenario.skills.map(old):await Promise.all(scenario.skills.map(name=>(mode==='candidate-full'?fullPrompts:prompts).require(name)))).join('\n\n')
   if(mode==='compiled'&&prompts.diagnostics().some(d=>d.fallback))throw new Error('Quality evaluation cannot treat fallback as compiled evidence')
   const body={model:config.model,messages:[{role:'system',content:system},{role:'user',content:scenario.prompt}],max_tokens:config.maxOutputTokens,temperature:config.temperature,stream:false}

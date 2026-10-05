@@ -46,6 +46,34 @@ test('compiled Lisp guidance retains TypeSafe discovery and answer-consuming exa
   const lisp = compiled.resources.find(resource => resource.id === 'kiokuko-lisp/SKILL.md')!.content
   for (const contract of ['kioku.typesafe:evaluate', '/kioku-typesafe-key', 'inspect-diagnosis', 'kioku.decisions:status', 'assess-relevance', 'result.answers', 'Cancellation stops work', 'Existing approvals remain authoritative']) assert.ok(lisp.includes(contract), contract)
 })
+test('Lisp planning contract survives full, compiled and fallback delivery without losing the prior contract', async () => {
+  const sources = await loadSkillSources()
+  const lisp = sources.find(s => s.name === 'kiokuko-lisp' && s.relativePath === 'SKILL.md')!
+  const baseline = JSON.parse(await readFile(new URL('../../fixtures/lisp-prototype-planning/before.json', import.meta.url), 'utf8'))
+  const previous = baseline.resources.find((r: { path: string }) => r.path === 'skills/kiokuko-lisp/SKILL.md').content as string
+  const expected = 'For Lisp coding, plans or reviews, settle testable doubts with current evidence or authorized target-runtime probes. Choose controls and counterexamples first; record commands, failures, observations and refs in one reasoned plan. Stop when evidence suffices or budgets expire; ask only for needed intent or authority.'
+  const compiled = compileSkillResource(lisp)
+  assert.deepEqual(compiled.blocks, ['contract', 'prototype-driven-planning'])
+  assert.ok(compiled.content.includes(expected))
+  assert.ok(compiled.content.startsWith(compileSkillResource({ ...lisp, content: previous }).content.trimEnd()))
+  const misplaced = lisp.content.replace(/<!-- kiokuko:runtime prototype-driven-planning -->\n([\s\S]*?)<!-- \/kiokuko:runtime -->/u,
+    '<!-- kiokuko:documentation prototype-driven-planning -->\n$1<!-- /kiokuko:documentation -->')
+  assert.ok(!compileSkillResource({ ...lisp, content: misplaced }).content.includes(expected), 'the negative control must lose the obligation')
+  const dir = await mkdtemp(join(tmpdir(), 'lisp-contract-'))
+  try {
+    const artifact = pathToFileURL(join(dir, 'bundle.json'))
+    const fallback = new DshSkillPrompts({ mode: 'compiled' }, artifact, async () => sources)
+    assert.ok((await fallback.require('kiokuko-lisp')).includes(expected))
+    assert.equal(fallback.diagnostics().find(d => d.id === compiled.id)?.fallback, 'bundle_unavailable')
+    await writeFile(artifact, JSON.stringify(compileSkillBundle(sources)))
+    for (const mode of ['full', 'compiled'] as const) {
+      const prompts = new DshSkillPrompts({ mode }, artifact, async () => sources)
+      assert.ok((await prompts.require('kiokuko-lisp')).includes(expected))
+      assert.ok((await prompts.require('one-shot-software-completion')).includes('with prototype-driven-planning for\ncoding/plans'))
+      assert.ok(prompts.diagnostics().every(d => !d.fallback))
+    }
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
 test('compiler rejects unclassified, duplicate, nested, empty and malformed blocks', () => {
   for (const content of [`unclassified\n${contract}`, `${contract}\n${contract}`, contract.replace('Never replay completed effects.', ''),
     contract.replace('runtime core', 'runtime INVALID'), contract.replace('<!-- /kiokuko:runtime -->', ''),

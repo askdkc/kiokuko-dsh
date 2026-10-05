@@ -18,3 +18,11 @@ export function isolateSkillHome(): () => string {
   })
   return () => directory
 }
+
+/** Standalone evaluation counterpart; no test lifecycle or real profile writes. */
+export async function withIsolatedSkillHome<T>(run: () => Promise<T>): Promise<T> {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'kiokuko-evaluation-home-'))
+  const mocked = mock.method(os, 'homedir', () => directory)
+  try { return await run() }
+  finally { mocked.mock.restore(); await rm(directory, { recursive: true, force: true }) }
+}

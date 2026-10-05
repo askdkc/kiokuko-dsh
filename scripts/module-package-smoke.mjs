@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { join } from 'node:path'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { realpathSync } from 'node:fs'
 
@@ -151,6 +151,16 @@ try {
     const removeProbe = ctx.tools.register({ name: 'module_fixture_write', description: 'fixture effect', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => ++effects })
     const enabled = await registeredCommands.get('kioku-lisp').handler({ rawInput: 'enable', agent: parent, signal: new AbortController().signal })
     assert.equal(enabled.kind, 'success', enabled.text)
+    const artifact = JSON.parse(await readFile(join(packageRoot, 'dist/dsh/skill-prompts.json'), 'utf8'))
+    const expected = artifact.resources.find(resource => resource.id === 'kiokuko-lisp/SKILL.md').content
+    const beforeLispRequest = provider.requests.length
+    parent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Explain the available Lisp coding contract.' }], source: { kind: 'user' } }))
+    await parent.whenIdle()
+    assert.ok(provider.requests.length > beforeLispRequest, 'Lisp activation must reach a subsequent native model request')
+    const delivered = provider.requests.at(-1)
+    const deliveredText = [delivered.system ?? '', ...delivered.messages.flatMap(message => message.content.filter(block => block.type === 'text').map(block => block.text))].join('\n')
+    assert.ok(deliveredText.includes(expected), 'the packed core+Lisp model receives the complete compiled contract')
+    assert.ok(expected.includes('settle testable doubts'), 'the package contains the new mandatory contract')
     const arguments_ = { operationId: 'packed-eval', code: '(+ 20 22)' }
     const result = await ctx.tools.execute({ callId: 'packed-lisp-eval', name: 'lisp_eval', arguments: arguments_, agent: parent, signal: new AbortController().signal })
     assert.notEqual(result.isError, true, JSON.stringify(result))
