@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { runBackupWorker } from './backup-worker.js';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, type FileHandle } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
@@ -584,12 +584,12 @@ function parseUnsigned(value: unknown): bigint {
   return BigInt(value);
 }
 
-function writeBoundArtifact(
+async function writeBoundArtifact(
   binding: BackupDirectoryBinding,
   fileName: string,
   bytes: Buffer,
   posixFlags: PosixBackupOpenFlags | undefined,
-): BackupArtifactAttestation {
+): Promise<BackupArtifactAttestation> {
   const request = {
     destination: fileName,
     directory: {
@@ -604,27 +604,17 @@ function writeBoundArtifact(
     sha256: sha256(bytes),
     size: bytes.length.toString(),
   };
-  const child = spawnSync(
-    process.execPath,
-    ['--input-type=commonjs', '--eval', BOUND_WRITER_SCRIPT, JSON.stringify(request)],
-    {
-      cwd: binding.directory,
-      // The worker uses only built-in modules and an absolute executable path.
-      // Do not inherit preload, loader, search-path, or application environment.
-      env: {},
-      shell: false,
-      input: bytes,
-      timeout: WRITER_DEADLINE_MS,
-      maxBuffer: WRITER_PROTOCOL_LIMIT_BYTES,
-    },
-  );
-  if (child.error !== undefined) throw child.error;
-  if (child.status !== 0 || child.signal !== null) {
-    throw new Error('Bound backup writer subprocess failed');
-  }
+  const stdout = await runBackupWorker({
+    directory: binding.directory,
+    script: BOUND_WRITER_SCRIPT,
+    request: JSON.stringify(request),
+    bytes,
+    deadlineMs: WRITER_DEADLINE_MS,
+    outputLimitBytes: WRITER_PROTOCOL_LIMIT_BYTES,
+  });
   let parsed: unknown;
   try {
-    parsed = JSON.parse(child.stdout.toString('utf8')) as unknown;
+    parsed = JSON.parse(stdout.toString('utf8')) as unknown;
   } catch (error) {
     if (error instanceof SyntaxError) throw new Error('Bound backup writer returned invalid JSON');
     throw error;
@@ -834,7 +824,7 @@ export async function createSerializedBackupArtifact(
     directoryBinding = await bindExistingOutputDirectory(output, posixFlags);
     await hooks.afterDirectoryBound?.();
     await hooks.beforeArtifactWrite?.(output);
-    const artifact = writeBoundArtifact(directoryBinding, fileName, bytes, posixFlags);
+    const artifact = await writeBoundArtifact(directoryBinding, fileName, bytes, posixFlags);
     await requireBoundArtifact(output, artifact, posixFlags);
     await hooks.afterArtifactWritten?.(output);
     await requireBoundArtifact(output, artifact, posixFlags);
@@ -885,7 +875,7 @@ export async function createPreMigrationBackup(
     const output = path.join(directoryBinding.directory, fileName);
     await hooks.afterDirectoryBound?.();
     await hooks.beforeArtifactWrite?.(output);
-    const artifact = writeBoundArtifact(directoryBinding, fileName, bytes, posixFlags);
+    const artifact = await writeBoundArtifact(directoryBinding, fileName, bytes, posixFlags);
     await requireBoundArtifact(output, artifact, posixFlags);
     await hooks.afterArtifactWritten?.(output);
     await requireBoundArtifact(output, artifact, posixFlags);

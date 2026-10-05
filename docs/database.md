@@ -7,6 +7,13 @@ baseline, and applied history is protected by the migration framework's
 sequence and checksum validation. There is no rollback path (`migrations/down/`
 does not exist), and released migration files are never rewritten.
 
+Pre-migration backups use an isolated asynchronous Node worker with a 30-second
+deadline and a combined 64 KiB stdout/stderr limit. The parent drains its pipes
+while transferring the serialized snapshot and waits for child close, including
+after failure or forced termination. Directory identity, create-only output,
+private file mode, snapshot hash and artifact attestation are verified before
+migration; a failed backup leaves the source database unmigrated.
+
 The baseline binds every ledger run to exactly one authoritative DSH session:
 
 - `ledger_runs.dsh_session_id` (no `client_kind`, `client_version`, or
