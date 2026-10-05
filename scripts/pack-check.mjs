@@ -23,6 +23,8 @@ const requiredFiles = [
   'migrations/028_model_auto.sql',
   'migrations/029_harness_completion.sql',
   'migrations/030_memory_index_reasoning.sql',
+  'migrations/031_dsh_lisp_hot_tools.sql',
+  'docs/lisp-hot-tools.md',
   'dist/memory/index-reasoning/contracts.js',
   'dist/memory/index-reasoning/store.js',
   'dist/memory/index-reasoning/worker.js',

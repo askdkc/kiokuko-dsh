@@ -83,3 +83,12 @@ test('choosing conversation once survives unclear follow-ups, but a new coding r
   assert.deepEqual(f.asked, ['taskType', 'lisp-coding-mode'])
   await assert.rejects(f.service.prepare({ ...f.input, agent: { id: 'other-session' }, turn: 6, taskType: null }), /Unexpected repeated question/)
 })
+
+for (const [number, effect] of [['1', 'enable'], ['2', 'decline'], ['3', 'cancel']] as const) {
+  test(`Lisp choice preserves numeric shortcut ${number}`, async () => {
+    const f = fixture([{ selected: [], custom: number }])
+    if (effect === 'cancel') await assert.rejects(f.service.prepare(f.input), ExecutionSelectionPending)
+    else await f.service.prepare(f.input)
+    assert.deepEqual(f.effects, effect === 'cancel' ? [] : [effect])
+  })
+}

@@ -230,7 +230,7 @@ test('Deep model search and budget values keep free-text digits literal through 
 
 test('platform shortcuts select from outside the card, show matching hints, and confirm once', async () => {
   for (const platform of ['MacIntel', 'Win32', 'Linux x86_64']) for (const [id, header] of [
-    ['taskType', 'Kiokuko · 作業の選択'], ['enno-model-zenki', '実行方式とモデル'], ['deep-role-model', 'Deep planning'],
+    ['lisp-coding-mode', 'コーディングの準備'], ['taskType', 'Kiokuko · 作業の選択'], ['enno-model-zenki', '実行方式とモデル'], ['deep-role-model', 'Deep planning'],
   ]) {
     const mac = platform === 'MacIntel', modifier = mac ? { metaKey: true } : { ctrlKey: true }
     const h = clientHarness(platform), responses: unknown[] = []

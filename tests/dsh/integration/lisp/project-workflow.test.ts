@@ -18,6 +18,7 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
   await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'state.sqlite3'), new DatabaseSync(join(base, 'state.sqlite3')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 'session', agentId: 'agent', root }
   let approvals = 0, approve = true
   const observedWorkspace: Array<{operationId:string;generation:string;state:unknown}> = []

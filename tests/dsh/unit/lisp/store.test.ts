@@ -7,6 +7,7 @@ import { LispStore } from '../../../../src/dsh/lisp/store.js'
 test('durable requests deduplicate by owner and digest; restart quarantines unfinished work', async () => {
   const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
   db.exec(readFileSync(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(readFileSync(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 's', agentId: 'a', root: '/workspace' }
   try {
     await store.enable(owner)
@@ -37,6 +38,7 @@ test('durable requests deduplicate by owner and digest; restart quarantines unfi
 test('declining Lisp persists without enabling a worker and cannot undo an enabled session', async () => {
   const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
   db.exec(readFileSync(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(readFileSync(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 's', agentId: 'a', root: '/workspace' }
   try {
     await store.decline(owner)

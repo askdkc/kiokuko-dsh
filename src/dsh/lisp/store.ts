@@ -45,7 +45,7 @@ export class LispStore {
     const cutoff = new Date(now.getTime() - 30 * 86400000).toISOString()
     return this.database(db => {
       db.prepare("UPDATE dsh_lisp_operations SET result=NULL WHERE kind IN ('lisp_eval','lisp_describe','lisp_inspect','lisp_reset','lisp_cancel') AND state IN ('SUCCEEDED','FAILED','CANCELLED') AND updated_at<? AND result IS NOT NULL").run(cutoff)
-      db.prepare("UPDATE dsh_lisp_operations SET result=NULL WHERE kind IN ('lisp_define','lisp_call','lisp_observe','task_result') AND state IN ('SUCCEEDED','FAILED','CANCELLED') AND updated_at<? AND result IS NOT NULL").run(cutoff)
+      db.prepare("UPDATE dsh_lisp_operations SET result=NULL WHERE kind IN ('lisp_define','lisp_call','lisp_observe','task_result','lisp_hot_contract','lisp_hot_install','lisp_hot_call','lisp_hot_deactivate') AND state IN ('SUCCEEDED','FAILED','CANCELLED') AND updated_at<? AND result IS NOT NULL").run(cutoff)
       db.prepare("UPDATE dsh_lisp_operations SET payload='{}',result=NULL WHERE kind='task_tool' AND state='SUCCEEDED' AND updated_at<? AND payload!='{}'").run(cutoff)
     })
   }

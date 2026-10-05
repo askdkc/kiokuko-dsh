@@ -21,7 +21,9 @@ const artifact = enabled ? JSON.parse(await readFile(join(packageRoot ?? process
 const content = (name: string) => artifact.resources.find((r: any) => r.id === `${name}/SKILL.md`).content as string
 const names: string[] = artifact.resources.filter((r: any) => r.id.endsWith('/SKILL.md')).map((r: any) => r.id.slice(0,-'/SKILL.md'.length))
 // Exact model-facing contract: protected Lisp, native reads and memory recovery.
-const expectedLispTools = ['lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval', 'lisp_inspect', 'lisp_observe', 'lisp_reset', 'lisp_stage', 'lisp_status', 'lisp_verify',
+const expectedLispTools = ['lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
+  'lisp_hot_call', 'lisp_hot_contract', 'lisp_hot_deactivate', 'lisp_hot_install', 'lisp_hot_status',
+  'lisp_inspect', 'lisp_observe', 'lisp_reset', 'lisp_stage', 'lisp_status', 'lisp_verify',
   'observation_read', 'skill', 'task_memory_review']
 const textOf = (request: any): string => [request.system ?? '', ...request.messages.flatMap((m: any) => m.content.flatMap((b: any) =>
   b.type === 'text' ? [b.text] : b.type === 'tool-result' ? b.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text) : []))].join('\n')
@@ -145,6 +147,9 @@ test('compiled Skill delivery: protected Lisp enable and lisp_describe reach the
     await f.turn()
     assert.equal(f.model.requests.length,5,'native requests must define, discover and reuse the task toolkit')
     requireBody(f.model.requests[0],'kiokuko-lisp')
+    const hotContract = f.model.requests[0].tools.find((tool: any) => tool.name === 'lisp_hot_contract')
+    assert.match(hotContract.description, /user to approve/u)
+    assert.ok(textOf(f.model.requests[0]).includes('See lisp_hot_* schemas.'))
     const last=f.model.requests.at(-1)
     const results=last.messages.flatMap((m:any)=>m.content).filter((b:any)=>b.type==='tool-result')
     assert.ok(results.some((b:any)=>b.content.some((c:any)=>c.type==='text'&&JSON.parse(c.text).api?.verify&&JSON.parse(c.text).guide===undefined)), 'lisp_describe delivers a concise API without duplicating the injected guide')
@@ -157,7 +162,7 @@ test('compiled Skill delivery: protected Lisp enable and lisp_describe reach the
   } finally {await f.close()}
 })
 
-test('Lisp selected during initial admission reaches the first model request', {
+test('Lisp selected during initial admission executes shared functions without switching mode', {
   ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
 }, async () => {
   const asked: string[] = []
@@ -166,20 +171,42 @@ test('Lisp selected during initial admission reaches the first model request', {
     asked.push(q.id)
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['debug'] }] }
     if (q.id === 'lisp-coding-mode') return { answers: [{ id: q.id, selected: ['Lispモードを使う（通常実行）'] }] }
+    if (q.id.startsWith('lisp-hot-')) return { answers: [{ id: q.id, selected: [q.intent.approve] }] }
     throw new Error(`Unexpected admission question: ${JSON.stringify(q)}`)
   })
   try {
     // These tools are visible when native assembly begins, before the choice.
     for (const name of ['bash', 'write']) f.ctx.tools.register({ name, description: name, parameters: { type: 'object' },
       output: { schema: {}, render: () => [] }, execute: async () => { throw new Error('blocked tool must never execute') } })
-    f.responses.push(f.mock.toolCallResponse('initial-lisp', 'lisp_describe', { operationId: 'initial-guide' }), f.mock.textResponse('Inspected.'))
+    const resultOf = (request: any) => {
+      const block = request.messages.flatMap((m: any) => m.content).filter((b: any) => b.type === 'tool-result').at(-1)
+      return JSON.parse(block.content.find((b: any) => b.type === 'text').text)
+    }
+    f.responses.push(f.mock.toolCallResponse('initial-lisp', 'lisp_describe', { operationId: 'initial-guide' }),
+      f.mock.toolCallResponse('initial-contract', 'lisp_hot_contract', { operationId: 'initial-contract', name: 'add-one', description: 'Add one',
+        inputSchema: { type: 'integer' }, outputSchema: { type: 'integer' }, properties: [{ input: 1, expected: 2 }] }),
+      (request: any) => {
+        const contract = resultOf(request)
+        assert.equal(contract.ok, true, JSON.stringify(contract))
+        return f.mock.toolCallResponse('install-shared', 'lisp_hot_install', { operationId: 'install-shared', name: 'add-one',
+          contractRef: contract.contractRef, expectedRevision: 0, source: '(lambda (input) (+ input 1))' })
+      },
+      (request: any) => {
+        assert.equal(resultOf(request).revision, 1, JSON.stringify(resultOf(request)))
+        return f.mock.toolCallResponse('call-shared', 'lisp_hot_call', { operationId: 'call-shared', name: 'add-one', input: 41 })
+      },
+      (request: any) => {
+        assert.equal(resultOf(request).value, 42, JSON.stringify(resultOf(request)))
+        return f.mock.toolCallResponse('legacy-eval', 'lisp_eval', { operationId: 'legacy-eval', code: '(+ 20 22)' })
+      }, f.mock.textResponse('Verified.'))
     await f.turn('Fix the failing implementation in src/main.js and verify that its tests pass.')
-    assert.ok(asked.includes('lisp-coding-mode'))
-    assert.equal(f.model.requests.length, 2, JSON.stringify(f.agent.session.snapshotEvents().slice(-6)))
+    assert.equal(f.model.requests.length, 6, JSON.stringify(f.agent.session.snapshotEvents().slice(-6)))
     for (const request of f.model.requests) {
       requireBody(request, 'kiokuko-lisp')
       assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
     }
+    assert.equal(resultOf(f.model.requests.at(-1)).ok, true, JSON.stringify(resultOf(f.model.requests.at(-1))))
+    assert.equal(asked.filter(id => id === 'lisp-coding-mode').length, 1)
   } finally { await f.close() }
 })
 

@@ -11,11 +11,12 @@ import { LISP_CODING_SERVICE, type LispCodingService } from '../../../../src/dsh
 import { mountLispSurface } from '../../../../src/dsh/lisp/surface.js'
 import type { DshRuntime } from '../../../../src/dsh/runtime.js'
 
-for (const outcome of ['ready', 'startup-failure', 'decline'] as const) test(`Lisp coding surface: ${outcome}`, async t => {
+for (const outcome of ['ready', 'task-ready', 'startup-failure', 'decline'] as const) test(`Lisp coding surface: ${outcome}`, async t => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-coding-surface-')))
   const path = join(base, 'db.sqlite3')
   const db = new NodeSqliteAdapter(path, new DatabaseSync(path))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
   const ctx = new Context(), definitions = new Map<string, any>(), commands = new Map<string, any>()
   const sections = new Map<string, string>()
@@ -54,7 +55,14 @@ for (const outcome of ['ready', 'startup-failure', 'decline'] as const) test(`Li
     })
     const service = ctx.get(LISP_CODING_SERVICE) as LispCodingService
     const input = { agent, turn: 1, task: 'Implement src/index.ts', taskType: 'build' as const, signal: new AbortController().signal }
-    if (outcome === 'startup-failure') {
+    if (outcome === 'task-ready') {
+      assert.equal((await commands.get('kioku-lisp').handler({ rawInput: 'enable-task', agent, signal: input.signal })).kind, 'success')
+      await service.prepare(input)
+      await service.prepare({ ...input, turn: 2 })
+      assert.equal(asked, 0, 'an explicit task-mode choice is retained')
+      assert.deepEqual([...definitions.keys()], [...LISP_TOOLS])
+      assert.equal((await surface.manager.status({ sessionId: agent.session.id, agentId: agent.id, root: base }) as any).state, 'TASK_READY')
+    } else if (outcome === 'startup-failure') {
       await assert.rejects(service.prepare(input), /SBCL|sbcl|ENOENT/u)
       assert.equal(service.enabled(agent), true, 'failed startup retains the admitted fence')
       assert.deepEqual([...definitions.keys()], [...LISP_TOOLS], 'diagnostic tools remain available')

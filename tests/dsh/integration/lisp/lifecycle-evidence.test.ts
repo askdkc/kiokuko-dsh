@@ -16,6 +16,7 @@ test('crash-state journal between file receipts and parent commit remains inspec
   await mkdir(root); await writeFile(join(root, 'a.txt'), 'old-a'); await writeFile(join(root, 'b.txt'), 'old-b')
   const db = new NodeSqliteAdapter(join(base, 'live.sqlite3'), new DatabaseSync(join(base, 'live.sqlite3')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const owner = { sessionId: 'restart-session', agentId: 'restart-agent', root }, store = new LispStore(async fn => fn(db))
   const crashPath = join(base, 'interrupted.sqlite3'), transition = store.transition.bind(store)
   let asks = 0, snapshotted = false, reopened: NodeSqliteAdapter | undefined

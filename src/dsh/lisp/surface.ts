@@ -15,6 +15,7 @@ import type { DshNativeCommandDefinition } from '../commands.js'
 import type { DshUserQuestions } from '../user-interaction.js'
 import { LispManager } from './manager.js'
 import { LispStore } from './store.js'
+import { HotCallInput, HotContractInput, HotDeactivateInput, HotInstallInput, HotStatusInput } from './hot-contracts.js'
 import { createLispCodingChoice, LISP_CODING_SERVICE } from './coding-choice.js'
 import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './request-surface.js'
 import { mountLispHttp } from './http.js'
@@ -51,12 +52,16 @@ function restrictInheritedTools(tools: Tools, scopedTools: Tools, agent: Agent, 
 
 function text(value: unknown): string {
   const result = value as { state?: string; enabled?: boolean; ok?: boolean; message?: string; recovery?: string; error?: { message?: string; recovery?: string }; operations?: { id: string; state: string }[] }
+  const hot = value as { tools?: { name: string; revision: number; bundleRef: string | null }[]; hot?: { tools: { name: string; revision: number; bundleRef: string | null }[] } }
+  const shared = hot.tools ?? hot.hot?.tools
   if (result.message) return `${result.message}\n${result.recovery ?? ''}`
-  return `Lisp: ${result.state ?? (result.ok ? '処理完了' : '状態不明')}\n${result.error?.message ?? ''}\n${result.error?.recovery ?? result.recovery ?? ''}\n${result.operations?.map(o => `${o.id}: ${o.state}`).join('\n') ?? ''}`.trim()
+  return `Lisp: ${result.state ?? (result.ok ? '処理完了' : '状態不明')}\n${result.error?.message ?? ''}\n${result.error?.recovery ?? result.recovery ?? ''}\n${result.operations?.map(o => `${o.id}: ${o.state}`).join('\n') ?? ''}\n${shared ? `共有関数（表示中）: ${shared.length}\n${shared.map(t => `${t.name}: 版 ${t.revision} / ${t.bundleRef ? '有効' : '無効'}`).join('\n')}` : ''}`.trim()
 }
 export const ToolInput = z.object({ operationId: identifier.optional(), code: z.string().max(262144).optional(), inputs: z.array(z.string().max(4096)).max(100).optional(),
   name: z.string().max(64).optional(), description: z.string().max(1000).optional(), source: z.string().max(262144).optional(),
   inputSchema: z.unknown().optional(), outputSchema: z.unknown().optional(), dependencies: z.unknown().optional(), examples: z.unknown().optional(), firstInput: z.unknown().optional(),
+  properties: z.unknown().optional(), contractRef: z.uuid().optional(), expectedContractRef: z.uuid().nullable().optional(), expectedRevision: z.number().int().nonnegative().optional(),
+  contractOffset: z.number().int().nonnegative().optional(),
   toolRef: z.string().uuid().optional(), input: z.unknown().optional(), inputRef: z.string().uuid().optional(), fields: z.unknown().optional(),
   paths: z.array(z.string().min(1).max(4096)).max(100).optional(), format: z.enum(['text', 'json']).optional(),
   resultRef: z.string().uuid().optional(), baseRef: z.string().uuid().optional(), candidateRef: z.string().uuid().optional(),
@@ -216,9 +221,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
           try {
             const binding = owner(execution.agent), parsed = ToolInput.parse(args)
             if (name === 'lisp_cancel' && !await manager.isTaskMode(binding.owner)) { identifier.parse(parsed.operationId); identifier.parse(parsed.generation) }
-            if (name !== 'lisp_status' && !isSavedLispResultRead({ name, arguments: parsed, parent: undefined }))
+            if (name !== 'lisp_status' && name !== 'lisp_hot_status' && !isSavedLispResultRead({ name, arguments: parsed, parent: undefined }))
               parsed.operationId = await store.bind(binding.owner, identifier.parse(execution.callId), identifier.parse(parsed.operationId), { name, input: parsed })
-            return await manager.execute(binding.owner, name, parsed, execution.signal)
+            return await manager.execute(binding.owner, name, parsed, execution.signal ? AbortSignal.any([binding.signal, execution.signal]) : binding.signal)
           }
           catch (error) { return failure(error) }
         } }
@@ -265,7 +270,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const enable = async (binding: ReturnType<typeof owner>): Promise<unknown> => {
     const wasEnabled = manager.enabled.has(binding.owner.sessionId)
     try {
-      const result = await manager.enable(binding.owner, binding.agent.status !== undefined && binding.agent.status !== 'idle', binding.signal)
+      const result = await manager.isTaskMode(binding.owner)
+        ? await manager.status(binding.owner)
+        : await manager.enable(binding.owner, binding.agent.status !== undefined && binding.agent.status !== 'idle', binding.signal)
       binding.signal.throwIfAborted()
       register(binding.agent)
       return result
@@ -286,7 +293,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     decline: candidate => store.decline(owner(candidate).owner),
     enable: async candidate => {
       const result = await enable(owner(candidate)) as { state?: string }
-      if (!['READY', 'EVALUATING'].includes(result.state ?? '')) fail('RECOVERY_REQUIRED', 'Lisp の起動・復旧が必要です。/kioku-lisp status で状態を確認してください。')
+      if (!['READY', 'EVALUATING', 'TASK_READY'].includes(result.state ?? '')) fail('RECOVERY_REQUIRED', 'Lisp の起動・復旧が必要です。/kioku-lisp status で状態を確認してください。')
     },
   })))
   const requestSurface: LispAssemblyService = {
@@ -323,7 +330,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       try {
         const binding = owner(invocation.agent)
         const [action = 'status', argument, ...extra] = invocation.rawInput.trim().split(/\s+/u).filter(Boolean)
-        if (extra.length || (argument && !['status', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|enable-task|status|diagnostics|cancel|recover|abandon ID|restore ID|disable')
+        if (extra.length || (argument && !['status', 'hot', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|enable-task|status|hot [NAME]|diagnostics|cancel|recover|abandon ID|restore ID|disable')
         let result: unknown
         if (action === 'enable') result = await enable(binding)
         else if (action === 'enable-task') { result = await manager.enableTask(binding.owner, binding.signal); register(binding.agent) }
@@ -336,6 +343,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         else if (action === 'abandon') result = await manager.abandon(binding.owner, argument ?? '')
         else if (action === 'restore') result = await manager.restore(binding.owner, argument ?? '', invocation.signal)
         else if (action === 'diagnostics') result = await manager.diagnostics(binding.owner, argument === '--json' ? undefined : argument)
+        else if (action === 'hot') result = await manager.execute(binding.owner, 'lisp_hot_status', argument && argument !== '--json' ? { name: argument } : {}, binding.signal)
         else if (action === 'status') result = await manager.status(binding.owner)
         else fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|status|diagnostics|cancel|recover|abandon ID|disable')
         return { kind: 'success', text: argument === '--json' || action === 'diagnostics' || (result as {code?:string}).code ? JSON.stringify(result, null, 2) : text(result) }
@@ -353,6 +361,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
 }
 function description(name: LispTool): string {
   return ({ lisp_eval: 'Evaluate Common Lisp. In persistent mode, define and reuse cohesive functions in one worker generation; proposals require host approval. In enable-task mode, each evaluation is a disposable scratch experiment without workspace inputs or proposals. Exact operationId replay never re-evaluates.',
+    lisp_hot_contract: 'Ask the user to approve immutable schemas and finite input/expected cases for a project-shared function. Model declarations alone do not grant approval. Requires enable-task.',
+    lisp_hot_install: 'Validate a candidate against the current approved contract in protected workers, then atomically select it at expectedRevision. Dependency code is snapshotted. Failed checks preserve the active version.',
+    lisp_hot_call: 'Call a project-shared function by name, pinning its active immutable version. Input/result refs remain private to this session and agent. Exact operationId replay never executes again.',
+    lisp_hot_status: 'Read project-shared function names, revisions and contract refs; paginate with offset. Supply name to inspect approved checks; contractOffset pages their JSON in 2000 Unicode characters. No worker execution.',
+    lisp_hot_deactivate: 'Ask the user to deactivate a project-shared function at expectedRevision. Existing calls and results remain available; new calls stop.',
     lisp_define: 'Save a generated Lisp lambda and exact dependency refs as a reusable task tool. Requires /kioku-lisp enable-task. Compiles in an isolated worker and checks declared examples.',
     lisp_call: 'Run a saved task tool with JSON input or a saved resultRef. Exact retries return the journal result; new calls use isolated workers.',
     lisp_observe: 'Capture explicitly named workspace files as immutable task input, returning a resultRef without sending contents to the model.',
@@ -364,6 +377,14 @@ function description(name: LispTool): string {
     lisp_cancel: 'Stop Lisp and all managed jobs without waiting for evaluation.', lisp_reset: 'Stop a healthy worker and start a new generation. Never use to bypass recovery.' })[name]
 }
 export function lispToolSchema(name: LispTool): object {
+  const hotSchemas = { lisp_hot_contract: HotContractInput, lisp_hot_install: HotInstallInput,
+    lisp_hot_call: HotCallInput, lisp_hot_deactivate: HotDeactivateInput, lisp_hot_status: HotStatusInput }
+  if (name in hotSchemas) {
+    const schema = hotSchemas[name as keyof typeof hotSchemas]
+    // Zod attaches a non-enumerable ~standard validator. Native DSH accepts
+    // lossless JSON only; the transport receives the generated JSON schema.
+    return JSON.parse(JSON.stringify(z.toJSONSchema(name === 'lisp_hot_status' ? schema : schema.safeExtend({ operationId: identifier }), { io: 'input' }))) as object
+  }
   const properties: Record<string, unknown> = name === 'lisp_status' ? {} : { operationId: { type: 'string', minLength: 1, maxLength: 256 } }
   const required = Object.keys(properties)
   if (name === 'lisp_status') properties.offset = { type: 'integer', minimum: 0, description: 'Read the next 10 operation summaries using nextOffset.' }

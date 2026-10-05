@@ -11,7 +11,8 @@ export const LispConfig = z.object({
   maxOutputBytes: z.number().int().min(1024).max(8_388_608).default(8_388_608),
 }).strict()
 export type LispConfiguration = z.infer<typeof LispConfig>
-export const LISP_TOOLS = ['lisp_eval', 'lisp_define', 'lisp_call', 'lisp_observe', 'lisp_stage', 'lisp_verify', 'lisp_apply', 'lisp_compare', 'lisp_describe', 'lisp_inspect', 'lisp_status', 'lisp_cancel', 'lisp_reset'] as const
+export const LISP_TOOLS = ['lisp_eval', 'lisp_define', 'lisp_call', 'lisp_observe', 'lisp_stage', 'lisp_verify', 'lisp_apply', 'lisp_compare', 'lisp_describe', 'lisp_inspect', 'lisp_status', 'lisp_cancel', 'lisp_reset',
+  'lisp_hot_contract', 'lisp_hot_install', 'lisp_hot_call', 'lisp_hot_status', 'lisp_hot_deactivate'] as const
 export type LispTool = typeof LISP_TOOLS[number]
 export const FRAME_BYTES = 1_048_576
 export const FILE_BYTES = 64 * 1024 * 1024

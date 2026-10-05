@@ -15,6 +15,8 @@ import { describeVerifiers, type LispCiRequest } from './ci.js'
 import { LispProposalBatch } from './proposal-batch.js'
 import { inspectSavedResult } from './inspection.js'
 import { recordedResult } from './recorded-result.js'
+import { detectRepositoryRoot } from '../../repository/detect-root.js'
+import { HotToolRuntime, type HotMutation } from './hot-tools.js'
 import type { DshSkillPrompts } from '../skill-prompts.js'
 import type { AttachmentInput } from './attachment-input.js'
 import { CallInput, DefineInput, TaskToolCatalog, selectFields, validateValue } from './task-tools.js'
@@ -45,6 +47,7 @@ export class LispManager {
   readonly #library: string
   readonly #compiled: CompiledLispCache
   readonly #taskTools: TaskToolCatalog
+  readonly #hot: HotToolRuntime
   #closed = false
   #lock = false
   #artifactReserved = 0
@@ -56,6 +59,16 @@ export class LispManager {
     this.#library = options.library ?? fileURLToPath(new URL('../../../lisp/', import.meta.url))
     this.#compiled = new CompiledLispCache(join(options.dataRoot, 'compiled'), this.#library, this.#config)
     this.#taskTools = new TaskToolCatalog(options.store)
+    this.#hot = new HotToolRuntime({ store: options.store, ...(options.questions ? { questions: options.questions } : {}),
+      projectRoot: async owner => detectRepositoryRoot({ cwd: owner.root, allowDirectory: true }).root,
+      authorize: async owner => {
+        const state = this.entry(owner)
+        if (this.#closed || state.disposed) fail('HOST_STOPPED', 'Lisp のホストまたはセッションが停止しています。')
+        // Shared functions run in isolated workers in either admitted Lisp mode.
+      },
+      run: (owner, source, input, signal, mode) => this.runTask(owner, source, input, signal, mode),
+      input: (owner, ref) => this.taskResult(owner, ref),
+    })
   }
   async start(): Promise<void> {
     await verifyLispVendor(this.#library)
@@ -77,6 +90,7 @@ export class LispManager {
     try {
       await this.#store.expireResults()
       for (const session of await this.#store.start()) this.enabled.set(session.session_id, session.root_path)
+      await this.#hot.catalog.expire()
     } catch (error) { await unlink(lockPath); this.#lock = false; throw error }
   }
   private entry(owner: LispOwner): AgentState {
@@ -129,6 +143,7 @@ export class LispManager {
     return record?.kind === 'task_mode' && record.state === 'SUCCEEDED' && record.digest === digest({ root: owner.root, epoch })
   }
   private async stopTaskWorkers(sessionId: string): Promise<void> {
+    this.#hot.cancel(sessionId)
     const active = [...this.#agents].filter(([key, state]) => state.owner.sessionId === sessionId && (JSON.parse(key) as string[])[2] === 'task')
     const stopped = await Promise.allSettled(active.map(async ([key, state]) => {
       state.state = 'STOPPING'
@@ -395,6 +410,7 @@ export class LispManager {
         aggregateMemory: 'unavailable', aggregateCpu: 'unavailable', scratchQuota: 'unavailable', termination: 'supervised', fileBoundary: process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap' },
       operations,
       ...(taskSummary ? { task: taskSummary } : {}),
+      hot: await this.#hot.status(owner),
       ...(offset === undefined ? {} : { operationCount: summary.count, pendingCount: Object.values(summary.pendingStates).reduce((a,b) => a+b,0), pendingStates: summary.pendingStates, offset, nextOffset: offset + 10 < summary.count ? offset + 10 : null }),
       recovery: unconfirmed ? '停止と操作記録を照合してください。自動再実行しません。' : taskMode && !state.worker ? null : state.state === 'SUSPENDED' ? 'Lisp は休止中です。次の利用時に自動起動します。変数・関数定義は保持されません。' : state.state === 'READY' ? null : '停止理由と操作履歴を確認し、/kioku-lisp recover を実行してください。' }
   }
@@ -429,6 +445,7 @@ export class LispManager {
     try {
       if (tool === 'lisp_status') return await this.status(owner, z.number().int().nonnegative().parse(input.offset ?? 0))
       const state = this.entry(owner)
+      if (tool === 'lisp_hot_status') return await this.#hot.status(owner, input)
       if (tool === 'lisp_describe' && typeof input.toolRef === 'string') {
         const { source: _source, ...manifest } = await this.#taskTools.get(owner, input.toolRef)
         return { ok: true, manifest }
@@ -444,6 +461,7 @@ export class LispManager {
           compare: 'lisp_compare reports two candidates\' common base and per-path intent hashes without executing them.',
           inspect: 'lisp_inspect pages saved results without re-executing them.',
           eval: 'lisp_eval is a disposable scratch experiment; inputs and proposals are unavailable.',
+          hot: 'lisp_hot_contract asks the user to approve schemas and finite input/expected cases. lisp_hot_install validates and atomically selects immutable code by name for this project. lisp_hot_call pins the active version. lisp_hot_status reads revisions; lisp_hot_deactivate asks approval to stop new calls. Results remain session/agent-local.',
         } }
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
         packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.typesafe', 'kioku.decisions'],
@@ -452,6 +470,7 @@ export class LispManager {
           typesafe: '(kioku.typesafe:status); (kioku.typesafe:evaluate state questions :model "jev-latest" :timeout-ms 30000). Explicit semantic decisions via the host; consume answers with gethash. Strings/hash tables/vectors use JSON conventions. Catch kioku.typesafe:service-error; no retries or approval bypass. Configure with /kioku-typesafe-key.',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
           workflow: 'Define task-specific defun helpers once, compose them into one useful operation, and call that function in later evaluations. Batch known reads and checks; return a compact result. Definitions last for this worker generation. Stop before decisions requiring new evidence or approval.',
+          hot: 'Use lisp_hot_contract, lisp_hot_install and lisp_hot_call for approved project-shared functions. They run in separate protected workers without access to this worker heap. No mode switch is needed. lisp_hot_status reads active versions.',
           run: '(kioku.process:run "node" (list "--test" "--experimental-test-isolation=none" "test/public.test.mjs") :directory "project") uses a scratch-relative directory. Check result-code.',
           inspect: 'lisp_inspect accepts ref, or resultOperationId with section/offset/limit (Unicode characters). Never rerun to retrieve output.',
           reads: 'Use native read/glob/grep/skill for repository exploration; lisp_eval.inputs for read-only workspace or session-attachment copies.',
@@ -477,11 +496,13 @@ export class LispManager {
           if (old) { if (old.kind !== tool || old.digest !== hash) fail('ID_CONFLICT', '取消 ID の内容が異なります。'); return await this.replay(owner, old) }
           if (input.generation !== state.worker?.generation) fail('STALE_GENERATION', '取消対象の Lisp 世代は現在のものではありません。')
           await this.#store.reserve(owner, id, tool, hash, state.worker!.generation, input)
+          await this.stopTaskWorkers(owner.sessionId)
           await this.cancel(state)
           const result = { ok: true, state: state.state }
           await this.#store.transition(owner, id, ['RUNNING'], 'SUCCEEDED', result)
           return result
         }
+        await this.stopTaskWorkers(owner.sessionId)
         await this.cancel(state); return { ok: true, state: state.state }
       }
       if (this.#closed || state.disposed) fail('HOST_STOPPED', 'Lisp のホストまたはセッションが停止しています。')
@@ -492,6 +513,8 @@ export class LispManager {
         if (old.digest !== hash || old.kind !== tool) fail('ID_CONFLICT', '同じ操作 ID の内容を変えることはできません。')
         return await this.replay(owner, old)
       }
+      if (tool.startsWith('lisp_hot_')) return await this.#hot.execute(owner, tool as HotMutation, id, hash,
+        Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'operationId')), signal)
       if (tool === 'lisp_define' || tool === 'lisp_call' || tool === 'lisp_observe') {
         if (!await this.isTaskMode(owner)) fail('TASK_MODE_REQUIRED', '作業用ツールには /kioku-lisp enable-task を使用してください。')
         if (tool === 'lisp_observe') {
@@ -815,6 +838,7 @@ export class LispManager {
       return this.status(owner)
     }
     const state = this.entry(owner)
+    await this.stopTaskWorkers(owner.sessionId)
     await this.cancel(state)
     await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
     const pending = (await this.#store.operations(owner.sessionId)).filter(o => ['RUNNING', 'UNKNOWN', 'APPLYING', 'AWAITING_APPROVAL'].includes(o.state))
@@ -830,6 +854,7 @@ export class LispManager {
     return this.status(owner)
   }
   async abandon(owner: LispOwner, id: string): Promise<unknown> {
+    await this.stopTaskWorkers(owner.sessionId)
     const state = this.entry(owner); await this.cancel(state)
     await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
     const op = await this.#store.get(owner, identifier.parse(id))
@@ -869,6 +894,7 @@ export class LispManager {
   }
   async dispose(): Promise<void> {
     this.#closed = true
+    this.#hot.cancel()
     for (const sessionId of new Set([...this.#agents.values()].map(state => state.owner.sessionId))) await this.stopTaskWorkers(sessionId)
     await Promise.all([...this.#agents.values()].map(state => this.cancel(state)))
     await Promise.allSettled([...this.#executions.keys(), ...[...this.#agents.values()].map(state => state.admission)])

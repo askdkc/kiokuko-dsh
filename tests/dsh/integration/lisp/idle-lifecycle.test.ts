@@ -17,6 +17,7 @@ async function fixture(idleTimeoutMs = 300000, questions?: DshUserQuestions) {
   await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db))
   const manager = new LispManager({ store, dataRoot: join(base, 'data'), ...(questions ? { questions } : {}),
     config: LispConfig.parse({ enabled: true, maxWorkers: 1, idleTimeoutMs, startupTimeoutMs: 60000, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl' }) })

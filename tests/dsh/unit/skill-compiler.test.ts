@@ -44,7 +44,7 @@ test('compiler retains rules, excludes only documentation, preserves unannotated
 test('compiled Lisp guidance retains TypeSafe discovery and answer-consuming examples', async () => {
   const compiled = compileSkillBundle(await loadSkillSources())
   const lisp = compiled.resources.find(resource => resource.id === 'kiokuko-lisp/SKILL.md')!.content
-  for (const contract of ['kioku.typesafe:evaluate', '/kioku-typesafe-key', 'inspect-diagnosis', 'kioku.decisions:status', 'assess-relevance', 'result.answers', 'Cancellation stops work', 'Existing approvals remain authoritative']) assert.ok(lisp.includes(contract), contract)
+  for (const contract of ['kioku.typesafe:evaluate', '/kioku-typesafe-key', 'inspect-diagnosis', 'kioku.decisions:status', 'assess-relevance', 'result.answers', 'Cancellation stops work', 'Existing approvals remain authoritative', 'See lisp_hot_* schemas.']) assert.ok(lisp.includes(contract), contract)
 })
 test('Lisp planning contract survives full, compiled and fallback delivery without losing the prior contract', async () => {
   const sources = await loadSkillSources()

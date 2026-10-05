@@ -21,6 +21,7 @@ for (const provider of ['typesafe', 'nimble', 'laya-coreml', 'laya-v1'] as const
   const base = await realpath(await mkdtemp(join(tmpdir(), 'neutral-lisp-'))), root = join(base, 'work'); await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'db'), new DatabaseSync(join(base, 'db')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const owner = { sessionId: 'session', agentId: 'agent', root }, config = provider === 'laya-v1' ? TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } }) : provider === 'laya-coreml' ? layaConfig() : TypedDecisionsConfig.parse({ provider, nimble: { endpoint: 'http://localhost:8000/v1/systemone', model: 'fixture-model' } })
   let mode = 'selected', calls = 0, began!: () => void, late!: (response: Response) => void, requestSignal: AbortSignal | undefined
   const request: typeof fetch = async (_url, options) => {

@@ -21,6 +21,7 @@ async function fixture(t: test.TestContext) {
   await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'state.sqlite3'), new DatabaseSync(join(base, 'state.sqlite3')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   t.after(async () => { db.close(); await rm(base, { recursive: true, force: true }) })
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 's', agentId: 'a', root }
   await store.enable(owner)

@@ -22,6 +22,7 @@ test('uploaded binary reaches protected Lisp through the native attachment servi
   await mkdir(workspace)
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
   const ctx = new cordis.Context(), fibers: any[] = [], commands = new Map<string, any>()
   const session = sessionModule.Session.create('attachment-session', [], { version: 3, id: 'attachment-session', createdAt: Date.now(), isSeeded: false, cwd: workspace })

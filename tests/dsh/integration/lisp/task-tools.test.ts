@@ -21,6 +21,7 @@ test('AI task tools survive worker and host restarts, compose by exact ref, and 
   const path = join(base, 'db.sqlite3')
   const db = new NodeSqliteAdapter(path, new DatabaseSync(path))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db))
   let approvalCount = 0
   const questions: DshUserQuestions = { ask: async request => {

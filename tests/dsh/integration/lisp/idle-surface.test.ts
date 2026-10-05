@@ -15,6 +15,7 @@ test('native lifecycle hooks suspend, resume before model input, preserve fencin
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-idle-surface-')))
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const listeners = new Map<string, (...args: any[]) => any>(), definitions = new Map<string, any>(), sections = new Map<string, string>()
   let command: any, guard: any, registrations = 0
   const tools = { guard(fn: any) { guard = fn; return () => {} }, presentAs: () => () => {}, restrict: () => () => {},

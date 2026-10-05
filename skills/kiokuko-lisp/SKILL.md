@@ -163,6 +163,8 @@ host copy: 64 MiB/file, 1000/session, 1 GiB total; registration is not project a
 `kioku.tools:available-tools` lists audited adapters (initially lisp_status only).
 `call-tool` traverses DSH guards/registry; other tools and recursive evaluation are
 refused. stdout/stderr are bounded.
+
+See lisp_hot_* schemas.
 <!-- /kiokuko:runtime -->
 
 <!-- kiokuko:runtime prototype-driven-planning -->
@@ -170,6 +172,22 @@ For Lisp coding, plans or reviews, settle testable doubts with current evidence 
 <!-- /kiokuko:runtime -->
 
 <!-- kiokuko:documentation examples -->
+## Project-shared functions
+
+Project-shared functions work in both Lisp modes without a mode switch after the
+coding choice. They execute in separate protected workers, preserving the persistent
+worker's APIs and heap. `lisp_hot_contract` asks the user to approve
+schemas and 1–32 finite input/expected cases. The model cannot approve its own
+proposal. `lisp_hot_install` validates against that immutable contract and replaces
+the active version only at the expected revision. Dependency code is snapshotted.
+`lisp_hot_call` pins the active version by name; input/result refs stay owner-local.
+`lisp_hot_status {name?}` reads heads and selected contract; `lisp_hot_deactivate`
+requires user confirmation. Approving new conditions preserves the old active
+version until a candidate passes; old conditions cannot authorize a new install.
+Finite cases are not a proof for every input. Active code/dependencies do not
+expire; retired versions may be collected after 30 days. No shared heap or RPC.
+Use `/kioku-lisp hot [NAME]` for human inspection. Never rerun UNKNOWN operations.
+
 ## Task-mode API details
 
 Native tool schemas remain authoritative for exact arguments.

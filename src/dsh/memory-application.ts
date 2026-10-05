@@ -39,7 +39,7 @@ export interface ApplicationHost {
   refresh(execution: NativeExecution, query: string, timeConstraint?: import('../memory/retrieval-contracts.js').MemoryTimeConstraint): Promise<unknown>
 }
 // Exact native read tools only; never classify arbitrary shell strings as read-only.
-const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status'])
+const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status', 'lisp_hot_status'])
 const CONTROL_TOOLS = new Set(['task_memory_review', 'task_completion', 'memory_checkpoint', 'curator_check', 'enno_finish', 'enno_work_report', 'enno_plan_review', 'enno_plan_submit', 'enno_ideal_submit', 'enno_meditation_submit'])
 
 /** Only an exact foreground native Bash invocation at the bound repository root is proof-eligible. */

@@ -17,6 +17,7 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
   await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db))
   let approval: 'allow' | 'deny' | 'skip' | 'throw' | 'mutate' | 'pending' = 'deny', questions = 0
   let answerLate: ((value: any) => void) | undefined, pendingQuestion: any

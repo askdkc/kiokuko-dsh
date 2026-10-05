@@ -2,6 +2,10 @@ For configured semantic routing, use [provider-independent decisions](typed-deci
 
 # Common Lisp tools
 
+For approved named functions shared across task-mode sessions, see
+[Project-shared Lisp functions](lisp-hot-tools.md). Active code survives worker
+and host restarts; input and result refs remain private to their owner.
+
 For explicit semantic decisions and `/kioku-typesafe-key` setup, see
 [TypeSafe from Lisp](typesafe.md). Answers can guide inspection and proposals;
 the existing permission and approval boundaries still apply.
@@ -74,7 +78,7 @@ manually or inspect its state, use these commands in the desired DSH session:
 /kioku-lisp status
 ```
 
-This enables the six Lisp tools and supplies the bundled `kiokuko-lisp` Skill.
+This enables the Lisp tools and supplies the bundled `kiokuko-lisp` Skill.
 Existing DSH `read`, `glob`, `grep` and `skill` tools remain available under native
 session permissions, so project files and applicable Skills can be inspected.
 File changes still use Lisp proposals and their confirmation rules. The read

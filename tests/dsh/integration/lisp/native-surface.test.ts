@@ -20,6 +20,7 @@ test('recover on a disabled session leaves native tools available without requir
   const base = await realpath(await mkdtemp(join(tmpdir(), 'ls-disabled-')))
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
   const ctx = new cordis.Context(), fibers: any[] = [], commands = new Map<string, any>()
   const agent: any = { id: 'disabled-session', session: { id: 'disabled-session', header: { cwd: base } } }
@@ -59,6 +60,7 @@ for (const scenario of ['disabled-config', 'scope-conflict', 'startup-failure'] 
   const base = await realpath(await mkdtemp(join(tmpdir(), 'ls-enable-')))
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   db.prepare('INSERT INTO dsh_lisp_sessions VALUES(?,?,1,?,?)').run('saved', base, 'epoch', new Date().toISOString())
   if (scenario === 'scope-conflict') db.prepare('INSERT INTO dsh_lisp_sessions VALUES(?,?,0,?,?)').run('new', join(base, 'old-root'), 'epoch', new Date().toISOString())
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
@@ -115,6 +117,7 @@ test('real DSH registry: session tools, nested/child/late-tool denial, unload fe
   await mkdir(workspace)
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
   const ctx = new cordis.Context(), fibers: any[] = [], scopes: any[] = [], commands = new Map<string, any>()
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined, effects = 0, failRegistration = false
