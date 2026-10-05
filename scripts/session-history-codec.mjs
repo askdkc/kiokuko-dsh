@@ -151,11 +151,16 @@ function repairContinuationRecord(value) {
   return changed ? { ...record, data: { ...data, inserted } } : value
 }
 
-/** A serialized stack is diagnostic metadata; retain the original abort cause. */
+/** Preserve Kiokuko's known legacy cancellation text and remove diagnostic stacks. */
 function repairLegacyAbortRecord(value) {
   const record = objectRecord(value), data = objectRecord(record?.data)
-  const reason = objectRecord(data?.reason), cause = objectRecord(reason?.reason)
-  if (record?.type !== 'turn/end' || reason?.kind !== 'aborted' || typeof cause?.stack !== 'string'
+  const reason = objectRecord(data?.reason)
+  if (record?.type !== 'turn/end' || reason?.kind !== 'aborted') return value
+  if (reason.reason === 'kiokuko dsh Enno continuation stopped: continuation_limit') {
+    return { ...record, data: { ...data, reason: { ...reason, reason: { kind: 'hook', reason: reason.reason } } } }
+  }
+  const cause = objectRecord(reason.reason)
+  if (typeof cause?.stack !== 'string'
     || !['user', 'parent', 'disposed', 'legacy', 'hook'].includes(cause.kind)) return value
   const { stack: _stack, ...compatibleCause } = cause
   return { ...record, data: { ...data, reason: { ...reason, reason: compatibleCause } } }

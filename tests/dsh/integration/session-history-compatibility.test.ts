@@ -7,6 +7,8 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
+import { DshEnnoController } from '../../../src/dsh/enno-controller.js'
+import { nativeMock } from '../helpers/native-mock.js'
 import * as dshPlugin from '../../../src/dsh/index.js'
 import { mountSessionHistoryCompatibility } from '../../../src/dsh/session-history-compatibility.js'
 import { cleanupSessionMismatches } from '../../../src/dsh/session-mismatch-cleanup.js'
@@ -23,7 +25,10 @@ const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? ''
 const currentVersion = expectedDshVersion.startsWith('0.1.7') || expectedDshVersion.startsWith('0.2.') ? 4 : 3
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 const sourceModules: Record<string, string> = { cordis: 'vendor/cordis', 'dsh-session': 'packages/core/session',
-  'dsh-session-persistence-jsonl': 'packages/session/session-persistence-jsonl', 'dsh-session-query': 'packages/session-query/session-query' }
+  'dsh-session-persistence-jsonl': 'packages/session/session-persistence-jsonl', 'dsh-session-query': 'packages/session-query/session-query',
+  'dsh-llm': 'packages/llm/llm', 'dsh-session-projection': 'packages/session/session-projection',
+  'dsh-system-prompt': 'packages/core/system-prompt', 'dsh-tools': 'packages/core/tools',
+  'dsh-agent': 'packages/core/agent', 'dsh-agent-loop': 'packages/core/agent-loop' }
 const modulePath = (name: string) => sourceRoot ? join(sourceRoot, sourceModules[name]!, 'src/index.ts') : join(packageRoot, '@deepseek-ai', name, 'lib/index.js')
 const jsonlPath = modulePath('dsh-session-persistence-jsonl')
 const available = await access(jsonlPath).then(() => true, () => false)
@@ -102,6 +107,94 @@ function legacyRows() {
     { type: 'turn/end', seq: 5, time: 6, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'parent', stack: 'Original diagnostic stack' } } } },
   ]
 }
+
+const legacyStopReason = 'kiokuko dsh Enno continuation stopped: continuation_limit'
+function abortRows(cause: unknown): Array<{ type: string; seq: number; time: number; data: { turn: number; reason?: { kind: string; reason: unknown; extra?: boolean } } }> {
+  return [
+    { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
+    { type: 'turn/end', seq: 1, time: 2, data: { turn: 1, reason: { kind: 'aborted', reason: cause } } },
+  ]
+}
+
+for (const compression of ['zstd', 'none'] as const) test(`startup repairs only legacy Kiokuko cancellation text (${compression})`, options, async () => {
+  const f = await fixture(compression)
+  try {
+    const events = [...abortRows(legacyStopReason), ...abortRows(legacyStopReason).map(row => ({
+      ...row, seq: row.seq + 2, time: row.time + 2, data: { ...row.data, turn: 2 },
+    }))]
+    const old = await f.legacy('legacy-text-abort', events)
+    await assert.rejects(() => restored(f.backend, old.id), /abort cause must be a JSON object/)
+    const composition = await f.mount()
+    assert.equal((await composition.historyCheck).repaired, 1)
+    assert.equal((await composition.historyCheck).failed, 0)
+    const loaded = await restored(f.backend, old.id)
+    for (const index of [1, 3]) assert.deepEqual(loaded.state.events[index], {
+      ...events[index], data: { ...events[index]!.data, reason: { kind: 'aborted', reason: { kind: 'hook', reason: legacyStopReason } } },
+    })
+    assert.deepEqual(await readFile(old.path), old.original)
+    assert.deepEqual(await readFile(`${old.path}.bak`), old.original)
+    const migrated = await readFile(old.currentPath)
+    await composition.dispose()
+    assert.equal((await (await f.mount()).historyCheck).repaired, 0)
+    await restored(f.backend, old.id)
+    assert.deepEqual(await readFile(old.currentPath), migrated)
+    assert.deepEqual(await readFile(old.path), old.original)
+  } finally { await f.close() }
+})
+
+for (const [name, cause] of [['unknown-text', 'other cancellation'], ['null', null], ['array', []],
+  ['extra-field', { kind: 'hook', reason: legacyStopReason, extra: true }]] as const) {
+  test(`legacy cancellation refuses ${name} without publishing a successor`, options, async () => {
+    const f = await fixture()
+    try {
+      const events = abortRows(cause)
+      if (name === 'extra-field') events[1]!.data.reason = { kind: 'aborted', reason: legacyStopReason, extra: true }
+      const old = await f.legacy(`invalid-abort-${name}`, events)
+      assert.equal((await (await f.mount()).historyCheck).failed, 1)
+      assert.deepEqual(await readFile(old.path), old.original)
+      await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+      await assert.rejects(access(`${old.path}.bak`), { code: 'ENOENT' })
+    } finally { await f.close() }
+  })
+}
+
+test('native Enno cancellation persists a hook cause and reopens without repair', options, async () => {
+  const f = await fixture()
+  try {
+    const names = ['dsh-llm', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop']
+    // Agent drivers use the built module graph, as the local DSH application does.
+    const [llm, projection, prompt, tools, agents, loop] = await Promise.all(names.map(name => import(pathToFileURL(
+      sourceRoot ? join(sourceRoot, sourceModules[name]!, 'lib/index.js') : modulePath(name),
+    ).href)))
+    for (const [plugin, config] of [[llm!.default, undefined], [f.session.default, undefined], [projection!.default, undefined],
+      [prompt!.default, { persona: '' }], [tools!.default, undefined], [agents!.default, undefined], [loop!.default, { agents: [] }]] as const) {
+      const fiber = f.ctx.plugin(plugin, config)
+      await fiber
+      f.disposers.push(() => fiber.dispose())
+    }
+    const mock = nativeMock(llm)
+    const adapter = new mock.MockAdapter([mock.textResponse('Finished fixture response.')])
+    f.ctx.llm.registerAdapter(['mock'], adapter)
+    const composition = await mountDshComposition(f.ctx, { ennoController: new DshEnnoController({ readState: async () => { throw new Error('Fixture state unavailable') } }) })
+    f.disposers.push(composition.dispose)
+    await composition.historyCheck
+    const agent = await f.ctx.agentLoop.create(f.session.SessionId('native-hook-abort'), { provider: 'mock', model: 'mock' }, { cwd: f.root })
+    f.disposers.push(async () => { agent.cancel({ kind: 'disposed' }) })
+    agent.followup(llm!.createUserMessage({ content: [{ type: 'text', text: 'Finish this fixture.' }], source: { kind: 'user' } }))
+    for (let count = 0; count < 500; count++) {
+      if (agent.status === 'idle' && agent.session.snapshotEvents().some((row: any) => row.type === 'turn/end')) break
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal(agent.status, 'idle')
+    await f.ctx.sessions.flush(agent.session)
+    const loaded = await restored(f.backend, agent.session.id)
+    const ending = loaded.state.events.findLast((row: any) => row.type === 'turn/end')
+    assert.deepEqual(ending.data.reason, { kind: 'aborted', reason: { kind: 'hook', reason: 'kiokuko dsh Enno continuation stopped: state_unavailable' } })
+    assert.equal(adapter.requests.length, 1)
+    const path = await f.backend.resolveCurrentLog(agent.session.id)
+    await assert.rejects(access(`${path}.bak`), { code: 'ENOENT' })
+  } finally { await f.close() }
+})
 
 for (const compression of ['zstd', 'none'] as const) test(`startup migrates legacy ${compression} sources and retains the original generation`, options, async () => {
   const f = await fixture(compression)

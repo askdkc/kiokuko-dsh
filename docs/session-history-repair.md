@@ -40,7 +40,11 @@ hooks do not provide those running services.
 
 For historical v0 logs, the checker also normalizes Kiokuko's old
 `continuation` / `loop-recovery` message sources and serialized diagnostic
-stacks in supported abort causes. It runs the complete native migration in
+stacks in supported abort causes. The exact old cancellation text
+`kiokuko dsh Enno continuation stopped: continuation_limit` becomes a
+`hook` cause retaining that text; other string causes remain unsupported.
+Native Enno cancellations also use structured `hook` causes for new records.
+It runs the complete native migration in
 isolation, validates the resulting v3 history, then publishes that new
 generation under DSH's write lease. The original v0 file remains unchanged,
 with a byte-for-byte `.bak`; existing successors are never overwritten.

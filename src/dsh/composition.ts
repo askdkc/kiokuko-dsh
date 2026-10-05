@@ -53,7 +53,7 @@ export interface DshNativeTurnStoppingPayload {
     readonly session?: { readonly id: string }
     readonly sessionId?: string
     readonly steer: (message: unknown) => void
-    readonly cancel?: (reason: unknown) => void
+    readonly cancel?: (cause: { readonly kind: 'hook'; readonly reason: string }) => void
   }
   readonly turn: number
   readonly signal: AbortSignal
@@ -183,7 +183,7 @@ function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshE
         content: [{ type: 'text', text: message.content }],
         source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' },
       }),
-      ...(payload.agent.cancel === undefined ? {} : { cancel: (reason: string) => payload.agent.cancel!(reason) }),
+      ...(payload.agent.cancel === undefined ? {} : { cancel: (reason: string) => payload.agent.cancel!({ kind: 'hook', reason }) }),
     }
     await controller.handle({ agent, turn: payload.turn, signal: payload.signal })
   }, { prepend: true })
