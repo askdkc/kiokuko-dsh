@@ -274,6 +274,7 @@ async function createAndSmokeTestTarball() {
       const { candidates } = await provider.list({});
       if (!candidates.some(candidate => candidate.name === 'veteran-programmer-skill')) throw new Error('packed veteran Skill is missing');
       if (!candidates.some(candidate => candidate.name === 'one-shot-software-completion')) throw new Error('packed completion Skill is missing');
+      if (!candidates.some(candidate => candidate.name === 'coding-ideal-routine-skill')) throw new Error('packed coding routine Skill is missing');
       if (!candidates.some(candidate => candidate.name === 'kiokuko-lisp')) throw new Error('packed Lisp Skill is missing');
       createDshCapabilityCatalog(candidates);
     const sources = await buildDshMessageSources({
@@ -324,7 +325,11 @@ async function createAndSmokeTestTarball() {
         const setupScript = new URL('../../scripts/setup-dsh.mjs', import.meta.resolve('kiokuko-dsh/dsh'));
         const { fileURLToPath } = await import('node:url');
         const checked = JSON.parse(execFileSync(process.execPath, [fileURLToPath(setupScript), '--home', home, '--cwd', process.cwd(), '--check', '--json'], { encoding: 'utf8' }));
-        if (!checked.current || checked.skills.unchanged !== 42) throw new Error('packed setup check failed');
+        // Standard manifest files plus the separately deployed Japanese Skill.
+        const expectedDeployedFiles = parity.markdownFileCount + 1;
+        if (!checked.current || checked.skills.created !== 0 || checked.skills.updated !== 0 || checked.skills.unchanged !== expectedDeployedFiles) {
+          throw new Error('packed setup check failed: expected ' + expectedDeployedFiles + ' unchanged files, received ' + JSON.stringify(checked.skills));
+        }
         if (await fs.readFile(path.join(deployed, 'japanese-translation-for-oss-models', 'SKILL.md'), 'utf8') !== skill.content) {
           throw new Error('packed startup Japanese Skill deployment failed');
         }
