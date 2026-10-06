@@ -158,7 +158,7 @@ export class AutoMemoryReviewCoordinator {
     try{evidence=await reviewEvidenceWithContext(this.options.mirror,range,settings.config.maxInputBytes,contextStartSeq)}
     catch(error){if(error instanceof Error&&['input_too_large','secret_detected','insufficient_context'].includes(error.message))blockedReason=error.message;else throw error}
     // Include the complete request envelope before deciding a turn-boundary split.
-    const snapshot=await this.options.runtime.withDatabase(db=>memorySnapshots(db,range,evidence.map(e=>e.text).join('\n')))
+    const snapshot=await this.options.runtime.withDatabase(db=>memorySnapshots(db,range,evidence.map(e=>e.text).join('\n'),true))
     if(Buffer.byteLength(JSON.stringify({system:REVIEW_SYSTEM,range,evidence,...snapshot}))+1024>settings.config.maxInputBytes)blockedReason='input_too_large'
     if(blockedReason==='input_too_large'&&!parent){
       const turns=await this.options.runtime.withDatabase(db=>db.prepare('SELECT DISTINCT start_seq,end_seq FROM memory_review_turns WHERE run_id=? AND start_seq>=? AND end_seq<=? ORDER BY start_seq').all<{start_seq:number;end_seq:number}>(range.runId,range.startSeq,range.endSeq))

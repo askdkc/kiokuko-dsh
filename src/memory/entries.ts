@@ -1,3 +1,5 @@
+import { evidenceIdentity, type EvidenceIdentity } from './evidence.js'
+import { assertProvenanceNotForgotten, memoryForgotten } from './forgotten.js'
 import { enqueueIndexSource } from './index-reasoning/store.js'
 import { randomUUID } from 'node:crypto';
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
@@ -54,6 +56,7 @@ export interface UpdateCandidateEntryInput {
 }
 
 export interface EntryRecord {
+  evidence?: EvidenceIdentity;
   id: string;
   workspace: string;
   kind: EntryKind;
@@ -170,6 +173,7 @@ function rowToEntry(database: SqliteDatabase, row: EntryRow, options: DecodeStor
     updatedAt: entry.updatedAt,
     verifiedAt: entry.verifiedAt,
     tags: revision.tags,
+    evidence: evidenceIdentity(database, { id: entry.id, revision: entry.currentRevision, workspace: entry.workspace }),
   };
 }
 
@@ -255,6 +259,7 @@ export function validateNewEntryInput(input: RecordEntryInput): {
 
 export function recordEntryInTransaction(database: SqliteDatabase, input: RecordEntryInput, options: RecordEntryOptions = {}): EntryRecord {
   const { record: validated, contentHash } = validateNewEntryInput(input);
+  assertProvenanceNotForgotten(database, validated.workspace, validated.provenance);
   const now = options.now ?? new Date().toISOString();
   const idFactory = options.idFactory ?? randomUUID;
 
@@ -347,6 +352,7 @@ export function recordEntry(database: SqliteDatabase, input: RecordEntryInput, o
 }
 
 export function readEntry(database: SqliteDatabase, input: ReadEntryInput, options: DecodeStoredMemoryOptions = {}): EntryRecord {
+  if(memoryForgotten(database,input.entryId)) throw new KiokukoError('NOT_FOUND','Memory was forgotten');
   const workspace = requireWorkspace(input.workspace);
   if (typeof input.entryId !== 'string' || input.entryId.length === 0) {
     throw new KiokukoError('VALIDATION_ERROR', 'entryId must be a non-empty string');
@@ -379,6 +385,7 @@ function updateCandidateEntryInTransactionInternal(database: SqliteDatabase, inp
     createdBy,
     actor: input.actor ?? createdBy,
   });
+  assertProvenanceNotForgotten(database, workspace, validated.provenance);
   const canonicalScope = normalizeStructuredScopeInput(validated.scope);
   const secretFinding = findSecret(canonicalJson({
     title: validated.title,

@@ -12,6 +12,15 @@ const cache = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-cache-'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
+  'migrations/032_memory_evidence.sql',
+  'migrations/033_memory_forgetting.sql',
+  'dist/memory/evidence.js',
+  'dist/memory/explain.js',
+  'dist/memory/forget.js',
+  'dist/memory/forgotten.js',
+  'dist/memory/review/citations.js',
+  'docs/memory-evidence.md',
+
   'dist/dsh/skill-prompts.json',
   'dist/dsh/skill-prompts.js',
   'migrations/019_dsh_lisp.sql',

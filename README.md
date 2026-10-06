@@ -6,6 +6,8 @@ Kiokuko adds memory, planning, verification, and observability to
 
 Automatic memory review saves or updates useful project candidates after eight completed human turns, even while a chat remains open. It is active by default and uses the session model. Check `/kioku-memory-review status` or exclude a conversation with `/kioku-memory-review exclude session`. [Settings, costs and recovery](docs/auto-memory-review.md).
 
+Inspect sources and corrections with `/kioku-memory explain ENTRY_ID`; explicitly forget a memory with `/kioku-memory forget ENTRY_ID --revision N`. [Evidence, explanations and forgetting](docs/memory-evidence.md).
+
 ## Features
 
 - **Execution modes** — Choose normal execution or 役小角(enno-oduno) for role-based planning and verification. [Details](docs/model-selection.md)

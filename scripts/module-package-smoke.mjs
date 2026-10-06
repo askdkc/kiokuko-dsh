@@ -96,6 +96,31 @@ try {
   }
   assert.ok(questions.every(id => id === 'taskType'), 'No coding, Enno, Lisp or model selection questions')
   assert.ok(provider.requests.every(request => !JSON.stringify(request).includes('submit_ideal')), 'ordinary requests do not receive role directives')
+  // Exercise memory lifecycle through the packed full/core native entry points.
+  const { openConnection } = await import(pathToFileURL(join(packageRoot, 'dist/db/connection.js')))
+  const { recordEntry } = await import(pathToFileURL(join(packageRoot, 'dist/memory/entries.js')))
+  const database = openConnection(configuration.databasePath)
+  let memory
+  try {
+    const workspace = database.prepare('SELECT workspace FROM task_memory_bindings WHERE session_id=? ORDER BY rowid DESC LIMIT 1').get(parent.session.id).workspace
+    memory = recordEntry(database, {workspace,kind:'fact',title:'CYCLEPACK',body:'CYCLEPACK saved memory payload for native package verification.',scope:{visibility:'project'}})
+  } finally { database.close() }
+  const explained = await ctx.commands.execute(parent, `/kioku-memory explain ${memory.id} --json`, [], new AbortController().signal)
+  assert.equal(explained.result.kind, 'success', explained.result.text)
+  assert.equal(JSON.parse(explained.result.text).evidenceStatus, 'details_unavailable')
+  const toolExplanation = await ctx.tools.execute({callId:'packed-memory-explain',name:'memory_explain',arguments:{entryId:memory.id},agent:parent,signal:new AbortController().signal})
+  assert.notEqual(toolExplanation.isError, true, JSON.stringify(toolExplanation))
+  assert.equal(toolExplanation.value.body,memory.body)
+  parent.followup(llm.createUserMessage({content:[{type:'text',text:'CYCLEPACK の内容を確認してください'}],source:{kind:'user'}}))
+  await parent.whenIdle()
+  assert.ok(JSON.stringify(provider.requests.at(-1).messages).includes(memory.body), 'packed memory must be retrieved')
+  const forgotten = await ctx.commands.execute(parent, `/kioku-memory forget ${memory.id} --revision 1 --json`, [], new AbortController().signal)
+  assert.equal(forgotten.result.kind,'success',forgotten.result.text)
+  parent.followup(llm.createUserMessage({content:[{type:'text',text:'CYCLEPACK の内容を確認してください'}],source:{kind:'user'}}))
+  await parent.whenIdle()
+  assert.ok(!JSON.stringify(provider.requests.at(-1).messages).includes(memory.body), 'packed forgotten memory cannot reach the next request')
+  const forgottenRead = await ctx.commands.execute(parent, `/kioku-memory explain ${memory.id} --json`, [], new AbortController().signal)
+  assert.equal(forgottenRead.result.kind,'error')
   // Exercise the delivered full/core coordinator, not an imported test-only instance.
   semanticReady = true
   const message = (id, text) => ({ id, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] })

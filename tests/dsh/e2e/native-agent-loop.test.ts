@@ -275,7 +275,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
           assert.equal(request.model, 'gpt-6-astra')
           assert.ok(payload.context.candidate)
         }
-        yield { type: 'text-delta', index: 0, text: review ? JSON.stringify({ slotId: payload.slotId, outcome: 'completed', summary: `Checked ${payload.slotId}.`, recommendations: [], risks: [], evidence: [] }) : '{"schemaVersion":3,"memoryOperations":[]}' }
+        yield { type: 'text-delta', index: 0, text: review ? JSON.stringify({ slotId: payload.slotId, outcome: 'completed', summary: `Checked ${payload.slotId}.`, recommendations: [], risks: [], evidence: [] }) : JSON.stringify({schemaVersion:request.system?.includes('Use schemaVersion 4')?4:3,memoryOperations:[]}) }
         yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 8 } }
         yield { type: 'finish', reason: { kind: 'stop' } }
       },

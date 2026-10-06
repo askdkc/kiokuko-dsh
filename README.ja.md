@@ -6,6 +6,8 @@
 
 自動メモリレビューは、人間の入力を処理した8ターンごとに、開いたままの会話から有用な記憶候補を保存・更新します。標準で有効で、会話のモデルを使用します。状態は `/kioku-memory-review status`、会話の保存除外は `/kioku-memory-review exclude session` で操作できます。[設定・費用・復旧方法](docs/auto-memory-review.md)。
 
+保存した記憶の根拠と訂正履歴は `/kioku-memory explain ENTRY_ID`、明示的な忘却は `/kioku-memory forget ENTRY_ID --revision N` で確認・操作できます。[根拠・説明・忘却の仕様](docs/memory-evidence.md)。
+
 ## 機能
 
 - **実行方式** — 通常実行と役小角(enno-oduno)を選べます。[詳細](docs/model-selection.ja.md)

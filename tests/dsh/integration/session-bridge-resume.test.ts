@@ -1,3 +1,4 @@
+import { scheduleLegacyFinalizer } from '../helpers/legacy-finalizer.js'
 import { CURRENT_MIGRATION_VERSIONS } from '../../fixtures/current-migrations.js'
 import assert from 'node:assert/strict'
 import { copyFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
@@ -134,7 +135,7 @@ test('new DSH run creation and its turn-start boundary commit atomically', async
   }
 })
 
-test('completed run finalizes once from an archived DSH log and stores a self-contained bounded capsule', async () => {
+test('legacy reserved completed run finalizes once from an archived DSH log and stores a self-contained bounded capsule', async () => {
   const f = await fixture()
   const calls: Array<Record<string, unknown>> = []
   let reads = 0
@@ -157,7 +158,7 @@ test('completed run finalizes once from an archived DSH log and stores a self-co
     await finalizer.bindRunStart({ runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceStartSeq: 0, sourceStartTurn: 1 })
     withImmediateTransaction(f.database, () => {
       new LedgerStore(f.database).updateRunStatusInTransaction('run-finalizer', 'completed')
-      finalizer.scheduleInTransaction(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 })
+      scheduleLegacyFinalizer(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 })
     })
     finalizer.kick()
     await finalizer.whenIdle()
@@ -207,7 +208,7 @@ test('completed run finalizes once from an archived DSH log and stores a self-co
     assert.equal(new LedgerStore(f.database).readEvents('run-finalizer').some((event) => event.event_type === 'source.event'), false)
 
     // Repeated scheduling is idempotent and never re-reads the archived log.
-    withImmediateTransaction(f.database, () => finalizer.scheduleInTransaction(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 }))
+    withImmediateTransaction(f.database, () => scheduleLegacyFinalizer(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 }))
     finalizer.kick()
     await finalizer.whenIdle()
     assert.equal(reads, 1)
@@ -236,7 +237,7 @@ test('summary failure is contained, leaves the DSH run completed, and can be ret
     await finalizer.bindRunStart({ runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceStartSeq: 0, sourceStartTurn: 1 })
     withImmediateTransaction(f.database, () => {
       new LedgerStore(f.database).updateRunStatusInTransaction('run-finalizer', 'completed')
-      finalizer.scheduleInTransaction(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 })
+      scheduleLegacyFinalizer(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 })
     })
     finalizer.kick()
     await finalizer.whenIdle()
@@ -277,7 +278,7 @@ test(`finalizer observes consumed usage after ${failure} failure without changin
     await finalizer.bindRunStart({ runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceStartSeq: 0, sourceStartTurn: 1 })
     withImmediateTransaction(f.database, () => {
       new LedgerStore(f.database).updateRunStatusInTransaction('run-finalizer', 'completed')
-      finalizer.scheduleInTransaction(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 })
+      scheduleLegacyFinalizer(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 })
     })
     if (failure === 'storage') f.database.exec(`CREATE TRIGGER reject_finalization_completion BEFORE UPDATE OF status ON dsh_memory_finalizations WHEN NEW.status = 'completed' BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END;`)
     finalizer.kick()
@@ -314,10 +315,11 @@ test('bounded finalization keeps latest surface evidence and its persisted mode 
   const first = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}), ...common, inputMode: 'bounded_evidence' })
   const second = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}), ...common, inputMode: 'prefix_reuse' })
   try {
+    await first.start()
     await first.bindRunStart({ runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceStartSeq: 0, sourceStartTurn: 1 })
     withImmediateTransaction(f.database, () => {
       new LedgerStore(f.database).updateRunStatusInTransaction('run-finalizer', 'completed')
-      first.scheduleInTransaction(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 })
+      scheduleLegacyFinalizer(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 }, 'bounded_evidence')
     })
     first.kick(); await first.whenIdle(); await first.dispose()
     assert.throws(() => first.configure('prefix_reuse'), /already bound/u)

@@ -75,7 +75,7 @@ export function reserveReview(db:SqliteDatabase,range:ReviewRange,input:ReviewIn
     const existing=db.prepare('SELECT * FROM memory_review_jobs WHERE retry_parent_id=?').get<ReviewJob>(parent.id)
     if(existing)return existing
     if(parent.resolved_by)throw new Error('already_reviewed')
-    if(!['held','rejected','completed','cancelled'].includes(parent.state)||parent.reason==='source_unavailable')throw new Error('retry_not_available')
+    if(!['held','rejected','completed','cancelled'].includes(parent.state)||['source_unavailable','memory_forgotten'].includes(parent.reason??''))throw new Error('retry_not_available')
     if(parent.state==='completed'&&!db.prepare("SELECT 1 FROM memory_review_effects WHERE job_id=? AND disposition='held'").get(parent.id))throw new Error('already_reviewed')
   }else if(state.terminal_outcome)throw new Error('run_terminal')
   if(db.prepare("SELECT 1 FROM dsh_memory_finalizations WHERE run_id=? AND status IN ('pending','processing')").get(range.runId))throw new Error('finalizer_owns_range')
@@ -83,9 +83,9 @@ export function reserveReview(db:SqliteDatabase,range:ReviewRange,input:ReviewIn
   const existing=db.prepare('SELECT * FROM memory_review_jobs WHERE id=?').get<ReviewJob>(id)
   if(existing)return existing
   if(!parent&&range.startSeq<=state.scheduled_through_seq)throw new Error('range_already_scheduled')
-  const json=JSON.stringify(input)
+  const json=JSON.stringify({...input,contractVersion:parent ? (JSON.parse(parent.input_json).contractVersion ?? 1) : 2})
   db.prepare(`INSERT INTO memory_review_jobs(id,workspace,session_id,run_id,source_generation,start_seq,end_seq,input_json,input_hash,settings_generation,policy_revision,origin,retry_parent_id,state,created_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)`).run(id,range.workspace,range.sessionId,range.runId,range.sourceGeneration,range.startSeq,range.endSeq,json,canonicalContentHash(input),settings.generation,capturePolicy(db,range.workspace,range.sessionId).revision,origin,parent?.id??null,now)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)`).run(id,range.workspace,range.sessionId,range.runId,range.sourceGeneration,range.startSeq,range.endSeq,json,canonicalContentHash(JSON.parse(json)),settings.generation,capturePolicy(db,range.workspace,range.sessionId).revision,origin,parent?.id??null,now)
   if(!parent)db.prepare('UPDATE memory_review_states SET scheduled_through_seq=? WHERE run_id=?').run(range.endSeq,range.runId)
   return db.prepare('SELECT * FROM memory_review_jobs WHERE id=?').get<ReviewJob>(id)!
 }

@@ -15,7 +15,7 @@ if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !available)
 test('bridge explanation and complete citations reach the actual native DSH model request', { skip: !available, timeout: 60000 }, async () => {
     const previous = process.env.KIOKUKO_DSH_PACKAGE_ROOT;
     process.env.KIOKUKO_DSH_PACKAGE_ROOT = packages;
-    const f = await deepNativeFixture(mock => Array.from({ length: 4 }, () => (request: any) => mock.textResponse(request.purpose === 'compaction' ? '{"schemaVersion":3,"memoryOperations":[]}' : 'Driver explanation.')), { questions: async (request) => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: [q.id === 'taskType' ? 'chat' : q.options?.[0]?.value ?? q.options?.[0]?.label ?? 'chat'] })) }) });
+    const f = await deepNativeFixture(mock => Array.from({ length: 4 }, () => (request: any) => mock.textResponse(request.purpose === 'compaction' ? JSON.stringify({schemaVersion:request.system.includes('Use schemaVersion 4')?4:3,memoryOperations:[]}) : 'Driver explanation.')), { questions: async (request) => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: [q.id === 'taskType' ? 'chat' : q.options?.[0]?.value ?? q.options?.[0]?.label ?? 'chat'] })) }) });
     let original: EntryRecord;
     try {
         await f.adapter.host.runtime!.withDatabase(db => withImmediateTransaction(db, () => {
@@ -58,7 +58,7 @@ test('default active native admission automatically builds a bridge for a later 
     let generationCalls = 0;
     const explain = 'Widget writes need the SQLite write lock in fixture-v1.';
     const f = await deepNativeFixture(mock => Array.from({ length: 12 }, () => (request: any) => {
-        let output: unknown = { schemaVersion: 3, memoryOperations: [] };
+        let output: unknown = { schemaVersion: request.system.includes('Use schemaVersion 4')?4:3, memoryOperations: [] };
         if (request.system?.startsWith('Extract up to')) {
             generationCalls++;
             output = JSON.parse(request.messages[0].content[0].text).map((e: EntryRecord) => ({ role: 'atomic', text: e.body, applicability: 'fixture-v1 only', entities: [{ type: 'package', value: 'SQLite' }], sources: [{ entryId: e.id, revision: e.revision, contentHash: e.contentHash, supportingText: e.body }] }));

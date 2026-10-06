@@ -1,3 +1,4 @@
+import { deliveryForgotten } from '../memory/forgotten.js'
 import { indexSettings } from '../memory/index-reasoning/store.js'
 import { applyMemoryReuse, type MemoryReuseRuntime } from '../memory/reuse.js';
 import { renderMemoryFields } from './memory-projection.js';
@@ -59,6 +60,7 @@ export interface ScopedContextQuery {
 }
 
 export interface ScopedContextItem {
+  evidence?: import('../memory/evidence.js').EvidenceIdentity;
   entryId: string;
   revision: number;
   origin: FederatedOrigin;
@@ -300,6 +302,7 @@ function entryScore(entry: EntryRecord, origin: FederatedOrigin, retrieval: numb
     title: entry.title,
     summary: entry.summary,
     bodyPreview: entry.body,
+    ...(entry.evidence ? {evidence: entry.evidence} : {}),
     score,
     scoreComponents: {
       status,
@@ -547,6 +550,7 @@ function replayableDelivery(
      ORDER BY delivery_id ASC
   `).all<{ deliveryId: string }>(run.runId, queryHash);
   for (const row of rows) {
+    if (deliveryForgotten(database, row.deliveryId)) continue;
     const delivery = readContextDelivery(database, { workspace: run.workspace, deliveryId: row.deliveryId });
     if (storedDeliveryIsRetrievable(database, delivery, run.throughSequence, taskProfileHash, limit, characterBudget, policyVersion)) return delivery;
   }
@@ -576,6 +580,7 @@ function storedScopedItems(database: SqliteDatabase, delivery: ContextDeliveryVi
       title: revision.title,
       summary: revision.summary,
       bodyPreview: revision.body,
+      ...(current.evidence ? {evidence: current.evidence} : {}),
       ...(projection ?? {}),
       score: Object.values(scoreComponents).reduce((total, component) => total + component, 0),
       scoreComponents: { ...scoreComponents },

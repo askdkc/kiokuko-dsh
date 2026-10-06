@@ -168,7 +168,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
         response = { schemaVersion: episode ? 2 : 1, memories: [{ kind: 'reference', title: `Fixture observation ${activeRound}`,
           body: result?.text ?? `Read-only lifecycle check ${activeRound}`, summary: null, tags: ['fixture-v1'], confidence: 0.5 }], ...(episode ? { episode } : {}) }
       }
-      if(reconciliation){const capsule=response as any;response={schemaVersion:3,memoryOperations:capsule.memories.map((m:any)=>({action:'add',kind:m.kind,title:m.title,body:m.body,evidenceIds:[reconciliation.evidence.at(-1).id]})),...(capsule.episode?{episode:capsule.episode}:{})}}
+      if(reconciliation){const capsule=response as any;response={schemaVersion:request.system?.includes('Use schemaVersion 4')?4:3,memoryOperations:capsule.memories.map((m:any)=>({action:'add',kind:m.kind,title:m.title,body:m.body,evidenceIds:[reconciliation.evidence.at(-1).id],...(request.system?.includes('Use schemaVersion 4')?{claims:[{id:'memory',text:m.body,evidence:[{evidenceId:reconciliation.evidence.at(-1).id,supportingText:reconciliation.evidence.at(-1).text}]}]}:{})})),...(capsule.episode?{episode:capsule.episode}:{})}}
       yield { type: 'text-delta', text: JSON.stringify(response) }
       yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 10 } }
       yield { type: 'finish', reason: { kind: 'stop' } }

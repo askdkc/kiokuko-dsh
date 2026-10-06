@@ -5,6 +5,10 @@ import { DshMemoryFinalizer, reduceDshFinalizationLog, type DshLogEvent } from '
 import { withImmediateTransaction } from '../../../../src/db/transaction.js'
 import { MemoryEvolutionConfig, type Episode } from '../../../../src/memory/evolution/contracts.js'
 
+function cited(request: any, kind: string, title: string, body: string) {
+  const source = JSON.parse(request.messages.at(-1).content[0].text).reconciliation.evidence.find((e: any) => e.eligibleForNewMemory)
+  return {action:'add',kind,title,body,evidenceIds:[source.id],claims:[{id:'observation',text:body,evidence:[{evidenceId:source.id,supportingText:source.text}]}]}
+}
 function log(passed: boolean): DshLogEvent[] {
   const result=(seq:number,callId:string,exitCode:number):DshLogEvent=>({seq,time:seq,type:'tool/result',data:{exitCode,message:{role:'user',source:{kind:'tool',callId},content:[{type:'text',text:exitCode===0?'Migration test completed':'SQLITE_BUSY'}]}}})
   return [
@@ -25,7 +29,7 @@ test('closed failed logs and completed recovery preserve distinct outcome and ve
       sessionQuery:{async readSession(){return {session:{id:'session-native'},inheritedEventCount:0,events:log(outcome==='completed')}}},
       llm:{async *stream(request){
         assert.match(JSON.stringify(request.messages),new RegExp(`Native run outcome: ${outcome}`))
-        yield {type:'text-delta',text:JSON.stringify({schemaVersion:2,memories:[{kind:'fact',title:'Migration observation',body:'SQLITE_BUSY was observed.',summary:null,tags:[],confidence:0.5}],episode:d})}
+        yield {type:'text-delta',text:JSON.stringify({schemaVersion:4,memoryOperations:[cited(request,'fact','Migration observation','SQLITE_BUSY was observed.')],episode:d})}
         yield {type:'finish',reason:{kind:'stop'}}
       }}})
     try {
@@ -44,7 +48,7 @@ test('invalid v2 evidence saves ordinary memory and excludes unsupported episode
   const f=fixture();createRun(f.db,'invalid')
   const finalizer=new DshMemoryFinalizer({runtime:f.runtime,
     sessionQuery:{async readSession(){return {session:{id:'session-invalid'},inheritedEventCount:0,events:log(true)}}},
-    llm:{async *stream(){yield {type:'text-delta',text:JSON.stringify({schemaVersion:2,memories:[{kind:'reference',title:'Observed fact',body:'A migration ran.',summary:null,tags:[],confidence:0.5}],episode:draft()})};yield {type:'finish',reason:{kind:'stop'}}}}})
+    llm:{async *stream(request){yield {type:'text-delta',text:JSON.stringify({schemaVersion:4,memoryOperations:[cited(request,'reference','Observed fact','A migration ran.')],episode:draft()})};yield {type:'finish',reason:{kind:'stop'}}}}})
   try {
     await finalizer.start();withImmediateTransaction(f.db,()=>{f.db.prepare("UPDATE ledger_runs SET status='failed'").run();finalizer.scheduleInTransaction(f.db,{runId:'invalid',workspace:'project:test',dshSessionId:'session-invalid',sourceEndSeq:9})})
     finalizer.kick();await finalizer.whenIdle()

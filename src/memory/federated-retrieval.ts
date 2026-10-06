@@ -184,6 +184,7 @@ function recallItem(entry: EntryRecord, maxChars: number, origin: FederatedOrigi
     summary: entry.summary,
     snippet,
     tags: [...entry.tags],
+      ...(entry.evidence ? {evidence: entry.evidence} : {}),
     metadata: { storedData: true, untrusted: true, instructions: false },
     origin,
     ...(sourceWorkspace === undefined ? {} : { sourceWorkspace }),
@@ -385,6 +386,7 @@ function recallRankedEntries(candidates: RankedEntry[], maxChars: number, initia
       summary: entry.summary,
       snippet,
       tags: [...entry.tags],
+      ...(entry.evidence ? {evidence: entry.evidence} : {}),
       metadata: { storedData: true, untrusted: true, instructions: false },
     });
     characters += titleCost + characterCount(snippet);

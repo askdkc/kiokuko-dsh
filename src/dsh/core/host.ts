@@ -1,7 +1,8 @@
+import { KiokukoError } from '../../errors.js'
 import { ObservationPackConfig } from '../observation-pack/policy.js'
 import { MemoryIndexReasoningConfig } from '../../memory/index-reasoning/contracts.js'
 import { IndexReasoningService } from '../../memory/index-reasoning/service.js'
-import { currentContextMemory,filterRequestMemory,pruneDshMemorySurface } from '../request-memory.js'
+import { retiredExplanationCalls,filterExplainedMemory,pruneExplainedMemorySurface,currentContextMemory,filterRequestMemory,pruneDshMemorySurface } from '../request-memory.js'
 import { capabilityCatalogDigest } from '../../akinator/capability-binding.js'
 import { memoryApplicationMode } from '../../memory/application.js'
 import { mountMemoryApplication, MEMORY_APPLICATION_GUIDANCE } from '../memory-application.js'
@@ -140,7 +141,9 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     if (result.kind !== 'enter') return result
     const allowed=await runtime.withDatabase(db=>currentContextMemory(db,current.task.workspace,current.task.context?.items??[]))
     pruneDshMemorySurface(current.agent.session,allowed)
-    result={...result,messages:filterRequestMemory(result.messages,allowed)}
+    const retired=await runtime.withDatabase(db=>retiredExplanationCalls(db,current.agent.session.id))
+    pruneExplainedMemorySurface(current.agent.session,retired)
+    result={...result,messages:filterExplainedMemory(filterRequestMemory(result.messages,allowed),retired)}
     if(current.contextDelivered)return result
     current.contextDelivered = true
     const task = current.task
@@ -365,7 +368,21 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
             await modelAuto.assertCurrent(autoRoute.runId, autoRoute.sessionId, binding)
           },
         })
-        routedAgents.set(agent, () => { memoryReviewPresentation.dispose(); releaseMemoryReviewIdle(); route(); claim() })
+        const fence = agent.ctx.on('llm/stream', (request: any, next: () => AsyncIterable<unknown>) => (async function* () {
+          const current = active.get(agent.session.id)
+          if (current?.agent === agent && request.sessionId === agent.session.id && request.purpose !== 'compaction') {
+            const allowed = await runtime.withDatabase(db => currentContextMemory(db,current.task.workspace,current.task.context?.items??[]))
+            const retired = await runtime.withDatabase(db => retiredExplanationCalls(db,agent.session.id))
+            if (filterRequestMemory(request.messages,allowed).length !== request.messages.length
+              || JSON.stringify(filterExplainedMemory(request.messages,retired)) !== JSON.stringify(request.messages)) {
+              pruneDshMemorySurface(agent.session,allowed)
+              pruneExplainedMemorySurface(agent.session,retired)
+              throw new KiokukoError('CONFLICT','Memory forgotten after request assembly; rebuild the request')
+            }
+          }
+          yield* next()
+        })())
+        routedAgents.set(agent, () => { memoryReviewPresentation.dispose(); releaseMemoryReviewIdle(); fence(); route(); claim() })
       })
       listen('agent/disposed', ({ agent }: { agent: NativeAgent }) => { routedAgents.get(agent)?.(); routedAgents.delete(agent) })
       disposers.push(() => { for (const dispose of routedAgents.values()) dispose(); routedAgents.clear() })

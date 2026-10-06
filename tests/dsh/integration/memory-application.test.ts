@@ -19,6 +19,37 @@ import { AutoGlobalizationWorker, autoGlobalizationStatus, autoGlobalApplicable 
 import { readEntry } from '../../../src/memory/entries.js'
 import { recordContextFeedback } from '../../../src/context/feedback.js'
 import { queryScopedContextGated } from '../../../src/context/scoped-broker.js'
+import { forgetMemory } from '../../../src/memory/forget.js'
+import { explainMemory } from '../../../src/memory/explain.js'
+
+test('forget retracts a real automatic Global and invalidates application proof while retaining accounting',async()=>{
+ const f=await fixture('build',true),worker=new AutoGlobalizationWorker(f.runtime as any,true)
+ try{
+   for(let n=1;n<=3;n++){
+     const task=n===1?f.task:await f.tasks.prepare({requestId:`forget-proof-${n}`,sessionId:'session',turn:n,task:'migration expectations code',cwd:f.root,capabilities,
+       profileHints:{taskType:'build',target:'migration code tests',expected:'Handle the next migration',constraints:'Preserve past schemas'},signal:new AbortController().signal})
+     const identity={runId:task.runId,workspace:task.workspace,sessionId:task.sessionId,repositoryRoot:f.root}
+     const status=memoryApplicationStatus(f.db,task.runId);assert.equal(status.supported,true)
+     recordMemoryApplicationReview(f.db,identity,`forget-review-${n}`,{...f.review(),generation:status.generation})
+     beginMemoryExecution(f.db,identity,`forget-test-${n}`,'node check.mjs')
+     const result=spawnSync(process.execPath,['check.mjs'],{cwd:f.root,encoding:'utf8'});assert.equal(result.status,0)
+     completeMemoryExecution(f.db,identity,`forget-test-${n}`,{value:{exitCode:0}})
+     await f.tasks.finish(task,'completed');worker.kick();await worker.whenIdle()
+   }
+   const globalId=String(f.db.prepare('SELECT global_entry_id FROM auto_global_projections WHERE entry_id=?').get(f.memory.id)?.global_entry_id)
+   assert.equal(readEntry(f.db,{workspace:'global',entryId:globalId}).status,'verified')
+   assert.equal(explainMemory(f.db,{workspace:'global',entryId:globalId}).derivation?.kind,'global')
+   const count=f.db.prepare('SELECT count(*) AS n FROM auto_global_application_receipts WHERE entry_id=?').get(f.memory.id)?.n
+   assert.equal(forgetMemory(f.db,{workspace:f.memory.workspace,entryId:f.memory.id,expectedRevision:1,operationId:'auto-global-forget'}).count,2)
+   assert.throws(()=>readEntry(f.db,{workspace:'global',entryId:globalId}))
+   worker.kick();await worker.whenIdle();f.reopen();worker.kick();await worker.whenIdle()
+   assert.equal(f.db.prepare('SELECT count(*) AS n FROM auto_global_application_receipts WHERE entry_id=?').get(f.memory.id)?.n,count)
+   assert.equal(f.db.prepare("SELECT count(*) AS n FROM task_memory_executions WHERE outcome='passed'").get()?.n,0)
+   assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_reviews WHERE entry_id=?').get(f.memory.id)?.n,0)
+   assert.equal(f.db.prepare('SELECT count(*) AS n FROM context_delivery_entries WHERE entry_id IN (?,?)').get(f.memory.id,globalId)?.n,0)
+   assert.deepEqual(f.db.prepare('PRAGMA foreign_key_check').all(),[])
+ }finally{await worker.dispose();await f.close()}
+})
 
 const capabilities = ['kiokuko-soul', 'memory-reasoning'].map(name => ({ kind: 'skill' as const, name }))
 test('empty application has no write transaction or result observer after five effectful calls', async () => {
@@ -86,27 +117,32 @@ test('native path blocks missing decisions, observes failing next-migration regr
   })
   const execution = (callId: string, name = 'Bash', args: unknown = { command: 'node check.mjs' }) => ({ callId, name, arguments: args, agent, signal: new AbortController().signal })
   try {
-    assert.deepEqual(Reflect.ownKeys(tools[0].parameters), Object.keys(tools[0].parameters),
+    assert.deepEqual(Reflect.ownKeys(tools.find(tool => tool.name === 'task_memory_review').parameters), Object.keys(tools.find(tool => tool.name === 'task_memory_review').parameters),
       'native DSH schema projection rejects non-enumerable or symbol properties')
-    assert.equal(tools[0].parameters.type, 'object', 'model provider requires an object-root tool schema')
-    assert.deepEqual(tools[0].parameters.required, ['action'])
-    assert.deepEqual(tools[0].parameters.properties.action.enum, ['status', 'review', 'review_batch', 'refresh'])
+    assert.equal(tools.find(tool => tool.name === 'task_memory_review').parameters.type, 'object', 'model provider requires an object-root tool schema')
+    assert.deepEqual(tools.find(tool => tool.name === 'task_memory_review').parameters.required, ['action'])
+    assert.deepEqual(tools.find(tool => tool.name === 'task_memory_review').parameters.properties.action.enum, ['status', 'review', 'review_batch', 'refresh'])
     assert.equal(f.status().ready, false)
     const pendingStatus = f.status()
-    for (const name of ['read', 'Read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status']) {
+    for (const name of ['read', 'Read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'memory_explain', 'lisp_status']) {
       let readAllowed = false
       const call = execution(`original-${name}`, name, { file_path: 'check.mjs' })
       await listeners.get('tools/pre-execute')(call, async () => { readAllowed = true })
       await listeners.get('tools/result')(call, { value: { exitCode: 0 } })
       assert.equal(readAllowed, true, `${name} must remain available to assess pending memory`)
     }
+    const read = execution('pending-explanation','memory_explain',{entryId:f.memory.id})
+    const explanation = await listeners.get('tools/pre-execute')(read,async () => tools.find(tool => tool.name === 'memory_explain').execute(read.arguments,read))
+    assert.equal(explanation.body,f.memory.body)
+    assert.equal(explanation.evidenceStatus,'details_unavailable')
+    await assert.rejects(tools.find(tool => tool.name === 'memory_explain').execute({entryId:f.memory.id,workspace:'global'},read))
     assert.deepEqual(f.status(), pendingStatus, 'retrieval is not a new execution or verification')
     let effects = 0
     for (const name of ['Edit', 'edit', 'write', 'bash', 'lisp_eval', 'unknown_tool']) {
       await assert.rejects(listeners.get('tools/pre-execute')(execution(`missing-${name}`, name), async () => { effects++ }), /resolve memory decisions/)
     }
     assert.equal(effects, 0)
-    await tools[0].execute({ action: 'review', review: f.review() }, execution('review', 'task_memory_review'))
+    await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review', review: f.review() }, execution('review', 'task_memory_review'))
     await writeFile(join(f.root, 'migrations', '002.sql'), 'SELECT 2;')
     const run = async (callId: string) => {
       const call = execution(callId)
@@ -147,18 +183,18 @@ test('PTC transport stays blocked until direct review, then gates nested effects
     assert.equal(f.status().ready, false)
     const parent = Symbol('ptc-parent')
     const statusCall = execution('direct-status', 'task_memory_review')
-    const status = await tools[0].execute({ action: 'status' }, statusCall)
+    const status = await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'status' }, statusCall)
     assert.equal(status.pending[0]?.problem, 'decision_missing')
-    await assert.rejects(tools[0].execute({ action: 'status' }, execution('foreign:ptc:1', 'task_memory_review', parent)), /No active native task/)
+    await assert.rejects(tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'status' }, execution('foreign:ptc:1', 'task_memory_review', parent)), /No active native task/)
     await assert.rejects(listeners.get('tools/pre-execute')(execution('ptc-root:ptc:2', 'bash', parent),
       async () => { effects++ }), /resolve memory decisions/)
     assert.equal(effects, 0)
-    await tools[0].execute({ action: 'review', review: f.review('not_applicable') }, execution('direct-review', 'task_memory_review'))
+    await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review', review: f.review('not_applicable') }, execution('direct-review', 'task_memory_review'))
     assert.equal(f.status().ready, true)
     await listeners.get('tools/pre-execute')(root, async () => { transportRuns++ })
     await listeners.get('tools/result')(root, { value: { logs: [], result: null } })
     assert.equal(transportRuns, 1)
-    assert.equal((await tools[0].execute({ action: 'status' }, execution('ptc-root:ptc:3', 'task_memory_review', parent))).ready, true)
+    assert.equal((await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'status' }, execution('ptc-root:ptc:3', 'task_memory_review', parent))).ready, true)
     await listeners.get('tools/pre-execute')(execution('ptc-root:ptc:4', 'bash', parent), async () => { effects++ })
     assert.equal(effects, 1)
   } finally { dispose(); await f.close() }
@@ -342,7 +378,7 @@ test('three completed native and Enno applications create one source-verified Gl
     assert.equal(autoGlobalApplicable(f.db,replacement,accepted),true)
     let command: any
     const unmount = mountMemoryApplication({tools:{register:() => () => {}},on:() => () => {},
-      commands:{register:(definition:any) => {command=definition; return () => {}}}} as any,
+      commands:{register:(definition:any) => {if(definition.name==='kioku-memory-application')command=definition; return () => {}}}} as any,
     {runtime:f.runtime as any,resolve:() => undefined,
       session:() => ({sessionId:'session',repositoryRoot:f.root}),refresh:async () => undefined})
     try {
@@ -484,15 +520,15 @@ test('native batch reviews multiple memories atomically with exact replay', asyn
     const second = { generation: status.generation, entryId: added.id, entryRevision: added.revision,
       expectedRevision: 0, decision: 'not_applicable', basis: 'The second lesson is unrelated.', paths: [] }
     const execution = (callId: string) => ({ callId, name: 'task_memory_review', agent, signal: new AbortController().signal })
-    await assert.rejects(tools[0].execute({ action: 'review_batch', reviews: [original, { ...second, entryRevision: 99 }] }, execution('bad')))
+    await assert.rejects(tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review_batch', reviews: [original, { ...second, entryRevision: 99 }] }, execution('bad')))
     const afterRejection = f.status()
     assert.ok(afterRejection.supported)
     assert.equal(afterRejection.items.every(item => item.decision === null), true, 'invalid batch must write no decisions')
-    const result = await tools[0].execute({ action: 'review_batch', reviews: [original, second] }, execution('batch'))
+    const result = await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review_batch', reviews: [original, second] }, execution('batch'))
     assert.equal(result.ready, true)
     assert.equal(result.items.length, 2)
-    assert.equal((await tools[0].execute({ action: 'review_batch', reviews: [original, second] }, execution('batch'))).ready, true)
-    await assert.rejects(tools[0].execute({ action: 'review_batch', reviews: [{ ...original, basis: 'changed' }, second] }, execution('batch')), /different input/)
+    assert.equal((await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review_batch', reviews: [original, second] }, execution('batch'))).ready, true)
+    await assert.rejects(tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review_batch', reviews: [{ ...original, basis: 'changed' }, second] }, execution('batch')), /different input/)
   } finally { dispose(); await f.close() }
 })
 

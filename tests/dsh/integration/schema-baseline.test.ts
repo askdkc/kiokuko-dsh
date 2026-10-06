@@ -9,6 +9,30 @@ import { loadMigrationSnapshot, migrateDatabase } from '../../../src/db/migrate.
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { CURRENT_MIGRATION_VERSIONS, CURRENT_SCHEMA_VERSION } from '../../fixtures/current-migrations.js'
 import { prepareTurnIntent } from '../../../src/dsh/turn-process.js'
+import { recordEntry } from '../../../src/memory/entries.js'
+import { explainMemory } from '../../../src/memory/explain.js'
+
+test('031 upgrade retains old bodies and reserved job formats without manufacturing evidence',async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),'kiokuko-031-upgrade-')),old=path.join(root,'old')
+  await mkdir(old)
+  for(const migration of CURRENT_MIGRATION_SNAPSHOT.migrations.filter(m=>m.version<=31))await copyFile(path.join(migrationsDirectory,migration.name),path.join(old,migration.name))
+  const db=openConnection(path.join(root,'state.sqlite3'))
+  try{
+    migrateDatabase(db,old)
+    db.prepare("INSERT INTO repositories VALUES('project:test','test','test',NULL,1,0,?,?)").run('2026-10-06T00:00:00.000Z','2026-10-06T00:00:00.000Z')
+    const entry=recordEntry(db,{workspace:'project:test',kind:'fact',title:'Legacy',body:'今回だけ。未実施。前回は失敗した。'})
+    db.prepare("INSERT INTO ledger_runs(run_id,workspace,dsh_session_id,protocol_version,capture_profile,coverage_json,status,metadata_json,started_at,created_at,updated_at) VALUES('old','project:test','old-session','1','test','{}','active','{}',?,?,?)").run('2026-10-06T00:00:00.000Z','2026-10-06T00:00:00.000Z','2026-10-06T00:00:00.000Z')
+    db.prepare("INSERT INTO dsh_run_log_boundaries VALUES('old','project:test','old-session',1,1,?,?)").run('2026-10-06T00:00:00.000Z','2026-10-06T00:00:00.000Z')
+    db.prepare("UPDATE ledger_runs SET status='completed' WHERE run_id='old'").run()
+    db.prepare("INSERT INTO dsh_memory_finalizations(run_id,workspace,dsh_session_id,source_start_seq,source_end_seq,status,attempt_count,scheduled_at,updated_at) VALUES('old','project:test','old-session',1,2,'pending',0,?,?)").run('2026-10-06T00:00:00.000Z','2026-10-06T00:00:00.000Z')
+    const before=db.prepare('SELECT * FROM entry_revisions').get()
+    assert.deepEqual(migrateDatabase(db).applied,[32,33])
+    assert.deepEqual(db.prepare('SELECT * FROM entry_revisions').get(),before)
+    assert.equal(db.prepare('SELECT evidence_contract_version FROM dsh_memory_finalizations').get()?.evidence_contract_version,3)
+    assert.equal(explainMemory(db,{workspace:entry.workspace,entryId:entry.id}).evidenceStatus,'details_unavailable')
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[])
+  }finally{db.close();await rm(root,{recursive:true,force:true})}
+})
 
 const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migrations')
 
@@ -211,8 +235,10 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'memory_evolution_jobs',
         'memory_evolution_settings',
         'memory_evolution_skips',
+        'memory_explain_receipts', 'memory_forget_deliveries', 'memory_forget_jobs', 'memory_forget_receipts', 'memory_forget_tombstones',
         'memory_index_calls', 'memory_index_entities', 'memory_index_facts', 'memory_index_jobs', 'memory_index_settings', 'memory_index_sources',
         'memory_review_control', 'memory_review_effects', 'memory_review_jobs', 'memory_review_states', 'memory_review_turns',
+        'memory_revision_evidence',
         'nudge_deliveries',
         'query_embeddings',
         'repositories',

@@ -1,3 +1,6 @@
+import { readRevisionEvidence } from '../evidence.js'
+import { assertEvidenceNotForgotten } from '../forgotten.js'
+import { citationManifest, saveCitationManifest } from './citations.js'
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { canonicalContentHash, type JsonObject } from '../../serialization/validate.js'
 import { readEntry, recordEntryInTransaction, updateCandidateEntryInTransaction, type EntryRecord } from '../entries.js'
@@ -12,7 +15,7 @@ function editable(db:SqliteDatabase,entry:EntryRecord):boolean {
   return entry.status==='candidate'&&entry.createdBy===REVIEW_ACTOR&&latest?.created_by===REVIEW_ACTOR&&
     !db.prepare('SELECT 1 FROM external_skill_entries WHERE entry_id=?').get(entry.id)
 }
-export function memorySnapshots(db:SqliteDatabase,range:ReviewRange,query:string):{existing:MemorySnapshot[];lookupIncomplete:boolean} {
+export function memorySnapshots(db:SqliteDatabase,range:ReviewRange,query:string,includeClaims=false):{existing:MemorySnapshot[];lookupIncomplete:boolean} {
   const owned=db.prepare('SELECT DISTINCT entry_id FROM memory_review_effects WHERE run_id=? AND entry_id IS NOT NULL ORDER BY source_end_seq DESC LIMIT 13')
     .all<{entry_id:string}>(range.runId)
   const entries=new Map<string,EntryRecord>();let lookupIncomplete=owned.length>12
@@ -21,7 +24,8 @@ export function memorySnapshots(db:SqliteDatabase,range:ReviewRange,query:string
   const existing:MemorySnapshot[]=[];let bytes=0
   for(const entry of entries.values()){
     if(findSecretInValue({title:entry.title,body:entry.body})) {lookupIncomplete=true;continue}
-    const item={entryId:entry.id,revision:entry.revision,contentHash:entry.contentHash,kind:entry.kind,status:entry.status,trustLevel:entry.trustLevel,title:entry.title,body:entry.body,editable:editable(db,entry)}
+    const claims=includeClaims?readRevisionEvidence(db,entry.id,entry.revision,entry.workspace)?.claims.map(({id,text})=>({id,text}))??[]:undefined
+    const item={entryId:entry.id,revision:entry.revision,contentHash:entry.contentHash,kind:entry.kind,status:entry.status,trustLevel:entry.trustLevel,title:entry.title,body:entry.body,editable:editable(db,entry),...(claims===undefined?{}:{claimIds:claims.map(c=>c.id),claims})}
     const size=Buffer.byteLength(JSON.stringify(item))
     if(existing.length>=12||bytes+size>8192){lookupIncomplete=true;continue}
     existing.push(item);bytes+=size
@@ -43,8 +47,10 @@ export function adoptMemories(db:SqliteDatabase,input:AdoptionInput):AdoptionRes
     db.exec('SAVEPOINT memory_review_operation')
     try {
       if(new Set(op.evidenceIds).size!==op.evidenceIds.length||refs.length!==op.evidenceIds.length||refs.some(e=>!e.eligibleForNewMemory))throw new Error('evidence_invalid')
+      assertEvidenceNotForgotten(db,range.workspace,range.sessionId,range.sourceGeneration,refs.map(e=>e.normalizedSourceHash))
       if(findSecretInValue(op))throw new Error('secret_detected')
       if(op.action==='defer')throw new Error(op.reason)
+      const citations = op.action==='add'||op.action==='update' ? citationManifest(db,range,input.evidence,op) : undefined
       if(op.action!=='add'){
         if(targets.has(op.targetEntryId)||input.operations.filter(other=>'targetEntryId' in other&&other.targetEntryId===op.targetEntryId).length!==1)throw new Error('ambiguous_target')
         targets.add(op.targetEntryId)
@@ -84,10 +90,11 @@ export function adoptMemories(db:SqliteDatabase,input:AdoptionInput):AdoptionRes
           }
         }
       }
+      if(entry && (disposition==='added'||disposition==='updated')) saveCitationManifest(db,entry,citations)
       db.exec('RELEASE memory_review_operation')
     }catch(error){
       db.exec('ROLLBACK TO memory_review_operation');db.exec('RELEASE memory_review_operation')
-      const allowed=new Set(['evidence_invalid','secret_detected','ambiguous','conflict','insufficient_context','ambiguous_target','target_not_offered','revision_changed','source_retired','target_not_editable','newer_evidence_conflict','trust_mismatch'])
+      const allowed=new Set(['claims_invalid','evidence_invalid','secret_detected','ambiguous','conflict','insufficient_context','ambiguous_target','target_not_offered','revision_changed','source_retired','target_not_editable','newer_evidence_conflict','trust_mismatch'])
       reason=error instanceof Error&&allowed.has(error.message)?error.message:'adoption_rejected';disposition='held'
     }
     db.prepare(`INSERT INTO memory_review_effects(job_id,operation_index,workspace,run_id,session_id,source_generation,evidence_json,action,disposition,reason,entry_id,revision,content_hash,previous_revision,content_identity,source_end_seq)

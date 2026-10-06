@@ -1,3 +1,4 @@
+import { memoryForgotten } from './forgotten.js'
 import { indexInstalled, indexSettings, indexFactEligible } from './index-reasoning/store.js'
 import { evolutionEntryState } from './evolution/store.js';
 import { autoGlobalProjectionActive } from './auto-globalization.js';
@@ -83,6 +84,7 @@ interface ExternalMappingRow extends SqliteRow {
 
 /** Decide eligibility only after the entry and the complete parent snapshot decode. */
 export function isRetrievableEntry(database: SqliteDatabase, entry: EntryRecord): boolean {
+  if (memoryForgotten(database,entry.id)) return false;
   if (!indexFactEligible(database, entry)) return false;
   if (!autoGlobalProjectionActive(database, entry)) return false;
   if (!evolutionEntryState(database, entry).eligible) return false;
@@ -378,7 +380,7 @@ function semanticLane(database: SqliteDatabase, input: HybridSearchInput, runtim
       || !Number.isFinite(hit.distance) || hit.distance < 0) {
       throw new KiokukoError('INTEGRITY_ERROR', 'Semantic backend returned an invalid candidate');
     }
-    if (hit.distance > query.distanceCeiling) continue;
+    if (hit.distance > query.distanceCeiling || memoryForgotten(database, hit.entryId)) continue;
     const previous = canonical.get(hit.entryId);
     if (previous === undefined || hit.distance < previous) canonical.set(hit.entryId, hit.distance);
   }

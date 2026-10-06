@@ -163,15 +163,16 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       },
     },
     llm: {
-      async * stream() {
-        yield { type: 'text-delta', index: 0, text: '{"schemaVersion":1,"memories":[]}' }
+      async * stream(request) {
+        yield { type: 'text-delta', index: 0, text: request.system?.includes('Use schemaVersion 4') ? '{"schemaVersion":4,"memoryOperations":[]}' : '{"schemaVersion":1,"memories":[]}' }
         yield { type: 'finish', reason: { kind: 'stop' } }
       },
     },
   })
   const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
-    assert.equal(registered.length, 11)
+    assert.equal(registered.length, 12)
+    assert.ok(registered.some((definition: any) => definition.name === 'memory_explain'))
     assert.ok(registered.some((definition: any) => definition.name === 'task_completion'))
     const archivedExportSession = createNativeSession('archived-export-session')
     nativeSessions.delete(archivedExportSession.id)

@@ -4,7 +4,7 @@ import { assertCaptureAllowed, capturePolicy, watchCapture } from '../memory/cap
 import { acquireMemoryLease, assertMemoryLease, releaseMemoryLease, reviewState } from '../memory/review/store.js'
 import { adoptMemories, memorySnapshots } from '../memory/review/adoption.js'
 import { collectReviewEvidence, reviewManifest } from '../memory/review/evidence.js'
-import { FinalizerResult, type MemoryOperation, type ReviewEvidence, type MemorySnapshot, type ReviewRange } from '../memory/review/contracts.js'
+import { FinalizerResultV4, CITED_REVIEW_SYSTEM, FinalizerResult, type MemoryOperation, type ReviewEvidence, type MemorySnapshot, type ReviewRange } from '../memory/review/contracts.js'
 import { abortableStream } from '../deep-thinker/abortable-stream.js'
 import { EVOLUTION_OBSERVATION_EVENT, observationMatchesResult, type EvolutionObservation, type EvolutionObservationBinding } from './evolution-observation.js'
 import { readEvolutionObservation } from './plugin-records.js'
@@ -132,6 +132,7 @@ export interface DshMemoryCapsule {
 }
 
 interface FinalizationJob extends Record<string, unknown> {
+  readonly evidenceContractVersion?: 3 | 4
   readonly memoryAdoptionVersion: 1 | 2
   readonly claimNonce: string
   readonly leaseUntil: string
@@ -955,7 +956,7 @@ export class DshMemoryFinalizer {
       database.prepare(`
         UPDATE dsh_memory_finalizations
            SET status = 'pending', updated_at = ?
-         WHERE status IN ('processing', 'failed') AND attempt_count < ? AND capture_admission='ready' AND (claim_nonce IS NULL OR lease_until<=?)
+         WHERE status IN ('processing', 'failed') AND COALESCE(last_error_code,'')<>'MEMORY_FORGOTTEN' AND attempt_count < ? AND capture_admission='ready' AND (claim_nonce IS NULL OR lease_until<=?)
       `).run(this.#now(), this.#maximumAttempts, this.#now())
     })
     await this.#runtime.withDatabase(database => configureEvolution(database, this.#evolutionConfig.mode))
@@ -999,10 +1000,10 @@ export class DshMemoryFinalizer {
     database.prepare(`
       INSERT INTO dsh_memory_finalizations (
         run_id, workspace, dsh_session_id, source_start_seq, source_end_seq,
-        status, attempt_count, input_mode, extraction_version, evidence_selection_version, memory_adoption_version, capture_admission,
+        status, attempt_count, input_mode, extraction_version, evidence_selection_version, memory_adoption_version, capture_admission, evidence_contract_version,
         scheduled_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, 2, ?, ?, ?, ?)
-    `).run(runId, workspace, sessionId, boundary.sourceStartSeq, sourceEndSeq, this.#inputMode, this.#evolutionConfig.mode === 'off' ? 1 : 2, reviewState(database,runId) ? 2 : 1, capturePolicy(database,workspace,sessionId).mode === 'allowed' ? 'ready' : capturePolicy(database,workspace,sessionId).mode, now, now)
+      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, 2, ?, ?, 4, ?, ?)
+    `).run(runId, workspace, sessionId, boundary.sourceStartSeq, sourceEndSeq, this.#inputMode, this.#evolutionConfig.mode === 'off' ? 1 : 2, 2, capturePolicy(database,workspace,sessionId).mode === 'allowed' ? 'ready' : capturePolicy(database,workspace,sessionId).mode, now, now)
   }
 
   /** Schedule a background drain after the enclosing transaction commits. */
@@ -1043,7 +1044,7 @@ export class DshMemoryFinalizer {
       database.prepare(`
         UPDATE dsh_memory_finalizations
            SET status = 'pending', updated_at = ?
-         WHERE run_id = ? AND status = 'failed' AND attempt_count < ? AND capture_admission='ready' AND NOT EXISTS(SELECT 1 FROM memory_capture_exclusions x WHERE x.workspace=dsh_memory_finalizations.workspace AND x.native_session_id=dsh_memory_finalizations.dsh_session_id)
+         WHERE run_id = ? AND status = 'failed' AND COALESCE(last_error_code,'')<>'MEMORY_FORGOTTEN' AND attempt_count < ? AND capture_admission='ready' AND NOT EXISTS(SELECT 1 FROM memory_capture_exclusions x WHERE x.workspace=dsh_memory_finalizations.workspace AND x.native_session_id=dsh_memory_finalizations.dsh_session_id)
       `).run(this.#now(), checked, this.#maximumAttempts)
     })
     this.kick()
@@ -1054,7 +1055,7 @@ export class DshMemoryFinalizer {
       const row = database.prepare(`
         SELECT run_id AS runId, workspace, dsh_session_id AS dshSessionId,
                source_start_seq AS sourceStartSeq, source_end_seq AS sourceEndSeq,
-               attempt_count AS attemptCount, scheduled_at AS scheduledAt, input_mode AS inputMode, extraction_version AS extractionVersion, evidence_selection_version AS evidenceSelectionVersion, memory_adoption_version AS memoryAdoptionVersion,
+               attempt_count AS attemptCount, scheduled_at AS scheduledAt, input_mode AS inputMode, extraction_version AS extractionVersion, evidence_selection_version AS evidenceSelectionVersion, memory_adoption_version AS memoryAdoptionVersion, evidence_contract_version AS evidenceContractVersion,
                (SELECT status FROM ledger_runs r WHERE r.run_id=dsh_memory_finalizations.run_id) AS outcome
           FROM dsh_memory_finalizations
          WHERE status = 'pending' AND attempt_count < ? AND capture_admission='ready' AND NOT EXISTS(SELECT 1 FROM memory_capture_exclusions x WHERE x.workspace=dsh_memory_finalizations.workspace AND x.native_session_id=dsh_memory_finalizations.dsh_session_id) AND NOT EXISTS(SELECT 1 FROM memory_review_states m WHERE m.run_id=dsh_memory_finalizations.run_id AND m.lease_nonce IS NOT NULL AND m.lease_until>?)
@@ -1091,9 +1092,13 @@ export class DshMemoryFinalizer {
     if (this.#llm === undefined) throw new KiokukoError('SERVICE_UNAVAILABLE', 'DSH LLM service is unavailable for memory finalization')
     const { envelope } = prepared
     const built = buildFinalizationRequest(job, prepared, signal)
-    const request = reconciliation ? { ...built.request, tools: [], system: `${built.request.system ?? ''}
+    let request = reconciliation ? { ...built.request, tools: [], system: `${built.request.system ?? ''}
 Override the legacy memory output format: return only schemaVersion 3 with memoryOperations and optional episode. Kinds: fact, decision, preference, lesson, reference. Use only the evidence IDs and existing entry IDs below. Operations: add(kind,title,body,evidenceIds), update(targetEntryId,expectedRevision,expectedContentHash,kind,title,body,evidenceIds), unchanged(targetEntryId,evidenceIds), defer(reason: ambiguous|conflict|insufficient_context,evidenceIds). Only editable candidates may be updated. Do not duplicate existing memories; preserve conditions and corrections. Assistant statements, quotes and recalled memory are not new evidence. Empty memoryOperations is valid.`,
       messages:[...built.request.messages,{role:'user',content:[{type:'text',text:JSON.stringify({reconciliation})}]}] } : built.request
+    if (reconciliation && job.evidenceContractVersion === 4) request = {...request, system: `${built.request.system ?? ''}
+Override the legacy memory output format.
+${CITED_REVIEW_SYSTEM.replaceAll('schemaVersion\":2', 'schemaVersion\":4').replaceAll('schemaVersion 2', 'schemaVersion 4').replaceAll('proposals', 'memoryOperations').replace('Kinds: fact, decision, preference.', 'Kinds: fact, decision, preference, lesson, reference.').replace('At most 6 operations.', 'At most 16 operations.')}
+Use schemaVersion 4 with memoryOperations and optional episode. Use only supplied evidence and editable existing entries.`}
     try { if (this.#onObservation !== undefined) attempt.observation = {
       callId: `finalization:${job.runId}:${job.attemptCount}`, sessionId: job.dshSessionId, runId: job.runId,
       task: 'memory-finalization', attempt: job.attemptCount, provider: modelLabel(envelope.provider), model: modelLabel(envelope.model),
@@ -1141,7 +1146,7 @@ Override the legacy memory output format: return only schemaVersion 3 with memor
       throw new KiokukoError('SERVICE_UNAVAILABLE', `DSH memory finalizer did not stop normally (${String(reason?.kind ?? 'missing-finish')})`)
     }
     if(reconciliation){
-      const parsed=FinalizerResult.parse(JSON.parse(text))
+      const parsed=(job.evidenceContractVersion===4?FinalizerResultV4:FinalizerResult).parse(JSON.parse(text))
       return {capsule:{schemaVersion:1,memories:[]},capsuleJson:text,memoryOperations:parsed.memoryOperations,...(parsed.episode===undefined?{}:{episode:parsed.episode}),usage,envelope}
     }
     return { ...parseCapsule(text), usage, envelope }
@@ -1199,7 +1204,7 @@ Override the legacy memory output format: return only schemaVersion 3 with memor
         reconciliation=await this.#runtime.withDatabase(database=>{
           const state=reviewState(database,job.runId)!
           const range={workspace:job.workspace,sessionId:job.dshSessionId,runId:job.runId,sourceGeneration:state.source_generation,startSeq:job.sourceStartSeq,endSeq:job.sourceEndSeq}
-          return {range,evidence,...memorySnapshots(database,range,evidence.map(e=>e.text).join('\n'))}
+          return {range,evidence,...memorySnapshots(database,range,evidence.map(e=>e.text).join('\n'),job.evidenceContractVersion===4)}
         })
       }
       const extractEpisode = job.extractionVersion === 2 && await this.#runtime.withDatabase(database => evolutionSettings(database).mode !== 'off')
@@ -1326,6 +1331,8 @@ Override the legacy memory output format: return only schemaVersion 3 with memor
              WHERE run_id = ? AND status = 'processing' AND claim_nonce=?
           `).run(failure.code, failure.code, this.#now(), job.runId,job.claimNonce)
           database.prepare("UPDATE memory_review_states SET handoff_status='finalizer_failed' WHERE run_id=? AND lease_nonce=?").run(job.runId,job.claimNonce)
+          database.prepare("UPDATE dsh_memory_finalizations SET input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_write_tokens=? WHERE run_id=? AND last_error_code='MEMORY_FORGOTTEN'")
+            .run(attempt.usage.inputTokens??null,attempt.usage.outputTokens??null,attempt.usage.cacheReadTokens??null,attempt.usage.cacheWriteTokens??null,job.runId)
           releaseMemoryLease(database,job.runId,job.claimNonce)
         })
       } catch (markError) {

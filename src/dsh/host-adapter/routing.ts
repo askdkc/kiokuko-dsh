@@ -14,7 +14,7 @@ import { projectToolsForLean, projectToolsForMinimal, resolveToolExposureMode, p
 import type { NativeModelCatalog } from '../native-model-catalog.js'
 import type { DshUserQuestionAgent } from '../user-interaction.js'
 import { KiokukoError } from '../../errors.js'
-import { currentRequestMemory, pruneDshMemorySurface, filterRequestMemory } from '../request-memory.js'
+import { filterExplainedMemory, retiredExplanationCalls, pruneExplainedMemorySurface, currentRequestMemory, pruneDshMemorySurface, filterRequestMemory } from '../request-memory.js'
 import { createMemoryReviewPresentation } from '../memory-review-presentation.js'
 import type { DshNativePreStepPayload } from '../composition.js'
 import type { DshCoreRuntime } from '../core-runtime.js'
@@ -121,6 +121,8 @@ export function createRouting({
       let allowed: ReadonlyMap<string, string> = new Map()
       try { allowed = await runtime.withDatabase(db => currentRequestMemory(db, prepared)) } catch { /* no memory is safer than stale memory */ }
       pruneDshMemorySurface(agent.session, allowed)
+      const retired=await runtime.withDatabase(db=>retiredExplanationCalls(db,agent.session!.id))
+      pruneExplainedMemorySurface(agent.session,retired)
       return request
     }, { prepend: true })
     const disposeClaim = onNativeEvent(agent.ctx, 'agent/inbox/claimed', (event: { agent: RoutableAgent; turn: number; message: unknown }) => {
@@ -346,6 +348,11 @@ export function createRouting({
       if (item && !item.closed && !delegation.isChild(agent) && request.sessionId === agent.session?.id && request.purpose !== 'compaction') {
         let allowed: ReadonlyMap<string,string> = new Map()
         try { allowed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared)) } catch { /* fail closed for owned memory */ }
+        const retired=await runtime.withDatabase(db=>retiredExplanationCalls(db,agent.session!.id))
+        if (JSON.stringify(filterExplainedMemory(request.messages,retired))!==JSON.stringify(request.messages)) {
+          pruneExplainedMemorySurface(agent.session!,retired)
+          throw new KiokukoError('CONFLICT','Memory explanation forgotten after request assembly; rebuild the request')
+        }
         if (filterRequestMemory(request.messages, allowed).length !== request.messages.length) {
           pruneDshMemorySurface(agent.session!, allowed)
           throw new KiokukoError('CONFLICT', 'Memory changed after native request assembly; rebuild the request')

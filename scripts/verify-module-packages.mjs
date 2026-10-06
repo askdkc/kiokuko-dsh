@@ -57,6 +57,7 @@ try {
   const packed = {}
   for (const name of ['core', 'enno', 'lisp']) packed[name] = await pack(join(staged, name), join(work, `pack-${name}`))
   const coreFiles = new Set(packed.core.files.map(file => file.path))
+  for (const path of ['migrations/032_memory_evidence.sql', 'migrations/033_memory_forgetting.sql', 'dist/memory/evidence.js', 'dist/memory/explain.js', 'dist/memory/forget.js', 'dist/memory/forgotten.js', 'docs/memory-evidence.md']) assert.ok(coreFiles.has(path), `Missing memory lifecycle core asset: ${path}`)
   assert.ok(coreFiles.has('migrations/031_dsh_lisp_hot_tools.sql'), 'Missing hot-tool catalog migration')
   for (const path of ['docs/lisp-hot-tools.md', 'dist/dsh/lisp/hot-contracts.js', 'dist/dsh/lisp/hot-store.js', 'dist/dsh/lisp/hot-tools.js'])
     assert.ok(packed.lisp.files.some(file => file.path === path), `Missing hot-tool Lisp asset: ${path}`)

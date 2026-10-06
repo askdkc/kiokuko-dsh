@@ -1,3 +1,4 @@
+import { scheduleLegacyFinalizer } from '../helpers/legacy-finalizer.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -587,7 +588,7 @@ for (const version of [0, 1, 2] as const) test(`host finalization extracts memor
     await finalizer.bindRunStart({ runId: 'lookup-run', workspace, dshSessionId: old.id, sourceStartSeq: 0, sourceStartTurn: 1 })
     await runtime.withDatabase(database => withImmediateTransaction(database, () => {
       new LedgerStore(database).updateRunStatusInTransaction('lookup-run', 'completed')
-      finalizer.scheduleInTransaction(database, { runId: 'lookup-run', workspace, dshSessionId: old.id, sourceEndSeq: 5 })
+      scheduleLegacyFinalizer(database, { runId: 'lookup-run', workspace, dshSessionId: old.id, sourceEndSeq: 5 })
       if (version === 0) database.prepare("UPDATE dsh_memory_finalizations SET status = 'failed', attempt_count = 1 WHERE run_id = ?").run('lookup-run')
     }))
     // A pre-update failed lookup is retried on startup within the existing budget.

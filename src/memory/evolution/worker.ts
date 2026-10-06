@@ -28,7 +28,7 @@ export interface EvolutionWorkerOptions {
 export function buildEvolutionRequest(episodes: Episode[], kind: Job['kind'], model: EvolutionModel, config: EvolutionConfig): string | undefined {
   if (model.contextWindow === undefined) return undefined
   const input = canonicalJson({ algorithm: EVOLUTION_VERSION, kind, episodes: episodes.map(e => ({
-    runId: e.runId, draft: e.draft, observedSuccess: e.successful, observedProcedureSuccess: e.procedureSupported, failed: e.failed, corrective: e.corrective,
+    runId: e.runId, sources: e.sources, draft: e.draft, observedSuccess: e.successful, observedProcedureSuccess: e.procedureSupported, failed: e.failed, corrective: e.corrective,
   })) })
   // One UTF-8 byte per token is a conservative upper bound for this bounded text;
   // never reuse the old finalizer's byte count as a measured token count.

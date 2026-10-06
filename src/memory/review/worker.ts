@@ -8,7 +8,7 @@ import { findSecretInValue } from '../secrets.js'
 import { finalizationObservationScope } from '../../dsh/efficiency.js'
 import { adoptMemories, type AdoptionResult } from './adoption.js'
 import { reviewEvidenceWithContext, object, reviewManifest } from './evidence.js'
-import { REVIEW_SYSTEM, ReviewResult, type ReviewInput, type ReviewJob, type ReviewRange } from './contracts.js'
+import { REVIEW_SYSTEM, CITED_REVIEW_SYSTEM, ReviewResultV2, ReviewResult, type ReviewInput, type ReviewJob, type ReviewRange } from './contracts.js'
 import { advanceReviewed, assertReviewClaim, claimReview, dispatchReview, releaseMemoryLease, reviewSettings } from './store.js'
 
 export interface ReviewReadPort { streamRange(sessionId:string,start:number,end:number):AsyncIterable<DshLogEvent>; sourceGeneration(sessionId:string):Promise<string> }
@@ -58,7 +58,7 @@ export class MemoryReviewWorker {
       const payload={range:jobRange(job),evidence,existing:input.existing,lookupIncomplete:input.lookupIncomplete}
       const messages=[{role:'user',content:[{type:'text',text:JSON.stringify(payload)}]}]
       const request={provider:input.model.provider,model:input.model.model,...(input.model.reasoningEffort?{reasoningEffort:input.model.reasoningEffort}:{}),
-        sessionId:job.session_id,purpose:'compaction' as const,system:REVIEW_SYSTEM,messages,tools:[],maxTokens:settings.config.maxOutputTokens,temperature:0,signal:controller.signal}
+        sessionId:job.session_id,purpose:'compaction' as const,system:input.contractVersion===2?CITED_REVIEW_SYSTEM:REVIEW_SYSTEM,messages,tools:[],maxTokens:settings.config.maxOutputTokens,temperature:0,signal:controller.signal}
       const bytes=Buffer.byteLength(JSON.stringify({...request,signal:undefined}))
       await this.options.runtime.withDatabase(db=>db.prepare('UPDATE memory_review_jobs SET request_bytes=? WHERE id=? AND owner_nonce=?').run(bytes,job.id,job.owner_nonce))
       reason='input_too_large'
@@ -86,7 +86,7 @@ export class MemoryReviewWorker {
       })
       if(!finish){reason='abnormal_finish';throw new Error(reason)}
       if((usage.outputTokens??0)>settings.config.maxOutputTokens){reason='output_limit';throw new Error(reason)}
-      reason='invalid_schema';const result=ReviewResult.parse(JSON.parse(text))
+      reason='invalid_schema';const result=(input.contractVersion===2?ReviewResultV2:ReviewResult).parse(JSON.parse(text))
       if(findSecretInValue(result)){reason='secret_detected';throw new Error(reason)}
       reason='source_changed'
       const current=await reviewEvidenceWithContext(this.options.source,jobRange(job),settings.config.maxInputBytes,input.contextStartSeq)
@@ -119,6 +119,9 @@ export class MemoryReviewWorker {
         const deferred=!dispatched&&['model_unavailable','context_capacity_unknown','shutdown'].includes(reason)
         db.prepare("UPDATE memory_review_jobs SET state=?,reason=?,usage_json=?,duration_ms=?,owner_nonce=NULL,next_eligible_at=? WHERE id=? AND owner_nonce=? AND state IN ('claimed','dispatched')")
           .run(deferred?'deferred':'held',reason,JSON.stringify(usage),performance.now()-started,deferred?new Date(Date.parse(this.now())+60000).toISOString():null,job.id,job.owner_nonce)
+        // A retired claim may record accounting, but can never restore its payload.
+        db.prepare("UPDATE memory_review_jobs SET usage_json=?,duration_ms=? WHERE id=? AND reason='memory_forgotten' AND EXISTS(SELECT 1 FROM memory_forget_jobs WHERE kind='review' AND id=?)")
+          .run(JSON.stringify(usage),performance.now()-started,job.id,job.id)
         releaseMemoryLease(db,job.run_id,job.owner_nonce!)
       }))
     }finally{unwatch();if(timer)clearTimeout(timer);if(this.#abort===controller){this.#abort=undefined;this.#activeRun=undefined}}

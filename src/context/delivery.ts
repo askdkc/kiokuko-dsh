@@ -1,3 +1,4 @@
+import { deliveryForgotten } from '../memory/forgotten.js'
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { KiokukoError } from '../errors.js';
 import {
@@ -878,6 +879,7 @@ export function recordContextDeliveryInTransaction(
 
 export function readContextDelivery(database: SqliteDatabase, input: unknown): ContextDeliveryView {
   const validated = validateReadInput(input);
+  if (deliveryForgotten(database, validated.deliveryId)) throw new KiokukoError('CONFLICT', 'Memory delivery invalidated by forgetting');
   try {
     return readStoredDelivery(database, validated.workspace, validated.deliveryId);
   } catch (error) {
@@ -906,7 +908,7 @@ export function listContextDeliveries(database: SqliteDatabase, input: unknown):
              lr.workspace AS run_workspace, lr.last_sequence AS run_last_sequence
         FROM context_deliveries AS cd
         LEFT JOIN ledger_runs AS lr ON lr.run_id = cd.run_id
-       WHERE cd.run_id = ? AND lr.workspace = ?${cursorClause}
+       WHERE cd.run_id = ? AND lr.workspace = ? AND NOT EXISTS (SELECT 1 FROM memory_forget_deliveries f WHERE f.delivery_id=cd.delivery_id)${cursorClause}
        ORDER BY cd.created_at DESC, cd.delivery_id ASC
        LIMIT ?
     `).all<DeliveryHeaderRow>(...parameters);

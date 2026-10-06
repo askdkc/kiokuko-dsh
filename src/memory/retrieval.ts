@@ -28,6 +28,7 @@ export interface RecallEntriesInput extends SearchEntriesInput {
 }
 
 export interface RecallItem {
+  evidence?: import('./evidence.js').EvidenceIdentity;
   id: string;
   workspace: string;
   kind: EntryKind;
@@ -175,6 +176,7 @@ export function recallEntryHits(database: SqliteDatabase, input: RecallEntriesIn
       summary: entry.summary,
       snippet,
       tags: entry.tags,
+      ...(entry.evidence ? {evidence: entry.evidence} : {}),
       metadata: { storedData: true, untrusted: true, instructions: false },
     });
     characters += titleCost + characterCount(snippet);

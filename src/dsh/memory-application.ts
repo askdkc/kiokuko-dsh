@@ -1,3 +1,5 @@
+import { forgetMemory } from '../memory/forget.js'
+import { explainMemory, renderMemoryExplanation } from '../memory/explain.js'
 import { z } from 'zod'
 import { realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -39,7 +41,7 @@ export interface ApplicationHost {
   refresh(execution: NativeExecution, query: string, timeConstraint?: import('../memory/retrieval-contracts.js').MemoryTimeConstraint): Promise<unknown>
 }
 // Exact native read tools only; never classify arbitrary shell strings as read-only.
-const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'lisp_status', 'lisp_hot_status'])
+const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'memory_explain', 'lisp_status', 'lisp_hot_status'])
 const CONTROL_TOOLS = new Set(['task_memory_review', 'task_completion', 'memory_checkpoint', 'curator_check', 'enno_finish', 'enno_work_report', 'enno_plan_review', 'enno_plan_submit', 'enno_ideal_submit', 'enno_meditation_submit'])
 
 /** Only an exact foreground native Bash invocation at the bound repository root is proof-eligible. */
@@ -91,6 +93,47 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
       return { kind: 'success', text: !status.supported ? '記憶適用の連携は稼働中です。この会話で準備済みの依頼はありません。'
         : `記憶適用: ${status.ready ? '未処理なし' : '確認が必要'}\n取得: ${'retrieval' in status ? status.retrieval : 'unavailable'}\n検証: ${status.verification}\n未処理: ${'pending' in status ? status.pending.length : 0}\n実行中・終了未確認: ${'running' in status ? status.running : 0}\n自動Global化: ${status.globalization.map(item => `${item.entryId}@${item.revision}: ${'successfulRuns' in item ? item.successfulRuns : 0}/3, ${'reason' in item ? item.reason ?? item.state : '未対応'}, ${'globalEntryId' in item ? item.globalEntryId ?? '未生成' : '未生成'}`).join(' / ') || '対象なし'}\n詳細は status --json で確認できます。` }
     } }))
+  disposers.push(ctx.tools.register({ name: 'memory_explain', modelFacing: true,
+    description: 'Inspect stored memory claims, source excerpts, revision history and current eligibility. Source attachment does not prove truth.',
+    parameters: JSON.parse(JSON.stringify(z.toJSONSchema(z.object({entryId:z.string().min(1).max(256),revision:z.number().int().positive().optional()}).strict()))),
+    output: {schema:{},render:(_:unknown,value:unknown)=>[{type:'text',text:JSON.stringify(value)}]},
+    execute: async (args:unknown,execution:NativeExecution) => {
+      const identity=host.resolve(execution)
+      if(!identity || execution.parent!==undefined || execution.name!=='memory_explain') throw new Error('No active native task')
+      const input=z.object({entryId:z.string().min(1).max(256),revision:z.number().int().positive().optional()}).strict().parse(args)
+      execution.signal.throwIfAborted()
+      return host.runtime.withDatabase(db=>{
+        if(host.resolve(execution)?.runId!==identity.runId)throw new Error('Native task changed')
+        const value=explainMemory(db,{workspace:identity.workspace,runId:identity.runId,...input})
+        db.prepare('INSERT OR IGNORE INTO memory_explain_receipts VALUES(?,?,?,?)').run(identity.sessionId,execution.callId,value.entryId,value.revision)
+        return value
+      })
+    }
+  }))
+  if(ctx.commands && host.session) disposers.push(ctx.commands.register({name:'kioku-memory',description:'Explain memory evidence or forget all revisions and dependent memories. Native logs remain. explain ENTRY_ID [--revision N] [--json] | forget ENTRY_ID --revision N',input:{hint:'explain ENTRY_ID [--revision N] [--json] | forget ENTRY_ID --revision N'},
+    handler:async invocation=>{
+      try {
+        const session=host.session!(invocation.agent)
+        if(!session)throw new Error('Native session identity unavailable')
+        const args=invocation.rawInput.trim().split(/\s+/u)
+        if(!['explain','forget'].includes(args[0]!)||!args[1])throw new Error('Use explain ENTRY_ID [--revision N] [--json]')
+        let revision:number|undefined
+        for(let i=2;i<args.length;i++){
+          if(args[i]==='--json')continue
+          if(args[i]==='--revision' && revision===undefined && /^[1-9]\d*$/.test(args[i+1]??'')){revision=Number(args[++i]);if(!Number.isSafeInteger(revision))throw new Error('Invalid revision');continue}
+          throw new Error('Invalid memory command arguments')
+        }
+        if(args[0]==='forget' && revision===undefined)throw new Error('forget requires --revision N; it erases all revisions and dependent memories')
+        invocation.signal.throwIfAborted()
+        const value=await host.runtime.withDatabase(db=>{
+          const binding=db.prepare('SELECT workspace,run_id FROM task_memory_bindings WHERE session_id=? AND repository_root=? ORDER BY rowid DESC LIMIT 1').get<{workspace:string;run_id:string}>(session.sessionId,session.repositoryRoot)
+          if(!binding)throw new Error('No admitted workspace for this session')
+          return args[0]==='forget' ? forgetMemory(db,{workspace:binding.workspace,entryId:args[1]!,expectedRevision:revision!,operationId:`forget:${session.sessionId}:${invocation.commandId??args[1]+':'+revision}`}) : explainMemory(db,{workspace:binding.workspace,entryId:args[1]!,revision,runId:binding.run_id})
+        })
+        return {kind:'success',text:args.includes('--json') ? JSON.stringify(value,null,2) : args[0]==='forget' ? `記憶 ${args[1]} と依存する記憶を忘却しました。native会話ログ、外部への送信済み情報、バックアップは対象外です。` : renderMemoryExplanation(value as ReturnType<typeof explainMemory>)}
+      }catch(error){return {kind:'error',text:error instanceof Error?error.message:'Memory inspection failed'}}
+    }
+  }))
   disposers.push(ctx.tools.register({ name: 'task_memory_review', modelFacing: true,
     description: MEMORY_APPLICATION_GUIDANCE,
     // Zod attaches non-enumerable ~standard metadata; DSH requires plain JSON.

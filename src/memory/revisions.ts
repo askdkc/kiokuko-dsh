@@ -1,3 +1,4 @@
+import { memoryForgotten } from './forgotten.js'
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { KiokukoError, storedMemoryIntegrityError } from '../errors.js';
 import {
@@ -482,6 +483,7 @@ function selectRevision(
 
 export function readEntryRevision(database: SqliteDatabase, input: { entryId: string; workspace: string; revision: number }): EntryRevisionRecord {
   revisionKey(input);
+  if(memoryForgotten(database,input.entryId))throw new KiokukoError('NOT_FOUND','Memory was forgotten');
   const result = selectRevision(database, input);
   if (result === undefined) throw new KiokukoError('NOT_FOUND', 'Entry revision not found');
   return result;
@@ -489,6 +491,7 @@ export function readEntryRevision(database: SqliteDatabase, input: { entryId: st
 
 export function findEntryRevision(database: SqliteDatabase, input: { entryId: string; workspace: string; revision: number }): EntryRevisionRecord | undefined {
   revisionKey(input);
+  if (memoryForgotten(database, input.entryId)) return undefined;
   return selectRevision(database, input);
 }
 

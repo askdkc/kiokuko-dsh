@@ -63,3 +63,38 @@ export function pruneDshMemorySurface(session: Parameters<typeof retainedEvents>
     { surfaceOp: v3 ? { op: 'replace', startSeq: event.seq, endSeq: event.seq } : { op: 'replace', start: event.seq, end: event.seq }, sourceEventSeqs: [event.seq] })
   }
 }
+
+/** Explanation tool results are native logs; retire their active surface only. */
+export function retiredExplanationCalls(db: SqliteDatabase, sessionId: string): ReadonlySet<string> {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='memory_explain_receipts'").get()) return new Set()
+  return new Set(db.prepare('SELECT r.call_id FROM memory_explain_receipts r JOIN memory_forget_tombstones t ON t.entry_id=r.entry_id WHERE r.session_id=?')
+    .all<{call_id: string}>(sessionId).map(row => row.call_id))
+}
+const FORGOTTEN_EXPLANATION = 'Kiokuko memory was forgotten; its earlier explanation is no longer available.'
+export function filterExplainedMemory<T>(messages: readonly T[], retired: ReadonlySet<string>): T[] {
+  return messages.map(value => {
+    const message = value as {source?: {kind?: string; callId?: string}; role?: string; content?: unknown}
+    if (message.source?.kind !== 'tool' || !message.source.callId || !retired.has(message.source.callId)) return value
+    return {...message, content: forgottenExplanationContent(message.content,message.role)} as T
+  })
+}
+function forgottenExplanationContent(content: unknown, role?: string): unknown[] {
+  if (role === 'tool') return [{type:'text',text:FORGOTTEN_EXPLANATION}]
+  if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== 'tool-result') throw new Error('Unexpected native explanation result shape')
+  return [{...content[0], content: [{type:'text',text:FORGOTTEN_EXPLANATION}]}]
+}
+export function pruneExplainedMemorySurface(session: Parameters<typeof retainedEvents>[0] & {append?: Function}, retired: ReadonlySet<string>): void {
+  if (!retired.size) return
+  for (const event of retainedEvents(session)) {
+    if (event.type !== 'tool/result') continue
+    const data = event.data as {message?: {source?: {callId?: string}; role?: string; content?: unknown}; callId?: string}
+    const callId = data.message?.source?.callId ?? data.callId
+    if (!callId || !retired.has(callId) || !data.message) continue
+    const content = forgottenExplanationContent(data.message.content,data.message.role)
+    if (JSON.stringify(data.message.content) === JSON.stringify(content)) continue
+    if (typeof session.append !== 'function') throw new Error('Memory explanation retirement requires the native Session append API')
+    const v3 = ((session as {header?:{version?:number}}).header?.version ?? 0) >= 3
+    session.append('tool/result', {...data, message:{...data.message,content}},
+      {surfaceOp: v3 ? {op:'replace',startSeq:event.seq,endSeq:event.seq} : {op:'replace',start:event.seq,end:event.seq},sourceEventSeqs:[event.seq]})
+  }
+}
