@@ -1,8 +1,23 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { build } from 'esbuild'
 
 const root = resolve(import.meta.dirname, '..')
+// DSH inventory reads exported locale resources without evaluating plugin code.
+// Derive the displayed version from the manifest on every build.
+const manifest = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'))
+const localeRoot = resolve(root, 'dist/locale')
+await mkdir(localeRoot, { recursive: true })
+for (const [language, description] of Object.entries({
+  en: `Version ${manifest.version} — ${manifest.description}`,
+  ja: `バージョン ${manifest.version} — DeepSeek Harness 向け Kiokuko プラグイン`,
+  'zh-CN': `版本 ${manifest.version} — DeepSeek Harness 的 Kiokuko 插件`,
+  ko: `버전 ${manifest.version} — DeepSeek Harness용 Kiokuko 플러그인`,
+})) {
+  await writeFile(resolve(localeRoot, `${language}.json`), JSON.stringify({
+    meta: { title: manifest.name, description },
+  }, null, 2) + '\n')
+}
 // Analyze the emitted JavaScript so erased type-only re-exports never become runtime exports.
 const analysis = await build({
   absWorkingDir: root,

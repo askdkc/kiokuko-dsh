@@ -100,6 +100,10 @@ const requiredFiles = [
   'dist/dsh/legacy-session-codecs.js',
   'dist/index.js',
   'dist/index.d.ts',
+  'dist/locale/en.json',
+  'dist/locale/ja.json',
+  'dist/locale/zh-CN.json',
+  'dist/locale/ko.json',
   'dist/client.cjs',
   'dist/client.d.ts',
   'dist/dsh/index.js',
@@ -285,6 +289,11 @@ async function createAndSmokeTestTarball() {
       }
     } finally { provider.dispose(); }
     const fs = await import('node:fs/promises');
+    const manifest = JSON.parse(await fs.readFile(new URL(import.meta.resolve('kiokuko-dsh/package.json')), 'utf8'));
+    for (const language of ['en', 'ja', 'zh-CN', 'ko']) {
+      const locale = JSON.parse(await fs.readFile(new URL(import.meta.resolve('kiokuko-dsh/locale/' + language + '.json')), 'utf8'));
+      if (locale.meta.title !== manifest.name || !locale.meta.description.includes(manifest.version)) throw new Error('packed plugin version metadata mismatch: ' + language);
+    }
     const path = await import('node:path');
     const os = (await import('node:os')).default;
     const { createRequire } = await import('node:module');
@@ -384,7 +393,7 @@ try {
     }
   }
   const exportsKeys = Object.keys(packageManifest.exports ?? {})
-  if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh', './core', './modules/enno', './modules/lisp'])) throw new Error('public exports must contain the compatibility, core and explicit module entries')
+  if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json'])) throw new Error('public exports must contain the compatibility, core, explicit module and display metadata entries')
   const smoke = await createAndSmokeTestTarball()
   process.stdout.write(`${JSON.stringify({
     name: metadata.name,

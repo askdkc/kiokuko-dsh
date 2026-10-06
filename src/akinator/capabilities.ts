@@ -1,6 +1,7 @@
 import type { TaskProfile } from './types.js';
 import {
   STANDARD_FUNCTION_SKILL_NAME,
+  STANDARD_CODING_ROUTINE_SKILL_NAME,
   STANDARD_MEMORY_SKILL_NAME,
   STANDARD_SOUL_SKILL_NAME,
   STANDARD_UI_SKILL_NAME,
@@ -317,6 +318,7 @@ const TASK_TOOL_TERMS: Record<NonNullable<TaskProfile['taskType']>, string[]> = 
 };
 
 const SKILL_REASONS: Record<string, string> = {
+  [STANDARD_CODING_ROUTINE_SKILL_NAME]: 'Coding changes use investigation, failing regression coverage, implementation and acceptance verification through the real user path.',
   tdd: 'The build task benefits from a test-first implementation workflow.',
   'diagnosing-bugs': 'The debugging task benefits from a reproducible diagnosis workflow.',
   research: 'The research task requires source-grounded findings.',
@@ -359,7 +361,7 @@ function desiredSkills(input: { task: string; profile: TaskProfile; recommendedT
   const taskScope = [input.task, input.profile.target ?? '', input.profile.expected ?? '', input.profile.constraints ?? ''].join(' ');
   if (!EXCLUDED_UI_SCOPE.test(taskScope) && EXPLICIT_UI_INTENT.test(taskScope)) skillNames.push(STANDARD_UI_SKILL_NAME);
   if (!EXCLUDED_CODING_SCOPE.test(taskScope) && EXPLICIT_CODING_INTENT.test(taskScope)) {
-    skillNames.push(STANDARD_FUNCTION_SKILL_NAME);
+    skillNames.push(STANDARD_FUNCTION_SKILL_NAME, STANDARD_CODING_ROUTINE_SKILL_NAME);
   }
   if (memoryReasoningRequired(input.profile, input.memoryUse)) {
     skillNames.push(MEMORY_REASONING_SKILL_NAME);

@@ -49,7 +49,9 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   }
   assert.equal(packageManifest.name, 'kiokuko-dsh')
   assert.equal(packageManifest.scripts?.prepare, 'npm run build')
-  assert.deepEqual(Object.keys(packageManifest.exports ?? {}), ['.', './client', './dsh', './core', './modules/enno', './modules/lisp'])
+  assert.deepEqual(Object.keys(packageManifest.exports ?? {}), ['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json'])
+  assert.equal(packageManifest.exports?.['./package.json'], './package.json')
+  assert.equal(packageManifest.exports?.['./locale/*.json'], './dist/locale/*.json')
   assert.deepEqual(packageManifest.exports?.['.'], {
     types: './dist/index.d.ts',
     default: './dist/index.js',

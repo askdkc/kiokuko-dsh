@@ -70,7 +70,9 @@
     "./modules/lisp": {
       "types": "./dist/dsh/modules/lisp.d.ts",
       "default": "./dist/dsh/modules/lisp.js"
-    }
+    },
+    "./package.json": "./package.json",
+    "./locale/*.json": "./dist/locale/*.json"
   },
   "dsh": {
     "displayName": "Kiokuko DSH",
@@ -112,7 +114,7 @@
         "Stored native DSH session IDs and histories for startup validation and legacy Kiokuko compatibility"
       ],
       "writePaths": [
-        "Sixteen bundled managed Skills and references under ~/.agents/skills on enabled plugin load",
+        "Seventeen bundled managed Skills and references under ~/.agents/skills on enabled plugin load",
         "Existing Kiokuko managed block in startup-directory AGENTS.md; instructions outside the markers are preserved",
         "Configured Kiokuko database and pre-migration backups",
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",

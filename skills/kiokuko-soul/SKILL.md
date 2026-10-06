@@ -40,5 +40,5 @@ Unavailable Skills: use current evidence unless host safety, authorization, iden
 
 ## Specialists
 
-Use the catalog descriptions to select `kiokuko-{investigate,architecture,review,benchmark,verification,skill-authoring,technical-writing}` only as needed. Small fixes need no panel. Inherit host model/effort.
+Select `kiokuko-{investigate,architecture,review,benchmark,verification,skill-authoring,technical-writing}` as needed; apply `coding-ideal-routine-skill` for code changes. Inherit host model/effort.
 <!-- /kiokuko:runtime -->

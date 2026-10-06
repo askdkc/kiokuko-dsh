@@ -28,7 +28,7 @@ Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
   not a backup of the workspace or whole session. Later step inputs do not
   replace it. Storage failure cannot veto the native turn; observed model or
   tool execution prevents automatic input replay.
-- On enabled plugin load, synchronizes all sixteen bundled Skills and their
+- On enabled plugin load, synchronizes all seventeen bundled Skills and their
   references to `~/.agents/skills/` before registering the DSH surfaces. Creates
   missing files and atomically replaces files carrying their exact Kiokuko
   management marker. Leaves unrelated files untouched and refuses unmanaged

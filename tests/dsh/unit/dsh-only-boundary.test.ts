@@ -92,7 +92,7 @@ test('migrations preserve the immutable baseline and append forward-only evoluti
 
 test('package exposes compatibility entries and explicit core/module entries without restoring generic clients', async () => {
   const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-  assert.deepEqual(Object.keys(manifest.exports), ['.', './client', './dsh', './core', './modules/enno', './modules/lisp'])
+  assert.deepEqual(Object.keys(manifest.exports), ['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json'])
   assert.equal(manifest.bin, undefined)
   assert.equal(manifest.dependencies?.commander, undefined)
   assert.equal(manifest.dependencies?.['@modelcontextprotocol/sdk'], undefined)
