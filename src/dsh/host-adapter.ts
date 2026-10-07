@@ -4,7 +4,7 @@ import { IntakeModeConfig } from './intake-mode.js'
 import { OnDemandIntake, type IntakeMode } from './on-demand-intake.js'
 import { classifyTaskForIntake } from './decisions/workflows.js'
 import { dshTurnRequestId } from './intake-profile-resolver.js'
-import { readExecutionOwner } from './orchestration/execution-owner.js'
+import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
 import { MemoryIndexReasoningConfig } from '../memory/index-reasoning/contracts.js'
 import { ObservationPackConfig } from './observation-pack/policy.js'
 import { createTurnState, policyState, type TurnRecord } from './host-adapter/turn-state.js'
@@ -510,27 +510,42 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   if (conversationFirst && hasExecutionIngress && (!tools || !agents || !sessions)) {
     throw new Error('Conversation-first execution requires native tools, agents and sessions; read-only history adapters must not expose a partial execution plane')
   }
+  const answerCwd = (agent: import('./on-demand-intake.js').DemandAgent): string => {
+    const session = agent.session as { id: string; header?: { cwd?: string } } | undefined
+    if (!session || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session
+      || typeof session.header?.cwd !== 'string' || !session.header.cwd) throw new Error('On-demand native identity mismatch')
+    return realpathSync(session.header.cwd)
+  }
   const demand = conversationFirst && hasExecutionIngress ? new OnDemandIntake({
-    answerContext: new DshAnswerContext(runtime, { root, projectOnly: false, memoryRetrieval: memoryRetrievalConfig,
-      instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills: skills as AnswerSkillRegistry, prompts: skillPrompts, decisions, cwd: root }),
+    answerContext: new DshAnswerContext(runtime, { root, cwd: answerCwd, projectOnly: false, memoryRetrieval: memoryRetrievalConfig,
+      instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills: skills as AnswerSkillRegistry, prompts: skillPrompts, decisions, cwd: answerCwd(input.agent) }),
     }),
     nativeChild: agent => agents?.get(agent.id) === agent && sessions?.get(agent.session?.id ?? '') === agent.session && isNativeSubagent(agent as NativeAgent),
     validate: async input => {
       const agent = input.agent, session = agent.session as { id: string; header?: { cwd?: string } } | undefined
-      if (!session || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session || realpathSync(session.header?.cwd ?? '') !== root) throw new Error('On-demand native identity mismatch')
-      await captureInitialInput(session.id, input.turn, input.messages)
+      answerCwd(agent)
+      await captureInitialInput(session!.id, input.turn, input.messages)
     },
-    existing: async input => runtime.withDatabase(db => {
-      if (!readExecutionOwner(db, input.agent.session!.id) || detachedDemandSessions.has(input.agent.session!.id)) return false
+    existing: async input => runtime.withDatabase(async db => {
+      if (detachedDemandSessions.has(input.agent.session!.id)) return false
       const current = currentSession(input.agent.session!.id)
       // A retired native identity is not live execution authority. Keep its durable
       // owner intact, but let a reopened session answer before attempting recovery.
-      return !current || current.nativeAgent === input.agent && current.nativeSession === input.agent.session
+      if (current) return !current.closed && !current.failed && current.nativeAgent === input.agent && current.nativeSession === input.agent.session
+      const project = await resolveProjectWorkspaceReadOnly(db, answerCwd(input.agent), { allowDirectory: true })
+      if (!project) return false
+      // The full adapter owns ledger runs, not the modular core ownership table.
+      // Recovery still goes through admission's exact workspace/session checks.
+      return Boolean(db.prepare(`SELECT 1 FROM ledger_runs lr
+        JOIN enno_contracts ec ON ec.run_id=lr.run_id
+        WHERE lr.workspace=? AND lr.dsh_session_id=? AND lr.status='active'
+          AND ec.repository_root=? AND ec.status NOT IN ('completed','cancelled','blocked') LIMIT 1`)
+        .get(project.workspace, input.agent.session!.id, project.repositoryRoot))
     }),
     classify: (input, task) => classifyTaskForIntake(decisions, dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, undefined, input.signal),
     prepare: async (input, taskType) => {
       const event = await admission.mapPreStep(input, taskType)
-      const result = await gate.prepare(event)
+      const result = await gate.prepareRequestedWork(event)
       if (result.admitted) detachedDemandSessions.delete(input.agent.session!.id)
       return result.admitted && result.prepared.intake.profile.taskType !== 'chat'
     },

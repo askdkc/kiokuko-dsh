@@ -22,6 +22,16 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   let plugin: { dispose(): Promise<unknown> } | undefined
   let off = () => {}, offQuestions: (() => void) | undefined
   const workspace = prompts ? join(dir, 'workspace') : dir
+  const mountPlugin = async (nextMode: 'full'|'compiled') => {
+    // The bundled host binds its workspace at startup, just as a real DSH
+    // process does. Keep the session in that same disposable workspace without
+    // weakening the on-demand identity check or leaking cwd to later tests.
+    const previousCwd = process.cwd()
+    try {
+      process.chdir(workspace)
+      return await ctx.plugin(subject, { enabled: true, skillPrompts: { mode: nextMode }, orca: { enabled: false }, ...extra })
+    } finally { process.chdir(previousCwd) }
+  }
   const close = async () => {
     const failures: unknown[] = []
     off(); offQuestions?.()
@@ -40,7 +50,10 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
     if (nativeAnswer) {
       const questions = await import(pathToFileURL(join(packages!, '@deepseek-ai/dsh-user-questions/lib/index.js')).href)
       fibers.push(await ctx.plugin(questions.default, {}))
-    } else fibers.push(await ctx.plugin({name:'delivery-intent-answer',apply(c:any){return c.provide('userQuestions',{ask:async(r:any)=>({answers:r.questions.map((q:any)=>{assert.equal(q.id,'taskType');return{id:q.id,selected:['chat']}})})})}}))
+    } else fibers.push(await ctx.plugin({name:'delivery-intent-answer',apply(c:any){return c.provide('userQuestions',{ask:async(r:any)=>({answers:r.questions.map((q:any)=>{
+      assert.ok(['taskType','enno-execution-mode'].includes(q.id),JSON.stringify(q))
+      return{id:q.id,selected:[q.id==='taskType'?'chat':'通常実行']}
+    })})})}}))
   }
   const initial=explicit==='prompt-only'?[llm,prompt,skills]:[llm,session,projection,prompt,tools,agents,skills,commands,subagents,skillTool]
   for(const m of initial) fibers.push(await ctx.plugin(m.default??m, m===prompt?{persona:''}:undefined))
@@ -48,12 +61,17 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   const responses: any[] = [], model = new mock.MockAdapter(responses)
   ctx.llm.registerAdapter(['mock'],model)
   if(explicit===true) {
-    adapter = subject.createDshHostAdapter(ctx,{databasePath:join(dir,'state.sqlite3'),repositoryRoot:workspace,orca:{enabled:false}, ...(prompts ? { skillPrompts: prompts, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, typedDecisions: { mode: 'off' } } : {})})
+    adapter = subject.createDshHostAdapter(ctx,{databasePath:join(dir,'state.sqlite3'),repositoryRoot:workspace,orca:{enabled:false}, ...(prompts ? {
+      skillPrompts: prompts, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, typedDecisions: { mode: 'off' },
+      // Auxiliary finalization must not consume evaluation scripts or provider
+      // budgets. Foreground native model and tool dispatch remain unchanged.
+      llm: { async *stream() { throw new Error('Auxiliary model generation is unavailable in isolated Skill evaluation') } },
+    } : {})})
     fibers.push(await ctx.plugin({name:'explicit-skill-host',apply(c:any){return c.provide('kiokukoDsh',adapter!.host)}}))
   }
   plugin = prompts
     ? await subject.mountDshComposition(ctx, adapter!.host, subject.Config.parse({ ...extra }).lisp, prompts)
-    : await ctx.plugin(subject,{enabled:true,skillPrompts:{mode},orca:{enabled:false},...extra})
+    : await mountPlugin(mode)
   if(explicit==='prompt-only'){
     for(const m of [session,projection,tools,agents,commands,skillTool])fibers.push(await ctx.plugin(m.default??m))
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
@@ -64,7 +82,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   off=ctx.on('agent/error',(e:any)=>errors.push(e.error))
   const turn=async(input='この内容を日本語で説明してください。')=>{agent.followup(llm.createUserMessage({content:[{type:'text',text:input}],source:{kind:'user'}}));await agent.whenIdle();assert.deepEqual(errors,[])}
   return {ctx,agent,model,responses,mock,turn,adapter,dir:workspace,llm,
-    async reload(nextMode: 'full'|'compiled') { if (prompts) throw new Error('Snapshot fixtures cannot change representation'); await plugin!.dispose(); plugin=await ctx.plugin(subject,{enabled:true,skillPrompts:{mode:nextMode},orca:{enabled:false},...extra}) },
+    async reload(nextMode: 'full'|'compiled') { if (prompts) throw new Error('Snapshot fixtures cannot change representation'); await plugin!.dispose(); plugin=await mountPlugin(nextMode) },
     close }
   } catch (error) { await close(); throw error }
 }

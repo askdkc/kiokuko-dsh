@@ -62,11 +62,12 @@ test('native turn accepts steering after a tool without replacing its initial re
     execute: async () => { writes++; agent.steer(h.llm.createUserMessage({ content: [{ type: 'text', text: '追記は不要です。検証してください。' }], source: { kind: 'user' } })); return 'edited' },
   })
   try {
+    model.prepareNext('debug', 'prepare-steering')
     await turn(h, agent, 'README.mdを修正してください。')
     assert.deepEqual(errors, [])
     assert.equal(writes, 1)
-    assert.equal(model.requests.length, 2)
-    assert.ok(JSON.stringify(model.requests[1]!.messages).includes('追記は不要です。検証してください。'))
+    assert.equal(model.requests.length, 3)
+    assert.ok(JSON.stringify(model.requests[2]!.messages).includes('追記は不要です。検証してください。'))
     const claims = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT native_turn, message_payload, provider_started, side_effect_started FROM dsh_input_claim_backups').all())
     assert.equal(claims.length, 1)
     const messages = JSON.parse(Buffer.from(claims[0]!.message_payload as Uint8Array).toString('utf8'))
@@ -77,14 +78,14 @@ test('native turn accepts steering after a tool without replacing its initial re
   } finally { observeError(); edit(); await composition.dispose(); await adapter.dispose(); await questions.dispose(); await h.dispose() }
 })
 for (const failure of ['insert', 'first-request', 'late-request', 'late-request-and-update'] as const) {
-  test(`native input recovery tolerates ${failure} failure without interrupting or replaying executed work`, {
+  test(`native eager compatibility: input recovery tolerates ${failure} failure without interrupting or replaying executed work`, {
     skip: !packageRoot && !sourceRoot, timeout: 30_000,
   }, async () => {
     const h = await harness()
     const questions = h.ctx.plugin({ name: 'claim-failure-test-ui', apply(ctx: any) {
       return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: ['通常実行'] })) }) })
     } }); await questions
-    const adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
+    const adapter = createDshHostAdapter(h.ctx, { intakeMode: 'eager', repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
       migrationsDirectory: join(process.cwd(), 'migrations'), llm: { async *stream() { throw new Error('Optional memory backend unavailable') } } })
     const composition = await mountDshComposition(h.ctx, adapter.host)
     const model = new h.mock.MockAdapter(failure === 'insert' || failure === 'first-request' ? [h.mock.textResponse('verified')]
@@ -189,8 +190,9 @@ test('native model-auto applies the selected effort to first prompt and request,
       context: { contextWindow: 200_000 }, inputModalities: ['text', 'image'],
       reasoning: { efforts: ['low', 'medium', 'high'].map(id => ({ id, name: id })) } } }
   }
-  const codex = new CodexAdapter([h.mock.toolCallResponse('edit-1', 'edit_once', {}), h.mock.textResponse('done')], ['gpt-6-luna', 'gpt-6-sol'])
-  const ordinary = new h.mock.MockAdapter([h.mock.textResponse('manual task')])
+  const prepared = h.mock.prepareWork([h.mock.toolCallResponse('edit-1', 'edit_once', {}), h.mock.textResponse('done')], 'debug', 'prepare-auto')
+  const codex = new CodexAdapter(prepared.slice(1), ['gpt-6-luna', 'gpt-6-sol'])
+  const ordinary = new h.mock.MockAdapter([prepared[0], h.mock.textResponse('manual task')])
   h.ctx.llm.registerAdapter(['openai-codex'], codex)
   h.ctx.llm.registerAdapter(['ordinary'], ordinary)
   const adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
@@ -217,15 +219,16 @@ test('native model-auto applies the selected effort to first prompt and request,
     assert.equal(codex.requests[0].model, 'gpt-6-luna')
     assert.equal(codex.requests[0].reasoningEffort, 'high')
     assert.equal(codex.requests[1].model, 'gpt-6-luna')
-    assert.equal(prompts[0].model, 'gpt-6-luna')
+    assert.equal(prompts[1].model, 'gpt-6-luna')
     const headers = agent.session.snapshotEvents().filter((event: any) => event.type === 'request/header')
-    assert.equal(headers[0].data.header.config.model, 'gpt-6-luna')
-    assert.equal(headers[0].data.header.config.reasoningEffort, 'high')
+    assert.equal(headers[1].data.header.config.model, 'gpt-6-luna')
+    assert.equal(headers[1].data.header.config.reasoningEffort, 'high')
     agent.session.append('model/selection', { provider: 'ordinary', model: 'mock' })
+    ordinary.prepareNext('debug', 'prepare-manual')
     await turn(h, agent, '次のREADME修正をしてください。通常実行で。')
     assert.equal(classified, 1)
-    assert.equal(ordinary.requests.length, 1)
-    assert.equal(ordinary.requests[0].model, 'mock')
+    assert.equal(ordinary.requests.length, 3)
+    assert.equal(ordinary.requests[2].model, 'mock')
   } finally { edit(); watch(); stopPicker(); await composition.dispose(); await adapter.dispose(); await questions.dispose(); await meter.dispose(); await h.dispose() }
 })
 test('native model-auto command accepts its exact session in another workspace', {
@@ -256,7 +259,7 @@ test('native model-auto command accepts its exact session in another workspace',
     assert.equal((await adapter.host.modelAuto!.coordinator.status(agent.session.id)).mode, 'auto')
   } finally { await composition.dispose(); await adapter.dispose(); await commandFiber.dispose(); await h.dispose() }
 })
-test('native modular core applies model-auto to its first prompt and request', {
+test('native modular core applies model-auto to its first prepared prompt and request', {
   skip: !packageRoot && !sourceRoot, timeout: 30_000,
 }, async () => {
   const h = await harness(), originalFetch = globalThis.fetch
@@ -282,12 +285,13 @@ test('native modular core applies model-auto to its first prompt and request', {
       context: { contextWindow: 200_000 }, inputModalities: ['text'],
       reasoning: { efforts: ['low', 'medium', 'high'].map(id => ({ id, name: id })) } } }
   }
-  const codex = new CodexAdapter([h.mock.textResponse('調査しました。')], ['gpt-6-luna', 'gpt-6-sol'])
+  const prepared = h.mock.prepareWork([h.mock.textResponse('調査しました。')], 'research', 'prepare-core-auto')
+  const codex = new CodexAdapter(prepared.slice(1), ['gpt-6-luna', 'gpt-6-sol'])
   const meter = h.ctx.plugin({ name: 'core-model-auto-meter', apply(ctx: any) {
     return ctx.provide('tokenMeter', { measure: () => ({ totalTokens: 100, logRevision: 0, nodes: [] }) })
   } }); await meter
   h.ctx.llm.registerAdapter(['openai-codex'], codex)
-  h.ctx.llm.registerAdapter(['ordinary'], new h.mock.MockAdapter([h.mock.textResponse('baseline')]))
+  h.ctx.llm.registerAdapter(['ordinary'], new h.mock.MockAdapter([prepared[0]]))
   const core = await mountCore(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
     migrationsDirectory: join(process.cwd(), 'migrations'), modelAutoMode: { mode: 'auto' }, typedDecisions: { mode: 'auto' } })
   const agent = await h.ctx.agentLoop.create(h.session.SessionId('core-model-auto-native'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
@@ -308,10 +312,10 @@ test('native modular core applies model-auto to its first prompt and request', {
     assert.equal(codex.requests[0].provider, 'openai-codex')
     assert.equal(codex.requests[0].model, 'gpt-6-luna')
     assert.equal(codex.requests[0].reasoningEffort, 'high')
-    assert.equal(prompts[0].model, 'gpt-6-luna')
+    assert.equal(prompts[1].model, 'gpt-6-luna')
     const headers = agent.session.snapshotEvents().filter((event: any) => event.type === 'request/header')
-    assert.equal(headers[0].data.header.config.model, 'gpt-6-luna')
-    assert.equal(headers[0].data.header.config.reasoningEffort, 'high')
+    assert.equal(headers[1].data.header.config.model, 'gpt-6-luna')
+    assert.equal(headers[1].data.header.config.reasoningEffort, 'high')
   } finally { watchErrors(); watch(); await core.dispose(); globalThis.fetch = originalFetch; await meter.dispose(); await credentials.dispose(); await questions.dispose(); await h.dispose() }
 })
 test('native README normal execution: cancel, plugin reload, original input recovery, write, verification and fresh next-task choice', {
@@ -324,7 +328,7 @@ test('native README normal execution: cancel, plugin reload, original input reco
     output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
     execute: async () => { writes++; await writeFile(join(h.root, 'README.md'), 'after\n'); assert.equal(await readFile(join(h.root, 'README.md'), 'utf8'), 'after\n'); return 'README edit verified' },
   })
-  const model = new h.mock.MockAdapter([h.mock.toolCallResponse('edit-1', 'edit_readme', {}), h.mock.textResponse('READMEを修正し、内容を検証しました。'), h.mock.textResponse('次の修正も完了しました。')])
+  const model = new h.mock.MockAdapter([h.mock.toolCallResponse('prepare-cancelled', 'prepare_requested_work', { taskType: 'debug' }), (request: any) => { assert.match(JSON.stringify(request.messages), /Execution preparation did not admit/); return h.mock.textResponse('作業を保持しました。') }, h.mock.toolCallResponse('edit-1', 'edit_readme', {}), h.mock.textResponse('READMEを修正し、内容を検証しました。'), h.mock.textResponse('次の修正も完了しました。')])
   h.ctx.llm.registerAdapter(['ordinary'], model)
   const questions = h.ctx.plugin({ name: 'selection-test-ui', apply(ctx: any) { return ctx.provide('userQuestions', { ask: async (request: any) => {
     const question = request.questions[0]; assert.equal(question.id, 'enno-execution-mode'); questionCount++
@@ -337,20 +341,22 @@ test('native README normal execution: cancel, plugin reload, original input reco
   const agent = await h.ctx.agentLoop.create(h.session.SessionId('normal-session'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
   try {
     await turn(h, agent, 'README.mdを修正してください。')
-    assert.equal(model.requests.length, 0)
+    assert.equal(model.requests.length, 2)
     assert.equal(writes, 0)
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()?.n), 0)
     await composition.dispose(); await adapter.dispose()
     adapter = createDshHostAdapter(h.ctx, options); composition = await mountDshComposition(h.ctx, adapter.host)
+    model.prepareNext('debug', 'prepare-recovered')
     await turn(h, agent, '続けてください。')
     await new Promise(resolve => setTimeout(resolve, 30))
     assert.equal(writes, 1)
     assert.equal(questionCount, 2)
-    assert.equal(model.requests.length, 2)
-    assert.ok(JSON.stringify(model.requests[0].messages).includes('README.mdを修正してください。'))
+    assert.equal(model.requests.length, 5)
+    assert.ok(JSON.stringify(model.requests[3].messages).includes('README.mdを修正してください。'))
     assert.equal(model.requests.every(r => r.provider === 'ordinary' && r.model === 'mock'), true)
     const counts = await adapter.host.runtime!.withDatabase(db => ['enno_contracts', 'dsh_turn_receipts', 'dsh_continuation_outbox'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
     assert.deepEqual(counts, [0, 0, 0])
+    model.prepareNext('debug', 'prepare-next-readme')
     await turn(h, agent, 'README.mdの追記も実装してください。')
     assert.equal(questionCount, 3)
   } finally { await composition.dispose(); await adapter.dispose(); edit(); await questions.dispose(); await h.dispose() }

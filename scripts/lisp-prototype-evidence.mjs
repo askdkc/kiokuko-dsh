@@ -19,8 +19,8 @@ export function readEvidence(events) {
       }
       if (block.type === 'text') finals.push(block.text)
     }
-    if (event.type === 'tool/result') for (const block of message?.content ?? []) {
-      if (block.type !== 'tool-result') continue
+    if (event.type === 'tool/result') for (const block of message?.role === 'tool' ? [message]
+      : (message?.content ?? []).filter(block => block.type === 'tool-result')) {
       const parts = block.content.filter(b => b.type === 'text').map(b => b.text)
       let value
       try { value = JSON.parse(parts.join('\n')) } catch { value = null }

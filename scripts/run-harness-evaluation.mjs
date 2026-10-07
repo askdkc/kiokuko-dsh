@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn, execFileSync } from 'node:child_process'
 import { readFile, mkdir, writeFile, stat, rm } from 'node:fs/promises'
+import { pathToFileURL } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { parseNodeTapSummary } from '../src/dsh/node-tap-summary.js'
 
@@ -16,10 +17,11 @@ const scenarios = [
   ['compacted-context', 'tests/dsh/integration/context-projection.test.ts', 'compaction and restart reinstate only fragments missing from the retained surface'],
   ['context-provenance', 'tests/dsh/unit/orca-request-manifest.test.ts', 'Orca metadata records current host section digests without source text or a forged user section'],
   ['native-resume', 'tests/dsh/e2e/native-agent-loop.test.ts', 'real DSH agent loop: persisted resume, verification retry, completion (text)'],
+  ['native-default-resume', 'tests/dsh/e2e/native-agent-loop.test.ts', 'real DSH agent loop: persisted resume, verification retry, completion (default_resume)'],
 ]
 // A fixture change is reviewed with this digest rather than silently changing
 // what the mandatory offline gate measures.
-const EXPECTED_FIXTURE_DIGEST = '678130624dfc76a271538ac04ead72b4ae4cba008b6fc2f14c45e60b93f375c8'
+const EXPECTED_FIXTURE_DIGEST = 'acb1a18eb295e06bb43d115c03dd379cb749167e33d16c96c4b3506385db0a15'
 const root = process.cwd()
 const reportPath = resolve(process.env.KIOKUKO_HARNESS_REPORT ?? '.artifacts/harness-report.json')
 await rm(reportPath, { force: true })
@@ -38,10 +40,10 @@ const report = { schemaVersion: 1, invocationId: randomUUID(), commit, workingTr
 
 async function run(file, name) {
   const started = performance.now()
-  const child = spawn(process.execPath, ['--import', 'tsx', '--test', '--test-reporter=tap',
+  const child = spawn(process.execPath, ['--import', resolve(root, 'tests/dsh/helpers/offline-skill-catalog.mjs'), '--import', 'tsx', '--test', '--test-reporter=tap',
     `--test-name-pattern=^${name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`, file], {
     cwd: root, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, KIOKUKO_REQUIRE_DSH_NATIVE: '1',
+    env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(resolve(root, 'tests/dsh/helpers/offline-skill-catalog.mjs')).href}`, KIOKUKO_REQUIRE_DSH_NATIVE: '1',
       ...(fixtureAvailable ? { KIOKUKO_DSH_PACKAGE_ROOT: existingRoot } : {}) },
   })
   let output = '', timedOut = false

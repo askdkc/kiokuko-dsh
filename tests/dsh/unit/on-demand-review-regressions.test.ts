@@ -36,6 +36,11 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}) {
   const session = { id: 'review-session', snapshotEvents: () => events }
   const agent = { id: 'review-agent', session }
   const admissions: DemandInput[] = []
+  let skillReads = 0
+  let releaseSkill = ctx.tools.register({ name: 'skill', parameters: { type: 'object' },
+    output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
+    execute: () => { skillReads++; return 'installed Skill body' },
+  })
   let readyTurn: number | undefined, bodies = 0, call = 0
   const intake = new OnDemandIntake({
     validate: async input => { assert.equal(input.agent, agent); assert.equal(input.agent.session, session) },
@@ -50,10 +55,12 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}) {
     output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
     execute: () => { bodies++; return 'review body' },
   })
-  t.after(async () => { await intake.dispose(); releaseProbe(); await fiber.dispose() })
+  t.after(async () => { await intake.dispose(); releaseProbe(); releaseSkill(); await fiber.dispose() })
   return {
     ctx, agent, session, events, intake, admissions,
     bodies: () => bodies,
+    skillReads: () => skillReads,
+    rebindSkill() { releaseSkill(); releaseSkill = ctx.tools.register({ name: 'skill', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => { skillReads++; return 'replacement' } }) },
     ready(turn: number) { readyTurn = turn },
     capture(messages = [human('original', 'Inspect src without changing any files.')], turn = 1) {
       return intake.capture({ agent, turn, step: 0, messages, signal: signal() })
@@ -64,6 +71,42 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}) {
     prepare() { return this.execute(TASK_PREPARE_TOOL, { taskType: 'research' }) },
   }
 }
+
+test('on-demand review: installed Skill reads need no execution intake and cannot authorize work', async t => {
+  const f = await fixture(t)
+  await f.capture([human('question', 'Explain the installed Skill.')])
+  assert.equal((await f.execute('skill')).isError, false)
+  assert.equal(f.skillReads(), 1)
+  assert.equal(f.admissions.length, 0)
+  assert.equal((await f.execute()).isError, true)
+  assert.equal(f.bodies(), 0)
+  f.rebindSkill()
+  assert.equal((await f.execute('skill')).isError, true, 'a replacement with the same name cannot borrow the native reader exception')
+  assert.equal(f.skillReads(), 1)
+})
+
+test('on-demand review: conversational Skill reads preserve native denial and exact agent scope', async t => {
+  const f = await fixture(t)
+  await f.capture()
+  assert.equal((await f.execute('skill', {}, { agent: { ...f.agent } })).isError, true)
+  const release = f.ctx.on('tools/pre-execute', async (_execution: unknown, _next: unknown) => ({ kind: 'deny', reason: 'native denial' }))
+  t.after(release)
+  assert.equal((await f.execute('skill')).isError, true)
+  assert.equal(f.skillReads(), 0)
+  assert.equal(f.admissions.length, 0)
+})
+
+test('on-demand review: resumed native ownership still requires exact ready identity for explicit preparation', async t => {
+  const f = await fixture(t, { existing: async () => true })
+  f.ready(1)
+  assert.equal(await f.capture(), false)
+  const result = await f.execute('prepare_requested_work', { taskType: 'research' })
+  assert.equal(result.isError, false)
+  assert.equal(f.admissions.length, 0, 'acknowledging exact existing admission must not open another run')
+  assert.equal((await f.execute()).isError, false)
+  f.ready(2)
+  assert.equal((await f.execute()).isError, true, 'existing ownership does not waive the current-turn guard')
+})
 
 test('on-demand review: admission receives an immutable snapshot of the complete original human batch', async t => {
   const f = await fixture(t)
@@ -162,7 +205,7 @@ test('on-demand review: an existing owner must match the exact open native turn'
   const f = await fixture(t, { existing: async () => true })
   f.ready(1)
   assert.equal(await f.capture(), false)
-  assert.equal(f.intake.snapshot(f.session.id), undefined)
+  assert.deepEqual(f.intake.snapshot(f.session.id), { task: 'Inspect src without changing any files.', taskType: null, status: 'prepared', turn: 1 })
   assert.equal((await f.execute()).isError, false)
   f.events.push(event('turn/end', 1))
   assert.equal((await f.execute()).isError, true)

@@ -93,18 +93,19 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     const task = (mode === 'research' ? '資料を調査して根拠を報告してください。' : '資料を参照して記事を書いてください。')
       + '\nread paths: src\nwrite paths: src\n完了条件: 日本語の最終報告\n> write paths: .\n{{user_braces}}\n' + '補足の文。'.repeat(1500)
     const paused = async () => adapter.host.runtime!.withDatabase(db => !!db.prepare("SELECT run_id FROM dsh_exploration_states WHERE json_extract(state_json, '$.paused') = 1").get())
+    model.prepareNext(mode === 'writing' ? 'writing' : 'research', 'prepare-initial')
     await settle(agent, task, paused)
     assert.equal(writes, 0, 'structured outside write never executed')
     assert.equal(reads, 4)
-    assert.equal(model.requests.length, 7, 'pause does not issue another model request')
+    assert.equal(model.requests.length, 8, 'pause does not issue another model request')
     const notices = () => adapter.host.runtime!.withDatabase(db => db.prepare("SELECT * FROM dsh_session_notices WHERE kind='status'").all())
     assert.equal((await notices()).length, 1)
     assert.equal(agent.session.snapshotEvents().some((event: any) => event.type === 'user/message' && event.data?.content?.some((block: any) => block.text === task)), true)
-    assert.match(JSON.stringify(model.requests[6]), /three times/)
+    assert.match(JSON.stringify(model.requests[7]), /three times/)
     const running = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status = 'active' AND dsh_session_id = 'execution-session'").get<{ id: string }>())
     assert.ok(running)
     const other = await ctx.agentLoop.create(session.SessionId('other-session'), { provider: 'execution-mock', model: 'mock' }, { cwd: root })
-    await settle(other, 'こんにちは', () => model.requests.length === 8)
+    await settle(other, 'こんにちは', () => model.requests.length === 9)
     expectedQuestions.push({ id: 'kioku-orca-recording', agentId: other.id })
     assert.deepEqual(questions, expectedQuestions, 'each session asks once, without task clarification or approval')
     assert.equal(await paused(), true, 'another session cannot clear the pause')
@@ -113,6 +114,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     try { assert.equal(stored.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(running.id)?.status, 'active') }
     finally { stored.close() }
     adapter = createDshHostAdapter(ctx, options); composition = await mountDshComposition(ctx, adapter.host)
+    model.prepareNext('research', 'prepare-resume')
     await settle(agent, '記録した根拠を使って続行してください。', () => adapter.host.runtime!.withDatabase(db =>
       db.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(running.id)?.status === 'completed'))
     assert.equal(reads, 5, 'only the explicitly resumed read ran')
@@ -130,7 +132,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     }
     assert.equal(writes, 0)
     assert.equal((await notices()).length, 1)
-    assert.equal(model.requests.length, 10)
+    assert.equal(model.requests.length, 12)
     assert.match(JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'assistant/message').at(-1)), /完了しました/)
     assert.deepEqual(questions, expectedQuestions,
       'reload preserves the recording choice and grounded research/writing adds no clarification or approval')

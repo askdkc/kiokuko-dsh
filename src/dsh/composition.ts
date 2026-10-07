@@ -1,4 +1,6 @@
+import { hasHumanInput } from './answer-review/contracts.js'
 import type { OnDemandIntake } from './on-demand-intake.js'
+import { projectDshContext } from './context-projection.js'
 import type { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
 import { mountDecisionCommand } from './decisions/host.js'
 import { mountModelAutoCommand } from './model-auto/command.js'
@@ -154,13 +156,16 @@ function mountNativeIntakeGate(
   return ctx.on('agent/pre-step', async (payload: DshNativePreStepPayload, next) => {
     if (deep?.executor.isChild(payload.agent)) return next()
     if (bypassIntake?.(payload.agent)) return next()
-    if (demand && await demand.capture(payload)) {
-      const result = await next()
-      return result.kind === 'enter' ? { ...result, messages: await demand.answerMessages(payload, result.messages) } : result
-    }
     if (await deep?.preStep(payload)) {
       void deep!.kick(payload.agent).catch(() => {})
       return { kind: 'reject', reason: 'Deep owns and has preserved this input.' }
+    }
+    if (demand && (hasHumanInput(payload.messages) || demand.pending(payload.agent) || demand.continuing(payload.agent)) && await demand.capture(payload)) {
+      const result = await next()
+      if (result.kind !== 'enter') return result
+      const previousReport = deep && payload.agent.session ? await deep.previousReport(payload.agent.session.id) : []
+      const messages = [...result.messages, ...projectDshContext(previousReport, payload.agent.session ?? {}, result.messages)]
+      return { ...result, messages: await demand.answerMessages(payload, messages) }
     }
     let mapped: DshPreStepEvent
     try { mapped = await mapPreStep(payload) } catch (error) {

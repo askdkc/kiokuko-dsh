@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
+import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { EVOLUTION_OBSERVATION_EVENT } from '../../../src/dsh/evolution-observation.js'
 
@@ -25,7 +26,7 @@ test('native result DTOs survive text-only log rendering as identity-bound episo
     }
     const nativeResults:any[]=[]
     ctx.on('tools/result',(execution:any,result:any)=>{nativeResults.push({name:execution.name,parent:typeof execution.parent,agent:execution.agent?.id,session:execution.agent?.session?.id,seq:execution.agent?.session?.seq,hasEventAt:typeof execution.agent?.session?.eventAt,value:result.value,isError:result.isError,content:result.content})})
-    const mock=nativeMock(llm),model=new mock.MockAdapter([mock.toolCallResponse('failed-check','verify',{exitCode:1}),mock.toolCallResponse('passed-check','verify',{exitCode:0}),mock.textResponse('終了しました。')])
+    const mock=nativeMock(llm),model=new mock.MockAdapter([mock.toolCallResponse('prepare-checks', TASK_PREPARE_TOOL, { taskType: 'research' }),mock.toolCallResponse('failed-check','verify',{exitCode:1}),mock.toolCallResponse('passed-check','verify',{exitCode:0}),mock.textResponse('終了しました。')])
     ctx.llm.registerAdapter(['evolution-test'],model)
     disposeTool=ctx.tools.register(tools.defineTool({name:'verify',description:'Return a typed execution result',parameters:{exitCode:{type:'number',required:true}},
       output:{schema:{type:'object',additionalProperties:false,properties:{exitCode:{type:'number',required:true}}},render:()=>[{type:'text',text:'Native execution output; the renderer omits its exit code.'}]},
@@ -43,18 +44,16 @@ test('native result DTOs survive text-only log rendering as identity-bound episo
     }}})
     composition=await mountDshComposition(ctx,adapter.host)
     const agent=await ctx.agentLoop.create(session.SessionId('evolution-native'),{provider:'evolution-test',model:'mock'},{cwd:root,delegationDepth:0})
-    agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'こんにちは'}]}))
+    agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'検証結果を調査して、失敗と成功を報告してください。'}]}))
     const deadline=Date.now()+15000
     while(Date.now()<deadline) {
-      if(agent.status==='idle'&&model.requests.length===3)break
+      if(agent.status==='idle'&&model.requests.length===4)break
       await new Promise(resolve=>setTimeout(resolve,20))
     }
     await ctx.sessions.flush(agent.session)
     await adapter.host.checkpointSessionMirror!(agent.session)
     const close=await adapter.host.resolveSessionClose!(agent.session.id,agent.session)
-    assert.ok(close)
-    const end=agent.session.snapshotEvents().findLast((e:any)=>e.type==='turn/end')
-    await adapter.host.lifecycle!.closeTurn({...close,sourceEndSeq:end.seq})
+    assert.equal(close, undefined, 'prepared ordinary work was already closed by its native completion')
     await adapter.host.memoryFinalizer!.whenIdle()
     const events=agent.session.snapshotEvents()
     assert.equal(events.filter((e:any)=>e.type===EVOLUTION_OBSERVATION_EVENT).length,0)

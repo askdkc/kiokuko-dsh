@@ -11,6 +11,7 @@ import { openConnection } from '../../../src/db/connection.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
+import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 import { nativeMock } from './native-mock.js'
 import { mockModelRoutes, modelSelectionAnswer, openaiModels } from './model-selection.js'
 import type { FinalizationInputMode } from '../../../src/dsh/efficiency.js'
@@ -225,6 +226,9 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'injected memory commit failure'); END;`))
     const response = `Completed fixture lifecycle ${number}.`
     const task = `${route === 'normal' ? '通常実行で' : '役小角を使って'}、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測を確認' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`
+    // Match the existing fixture's verification request and read-only follow-up
+    // profiles while exercising the explicit default preparation protocol.
+    script.push(mock.toolCallResponse(`prepare-${number}`, TASK_PREPARE_TOOL, { taskType: readonly ? 'debug' : 'review' }))
     if (route === 'enno') script.push(...ennoScript(mock, number, readonly).map(step => {
       const name = step.find((chunk: any) => chunk.type === 'block-end' && chunk.block.type === 'tool-call')?.block.name
       return ['enno_ideal_submit', 'enno_work_report', 'enno_finish', 'enno_meditation_submit'].includes(name) ? withMemoryReview(step, readonly, false) : step

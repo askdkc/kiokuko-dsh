@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { attachmentTypesFromMessages, nativeContextTokens } from '../model-auto/policy.js'
 import type { CompactionAgent } from '../semantic-compaction/contracts.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
-import type { ReviewAgent } from '../answer-review/contracts.js'
+import { hasHumanInput, type ReviewAgent } from '../answer-review/contracts.js'
 import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from '../execution-selection.js'
 import { ExecutionSelectionPending } from '../model-selection-ui.js'
 import { LISP_CODING_SERVICE, type LispCodingService } from '../lisp/coding-choice.js'
@@ -151,15 +151,16 @@ export function createRouting({
     let autoRoute: { runId: string; sessionId: string; binding: import('../model-configuration.js').ModelBinding } | undefined
     const disposeRouting = installDshModelRouting(agent, async signal => {
       autoRoute = undefined
+      // An armed/native Deep request owns its ingress before ordinary intake.
+      const deep = await deepPlanning.beforeAssembly(agent, signal)
+      if (deep.owned) { memoryReviewPresentation.dispose(); assemblyClaims.delete(agent); return deep.model }
       if (demand && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent) && !isGenericNativeChild(agent)) {
         const claim = assemblyClaims.get(agent)
-        if (claim && await demand.capture({ agent, messages: claim.messages, turn: claim.turn, step: 0, signal })) {
+        if (claim && hasHumanInput(claim.messages) && await demand.capture({ agent, messages: claim.messages, turn: claim.turn, step: 0, signal })) {
           assemblyClaims.delete(agent); return { kind: 'native' }
         }
         if (demand.pending(agent)) return { kind: 'native' }
       }
-      const deep = await deepPlanning.beforeAssembly(agent, signal)
-      if (deep.owned) { memoryReviewPresentation.dispose(); assemblyClaims.delete(agent); return deep.model }
       const childModel = await delegation.restoreOrPersist(agent)
       if (childModel) { memoryReviewPresentation.dispose(); await delegation.assertCurrent(agent); return childModel }
       if (isGenericNativeChild(agent)) { memoryReviewPresentation.dispose(); assemblyClaims.delete(agent); return { kind: 'native' } }

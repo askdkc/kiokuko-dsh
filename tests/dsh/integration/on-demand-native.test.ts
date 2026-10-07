@@ -187,7 +187,8 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       const fiber = ctx.plugin(createConfiguredPlugin(lispEnabled ? [{ module: lispModule, configuration: lispConfig }] : []), common)
       await fiber; core = { dispose: () => fiber.dispose() }
     } else if (mode === 'public') {
-      process.chdir(root); process.env.KIOKUKO_DATA_DIR = root
+      if (task !== 'SESSION_WORKSPACE_PROBE') process.chdir(root)
+      process.env.KIOKUKO_DATA_DIR = root
       const options = { typedDecisions: common.typedDecisions, answerReview: common.answerReview, semanticCompaction: common.semanticCompaction, modelAutoMode: common.modelAutoMode, lisp: lispConfig, orca: { enabled: false }, toolExposure: { mode: 'full' }, deepPlanning: { enabled: false }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, memoryIndexReasoning: { mode: 'off' } }
       assert.equal(Object.hasOwn(options, 'intakeMode'), false, 'public plugin config must also omit the intake option')
       assert.equal(publicPlugin.Config.parse(options).intakeMode, 'on-demand', 'public exported Config default must drive automatic installation')
@@ -332,6 +333,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
     }
   }
 }
+test('default public host: native session workspace can differ from startup cwd', { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative('public', 'text', 'SESSION_WORKSPACE_PROBE'))
 if (process.env.PR72_MATRIX_ONLY !== '1') for (const mode of ['core', 'full'] as const) {
   test(`default native ${mode}: ordinary answer recalls memory and revalidates after forgetting without an execution run`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'answer-memory', 'NATIVEMEMORYの回答設定を説明して'))
   test(`default native ${mode}: screenshot question answers without intake configuration`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'text', '富士山って日本で一番高い山?'))

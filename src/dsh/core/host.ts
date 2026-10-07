@@ -394,7 +394,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           if (selected) { memoryReviewPresentation.dispose(); return selected }
           const currentClaim = claims.get(agent)
           if (currentClaim) claims.delete(agent)
-          if (demand && currentClaim && await demand.capture({ agent, messages: currentClaim.messages, turn: currentClaim.turn, step: 0, signal })) return { kind: 'native' }
+          if (demand && currentClaim && hasHumanInput(currentClaim.messages) && await demand.capture({ agent, messages: currentClaim.messages, turn: currentClaim.turn, step: 0, signal })) return { kind: 'native' }
           if (demand?.pending(agent)) return { kind: 'native' }
           let owner = active.get(agent.session.id)
           const mode = (await modelAuto.store.session(agent.session.id)).mode
@@ -469,7 +469,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       listen('agent/pre-step', (payload: PreStep, next: () => Promise<any>) => track((async () => {
         if (stopped) return { kind: 'reject' }
         bind(payload.agent)
-        if (demand && await demand.capture(payload)) {
+        if (demand && (hasHumanInput(payload.messages) || demand.pending(payload.agent) || demand.continuing(payload.agent)) && await demand.capture(payload)) {
           const result = await next()
           return result.kind === 'enter' ? { ...result, messages: await demand.answerMessages(payload, result.messages) } : result
         }
