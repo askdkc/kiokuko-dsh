@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { digest, renderResult, RESULT_BYTES } from '../../../../src/dsh/lisp/contracts.js'
+import { digest, identifier, renderResult, RESULT_BYTES } from '../../../../src/dsh/lisp/contracts.js'
 import { lispToolSchema, ToolInput } from '../../../../src/dsh/lisp/surface.js'
 import { selectFields, validateValue } from '../../../../src/dsh/lisp/task-tools.js'
 
@@ -46,5 +46,20 @@ test('generated task tools expose object-root native schemas with their required
     assert.equal(schema.type, 'object')
     assert.equal(schema.additionalProperties, false)
     for (const field of fields) { assert.ok(schema.required.includes(field)); assert.ok(schema.properties[field]) }
+  }
+})
+
+test('hot tools expose operation IDs without provider-specific regular expressions', () => {
+  for (const name of ['lisp_hot_call', 'lisp_hot_contract', 'lisp_hot_install', 'lisp_hot_deactivate'] as const) {
+    const schema = lispToolSchema(name) as { properties: Record<string, unknown>; required: string[] }
+    assert.deepEqual(schema.properties.operationId, { type: 'string', minLength: 1, maxLength: 256 }, name)
+    assert.ok(schema.required.includes('operationId'), name)
+  }
+})
+
+test('runtime operation IDs still reject control and format characters', () => {
+  for (const value of ['call-123', '操作-1', 'x'.repeat(256)]) assert.equal(identifier.parse(value), value)
+  for (const value of ['', 'x'.repeat(257), 'op\n1', 'op\u00001', 'op\u200b1', 'op\u202e1']) {
+    assert.equal(identifier.safeParse(value).success, false, JSON.stringify(value))
   }
 })

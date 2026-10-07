@@ -383,7 +383,9 @@ export function lispToolSchema(name: LispTool): object {
     const schema = hotSchemas[name as keyof typeof hotSchemas]
     // Zod attaches a non-enumerable ~standard validator. Native DSH accepts
     // lossless JSON only; the transport receives the generated JSON schema.
-    return JSON.parse(JSON.stringify(z.toJSONSchema(name === 'lisp_hot_status' ? schema : schema.safeExtend({ operationId: identifier }), { io: 'input' }))) as object
+    // Providers may reject Unicode property escapes; execute still validates with identifier.
+    const transportSchema = name === 'lisp_hot_status' ? schema : schema.safeExtend({ operationId: z.string().min(1).max(256) })
+    return JSON.parse(JSON.stringify(z.toJSONSchema(transportSchema, { io: 'input' }))) as object
   }
   const properties: Record<string, unknown> = name === 'lisp_status' ? {} : { operationId: { type: 'string', minLength: 1, maxLength: 256 } }
   const required = Object.keys(properties)
