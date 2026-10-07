@@ -13,6 +13,53 @@ import { DshIntakeGate, type DshPreStepEvent } from '../../../src/dsh/intake-gat
 import { createDshIntakeAnswerer } from '../../../src/dsh/user-interaction.js'
 import { createStandardSkillProvider } from '../../../src/dsh/standard-skill-provider.js'
 import { DshRuntime } from '../../../src/dsh/runtime.js'
+import { layaConfig, layaReply, layaV1Reply, serveLaya } from '../helpers/laya.js'
+
+for (const kind of ['typesafe', 'nimble', 'laya-v1', 'laya-strict'] as const) test(`full gate ${kind}: a simple factual question enters without asking for its purpose`, { skip: process.platform === 'win32' && kind.startsWith('laya') }, async t => {
+  const { TypedDecisionsConfig } = await import('../../../src/dsh/decisions/config.js')
+  const { DecisionService, databaseDecisionStore } = await import('../../../src/dsh/decisions/service.js')
+  const { TypeSafeDecisionProvider, NimbleDecisionProvider } = await import('../../../src/dsh/decisions/providers.js')
+  const { LayaCoreMLDecisionProvider } = await import('../../../src/dsh/decisions/laya-coreml.js')
+  const { LayaV1DecisionProvider } = await import('../../../src/dsh/decisions/laya-v1.js')
+  const f = await makeFixture()
+  const runtime = new DshRuntime({ repositoryRoot: f.root, databasePath: f.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'), embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 } })
+  const task = '富士山って日本で一番高い山？', requests: any[] = [], asked: string[] = []
+  const choose = (id: string, choices: string[]) => id === 'task-type' ? 'chat' : choices.includes('none') ? 'none' : 'no'
+  const socket = kind.startsWith('laya') ? await serveLaya(t, request => {
+    if (request.questions?.['task-type']) requests.push(request)
+    return kind === 'laya-v1' ? layaV1Reply(request, choose) : layaReply(request, choose)
+  }) : undefined
+  const config = kind === 'laya-strict' ? layaConfig(socket!.path) : TypedDecisionsConfig.parse(kind === 'laya-v1'
+    ? { provider: 'laya-coreml', 'laya-coreml': { socketPath: socket!.path, protocol: 'v1', model: 'laya-rl-agent' } }
+    : { provider: kind, nimble: { endpoint: 'http://localhost:8000/v1/systemone', model: 'fixture' } })
+  const request: typeof fetch = async (_url, options) => {
+    const input = JSON.parse(String(options!.body))
+    if (input.questions['task-type']) requests.push(input)
+    return Response.json({ model: input.model, answers: Object.fromEntries(Object.entries(input.questions).map(([id, q]: [string, any]) => {
+      const choice = choose(id, Object.keys(q.criteria))
+      return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(c => [c, c === choice ? 1 : 0])), confidence: 1 }]
+    })) })
+  }
+  const provider = kind === 'laya-v1' ? new LayaV1DecisionProvider(config['laya-coreml']!) : kind === 'laya-strict' ? new LayaCoreMLDecisionProvider(config['laya-coreml'])
+    : kind === 'typesafe' ? new TypeSafeDecisionProvider(config.typesafe, async () => 'host-key', request) : new NimbleDecisionProvider(config.nimble, async () => undefined, request)
+  const service = new DecisionService(config, () => provider, databaseDecisionStore(runtime))
+  const answerer = createDshIntakeAnswerer({ async ask(request) { asked.push(request.questions[0].id); return { answers: [{ id: request.questions[0].id, selected: ['質問、相談、会話'] }] } } })
+  const gate = new DshIntakeGate(runtime, answerer, undefined, false, undefined, service)
+  try {
+    const input = { ...event(f.root, await catalog()), task }
+    let nativeCalls = 0
+    const result = await gate.preStep(input, async () => { nativeCalls++; return { kind: 'enter', messages: ['native'] } })
+    assert.deepEqual(asked, [], 'purpose must be resolved before asking the user')
+    assert.equal(result.kind, 'enter'); assert.equal(nativeCalls, 1)
+    const prepared = await gate.prepare(input)
+    assert.equal(prepared.admitted, true); assert.equal(prepared.prepared.intake.profile.taskType, 'chat')
+    assert.equal(prepared.prepared.intake.status, 'ready'); assert.equal(prepared.prepared.intake.question, null)
+    assert.equal(requests.length, 1, 'replayed pre-step must reuse classification')
+    const sent = requests[0]
+    assert.equal(kind.startsWith('laya') ? sent.state : sent.state.task, task)
+    assert.match(sent.questions['task-type'].criteria.chat, /question/i)
+  } finally { await runtime.close(); await rm(f.root, { recursive: true, force: true }) }
+})
 
 async function makeFixture(): Promise<{ root: string; databasePath: string }> {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-akinator-'))

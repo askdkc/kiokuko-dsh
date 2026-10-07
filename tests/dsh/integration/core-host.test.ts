@@ -100,6 +100,38 @@ test('core native path handles conversation, research, writing and project memor
   assert.equal(f.listeners.size, 0); assert.equal(f.tools.length, 0); assert.equal(f.providers.length, 0)
 })
 
+test('mounted core admits a first factual question through Laya without opening user questions', { skip: process.platform === 'win32' }, async t => {
+  const asked: string[] = [], requests: any[] = []
+  const f = await fixture({ async ask(request) { asked.push(request.questions[0].id); throw new Error('simple question must not prompt') } })
+  const socket = await serveLaya(t, request => {
+    if (request.questions?.['task-type']) requests.push(request)
+    return layaV1Reply(request, (id, choices) => id === 'task-type' ? 'chat' : choices.includes('none') ? 'none' : 'no')
+  })
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
+    typedDecisions: { provider: 'laya-coreml', 'laya-coreml': { socketPath: socket.path, protocol: 'v1', model: 'laya-rl-agent' } } })
+  try {
+    const task = '富士山って日本で一番高い山？'
+    const messages = [{ role: 'user', content: [{ type: 'text', text: task }], source: { kind: 'user' } }]
+    let calls = 0
+    const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, turn: 1, step: 0, messages, signal: new AbortController().signal }, async () => {
+      calls++; return { kind: 'enter', messages }
+    })
+    assert.equal(result.kind, 'enter'); assert.equal(calls, 1); assert.deepEqual(asked, [])
+    assert.equal(result.messages[0], messages[0])
+    assert.ok(result.messages.slice(1).some((message: any) => message.source?.kind === 'plugin:kiokuko-dsh'))
+    assert.equal(requests.length, 1); assert.equal(requests[0].state, task)
+    const db = openConnection(join(f.root, 'memory.sqlite3'))
+    try {
+      const intake = db.prepare('SELECT profile_json, status, question_count FROM akinator_sessions').get()!
+      assert.equal(JSON.parse(String(intake.profile_json)).taskType, 'chat')
+      assert.equal(intake.status, 'ready'); assert.equal(intake.question_count, 0)
+      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 1)
+      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get()?.count, 0)
+      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM dsh_lisp_sessions').get()?.count, 0)
+    } finally { db.close() }
+  } finally { await handle.dispose(); await f.cleanup() }
+})
+
 test('core model-auto intake runs before first prompt assembly and pre-step reuses the exact run', async () => {
   const f = await fixture(), commands: any[] = [], agentHooks = new Map<string, Function>()
   ;(f.agent as any).ctx = { on(name: string, listener: Function) { agentHooks.set(name, listener); return () => { agentHooks.delete(name) } } }

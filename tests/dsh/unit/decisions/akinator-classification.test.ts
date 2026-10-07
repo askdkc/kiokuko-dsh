@@ -10,7 +10,29 @@ const signal = () => new AbortController().signal
 for (const task of ['Fix the failing parser', '調査結果を要約して', 'このバグを直して']) test(`eligible current direct request is complete: ${task}`, () => {
   const batch = buildAkinatorClassificationBatch(task)!
   assert.equal(batch.state, task)
-  assert.deepEqual((batch.questions[0] as any).choices.map((choice: any) => choice.id), ['debug', 'research', 'writing', 'abstain'])
+  assert.deepEqual((batch.questions[0] as any).choices.map((choice: any) => choice.id), ['debug', 'research', 'writing', 'chat', 'abstain'])
+})
+for (const task of ['富士山って日本で一番高い山？', '富士山は日本で一番高い山ですか', '富士山の高さを教えて', 'Is Mount Fuji the highest mountain in Japan?', 'Why is the sky blue?', 'Is Mount Fuji not the highest mountain in Japan?', 'Are cats and dogs mammals?']) test(`a single question is offered to Laya without guessing its type: ${task}`, () => {
+  const batch = buildAkinatorClassificationBatch(task)!
+  assert.equal(batch?.state, task)
+  assert.ok((batch.questions[0] as any).choices.some((choice: any) => choice.id === 'chat'))
+})
+test('questions with embedded instructions, source material or unresolved alternatives remain deferred', () => {
+  for (const task of ['富士山は高い？ コードを修正して', 'Is Fuji tall? Fix the parser.', 'Which task?\nFix the parser', '「Fix the parser?」を翻訳して', 'デバッグするか調査するかまだ迷っています？'])
+    assert.equal(buildAkinatorClassificationBatch(task), undefined, task)
+})
+test('a question is not forced to chat when Laya selects research or abstains', async () => {
+  for (const choice of ['research', 'abstain']) {
+    let calls = 0
+    const service = new DecisionService(configuration(), () => ({ capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 }, evaluate: async batch => {
+      calls++
+      return { provider: 'laya-coreml', requestedModel: 'laya-rl-agent', policyVersion: 'fixture', answers: batch.questions.map(q => choice === 'abstain'
+        ? { id: q.id, status: 'abstained', reason: 'uncertain' } : { id: q.id, status: 'selected', choiceId: choice }) }
+    } }))
+    const classified = await classifyTaskForIntake(service, 'question', 'What sources explain this bug?', undefined, signal())
+    assert.equal(calls, 1)
+    assert.deepEqual(classified, choice === 'abstain' ? { deferInference: true } : { taskType: 'research', deferInference: false })
+  }
 })
 test('quotes, negation, combined intent, build/chat, harmless conjunction and prior-turn requests retain the question', () => {
   for (const task of ['Fix `bug.ts`', 'Do not fix this issue', 'Fix and deploy the application', 'Build a compiler', 'hello', 'yes', '続けて', 'Fix the parser and its tests', 'デバッグするか調査するかまだ迷っています', 'x'.repeat(513)])

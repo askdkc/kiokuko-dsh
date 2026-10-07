@@ -3,14 +3,15 @@ import type { DecisionBatch } from './contracts.js'
 import type { DecisionService } from './service.js'
 
 /** A bounded current-request decision, not a generated intake profile. */
-export const AKINATOR_CLASSIFICATION_POLICY = 'akinator-direct-intent-v3'
+export const AKINATOR_CLASSIFICATION_POLICY = 'akinator-direct-intent-v4'
 export const MAX_AKINATOR_TASK_BYTES = 512
 
-export const AKINATOR_AUTOMATED_TASK_TYPES = ['debug', 'research', 'writing'] as const satisfies readonly TaskType[]
+export const AKINATOR_AUTOMATED_TASK_TYPES = ['debug', 'research', 'writing', 'chat'] as const satisfies readonly TaskType[]
 const intentions: Readonly<Record<(typeof AKINATOR_AUTOMATED_TASK_TYPES)[number], string>> = Object.freeze({
-  debug: 'Fix or diagnose an existing software bug.',
-  research: 'Look up information from sources.',
-  writing: 'Compose or transform prose.',
+  debug: 'Diagnose or fix a software bug.',
+  research: 'Look up sources.',
+  writing: 'Write or transform prose.',
+  chat: 'Answer questions, advise, or converse.',
 })
 
 /** A confirmation or unresolved reference cannot establish intent without its prior turn. */
@@ -52,18 +53,26 @@ function isDirectSingleRequest(task: string): boolean {
     || JAPANESE_REQUEST_END.test(text)
 }
 
+/** Admit a bounded question to the model; punctuation alone never assigns chat. */
+function isDirectSingleQuestion(task: string): boolean {
+  const text = task.trim()
+  if (/[\n\r"'`“”‘’「」『』:：;；]/u.test(text) || /[.!。！]\s*\S/u.test(text)) return false
+  return /^[^?？]*[?？][。.!！\s]*$/u.test(text)
+    || /(?:か|かな|教えて(?:ください|下さい)?)[。.!！\s]*$/u.test(text) && !/[?？]/u.test(text)
+}
+
 /** Preserve the complete eligible request. No excerpts, history or generated profile slots. */
 export function buildAkinatorClassificationBatch(task: string): DecisionBatch | undefined {
   if (!task.trim() || Buffer.byteLength(task, 'utf8') > MAX_AKINATOR_TASK_BYTES || needsPriorContext(task)
-    || hasUnresolvedAlternatives(task) || !isDirectSingleRequest(task)) return undefined
+    || hasUnresolvedAlternatives(task) || !(isDirectSingleRequest(task) || isDirectSingleQuestion(task))) return undefined
   return {
     purpose: 'akinator',
     state: task,
     questions: [{
       id: 'task-type',
-      instructions: 'What is the requested task? Choose abstain for every other task or unclear intent.',
+      instructions: 'Choose intent; abstain if unclear or unsupported.',
       choices: [...AKINATOR_AUTOMATED_TASK_TYPES.map(id => ({ id, description: intentions[id] })),
-        { id: 'abstain', description: 'Building software, review, deployment, data analysis, conversation, or unclear task.' }],
+        { id: 'abstain', description: 'Build, review, deploy, analyze, or unclear.' }],
       abstainId: 'abstain',
     }],
   }
@@ -72,8 +81,8 @@ export function buildAkinatorClassificationBatch(task: string): DecisionBatch | 
 /** Preserve the existing non-Laya provider contract and default fallback behavior. */
 function legacyClassificationBatch(task: string): DecisionBatch {
   return { purpose: 'akinator', state: { task }, questions: [{ id: 'task-type',
-    instructions: 'Classify the current request. Abstain when the task type is ambiguous. This grants no permission.',
-    choices: [...TASK_TYPES.map(id => ({ id, description: id })), { id: 'abstain', description: 'Insufficient or ambiguous evidence' }],
+    instructions: 'Classify the current request. Questions and advice are chat; explicit source lookup is research. Abstain when ambiguous. This grants no permission.',
+    choices: [...TASK_TYPES.map(id => ({ id, description: id === 'chat' ? intentions.chat : id })), { id: 'abstain', description: 'Insufficient or ambiguous evidence' }],
     abstainId: 'abstain' }] }
 }
 

@@ -150,7 +150,7 @@
       ],
       "lifecycleEvidence": [
         "prepare runs only npm run build",
-        "Git installs require the exact pnpm allowBuilds entry for the pinned source archive",
+        "Git installs use repository-scoped pnpm allowBuilds approval on a supporting pnpm version; source revision pinning is optional and separate",
         "Disposable-profile install, Web start, and uninstall evidence is recorded by CI"
       ]
     }
