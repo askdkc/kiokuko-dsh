@@ -375,3 +375,5 @@ independent: no automatic deletion. Call bindings count toward the record limit.
 For API examples see [the bundled Skill](../skills/kiokuko-lisp/SKILL.md).
 
 Verification scope and installed Web reproduction: [verification record](lisp-verification.md).
+
+Native `ask_user_question` and `exit_plan_mode` remain available in both Lisp modes. Plan approval uses the DSH review UI and does not remove Lisp protection. Run `npm run test:lisp:plan:web` for a disposable packed-package Web check without model credentials.

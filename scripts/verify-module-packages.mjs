@@ -14,8 +14,8 @@ await access(join(nativeRoot, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-module-pack-'))
 const env = { ...process.env, npm_config_cache: join(work, 'cache') }
 delete env.NODE_TEST_CONTEXT
-async function command(executable, args, cwd) {
-  try { return await exec(executable, args, { cwd, env, maxBuffer: 16 * 1024 * 1024, timeout: 60_000 }) }
+async function command(executable, args, cwd, extraEnv = {}) {
+  try { return await exec(executable, args, { cwd, env: { ...env, ...extraEnv }, maxBuffer: 16 * 1024 * 1024, timeout: 60_000 }) }
   catch (error) { process.stderr.write(error.stdout ?? ''); process.stderr.write(error.stderr ?? ''); throw error }
 }
 async function pack(directory, destination) {
@@ -86,6 +86,7 @@ try {
     await isolatedDependencies(consumer, { '@types/node': '*' })
     await writeFile(join(consumer, 'consumer.mts'), "import { createConfiguredPlugin, DshModules } from 'kiokuko-dsh/core'\nconst plugin = createConfiguredPlugin([])\nvoid plugin.Config.parse({})\nvoid new DshModules([], [])\n")
     await command(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--target', 'ES2023', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--types', 'node', 'consumer.mts'], consumer)
+    if (configuration.includes('lisp')) await command(process.execPath, [join(root, 'scripts/run-tests.mjs'), 'tests/dsh/integration/lisp/plan-surface.test.ts'], root, { KIOKUKO_DSH_PACKAGE_ROOT: nativeRoot, KIOKUKO_REQUIRE_DSH_NATIVE: '1', KIOKUKO_LISP_PLAN_ENTRY: join(consumer, 'dist/dsh/lisp/surface.js') })
     const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, nativeRoot, combination], consumer)
     const result = smoke.stdout.trim().split('\n').map(line => { try { return JSON.parse(line) } catch { return null } }).find(value => value?.combination === combination)
     assert.equal(result?.status, 'passed')

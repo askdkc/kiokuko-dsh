@@ -200,6 +200,7 @@
     "test:lisp:prototype-planning": "node --import tsx scripts/run-lisp-prototype-planning.mjs",
     "test:lisp:efficiency": "node --import tsx scripts/run-lisp-efficiency.mjs",
     "test:lisp:web": "node scripts/verify-lisp-web.mjs",
+    "test:lisp:plan:web": "npm run build && node scripts/verify-lisp-plan-web.mjs",
     "test:diff-review:web": "node scripts/verify-diff-review-web.mjs",
     "test:skill-prompts": "node scripts/run-tests.mjs tests/dsh/unit/skill-compiler.test.ts tests/dsh/unit/skill-snapshot.test.ts",
     "test:skill-delivery": "npm run build && node scripts/run-skill-delivery.mjs",
