@@ -11,35 +11,9 @@ not remove files or dependencies from an installed full package.
 
 ## Compatibility
 
-The `dsh-tui` profile is supported for the DSH-native core on the pinned DSH
-`0.1.7-rc.2` / dsh-TUI `0.11.1` combination. The packed-plugin test installs
-both packages in a disposable profile, verifies the native Skill, tool, command,
-agent and session services, executes a session-required command rejection,
-creates and releases a native session, checks a missing-service failure, and
-confirms removal restores the original profile. It does not make the browser
-client available in the terminal, exercise an interactive PTY conversation, or
-call a model provider. The `client.platform: web` declaration remains Web-only.
-The shared patch emits `patch: entry "session-log-download" not found` in the TUI
-profile because that Web stock export entry is absent; the test accepts this
-specific warning and rejects other unmatched patches.
+The current runtime target is **DSH 0.2.0-rc.2**. The prior **0.1.7-rc.2** runtime remains pinned in `tests/fixtures/dsh-runtime-0.1.7`. The earlier **0.1.6-alpha.1** source checkout at `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720` also passed its disposable-profile and 63 history checks.
 
-With the DSH CLI and dsh-TUI installed, add Kiokuko to that profile:
-
-```sh
-dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@0.11.1
-dsh plugin --profile dsh-tui add kiokuko-dsh
-dsh --profile dsh-tui --dump-config
-dsh --profile dsh-tui
-```
-
-The profile needs its own plugin installation. Installing Kiokuko into `web`
-does not install it into `dsh-tui`. The test command is
-`npm run test:e2e:dsh:tui`; it requires the pinned fixture dependencies and
-pnpm. It does not use credentials or the user's profile.
-
-The current runtime target is **DSH 0.2.0-rc.2**. The prior **0.1.7-rc.2** runtime remains pinned in `tests/fixtures/dsh-runtime-0.1.7`, and the TUI lifecycle fixture still exercises DSH 0.1.7-rc.2 with dsh-TUI 0.11.1. The earlier **0.1.6-alpha.1** source checkout at `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720` also passed its disposable-profile and 63 history checks.
-
-CI keeps the pinned DSH 0.1.5-rc.1 fixture for legacy-history and Web lifecycle coverage. The DSH 0.2.0-rc.2 job runs the full suite, native routing/history coverage, and packed Web lifecycle; its TUI core lifecycle step uses the separate pinned DSH 0.1.7-rc.2 / dsh-TUI 0.11.1 fixture. The historical source-repair CLI tests deliberately use the legacy catalog that accepted v0/v3 fixtures. Local tests do not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
+CI keeps the pinned DSH 0.1.5-rc.1 fixture for legacy-history and Web lifecycle coverage. The DSH 0.2.0-rc.2 job runs the full suite, native routing/history coverage, and packed Web lifecycle. The historical source-repair CLI tests deliberately use the legacy catalog that accepted v0/v3 fixtures. Local tests do not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
 
 ## Model tool exposure
 
