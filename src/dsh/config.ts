@@ -1,3 +1,4 @@
+import { IntakeModeConfig } from './intake-mode.js'
 import { MemoryIndexReasoningConfig } from '../memory/index-reasoning/contracts.js'
 import { ObservationPackConfig } from './observation-pack/policy.js'
 import { SemanticCompactionConfig } from './semantic-compaction/contracts.js'
@@ -76,6 +77,7 @@ export const DiffReviewConfig = z.object({
 export type DiffReviewConfig = z.infer<typeof DiffReviewConfig>
 /** Runtime configuration accepted by the dsh bundle entrypoint. */
 export const Config = z.object({
+  intakeMode: IntakeModeConfig,
   enabled: z.boolean().default(true),
   skillPrompts: SkillPromptsConfig.prefault({}),
   lisp: LispConfig.prefault({}),

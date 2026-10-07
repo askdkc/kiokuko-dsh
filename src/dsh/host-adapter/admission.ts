@@ -1,3 +1,4 @@
+import type { TaskType } from '../../akinator/types.js'
 import { createTurnState, policyState } from '../host-adapter/turn-state.js'
 import { bindMemoryApplication, memoryRetrievalStatus } from '../../memory/application.js'
 import { createMemoryReuseRuntime } from '../memory-reuse.js'
@@ -96,7 +97,7 @@ interface AdmissionDependencies {
 
 interface AdmissionOwner {
   readonly gate: DshIntakeGate
-  readonly mapPreStep: (payload: DshNativePreStepPayload) => Promise<DshPreStepEvent>
+  readonly mapPreStep: (payload: DshNativePreStepPayload, advisoryType?: TaskType) => Promise<DshPreStepEvent>
   readonly clear: () => void
 }
 
@@ -658,7 +659,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
     if (decision?.executionLease) turnState.stageLease(runId, decision.executionLease)
     return { admitted: !event.signal.aborted, prepared, catalog: event.capabilities }
   })
-  const mapPreStep = async (payload: DshNativePreStepPayload): Promise<DshPreStepEvent> => {
+  const mapPreStep = async (payload: DshNativePreStepPayload, advisoryType?: TaskType): Promise<DshPreStepEvent> => {
     const nativeSession = payload.agent.session
     const registered = nativeSession === undefined && payload.agent.sessionId === undefined
       ? sessions?.get(payload.agent.id)
@@ -694,6 +695,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
     const task = bound?.task ?? (reviewing && previous ? previous.task : textFromMessages(payload.messages, previous?.task))
     let profile = (() => {
       if (bound !== undefined) return bound.profileHints
+      if (advisoryType) return { taskType: advisoryType }
       if (reviewing && previous) return previous.profileHints
       if (previous === undefined) return undefined
       const inferred = resolveGroundedIntakeProfile({ task, cwd }).profileHints.taskType
@@ -707,7 +709,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       // This profile is inherited from a previous turn, not a current user choice.
       // Let Laya assess new work, but retain the user's chat choice for an
       // ambiguous continuation instead of asking the same classification again.
-      const explicit = configuration?.provider === 'laya-coreml' && profile?.taskType !== 'chat' ? undefined : profile?.taskType
+      const explicit = advisoryType ?? (configuration?.provider === 'laya-coreml' && profile?.taskType !== 'chat' ? undefined : profile?.taskType)
       const classification = await classifyTaskForIntake(decisions, requestId, task, explicit, payload.signal)
       deferTaskTypeInference = classification.deferInference
       if (classification.taskType) profile = { ...profile, taskType: classification.taskType }

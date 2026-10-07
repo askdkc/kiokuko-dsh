@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
@@ -15,22 +16,81 @@ import { synchronizeConfiguredSkills } from '../../../src/dsh/core/deployment.js
 import { compileSkillBundle } from '../../../src/dsh/skill-compiler.js'
 import { pathToFileURL } from 'node:url'
 import { layaV1Reply, serveLaya } from '../helpers/laya.js'
+import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
+
+function scopedHooks() {
+  const listeners = new Map<string, Function>(), handlers = new Map<string, Function[]>()
+  return { listeners, on(name: string, callback: Function, options?: { prepend?: boolean }) {
+    const registered = handlers.get(name) ?? []
+    if (options?.prepend) registered.unshift(callback); else registered.push(callback)
+    handlers.set(name, registered)
+    listeners.set(name, (...args: any[]) => {
+      if (typeof args.at(-1) === 'function') {
+        const terminal = args.pop()
+        const dispatch = (index: number): any => registered[index] ? registered[index]!(...args, () => dispatch(index + 1)) : terminal()
+        return dispatch(0)
+      }
+      return Promise.all(registered.map(handler => handler(...args)))
+    })
+    return () => { registered.splice(registered.indexOf(callback), 1); if (!registered.length) { handlers.delete(name); listeners.delete(name) } }
+  } }
+}
 
 async function fixture(questions?: { ask(request: any): Promise<any> }) {
   const directory = await mkdtemp(join(tmpdir(), 'kiokuko-core-')), root = realpathSync(directory)
   const listeners = new Map<string, Function>(), tools: any[] = [], providers: any[] = [], sections: any[] = []
-  const events: any[] = []
+  const events: any[] = [], guards: Function[] = []
+  const handlers = new Map<string, Function[]>()
   const session = { id: 'core-session', header: { cwd: root }, snapshotEvents: () => events }, agent = { id: 'core-agent', session }
   const services: Record<string, any> = {
     sessions: { get: (id: string) => id === session.id ? session : undefined, async flush() {} },
     agents: { get: (id: string) => id === agent.id ? agent : undefined },
     skills: { registerProvider(create: Function) { const provider = create({ signal: new AbortController().signal }); providers.push(provider); return () => { providers.splice(providers.indexOf(provider), 1) } }, async snapshot() { return { complete: true, skills: (await Promise.all(providers.map(provider => provider.list({})))).flatMap(result => result.candidates) } } },
-    tools: { guard: () => () => {}, schemas: () => tools.map(({ name, description }) => ({ name, description })), register(tool: any) { tools.push(tool); return () => { tools.splice(tools.indexOf(tool), 1) } } },
+    tools: {
+      get(name: string, scope?: unknown) { return scope && scope !== agent ? undefined : tools.find(tool => tool.name === name) },
+      guard(guard: Function) { guards.push(guard); return () => { guards.splice(guards.indexOf(guard), 1) } },
+      schemas: () => tools.map(({ name, description }) => ({ name, description })), register(tool: any) { tools.push(tool); return () => { tools.splice(tools.indexOf(tool), 1) } } },
     systemPrompt: { section(section: any) { sections.push(section); return () => { sections.splice(sections.indexOf(section), 1) } } },
     ...(questions ? { userQuestions: questions } : {}),
   }
-  const ctx = { get: (name: string) => services[name], on(name: string, callback: Function) { listeners.set(name, callback); return () => { listeners.delete(name) } } } as unknown as Context
-  return { root, ctx, agent, session, events, listeners, tools, sections, providers, services, async cleanup() { await rm(root, { recursive: true, force: true }) } }
+  const ctx = { get: (name: string) => services[name], on(name: string, callback: Function, options?: { prepend?: boolean }) {
+    const registered = handlers.get(name) ?? []
+    if (options?.prepend) registered.unshift(callback); else registered.push(callback)
+    handlers.set(name, registered)
+    listeners.set(name, (...args: any[]) => {
+      if (name === 'agent/pre-step' && events.filter(event => event.type === 'turn/start').at(-1)?.data.turn !== args[0].turn) events.push({ type: 'turn/start', data: { turn: args[0].turn } })
+      if (typeof args.at(-1) === 'function') {
+        const terminal = args.pop()
+        const dispatch = (index: number): any => registered[index] ? registered[index]!(...args, () => dispatch(index + 1)) : terminal()
+        return dispatch(0)
+      }
+      return Promise.all(registered.map(handler => handler(...args)))
+    })
+    return () => { registered.splice(registered.indexOf(callback), 1); if (!registered.length) { handlers.delete(name); listeners.delete(name) } }
+  } } as unknown as Context
+  let callId = 0
+  const execute = async (name: string, args: unknown, signal = new AbortController().signal) => {
+    const definition = services.tools.get(name, agent)
+    assert.ok(definition, `native fixture must register ${name}`)
+    const execution = { callId: `core-call-${++callId}`, name, arguments: args, agent, signal }
+    const decision = await listeners.get('tools/pre-execute')?.(execution, async () => ({ kind: 'allow' }))
+    if (decision?.kind === 'deny' || decision?.kind === 'cancel') throw new Error(decision.reason ?? 'Native policy cancelled')
+    for (const guard of guards) { const reason = guard(execution); if (reason) throw new Error(reason) }
+    const body = () => definition.execute(args, execution)
+    return listeners.has('tools/execute') ? listeners.get('tools/execute')!(execution, body) : body()
+  }
+  return { root, ctx, agent, session, events, listeners, tools, sections, providers, services, execute,
+    prepare: (taskType = 'research', signal?: AbortSignal) => execute(TASK_PREPARE_TOOL, { taskType }, signal),
+    async event(event: any) { events.push(event); await listeners.get('session/event')?.(session, event) },
+    async cleanup() { await rm(root, { recursive: true, force: true }) } }
+
+}
+
+// Exercise legacy module-driven intake questions after explicit model demand. The module
+// owns its profile policy and deliberately requires a fresh task-type answer.
+const requireIntakeChoice: DshModule<CoreModuleHost> = {
+  id: 'fixture-intake-choice', coreVersion: 1, requires: [], configure: value => value,
+  async mount({ host, defer }) { defer(host.beforeTask(async () => ({ taskType: null }))); return { stopIngress() {}, async drain() {}, async dispose() {} } },
 }
 
 test('mounted core gates actionable memory and exposes a session-bound diagnostic after interrupted completion', async () => {
@@ -42,18 +102,20 @@ test('mounted core gates actionable memory and exposes a session-bound diagnosti
     const workspace = db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
     recordEntry(db, { workspace, kind: 'lesson', title: 'code migration expectations', body: 'code migration expectations must include the next migration.', createdBy: 'fixture' })
     db.close()
+    let mutated = false
+    f.services.tools.register({ name: 'Edit', execute() { mutated = true } })
     const messages = [{ role: 'user', content: 'Implement code migration expectations' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    await f.prepare('build')
     const execution = { callId: 'write', name: 'Edit', arguments: {}, agent: f.agent, signal: new AbortController().signal }
-    let mutated = false
-    await assert.rejects(f.listeners.get('tools/pre-execute')!(execution, async () => { mutated = true }), /resolve memory decisions/)
+    await assert.rejects(f.execute('Edit', {}), /resolve memory decisions/)
     assert.equal(mutated, false)
     const tool = f.tools.find(tool => tool.name === 'task_memory_review')
     const status = await tool.execute({ action: 'status' }, { ...execution, name: 'task_memory_review' })
     assert.equal(status.ready, false)
     assert.equal(status.pending[0].problem, 'decision_missing')
     await assert.rejects(tool.execute({ action: 'status' }, { ...execution, name: 'task_memory_review', agent: { ...f.agent } }), /identity/)
-    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+    await f.event({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
     await f.listeners.get('agent/idle')!({ agent: f.agent })
     const command = commands.find(command => command.name === 'kioku-memory-application')
     const result = await command.handler({ agent: f.agent, rawInput: 'status --json', signal: execution.signal })
@@ -71,7 +133,7 @@ test('core native path handles conversation, research, writing and project memor
   const f = await fixture()
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
   try {
-    assert.equal(f.sections.length, 1)
+    assert.equal(f.sections.length, 2)
     assert.doesNotMatch(f.sections[0].text, /\| `kiokuko-enno-oduno`|\| `kiokuko-single-purpose-functions`/)
     assert.deepEqual((await f.providers[0].list({})).candidates.map((item: any) => item.name), ['kiokuko-soul', 'memory-reasoning', 'natural-japanese-output'])
     const db = openConnection(join(f.root, 'memory.sqlite3'))
@@ -88,19 +150,20 @@ test('core native path handles conversation, research, writing and project memor
       assert.ok(output.messages.slice(1).some((message: any) => message.source?.kind === 'plugin:kiokuko-dsh'))
       assert.ok(output.messages.every((message: any) => message.source?.kind !== 'plugin'))
       if (index === 2) assert.match(JSON.stringify(output.messages), /見出しを短くする/)
-      f.events.push({ type: 'turn/end', data: { turn: index + 1, reason: { kind: 'completed' } } })
+      await f.event({ type: 'turn/end', data: { turn: index + 1, reason: { kind: 'completed' } } })
       await f.listeners.get('agent/idle')!({ agent: f.agent })
     }
     const after = openConnection(join(f.root, 'memory.sqlite3'))
     assert.equal(after.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get()?.count, 0)
     assert.equal(after.prepare('SELECT COUNT(*) AS count FROM dsh_lisp_sessions').get()?.count, 0)
-    assert.equal(after.prepare("SELECT COUNT(*) AS count FROM ledger_runs WHERE status='completed'").get()?.count, 3)
+    assert.equal(after.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 0)
+    assert.equal(after.prepare('SELECT COUNT(*) AS count FROM akinator_sessions').get()?.count, 0)
     after.close()
   } finally { await handle.dispose(); await f.cleanup() }
   assert.equal(f.listeners.size, 0); assert.equal(f.tools.length, 0); assert.equal(f.providers.length, 0)
 })
 
-test('mounted core admits a first factual question through Laya without opening user questions', { skip: process.platform === 'win32' }, async t => {
+test('mounted core answers a first factual question through Laya without execution intake', { skip: process.platform === 'win32' }, async t => {
   const asked: string[] = [], requests: any[] = []
   const f = await fixture({ async ask(request) { asked.push(request.questions[0].id); throw new Error('simple question must not prompt') } })
   const socket = await serveLaya(t, request => {
@@ -122,19 +185,17 @@ test('mounted core admits a first factual question through Laya without opening 
     assert.equal(requests.length, 1); assert.equal(requests[0].state, task)
     const db = openConnection(join(f.root, 'memory.sqlite3'))
     try {
-      const intake = db.prepare('SELECT profile_json, status, question_count FROM akinator_sessions').get()!
-      assert.equal(JSON.parse(String(intake.profile_json)).taskType, 'chat')
-      assert.equal(intake.status, 'ready'); assert.equal(intake.question_count, 0)
-      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 1)
+      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM akinator_sessions').get()?.count, 0)
+      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 0)
       assert.equal(db.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get()?.count, 0)
       assert.equal(db.prepare('SELECT COUNT(*) AS count FROM dsh_lisp_sessions').get()?.count, 0)
     } finally { db.close() }
   } finally { await handle.dispose(); await f.cleanup() }
 })
 
-test('core model-auto intake runs before first prompt assembly and pre-step reuses the exact run', async () => {
-  const f = await fixture(), commands: any[] = [], agentHooks = new Map<string, Function>()
-  ;(f.agent as any).ctx = { on(name: string, listener: Function) { agentHooks.set(name, listener); return () => { agentHooks.delete(name) } } }
+test('core model-auto leaves first prompt unprepared and reuses an explicitly prepared run', async () => {
+  const f = await fixture(), commands: any[] = [], scope = scopedHooks(), agentHooks = scope.listeners
+  ;(f.agent as any).ctx = { on: scope.on }
   f.services.commands = { register(command: any) { commands.push(command); return () => commands.splice(commands.indexOf(command), 1) } }
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
     modelAutoMode: { mode: 'auto' }, typedDecisions: { mode: 'off' } })
@@ -147,11 +208,13 @@ test('core model-auto intake runs before first prompt assembly and pre-step reus
       ({ variables: { provider: 'ordinary', model: 'original' }, sections: [], contexts: [] }))
     assert.equal(assembled.variables.model, 'original')
     const db = openConnection(join(f.root, 'memory.sqlite3'))
-    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 1)
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 0)
     db.close()
     const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [message], turn: 1, step: 0, signal },
       async () => ({ kind: 'enter', messages: [message] }))
     assert.equal(result.kind, 'enter')
+    await f.prepare('research')
+    await agentHooks.get('system-prompt/assemble')!({}, { signal }, async () => ({ variables: { provider: 'ordinary', model: 'original' }, sections: [], contexts: [] }))
     const after = openConnection(join(f.root, 'memory.sqlite3'))
     assert.equal(after.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 1)
     after.close()
@@ -159,18 +222,22 @@ test('core model-auto intake runs before first prompt assembly and pre-step reus
   } finally { await handle.dispose(); await f.cleanup() }
 })
 
-test('core PTC mode prepares memory before assembly and exposes direct review until decided', async () => {
-  const f = await fixture(), hooks = new Map<string, Function>()
-  let presentation: 'ptc' | 'native' = 'ptc'
+test('core PTC mode exposes memory review only after requested work is prepared', async () => {
+  const f = await fixture(), scope = scopedHooks(), hooks = scope.listeners
+  // Keep the application binding and native cwd on the same exact repository.
+  execFileSync('git', ['init', '--quiet'], { cwd: f.root })
+  let programs = 0
+  f.services.tools.register({ name: 'run_code', description: 'Execute a fixture program', execute() { programs++; return { ran: true } } })
+  let presentation: 'ptc' | 'both' = 'ptc'
   f.services.tools.modeFor = () => presentation
-  f.services.tools.presentAs = (mode: 'native') => {
-    assert.equal(mode, 'native')
+  f.services.tools.presentAs = (mode: 'both') => {
+    assert.equal(mode, 'both')
     presentation = mode
     return () => { presentation = 'ptc' }
   }
   ;(f.agent as any).ctx = {
     get: (name: string) => f.services[name],
-    on(name: string, listener: Function) { hooks.set(name, listener); return () => { hooks.delete(name) } },
+    on: scope.on,
   }
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
     modelAutoMode: { mode: 'off' }, typedDecisions: { mode: 'off' } })
@@ -185,20 +252,32 @@ test('core PTC mode prepares memory before assembly and exposes direct review un
     hooks.get('agent/inbox/claimed')!({ agent: f.agent, turn: 1, message })
     const routingAssemble = hooks.get('system-prompt/assemble')!
     const assemble = () => routingAssemble({}, { signal: new AbortController().signal },
-      async () => ({ variables: {}, sections: [], contexts: [] }))
-    await assemble()
-    assert.equal(presentation, 'native')
-    const review = f.tools.find(tool => tool.name === 'task_memory_review')
-    const execution = { callId: 'review-status', name: 'task_memory_review', agent: f.agent, signal: new AbortController().signal }
-    const status = await review.execute({ action: 'status' }, execution)
+      async () => ({ variables: {}, sections: [], contexts: [], tools: presentation === 'ptc' ? [{ name: 'run_code' }] : f.services.tools.schemas(f.agent) }))
+    const initial = await assemble()
+    assert.deepEqual(initial.tools.map((tool: any) => tool.name), ['run_code'])
+    assert.equal(presentation, 'ptc', 'ordinary first assembly must not prepare execution')
+    await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [message], turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [message] }))
+    const prepared = await f.execute('run_code', { description: 'Prepare requested work only', code: 'return await tools.prepare_requested_work({"taskType":"build"})' })
+    assert.equal(prepared.isError, false)
+    assert.equal(prepared.value.result.prepared, true)
+    assert.equal(programs, 0, 'the preparation-only carrier must not execute a program')
+    const pendingAssembly = await assemble()
+    assert.equal(presentation, 'both')
+    assert.ok(pendingAssembly.tools.some((tool: any) => tool.name === 'task_memory_review'), 'pending memory decisions must expose direct native review')
+    const status = await f.execute('task_memory_review', { action: 'status' })
     assert.equal(status.pending[0]?.problem, 'decision_missing')
-    await review.execute({ action: 'review', review: { generation: status.generation, entryId: status.pending[0].entryId,
+    await assert.rejects(f.execute('run_code', { description: 'Attempt work before review', code: 'return "must not run"' }), /resolve memory decisions/)
+    assert.equal(programs, 0)
+    await f.execute('task_memory_review', { action: 'review', review: { generation: status.generation, entryId: status.pending[0].entryId,
       entryRevision: status.pending[0].revision, expectedRevision: 0, decision: 'not_applicable', paths: [],
-      basis: 'This stored lesson does not apply to the isolated fixture task.' } }, { ...execution, callId: 'review-decision' })
-    const afterReview = await review.execute({ action: 'status' }, { ...execution, callId: 'review-after' })
+      basis: 'This stored lesson does not apply to the isolated fixture task.' } })
+    const afterReview = await f.execute('task_memory_review', { action: 'status' })
     assert.equal(afterReview.pending.length, 0, JSON.stringify(afterReview.pending))
-    await assemble()
+    const afterAssembly = await assemble()
     assert.equal(presentation, 'ptc')
+    assert.deepEqual(afterAssembly.tools.map((tool: any) => tool.name), ['run_code'])
+    assert.deepEqual(await f.execute('run_code', { description: 'Perform prepared work', code: 'return "fixture complete"' }), { ran: true })
+    assert.equal(programs, 1, 'review completion must restore usable PTC execution')
   } finally { await handle.dispose(); await f.cleanup() }
 })
 
@@ -208,10 +287,12 @@ test('a local writing feature can prepare and dispose through the same contract 
     async mount({ host, defer }) { defer(host.beforeTask(async input => { events.push(input.task) })); return { stopIngress() { events.push('stop') }, async drain() { events.push('drain') }, async dispose() { events.push('dispose') } } } }
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') }, [{ module: feature }])
   try {
-    const messages = [{ role: 'user', content: 'こんにちは' }]
+    const messages = [{ role: 'user', content: 'Write a concise project summary.' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    assert.deepEqual(events, [], 'answer entry must not trigger execution hooks')
+    await f.prepare('writing')
   } finally { await handle.dispose(); await f.cleanup() }
-  assert.deepEqual(events, ['こんにちは', 'stop', 'drain', 'dispose'])
+  assert.deepEqual(events, ['Write a concise project summary.', 'stop', 'drain', 'dispose'])
 })
 
 test('resource-only extension is available in full and compiled fallback without importing absent optional resources', async () => {
@@ -237,6 +318,7 @@ test('persisted protected sessions cannot become native work when the required m
     db.close()
     let called = false
     await assert.rejects(f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: 'こんにちは' }], turn: 1, step: 0, signal: new AbortController().signal }, async () => { called = true }), /Required module unavailable/)
+    await f.event({ type: 'turn/end', data: { turn: 1, reason: { kind: 'error' } } })
     await assert.rejects(f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: [{ type: 'image', attachmentId: 'fixture' }] }], turn: 2, step: 0, signal: new AbortController().signal }, async () => { called = true }), /Required module unavailable/)
     assert.equal(called, false)
     const after = openConnection(databasePath)
@@ -251,8 +333,9 @@ test('memory checkpoint uses exact native identity, persists candidate memory ou
   const databasePath = join(f.root, 'memory.sqlite3')
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
-    const messages = [{ role: 'user', content: 'こんにちは' }]
+    const messages = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    await f.prepare('research')
     const tool = f.tools.find(tool => tool.name === 'memory_checkpoint')
     const args = { outcome: 'completed', memories: [{ kind: 'fact', title: 'Writing preference', body: 'Keep headings short.' }] }
     const execution = { name: 'memory_checkpoint', agent: f.agent, signal: new AbortController().signal }
@@ -273,15 +356,17 @@ test('reload resumes the exact ordinary request and a completed checkpoint canno
   const f = await fixture(), databasePath = join(f.root, 'memory.sqlite3')
   const config = { repositoryRoot: f.root, databasePath }
   let handle = await mountCore(f.ctx, config)
-  const messages = [{ role: 'user', content: 'こんにちは' }]
+  const messages = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
   const prepare = () => f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
   try {
     assert.equal((await prepare()).kind, 'enter')
+    await f.prepare('research')
     await handle.dispose(); handle = await mountCore(f.ctx, config)
     assert.equal((await prepare()).kind, 'enter')
     await f.tools.find(tool => tool.name === 'memory_checkpoint').execute({ outcome: 'completed', memories: [{ kind: 'fact', title: 'One saved fact', body: 'This exact request is saved once.' }] }, { name: 'memory_checkpoint', agent: f.agent, signal: new AbortController().signal })
     await handle.dispose(); handle = await mountCore(f.ctx, config)
-    assert.equal((await prepare()).kind, 'reject')
+    assert.equal((await prepare()).kind, 'enter')
+    await assert.rejects(f.prepare('research'), /not admit|not open|terminal|complete/i)
     const db = openConnection(databasePath)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, 1)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n, 1)
@@ -320,9 +405,10 @@ test('native error and cancellation preserve distinct terminal outcomes', async 
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
     for (const [index, reason] of ['error', 'aborted'].entries()) {
-      const turn = index + 1, messages = [{ role: 'user', content: 'こんにちは' }]
+      const turn = index + 1, messages = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
       await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
-      f.events.push({ type: 'turn/end', data: { turn, reason: { kind: reason } } })
+      await f.prepare('research')
+      await f.event({ type: 'turn/end', data: { turn, reason: { kind: reason } } })
       await f.listeners.get('agent/idle')!({ agent: f.agent })
     }
     const db = openConnection(databasePath)
@@ -337,22 +423,26 @@ test('cancelling intake releases the pending owner and admits the next request',
   let asked = false
   const f = await fixture({ ask: async () => { asked = true; controller.abort(); throw new Error('User cancelled intake') } })
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
   try {
+    const signal = controller.signal
+    const messages = [{ role: 'user', content: 'Inspect the repository contents.' }]
+    await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal }, async () => ({ kind: 'enter', messages }))
+    assert.equal(asked, false, 'ordinary entry does not ask intake questions')
     await assert.rejects(
-      f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: 'Do that please' }], turn: 1, step: 0, signal: controller.signal }, async () => ({ kind: 'enter', messages: [] })),
+      f.prepare('research', signal),
       /User cancelled intake|aborted|cancelled/i,
     )
     assert.equal(asked, true)
-    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted' } } })
+    await f.event({ type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted' } } })
     await f.listeners.get('agent/idle')!({ agent: f.agent })
     const afterCancellation = openConnection(databasePath)
     assert.deepEqual(afterCancellation.prepare('SELECT status FROM ledger_runs').all().map((row: any) => row.status), ['cancelled'])
     assert.equal(afterCancellation.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
     afterCancellation.close()
 
-    const messages = [{ role: 'user', content: 'こんにちは' }]
-    const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    const next = [{ role: 'user', content: 'こんにちは' }]
+    const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: next, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: next }))
     assert.equal(result.kind, 'enter')
   } finally { await handle.dispose(); await f.cleanup() }
 })
@@ -361,22 +451,26 @@ test('intake answer failure without signal abort releases the failed owner', asy
   let asked = false
   const f = await fixture({ ask: async () => { asked = true; throw new Error('Question service unavailable') } })
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
   try {
+    const signal = new AbortController().signal
+    const messages = [{ role: 'user', content: 'Inspect the repository contents.' }]
+    await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal }, async () => ({ kind: 'enter', messages }))
+    assert.equal(asked, false, 'ordinary entry does not ask intake questions')
     await assert.rejects(
-      f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: 'Do that please' }], turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [] })),
+      f.prepare('research', signal),
       /Question service unavailable/,
     )
     assert.equal(asked, true)
-    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'error' } } })
+    await f.event({ type: 'turn/end', data: { turn: 1, reason: { kind: 'error' } } })
     await f.listeners.get('agent/idle')!({ agent: f.agent })
     const afterFailure = openConnection(databasePath)
     assert.deepEqual(afterFailure.prepare('SELECT status FROM ledger_runs').all().map((row: any) => row.status), ['failed'])
     assert.equal(afterFailure.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
     afterFailure.close()
 
-    const messages = [{ role: 'user', content: 'こんにちは' }]
-    const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
+    const next = [{ role: 'user', content: 'こんにちは' }]
+    const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: next, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: next }))
     assert.equal(result.kind, 'enter')
   } finally { await handle.dispose(); await f.cleanup() }
 })
@@ -386,16 +480,21 @@ test('max-tokens is an interrupted boundary and releases ownership before the ne
   const databasePath = join(f.root, 'memory.sqlite3')
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
-    const first = [{ role: 'user', content: 'こんにちは' }]
+    const first = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: first, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: first }))
-    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } })
-    const second = [{ role: 'user', content: 'こんにちは' }]
+    await f.prepare('research')
+    await f.event({ type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } })
+    const second = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
     const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: second, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: second }))
     assert.equal(result.kind, 'enter')
+    const beforePreparation = openConnection(databasePath)
+    assert.deepEqual(beforePreparation.prepare('SELECT status FROM ledger_runs').all().map(row => row.status), ['interrupted'], 'the fresh turn has not requested execution yet')
+    beforePreparation.close()
+    await f.prepare('research')
     const afterBoundary = openConnection(databasePath)
     assert.deepEqual(afterBoundary.prepare('SELECT status FROM ledger_runs ORDER BY started_at').all().map((row: any) => row.status), ['interrupted', 'active'])
     afterBoundary.close()
-    f.events.push({ type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } })
+    await f.event({ type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } })
     await f.listeners.get('agent/idle')!({ agent: f.agent })
   } finally { await handle.dispose(); await f.cleanup() }
 })
@@ -405,15 +504,16 @@ test('max-tokens is finalized by native idle when no next request arrives', asyn
   const databasePath = join(f.root, 'memory.sqlite3')
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
-    const messages = [{ role: 'user', content: 'こんにちは' }]
+    const messages = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
-    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } })
+    await f.prepare('research')
+    await f.event({ type: 'turn/end', data: { turn: 1, reason: { kind: 'max-tokens' } } })
     await f.listeners.get('agent/idle')!({ agent: f.agent })
     const afterIdle = openConnection(databasePath)
     assert.deepEqual(afterIdle.prepare('SELECT status FROM ledger_runs').all().map((row: any) => row.status), ['interrupted'])
     assert.equal(afterIdle.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
     afterIdle.close()
-    const next = [{ role: 'user', content: 'こんにちは' }]
+    const next = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
     assert.equal((await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: next, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: next }))).kind, 'enter')
   } finally { await handle.dispose(); await f.cleanup() }
 })
@@ -423,8 +523,9 @@ test('a missing or wrong-turn boundary never releases the current owner', async 
   const databasePath = join(f.root, 'memory.sqlite3')
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
-    const first = [{ role: 'user', content: 'こんにちは' }]
+    const first = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: first, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: first }))
+    await f.prepare('research')
     await assert.rejects(
       f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: '次の依頼' }], turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [] })),
       /Previous task has not reached its confirmed native boundary/,
@@ -433,7 +534,7 @@ test('a missing or wrong-turn boundary never releases the current owner', async 
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 1)
     db.close()
 
-    f.events.push({ type: 'turn/end', data: { turn: 99, reason: { kind: 'max-tokens' } } })
+    await f.event({ type: 'turn/end', data: { turn: 99, reason: { kind: 'max-tokens' } } })
     await assert.rejects(
       f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: '次の依頼' }], turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [] })),
       /Previous task has not reached its confirmed native boundary/,
@@ -447,12 +548,13 @@ test('a missing or wrong-turn boundary never releases the current owner', async 
 test('a non-admitted intake run is failed and released by a native blocked boundary', async () => {
   const f = await fixture()
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
   try {
-    const first = [{ role: 'user', content: 'Do that please' }]
+    const first = [{ role: 'user', content: 'Inspect the repository contents.' }]
     const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: first, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: first }))
-    assert.equal(result.kind, 'reject')
-    f.events.push({ type: 'turn/end', data: { turn: 1, reason: { kind: 'blocked' } } })
+    assert.equal(result.kind, 'enter')
+    await assert.rejects(f.prepare('research'), /did not admit/)
+    await f.event({ type: 'turn/end', data: { turn: 1, reason: { kind: 'blocked' } } })
     await f.listeners.get('agent/idle')!({ agent: f.agent })
     const afterBlocked = openConnection(databasePath)
     assert.deepEqual(afterBlocked.prepare('SELECT status FROM ledger_runs').all().map((row: any) => row.status), ['failed'])
@@ -472,10 +574,14 @@ test('a late valid intake answer after signal cancellation is not persisted', as
     return { answers: [{ id: request.questions[0].id, selected: ['chat'] }] }
   } })
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
   try {
+    const signal = controller.signal
+    const messages = [{ role: 'user', content: 'Inspect the repository contents.' }]
+    await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal }, async () => ({ kind: 'enter', messages }))
+    assert.equal(asked, false, 'ordinary entry does not ask intake questions')
     await assert.rejects(
-      f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [{ role: 'user', content: 'Do that please' }], turn: 1, step: 0, signal: controller.signal }, async () => ({ kind: 'enter', messages: [] })),
+      f.prepare('research', signal),
       /aborted|cancelled/i,
     )
     assert.equal(asked, true)
@@ -491,20 +597,22 @@ test('cancellation at the prepared-task handoff releases the owner before host r
   const controller = new AbortController(), failure = new Error('Cancelled at task handoff')
   const f = await fixture(), databasePath = join(f.root, 'memory.sqlite3')
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
-  let bindings = 0
-  f.services.agents.get = (id: string) => {
-    if (++bindings === 2) controller.abort(failure)
-    return id === f.agent.id ? f.agent : undefined
-  }
   try {
-    const messages = [{ role: 'user', content: 'こんにちは' }]
-    let entered = false
-    await assert.rejects(f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: controller.signal }, async () => { entered = true; return { kind: 'enter', messages } }), error => error === failure)
-    assert.equal(entered, false)
+    const messages = [{ role: 'user', content: 'Inspect the repository contents.' }]
+    const entry = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: controller.signal }, async () => ({ kind: 'enter', messages }))
+    assert.equal(entry.kind, 'enter')
+    f.services.agents.get = (id: string) => {
+      const db = openConnection(databasePath)
+      try { if (db.prepare("SELECT COUNT(*) AS n FROM ledger_runs WHERE status='active'").get()?.n) controller.abort(failure) }
+      finally { db.close() }
+      return id === f.agent.id ? f.agent : undefined
+    }
+    await assert.rejects(f.prepare('research', controller.signal), error => error === failure)
     const db = openConnection(databasePath)
     assert.equal(db.prepare('SELECT status FROM ledger_runs').get()?.status, 'cancelled')
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_execution_owners').get()?.n, 0)
     db.close()
+    await f.event({ type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted' } } })
     assert.equal((await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 2, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))).kind, 'enter')
   } finally { await handle.dispose(); await f.cleanup() }
 })
@@ -532,6 +640,8 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
     assert.equal(calls, 2)
     const db = openConnection(join(f.root, 'memory.sqlite3'))
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()?.n, 0)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, 0)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM akinator_sessions').get()?.n, 0)
     db.close()
   } finally { await handle.dispose(); globalThis.fetch = originalFetch; await f.cleanup() }
 })
@@ -567,7 +677,6 @@ test('core Score selection reaches model context through native pre-step', async
   } finally { await handle.dispose(); globalThis.fetch = originalFetch; await f.cleanup() }
 })
 
-
 test('core connects to an existing start-laya v1 worker without credentials or replacement scripts', { skip: process.platform === 'win32' }, async t => {
   const f = await fixture(), commands: any[] = []
   f.services.commands = { register(command: any) { commands.push(command); return () => {} } }
@@ -586,7 +695,7 @@ test('core connects to an existing start-laya v1 worker without credentials or r
   } finally { await handle.dispose(); await f.cleanup() }
 })
 
-test('explicit conversation choice survives completed native turns without repeating task classification', async () => {
+test('ordinary conversation turns stay intake-free until new explicit work is prepared', async () => {
   const asked: string[] = []
   const f = await fixture({ ask: async (request: any) => {
     asked.push(request.questions[0].id)
@@ -598,15 +707,16 @@ test('explicit conversation choice survives completed native turns without repea
       const turn = i + 1, messages = [{ role: 'user', content: text }]
       const output = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
       assert.equal(output.kind, 'enter')
-      f.events.push({ type: 'turn/end', data: { turn, reason: { kind: 'completed' } } })
+      if (i === 3) await f.prepare('research')
+      await f.event({ type: 'turn/end', data: { turn, reason: { kind: 'completed' } } })
       await f.listeners.get('agent/idle')!({ agent: f.agent })
     }
-    assert.deepEqual(asked, ['taskType'])
+    assert.deepEqual(asked, [])
     const db = openConnection(join(f.root, 'memory.sqlite3'))
     try {
       const profiles = db.prepare('SELECT profile_json FROM akinator_sessions ORDER BY rowid').all() as any[]
-      assert.equal(profiles.length, 4)
-      assert.equal(JSON.parse(profiles[3].profile_json).taskType, 'research', 'new explicit work is not pinned to chat')
+      assert.equal(profiles.length, 1)
+      assert.equal(JSON.parse(profiles[0].profile_json).taskType, 'research', 'new explicit work is not pinned to chat')
     } finally { db.close() }
   } finally { await handle.dispose(); await f.cleanup() }
 })

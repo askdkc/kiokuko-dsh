@@ -1,3 +1,10 @@
+import { answerSkillContext, type AnswerSkillRegistry } from './answer-skills.js'
+import { DshAnswerContext } from './answer-context.js'
+import { IntakeModeConfig } from './intake-mode.js'
+import { OnDemandIntake, type IntakeMode } from './on-demand-intake.js'
+import { classifyTaskForIntake } from './decisions/workflows.js'
+import { dshTurnRequestId } from './intake-profile-resolver.js'
+import { readExecutionOwner } from './orchestration/execution-owner.js'
 import { MemoryIndexReasoningConfig } from '../memory/index-reasoning/contracts.js'
 import { ObservationPackConfig } from './observation-pack/policy.js'
 import { createTurnState, policyState, type TurnRecord } from './host-adapter/turn-state.js'
@@ -134,6 +141,7 @@ export interface DshAdvisoryHost {
 }
 
 export interface DshHostAdapterOptions {
+  readonly intakeMode?: IntakeMode
   readonly completion?: import('zod').z.input<typeof CompletionConfig>
   readonly answerReview?: import('zod').z.input<typeof AnswerReviewConfig>
   readonly decisions?: DecisionService
@@ -494,6 +502,71 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   })
   const gate = admission.gate
   const mapPreStep = admission.mapPreStep
+  const detachedDemandSessions = new Set<string>()
+  // Archive/session-query adapters own no live execution ingress. A partial live
+  // tool/agent plane is not that read-only case and must not silently downgrade.
+  const conversationFirst = IntakeModeConfig.parse(options.intakeMode) === 'on-demand'
+  const hasExecutionIngress = tools !== undefined || agents !== undefined
+  if (conversationFirst && hasExecutionIngress && (!tools || !agents || !sessions)) {
+    throw new Error('Conversation-first execution requires native tools, agents and sessions; read-only history adapters must not expose a partial execution plane')
+  }
+  const demand = conversationFirst && hasExecutionIngress ? new OnDemandIntake({
+    answerContext: new DshAnswerContext(runtime, { root, projectOnly: false, memoryRetrieval: memoryRetrievalConfig,
+      instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills: skills as AnswerSkillRegistry, prompts: skillPrompts, decisions, cwd: root }),
+    }),
+    nativeChild: agent => agents?.get(agent.id) === agent && sessions?.get(agent.session?.id ?? '') === agent.session && isNativeSubagent(agent as NativeAgent),
+    validate: async input => {
+      const agent = input.agent, session = agent.session as { id: string; header?: { cwd?: string } } | undefined
+      if (!session || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session || realpathSync(session.header?.cwd ?? '') !== root) throw new Error('On-demand native identity mismatch')
+      await captureInitialInput(session.id, input.turn, input.messages)
+    },
+    existing: async input => runtime.withDatabase(db => {
+      if (!readExecutionOwner(db, input.agent.session!.id) || detachedDemandSessions.has(input.agent.session!.id)) return false
+      const current = currentSession(input.agent.session!.id)
+      // A retired native identity is not live execution authority. Keep its durable
+      // owner intact, but let a reopened session answer before attempting recovery.
+      return !current || current.nativeAgent === input.agent && current.nativeSession === input.agent.session
+    }),
+    classify: (input, task) => classifyTaskForIntake(decisions, dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, undefined, input.signal),
+    prepare: async (input, taskType) => {
+      const event = await admission.mapPreStep(input, taskType)
+      const result = await gate.prepare(event)
+      if (result.admitted) detachedDemandSessions.delete(input.agent.session!.id)
+      return result.admitted && result.prepared.intake.profile.taskType !== 'chat'
+    },
+    ready: (agent, turn) => {
+      if (agents?.get(agent.id) !== agent || sessions?.get(agent.session?.id ?? '') !== agent.session) return false
+      const current = agent.session && currentSession(agent.session.id)
+      return !!current && current.nativeAgent === agent && current.nativeSession === agent.session && (turn === undefined || current.turn === turn)
+        && !current.closed && !current.failed && current.prepared.run.status === 'active'
+        && ['ready', 'exhausted'].includes(current.prepared.intake.status) && current.prepared.nextAction === 'proceed'
+        && !selections.get(current.runId)?.value.discussion
+    },
+  }) : undefined
+  const demandEnd = demand ? onNativeEvent(ctx, 'session/event', (session, event) => {
+    if (event.type === 'turn/end') demand.finish(session, (event.data as any)?.turn)
+    if (event.type === 'request/context' && !currentSession(session.id)) {
+      const answer = demand.answerOwner(session)
+      if (answer) {
+        const header = [...(answer.agent.session?.snapshotEvents?.() ?? [])].reverse().find(e => e.type === 'request/header')?.data as any
+        void memoryFinalizer.admitConversationIndex(answer.workspace, session.id, { ...header?.header?.config, contextWindow: (event.data as any)?.contextWindow },
+          () => agents?.get(answer.agent.id) === answer.agent && sessions?.get(session.id) === session
+            && demand.answerOwner(session)?.workspace === answer.workspace).catch(() => {})
+      }
+    }
+  }) : undefined
+  const demandDisposed = demand ? onNativeEvent(ctx, 'agent/disposed', ({ agent }) => {
+    demand.retire(agent)
+    const item = agent.session && currentSession(agent.session.id)
+    if (item?.nativeAgent !== agent || item.nativeSession !== agent.session) return
+    // Drop only dead in-memory bindings. Durable ownership and obligations remain
+    // untouched; a reopened session may answer but cannot borrow the old grant.
+    detachedDemandSessions.add(item.sessionId)
+    gate.clearTurn(item.sessionId, item.turn)
+    executionSupport.clear(item.sessionId)
+    turnState.releaseRun(item.runId)
+  }) : undefined
+
   const discussionGuardDisposer = tools?.guard((value) => {
     const agent = (value as { agent?: NativeAgent }).agent
     if (!agent?.session) return undefined
@@ -506,7 +579,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     return undefined
   })
   const routing = createRouting({
-    ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview, semanticCompaction, delegation, deepPlanning, isGenericNativeChild,
+    ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview, semanticCompaction, delegation, deepPlanning, isGenericNativeChild, demand,
     getSkillPrompts: () => skillPrompts,
     getToolExposureConfig: () => toolExposureConfig, reportToolExposureFallback, reportToolExposureProjection, modelCatalog,
     getSelection: runId => selections.get(runId), setSelection: (runId, value) => { selections.set(runId, value) },
@@ -601,7 +674,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   let disposePromise: Promise<void> | undefined
   const efficiencyHost = createEfficiencyHost({ ctx, memoryFinalizer, agents, sessions, delegation, deepPlanning, currentSession })
   efficiencyHost.configure({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
+  // Register last so deferred preparation precedes the existing memory/completion pre-execute checks.
+  if (demand) demand.mount(ctx as any, tools as any, systemPrompt)
   const host: DshCompositionHost = {
+    ...(demand ? { onDemandIntake: demand } : {}),
     bypassNativeIntake: isGenericNativeChild,
     modelAuto: { coordinator: modelAuto, validSession: (agentId, sessionId) => {
       const currentAgent = agents?.get(agentId) as { session?: object } | undefined
@@ -657,6 +733,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   return {
     host,
     dispose: () => disposePromise ??= (async () => {
+      demand?.stop()
+      await demand?.drain()
       await diffReview?.dispose()
       await answerReview.dispose()
       semanticCompaction.stop()
@@ -667,6 +745,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       await autoReview.dispose()
       await memoryFinalizer.dispose()
       await deepPlanning.dispose()
+      await demand?.dispose()
+      demandEnd?.()
+      demandDisposed?.()
       childGuardDisposer?.()
       discussionGuardDisposer?.()
       childExecutionDisposer()

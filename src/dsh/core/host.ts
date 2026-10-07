@@ -1,3 +1,12 @@
+import { retainedEvents } from '../context-projection.js'
+import { readAkinatorSession, readRunIntakeLink } from '../../akinator/store.js'
+import { answerSkillContext } from '../answer-skills.js'
+import { legacyModuleRequirements } from '../modules/legacy-bindings.js'
+import { DshAnswerContext } from '../answer-context.js'
+import { IntakeModeConfig } from '../intake-mode.js'
+import { isNativeSubagent } from '../native-subagent.js'
+import { OnDemandIntake, type IntakeMode } from '../on-demand-intake.js'
+import { readExecutionOwner } from '../orchestration/execution-owner.js'
 import { KiokukoError } from '../../errors.js'
 import { ObservationPackConfig } from '../observation-pack/policy.js'
 import { MemoryIndexReasoningConfig } from '../../memory/index-reasoning/contracts.js'
@@ -45,6 +54,7 @@ import { AnswerReviewCoordinator } from '../answer-review/coordinator.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 
 export interface CoreModuleHost {
+  readonly intakeMode: IntakeMode
   readonly context: Context
   readonly repositoryRoot: string
   readonly runtime: DshCoreRuntime
@@ -62,6 +72,7 @@ export interface CoreModuleHost {
 }
 export const CoreConfig = z.object({
   enabled: z.boolean().default(true),
+  intakeMode: IntakeModeConfig,
   typedDecisions: TypedDecisionsConfig.prefault({}),
   answerReview: AnswerReviewConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),
@@ -111,6 +122,36 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const semanticCompaction = new SemanticCompactionCoordinator(ctx as any, decisions, root, config.observationPack)
   const modelHandoff = new ModelHandoff(ctx as any, decisions, root, config.modelHandoff)
   const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions, config.memoryRetrieval)
+  const demand = config.intakeMode === 'on-demand' ? new OnDemandIntake({
+    answerContext: new DshAnswerContext(runtime, { root, projectOnly: true, memoryRetrieval: config.memoryRetrieval,
+      instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills, prompts, decisions, cwd: root }),
+    }),
+    nativeChild: agent => agents?.get(agent.id) === agent && sessions?.get(agent.session?.id) === agent.session && isNativeSubagent(agent as any),
+    validate: async input => {
+      bind(input.agent as NativeAgent)
+      await runtime.withDatabase(db => {
+        for (const id of legacyModuleRequirements(db, input.agent.session!.id)) {
+          if (!modules.ids().includes(id)) throw new Error(`Required module unavailable for persisted session: ${id}`)
+        }
+      })
+    },
+    existing: async input => {
+      const current = active.get(input.agent.session!.id)
+      if (current && current.turn < input.turn) await finishSession(input.agent.session!.id)
+      return runtime.withDatabase(db => Boolean(readExecutionOwner(db, input.agent.session!.id)))
+    },
+    classify: (input, task) => classifyTaskForIntake(decisions, dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, undefined, input.signal),
+    prepare: async (input, taskType) => {
+      const task = await prepareCoreTask(input as PreStep, input.signal, taskType)
+      return task.admitted && task.profile.taskType !== 'chat'
+    },
+    ready: (agent, turn) => {
+      if (agents?.get(agent.id) !== agent || sessions?.get(agent.session?.id) !== agent.session) return false
+      const current = active.get(agent.session?.id ?? '')
+      return !!current && current.agent === agent && current.agent.session === agent.session && (turn === undefined || current.turn === turn)
+        && current.task.admitted && !current.failed && !current.checkpointed && !stopped
+    },
+  }) : undefined
   const conversationSessions = new WeakSet<object>()
   function bind(agent: NativeAgent): void {
     if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || realpathSync(agent.session.header.cwd) !== root) throw new Error('Native task identity mismatch')
@@ -154,13 +195,16 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       const loaded = await prompts.get(name)
       guidance.push(loaded?.content ?? `Read the installed Skill by exact name through the native Skill facility: ${JSON.stringify(name)}. Do not install or substitute fetched content.`)
     }
-    const memories=[...allowed].map(([name,text])=>({id:randomUUID(),role:'user',content:[{type:'text',text}],source:{kind:KIOKUKO_DSH_SOURCE_KIND,form:'snapshot',sections:[{name,text}]}}))
+    const memoryHistory = filterRequestMemory(retainedEvents(current.agent.session).filter(event => event.type === 'user/message').map(event => event.data), allowed)
+    const presentMemory = new Set([...memoryHistory, ...result.messages].flatMap((message: any) => message?.source?.kind === KIOKUKO_DSH_SOURCE_KIND
+      && Array.isArray(message.source.sections) ? message.source.sections.map((section: any) => section.name) : []))
+    const memories=[...allowed].filter(([name]) => !presentMemory.has(name)).map(([name,text])=>({id:randomUUID(),role:'user',content:[{type:'text',text}],source:{kind:KIOKUKO_DSH_SOURCE_KIND,form:'snapshot',sections:[{name,text}]}}))
     if (!guidance.length) return {...result,messages:[...result.messages,...memories]}
     const contextText = guidance.join('\n\n')
     const message = { id: randomUUID(), role: 'user', content: [{ type: 'text', text: contextText }], source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'snapshot', sections: [{ name: 'core-context', text: contextText }] } }
     return { ...result, messages: [...result.messages, message,...memories] }
   }
-  async function prepareCoreTask(payload: PreStep, signal: AbortSignal): Promise<CoreTask> {
+  async function prepareCoreTask(payload: PreStep, signal: AbortSignal, advisoryType?: TaskProfile['taskType']): Promise<CoreTask> {
     const key = `${payload.agent.session.id}\u0000${payload.turn}`
     const existing = active.get(payload.agent.session.id)
     if (existing?.turn === payload.turn) {
@@ -179,14 +223,21 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         await finishSession(payload.agent.session.id)
         if (active.has(payload.agent.session.id)) throw new Error('Previous task has not reached its confirmed native boundary')
       }
-      const human = payload.messages.filter(message => message?.role === 'user' && (!message.source || message.source.kind === 'user')).slice(-1)
+      const originals = payload.messages.filter(message => message?.role === 'user' && (!message.source || message.source.kind === 'user'))
+      const human = advisoryType ? originals : originals.slice(-1)
       const text = human.flatMap(message => typeof message.content === 'string' ? [message.content] : (message.content ?? []).filter((block: any) => block.type === 'text').map((block: any) => block.text)).join('\n').trim()
       // Attachment-only turns still require identity, intake and persisted-feature checks.
       let request: CoreTaskInput = { requestId: dshTurnRequestId({ dshSessionId: payload.agent.session.id, turn: payload.turn }), sessionId: payload.agent.session.id,
         turn: payload.turn, task: text || 'User input contains no text.', cwd: root, signal, agent: payload.agent, capabilities: [] }
       const inferred = resolveGroundedIntakeProfile({ task: request.task, cwd: root }).profileHints.taskType
       const continuingChat = conversationSessions.has(payload.agent.session) && (inferred === null || inferred === 'chat')
-      const classification = await classifyTaskForIntake(decisions, request.requestId, request.task, continuingChat ? 'chat' : undefined, signal)
+      const restoredType = advisoryType === undefined ? await runtime.withDatabase(db => {
+        const owner = readExecutionOwner(db, request.sessionId)
+        if (!owner?.run_id || owner.start_id !== request.requestId) return undefined
+        const link = readRunIntakeLink(db, { workspace: owner.workspace, runId: owner.run_id })
+        return readAkinatorSession(db, { workspace: owner.workspace, sessionId: link.sessionId }).profile.taskType ?? undefined
+      }) : undefined
+      const classification = await classifyTaskForIntake(decisions, request.requestId, request.task, advisoryType ?? restoredType ?? (continuingChat ? 'chat' : undefined), signal)
       request = { ...request, deferTaskTypeInference: classification.deferInference,
         ...(classification.taskType ? { profileHints: { taskType: classification.taskType } } : {}) }
       for (const prepare of beforeTask) {
@@ -224,6 +275,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     try { return await operation } finally { if (preparingTasks.get(key) === operation) preparingTasks.delete(key) }
   }
   const stopIngress = () => {
+    demand?.stop()
     answerReview.stop()
     if (stopped) return
     stopped = true
@@ -234,12 +286,14 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     for (const dispose of disposers.reverse()) { try { dispose() } catch (error) { stopErrors.push(error) } }
   }
   const drain = async () => {
+    await demand?.drain()
     await indexReasoning?.dispose()
     await answerReview.dispose()
     await semanticCompaction.drain()
     await modelHandoff.drain()
     await Promise.allSettled([...pending])
     await modules.dispose()
+    await demand?.dispose()
   }
   const dispose = () => shutdown ??= (async () => {
     stopIngress()
@@ -265,7 +319,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         return sessionId && agentId && (agents?.get(agentId) as NativeAgent | undefined)?.session === sessions?.get(sessionId)
           ? modelAuto.status(sessionId) : { state: 'session_unavailable' }
       }))
-    await modules.mount({ context: ctx, repositoryRoot: root, runtime, prompts, decisions, semanticCompaction, answerReviewConfig: config.answerReview, memoryIndexReasoningConfig: config.memoryIndexReasoning, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
+    await modules.mount({ intakeMode: config.intakeMode, context: ctx, repositoryRoot: root, runtime, prompts, decisions, semanticCompaction, answerReviewConfig: config.answerReview, memoryIndexReasoningConfig: config.memoryIndexReasoning, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
       beforeTask(handler) { beforeTask.add(handler); return () => { beforeTask.delete(handler) } } })
     if (!claimed) {
       const nativeLlm=get('llm')
@@ -305,6 +359,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           return memory
         },
       }))
+      if (demand) demand.mount(ctx as any, tools, systemPrompt)
       const listen = (name: string, handler: (...args: any[]) => unknown) => disposers.push((ctx.on as any)(name, handler, { prepend: true }))
       const claims = new WeakMap<NativeAgent, { turn: number; messages: any[] }>()
       const manualChanges = new Map<string, Promise<void>>()
@@ -313,6 +368,16 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         if (!agent.ctx) return
         let autoRoute: { runId: string; sessionId: string; binding: ModelBinding } | undefined
         const memoryReviewPresentation = createMemoryReviewPresentation(agent as NativeAgent & { ctx: { get(name: string): unknown } }, runtime)
+        // Native schemas are collected before the assembly waterfall. Update
+        // after dispatch normalization, while post-execute is still awaited.
+        const releaseMemoryReviewResult = agent.ctx.on('tools/post-execute', async (execution: { agent?: NativeAgent }, _result: unknown, next: () => Promise<unknown>) => {
+          const decision = await next()
+          if (execution.agent === agent) {
+            const owner = active.get(agent.session.id)
+            await memoryReviewPresentation.sync(owner?.agent === agent && owner.task.admitted && !owner.failed && !owner.checkpointed ? owner.task.runId : undefined)
+          }
+          return decision
+        })
         const releaseMemoryReviewIdle = agent.ctx.on('agent/status', (event: { agent: NativeAgent; status: string }) => {
           if (event.agent === agent && event.status === 'idle') memoryReviewPresentation.dispose()
         })
@@ -329,6 +394,8 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           if (selected) { memoryReviewPresentation.dispose(); return selected }
           const currentClaim = claims.get(agent)
           if (currentClaim) claims.delete(agent)
+          if (demand && currentClaim && await demand.capture({ agent, messages: currentClaim.messages, turn: currentClaim.turn, step: 0, signal })) return { kind: 'native' }
+          if (demand?.pending(agent)) return { kind: 'native' }
           let owner = active.get(agent.session.id)
           const mode = (await modelAuto.store.session(agent.session.id)).mode
           const ptc = typeof tools.modeFor === 'function' && tools.modeFor(agent) === 'ptc'
@@ -362,6 +429,13 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         } }, { prompts: () => prompts,
           owner: () => active.get(agent.session.id)?.task.runId,
           beforeRequest: async binding => {
+            const current = active.get(agent.session.id)
+            if (current?.agent === agent && current.task.admitted) {
+              const allowed = await runtime.withDatabase(db => currentContextMemory(db, current.task.workspace, current.task.context?.items ?? []))
+              pruneDshMemorySurface(agent.session, allowed)
+              const retired = await runtime.withDatabase(db => retiredExplanationCalls(db, agent.session.id))
+              pruneExplainedMemorySurface(agent.session, retired)
+            } else await demand?.beforeRequest(agent)
             if (!autoRoute || !binding) return
             const pendingManual = manualChanges.get(autoRoute.sessionId)
             if (pendingManual) await pendingManual
@@ -369,6 +443,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           },
         })
         const fence = agent.ctx.on('llm/stream', (request: any, next: () => AsyncIterable<unknown>) => (async function* () {
+          await demand?.fence(agent, request)
           const current = active.get(agent.session.id)
           if (current?.agent === agent && request.sessionId === agent.session.id && request.purpose !== 'compaction') {
             const allowed = await runtime.withDatabase(db => currentContextMemory(db,current.task.workspace,current.task.context?.items??[]))
@@ -382,9 +457,9 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           }
           yield* next()
         })())
-        routedAgents.set(agent, () => { memoryReviewPresentation.dispose(); releaseMemoryReviewIdle(); fence(); route(); claim() })
+        routedAgents.set(agent, () => { releaseMemoryReviewResult(); memoryReviewPresentation.dispose(); releaseMemoryReviewIdle(); fence(); route(); claim() })
       })
-      listen('agent/disposed', ({ agent }: { agent: NativeAgent }) => { routedAgents.get(agent)?.(); routedAgents.delete(agent) })
+      listen('agent/disposed', ({ agent }: { agent: NativeAgent }) => { demand?.retire(agent); routedAgents.get(agent)?.(); routedAgents.delete(agent) })
       disposers.push(() => { for (const dispose of routedAgents.values()) dispose(); routedAgents.clear() })
       if (get('commands')) disposers.push(mountModelAutoCommand(get('commands'), modelAuto, (agentId, sessionId) => {
         const nativeAgent = agents?.get(agentId) as NativeAgent | undefined
@@ -394,6 +469,10 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       listen('agent/pre-step', (payload: PreStep, next: () => Promise<any>) => track((async () => {
         if (stopped) return { kind: 'reject' }
         bind(payload.agent)
+        if (demand && await demand.capture(payload)) {
+          const result = await next()
+          return result.kind === 'enter' ? { ...result, messages: await demand.answerMessages(payload, result.messages) } : result
+        }
         const nextInput = async () => {
           const result = await next()
           return hasHumanInput(payload.messages) && result.kind === 'enter'
@@ -433,11 +512,20 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       listen('agent/session-start', ({ agent }: { agent: NativeAgent }) => track(answerReview.recover(agent as ReviewAgent, async row => { bind(agent); await sessions.flush(agent.session); await tasks.finish({ ...row, admitted: true }, row.status) })))
       listen('agent/error', ({ agent }: { agent: NativeAgent }) => { const current = active.get(agent.session?.id); if (current?.agent === agent) { current.failed = true; answerReview.cancel(agent.session.id) } })
       listen('session/event', (session: { id: string }, event: any) => {
+        if (event.type === 'turn/end') demand?.finish(session, event.data?.turn)
         if(event.type==='request/context'){
           const current=active.get(session.id)
           if(current?.task.admitted&&!current.checkpointed){
             const header=[...current.agent.session.snapshotEvents()].reverse().find(e=>e.type==='request/header')?.data?.header?.config
             void indexReasoning!.admitIndex(current.task.workspace,session.id,{...header,contextWindow:event.data?.contextWindow}).catch(()=>{})
+          } else {
+            const answer = demand?.answerOwner(session)
+            if (answer) {
+              const header = [...(answer.agent.session?.snapshotEvents?.() ?? [])].reverse().find(e => e.type === 'request/header')?.data as any
+              void indexReasoning!.admitConversation(answer.workspace, session.id, { ...header?.header?.config, contextWindow: event.data?.contextWindow },
+                () => !stopped && agents?.get(answer.agent.id) === answer.agent && sessions?.get(session.id) === session
+                  && demand?.answerOwner(session)?.workspace === answer.workspace).catch(() => {})
+            }
           }
         }
         if (event.type === 'user/message' && hasHumanInput([event.data])) answerReview.humanInput(session.id, event.data?.turn)

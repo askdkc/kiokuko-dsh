@@ -3,7 +3,7 @@ import type { DecisionBatch } from './contracts.js'
 import type { DecisionService } from './service.js'
 
 /** A bounded current-request decision, not a generated intake profile. */
-export const AKINATOR_CLASSIFICATION_POLICY = 'akinator-direct-intent-v4'
+export const AKINATOR_CLASSIFICATION_POLICY = 'akinator-direct-intent-v5-scope-prototype'
 export const MAX_AKINATOR_TASK_BYTES = 512
 
 export const AKINATOR_AUTOMATED_TASK_TYPES = ['debug', 'research', 'writing', 'chat'] as const satisfies readonly TaskType[]
@@ -53,6 +53,20 @@ function isDirectSingleRequest(task: string): boolean {
     || JAPANESE_REQUEST_END.test(text)
 }
 
+/** Risk admission runs before either punctuation path. This is not an intent classifier. */
+function hasUnresolvedExecutionScope(task: string): boolean {
+  const text = task.trim()
+  // Unsupported actions cannot become supported debug tasks merely by adding a question mark.
+  if (/(?:実装して|追加して|作成して|開発して|構築して|レビューして|デプロイして|運用して)/u.test(text)
+    || /^(?:(?:please|can you|could you|would you|will you)\s+)?(?:build|implement|add|create|deploy|release|review|delete|remove|send)\b/iu.test(text)) return true
+  const japaneseActions = text.match(/(?:調べて|調査して|比較して|探して|要約して|執筆して|書いて|まとめて|翻訳して|書き直して|修正して|直して|診断して|実装して|追加して|作成して|開発して|構築して|レビューして|検証して|確認して|デプロイして|集計して|分析して|運用して)/gu)
+  if ((japaneseActions?.length ?? 0) > 1) return true
+  if (/\b(?:and|then|after|before|but|or)\s+(?:(?:please|also)\s+)?(?:fix|debug|repair|investigate|research|find|look up|write|draft|translate|summari[sz]e|build|implement|add|create|deploy|release|review|delete|remove|send)\b/iu.test(text)) return true
+  if (/\b(?:not|never|don't|do not)\s+(?:fix|build|implement|change|deploy|send|delete|remove)\b/iu.test(text)
+    || /(?:変更せず|直さず|修正せず)/u.test(text)) return true
+  return /^(?:(?:can|could|would|will) you (?:do|fix|change|delete) (?:that|it|this)|それをお願いできますか|それはどういう意味)[?？。.!！\s]*$/iu.test(text)
+}
+
 /** Admit a bounded question to the model; punctuation alone never assigns chat. */
 function isDirectSingleQuestion(task: string): boolean {
   const text = task.trim()
@@ -64,7 +78,7 @@ function isDirectSingleQuestion(task: string): boolean {
 /** Preserve the complete eligible request. No excerpts, history or generated profile slots. */
 export function buildAkinatorClassificationBatch(task: string): DecisionBatch | undefined {
   if (!task.trim() || Buffer.byteLength(task, 'utf8') > MAX_AKINATOR_TASK_BYTES || needsPriorContext(task)
-    || hasUnresolvedAlternatives(task) || !(isDirectSingleRequest(task) || isDirectSingleQuestion(task))) return undefined
+    || hasUnresolvedAlternatives(task) || hasUnresolvedExecutionScope(task) || !(isDirectSingleRequest(task) || isDirectSingleQuestion(task))) return undefined
   return {
     purpose: 'akinator',
     state: task,
