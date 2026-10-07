@@ -9,7 +9,7 @@ import { mountDshComposition } from '../../../../src/dsh/composition.js'
 import { nativeMock } from '../../helpers/native-mock.js'
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT
 
-for(const mode of ['off','observe','active'] as const)test(`native T01/T06/T11/T39: open chat saves and retrieves on the next request with ennoMemory=${mode}`, {skip:!packages,timeout:30000},async()=>{
+for(const intakeMode of ['on-demand','eager'] as const)for(const mode of ['off','observe','active'] as const)test(`${intakeMode==='eager'?'legacy eager native T01/T06/T11/T39: open chat saves and retrieves on the next request':'default on-demand native: ordinary answers do not open a review execution'} with ennoMemory=${mode}`, {skip:!packages,timeout:30000},async()=>{
   const modules=await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','commands'].map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
   const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,skills,commands]=modules
   const root=await mkdtemp(join(tmpdir(),'native-memory-review-'));await mkdir(join(root,'.git'))
@@ -44,7 +44,8 @@ for(const mode of ['off','observe','active'] as const)test(`native T01/T06/T11/T
     // A real native durability listener snapshots only the prefix present on entry.
     const persisted:any[]=[]
     ctx.on('session/flush',(s:any)=>{persisted.splice(0,persisted.length,...s.snapshotEvents());return Promise.resolve()})
-    adapter=createDshHostAdapter(ctx,{repositoryRoot:root,databasePath:join(root,'state.sqlite3'),orca:{enabled:false},ennoMemory:{mode}})
+    // Only the explicit legacy mode retains a chat run; the default path has no intake override.
+    adapter=createDshHostAdapter(ctx,{...(intakeMode==='eager'?{intakeMode}:{}),repositoryRoot:root,databasePath:join(root,'state.sqlite3'),orca:{enabled:false},ennoMemory:{mode}})
     composition=await mountDshComposition(ctx,adapter.host)
     const excluded=await ctx.agentLoop.create(session.SessionId('native-excluded'),{provider:'review-native',model:'fixed'},{cwd:root,delegationDepth:0})
     assert.equal((await adapter.host.memoryReview!.command(excluded.session,'exclude session')).state,'excluded')
@@ -54,6 +55,15 @@ for(const mode of ['off','observe','active'] as const)test(`native T01/T06/T11/T
     for(let turn=1;turn<=8;turn++){
       agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:`EMBERLANGプロジェクトでは回答に日本語を使う。 ${turn}`}]}))
       await wait(()=>agent.status==='idle'&&mainCalls===turn)
+    }
+    if(intakeMode==='on-demand'){
+      assert.equal(reviewCalls,0,'ordinary answers must not dispatch run-bound memory review')
+      assert.equal(adapter.host.resolveSessionRunId!(agent.session),undefined)
+      const counts=await adapter.host.runtime!.withDatabase(db=>Object.fromEntries(['ledger_runs','task_memory_bindings','memory_review_jobs']
+        .map(table=>[table,db.prepare(`SELECT count(*) AS n FROM ${table}`).get()!.n])))
+      assert.deepEqual(counts,{ledger_runs:0,task_memory_bindings:0,memory_review_jobs:0})
+      assert.deepEqual(errors,[])
+      return
     }
     await wait(async()=>await adapter!.host.runtime!.withDatabase(db=>db.prepare("SELECT count(*) AS n FROM memory_review_jobs WHERE state='completed'").get()?.n===1))
     assert.equal(reviewCalls,1)

@@ -36,7 +36,7 @@ test('an externally owned shared runtime is never closed by a failed compatibili
   assert.deepEqual(events, ['start', 'start', 'close'])
 })
 
-test('explicit host adapter mounts native DSH tools and commands and unloads them', async () => {
+test('explicit legacy execution host deliberately opts out and mounts native tools and commands', async () => {
   const tools: any[] = []
   const commands: any[] = []
   const guards: Function[] = []
@@ -65,7 +65,10 @@ test('explicit host adapter mounts native DSH tools and commands and unloads the
   }
   const root = new Context()
   const host = await root.plugin({ name: 'native-host', apply: (ctx: Context) => ctx.provide('kiokukoDsh', composition) })
-  const plugin = root.plugin(dshPlugin, { enabled: true })
+  // This independently supplied legacy execution host has no exact native
+  // onDemandIntake boundary. Exercise its explicit compatibility opt-out;
+  // default-intake-contract.test.ts verifies omission fails clearly instead.
+  const plugin = root.plugin(dshPlugin, { enabled: true, intakeMode: 'eager' })
   await host
   await plugin
 

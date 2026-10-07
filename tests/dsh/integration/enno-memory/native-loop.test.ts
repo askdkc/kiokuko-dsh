@@ -143,6 +143,8 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
     }, ...controls.slice(6), mock.textResponse('REFRESH_FIXTURE_COMPLETE'))
   // Read-only disposition calls preserve the native effect and completion gates.
   for (let index = 1; index < script.length - 1; index++) script[index] = reviewBefore(script[index])
+  // Admission is a separate native request before any Enno stage or memory review.
+  script.unshift(mock.toolCallResponse('prepare-refresh', 'prepare_requested_work', { taskType: 'debug' }))
   try {
     agent = await ctx.agentLoop.create(session.SessionId('refresh-parent'), { provider: 'mock', model: 'mock' }, { cwd: root })
     const task = '役小角を使って QUEUE_TEST_BASELINE のテストを修正してください。read paths: fixtures\nwrite paths: fixtures\n完了条件: 検証して報告'

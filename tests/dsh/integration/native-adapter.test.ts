@@ -146,6 +146,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   } })
   await hostFiber
   const adapter = createDshHostAdapter(root, {
+    intakeMode: 'eager', // This legacy fixture exercises pre-step admission with a minimal native tool registry.
     ...(socket ? { typedDecisions: TypedDecisionsConfig.parse({ mode: 'off', 'laya-coreml': { socketPath: socket.path } }) } : {}),
     modelRoutes: mockModelRoutes,
     repositoryRoot: f.root,

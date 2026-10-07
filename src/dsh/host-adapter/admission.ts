@@ -1,3 +1,4 @@
+import type { TaskType } from '../../akinator/types.js'
 import { createTurnState, policyState } from '../host-adapter/turn-state.js'
 import { bindMemoryApplication, memoryRetrievalStatus } from '../../memory/application.js'
 import { createMemoryReuseRuntime } from '../memory-reuse.js'
@@ -95,8 +96,8 @@ interface AdmissionDependencies {
 }
 
 interface AdmissionOwner {
-  readonly gate: DshIntakeGate
-  readonly mapPreStep: (payload: DshNativePreStepPayload) => Promise<DshPreStepEvent>
+  readonly gate: DshIntakeGate & { prepareRequestedWork(event: DshPreStepEvent): Promise<DshIntakeGateResult> }
+  readonly mapPreStep: (payload: DshNativePreStepPayload, advisoryType?: TaskType) => Promise<DshPreStepEvent>
   readonly clear: () => void
 }
 
@@ -448,6 +449,51 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       await bindAndRecord(event, selected, ++prepareGeneration)
       return selected
     }
+    private async acceptHumanInput(event: DshPreStepEvent): Promise<void> {
+      answerReview.humanInput(event.sessionId, event.turn)
+      cancelBoundarySession(event.sessionId)
+      const previous = currentSession(event.sessionId)
+      if (previous) ennoMemory.invalidate(previous.runId)
+      const state = previous === undefined ? undefined : turnState.policyState(previous.runId)
+      if (previous !== undefined) {
+        try {
+          await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+            if (state !== undefined) {
+              const timestamp = now?.() ?? new Date().toISOString()
+              supersedeOutboxAtOrBeforeRevisionInTransaction(database, event.sessionId, state.revision, timestamp)
+              supersedeBoundaryJobsAtOrBeforeRevisionInTransaction(database, event.sessionId, state.revision, timestamp)
+            }
+            resetLoopGuardForUserInTransaction(database, {
+              runId: previous.runId,
+              dshSessionId: event.sessionId,
+              resolution: 'manual_user',
+              ...(now === undefined ? {} : { now: now() }),
+            })
+          }))
+        } catch {
+          // Human input remains authoritative in the current native batch;
+          // stale durable outbox cleanup will be retried on a later kick.
+        }
+      }
+    }
+    private async refreshExecutionInput(event: DshPreStepEvent, messages: readonly unknown[], human: boolean): Promise<void> {
+      const item = currentSession(event.sessionId)
+      if (!item) return
+      const task = human ? textFromMessages(messages.filter(isHumanMessage), event.task) : undefined
+      if (task !== undefined) item.memoryInput = task
+      await executionSupport.refresh({ ...executionBinding(item), ...(task === undefined ? {} : {
+        task, humanInput: canonicalContentHash({ turn: event.turn, messages: messages.filter(isHumanMessage) }),
+      }) }, human)
+    }
+    /** The public preparation tool uses the same human boundary as native pre-step. */
+    async prepareRequestedWork(event: DshPreStepEvent): Promise<DshIntakeGateResult> {
+      const messages = event.nativeMessages ?? []
+      if (!hasHumanInput(messages)) throw new Error('Original human input is required for work preparation')
+      await this.acceptHumanInput(event)
+      const result = await this.prepare(event)
+      if (result.admitted) await this.refreshExecutionInput(event, messages, true)
+      return result
+    }
     override async preStep(event: DshPreStepEvent, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> {
       if (event.nativeAgent && delegation.isChild(event.nativeAgent)) return next()
       // The native chain owns admission and the original message ordering.
@@ -471,32 +517,8 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
         }),
       }
       if (humanPresent) {
-        answerReview.humanInput(event.sessionId, event.turn)
+        await this.acceptHumanInput(event)
         nativeDecision = { ...nativeDecision, messages: nativeDecision.messages.filter(message => objectRecord(objectRecord(message)?.source)?.form !== ANSWER_REVIEW_FORM) }
-        cancelBoundarySession(event.sessionId)
-        const previous = currentSession(event.sessionId)
-        if (previous) ennoMemory.invalidate(previous.runId)
-        const state = previous === undefined ? undefined : turnState.policyState(previous.runId)
-        if (previous !== undefined) {
-          try {
-            await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-              if (state !== undefined) {
-                const timestamp = now?.() ?? new Date().toISOString()
-                supersedeOutboxAtOrBeforeRevisionInTransaction(database, event.sessionId, state.revision, timestamp)
-                supersedeBoundaryJobsAtOrBeforeRevisionInTransaction(database, event.sessionId, state.revision, timestamp)
-              }
-              resetLoopGuardForUserInTransaction(database, {
-                runId: previous.runId,
-                dshSessionId: event.sessionId,
-                resolution: 'manual_user',
-                ...(now === undefined ? {} : { now: now() }),
-              })
-            }))
-          } catch {
-            // Human input remains authoritative in the current native batch;
-            // stale durable outbox cleanup will be retried on a later kick.
-          }
-        }
       }
       try {
         const result = await this.prepare(event)
@@ -516,13 +538,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
           }
           const humanMessages = [...new Map([...nativeMessages, ...nativeDecision.messages].filter(isHumanMessage)
             .map(message => [objectRecord(message)?.id ?? canonicalContentHash(message), message])).values()]
-          const humanTask = humanPresent ? textFromMessages(humanMessages, event.task) : undefined
-          if (humanTask !== undefined) item.memoryInput = humanTask
-          await executionSupport.refresh({ ...executionBinding(item), ...(humanTask === undefined ? {} : {
-            // Steering within a native turn must update optional conditions,
-            // without changing the logical-turn intake/receipt identity.
-            task: humanTask, humanInput: canonicalContentHash({ turn: event.turn, messages: humanMessages }),
-          }) }, humanPresent)
+          await this.refreshExecutionInput(event, humanMessages, humanPresent)
           // Only an empty, automatic step can be deliberately paused. Human,
           // attachment and other pending inputs must never be consumed here.
           if (!humanPresent && event.nativeMessages?.length === 0 && nativeDecision.messages.every(message => {
@@ -658,7 +674,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
     if (decision?.executionLease) turnState.stageLease(runId, decision.executionLease)
     return { admitted: !event.signal.aborted, prepared, catalog: event.capabilities }
   })
-  const mapPreStep = async (payload: DshNativePreStepPayload): Promise<DshPreStepEvent> => {
+  const mapPreStep = async (payload: DshNativePreStepPayload, advisoryType?: TaskType): Promise<DshPreStepEvent> => {
     const nativeSession = payload.agent.session
     const registered = nativeSession === undefined && payload.agent.sessionId === undefined
       ? sessions?.get(payload.agent.id)
@@ -694,6 +710,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
     const task = bound?.task ?? (reviewing && previous ? previous.task : textFromMessages(payload.messages, previous?.task))
     let profile = (() => {
       if (bound !== undefined) return bound.profileHints
+      if (advisoryType) return { taskType: advisoryType }
       if (reviewing && previous) return previous.profileHints
       if (previous === undefined) return undefined
       const inferred = resolveGroundedIntakeProfile({ task, cwd }).profileHints.taskType
@@ -707,7 +724,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       // This profile is inherited from a previous turn, not a current user choice.
       // Let Laya assess new work, but retain the user's chat choice for an
       // ambiguous continuation instead of asking the same classification again.
-      const explicit = configuration?.provider === 'laya-coreml' && profile?.taskType !== 'chat' ? undefined : profile?.taskType
+      const explicit = advisoryType ?? (configuration?.provider === 'laya-coreml' && profile?.taskType !== 'chat' ? undefined : profile?.taskType)
       const classification = await classifyTaskForIntake(decisions, requestId, task, explicit, payload.signal)
       deferTaskTypeInference = classification.deferInference
       if (classification.taskType) profile = { ...profile, taskType: classification.taskType }

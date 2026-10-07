@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -20,22 +20,24 @@ test('native modular core: explain before review, explicit forget and next-reque
   let handle:Awaited<ReturnType<typeof mountCore>>|undefined
   const requests:any[]=[];const errors:unknown[]=[]
   try {
+    await mkdir(join(root,'.git')) // Keep workspace identity independent of parent directories.
     for(const plugin of [llm,session,projection,prompt,tools,agents,skills,commands])fibers.push(await ctx.plugin(plugin.default,plugin===prompt?{persona:''}:undefined))
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
-    fibers.push(await ctx.plugin({name:'core-memory-questions',apply(c:any){return c.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:['chat']}))}}})}}))
+    fibers.push(await ctx.plugin({name:'core-memory-questions',apply(c:any){return c.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']}))}}})}}))
     handle=await mountCore(ctx,{repositoryRoot:root,databasePath,answerReview:{mode:'off'},memoryIndexReasoning:{mode:'off'}})
     const db=openConnection(databasePath),workspace=db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
     const memory=recordEntry(db,{workspace,kind:'preference',title:'CYCLEROOT response',body:'CYCLEROOT answer uses exactly three sentences.',scope:{visibility:'project'}})
     createRun(db,'foreign','other-workspace')
     const foreign=recordEntry(db,{workspace:'other-workspace',kind:'fact',title:'foreign',body:'PRIVATE_FOREIGN_MEMORY'})
     db.close()
-    const mock=nativeMock(llm);let explain=true
+    const mock=nativeMock(llm);let prepare=true,explain=true
     class Provider extends llm.LlmAdapter {
       async listModels(provider:string){return [{provider,id:'fixed',name:'fixed'}]}
       async resolveModel(provider:string,id:string){return {provider,id,name:id,context:{contextWindow:200000}}}
       async *stream(request:any){
         requests.push(request)
         if(request.purpose==='compaction'){yield*mock.textResponse('{"schemaVersion":4,"memoryOperations":[]}');return}
+        if(prepare){prepare=false;yield*mock.toolCallResponse('prepare-memory-inspection','prepare_requested_work',{taskType:'research'});return}
         if(explain){explain=false;yield*mock.toolCallResponse('core-explain','memory_explain',{entryId:memory.id});return}
         yield*mock.textResponse('Acknowledged.')
       }
@@ -43,8 +45,13 @@ test('native modular core: explain before review, explicit forget and next-reque
     ctx.llm.registerAdapter(['core-memory'],new Provider())
     ctx.on('agent/error',(event:any)=>errors.push({message:event.error?.message,stack:event.error?.stack}))
     const agent=await ctx.agentLoop.create(session.SessionId('memory-core'),{provider:'core-memory',model:'fixed'},{cwd:root})
-    const turn=async()=>{agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'CYCLEROOTの回答設定を説明して。'}]}));await agent.whenIdle();assert.deepEqual(errors,[])}
-    await turn()
+    const turn=async(text='CYCLEROOTの回答設定を説明して。')=>{agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text}]}));await agent.whenIdle();assert.deepEqual(errors,[])}
+    await turn('保存されたCYCLEROOTの回答設定の根拠をツールで調べて説明して。')
+    const preparation=agent.session.snapshotEvents().filter((event:any)=>event.type==='tool/result')
+      .flatMap((event:any)=>event.data.message?.role==='tool'?[event.data.message]:event.data.message?.content??[])
+      .find((result:any)=>result.toolCallId==='prepare-memory-inspection')
+    assert.equal(preparation?.isError,false,JSON.stringify(preparation))
+    assert.equal(JSON.parse(preparation.content.find((block:any)=>block.type==='text').text).prepared,true)
     assert.ok(requests.some(r=>r.tools?.some((tool:any)=>tool.name==='memory_explain')))
     const shown=await ctx.commands.execute(agent,`/kioku-memory explain ${memory.id} --json`,[],new AbortController().signal)
     assert.equal(shown.result.kind,'success',shown.result.text)

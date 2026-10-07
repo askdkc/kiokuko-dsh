@@ -9,6 +9,8 @@ export type IndexRuntime = {
 };
 export class IndexReasoningService {
     readonly worker: IndexReasoningWorker;
+    readonly #conversations = new Map<string, Map<string, () => boolean>>();
+    #closed = false;
     constructor(readonly runtime: IndexRuntime, readonly config: IndexReasoningConfig, llm?: DshLlm) {
         this.worker = new IndexReasoningWorker({ runtime, config, ...(llm ? { llm } : {}) });
     }
@@ -22,38 +24,74 @@ export class IndexReasoningService {
         this.worker.kick();
     }
     async dispose(): Promise<void> {
+        this.#closed = true;
+        this.#conversations.clear();
         await this.worker.dispose();
     }
     async whenIdle(): Promise<void> {
         await this.worker.whenIdle();
     }
     async admitIndex(workspace: string, sessionId: string, envelope: unknown): Promise<void> {
-        if (typeof envelope !== 'object' || envelope === null)
+        await this.#admit(workspace, sessionId, envelope, db => !!db.prepare('SELECT 1 FROM ledger_runs WHERE workspace=? AND dsh_session_id=?').get(workspace, sessionId));
+    }
+    /**
+     * Trusted native host only. The synchronous callback must verify the live
+     * agent/session/workspace; it also gates later commands for this binding.
+     * Conversation admission never creates a task or bypasses source checks.
+     */
+    async admitConversation(workspace: string, sessionId: string, envelope: unknown, assertCurrent: () => boolean): Promise<void> {
+        const admitted = await this.#admit(workspace, sessionId, envelope, () => !this.#closed && assertCurrent() === true);
+        if (!admitted || this.#closed)
             return;
+        const bindings = this.#conversations.get(sessionId) ?? new Map<string, () => boolean>();
+        bindings.set(workspace, assertCurrent);
+        this.#conversations.set(sessionId, bindings);
+    }
+    async #admit(workspace: string, sessionId: string, envelope: unknown, authorized: (db: SqliteDatabase) => boolean): Promise<boolean> {
+        if (typeof envelope !== 'object' || envelope === null)
+            return false;
         const e = envelope as Record<string, unknown>;
         const model = IndexModel.safeParse({ provider: e.provider, model: e.model, contextWindow: e.contextWindow, sessionId, ...(e.reasoningEffort ? { reasoningEffort: e.reasoningEffort } : {}) });
-        await this.runtime.withDatabase(db => withImmediateTransaction(db, () => {
-            if (!db.prepare('SELECT 1 FROM ledger_runs WHERE workspace=? AND dsh_session_id=?').get(workspace, sessionId))
-                return;
+        const admitted = await this.runtime.withDatabase(db => withImmediateTransaction(db, () => {
+            if (!authorized(db))
+                return false;
             configureIndex(db, workspace, this.config.mode, this.config);
             if (!model.success) {
                 db.prepare('UPDATE memory_index_settings SET model_json=NULL WHERE workspace=?').run(workspace);
-                return;
+                return true;
             }
             db.prepare('UPDATE memory_index_settings SET model_json=? WHERE workspace=?').run(JSON.stringify(model.data), workspace);
             reconcileIndexSources(db, workspace);
             reserveIndexJob(db, workspace, model.data);
+            return true;
         }));
         this.worker.kick();
+        return admitted;
+    }
+    #conversationWorkspaces(sessionId: string): string[] {
+        const bindings = this.#conversations.get(sessionId);
+        if (!bindings)
+            return [];
+        for (const [workspace, assertCurrent] of bindings) {
+            try {
+                if (assertCurrent() === true)
+                    continue;
+            } catch { /* A retired host binding must fail closed. */ }
+            bindings.delete(workspace);
+        }
+        if (!bindings.size)
+            this.#conversations.delete(sessionId);
+        return [...bindings.keys()];
     }
     async indexCommand(sessionId: string, raw: string): Promise<Record<string, unknown>> {
         const result = await this.runtime.withDatabase(db => withImmediateTransaction(db, () => {
             const rows = db.prepare('SELECT DISTINCT workspace FROM ledger_runs WHERE dsh_session_id=? LIMIT 2').all<{
                 workspace: string;
             }>(sessionId);
-            if (rows.length !== 1)
+            const workspaces = new Set([...rows.map(row => row.workspace), ...this.#conversationWorkspaces(sessionId)]);
+            if (workspaces.size !== 1)
                 throw new Error('workspace_unknown');
-            const workspace = rows[0]!.workspace, parts = raw.trim().split(/\s+/);
+            const workspace = [...workspaces][0]!, parts = raw.trim().split(/\s+/);
             if (!indexSettingsForCommand(db, workspace))
                 configureIndex(db, workspace, this.config.mode, this.config);
             if (parts[0] === 'mode' && parts.length === 2 && ['active', 'observe', 'off'].includes(parts[1]!))

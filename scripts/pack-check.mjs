@@ -258,6 +258,11 @@ async function createAndSmokeTestTarball() {
     process.stderr.write(wire.stderr)
   }
 
+  if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') {
+    const acceptance = await exec(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/integration/lisp/plan-surface.test.ts'], { cwd: root, env: { ...process.env, KIOKUKO_LISP_PLAN_ENTRY: join(packageRoot, 'dist/dsh/lisp/surface.js') }, timeout: 120_000, maxBuffer: 8 * 1024 ** 2 })
+    process.stdout.write(acceptance.stdout)
+  }
+
   const smokeCode = `
     const root = await import('kiokuko-dsh');
     const plugin = await import('kiokuko-dsh');

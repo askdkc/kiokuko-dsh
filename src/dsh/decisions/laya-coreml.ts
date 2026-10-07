@@ -11,10 +11,15 @@ const runtimeSchema = z.object({
   runtimeFingerprint: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   limits: z.object({ maxQuestions: z.literal(1), maxChoices: z.literal(32), maxBytes: z.literal(DECISION_BYTES), maxPromptTokens: z.number().int().positive() }).strict(),
 }).strict()
-const usageSchema = z.object({ input_tokens: z.number().int().nonnegative(), output_tokens: z.literal(0) }).strict()
+// Known additive Laya telemetry is optional; unknown fields and any reported
+// truncation still fail closed. Keep the public decision usage contract stable.
+const usageSchema = z.object({ input_tokens: z.number().int().nonnegative(), output_tokens: z.literal(0),
+  state_tokens: z.number().int().nonnegative().optional(), state_tokens_dropped: z.literal(0).optional(),
+  truncated: z.literal(false).optional(), truncated_questions: z.array(z.string()).length(0).optional(),
+}).strict().transform(({ input_tokens, output_tokens }) => ({ input_tokens, output_tokens }))
 const resultSchema = z.object({ model: z.literal('laya-rl-agent'),
   answers: z.record(z.string(), z.object({ type: z.literal('choice'), choice: z.string(), probabilities: z.record(z.string(), probability),
-    confidence: probability, action: z.object({ act_probability: probability }).strict() }).strict()), usage: usageSchema,
+    confidence: probability, answer_confidence: probability.optional(), action: z.object({ act_probability: probability }).strict() }).strict()), usage: usageSchema,
 }).strict()
 const successSchema = z.object({ version: z.literal(1), ok: z.literal(true), runtime: runtimeSchema, result: resultSchema,
   server: z.object({ predict_ms: z.number().finite().nonnegative() }).strict(),

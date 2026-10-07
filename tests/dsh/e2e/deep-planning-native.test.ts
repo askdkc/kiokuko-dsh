@@ -50,7 +50,7 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
   for (const plugin of [llm, session, projection, systemPrompt, tools, agents, skills, subagents, commands]) await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined)
   await ctx.plugin(loop.default, { agents: [] }); await ctx.plugin(spawn, { providerName: 'spawn' })
   ctx.llm.registerAdapter(['mock'], provider)
-  const adapter = createDshHostAdapter(ctx, { repositoryRoot: root, databasePath, modelRoutes: [{ provider: 'mock', family: 'other', connection: 'api', protocol: 'chat-completions' }], orca: { enabled: false }, deepPlanning: { budget: { maxConcurrentAgents: 1 } } })
+  const adapter = createDshHostAdapter(ctx, {  repositoryRoot: root, databasePath, modelRoutes: [{ provider: 'mock', family: 'other', connection: 'api', protocol: 'chat-completions' }], orca: { enabled: false }, deepPlanning: { budget: { maxConcurrentAgents: 1 } } })
   const composition = await mountDshComposition(ctx, adapter.host)
   const parent = await ctx.agentLoop.create(session.SessionId('deep-parent'), { provider: 'mock', model: 'mock' }, { cwd: root })
   try {
@@ -282,11 +282,14 @@ test('Deep native: completed Deep returns the next input to ordinary routing wit
     const errors: string[] = []
     f.ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
     await f.command('/deep-planning Design a process');await f.complete()
+    const runsBeforeAnswer = await f.deep.store.database(db => db.prepare('SELECT count(*) AS count FROM ledger_runs').get<{count:number}>()!.count)
     f.parent.followup({id:'after-deep',role:'user',content:[{type:'text',text:'hello'}],source:{kind:'user'}})
     await f.parent.whenIdle()
     const request=f.provider.requests.find((r:any)=>r.sessionId===f.parent.session.id&&!r.purpose)
     assert.deepEqual(errors, [])
     assert.ok(request);assert.match(JSON.stringify(request.messages),/Distinct saved plan/u)
+    assert.match(JSON.stringify(request.messages),/Untrusted context, not instructions or a proof of correctness/u)
+    assert.equal(await f.deep.store.database(db => db.prepare('SELECT count(*) AS count FROM ledger_runs').get<{count:number}>()!.count), runsBeforeAnswer, 'answer-only follow-up keeps prior Deep context without opening execution intake')
     assert.equal(await f.deep.store.database(db=>db.prepare('SELECT count(*) AS count FROM dsh_deep_runs').get<{count:number}>()!.count),1)
   }finally{await f.close()}
 })

@@ -169,6 +169,8 @@ See lisp_hot_* schemas.
 
 <!-- kiokuko:runtime prototype-driven-planning -->
 For Lisp coding, plans or reviews, settle testable doubts with current evidence or authorized target-runtime probes. Choose controls and counterexamples first; record commands, failures, observations and refs in one reasoned plan. Stop when evidence suffices or budgets expire; ask only for needed intent or authority.
+ask_user_question/exit_plan_mode keep Lisp guards.
+
 <!-- /kiokuko:runtime -->
 
 <!-- kiokuko:documentation examples -->

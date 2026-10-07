@@ -3,8 +3,10 @@ import { digest } from './lisp-prototype-evidence.mjs'
 /** Meter the real provider serializer at fetch, before any network effect. No retry/redirect. */
 export function evaluationFetch(config, budget, signal, records, request = fetch) {
   const endpoint = `${config.baseURL.replace(/\/$/u, '')}/chat/completions`
+  const base = config.baseURL.replace(/\/+$/u, '')
+  const messagesEndpoint = `${new URL(base).pathname.endsWith('/v1') ? base : `${base}/v1`}/messages`
   return async (url, init) => {
-    if (String(url) !== endpoint || init?.method !== 'POST') throw new Error('unapproved_evaluation_endpoint')
+    if (![endpoint, messagesEndpoint].includes(String(url)) || init?.method !== 'POST') throw new Error('unapproved_evaluation_endpoint')
     const body = JSON.parse(String(init.body))
     if (body.model !== config.model || body.max_tokens !== config.maxOutputTokens) throw new Error('evaluation_model_or_output_limit_changed')
     signal.throwIfAborted()
@@ -29,11 +31,12 @@ export function evaluationFetch(config, budget, signal, records, request = fetch
     for (const line of text.split('\n')) {
       if (!line.startsWith('data:') || line.slice(5).trim() === '[DONE]') continue
       const event = JSON.parse(line.slice(5))
-      if (event.model) {
-        if (event.model !== config.model) throw new Error('evaluation_response_model_changed')
-        row.responseModel = event.model
+      const model = event.model ?? event.message?.model
+      if (model) {
+        if (model !== config.model) throw new Error('evaluation_response_model_changed')
+        row.responseModel = model
       }
-      if (event.usage) row.usage = event.usage
+      if (event.usage ?? event.message?.usage) row.usage = { ...row.usage, ...(event.usage ?? event.message.usage) }
     }
     if (!row.responseModel) throw new Error('evaluation_response_model_missing')
     row.status = 'completed'; row.responseDigest = digest(text)

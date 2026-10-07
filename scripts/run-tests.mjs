@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -46,10 +47,12 @@ function runNodeTests(testFiles, testTempRoot) {
       TEMP: testTempRoot,
       TMP: testTempRoot,
       TMPDIR: testTempRoot,
+      // Cold-process lifecycle fixtures inherit the same offline catalog boundary.
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(path.resolve(import.meta.dirname, '../tests/dsh/helpers/offline-skill-catalog.mjs')).href}`,
     };
     delete childEnvironment.NODE_TEST_CONTEXT;
 
-    const child = spawn(process.execPath, ['--import', 'tsx', '--test', ...testFiles], {
+    const child = spawn(process.execPath, ['--import', path.resolve(import.meta.dirname, '../tests/dsh/helpers/offline-skill-catalog.mjs'), '--import', 'tsx', '--test', ...testFiles], {
       cwd: process.cwd(),
       env: childEnvironment,
       stdio: 'inherit',

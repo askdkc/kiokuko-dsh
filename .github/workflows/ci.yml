@@ -217,7 +217,7 @@ jobs:
           if-no-files-found: ignore
 
   dsh-current-native:
-    name: DSH 0.2.0 native/Web and 0.1.7 TUI compatibility
+    name: Current DSH native/Web compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -232,7 +232,6 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/dsh-runtime
       - run: npm ci --prefix tests/fixtures/dsh-runtime-current
-      - run: pnpm --dir tests/fixtures/dsh-tui-runtime-current install --frozen-lockfile --ignore-scripts
       - name: Verify current full suite
         run: npm test
         env:
@@ -277,17 +276,6 @@ jobs:
           KIOKUKO_EXPECTED_DSH_VERSION: 0.2.0-rc.2
           KIOKUKO_REQUIRE_DSH_CLI: "1"
           KIOKUKO_DSH_CLI_ONLY: "1"
-      - name: Verify pinned DSH 0.1.7 TUI core lifecycle
-        run: npm run test:e2e:dsh:tui
-        env:
-          KIOKUKO_DSH_EVIDENCE_PATH: ${{ runner.temp }}/kiokuko-dsh-tui-evidence.json
-      - name: Upload TUI core lifecycle evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kiokuko-dsh-tui-evidence-linux
-          path: ${{ runner.temp }}/kiokuko-dsh-tui-evidence.json
-          if-no-files-found: ignore
 
   shortcut-browser:
     name: Keyboard UI (${{ matrix.fixture }})

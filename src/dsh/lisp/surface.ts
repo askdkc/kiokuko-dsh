@@ -1,6 +1,7 @@
 import type { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
 import { renderHistoryResult } from './model-result.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
+import { TASK_PREPARE_TOOL } from '../on-demand-intake.js'
 import type { DecisionService } from '../decisions/service.js'
 import { DecisionError } from '../decisions/contracts.js'
 import type { Context } from '@deepseek-ai/cordis'
@@ -33,9 +34,9 @@ interface Tools { register(definition: any): () => void; guard(fn: (execution: a
 interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean }
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill', 'observation_read'] as const
-// Keep the host-owned review route reachable while Lisp blocks native effects.
+// Keep host-owned review, questions and Plan approval reachable while Lisp blocks native effects.
 // Pin its implementation just like reads; its own run/session checks still apply.
-const LISP_NATIVE_TOOLS = [...LISP_READ_TOOLS, 'task_memory_review'] as const
+const LISP_NATIVE_TOOLS = [...LISP_READ_TOOLS, TASK_PREPARE_TOOL, 'task_memory_review', 'ask_user_question', 'exit_plan_mode'] as const
 
 /** Keep admitted inherited tools without naming agent-owned tools in restrict(). */
 function restrictInheritedTools(tools: Tools, scopedTools: Tools, agent: Agent, names: string[]): () => void {
@@ -153,7 +154,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (agent.session.id !== scope) return '保護中の子セッションでは任意ツールを実行できません。親セッションの Lisp を使用してください。'
       const registered = persistent.definitions.get(`${agent.id}:${execution.name}`)
       if (registered && tools.get(execution.name, agent)?.execute === (registered as { execute: unknown }).execute) return undefined
-      return 'Lisp 保護中は Lisp ツールと DSH の読み取り・検索・スキル読み込みを使えます。変更は Lisp 経由で行い、削除・既存ファイルの置換には利用者の確認が必要です。'
+      return 'Lisp 保護中は Lisp ツールと DSH の読み取り・検索・スキル読み込み・質問・計画提出を使えます。変更は Lisp 経由で行い、削除・既存ファイルの置換には利用者の確認が必要です。'
     })
     root.on('agent/pre-step' as never, (async (payload: { agent: Agent }, next: () => Promise<unknown>) => {
       const scope = scopeSession(payload.agent, persistent)

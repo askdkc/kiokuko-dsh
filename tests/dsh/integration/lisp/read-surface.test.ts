@@ -107,6 +107,10 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     for (const name of admittedReads) assert.ok(ctx.tools.schemas(parent).some((s: any) => s.name === name), name)
     const projected = ctx.get(LISP_ASSEMBLY_SERVICE).project(parent, { sections: [], variables: {}, tools: [] })
     assert.ok(projected.tools.some((s: any) => s.name === 'task_memory_review'), 'memory recovery must reach the model in Lisp mode')
+    for (const name of ['ask_user_question', 'exit_plan_mode']) {
+      assert.equal(projected.tools.some((s: any) => s.name === name), false, 'unregistered control tools are not invented')
+      assert.equal((await call(name)).isError, true)
+    }
     assert.equal((await call('lisp_status')).isError, false, 'host diagnostics remain available before memory review')
     const unresolved = await call('task_memory_review', { action: 'status' })
     assert.equal(unresolved.isError, false, JSON.stringify(unresolved))

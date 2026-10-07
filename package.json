@@ -150,7 +150,7 @@
       ],
       "lifecycleEvidence": [
         "prepare runs only npm run build",
-        "Git installs require the exact pnpm allowBuilds entry for the pinned source archive",
+        "Git installs use repository-scoped pnpm allowBuilds approval on a supporting pnpm version; source revision pinning is optional and separate",
         "Disposable-profile install, Web start, and uninstall evidence is recorded by CI"
       ]
     }
@@ -173,7 +173,6 @@
     "test:benchmark:dsh-log": "npm run build && node scripts/run-dsh-million-event-benchmark.mjs",
     "test:efficiency": "node --import tsx scripts/run-token-efficiency-evaluation.mjs",
     "test:e2e:dsh": "npm run build && node scripts/run-enno-dsh-e2e.mjs",
-    "test:e2e:dsh:tui": "npm run build && node --test tests/dsh/unit/dsh-tui-e2e-assertions.test.mjs && node scripts/run-dsh-tui-e2e.mjs",
     "verify:prepare": "node scripts/verify-prepare-reproducibility.mjs",
     "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko-dsh.sqlite3",
     "test:sampledb": "npm run build && node --import tsx tests/ci/verify-sample-database.ts",
@@ -200,6 +199,7 @@
     "test:lisp:prototype-planning": "node --import tsx scripts/run-lisp-prototype-planning.mjs",
     "test:lisp:efficiency": "node --import tsx scripts/run-lisp-efficiency.mjs",
     "test:lisp:web": "node scripts/verify-lisp-web.mjs",
+    "test:lisp:plan:web": "npm run build && node scripts/verify-lisp-plan-web.mjs",
     "test:diff-review:web": "node scripts/verify-diff-review-web.mjs",
     "test:skill-prompts": "node scripts/run-tests.mjs tests/dsh/unit/skill-compiler.test.ts tests/dsh/unit/skill-snapshot.test.ts",
     "test:skill-delivery": "npm run build && node scripts/run-skill-delivery.mjs",

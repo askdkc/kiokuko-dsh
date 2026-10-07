@@ -11,35 +11,9 @@ not remove files or dependencies from an installed full package.
 
 ## Compatibility
 
-The `dsh-tui` profile is supported for the DSH-native core on the pinned DSH
-`0.1.7-rc.2` / dsh-TUI `0.11.1` combination. The packed-plugin test installs
-both packages in a disposable profile, verifies the native Skill, tool, command,
-agent and session services, executes a session-required command rejection,
-creates and releases a native session, checks a missing-service failure, and
-confirms removal restores the original profile. It does not make the browser
-client available in the terminal, exercise an interactive PTY conversation, or
-call a model provider. The `client.platform: web` declaration remains Web-only.
-The shared patch emits `patch: entry "session-log-download" not found` in the TUI
-profile because that Web stock export entry is absent; the test accepts this
-specific warning and rejects other unmatched patches.
+The current runtime target is **DSH 0.2.0-rc.2**. The prior **0.1.7-rc.2** runtime remains pinned in `tests/fixtures/dsh-runtime-0.1.7`. The earlier **0.1.6-alpha.1** source checkout at `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720` also passed its disposable-profile and 63 history checks.
 
-With the DSH CLI and dsh-TUI installed, add Kiokuko to that profile:
-
-```sh
-dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@0.11.1
-dsh plugin --profile dsh-tui add kiokuko-dsh
-dsh --profile dsh-tui --dump-config
-dsh --profile dsh-tui
-```
-
-The profile needs its own plugin installation. Installing Kiokuko into `web`
-does not install it into `dsh-tui`. The test command is
-`npm run test:e2e:dsh:tui`; it requires the pinned fixture dependencies and
-pnpm. It does not use credentials or the user's profile.
-
-The current runtime target is **DSH 0.2.0-rc.2**. The prior **0.1.7-rc.2** runtime remains pinned in `tests/fixtures/dsh-runtime-0.1.7`, and the TUI lifecycle fixture still exercises DSH 0.1.7-rc.2 with dsh-TUI 0.11.1. The earlier **0.1.6-alpha.1** source checkout at `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720` also passed its disposable-profile and 63 history checks.
-
-CI keeps the pinned DSH 0.1.5-rc.1 fixture for legacy-history and Web lifecycle coverage. The DSH 0.2.0-rc.2 job runs the full suite, native routing/history coverage, and packed Web lifecycle; its TUI core lifecycle step uses the separate pinned DSH 0.1.7-rc.2 / dsh-TUI 0.11.1 fixture. The historical source-repair CLI tests deliberately use the legacy catalog that accepted v0/v3 fixtures. Local tests do not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
+CI keeps the pinned DSH 0.1.5-rc.1 fixture for legacy-history and Web lifecycle coverage. The DSH 0.2.0-rc.2 job runs the full suite, native routing/history coverage, and packed Web lifecycle. The historical source-repair CLI tests deliberately use the legacy catalog that accepted v0/v3 fixtures. Local tests do not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
 
 ## Model tool exposure
 
@@ -83,44 +57,26 @@ pnpm dsh plugin --profile web add github:askdkc/kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
-For a source-pinned Git install, use this fallback. It pins one commit, lets
-the first run initialize the profile, adds the exact `allowBuilds` key without
-deleting existing entries, and retries automatically. Run it from a DeepSeek
-Harness checkout:
+If pnpm blocks the Git package's build, approve the repository in the affected
+profile's `pnpm-workspace.yaml`, preserving other entries in its `allowBuilds` map:
 
-```bash
-set -eu
-
-dsh_profile="$HOME/.dsh/profiles/web"
-dsh_workspace="$dsh_profile/pnpm-workspace.yaml"
-dsh_commit="$(git ls-remote https://github.com/askdkc/kiokuko-dsh.git HEAD | awk '{print $1}')"
-test -n "$dsh_commit"
-dsh_spec="github:askdkc/kiokuko-dsh#${dsh_commit}"
-dsh_key="kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/${dsh_commit}"
-
-if ! pnpm dsh plugin --profile web add "$dsh_spec"; then
-  node --input-type=module - "$dsh_workspace" "$dsh_key" <<'NODE'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-
-const [file, key] = process.argv.slice(2);
-mkdirSync(dirname(file), { recursive: true });
-let text = existsSync(file) ? readFileSync(file, 'utf8') : '';
-if (!text.includes(key)) {
-  if (/^allowBuilds:\s*$/m.test(text)) {
-    text = text.replace(/^allowBuilds:\s*$/m, (line) => `${line}\n  "${key}": true`);
-  } else if (/^allowBuilds:\s*\{\}\s*$/m.test(text)) {
-    text = text.replace(/^allowBuilds:\s*\{\}\s*$/m, `allowBuilds:\n  "${key}": true`);
-  } else {
-    text += `${text.endsWith('\n') || text.length === 0 ? '' : '\n'}allowBuilds:\n  "${key}": true\n`;
-  }
-  writeFileSync(file, text);
-}
-NODE
-  pnpm dsh plugin --profile web add "$dsh_spec"
-fi
-pnpm dsh --profile web --dump-config
+```yaml
+allowBuilds:
+  "kiokuko-dsh@git+https://github.com/askdkc/kiokuko-dsh.git": true
 ```
+
+This rule covers future commits from that repository. Repository matching for
+GitHub tarball downloads is confirmed in [pnpm 11.25.0's implementation](https://github.com/pnpm/pnpm/blob/v11.25.0/pnpm11/building/policy/src/index.ts#L137-L176);
+verify the pnpm version used by the DSH command before relying on it. Package-name
+approval alone does not cover Git sources. If `approve-builds` reports no pending
+packages, inspect the affected profile's `allowBuilds` entries and correct the
+repository rule directly; do not repeat the same command or approve all builds.
+Then rerun the original installation command.
+
+An optional `#<commit>` in the dependency spec selects a reproducible source
+revision. It is separate from build approval and is unnecessary when following
+the default branch. Do not turn a resolved commit from an error into a permanent
+per-update approval requirement.
 
 With an installed dsh CLI, use the same commands without the `pnpm` launcher.
 
@@ -175,9 +131,10 @@ previous resolutions until updated. Future API compatibility is not guaranteed;
 after restarting, check a new recording with `/kioku-orca list`, `show`, and
 `export` as described in the [Orca guide](orca-recording.md).
 
-For a commit-pinned Git install, use the source-pinned installation procedure
-above with the intended new commit; updating a fixed source reference does not
-move it to a newer commit. For a local checkout, update/build that checkout and
+For an intentionally commit-pinned Git install, change the dependency spec to
+the intended new revision; updating a fixed source reference does not move it
+to a newer commit. The repository build approval above remains unchanged.
+For a local checkout, update/build that checkout and
 install its built path again. These profile commands do not update the lockfiles
 in a separate Kiokuko development checkout.
 
@@ -382,13 +339,9 @@ Runtime effects are explicit:
 - optional GitHub or embedding credentials are supplied by the user and are
   never bundled or persisted by the plugin.
 
-`prepare` runs only `npm run build`. A Git install must be pinned to one full
-commit and may require this exact pnpm permission in the consuming profile:
-
-```yaml
-allowBuilds:
-  "kiokuko-dsh@https://codeload.github.com/askdkc/kiokuko-dsh/tar.gz/<commit>": true
-```
+`prepare` runs only `npm run build`. Git installs need build approval in the
+consuming profile; use the repository-scoped rule in [Install](#install) so
+ordinary updates do not require another commit-specific permission.
 
 The npm tarball already contains `dist/`, so its normal install path does not
 depend on a consumer-side build permission.

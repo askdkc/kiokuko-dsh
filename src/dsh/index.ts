@@ -85,6 +85,10 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     await setupDshOnLoad()
     let host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as DshCompositionHost | undefined
     if (host !== undefined) {
+      const ownsExecutionIngress = host.runtime !== undefined || host.tools !== undefined || host.toolHost !== undefined || host.intakeGate !== undefined || host.mapPreStep !== undefined
+      if (resolvedConfig.intakeMode === 'on-demand' && ownsExecutionIngress && !host.onDemandIntake) {
+        throw new Error('The explicit execution host does not support default conversation-first intake. Use createDshHostAdapter (which provides onDemandIntake), update the custom native ownership contract, or deliberately select intakeMode: eager for its legacy behavior.')
+      }
       if (resolvedConfig.modelAutoMode.mode !== 'off' && !host.modelAuto)
         throw new Error('The explicit Kiokuko host does not support modelAutoMode')
       if (host.runtime && !host.decisions) {
@@ -148,7 +152,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx, { answerReview: resolvedConfig.answerReview, completion: resolvedConfig.completion, typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, modelHandoff: resolvedConfig.modelHandoff, modelAutoMode: resolvedConfig.modelAutoMode, observationPack: resolvedConfig.observationPack, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, toolExposure: resolvedConfig.toolExposure, modelRoutes: resolvedConfig.modelRoutes, diffReview: resolvedConfig.diffReview,
+    const adapter = createDshHostAdapter(ctx, { intakeMode: resolvedConfig.intakeMode, answerReview: resolvedConfig.answerReview, completion: resolvedConfig.completion, typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, modelHandoff: resolvedConfig.modelHandoff, modelAutoMode: resolvedConfig.modelAutoMode, observationPack: resolvedConfig.observationPack, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, toolExposure: resolvedConfig.toolExposure, modelRoutes: resolvedConfig.modelRoutes, diffReview: resolvedConfig.diffReview,
       ennoMemory: resolvedConfig.ennoMemory, memoryRetrieval: resolvedConfig.memoryRetrieval, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, memoryIndexReasoning: resolvedConfig.memoryIndexReasoning, autoGlobalization: resolvedConfig.autoGlobalization, memoryReview: resolvedConfig.memoryReview })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let disposeOrcaCommand: (() => void) | undefined

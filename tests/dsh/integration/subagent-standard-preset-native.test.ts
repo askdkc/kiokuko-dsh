@@ -9,6 +9,7 @@ import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
+import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 
 isolateSkillHome()
 
@@ -137,9 +138,10 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
         const parentStep = child || !options.tools?.length ? 0 : ++parentRequests
         const chunks = child ? mock.textResponse('CHILD_COMPLETE')
           : mode === 'fork' && parentStep === 1 ? mock.textResponse('PARENT_SEED')
-          : mode === 'fork' && parentStep === 2 ? tool('fork-1', 'subagent_fork', false)
-          : mode === 'parallel' && parentStep === 1 ? multi([['spawn-1', 'subagent'], ['spawn-2', 'subagent']])
-          : (mode === 'foreground' || mode === 'failure') && parentStep === 1 ? tool('spawn-1', 'subagent', false)
+          : parentStep === (mode === 'fork' ? 2 : 1) ? mock.toolCallResponse('prepare-parent', TASK_PREPARE_TOOL, { taskType: 'build' })
+          : mode === 'fork' && parentStep === 3 ? tool('fork-1', 'subagent_fork', false)
+          : mode === 'parallel' && parentStep === 2 ? multi([['spawn-1', 'subagent'], ['spawn-2', 'subagent']])
+          : (mode === 'foreground' || mode === 'failure') && parentStep === 2 ? tool('spawn-1', 'subagent', false)
           : mock.textResponse('PARENT_COMPLETE')
         for (const chunk of chunks) yield chunk
       }
@@ -185,12 +187,16 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
     if (mode === 'parallel') await waitBounded(childrenFinished, 'Continuable children did not settle')
     assert.ok(requests.some(request => request.sessionId !== 'standard-parent'),
       `real child LLM request must occur: ${JSON.stringify({ requests: requests.map(request => ({ sessionId: request.sessionId, tools: request.tools?.map((tool: any) => tool.name) })), questions: questions.map(request => request.questions?.map((question: any) => ({ id: question.id, options: question.options?.map((option: any) => option.label) }))), events: parent.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result' || event.type === 'tool/call').map((event: any) => event.data) })}`)
+    const preparation = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId === 'prepare-parent')
+    assert.ok(preparation && !preparation.data.message.isError, 'parent must prepare through the real native tool registry before launching children')
     assert.equal(questions.some(request => request.agent?.session?.header?.origin === 'subagent'), false)
+    const parentRows = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS count FROM ledger_runs WHERE dsh_session_id=?').get<{ count: number }>(parent.agent.session.id))
+    assert.equal(parentRows?.count, 1, 'only the explicitly prepared parent execution may create a run')
     assert.ok(requests.some(request => request.sessionId === 'standard-parent' &&
       request.tools?.some((tool: any) => tool.name === 'subagent') &&
       request.tools?.some((tool: any) => tool.name === 'subagent_fork')), 'both tools must reach the parent model request')
     if (mode !== 'parallel') {
-      const result = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result')
+      const result = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId !== 'prepare-parent')
       assert.match(JSON.stringify(result), mode === 'failure' ? /subagent run failed/ : /CHILD_COMPLETE/)
       if (mode === 'failure') assert.equal(result?.data.message.isError, true)
     }

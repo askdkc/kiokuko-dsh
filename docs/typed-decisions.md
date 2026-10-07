@@ -5,6 +5,16 @@ installed Skill relevance, past memory reuse, Zenki draft review, [post-display 
 The selected adapter owns its transport protocol and uncertainty policy. Domain
 workflows consume `selected` or `abstained`; they do not depend on model names.
 
+Task classification treats ordinary questions and advice as `chat`; an explicit
+source lookup is `research`. Laya receives short single requests and questions
+(up to 512 UTF-8 bytes), including Japanese questions ending in `？`, `か`,
+`かな`, or `教えて`. Its choices are `debug`, `research`, `writing`, `chat`,
+and `abstain`. An accepted `chat` result admits the request without asking its
+purpose. Quoted/source material, multiple sentences, prior-turn confirmations,
+and explicitly undecided alternatives retain the existing intake path.
+Punctuation only admits the input to classification; the model still chooses
+the task type. Laya abstention or capacity rejection retains the purpose question.
+
 The common API also accepts explicit `noul` (yes probability) and `score`
 (ordered rubric) questions. Their validated answers have `status: "measured"`;
 they grant no permission. The existing Choice request and answer shapes remain

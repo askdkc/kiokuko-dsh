@@ -1,8 +1,9 @@
+import type { OnDemandIntake } from '../on-demand-intake.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { attachmentTypesFromMessages, nativeContextTokens } from '../model-auto/policy.js'
 import type { CompactionAgent } from '../semantic-compaction/contracts.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
-import type { ReviewAgent } from '../answer-review/contracts.js'
+import { hasHumanInput, type ReviewAgent } from '../answer-review/contracts.js'
 import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from '../execution-selection.js'
 import { ExecutionSelectionPending } from '../model-selection-ui.js'
 import { LISP_CODING_SERVICE, type LispCodingService } from '../lisp/coding-choice.js'
@@ -32,6 +33,7 @@ import type { DshToolDefinition } from '../tools.js'
 import type { AdapterContext, NativeAgents, NativeSessions, NativeTools } from './native-events.js'
 
 interface RoutingDependencies {
+  readonly demand?: OnDemandIntake | undefined
   readonly ctx: Context
   readonly native: AdapterContext
   readonly tools: NativeTools | undefined
@@ -66,7 +68,7 @@ export function createRouting({
   getToolExposureConfig, reportToolExposureFallback, reportToolExposureProjection, modelCatalog,
   getSelection, setSelection, hasSelection,
   getPolicyState, captureInitialInput, prepareTurn, mapPreStep, currentSession,
-  readStateForRun,
+  readStateForRun, demand,
 }: RoutingDependencies) {
   const systemSkillNames = new WeakMap<object, ReadonlySet<string>>()
   const ownedModelToolDefinitions = new Map<string, { readonly execute: unknown }>()
@@ -114,6 +116,7 @@ export function createRouting({
     const disposeMemory = onNativeEvent(agent.ctx, 'agent/request', async (_event: unknown, next: () => Promise<any>) => {
       const request = await next()
       if (delegation.isChild(agent)) return request
+      if (demand?.pending(agent)) { await demand.beforeRequest(agent); return request }
       const prepared = agent.session ? currentSession(agent.session.id)?.prepared : undefined
       if (!prepared || !agent.session) return request
       // A unavailable memory catalog degrades to no owned memory, never to a
@@ -132,14 +135,32 @@ export function createRouting({
       else assemblyClaims.set(agent, { turn: event.turn, messages: [event.message] })
     })
     const memoryReviewPresentation = createMemoryReviewPresentation(agent, runtime)
+    // Post-execute is awaited after native result normalization and before the
+    // next assembly snapshots its schemas, unlike the tools/result observer.
+    const disposeMemoryReviewResult = onNativeEvent(agent.ctx, 'tools/post-execute', async (execution, _result, next) => {
+      const decision = await next()
+      if (execution.agent === agent) {
+        const item = agent.session ? currentSession(agent.session.id) : undefined
+        await memoryReviewPresentation.sync(item && !item.closed && !item.failed && item.nativeAgent === agent && item.nativeSession === agent.session ? item.runId : undefined)
+      }
+      return decision
+    })
     const disposeMemoryReviewIdle = agent.ctx.on('agent/status', (event: { agent: RoutableAgent; status: string }) => {
       if (event.agent === agent && event.status === 'idle') memoryReviewPresentation.dispose()
     })
     let autoRoute: { runId: string; sessionId: string; binding: import('../model-configuration.js').ModelBinding } | undefined
     const disposeRouting = installDshModelRouting(agent, async signal => {
       autoRoute = undefined
+      // An armed/native Deep request owns its ingress before ordinary intake.
       const deep = await deepPlanning.beforeAssembly(agent, signal)
       if (deep.owned) { memoryReviewPresentation.dispose(); assemblyClaims.delete(agent); return deep.model }
+      if (demand && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent) && !isGenericNativeChild(agent)) {
+        const claim = assemblyClaims.get(agent)
+        if (claim && hasHumanInput(claim.messages) && await demand.capture({ agent, messages: claim.messages, turn: claim.turn, step: 0, signal })) {
+          assemblyClaims.delete(agent); return { kind: 'native' }
+        }
+        if (demand.pending(agent)) return { kind: 'native' }
+      }
       const childModel = await delegation.restoreOrPersist(agent)
       if (childModel) { memoryReviewPresentation.dispose(); await delegation.assertCurrent(agent); return childModel }
       if (isGenericNativeChild(agent)) { memoryReviewPresentation.dispose(); assemblyClaims.delete(agent); return { kind: 'native' } }
@@ -344,6 +365,7 @@ export function createRouting({
       },
     })
     const disposeMemoryFence = onNativeEvent(agent.ctx, 'llm/stream', (request: any, next: () => AsyncIterable<any>) => (async function* () {
+      await demand?.fence(agent, request)
       const item = agent.session ? currentSession(agent.session.id) : undefined
       if (item && !item.closed && !delegation.isChild(agent) && request.sessionId === agent.session?.id && request.purpose !== 'compaction') {
         let allowed: ReadonlyMap<string,string> = new Map()
@@ -360,7 +382,7 @@ export function createRouting({
       }
       yield* next()
     })())
-    routingDisposers.set(agent, () => { disposeMemoryReviewIdle(); memoryReviewPresentation.dispose(); releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeClaim() })
+    routingDisposers.set(agent, () => { disposeMemoryReviewResult(); disposeMemoryReviewIdle(); memoryReviewPresentation.dispose(); releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeClaim() })
   }
   const routingCreatedDisposer = onNativeEvent(ctx, 'agent/created', (event: { agent: RoutableAgent }) => {
     delegation.created(event.agent)

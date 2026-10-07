@@ -35,9 +35,6 @@ pnpm dsh web
 ```
 
 If you use a globally installed `dsh` CLI, omit `pnpm` from the commands.
-For the tested dsh-TUI `0.11.1` profile, install Kiokuko separately with
-`dsh plugin --profile dsh-tui add kiokuko-dsh`. Its DSH-native core is covered;
-the browser client remains Web-only. See the [TUI compatibility boundary](docs/dsh-plugin.md#compatibility).
 Enter your task normally; no Kiokuko setup command is needed.
 For GitHub/local installation, see the [plugin guide](docs/dsh-plugin.md).
 

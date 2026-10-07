@@ -2,12 +2,13 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, rm, symlink, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 import { join, resolve } from 'node:path'
 
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
 const native = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(root, 'tests/fixtures/dsh-runtime/node_modules')
 await access(join(native, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
-const env = {...process.env, KIOKUKO_DSH_PACKAGE_ROOT:native, KIOKUKO_REQUIRE_DSH_NATIVE:'1', KIOKUKO_REQUIRE_LISP_RUNTIME:'1', KIOKUKO_TEST_COMPILED_SKILLS:'1'}
+const env = {...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(join(root,'tests/dsh/helpers/offline-skill-catalog.mjs')).href}`, KIOKUKO_DSH_PACKAGE_ROOT:native, KIOKUKO_REQUIRE_DSH_NATIVE:'1', KIOKUKO_REQUIRE_LISP_RUNTIME:'1', KIOKUKO_TEST_COMPILED_SKILLS:'1'}
 delete env.KIOKUKO_SKILL_PACKAGE_ROOT
 delete env.KIOKUKO_DSH_SOURCE_ROOT
 delete env.NODE_TEST_CONTEXT
@@ -17,7 +18,7 @@ async function verify(packageRoot) {
     ['--import','tsx','--test','tests/dsh/skill-delivery/skill-delivery.test.ts', ...(!packageRoot ? ['tests/dsh/skill-delivery/prototype-evaluation.test.ts'] : [])],
     ['--import','tsx','--test','--test-name-pattern=\\(text\\)|Japanese Skill reaches','tests/dsh/e2e/native-agent-loop.test.ts','tests/dsh/e2e/deep-planning-native.test.ts'],
   ]) {
-    try { const result=await exec(process.execPath,args,options);process.stdout.write(result.stdout);process.stderr.write(result.stderr) }
+    try { const result=await exec(process.execPath,['--import',join(root,'tests/dsh/helpers/offline-skill-catalog.mjs'),...args],options);process.stdout.write(result.stdout);process.stderr.write(result.stderr) }
     catch(error) { process.stdout.write(error.stdout??'');process.stderr.write(error.stderr??'');throw new Error(`Skill delivery failed (${packageRoot?'packed':'source'}, exit ${error.code})`) }
   }
 }

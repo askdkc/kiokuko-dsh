@@ -1,7 +1,8 @@
 import type { DshCoreRuntime } from './core-runtime.js'
 import { memoryApplicationDecisionsPending, memoryApplicationStatus } from '../memory/application.js'
 
-/** PTC can execute Node code, so unresolved memory decisions need a direct native review tool. */
+/** Pending reviews need direct tools without removing the bound PTC transport.
+ * The memory execution gate still blocks run_code until decisions are resolved. */
 export function createMemoryReviewPresentation(agent: { ctx?: unknown }, runtime: DshCoreRuntime) {
   let release: (() => void) | undefined
   let activeRunId: string | undefined
@@ -13,10 +14,10 @@ export function createMemoryReviewPresentation(agent: { ctx?: unknown }, runtime
     if (!pending) { dispose(); return }
     if (release) return
     const scopedTools = (agent.ctx as { get?(name: string): unknown } | undefined)?.get?.('tools') as {
-      modeFor(scope: unknown): string; presentAs(mode: 'native'): () => void
+      modeFor(scope: unknown): string; presentAs(mode: 'both'): () => void
     } | undefined
     if (scopedTools?.modeFor(agent) !== 'ptc') return
-    release = scopedTools.presentAs('native')
+    release = scopedTools.presentAs('both')
     activeRunId = runId
   } }
 }

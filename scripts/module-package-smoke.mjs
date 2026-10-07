@@ -6,7 +6,8 @@ import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { realpathSync } from 'node:fs'
 
-const [packagePath, nativeRoot, combination = 'core'] = process.argv.slice(2)
+const [packagePath, nativeRoot, combination = 'core', intakeProbe = 'admitted'] = process.argv.slice(2)
+assert.ok(['admitted', 'default'].includes(intakeProbe))
 const packageRoot = realpathSync(packagePath)
 const legacy = combination.endsWith('full')
 const loaded = new Set()
@@ -21,10 +22,19 @@ const [cordis, llm, session, projection, systemPrompt, tools, agents, loop, skil
   ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'skill', 'commands', 'token-meter', 'compaction-basic'].map(name => import(pathToFileURL(join(nativeRoot, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')))))
 class FixtureModel extends llm.LlmAdapter {
   requests = []
+  script = []
   async listModels(provider) { return [{ provider, id: 'fixture', name: 'fixture' }] }
   async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: 100000 } } }
   async *stream(options) {
+    if (options.purpose === 'compaction') {
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: '{"schemaVersion":1,"memories":[]}' } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
     this.requests.push(options)
+    const scripted = this.script.shift()
+    if (scripted) { yield* typeof scripted === 'function' ? await scripted(options) : scripted; return }
     yield { type: 'block-start', index: 0, blockType: 'text' }
     yield { type: 'text-delta', index: 0, text: '確認しました。' }
     yield { type: 'block-end', index: 0, block: { type: 'text', text: '確認しました。' } }
@@ -38,6 +48,8 @@ process.env.HOME = join(directory, 'home')
 process.env.KIOKUKO_DATA_DIR = join(directory, 'data')
 const ctx = new cordis.Context(), fibers = [], provider = new FixtureModel(), questions = []
 const failures = []
+const toolResults = new Map()
+ctx.on('tools/result', (execution, result) => toolResults.set(execution.callId, result), { global: true })
 const registeredCommands = new Map()
 ctx.on('agent/error', payload => failures.push(String(payload.error?.stack ?? JSON.stringify(payload))))
 let handle
@@ -64,6 +76,7 @@ try {
   ctx.llm.registerAdapter(['fixture'], provider)
   const registerCommand = ctx.commands.register.bind(ctx.commands)
   ctx.commands.register = definition => { registeredCommands.set(definition.name, definition); return registerCommand(definition) }
+  // Both conversational and tool-backed consumers exercise the public default.
   const configuration = { repositoryRoot: directory, databasePath: join(directory, 'memory.sqlite3'), migrationsDirectory: join(packageRoot, 'migrations'), skillPrompts: { mode: 'compiled' } }
   if (legacy) {
     const prompts = new publicEntry.DshSkillPrompts({ mode: 'compiled' })
@@ -88,7 +101,22 @@ try {
     const status = await ctx.commands.execute(parent, '/kioku-typesafe-key status', [], new AbortController().signal)
     assert.equal(status.result.kind, 'success'); assert.match(status.result.text, /TypeSafe:/)
   }
-  for (const task of ['こんにちは', 'この文章を要約してください', 'この資料を調査してください']) {
+  if (intakeProbe === 'default') {
+    assert.equal(Object.hasOwn(configuration, 'intakeMode'), false)
+    assert.equal(publicEntry.Config.parse({}).intakeMode, 'on-demand')
+    parent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'この仕組みを日本語で説明してください。' }], source: { kind: 'user' } }))
+    await parent.whenIdle()
+    assert.deepEqual(failures, [])
+    assert.equal(provider.requests.length, 1)
+    assert.deepEqual(questions, [])
+    const { openConnection } = await import(pathToFileURL(join(packageRoot, 'dist/db/connection.js')))
+    const db = openConnection(configuration.databasePath)
+    try {
+      for (const table of ['ledger_runs', 'akinator_sessions', 'enno_contracts']) assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0, table)
+    } finally { db.close() }
+    console.log(JSON.stringify({ combination, status: 'passed', intakeProbe, nativeRequests: 1, liveModelQuality: 'unmeasured' }))
+  } else {
+  for (const task of ['こんにちは', 'この文章を要約してください', 'この仕組みを説明してください']) {
     const count = provider.requests.length
     parent.followup(llm.createUserMessage({ content: [{ type: 'text', text: task }], source: { kind: 'user' } }))
     await parent.whenIdle()
@@ -102,15 +130,37 @@ try {
   const database = openConnection(configuration.databasePath)
   let memory
   try {
-    const workspace = database.prepare('SELECT workspace FROM task_memory_bindings WHERE session_id=? ORDER BY rowid DESC LIMIT 1').get(parent.session.id).workspace
+    const workspace = database.prepare('SELECT r.workspace FROM repositories r JOIN repository_locations l ON l.repository_id=r.repository_id WHERE l.canonical_root=?').get(directory).workspace
     memory = recordEntry(database, {workspace,kind:'fact',title:'CYCLEPACK',body:'CYCLEPACK saved memory payload for native package verification.',scope:{visibility:'project'}})
   } finally { database.close() }
-  const explained = await ctx.commands.execute(parent, `/kioku-memory explain ${memory.id} --json`, [], new AbortController().signal)
-  assert.equal(explained.result.kind, 'success', explained.result.text)
-  assert.equal(JSON.parse(explained.result.text).evidenceStatus, 'details_unavailable')
-  const toolExplanation = await ctx.tools.execute({callId:'packed-memory-explain',name:'memory_explain',arguments:{entryId:memory.id},agent:parent,signal:new AbortController().signal})
-  assert.notEqual(toolExplanation.isError, true, JSON.stringify(toolExplanation))
-  assert.equal(toolExplanation.value.body,memory.body)
+  const call = (id, name, args) => [
+    { type: 'block-start', index: 0, blockType: 'tool-call' },
+    { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: JSON.stringify(args) },
+    { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: JSON.stringify(args) } },
+    { type: 'finish', reason: { kind: 'tool-calls' } },
+  ]
+  const nativeResult = (request, id) => request.messages.flatMap(message => message.role === 'tool' && message.toolCallId === id ? [message]
+    : (message.content ?? []).filter(block => block.type === 'tool-result' && block.toolCallId === id)).at(-1)
+  provider.script.push(request => {
+    assert.ok(request.tools.some(tool => tool.name === 'prepare_requested_work'))
+    return call('packed-prepare-memory', 'prepare_requested_work', { taskType: 'research' })
+  }, async request => {
+    const result = nativeResult(request, 'packed-prepare-memory')
+    assert.equal(result.isError, false)
+    assert.equal(JSON.parse(result.content[0].text).prepared, true)
+    const explained = await ctx.commands.execute(parent, `/kioku-memory explain ${memory.id} --json`, [], new AbortController().signal)
+    assert.equal(explained.result.kind, 'success', explained.result.text)
+    assert.equal(JSON.parse(explained.result.text).evidenceStatus, 'details_unavailable')
+    return call('packed-memory-explain', 'memory_explain', { entryId: memory.id })
+  }, request => {
+    const result = nativeResult(request, 'packed-memory-explain')
+    assert.equal(result.isError, false)
+    assert.ok(JSON.stringify(result.content).includes(memory.body))
+    return [{ type: 'block-start', index: 0, blockType: 'text' }, { type: 'block-end', index: 0, block: { type: 'text', text: '出典を検証しました。' } }, { type: 'finish', reason: { kind: 'stop' } }]
+  })
+  parent.followup(llm.createUserMessage({ content: [{ type: 'text', text: '通常実行で CYCLEPACK の出典を調査し、記憶ツールで根拠を検証してください。' }], source: { kind: 'user' } }))
+  await parent.whenIdle()
+  assert.deepEqual(failures, [])
   parent.followup(llm.createUserMessage({content:[{type:'text',text:'CYCLEPACK の内容を確認してください'}],source:{kind:'user'}}))
   await parent.whenIdle()
   assert.ok(JSON.stringify(provider.requests.at(-1).messages).includes(memory.body), 'packed memory must be retrieved')
@@ -121,6 +171,24 @@ try {
   assert.ok(!JSON.stringify(provider.requests.at(-1).messages).includes(memory.body), 'packed forgotten memory cannot reach the next request')
   const forgottenRead = await ctx.commands.execute(parent, `/kioku-memory explain ${memory.id} --json`, [], new AbortController().signal)
   assert.equal(forgottenRead.result.kind,'error')
+  const runTools = async (agent, task, operations) => {
+    const preparation = `prepare-${operations[0][0]}`
+    provider.script.push(call(preparation, 'prepare_requested_work', { taskType: 'research' }),
+      request => {
+        const result = nativeResult(request, preparation)
+        assert.equal(result.isError, false, JSON.stringify(result))
+        assert.equal(JSON.parse(result.content[0].text).prepared, true)
+        return call(...operations[0])
+      }, ...operations.slice(1).map(operation => call(...operation)))
+    agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: `通常実行で ${task}` }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    assert.deepEqual(failures, [])
+    return operations.map(([id]) => {
+      const result = toolResults.get(id)
+      assert.ok(result, `Missing native result: ${id}`)
+      return result
+    })
+  }
   // Exercise the delivered full/core coordinator, not an imported test-only instance.
   semanticReady = true
   const message = (id, text) => ({ id, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] })
@@ -163,7 +231,8 @@ try {
     const output = provider.requests.at(-1).messages.flatMap(message => message.content).find(block => block.type === 'tool-result' && block.toolCallId === 'packed-old').content[0].text
     assert.match(output, /^\[Kiokuko ObservationPack v1\]/)
     const reference = JSON.parse(output.split('\n')[1])
-    const page = await ctx.tools.execute({ callId: 'packed-original-read', name: 'observation_read', arguments: { handle: reference.handle, offset: 200000, limit: 80 }, agent: observationAgent.agent, signal: new AbortController().signal })
+    const [page] = await runTools(observationAgent.agent, 'observation_read で保存済みの元の出力を調べてください。',
+      [['packed-original-read', 'observation_read', { handle: reference.handle, offset: 200000, limit: 80 }]])
     assert.equal(page.isError, false, JSON.stringify(page))
     assert.equal(page.value.text, resultText.slice(200000, 200080))
     const status = JSON.parse((await registeredCommands.get('kioku-decisions').handler({ rawInput: 'status', agent: observationAgent.agent, signal: new AbortController().signal })).text)
@@ -187,17 +256,19 @@ try {
     assert.ok(deliveredText.includes(expected), 'the packed core+Lisp model receives the complete compiled contract')
     assert.ok(expected.includes('settle testable doubts'), 'the package contains the new mandatory contract')
     const arguments_ = { operationId: 'packed-eval', code: '(+ 20 22)' }
-    const result = await ctx.tools.execute({ callId: 'packed-lisp-eval', name: 'lisp_eval', arguments: arguments_, agent: parent, signal: new AbortController().signal })
+    const [result, discovery, status, replay] = await runTools(parent, 'protected Lisp で (+ 20 22) を実行し、TypeSafeの状態と保存済みの実行結果を検証してください。', [
+      ['packed-lisp-eval', 'lisp_eval', arguments_],
+      ['packed-typesafe-discovery', 'lisp_describe', { operationId: 'typesafe-discovery' }],
+      ['packed-typesafe-status', 'lisp_eval', { operationId: 'typesafe-status', code: '(kioku.typesafe:status)' }],
+      ['packed-lisp-replay', 'lisp_eval', arguments_],
+    ])
     assert.notEqual(result.isError, true, JSON.stringify(result))
     assert.equal(result.value.ok, true, JSON.stringify(result))
     assert.match(JSON.stringify(result), /42/)
-    const discovery = await ctx.tools.execute({ callId: 'packed-typesafe-discovery', name: 'lisp_describe', arguments: { operationId: 'typesafe-discovery' }, agent: parent, signal: new AbortController().signal })
     assert.equal(discovery.value.ok, true, JSON.stringify(discovery))
     assert.ok(JSON.stringify(discovery).includes('kioku.typesafe:evaluate'), JSON.stringify(discovery))
-    const status = await ctx.tools.execute({ callId: 'packed-typesafe-status', name: 'lisp_eval', arguments: { operationId: 'typesafe-status', code: '(kioku.typesafe:status)' }, agent: parent, signal: new AbortController().signal })
     assert.equal(status.value.ok, true, JSON.stringify(status))
     assert.equal(typeof status.value.value.json.configured, 'boolean')
-    const replay = await ctx.tools.execute({ callId: 'packed-lisp-replay', name: 'lisp_eval', arguments: arguments_, agent: parent, signal: new AbortController().signal })
     assert.equal(replay.value.replay, true, 'exact completed effects must not execute twice')
     await handle.dispose(); handle = undefined
     assert.equal(ctx.commands.list(parent).some(command => command.name === 'kioku-typesafe-key'), false)
@@ -211,6 +282,7 @@ try {
   const first = provider.requests[0]
   const system = first.system ?? first.messages.filter(message => message.role === 'system').flatMap(message => message.content).map(block => block.text ?? '').join('\n')
   console.log(JSON.stringify({ combination, status: 'passed', nativeRequests: provider.requests.length, skills: names, startupModules: imported.map(url => url.slice(pathToFileURL(packageRoot).href.length + 1)), constantPromptBytes: Buffer.byteLength(system), protectedLisp: combination.includes('lisp'), semanticCompaction: semanticCalls === 1, liveModelQuality: 'unmeasured' }))
+  }
 } finally {
   globalThis.fetch = originalFetch
   await handle?.dispose()

@@ -1,3 +1,6 @@
+import { hasHumanInput } from './answer-review/contracts.js'
+import type { OnDemandIntake } from './on-demand-intake.js'
+import { projectDshContext } from './context-projection.js'
 import type { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
 import { mountDecisionCommand } from './decisions/host.js'
 import { mountModelAutoCommand } from './model-auto/command.js'
@@ -60,6 +63,7 @@ export interface DshNativeTurnStoppingPayload {
 }
 
 export interface DshCompositionHost {
+  readonly onDemandIntake?: OnDemandIntake
   readonly diffReview?: DiffReviewController
   readonly decisions?: DecisionService
   readonly modelAuto?: { readonly coordinator: import('./model-auto/coordinator.js').ModelAutoCoordinator;
@@ -146,6 +150,7 @@ function mountNativeIntakeGate(
   mapPreStep: (payload: DshNativePreStepPayload) => DshPreStepEvent | PromiseLike<DshPreStepEvent>,
   worker?: Pick<DshBoundaryWorker, 'kick'>,
   deep?: import('../deep-thinker/controller.js').DeepPlanningController,
+  demand?: OnDemandIntake,
   bypassIntake?: (agent: DshNativePreStepPayload['agent']) => boolean,
 ): () => void {
   return ctx.on('agent/pre-step', async (payload: DshNativePreStepPayload, next) => {
@@ -154,6 +159,13 @@ function mountNativeIntakeGate(
     if (await deep?.preStep(payload)) {
       void deep!.kick(payload.agent).catch(() => {})
       return { kind: 'reject', reason: 'Deep owns and has preserved this input.' }
+    }
+    if (demand && (hasHumanInput(payload.messages) || demand.pending(payload.agent) || demand.continuing(payload.agent)) && await demand.capture(payload)) {
+      const result = await next()
+      if (result.kind !== 'enter') return result
+      const previousReport = deep && payload.agent.session ? await deep.previousReport(payload.agent.session.id) : []
+      const messages = [...result.messages, ...projectDshContext(previousReport, payload.agent.session ?? {}, result.messages)]
+      return { ...result, messages: await demand.answerMessages(payload, messages) }
     }
     let mapped: DshPreStepEvent
     try { mapped = await mapPreStep(payload) } catch (error) {
@@ -231,6 +243,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   const stopIngress = (): void => {
     if (ingressStopped) return
     ingressStopped = true
+    host.onDemandIntake?.stop()
     mismatchCleanup.abort(new Error('Kiokuko mismatch cleanup stopped on plugin unload'))
     host.semanticCompaction?.stop()
     for (const dispose of ingressDisposers.reverse()) {
@@ -371,7 +384,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     }
     if (host.intakeGate !== undefined) {
       if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')
-      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep, host.boundaryWorker, host.deepPlanning, host.bypassNativeIntake))
+      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep, host.boundaryWorker, host.deepPlanning, host.onDemandIntake, host.bypassNativeIntake))
     }
     if (host.boundaryWorker !== undefined && host.ennoController !== undefined) {
       throw new Error('kiokuko-dsh must not mount both the durable boundary worker and the legacy turn-stopping controller')

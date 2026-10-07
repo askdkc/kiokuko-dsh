@@ -938,6 +938,7 @@ export class DshMemoryFinalizer {
 
   async observeIndexRequest(workspace:string,sessionId:string,events:readonly DshLogEvent[]):Promise<void> {try{await this.admitIndex(workspace,sessionId,latestEnvelope(events))}catch{/* optional enrichment never vetoes native work */}}
   async admitIndex(workspace:string,sessionId:string,envelope:unknown):Promise<void> {await this.#indexService?.admitIndex(workspace,sessionId,envelope)}
+  async admitConversationIndex(workspace:string,sessionId:string,envelope:unknown,assertCurrent:()=>boolean):Promise<void> {await this.#indexService?.admitConversation(workspace,sessionId,envelope,assertCurrent)}
   async indexCommand(sessionId:string,raw:string):Promise<Record<string,unknown>> {await this.start();return this.#indexService!.indexCommand(sessionId,raw)}
 
   get lastDrainError(): unknown { return this.#lastDrainError }

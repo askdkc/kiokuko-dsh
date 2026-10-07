@@ -16,6 +16,7 @@ import { compareCanonicalStrings } from '../../../src/serialization/validate.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 import { dshTurnBoundarySeq } from '../../../src/dsh/session-memory-finalizer.js'
 import type { EfficiencyObservation } from '../../../src/dsh/efficiency.js'
+import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { mockModelRoutes, modelSelectionAnswer, openaiModels } from '../helpers/model-selection.js'
 const { createDshHostAdapter, mountDshComposition, DshSkillPrompts } = await import(process.env.KIOKUKO_SKILL_PACKAGE_ROOT
@@ -32,7 +33,7 @@ function dshModule(relativePath: string): string {
   return pathToFileURL(join(dshPackageRoot, '@deepseek-ai', name, 'lib/index.js')).href
 }
 
-for (const finalMode of ['text', 'empty', 'error', 'stall', 'pause', 'verifier_mutation', 'last_attempt', 'boundary_blocked', 'phase_handoff'] as const) {
+for (const finalMode of ['text', 'empty', 'error', 'stall', 'pause', 'verifier_mutation', 'last_attempt', 'boundary_blocked', 'phase_handoff', 'default_resume'] as const) {
 test(`real DSH agent loop: persisted resume, verification retry, completion (${finalMode})`, {
   skip: !dshSourceRoot && !dshPackageRoot ? 'requires the pinned DeepSeek Harness runtime' : false,
   timeout: 60_000,
@@ -161,6 +162,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   const adapterScript = new mock.MockAdapter(finalMode === 'stall'
     ? Array.from({ length: 8 }, () => mock.textResponse('I have not submitted the required phase.')) : [
     ...flowResponses('one', true, false, true),
+    mock.toolCallResponse('prepare-two', TASK_PREPARE_TOOL, { taskType: 'build' }),
     ...secondFlow.slice(0, 5),
     mock.toolCallResponse('review-two-revised', 'enno_plan_review', plan),
     mock.toolCallResponse('plan-two-revised', 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
@@ -328,6 +330,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     await adapter.host.runtime!.withDatabase(async (seedDatabase) => {
       const seeded = await prepareAgentTask(seedDatabase, {
         requestId: 'pre-reload-active-run',
+        sessionOwnership: true,
         task: '@PLAN.md を実装',
         cwd: fixtureRoot,
         profileHints: { taskType: 'build', target: fixtureRoot, expected: '@PLAN.md を実装\n変更を検証し、結果を報告してください。', constraints: '変更範囲を守る。\n無関係な変更はしない。' },
@@ -425,6 +428,16 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     await completeTurn('@PLAN.md を実装', () => completed(1))
     assert.deepEqual(boundaryFailures, [], 'multiline intake must not trigger an internal-error question')
     assert.match(confirmationDetails[0]!, /Keep the native workflow recoverable/)
+    if (finalMode === 'default_resume') {
+      assert.deepEqual(boundaryFailures, [])
+      assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n), 1,
+        'default admission resumes the exact existing run instead of opening another')
+      assert.match(JSON.stringify(liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'assistant/message').at(-1)), /Completed one/)
+      assert.equal(liveAgent.session.snapshotEvents().filter((e: any) => e.type === 'tool/result').some((e: any) => e.data.message.content[0]?.isError), false)
+      return
+    }
+    assert.deepEqual(boundaryFailures, [], 'multiline intake must not trigger an internal-error question')
+    assert.match(confirmationDetails[0]!, /Keep the native workflow recoverable/)
     if (finalMode === 'phase_handoff') {
       const events = liveAgent.session.snapshotEvents()
       const idealCall = events.find((e: any) => e.type === 'tool/call' && e.data.callId === 'ideal-one')
@@ -507,7 +520,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     } else assert.ok(longAssistantMessage.sourceEventSeqs?.length > 2_048, 'legacy logs exercise the former bridge source-reference limit')
     const resultCallId = (event: any) => event.data.message.toolCallId ?? event.data.message.content[0]?.toolCallId
     const resultContent = (event: any) => event.data.message.role === 'tool' ? event.data.message.content : event.data.message.content[0].content
-    assert.deepEqual(results.map((event: any) => event.data.message.isError ?? event.data.message.content[0]?.isError), Array(16).fill(false), JSON.stringify({ toolEvents, turnEnds }))
+    assert.deepEqual(results.map((event: any) => event.data.message.isError ?? event.data.message.content[0]?.isError), Array(17).fill(false), JSON.stringify({ toolEvents, turnEnds }))
     const delegation = results.find((event: any) => resultCallId(event) === 'delegate-two')
     const delegated = JSON.parse(resultContent(delegation)[0].text)
     assert.equal(delegated.accepted, false)
