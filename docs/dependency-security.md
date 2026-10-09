@@ -1,6 +1,6 @@
 # Dependency security status
 
-Checked on 2026-09-22. These findings apply to this repository's development
+Checked on 2026-10-09. These findings apply to this repository's development
 dependency graph and its CI configuration. Root npm/pnpm overrides do not
 propagate to an application's dependencies when Kiokuko is installed as a plugin.
 
@@ -11,6 +11,25 @@ propagate to an application's dependencies when Kiokuko is installed as a plugin
 | #5: GHSA-rgj7-g3m4-5g8c | sharp < 0.35.4 | Pin 0.35.4 in npm and pnpm. |
 | #3 / #4: GHSA-vwc7-r8mq-g2x9 | adm-zip 0.5.9–0.6.0 | Unfixed upstream; CI avoids the affected installer path. |
 | #7: GHSA-7q85-xj36-vmfc | adm-zip < 0.6.1 | Pin 0.6.1 in npm and pnpm; check the crafted ZIP without allowing oversized allocations. |
+| #12 / #13: GHSA-wq5f-xc86-pv6w | sharp < 0.35.5 | Pin 0.35.5 in npm and pnpm; verify the loaded librsvg is at least 2.63.2. |
+| #10 / #11: GHSA-hp3w-g68c-fv3c | sprintf-js <= 1.1.3 | Remove the dependency by overriding global-agent to 4.1.3 in npm and pnpm. |
+
+The [librsvg advisory](https://github.com/advisories/GHSA-wq5f-xc86-pv6w)
+lists sharp 0.35.5 as the first patched release with prebuilt librsvg 2.63.2.
+The dependency test checks the loaded library version and an SVG-to-pixels
+conversion, in addition to the existing PNG checks.
+
+The [sprintf-js advisory](https://github.com/advisories/GHSA-hp3w-g68c-fv3c)
+has no patched release. Its only root dependency path was
+`@huggingface/transformers -> onnxruntime-node -> global-agent -> roarr -> sprintf-js`.
+[global-agent 4.1](https://github.com/gajus/global-agent/releases/tag/v4.1.0)
+removed roarr. Pinning 4.1.3 removes both roarr and sprintf-js from the root
+lockfiles without replacing Transformers or ONNX Runtime. This is a major-version
+override of ONNX Runtime's requested global-agent 3.x: tests exercise its
+CommonJS bootstrap API, HTTP proxy routing, installer skip/negative-control
+paths, and CPU inference. Remove the override once ONNX Runtime's own dependency
+range selects a version without sprintf-js. Optional CUDA downloads and live
+corporate HTTPS proxies are not covered by these checks.
 
 The [memory-allocation advisory](https://github.com/advisories/GHSA-7q85-xj36-vmfc)
 lists 0.6.1 as its first patched version. Both lockfiles and the installed

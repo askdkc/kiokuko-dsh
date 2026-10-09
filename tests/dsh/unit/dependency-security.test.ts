@@ -17,7 +17,7 @@ test('security overrides resolve consistently in both package-manager lockfiles'
   const npm = json('package-lock.json')
   const pnpm = yaml('pnpm-lock.yaml')
   const workspace = yaml('pnpm-workspace.yaml')
-  for (const [name, minimum] of Object.entries({ 'adm-zip': '0.6.1', sharp: '0.35.4' })) {
+  for (const [name, minimum] of Object.entries({ 'adm-zip': '0.6.1', sharp: '0.35.5', 'global-agent': '4.1.3' })) {
     const version = manifest.overrides[name]
     assert.ok(gte(version, minimum), `${name}: the published security fix must not regress`)
     assert.equal(workspace.overrides[name], version)
@@ -33,9 +33,54 @@ test('security overrides resolve consistently in both package-manager lockfiles'
   }
 })
 
+test('both dependency graphs exclude the unpatched sprintf-js dependency', () => {
+  const npm = json('package-lock.json')
+  const pnpm = yaml('pnpm-lock.yaml')
+  assert.equal(Object.keys(npm.packages).some(key => /(?:^|\/)node_modules\/sprintf-js$/.test(key)), false)
+  assert.equal(Object.keys(pnpm.packages).some(key => key.startsWith('sprintf-js@')), false)
+})
+
+test('the ONNX installer proxy dependency still bootstraps and routes HTTP requests', () => {
+  const ortRequire = createRequire(transformersRequire.resolve('onnxruntime-node'))
+  assert.equal(ortRequire('global-agent/package.json').version, manifest.overrides['global-agent'])
+  const script = `
+    const assert = require('node:assert/strict');
+    const http = require('node:http');
+    const proxy = http.createServer((request, response) => {
+      assert.equal(request.url, 'http://dependency-security.invalid/fixture');
+      response.end('proxy reached');
+    });
+    proxy.listen(0, '127.0.0.1', () => {
+      process.env.GLOBAL_AGENT_HTTP_PROXY = 'http://127.0.0.1:' + proxy.address().port;
+      process.env.GLOBAL_AGENT_NO_PROXY = '';
+      process.env.GLOBAL_AGENT_ENVIRONMENT_VARIABLE_NAMESPACE = 'GLOBAL_AGENT_';
+      const { bootstrap } = require(process.argv[1]);
+      bootstrap();
+      http.get('http://dependency-security.invalid/fixture', response => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => { body += chunk; });
+        response.on('end', () => {
+          assert.equal(body, 'proxy reached');
+          proxy.closeAllConnections();
+          proxy.close();
+        });
+      }).on('error', error => { throw error; });
+    });
+  `
+  execFileSync(process.execPath, ['-e', script, ortRequire.resolve('global-agent')], {
+    timeout: 10_000, stdio: 'pipe',
+  })
+})
+
 test('the actual Transformers dependencies use the security pins and retain image/ZIP APIs', async () => {
   const sharp = transformersRequire('sharp')
   assert.equal(sharp.versions.sharp, manifest.overrides.sharp)
+  assert.ok(gte(sharp.versions.rsvg, '2.63.2'), 'the loaded librsvg must include the security fix')
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>')
+  const raster = await sharp(svg).raw().toBuffer({ resolveWithObject: true })
+  assert.equal(raster.info.width, 2)
+  assert.deepEqual([...raster.data.subarray(0, 3)], [255, 0, 0])
   const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } })
     .resize(1, 1).png().toBuffer()
   const metadata = await sharp(png).metadata()
