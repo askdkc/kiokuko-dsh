@@ -122,6 +122,23 @@ test('plan review offers discussion, refusal and approval shortcuts without chan
   }
 })
 
+test('Lisp review keeps refusal second, approval third and profile policy fourth', async () => {
+  for (const kind of ['question', 'plan-review']) for (const approveFirst of [true, false]) for (const choice of [2, 3, 4]) {
+    const h = clientHarness(), responses: unknown[] = []
+    const approve = {label: 'Approve'}, deny = {label: 'Reject'}, auto = {label: 'Auto-approve all Lisp actions for this profile and continue'}
+    const q = {id: 'lisp', question: 'Apply?', detail: 'Frozen changes', intent: {kind: 'plan-review', approve: approve.label},
+      options: [...(approveFirst ? [approve, deny] : [deny, approve]), auto]}
+    try {
+      const card = h.mount({kind, key: `${kind}-${approveFirst}-${choice}`, questions: [q], async answer(value: unknown) { responses.push(value) }, async cancel() {}})
+      const tree = card.render()
+      assert.deepEqual(descendants(tree).filter(node => node.component === 'strong').map(node => node.props.children),
+        ['1. Chat about it', '2. Reject', '3. Approve', `4. ${auto.label}`])
+      tree.props.onKeyDown(key(String(choice))); tree.props.onKeyDown(key('Enter')); await flush()
+      assert.deepEqual(responses, [{answers: [{id: 'lisp', selected: [[deny, approve, auto][choice - 2]!.label]}]}])
+    } finally { h.restore() }
+  }
+})
+
 test('approval-only review uses two choices; failed submission retains selection for retry', async () => {
   const h = clientHarness('MacIntel', 'Version/19 Safari/605.1.15'), responses: unknown[] = []
   let attempts = 0
@@ -131,7 +148,7 @@ test('approval-only review uses two choices; failed submission retains selection
     async answer(value: unknown) { if (++attempts === 1) throw new Error('Send failed'); responses.push(value) }, async cancel() {} }
   try {
     for (const invalid of [{ ...q, intent: undefined }, { ...q, detail: undefined }, { ...q, multiSelect: true },
-      { ...q, options: [{ label: 'Other' }] }, { ...q, options: [...q.options, { label: 'No' }, { label: 'Later' }] }]) {
+      { ...q, options: [{ label: 'Other' }] }, { ...q, options: [...q.options, { label: 'No' }, { label: 'Later' }, { label: 'Another' }] }]) {
       assert.equal(h.entry.definition.select({ pendingInteraction: { ...pending, questions: [invalid] } }), null)
     }
     const card = h.mount(pending)

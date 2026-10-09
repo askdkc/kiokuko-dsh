@@ -83,7 +83,11 @@ for (const failure of ['insert', 'first-request', 'late-request', 'late-request-
   }, async () => {
     const h = await harness()
     const questions = h.ctx.plugin({ name: 'claim-failure-test-ui', apply(ctx: any) {
-      return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: ['通常実行'] })) }) })
+      return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) => {
+        const answer = q.id === 'taskType' ? '実装・変更' : '通常実行'
+        assert.ok(q.options?.some((option: any) => option.label === answer), `Unexpected intake question: ${JSON.stringify(q)}`)
+        return { id: q.id, selected: [answer] }
+      }) }) })
     } }); await questions
     const adapter = createDshHostAdapter(h.ctx, { intakeMode: 'eager', repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
       migrationsDirectory: join(process.cwd(), 'migrations'), llm: { async *stream() { throw new Error('Optional memory backend unavailable') } } })

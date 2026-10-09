@@ -257,7 +257,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
   ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
 }, async () => {
   let approvals = 0, observedDetail = ''
-  const f = await fixture(false, 'compiled', { lisp: { enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
+  const f = await fixture(false, 'compiled', { lisp: { enabled: true, approvalMode: 'ask', sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
     const q = request.questions[0]
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['chat'] }] }
     assert.match(q.id, /^batch-/u); assert.equal(request.agent.id, 'skill-main')

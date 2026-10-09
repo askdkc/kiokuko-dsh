@@ -632,8 +632,10 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const card = useRef<HTMLElement | null>(null), optionElements = useRef<Array<HTMLElement | null>>([])
   const original = pending.questions[batch.page]!
   const options = original.options ?? []
+  const alternatives = options.filter(option => option.label !== original.intent?.approve)
   const question = { ...original, options: reviewing ? [{ label: reviewCopy!.discuss },
-    ...options] : options }
+    ...alternatives.slice(0, 1), ...options.filter(option => option.label === original.intent?.approve),
+    ...alternatives.slice(1)] : options }
   const draft = batch.drafts[batch.page]!, multi = question.multiSelect === true, inputKind = questionInputKind(question)
   const editable = () => !pending.review && !pendingState(pending).closed && pendingState(pending).channel !== 'none'
   useEffect(() => {

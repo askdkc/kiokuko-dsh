@@ -46,16 +46,24 @@ test('compiled Lisp guidance retains TypeSafe discovery and answer-consuming exa
   const lisp = compiled.resources.find(resource => resource.id === 'kiokuko-lisp/SKILL.md')!.content
   for (const contract of ['kioku.typesafe:evaluate', '/kioku-typesafe-key', 'inspect-diagnosis', 'kioku.decisions:status', 'assess-relevance', 'result.answers', 'Cancellation stops work', 'Existing approvals remain authoritative', 'See lisp_hot_* schemas.']) assert.ok(lisp.includes(contract), contract)
 })
-test('Lisp planning contract survives full, compiled and fallback delivery without losing the prior contract', async () => {
+test('Lisp planning and execution safeguards survive full, compiled and fallback delivery', async () => {
   const sources = await loadSkillSources()
   const lisp = sources.find(s => s.name === 'kiokuko-lisp' && s.relativePath === 'SKILL.md')!
-  const baseline = JSON.parse(await readFile(new URL('../../fixtures/lisp-prototype-planning/before.json', import.meta.url), 'utf8'))
-  const previous = baseline.resources.find((r: { path: string }) => r.path === 'skills/kiokuko-lisp/SKILL.md').content as string
+  // Historical prose is not a byte-prefix contract: package APIs and profile
+  // approvals deliberately extend it. Verify the executable safeguards in every
+  // delivered representation, including the no-artifact fallback.
+  const safeguards = ['Never spoof host-bound session/agent/directory/generation',
+    'never escape protection', 'Unknown\ntest status or generated `passed` fields never prove host verification',
+    'IN_PROGRESS', 'ID_CONFLICT', 'RUNNING/UNKNOWN', 'RESULT_EXPIRED', 'Never replay effects',
+    'profile policy on frozen targets/diffs', 'Refusal/skip/UI failure/cancellation never authorizes',
+    'Generation\napproval never authorizes writes', 'no reapply/\nrollback', 'Cancellation stops work',
+    'execute authorized actions without permission or resubmission questions']
+  const check = (body: string) => { for (const safeguard of safeguards) assert.ok(body.includes(safeguard), safeguard) }
   const expected = 'For Lisp coding, plans or reviews, settle testable doubts with current evidence or authorized target-runtime probes. Choose controls and counterexamples first; record commands, failures, observations and refs in one reasoned plan. Stop when evidence suffices or budgets expire; ask only for needed intent or authority.'
   const compiled = compileSkillResource(lisp)
   assert.deepEqual(compiled.blocks, ['contract', 'prototype-driven-planning', 'approval-policy'])
   assert.ok(compiled.content.includes(expected))
-  assert.ok(compiled.content.startsWith(compileSkillResource({ ...lisp, content: previous }).content.trimEnd()))
+  check(compiled.content)
   const misplaced = lisp.content.replace(/<!-- kiokuko:runtime prototype-driven-planning -->\n([\s\S]*?)<!-- \/kiokuko:runtime -->/u,
     '<!-- kiokuko:documentation prototype-driven-planning -->\n$1<!-- /kiokuko:documentation -->')
   assert.ok(!compileSkillResource({ ...lisp, content: misplaced }).content.includes(expected), 'the negative control must lose the obligation')
@@ -64,11 +72,13 @@ test('Lisp planning contract survives full, compiled and fallback delivery witho
     const artifact = pathToFileURL(join(dir, 'bundle.json'))
     const fallback = new DshSkillPrompts({ mode: 'compiled' }, artifact, async () => sources)
     assert.ok((await fallback.require('kiokuko-lisp')).includes(expected))
+    check(await fallback.require('kiokuko-lisp'))
     assert.equal(fallback.diagnostics().find(d => d.id === compiled.id)?.fallback, 'bundle_unavailable')
     await writeFile(artifact, JSON.stringify(compileSkillBundle(sources)))
     for (const mode of ['full', 'compiled'] as const) {
       const prompts = new DshSkillPrompts({ mode }, artifact, async () => sources)
       assert.ok((await prompts.require('kiokuko-lisp')).includes(expected))
+      check(await prompts.require('kiokuko-lisp'))
       assert.ok((await prompts.require('one-shot-software-completion')).includes('with prototype-driven-planning for\ncoding/plans'))
       assert.ok(prompts.diagnostics().every(d => !d.fallback))
     }
