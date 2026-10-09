@@ -53,7 +53,7 @@ test('Lisp planning contract survives full, compiled and fallback delivery witho
   const previous = baseline.resources.find((r: { path: string }) => r.path === 'skills/kiokuko-lisp/SKILL.md').content as string
   const expected = 'For Lisp coding, plans or reviews, settle testable doubts with current evidence or authorized target-runtime probes. Choose controls and counterexamples first; record commands, failures, observations and refs in one reasoned plan. Stop when evidence suffices or budgets expire; ask only for needed intent or authority.'
   const compiled = compileSkillResource(lisp)
-  assert.deepEqual(compiled.blocks, ['contract', 'prototype-driven-planning'])
+  assert.deepEqual(compiled.blocks, ['contract', 'prototype-driven-planning', 'approval-policy'])
   assert.ok(compiled.content.includes(expected))
   assert.ok(compiled.content.startsWith(compileSkillResource({ ...lisp, content: previous }).content.trimEnd()))
   const misplaced = lisp.content.replace(/<!-- kiokuko:runtime prototype-driven-planning -->\n([\s\S]*?)<!-- \/kiokuko:runtime -->/u,
@@ -113,4 +113,18 @@ test('runtime never compiles: absent, stale and corrupt artifacts deliver full s
     const invalidSource = new DshSkillPrompts({mode:'compiled'}, artifact, async () => { throw new Error('original integrity') })
     await assert.rejects(invalidSource.get('fixture'), /original integrity/u)
   } finally { await rm(dir, {recursive:true, force:true}) }
+})
+
+ test('approval policy survives compiled, full and missing-bundle fallback delivery', async () => {
+  const sources = await loadSkillSources()
+  const dir = await mkdtemp(join(tmpdir(), 'lisp-approval-guidance-'))
+  try {
+    const artifact = pathToFileURL(join(dir,'missing.json'))
+    const expected = 'execute authorized actions without permission or resubmission questions'
+    for (const mode of ['compiled','full'] as const) {
+      const prompts = new DshSkillPrompts({mode}, artifact, async()=>sources)
+      assert.ok((await prompts.require('kiokuko-lisp')).includes(expected))
+    }
+    assert.ok(compileSkillBundle(sources).resources.find(r=>r.id==='kiokuko-lisp/SKILL.md')!.content.includes(expected))
+  } finally { await rm(dir,{recursive:true,force:true}) }
 })

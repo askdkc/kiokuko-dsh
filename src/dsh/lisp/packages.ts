@@ -106,12 +106,12 @@ export function createLispPackageAdapter(questions?: DshUserQuestions, fetcher: 
     const request = PackageRequest.parse(input)
     const before = request.kind === 'update' ? await capture(owner, request.directory) : undefined
     const label = 'Run this package operation'
-    const approval = await confirm(questions, owner.agentId, { id: `lisp-packages-${randomUUID()}`, header: 'Lisp · Package operation',
+    const approval = await confirm(questions, owner, { id: `lisp-packages-${randomUUID()}`, header: 'Lisp · Package operation',
       question: `Allow ${request.kind} via the public npm registry?`,
       detail: `Registry: ${REGISTRY} (no authentication)\nRequest: ${JSON.stringify(request)}\n${request.kind === 'metadata' ? 'Sends only the package name/version.' : request.kind === 'audit' ? 'Sends only the selected package names/versions to the bulk advisory endpoint.' : 'Runs installed npm/pnpm in private OS-protected scratch with network access, clean configuration/environment, no lifecycle scripts or hooks. Only captured root manifests/locks are copied. No repository writes or dependency installation; generated files still require proposal approval.'}\nTimeout: HTTP 30 s; each fixed package-manager command 90 s. No retries.`,
       options: [{ label: 'Do not run' }, { label }], intent: { kind: 'plan-review', approve: label },
     }, signal)
-    if (!approval.approved) return { value: { state: 'NOT_APPLIED', reason: approval.reason } }
+    if (!approval.approved) return { value: { state: 'NOT_APPLIED', reason: approval.reason, ...("message" in approval ? { message: approval.message } : {}) } }
     signal.throwIfAborted()
     if (request.kind === 'metadata') {
       const value = await registryJson(fetcher, `/${encodeURIComponent(request.name)}/${encodeURIComponent(request.version)}`, signal)
@@ -120,16 +120,17 @@ export function createLispPackageAdapter(questions?: DshUserQuestions, fetcher: 
       if (metadata.name !== request.name || (request.version !== 'latest' && metadata.version !== request.version)) fail('PACKAGES_RESPONSE_INVALID', 'Registry package identity does not match.')
       const url = new URL(metadata.dist.tarball)
       if (url.origin !== REGISTRY || url.username || url.password) fail('PACKAGES_RESPONSE_INVALID', 'Registry tarball identity does not match.')
-      return { value: { state: 'SUCCEEDED', source: REGISTRY, package: metadata } }
+      return { value: { state: 'SUCCEEDED', approval: approval.source ?? 'manual', source: REGISTRY, package: metadata } }
     }
     if (request.kind === 'audit') {
       const body = Object.fromEntries(Object.entries(request.versions).map(([name, version]) => [name, [version]]))
       const result = z.record(Name, z.array(z.object({ id: z.number(), name: Name, title: z.string(), url: z.string(), severity: z.string(), vulnerable_versions: z.string() }).passthrough()).max(100))
         .parse(await registryJson(fetcher, '/-/npm/v1/security/advisories/bulk', signal, body))
       if (Object.keys(result).some(name => !Object.hasOwn(body, name))) fail('PACKAGES_RESPONSE_INVALID', 'Advisory package identity does not match.')
-      return { value: { state: 'SUCCEEDED', source: REGISTRY, audited: request.versions, advisories: result } }
+      return { value: { state: 'SUCCEEDED', approval: approval.source ?? 'manual', source: REGISTRY, audited: request.versions, advisories: result } }
     }
-    return generate(owner, request, before!, command, signal)
+    const result = await generate(owner, request, before!, command, signal)
+    return { ...result, value: { ...(result.value as object), approval: approval.source ?? 'manual' } }
   }
 }
 

@@ -1,3 +1,5 @@
+import { mountApprovalPolicy } from './approval-settings.js'
+import type { ApprovalQuestions } from './approval.js'
 import type { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
 import { renderHistoryResult } from './model-result.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
@@ -85,11 +87,17 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const commands = ctx.get('commands', false) as { register(definition: DshNativeCommandDefinition): () => void } | undefined
   if (!tools || !agents || !sessions || !commands) fail('HOST_CAPABILITY_MISSING', 'Lisp には DSH のツール・セッション・コマンドサービスが必要です。')
   const questions = ctx.get('userQuestions', false) as DshUserQuestions | undefined
-  const ownerQuestions = questions ? { ask: (request: Parameters<DshUserQuestions['ask']>[0]) => {
-    const agent = request.agent ? agents.get(request.agent.id) : undefined
-    if (!agent || sessions.get(agent.session.id) !== agent.session) fail('SESSION_MISMATCH', '確認画面のセッションを確認できません。')
-    return questions.ask({ ...request, agent })
-  } } : undefined
+  const approvalPolicy = mountApprovalPolicy(ctx, config.approvalMode, (agentId, expected) => {
+    const agent = agents.get(agentId)
+    const bound = fence
+    if (!agent || expected && (agent.session.id !== expected.sessionId || realpathSync(agent.session.header.cwd) !== expected.root) || sessions.get(agent.session.id) !== agent.session || !bound || bound.stopped ||
+      bound.sessions.get(agent.session.id) !== realpathSync(agent.session.header.cwd))
+      fail('SESSION_MISMATCH', 'Lisp approval session identity changed.')
+  })
+  const ownerQuestions: ApprovalQuestions = { approvalPolicy, ask: request => {
+    approvalPolicy.validate(request.agent!.id)
+    return questions?.ask({ ...request, agent: agents.get(request.agent!.id)! }) ?? Promise.reject(new Error('Question UI unavailable'))
+  } }
   const databasePath = await runtime.withDatabase(db => db.filePath)
   const store = new LispStore(fn => runtime.withDatabase(db => fn(db)))
   const typesafe = new HttpTypeSafeClient(typeSafeCredentials(ctx))
@@ -213,6 +221,14 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     }
     return { agent, owner: { sessionId: identifier.parse(agent.session.id), agentId: identifier.parse(agent.id), root: realpathSync(agent.session.header.cwd) }, signal: binding.abort.signal }
   }
+  const approvalText = () => `Lisp approval mode: ${approvalPolicy.mode()} (entire profile). ` + (approvalPolicy.mode() === 'auto'
+    ? 'Execute authorized Lisp actions directly. Do not ask permission to submit, resubmit, run verification or apply changes. Ask only for missing intent that materially changes the work. Cancellation, refusal and unknown outcomes remain authoritative.'
+    : 'Lisp host permission dialogs are enabled. Submit authorized operations directly; do not add conversational permission requests before the host dialog.')
+  // Native DSH assembles prompts BEFORE agent/pre-step. Register a live provider
+  // now so activation, restored sessions and the next step see the current mode.
+  const policyPrompt = ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
+  if (policyPrompt) disposers.push(policyPrompt.section({ name: 'kiokuko:lisp-approval', order: -89999,
+    text: ({agent}: {agent?: Agent}) => agent && manager.enabled.has(agent.session.id) ? approvalText() : '' }))
   const registeredAgents = new WeakSet<object>()
   const agentDisposers = new Map<string, (() => void)[]>()
   const boundAgents = new Map<string, Agent>()
@@ -244,7 +260,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     }
     local.push(restrictInheritedTools(tools, scopedTools, agent, nativeTools))
     for (const name of LISP_TOOLS) {
-      const definition = { name, description: description(name), modelFacing: true,
+      const definition = { name, get description() { return `${description(name)} Current Lisp approval mode: ${approvalPolicy.mode()} (profile).` }, modelFacing: true,
         parameters: lispToolSchema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
         execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string }) => {
           try {
@@ -261,11 +277,15 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     }
     registeredAgents.add(agent)
     const prompt = agent.ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
-    if (prompt) local.push(prompt.section({ name: 'kiokuko:lisp', order: -90000, text: guide }))
+    if (prompt) {
+      local.push(prompt.section({ name: 'kiokuko:lisp', order: -90000, text: guide }))
+      if (!policyPrompt) local.push(prompt.section({ name: 'kiokuko:lisp-approval', order: -89999, text: approvalText }))
+    }
   }
   const guide = skillPrompts ? await skillPrompts.require('kiokuko-lisp') : await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
   fence.prepareAgent = async candidate => {
     const binding = owner(candidate)
+    runtimePrompts.get(candidate.id)?.(); runtimePrompts.delete(candidate.id)
     manager.setAgentBusy(binding.owner, true)
     if (await manager.isTaskMode(binding.owner)) {
       binding.signal.throwIfAborted()
@@ -276,10 +296,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     binding.signal.throwIfAborted()
     register(binding.agent)
     const prompt = binding.agent.ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
-    runtimePrompts.get(candidate.id)?.(); runtimePrompts.delete(candidate.id)
-    if (prompt) runtimePrompts.set(candidate.id, prompt.section({ name: 'kiokuko:lisp-runtime', order: -89999,
+    if (prompt) { const previous = runtimePrompts.get(candidate.id); const remove = prompt.section({ name: 'kiokuko:lisp-runtime', order: -89999,
       text: `Current Lisp generation: ${status.generation ?? 'none'}. State: ${status.state}.` + (status.resumed
-        ? ' Lisp was automatically restarted after normal suspension. Definitions, variables and object references from older generations are gone. Recreate needed helpers; never replay completed file or process effects. Compare the generation of previous tool results before reusing state.' : '') }))
+        ? ' Lisp was automatically restarted after normal suspension. Definitions, variables and object references from older generations are gone. Recreate needed helpers; never replay completed file or process effects. Compare the generation of previous tool results before reusing state.' : '') }); runtimePrompts.set(candidate.id, () => { previous?.(); remove() }) }
     return ['READY', 'EVALUATING'].includes(status.state)
   }
   disposers.push((ctx as any).on('agent/status', (event: { agent: Agent; status: string }) => {
@@ -356,13 +375,18 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     if (recover && manager.enabled.has(sessionId)) register(binding.agent)
     return binding.owner
   }))
-  disposers.push(commands.register({ name: 'kioku-lisp', description: 'Common Lisp の開始・状態・停止・復旧', input: { hint: 'enable | enable-task | status [--json] | cancel | recover | abandon ID | restore ID | disable' },
+  disposers.push(commands.register({ name: 'kioku-lisp', description: 'Common Lisp の開始・状態・停止・復旧', input: { hint: 'approval ask|auto|status | enable | enable-task | status [--json] | cancel | recover | abandon ID | restore ID | disable' },
     handler: async invocation => {
       try {
         const binding = owner(invocation.agent)
         const [action = 'status', argument, ...extra] = invocation.rawInput.trim().split(/\s+/u).filter(Boolean)
-        if (extra.length || (argument && !['status', 'hot', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|enable-task|status|hot [NAME]|diagnostics|cancel|recover|abandon ID|restore ID|disable')
+        if (extra.length || (argument && !['approval', 'status', 'hot', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|enable-task|status|hot [NAME]|diagnostics|cancel|recover|abandon ID|restore ID|disable')
         let result: unknown
+        if (action === 'approval') {
+          if (argument && !['ask', 'auto', 'status'].includes(argument)) fail('INVALID_COMMAND', 'Use /kioku-lisp approval ask|auto|status')
+          if (argument === 'ask' || argument === 'auto') await approvalPolicy.set(argument)
+          return { kind: 'success', text: `Lisp approvals: ${approvalPolicy.mode()} · Profile` }
+        }
         if (action === 'enable') result = await enable(binding)
         else if (action === 'enable-task') {
           const wasEnabled = manager.enabled.has(binding.owner.sessionId)
@@ -399,12 +423,12 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }
 }
 function description(name: LispTool): string {
-  return ({ lisp_eval: 'Evaluate Common Lisp. In persistent mode, define and reuse cohesive functions in one worker generation; proposals require host approval. In enable-task mode, each evaluation is a disposable scratch experiment without workspace inputs or proposals. Exact operationId replay never re-evaluates.',
-    lisp_hot_contract: 'Ask the user to approve immutable schemas and finite input/expected cases for a project-shared function. Model declarations alone do not grant approval. Requires enable-task.',
+  return ({ lisp_eval: 'Evaluate Common Lisp. In persistent mode, define and reuse cohesive functions in one worker generation; proposals use the current host approval policy. In enable-task mode, each evaluation is a disposable scratch experiment without workspace inputs or proposals. Exact operationId replay never re-evaluates.',
+    lisp_hot_contract: 'Authorize immutable schemas through the current host approval policy and finite input/expected cases for a project-shared function. Profile auto-approval or explicit human consent grants approval; model declarations do not. Requires enable-task.',
     lisp_hot_install: 'Validate a candidate against the current approved contract in protected workers, then atomically select it at expectedRevision. Dependency code is snapshotted. Failed checks preserve the active version.',
     lisp_hot_call: 'Call a project-shared function by name, pinning its active immutable version. Input/result refs remain private to this session and agent. Exact operationId replay never executes again.',
     lisp_hot_status: 'Read project-shared function names, revisions and contract refs; paginate with offset. Supply name to inspect approved checks; contractOffset pages their JSON in 2000 Unicode characters. No worker execution.',
-    lisp_hot_deactivate: 'Ask the user to deactivate a project-shared function at expectedRevision. Existing calls and results remain available; new calls stop.',
+    lisp_hot_deactivate: 'Use the current host approval policy to deactivate a project-shared function at expectedRevision. Existing calls and results remain available; new calls stop.',
     lisp_define: 'Save a generated Lisp lambda and exact dependency refs as a reusable task tool. Requires /kioku-lisp enable-task. Compiles in an isolated worker and checks declared examples.',
     lisp_call: 'Run a saved task tool with JSON input or a saved resultRef. Exact retries return the journal result; new calls use isolated workers.',
     lisp_observe: 'Capture explicitly named workspace files as immutable task input, returning a resultRef without sending contents to the model.',

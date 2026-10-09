@@ -35,7 +35,7 @@ test('Lisp CI verifier fails closed without approval and runs only a fixed targe
   assert.deepEqual(await denied(bound, { kind: 'verify', target: 'typecheck' }, signal), { target: 'typecheck', script: 'typecheck', state: 'NOT_APPLIED', reason: 'declined' })
   assert.equal(calls, 0)
   const allowed = createLispCiAdapter(questions(true), runner)
-  assert.deepEqual(await allowed(bound, { kind: 'verify', target: 'typecheck' }, signal), { target: 'typecheck', script: 'typecheck', state: 'SUCCEEDED', code: 0, stdout: 'ok', stderr: '' })
+  assert.deepEqual(await allowed(bound, { kind: 'verify', target: 'typecheck' }, signal), { approval: 'manual', target: 'typecheck', script: 'typecheck', state: 'SUCCEEDED', code: 0, stdout: 'ok', stderr: '' })
   assert.equal(calls, 1)
 })
 
@@ -43,7 +43,7 @@ test('Lisp CI exposes nonzero verifier outcomes without claiming success', async
   const root = await realpath(await mkdtemp(join(tmpdir(), 'ci-'))); t.after(() => rm(root, { recursive: true, force: true }))
   const bound = { ...owner, root }; await writeFile(join(root, 'package.json'), JSON.stringify({ scripts: { 'verify:lisp:vendor': 'node vendor.mjs' } }))
   const adapter = createLispCiAdapter(questions(true), async () => ({ code: 2, stdout: '', stderr: 'failed' }))
-  assert.deepEqual(await adapter(bound, { kind: 'verify', target: 'vendor' }, signal), { target: 'vendor', script: 'verify:lisp:vendor', state: 'FAILED', code: 2, stdout: '', stderr: 'failed' })
+  assert.deepEqual(await adapter(bound, { kind: 'verify', target: 'vendor' }, signal), { approval: 'manual', target: 'vendor', script: 'verify:lisp:vendor', state: 'FAILED', code: 2, stdout: '', stderr: 'failed' })
 })
 
 test('Lisp verification selects the exact workspace or scratch project and shows it for approval', async t => {

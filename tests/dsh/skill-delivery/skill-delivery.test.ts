@@ -189,7 +189,7 @@ test('compiled Skill delivery: protected Lisp enable and lisp_describe reach the
     assert.equal(f.model.requests.length,6,'native requests must prepare, define, discover and reuse the task toolkit')
     requireBody(f.model.requests[0],'kiokuko-lisp')
     const hotContract = f.model.requests[0].tools.find((tool: any) => tool.name === 'lisp_hot_contract')
-    assert.match(hotContract.description, /user to approve/u)
+    assert.match(hotContract.description, /current host approval policy/u)
     assert.ok(textOf(f.model.requests[0]).includes('See lisp_hot_* schemas.'))
     const last=f.model.requests.at(-1)
     const results=nativeToolResults(last.messages)
@@ -332,4 +332,22 @@ test('compiled Skill delivery: real DeepSeek serializer sends the bodies in the 
     assert.equal(sent.split(content('kiokuko-soul')).length-1,1)
     assert.equal(sent.split(content('natural-japanese-output')).length-1,1)
   } finally {off();http.mock.restore();await f.close()}
+})
+
+for (const taskMode of [false, true]) for (const representation of ['compiled', 'full'] as const) test(`Lisp ${taskMode ? 'task' : 'persistent'} ${representation} delivers auto policy on activation, follow-up and reload`, {
+  ...native, skip: !enabled || (!taskMode && process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1'), timeout: 180000,
+}, async () => {
+  const f = await fixture(false, representation, {lisp:{enabled:true, approvalMode:'auto', startupTimeoutMs:60000}})
+  const enable = () => f.ctx.commands.execute(f.agent, taskMode ? '/kioku-lisp enable-task' : '/kioku-lisp enable', [], new AbortController().signal)
+  try {
+    assert.equal((await enable()).result.kind, 'success')
+    for (const phase of ['activation', 'follow-up', 'reload']) {
+      if (phase === 'reload') { await f.reload(representation); assert.equal((await enable()).result.kind, 'success') }
+      f.responses.push(f.mock.textResponse('Policy received.'))
+      await f.turn('Explain the current Lisp approval policy without executing anything.')
+      const delivered = textOf(f.model.requests.at(-1))
+      assert.match(delivered, /Lisp approval mode: auto \(entire profile\)/)
+      assert.match(delivered, /Do not ask permission to submit, resubmit, run verification or apply changes/)
+    }
+  } finally { await f.close() }
 })

@@ -266,3 +266,31 @@ selection flow or shows setup instructions; it does not install or replace files
 No credential value is stored in this selection. Existing request
 bindings remain immutable; the command does not edit DSH profile files or restart
 DSH or the worker. `use default` restores the plugin configuration.
+
+<!-- kiokuko:runtime approval-policy -->
+## Profile-wide Lisp approval policy
+
+`lisp.approvalMode` defaults to `auto`; no enabling command is needed. Explicit
+configuration and saved profile settings can select `ask`. Use General settings
+or `/kioku-lisp approval ask` for manual consent on subsequent operations. Return
+to auto with `/kioku-lisp approval auto` or “Auto-approve all Lisp actions for this
+profile and continue” in a Lisp approval dialog. Native profile settings persist
+across chats and restarts and override the composition default.
+All Lisp permission categories are covered, including file restoration, host
+verification, public npm package operations, and shared-function changes.
+
+Follow the current host-reported mode. In auto mode execute authorized work
+without asking whether to submit, resubmit, run tests, or apply changes. Ask only
+for missing intent that materially changes the work. In ask mode submit the
+operation directly to the host approval dialog without an extra conversational
+permission question. Earlier references to human approval describe ask mode.
+Explicit refusal, cancellation, stale inputs and unknown outcomes still stop
+execution; changing mode does not replay completed or refused operations.
+Identity checks, protected paths, backups and journal recovery remain enforced.
+<!-- /kiokuko:runtime -->
+
+Pinned DSH stores this setting in the native `kiokuko-lisp` namespace, keyed by
+the host-owned profile identity. Current DSH exposes `lisp.approvalMode` through
+the native `kiokuko-dsh` configuration form and saves its profile patch. This
+compatibility difference does not change the controls or scope. No separate
+preference file or database migration is used.

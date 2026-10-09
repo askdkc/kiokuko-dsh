@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
+import { nativeApprovalConfig, bindApprovalConfig } from '../live-approval-config.js'
 import { coreSkills } from '../modules/resources.js'
 import { synchronizeConfiguredSkills } from './deployment.js'
 import { CoreConfig, mountCore, type CoreModuleHost } from './host.js'
@@ -14,10 +15,12 @@ export { CoreTasks } from './tasks.js'
 export const name = 'kiokuko-dsh'
 export const inject = ['skills', 'systemPrompt', 'tools', 'sessions', 'agents'] as const
 export function createConfiguredPlugin(registrations: readonly ModuleRegistration<CoreModuleHost>[]) {
-  const Config = CoreConfig.extend({ modules: z.record(z.string(), z.unknown()).optional() })
+  const business = CoreConfig.extend({ modules: z.record(z.string(), z.unknown()).optional() })
+  const approvalPath = ['modules', 'lisp', 'approvalMode']
+  const Config = registrations.some(entry => entry.module.id === 'lisp') ? nativeApprovalConfig(business, approvalPath) : business
   const required = [...new Set([...inject, ...registrations.flatMap(entry => entry.module.requires)])]
-  return { name, inject: required, Config, async apply(ctx: Context, input: z.input<typeof Config>): Promise<void> {
-    const { modules: settings = {}, ...config } = Config.parse(input)
+  return { name, inject: required, Config, async apply(ctx: Context, input: z.input<typeof business>): Promise<void> {
+    const { modules: settings = {}, ...config } = Config.parse(bindApprovalConfig(ctx, input, approvalPath))
     if (!config.enabled) return
     for (const capability of required) if (!ctx.get(capability, false)) throw new Error(`Missing native service: ${capability}`)
     for (const id of Object.keys(settings)) if (!registrations.some(entry => entry.module.id === id)) throw new Error(`Unconfigured module: ${id}`)

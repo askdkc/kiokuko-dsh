@@ -83,7 +83,8 @@
         "@deepseek-ai/dsh-client-ui-commands",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-ui-session"
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-settings"
       ],
       "platform": "web"
     },
@@ -219,9 +220,12 @@
     "test:evaluation:index-reasoning": "node --import tsx scripts/run-index-reasoning-evaluation.mjs",
     "test:skill-coding:offline": "node --test tests/fixtures/skill-coding/offline.test.mjs",
     "test:skill-coding": "node scripts/run-skill-coding.mjs",
-    "test:shortcuts:web": "npm run build && node scripts/verify-shortcuts-web.mjs"
+    "test:shortcuts:web": "npm run build && node scripts/verify-shortcuts-web.mjs",
+    "test:lisp:approval:web": "npm run build && node scripts/verify-lisp-approval-web.mjs"
   },
   "dependencies": {
+    "@deepseek-ai/cosmokit": "1.8.5",
+    "@deepseek-ai/schemastery": "3.18.4",
     "@orcareplay/core": ">=0.2.1",
     "@orcareplay/schema": ">=0.2.1",
     "@orcareplay/viewer": ">=0.2.1",

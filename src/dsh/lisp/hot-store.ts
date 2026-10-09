@@ -96,7 +96,7 @@ export class HotToolStore {
         .run(ref, project, contract.name, digest({ project, contract }), payload, owner.sessionId, owner.agentId, now)
       db.prepare(`INSERT INTO dsh_lisp_hot_heads VALUES(?,?,0,?,NULL,?) ON CONFLICT(project_root,name)
         DO UPDATE SET contract_ref=excluded.contract_ref,updated_at=excluded.updated_at`).run(project, contract.name, ref, now)
-      const result = { ok: true, operationId: id, projectRoot: project, name: contract.name, contractRef: ref, revision: old?.revision ?? 0 }
+      const result = { ok: true, operationId: id, projectRoot: project, name: contract.name, contractRef: ref, revision: old?.revision ?? 0, approval: operation.payload.approval ?? 'manual' }
       receipt(db, owner, id, result); return result
     }))
   }
@@ -139,7 +139,7 @@ export class HotToolStore {
       const revision = old.revision + 1
       db.prepare('UPDATE dsh_lisp_hot_heads SET bundle_ref=NULL,revision=?,updated_at=? WHERE project_root=? AND name=?')
         .run(revision, new Date().toISOString(), project, request.name)
-      const result = { ok: true, operationId: id, projectRoot: project, name: request.name, revision, bundleRef: null, contractRef: old.contract_ref }
+      const result = { ok: true, operationId: id, projectRoot: project, name: request.name, revision, bundleRef: null, contractRef: old.contract_ref, approval: operation.payload.approval ?? 'manual' }
       receipt(db, owner, id, result); return result
     }))
   }

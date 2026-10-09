@@ -125,7 +125,7 @@ test('real DSH registry: session tools, nested/child/late-tool denial, unload fe
   const child: any = { id: 'child', session: { id: 'child', header: { cwd: workspace, parentSession: 'parent' } } }
   const outsider: any = { id: 'outsider', session: { id: 'outsider', header: { cwd: workspace } } }
   const agentMap = new Map([parent, child, outsider].map(agent => [agent.id, agent]))
-  const config = LispConfig.parse({ enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 })
+  const config = LispConfig.parse({ enabled: true, approvalMode: 'ask', sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 })
   const command = (rawInput: string) => commands.get('kioku-lisp').handler({ rawInput, agent: parent, signal: new AbortController().signal })
   const call = (name: string, agent = parent, nested = false, args = {}) => ctx.tools.execute({ callId: `call-${randomUUID()}`, name, arguments: args, agent,
     signal: new AbortController().signal, ...(nested ? { parent: Symbol('parent'), rootCallId: 'root' } : {}) })

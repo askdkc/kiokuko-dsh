@@ -84,12 +84,14 @@ export class HotToolRuntime {
 
   private async approve(owner: LispOwner, id: string, title: string, detail: string, signal: AbortSignal): Promise<void> {
     await this.options.store.transition(owner, id, ['RUNNING'], 'AWAITING_APPROVAL', { phase: 'awaiting_approval' })
-    const approval = await confirm(this.options.questions, owner.agentId, {
+    const approval = await confirm(this.options.questions, owner, {
       id: `lisp-hot-${id}`, header: 'Lisp · プロジェクト共有', question: title, detail,
       options: [{ label: '取り消す' }, { label: '承認する' }], intent: { kind: 'plan-review', approve: '承認する' },
     }, signal)
     if (signal.aborted) fail('CANCELLED', '共有関数の確認を取り消しました。')
-    if (!approval.approved) fail('HOT_APPROVAL_REQUIRED', `承認されませんでした: ${approval.reason}`)
+    if (!approval.approved) fail('HOT_APPROVAL_REQUIRED', `承認されませんでした: ${approval.message ?? approval.reason}`)
+    const pending = await this.options.store.get(owner, id)
+    await this.options.store.transition(owner, id, ['AWAITING_APPROVAL'], 'AWAITING_APPROVAL', { phase: 'approved', approval: approval.source ?? 'manual' }, { ...JSON.parse(pending!.payload), approval: approval.source ?? 'manual' })
   }
 
   private async contract(owner: LispOwner, scope: Scope, id: string, hash: string, raw: unknown, signal: AbortSignal): Promise<unknown> {

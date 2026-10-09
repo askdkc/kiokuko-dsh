@@ -27,6 +27,8 @@ interface SessionLogDownloadState {
 }
 
 interface DshClientContext {
+  readonly configForms?: { get(namespace: string): LispApprovalScope }
+  readonly settingsScope?: { bind(spec: { namespace: string }): LispApprovalScope }
   readonly uiConversation: { readonly events: { register(definition: unknown): unknown } }
   readonly locale: {
     register(namespace: string, dictionaries: Record<string, Record<string, string>>): unknown
@@ -52,6 +54,43 @@ interface DshClientContext {
   }
   effect(setup: () => void | (() => void | Promise<void>), label: string): unknown
   on(event: 'command/executed', listener: (sessionId: string, commandName: string, result: { readonly kind: string }) => void): unknown
+}
+
+interface LispApprovalScope {
+  getSnapshot(): { status: string; writable: boolean; base?: Record<string, unknown>; value?: Record<string, unknown> }
+  subscribe(listener: () => void): () => void
+  set(field: string, value: unknown): Promise<unknown>
+  mutate?(ops: { op: 'set'; path: string[]; value: unknown }[]): Promise<boolean>
+}
+
+function LispApprovalControl(props: Record<string, unknown>): unknown {
+  const scope = props.approvalScope as LispApprovalScope
+  const [state, setState] = useState(() => scope.getSnapshot())
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => scope.subscribe(() => setState(scope.getSnapshot())), [scope])
+  const modern = props.modern === true
+  const field = modern ? 'lisp' : Object.keys(state.base ?? {}).find(key => key === 'approvalMode' || key.startsWith('approvalMode-'))
+  const mode = modern ? (state.value?.lisp as { approvalMode?: string } | undefined)?.approvalMode : field ? state.value?.[field] : undefined
+  const update = async (mode: string) => {
+    if (busy || !field) return
+    setBusy(true); setError('')
+    try { const saved = modern ? await scope.mutate!([{op: 'set', path: ['lisp', 'approvalMode'], value: mode}]) : await scope.set(field, mode); if (saved === false) throw new Error('The host did not save the approval setting. Reload the current value and try again.') }
+    catch (error) { setError(messageOf(error)) }
+    finally { setBusy(false) }
+  }
+  const auto = mode === 'auto'
+  return jsxs('div', { children: [
+    jsx('label', { children: jsxs(Fragment, { children: [
+      props.compact ? (auto ? 'Lisp: Auto-approve · Profile ' : 'Lisp: Ask · Profile ') : 'Lisp approvals · Entire profile ',
+      jsxs('select', { 'aria-label': 'Lisp approvals', value: mode ?? 'ask', disabled: busy || !field || state.status !== 'ready' || !state.writable,
+        onChange: (event: { target: { value: string } }) => void update(event.target.value),
+        children: [jsx('option', { value: 'ask', children: 'Ask' }), jsx('option', { value: 'auto', children: 'Auto-approve all' })] }),
+    ] }) }),
+    ...(state.status === 'ready' && state.writable ? [] : [jsx('span', { children: ' Profile settings are unavailable or read-only.' })]),
+    ...(error ? [jsx('span', { role: 'alert', children: error })] : []),
+    ...(busy ? [jsx('span', { role: 'status', children: 'Saving…' })] : []),
+  ] })
 }
 
 // Supplied by the DSH lazy-CJS wrapper generated after tsc. These deliberately
@@ -555,6 +594,12 @@ function questionInputKind(question: IntakeItem): 'choice' | 'search' | 'value' 
   if (question.header === 'Deep planning' && question.id === 'deep-budget-value') return 'value'
   return 'choice'
 }
+function isPlanReview(p: IntakePending): boolean {
+  const q = p.questions[0]
+  return p.questions.length === 1 && !!q && !q.multiSelect && q.intent?.kind === 'plan-review'
+    && typeof q.detail === 'string' && (q.options?.length ?? 0) <= 3
+    && q.options?.some(o => o.label === q.intent!.approve) === true
+}
 function intakePending(props: Record<string, unknown>): IntakePending | null {
   const p = props.pendingInteraction as IntakePending | undefined
   if (!p || !Array.isArray(p.questions) || !p.questions.length || typeof p.answer !== 'function'
@@ -565,19 +610,19 @@ function intakePending(props: Record<string, unknown>): IntakePending | null {
   if (p.kind === 'question') return p
   const q = p.questions[0]!
   return p.kind === 'plan-review' && p.questions.length === 1 && !q.multiSelect && q.intent?.kind === 'plan-review'
-    && typeof q.detail === 'string' && (q.options?.length ?? 0) <= 2 && q.options?.some((o: { label: string }) => o.label === q.intent!.approve) ? p : null
+    && typeof q.detail === 'string' && (q.options?.length ?? 0) <= 3 && q.options?.some((o: { label: string }) => o.label === q.intent!.approve) ? p : null
 }
 function IntakeQuestion(props: Record<string, unknown>): unknown {
   const pending = props.matched as IntakePending, t = props.t as (key: string) => string
   return jsx(IntakeQuestionCard, { key: `${pending.sessionId ?? ''}:${pending.key}`, pending,
-    ...(pending.kind === 'plan-review' ? { reviewCopy: { discuss: t('review.discuss'),
+    ...(isPlanReview(pending) ? { reviewCopy: { discuss: t('review.discuss'),
       labels: { code: { copyLabel: t('review.copy'), copiedLabel: t('review.copied') }, footnotes: t('review.footnotes') } } } : {}),
   })
 }
 function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const pending = props.pending as IntakePending
   const reviewCopy = props.reviewCopy as { discuss: string; labels: unknown } | undefined
-  const reviewing = pending.kind === 'plan-review'
+  const reviewing = isPlanReview(pending)
   const [batch, setBatch] = useState<IntakeBatch>(() => readIntakeDraft(pending))
   const [snapshot, setSnapshot] = useState(() => pendingState(pending))
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
@@ -588,7 +633,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const original = pending.questions[batch.page]!
   const options = original.options ?? []
   const question = { ...original, options: reviewing ? [{ label: reviewCopy!.discuss },
-    ...options.filter(o => o.label !== original.intent!.approve), ...options.filter(o => o.label === original.intent!.approve)] : options }
+    ...options] : options }
   const draft = batch.drafts[batch.page]!, multi = question.multiSelect === true, inputKind = questionInputKind(question)
   const editable = () => !pending.review && !pendingState(pending).closed && pendingState(pending).channel !== 'none'
   useEffect(() => {
@@ -1257,6 +1302,15 @@ function installReviewStyle(): () => void {
 
 /** Register Kiokuko's streaming Session-export browser surface. */
 export function apply(ctx: DshClientContext): void {
+  const installApprovals = (scope: DshClientContext, approvalScope: LispApprovalScope, modern: boolean) => {
+    for (const name of ['settings.general.item', 'conversation.input.left']) {
+      scope.slots.inject(name, () => scope.slots.register({ name, id: 'kiokuko-lisp-approval', locale: LOCALE_NAMESPACE,
+        inject: () => ({ approvalScope, modern, compact: name === 'conversation.input.left' }),
+      }, LispApprovalControl))
+    }
+  }
+  ctx.inject?.(['settingsScope'], scope => installApprovals(scope, scope.settingsScope!.bind({namespace: 'kiokuko-lisp'}), false))
+  ctx.inject?.(['configForms'], scope => installApprovals(scope, scope.configForms!.get('kiokuko-dsh'), true))
   const reviewController = new DiffReviewClientController()
   let rightSidebar: DshClientContext['sidebarRight']
   ctx.effect(() => async () => reviewController.dispose(), 'kiokuko-dsh: diff review browser lifecycle')

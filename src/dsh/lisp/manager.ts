@@ -1,3 +1,4 @@
+import type { ApprovalQuestions } from './approval.js'
 import { mkdir, mkdtemp, open, readFile, realpath, rm, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -408,7 +409,9 @@ export class LispManager {
     fail('UNKNOWN_ADAPTER', 'このホスト要求には対応していません。')
   }
   async status(owner: LispOwner, offset?: number): Promise<unknown> {
-    if (!this.enabled.has(owner.sessionId)) return { enabled: false, state: 'DISABLED', recovery: '/kioku-lisp enable' }
+    const policy = (this.options.questions as ApprovalQuestions | undefined)?.approvalPolicy
+    const approval = { mode: policy?.mode() ?? this.#config.approvalMode, scope: 'profile', writable: policy?.writable() ?? false }
+    if (!this.enabled.has(owner.sessionId)) return { approval, enabled: false, state: 'DISABLED', recovery: '/kioku-lisp enable' }
     const state = this.entry(owner)
     const taskMode = await this.isTaskMode(owner)
     const unconfirmed = [...this.#agents.values()].find(s => s.owner.sessionId === owner.sessionId && s.state === 'STOP_UNCONFIRMED')
@@ -416,7 +419,7 @@ export class LispManager {
     const summary = await this.#store.operationSummaries(owner.sessionId, offset)
     const taskSummary = taskMode ? await this.#store.taskSummary(owner) : undefined
     const operations = summary.operations.map(o => ({ id: o.operation_id, agent: o.agent_id, kind: o.kind, state: o.state, updatedAt: o.updated_at }))
-    return { enabled: true, state: unconfirmed ? 'STOP_UNCONFIRMED' : taskMode && state.state === 'RECOVERY_REQUIRED' && !state.worker ? 'TASK_READY' : state.state,
+    return { approval, enabled: true, state: unconfirmed ? 'STOP_UNCONFIRMED' : taskMode && state.state === 'RECOVERY_REQUIRED' && !state.worker ? 'TASK_READY' : state.state,
       generation: state.worker?.generation ?? null, error: unconfirmed?.error ?? (taskMode && !state.worker ? null : state.error ?? null),
       jobs: state.worker?.jobStatus() ?? [],
       compilation: state.compilation ?? null, resumed: state.resumed ?? false,
@@ -475,7 +478,7 @@ export class LispManager {
           compare: 'lisp_compare reports two candidates\' common base and per-path intent hashes without executing them.',
           inspect: 'lisp_inspect pages saved results without re-executing them.',
           eval: 'lisp_eval is a disposable scratch experiment; inputs and proposals are unavailable.',
-          hot: 'lisp_hot_contract asks the user to approve schemas and finite input/expected cases. lisp_hot_install validates and atomically selects immutable code by name for this project. lisp_hot_call pins the active version. lisp_hot_status reads revisions; lisp_hot_deactivate asks approval to stop new calls. Results remain session/agent-local.',
+          hot: 'lisp_hot_contract authorizes schemas through the current profile approval policy and finite input/expected cases. lisp_hot_install validates and atomically selects immutable code by name for this project. lisp_hot_call pins the active version. lisp_hot_status reads revisions; lisp_hot_deactivate uses the current profile approval policy to stop new calls. Results remain session/agent-local.',
         } }
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
         packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.packages', 'kioku.typesafe', 'kioku.decisions'],
@@ -488,7 +491,7 @@ export class LispManager {
           run: '(kioku.process:run "node" (list "--test" "--experimental-test-isolation=none" "test/public.test.mjs") :directory "project") uses a scratch-relative directory. Check result-code.',
           inspect: 'lisp_inspect accepts ref, or resultOperationId with section/offset/limit (Unicode characters). Never rerun to retrieve output.',
           reads: 'Use native read/glob/grep/skill for repository exploration; lisp_eval.inputs for read-only workspace or session-attachment copies.',
-          verify: '(kioku.ci:verify :test :script "test:unit") runs a focused npm script. For an extracted project: (kioku.ci:verify :test :location :scratch :directory "extract/project"). Requires human approval and runs the actual npm command.' },
+          verify: '(kioku.ci:verify :test :script "test:unit") runs a focused npm script. For an extracted project: (kioku.ci:verify :test :location :scratch :directory "extract/project"). Uses the current profile approval policy and runs the actual npm command.' },
         verifiers: await describeVerifiers(owner) }
       if (tool === 'lisp_inspect' && input.resultOperationId !== undefined) {
         if (input.ref !== undefined) throw new LispError('INVALID_INSPECTION', 'ref と resultOperationId は同時に指定できません。', 'どちらか一つを指定してください。')

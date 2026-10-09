@@ -15,7 +15,7 @@ const native = {
   timeout: 180000,
 }
 
-async function fixture() {
+async function fixture(auto = false) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-hot-')))
   const root = join(base, 'workspace')
   await mkdir(root)
@@ -24,7 +24,7 @@ async function fixture() {
   db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db))
   let approvals = 0, forgeApproval = false, holdApproval = false
-  const questions: DshUserQuestions = { ask: async request => {
+  const questions: DshUserQuestions & {approvalPolicy?: import('../../../../src/dsh/lisp/approval.js').LispApprovalPolicy} = { ...(auto ? {approvalPolicy: {mode: () => 'auto' as const, writable: () => false, validate: () => {}, set: async () => {}}} : {}), ask: async request => {
     approvals++
     const question = request.questions[0]!
     assert.ok(question.options && question.options.length >= 2)
@@ -42,8 +42,8 @@ async function fixture() {
   return { base, root, get manager() { return manager }, store, get approvalsCount() { return approvals }, set forgeApproval(value: boolean) { forgeApproval = value }, set holdApproval(value: boolean) { holdApproval = value }, restart: async () => { await manager.dispose(); manager = new LispManager(options); await manager.start() }, close: async () => { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) } }
 }
 
-test('hot task tools: approval, immutable contract, shared code, owner-local results, replay and deactivation', native, async () => {
-  const f = await fixture()
+for (const auto of [false, true]) test(`hot task tools (${auto ? 'auto' : 'ask'}): contract, shared code, replay and deactivation`, native, async () => {
+  const f = await fixture(auto)
   const ownerA = { sessionId: 'session-a', agentId: 'agent-a', root: f.root }
   const ownerB = { sessionId: 'session-b', agentId: 'agent-b', root: f.root }
   try {
@@ -97,7 +97,8 @@ test('hot task tools: approval, immutable contract, shared code, owner-local res
     const inactiveCall = await f.manager.execute(ownerB, 'lisp_hot_call', { operationId: 'inactive-call', name: 'add-one', input: 1 }) as any
     assert.equal(inactiveCall.ok, false)
     assert.equal(inactiveCall.code, 'HOT_NOT_ACTIVE')
-    assert.ok(f.approvalsCount >= 1, 'deactivation must require user confirmation')
+    if (auto) assert.equal(f.approvalsCount, 0)
+    else assert.ok(f.approvalsCount >= 1, 'deactivation must require user confirmation')
   } finally { await f.close() }
 })
 

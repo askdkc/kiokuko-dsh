@@ -300,6 +300,14 @@ jobs:
       - run: npm run test:shortcuts:web
         env:
           KIOKUKO_SHORTCUT_RUNTIME: ${{ matrix.fixture }}
+      - name: Install protected Lisp runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sbcl bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - run: npm run test:lisp:approval:web
+        env:
+          KIOKUKO_LISP_APPROVAL_RUNTIME: ${{ matrix.fixture }}
 
   semantic-platform-smoke:
     name: Semantic smoke (${{ matrix.platform }})

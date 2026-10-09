@@ -8,7 +8,7 @@ import type { LispStore } from './store.js'
 
 export interface ChangeOutcome {
   id: string; path: string; state: 'APPLIED' | 'UNCHANGED' | 'NOT_APPLIED' | 'UNKNOWN';
-  backup?: string | null; reason?: string; code?: string; message?: string
+  approval?: 'manual' | 'profile'; backup?: string | null; reason?: string; code?: string; message?: string
 }
 const contentHash = (text: string) => createHash('sha256').update(text).digest('hex')
 
@@ -38,6 +38,7 @@ export class LispProposalBatch {
     const { store, backupRoot } = this.options, roots = this.options.protectedRoots()
     const changes: FrozenChange[] = [], reserved = new Map<string, string>(), outcomes: ChangeOutcome[] = []
     let backupReservation = 0
+    let approvalSource: 'manual' | 'profile' | undefined
     const id = (c: FrozenChange) => `proposal-${c.id}`
     const record = async (c: FrozenChange, outcome: ChangeOutcome) => {
       await store.transition(owner, id(c), [reserved.get(id(c))!], outcome.state, { evalId, ...outcome })
@@ -81,16 +82,17 @@ export class LispProposalBatch {
           details.push(`対象: ${c.request.path}\n操作: ${c.restoration ? '復元' : c.request.operation}\n元内容 SHA-256: ${c.before.hash ?? '(新規)'}\n変更後 SHA-256: ${contentHash(after)}\nバックアップ: ${c.backup ?? '(不要)'}\n${changeDiff(before, after)}`)
         }
         const label = `${active.length}件の変更を許可`
-        const approval = await confirm(this.options.questions, owner.agentId, {
+        const approval = await confirm(this.options.questions, owner, {
           id: `batch-${digest({ evalId, changes: active })}`, header: 'Lisp · 変更をまとめて確認',
           question: `${active.length}件の確定した変更を適用しますか？`,
           detail: `${details.join('\n\n')}\n\n途中で競合・取消が起きた場合、残りの適用を止めます。適用済みの変更とバックアップは保持します。`,
           options: [{ label: '許可しない' }, { label }], intent: { kind: 'plan-review', approve: label },
         }, signal)
         if (!approval.approved) {
-          for (const c of active) await record(c, { id: id(c), path: c.request.path, state: 'NOT_APPLIED', reason: approval.reason })
+          for (const c of active) await record(c, { id: id(c), path: c.request.path, state: 'NOT_APPLIED', reason: approval.reason, ...(approval.message ? { message: approval.message } : {}) })
           return outcomes
         }
+        approvalSource = approval.source ?? 'manual'
       }
       // Validate the entire frozen batch before the first filesystem effect.
       if (expected) for (const before of expected.readSet) {
@@ -103,7 +105,7 @@ export class LispProposalBatch {
         if (signal.aborted || this.options.stopped()) throw new LispError('CANCELLED', '残りの変更を取り消しました。', '適用済みの変更は結果一覧で確認できます。')
         await store.transition(owner, id(c), [reserved.get(id(c))!], 'APPLYING', { evalId }); reserved.set(id(c), 'APPLYING')
         await applyChange(owner, c, roots, createdParents)
-        await record(c, { id: id(c), path: c.request.path, state: 'APPLIED', backup: c.backup })
+        await record(c, { id: id(c), path: c.request.path, state: 'APPLIED', backup: c.backup, ...(approvalSource ? { approval: approvalSource } : {}) })
       }
       return outcomes
     } catch (error) {

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { HostServiceError } from '../service-error.js'
 
 export const LispConfig = z.object({
+  approvalMode: z.enum(['ask', 'auto']).default('auto'),
   enabled: z.boolean().default(false), sbclPath: z.string().min(1).default('sbcl'),
   timeoutMs: z.number().int().min(100).max(600_000).default(120_000),
   startupTimeoutMs: z.number().int().min(100).max(60_000).default(30_000),

@@ -9,7 +9,7 @@ import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
 import { mountLispSurface } from '../../../../src/dsh/lisp/surface.js'
 import { CompiledLispCache } from '../../../../src/dsh/lisp/compiled-cache.js'
 
-test('native lifecycle hooks suspend, resume before model input, preserve fencing and dispose exact sessions', {
+for (const hostFences of [false,true]) test(`native lifecycle hooks (${hostFences ? 'host fence' : 'root fence'}) suspend, resume and preserve identity`, {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL' : false, timeout: 90000,
 }, async t => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-idle-surface-')))
@@ -27,7 +27,10 @@ test('native lifecycle hooks suspend, resume before model input, preserve fencin
   let currentAgent: any = agent, currentSession: any = agent.session
   const services: Record<string, any> = { tools, agents: { get: (id: string) => id === currentAgent?.id ? currentAgent : undefined },
     sessions: { get: (id: string) => id === currentSession?.id ? currentSession : undefined }, commands: { register(d: any) { command = d; return () => {} } } }
-  const ctx: any = { get: (name: string) => services[name], provide: () => () => {},
+  if (hostFences) services.executionFences = { attach(options: any) { guard = options.check; listeners.set('agent/pre-step', async (payload: any, next: any) => await options.beforeStep(payload.agent) ? next() : {kind:'reject'}); return {protect() {}, release() {}} } }
+  let approvalMode = 'ask'
+  services.settings = { writable: true, installSection(_ctx: any, _ns: string, _schema: any, _base: any, hooks: any) { hooks.setSource(() => ({approvalMode})) }, async update(_ns: string, patch: any) { approvalMode = patch.approvalMode } }
+  const ctx: any = { inject(_names: string[], callback: any) { callback(ctx) }, get: (name: string) => services[name], provide: () => () => {},
     on(name: string, fn: any) { listeners.set(name, fn); return () => listeners.delete(name) } }
   ctx.root = ctx
   const runtime: any = { withDatabase: async (fn: any) => fn(db) }
@@ -47,6 +50,13 @@ test('native lifecycle hooks suspend, resume before model input, preserve fencin
     assert.match(guard({ agent, name: 'bash' }), /Lisp/u, 'normal suspension never releases protection')
     assert.match((await command.handler({ rawInput: 'status', agent })).text, /SUSPENDED/u)
     assert.equal(await step(), 'model-ready')
+    assert.match((sections.get('kiokuko:lisp-approval') as unknown as () => string)(), /mode: ask/)
+    assert.equal((await command.handler({ rawInput: 'approval auto', agent })).kind, 'success')
+    await step()
+    assert.match((sections.get('kiokuko:lisp-approval') as unknown as () => string)(), /mode: auto/)
+    assert.equal((await state()).approval.mode, 'auto')
+    const applied = await surface.manager.execute(owner, 'lisp_eval', {operationId:'auto-identity',code:'(kioku.files:propose-write "auto.txt" "ok")'}) as any
+    assert.equal(applied.changes?.[0]?.state, 'APPLIED', JSON.stringify(applied))
     const nextGeneration = (await state()).generation
     assert.notEqual(nextGeneration, firstGeneration)
     assert.match(sections.get('kiokuko:lisp-runtime')!, /automatically restarted/u)

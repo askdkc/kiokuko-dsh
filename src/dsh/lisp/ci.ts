@@ -103,17 +103,17 @@ export function createLispCiAdapter(questions?: DshUserQuestions, runner: Comman
     if (!Object.hasOwn(scripts, script)) return { target: request.target, state: 'NOT_APPLIED', code: 'SCRIPT_MISSING', reason: 'script_missing', script,
       message: `package.json に ${script} がありません。実行・確認はしていません。`, availableScripts: Object.keys(scripts) }
     const command = { ...VERIFIERS[request.target], args: script === 'test' ? ['test'] : ['run', script] }
-    const approval = await confirm(questions, owner.agentId, {
+    const approval = await confirm(questions, owner, {
       id: `lisp-ci-${randomUUID()}`, header: 'Lisp · 検証実行の確認', question: `${script} を実行しますか？`,
       detail: `実行: ${command.file} ${command.args.join(' ')}\nスクリプト: ${scripts[script]}\n作業ディレクトリ: ${directory.path}\nタイムアウト: ${command.timeoutMs} ms\nホスト上で npm とライフサイクルスクリプトを実行します。Lisp ワーカーの保護外で、テスト・ビルド成果物が作成される場合があります。`,
       options: [{ label: '実行しない' }, { label: 'この検証を実行' }], intent: { kind: 'plan-review', approve: 'この検証を実行' },
     }, signal)
-    if (!approval.approved) return { target: request.target, script, state: 'NOT_APPLIED', reason: approval.reason }
+    if (!approval.approved) return { target: request.target, script, state: 'NOT_APPLIED', reason: approval.reason, ...('message' in approval ? { message: approval.message } : {}) }
     if (digest(directory) !== digest(await checkedDirectory(root, request.directory)) || digest(scripts) !== digest(await scriptsFor(targetOwner))) {
       return { target: request.target, script, state: 'NOT_APPLIED', code: 'TARGET_CHANGED', reason: 'scripts_changed', message: '確認中に作業ディレクトリまたはnpmスクリプトが変わりました。実行していません。' }
     }
     const result = await runner(command.file, [...command.args], { cwd: directory.path, timeoutMs: command.timeoutMs, signal,
       excludedRoots: [owner.root, ...(scratchRoot ? [scratchRoot] : [])] })
-    return { target: request.target, script, ...(request.directory || request.location ? { cwd: directory.path } : {}), state: result.code === 0 ? 'SUCCEEDED' : 'FAILED', ...result }
+    return { approval: approval.source ?? 'manual', target: request.target, script, ...(request.directory || request.location ? { cwd: directory.path } : {}), state: result.code === 0 ? 'SUCCEEDED' : 'FAILED', ...result }
   }
 }

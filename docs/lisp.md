@@ -382,3 +382,31 @@ For API examples see [the bundled Skill](../skills/kiokuko-lisp/SKILL.md).
 Verification scope and installed Web reproduction: [verification record](lisp-verification.md).
 
 Native `ask_user_question` and `exit_plan_mode` remain available in both Lisp modes. Plan approval uses the DSH review UI and does not remove Lisp protection. Run `npm run test:lisp:plan:web` for a disposable packed-package Web check without model credentials.
+
+<!-- kiokuko:runtime approval-policy -->
+## Profile-wide Lisp approval policy
+
+`lisp.approvalMode` defaults to `auto`; no enabling command is needed. Explicit
+configuration and saved profile settings can select `ask`. Use General settings
+or `/kioku-lisp approval ask` for manual consent on subsequent operations. Return
+to auto with `/kioku-lisp approval auto` or “Auto-approve all Lisp actions for this
+profile and continue” in a Lisp approval dialog. Native profile settings persist
+across chats and restarts and override the composition default.
+All Lisp permission categories are covered, including file restoration, host
+verification, public npm package operations, and shared-function changes.
+
+Follow the current host-reported mode. In auto mode execute authorized work
+without asking whether to submit, resubmit, run tests, or apply changes. Ask only
+for missing intent that materially changes the work. In ask mode submit the
+operation directly to the host approval dialog without an extra conversational
+permission question. Earlier references to human approval describe ask mode.
+Explicit refusal, cancellation, stale inputs and unknown outcomes still stop
+execution; changing mode does not replay completed or refused operations.
+Identity checks, protected paths, backups and journal recovery remain enforced.
+<!-- /kiokuko:runtime -->
+
+Pinned DSH stores this setting in the native `kiokuko-lisp` namespace, keyed by
+the host-owned profile identity. Current DSH exposes `lisp.approvalMode` through
+the native `kiokuko-dsh` configuration form and saves its profile patch. This
+compatibility difference does not change the controls or scope. No separate
+preference file or database migration is used.

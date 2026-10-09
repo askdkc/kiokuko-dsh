@@ -4,7 +4,9 @@ import { createDecisionService } from './decisions/host.js'
 import { startupRecoveryMessage } from './startup-recovery.js'
 import { mountDshOrcaCommand } from './orca-command-surface.js'
 import type { Context } from '@deepseek-ai/cordis'
-import { Config, type Config as DshConfig } from './config.js'
+import { Config as BusinessConfig, type Config as DshConfig } from './config.js'
+import { nativeApprovalConfig, bindApprovalConfig } from './live-approval-config.js'
+const Config = nativeApprovalConfig(BusinessConfig)
 import type { DshRuntime } from './runtime.js'
 import { KIOKUKO_DSH_HOST_SERVICE, mountDshComposition, type DshCompositionHost } from './composition.js'
 import { createDshHostAdapter } from './host-adapter.js'
@@ -75,7 +77,7 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
 }
 
 async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
-  const resolvedConfig = Config.parse(config)
+  const resolvedConfig = Config.parse(bindApprovalConfig(ctx, config))
   if (!resolvedConfig.enabled) return
   const profileName = (ctx.get?.('profileContext', false) as { name?: string } | undefined)?.name
   const tuiProfile = profileName === 'dsh-cli' || profileName === 'dsh-tui'

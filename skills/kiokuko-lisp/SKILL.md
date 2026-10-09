@@ -76,7 +76,7 @@ Reimport applied files for comparison; export only when authorized. Proposals
 require successful evaluation, durable recording and relative paths via
 `kioku.files:propose-write`.
 
-Deletion/replacement needs confirmation of frozen targets/diffs. Duplicate
+Deletion/replacement uses the profile approval policy on frozen targets/diffs. Duplicate
 targets fail; unchanged writes do nothing. Refusal/skip/UI failure/cancellation
 never authorizes. Trust APPLIED, UNCHANGED, NOT_APPLIED and UNKNOWN receipts;
 partial failure stops later writes. Never retry unknown effects. Protected
@@ -99,7 +99,7 @@ credentials never enter Lisp. `verify` accepts only `:typecheck`, `:lisp`,
 `check` only when `typecheck` is absent. Prefer focused then broader checks.
 `:directory` selects a workspace subproject; `:location :scratch` selects an
 extracted project. Approved scripts run on the host; roots are bound, and links,
-absolute paths and traversal fail. Native confirmation covers command/args/cwd/
+absolute paths and traversal fail. Host approval policy covers command/args/cwd/
 timeout; refusal or missing UI yields NOT_APPLIED. Exact ID replay never reruns.
 
 Evaluation ok=true is not process success: check result-code and verifier state/code.
@@ -150,7 +150,7 @@ paths with native reads; input errors need no recovery.
 Report observed errors/recovery; missing results never prove deletion/restoration.
 Independent human `/kioku-lisp` commands: status, diagnostics [ID], cancel, recover,
 abandon ID, restore ID, disable. Inspect UNKNOWN operations/backups before abandon
-(no reapply/rollback). Restore requires new confirmation; diagnostics shows outcomes.
+(no reapply/rollback). Restore crosses a new host approval boundary; diagnostics shows outcomes.
 Disable requires confirmed stop/reconciliation; unload retains protection.
 
 ## Data and adapters
@@ -210,13 +210,12 @@ ask_user_question/exit_plan_mode keep Lisp guards.
 
 Project-shared functions work in both Lisp modes without a mode switch after the
 coding choice. They execute in separate protected workers, preserving the persistent
-worker's APIs and heap. `lisp_hot_contract` asks the user to approve
-schemas and 1–32 finite input/expected cases. The model cannot approve its own
-proposal. `lisp_hot_install` validates against that immutable contract and replaces
+worker's APIs and heap. `lisp_hot_contract` applies the profile approval policy to
+schemas and 1–32 finite input/expected cases. Only the host grants approval. `lisp_hot_install` validates against that immutable contract and replaces
 the active version only at the expected revision. Dependency code is snapshotted.
 `lisp_hot_call` pins the active version by name; input/result refs stay owner-local.
 `lisp_hot_status {name?}` reads heads and selected contract; `lisp_hot_deactivate`
-requires user confirmation. Approving new conditions preserves the old active
+uses the same profile approval policy. Approving new conditions preserves the old active
 version until a candidate passes; old conditions cannot authorize a new install.
 Finite cases are not a proof for every input. Active code/dependencies do not
 expire; retired versions may be collected after 30 days. No shared heap or RPC.
@@ -403,3 +402,29 @@ shortlist order for selection; source and test for diagnosis. Define `obj` first
 ```
 
 <!-- /kiokuko:documentation -->
+
+<!-- kiokuko:documentation approval-help -->
+## Profile-wide Lisp approval policy
+
+`lisp.approvalMode` defaults to `auto`; no enabling command is needed. Explicit
+configuration and saved profile settings can select `ask`. Use General settings
+or `/kioku-lisp approval ask` for manual consent on subsequent operations. Return
+to auto with `/kioku-lisp approval auto` or “Auto-approve all Lisp actions for this
+profile and continue” in a Lisp approval dialog. Native profile settings persist
+across chats and restarts and override the composition default.
+All Lisp permission categories are covered, including file restoration, host
+verification, public npm package operations, and shared-function changes.
+
+Follow the current host-reported mode. In auto mode execute authorized work
+without asking whether to submit, resubmit, run tests, or apply changes. Ask only
+for missing intent that materially changes the work. In ask mode submit the
+operation directly to the host approval dialog without an extra conversational
+permission question. Earlier references to human approval describe ask mode.
+Explicit refusal, cancellation, stale inputs and unknown outcomes still stop
+execution; changing mode does not replay completed or refused operations.
+Identity checks, protected paths, backups and journal recovery remain enforced.
+
+<!-- /kiokuko:documentation -->
+<!-- kiokuko:runtime approval-policy -->
+Follow the live host approval mode. Profile auto-approve covers every Lisp permission: execute authorized actions without permission or resubmission questions. Ask only for materially missing intent. Ask mode uses host dialogs without an extra conversational permission request. Refusal, cancellation, stale inputs and unknown outcomes still stop work; never replay effects because mode changed.
+<!-- /kiokuko:runtime -->
