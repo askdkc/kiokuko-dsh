@@ -3,11 +3,12 @@ import type { DecisionBatch } from './contracts.js'
 import type { DecisionService } from './service.js'
 
 /** A bounded current-request decision, not a generated intake profile. */
-export const AKINATOR_CLASSIFICATION_POLICY = 'akinator-direct-intent-v5-scope-prototype'
+export const AKINATOR_CLASSIFICATION_POLICY = 'akinator-direct-intent-v6-coding'
 export const MAX_AKINATOR_TASK_BYTES = 512
 
-export const AKINATOR_AUTOMATED_TASK_TYPES = ['debug', 'research', 'writing', 'chat'] as const satisfies readonly TaskType[]
+export const AKINATOR_AUTOMATED_TASK_TYPES = ['build', 'debug', 'research', 'writing', 'chat'] as const satisfies readonly TaskType[]
 const intentions: Readonly<Record<(typeof AKINATOR_AUTOMATED_TASK_TYPES)[number], string>> = Object.freeze({
+  build: 'Implement or add software functionality.',
   debug: 'Diagnose or fix a software bug.',
   research: 'Look up sources.',
   writing: 'Write or transform prose.',
@@ -34,7 +35,7 @@ function hasUnresolvedAlternatives(task: string): boolean {
   return englishAlternatives && englishUncertainty || japaneseAlternatives && japaneseUncertainty
 }
 
-const JAPANESE_DIRECT_ACTION = '(?:調べて|調査して|比較して|探して|要約して|執筆して|書いて|まとめて|翻訳して|書き直して|修正して|直して|診断して)'
+const JAPANESE_DIRECT_ACTION = '(?:調べて|調査して|比較して|探して|要約して|執筆して|書いて|まとめて|翻訳して|書き直して|修正して|直して|診断して|実装して|追加して|作成して|開発して|構築して)'
 const JAPANESE_COMBINED_ACTIONS = new RegExp(`(?:${JAPANESE_DIRECT_ACTION}|実装して|追加して|作成して|開発して|構築して|レビューして|検証して|確認して|デプロイして|集計して|分析して|運用して)(?=.{0,128}${JAPANESE_DIRECT_ACTION})`, 'u')
 const JAPANESE_REQUEST_END = new RegExp(`${JAPANESE_DIRECT_ACTION}(?:ください|下さい)?[。.!！\\s]*$`, 'u')
 
@@ -49,16 +50,19 @@ function isDirectSingleRequest(task: string): boolean {
   if (/\b(?:not|never|without|no|and|then|or|but|instead|unless|either|while|after|before)\b/iu.test(text)) return false
   if (/(?:ない|ません|せず|禁止|不要|それとも|または|あるいは|か[^。！？]*か)/u.test(text)) return false
   if (JAPANESE_COMBINED_ACTIONS.test(text)) return false
-  return /^(?:please\s+)?(?:fix|debug|diagnose|resolve|repair|investigate|research|find|look up|compare|write|draft|compose|rewrite|translate|summari[sz]e)\b/iu.test(text)
+  return /^(?:please\s+)?(?:build|implement|add|create|fix|debug|diagnose|resolve|repair|investigate|research|find|look up|compare|write|draft|compose|rewrite|translate|summari[sz]e)\b/iu.test(text)
     || JAPANESE_REQUEST_END.test(text)
 }
 
 /** Risk admission runs before either punctuation path. This is not an intent classifier. */
 function hasUnresolvedExecutionScope(task: string): boolean {
   const text = task.trim()
-  // Unsupported actions cannot become supported debug tasks merely by adding a question mark.
-  if (/(?:実装して|追加して|作成して|開発して|構築して|レビューして|デプロイして|運用して)/u.test(text)
-    || /^(?:(?:please|can you|could you|would you|will you)\s+)?(?:build|implement|add|create|deploy|release|review|delete|remove|send)\b/iu.test(text)) return true
+  // Unsupported or target-free actions cannot gain admission by adding a question mark.
+  if (/(?:レビューして|デプロイして|運用して)/u.test(text)
+    || /^(?:(?:please|can you|could you|would you|will you)\s+)?(?:deploy|release|review|delete|remove|send)\b/iu.test(text)) return true
+  // New build wording needs an explicit target; references still require intake.
+  if (/^(?:(?:please|can you|could you|would you|will you)\s+)?(?:build|implement|add|create)(?:\s+(?:it|this|that))?[?？。.!！\s]*$/iu.test(text)
+    || /^(?:(?:これ|それ|あれ)(?:を)?)?(?:実装して|追加して|作成して|開発して|構築して)(?:ください|下さい|くれますか)?[?？。.!！\s]*$/u.test(text)) return true
   const japaneseActions = text.match(/(?:調べて|調査して|比較して|探して|要約して|執筆して|書いて|まとめて|翻訳して|書き直して|修正して|直して|診断して|実装して|追加して|作成して|開発して|構築して|レビューして|検証して|確認して|デプロイして|集計して|分析して|運用して)/gu)
   if ((japaneseActions?.length ?? 0) > 1) return true
   if (/\b(?:and|then|after|before|but|or)\s+(?:(?:please|also)\s+)?(?:fix|debug|repair|investigate|research|find|look up|write|draft|translate|summari[sz]e|build|implement|add|create|deploy|release|review|delete|remove|send)\b/iu.test(text)) return true
@@ -86,13 +90,13 @@ export function buildAkinatorClassificationBatch(task: string): DecisionBatch | 
       id: 'task-type',
       instructions: 'Choose intent; abstain if unclear or unsupported.',
       choices: [...AKINATOR_AUTOMATED_TASK_TYPES.map(id => ({ id, description: intentions[id] })),
-        { id: 'abstain', description: 'Build, review, deploy, analyze, or unclear.' }],
+        { id: 'abstain', description: 'Review, deploy, analyze, or unclear.' }],
       abstainId: 'abstain',
     }],
   }
 }
 
-/** Preserve the existing non-Laya provider contract and default fallback behavior. */
+/** Preserve the existing non-Laya provider question contract. */
 function legacyClassificationBatch(task: string): DecisionBatch {
   return { purpose: 'akinator', state: { task }, questions: [{ id: 'task-type',
     instructions: 'Classify the current request. Questions and advice are chat; explicit source lookup is research. Abstain when ambiguous. This grants no permission.',
@@ -116,11 +120,11 @@ export async function classifyTaskForIntake(service: DecisionService | undefined
   const batch = laya ? buildAkinatorClassificationBatch(task) : legacyClassificationBatch(task)
   if (!batch) return { deferInference: true }
   const outcome = await service.evaluate(requestId, batch, signal, laya ? AKINATOR_CLASSIFICATION_POLICY : '')
-  if (outcome.status === 'fallback') return { deferInference: laya && ['DECISION_TOO_LARGE', 'DECISION_INVALID_INPUT'].includes(outcome.reason) }
+  if (outcome.status === 'fallback') return { deferInference: true }
   const answer = outcome.result.answers[0]
   return answer?.status === 'selected' && (laya ? AKINATOR_AUTOMATED_TASK_TYPES : TASK_TYPES).some(type => type === answer.choiceId)
     ? { taskType: answer.choiceId as TaskType, deferInference: false }
-    : { deferInference: laya }
+    : { deferInference: true }
 }
 
 /** Compatibility for consumers interested only in the optional classification. */

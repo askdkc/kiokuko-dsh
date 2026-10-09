@@ -12,6 +12,7 @@ import { verifyLispVendor } from './integrity.js'
 import { CompiledLispCache, type CompilationStatus } from './compiled-cache.js'
 import { backupUsage, checkedBytes, snapshot, under, type FrozenChange } from './files.js'
 import { describeVerifiers, type LispCiRequest } from './ci.js'
+import { PackageRequest, type PackageResult } from './packages.js'
 import { LispProposalBatch } from './proposal-batch.js'
 import { inspectSavedResult } from './inspection.js'
 import { recordedResult } from './recorded-result.js'
@@ -24,12 +25,14 @@ import { ApplyInput, CompareInput, StageInput, VerifyInput, candidateFromResult,
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus
   slotReserved?: boolean; hostBusy?: boolean; idleSince?: number; idleTimer?: ReturnType<typeof setTimeout>; suspension?: Promise<void>; resumed?: boolean; disposed?: boolean;
+  packageBase?: NonNullable<PackageResult['base']>;
   currentVerification?: { operationId: string; generation: string; results: Array<{ request: LispCiRequest; result: unknown }> } }
 export interface ManagerOptions {
   skillPrompts?: DshSkillPrompts
   store: LispStore; config: LispConfiguration; dataRoot: string; library?: string; protectedRoots?: string[]; questions?: DshUserQuestions
   notify?: (owner: LispOwner, message: string) => void
   toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>) => Promise<unknown>
+  packagesCall?: (owner: LispOwner, request: PackageRequest, signal: AbortSignal) => Promise<PackageResult>
   ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal, scratchRoot?: string) => Promise<unknown>
   verifiedCall?: (owner: LispOwner, operationId: string, generation: string, request: LispCiRequest, result: unknown) => Promise<void>
   attachmentInput?: (owner: LispOwner, path: string, signal: AbortSignal) => AttachmentInput
@@ -343,6 +346,17 @@ export class LispManager {
       if (this.#closed || state.state !== 'EVALUATING' || state.worker.generation !== context.generation || context.signal.aborted) fail('STALE_RPC', 'Decision evaluation is no longer current.')
       return result
     }
+    if (method === 'packages') {
+      if (!this.options.packagesCall) fail('PACKAGES_UNAVAILABLE', 'Package host adapter is unavailable.')
+      const request = PackageRequest.parse(args)
+      if (request.kind === 'update' && (!state.currentVerification || state.packageBase))
+        fail('PACKAGES_UPDATE_SCOPE', 'Use exactly one update-lockfiles call in a persistent lisp_eval; task calls cannot propose workspace updates.')
+      const result = await this.options.packagesCall(state.owner, request, context.signal)
+      if (this.#closed || state.state !== 'EVALUATING' || state.worker.generation !== context.generation || context.signal.aborted)
+        fail('STALE_RPC', 'Package operation is no longer current.')
+      if (result.base) state.packageBase = result.base
+      return result.value
+    }
     if (method === 'typesafe-status' || method === 'typesafe-evaluate') {
       if (!this.options.typesafeCall) fail('TYPESAFE_UNAVAILABLE', 'TypeSafe host adapter is unavailable.')
       if (method === 'typesafe-status' && !z.object({}).strict().safeParse(args).success) fail('TYPESAFE_INVALID_REQUEST', 'TypeSafe status takes no arguments.')
@@ -464,8 +478,8 @@ export class LispManager {
           hot: 'lisp_hot_contract asks the user to approve schemas and finite input/expected cases. lisp_hot_install validates and atomically selects immutable code by name for this project. lisp_hot_call pins the active version. lisp_hot_status reads revisions; lisp_hot_deactivate asks approval to stop new calls. Results remain session/agent-local.',
         } }
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
-        packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.typesafe', 'kioku.decisions'],
-        api: { scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
+        packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.packages', 'kioku.typesafe', 'kioku.decisions'],
+        api: { packages: 'kioku.packages:metadata, audit and update-lockfiles use an approval-gated public npm broker. Updates generate in protected scratch and propose frozen files, never install dependencies or write the repository directly.', scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
           decisions: '(kioku.decisions:status), evaluate, assess-relevance, classify-failure, assess-change. Consume selected/abstained results; ordinary reasoning on fallback, cancellation is terminal.',
           typesafe: '(kioku.typesafe:status); (kioku.typesafe:evaluate state questions :model "jev-latest" :timeout-ms 30000). Explicit semantic decisions via the host; consume answers with gethash. Strings/hash tables/vectors use JSON conventions. Catch kioku.typesafe:service-error; no retries or approval bypass. Configure with /kioku-typesafe-key.',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
@@ -765,7 +779,7 @@ export class LispManager {
         evidence = { ...result, state: response.ok ? 'RUNNING' : 'FAILED' }
         await this.#store.transition(owner, id, ['RUNNING'], response.ok ? 'RUNNING' : 'FAILED', evidence)
         if (!response.ok) { state.state = 'READY'; return result }
-        const applied = await this.#proposals.apply(owner, id, worker.generation, response.proposals, combined)
+        const applied = await this.#proposals.apply(owner, id, worker.generation, response.proposals, combined, undefined, state.packageBase)
         const uncertain = applied.some(change => change.state === 'UNKNOWN')
         if (uncertain) { await worker.stop(); this.halted(state, new LispError('RECONCILIATION_REQUIRED', '変更結果が未確定です。記録とバックアップを照合してください。')) }
         else if (state.state === 'EVALUATING') state.state = 'READY'
@@ -795,7 +809,7 @@ export class LispManager {
         } else if (!worker.healthy) { try { await worker.stop() } catch (stop) { error = stop }; this.halted(state, error) }
         else if (state.state === 'EVALUATING') state.state = 'READY'
         return outcome
-      } finally { state.active.delete(abort); if (state.currentVerification?.operationId === id) delete state.currentVerification }
+      } finally { state.active.delete(abort); delete state.packageBase; if (state.currentVerification?.operationId === id) delete state.currentVerification }
     } catch (error) { return failure(error) }
   }
   private async taskResult(owner: LispOwner, ref: string): Promise<unknown> {

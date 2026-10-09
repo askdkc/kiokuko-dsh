@@ -51,7 +51,7 @@ after(async () => {
 })
 type Mode = 'core' | 'full' | 'enno' | 'public' | 'configured-core' | 'enno-incomplete'
 type Scenario = 'auto-web' | 'text' | 'clarify' | 'build-write' | 'writing-write' | 'debug-write' | 'multi-tool' | 'scope-spoof' | 'definition-rebound' | 'direct-advisory' | 'uncertain-recovery' | 'ptc-malicious' | 'restart' | 'unknown-action' | 'memory-pending' | 'memory-direct' | 'prepared' | 'native-allow-once' | 'native-reject' | 'native-deny' | 'native-cancel' | 'carrier-ask-reject' | 'replace-task' | 'incomplete-catalog' | 'answer-memory'
-async function runNative(mode: Mode, scenario: Scenario, task: string, taskType = 'research', presentation: 'native' | 'ptc' | 'ptc-scoped' = 'native', lispEnabled = false) {
+async function runNative(mode: Mode, scenario: Scenario, task: string, taskType = 'research', presentation: 'native' | 'ptc' | 'ptc-scoped' = 'native', lispEnabled = false, publicProfile?: 'dsh-cli' | 'dsh-tui') {
   const root = realpathSync(await mkdtemp(join(tmpdir(), 'kiokuko-on-demand-native-')))
   execFileSync('git', ['init', '-q', root]); await mkdir(join(root, 'src'))
   if (scenario === 'debug-write') await writeFile(join(root, 'src', 'verified-fixture.txt'), 'BROKEN_FIXTURE')
@@ -100,7 +100,8 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       disposers.push(() => { runtime.run = originalRun })
     }
     const questionFiber = ctx.plugin({ name: 'on-demand-question-fixture', apply(context: any) {
-      if (mode === 'public') context.provide('connection', { fetch: { register(route: any) { publicRoutes.push(route.path); return () => {} } }, rpc: { intercept: () => () => {} } })
+      if (publicProfile) context.provide('profileContext', { name: publicProfile })
+      if (mode === 'public' && !publicProfile) context.provide('connection', { fetch: { register(route: any) { publicRoutes.push(route.path); return () => {} } }, rpc: { intercept: () => () => {} } })
       return context.provide('userQuestions', { async ask(request: any) {
         questions.push(request.questions)
         questionPhases.push({ modelRequests: requests.length, dispatched: dispatches.map(call => call.name) })
@@ -232,7 +233,10 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
     assert.deepEqual(errors, [], JSON.stringify(row))
     assert.equal(state.ennoContractCount, 0, 'ordinary answers and selected normal execution must not create an Enno contract')
     assert.equal(state.ennoWorkUnitCount, 0, 'normal execution must not create an Enno WorkUnit')
-    if (mode === 'public') assert.ok(publicRoutes.length > 0, 'normal public Web plugin must register its export surface')
+    if (mode === 'public') {
+      if (publicProfile) assert.equal(publicRoutes.length, 0, 'public TUI plugin must not require the Web export route')
+      else assert.ok(publicRoutes.length > 0, 'normal public Web plugin must register its export surface')
+    }
     if (lispEnabled) {
       assert.equal(state.lispOperationCount, 0, 'answer or declined Lisp choice must never start Lisp work')
       assert.ok(!state.lispSessions?.some((entry: any) => entry.enabled === 1), 'fixture must never enable Lisp')
@@ -341,6 +345,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
     }
   }
 }
+for (const profile of ['dsh-cli', 'dsh-tui'] as const) test(`public TUI ${profile}: coding choice works without Web services`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative('public', 'build-write', 'srcに検証用ファイルを実装して。', 'build', 'native', true, profile))
 test('default public host: native session workspace can differ from startup cwd', { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative('public', 'text', 'SESSION_WORKSPACE_PROBE'))
 if (process.env.PR72_MATRIX_ONLY !== '1') for (const mode of ['core', 'full'] as const) {
   test(`default native ${mode}: ordinary answer recalls memory and revalidates after forgetting without an execution run`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'answer-memory', 'NATIVEMEMORYの回答設定を説明して'))

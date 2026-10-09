@@ -195,6 +195,8 @@
     "test:benchmark:enno-memory": "node --import tsx scripts/run-enno-memory-benchmark.ts",
     "test:evaluation:enno-memory": "node scripts/run-enno-memory-evaluation.mjs",
     "verify:lisp:vendor": "node scripts/verify-lisp-vendor.mjs",
+    "test:packages:live": "KIOKUKO_REQUIRE_LISP_RUNTIME=1 KIOKUKO_PACKAGE_LIVE=1 node scripts/run-tests.mjs tests/dsh/integration/lisp/packages-live.test.ts",
+    "test:packages": "KIOKUKO_REQUIRE_LISP_RUNTIME=1 node scripts/run-tests.mjs tests/dsh/unit/lisp/packages.test.ts tests/dsh/integration/lisp/packages-runtime.test.ts tests/dsh/integration/lisp/packages-update.test.ts",
     "test:lisp": "node scripts/run-tests.mjs tests/dsh/unit/lisp tests/dsh/integration/lisp",
     "test:lisp:prototype-planning": "node --import tsx scripts/run-lisp-prototype-planning.mjs",
     "test:lisp:efficiency": "node --import tsx scripts/run-lisp-efficiency.mjs",

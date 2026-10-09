@@ -3,7 +3,7 @@ import test from 'node:test'
 import { buildAkinatorClassificationBatch } from '../../../../src/dsh/decisions/akinator-classification.js'
 
 test('question punctuation cannot bypass unsupported or combined execution scope', () => {
-  for (const task of ['検索機能を実装してくれますか？', 'バグを修正してデプロイしてくれますか？', 'Fix and deploy the application?', 'Could you build a compiler?', '富士山について調べて紹介文を書いてくれますか？', 'Can you do that?', 'それをお願いできますか？']) {
+  for (const task of ['バグを修正してデプロイしてくれますか？', 'Fix and deploy the application?', '富士山について調べて紹介文を書いてくれますか？', 'Can you do that?', 'それをお願いできますか？']) {
     assert.equal(buildAkinatorClassificationBatch(task), undefined, task)
   }
 })

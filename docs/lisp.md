@@ -63,8 +63,13 @@ starts a worker. Variables, definitions and references are lost on restart; the
 agent receives the new generation and must rebuild helpers without replaying
 completed effects. Crashes and explicit cancellation still require human recovery.
 
-Before the first implementation or debugging request, the host asks whether to
-use Lisp. It resolves unclear task intent first. Both enable and decline choices
+Enter a normal implementation or debugging request in DSH, including dsh-cli.
+With `typedDecisions.mode: auto`, an accepted Jev/Laya `build` or `debug`
+classification reaches the existing Lisp question. Laya admits short single
+implementation requests with an explicit target; wording only determines whether
+to ask the classifier, never the classification itself. Unclear, combined or
+oversized requests retain intake confirmation. The host asks whether to use Lisp
+before coding begins; it resolves unclear task intent first. Both enable and decline choices
 persist for that session, including after a restart. Conversation and review
 requests do not trigger this prompt. Free text returns to conversation without
 starting Lisp; cancellation and startup failure block coding admission.

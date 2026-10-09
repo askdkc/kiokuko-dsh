@@ -21,6 +21,7 @@ import { createLispCodingChoice, LISP_CODING_SERVICE } from './coding-choice.js'
 import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './request-surface.js'
 import { mountLispHttp } from './http.js'
 import { createLispCiAdapter } from './ci.js'
+import { createLispPackageAdapter } from './packages.js'
 import { createLispMemoryVerification } from './memory-verification.js'
 import { isSavedLispResultRead } from '../memory-application.js'
 import { attachmentInput, type LispAttachmentSession, type LispAttachmentStore } from './attachment-input.js'
@@ -31,6 +32,8 @@ import { LISP_TOOLS, failure, fail, identifier, renderResult, type LispConfigura
 interface Session extends LispAttachmentSession { id: string; header: { cwd: string; parentSession?: string } }
 interface Agent { id: string; status?: string; session: Session; ctx: { get(name: string, strict?: boolean): any }; inject?: (message: unknown) => void }
 interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; schemas(scope?: unknown): { name: string; description: string; parameters: unknown }[]; presentAs(mode: 'native'): () => void; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
+interface ExecutionFence { protect(sessionId: string): void; release(sessionId: string): void }
+interface ExecutionFences { attach(request: { id: string; tools: readonly string[]; check(execution: any): string | undefined; beforeStep(agent: Agent): Promise<boolean> }): ExecutionFence }
 interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean }
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill', 'observation_read'] as const
@@ -91,11 +94,22 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const store = new LispStore(fn => runtime.withDatabase(db => fn(db)))
   const typesafe = new HttpTypeSafeClient(typeSafeCredentials(ctx))
   const ciAdapter = createLispCiAdapter(ownerQuestions)
+  const packageAdapter = createLispPackageAdapter(ownerQuestions)
   const memoryVerification = createLispMemoryVerification(runtime)
   const manager = new LispManager({ store, config,
     ...(skillPrompts ? { skillPrompts } : {}),
     dataRoot: join(dirname(databasePath), 'lisp'), protectedRoots: [databasePath, `${databasePath}-wal`, `${databasePath}-shm`],
     ...(ownerQuestions ? { questions: ownerQuestions } : {}),
+    packagesCall: async (owner, request, signal) => {
+      const agent = agents.get(owner.agentId)
+      if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root)
+        fail('SESSION_MISMATCH', 'Package session identity changed.')
+      signal.throwIfAborted()
+      const result = await packageAdapter(owner, request, signal)
+      if (agents.get(owner.agentId) !== agent || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root)
+        fail('SESSION_MISMATCH', 'Package session identity changed during approval or execution.')
+      return result
+    },
     ciCall: async (owner, request, signal, scratchRoot) => {
       await memoryVerification.beforeCall(owner, request)
       return ciAdapter(owner, request, signal, scratchRoot)
@@ -141,30 +155,44 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     }
     return undefined
   }
-  let fence = root[fenceKey]
+  // CLI mediates a root-owned denial without granting a plugin root effects.
+  // Other DSH hosts retain their existing persistent root fence.
+  const hostFences = ctx.get('executionFences', false) as ExecutionFences | undefined
+  let hostFence: ExecutionFence | undefined
+  let fence = hostFences ? undefined : root[fenceKey]
   if (!fence) {
-    fence = { sessions: new Map(), definitions: new Map(), stopped: true }; root[fenceKey] = fence
+    fence = { sessions: new Map(), definitions: new Map(), stopped: true }
     const persistent = fence
-    tools.guard(execution => {
+    const check = (execution: any): string | undefined => {
       const agent = execution.agent as Agent | undefined
       const scope = scopeSession(agent, persistent)
-      if (!scope) return LISP_TOOLS.includes(execution.name) ? 'このセッションでは Lisp が無効です。' : undefined
+      if (!scope) return hostFences || LISP_TOOLS.includes(execution.name) ? 'このセッションでは Lisp が無効または起動中です。' : undefined
       if (persistent.stopped || !persistent.controller) return 'Lisp の保護が継続中です。プラグインを戻し /kioku-lisp status で確認してください。'
       if (!agent || agents.get(agent.id) !== agent || sessions.get(agent.session.id) !== agent.session) return 'Lisp のセッションを確認できません。'
       if (agent.session.id !== scope) return '保護中の子セッションでは任意ツールを実行できません。親セッションの Lisp を使用してください。'
       const registered = persistent.definitions.get(`${agent.id}:${execution.name}`)
       if (registered && tools.get(execution.name, agent)?.execute === (registered as { execute: unknown }).execute) return undefined
       return 'Lisp 保護中は Lisp ツールと DSH の読み取り・検索・スキル読み込み・質問・計画提出を使えます。変更は Lisp 経由で行い、削除・既存ファイルの置換には利用者の確認が必要です。'
-    })
-    root.on('agent/pre-step' as never, (async (payload: { agent: Agent }, next: () => Promise<unknown>) => {
-      const scope = scopeSession(payload.agent, persistent)
-      if (!scope) return next()
-      if (persistent.stopped || !persistent.controller || scope !== payload.agent.session.id) return { kind: 'reject' }
-      return await persistent.prepareAgent?.(payload.agent) ? next() : { kind: 'reject' }
-    }) as never, { prepend: true, global: true })
+    }
+    const prepare = async (agent: Agent): Promise<boolean> => {
+      const scope = scopeSession(agent, persistent)
+      if (!scope) return !hostFences
+      if (persistent.stopped || !persistent.controller || scope !== agent.session.id) return false
+      return await persistent.prepareAgent?.(agent) === true
+    }
+    if (hostFences) hostFence = hostFences.attach({ id: 'kiokuko.lisp.v1', tools: LISP_TOOLS, check, beforeStep: prepare })
+    else {
+      root[fenceKey] = fence
+      tools.guard(check)
+      root.on('agent/pre-step' as never, (async (payload: { agent: Agent }, next: () => Promise<unknown>) =>
+        await prepare(payload.agent) ? next() : { kind: 'reject' }) as never, { prepend: true, global: true })
+    }
   }
   if (fence.controller && !fence.stopped) fail('HOST_CONFLICT', 'Lisp プラグインが既に接続されています。')
-  for (const saved of await runtime.withDatabase(db => db.prepare('SELECT session_id,root_path FROM dsh_lisp_sessions WHERE enabled=1').all<{session_id:string;root_path:string}>())) fence.sessions.set(saved.session_id, saved.root_path)
+  for (const saved of await runtime.withDatabase(db => db.prepare('SELECT session_id,root_path FROM dsh_lisp_sessions WHERE enabled=1').all<{session_id:string;root_path:string}>())) {
+    hostFence?.protect(saved.session_id)
+    fence.sessions.set(saved.session_id, saved.root_path)
+  }
   await manager.start()
   fence.sessions = manager.enabled; fence.controller = manager; fence.stopped = false
   const disposers: (() => void)[] = []
@@ -270,6 +298,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }, { global: true }))
   const enable = async (binding: ReturnType<typeof owner>): Promise<unknown> => {
     const wasEnabled = manager.enabled.has(binding.owner.sessionId)
+    hostFence?.protect(binding.owner.sessionId)
     try {
       const result = await manager.isTaskMode(binding.owner)
         ? await manager.status(binding.owner)
@@ -278,6 +307,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       register(binding.agent)
       return result
     } catch (error) {
+      if (!wasEnabled && !manager.enabled.has(binding.owner.sessionId)) hostFence?.release(binding.owner.sessionId)
       // Startup failures retain the admitted fence and diagnostic tools.
       if (!binding.signal.aborted && !wasEnabled && manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
       throw error
@@ -334,8 +364,16 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         if (extra.length || (argument && !['status', 'hot', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|enable-task|status|hot [NAME]|diagnostics|cancel|recover|abandon ID|restore ID|disable')
         let result: unknown
         if (action === 'enable') result = await enable(binding)
-        else if (action === 'enable-task') { result = await manager.enableTask(binding.owner, binding.signal); register(binding.agent) }
-        else if (action === 'disable') { result = await manager.disable(binding.owner); unregister(binding.agent) }
+        else if (action === 'enable-task') {
+          const wasEnabled = manager.enabled.has(binding.owner.sessionId)
+          hostFence?.protect(binding.owner.sessionId)
+          try { result = await manager.enableTask(binding.owner, binding.signal); register(binding.agent) }
+          catch (error) {
+            if (!wasEnabled && !manager.enabled.has(binding.owner.sessionId)) hostFence?.release(binding.owner.sessionId)
+            throw error
+          }
+        }
+        else if (action === 'disable') { result = await manager.disable(binding.owner); unregister(binding.agent); hostFence?.release(binding.owner.sessionId) }
         else if (action === 'cancel') result = await manager.execute(binding.owner, 'lisp_cancel', {})
         else if (action === 'recover') {
           if (manager.enabled.has(binding.owner.sessionId)) register(binding.agent)

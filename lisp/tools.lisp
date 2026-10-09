@@ -5,6 +5,7 @@
 (defpackage :kioku.process (:use :cl) (:export :run :python :shell :start-job :job-status :cancel-job :result-code :result-stdout :result-stderr :result-ok? :split-lines :python-stdout :shell-stdout :run-lines :list-jobs :forget-job))
 (defpackage :kioku.environment (:use :cl) (:export :status))
 (defpackage :kioku.ci (:use :cl) (:export :list-runs :failed-log :verify))
+(defpackage :kioku.packages (:use :cl) (:export :metadata :audit :update-lockfiles))
 (defpackage :kioku.decisions (:use :cl) (:export :status :evaluate :assess-relevance :classify-failure :assess-change :service-error :error-code))
 (defpackage :kioku.typesafe (:use :cl) (:export :status :evaluate :service-error :error-code))
 (defpackage :kioku.tools (:use :cl) (:export :describe-tools :describe-symbol :available-tools :call-tool))
@@ -218,6 +219,22 @@
     (unless (equal directory ".") (setf (gethash "directory" request) directory))
     (unless (eq location :workspace) (setf (gethash "location" request) (string-downcase (string location))))
     (kioku.internal:rpc "ci-verify" request)))
+(in-package :kioku.packages)
+(defun metadata (name &key (version "latest"))
+  "Approved public npm metadata lookup for NAME and an exact VERSION or latest; no arbitrary URLs."
+  (kioku.internal:rpc "packages" (kioku.internal:object "kind" "metadata" "name" name "version" version)))
+(defun audit (versions)
+  "Approved public npm bulk advisory lookup. VERSIONS is a hash table of at most ten names/exact versions."
+  (kioku.internal:rpc "packages" (kioku.internal:object "kind" "audit" "versions" versions)))
+(defun update-lockfiles (versions &key (directory "."))
+  "Generate root npm/pnpm locks in protected network scratch, then propose the frozen manifest/lockfile batch. Persistent eval only."
+  (let ((result (kioku.internal:rpc "packages" (kioku.internal:object "kind" "update" "versions" versions "directory" directory))))
+    (when (and (equal (gethash "state" result) "SUCCEEDED") (eq (gethash "generatedOnly" result) yason:true))
+      (loop for file across (gethash "files" result) do
+        (kioku.files:propose-write (gethash "path" file) (gethash "content" file)))
+      (setf (gethash "proposedFiles" result) (map 'vector (lambda (file) (gethash "path" file)) (gethash "files" result)))
+      (remhash "files" result))
+    result))
 (in-package :kioku.typesafe)
 (define-condition service-error (error)
   ((code :initarg :code :reader error-code) (message :initarg :message :reader service-message))
@@ -265,7 +282,7 @@
   (kioku.internal:rpc "tool-call" (kioku.internal:object "name" name "args" arguments)))
 (defun describe-tools ()
   (mapcar (lambda (package) (cons package (sort (loop for symbol being the external-symbols of (find-package package) collect (symbol-name symbol)) #'string<)))
-          '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.TYPESAFE" "KIOKU.DECISIONS")))
+          '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS")))
 (defun task-functions ()
   "List functions and macros defined in this worker's KIOKU.USER package."
   (let ((package (find-package :kioku.user)))
@@ -279,7 +296,7 @@
       (kioku.internal:object "package" "kioku.user" "generation" kioku.internal:*generation*
                             "symbols" (coerce (task-functions) 'vector))))
   (let ((package (find-package (string-upcase name))))
-    (when (and package (member (package-name package) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.TYPESAFE") :test #'equal))
+    (when (and package (member (package-name package) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE") :test #'equal))
       (return-from describe-symbol
         (kioku.internal:object "package" (string-downcase (package-name package))
           "symbols" (coerce (sort (loop for symbol being the external-symbols of package
@@ -289,7 +306,7 @@
         (multiple-value-bind (symbol end) (read-from-string name)
           (unless (and (symbolp symbol) (symbol-package symbol) (fboundp symbol)
                        (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq name end))))
-                       (member (package-name (symbol-package symbol)) '("KIOKU.USER" "KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.TYPESAFE") :test #'equal))
+                       (member (package-name (symbol-package symbol)) '("KIOKU.USER" "KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE") :test #'equal))
             (error "UNKNOWN_SYMBOL"))
           (kioku.internal:object "symbol" name "arguments" (kioku.internal::printed (sb-introspect:function-lambda-list symbol)) "documentation" (or (documentation symbol 'function) "No function documentation."))))))
 

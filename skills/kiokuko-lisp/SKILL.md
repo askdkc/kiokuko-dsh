@@ -106,6 +106,38 @@ Evaluation ok=true is not process success: check result-code and verifier state/
 Report only observed results; partial reads do not prove byte equality. Distinguish
 scratch/applied-file checks; validate custom checkers on known cases first.
 
+## Public registry and dependency updates
+
+The worker still has no direct network access. `kioku.packages` uses a separate,
+explicitly approved host broker for the public npm registry; no arbitrary URLs,
+registry credentials or shell arguments are accepted.
+
+- `(kioku.packages:metadata "sharp")` looks up latest metadata; `:version` selects
+  one exact canonical version. Verify advisory ranges before choosing a release.
+- `(kioku.packages:audit versions)` sends a hash table of at most ten package names
+  and exact versions to npm's bulk advisory endpoint. Empty advisories mean only
+  those selected versions were checked, not that the whole project is safe.
+- `(kioku.packages:update-lockfiles versions)` captures the root manifest and
+  existing npm/pnpm locks, adds explicit security overrides, and generates locks
+  with installed package managers in private OS-protected scratch. `:directory`
+  selects a workspace-relative root project. Local/Git dependencies and multi-project
+  workspaces are refused. Scripts, hooks, original npm configuration and inherited
+  credentials are excluded. The separate package-manager sandbox permits networking
+  and children; the ordinary Lisp worker's protection is unchanged.
+
+Updates are persistent-mode eval only: one call per evaluation, with no unrelated
+proposals. The wrapper proposes the generated manifest/lockfiles through the usual
+review, backups and journal. Captured files are rechecked before generation returns
+and again during proposal application. Approval to generate never grants approval
+to write. `SUCCEEDED` with `generatedOnly` describes generation; only the host's
+`changes` receipts establish APPLIED/UNCHANGED. Refusal, failure or cancellation
+returns no update proposals; exact operation replay sends nothing again.
+
+HTTP requests cap at 30 seconds/256 KiB; each fixed package-manager command caps
+at 90 seconds/256 KiB output. No retries, runtime downloads, dependency installation,
+profile changes or auto-reload. Build/reload the plugin to activate new host APIs;
+resetting an old worker alone does not install new host code.
+
 ## Evidence and recovery
 
 Idle workers suspend after five minutes/slot pressure, never during active turns,
