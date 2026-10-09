@@ -20,8 +20,8 @@ const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'te
 const installed = existsSync(join(packages, '@deepseek-ai/dsh-tools/lib/index.js'))
 if (!installed && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Native runtime required for classifier failure tests')
 
-for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) {
-  test(`on-demand full native: ${fault} classifier with Orca recording permits an ordinary answer without purpose UI`, { skip: !installed, timeout: 30_000 }, async () => {
+for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) for (const web of [false, true]) {
+  test(`on-demand full native: ${fault} classifier with Orca recording permits ${web ? 'automatic web search' : 'an ordinary answer'} without purpose UI`, { skip: !installed, timeout: 30_000 }, async () => {
     const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
     const [cordis, llm, session, projection, prompt, tools, agents, loop, skills] = await Promise.all([
       'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop', 'dsh-skill',
@@ -47,21 +47,24 @@ for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) {
         async ask() { questions++; throw new Error('An ordinary answer must not open intake UI') },
       }) } }); fibers.push(questionFiber); await questionFiber
       ctx.on('agent/error', (event: any) => errors.push(String(event.error)))
-      const mock = nativeMock(llm), provider = new mock.MockAdapter([mock.textResponse('SCRIPTED_ORDINARY_ANSWER')])
+      let webBodies = 0
+      ctx.tools.register({ name: 'web_search', description: 'Harmless web search fixture.', parameters: { queries: { type: 'array', items: { type: 'string' }, required: true } }, output: { schema: {}, render: () => [] }, execute: () => { webBodies++; return 'web fixture result' } })
+      const mock = nativeMock(llm), provider = new mock.MockAdapter([...(web ? [mock.toolCallResponse('first-search', 'web_search', { queries: ['VMware Tools critical CVE'] })] : []), mock.textResponse('SCRIPTED_ORDINARY_ANSWER')])
       ctx.llm.registerAdapter(['fixture'], provider)
       adapter = createDshHostAdapter(ctx, { repositoryRoot: root, databasePath, decisions,
         orca: { enabled: true }, answerReview: { mode: 'off' }, deepPlanning: { enabled: false }, modelAutoMode: { mode: 'off' } })
       composition = await mountDshComposition(ctx, adapter.host)
       handle = await ctx.agents.create({ sessionId: session.SessionId(`fault-${fault}`), agentOptions: { provider: 'fixture', model: 'mock' }, meta: { cwd: root } })
-      const task = 'Why is the sky blue?'
+      const task = web ? 'vmware toolsの最新の脆弱性でクリティカルレベルのものある？' : 'Why is the sky blue?'
       handle.agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
       await handle.agent.whenIdle()
       assert.deepEqual(errors, []); assert.equal(questions, 0); assert.ok(providerCalls > 0)
       assert.ok(observations.some(observation => observation.purpose === 'akinator' && observation.fallbackReason === (fault === 'NONE' ? null : `DECISION_${fault}`)))
-      assert.equal(provider.requests.length, 1)
+      assert.equal(provider.requests.length, web ? 2 : 1); assert.equal(webBodies, web ? 1 : 0)
+      if (web) assert.ok(!handle.agent.session.snapshotEvents().some((event: any) => event.type === 'tool/result' && event.data.message.isError))
       assert.ok(handle.agent.session.snapshotEvents().some((event: any) => event.type === 'assistant/message' && JSON.stringify(event.data).includes('SCRIPTED_ORDINARY_ANSWER')))
       const db = openConnection(databasePath)
-      try { assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, 0); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM akinator_sessions').get()?.n, 0) } finally { db.close() }
+      try { assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, web ? 1 : 0); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM akinator_sessions').get()?.n, web ? 1 : 0) } finally { db.close() }
     } finally {
       await handle?.dispose(); await composition?.dispose(); await adapter?.dispose()
       for (const fiber of fibers.reverse()) await fiber.dispose()

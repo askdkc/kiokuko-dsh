@@ -9,7 +9,7 @@ import type { AkinatorTaskClassification } from './decisions/akinator-classifica
 
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
-export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. No execution task has been prepared yet. Preserve all requested actions, negations, alternatives and target uncertainty. For research or other work requiring tools, prepare that work with prepare_requested_work(taskType); its type is advisory and grants no permission. Do not silently replace a requested action with a text-only answer or claim work was done. Ask a concrete clarification in ordinary conversation when the actual target or requested action is unclear. Do not prepare work merely to load a conversational skill. Existing native tool permissions and approvals still apply. If only run_code is exposed, prepare with exactly return await tools.prepare_requested_work({"taskType":"research"}) using the appropriate advisory type; the host intercepts that preparation-only carrier without evaluating code. Extra statements or expressions are refused until preparation completes.'
+export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. No execution task has been prepared yet. Preserve all requested actions, negations, alternatives and target uncertainty. Native web_search and web_fetch demands automatically prepare the original request with research advice when no non-chat action type is resolved. Other tool-backed work requires prepare_requested_work(taskType); its type is advisory and grants no permission. Do not silently replace a requested action with a text-only answer or claim work was done. Ask a concrete clarification in ordinary conversation when the actual target or requested action is unclear. Do not prepare work merely to load a conversational skill. Existing native tool permissions and approvals still apply. If only run_code is exposed, prepare with exactly return await tools.prepare_requested_work({"taskType":"research"}) using the appropriate advisory type; the host intercepts that preparation-only carrier without evaluating code. Extra statements or expressions are refused until preparation completes.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(type => type !== 'chat')
 
 export interface DemandAgent { readonly ctx?: unknown; readonly id: string; readonly session?: { readonly id: string; snapshotEvents?(): readonly DshLogEvent[] } }
@@ -54,6 +54,11 @@ function humanId(message: any): string { return typeof message.id === 'string' ?
 function eventTurn(event: { data?: unknown } | undefined): number | undefined {
   const data = event?.data as { turn?: unknown } | undefined
   return Number.isSafeInteger(data?.turn) ? data!.turn as number : undefined
+}
+/** Tool names select advice only; admission and native permissions remain authoritative. */
+function automaticPreparationType(intent: AkinatorTaskClassification, name: string): TaskType | undefined {
+  if (intent.taskType && intent.taskType !== 'chat') return intent.taskType
+  return name === 'web_search' || name === 'web_fetch' ? 'research' : undefined
 }
 function denied(reason: string): { kind: 'deny'; reason: string } { return { kind: 'deny', reason } }
 /** A protocol carrier, not JavaScript evaluation. Only this exact JSON-literal call is recognized. */
@@ -258,8 +263,8 @@ export class OnDemandIntake {
           if (actual.execute !== definition.execute || !(state.status === 'answer' || state.existing && state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) || state.preparationCalls.has(execution.callId)) return denied('Task preparation is not current')
         } else if (!skillRead) {
           if (state.status !== 'prepared') {
-            const type = state.intent.taskType
-            if (!type || type === 'chat') return denied('Before tool-backed work, call prepare_requested_work with its advisory taskType. Clarify unknown actions or targets first; the original request is preserved.')
+            const type = automaticPreparationType(state.intent, execution.name)
+            if (!type) return denied('Before tool-backed work, call prepare_requested_work with its advisory taskType. Clarify unknown actions or targets first; the original request is preserved.')
             await this.prepare(state, type, execution.signal)
           }
           if (!this.host.ready(state.input.agent, state.input.turn)) return denied('Prepared execution is no longer current')

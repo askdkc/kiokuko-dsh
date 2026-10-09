@@ -35,7 +35,7 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}) {
   const events = [event('turn/start', 1)]
   const session = { id: 'review-session', snapshotEvents: () => events }
   const agent = { id: 'review-agent', session }
-  const admissions: DemandInput[] = []
+  const admissions: DemandInput[] = [], advice: string[] = []
   let skillReads = 0
   let releaseSkill = ctx.tools.register({ name: 'skill', parameters: { type: 'object' },
     output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
@@ -46,7 +46,7 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}) {
     validate: async input => { assert.equal(input.agent, agent); assert.equal(input.agent.session, session) },
     existing: async () => false,
     classify: async () => ({ deferInference: true }),
-    prepare: async input => { admissions.push(input); readyTurn = input.turn; return true },
+    prepare: async (input, type) => { advice.push(type); admissions.push(input); readyTurn = input.turn; return true },
     ready: (candidate, turn) => candidate === agent && readyTurn !== undefined && (turn === undefined || turn === readyTurn),
     ...options,
   })
@@ -57,7 +57,7 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}) {
   })
   t.after(async () => { await intake.dispose(); releaseProbe(); releaseSkill(); await fiber.dispose() })
   return {
-    ctx, agent, session, events, intake, admissions,
+    ctx, agent, session, events, intake, admissions, advice,
     bodies: () => bodies,
     skillReads: () => skillReads,
     rebindSkill() { releaseSkill(); releaseSkill = ctx.tools.register({ name: 'skill', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => { skillReads++; return 'replacement' } }) },
@@ -326,4 +326,82 @@ test('on-demand review: automatic classifier advice cannot resolve a known missi
   assert.equal((await f.execute()).isError, true)
   assert.equal(f.admissions.length, 0)
   assert.equal(f.bodies(), 0)
+})
+
+function webTool(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, name = 'web_search') {
+  const calls: any[] = []
+  const release = f.ctx.tools.register({ name, parameters: { type: 'object' }, output: { schema: {}, render: () => [] },
+    execute: (args: unknown, execution: any) => { calls.push({ args, execution }); return 'web result' } })
+  t.after(release)
+  ;(calls as any).release = release
+  return calls
+}
+for (const taskType of [undefined, 'chat', 'debug'] as const) for (const name of ['web_search', 'web_fetch']) {
+  test(`automatic web preparation: ${name} with ${taskType ?? 'unclassified'} advice`, async t => {
+    const f = await fixture(t, { classify: async () => ({ ...(taskType ? { taskType } : {}), deferInference: !taskType }) })
+    const calls = webTool(t, f, name), messages = [human('original', 'vmware toolsの最新の脆弱性でクリティカルレベルのものある？')]
+    await f.capture(messages)
+    const args = name === 'web_search' ? { queries: ['VMware Tools critical CVE'] } : { url: 'https://example.com/advisory' }
+    assert.equal((await f.execute(name, args, { callId: 'original-call' })).isError, false)
+    assert.deepEqual(f.advice, [taskType === 'debug' ? 'debug' : 'research'])
+    assert.deepEqual(f.admissions[0]!.messages, messages)
+    assert.equal(calls.length, 1); assert.deepEqual(calls[0].args, args)
+    assert.equal(calls[0].execution.callId, 'original-call'); assert.equal(calls[0].execution.agent, f.agent)
+    assert.equal((await f.execute(name, args)).isError, false)
+    assert.equal(f.admissions.length, 1); assert.equal(calls.length, 2)
+  })
+}
+for (const task of ['それを検索して', 'search that', 'look up it', 'それを消して？', 'Delete that.', 'search A or B, I am undecided']) {
+  test(`automatic web preparation: missing scope stops ${task}`, async t => {
+    const f = await fixture(t), calls = webTool(t, f)
+    await f.capture([human('original', task)])
+    assert.equal((await f.execute('web_search', { queries: ['invented target'] })).isError, true)
+    assert.equal(f.admissions.length, 0); assert.equal(calls.length, 0)
+  })
+}
+test('automatic web preparation: concurrent web calls share one pending admission', async t => {
+  const gate = deferred(); let preparations = 0
+  const f = await fixture(t, { prepare: async () => { preparations++; await gate.promise; f.ready(1); return true } })
+  const calls = webTool(t, f)
+  await f.capture()
+  const first = f.execute('web_search'), second = f.execute('web_search')
+  await new Promise(resolve => setImmediate(resolve)); gate.resolve()
+  assert.ok((await Promise.all([first, second])).every(result => !result.isError))
+  assert.equal(preparations, 1); assert.equal(calls.length, 2)
+})
+for (const failure of ['admission', 'readiness', 'deny', 'cancel', 'closed'] as const) {
+  test(`automatic web preparation: ${failure} prevents web body`, async t => {
+    const f = await fixture(t, failure === 'admission' ? { prepare: async () => false } : failure === 'readiness' ? { ready: () => false } : {})
+    const calls = webTool(t, f)
+    if (failure === 'deny' || failure === 'cancel') t.after(f.ctx.on('tools/pre-execute', async () => ({ kind: failure, reason: 'native policy' })))
+    if (failure === 'closed') t.after(f.ctx.on('tools/execute', async (_execution: any, next: () => Promise<unknown>) => { f.intake.finish(f.session, 1); return next() }))
+    await f.capture()
+    assert.equal((await f.execute('web_search')).isError, true); assert.equal(calls.length, 0)
+  })
+}
+
+for (const invalidation of ['definition', 'turn', 'cancel'] as const) test(`automatic web preparation: ${invalidation} during admission revokes dispatch`, async t => {
+  const started = deferred(), gate = deferred()
+  const f = await fixture(t, { prepare: async () => { started.resolve(); await gate.promise; f.ready(1); return true } })
+  const calls = webTool(t, f), controller = new AbortController()
+  await f.capture()
+  const pending = f.execute('web_search', {}, { signal: controller.signal })
+  await started.promise
+  if (invalidation === 'cancel') controller.abort()
+  if (invalidation === 'turn') f.events.push(event('turn/start', 2))
+  if (invalidation === 'definition') {
+    // Replacement must not inherit the definition checked before admission.
+    ;(calls as any).release()
+    t.after(f.ctx.tools.register({ name: 'web_search', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => { calls.push('replacement'); return 'replacement' } }))
+  }
+  gate.resolve()
+  assert.equal((await pending).isError, true); assert.equal(calls.length, 0)
+})
+
+test('automatic web preparation: pending memory guard remains authoritative after admission', async t => {
+  const f = await fixture(t), calls = webTool(t, f)
+  t.after(f.ctx.tools.guard(() => 'resolve memory decisions before native work'))
+  await f.capture()
+  assert.equal((await f.execute('web_search')).isError, true)
+  assert.equal(f.admissions.length, 1); assert.equal(calls.length, 0)
 })

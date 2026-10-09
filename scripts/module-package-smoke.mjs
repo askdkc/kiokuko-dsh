@@ -24,7 +24,7 @@ class FixtureModel extends llm.LlmAdapter {
   requests = []
   script = []
   async listModels(provider) { return [{ provider, id: 'fixture', name: 'fixture' }] }
-  async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: 100000 } } }
+  async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: semanticReady ? 20000 : 100000 } } }
   async *stream(options) {
     if (options.purpose === 'compaction') {
       yield { type: 'block-start', index: 0, blockType: 'text' }
@@ -189,17 +189,33 @@ try {
       return result
     })
   }
+  // Start with a web demand against the installed package, without a prepare call.
+  const webParent = await ctx.agentLoop.create(session.SessionId('packed-web-first'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
+  const webBodies = []
+  const releaseWeb = ctx.tools.register({ name: 'web_search', description: 'Harmless web search fixture.', parameters: { queries: { type: 'array', items: { type: 'string' }, required: true } }, output: { schema: {}, render: () => [] }, execute(args, execution) {
+    assert.equal(execution.agent, webParent)
+    webBodies.push({ callId: execution.callId, args })
+    return 'packed web fixture'
+  } })
+  provider.script.push(call('packed-first-web', 'web_search', { queries: ['VMware Tools critical CVE'] }))
+  webParent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'vmware toolsの最新の脆弱性でクリティカルレベルのものある？' }], source: { kind: 'user' } }))
+  await webParent.whenIdle()
+  assert.deepEqual(failures, [])
+  assert.equal(toolResults.get('packed-first-web').isError, false)
+  assert.deepEqual(webBodies, [{ callId: 'packed-first-web', args: { queries: ['VMware Tools critical CVE'] } }])
+  releaseWeb()
   // Exercise the delivered full/core coordinator, not an imported test-only instance.
   semanticReady = true
   const message = (id, text) => ({ id, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] })
-  const resultText = 'stale packed fixture output. '.repeat(18000)
+  // Exercise native pressure with a payload inside the decision-provider byte limit.
+  const resultText = 'stale packed fixture output. '.repeat(6000)
   const events = [
     { type: 'turn/start', data: { turn: 1 } },
     { type: 'step/start', data: { turn: 1, step: 1 } },
     { type: 'user/message', data: message('packed-first', 'こんにちは') },
     ...Array.from({ length: 5 }, (_, i) => ({ type: 'user/message', data: message(`packed-initial-${i}`, 'Keep initial requirements.') })),
     { type: 'assistant/message', data: { turn: 1, step: 1, stream: [], message: { id: 'packed-call', role: 'assistant', source: { kind: 'model', provider: 'fixture', model: 'fixture' }, content: [{ type: 'tool-call', id: 'packed-old', name: 'read', arguments: '{}' }] } } },
-    { type: 'tool/result', data: { turn: 1, step: 1, message: { id: 'packed-result', role: 'user', source: { kind: 'tool', callId: 'packed-old' }, content: [{ type: 'tool-result', toolCallId: 'packed-old', content: [{ type: 'text', text: resultText }], isError: false }] } } },
+    { type: 'tool/result', data: { turn: 1, step: 1, message: { ...llm.createToolResultMessage({ callId: 'packed-old', content: [{ type: 'text', text: resultText }], isError: false }), id: 'packed-result' } } },
     ...Array.from({ length: 6 }, (_, i) => ({ type: 'user/message', data: message(`packed-recent-${i}`, 'Keep recent evidence.') })),
     { type: 'step/end', data: { turn: 1, step: 1 } },
     { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
@@ -228,13 +244,13 @@ try {
   try {
     observationAgent.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'こんにちは' }], source: { kind: 'user' } }))
     await observationAgent.agent.whenIdle()
-    const output = provider.requests.at(-1).messages.flatMap(message => message.content).find(block => block.type === 'tool-result' && block.toolCallId === 'packed-old').content[0].text
+    const output = nativeResult(provider.requests.at(-1), 'packed-old').content[0].text
     assert.match(output, /^\[Kiokuko ObservationPack v1\]/)
     const reference = JSON.parse(output.split('\n')[1])
     const [page] = await runTools(observationAgent.agent, 'observation_read で保存済みの元の出力を調べてください。',
-      [['packed-original-read', 'observation_read', { handle: reference.handle, offset: 200000, limit: 80 }]])
+      [['packed-original-read', 'observation_read', { handle: reference.handle, offset: 100000, limit: 80 }]])
     assert.equal(page.isError, false, JSON.stringify(page))
-    assert.equal(page.value.text, resultText.slice(200000, 200080))
+    assert.equal(page.value.text, resultText.slice(100000, 100080))
     const status = JSON.parse((await registeredCommands.get('kioku-decisions').handler({ rawInput: 'status', agent: observationAgent.agent, signal: new AbortController().signal })).text)
     assert.equal(status.observationPack.mode, 'auto'); assert.equal(status.observationPack.metrics.packed, 1)
     assert.equal(status.observationPack.metrics.reads, 1); assert.equal(status.semanticCompaction.preemptive, true)
