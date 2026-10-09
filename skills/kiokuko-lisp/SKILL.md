@@ -121,6 +121,8 @@ requirement/before/after; candidates/actions: id/description vectors. Consume
 Cancellation stops work. No file edits or replacement of validation/tests/permissions/
 approval; never compare provider scores.
 
+### TypeSafe
+
 `(kioku.typesafe:status)`; `(kioku.typesafe:evaluate state questions :model
 "jev-latest" :timeout-ms 30000)`: JSON strings/hash tables/vectors → answers/model/usage.
 `/kioku-typesafe-key <key>|status|clear`: visible, unrecorded credentials, never Lisp keys.

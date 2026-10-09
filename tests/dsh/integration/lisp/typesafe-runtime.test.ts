@@ -84,7 +84,8 @@ test('protected Lisp consumes TypeSafe decisions, catches API errors, preserves 
     const examples = skill.slice(skill.indexOf('### Explicit TypeSafe decisions')).match(/```lisp\n([\s\S]*?)```/)![1]!
     assert.equal((await evaluate('documented-helpers', examples)).ok, true)
     const compiledGuide = compileSkillResource({ name: 'kiokuko-lisp', relativePath: 'SKILL.md', content: skill }).content
-    const deliveredExamples = compiledGuide.slice(compiledGuide.indexOf('### TypeSafe')).match(/```lisp\n([\s\S]*?)```/)![1]!
+    const deliveredExamples = compiledGuide.match(/^### TypeSafe\n[\s\S]*?```lisp\n([\s\S]*?)```/m)?.[1]
+    assert.ok(deliveredExamples, 'compiled TypeSafe section must expose its executable Lisp example')
     assert.equal((await evaluate('delivered-examples', deliveredExamples)).ok, true)
     decision = 'import'
     const mixed = await evaluate('mixed', `(kioku.typesafe:evaluate (obj "code" "synthetic" "facts" #(1 2))
