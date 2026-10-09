@@ -2,10 +2,10 @@
 
 OrcaReplay records observations from the existing DSH process. It does not start
 another DSH. `@orcareplay/core`, `@orcareplay/schema` and `@orcareplay/viewer`
-accept **>=0.2.1** as ordinary dependencies and are installed automatically with
+accept **^0.5.0** as ordinary dependencies and are installed automatically with
 `kiokuko-dsh` by npm/pnpm. No separate Orca install or global CLI is required.
-This range includes 0.3 and later stable releases; future API compatibility is not guaranteed.
-Lockfiles retain the tested resolution (currently 0.2.1); they do not refresh on each launch.
+This range permits stable 0.5.x releases; 0.6.0 and later require a range change.
+Lockfiles retain the tested resolution (currently 0.5.0); they do not refresh on each launch.
 The trace manifest records the installed core version.
 Each recorded final model request also includes a bounded manifest of host-owned
 context sections still present in that request: section ID, digest, byte count,

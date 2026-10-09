@@ -67,7 +67,7 @@ These are the full-package defaults. The [configured core and optional modules](
 
 Startup also refreshes an existing Kiokuko managed block in the startup directory’s `AGENTS.md`, preserving your other instructions. Restart DSH after updating the package. See [setup and verification](docs/dsh-plugin.md#what-setup-updates-and-when) for another workspace or stale copies; `kiokuko use` is not the DSH setup command.
 
-To update Orca dependencies after a release such as 0.3.0:
+To update Orca dependencies within the supported release range:
 
 ```bash
 pnpm dsh plugin --profile web update --depth Infinity '@orcareplay/*'
@@ -75,8 +75,8 @@ pnpm dsh plugin --profile web why @orcareplay/core
 pnpm dsh web
 ```
 
-The installed Kiokuko must include the `>=0.2.1` dependency range. It permits
-stable 0.3.0 and later releases; it does not automatically update existing installs.
+The current dependency range is `^0.5.0`: stable 0.5.x releases are permitted,
+but 0.6.0 and later require a range change. Existing installs are not updated automatically.
 Verify recording and export after updating. See [update details](docs/dsh-plugin.md#update).
 
 If existing chats fail with an unknown `kiokuko/` event, see [history repair](docs/session-history-repair.md).

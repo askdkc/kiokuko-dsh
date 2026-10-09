@@ -67,7 +67,7 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 
 시작 시 시작 디렉터리의 `AGENTS.md`에 있는 기존 Kiokuko 관리 블록도 갱신하며, 블록 밖의 지침은 보존합니다. 패키지 업데이트 후 DSH를 다시 시작하세요. 다른 작업 디렉터리나 오래된 복사본의 확인 및 복구는 [설정 절차](docs/dsh-plugin.md#what-setup-updates-and-when)를 참고하세요. `kiokuko use`는 DSH 설정 명령이 아닙니다.
 
-Orca 0.3.0 등 새 버전이 공개된 후 Orca 관련 의존 패키지를 업데이트하려면:
+지원하는 버전 범위 내에서 Orca 관련 의존 패키지를 업데이트하려면:
 
 ```bash
 pnpm dsh plugin --profile web update --depth Infinity '@orcareplay/*'
@@ -75,8 +75,8 @@ pnpm dsh plugin --profile web why @orcareplay/core
 pnpm dsh web
 ```
 
-설치된 Kiokuko에 `>=0.2.1` 의존 범위가 포함되어 있어야 합니다. 이 범위는 정식 0.3.0 이후 버전을
-허용하지만 기존 설치를 자동으로 업데이트하지는 않습니다. 업데이트 후 기록과 HTML 내보내기를 확인하세요.
+현재 의존 범위는 `^0.5.0`입니다. 정식 0.5.x 버전은 허용하지만 0.6.0 이상은 의존 범위를 변경해야 합니다.
+기존 설치는 자동으로 업데이트되지 않습니다. 업데이트 후 기록과 HTML 내보내기를 확인하세요.
 [업데이트 상세 안내](docs/dsh-plugin.md#update)
 
 DSH 업데이트 후 Kiokuko를 불러오지 못하면 [시작 오류 복구 절차](docs/dsh-plugin.md#startup-failure-after-a-dsh-update)에서 해당 프로필의 업데이트 및 재설치 명령을 확인하세요. 세션 로그와 Kiokuko 데이터베이스는 삭제하지 마세요. API 호환성 문제는 재설치만으로 해결되지 않을 수 있습니다.

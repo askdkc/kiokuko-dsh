@@ -4,7 +4,7 @@ import { dirname, extname, join, relative, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Script } from 'node:vm'
-import { satisfies } from 'semver'
+import { satisfies, subset, validRange } from 'semver'
 
 const exec = promisify(execFile)
 const root = process.cwd()
@@ -402,7 +402,9 @@ try {
   const pnpmLock = parse(await readFile(join(root, 'pnpm-lock.yaml'), 'utf8'))
   for (const name of ['@orcareplay/core', '@orcareplay/schema', '@orcareplay/viewer']) {
     const range = packageManifest.dependencies?.[name]
-    if (range !== '>=0.2.1') throw new Error(`${name} must allow ordinary runtime releases >=0.2.1`)
+    if (typeof range !== 'string' || !validRange(range) || !subset(range, '>=0.2.1')) {
+      throw new Error(`${name} must declare a runtime semver range excluding releases below 0.2.1`)
+    }
     const entry = npmLock.packages[`node_modules/${name}`]
     const pnpmEntry = pnpmLock.importers['.'].dependencies[name]
     if (npmLock.packages[''].dependencies[name] !== range || pnpmEntry?.specifier !== range ||

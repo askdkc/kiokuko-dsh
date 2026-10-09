@@ -68,7 +68,7 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 
 起動時には、起動ディレクトリの `AGENTS.md` にある既存の Kiokuko 管理ブロックも更新し、その外側の指示は保持します。パッケージ更新後は DSH を再起動してください。別の作業ディレクトリや配備コピーの確認・修復は[セットアップ手順](docs/dsh-plugin.md#what-setup-updates-and-when)を参照してください。`kiokuko use` は DSH のセットアップコマンドではありません。
 
-Orca の 0.3.0 などが公開された後、Orca 関連の依存を更新する場合:
+対応するバージョン範囲内で Orca 関連の依存を更新する場合:
 
 ```bash
 pnpm dsh plugin --profile web update --depth Infinity '@orcareplay/*'
@@ -76,8 +76,8 @@ pnpm dsh plugin --profile web why @orcareplay/core
 pnpm dsh web
 ```
 
-導入済みの Kiokuko に `>=0.2.1` の依存指定が含まれていることが前提です。
-正式版 0.3.0 以降も許可する指定ですが、既存環境が自動更新されるわけではありません。
+現在の依存指定は `^0.5.0` です。正式版 0.5.x への更新を許可し、0.6.0 以降には依存指定の変更が必要です。
+既存環境が自動更新されるわけではありません。
 更新後は記録・HTML 出力を確認してください。[更新の詳細](docs/dsh-plugin.md#update)
 
 既存チャットが `unknown ... not marked ignorable` で開けない場合は、[履歴の修復手順](docs/session-history-repair.md)を参照してください。

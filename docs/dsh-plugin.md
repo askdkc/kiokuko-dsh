@@ -110,10 +110,10 @@ For an npm-installed Kiokuko, update the plugin itself:
 dsh plugin --profile web update kiokuko-dsh --latest
 ```
 
-For Orca dependency updates, the installed Kiokuko must contain the `>=0.2.1`
-ranges for `@orcareplay/core`, `@orcareplay/schema`, and `@orcareplay/viewer`.
-An older Kiokuko that pins 0.2.1 must be updated first. After a new Orca release
-is published, refresh the Orca dependency graph and inspect the resolved versions:
+The current Kiokuko declares `^0.5.0` for `@orcareplay/core`,
+`@orcareplay/schema`, and `@orcareplay/viewer`. An older installation with a
+different range must be updated first to use this range. After a compatible Orca
+release is published, refresh the dependency graph and inspect the resolved versions:
 
 ```bash
 dsh plugin --profile web update --depth Infinity '@orcareplay/*'
@@ -125,9 +125,9 @@ dsh web
 
 The quoted pattern selects Orca packages; `--depth Infinity` includes indirect
 dependencies. This is an explicit [pnpm update](https://pnpm.io/11.x/cli/update),
-not an update on every startup. `>=0.2.1` permits stable 0.3.0 and later releases
-but excludes prereleases such as `0.3.0-rc.1`. Existing lockfiles retain their
-previous resolutions until updated. Future API compatibility is not guaranteed;
+not an update on every startup. `^0.5.0` permits stable 0.5.x releases,
+but excludes 0.6.0 and later releases and prereleases such as `0.5.1-rc.1`.
+Existing lockfiles retain their previous resolutions until updated. Future API compatibility is not guaranteed;
 after restarting, check a new recording with `/kioku-orca list`, `show`, and
 `export` as described in the [Orca guide](orca-recording.md).
 
