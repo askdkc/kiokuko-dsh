@@ -75,7 +75,9 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   if (await welcome.isVisible()) await welcome.click()
   const conversation = page.locator('[data-conversation-content]:visible').first()
   const newSession = async () => {
-    const previous = await conversation.getAttribute('data-conversation-session')
+    // Startup restores a session independently of New session. Wait for that
+    // initial binding so its completion cannot masquerade as our navigation.
+    const previous = await poll(() => conversation.getAttribute('data-conversation-session'))
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
     // New session starts asynchronous navigation. Wait for its rendered binding
     // before filling the composer, or the replacement discards the first command.
