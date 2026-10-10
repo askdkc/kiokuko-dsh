@@ -15,7 +15,7 @@ const scenarios = [
   ['never-settling-flush', 'tests/dsh/integration/boundary-worker.test.ts', 'an unresponsive native flush times out without dispatch or an overlapping retry'],
   ['dispatch-replay', 'tests/dsh/integration/boundary-worker.test.ts', 'dispatch-before-observed crash survives worker restart with the same deterministic delivery id'],
   ['compacted-context', 'tests/dsh/integration/context-projection.test.ts', 'compaction and restart reinstate only fragments missing from the retained surface'],
-  ['context-provenance', 'tests/dsh/unit/orca-request-manifest.test.ts', 'Orca metadata records current host section digests without source text or a forged user section'],
+  ['context-provenance', 'tests/dsh/unit/agenticreplay-request-manifest.test.ts', 'AgenticReplay metadata records current host section digests without source text or a forged user section'],
   ['native-resume', 'tests/dsh/e2e/native-agent-loop.test.ts', 'real DSH agent loop: persisted resume, verification retry, completion (text)'],
   ['native-default-resume', 'tests/dsh/e2e/native-agent-loop.test.ts', 'real DSH agent loop: persisted resume, verification retry, completion (default_resume)'],
 ]

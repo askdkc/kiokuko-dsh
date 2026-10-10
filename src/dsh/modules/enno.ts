@@ -11,7 +11,7 @@ export const ennoModule: DshModule<CoreModuleHost> = {
   configure: value => EnnoModuleConfig.parse(value ?? {}),
   async mount({ host, defer }, configuration) {
     host.claimNativeIngress()
-    const config = Config.parse({ ...EnnoModuleConfig.parse(configuration), deepPlanning: { enabled: false }, orca: { enabled: false }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' } })
+    const config = Config.parse({ ...EnnoModuleConfig.parse(configuration), deepPlanning: { enabled: false }, agenticReplay: { enabled: false }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' } })
     const [{ createDshHostAdapter }, { mountDshComposition }] = await Promise.all([import('../host-adapter.js'), import('../composition.js')])
     const adapter = createDshHostAdapter(host.context, { ...config, intakeMode: host.intakeMode, answerReview: host.answerReviewConfig, memoryIndexReasoning: host.memoryIndexReasoningConfig, repositoryRoot: host.repositoryRoot, runtime: host.runtime, decisions: host.decisions, semanticCompactionCoordinator: host.semanticCompaction, skillPrompts: host.prompts })
     defer(adapter.dispose)

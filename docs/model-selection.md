@@ -158,4 +158,4 @@ Native tests cover request model IDs, ordinary README completion, cancel/reload,
 input recovery, independent sessions, routing restoration and actual adapter
 transport. Recording adapters do not verify paid account access, subscription
 limits or successful live provider responses. Existing advisors, leases, final
-verification, memory finalization and Orca behavior remain in place.
+verification, memory finalization and AgenticReplay behavior remain in place.

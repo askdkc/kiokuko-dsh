@@ -51,7 +51,7 @@ export async function apply(ctx) {
     } catch(e){await appendFile(${JSON.stringify(answers)},JSON.stringify({mode,error:e.code??e.message})+'\\n');return {kind:'success',text:'Dismissed '+mode};}
   }});
 }`)
-  await writeFile(patch, `- id: kiokuko-dsh\n  config:\n    enabled: true\n    orca: {enabled: false}\n- insert:\n    - id: shortcut-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, userQuestions]\n`)
+  await writeFile(patch, `- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n- insert:\n    - id: shortcut-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, userQuestions]\n`)
   }
   child = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', '0'], { env, cwd: project, stdio: ['ignore', 'pipe', 'pipe'] })
   for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { logs += chunk.toString() })

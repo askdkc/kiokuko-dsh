@@ -6,15 +6,15 @@ import { apply } from '../../../src/client.js'
 interface RecordedAnswer { answers: { id: string; selected: string[]; custom?: string }[] }
 
 /**
- * The OrcaReplay detailed-log choice is a native DSH question, so the plugin's
+ * The AgenticReplay detailed-log choice is a native DSH question, so the plugin's
  * composer entry has to claim that carrier and give it the same number-key plus
  * Enter contract as the task-type card. Every other single-select question that
  * carries one to nine options is claimed the same way, so no question this
  * composer shows is left without a shortcut.
  */
 const recordingQuestion = {
-  id: 'kioku-orca-recording',
-  header: 'OrcaReplay · 詳細ログ',
+  id: 'kioku-agenticreplay-recording',
+  header: 'AgenticReplay · 詳細ログ',
   question: 'このチャットの詳細ログを記録しますか？',
   detail: 'モデルの応答やツールの実行結果をローカルに保存し、後で確認・HTML出力できます。',
   options: [
@@ -53,7 +53,7 @@ test('every question shape keeps the numbered option card', async () => {
   const responses: RecordedAnswer[] = []
   let cancellations = 0
   const pending = {
-    kind: 'question', key: 'orca-recording-one',
+    kind: 'question', key: 'agenticreplay-recording-one',
     questions: [recordingQuestion],
     async answer(answer: RecordedAnswer) { responses.push(answer) },
     async cancel() { cancellations++ },
@@ -91,7 +91,7 @@ test('every question shape keeps the numbered option card', async () => {
       assert.equal(entry.definition.select({ pendingInteraction: carrier }), carrier, `options=${count}`)
     }
     for (const questions of [
-      [{ ...recordingQuestion, header: 'OrcaReplay · 別の見出し' }],
+      [{ ...recordingQuestion, header: 'AgenticReplay · 別の見出し' }],
       [{ ...recordingQuestion, id: 'other-recording' }],
     ]) {
       const carrier = { ...pending, questions }
@@ -146,7 +146,7 @@ test('every question shape keeps the numbered option card', async () => {
     tree.props.onKeyDown(key('Enter'))
     await Promise.resolve(); await Promise.resolve()
     assert.deepEqual(responses, [{
-      answers: [{ id: 'kioku-orca-recording', selected: ['記録しない'] }],
+      answers: [{ id: 'kioku-agenticreplay-recording', selected: ['記録しない'] }],
     }])
     assert.equal(cancellations, 0)
 

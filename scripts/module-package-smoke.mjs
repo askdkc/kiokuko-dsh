@@ -80,7 +80,7 @@ try {
   const configuration = { repositoryRoot: directory, databasePath: join(directory, 'memory.sqlite3'), migrationsDirectory: join(packageRoot, 'migrations'), skillPrompts: { mode: 'compiled' } }
   if (legacy) {
     const prompts = new publicEntry.DshSkillPrompts({ mode: 'compiled' })
-    const adapter = publicEntry.createDshHostAdapter(ctx, { ...configuration, skillPrompts: prompts, deepPlanning: { enabled: false }, orca: { enabled: false }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' } })
+    const adapter = publicEntry.createDshHostAdapter(ctx, { ...configuration, skillPrompts: prompts, deepPlanning: { enabled: false }, agenticReplay: { enabled: false }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' } })
     const composition = await publicEntry.mountDshComposition(ctx, adapter.host, undefined, prompts)
     handle = { stopIngress: composition.stopIngress, async dispose() { await composition.dispose(); await adapter.dispose() } }
   } else {

@@ -45,7 +45,7 @@ for(const intakeMode of ['on-demand','eager'] as const)for(const mode of ['off',
     const persisted:any[]=[]
     ctx.on('session/flush',(s:any)=>{persisted.splice(0,persisted.length,...s.snapshotEvents());return Promise.resolve()})
     // This fixture deliberately tests legacy chat-ledger review with classification disabled, not the new uncertainty-to-reasoning path. The default path has no intake override.
-    adapter=createDshHostAdapter(ctx,{...(intakeMode==='eager'?{intakeMode,typedDecisions:{mode:'off'}}:{}),repositoryRoot:root,databasePath:join(root,'state.sqlite3'),orca:{enabled:false},ennoMemory:{mode}})
+    adapter=createDshHostAdapter(ctx,{...(intakeMode==='eager'?{intakeMode,typedDecisions:{mode:'off'}}:{}),repositoryRoot:root,databasePath:join(root,'state.sqlite3'),agenticReplay:{enabled:false},ennoMemory:{mode}})
     composition=await mountDshComposition(ctx,adapter.host)
     const excluded=await ctx.agentLoop.create(session.SessionId('native-excluded'),{provider:'review-native',model:'fixed'},{cwd:root,delegationDepth:0})
     assert.equal((await adapter.host.memoryReview!.command(excluded.session,'exclude session')).state,'excluded')

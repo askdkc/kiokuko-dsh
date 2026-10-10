@@ -25,7 +25,7 @@ Ordinary answers retain the native conversation and its provenance, the system/S
 
 Owned memory snapshots are revalidated and deduplicated against native history. Forgotten entries, revised source material, and invalidated derived facts are removed from the active context; a change after assembly blocks that stale request at the final provider seam. Native user messages, unrelated instructions, and the on-disk audit history are preserved.
 
-Configured memory-index reasoning still admits the actual native conversation/model through a verified session-workspace binding. It can generate the same indexed facts and cited bridges without a fake execution run. Its configured active/observe/off behavior remains in force. Run-bound memory application, execution verification, and post-task finalization begin when actual work is prepared. Native recording, including the bundled Orca configuration, remains enabled as configured.
+Configured memory-index reasoning still admits the actual native conversation/model through a verified session-workspace binding. It can generate the same indexed facts and cited bridges without a fake execution run. Its configured active/observe/off behavior remains in force. Run-bound memory application, execution verification, and post-task finalization begin when actual work is prepared. Native recording, including the bundled AgenticReplay configuration, remains enabled as configured.
 
 Module `beforeTask` preparation hooks remain work-preparation hooks; they are not invoked merely to answer a question. Relevant read-only Skill instructions are selected separately so this does not require activating Lisp or opening task-purpose UI.
 

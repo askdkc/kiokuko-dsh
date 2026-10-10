@@ -31,7 +31,7 @@ test('native result DTOs survive text-only log rendering as identity-bound episo
     disposeTool=ctx.tools.register(tools.defineTool({name:'verify',description:'Return a typed execution result',parameters:{exitCode:{type:'number',required:true}},
       output:{schema:{type:'object',additionalProperties:false,properties:{exitCode:{type:'number',required:true}}},render:()=>[{type:'text',text:'Native execution output; the renderer omits its exit code.'}]},
       execute:async(args:any)=>({exitCode:args.exitCode})}))
-    const questions=ctx.plugin({name:'evolution-questions',apply(context:any){return context.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='kioku-orca-recording'?'記録しない':'chat']}))}}})}});fibers.push(questions);await questions
+    const questions=ctx.plugin({name:'evolution-questions',apply(context:any){return context.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='kioku-agenticreplay-recording'?'記録しない':'chat']}))}}})}});fibers.push(questions);await questions
     adapter=createDshHostAdapter(ctx,{repositoryRoot:root,databasePath:join(root,'state.sqlite3'),migrationsDirectory:join(process.cwd(),'migrations'),llm:{async *stream(request){
       const last=(request.messages.at(-1) as any).content[0].text
       const v3=last.startsWith('{"reconciliation"')

@@ -12,6 +12,10 @@ const cache = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-cache-'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
+  'migrations/034_agenticreplay.sql',
+  'dist/dsh/agenticreplay-libraries.js',
+  'dist/dsh/agenticreplay-libraries.d.ts',
+  'docs/AGENTICREPLAY-LICENSE.txt',
   'migrations/032_memory_evidence.sql',
   'migrations/033_memory_forgetting.sql',
   'dist/memory/evidence.js',
@@ -400,13 +404,22 @@ try {
   const npmLock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'))
   const { parse } = await import('yaml')
   const pnpmLock = parse(await readFile(join(root, 'pnpm-lock.yaml'), 'utf8'))
-  for (const name of ['@orcareplay/core', '@orcareplay/schema', '@orcareplay/viewer']) {
+  if (Object.keys(packageManifest.dependencies ?? {}).some(name => name.startsWith('@orcareplay/')) ||
+      Object.keys(npmLock.packages).some(name => name.includes('@orcareplay/')) ||
+      Object.keys(pnpmLock.packages).some(name => name.startsWith('@orcareplay/'))) {
+    throw new Error('OrcaReplay runtime dependencies are no longer supported')
+  }
+  for (const name of ['agenticreplay']) {
     const range = packageManifest.dependencies?.[name]
-    if (typeof range !== 'string' || !validRange(range) || !subset(range, '>=0.2.1')) {
-      throw new Error(`${name} must declare a runtime semver range excluding releases below 0.2.1`)
+    if (typeof range !== 'string' || !validRange(range) || !subset(range, '>=0.1.0 <1.0.0') ||
+        !satisfies('0.1.2', range) || !satisfies('0.2.0', range)) {
+      throw new Error(`${name} must admit future patch and minor releases within the pre-1.0 dependency range`)
     }
     const entry = npmLock.packages[`node_modules/${name}`]
     const pnpmEntry = pnpmLock.importers['.'].dependencies[name]
+    if (!entry || !pnpmEntry) {
+      throw new Error(`${name} has no published resolution in both lockfiles`)
+    }
     if (npmLock.packages[''].dependencies[name] !== range || pnpmEntry?.specifier !== range ||
         typeof entry?.version !== 'string' || !satisfies(entry.version, range) || pnpmEntry.version !== entry.version ||
         typeof entry.integrity !== 'string' || entry.integrity !== pnpmLock.packages[`${name}@${entry.version}`]?.resolution?.integrity) {

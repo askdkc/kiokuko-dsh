@@ -50,7 +50,7 @@ function relevantDump(rows, stderr) {
 function assertInstalledDump(result) {
   const rows = dumpedRows(result, 'dsh dump-config after install')
   const kiokuko = rows.filter(row => row?.id === 'kiokuko-dsh'
-    && row?.name === 'kiokuko-dsh' && row?.disabled !== true && row?.config?.orca?.enabled === true
+    && row?.name === 'kiokuko-dsh' && row?.disabled !== true && row?.config?.agenticReplay?.enabled === true
     && row?.config?.efficiency?.observe === true && row?.config?.finalization?.inputMode === 'bounded_evidence')
   const stock = rows.filter(row => row?.id === 'session-log-download'
     && row?.name === '@deepseek-ai/dsh-session-log-export' && row?.disabled === true)
@@ -161,7 +161,7 @@ async function runCordisComposition() {
 }
 
 function startWebProfile(env) {
-  const child = spawn(dsh, ['--profile', profile, '--patch', env.KIOKUKO_ORCA_E2E_PATCH, '--no-open', '--port', '0'], {
+  const child = spawn(dsh, ['--profile', profile, '--patch', env.KIOKUKO_AGENTICREPLAY_E2E_PATCH, '--no-open', '--port', '0'], {
     cwd: env.KIOKUKO_E2E_WORKSPACE,
     env,
     shell: false,
@@ -334,7 +334,7 @@ async function runCliLifecycle(nativeDependencies) {
     PNPM_HOME: join(profileDirectory, 'pnpm-home'), COREPACK_HOME: join(profileDirectory, 'corepack'),
     npm_config_store_dir: join(profileDirectory, 'pnpm-store'), DSH_TELEMETRY_DISABLED: '1',
     KIOKUKO_E2E_WORKSPACE: workspace, KIOKUKO_DATA_DIR: dataDirectory, npm_config_cache: cache,
-    KIOKUKO_ORCA_E2E_PATCH: join(profileDirectory, 'orca-test.patch.yml') }
+    KIOKUKO_AGENTICREPLAY_E2E_PATCH: join(profileDirectory, 'agenticreplay-test.patch.yml') }
   let web
   try {
     await mkdir(workspace, { recursive: true })
@@ -365,19 +365,19 @@ async function runCliLifecycle(nativeDependencies) {
     const tarball = join(output, filename)
     await access(tarball)
     await runIsolated(dsh, ['plugin', '--profile', profile, 'add', tarball], env, workspace)
-    await writeFile(env.KIOKUKO_ORCA_E2E_PATCH, '- id: kiokuko-dsh\n  config:\n    enabled: true\n    orca:\n      enabled: true\n    efficiency:\n      observe: true\n    finalization:\n      inputMode: bounded_evidence\n', { mode: 0o600 })
-    const dumped = await runIsolated(dsh, ['--profile', profile, '--patch', env.KIOKUKO_ORCA_E2E_PATCH, '--dump-config'], env, workspace)
+    await writeFile(env.KIOKUKO_AGENTICREPLAY_E2E_PATCH, '- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay:\n      enabled: true\n    efficiency:\n      observe: true\n    finalization:\n      inputMode: bounded_evidence\n', { mode: 0o600 })
+    const dumped = await runIsolated(dsh, ['--profile', profile, '--patch', env.KIOKUKO_AGENTICREPLAY_E2E_PATCH, '--dump-config'], env, workspace)
     assertInstalledDump(dumped)
     web = startWebProfile(env)
     const ready = await web.ready
     if (web.child.exitCode !== null || web.child.signalCode !== null) throw new Error(`DSH web exited immediately after readiness\n${web.getOutput()}`)
     const browserBundle = await verifyBrowserBundle(ready.url)
-    await awaitUiVerification(ready.url, profileDirectory, env.KIOKUKO_ORCA_E2E_PATCH, 'installed')
+    await awaitUiVerification(ready.url, profileDirectory, env.KIOKUKO_AGENTICREPLAY_E2E_PATCH, 'installed')
     await stopWebProfile(web)
     web = startWebProfile(env)
     const reloaded = await web.ready
     await verifyBrowserBundle(reloaded.url)
-    await awaitUiVerification(reloaded.url, profileDirectory, env.KIOKUKO_ORCA_E2E_PATCH, 'reloaded')
+    await awaitUiVerification(reloaded.url, profileDirectory, env.KIOKUKO_AGENTICREPLAY_E2E_PATCH, 'reloaded')
     await stopWebProfile(web)
     await runIsolated(dsh, ['plugin', '--profile', profile, 'remove', 'kiokuko-dsh'], env, workspace)
     const afterRemove = await runIsolated(dsh, ['--profile', profile, '--dump-config'], env, workspace)
@@ -395,7 +395,7 @@ async function runCliLifecycle(nativeDependencies) {
       workingTreeClean,
       packageIntegrity: packageMetadata.integrity,
       install: 'complete',
-      orca: cliOnly ? 'not_run_cli_only' : 'enabled-native-scenarios-no-skips',
+      agenticReplay: cliOnly ? 'not_run_cli_only' : 'enabled-native-scenarios-no-skips',
       web: 'browser-bundle-loaded-and-materialized',
       browserBundle,
       reload: 'browser-bundle-loaded-and-materialized',

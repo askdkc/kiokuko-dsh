@@ -61,7 +61,7 @@ import { CompletionConfig } from './task-completion.js'
 import { saveSessionNotice } from './plugin-records.js'
 import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution/contracts.js'
 import { evolutionStatus } from '../memory/evolution/store.js'
-import { OrcaConfig, EfficiencyConfig, FinalizationConfig, AkinatorMemoryConfig, ContinuityConfig } from './config.js'
+import { AgenticReplayConfig, EfficiencyConfig, FinalizationConfig, AkinatorMemoryConfig, ContinuityConfig } from './config.js'
 
 import { type StoredExecutionSelection } from './execution-selection.js'
 
@@ -74,7 +74,7 @@ import type { ModelRoute, DshModelCatalog, DshModelCompatibility } from './model
 import { nativeModelCatalog } from './native-model-catalog.js'
 
 import { DshEnnoDelegation, type DshSpawnBackend } from './enno-delegation.js'
-import { createDshOrcaHost } from './orca-host.js'
+import { createDshAgenticReplayHost } from './agenticreplay-host.js'
 import { fileURLToPath } from 'node:url'
 import { realpathSync } from 'node:fs'
 
@@ -168,7 +168,7 @@ export interface DshHostAdapterOptions {
   readonly finalization?: import('zod').z.input<typeof FinalizationConfig>
   readonly modelRoutes?: readonly ModelRoute[]
   readonly modelCompatibility?: DshModelCompatibility
-  readonly orca?: import('zod').z.input<typeof OrcaConfig>
+  readonly agenticReplay?: import('zod').z.input<typeof AgenticReplayConfig>
   readonly toolExposure?: import('zod').z.input<typeof ToolExposureConfig>
   readonly diffReview?: import('zod').z.input<typeof DiffReviewConfig>
   readonly databasePath?: string
@@ -684,8 +684,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const { runLifecycle, resolveIdleClose, resolveSessionRunId, resolveSessionClose } = lifecycle
   retireSupersededRun = lifecycle.retireSupersededRun
 
-  const orcaConfig = OrcaConfig.parse(options.orca ?? {})
-  const orca = !orcaConfig.enabled ? undefined : createDshOrcaHost(ctx, orcaConfig, runtime, {
+  const agenticReplayConfig = AgenticReplayConfig.parse(options.agenticReplay ?? {})
+  const agenticReplay = !agenticReplayConfig.enabled ? undefined : createDshAgenticReplayHost(ctx, agenticReplayConfig, runtime, {
     session: id => sessions?.get(id), agent: id => agents?.get(id), logicalRun: resolveSessionRunId,
     ...(userQuestions ? { questions: userQuestions } : {}),
     interactive: agent => !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent),
@@ -722,7 +722,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     memoryIndexReasoning: {configure:config=>memoryFinalizer.configureMemoryIndexReasoning(config),command:(sessionId,raw)=>memoryFinalizer.indexCommand(sessionId,raw)},
     memoryEvolution: createEvolutionHost({ runtime, memoryFinalizer, evolutionConfig }),
     autoGlobalization: { configure(enabled: boolean) { memoryFinalizer.configureAutoGlobalization(enabled) } },
-    ...(orca === undefined ? {} : { orca }),
+    ...(agenticReplay === undefined ? {} : { agenticReplay }),
     ...(skills === undefined ? {} : { skills: skills as any }),
     ...(systemPrompt === undefined ? {} : { systemPrompt }),
     runtime,
@@ -774,7 +774,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       childExecutionDisposer()
       routing.dispose()
       const failures: unknown[] = []
-      try { await orca?.shutdown() } catch (error) { failures.push(error) }
+      try { await agenticReplay?.shutdown() } catch (error) { failures.push(error) }
       const pausedSessions = new Set(turnState.sessionIds().filter(id => executionSupport.paused(id)))
       ennoMemory.close()
       executionSupport.dispose()

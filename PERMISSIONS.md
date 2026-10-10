@@ -7,7 +7,7 @@ Kiokuko operation.
 This document describes the full compatibility package. The
 [configured core](docs/core-modules.md) synchronizes only its selected managed
 Skills and uses the shared database, intake, ledger and scoped memory. It mounts
-source-backed index reasoning by default. Orca, Deep, other advanced-memory workers,
+source-backed index reasoning by default. AgenticReplay, Deep, other advanced-memory workers,
 session-history repair and the full browser client are optional. Enno retains the existing compatibility host adapter;
 Lisp adds protected execution and its existing explicit approval boundaries.
 Omitted managed Skills are preserved on disk. Configured startup rejects unsafe
@@ -147,7 +147,7 @@ Source excerpts and the problem are sent to those configured model providers.
 It offers no shell, mutation, arbitrary MCP or further child-spawn capability.
 Deep memory extraction shares the request budget. Unknown Deep calls and memory
 extractions are not automatically resent after a crash. Deep children inherit
-only their exact parent's existing Orca recording choice. See
+only their exact parent's existing AgenticReplay recording choice. See
 [Deep planning](docs/deep-planning.md) for limits and recovery behavior.
 
 Missing optional dependencies, unavailable external services, stale or
@@ -156,31 +156,31 @@ conflicts are reported as failures or unavailable states. They are never
 converted into normal success or silently redirected to another repository or
 run.
 
-## Orca recordings
+## AgenticReplay recordings
 
-`orca.enabled` defaults to `true`, including in the installed bundle configuration.
+`agenticReplay.enabled` defaults to `true`, including in the installed bundle configuration.
 This enables the feature, and configuration also approves it: each interactive
 session is recorded without a question, and delegated or managed child sessions
-follow the same default without ever being asked. `orca.askOnStart: true`
+follow the same default without ever being asked. `agenticReplay.askOnStart: true`
 restores the per-session question instead, and child sessions then need an
-explicit `/kioku-orca start`. Default recording, an affirmative answer or
-`/kioku-orca start` authorize capture. Choices are
+explicit `/kioku-agenticreplay start`. Default recording, an affirmative answer or
+`/kioku-agenticreplay start` authorize capture. Choices are
 saved in SQLite and outrank the default, so a saved refusal keeps that session
 unrecorded; with `askOnStart: true`, skip/cancel or unavailable UI continues
 without recording.
-Set it to `false` and reload to disable the feature. The runtime dependencies
-`@orcareplay/core`, `@orcareplay/schema`, and `@orcareplay/viewer` with range `>=0.2.1`
-are installed automatically by npm/pnpm with this package. No extra installer,
+Set it to `false` and reload to disable the feature. The runtime dependency
+`agenticreplay` uses `>=0.1.0 <1.0.0` and installs automatically through npm.
+Kiokuko resolves its bundled core, schema and viewer libraries from that package. No extra installer,
 startup subprocess, automatic package repair, or network transmission is added.
-The dependencies are Apache-2.0; the [upstream license](docs/ORCAREPLAY-LICENSE.txt)
-and viewer credit are retained. Disabled recording never initializes Orca or creates trace files.
+The dependencies are Apache-2.0; the [upstream license](docs/AGENTICREPLAY-LICENSE.txt)
+and viewer credit are retained. Disabled recording never initializes AgenticReplay or creates trace files.
 
 After an affirmative session choice or start command, projected model content and tool final results are
-written to `<verified workspace>/.orca/runs`, or under
-`<Kiokuko data directory>/traces/projects/<workspace hash>/.orca/runs`.
-For Orca, the main database holds the session/run index and recording choices, not log bodies. `show` and `export` require
-the exact native command agent/session; no Orca HTTP API or model tool exists.
-Offline HTML is written only to `.orca/exports/<run ID>.html`.
+written to `<verified workspace>/.agenticreplay/runs`, or under
+`<Kiokuko data directory>/traces/projects/<workspace hash>/.agenticreplay/runs`.
+For AgenticReplay, the main database holds the session/run index and recording choices, not log bodies. `show` and `export` require
+the exact native command agent/session; no AgenticReplay HTTP API or model tool exists.
+Offline HTML is written only to `.agenticreplay/exports/<run ID>.html`.
 
 Traces and HTML can contain sensitive source and conversations. Known secret
 patterns and credential-shaped fields are removed before writing, but arbitrary
@@ -188,9 +188,9 @@ secrets cannot all be recognized. Use `capture.content: metadata` to omit bodies
 arguments and result content. Reasoning is excluded unless separately enabled;
 environment variables, replayState, image bytes and attachments are excluded.
 New directories/files use 0700/0600 and unsafe existing modes/symlinks are refused.
-`.orca/.gitignore` excludes new stores from Git. Exports are never published or
+`.agenticreplay/.gitignore` excludes new stores from Git. Exports are never published or
 uploaded automatically. Deletion and disabling instructions are in
-[Orca recording](docs/orca-recording.md).
+[AgenticReplay recording](docs/agenticreplay-recording.md).
 # Optional Common Lisp mode
 
 With `lisp.enabled: true`, `/kioku-lisp enable` starts an OS-protected SBCL for the

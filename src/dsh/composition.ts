@@ -82,7 +82,7 @@ export interface DshCompositionHost {
   readonly autoGlobalization?: { configure: (enabled: boolean) => void }
   readonly efficiency?: import('./efficiency.js').DshEfficiencyObserver | undefined
   readonly configureEfficiency?: (config: { observe: boolean; inputMode: import('./efficiency.js').FinalizationInputMode }) => void
-  readonly orca?: import('./orca-types.js').DshOrcaHostServices
+  readonly agenticReplay?: import('./agenticreplay-types.js').DshAgenticReplayHostServices
   readonly skills?: DshSkillContext['skills']
   readonly systemPrompt?: Parameters<typeof mountSoulPrompt>[0]['systemPrompt']
   readonly runtime?: DshRuntime
@@ -428,7 +428,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   } catch (error) {
     stopIngress()
     const setupFailures = [error]
-    try { await host.orca?.shutdown() } catch (cleanupError) { setupFailures.push(cleanupError) }
+    try { await host.agenticReplay?.shutdown() } catch (cleanupError) { setupFailures.push(cleanupError) }
     try { await runSetupCleanup() } catch (cleanupError) { setupFailures.push(cleanupError) }
     if (setupFailures.length > 1) throw new AggregateError(setupFailures, 'kiokuko-dsh composition setup failed')
     throw error

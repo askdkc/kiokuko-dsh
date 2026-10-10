@@ -30,7 +30,7 @@ const patch = join(base, 'patch.yml')
 await writeFile(patch, `- id: kiokuko-dsh
   config:
     enabled: true
-    orca: {enabled: false}
+    agenticReplay: {enabled: false}
     lisp:
       enabled: true
       sbclPath: ${JSON.stringify(process.env.KIOKUKO_LISP_SBCL ?? 'sbcl')}

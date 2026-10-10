@@ -31,12 +31,12 @@ test('default intake: root, DSH, core and configured-module exports agree withou
 })
 
 test('default intake: saved configurations missing the new field preserve all unrelated choices', () => {
-  const saved = JSON.parse('{"enabled":true,"lisp":{"enabled":false},"orca":{"enabled":false},"typedDecisions":{"mode":"off"},"memoryReuse":{"mode":"off"},"memoryRetrieval":{"mode":"off"},"modelAutoMode":{"mode":"off"}}')
+  const saved = JSON.parse('{"enabled":true,"lisp":{"enabled":false},"agenticReplay":{"enabled":false},"typedDecisions":{"mode":"off"},"memoryReuse":{"mode":"off"},"memoryRetrieval":{"mode":"off"},"modelAutoMode":{"mode":"off"}}')
   assert.equal(Object.hasOwn(saved, 'intakeMode'), false)
   const parsed = dshPlugin.Config.parse(saved)
   assert.equal(parsed.intakeMode, 'on-demand')
   assert.equal(parsed.lisp.enabled, false)
-  assert.equal(parsed.orca.enabled, false)
+  assert.equal(parsed.agenticReplay.enabled, false)
   assert.equal(parsed.typedDecisions.mode, 'off')
   assert.equal(parsed.memoryReuse.mode, 'off')
   assert.equal(parsed.memoryRetrieval.mode, 'off')
@@ -108,7 +108,7 @@ test('default intake: a history-only native adapter retains export access withou
   let adapter: ReturnType<typeof createDshHostAdapter> | undefined
   try {
     adapter = createDshHostAdapter(ctx, {
-      repositoryRoot: directory, databasePath: join(directory, 'memory.sqlite3'), orca: { enabled: false },
+      repositoryRoot: directory, databasePath: join(directory, 'memory.sqlite3'), agenticReplay: { enabled: false },
       sessionQuery: { async readSession() { throw new Error('No historical ID was requested by this construction test') } },
     })
     assert.ok(adapter.host.sessionExport, 'no-tool history clients retain their existing read/export API')

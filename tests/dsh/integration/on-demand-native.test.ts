@@ -188,13 +188,13 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
     } else if (mode === 'public') {
       if (task !== 'SESSION_WORKSPACE_PROBE') process.chdir(root)
       process.env.KIOKUKO_DATA_DIR = root
-      const options = { typedDecisions: common.typedDecisions, answerReview: common.answerReview, semanticCompaction: common.semanticCompaction, modelAutoMode: common.modelAutoMode, lisp: lispConfig, orca: { enabled: false }, toolExposure: { mode: 'full' }, deepPlanning: { enabled: false }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, memoryIndexReasoning: { mode: 'off' } }
+      const options = { typedDecisions: common.typedDecisions, answerReview: common.answerReview, semanticCompaction: common.semanticCompaction, modelAutoMode: common.modelAutoMode, lisp: lispConfig, agenticReplay: { enabled: false }, toolExposure: { mode: 'full' }, deepPlanning: { enabled: false }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, memoryIndexReasoning: { mode: 'off' } }
       assert.equal(Object.hasOwn(options, 'intakeMode'), false, 'public plugin config must also omit the intake option')
       assert.equal(publicPlugin.Config.parse(options).intakeMode, 'on-demand', 'public exported Config default must drive automatic installation')
       const fiber = ctx.plugin(publicPlugin, JSON.parse(JSON.stringify(options)))
       await fiber; composition = { dispose: () => fiber.dispose() }
     } else {
-      adapter = implementation.createDshHostAdapter(ctx, { ...common, orca: { enabled: false }, toolExposure: { mode: 'full' },
+      adapter = implementation.createDshHostAdapter(ctx, { ...common, agenticReplay: { enabled: false }, toolExposure: { mode: 'full' },
         llm: { async *stream() { throw new Error('Optional memory model intentionally unavailable in native protocol fixture') } } })
       composition = await implementation.mountDshComposition(ctx, adapter.host, lispEnabled ? lispConfig : undefined)
     }

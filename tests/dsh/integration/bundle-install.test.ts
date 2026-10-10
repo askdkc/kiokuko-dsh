@@ -44,6 +44,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     exports?: Record<string, unknown>
     files?: string[]
     peerDependencies?: Record<string, string>
+    dependencies?: Record<string, string>
     name?: string
     scripts?: Record<string, string>
     dsh?: { bundle?: { patch?: string }; client?: { platform?: string; inject?: string[] } }
@@ -72,6 +73,16 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   const cordis = JSON.parse(await readFile(join(repositoryRoot, 'node_modules/@deepseek-ai/cordis/package.json'), 'utf8'))
   const cordisRange = packageManifest.peerDependencies?.['@deepseek-ai/cordis']
   assert.ok(cordisRange && satisfies(cordis.version, cordisRange), 'the published peer range must admit the Cordis version used by native tests')
+  for (const name of ['agenticreplay']) {
+    const range = packageManifest.dependencies?.[name]
+    assert.ok(range, `${name} must be installed as a runtime dependency`)
+    for (const version of ['0.1.2', '0.2.0']) {
+      assert.ok(satisfies(version, range), `${name} must admit ${version} without editing Kiokuko`)
+    }
+    assert.equal(satisfies('1.0.0', range), false, `${name} major API changes require an explicit review`)
+  }
+  assert.ok(!Object.keys(packageManifest.dependencies ?? {}).some(name => name.startsWith('@agenticreplay/')),
+    'libraries are resolved from the published distribution, not independently installed')
 
   const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{
     id?: string
@@ -89,10 +100,10 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('sessionPersistence'))
   assert.ok(patch[1]?.insert?.[0]?.inject?.includes('subagents'))
   assert.equal(Config.parse({}).enabled, true)
-  assert.equal(Config.parse({}).orca.enabled, true)
+  assert.equal(Config.parse({}).agenticReplay.enabled, true)
   const bundledConfig = patch[1]?.insert?.[0]?.config
-  assert.equal(bundledConfig?.orca?.enabled, true)
-  assert.equal(Config.parse(bundledConfig).orca.storage, 'project')
+  assert.equal(bundledConfig?.agenticReplay?.enabled, true)
+  assert.equal(Config.parse(bundledConfig).agenticReplay.storage, 'project')
 
   await run('npm', ['run', 'build'])
   await access(join(repositoryRoot, 'dist/dsh/index.js'))
@@ -117,7 +128,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     assert.match(archive.stdout, /package\/dsh\/cordis\.patch\.yml\n/)
     const installedPatch = YAML.parse((await run('tar', ['-xOzf', tarball, 'package/dsh/cordis.patch.yml'])).stdout) as typeof patch
     assert.ok(installedPatch[1]?.insert?.[0]?.inject?.includes('subagents'))
-    assert.equal(installedPatch[1]?.insert?.[0]?.config?.orca?.enabled, true)
+    assert.equal(installedPatch[1]?.insert?.[0]?.config?.agenticReplay?.enabled, true)
   } finally {
     await Promise.all([
       rm(packageOutput, { recursive: true, force: true }),

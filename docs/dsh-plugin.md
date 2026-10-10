@@ -110,26 +110,23 @@ For an npm-installed Kiokuko, update the plugin itself:
 dsh plugin --profile web update kiokuko-dsh --latest
 ```
 
-The current Kiokuko declares `^0.5.0` for `@orcareplay/core`,
-`@orcareplay/schema`, and `@orcareplay/viewer`. An older installation with a
-different range must be updated first to use this range. After a compatible Orca
-release is published, refresh the dependency graph and inspect the resolved versions:
+The `agenticreplay` distribution uses `>=0.1.0 <1.0.0`. This includes future patch and minor
+releases such as 0.1.2 and 0.2.0 without changing Kiokuko's dependency declarations.
+Lockfiles keep the tested versions until you explicitly update dependencies:
 
 ```bash
-dsh plugin --profile web update --depth Infinity '@orcareplay/*'
-dsh plugin --profile web why @orcareplay/core
-dsh plugin --profile web why @orcareplay/schema
-dsh plugin --profile web why @orcareplay/viewer
+dsh plugin --profile web update --depth Infinity agenticreplay
+dsh plugin --profile web why agenticreplay
 dsh web
 ```
 
-The quoted pattern selects Orca packages; `--depth Infinity` includes indirect
-dependencies. This is an explicit [pnpm update](https://pnpm.io/11.x/cli/update),
-not an update on every startup. `^0.5.0` permits stable 0.5.x releases,
-but excludes 0.6.0 and later releases and prereleases such as `0.5.1-rc.1`.
-Existing lockfiles retain their previous resolutions until updated. Future API compatibility is not guaranteed;
-after restarting, check a new recording with `/kioku-orca list`, `show`, and
-`export` as described in the [Orca guide](orca-recording.md).
+The package supplies the bundled recording libraries; `--depth Infinity`
+selects the indirect AgenticReplay dependency. Prereleases and 1.0+ are excluded. The range
+does not guarantee future API compatibility. After restarting, check a new
+recording with `/kioku-agenticreplay list`, `show`, and `export`.
+When upgrading from OrcaReplay, rename explicit `orca` settings to `agenticReplay`
+first. Saved session choices are preserved; legacy recordings are retained but
+not imported. See the [recording guide](agenticreplay-recording.md#upgrade-from-orcareplay).
 
 For an intentionally commit-pinned Git install, change the dependency spec to
 the intended new revision; updating a fixed source reference does not move it
@@ -548,17 +545,17 @@ lifecycle checked here is the DeepSeek Harness `web` profile loading and
 unloading this plugin. An unavailable DeepSeek CLI is reported as
 `unsupported`, never as a successful install or runtime execution.
 
-## OrcaReplay recording
+## AgenticReplay recording
 
-Orca dependencies and recording configuration are installed automatically with
+AgenticReplay dependencies and recording configuration are installed automatically with
 this package; the feature is **enabled by default** and records each chat without
-asking, including delegated and managed child sessions. Set `orca.askOnStart: true` to ask once per chat instead; only an
+asking, including delegated and managed child sessions. Set `agenticReplay.askOnStart: true` to ask once per chat instead; only an
 affirmative choice then starts capture, while skipping or an unavailable question
 UI continues without recording and child sessions need an explicit start. The decision survives reloads, and a saved
 refusal outranks the recording default. The first recorded model/tool observation creates
-`.orca/runs/` in the verified session workspace. Set `config.orca.enabled: false` and reload to disable
-recording. `/kioku-orca stop`, `list`, `show <run ID>` and
+`.agenticreplay/runs/` in the verified session workspace. Set `config.agenticReplay.enabled: false` and reload to disable
+recording. `/kioku-agenticreplay stop`, `list`, `show <run ID>` and
 `export <run ID>` finalize and inspect the selected session's trace. This records
 DSH internal events, not a complete replayable HTTP/filesystem capture.
-See [Orca recording](orca-recording.md) for configuration, limits, sensitive data,
+See [AgenticReplay recording](agenticreplay-recording.md) for configuration, limits, sensitive data,
 storage, disabling and removal.

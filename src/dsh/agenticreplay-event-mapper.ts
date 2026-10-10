@@ -1,21 +1,21 @@
-import type { EventInit } from '@orcareplay/core'
-import type { OrcaConfig } from './config.js'
-import { projectOrcaJson, scrubOrcaText } from './orca-security.js'
-import { OrcaError } from './orca-types.js'
+import type { EventInit } from './agenticreplay-libraries.js'
+import type { AgenticReplayConfig } from './config.js'
+import { projectAgenticReplayJson, scrubAgenticReplayText } from './agenticreplay-security.js'
+import { AgenticReplayError } from './agenticreplay-types.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { isKiokukoDshSource } from './plugin-source.js'
 
-export const ORCA_CAPTURE = Object.freeze({ format: 'dsh.observation.v1', httpCapture: false, filesystemSnapshot: false, exactReplay: false,
+export const AGENTICREPLAY_CAPTURE = Object.freeze({ format: 'dsh.observation.v1', httpCapture: false, filesystemSnapshot: false, exactReplay: false,
   shellFrames: false, mcpTransport: false, environment: false, replayState: false, attachments: false })
 export const record = (value: unknown): Record<string, any> => typeof value === 'object' && value !== null ? value as Record<string, any> : {}
 export function label(value: unknown): string {
   if (typeof value !== 'string') return 'unknown'
-  if (value.length > 512) throw new OrcaError('metadata_limit')
-  return scrubOrcaText(value).replace(/[\p{Cc}]/gu, '')
+  if (value.length > 512) throw new AgenticReplayError('metadata_limit')
+  return scrubAgenticReplayText(value).replace(/[\p{Cc}]/gu, '')
 }
-export function projectBlocks(value: unknown, config: OrcaConfig): unknown[] {
+export function projectBlocks(value: unknown, config: AgenticReplayConfig): unknown[] {
   if (!Array.isArray(value)) return []
-  if (value.length * 64 > config.maxQueuedBytesPerTrace) throw new OrcaError('queue_limit')
+  if (value.length * 64 > config.maxQueuedBytesPerTrace) throw new AgenticReplayError('queue_limit')
   return value.map(item => {
     const block = record(item)
     if (block.type === 'reasoning' && !config.capture.reasoning) return { type: 'reasoning', omitted: true }
@@ -30,7 +30,7 @@ export function projectBlocks(value: unknown, config: OrcaConfig): unknown[] {
 }
 
 /** Hash only host-attributed sections still present at the final request seam. */
-export function requestSourceManifest(messages: unknown, config: OrcaConfig): {
+export function requestSourceManifest(messages: unknown, config: AgenticReplayConfig): {
   coverage: 'observed' | 'partial' | 'unknown'; omittedCount: number;
   items: { kind: string; id: string; digest: string; bytes: number }[]
 } {
@@ -62,9 +62,9 @@ export function requestSourceManifest(messages: unknown, config: OrcaConfig): {
   }
   return { coverage: omittedCount ? 'partial' : items.length ? 'observed' : 'unknown', omittedCount, items }
 }
-export function modelRequest(options: Record<string, any>, id: string, config: OrcaConfig): EventInit {
+export function modelRequest(options: Record<string, any>, id: string, config: AgenticReplayConfig): EventInit {
   const messages = Array.isArray(options.messages) ? options.messages : []
-  if (messages.length * 64 > config.maxQueuedBytesPerTrace) throw new OrcaError('queue_limit')
+  if (messages.length * 64 > config.maxQueuedBytesPerTrace) throw new AgenticReplayError('queue_limit')
   const sources = requestSourceManifest(options.messages, config)
   const payload = config.capture.content === 'metadata' ? { format: 'dsh.llm.request.v1', sources } : {
     format: 'dsh.llm.request.v1', system: options.system,
@@ -74,7 +74,7 @@ export function modelRequest(options: Record<string, any>, id: string, config: O
   }
   return { type: 'model.request', actor: 'harness', attrs: { modelCallId: id, provider: label(options.provider), model: label(options.model),
     messages: messages.length, purpose: options.purpose === undefined ? 'conversation' : label(options.purpose) },
-    payload: projectOrcaJson(payload, config.maxQueuedBytesPerTrace) as Record<string, unknown> }
+    payload: projectAgenticReplayJson(payload, config.maxQueuedBytesPerTrace) as Record<string, unknown> }
 }
 /** DSH uses a replacement usage snapshot, with disjoint cache counters. */
 export function usageAttrs(value: unknown): Record<string, unknown> {

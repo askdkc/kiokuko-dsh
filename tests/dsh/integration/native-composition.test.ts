@@ -74,7 +74,7 @@ test('explicit legacy execution host deliberately opts out and mounts native too
 
   assert.equal(tools.length, 9)
   assert.equal(commands.length, 3)
-  assert.ok(commands.some(command => command.name === 'kioku-orca'))
+  assert.ok(commands.some(command => command.name === 'kioku-agenticreplay'))
   const keyCommand = commands.find(command => command.name === 'kioku-typesafe-key')
   assert.equal(keyCommand.recordInput, false)
   assert.match((await keyCommand.handler({ rawInput: 'status', signal: new AbortController().signal })).text, /^TypeSafe:/)

@@ -29,11 +29,11 @@ test('omitted approval mode requires consent through plain and native configurat
 
 test('native live Config preserves ordinary config, profile entry identity and current values', async () => {
   const schema = nativeApprovalConfig(Config)
-  const resolved = schema({lisp:{enabled:true, approvalMode:'auto', maxWorkers:3}, orca:{enabled:false}}) as any
+  const resolved = schema({lisp:{enabled:true, approvalMode:'auto', maxWorkers:3}, agenticReplay:{enabled:false}}) as any
   const services: Record<string, any> = {}
   const ctx: any = {fiber:{entry:{id:'include:kiokuko-dsh',options:{id:'kiokuko-dsh'}}},get:(name:string)=>services[name],provide:(name:string,value:any)=>{services[name]=value}}
   const plain = Config.parse(bindApprovalConfig(ctx, resolved))
-  assert.equal(plain.lisp.enabled, true); assert.equal(plain.lisp.approvalMode, 'auto'); assert.equal(plain.orca.enabled,false)
+  assert.equal(plain.lisp.enabled, true); assert.equal(plain.lisp.approvalMode, 'auto'); assert.equal(plain.agenticReplay.enabled,false)
   const source=services[APPROVAL_CONFIG_SERVICE]
   assert.equal(source.namespace,'kiokuko-dsh')
   let writes=0

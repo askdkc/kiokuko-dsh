@@ -17,7 +17,7 @@
 - **Continuity** — 既定では無効です。`continuity.mode: active` にすると、最近の実行記録を短くまとめてモデルへ渡します。[設定方法](docs/continuity.ja.md)
 - **事前推論索引** — 出典付きatomic・bridge候補を事前生成し、検索時に本文を渡します。既定で有効、workspaceごとUTC日次8呼び出しまで。[設定・費用・停止・評価](docs/index-reasoning.md)
 - **記憶学習** — 完了した作業から再利用できる episode・教訓候補を作ります。[設定](docs/memory-evolution.md)
-- **OrcaReplay** — モデル・ツールの動作を記録し、HTML に出力できます。[設定とコマンド](docs/orca-recording.md)
+- **AgenticReplay** — モデル・ツールの動作を記録し、HTML に出力できます。[設定とコマンド](docs/agenticreplay-recording.md)
 - **Diff レビュー** — DSH の右ペインで、選択した差分と Kiokuko の文脈を根拠付きで確認できます。分析は明示操作です。[使い方と制限](docs/diff-review.ja.md)
 - **日本語出力** — 対応モデルへ自然な日本語を書く同梱 Skill を渡します。[詳細](docs/japanese-output.md)
 
@@ -68,17 +68,11 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 
 起動時には、起動ディレクトリの `AGENTS.md` にある既存の Kiokuko 管理ブロックも更新し、その外側の指示は保持します。パッケージ更新後は DSH を再起動してください。別の作業ディレクトリや配備コピーの確認・修復は[セットアップ手順](docs/dsh-plugin.md#what-setup-updates-and-when)を参照してください。`kiokuko use` は DSH のセットアップコマンドではありません。
 
-対応するバージョン範囲内で Orca 関連の依存を更新する場合:
-
-```bash
-pnpm dsh plugin --profile web update --depth Infinity '@orcareplay/*'
-pnpm dsh plugin --profile web why @orcareplay/core
-pnpm dsh web
-```
-
-現在の依存指定は `^0.5.0` です。正式版 0.5.x への更新を許可し、0.6.0 以降には依存指定の変更が必要です。
-既存環境が自動更新されるわけではありません。
-更新後は記録・HTML 出力を確認してください。[更新の詳細](docs/dsh-plugin.md#update)
+`agenticreplay` パッケージは `>=0.1.0 <1.0.0` を指定しています。今後のパッチ版・マイナー版は
+依存範囲を変えずに更新できます。ロックファイルは明示的に更新するまで検証済みの版を保持します。
+更新後は DSH を再起動してください。OrcaReplay から更新する際は、明示的な `orca` 設定を
+`agenticReplay` に変更します。保存済みの記録設定は引き継ぎ、旧ログは保持しますが取り込みません。
+[更新の詳細](docs/dsh-plugin.md#update) · [記録機能の移行](docs/agenticreplay-recording.md#upgrade-from-orcareplay)
 
 既存チャットが `unknown ... not marked ignorable` で開けない場合は、[履歴の修復手順](docs/session-history-repair.md)を参照してください。
 

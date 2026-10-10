@@ -17,7 +17,7 @@ Inspect sources and corrections with `/kioku-memory explain ENTRY_ID`; explicitl
 - **Continuity** — Disabled by default. Set `continuity.mode: active` to summarize recent execution evidence for the model. [Setup](docs/continuity.md)
 - **Memory evolution** — Turn completed work into reusable episode and lesson candidates. [Settings](docs/memory-evolution.md)
 - **Verified automatic Global memory** — Three independent, host-observed successful applications can create a scoped `source_verified` Global memory. [Conditions and opt-out](docs/auto-globalization.md)
-- **OrcaReplay** — Record model/tool activity and export it as HTML. [Settings and commands](docs/orca-recording.md)
+- **AgenticReplay** — Record model/tool activity and export it as HTML. [Settings and commands](docs/agenticreplay-recording.md)
 - **Japanese output** — Give supported models a bundled Skill for natural Japanese. [Details](docs/japanese-output.md)
 
 Tool exposure defaults to `auto`: task type and current phase determine the Kiokuko model tools shown. Native tools stay available; `full` is an explicit compatibility override. See [tool exposure](docs/tool-exposure.md).
@@ -67,17 +67,12 @@ These are the full-package defaults. The [configured core and optional modules](
 
 Startup also refreshes an existing Kiokuko managed block in the startup directory’s `AGENTS.md`, preserving your other instructions. Restart DSH after updating the package. See [setup and verification](docs/dsh-plugin.md#what-setup-updates-and-when) for another workspace or stale copies; `kiokuko use` is not the DSH setup command.
 
-To update Orca dependencies within the supported release range:
-
-```bash
-pnpm dsh plugin --profile web update --depth Infinity '@orcareplay/*'
-pnpm dsh plugin --profile web why @orcareplay/core
-pnpm dsh web
-```
-
-The current dependency range is `^0.5.0`: stable 0.5.x releases are permitted,
-but 0.6.0 and later require a range change. Existing installs are not updated automatically.
-Verify recording and export after updating. See [update details](docs/dsh-plugin.md#update).
+The `agenticreplay` distribution uses `>=0.1.0 <1.0.0`, so future patch and minor releases
+can be installed by an explicit dependency update without changing the range.
+Lockfiles retain the tested versions until updated. Restart DSH afterward.
+When upgrading from OrcaReplay, rename explicit `orca` settings to `agenticReplay`;
+saved session choices survive and legacy traces are retained but not imported.
+[Update details](docs/dsh-plugin.md#update) · [Recording upgrade](docs/agenticreplay-recording.md#upgrade-from-orcareplay)
 
 If existing chats fail with an unknown `kiokuko/` event, see [history repair](docs/session-history-repair.md).
 
