@@ -3,7 +3,7 @@
 [English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | 한국어
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)에 프로젝트 기억, 작업 계획, 검증 지원을 추가합니다.
-OrcaReplay로 모델과 도구의 동작을 기록하고, 기록을 확인하거나 HTML로 내보낼 수 있습니다.
+AgenticReplay로 모델과 도구의 동작을 기록하고, 기록을 확인하거나 HTML로 내보낼 수 있습니다.
 DSH 표준 agent preset은 `subagent`와 `subagent_fork`를 제공합니다. 일반 하위 agent에서는 Kiokuko 실행 방식을 다시 묻지 않습니다. [설정](docs/dsh-plugin.md#subagents).
 
 
@@ -29,14 +29,14 @@ pnpm dsh web
 시작 후 평소처럼 작업을 입력하면 됩니다. Kiokuko 전용 setup 작업은 필요하지 않습니다.
 GitHub 및 로컬 설치 방법은 [플러그인 안내](docs/dsh-plugin.md)를 참고하세요.
 
-OrcaReplay 기능은 자동으로 설정되며 **수동 설정이 필요 없습니다**. 각 채팅은 확인 없이 상세 로그를 기록합니다.
-기록하면 이후 모델 응답과 도구 실행 결과가 세션 작업 공간의 `.orca/runs/`에 저장됩니다. 결정은 세션별로 유지되므로 `/kioku-orca stop`한 채팅은 기록하지 않은 상태로 남습니다. 채팅 시작 시 확인하려면 `orca.askOnStart: true`를 설정하세요.
+AgenticReplay 기능은 자동으로 설정되며 **수동 설정이 필요 없습니다**. 각 채팅은 확인 없이 상세 로그를 기록합니다.
+기록하면 이후 모델 응답과 도구 실행 결과가 세션 작업 공간의 `.agenticreplay/runs/`에 저장됩니다. 결정은 세션별로 유지되므로 `/kioku-agenticreplay stop`한 채팅은 기록하지 않은 상태로 남습니다. 채팅 시작 시 확인하려면 `agenticReplay.askOnStart: true`를 설정하세요.
 
-- `/kioku-orca start`: 기록을 수동으로 시작하거나 중지 후 다시 시작합니다. 해당 채팅을 중지하지 않았다면 실행할 필요가 없습니다. 과거 동작은 기록되지 않습니다.
-- `/kioku-orca status`: 기록 상태, 저장 위치와 다음 동작을 간단히 표시합니다. 진단용 상세 정보는 `/kioku-orca status --json`으로 확인할 수 있습니다.
+- `/kioku-agenticreplay start`: 기록을 수동으로 시작하거나 중지 후 다시 시작합니다. 해당 채팅을 중지하지 않았다면 실행할 필요가 없습니다. 과거 동작은 기록되지 않습니다.
+- `/kioku-agenticreplay status`: 기록 상태, 저장 위치와 다음 동작을 간단히 표시합니다. 진단용 상세 정보는 `/kioku-agenticreplay status --json`으로 확인할 수 있습니다.
 
-`/kioku-orca stop`으로 로그를 확정한 뒤 `list`로 run ID를 확인하고, `show <run ID>`로 내용을 보거나 `export <run ID>`로 HTML을 내보낼 수 있습니다(모두 `/kioku-orca` 뒤에 입력).
-기록을 끄려면 `orca.enabled: false`를 설정하고 다시 로드하세요. 자세한 내용은 [기록 설정과 명령](docs/orca-recording.md)을 참고하세요.
+`/kioku-agenticreplay stop`으로 로그를 확정한 뒤 `list`로 run ID를 확인하고, `show <run ID>`로 내용을 보거나 `export <run ID>`로 HTML을 내보낼 수 있습니다(모두 `/kioku-agenticreplay` 뒤에 입력).
+기록을 끄려면 `agenticReplay.enabled: false`를 설정하고 다시 로드하세요. 자세한 내용은 [기록 설정과 명령](docs/agenticreplay-recording.md)을 참고하세요.
 
 ## 업데이트
 
@@ -67,17 +67,11 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 
 시작 시 시작 디렉터리의 `AGENTS.md`에 있는 기존 Kiokuko 관리 블록도 갱신하며, 블록 밖의 지침은 보존합니다. 패키지 업데이트 후 DSH를 다시 시작하세요. 다른 작업 디렉터리나 오래된 복사본의 확인 및 복구는 [설정 절차](docs/dsh-plugin.md#what-setup-updates-and-when)를 참고하세요. `kiokuko use`는 DSH 설정 명령이 아닙니다.
 
-지원하는 버전 범위 내에서 Orca 관련 의존 패키지를 업데이트하려면:
-
-```bash
-pnpm dsh plugin --profile web update --depth Infinity '@orcareplay/*'
-pnpm dsh plugin --profile web why @orcareplay/core
-pnpm dsh web
-```
-
-현재 의존 범위는 `^0.5.0`입니다. 정식 0.5.x 버전은 허용하지만 0.6.0 이상은 의존 범위를 변경해야 합니다.
-기존 설치는 자동으로 업데이트되지 않습니다. 업데이트 후 기록과 HTML 내보내기를 확인하세요.
-[업데이트 상세 안내](docs/dsh-plugin.md#update)
+`agenticreplay` 패키지의 범위는 `>=0.1.0 <1.0.0`입니다. 이후 패치 및 마이너 버전은
+범위를 변경하지 않고 업데이트할 수 있습니다. 명시적으로 업데이트할 때까지 잠금 파일은 검증된 버전을 유지합니다.
+업데이트 후 DSH를 다시 시작하세요. OrcaReplay에서 업데이트할 때는 명시적인 `orca` 설정을
+`agenticReplay`로 변경하세요. 저장된 기록 선택과 기존 로그는 유지되지만 이전 로그는 가져오지 않습니다.
+[업데이트 안내](docs/dsh-plugin.md#update) · [기록 기능 이전](docs/agenticreplay-recording.md#upgrade-from-orcareplay)
 
 DSH 업데이트 후 Kiokuko를 불러오지 못하면 [시작 오류 복구 절차](docs/dsh-plugin.md#startup-failure-after-a-dsh-update)에서 해당 프로필의 업데이트 및 재설치 명령을 확인하세요. 세션 로그와 Kiokuko 데이터베이스는 삭제하지 마세요. API 호환성 문제는 재설치만으로 해결되지 않을 수 있습니다.
 

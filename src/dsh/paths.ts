@@ -87,9 +87,9 @@ export function getDshEmbeddingPresetDirectory(
 }
 
 /** The caller supplies a verified worktree root, never the process cwd. */
-export function getDshOrcaStoreRoot(workspaceRoot: string, storage: 'project' | 'data-dir', projectKey: string): string {
+export function getDshAgenticReplayStoreRoot(workspaceRoot: string, storage: 'project' | 'data-dir', projectKey: string): string {
   if (!path.isAbsolute(workspaceRoot) || !/^[a-f0-9]{64}$/u.test(projectKey)) {
-    throw new KiokukoError('VALIDATION_ERROR', 'Orca requires a verified workspace')
+    throw new KiokukoError('VALIDATION_ERROR', 'AgenticReplay requires a verified workspace')
   }
   return storage === 'project' ? workspaceRoot : path.join(getDshDataDirectory(), 'traces', 'projects', projectKey)
 }

@@ -76,7 +76,7 @@ try {
   }
   for (const name of ['enno', 'lisp']) for (const file of report.artifacts[name].sourceFiles) assert.ok(!coreFiles.has(file), `${name} duplicates core implementation: ${file}`)
   assert.ok(!packed.core.files.some(file => /^lisp\/|^skills\/kiokuko-(lisp|enno-oduno)\//.test(file.path)))
-  assert.ok(!Object.keys(report.artifacts.core.dependencies).some(name => name.startsWith('@orcareplay/')))
+  assert.ok(!Object.keys(report.artifacts.core.dependencies).some(name => name === 'agenticreplay' || name.startsWith('@agenticreplay/')))
   assert.deepEqual(packed.core.files.filter(file => file.path.startsWith('migrations/')).map(file => file.path).sort(), report.sharedCompatibilityAssets.map(asset => asset.path).sort())
   const results = []
   for (const configuration of [[], ['enno'], ['lisp'], ['enno', 'lisp']]) {

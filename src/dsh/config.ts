@@ -28,7 +28,7 @@ import { DeepThinkerConfigSchema } from '../deep-thinker/core/contracts.js'
 import { MemoryRetrievalConfig } from '../memory/retrieval-contracts.js'
 
 const limit = (value: number) => z.number().int().positive().max(Number.MAX_SAFE_INTEGER).default(value)
-export const OrcaConfig = z.object({
+export const AgenticReplayConfig = z.object({
   enabled: z.boolean().default(true),
   /** `false` records every interactive session without a per-session question; `true` asks first. */
   askOnStart: z.boolean().default(false),
@@ -50,7 +50,7 @@ export const OrcaConfig = z.object({
   maxHtmlInlineCharsPerEvent: limit(32_768),
   maxHtmlExportOutputBytes: limit(67_108_864),
 })
-export type OrcaConfig = z.infer<typeof OrcaConfig>
+export type AgenticReplayConfig = z.infer<typeof AgenticReplayConfig>
 export const EfficiencyConfig = z.object({ observe: z.boolean().default(false) }).strict()
 export const FinalizationConfig = z.object({ inputMode: z.enum(['prefix_reuse', 'bounded_evidence']).default('prefix_reuse') }).strict()
 export const EnnoMemoryConfig = z.object({
@@ -93,7 +93,9 @@ export const Config = z.object({
   akinatorMemory: AkinatorMemoryConfig.prefault({}),
   deepPlanning: DeepThinkerConfigSchema.prefault({}),
   modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),
-  orca: OrcaConfig.prefault({}),
+  agenticReplay: AgenticReplayConfig.prefault({}),
+  // Reject a stale opt-out rather than strip it and silently enable recording.
+  orca: z.never({ error: 'OrcaReplay support was removed; rename orca configuration to agenticReplay.' }).optional(),
   toolExposure: ToolExposureConfig.prefault({}),
   efficiency: EfficiencyConfig.prefault({}),
   continuity: ContinuityConfig.prefault({}),

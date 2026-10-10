@@ -70,7 +70,7 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       const lisp = LispConfig.parse({ enabled: true, sbclPath: join(root, 'must-not-start-sbcl') })
       if (host === 'core-off') core = await mountCore(ctx, { ...common, typedDecisions: { mode: 'off' } }, [{ module: lispModule, configuration: lisp }])
       else {
-        adapter = createDshHostAdapter(ctx, { ...common, decisions, orca: { enabled: false }, deepPlanning: { enabled: false }, llm: { async *stream() { throw new Error('Optional memory model unavailable in native routing fixture') } } })
+        adapter = createDshHostAdapter(ctx, { ...common, decisions, agenticReplay: { enabled: false }, deepPlanning: { enabled: false }, llm: { async *stream() { throw new Error('Optional memory model unavailable in native routing fixture') } } })
         composition = await mountDshComposition(ctx, adapter.host, lisp)
       }
       handle = await ctx.agents.create({ sessionId: session.SessionId('queued-intake'), agentOptions: { provider: 'fixture', model: 'mock' }, meta: { cwd: root } })

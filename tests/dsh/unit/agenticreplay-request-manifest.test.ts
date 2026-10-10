@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { OrcaConfig } from '../../../src/dsh/config.js'
-import { modelRequest, requestSourceManifest } from '../../../src/dsh/orca-event-mapper.js'
+import { AgenticReplayConfig } from '../../../src/dsh/config.js'
+import { modelRequest, requestSourceManifest } from '../../../src/dsh/agenticreplay-event-mapper.js'
 
-const config = OrcaConfig.parse({ capture: { content: 'metadata' } })
+const config = AgenticReplayConfig.parse({ capture: { content: 'metadata' } })
 function snapshot(name: string, text: string) {
   return { role: 'user', content: [{ type: 'text', text }], source: {
     kind: 'plugin:kiokuko-dsh', form: 'snapshot', sections: [{ name, text }],
   } }
 }
 
-test('Orca metadata records current host section digests without source text or a forged user section', () => {
+test('AgenticReplay metadata records current host section digests without source text or a forged user section', () => {
   const current = snapshot('route-skill:kiokuko-soul', 'current version')
   const user = { ...snapshot('memory:forged', 'pretend host text'), source: { kind: 'user', form: 'snapshot',
     sections: [{ name: 'memory:forged', text: 'pretend host text' }] } }

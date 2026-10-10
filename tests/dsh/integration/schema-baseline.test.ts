@@ -26,7 +26,7 @@ test('031 upgrade retains old bodies and reserved job formats without manufactur
     db.prepare("UPDATE ledger_runs SET status='completed' WHERE run_id='old'").run()
     db.prepare("INSERT INTO dsh_memory_finalizations(run_id,workspace,dsh_session_id,source_start_seq,source_end_seq,status,attempt_count,scheduled_at,updated_at) VALUES('old','project:test','old-session',1,2,'pending',0,?,?)").run('2026-10-06T00:00:00.000Z','2026-10-06T00:00:00.000Z')
     const before=db.prepare('SELECT * FROM entry_revisions').get()
-    assert.deepEqual(migrateDatabase(db).applied,[32,33])
+    assert.deepEqual(migrateDatabase(db).applied,CURRENT_MIGRATION_VERSIONS.filter(version => version > 31))
     assert.deepEqual(db.prepare('SELECT * FROM entry_revisions').get(),before)
     assert.equal(db.prepare('SELECT evidence_contract_version FROM dsh_memory_finalizations').get()?.evidence_contract_version,3)
     assert.equal(explainMemory(db,{workspace:entry.workspace,entryId:entry.id}).evidenceStatus,'details_unavailable')
@@ -35,6 +35,33 @@ test('031 upgrade retains old bodies and reserved job formats without manufactur
 })
 
 const migrationsDirectory = path.resolve(import.meta.dirname, '../../../migrations')
+
+test('AgenticReplay upgrade retains legacy rows and copies saved refusals into an empty new index', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kiokuko-agenticreplay-upgrade-'))
+  const old = path.join(root, 'old')
+  await mkdir(old)
+  for (const migration of CURRENT_MIGRATION_SNAPSHOT.migrations.filter(m => m.version < 34)) {
+    await copyFile(path.join(migrationsDirectory, migration.name), path.join(old, migration.name))
+  }
+  const db = openConnection(path.join(root, 'state.sqlite3'))
+  try {
+    migrateDatabase(db, old)
+    db.prepare('INSERT INTO dsh_orca_session_choices VALUES (?, ?, ?, ?, ?, ?)')
+      .run('session', root, root, root, 0, '2026-10-10T00:00:00.000Z')
+    db.prepare(`INSERT INTO dsh_orca_traces (orca_run_id, dsh_session_id, recorder_instance_id, recording_generation,
+      workspace_key, store_root, session_cwd, capture_format_version, state, started_at)
+      VALUES ('run_abcdef', 'session', 'legacy-owner', 'legacy-generation', 'workspace', ?, ?, 1, 'completed', ?)`)
+      .run(root, root, '2026-10-10T00:00:00.000Z')
+    const choice = db.prepare('SELECT * FROM dsh_orca_session_choices').get()
+    const trace = db.prepare('SELECT * FROM dsh_orca_traces').get()
+    assert.deepEqual(migrateDatabase(db).applied, CURRENT_MIGRATION_VERSIONS.filter(version => version >= 34))
+    assert.deepEqual(db.prepare('SELECT * FROM dsh_orca_traces').get(), trace)
+    assert.deepEqual(db.prepare('SELECT * FROM dsh_orca_session_choices').get(), choice)
+    assert.deepEqual(db.prepare('SELECT * FROM dsh_agenticreplay_session_choices').get(), choice)
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM dsh_agenticreplay_traces').get()?.count, 0)
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
+  } finally { db.close(); await rm(root, { recursive: true, force: true }) }
+})
 
 test('the schema keeps 001 immutable and appends forward-only DSH runtime migrations', async () => {
   const entries = await readdir(migrationsDirectory)
@@ -140,6 +167,9 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'context_delivery_entries',
         'context_delivery_omissions',
         'context_feedback',
+        'dsh_agenticreplay_session_choices',
+        'dsh_agenticreplay_trace_run_links',
+        'dsh_agenticreplay_traces',
         'dsh_answer_reviews',
         'dsh_boundary_jobs',
         'dsh_completion_bind_ops',

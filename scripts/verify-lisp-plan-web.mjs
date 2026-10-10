@@ -44,7 +44,7 @@ ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan accepta
 }});}
 `)
   const patch = join(base, 'patch.yml')
-  await writeFile(patch, `- id: kiokuko-dsh\n  config:\n    enabled: true\n    orca: {enabled: false}\n    lisp: {enabled: true}\n- insert:\n    - id: lisp-plan-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, tools, agents, sessionProjections]\n`)
+  await writeFile(patch, `- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n    lisp: {enabled: true}\n- insert:\n    - id: lisp-plan-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, tools, agents, sessionProjections]\n`)
   host = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', '0'], { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] })
   for (const stream of [host.stdout, host.stderr]) stream.on('data', c => { logs += c })
   const url = await poll(() => logs.match(/https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/)?.[0])

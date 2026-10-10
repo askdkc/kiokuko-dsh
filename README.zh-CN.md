@@ -3,7 +3,7 @@
 [English](README.md) | [日本語](README.ja.md) | 简体中文 | [한국어](README.ko.md)
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 添加项目记忆、任务规划和验证支持。
-OrcaReplay 可记录模型和工具活动，查看记录并导出 HTML。
+AgenticReplay 可记录模型和工具活动，查看记录并导出 HTML。
 标准 DSH agent preset 提供 `subagent` 和 `subagent_fork`。普通子 agent 不会再次询问 Kiokuko 的执行模式。[配置说明](docs/dsh-plugin.md#subagents)。
 
 
@@ -29,14 +29,14 @@ pnpm dsh web
 启动后直接输入任务，无需额外的 Kiokuko setup 操作。
 GitHub 和本地安装方式见[插件指南](docs/dsh-plugin.md)。
 
-OrcaReplay 的功能配置会自动安装，**无需手动设置**。每次聊天都会在无需确认的情况下记录详细日志。
-记录后，后续模型回复和工具执行结果将保存到会话工作目录的 `.orca/runs/`。决定按会话保存，因此执行过 `/kioku-orca stop` 的聊天保持不记录。若想在聊天开始时确认，请设置 `orca.askOnStart: true`。
+AgenticReplay 的功能配置会自动安装，**无需手动设置**。每次聊天都会在无需确认的情况下记录详细日志。
+记录后，后续模型回复和工具执行结果将保存到会话工作目录的 `.agenticreplay/runs/`。决定按会话保存，因此执行过 `/kioku-agenticreplay stop` 的聊天保持不记录。若想在聊天开始时确认，请设置 `agenticReplay.askOnStart: true`。
 
-- `/kioku-orca start`：手动开始记录，或在停止后重新开始。若该聊天未被停止，则无需执行。不会补录过去的活动。
-- `/kioku-orca status`：简要显示记录状态、保存位置和下一步操作。诊断详情可用 `/kioku-orca status --json` 查看。
+- `/kioku-agenticreplay start`：手动开始记录，或在停止后重新开始。若该聊天未被停止，则无需执行。不会补录过去的活动。
+- `/kioku-agenticreplay status`：简要显示记录状态、保存位置和下一步操作。诊断详情可用 `/kioku-agenticreplay status --json` 查看。
 
-用 `/kioku-orca stop` 完成日志记录后，用 `list` 查看 run ID、`show <run ID>` 查看内容、`export <run ID>` 导出 HTML（均在 `/kioku-orca` 后输入）。
-要禁用记录，请设置 `orca.enabled: false` 并重新加载。详见[记录设置与命令](docs/orca-recording.md)。
+用 `/kioku-agenticreplay stop` 完成日志记录后，用 `list` 查看 run ID、`show <run ID>` 查看内容、`export <run ID>` 导出 HTML（均在 `/kioku-agenticreplay` 后输入）。
+要禁用记录，请设置 `agenticReplay.enabled: false` 并重新加载。详见[记录设置与命令](docs/agenticreplay-recording.md)。
 
 ## 更新
 
@@ -66,16 +66,11 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 
 启动时也会更新启动目录中 `AGENTS.md` 的现有 Kiokuko 管理块，保留块外的指令。更新包后请重启 DSH。其他工作目录或旧副本的检查与修复请参阅[设置步骤](docs/dsh-plugin.md#what-setup-updates-and-when)。`kiokuko use` 不是 DSH 的设置命令。
 
-在支持的版本范围内更新 Orca 相关依赖：
-
-```bash
-pnpm dsh plugin --profile web update --depth Infinity '@orcareplay/*'
-pnpm dsh plugin --profile web why @orcareplay/core
-pnpm dsh web
-```
-
-当前依赖范围为 `^0.5.0`，允许正式版 0.5.x；升级到 0.6.0 及后续版本需要修改依赖范围。
-现有安装不会自动更新。更新后请检查记录和 HTML 导出。[更新详情](docs/dsh-plugin.md#update)
+`agenticreplay` 包的版本范围为 `>=0.1.0 <1.0.0`，后续补丁和次版本可在不修改范围的情况下更新。
+锁文件会保留已验证的版本，直到明确更新依赖。更新后请重启 DSH。
+从 OrcaReplay 升级时，请将显式 `orca` 配置改为 `agenticReplay`；
+已保存的记录选择和旧日志会保留，但旧日志不会导入。
+[更新详情](docs/dsh-plugin.md#update) · [记录功能迁移](docs/agenticreplay-recording.md#upgrade-from-orcareplay)
 
 DSH 更新后若无法加载 Kiokuko，请参阅[启动恢复步骤](docs/dsh-plugin.md#startup-failure-after-a-dsh-update)，按对应 profile 更新或重新安装。请保留会话日志和 Kiokuko 数据库；重新安装不一定能解决 API 兼容性问题。
 

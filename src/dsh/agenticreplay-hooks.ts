@@ -1,11 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { DshOrcaHostServices, OrcaToolExecution } from './orca-types.js'
+import type { DshAgenticReplayHostServices, AgenticReplayToolExecution } from './agenticreplay-types.js'
 
 /** Global Cordis observation with exact host bindings; result observer survives ingress shutdown. */
-export function mountDshOrcaHooks(ctx: Context, services: DshOrcaHostServices): () => void {
+export function mountDshAgenticReplayHooks(ctx: Context, services: DshAgenticReplayHostServices): () => void {
   const disposers: (() => void)[] = []
   const on = (name: string, listener: (...args: any[]) => any) => disposers.push((ctx as any).on(name, listener, { global: true }))
-  const binding = (exec: OrcaToolExecution) => {
+  const binding = (exec: AgenticReplayToolExecution) => {
     try {
       const resolved = exec.agent?.session ? services.resolveSessionBinding(exec.agent, exec.agent.session) : undefined
       return resolved && services.canRecord(resolved) ? resolved : undefined
@@ -18,17 +18,17 @@ export function mountDshOrcaHooks(ctx: Context, services: DshOrcaHostServices): 
       if (resolved && !services.canRecord(resolved)) return next()
       return services.recorder.stream(resolved, options, next)
     })
-    on('tools/pre-execute', async (exec: OrcaToolExecution, next: () => Promise<unknown>) => {
+    on('tools/pre-execute', async (exec: AgenticReplayToolExecution, next: () => Promise<unknown>) => {
       try { services.recorder.preTool(binding(exec), exec) } catch { /* observation cannot veto */ }
       const result = await next()
       try { services.recorder.toolDecision(exec, result) } catch { /* decision remains unchanged */ }
       return result
     })
-    on('tools/execute', async (exec: OrcaToolExecution, next: () => Promise<unknown>) => {
+    on('tools/execute', async (exec: AgenticReplayToolExecution, next: () => Promise<unknown>) => {
       try { services.recorder.toolDispatch(exec) } catch { /* transparent */ }
       try { return await next() } finally { try { services.recorder.toolDispatched(exec) } catch { /* transparent */ } }
     })
-    on('tools/result', (exec: OrcaToolExecution, result: unknown) => {
+    on('tools/result', (exec: AgenticReplayToolExecution, result: unknown) => {
       try { services.recorder.toolResult(binding(exec), exec, result) } catch { /* synchronous non-vetoing notification */ }
     })
 

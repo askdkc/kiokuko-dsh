@@ -119,7 +119,7 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
     assert.equal(Object.hasOwn(config, 'intakeMode'), false)
     if (hostMode === 'core') core = await mountCore(ctx, config)
     else {
-      adapter = createDshHostAdapter(ctx, { ...config, orca: { enabled: false }, memoryIndexReasoning: { mode: 'off' }, llm: { async *stream() { throw new Error('Optional finalizer disabled for isolated PTC protocol proof') } } })
+      adapter = createDshHostAdapter(ctx, { ...config, agenticReplay: { enabled: false }, memoryIndexReasoning: { mode: 'off' }, llm: { async *stream() { throw new Error('Optional finalizer disabled for isolated PTC protocol proof') } } })
       composition = await mountDshComposition(ctx, adapter.host)
     }
     const db = openConnection(databasePath)

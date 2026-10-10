@@ -1,18 +1,17 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile } from 'node:fs/promises'
-import { findPackageJSON } from 'node:module'
+import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { EventInit, TraceWriter } from '@orcareplay/core'
-import type { OrcaConfig } from './config.js'
-import { ORCA_CAPTURE, label, modelRequest, projectBlocks, record, usageAttrs } from './orca-event-mapper.js'
-import { prepareOrcaParent, projectOrcaJson, workspaceKey } from './orca-security.js'
-import { orcaDiskBytes, scanOrcaTrace } from './orca-files.js'
-import { OrcaError, orcaErrorCode, type DshOrcaBinding, type OrcaToolExecution, type OrcaTrace, type WithOrcaIndex } from './orca-types.js'
+import { loadAgenticReplayLibrary, installedAgenticReplayCoreVersion, type EventInit, type TraceWriter, type CreateTraceWriter, type CoreLibrary, type SchemaLibrary } from './agenticreplay-libraries.js'
+import type { AgenticReplayConfig } from './config.js'
+import { AGENTICREPLAY_CAPTURE, label, modelRequest, projectBlocks, record, usageAttrs } from './agenticreplay-event-mapper.js'
+import { prepareAgenticReplayParent, projectAgenticReplayJson, workspaceKey } from './agenticreplay-security.js'
+import { agenticReplayDiskBytes, scanAgenticReplayTrace } from './agenticreplay-files.js'
+import { AgenticReplayError, agenticReplayErrorCode, type DshAgenticReplayBinding, type AgenticReplayToolExecution, type AgenticReplayTrace, type WithAgenticReplayIndex } from './agenticreplay-types.js'
 
 type Ref = { seq?: number }
 interface ActiveTrace {
-  readonly row: OrcaTrace
-  readonly binding: DshOrcaBinding
+  readonly row: AgenticReplayTrace
+  readonly binding: DshAgenticReplayBinding
   writer?: TraceWriter
   tail: Promise<void>
   closePromise?: Promise<void>
@@ -25,23 +24,14 @@ interface ActiveTrace {
   modelCleanups: Set<() => void>
 }
 interface Attempt { trace: ActiveTrace; ref: Ref; id: string; started?: number; phase: string; bytes: number }
-export interface OrcaRecorderDependencies {
-  createWriter?: typeof TraceWriter.create
-  loadCore?: () => Promise<typeof import('@orcareplay/core')>
-  loadSchema?: () => Promise<typeof import('@orcareplay/schema')>
+export interface AgenticReplayRecorderDependencies {
+  createWriter?: CreateTraceWriter
+  loadCore?: () => Promise<CoreLibrary>
+  loadSchema?: () => Promise<SchemaLibrary>
   loadCoreVersion?: () => Promise<string>
 }
-async function installedCoreVersion(): Promise<string> {
-  const path = findPackageJSON('@orcareplay/core', import.meta.url)
-  if (!path) throw new Error('Orca core package metadata unavailable')
-  const manifest = JSON.parse(await readFile(path, 'utf8'))
-  if (manifest.name !== '@orcareplay/core' || typeof manifest.version !== 'string' || !manifest.version.trim()) {
-    throw new Error('Invalid Orca core package metadata')
-  }
-  return manifest.version
-}
 /** Owns all writers. Observation methods never throw into the DSH pipeline. */
-export class DshOrcaRecorder {
+export class DshAgenticReplayRecorder {
   readonly instanceId = `pid_${process.pid}_${randomBytes(12).toString('hex')}`
   readonly diagnostics = { unattributed: 0, auxiliary: 0, lateResults: 0, unsupportedChunks: 0 }
   readonly #traces = new Map<string, ActiveTrace>()
@@ -53,12 +43,12 @@ export class DshOrcaRecorder {
   #shutdown?: Promise<void>
   #unavailable = false
   #unavailableReason: string | undefined
-  constructor(readonly config: OrcaConfig, readonly withIndex: WithOrcaIndex, private readonly deps: OrcaRecorderDependencies = {}) {}
+  constructor(readonly config: AgenticReplayConfig, readonly withIndex: WithAgenticReplayIndex, private readonly deps: AgenticReplayRecorderDependencies = {}) {}
   status(sessionId: string) {
     const trace = this.#traces.get(sessionId)
     return { capability: !this.config.enabled ? 'disabled' : this.#unavailable ? 'unavailable' : 'available',
       trace: trace === undefined ? null : { ...trace.row }, persistenceFailed: trace?.persistenceFailed ?? false,
-      diagnostics: { ...this.diagnostics }, unavailableReason: this.#unavailableReason, capture: ORCA_CAPTURE }
+      diagnostics: { ...this.diagnostics }, unavailableReason: this.#unavailableReason, capture: AGENTICREPLAY_CAPTURE }
   }
   #fail(trace: ActiveTrace, code: string) {
     trace.accepting = false
@@ -68,7 +58,7 @@ export class DshOrcaRecorder {
   }
   #safe(trace: ActiveTrace, operation: () => void) {
     if (trace.sealed) return
-    try { operation() } catch (error) { this.#fail(trace, orcaErrorCode(error)) }
+    try { operation() } catch (error) { this.#fail(trace, agenticReplayErrorCode(error)) }
   }
   #reserve(trace: ActiveTrace, bytes: number): boolean {
     if (trace.pendingBytes + bytes > this.config.maxQueuedBytesPerTrace || this.#bytes + bytes > this.config.maxQueuedBytesTotal) {
@@ -81,15 +71,15 @@ export class DshOrcaRecorder {
     try { await this.withIndex(store => store.save({ ...trace.row })) }
     catch { trace.persistenceFailed = true; this.#fail(trace, 'index_persistence_failed') }
   }
-  #admit(binding: DshOrcaBinding, explicit = false): ActiveTrace | undefined {
+  #admit(binding: DshAgenticReplayBinding, explicit = false): ActiveTrace | undefined {
     if (!this.config.enabled || !this.#accepting || this.#unavailable) return undefined
     const existing = this.#traces.get(binding.sessionId)
     if (existing && (existing.binding.workspaceRoot !== binding.workspaceRoot || existing.binding.sessionCwd !== binding.sessionCwd || existing.binding.storeRoot !== binding.storeRoot)) return undefined
     if (existing && !explicit) return existing.accepting ? existing : undefined
     if (existing && !existing.sealed) return existing.accepting ? existing : undefined
-    if ([...this.#traces.values()].filter(t => !t.sealed).length >= this.config.maxOpenTraces) throw new OrcaError('open_trace_limit')
+    if ([...this.#traces.values()].filter(t => !t.sealed).length >= this.config.maxOpenTraces) throw new AgenticReplayError('open_trace_limit')
     const trace: ActiveTrace = { binding: Object.freeze({ ...binding }),
-      row: { orca_run_id: `run_${randomBytes(12).toString('hex')}`, dsh_session_id: binding.sessionId,
+      row: { agenticreplay_run_id: `run_${randomBytes(12).toString('hex')}`, dsh_session_id: binding.sessionId,
         recorder_instance_id: this.instanceId, recording_generation: randomBytes(12).toString('hex'), workspace_key: workspaceKey(binding.workspaceRoot),
         store_root: binding.storeRoot, session_cwd: binding.sessionCwd, capture_format_version: 1, state: 'starting',
         started_at: new Date().toISOString(), ended_at: null, last_error_code: null, missing_event_count: 0,
@@ -97,30 +87,30 @@ export class DshOrcaRecorder {
       tail: Promise.resolve(), accepting: true, sealed: false, pendingBytes: 0, active: 0, waiters: new Set(), persistenceFailed: false, modelCleanups: new Set() }
     this.#traces.set(binding.sessionId, trace)
     trace.tail = this.#initialize(trace)
-    this.#enqueue(trace, { type: 'run.start', actor: 'harness', payload: { ...ORCA_CAPTURE, reasoning: this.config.capture.reasoning,
-      content: this.config.capture.content, verifiedDshVersion: '0.1.2-rc.1' } })
+    this.#enqueue(trace, { type: 'run.start', actor: 'harness', payload: { ...AGENTICREPLAY_CAPTURE, reasoning: this.config.capture.reasoning,
+      content: this.config.capture.content, verifiedDshVersion: '0.2.1-alpha.2' } })
     return trace
   }
   async #initialize(trace: ActiveTrace) {
     try {
       // Dependency validation precedes any filesystem/index side effects.
-      let create: typeof TraceWriter.create
-      let orcaVersion: string
+      let create: CreateTraceWriter
+      let agenticreplayVersion: string
       try {
-        const [core, , version] = await Promise.all([this.deps.loadCore?.() ?? import('@orcareplay/core'), this.deps.loadSchema?.() ?? import('@orcareplay/schema'), this.deps.loadCoreVersion?.() ?? installedCoreVersion()])
+        const [core, , version] = await Promise.all([this.deps.loadCore?.() ?? loadAgenticReplayLibrary('core'), this.deps.loadSchema?.() ?? loadAgenticReplayLibrary('schema'), this.deps.loadCoreVersion?.() ?? installedAgenticReplayCoreVersion()])
         create = this.deps.createWriter ?? core.TraceWriter.create
-        orcaVersion = version
+        agenticreplayVersion = version
       } catch { this.markUnavailable('dependency_unavailable_reinstall_package'); trace.accepting = false; this.#traces.delete(trace.binding.sessionId); return }
       await this.#save(trace)
       if (trace.persistenceFailed) return
-      const runs = await prepareOrcaParent(trace.binding.storeRoot)
-      await mkdir(join(runs, trace.row.orca_run_id), { mode: 0o700 }) // exclusive reservation, never append to an existing run
-      trace.writer = await create(runs, { runId: trace.row.orca_run_id, adapter: { id: 'kiokuko-dsh' },
-        argv: [], cwd: trace.binding.sessionCwd, orcaVersion, envAllowlist: [] })
+      const runs = await prepareAgenticReplayParent(trace.binding.storeRoot)
+      await mkdir(join(runs, trace.row.agenticreplay_run_id), { mode: 0o700 }) // exclusive reservation, never append to an existing run
+      trace.writer = await create(runs, { runId: trace.row.agenticreplay_run_id, adapter: { id: 'kiokuko-dsh' },
+        argv: [], cwd: trace.binding.sessionCwd, agenticreplayVersion, envAllowlist: [] })
       if (trace.row.last_error_code === null) trace.row.state = 'recording'
-      trace.row.recorded_bytes = await orcaDiskBytes(trace.writer.runDir, this.config.maxTraceBytes)
+      trace.row.recorded_bytes = await agenticReplayDiskBytes(trace.writer.runDir, this.config.maxTraceBytes)
       await this.#save(trace)
-    } catch (error) { this.#fail(trace, orcaErrorCode(error)); await this.#save(trace) }
+    } catch (error) { this.#fail(trace, agenticReplayErrorCode(error)); await this.#save(trace) }
   }
   #enqueue(trace: ActiveTrace, event: EventInit, cause?: Ref): Ref {
     const ref: Ref = {}
@@ -133,31 +123,31 @@ export class DshOrcaRecorder {
       if (!trace.writer) return
       try {
         // Reserve conservatively for JSON/blob/redaction overhead, then measure real files.
-        if (trace.row.recorded_bytes + bytes * 4 + 16_384 > this.config.maxTraceBytes) throw new OrcaError('trace_limit')
-        if (cause && cause.seq === undefined) throw new OrcaError('missing_cause')
+        if (trace.row.recorded_bytes + bytes * 4 + 16_384 > this.config.maxTraceBytes) throw new AgenticReplayError('trace_limit')
+        if (cause && cause.seq === undefined) throw new AgenticReplayError('missing_cause')
         const saved = await trace.writer.append({ ...event, occurredAt, ...(cause ? { causes: [cause.seq!] } : {}) })
         ref.seq = saved.seq
-        trace.row.recorded_bytes = await orcaDiskBytes(trace.writer.runDir, this.config.maxTraceBytes)
-      } catch (error) { this.#fail(trace, orcaErrorCode(error)) }
+        trace.row.recorded_bytes = await agenticReplayDiskBytes(trace.writer.runDir, this.config.maxTraceBytes)
+      } catch (error) { this.#fail(trace, agenticReplayErrorCode(error)) }
     }).finally(() => this.#release(trace, bytes))
     return ref
   }
-  #link(trace: ActiveTrace, binding: DshOrcaBinding) {
+  #link(trace: ActiveTrace, binding: DshAgenticReplayBinding) {
     if (binding.kiokukoRunId === undefined) return
     // No growing in-memory logical-run set; SQLite's PK performs deduplication.
     const id = binding.kiokukoRunId
     trace.tail = trace.tail.then(async () => {
-      try { await this.withIndex(store => store.link(trace.row.orca_run_id, id)) }
+      try { await this.withIndex(store => store.link(trace.row.agenticreplay_run_id, id)) }
       catch { trace.persistenceFailed = true; this.#fail(trace, 'index_persistence_failed') }
     })
   }
-  start(binding: DshOrcaBinding): void { this.#admit(binding, true) }
+  start(binding: DshAgenticReplayBinding): void { this.#admit(binding, true) }
   markUnavailable(reason: string): void { this.#unavailable = true; this.#unavailableReason = reason; this.#accepting = false }
   #settle(trace: ActiveTrace) {
     trace.active--
     if (trace.active === 0) for (const resolve of trace.waiters) resolve()
   }
-  stream<T>(binding: DshOrcaBinding | undefined, options: Record<string, any>, next: () => AsyncIterable<T>): AsyncIterable<T> {
+  stream<T>(binding: DshAgenticReplayBinding | undefined, options: Record<string, any>, next: () => AsyncIterable<T>): AsyncIterable<T> {
     const self = this
     return (async function* () {
       let trace: ActiveTrace | undefined
@@ -199,7 +189,7 @@ export class DshOrcaRecorder {
               const v = record(value)
               if (v.omitted) return
               const n = c.index
-              if (!Number.isSafeInteger(n) || n < 0) throw new OrcaError('unsupported_chunk')
+              if (!Number.isSafeInteger(n) || n < 0) throw new AgenticReplayError('unsupported_chunk')
               if (blocks.get(n)?.closed) return
               if (self.config.capture.content === 'metadata') {
                 if (!blocks.has(n)) {
@@ -212,7 +202,7 @@ export class DshOrcaRecorder {
                 return
               }
               const text = v.text ?? v.arguments ?? ''
-              if (typeof text !== 'string') throw new OrcaError('unsupported_chunk')
+              if (typeof text !== 'string') throw new AgenticReplayError('unsupported_chunk')
               const bytes = text.length * 6 + (blocks.has(n) ? 0 : 256)
               if (!self.#reserve(trace!, bytes)) return
               heldBytes += bytes
@@ -236,7 +226,7 @@ export class DshOrcaRecorder {
           self.#release(trace, heldBytes); heldBytes = 0
           self.#safe(trace, () => {
             if (finish === undefined && !failure) self.#fail(trace!, 'model_finish_missing')
-            const payload = projectOrcaJson({ format: 'dsh.llm.response.v1', blocks: [...blocks.values()] }, self.config.maxQueuedBytesPerTrace)
+            const payload = projectAgenticReplayJson({ format: 'dsh.llm.response.v1', blocks: [...blocks.values()] }, self.config.maxQueuedBytesPerTrace)
             self.#enqueue(trace!, { type: 'model.response', actor: 'model', attrs: { modelCallId: id,
               stop_reason: finish ?? (failure ? 'exception' : 'incomplete'), duration_ms: performance.now() - started,
               ...(usage === undefined ? { usage_known: false } : record(usage)) }, payload: payload as Record<string, unknown> }, ref)
@@ -246,14 +236,14 @@ export class DshOrcaRecorder {
       }
     })()
   }
-  preTool(binding: DshOrcaBinding | undefined, exec: OrcaToolExecution, startObserved = true): void {
+  preTool(binding: DshAgenticReplayBinding | undefined, exec: AgenticReplayToolExecution, startObserved = true): void {
     try {
       this.#seenTokens.add(exec.token as unknown as object)
       if (!binding || this.#attempts.has(exec.token)) return
       const trace = this.#admit(binding)
       if (!trace) return
       this.#safe(trace, () => {
-        const projected = this.config.capture.content === 'metadata' ? undefined : projectOrcaJson(exec.arguments, this.config.maxQueuedBytesPerTrace)
+        const projected = this.config.capture.content === 'metadata' ? undefined : projectAgenticReplayJson(exec.arguments, this.config.maxQueuedBytesPerTrace)
         const name = label(exec.name), callId = label(exec.callId), rootCallId = label(exec.rootCallId)
         if (!this.#reserve(trace, 512)) return
         const id = randomBytes(12).toString('hex')
@@ -267,7 +257,7 @@ export class DshOrcaRecorder {
       })
     } catch { this.diagnostics.unattributed++ }
   }
-  toolDecision(exec: OrcaToolExecution, decision: unknown): void {
+  toolDecision(exec: AgenticReplayToolExecution, decision: unknown): void {
     const attempt = this.#attempts.get(exec.token)
     if (!attempt) return
     this.#safe(attempt.trace, () => {
@@ -275,18 +265,18 @@ export class DshOrcaRecorder {
       this.#enqueue(attempt.trace, { type: 'note', actor: 'harness', attrs: { attemptId: attempt.id, decision: label(record(decision).kind), phase: attempt.phase } })
     })
   }
-  toolDispatch(exec: OrcaToolExecution): void {
+  toolDispatch(exec: AgenticReplayToolExecution): void {
     const attempt = this.#attempts.get(exec.token)
     if (attempt) { attempt.started = performance.now(); attempt.phase = 'dispatching' }
   }
-  toolDispatched(exec: OrcaToolExecution): void {
+  toolDispatched(exec: AgenticReplayToolExecution): void {
     const attempt = this.#attempts.get(exec.token)
     if (attempt) this.#safe(attempt.trace, () => {
       this.#enqueue(attempt.trace, { type: 'note', actor: 'harness', attrs: { attemptId: attempt.id, dispatch_duration_ms: performance.now() - attempt.started! } })
       attempt.phase = 'final_result_pending'
     })
   }
-  toolResult(binding: DshOrcaBinding | undefined, exec: OrcaToolExecution, result: unknown): void {
+  toolResult(binding: DshAgenticReplayBinding | undefined, exec: AgenticReplayToolExecution, result: unknown): void {
     let attempt = this.#attempts.get(exec.token)
     if (!attempt) {
       if (this.#seenTokens.has(exec.token as unknown as object)) { this.diagnostics.lateResults++; return }
@@ -300,9 +290,9 @@ export class DshOrcaRecorder {
     this.#release(trace, bytes)
     this.#safe(trace, () => {
       const r = record(result)
-      if (typeof r.isError !== 'boolean') throw new OrcaError('unsupported_tool_result')
+      if (typeof r.isError !== 'boolean') throw new AgenticReplayError('unsupported_tool_result')
       this.#enqueue(trace, { type: 'tool.result', actor: 'tool', attrs: { name: label(exec.name), attemptId: id, is_error: r.isError },
-        payload: projectOrcaJson({ content: projectBlocks(r.content, this.config) }, this.config.maxQueuedBytesPerTrace) as Record<string, unknown> }, ref)
+        payload: projectAgenticReplayJson({ content: projectBlocks(r.content, this.config) }, this.config.maxQueuedBytesPerTrace) as Record<string, unknown> }, ref)
     })
     this.#settle(trace)
   }
@@ -335,14 +325,14 @@ export class DshOrcaRecorder {
     await trace.tail
     if (this.#unavailable && !trace.writer) return
     try {
-      if (!trace.writer) throw new OrcaError('writer_unavailable')
+      if (!trace.writer) throw new AgenticReplayError('writer_unavailable')
       await trace.writer.close() // no invented process exit code
-      const scan = await scanOrcaTrace(trace.writer.runDir, trace.row.orca_run_id, this.config.maxTraceBytes, Number.MAX_SAFE_INTEGER)
+      const scan = await scanAgenticReplayTrace(trace.writer.runDir, trace.row.agenticreplay_run_id, this.config.maxTraceBytes, Number.MAX_SAFE_INTEGER)
       trace.row.event_count = scan.eventCount
       trace.row.export_input_bytes = scan.exportInputBytes
-      trace.row.recorded_bytes = await orcaDiskBytes(trace.writer.runDir, this.config.maxTraceBytes)
+      trace.row.recorded_bytes = await agenticReplayDiskBytes(trace.writer.runDir, this.config.maxTraceBytes)
       trace.row.state = trace.row.last_error_code === null ? 'completed' : 'incomplete'
-    } catch (error) { trace.row.state = 'failed'; trace.row.last_error_code ??= orcaErrorCode(error) }
+    } catch (error) { trace.row.state = 'failed'; trace.row.last_error_code ??= agenticReplayErrorCode(error) }
     trace.row.ended_at = new Date().toISOString()
     await this.#save(trace)
     if (trace.persistenceFailed && trace.row.state === 'completed') trace.row.state = 'incomplete'

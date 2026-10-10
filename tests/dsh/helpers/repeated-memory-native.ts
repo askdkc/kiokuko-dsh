@@ -118,7 +118,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     return context.provide('userQuestions', { async ask(request: any) {
       return { answers: request.questions.map((question: any) => {
         if (/^(boundary-|loop-|effect-)/u.test(question.id)) throw new Error(`Unexpected workflow hold: ${question.id}: ${question.detail}`)
-        const selected = question.id === 'kioku-orca-recording' ? '記録しない' : question.id === 'kiokuko-plan-confirmation' ? 'approve'
+        const selected = question.id === 'kioku-agenticreplay-recording' ? '記録しない' : question.id === 'kiokuko-plan-confirmation' ? 'approve'
           : modelSelectionAnswer(question) ?? 'debug'
         return { id: question.id, selected: [selected] }
       }) }
@@ -126,7 +126,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   } }))
   const adapter = createDshHostAdapter(ctx, { repositoryRoot: root, databasePath: join(root, '.git', 'state.sqlite3'),
     ...options,
-    modelRoutes: mockModelRoutes, orca: { enabled: false }, efficiency: { observe: true }, finalization: { inputMode },
+    modelRoutes: mockModelRoutes, agenticReplay: { enabled: false }, efficiency: { observe: true }, finalization: { inputMode },
     advisory: { verifyReadOnly: () => true, execute: async call => ({ slotId: call.slotId, outcome: 'completed', summary: 'Reviewed the immutable fixture contract.', recommendations: [], risks: [], evidence: [] }) },
     llm: { async *stream(request) {
       if (/^(Extract up to|Return JSON array|Check each supplied)/.test(request.system ?? '')) {

@@ -51,7 +51,7 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
     plugin === systemPrompt ? { persona: '' } : plugin === workingDirectory ? { defaultDirectory: root } : plugin === fsLocal ? { cwd: root } : plugin === tools ? { mode: 'native' } : undefined)
   await ctx.plugin(loop.default, { agents: [] }); await ctx.plugin(spawn, { providerName: 'spawn' })
   ctx.llm.registerAdapter(['mock'], provider)
-  const adapter = createDshHostAdapter(ctx, {  repositoryRoot: root, databasePath, modelRoutes: [{ provider: 'mock', family: 'other', connection: 'api', protocol: 'chat-completions' }], orca: { enabled: false }, deepPlanning: { budget: { maxConcurrentAgents: 1 } } })
+  const adapter = createDshHostAdapter(ctx, {  repositoryRoot: root, databasePath, modelRoutes: [{ provider: 'mock', family: 'other', connection: 'api', protocol: 'chat-completions' }], agenticReplay: { enabled: false }, deepPlanning: { budget: { maxConcurrentAgents: 1 } } })
   const composition = await mountDshComposition(ctx, adapter.host)
   const parent = await ctx.agentLoop.create(session.SessionId('deep-parent'), { provider: 'mock', model: 'mock' }, { cwd: root })
   const parentScope = scope.createScope(ctx, parent); parent.ctx = parentScope.ctx; const releaseNative = parent.ctx.get('tools').presentAs('native')
@@ -222,7 +222,7 @@ test('Deep native: Web model selection overrides initial Agent options before an
     assert.equal(fixture.provider.requests.length, 0)
   } finally { await fixture.close() }
 })
-test('Deep native: zero tokens and request exhaustion still deliver partial answers with Orca disabled', nativeOptions, async () => {
+test('Deep native: zero tokens and request exhaustion still deliver partial answers with AgenticReplay disabled', nativeOptions, async () => {
   for(const budget of [{maxTotalTokens:0},{maxModelRequests:1}]) {
     const fixture=await deepNativeFixture(mock=>[mock.textResponse('{"kind":"leaf","reason":"A bounded question"}')],{budget})
     try {
@@ -367,16 +367,16 @@ test('Deep native: unavailable models pause without silently choosing another mo
 })
 test('Deep native: child recordings inherit only the exact parent choice and link to the Deep run',nativeOptions,async()=>{
   let asked=0
-  const f=await deepNativeFixture(mock=>[mock.textResponse('{"kind":"leaf","reason":"bounded"}'),mock.textResponse('{"kind":"candidate","answer":"A recorded plan","evidence":[],"assumptions":[],"unresolved":[]}'),mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),mock.textResponse('{"schemaVersion":1,"memories":[]}')],{orca:true,questions:async()=>{asked++;throw new Error('Children must not ask')}})
+  const f=await deepNativeFixture(mock=>[mock.textResponse('{"kind":"leaf","reason":"bounded"}'),mock.textResponse('{"kind":"candidate","answer":"A recorded plan","evidence":[],"assumptions":[],"unresolved":[]}'),mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),mock.textResponse('{"schemaVersion":1,"memories":[]}')],{agenticReplay:true,questions:async()=>{asked++;throw new Error('Children must not ask')}})
   try{
-    const recording=await f.command('/kioku-orca start');assert.equal(recording.result.kind,'success',JSON.stringify(recording))
+    const recording=await f.command('/kioku-agenticreplay start');assert.equal(recording.result.kind,'success',JSON.stringify(recording))
     await f.command('/deep-planning Create a recorded plan');const intent=await f.complete()
-    await f.command('/kioku-orca stop')
+    await f.command('/kioku-agenticreplay stop')
     let evidence!: { choices: { dsh_session_id: string }[]; traces: { dsh_session_id: string; state: string; kiokuko_run_id: string }[] }
     for (let attempt = 0; attempt < 200; attempt++) {
       evidence = await f.deep.store.database(db => ({
-        choices: db.prepare('SELECT dsh_session_id FROM dsh_orca_session_choices').all<{ dsh_session_id: string }>(),
-        traces: db.prepare('SELECT t.dsh_session_id,t.state,l.kiokuko_run_id FROM dsh_orca_traces t JOIN dsh_orca_trace_run_links l USING(orca_run_id) WHERE t.dsh_session_id<>?').all<{ dsh_session_id: string; state: string; kiokuko_run_id: string }>(f.parent.session.id),
+        choices: db.prepare('SELECT dsh_session_id FROM dsh_agenticreplay_session_choices').all<{ dsh_session_id: string }>(),
+        traces: db.prepare('SELECT t.dsh_session_id,t.state,l.kiokuko_run_id FROM dsh_agenticreplay_traces t JOIN dsh_agenticreplay_trace_run_links l USING(agenticreplay_run_id) WHERE t.dsh_session_id<>?').all<{ dsh_session_id: string; state: string; kiokuko_run_id: string }>(f.parent.session.id),
       }))
       const expected = evidence.traces.filter(trace => trace.kiokuko_run_id === intent!.runId && trace.state === 'completed')
       if (expected.length === 3) break

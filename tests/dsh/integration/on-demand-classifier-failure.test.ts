@@ -21,7 +21,7 @@ const installed = existsSync(join(packages, '@deepseek-ai/dsh-tools/lib/index.js
 if (!installed && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Native runtime required for classifier failure tests')
 
 for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) for (const web of [false, true]) {
-  test(`on-demand full native: ${fault} classifier with Orca recording permits ${web ? 'automatic web search' : 'an ordinary answer'} without purpose UI`, { skip: !installed, timeout: 30_000 }, async () => {
+  test(`on-demand full native: ${fault} classifier with AgenticReplay recording permits ${web ? 'automatic web search' : 'an ordinary answer'} without purpose UI`, { skip: !installed, timeout: 30_000 }, async () => {
     const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
     const [cordis, llm, session, projection, prompt, tools, agents, loop, skills] = await Promise.all([
       'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop', 'dsh-skill',
@@ -52,7 +52,7 @@ for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) for 
       const mock = nativeMock(llm), provider = new mock.MockAdapter([...(web ? [mock.toolCallResponse('first-search', 'web_search', { queries: ['VMware Tools critical CVE'] })] : []), mock.textResponse('SCRIPTED_ORDINARY_ANSWER')])
       ctx.llm.registerAdapter(['fixture'], provider)
       adapter = createDshHostAdapter(ctx, { repositoryRoot: root, databasePath, decisions,
-        orca: { enabled: true }, answerReview: { mode: 'off' }, deepPlanning: { enabled: false }, modelAutoMode: { mode: 'off' } })
+        agenticReplay: { enabled: true }, answerReview: { mode: 'off' }, deepPlanning: { enabled: false }, modelAutoMode: { mode: 'off' } })
       composition = await mountDshComposition(ctx, adapter.host)
       handle = await ctx.agents.create({ sessionId: session.SessionId(`fault-${fault}`), agentOptions: { provider: 'fixture', model: 'mock' }, meta: { cwd: root } })
       const task = web ? 'vmware toolsの最新の脆弱性でクリティカルレベルのものある？' : 'Why is the sky blue?'

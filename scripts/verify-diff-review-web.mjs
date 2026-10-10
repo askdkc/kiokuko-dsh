@@ -33,7 +33,7 @@ const patch = join(base, 'patch.yml')
 await writeFile(patch, `- id: kiokuko-dsh
   config:
     enabled: true
-    orca: { enabled: false }
+    agenticReplay: { enabled: false }
 - insert:
     - id: diff-review-workspace-fixture
       name: ${JSON.stringify(fixture)}

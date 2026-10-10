@@ -2,7 +2,7 @@ import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator
 import { realpathSync } from 'node:fs'
 import { createDecisionService } from './decisions/host.js'
 import { startupRecoveryMessage } from './startup-recovery.js'
-import { mountDshOrcaCommand } from './orca-command-surface.js'
+import { mountDshAgenticReplayCommand } from './agenticreplay-command-surface.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { Config as BusinessConfig, type Config as DshConfig } from './config.js'
 import { nativeApprovalConfig, bindApprovalConfig } from './live-approval-config.js'
@@ -116,16 +116,16 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       if (host.configureToolExposure !== undefined) host.configureToolExposure(resolvedConfig.toolExposure)
       else if (resolvedConfig.toolExposure.mode !== 'full' && (host.tools !== undefined || host.toolHost !== undefined)) console.warn('[kiokuko-dsh] [warn] toolExposure left the explicit host surface unchanged: unsupported_runtime')
       let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
-      let disposeOrcaCommand: (() => void) | undefined
+      let disposeAgenticReplayCommand: (() => void) | undefined
       let disposeExport: (() => Promise<void>) | undefined
       let shutdown: Promise<void> | undefined
       const shutdownHost = host
       const cleanup = () => shutdown ??= (async () => {
         composition?.stopIngress()
         modelHandoff?.stop()
-        disposeOrcaCommand?.()
+        disposeAgenticReplayCommand?.()
         const failures: unknown[] = []
-        try { await shutdownHost.orca?.shutdown() } catch (error) { failures.push(error) }
+        try { await shutdownHost.agenticReplay?.shutdown() } catch (error) { failures.push(error) }
         try { await disposeExport?.() } catch (error) { failures.push(error) }
         try { await modelHandoff?.drain() } catch (error) { failures.push(error) }
         try { await composition?.dispose() } catch (error) { failures.push(error) }
@@ -133,7 +133,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       })()
       try {
         composition = await mountDshComposition(ctx, host, resolvedConfig.lisp, skillPrompts)
-        disposeOrcaCommand = host.commands === undefined ? undefined : mountDshOrcaCommand({ commands: host.commands }, resolvedConfig.orca.enabled, host.orca)
+        disposeAgenticReplayCommand = host.commands === undefined ? undefined : mountDshAgenticReplayCommand({ commands: host.commands }, resolvedConfig.agenticReplay.enabled, host.agenticReplay)
         disposeExport = host.sessionExport === undefined || tuiProfile ? undefined
           : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, host.sessionExport)
         return cleanup
@@ -149,21 +149,21 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
         ...(ctx.get('systemPrompt', false) === undefined ? {} : { systemPrompt: ctx.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] }),
       } as DshCompositionHost, resolvedConfig.lisp, skillPrompts)
       const commands = ctx.get('commands', false) as DshCompositionHost['commands']
-      const disposeCommand = commands === undefined ? undefined : mountDshOrcaCommand({ commands }, resolvedConfig.orca.enabled)
+      const disposeCommand = commands === undefined ? undefined : mountDshAgenticReplayCommand({ commands }, resolvedConfig.agenticReplay.enabled)
       return () => { disposeCommand?.(); return composition.dispose() }
     }
     if (runtimeServices.some((service) => service === undefined)) {
       throw new Error('kiokuko-dsh native tools, sessions, and agents must be provided together')
     }
-    const adapter = createDshHostAdapter(ctx, { intakeMode: resolvedConfig.intakeMode, answerReview: resolvedConfig.answerReview, completion: resolvedConfig.completion, typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, modelHandoff: resolvedConfig.modelHandoff, modelAutoMode: resolvedConfig.modelAutoMode, observationPack: resolvedConfig.observationPack, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, orca: resolvedConfig.orca, toolExposure: resolvedConfig.toolExposure, modelRoutes: resolvedConfig.modelRoutes, diffReview: resolvedConfig.diffReview,
+    const adapter = createDshHostAdapter(ctx, { intakeMode: resolvedConfig.intakeMode, answerReview: resolvedConfig.answerReview, completion: resolvedConfig.completion, typedDecisions: resolvedConfig.typedDecisions, memoryReuse: resolvedConfig.memoryReuse, semanticCompaction: resolvedConfig.semanticCompaction, modelHandoff: resolvedConfig.modelHandoff, modelAutoMode: resolvedConfig.modelAutoMode, observationPack: resolvedConfig.observationPack, skillPrompts, deepPlanning: resolvedConfig.deepPlanning, agenticReplay: resolvedConfig.agenticReplay, toolExposure: resolvedConfig.toolExposure, modelRoutes: resolvedConfig.modelRoutes, diffReview: resolvedConfig.diffReview,
       ennoMemory: resolvedConfig.ennoMemory, memoryRetrieval: resolvedConfig.memoryRetrieval, akinatorMemory: resolvedConfig.akinatorMemory, efficiency: resolvedConfig.efficiency, continuity: resolvedConfig.continuity, finalization: resolvedConfig.finalization, memoryEvolution: resolvedConfig.memoryEvolution, memoryIndexReasoning: resolvedConfig.memoryIndexReasoning, autoGlobalization: resolvedConfig.autoGlobalization, memoryReview: resolvedConfig.memoryReview })
     let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
-    let disposeOrcaCommand: (() => void) | undefined
+    let disposeAgenticReplayCommand: (() => void) | undefined
     let disposeExport: (() => Promise<void>) | undefined
     let shutdown: Promise<void> | undefined
     const cleanup = () => shutdown ??= (async () => {
       composition?.stopIngress()
-      disposeOrcaCommand?.()
+      disposeAgenticReplayCommand?.()
       const failures: unknown[] = []
       try { await composition?.drainLisp() } catch (error) { failures.push(error) }
       try { await disposeExport?.() } catch (error) { failures.push(error) }
@@ -174,7 +174,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     })()
     try {
       composition = await mountDshComposition(ctx, adapter.host, resolvedConfig.lisp, skillPrompts)
-      disposeOrcaCommand = adapter.host.commands === undefined ? undefined : mountDshOrcaCommand({ commands: adapter.host.commands }, resolvedConfig.orca.enabled, adapter.host.orca)
+      disposeAgenticReplayCommand = adapter.host.commands === undefined ? undefined : mountDshAgenticReplayCommand({ commands: adapter.host.commands }, resolvedConfig.agenticReplay.enabled, adapter.host.agenticReplay)
       disposeExport = adapter.host.sessionExport === undefined || tuiProfile ? undefined
         : (await import('./session-log-surface.js')).mountDshSessionExportSurface(ctx, adapter.host.sessionExport)
       return cleanup
@@ -182,9 +182,9 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
   }, 'kiokuko-dsh composition')
 }
 
-export type * from './orca-types.js'
-export { DshOrcaRecorder } from './orca-recorder.js'
-export { DshOrcaStore } from './orca-store.js'
+export type * from './agenticreplay-types.js'
+export { DshAgenticReplayRecorder } from './agenticreplay-recorder.js'
+export { DshAgenticReplayStore } from './agenticreplay-store.js'
 
 export * from '../memory/evolution/contracts.js'
 

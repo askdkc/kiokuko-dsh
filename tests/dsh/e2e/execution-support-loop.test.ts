@@ -61,12 +61,12 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     return context.provide('userQuestions', { async ask(request: DshUserQuestionRequest) {
       return { answers: request.questions.map(q => {
         questions.push({ id: q.id, agentId: request.agent?.id })
-        return { id: q.id, selected: [q.id === 'kioku-orca-recording' ? '記録しない' : mode] }
+        return { id: q.id, selected: [q.id === 'kioku-agenticreplay-recording' ? '記録しない' : mode] }
       }) }
     } })
   } }); await questionFiber
   const options = { repositoryRoot: root, databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
-    orca: { askOnStart: true },
+    agenticReplay: { askOnStart: true },
     llm: { async *stream() { throw new Error('Memory backend deliberately unavailable after completion') } } }
   let adapter = createDshHostAdapter(ctx, options)
   let composition = await mountDshComposition(ctx, adapter.host)
@@ -89,7 +89,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
         events: target.session.snapshotEvents().filter((event: any) => ['turn/end', 'tool/result'].includes(event.type)).slice(-5), requests: model.requests.length, reads, writes }))
     }
     await settle(agent, 'こんにちは', () => model.requests.length === 1)
-    const expectedQuestions = [{ id: 'kioku-orca-recording', agentId: agent.id }]
+    const expectedQuestions = [{ id: 'kioku-agenticreplay-recording', agentId: agent.id }]
     assert.deepEqual(questions, expectedQuestions, 'first chat asks only for the session recording choice')
     await settle(agent, '雑談を続けよう', () => model.requests.length === 2)
     const task = (mode === 'research' ? '資料を調査して根拠を報告してください。' : '資料を参照して記事を書いてください。')
@@ -109,7 +109,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     const other = await ctx.agentLoop.create(session.SessionId('other-session'), { provider: 'execution-mock', model: 'mock' }, { cwd: root })
     otherScope = scope.createScope(ctx, other); other.ctx = otherScope.ctx; releaseOtherNative = other.ctx.get('tools').presentAs('native')
     await settle(other, 'こんにちは', () => model.requests.length === 9)
-    expectedQuestions.push({ id: 'kioku-orca-recording', agentId: other.id })
+    expectedQuestions.push({ id: 'kioku-agenticreplay-recording', agentId: other.id })
     assert.deepEqual(questions, expectedQuestions, 'each session asks once, without task clarification or approval')
     assert.equal(await paused(), true, 'another session cannot clear the pause')
     composition.stopIngress(); await adapter.dispose(); await composition.dispose()

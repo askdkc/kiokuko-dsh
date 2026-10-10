@@ -2,33 +2,33 @@ import assert from 'node:assert/strict'
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
-import { createDshOrcaHost } from '../../../src/dsh/orca-host.js'
-import { mountDshOrcaCommand } from '../../../src/dsh/orca-command-surface.js'
-import { DshOrcaSessionChoices } from '../../../src/dsh/orca-session-choice.js'
+import { createDshAgenticReplayHost } from '../../../src/dsh/agenticreplay-host.js'
+import { mountDshAgenticReplayCommand } from '../../../src/dsh/agenticreplay-command-surface.js'
+import { DshAgenticReplaySessionChoices } from '../../../src/dsh/agenticreplay-session-choice.js'
 import type { DshNativeCommandDefinition } from '../../../src/dsh/commands.js'
 import type { DshUserQuestionAnswer, DshUserQuestions } from '../../../src/dsh/user-interaction.js'
-import { orcaFixture, collect, chunks, request, response } from '../helpers/orca-fixture.js'
+import { agenticReplayFixture, collect, chunks, request, response } from '../helpers/agenticreplay-fixture.js'
 
-const answer = (value: string, id = 'kioku-orca-recording'): DshUserQuestionAnswer => ({ answers: [{ id, selected: value ? [value] : [] }] })
+const answer = (value: string, id = 'kioku-agenticreplay-recording'): DshUserQuestionAnswer => ({ answers: [{ id, selected: value ? [value] : [] }] })
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>(r => { resolve = r })
   return { promise, resolve }
 }
 async function fixture(questions?: DshUserQuestions, interactive = true, askOnStart = true) {
-  const f = await orcaFixture({ askOnStart })
+  const f = await agenticReplayFixture({ askOnStart })
   const session = { id: f.binding.sessionId, header: { cwd: f.root } }
   const agent = { id: 'native-agent', session }
   const listeners = new Map<string, (...args: any[]) => any>()
   const ctx = { on: (name: string, listener: (...args: any[]) => any) => { listeners.set(name, listener); return () => listeners.delete(name) } }
-  const makeHost = () => createDshOrcaHost(ctx as never, f.config, { withDatabase: async (op: any) => op(f.database) } as never, {
+  const makeHost = () => createDshAgenticReplayHost(ctx as never, f.config, { withDatabase: async (op: any) => op(f.database) } as never, {
     session: id => id === session.id ? session : undefined,
     agent: id => id === agent.id ? agent : undefined, logicalRun: () => undefined, ...(questions ? { questions } : {}),
     interactive: () => interactive,
   })
   let host = makeHost()
   let command!: DshNativeCommandDefinition
-  const mount = () => mountDshOrcaCommand({ commands: { register: definition => { command = definition; return () => {} } } }, true, host)
+  const mount = () => mountDshAgenticReplayCommand({ commands: { register: definition => { command = definition; return () => {} } } }, true, host)
   mount()
   const signal = new AbortController().signal
   return { ...f, agent, session, listeners, get host() { return host },
@@ -61,7 +61,7 @@ test('first-step recording choice gates early model/tool observations, deduplica
     const early = { token: Symbol(), callId: 'early', rootCallId: 'early', name: 'read', arguments: {}, agent: f.agent }
     await f.listeners.get('tools/pre-execute')!(early, async () => ({ kind: 'allow' }))
     f.listeners.get('tools/result')!(early, { isError: false, content: [] })
-    await assert.rejects(access(join(f.root, '.orca')))
+    await assert.rejects(access(join(f.root, '.agenticreplay')))
     assert.equal((await f.reader.list(f.binding)).length, 0)
     reply.resolve(answer('記録する'))
     assert.equal(await step, 'native-decision')
@@ -107,7 +107,7 @@ test('declining persists without traces, commands override the choice, and stop 
     await f.step(); await f.stream(); await f.reload(); await f.step(); await f.stream()
     assert.equal(asked, 1)
     assert.equal((await f.command('status --json')).sessionRecording, 'disabled')
-    await assert.rejects(access(join(f.root, '.orca')))
+    await assert.rejects(access(join(f.root, '.agenticreplay')))
     await f.command('start'); await f.stream(); await f.command('stop')
     const rows = await f.reader.list(f.binding)
     assert.equal(rows.length, 1)
@@ -131,7 +131,7 @@ for (const mode of ['missing', 'rejected', 'skipped', 'wrong-id', 'invalid'] as 
     await f.step(); await f.stream()
     assert.equal(asked, mode === 'missing' ? 0 : 1)
     assert.equal((await f.command('status --json')).sessionRecording, 'awaiting_choice')
-    await assert.rejects(access(join(f.root, '.orca')))
+    await assert.rejects(access(join(f.root, '.agenticreplay')))
     await f.command('start'); await f.stream(); await f.command('stop')
     assert.equal((await f.reader.list(f.binding)).length, 1)
   } finally { await f.dispose() }
@@ -160,14 +160,14 @@ for (const action of ['start', 'stop', 'abort', 'shutdown'] as const) test(`${ac
 })
 
 test('session choices cannot cross session, workspace, cwd or storage identities', async () => {
-  const f = await orcaFixture()
+  const f = await agenticReplayFixture()
   try {
     f.store.saveRecordingChoice(f.binding, true)
     assert.equal(f.store.recordingChoice(f.binding), true)
     for (const key of ['sessionId', 'workspaceRoot', 'sessionCwd', 'storeRoot'] as const) {
       assert.equal(f.store.recordingChoice({ ...f.binding, [key]: `${f.binding[key]}-different` }), undefined)
     }
-    const choices = new DshOrcaSessionChoices(f.withIndex, { ask: async () => answer('２') })
+    const choices = new DshAgenticReplaySessionChoices(f.withIndex, { ask: async () => answer('２') })
     const second = { ...f.binding, sessionId: 'second' }
     await choices.prepare(second, { id: 'second-agent' }, new AbortController().signal, () => true)
     assert.equal(f.store.recordingChoice(second), false)
@@ -177,9 +177,9 @@ test('session choices cannot cross session, workspace, cwd or storage identities
 })
 
 test('failed preference storage stays non-recording and visible; explicit start can recover', async () => {
-  const f = await orcaFixture()
+  const f = await agenticReplayFixture()
   let fail = true
-  const choices = new DshOrcaSessionChoices(async op => { if (fail) throw new Error('database unavailable'); return f.withIndex(op) },
+  const choices = new DshAgenticReplaySessionChoices(async op => { if (fail) throw new Error('database unavailable'); return f.withIndex(op) },
     { ask: async () => answer('記録する') })
   try {
     await choices.prepare(f.binding, { id: 'agent' }, new AbortController().signal, () => true)
@@ -190,7 +190,7 @@ test('failed preference storage stays non-recording and visible; explicit start 
     fail = false
     await choices.set(f.binding, true)
     assert.equal(choices.allows(f.binding), true)
-    const silent = new DshOrcaSessionChoices(async () => { throw new Error('database unavailable') }, undefined, false)
+    const silent = new DshAgenticReplaySessionChoices(async () => { throw new Error('database unavailable') }, undefined, false)
     await silent.prepare(f.binding, { id: 'agent' }, new AbortController().signal, () => true)
     assert.equal(silent.allows(f.binding), false, 'a failed default must not record without the saved choice')
     assert.equal((await silent.status(f.binding)).selectionError, 'recording_choice_persistence_failed')
@@ -210,7 +210,7 @@ test('disposed or replaced native identities cannot adopt a late recording answe
       reply.resolve(answer('記録する'))
       await step
       assert.equal(f.store.recordingChoice(f.binding), undefined)
-      await assert.rejects(access(join(f.root, '.orca')))
+      await assert.rejects(access(join(f.root, '.agenticreplay')))
     } finally { await f.dispose() }
   }
 })
@@ -222,7 +222,7 @@ test('managed children do not interrupt work with recording questions or inherit
     f.store.saveRecordingChoice({ ...f.binding, sessionId: 'parent' }, true)
     await f.step(); await f.stream()
     assert.equal(asked, 0)
-    await assert.rejects(access(join(f.root, '.orca')))
+    await assert.rejects(access(join(f.root, '.agenticreplay')))
     await f.command('start'); await f.stream(); await f.reload(); await f.step(); await f.stream()
     assert.equal(asked, 0)
     assert.equal((await f.command('status --json')).sessionRecording, 'enabled')
@@ -246,14 +246,14 @@ test('managed children record without asking when the configuration records by d
 
 test('a delegated child records through its parent choice and stores no decision of its own', async () => {
   let asked = 0
-  const f = await orcaFixture({ askOnStart: false })
+  const f = await agenticReplayFixture({ askOnStart: false })
   const parentSession = { id: 'deep-case-parent', header: { cwd: f.root } }
   const childSession = { id: 'deep-case-worker', header: { cwd: f.root } }
   const parent = { id: 'parent-agent', session: parentSession }
   const child = { id: 'child-agent', session: childSession }
   const listeners = new Map<string, (...args: any[]) => any>()
   const ctx = { on: (name: string, listener: (...args: any[]) => any) => { listeners.set(name, listener); return () => listeners.delete(name) } }
-  const host = createDshOrcaHost(ctx as never, f.config, { withDatabase: async (op: any) => op(f.database) } as never, {
+  const host = createDshAgenticReplayHost(ctx as never, f.config, { withDatabase: async (op: any) => op(f.database) } as never, {
     session: id => [parentSession, childSession].find(session => session.id === id),
     agent: id => [parent, child].find(candidate => candidate.id === id),
     logicalRun: () => undefined,
@@ -268,7 +268,7 @@ test('a delegated child records through its parent choice and stores no decision
     assert.equal(await step(child), 'native-decision')
     assert.equal(asked, 0, 'the default configuration asks no session, and a child never inherits the question')
     // The child's recording authority is the parent, so only the parent stores a decision.
-    const decisions = f.database.prepare('SELECT dsh_session_id FROM dsh_orca_session_choices').all<{ dsh_session_id: string }>()
+    const decisions = f.database.prepare('SELECT dsh_session_id FROM dsh_agenticreplay_session_choices').all<{ dsh_session_id: string }>()
     assert.deepEqual(decisions.map(row => row.dsh_session_id), [parentSession.id])
     // The child still records, because it inherits that exact parent decision.
     await collect(listeners.get('llm/stream')!({ ...request, sessionId: childSession.id }, () => chunks(response())))

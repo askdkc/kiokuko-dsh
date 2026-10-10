@@ -57,7 +57,7 @@ selection and execution ownership still prohibit using both for one request.
 | core | Native identity, Akinator, ledger, scoped memory, shared database lifecycle, configured Skill provider | SOUL, memory reasoning, Japanese output |
 | Enno add-on | Existing role, lease, verification and continuation adapter | Five coding Skills plus Enno |
 | Lisp add-on | Protected runtime, capability fences, approvals, journals, recovery and vendor assets | Five coding Skills plus Lisp |
-| Full compatibility package | Existing setup, commands, browser client, Orca, Deep and advanced memory workflows | Existing complete inventory |
+| Full compatibility package | Existing setup, commands, browser client, AgenticReplay, Deep and advanced memory workflows | Existing complete inventory |
 
 SOUL is a constant configured-core prompt. Selected bundled Skills are delivered
 through the validated loader; other selected installed Skills are requested by
@@ -83,7 +83,7 @@ Enno/Lisp ownership is read by `modules/legacy-bindings.ts` before ordinary
 admission, so removing a module cannot turn protected work into native work.
 
 Enno currently wraps the existing host adapter. Its artifact therefore still
-contains compatibility implementations for Deep, Orca and advanced memory;
+contains compatibility implementations for Deep, AgenticReplay and advanced memory;
 those features are disabled in the module configuration. They remain available
 through the full distribution. The add-on is not yet an independently minimal
 Enno implementation. Shared optional interfaces between Enno and Lisp are

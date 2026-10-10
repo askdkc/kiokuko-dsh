@@ -767,7 +767,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
 test('full native adapter connects to the existing start-laya v1 socket', { skip: process.platform === 'win32' }, async t => {
   const f = await fixture(), ctx = new Context(), socket = await serveLaya(t, request => layaV1Reply(request))
   const adapter = createDshHostAdapter(ctx, { repositoryRoot: f.root, databasePath: f.databasePath,
-    typedDecisions: TypedDecisionsConfig.parse({ 'laya-coreml': { socketPath: socket.path } }), memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, deepPlanning: { enabled: false }, orca: { enabled: false } })
+    typedDecisions: TypedDecisionsConfig.parse({ 'laya-coreml': { socketPath: socket.path } }), memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, deepPlanning: { enabled: false }, agenticReplay: { enabled: false } })
   try {
     const decisions = adapter.host.decisions!
     assert.equal((decisions.status() as any).provider, 'typesafe'); assert.equal(socket.calls(), 0)

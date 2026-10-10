@@ -144,8 +144,8 @@ Memory extraction uses the fixed report, accepted evidence and configuration
 snapshot. It does not borrow an old parent model header or fabricate a native
 turn. It reserves from the same budget, can be visibly skipped, and never
 automatically resends a Deep extraction left uncertain by a crash. Memory or
-Orca failure does not prevent answer delivery. Deep children inherit their
-exact parent's existing Orca choice; they do not prompt or enable capture.
+AgenticReplay failure does not prevent answer delivery. Deep children inherit their
+exact parent's existing AgenticReplay choice; they do not prompt or enable capture.
 
 ## Boundaries and storage
 

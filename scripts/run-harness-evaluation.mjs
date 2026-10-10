@@ -15,13 +15,13 @@ const scenarios = [
   ['never-settling-flush', 'tests/dsh/integration/boundary-worker.test.ts', 'an unresponsive native flush times out without dispatch or an overlapping retry'],
   ['dispatch-replay', 'tests/dsh/integration/boundary-worker.test.ts', 'dispatch-before-observed crash survives worker restart with the same deterministic delivery id'],
   ['compacted-context', 'tests/dsh/integration/context-projection.test.ts', 'compaction and restart reinstate only fragments missing from the retained surface'],
-  ['context-provenance', 'tests/dsh/unit/orca-request-manifest.test.ts', 'Orca metadata records current host section digests without source text or a forged user section'],
+  ['context-provenance', 'tests/dsh/unit/agenticreplay-request-manifest.test.ts', 'AgenticReplay metadata records current host section digests without source text or a forged user section'],
   ['native-resume', 'tests/dsh/e2e/native-agent-loop.test.ts', 'real DSH agent loop: persisted resume, verification retry, completion (text)'],
   ['native-default-resume', 'tests/dsh/e2e/native-agent-loop.test.ts', 'real DSH agent loop: persisted resume, verification retry, completion (default_resume)'],
 ]
 // A fixture change is reviewed with this digest rather than silently changing
 // what the mandatory offline gate measures.
-const EXPECTED_FIXTURE_DIGEST = 'd9dcc13bab74cc48f3d5ac5f8087de7a2f8ae71d210d6d95335934f1870c1308'
+const EXPECTED_FIXTURE_DIGEST = '667019b31ab6fdadb26bdd1f12bd69bf05c516b52eadc6935cc9d67d4103a92a'
 const root = process.cwd()
 const reportPath = resolve(process.env.KIOKUKO_HARNESS_REPORT ?? '.artifacts/harness-report.json')
 await rm(reportPath, { force: true })

@@ -29,7 +29,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
     const previousCwd = process.cwd()
     try {
       process.chdir(workspace)
-      return await ctx.plugin(subject, { enabled: true, skillPrompts: { mode: nextMode }, orca: { enabled: false }, ...extra })
+      return await ctx.plugin(subject, { enabled: true, skillPrompts: { mode: nextMode }, agenticReplay: { enabled: false }, ...extra })
     } finally { process.chdir(previousCwd) }
   }
   const close = async () => {
@@ -63,7 +63,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   const responses: any[] = [], model = new mock.MockAdapter(responses)
   ctx.llm.registerAdapter(['mock'],model)
   if(explicit===true) {
-    adapter = subject.createDshHostAdapter(ctx,{databasePath:join(dir,'state.sqlite3'),repositoryRoot:workspace,orca:{enabled:false}, ...(prompts ? {
+    adapter = subject.createDshHostAdapter(ctx,{databasePath:join(dir,'state.sqlite3'),repositoryRoot:workspace,agenticReplay:{enabled:false}, ...(prompts ? {
       skillPrompts: prompts, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, typedDecisions: { mode: 'off' },
       // Auxiliary finalization must not consume evaluation scripts or provider
       // budgets. Foreground native model and tool dispatch remain unchanged.

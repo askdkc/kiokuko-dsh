@@ -4,22 +4,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openConnection } from '../../../src/db/connection.js'
 import { migrateDatabase } from '../../../src/db/migrate.js'
-import { OrcaConfig } from '../../../src/dsh/config.js'
-import { DshOrcaStore } from '../../../src/dsh/orca-store.js'
-import { DshOrcaRecorder, type OrcaRecorderDependencies } from '../../../src/dsh/orca-recorder.js'
-import { DshOrcaReadService } from '../../../src/dsh/orca-read-service.js'
-import type { DshOrcaBinding, WithOrcaIndex } from '../../../src/dsh/orca-types.js'
+import { AgenticReplayConfig } from '../../../src/dsh/config.js'
+import { DshAgenticReplayStore } from '../../../src/dsh/agenticreplay-store.js'
+import { DshAgenticReplayRecorder, type AgenticReplayRecorderDependencies } from '../../../src/dsh/agenticreplay-recorder.js'
+import { DshAgenticReplayReadService } from '../../../src/dsh/agenticreplay-read-service.js'
+import type { DshAgenticReplayBinding, WithAgenticReplayIndex } from '../../../src/dsh/agenticreplay-types.js'
 import type { z } from 'zod'
-export async function orcaFixture(input: z.input<typeof OrcaConfig> = {}, dependencies: OrcaRecorderDependencies = {}) {
-  const root = realpathSync(await mkdtemp(join(tmpdir(), 'kiokuko-orca-')))
+export async function agenticReplayFixture(input: z.input<typeof AgenticReplayConfig> = {}, dependencies: AgenticReplayRecorderDependencies = {}) {
+  const root = realpathSync(await mkdtemp(join(tmpdir(), 'kiokuko-agenticreplay-')))
   const database = openConnection(join(root, 'index.sqlite3'))
   migrateDatabase(database, join(process.cwd(), 'migrations'))
-  const store = new DshOrcaStore(database)
-  const withIndex: WithOrcaIndex = async operation => await operation(store)
-  const config = OrcaConfig.parse({ shutdownDrainTimeoutMs: 20, ...input })
-  const binding: DshOrcaBinding = { sessionId: 'session-a', workspaceRoot: root, sessionCwd: root, storeRoot: root }
-  const recorder = new DshOrcaRecorder(config, withIndex, dependencies)
-  const reader = new DshOrcaReadService(config, withIndex)
+  const store = new DshAgenticReplayStore(database)
+  const withIndex: WithAgenticReplayIndex = async operation => await operation(store)
+  const config = AgenticReplayConfig.parse({ shutdownDrainTimeoutMs: 20, ...input })
+  const binding: DshAgenticReplayBinding = { sessionId: 'session-a', workspaceRoot: root, sessionCwd: root, storeRoot: root }
+  const recorder = new DshAgenticReplayRecorder(config, withIndex, dependencies)
+  const reader = new DshAgenticReplayReadService(config, withIndex)
   return { root, database, store, withIndex, config, binding, recorder, reader,
     async dispose() { await recorder.shutdown(); database.close(); await rm(root, { recursive: true, force: true }) } }
 }

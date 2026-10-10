@@ -9,7 +9,7 @@
       inject: [skills, systemPrompt, tools, commands, userQuestions, sessions, sessionQuery, sessionPersistence, llm, agents, attachments, subagents, subprocess]
       config:
         enabled: true
-        orca:
+        agenticReplay:
           enabled: true
           # Record each chat without asking; set true to be asked once per chat.
           askOnStart: false

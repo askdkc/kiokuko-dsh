@@ -2,36 +2,54 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile, access, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { TraceReader, TraceWriter } from '@orcareplay/core'
-import { Config, OrcaConfig } from '../../../src/dsh/config.js'
-import { projectOrcaJson } from '../../../src/dsh/orca-security.js'
-import { orcaFixture, chunks, collect, request, response } from '../helpers/orca-fixture.js'
+import { loadAgenticReplayLibrary } from '../../../src/dsh/agenticreplay-libraries.js'
+import { Config, AgenticReplayConfig } from '../../../src/dsh/config.js'
+import { projectAgenticReplayJson } from '../../../src/dsh/agenticreplay-security.js'
+import { agenticReplayFixture, chunks, collect, request, response } from '../helpers/agenticreplay-fixture.js'
 
-test('Orca config records by default, allows explicit opt-out, and rejects invalid finite limits', () => {
-  assert.equal(Config.parse({}).orca.enabled, true)
-  assert.equal(Config.parse({ orca: {} }).orca.enabled, true)
-  assert.equal(Config.parse({ orca: { enabled: false } }).orca.enabled, false)
-  assert.equal(Config.parse({ orca: {} }).orca.capture.reasoning, false)
-  assert.equal(Config.parse({ orca: {} }).orca.askOnStart, false)
-  assert.equal(Config.parse({ orca: { askOnStart: true } }).orca.askOnStart, true)
-  for (const value of [0, -1, Infinity, NaN, 1.2]) assert.equal(OrcaConfig.safeParse({ maxOpenTraces: value }).success, false)
-  assert.equal(OrcaConfig.safeParse({ storage: 'cwd' }).success, false)
+const { TraceReader, TraceWriter } = await loadAgenticReplayLibrary('core')
+
+test('new recordings use the AgenticReplay manifest contract and storage namespace', async () => {
+  const f = await agenticReplayFixture()
+  try {
+    await collect(f.recorder.stream(f.binding, request, () => chunks(response())))
+    await f.recorder.shutdown()
+    const row = (await f.reader.list(f.binding))[0]!
+    assert.equal(row.state, 'completed')
+    const manifest = JSON.parse(await readFile(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'manifest.json'), 'utf8'))
+    assert.equal(typeof manifest.agenticreplay_version, 'string')
+    assert.equal(manifest.orca_version, undefined)
+    await access(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'manifest.json'))
+    await assert.rejects(access(join(f.root, '.orca')))
+  } finally { await f.dispose() }
+})
+
+test('AgenticReplay config records by default, allows explicit opt-out, and rejects invalid finite limits', () => {
+  assert.equal(Config.safeParse({ orca: { enabled: false } }).success, false)
+  assert.equal(Config.parse({}).agenticReplay.enabled, true)
+  assert.equal(Config.parse({ agenticReplay: {} }).agenticReplay.enabled, true)
+  assert.equal(Config.parse({ agenticReplay: { enabled: false } }).agenticReplay.enabled, false)
+  assert.equal(Config.parse({ agenticReplay: {} }).agenticReplay.capture.reasoning, false)
+  assert.equal(Config.parse({ agenticReplay: {} }).agenticReplay.askOnStart, false)
+  assert.equal(Config.parse({ agenticReplay: { askOnStart: true } }).agenticReplay.askOnStart, true)
+  for (const value of [0, -1, Infinity, NaN, 1.2]) assert.equal(AgenticReplayConfig.safeParse({ maxOpenTraces: value }).success, false)
+  assert.equal(AgenticReplayConfig.safeParse({ storage: 'cwd' }).success, false)
 })
 test('disabled recording makes no trace files and does not create a writer', async () => {
   let creates = 0
-  const f = await orcaFixture({ enabled: false }, { createWriter: async () => { creates++; throw new Error('must not load') } })
+  const f = await agenticReplayFixture({ enabled: false }, { createWriter: async () => { creates++; throw new Error('must not load') } })
   try {
     const input = response()
     assert.deepEqual(await collect(f.recorder.stream(f.binding, request, () => chunks(input))), input)
     await f.recorder.shutdown()
     assert.equal(creates, 0)
-    await assert.rejects(access(join(f.root, '.orca')))
+    await assert.rejects(access(join(f.root, '.agenticreplay')))
     assert.equal((await f.reader.list(f.binding)).length, 0)
   } finally { await f.dispose() }
 })
 test('concurrent model calls share a writer, retain identity and causal seqs, preserve cached usage', async () => {
   let creates = 0, nextCalls = 0
-  const f = await orcaFixture({}, { loadCoreVersion: async () => '0.2.99', createWriter: async (...args) => { creates++; assert.deepEqual(args[1].envAllowlist, []); return TraceWriter.create(...args) } })
+  const f = await agenticReplayFixture({}, { loadCoreVersion: async () => '0.2.99', createWriter: async (...args) => { creates++; assert.deepEqual(args[1].envAllowlist, []); return TraceWriter.create(...args) } })
   try {
     const values = Object.freeze(response().map(c => Object.freeze(c)))
     const options = Object.freeze(request)
@@ -46,25 +64,25 @@ test('concurrent model calls share a writer, retain identity and causal seqs, pr
     const rows = await f.reader.list(f.binding)
     assert.equal(rows[0]?.state, 'completed', JSON.stringify(rows))
     const row = rows[0]!
-    const page = await f.reader.show(f.binding, row.orca_run_id)
+    const page = await f.reader.show(f.binding, row.agenticreplay_run_id)
     for (const event of page.events.filter(e => e.type === 'model.response')) {
       const cause = page.events.find(e => e.seq === event.causes?.[0])!
       assert.equal(cause.type, 'model.request')
       assert.equal(cause.attrs?.modelCallId, event.attrs?.modelCallId)
       assert.equal(event.attrs?.input_tokens, 12)
     }
-    const manifest = JSON.parse(await readFile(join(f.root, '.orca/runs', row.orca_run_id, 'manifest.json'), 'utf8'))
+    const manifest = JSON.parse(await readFile(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'manifest.json'), 'utf8'))
     assert.deepEqual(manifest.env_allowlisted, {})
-    assert.equal(manifest.orca_version, '0.2.99')
+    assert.equal(manifest.agenticreplay_version, '0.2.99')
     assert.equal(manifest.exit_code, undefined)
-    const nativeReader = await TraceReader.open(join(f.root, '.orca/runs', row.orca_run_id))
+    const nativeReader = await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))
     assert.equal((await nativeReader.events()).length, row.event_count)
-    assert.ok((await f.reader.export(f.binding, row.orca_run_id)).endsWith('.html'))
+    assert.ok((await f.reader.export(f.binding, row.agenticreplay_run_id)).endsWith('.html'))
   } finally { await f.dispose() }
 })
 
 test('the recorded final model request carries bounded provenance for the host section it received', async () => {
-  const f = await orcaFixture({ capture: { content: 'metadata' } })
+  const f = await agenticReplayFixture({ capture: { content: 'metadata' } })
   try {
     const text = 'The current runtime contract'
     const options = { ...request, messages: [{ role: 'user', content: [{ type: 'text', text }],
@@ -72,7 +90,7 @@ test('the recorded final model request carries bounded provenance for the host s
     await collect(f.recorder.stream(f.binding, options, () => chunks(response())))
     await f.recorder.closeSessionRecording(f.binding.sessionId, 'manual')
     const row = (await f.reader.list(f.binding))[0]!
-    const page = await f.reader.show(f.binding, row.orca_run_id)
+    const page = await f.reader.show(f.binding, row.agenticreplay_run_id)
     const model = page.events.find(event => event.type === 'model.request')!
     const payload = model.payload as any
     assert.equal(payload.sources.items[0].id, 'route-skill:kiokuko-soul')
@@ -81,7 +99,7 @@ test('the recorded final model request carries bounded provenance for the host s
   } finally { await f.dispose() }
 })
 test('unknown sessions and auxiliary calls are excluded without guessing', async () => {
-  const f = await orcaFixture()
+  const f = await agenticReplayFixture()
   try {
     await collect(f.recorder.stream(undefined, request, () => chunks(response())))
     await collect(f.recorder.stream(f.binding, { ...request, purpose: 'compaction' }, () => chunks(response())))
@@ -91,7 +109,7 @@ test('unknown sessions and auxiliary calls are excluded without guessing', async
   } finally { await f.dispose() }
 })
 for (const mode of ['throw', 'return', 'missing-finish', 'aborted'] as const) test(`stream ${mode} preserves upstream semantics`, async () => {
-  const f = await orcaFixture()
+  const f = await agenticReplayFixture()
   const original = new Error('upstream secret not to persist')
   let finalized = false
   try {
@@ -110,7 +128,7 @@ for (const mode of ['throw', 'return', 'missing-finish', 'aborted'] as const) te
   } finally { await f.dispose() }
 })
 test('pre-execute survives permission wait and shutdown until the final rejected result', async () => {
-  const f = await orcaFixture({ shutdownDrainTimeoutMs: 1000 })
+  const f = await agenticReplayFixture({ shutdownDrainTimeoutMs: 1000 })
   try {
     const exec = { token: Symbol(), callId: 'one', rootCallId: 'one', name: 'tool', arguments: { hello: 'world' } }
     f.recorder.preTool(f.binding, exec)
@@ -122,7 +140,7 @@ test('pre-execute survives permission wait and shutdown until the final rejected
     await closing
     const row = (await f.reader.list(f.binding))[0]!
     assert.equal(row.state, 'completed')
-    const events = (await f.reader.show(f.binding, row.orca_run_id)).events
+    const events = (await f.reader.show(f.binding, row.agenticreplay_run_id)).events
     assert.equal(events.filter(e => e.type === 'tool.call').length, 1)
     const result = events.find(e => e.type === 'tool.result')!
     assert.equal(result.attrs?.is_error, true)
@@ -130,7 +148,7 @@ test('pre-execute survives permission wait and shutdown until the final rejected
   } finally { await f.dispose() }
 })
 test('permission timeout is incomplete and late result never reopens the old generation', async () => {
-  const f = await orcaFixture()
+  const f = await agenticReplayFixture()
   try {
     const exec = { token: Symbol(), callId: 'one', rootCallId: 'one', name: 'tool', arguments: {} }
     f.recorder.preTool(f.binding, exec)
@@ -144,11 +162,11 @@ test('permission timeout is incomplete and late result never reopens the old gen
     const rows = await f.reader.list(f.binding)
     assert.equal(rows.length, 2)
     assert.equal(f.recorder.diagnostics.lateResults, 1)
-    assert.notEqual(rows[0]?.orca_run_id, rows[1]?.orca_run_id)
+    assert.notEqual(rows[0]?.agenticreplay_run_id, rows[1]?.agenticreplay_run_id)
   } finally { await f.dispose() }
 })
 for (const content of ['redacted', 'metadata'] as const) test(`projection ${content} omits secrets, reasoning, attachments and replayState`, async () => {
-  const f = await orcaFixture({ capture: { content } })
+  const f = await agenticReplayFixture({ capture: { content } })
   try {
     const text = 'sk-testsecret123456789 Authorization: Bearer DUMMYVALUE\n<script>alert("x")</script>'
     const values = [...response(text), { type: 'reasoning-delta', index: 9, text: 'PRIVATE_REASONING' },
@@ -157,7 +175,7 @@ for (const content of ['redacted', 'metadata'] as const) test(`projection ${cont
     await f.recorder.shutdown()
     const row = (await f.reader.list(f.binding))[0]!
     assert.equal(row.state, 'completed', JSON.stringify(row))
-    const htmlPath = await f.reader.export(f.binding, row.orca_run_id)
+    const htmlPath = await f.reader.export(f.binding, row.agenticreplay_run_id)
     const html = await readFile(htmlPath, 'utf8')
     for (const secret of ['sk-testsecret123456789','DUMMYVALUE','PRIVATE_REASONING','PRIVATE_REPLAY']) assert.ok(!html.includes(secret), secret)
     assert.ok(!html.includes('<script>alert("x")</script>'))
@@ -165,11 +183,11 @@ for (const content of ['redacted', 'metadata'] as const) test(`projection ${cont
   } finally { await f.dispose() }
 })
 test('oversized event and cyclic/accessor values cannot bypass the projection budget', async () => {
-  assert.throws(() => projectOrcaJson({ text: 'x'.repeat(1000) }, 100), /queue_limit/u)
+  assert.throws(() => projectAgenticReplayJson({ text: 'x'.repeat(1000) }, 100), /queue_limit/u)
   const cyclic: any = {}; cyclic.self = cyclic
-  assert.throws(() => projectOrcaJson(cyclic, 10_000), /projection_cycle/u)
-  assert.deepEqual(projectOrcaJson({ get secret() { throw new Error('must not invoke') } }, 1000), {})
-  const f = await orcaFixture({ maxQueuedBytesPerTrace: 4096 })
+  assert.throws(() => projectAgenticReplayJson(cyclic, 10_000), /projection_cycle/u)
+  assert.deepEqual(projectAgenticReplayJson({ get secret() { throw new Error('must not invoke') } }, 1000), {})
+  const f = await agenticReplayFixture({ maxQueuedBytesPerTrace: 4096 })
   try {
     const input = response('x'.repeat(100_000))
     assert.deepEqual(await collect(f.recorder.stream(f.binding, request, () => chunks(input))), input)
@@ -179,7 +197,7 @@ test('oversized event and cyclic/accessor values cannot bypass the projection bu
   } finally { await f.dispose() }
 })
 for (const failure of ['ENOSPC','EACCES','append','close'] as const) test(`writer ${failure} cannot change DSH results`, async () => {
-  const f = await orcaFixture({}, { createWriter: async (...args) => {
+  const f = await agenticReplayFixture({}, { createWriter: async (...args) => {
     if (failure === 'ENOSPC' || failure === 'EACCES') throw Object.assign(new Error('private error'), { code: failure })
     const writer = await TraceWriter.create(...args)
     if (failure === 'append') writer.append = async () => { throw new Error('private append error') }
@@ -193,9 +211,9 @@ for (const failure of ['ENOSPC','EACCES','append','close'] as const) test(`write
   } finally { await f.dispose() }
 })
 test('symlink storage is refused without touching its target', async () => {
-  const f = await orcaFixture()
+  const f = await agenticReplayFixture()
   try {
-    await symlink(f.root, join(f.root, '.orca'))
+    await symlink(f.root, join(f.root, '.agenticreplay'))
     await collect(f.recorder.stream(f.binding, request, () => chunks(response())))
     await f.recorder.shutdown()
     assert.equal((await f.reader.list(f.binding))[0]?.state, 'failed')
@@ -204,19 +222,19 @@ test('symlink storage is refused without touching its target', async () => {
 })
 
 for (const dependency of ['loadCore', 'loadSchema', 'loadCoreVersion'] as const) test(`missing ${dependency} is unavailable with no trace/index initialization`, async () => {
-  const f = await orcaFixture({}, { [dependency]: async () => { throw new Error('missing module') } })
+  const f = await agenticReplayFixture({}, { [dependency]: async () => { throw new Error('missing module') } })
   try {
     await collect(f.recorder.stream(f.binding, request, () => chunks(response())))
     await f.recorder.shutdown()
     assert.equal(f.recorder.status(f.binding.sessionId).capability, 'unavailable')
     assert.equal((await f.reader.list(f.binding)).length, 0)
-    await assert.rejects(access(join(f.root, '.orca')))
+    await assert.rejects(access(join(f.root, '.agenticreplay')))
   } finally { await f.dispose() }
 })
 test('global queue and open trace ceilings apply during writer creation', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  const f = await orcaFixture({ maxQueuedBytesTotal: 1600, maxOpenTraces: 1 }, { createWriter: async (...args) => { await gate; return TraceWriter.create(...args) } })
+  const f = await agenticReplayFixture({ maxQueuedBytesTotal: 1600, maxOpenTraces: 1 }, { createWriter: async (...args) => { await gate; return TraceWriter.create(...args) } })
   try {
     const values = response()
     assert.deepEqual(await collect(f.recorder.stream(f.binding, request, () => chunks(values))), values)
@@ -228,7 +246,7 @@ test('global queue and open trace ceilings apply during writer creation', async 
   } finally { release(); await f.dispose() }
 })
 test('nested tools preserve parent identity and a result-only attempt has no invented start', async () => {
-  const f = await orcaFixture()
+  const f = await agenticReplayFixture()
   try {
     const parent = { token: Symbol(), callId: 'root', rootCallId: 'root', name: 'run_code', arguments: {} }
     const child = { token: Symbol(), parent: parent.token, callId: 'child', rootCallId: 'root', name: 'read', arguments: {} }
@@ -238,7 +256,7 @@ test('nested tools preserve parent identity and a result-only attempt has no inv
     f.recorder.toolResult(f.binding, { ...parent, token: Symbol(), callId: 'result-only' }, { isError: true, content: [] })
     await f.recorder.shutdown()
     const row = (await f.reader.list(f.binding))[0]!
-    const calls = (await f.reader.show(f.binding, row.orca_run_id)).events.filter(e => e.type === 'tool.call')
+    const calls = (await f.reader.show(f.binding, row.agenticreplay_run_id)).events.filter(e => e.type === 'tool.call')
     assert.equal(calls.length, 3)
     assert.equal(calls[1]?.attrs?.parentAttemptId, calls[0]?.attrs?.attemptId)
     assert.equal(calls[2]?.attrs?.startObserved, false)
@@ -246,7 +264,7 @@ test('nested tools preserve parent identity and a result-only attempt has no inv
   } finally { await f.dispose() }
 })
 test('index persistence failure is independent of native output and visible in status', async () => {
-  const f = await orcaFixture()
+  const f = await agenticReplayFixture()
   try {
     f.store.save = () => { throw new Error('private SQL failure') }
     const values = response()
@@ -260,7 +278,7 @@ test('index persistence failure is independent of native output and visible in s
 })
 
 test('recording store ignores itself in Git and separates an actual worktree', async () => {
-  const f = await orcaFixture()
+  const f = await agenticReplayFixture()
   const { execFileSync } = await import('node:child_process')
   const { detectRepositoryRoot } = await import('../../../src/repository/detect-root.js')
   try {
@@ -276,6 +294,6 @@ test('recording store ignores itself in Git and separates an actual worktree', a
     const a = (await f.reader.list(f.binding))[0]!, b = (await f.reader.list(other))[0]!
     assert.equal(a.state, 'completed'); assert.equal(b.state, 'completed')
     assert.notEqual(a.store_root, b.store_root)
-    assert.match(execFileSync('git', ['-C', root, 'check-ignore', `.orca/runs/${b.orca_run_id}/manifest.json`], { encoding: 'utf8' }), /\.orca/u)
+    assert.match(execFileSync('git', ['-C', root, 'check-ignore', `.agenticreplay/runs/${b.agenticreplay_run_id}/manifest.json`], { encoding: 'utf8' }), /\.agenticreplay/u)
   } finally { await f.dispose() }
 })

@@ -57,7 +57,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
       return { id: q.id, selected: [q.id === 'kiokuko-plan-confirmation' ? 'approve' : modelSelectionAnswer(q) ?? 'debug'] }
     }) }
   } }) } }))
-  const adapter = createDshHostAdapter(ctx, { repositoryRoot: root, databasePath: join(root, '.git/state.sqlite3'), orca: { enabled: false },
+  const adapter = createDshHostAdapter(ctx, { repositoryRoot: root, databasePath: join(root, '.git/state.sqlite3'), agenticReplay: { enabled: false },
     modelRoutes: mockModelRoutes, efficiency: { observe: true }, ennoMemory: { mode, localBudgetMs: 1000 },
     advisory: { verifyReadOnly: () => true, execute: async call => ({ slotId: call.slotId, outcome: 'completed', summary: 'Reviewed fixture contract.', recommendations: [], risks: [], evidence: [] }) },
     llm: { async *stream(request) {

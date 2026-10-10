@@ -1,18 +1,18 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { OrcaConfig } from './config.js'
+import type { AgenticReplayConfig } from './config.js'
 import { canonicalDirectory, detectRepositoryRoot } from '../repository/detect-root.js'
-import { DshOrcaRecorder } from './orca-recorder.js'
-import { DshOrcaStore } from './orca-store.js'
-import { mountDshOrcaHooks } from './orca-hooks.js'
-import { getDshOrcaStoreRoot } from './paths.js'
-import { workspaceKey } from './orca-security.js'
-import { record } from './orca-event-mapper.js'
-import { DshOrcaSessionChoices } from './orca-session-choice.js'
+import { DshAgenticReplayRecorder } from './agenticreplay-recorder.js'
+import { DshAgenticReplayStore } from './agenticreplay-store.js'
+import { mountDshAgenticReplayHooks } from './agenticreplay-hooks.js'
+import { getDshAgenticReplayStoreRoot } from './paths.js'
+import { workspaceKey } from './agenticreplay-security.js'
+import { record } from './agenticreplay-event-mapper.js'
+import { DshAgenticReplaySessionChoices } from './agenticreplay-session-choice.js'
 import type { DshUserQuestions } from './user-interaction.js'
 import type { DshCoreRuntime as DshRuntime } from './core-runtime.js'
-import type { DshOrcaBinding, DshOrcaHostServices, WithOrcaIndex } from './orca-types.js'
+import type { DshAgenticReplayBinding, DshAgenticReplayHostServices, WithAgenticReplayIndex } from './agenticreplay-types.js'
 
-export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: DshRuntime, native: {
+export function createDshAgenticReplayHost(ctx: Context, config: AgenticReplayConfig, runtime: DshRuntime, native: {
   session(id: string): object | undefined
   agent(id: string): object | undefined
   logicalRun(session: { id: string }): string | undefined
@@ -20,36 +20,36 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
   interactive?(agent: { id: string }): boolean
   recordingRun?(agent: object): string | undefined
   recordingParent?(agent: object): { agent: object; session: object } | undefined
-}): DshOrcaHostServices {
+}): DshAgenticReplayHostServices {
   // Web keeps observers alive through recorder drain. TUI forbids a plugin
   // from registering on the composition root, so use its own scoped context.
   const profile = (ctx.get?.('profileContext', false) as { name?: string } | undefined)?.name
   const observerContext = profile === 'dsh-tui' ? ctx : ctx.root ?? ctx
-  const bindings = new Map<string, { agent: object; session: object; binding: DshOrcaBinding }>()
+  const bindings = new Map<string, { agent: object; session: object; binding: DshAgenticReplayBinding }>()
   let accepting = true
-  const withIndex: WithOrcaIndex = operation => runtime.withDatabase(async db => await operation(new DshOrcaStore(db)))
-  const recorder = new DshOrcaRecorder(config, withIndex)
-  const choices = new DshOrcaSessionChoices(withIndex, native.questions, config.askOnStart)
+  const withIndex: WithAgenticReplayIndex = operation => runtime.withDatabase(async db => await operation(new DshAgenticReplayStore(db)))
+  const recorder = new DshAgenticReplayRecorder(config, withIndex)
+  const choices = new DshAgenticReplaySessionChoices(withIndex, native.questions, config.askOnStart)
   const operations = new Map<string, Promise<void>>()
   let shutdown: Promise<void> | undefined
   const disposers: (() => void)[] = []
-  function enrich(entry: { agent: object; session: object; binding: DshOrcaBinding }): DshOrcaBinding {
+  function enrich(entry: { agent: object; session: object; binding: DshAgenticReplayBinding }): DshAgenticReplayBinding {
     const runId = native.recordingRun?.(entry.agent) ?? native.logicalRun(entry.session as { id: string })
     return Object.freeze({ ...entry.binding, ...(runId === undefined ? {} : { kiokukoRunId: runId }) })
   }
-  function recordingAuthority(binding: DshOrcaBinding): DshOrcaBinding | undefined {
+  function recordingAuthority(binding: DshAgenticReplayBinding): DshAgenticReplayBinding | undefined {
     const entry = bindings.get(binding.sessionId), parent = entry && native.recordingParent?.(entry.agent)
     if (!parent) return binding
     const inherited = services.resolveSessionBinding(parent.agent, parent.session)
     return inherited && inherited.workspaceRoot === binding.workspaceRoot && inherited.storeRoot === binding.storeRoot ? inherited : undefined
   }
-  const services: DshOrcaHostServices = {
+  const services: DshAgenticReplayHostServices = {
     config, recorder, withIndex,
     canRecord: binding => { const authority = recordingAuthority(binding); return accepting && !!authority && choices.allows(authority) },
     sessionRecordingStatus: binding => { const authority = recordingAuthority(binding); return authority ? choices.status(authority) : Promise.resolve({sessionRecording:'unavailable'}) },
     setSessionRecording(binding, enabled) {
       const pending = (operations.get(binding.sessionId) ?? Promise.resolve()).catch(() => undefined).then(async () => {
-        if (!accepting) throw new Error('Orca host closed')
+        if (!accepting) throw new Error('AgenticReplay host closed')
         try { await choices.set(binding, enabled) }
         finally { if (!enabled) await recorder.closeSessionRecording(binding.sessionId, 'manual') }
         if (enabled && accepting && choices.allows(binding)) recorder.start(binding)
@@ -73,7 +73,7 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
       const cwd = canonicalDirectory(s.header.cwd)
       const root = detectRepositoryRoot({ cwd, allowDirectory: true }).root
       const entry = { agent, session, binding: Object.freeze({ sessionId: s.id, sessionCwd: cwd, workspaceRoot: root,
-        storeRoot: getDshOrcaStoreRoot(root, config.storage, workspaceKey(root)) }) }
+        storeRoot: getDshAgenticReplayStoreRoot(root, config.storage, workspaceKey(root)) }) }
       bindings.set(s.id, entry)
       return enrich(entry)
     },
@@ -127,7 +127,7 @@ export function createDshOrcaHost(ctx: Context, config: OrcaConfig, runtime: Dsh
       choices.forget(entry.binding)
       void recorder.closeSessionRecording(id, 'session_disposed').finally(() => { bindings.delete(id); recorder.forgetSession(id) }).catch(() => undefined)
     }, { global: true }))
-    disposers.push(mountDshOrcaHooks(observerContext, services))
+    disposers.push(mountDshAgenticReplayHooks(observerContext, services))
   } catch {
     for (const dispose of disposers.reverse()) dispose()
     accepting = false

@@ -1,11 +1,16 @@
-# Orca recording in DSH
+# AgenticReplay recording in DSH
 
-OrcaReplay records observations from the existing DSH process. It does not start
-another DSH. `@orcareplay/core`, `@orcareplay/schema` and `@orcareplay/viewer`
-accept **^0.5.0** as ordinary dependencies and are installed automatically with
-`kiokuko-dsh` by npm/pnpm. No separate Orca install or global CLI is required.
-This range permits stable 0.5.x releases; 0.6.0 and later require a range change.
-Lockfiles retain the tested resolution (currently 0.5.0); they do not refresh on each launch.
+AgenticReplay records observations from the existing DSH process. It does not start
+another DSH. The ordinary npm dependency
+[`agenticreplay`](https://www.npmjs.com/package/agenticreplay) supplies its bundled
+`@agenticreplay/core`, `@agenticreplay/schema`, and `@agenticreplay/viewer` libraries.
+Node resolves them from that distribution without fixed installation paths.
+Kiokuko calls the libraries in process; it does not launch the CLI or install packages at startup.
+The supported range is `>=0.1.0 <1.0.0`: patch and minor releases in the pre-1.0
+API family, including 0.1.2 and 0.2.0, can be selected by a dependency update
+without editing Kiokuko's dependency range. Prereleases and 1.0+ are excluded.
+Lockfiles retain the tested resolution; installing or restarting does not update
+it automatically. A permitted range is not proof of future API compatibility.
 The trace manifest records the installed core version.
 Each recorded final model request also includes a bounded manifest of host-owned
 context sections still present in that request: section ID, digest, byte count,
@@ -16,19 +21,32 @@ For manual dependency updates and restarting DSH, see [the update guide](dsh-plu
 The integration is tested against **DSH 0.2.1-alpha.2**. The native E2E verifies
 installed package versions before executing. The trace labels that version as
 `verifiedDshVersion`; it does not invent an actual host version when the host
-does not expose one. See the bundled [Apache-2.0 license](ORCAREPLAY-LICENSE.txt).
+does not expose one. See the bundled [Apache-2.0 license](AGENTICREPLAY-LICENSE.txt).
+
+## Upgrade from OrcaReplay
+
+The configuration key is now `agenticReplay`, the command is
+`/kioku-agenticreplay`, and new recordings use `.agenticreplay/runs` with the
+AgenticReplay 0.4.x schema and `agenticreplay_version` manifest field.
+Rename any explicit `orca` profile configuration to `agenticReplay` before
+reloading, especially an existing `enabled: false` opt-out. The old command is removed; the old configuration key is rejected with an
+upgrade error rather than silently ignoring an opt-out. Omitted new configuration keeps recording enabled by default.
+Migration 034 copies saved per-session recording choices, including refusals,
+into the new index. Historical Orca tables and `.orca` files are retained;
+legacy trace rows are not imported, listed, read or converted. The new reader
+rejects legacy manifests even if a file is placed in the new directory.
 
 ## Automatic setup and use
 
 Installing the Kiokuko bundle configures the recording feature automatically.
 Configuration approves recording: at the first native step of a chat the session
-is recorded without asking, and only `orca.askOnStart: true` restores the
+is recorded without asking, and only `agenticReplay.askOnStart: true` restores the
 per-chat 記録する／記録しない question. The bundled loader row supplies these
 defaults:
 
 ```yaml
 enabled: true
-orca:
+agenticReplay:
   enabled: true
   askOnStart: false
   storage: project
@@ -37,44 +55,44 @@ orca:
     reasoning: false
 ```
 
-Omitted `orca` settings also enable the feature and record. Either the default or
+Omitted `agenticReplay` settings also enable the feature and record. Either the default or
 an affirmative answer admits subsequent observations; a refusal leaves the chat
-running without Orca trace files. The decision is saved in Kiokuko SQLite, scoped
+running without AgenticReplay trace files. The decision is saved in Kiokuko SQLite, scoped
 to the session ID, workspace, session cwd and storage root; a saved choice
 outranks the configuration default, so a session stopped once stays unrecorded
 across reloads. While a question is pending, no observations are recorded. A
 failed preference write leaves the session unrecorded and reports
-`selectionError` in `status --json`; `/kioku-orca start` can still authorize that
+`selectionError` in `status --json`; `/kioku-agenticreplay start` can still authorize that
 session explicitly. Skipped, invalid, cancelled or unavailable questions continue
 without capture. An unanswered question is not repeated on each step; use
-`/kioku-orca start` later (or answer after reloading). With `askOnStart: true`,
+`/kioku-agenticreplay start` later (or answer after reloading). With `askOnStart: true`,
 hosts without a question UI also require an explicit start command.
 Managed Enno worker and delegated child sessions are never prompted. A child
 follows the exact decision of the session that owns it: with `askOnStart: false`
 it records under that parent's default, and with `askOnStart: true` it records
 only when the parent approved, because a question would interrupt managed work.
-A child stores no decision of its own, so its work still appears in `.orca/runs/`
+A child stores no decision of its own, so its work still appears in `.agenticreplay/runs/`
 as its own generation, and a managed session without an owning parent records
-under the configured default or needs its own explicit `/kioku-orca start`.
+under the configured default or needs its own explicit `/kioku-agenticreplay start`.
 
 Once a session is approved, the next attributable model/tool observation creates
 the trace directory, not package installation. Past calls are not captured.
 
 After updating an older installation, restart DSH to load the new bundle defaults.
-An explicit `orca.enabled: false` in a profile, home, or launch patch still takes
+An explicit `agenticReplay.enabled: false` in a profile, home, or launch patch still takes
 precedence: remove that override or change it to `true` and reload. Preserve other
 plugin settings when editing a patch because DSH replaces the whole row config.
 Use the native session's human command interface:
 
 ```text
-/kioku-orca status
-/kioku-orca status --json
-/kioku-orca stop
-/kioku-orca list
-/kioku-orca show run_<id>
-/kioku-orca show run_<id> <cursor>
-/kioku-orca export run_<id>
-/kioku-orca start
+/kioku-agenticreplay status
+/kioku-agenticreplay status --json
+/kioku-agenticreplay stop
+/kioku-agenticreplay list
+/kioku-agenticreplay show run_<id>
+/kioku-agenticreplay show run_<id> <cursor>
+/kioku-agenticreplay export run_<id>
+/kioku-agenticreplay start
 ```
 
 Replace `run_<id>` with the exact ID returned by `list`. Stop finalizes recording
@@ -101,11 +119,11 @@ task succeeded. Unknown usage is not measured zero. Process exit codes are absen
 
 ## Storage and contents
 
-The default is `<verified session workspace>/.orca/runs/<run ID>`. The manifest's
+The default is `<verified session workspace>/.agenticreplay/runs/<run ID>`. The manifest's
 `cwd` is the actual session directory. Worktrees have separate roots. A non-Git
 session uses its verified directory. No process-cwd or DSH_HOME fallback is used.
 `storage: data-dir` selects
-`<Kiokuko data directory>/traces/projects/<workspace hash>/.orca/runs` and respects
+`<Kiokuko data directory>/traces/projects/<workspace hash>/.agenticreplay/runs` and respects
 the existing `KIOKUKO_DATA_DIR` setting. Hashing a path does not anonymize it.
 
 `redacted` preserves text after known secret-pattern filtering. It cannot detect
@@ -118,14 +136,14 @@ unsupported. Model errors/abort reasons and final post-policy tool results are
 recorded without changing native values or exceptions.
 
 These are **DSH internal observations**: `httpCapture=false`,
-`filesystemSnapshot=false`, `exactReplay=false`. Orca replay/fork/compare and
+`filesystemSnapshot=false`, `exactReplay=false`. AgenticReplay replay/fork/compare and
 reconstructing images or physical HTTP retries are not supported. Tool calls are
 represented once at admission; model tool-call blocks remain response content.
 
-HTML is an offline file at `.orca/exports/<run ID>.html`. It contains the same
+HTML is an offline file at `.agenticreplay/exports/<run ID>.html`. It contains the same
 sensitive projected data as the trace. It is escaped, generated through the public
-Orca viewer, and never uploaded. No arbitrary output path, file URL, `last`
-selector, model-facing command or Orca HTTP route is accepted.
+AgenticReplay viewer, and never uploaded. No arbitrary output path, file URL, `last`
+selector, model-facing command or AgenticReplay HTTP route is accepted.
 
 ## Limits and failure behavior
 
@@ -166,16 +184,16 @@ rejected instead of silently chmod-ing user files.
 
 ## Disable, remove, and recover dependencies
 
-Stop active recordings, set `orca.enabled: false`, and reload. This retains traces
+Stop active recordings, set `agenticReplay.enabled: false`, and reload. This retains traces
 and the existing Kiokuko database/session mirror. To remove a recording, stop it
-first, then delete its exact `.orca/runs/<run ID>` directory and associated
-`.orca/exports/<run ID>.html` file in the verified workspace or data directory.
+first, then delete its exact `.agenticreplay/runs/<run ID>` directory and associated
+`.agenticreplay/exports/<run ID>.html` file in the verified workspace or data directory.
 The small historical index can remain; a missing artifact is refused by the reader.
 Do not delete/reinitialize the Kiokuko database to remove recordings.
 
 If a package is missing/corrupted, reinstall `kiokuko-dsh` using the same package
 manager/profile used for its installation. The plugin never launches an installer.
 Core/schema failure disables recording; viewer failure disables reading/export
-while recording can continue. Prompt-only hosts do not initialize Orca. Custom
-`kiokukoDsh` hosts must provide `DshOrcaHostServices`, exact native bindings,
+while recording can continue. Prompt-only hosts do not initialize AgenticReplay. Custom
+`kiokukoDsh` hosts must provide `DshAgenticReplayHostServices`, exact native bindings,
 observers and an idempotent shutdown that drains recording before closing their DB.

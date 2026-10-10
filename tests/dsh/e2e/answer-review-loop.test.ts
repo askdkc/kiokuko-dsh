@@ -61,7 +61,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
     } }) } }); fibers.push(ui); await ui
     const config = { ...(scenario==='off'?{answerReview:{mode:'off' as const}}:{}), typedDecisions:{...(paired ? {groundingReview:{mode:scenario==='paired-shadow'?'shadow' as const:'candidate' as const,policyVersion:'grounding-pairs-v1' as const,minProbability:.6,minMargin:.25}}:{}),provider:'laya-coreml' as const,'laya-coreml':{socketPath:socket.path}} }
     if (host === 'full') {
-      const adapter = createDshHostAdapter(ctx,{...config,repositoryRoot:root,databasePath,orca:{enabled:false},memoryReview:{mode:'off'},deepPlanning:{enabled:false},
+      const adapter = createDshHostAdapter(ctx,{...config,repositoryRoot:root,databasePath,agenticReplay:{enabled:false},memoryReview:{mode:'off'},deepPlanning:{enabled:false},
         llm:{async *stream(){throw new Error('No auxiliary LLM in this fixture')}}})
       reviewStatus = () => adapter.host.decisions?.status()
       const composition = await mountDshComposition(ctx,adapter.host)

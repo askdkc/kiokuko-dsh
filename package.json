@@ -107,7 +107,7 @@
         "Configured Kiokuko SQLite database and embedding assets",
         "Registered project roots and their repository metadata",
         "Selected session repository status, staged and working-tree diffs, and explicitly selected untracked files for Diff review",
-        "Orca traces belonging to the exact native DSH session",
+        "AgenticReplay traces belonging to the exact native DSH session",
         "Stored native DSH session IDs and histories for startup validation and legacy Kiokuko compatibility"
       ],
       "writePaths": [
@@ -115,7 +115,7 @@
         "Existing Kiokuko managed block in startup-directory AGENTS.md; instructions outside the markers are preserved",
         "Configured Kiokuko database and pre-migration backups",
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",
-        ".orca/runs and .orca/exports inside verified session workspaces, or the configured Kiokuko data directory",
+        ".agenticreplay/runs and .agenticreplay/exports inside verified session workspaces, or the configured Kiokuko data directory",
         "Legacy history compatibility under DSH's native write lease: exact rejected v3 file or validated new v3 generation from retained v0, identical .bak, disposable validation artifacts, and automatic deletion of confirmed identity-mismatched native logs",
         "Opt-in Lisp scratch, input snapshots, verified compiled bundle cache, durable operation journal, and approved file changes with host backups"
       ],
@@ -143,7 +143,7 @@
         "Repository identity, run identity, lease, revision, and integrity mismatches fail closed",
         "Remote embedding is disabled by default and unavailable services do not become normal success",
         "Ordinary memory finalization failures are retryable; uncertain Deep requests are never automatically resent. Neither can veto completion or session-log export",
-        "Orca is configured by default; capture requires a session choice or start command, adds no network transmission, and cannot veto native outcomes"
+        "AgenticReplay is configured by default; capture requires a session choice or start command, adds no network transmission, and cannot veto native outcomes"
       ],
       "lifecycleEvidence": [
         "prepare runs only npm run build",
@@ -179,7 +179,7 @@
     "pack:check": "node scripts/pack-check.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run publint && npm run pack:check",
-    "test:orca:package": "npm run build && node scripts/verify-orca-consumer.mjs",
+    "test:agenticreplay:package": "npm run build && node scripts/verify-agenticreplay-consumer.mjs && node scripts/verify-agenticreplay-consumer.mjs --pnpm",
     "test:memory-review": "node scripts/run-tests.mjs tests/dsh/unit/memory-review tests/dsh/integration/memory-review",
     "test:evolution": "node scripts/run-tests.mjs tests/dsh/unit/evolution tests/dsh/integration/evolution",
     "test:evaluation:evolution": "node --import tsx scripts/run-evolution-evaluation.mjs",
@@ -242,13 +242,11 @@
   "dependencies": {
     "@deepseek-ai/cosmokit": "1.8.5",
     "@deepseek-ai/schemastery": "3.18.4",
-    "@orcareplay/core": "^0.5.0",
-    "@orcareplay/schema": "^0.5.0",
-    "@orcareplay/viewer": "^0.5.0",
     "jsonc-parser": "3.3.1",
     "semver": "7.8.5",
     "yaml": "2.9.0",
-    "zod": "4.5.4"
+    "zod": "4.5.4",
+    "agenticreplay": ">=0.1.0 <1.0.0"
   },
   "overrides": {
     "adm-zip": "0.6.1",

@@ -32,7 +32,8 @@
     "migrations/030_memory_index_reasoning.sql",
     "migrations/031_dsh_lisp_hot_tools.sql",
     "migrations/032_memory_evidence.sql",
-    "migrations/033_memory_forgetting.sql"
+    "migrations/033_memory_forgetting.sql",
+    "migrations/034_agenticreplay.sql"
   ],
   "runtimeAssets": [
     "dist/security/sanitize.js"
