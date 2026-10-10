@@ -4,8 +4,26 @@ import { resolveCapabilities } from '../../../src/akinator/capabilities.js'
 import { createStandardSkillProvider } from '../../../src/dsh/standard-skill-provider.js'
 import { buildDshMessageSources } from '../../../src/dsh/message-sources.js'
 import { codingSkills } from '../../../src/dsh/modules/resources.js'
+import { compileSkillBundle } from '../../../src/dsh/skill-compiler.js'
+import { loadSkillSources } from '../../../src/dsh/skill-sources.js'
 
 const name = 'coding-ideal-routine-skill'
+
+test('always-delivered SOUL guides document verification and successive file edits in both representations', async () => {
+  const sources = await loadSkillSources()
+  const soul = sources.find(source => source.name === 'kiokuko-soul' && source.relativePath === 'SKILL.md')!
+  const compiled = compileSkillBundle(sources).resources.find(resource => resource.id === 'kiokuko-soul/SKILL.md')!
+  for (const content of [soul.content, compiled.content]) {
+    assert.match(content, /Before diagnostics.*supported.*file/iu)
+    assert.match(content, /Markdown.*document.*read.*structure.*requirements.*whitespace/iu)
+    assert.match(content, /After a successful.*edit.*write.*re-read.*before.*next mutation/iu)
+    assert.match(content, /stale.*re-read.*reconcile.*never.*overwrite/iu)
+    assert.match(content, /unavailable.*unverified.*not.*clean/iu)
+  }
+  const messages = await buildDshMessageSources({ task: 'Revise PLAN.md.', intakeStatus: 'ready', nextAction: 'proceed', context: null,
+    memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false } })
+  assert.ok(messages.find(message => message.name === 'kiokuko-soul')?.text.includes(soul.content), 'writing must receive the safeguards without a coding route')
+})
 
 test('coding routine is bundled, selected by coding policy and delivered to the model', async () => {
   const provider = createStandardSkillProvider()

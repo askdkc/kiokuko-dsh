@@ -353,6 +353,8 @@ rebuildable cache for bounded export and post-completion finalization. Cache
 listeners contain their own failures; only an orchestration-requested native
 `sessions.flush()` remains an awaited, fail-closed durability boundary.
 
+Conversation-first intake permits text answers before execution preparation. Native `read`, `glob`, `grep`, `web_search`, and `web_fetch` demands automatically prepare the complete original request; when its action type is unresolved, `research` is advisory only. Models can read a plan or inspect files directly without a separate `prepare_requested_work` call. Missing targets, unresolved user choices, native permissions, current session ownership, and pending memory checks still govern admission. Other unclassified tools and arbitrary PTC programs retain explicit preparation requirements.
+
 The dsh integration provides:
 
 - the exact bundled `kiokuko-soul` system-prompt section and seven standard Skill

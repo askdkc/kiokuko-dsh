@@ -252,9 +252,9 @@ async function createAndSmokeTestTarball() {
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
   await assertDshClientArtifact(packageRoot)
   if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') {
-    const wire = await exec(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/integration/tool-exposure-native.test.ts'], {
+    const wire = await exec(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/integration/tool-exposure-native.test.ts', 'tests/dsh/integration/on-demand-file-read.test.ts'], {
       cwd: root,
-      env: { ...process.env, KIOKUKO_TOOL_EXPOSURE_ENTRY: join(packageRoot, 'dist/dsh/index.js') },
+      env: { ...process.env, KIOKUKO_TOOL_EXPOSURE_ENTRY: join(packageRoot, 'dist/dsh/index.js'), KIOKUKO_TEST_PLUGIN_PACKAGE_ROOT: packageRoot },
       timeout: 120_000,
       maxBuffer: 16 * 1024 * 1024,
     })

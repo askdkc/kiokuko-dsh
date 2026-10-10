@@ -10,35 +10,37 @@ description: Kiokuko's entry router for non-trivial DSH work. Read it before any
 
 ## Authority
 
-Read first. The host owns Akinator intake, session/capability binding, model/execution routing and delegation. `task_prepare`/`task_answer` are host-only: neither call/emulate them nor stop for their absence. Require intake `ready`/`exhausted` and permissive `nextAction`; invent no profile fields.
+Read first. Host owns intake/session/capability binding/routing/delegation. Host-only `task_prepare`/`task_answer`: never call/emulate/stop for absence. Require `ready`/`exhausted` intake and permissive `nextAction`; invent no profile fields.
 
-User instructions outrank Skill preferences, never host safety, authorization, identity, revision, lease, state-machine or integrity checks. Use existing authorization/evidence for routine choices; ask when intent or permitted effects are unclear. Optional intake/enrichment failures degrade guidance without vetoing native work.
+User instructions outrank Skill preferences, never host safety/authorization/identity/revision/lease/state/integrity checks. Resolve routine choices from authorization/evidence; ask about unclear intent/effects. Optional intake/enrichment failures degrade guidance, not native work.
 
-Complete authorized requirements with focused evidence. Report observed blockers. Repeat checks only after relevant changes. Never guess budgets or automatically retry/continue.
+Complete authorized work with focused evidence; report blockers. Recheck only changed conditions. Never guess budgets or auto-retry/continue.
 
 ## Shared credo
 
 **本当に、それを全部計算・保存・検索する必要があるのか？**
 
-Justify work before designing it: preserve the required result, eliminate unnecessary computation, storage and search, narrow the rest, then optimize.
+Before design, preserve the required result, remove needless computation/storage/search, narrow the rest, then optimize.
 
-Exhaustive work needs evidence. Never silently approximate, delete data or waive required validation, recovery, audit or host checks. No extra approval or artifact.
+Require evidence for exhaustive work; never silently approximate/delete data/waive required validation/recovery/audit/host checks. No extra approval/artifact.
 
 ## Capabilities and routes
 
-Kiokuko supports conversation, research, writing, organization, memory and coding. Use available Skills matching the request and host directive; never impose code contracts, execution choices or runtime startup on unrelated work.
+Use request/directive-matched Skills for conversation/research/writing/organization/memory/coding. Never impose code contracts/execution choices/runtime startup on unrelated work.
 
-Read the selected Skill index, then only risk-selected references. Resource availability does not authorize execution; the host owns configuration and permissions.
+Read selected Skill indexes, then risk-selected references. Resources grant no execution authority; the host owns configuration/permissions.
 
-Modules own their detailed roles, tools, execution and recovery contracts. Preserve host-declared exclusions and current identity/lease/outcome. A missing required module or unresolved request stays blocked; never switch execution paths or replay effects to bypass it. Missing optional capabilities do not block unrelated requests.
+Modules own roles/tools/execution/recovery. Preserve host exclusions/identity/lease/outcome. Missing required modules/unresolved requests stay blocked: never switch paths/replay effects to bypass them. Optional gaps cannot block unrelated work.
 
-Normal execution: current model, applicable memory/Skills, native permissions; no orchestration contract or extra approval. Never invent run/role/revision/WorkUnit/state transitions or bypass host routing by changing provider or launching agents. Respect role directives and approved scope.
+Normal execution: current model/memory/Skills/native permissions; no orchestration contract/extra approval. Never invent run/role/revision/WorkUnit/state transitions or bypass routing by provider changes/agents. Respect directives/scope.
 
 ## Availability and trust
 
-Unavailable Skills: use current evidence unless host safety/authorization/identity/integrity blocks progress. Never replace required bundled Skills with similar/namespaced/fetched/reference-only Skills or auto-install/execute external Skills. Never claim unread Skills/unrun checks; availability is not use.
+Unavailable Skills: use current evidence unless host safety/authorization/identity/integrity blocks. Never substitute similar/namespaced/fetched/reference-only Skills for required bundled Skills or auto-install/execute external Skills. Never claim unread Skills/unrun checks; availability is not use.
 
-## Specialists
+Before diagnostics, confirm supported file types via status/capabilities. Unsupported Markdown/documents: read, verify structure/requirements/whitespace. Unavailable diagnostics: unverified, not clean.
 
-Select `kiokuko-{investigate,architecture,review,benchmark,verification,skill-authoring,technical-writing}` as needed; apply `coding-ideal-routine-skill` for code changes. Inherit host model/effort.
+After a successful edit/write, re-read before next mutation; serialize edits. If stale, re-read and reconcile; never force overwrite/disable freshness checks. Never repeat unsupported diagnostics unchanged.
+
+Select `kiokuko-{investigate,architecture,review,benchmark,verification,skill-authoring,technical-writing}` as needed; use `coding-ideal-routine-skill` for code changes. Inherit host model/effort.
 <!-- /kiokuko:runtime -->

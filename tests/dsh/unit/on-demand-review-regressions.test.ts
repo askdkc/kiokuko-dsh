@@ -381,6 +381,37 @@ function webTool(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, name = 
   ;(calls as any).release = release
   return calls
 }
+for (const taskType of [undefined, 'chat', 'writing'] as const) for (const name of ['read', 'glob', 'grep']) {
+  test(`automatic file preparation: ${name} preserves ${taskType ?? 'unclassified'} advice and the original request`, async t => {
+    const f = await fixture(t, { classify: async () => ({ ...(taskType ? { taskType } : {}), deferInference: !taskType }) })
+    const calls = webTool(t, f, name), messages = [human('original', 'Read PLAN.md and compare the alternatives. Do not modify files.')]
+    await f.capture(messages)
+    assert.equal((await f.execute(name, { file_path: 'PLAN.md' })).isError, false)
+    assert.deepEqual(f.advice, [taskType === 'writing' ? 'writing' : 'research'])
+    assert.deepEqual(f.admissions[0]!.messages, messages)
+    assert.equal((await f.execute(name, { file_path: 'PLAN.md' })).isError, false)
+    assert.equal(f.admissions.length, 1); assert.equal(calls.length, 2)
+  })
+}
+test('automatic file preparation: concurrent file demands share one admission', async t => {
+  const gate = deferred(); let preparations = 0
+  const f = await fixture(t, { prepare: async () => { preparations++; await gate.promise; f.ready(1); return true } })
+  const reads = webTool(t, f, 'read'), searches = webTool(t, f, 'grep')
+  await f.capture()
+  const first = f.execute('read'), second = f.execute('grep')
+  await new Promise(resolve => setImmediate(resolve)); gate.resolve()
+  assert.ok((await Promise.all([first, second])).every(result => !result.isError))
+  assert.equal(preparations, 1); assert.equal(reads.length, 1); assert.equal(searches.length, 1)
+})
+test('automatic file preparation: foreign agent and pending memory cannot borrow read admission', async t => {
+  const f = await fixture(t), calls = webTool(t, f, 'read')
+  await f.capture()
+  assert.equal((await f.execute('read', {}, { agent: { ...f.agent } })).isError, true)
+  assert.equal(f.admissions.length, 0); assert.equal(calls.length, 0)
+  t.after(f.ctx.tools.guard(() => 'resolve memory decisions before native work'))
+  assert.equal((await f.execute('read')).isError, true)
+  assert.equal(f.admissions.length, 1); assert.equal(calls.length, 0)
+})
 for (const taskType of [undefined, 'chat', 'debug'] as const) for (const name of ['web_search', 'web_fetch']) {
   test(`automatic web preparation: ${name} with ${taskType ?? 'unclassified'} advice`, async t => {
     const f = await fixture(t, { classify: async () => ({ ...(taskType ? { taskType } : {}), deferInference: !taskType }) })

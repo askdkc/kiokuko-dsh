@@ -151,6 +151,8 @@ jobs:
 
       - name: Verify package contents
         run: npm run pack:check
+        env:
+          KIOKUKO_REQUIRE_DSH_NATIVE: "1"
 
       - name: Lint package publication metadata
         run: npm run publint
