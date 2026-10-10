@@ -2,7 +2,7 @@ import type { DshCoreRuntime } from './core-runtime.js'
 import { memoryApplicationDecisionsPending, memoryApplicationStatus } from '../memory/application.js'
 
 /** Pending reviews need direct tools without removing the bound PTC transport.
- * The memory execution gate still blocks run_code until decisions are resolved. */
+ * Pending decisions never block execution; they keep the run incomplete until resolved. */
 export function createMemoryReviewPresentation(agent: { ctx?: unknown }, runtime: DshCoreRuntime) {
   let release: (() => void) | undefined
   let activeRunId: string | undefined

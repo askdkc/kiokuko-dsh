@@ -122,7 +122,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const semanticCompaction = new SemanticCompactionCoordinator(ctx as any, decisions, root, config.observationPack)
   const modelHandoff = new ModelHandoff(ctx as any, decisions, root, config.modelHandoff)
   const tasks = new CoreTasks(runtime, questions ? createDshIntakeAnswerer(questions) : undefined, modules.ids(), decisions, config.memoryRetrieval)
-  const demand = config.intakeMode === 'on-demand' ? new OnDemandIntake({
+  const demand = new OnDemandIntake({
     answerContext: new DshAnswerContext(runtime, { root, projectOnly: true, memoryRetrieval: config.memoryRetrieval,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills, prompts, decisions, cwd: root }),
     }),
@@ -151,7 +151,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       return !!current && current.agent === agent && current.agent.session === agent.session && (turn === undefined || current.turn === turn)
         && current.task.admitted && !current.failed && !current.checkpointed && !stopped
     },
-  }) : undefined
+  }, { onlyWhenDeferred: config.intakeMode === 'eager' })
   const conversationSessions = new WeakSet<object>()
   function bind(agent: NativeAgent): void {
     if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || realpathSync(agent.session.header.cwd) !== root) throw new Error('Native task identity mismatch')
@@ -224,7 +224,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         if (active.has(payload.agent.session.id)) throw new Error('Previous task has not reached its confirmed native boundary')
       }
       const originals = payload.messages.filter(message => message?.role === 'user' && (!message.source || message.source.kind === 'user'))
-      const human = advisoryType ? originals : originals.slice(-1)
+      const human = originals
       const text = human.flatMap(message => typeof message.content === 'string' ? [message.content] : (message.content ?? []).filter((block: any) => block.type === 'text').map((block: any) => block.text)).join('\n').trim()
       // Attachment-only turns still require identity, intake and persisted-feature checks.
       let request: CoreTaskInput = { requestId: dshTurnRequestId({ dshSessionId: payload.agent.session.id, turn: payload.turn }), sessionId: payload.agent.session.id,
@@ -330,6 +330,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         try{bind(agent);return {kind:'success',text:JSON.stringify(await indexReasoning!.indexCommand(agent.session.id,invocation.rawInput))}}catch{return {kind:'error',text:'索引操作を実行できません。status --json で確認してください。'}}
       }}))
       disposers.push(mountMemoryApplication({ tools, on: ctx.on.bind(ctx) as any, ...(get('commands') ? { commands: get('commands') } : {}) }, { runtime,
+        preparationOnly: execution => demand?.preparationOnly(execution) === true,
         session(agent) {
           if (!agent) return undefined
           bind(agent as NativeAgent)

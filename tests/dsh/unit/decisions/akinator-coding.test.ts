@@ -14,7 +14,10 @@ for (const task of ['検索機能を実装して', 'ログイン画面を追加�
   assert.ok(question && 'choices' in question)
   assert.ok(question.choices.some(choice => choice.id === 'build'))
 })
-for (const task of ['実装して', 'それを実装して', 'Implement it', 'Build', '検索を実装して画面を追加して', '検索を実装して調査して', 'Implement search and deploy it', '検索か画面かまだ決めていない', '続けて', '実装して'.repeat(100)]) test(`unresolved implementation remains deferred: ${task.slice(0, 40)}`, () => {
+for (const task of ['実装して', 'Build', '検索を実装して画面を追加して', '検索を実装して調査して', 'Implement search and deploy it', '実装して'.repeat(100)]) test(`complete request reaches the selected model; it may still abstain: ${task.slice(0, 40)}`, () => {
+  assert.equal(buildAkinatorClassificationBatch(task)?.state, task)
+})
+for (const task of ['それを実装して', 'Implement it', '検索か画面かまだ決めていない', '続けて', '実装して'.repeat(400)]) test(`missing prior context, unresolved alternatives or overflow remain deferred: ${task.slice(0, 40)}`, () => {
   assert.equal(buildAkinatorClassificationBatch(task), undefined)
 })
 for (const provider of ['typesafe', 'laya-coreml'] as const) for (const type of ['build', 'debug'] as const) test(`${provider} selected ${type} asks once before admission`, async () => {

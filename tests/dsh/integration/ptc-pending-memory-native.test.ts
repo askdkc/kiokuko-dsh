@@ -91,9 +91,9 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
           assert.equal(row.status.pending[0]?.problem, 'decision_missing')
           response = mock.toolCallResponse('premature', 'run_code', { description: 'Attempt arbitrary program before memory review', code: 'return "MUST_NOT_RUN"' })
         } else if (step === 4) {
-          row.premature = messageResult('premature'); assert.equal(row.premature.isError, true)
-          assert.ok(row.premature.text.includes('resolve memory decisions'), 'the actual memory gate must refuse arbitrary code')
-          assert.equal(row.runtimePrograms.length, 0, 'pending memory must block arbitrary interpreter execution')
+          row.premature = messageResult('premature'); assert.equal(row.premature.isError, false)
+          assert.ok(row.premature.text.includes('MUST_NOT_RUN'), 'an unresolved decision must never block the program')
+          assert.equal(row.runtimePrograms.length, 1, 'the program runs while the decision is unresolved')
           assert.ok(names.includes('task_memory_review'))
           const item = row.status.pending[0]
           response = mock.toolCallResponse('review', 'task_memory_review', { action: 'review', review: {
@@ -107,7 +107,7 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
         } else if (step === 6) {
           row.work = messageResult('work'); assert.equal(row.work.isError, false)
           assert.ok(row.work.text.includes('PTC_MEMORY_REVIEW_COMPLETE'))
-          assert.equal(row.runtimePrograms.length, 1, 'exactly the approved later program invokes actual PTC runtime')
+          assert.equal(row.runtimePrograms.length, 2, 'the unresolved-decision program and the approved later program both invoke the actual PTC runtime')
           response = mock.textResponse('SCRIPTED_COMPLETION')
         } else throw new Error('Unexpected native model request')
         yield* response
@@ -147,6 +147,6 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
   }
 }
 
-for (const hostMode of ['core', 'full'] as const) test(`native ${hostMode}: pending memory keeps PTC blocked until direct review completes`, {
+for (const hostMode of ['core', 'full'] as const) test(`native ${hostMode}: pending memory never blocks prepared PTC work and direct review completes the obligation`, {
   skip: available ? false : 'requires explicit pinned DSH native package root', timeout: 120_000,
 }, () => runPendingMemory(hostMode))

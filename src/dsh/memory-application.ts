@@ -25,7 +25,7 @@ const transportSchema = z.object({
   query: z.string().trim().min(1).max(4000).optional(),
   timeConstraint: MemoryTimeConstraint.optional(),
 }).strict()
-export const MEMORY_APPLICATION_GUIDANCE = 'Use task_memory_review(action=status) once, then submit independent pending decisions with action=review_batch (up to 32); action=review remains available for one. Adoption and contradiction require relevant source paths. Adoption also needs an invariant, counterexample, method and command: an exact foreground Bash command at repository-root cwd, or an approved Enno verifier expressed as executable and arguments joined by single spaces. For topic-based non-applicability, use paths:[]; supply paths when the judgment depends on current source. Refresh retains decisions when delivered entry revisions and mode stay unchanged; a revised entry or mode change starts a new review generation. New entries need decisions, and changed delivery invalidates execution proof. Only a typed successful foreground result on unchanged declared sources counts as observed proof. Use action=refresh for a concrete new error or target; it keeps the run. Missing proof cannot complete successfully. Judgments are model-reported.'
+export const MEMORY_APPLICATION_GUIDANCE = 'Use task_memory_review(action=status) once, then submit independent pending decisions with action=review_batch (up to 32); action=review remains available for one. Adoption and contradiction require relevant source paths. Adoption also needs an invariant, counterexample, method and command: an exact foreground Bash command at repository-root cwd, or an approved Enno verifier expressed as executable and arguments joined by single spaces. For topic-based non-applicability, use paths:[]; supply paths when the judgment depends on current source. Refresh retains decisions when delivered entry revisions and mode stay unchanged; a revised entry or mode change starts a new review generation. New entries need decisions, and changed delivery invalidates execution proof. Only a typed successful foreground result on unchanged declared sources counts as observed proof. Use action=refresh for a concrete new error or target; it keeps the run. Missing proof cannot complete successfully. Unresolved decisions never block a tool call; they keep the run incomplete until resolved. Host-validated request preparation is control-only; it neither resolves memory decisions nor authorizes execution or edits. Judgments are model-reported.'
 
 interface NativeExecution { callId: string; rootCallId?: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
 interface SurfaceContext {
@@ -38,6 +38,8 @@ export interface ApplicationHost {
   /** Exact native Agent and Session matching is the caller's responsibility. */
   resolve(execution: NativeExecution): MemoryApplicationIdentity | undefined
   session?(agent: unknown): { sessionId: string; repositoryRoot: string } | undefined
+  /** Exact current preparation proof supplied by the owning on-demand host. */
+  preparationOnly?(execution: NativeExecution): boolean
   refresh(execution: NativeExecution, query: string, timeConstraint?: import('../memory/retrieval-contracts.js').MemoryTimeConstraint): Promise<unknown>
 }
 // Exact native read tools only; never classify arbitrary shell strings as read-only.
@@ -154,7 +156,7 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
     } }))
   disposers.push(ctx.on('tools/pre-execute', async (execution: NativeExecution, next: () => Promise<unknown>) => {
     const identity = host.resolve(execution)
-    if (!identity || READ_TOOLS.has(execution.name) || CONTROL_TOOLS.has(execution.name) || isSavedLispResultRead(execution)) return next()
+    if (!identity || READ_TOOLS.has(execution.name) || CONTROL_TOOLS.has(execution.name) || isSavedLispResultRead(execution) || host.preparationOnly?.(execution) === true) return next()
     // A child without its own admitted binding cannot borrow its parent's proof.
     const command = foregroundNativeCommand(execution, identity.repositoryRoot)
     const tracked = await host.runtime.withDatabase(db => {

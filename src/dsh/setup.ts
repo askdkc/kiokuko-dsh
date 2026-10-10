@@ -23,6 +23,8 @@ ${SOUL_ROUTING_ENTRY_CONTRACT}
 The host owns request identity, session binding, memory delivery and finalization.
 Use its admitted workspace and directive; do not read or modify the SQLite file directly.
 
+Discover unfamiliar repository filenames with native glob/grep before read; use an exact returned path. Never infer a test filename from a source basename or treat remembered/example paths as current filesystem evidence. Explicit user targets may be read directly; if missing, report that fact and discover relevant alternatives without silently changing the requested target. After a not-found error, do not repeat the unchanged read or assume a sandbox/configuration fault; check current path evidence. Do not create placeholder files or silently substitute another target to hide a missing-file error.
+
 ${END}`
 
 /** Replace only an existing, unambiguous managed block. Never add project files. */

@@ -6,14 +6,19 @@ The selected adapter owns its transport protocol and uncertainty policy. Domain
 workflows consume `selected` or `abstained`; they do not depend on model names.
 
 Task classification treats ordinary questions and advice as `chat`; an explicit
-source lookup is `research`. Laya receives short single requests and questions
-(up to 512 UTF-8 bytes), including Japanese questions ending in `？`, `か`,
-`かな`, or `教えて`. Its choices are `debug`, `research`, `writing`, `chat`,
-and `abstain`. An accepted `chat` result admits the request without asking its
-purpose. Quoted/source material, multiple sentences, prior-turn confirmations,
-and explicitly undecided alternatives retain the existing intake path.
-Punctuation only admits the input to classification; the model still chooses
-the task type. Laya abstention or capacity rejection retains the purpose question.
+source lookup is `research`. Laya receives complete current requests up to 4096
+UTF-8 bytes, including queued coding requests, multiple sentences, quoted filenames,
+source material, combined actions and negations. All eight task types and `abstain`
+are offered; the selected model chooses the primary intent, never a punctuation or
+keyword default. An accepted result avoids the redundant purpose question.
+Prior-turn confirmations without context and explicitly undecided alternatives
+retain the existing intake path. The envelope limit is not a token-budget claim:
+provider capacity, confidence, margin and reported-truncation checks remain unchanged.
+Abstention, unavailability or capacity rejection still defer inference. Native full
+and core adapters let the ordinary model reason about that original request and
+supply advisory intent through `prepare_requested_work`, rather than repeat the
+category dialog. No tool effects are granted by this fallback. Requests are never
+excerpted or rewritten, and classification grants no execution permission.
 
 The common API also accepts explicit `noul` (yes probability) and `score`
 (ordered rubric) questions. Their validated answers have `status: "measured"`;

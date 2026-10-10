@@ -7,8 +7,8 @@ import type { DshSkillPrompts } from '../../../src/dsh/skill-prompts.js'
 import { nativeMock } from './native-mock.js'
 
 /** The same native host, model loop and Lisp boundary serve delivery and behavior probes. */
-export async function nativeSkillFixture(options: { packages: string; packageRoot?: string; explicit?: boolean|'prompt-only'; mode?: 'full'|'compiled'; extra?: object; nativeAnswer?: (request: any) => Promise<any>; prompts?: DshSkillPrompts }) {
-  const { packages, packageRoot, explicit = false, mode = 'compiled', extra = {}, nativeAnswer, prompts } = options
+export async function nativeSkillFixture(options: { packages: string; packageRoot?: string; explicit?: boolean|'prompt-only'; mode?: 'full'|'compiled'; extra?: object; skillToolPlacement?: 'global' | 'late' | 'agent'; nativeAnswer?: (request: any) => Promise<any>; prompts?: DshSkillPrompts }) {
+  const { packages, packageRoot, explicit = false, mode = 'compiled', extra = {}, skillToolPlacement = 'global', nativeAnswer, prompts } = options
   if (prompts && explicit !== true) throw new Error('Custom source snapshots require the explicit production host')
   const subject: typeof import('../../../src/dsh/index.js') = await import(packageRoot
     ? pathToFileURL(join(packageRoot, 'dist/index.js')).href : '../../../src/dsh/index.js')
@@ -56,7 +56,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
     })})})}}))
   }
   const initial=explicit==='prompt-only'?[llm,prompt,skills]:[llm,session,projection,prompt,tools,agents,skills,commands,subagents,skillTool]
-  for(const m of initial) fibers.push(await ctx.plugin(m.default??m, m===prompt?{persona:''}:undefined))
+  for(const m of initial) if (m !== skillTool || skillToolPlacement === 'global') fibers.push(await ctx.plugin(m.default??m, m===prompt?{persona:''}:undefined))
   if(explicit!=='prompt-only'){fibers.push(await ctx.plugin(loop.default,{agents:[]}));fibers.push(await ctx.plugin(spawn,{providerName:'spawn'}))}
   const responses: any[] = [], model = new mock.MockAdapter(responses)
   ctx.llm.registerAdapter(['mock'],model)
@@ -73,10 +73,12 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
     ? await subject.mountDshComposition(ctx, adapter!.host, subject.Config.parse({ ...extra }).lisp, prompts)
     : await mountPlugin(mode)
   if(explicit==='prompt-only'){
-    for(const m of [session,projection,tools,agents,commands,skillTool])fibers.push(await ctx.plugin(m.default??m))
+    for(const m of [session,projection,tools,agents,commands,skillTool])if (m !== skillTool || skillToolPlacement === 'global') fibers.push(await ctx.plugin(m.default??m))
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
   }
+  if (skillToolPlacement === 'late') fibers.push(await ctx.plugin(skillTool.default ?? skillTool))
   const agent = await ctx.agentLoop.create(session.SessionId('skill-main'),{provider:'mock',model:'qwen3-coder'},{cwd:workspace})
+  if (skillToolPlacement === 'agent') fibers.push(await agent.ctx.plugin(skillTool.default ?? skillTool))
   offQuestions = nativeAnswer ? agent.ctx.on('user-questions/request', nativeAnswer) : undefined
   const errors: unknown[]=[]
   off=ctx.on('agent/error',(e:any)=>errors.push(e.error))

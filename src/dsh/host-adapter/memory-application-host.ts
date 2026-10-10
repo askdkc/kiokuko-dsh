@@ -9,6 +9,7 @@ import type { DshEnnoDelegation } from '../enno-delegation.js'
 import type { DshIntakeGate, DshCapabilityReadContext } from '../intake-gate.js'
 import type { DshCapabilityCatalog } from '../capability-catalog.js'
 import { mountMemoryApplication } from '../memory-application.js'
+import type { OnDemandIntake } from '../on-demand-intake.js'
 import { refreshContinuedTaskContext } from '../task-intake.js'
 import { bindMemoryApplication, memoryRetrievalStatus } from '../../memory/application.js'
 import type { MemoryRetrievalConfig } from '../../memory/retrieval-contracts.js'
@@ -16,6 +17,7 @@ import type { MemoryRetrievalConfig } from '../../memory/retrieval-contracts.js'
 interface MemoryApplicationHostDependencies {
   readonly ctx: Context
   readonly runtime: DshCoreRuntime
+  readonly demand?: OnDemandIntake | undefined
   readonly tools: NativeTools | undefined
   readonly commands: NativeCommands | undefined
   readonly skills: NativeSkills | undefined
@@ -34,6 +36,7 @@ export function mountHostMemoryApplication(deps: MemoryApplicationHostDependenci
     currentSession, turnState, gate, capabilityCatalog, memoryRetrievalConfig } = deps
   return tools ? mountMemoryApplication({ tools: tools as any, on: (name: string, listener: (...args: any[]) => unknown, options?: { prepend?: boolean }) => onNativeServiceEvent(ctx, name, listener, options), ...(commands ? { commands: commands as any } : {}) }, {
     runtime,
+    preparationOnly: execution => deps.demand?.preparationOnly(execution) === true,
     session(value) {
       const agent = value as NativeAgent | undefined
       if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || typeof agent.session.header?.cwd !== 'string') return undefined

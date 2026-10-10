@@ -10,7 +10,7 @@ export interface ApprovalConfigSource { namespace: string; path: string[]; mode(
 /** The native Loader owns live references; business validation remains in Zod. */
 export function nativeApprovalConfig<T extends z.ZodObject>(schema: T, path = ['lisp', 'approvalMode']) {
   const fields = Object.fromEntries(Object.keys(schema.shape).map(key => [key, Schema.any()]))
-  let live = Schema.union([Schema.const('ask'), Schema.const('auto')]).default('auto').volatile() as Schema
+  let live = Schema.union([Schema.const('ask'), Schema.const('auto')]).default('ask').volatile() as Schema
   for (const key of [...path].reverse()) live = Schema.object({ [key]: live })
   const native = Schema.object({ ...fields, ...live.dict })
   return Object.assign(native, { parse: schema.parse.bind(schema), safeParse: schema.safeParse.bind(schema) })

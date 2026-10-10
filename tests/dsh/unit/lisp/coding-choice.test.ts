@@ -92,3 +92,11 @@ for (const [number, effect] of [['1', 'enable'], ['2', 'decline'], ['3', 'cancel
     assert.deepEqual(f.effects, effect === 'cancel' ? [] : [effect])
   })
 }
+
+for (const taskType of ['chat', 'research', 'review', 'devops', 'writing', 'analysis'] as const) test(`${taskType} never implicitly chooses or enables Lisp`, async () => {
+  const f = fixture([])
+  assert.equal((await f.service.prepare({ ...f.input, taskType })).taskType, taskType)
+  assert.deepEqual(f.asked, [])
+  assert.deepEqual(f.effects, [])
+  assert.equal(f.service.enabled(f.input.agent), false)
+})

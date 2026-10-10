@@ -25,6 +25,7 @@ import { DshIntakeGate, type DshPreStepDecision, type DshPreStepEvent, type DshP
 import { mountDshIdleLifecycle, mountDshSessionLifecycle, type DshCloseIntent, type DshIdleLifecycleContext, type DshNativeSession, type DshRunLifecycle, type DshSessionLifecycleContext } from './session-bridge.js'
 import { mountDshToolPolicy, type DshToolPolicy } from './tool-policy.js'
 import { mountDshModelTools, type DshToolDefinition, type DshToolHost, type DshToolRegistrationContext } from './tools.js'
+import { mountNativeSearch } from './native-search.js'
 import { DshPonytailModes, mountDshPonytailCommand, type DshPonytailCommandContext } from './commands.js'
 import { mountStandardSkillProvider, type DshSkillContext } from './standard-skill-provider.js'
 import { mountSoulPrompt } from './prompt-policy.js'
@@ -381,6 +382,8 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
         on: (name, listener, options) => ctx.on(name as never, listener as never, options),
       }, host.toolPolicy))
       ingressDisposers.push(mountDshModelTools({ tools: registration }, host.toolHost, host.modelToolDefinitionsChanged))
+      // The plugin owns its search tool: a scoped registration shadows the native global grep per agent.
+      ingressDisposers.push(mountNativeSearch(ctx as unknown as Parameters<typeof mountNativeSearch>[0]))
     }
     if (host.intakeGate !== undefined) {
       if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')

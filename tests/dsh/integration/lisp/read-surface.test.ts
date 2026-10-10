@@ -115,7 +115,7 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     const unresolved = await call('task_memory_review', { action: 'status' })
     assert.equal(unresolved.isError, false, JSON.stringify(unresolved))
     assert.equal(unresolved.value.pending[0].problem, 'decision_missing')
-    assert.match(JSON.stringify(await call('lisp_eval', { operationId: 'unreviewed', code: '(+ 1 2)' })), /resolve memory decisions/)
+    assert.doesNotMatch(JSON.stringify(await call('lisp_eval', { operationId: 'unreviewed', code: '(+ 1 2)' })), /resolve memory decisions/u, 'an unresolved decision never rejects Lisp work')
     if (placement === 'restricted-preset') {
       assert.equal(ctx.tools.schemas(parent).some((s: any) => s.name === 'grep'), false)
       assert.equal((await call('grep')).isError, true, 'pre-existing restrictions must remain effective')

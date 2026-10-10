@@ -43,6 +43,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
  if(mode==='seed'){agent.session.append('user/message',{id:randomUUID(),role:'user',content:[{type:'text',text:'Approval fixture'}],source:{kind:'user'}},{surfaceOp:'append'}); result={kind:'success'};}
  else if(mode==='approval-status') result=(await ctx.commands.execute(agent,'/kioku-lisp approval status',[],request.signal)).result;
  else if(mode==='enable') result=(await ctx.commands.execute(agent,'/kioku-lisp enable',[],request.signal)).result;
+ else if(mode==='approval-ask') result=(await ctx.commands.execute(agent,'/kioku-lisp approval ask',[],request.signal)).result;
  else {
  const code=mode.startsWith('apply')?'(kioku.files:propose-write "change.txt" "'+mode+'")':mode==='verify'?'(kioku.ci:verify :typecheck)':'(kioku.ci:verify :test :script "test:packages")';
  responses.push(...mock.prepareWork([mock.toolCallResponse(randomUUID(),'lisp_eval',{operationId:randomUUID(),code}),(input)=>{const results=nativeToolResults(input.messages);result=results.at(-1);return mock.textResponse('Fixture complete')}],'research',randomUUID()));
@@ -74,19 +75,20 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   const records = async () => (await readFile(receipts, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse)
   await command('/lisp-approval-fixture seed')
   await poll(async()=> (await records()).find(r=>r.mode==='seed'))
+  assert.equal(await page.getByRole('combobox',{name:'Lisp approvals'}).count(),0,'ordinary chat has no global Lisp approval selector')
   await command('/lisp-approval-fixture enable')
   assert.equal((await poll(async () => (await records()).find(r => r.mode === 'enable'))).result.kind, 'success')
   await page.setViewportSize({width:390,height:844})
-  const initial=page.getByRole('combobox',{name:'Lisp approvals'}).first()
-  await poll(async()=>await initial.inputValue()==='auto')
+  await command('/lisp-approval-fixture approval-status')
+  assert.match((await poll(async()=> (await records()).find(r=>r.mode==='approval-status'))).result.text,/ask/)
   await command('/lisp-approval-fixture apply-default')
-  const defaultApplied=await poll(async()=> (await records()).find(r=>r.mode==='apply-default'))
-  assert.match(JSON.stringify(defaultApplied.result),/APPLIED/)
-  assert.equal(await readFile(join(project,'change.txt'),'utf8'),'apply-default')
-  assert.equal(await page.getByText('Auto-approve all Lisp actions for this profile and continue',{exact:false}).count(),0)
-  // Manual consent remains an explicit profile choice, including its one-action enable option.
-  await initial.selectOption('ask')
-  await poll(async()=>await initial.inputValue()==='ask')
+  await page.getByText('Auto-approve all Lisp actions for this profile and continue',{exact:false}).first().waitFor()
+  assert.equal(await readFile(join(project,'change.txt'),'utf8'),'before','default policy cannot write before consent')
+  await page.keyboard.press('2'); await page.keyboard.press('Enter')
+  const defaultDenied=await poll(async()=> (await records()).find(r=>r.mode==='apply-default'))
+  assert.match(JSON.stringify(defaultDenied.result),/NOT_APPLIED/)
+  assert.equal(await readFile(join(project,'change.txt'),'utf8'),'before','denial preserves existing bytes')
+  // A later independent operation can explicitly enable profile auto-approval.
   await command('/lisp-approval-fixture apply')
   await page.getByText('Auto-approve all Lisp actions for this profile and continue', {exact:false}).first().waitFor()
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true,'approval fits narrow viewport')
@@ -96,8 +98,9 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   const applied=await poll(async () => (await records()).find(r => r.mode === 'apply'))
   const resultValue = result => JSON.parse(result.content.find(block=>block.type==='text').text)
   const generation=resultValue(applied.result).generation
+  const autoStatusCount=(await records()).length
   await command('/lisp-approval-fixture approval-status')
-  const reported=(await poll(async()=> (await records()).find(r=>r.mode==='approval-status'))).result
+  const reported=await poll(async()=>{const rows=await records();return rows.length>autoStatusCount ? rows.at(-1).result : undefined})
   assert.match(reported.text,/auto/)
   assert.equal(await readFile(join(project,'change.txt'),'utf8'),'apply')
   for (const mode of ['apply-again','verify','packages']) {
@@ -116,18 +119,20 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
     await command('/lisp-approval-fixture '+mode)
     await poll(async()=> (await records()).length > count)
   }
-  const restarted=page.getByRole('combobox',{name:'Lisp approvals'}).first()
-  await poll(async()=>await restarted.inputValue()==='auto')
+  const statusCount=(await records()).length
+  await command('/lisp-approval-fixture approval-status')
+  assert.match((await poll(async()=>{const rows=await records();return rows.length>statusCount ? rows.at(-1).result : undefined})).text,/auto/)
+  assert.equal(await page.getByRole('combobox',{name:'Lisp approvals'}).count(),0)
   const count=(await records()).length
   await command('/lisp-approval-fixture verify')
   assert.match(JSON.stringify(await poll(async()=>{const rows=await records();return rows.length>count ? rows.at(-1).result : undefined})),/SUCCEEDED/)
-  const control=page.getByRole('combobox',{name:'Lisp approvals'}).first()
-  await control.selectOption('ask')
-  await poll(async()=>await control.inputValue()==='ask')
+  const resetCount=(await records()).length
+  await command('/lisp-approval-fixture approval-ask')
+  assert.equal((await poll(async()=>{const rows=await records();return rows.length>resetCount ? rows.at(-1).result : undefined})).kind,'success')
   await command('/lisp-approval-fixture verify')
   await page.getByText('Auto-approve all Lisp actions for this profile and continue',{exact:false}).first().waitFor()
   await page.keyboard.press('2'); await page.keyboard.press('Enter')
-  console.log(JSON.stringify({result:'passed',runtime,checks:['fresh profile auto by default','enable and continue','file effect','multiple file changes','consecutive verifiers','cold restart and new chat','disable restores manual'],externalModelCalls:0}))
+  console.log(JSON.stringify({result:'passed',runtime,checks:['ordinary chat has no Lisp approval selector','fresh profile asks by default','denial preserves bytes','explicit enable and continue','file effect','multiple file changes','consecutive verifiers','cold restart and new chat','disable restores manual'],externalModelCalls:0}))
 
 } catch (e) { console.error(await readFile(receipts,'utf8').catch(()=>'')); console.error(logs.slice(-5000)); if (page) console.error((await page.locator('body').innerText().catch(() => '')).slice(-4000)); throw e }
 finally {
