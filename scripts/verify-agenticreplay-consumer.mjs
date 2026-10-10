@@ -50,6 +50,7 @@ try {
   })) {}
   await recorder.shutdown();
   const status = recorder.status(binding.sessionId); assert.equal(status.trace.state, 'completed');
+  assert.equal(await readFile(join(root, '.gitignore'), 'utf8'), '.agenticreplay/\\n');
   const dir = join(root, '.agenticreplay/runs', status.trace.agenticreplay_run_id);
   const installed = JSON.parse(await readFile(findPackageJSON('@agenticreplay/core', coreEntry), 'utf8'));
   const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));

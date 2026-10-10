@@ -63,6 +63,51 @@ export async function privateDirectory(target: string): Promise<void> {
   }
   await checkPrivatePath(target, true)
 }
+const gitignoreWrites = new Map<string, Promise<void>>()
+/** Append protection without replacing user content. Serialize sessions sharing a store. */
+export async function ensureAgenticReplayGitignore(root: string): Promise<void> {
+  const previous = gitignoreWrites.get(root) ?? Promise.resolve()
+  const pending = previous.catch(() => undefined).then(async () => {
+    const target = path.join(root, '.gitignore')
+    try {
+      // Do not follow links or block opening a FIFO supplied as .gitignore.
+      const handle = await open(target, constants.O_RDONLY | constants.O_CREAT
+        | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK, 0o644)
+      try {
+        const stat = await handle.stat()
+        const limit = 1_048_576
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit
+          || (process.getuid !== undefined && stat.uid !== process.getuid())) throw new Error('unsafe gitignore')
+        const buffer = Buffer.alloc(stat.size + 1)
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+        if (bytesRead !== stat.size) throw new Error('gitignore changed')
+        const text = buffer.subarray(0, bytesRead).toString('utf8')
+        const lines = text.split(/\r?\n/u)
+        let rule = -1
+        for (let index = 0; index < lines.length; index++) {
+          if (/^(?:\/)?\.agenticreplay\/?\s*$/u.test(lines[index]!)) rule = index
+        }
+        // A later negation can override an earlier rule. Append after it.
+        const current = await lstat(target)
+        if (current.isSymbolicLink() || current.ino !== stat.ino || current.dev !== stat.dev
+          || (await handle.stat()).size !== stat.size) throw new Error('gitignore changed')
+        if (rule >= 0 && !lines.slice(rule + 1).some(line => line.startsWith('!'))) return
+        const newline = text.includes('\r\n') ? '\r\n' : '\n'
+        const writer = await open(target, constants.O_WRONLY | constants.O_APPEND
+          | (constants.O_NOFOLLOW ?? 0) | constants.O_NONBLOCK)
+        try {
+          const opened = await writer.stat()
+          if (opened.ino !== stat.ino || opened.dev !== stat.dev || opened.size !== stat.size
+            || opened.nlink !== 1) throw new Error('gitignore changed')
+          await writer.writeFile(`${text && !text.endsWith('\n') ? newline : ''}.agenticreplay/${newline}`)
+          await writer.sync()
+        } finally { await writer.close() }
+      } finally { await handle.close() }
+    } catch { throw new AgenticReplayError('gitignore_protection_failed') }
+  })
+  gitignoreWrites.set(root, pending)
+  try { await pending } finally { if (gitignoreWrites.get(root) === pending) gitignoreWrites.delete(root) }
+}
 /** Validate every store ancestor without chmod-ing existing user directories. */
 export async function prepareAgenticReplayParent(root: string): Promise<string> {
   if (!path.isAbsolute(root) || root === path.parse(root).root || root.includes('\0')) throw new AgenticReplayError('unsafe_path')
@@ -81,6 +126,7 @@ export async function prepareAgenticReplayParent(root: string): Promise<string> 
     }
   }
   for (const directory of ancestors.reverse()) await privateDirectory(directory)
+  await ensureAgenticReplayGitignore(root)
   await privateDirectory(path.join(root, '.agenticreplay'))
   await privateDirectory(path.join(root, '.agenticreplay', 'runs'))
   const ignore = path.join(root, '.agenticreplay', '.gitignore')

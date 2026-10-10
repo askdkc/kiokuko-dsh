@@ -123,6 +123,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     assert.equal(rows.length, 1)
     assert.equal(rows[0].state, 'completed', JSON.stringify(rows))
     assert.equal(rows[0].store_root, root)
+    assert.match(await readFile(join(root, '.gitignore'), 'utf8'), /^\.agenticreplay\/$/mu)
     const id = rows[0].agenticreplay_run_id
     const page = await command(a, `show ${id}`)
     assert.equal(page.events.filter((e: any) => e.type === 'model.request').length, 3)
@@ -130,6 +131,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     assert.equal(page.events.find((e: any) => e.type === 'tool.result' && e.attrs.name === TASK_PREPARE_TOOL).attrs.is_error, false)
     const exported = await command(a, `export ${id}`)
     assert.ok((await readFile(exported.path, 'utf8')).includes('kiokuko-dsh'))
+    execFileSync('git', ['-C', root, 'check-ignore', exported.path], { stdio: 'ignore' })
     const denied = await ctx.commands.execute(b, `/kioku-agenticreplay show ${id}`, [], signal)
     assert.equal(denied.result.text, 'trace_not_found')
     const deniedWorkspace = await ctx.commands.execute(other, `/kioku-agenticreplay show ${id}`, [], signal)

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { appendFile, chmod, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, readFile, writeFile, rm, symlink, access } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { mountDshAgenticReplayCommand } from '../../../src/dsh/agenticreplay-command-surface.js'
 import { DshAgenticReplayReadService } from '../../../src/dsh/agenticreplay-read-service.js'
@@ -13,6 +14,25 @@ async function completed(f: Awaited<ReturnType<typeof agenticReplayFixture>>) {
   await f.recorder.closeSessionRecording(f.binding.sessionId, 'manual')
   return (await f.reader.list(f.binding))[0]!
 }
+test('export repairs a removed root ignore rule and rejects unsafe replacement before writing HTML', async () => {
+  const f = await agenticReplayFixture()
+  try {
+    execFileSync('git', ['init', '-q', f.root])
+    const row = await completed(f)
+    const ignore = join(f.root, '.gitignore')
+    await rm(ignore)
+    const target = join(f.root, 'user-owned')
+    await writeFile(target, 'preserve me')
+    await symlink(target, ignore)
+    await assert.rejects(f.reader.export(f.binding, row.agenticreplay_run_id), /gitignore_protection_failed/u)
+    await assert.rejects(access(join(f.root, '.agenticreplay/exports')))
+    assert.equal(await readFile(target, 'utf8'), 'preserve me')
+    await rm(ignore)
+    const output = await f.reader.export(f.binding, row.agenticreplay_run_id)
+    assert.equal(await readFile(ignore, 'utf8'), '.agenticreplay/\n')
+    execFileSync('git', ['-C', f.root, 'check-ignore', output], { stdio: 'ignore' })
+  } finally { await f.dispose() }
+})
 test('legacy OrcaReplay manifests are rejected even inside the new storage namespace', async () => {
   const f = await agenticReplayFixture()
   try {

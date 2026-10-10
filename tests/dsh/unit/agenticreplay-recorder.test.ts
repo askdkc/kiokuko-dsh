@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile, access, symlink } from 'node:fs/promises'
+import { readFile, access, symlink, writeFile, mkdir, chmod } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { loadAgenticReplayLibrary } from '../../../src/dsh/agenticreplay-libraries.js'
 import { Config, AgenticReplayConfig } from '../../../src/dsh/config.js'
@@ -8,6 +9,62 @@ import { projectAgenticReplayJson } from '../../../src/dsh/agenticreplay-securit
 import { agenticReplayFixture, chunks, collect, request, response } from '../helpers/agenticreplay-fixture.js'
 
 const { TraceReader, TraceWriter } = await loadAgenticReplayLibrary('core')
+
+for (const initial of [undefined, '# keep\nnode_modules/', '# keep\r\nnode_modules/\r\n', '.agenticreplay\nnode_modules/\n', '.agenticreplay/\n!.agenticreplay/\n']) {
+  test(`recording protects the storage root before writer creation and preserves ignore content: ${JSON.stringify(initial)}`, async () => {
+    let creates = 0
+    const f = await agenticReplayFixture({}, { createWriter: async (...args) => {
+      creates++
+      const ignore = await readFile(join(f.root, '.gitignore'), 'utf8')
+      if (initial !== undefined) assert.ok(ignore.startsWith(initial))
+      execFileSync('git', ['-C', f.root, 'check-ignore', '.agenticreplay/exports/fixture.html'], { stdio: 'ignore' })
+      return TraceWriter.create(...args)
+    } })
+    try {
+      execFileSync('git', ['init', '-q', f.root])
+      if (initial !== undefined) await writeFile(join(f.root, '.gitignore'), initial)
+      await Promise.all([f.binding, { ...f.binding, sessionId: 'parallel' }].map(binding => collect(f.recorder.stream(binding, request, () => chunks(response())))))
+      await f.recorder.closeSessionRecording(f.binding.sessionId, 'manual')
+      const once = await readFile(join(f.root, '.gitignore'), 'utf8')
+      assert.equal(once.split(/\r?\n/u).filter(line => ['.agenticreplay', '.agenticreplay/'].includes(line)).length, initial?.includes('!.agenticreplay/') ? 2 : 1)
+      f.recorder.start(f.binding)
+      await collect(f.recorder.stream(f.binding, request, () => chunks(response())))
+      await f.recorder.shutdown()
+      assert.equal(creates, 3)
+      assert.equal(await readFile(join(f.root, '.gitignore'), 'utf8'), once)
+      assert.equal(execFileSync('git', ['-C', f.root, 'ls-files', '--others', '--exclude-standard', '.agenticreplay'], { encoding: 'utf8' }), '')
+    } finally { await f.dispose() }
+  })
+}
+
+for (const unsafe of ['symlink', 'directory'] as const) test(`unsafe root gitignore ${unsafe} prevents capture without changing native output`, async () => {
+  let creates = 0
+  const f = await agenticReplayFixture({}, { createWriter: async () => { creates++; throw new Error('must not create') } })
+  try {
+    const target = join(f.root, 'user-owned')
+    await writeFile(target, 'preserve me')
+    if (unsafe === 'symlink') await symlink(target, join(f.root, '.gitignore'))
+    else await mkdir(join(f.root, '.gitignore'))
+    assert.deepEqual(await collect(f.recorder.stream(f.binding, request, () => chunks(response()))), response())
+    await f.recorder.shutdown()
+    assert.equal(creates, 0)
+    assert.equal(f.recorder.status(f.binding.sessionId).trace?.last_error_code, 'gitignore_protection_failed')
+    assert.equal(await readFile(target, 'utf8'), 'preserve me')
+    await assert.rejects(access(join(f.root, '.agenticreplay/runs')))
+  } finally { await f.dispose() }
+})
+
+test('an already protected read-only gitignore permits recording without a write', async () => {
+  const f = await agenticReplayFixture()
+  try {
+    await writeFile(join(f.root, '.gitignore'), '.agenticreplay/\n')
+    await chmod(join(f.root, '.gitignore'), 0o444)
+    await collect(f.recorder.stream(f.binding, request, () => chunks(response())))
+    await f.recorder.shutdown()
+    assert.equal(f.recorder.status(f.binding.sessionId).trace?.state, 'completed')
+    assert.equal(await readFile(join(f.root, '.gitignore'), 'utf8'), '.agenticreplay/\n')
+  } finally { await f.dispose() }
+})
 
 test('new recordings use the AgenticReplay manifest contract and storage namespace', async () => {
   const f = await agenticReplayFixture()
@@ -44,6 +101,7 @@ test('disabled recording makes no trace files and does not create a writer', asy
     await f.recorder.shutdown()
     assert.equal(creates, 0)
     await assert.rejects(access(join(f.root, '.agenticreplay')))
+    await assert.rejects(access(join(f.root, '.gitignore')))
     assert.equal((await f.reader.list(f.binding)).length, 0)
   } finally { await f.dispose() }
 })

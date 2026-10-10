@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { access } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
 import { createDshAgenticReplayHost } from '../../../src/dsh/agenticreplay-host.js'
@@ -93,6 +93,7 @@ test('the default configuration records each chat without asking, while a saved 
     const rows = await f.reader.list(f.binding)
     assert.equal(rows.length, 1)
     assert.equal(rows[0]?.state, 'completed')
+    assert.match(await readFile(join(f.root, '.gitignore'), 'utf8'), /^\.agenticreplay\/$/mu)
     await f.reload(); await f.step(); await f.stream()
     assert.equal(asked, 0)
     assert.equal((await f.command('status --json')).sessionRecording, 'disabled')

@@ -4,7 +4,7 @@ import { rename, rm, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AgenticReplayConfig } from './config.js'
 import { AgenticReplayError, type DshAgenticReplayBinding, type WithAgenticReplayIndex } from './agenticreplay-types.js'
-import { checkedRunDir, checkPrivatePath, AGENTICREPLAY_RUN_ID, privateDirectory, workspaceKey } from './agenticreplay-security.js'
+import { checkedRunDir, checkPrivatePath, AGENTICREPLAY_RUN_ID, privateDirectory, workspaceKey, ensureAgenticReplayGitignore } from './agenticreplay-security.js'
 import { readAgenticReplayManifest, readAgenticReplayPage, scanAgenticReplayTrace } from './agenticreplay-files.js'
 
 export class DshAgenticReplayReadService {
@@ -75,6 +75,7 @@ export class DshAgenticReplayReadService {
     let viewer: ViewerLibrary
     try { viewer = await this.loadViewer() } catch { throw new AgenticReplayError('viewer_unavailable_reinstall_package') }
     const exports = join(row.store_root, '.agenticreplay', 'exports')
+    await ensureAgenticReplayGitignore(row.store_root)
     await privateDirectory(exports)
     const output = join(exports, `${id}.html`)
     async function verifyExisting() {

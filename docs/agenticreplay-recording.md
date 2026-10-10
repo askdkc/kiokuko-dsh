@@ -126,6 +126,20 @@ session uses its verified directory. No process-cwd or DSH_HOME fallback is used
 `<Kiokuko data directory>/traces/projects/<workspace hash>/.agenticreplay/runs` and respects
 the existing `KIOKUKO_DATA_DIR` setting. Hashing a path does not anonymize it.
 
+Before creating a recording or exporting HTML, the plugin adds `.agenticreplay/`
+to the storage root's `.gitignore` (the workspace root with default storage).
+Existing contents and line endings are preserved; repeated use does not duplicate
+an effective rule. The internal `.agenticreplay/.gitignore` remains as additional
+protection. If the root rule cannot be written safely, recording fails with
+`gitignore_protection_failed` without interrupting the native model/tool operation;
+HTML export fails without writing an export. Non-Git directories receive the
+same rule so a later `git init` also excludes these files.
+
+Ignore rules do not remove already tracked files or published history and can be
+bypassed by a forced add. Check `git ls-files -- .agenticreplay` for previously
+tracked captures before pushing; remove them from the index and address any
+already published sensitive data separately.
+
 `redacted` preserves text after known secret-pattern filtering. It cannot detect
 all arbitrary secrets. `metadata` omits message bodies, arguments and tool result
 bodies. Neither mode records environment variables, replayState, attachment bytes,
