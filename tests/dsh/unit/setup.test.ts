@@ -87,3 +87,19 @@ test('unsafe project directory rejects replacement; setup succeeds after permiss
   assert.equal((await setupDsh(options)).instructions.status, 'updated')
   assert.equal((await setupDsh({ ...options, check: true })).current, true)
 })
+
+
+test('setup delivers discovery-first file guidance across ordinary updates without rewriting user instructions', async t => {
+  const options = await fixture(t)
+  const userRules = 'USER_RULE: never silently replace a requested target.'
+  await writeFile(options.agents, `${userRules}n${legacy}nUSER_SUFFIX`)
+  await setupDsh(options)
+  const installed = await readFile(options.agents, 'utf8')
+  assert.ok(installed.includes('Discover unfamiliar repository filenames with native glob/grep before read; use an exact returned path.'))
+  assert.ok(installed.includes('Never infer a test filename from a source basename or treat remembered/example paths as current filesystem evidence.'))
+  assert.ok(installed.includes('Do not create placeholder files or silently substitute another target to hide a missing-file error.'))
+  assert.ok(installed.startsWith(userRules))
+  assert.ok(installed.endsWith('USER_SUFFIX'))
+  assert.equal((await setupDsh(options)).instructions.status, 'unchanged')
+  assert.equal(await readFile(options.agents, 'utf8'), installed)
+})

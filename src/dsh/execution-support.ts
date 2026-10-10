@@ -47,6 +47,10 @@ interface SupportState {
 interface SupportContext {
   on(name: string, listener: (...args: any[]) => any, options?: { prepend?: boolean }): () => void
   tools?: { guard(listener: (execution: any) => string | undefined): () => void }
+  systemPrompt?: {
+    context(input: { name: string; order: number; required: boolean; interpolate: boolean; text: (context: any) => string }): () => void
+    getContextOrder(name: string): number
+  }
 }
 
 /** All optional observers contain failures; business receipts and leases are untouched. */
@@ -267,9 +271,13 @@ export class DshExecutionSupport {
       const state = this.#states.get(sessionId)
       if (!state || state.binding.chat) return messages
       const text = this.text(sessionId)
-      const isSnapshot = (message: any) => (message?.source?.kind === 'runtime-context'
-        || message?.source?.kind === 'plugin' && message.source.plugin === '@deepseek-ai/dsh-system-prompt')
-        && message.source.form === 'snapshot' && Array.isArray(message.source.sections)
+      const isSnapshot = (message: any) => {
+        const source = message?.source
+        const systemPrompt = source?.kind === 'plugin:@deepseek-ai/dsh-system-prompt'
+          || source?.kind === 'plugin' && source.plugin === '@deepseek-ai/dsh-system-prompt'
+        return (source?.kind === 'runtime-context' || systemPrompt)
+          && source.form === 'snapshot' && Array.isArray(source.sections)
+      }
       const current = [...messages].reverse().find(isSnapshot)
       const retained: any = current ? undefined : [...retainedEvents((state.binding.nativeSession ?? {}) as any)].reverse().find((event: any) =>
         isSnapshot(event.data?.message ?? event.data))
@@ -279,10 +287,11 @@ export class DshExecutionSupport {
       const body = 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n'
         + sections.map(item => item.text).join('\n\n')
       if (!current && before?.content?.[0]?.text === body) return messages
-      const snapshot = { ...(current ?? { id: randomUUID(), role: 'user' }),
-        content: [{ type: 'text', text: body }], source: {
-          kind: 'runtime-context', form: 'snapshot', sections,
-        } }
+      const base = current ?? before ?? { id: randomUUID(), role: 'user' }
+      const snapshot = { ...base,
+        content: [{ type: 'text', text: body }], source: base.source === undefined
+          ? { kind: 'runtime-context', form: 'snapshot', sections }
+          : { ...base.source, form: 'snapshot', sections } }
       return current ? messages.map(message => message === current ? snapshot : message) : [...messages, snapshot]
     } catch { return messages }
   }
@@ -292,6 +301,16 @@ export class DshExecutionSupport {
       const state = this.#states.get(agent?.session?.id)
       return state && state.binding.nativeAgent === agent && state.binding.nativeSession === agent.session ? state : undefined
     }
+    if (ctx.systemPrompt) this.#disposers.push(ctx.systemPrompt.context({
+      name: 'kiokuko:execution',
+      order: ctx.systemPrompt.getContextOrder('SANDBOX_POLICY'),
+      required: true,
+      interpolate: false,
+      text: (context: any) => {
+        const state = stateFor(context?.agent)
+        return state ? this.text(state.binding.sessionId) : ''
+      },
+    }))
     if (ctx.tools) this.#disposers.push(ctx.tools.guard(execution => {
       const state = stateFor(execution.agent)
       if (!state || state.binding.chat || state.binding.terminal) return undefined
@@ -345,8 +364,8 @@ export class DshExecutionSupport {
         }
       } catch { /* missing cursor is unknown evidence, never a native log failure */ }
     }))
-    // rc.1 agent/request carries configuration only. Dynamic context belongs to
-    // the native assembly/snapshot channel, which replaces rather than appends.
+    // Refresh persisted state during assembly; the registered context provider
+    // supplies the latest projection when DSH refreshes its request snapshot.
     this.#disposers.push(ctx.on('system-prompt/assemble', async (_assembly: any, context: any, next: () => Promise<any>) => {
       const assembly = await next()
       try {

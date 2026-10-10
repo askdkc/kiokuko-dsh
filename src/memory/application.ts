@@ -328,14 +328,16 @@ export function recordCompletedMemoryApplicationsInTransaction(db: SqliteDatabas
   }
 }
 
-/** Host pre-execution: unknown effectful calls invalidate prior proof, including concurrent work. */
+/** Host pre-execution: unknown effectful calls invalidate prior proof, including concurrent work.
+ * An unresolved decision never rejects the call: the effect runs so the user's work continues, the
+ * run stays incomplete until `task_memory_review` resolves it, and the epoch bump below still
+ * invalidates prior proof. */
 export function beginMemoryExecution(db: SqliteDatabase, identity: MemoryApplicationIdentity, callId: string, command: string | null): boolean {
   const initial = assertIdentity(db, identity)
   if ((JSON.parse(initial.required_json) as RequiredMemory[]).length === 0) return false
   return withImmediateTransaction(db, () => {
     const current = assertIdentity(db, identity), status = memoryApplicationStatus(db, identity.runId)
     if (!status.supported || !status.items.length) return false
-    if (memoryApplicationDecisionsPending(status)) conflict('Use task_memory_review to resolve memory decisions before executing or editing')
     const old = db.prepare('SELECT * FROM task_memory_executions WHERE run_id=? AND call_id=?').get<ExecutionRow>(identity.runId, callId)
     if (old) conflict('Native tool call was already observed; do not replay effects')
     const selected = command ? reviews(db, current).filter(row => {

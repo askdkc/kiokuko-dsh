@@ -9,6 +9,7 @@ import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import YAML from 'yaml'
+import { satisfies } from 'semver'
 import * as plugin from '../../../src/dsh/index.js'
 import { Config } from '../../../src/dsh/config.js'
 
@@ -68,7 +69,9 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   assert.equal(packageManifest.dsh?.client?.platform, 'web')
   assert.ok(packageManifest.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-session'))
   assert.ok(packageManifest.files?.includes('dsh/cordis.patch.yml'))
-  assert.equal(packageManifest.peerDependencies?.['@deepseek-ai/cordis'], '^4.0.2')
+  const cordis = JSON.parse(await readFile(join(repositoryRoot, 'node_modules/@deepseek-ai/cordis/package.json'), 'utf8'))
+  const cordisRange = packageManifest.peerDependencies?.['@deepseek-ai/cordis']
+  assert.ok(cordisRange && satisfies(cordis.version, cordisRange), 'the published peer range must admit the Cordis version used by native tests')
 
   const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{
     id?: string

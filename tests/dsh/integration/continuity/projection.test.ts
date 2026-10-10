@@ -44,6 +44,45 @@ test('off and shadow have identical requests, DB work and guard counts; active r
   } finally { shadow.dispose(); active.dispose(); await f.close() }
 })
 
+test('native context refresh reads the current bound agent and unregisters on disposal', async () => {
+  const f = await fixture({ continuity: { mode: 'active' } })
+  let provider!: { text: (context: any) => string }
+  let disposed = false
+  try {
+    f.support.mount({ on: () => () => undefined, systemPrompt: {
+      getContextOrder: () => 110,
+      context(input) { provider = input; return () => { disposed = true } },
+    } })
+    assert.match(provider.text({ agent: f.agent }), /根拠を示す/)
+    assert.equal(provider.text({ agent: { session: f.agent.session } }), '')
+    assert.equal(provider.text({ agent: { session: { id: f.binding.sessionId } } }), '')
+    await f.support.refresh({ ...f.binding, terminal: true }, false)
+    assert.match(provider.text({ agent: f.agent }), /Terminal state/)
+    f.support.dispose()
+    assert.equal(disposed, true)
+    assert.equal(provider.text({ agent: f.agent }), '')
+  } finally { await f.close() }
+})
+
+test('active continuity replaces the current alpha developer system snapshot in place', async () => {
+  const f = await fixture({ continuity: { mode: 'active' } })
+  try {
+    const user = { id: 'human', role: 'user', content: [{ type: 'text', text: 'request' }] }
+    const alphaSnapshot = { id: 'alpha', role: 'developer', source: {
+      kind: 'plugin:@deepseek-ai/dsh-system-prompt', form: 'snapshot', sections: [{ name: 'other', text: 'CURRENT OTHER' }],
+    } }
+    const projected = f.support.projectMessages('session', [user, alphaSnapshot])
+    assert.equal(projected.length, 2)
+    assert.equal(projected[1].role, 'developer')
+    assert.equal(projected[1].source.kind, 'plugin:@deepseek-ai/dsh-system-prompt')
+    assert.match(projected[1].content[0].text, /CURRENT OTHER/)
+    assert.equal(projected[1].source.sections.filter((item: any) => item.name === 'kiokuko:execution').length, 1)
+    const again = f.support.projectMessages('session', projected)
+    assert.equal(again.length, 2)
+    assert.equal(again[1].source.sections.filter((item: any) => item.name === 'kiokuko:execution').length, 1)
+  } finally { await f.close() }
+})
+
 test('active acquisition never reuses a previous full presentation; observer failure calls next once', async () => {
   const observations: any[] = []
   const f = await fixture({ continuity: { mode: 'active' }, observe: (value: any) => { observations.push(value); throw new Error('observer failure') } })

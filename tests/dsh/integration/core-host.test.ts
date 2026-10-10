@@ -108,8 +108,8 @@ test('mounted core gates actionable memory and exposes a session-bound diagnosti
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
     await f.prepare('build')
     const execution = { callId: 'write', name: 'Edit', arguments: {}, agent: f.agent, signal: new AbortController().signal }
-    await assert.rejects(f.execute('Edit', {}), /resolve memory decisions/)
-    assert.equal(mutated, false)
+    await f.execute('Edit', {})
+    assert.equal(mutated, true, 'an unresolved decision never rejects the call')
     const tool = f.tools.find(tool => tool.name === 'task_memory_review')
     const status = await tool.execute({ action: 'status' }, { ...execution, name: 'task_memory_review' })
     assert.equal(status.ready, false)
@@ -228,13 +228,8 @@ test('core PTC mode exposes memory review only after requested work is prepared'
   execFileSync('git', ['init', '--quiet'], { cwd: f.root })
   let programs = 0
   f.services.tools.register({ name: 'run_code', description: 'Execute a fixture program', execute() { programs++; return { ran: true } } })
-  let presentation: 'ptc' | 'both' = 'ptc'
+  let presentation: 'ptc' = 'ptc'
   f.services.tools.modeFor = () => presentation
-  f.services.tools.presentAs = (mode: 'both') => {
-    assert.equal(mode, 'both')
-    presentation = mode
-    return () => { presentation = 'ptc' }
-  }
   ;(f.agent as any).ctx = {
     get: (name: string) => f.services[name],
     on: scope.on,
@@ -262,22 +257,25 @@ test('core PTC mode exposes memory review only after requested work is prepared'
     assert.equal(prepared.value.result.prepared, true)
     assert.equal(programs, 0, 'the preparation-only carrier must not execute a program')
     const pendingAssembly = await assemble()
-    assert.equal(presentation, 'both')
-    assert.ok(pendingAssembly.tools.some((tool: any) => tool.name === 'task_memory_review'), 'pending memory decisions must expose direct native review')
-    const status = await f.execute('task_memory_review', { action: 'status' })
+    assert.equal(presentation, 'ptc')
+    assert.deepEqual(pendingAssembly.tools.map((tool: any) => tool.name), ['run_code'], 'pending memory decisions keep the native PTC transport')
+    const reviewTool = f.tools.find((tool: any) => tool.name === 'task_memory_review')
+    const reviewExecution = { agent: f.agent, name: 'task_memory_review', callId: 'review-status', signal: new AbortController().signal }
+    const status = await reviewTool.execute({ action: 'status' }, reviewExecution)
     assert.equal(status.pending[0]?.problem, 'decision_missing')
-    await assert.rejects(f.execute('run_code', { description: 'Attempt work before review', code: 'return "must not run"' }), /resolve memory decisions/)
-    assert.equal(programs, 0)
-    await f.execute('task_memory_review', { action: 'review', review: { generation: status.generation, entryId: status.pending[0].entryId,
+    const premature = await f.execute('run_code', { description: 'Attempt work before review', code: 'return "runs while unresolved"' })
+    assert.deepEqual(premature, { ran: true }, 'the program runs while the decision is unresolved')
+    assert.equal(programs, 1, 'the program runs while the decision is unresolved')
+    await reviewTool.execute({ action: 'review', review: { generation: status.generation, entryId: status.pending[0].entryId,
       entryRevision: status.pending[0].revision, expectedRevision: 0, decision: 'not_applicable', paths: [],
-      basis: 'This stored lesson does not apply to the isolated fixture task.' } })
-    const afterReview = await f.execute('task_memory_review', { action: 'status' })
+      basis: 'This stored lesson does not apply to the isolated fixture task.' } }, { ...reviewExecution, callId: 'review-apply' })
+    const afterReview = await reviewTool.execute({ action: 'status' }, { ...reviewExecution, callId: 'review-status-after' })
     assert.equal(afterReview.pending.length, 0, JSON.stringify(afterReview.pending))
     const afterAssembly = await assemble()
     assert.equal(presentation, 'ptc')
     assert.deepEqual(afterAssembly.tools.map((tool: any) => tool.name), ['run_code'])
     assert.deepEqual(await f.execute('run_code', { description: 'Perform prepared work', code: 'return "fixture complete"' }), { ran: true })
-    assert.equal(programs, 1, 'review completion must restore usable PTC execution')
+    assert.equal(programs, 2, 'review completion restores usable PTC execution')
   } finally { await handle.dispose(); await f.cleanup() }
 })
 

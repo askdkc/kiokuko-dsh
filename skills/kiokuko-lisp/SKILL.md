@@ -354,12 +354,17 @@ shortlist order for selection; source and test for diagnosis. Define `obj` first
 <!-- kiokuko:documentation approval-help -->
 ## Profile-wide Lisp approval policy
 
-`lisp.approvalMode` defaults to `auto`; no enabling command is needed. Explicit
-configuration and saved profile settings can select `ask`. Use General settings
-or `/kioku-lisp approval ask` for manual consent on subsequent operations. Return
-to auto with `/kioku-lisp approval auto` or “Auto-approve all Lisp actions for this
-profile and continue” in a Lisp approval dialog. Native profile settings persist
-across chats and restarts and override the composition default.
+`lisp.approvalMode` defaults to `ask`; auto-approval is never inferred from an
+unknown request or from selecting Lisp. Ordinary questions keep normal execution
+without a Lisp choice or an approval selector in the chat composer. Once a task
+is identified as coding implementation or debugging, the existing coding choice
+can offer protected Lisp or normal execution; coding plans do not require Lisp.
+Auto-approval is an explicit opt-in through General settings,
+`/kioku-lisp approval auto`, or “Auto-approve all Lisp actions for this profile and
+continue” in a Lisp approval dialog. Use `/kioku-lisp approval ask` to return to
+manual consent. Explicit configuration and saved profile settings persist across
+chats and restarts and override the default; changing the default does not revoke
+a previously saved choice.
 All Lisp permission categories are covered, including file restoration, host
 verification, public npm package operations, and shared-function changes.
 

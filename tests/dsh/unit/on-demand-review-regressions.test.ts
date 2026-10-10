@@ -8,12 +8,12 @@ import { pathToFileURL } from 'node:url'
 import nativeTest, { type TestContext } from 'node:test'
 import { OnDemandIntake, TASK_PREPARE_TOOL, type DemandAgent, type DemandInput } from '../../../src/dsh/on-demand-intake.js'
 
-const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime-current/node_modules')
+const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const nativeAvailable = ['cordis', 'dsh-tools'].every(name => existsSync(join(packages, '@deepseek-ai', name, 'lib/index.js')))
 if (!nativeAvailable && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Review regressions require a pinned native DSH fixture')
 const test = nativeAvailable ? nativeTest : nativeTest.skip
 const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
-const [cordis, nativeTools] = nativeAvailable ? await Promise.all([load('cordis'), load('dsh-tools')]) : [undefined, undefined]
+const [cordis, nativeTools, nativeScope] = nativeAvailable ? await Promise.all([load('cordis'), load('dsh-tools'), load('dsh-scope')]) : [undefined, undefined, undefined]
 const signal = () => new AbortController().signal
 function deferred() {
   let resolve!: () => void
@@ -27,7 +27,7 @@ function event(type: string, turn: number) {
   return { type, seq: turn * 2 + (type === 'turn/end' ? 1 : 0), time: 0, data: { turn } }
 }
 type Dependencies = ConstructorParameters<typeof OnDemandIntake>[0]
-async function fixture(t: TestContext, options: Partial<Dependencies> = {}) {
+async function fixture(t: TestContext, options: Partial<Dependencies> = {}, skillPlacement: 'global' | 'late' | 'agent' = 'global') {
   const ctx = new cordis.Context()
   ctx.provide('systemPrompt', { tools: () => () => {}, section: () => () => {}, getSectionOrder: () => 0 })
   const fiber = ctx.plugin(nativeTools.default)
@@ -37,10 +37,15 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}) {
   const agent = { id: 'review-agent', session }
   const admissions: DemandInput[] = [], advice: string[] = []
   let skillReads = 0
-  let releaseSkill = ctx.tools.register({ name: 'skill', parameters: { type: 'object' },
+  const scope = skillPlacement === 'agent' ? nativeScope.createScope(ctx, agent) : undefined
+  if (scope) (agent as any).ctx = scope.ctx
+  const skillContext = scope?.ctx ?? ctx
+  let releaseSkill = () => {}
+  const installSkill = () => { releaseSkill = skillContext.get('tools').register({ name: 'skill', parameters: { type: 'object' },
     output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
     execute: () => { skillReads++; return 'installed Skill body' },
-  })
+  }) }
+  if (skillPlacement === 'global') installSkill()
   let readyTurn: number | undefined, bodies = 0, call = 0
   const intake = new OnDemandIntake({
     validate: async input => { assert.equal(input.agent, agent); assert.equal(input.agent.session, session) },
@@ -51,16 +56,18 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}) {
     ...options,
   })
   intake.mount(ctx, ctx.tools)
+  if (skillPlacement !== 'global') installSkill()
   const releaseProbe = ctx.tools.register({ name: 'review_probe', parameters: { type: 'object', properties: {}, additionalProperties: false },
     output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
     execute: () => { bodies++; return 'review body' },
   })
-  t.after(async () => { await intake.dispose(); releaseProbe(); releaseSkill(); await fiber.dispose() })
+  t.after(async () => { await intake.dispose(); releaseProbe(); releaseSkill(); await scope?.dispose(); await fiber.dispose() })
   return {
     ctx, agent, session, events, intake, admissions, advice,
     bodies: () => bodies,
     skillReads: () => skillReads,
-    rebindSkill() { releaseSkill(); releaseSkill = ctx.tools.register({ name: 'skill', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => { skillReads++; return 'replacement' } }) },
+    removeSkill() { releaseSkill(); releaseSkill = () => {} },
+    rebindSkill() { releaseSkill(); releaseSkill = skillContext.get('tools').register({ name: 'skill', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => { skillReads++; return 'replacement' } }) },
     ready(turn: number) { readyTurn = turn },
     capture(messages = [human('original', 'Inspect src without changing any files.')], turn = 1) {
       return intake.capture({ agent, turn, step: 0, messages, signal: signal() })
@@ -91,6 +98,44 @@ test('on-demand review: conversational Skill reads preserve native denial and ex
   assert.equal((await f.execute('skill', {}, { agent: { ...f.agent } })).isError, true)
   const release = f.ctx.on('tools/pre-execute', async (_execution: unknown, _next: unknown) => ({ kind: 'deny', reason: 'native denial' }))
   t.after(release)
+  assert.equal((await f.execute('skill')).isError, true)
+  assert.equal(f.skillReads(), 0)
+  assert.equal(f.admissions.length, 0)
+})
+
+for (const placement of ['late', 'agent'] as const) test(`on-demand review: ${placement} Skill reader is pinned before execution preparation`, async t => {
+  const f = await fixture(t, {}, placement)
+  await f.capture([human('question', 'Explain the installed Skill without changing files.')])
+  assert.equal((await f.execute('skill')).isError, false)
+  assert.equal(f.skillReads(), 1)
+  assert.equal(f.admissions.length, 0)
+  assert.equal((await f.execute()).isError, true)
+  assert.equal(f.bodies(), 0)
+  const deny = f.ctx.tools.guard((execution: any) => execution.name === 'skill' ? 'native reader denial' : undefined)
+  try { assert.equal((await f.execute('skill')).isError, true); assert.equal(f.skillReads(), 1) } finally { deny() }
+  f.rebindSkill()
+  assert.equal((await f.execute('skill')).isError, true)
+  f.intake.finish(f.session, 1); f.events.push(event('turn/start', 2))
+  await f.capture([human('next', 'Explain again.')], 2)
+  assert.equal((await f.execute('skill')).isError, true, 'a later turn cannot adopt a replacement reader')
+  assert.equal(f.skillReads(), 1)
+  assert.equal(f.admissions.length, 0)
+})
+
+test('on-demand review: a reader registered after first capture cannot acquire a missing-reader exception', async t => {
+  const f = await fixture(t, {}, 'late')
+  f.removeSkill()
+  await f.capture()
+  f.rebindSkill()
+  assert.equal((await f.execute('skill')).isError, true)
+  assert.equal(f.skillReads(), 0)
+  assert.equal(f.admissions.length, 0)
+})
+
+test('on-demand review: startup reader replacement before first capture cannot inherit its exception', async t => {
+  const f = await fixture(t)
+  f.rebindSkill()
+  await f.capture()
   assert.equal((await f.execute('skill')).isError, true)
   assert.equal(f.skillReads(), 0)
   assert.equal(f.admissions.length, 0)

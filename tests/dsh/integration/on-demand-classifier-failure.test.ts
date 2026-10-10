@@ -16,7 +16,7 @@ import { nativeMock } from '../helpers/native-mock.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 
 isolateSkillHome()
-const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime-current/node_modules')
+const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const installed = existsSync(join(packages, '@deepseek-ai/dsh-tools/lib/index.js'))
 if (!installed && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Native runtime required for classifier failure tests')
 

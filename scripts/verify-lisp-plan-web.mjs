@@ -10,7 +10,7 @@ import { chromium } from 'playwright'
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
 const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-plan-web-')))
 const project = join(base, 'project'), receipts = join(base, 'receipts.jsonl')
-const dsh = process.env.DSH_BIN ?? join(root, 'tests/fixtures/dsh-runtime-current/node_modules/.bin/dsh')
+const dsh = process.env.DSH_BIN ?? join(root, 'tests/fixtures/dsh-runtime/node_modules/.bin/dsh')
 const env = { ...process.env, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'cache') }
 let host, browser, page, logs = ''
 async function poll(fn, timeout = 60000) {
@@ -25,7 +25,7 @@ try {
   await exec(dsh, ['plugin', '--profile', 'web', 'add', join(base, JSON.parse(packed.stdout)[0].filename), '--force'], { cwd: project, env, timeout: 120000, maxBuffer: 16 * 1024 ** 2 })
   const fixture = join(base, 'fixture.mjs')
   await writeFile(fixture, `import {appendFile} from 'node:fs/promises'; import {randomUUID} from 'node:crypto';
-import {agentEvents} from ${JSON.stringify(pathToFileURL(join(root,'tests/fixtures/dsh-runtime-current/node_modules/@deepseek-ai/dsh-agent/lib/index.js')).href)};
+import {agentEvents} from ${JSON.stringify(pathToFileURL(join(root,'tests/fixtures/dsh-runtime/node_modules/@deepseek-ai/dsh-agent/lib/index.js')).href)};
 export const name='lisp-plan-fixture'; export const inject=['workspaceRegistry','commands','tools','agents','sessionProjections'];
 export async function apply(ctx){
 await ctx.workspaceRegistry.create(${JSON.stringify(project)},'Lisp Plan verification');

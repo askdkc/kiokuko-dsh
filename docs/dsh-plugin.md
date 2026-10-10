@@ -11,9 +11,9 @@ not remove files or dependencies from an installed full package.
 
 ## Compatibility
 
-The current runtime target is **DSH 0.2.0-rc.2**. The prior **0.1.7-rc.2** runtime remains pinned in `tests/fixtures/dsh-runtime-0.1.7`. The earlier **0.1.6-alpha.1** source checkout at `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720` also passed its disposable-profile and 63 history checks.
+The current runtime target is **DSH 0.2.1-alpha.2**. Older runtime records remain historical evidence only.
 
-CI keeps the pinned DSH 0.1.5-rc.1 fixture for legacy-history and Web lifecycle coverage. The DSH 0.2.0-rc.2 job runs the full suite, native routing/history coverage, and packed Web lifecycle. The historical source-repair CLI tests deliberately use the legacy catalog that accepted v0/v3 fixtures. Local tests do not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
+CI uses the canonical DSH fixture for native history, routing and packed Web lifecycle coverage. Historical source-repair CLI tests use the current catalog's historical codecs for v0/v3 fixtures. Local tests do not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
 
 ## Model tool exposure
 
@@ -323,7 +323,7 @@ limit. The package is therefore not represented as a small, auto-approved
 plugin.
 
 The manifest declares MIT licensing, the canonical GitHub repository, Node.js
-`>=24.16.0`, DSH `0.1.2-rc.1`, and the verified `web` profile. Other DSH
+`>=24.16.0`, DSH `0.2.1-alpha.2`, and the verified `web` profile. Other DSH
 releases and `headless` remain unverified until a matching disposable-profile
 run is recorded.
 

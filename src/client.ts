@@ -79,10 +79,9 @@ function LispApprovalControl(props: Record<string, unknown>): unknown {
     catch (error) { setError(messageOf(error)) }
     finally { setBusy(false) }
   }
-  const auto = mode === 'auto'
   return jsxs('div', { children: [
     jsx('label', { children: jsxs(Fragment, { children: [
-      props.compact ? (auto ? 'Lisp: Auto-approve · Profile ' : 'Lisp: Ask · Profile ') : 'Lisp approvals · Entire profile ',
+      'Lisp approvals · Entire profile ',
       jsxs('select', { 'aria-label': 'Lisp approvals', value: mode ?? 'ask', disabled: busy || !field || state.status !== 'ready' || !state.writable,
         onChange: (event: { target: { value: string } }) => void update(event.target.value),
         children: [jsx('option', { value: 'ask', children: 'Ask' }), jsx('option', { value: 'auto', children: 'Auto-approve all' })] }),
@@ -1305,11 +1304,9 @@ function installReviewStyle(): () => void {
 /** Register Kiokuko's streaming Session-export browser surface. */
 export function apply(ctx: DshClientContext): void {
   const installApprovals = (scope: DshClientContext, approvalScope: LispApprovalScope, modern: boolean) => {
-    for (const name of ['settings.general.item', 'conversation.input.left']) {
-      scope.slots.inject(name, () => scope.slots.register({ name, id: 'kiokuko-lisp-approval', locale: LOCALE_NAMESPACE,
-        inject: () => ({ approvalScope, modern, compact: name === 'conversation.input.left' }),
-      }, LispApprovalControl))
-    }
+    scope.slots.inject('settings.general.item', () => scope.slots.register({ name: 'settings.general.item', id: 'kiokuko-lisp-approval', locale: LOCALE_NAMESPACE,
+      inject: () => ({ approvalScope, modern }),
+    }, LispApprovalControl))
   }
   ctx.inject?.(['settingsScope'], scope => installApprovals(scope, scope.settingsScope!.bind({namespace: 'kiokuko-lisp'}), false))
   ctx.inject?.(['configForms'], scope => installApprovals(scope, scope.configForms!.get('kiokuko-dsh'), true))

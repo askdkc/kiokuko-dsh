@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
-import { existsSync, realpathSync } from 'node:fs'
+import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -13,7 +13,6 @@ import { CoreTasks } from '../../../src/dsh/core/tasks.js'
 import { LedgerStore } from '../../../src/ledger/store.js'
 import { mountMemoryApplication } from '../../../src/dsh/memory-application.js'
 import { runMemoryAwareVerifiers } from '../../../src/enno-oduno/memory-verification.js'
-import { createMemoryReviewPresentation } from '../../../src/dsh/memory-review-presentation.js'
 import { memoryApplicationStatus, recordMemoryApplicationReview, beginMemoryExecution, completeMemoryExecution, bindMemoryApplication, applicationSourceDigest } from '../../../src/memory/application.js'
 import { AutoGlobalizationWorker, autoGlobalizationStatus, autoGlobalApplicable } from '../../../src/memory/auto-globalization.js'
 import { readEntry } from '../../../src/memory/entries.js'
@@ -139,9 +138,12 @@ test('native path blocks missing decisions, observes failing next-migration regr
     assert.deepEqual(f.status(), pendingStatus, 'retrieval is not a new execution or verification')
     let effects = 0
     for (const name of ['Edit', 'edit', 'write', 'bash', 'lisp_eval', 'unknown_tool']) {
-      await assert.rejects(listeners.get('tools/pre-execute')(execution(`missing-${name}`, name), async () => { effects++ }), /resolve memory decisions/)
+      const unresolved = execution(`unresolved-${name}`, name)
+      await listeners.get('tools/pre-execute')(unresolved, async () => { effects++ })
+      await listeners.get('tools/result')(unresolved, { value: {} })
     }
-    assert.equal(effects, 0)
+    assert.equal(effects, 6, 'an unresolved decision never rejects the call')
+    assert.equal(f.status().ready, false, 'an unresolved decision still blocks completion')
     await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review', review: f.review() }, execution('review', 'task_memory_review'))
     await writeFile(join(f.root, 'migrations', '002.sql'), 'SELECT 2;')
     const run = async (callId: string) => {
@@ -165,7 +167,7 @@ test('native path blocks missing decisions, observes failing next-migration regr
   } finally { dispose(); await f.close() }
 })
 
-test('PTC transport stays blocked until direct review, then gates nested effects', async () => {
+test('PTC transport and nested effects run before direct review, which then supplies the decision', async () => {
   const f = await fixture(), listeners = new Map<string, any>(), tools: any[] = []
   const agent = { session: {} }
   const dispose = mountMemoryApplication({ tools: { register(tool) { tools.push(tool); return () => {} } },
@@ -177,30 +179,30 @@ test('PTC transport stays blocked until direct review, then gates nested effects
     arguments: {}, agent, signal: new AbortController().signal, ...(parent === undefined ? {} : { parent }) })
   try {
     let transportRuns = 0, effects = 0
-    const root = execution('ptc-root', 'run_code')
-    await assert.rejects(listeners.get('tools/pre-execute')(root, async () => { transportRuns++ }), /resolve memory decisions/)
-    assert.equal(transportRuns, 0, 'model-written PTC code must not run before review')
-    assert.equal(f.status().ready, false)
     const parent = Symbol('ptc-parent')
+    // An unresolved decision no longer rejects the call; it keeps the run incomplete.
+    const root = execution('ptc-root', 'run_code')
+    await listeners.get('tools/pre-execute')(root, async () => { transportRuns++ })
+    await listeners.get('tools/result')(root, { value: { logs: [], result: null } })
+    assert.equal(transportRuns, 1, 'the transport call runs while decisions are unresolved')
+    assert.equal(f.status().ready, false, 'an unresolved decision still blocks completion')
     const statusCall = execution('direct-status', 'task_memory_review')
     const status = await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'status' }, statusCall)
     assert.equal(status.pending[0]?.problem, 'decision_missing')
     await assert.rejects(tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'status' }, execution('foreign:ptc:1', 'task_memory_review', parent)), /No active native task/)
-    await assert.rejects(listeners.get('tools/pre-execute')(execution('ptc-root:ptc:2', 'bash', parent),
-      async () => { effects++ }), /resolve memory decisions/)
-    assert.equal(effects, 0)
+    const nested = execution('ptc-root:ptc:2', 'bash', parent)
+    await listeners.get('tools/pre-execute')(nested, async () => { effects++ })
+    await listeners.get('tools/result')(nested, { value: {} })
+    assert.equal(effects, 1, 'nested effects are tracked while decisions are unresolved')
     await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review', review: f.review('not_applicable') }, execution('direct-review', 'task_memory_review'))
     assert.equal(f.status().ready, true)
-    await listeners.get('tools/pre-execute')(root, async () => { transportRuns++ })
-    await listeners.get('tools/result')(root, { value: { logs: [], result: null } })
-    assert.equal(transportRuns, 1)
     assert.equal((await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'status' }, execution('ptc-root:ptc:3', 'task_memory_review', parent))).ready, true)
     await listeners.get('tools/pre-execute')(execution('ptc-root:ptc:4', 'bash', parent), async () => { effects++ })
-    assert.equal(effects, 1)
+    assert.equal(effects, 2)
   } finally { dispose(); await f.close() }
 })
 
-test('pending memory review presents native tools for a PTC agent and restores PTC after review', {
+test('pending memory review keeps the native PTC transport and uses SDK subdispatch', {
   skip: !process.env.KIOKUKO_DSH_PACKAGE_ROOT && 'requires pinned native DSH',
 }, async () => {
   const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT!
@@ -210,9 +212,8 @@ test('pending memory review presents native tools for a PTC agent and restores P
       .map(name => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)))
   const f = await fixture()
   const ctx = new cordis.Context(), fibers: any[] = []
-  let scoped: any, presentation: ReturnType<typeof createMemoryReviewPresentation> | undefined
-  const runtimeName = existsSync(join(packages, '@deepseek-ai', 'dsh-ptc-runtime-node')) ? 'ptcRuntime' : 'codeRuntime'
-  const releaseRuntime = ctx.provide(runtimeName, { language: 'typescript' })
+  let scoped: any
+  const releaseRuntime = ctx.provide('ptcRuntime', { language: 'typescript' })
   try {
     fibers.push(await ctx.plugin(prompt.default, {}), await ctx.plugin(toolModule.default, { mode: 'ptc' }))
     const session = { id: 'session' }, agent: any = { id: 'ordinary-agent', session }
@@ -220,27 +221,14 @@ test('pending memory review presents native tools for a PTC agent and restores P
     const tools = scoped.ctx.get('tools')
     tools.register(toolModule.defineTool({ name: 'task_memory_review', description: 'Review memory', parameters: {},
       output: { schema: { type: 'json' }, render: () => [] }, execute: async () => ({}) }))
-    presentation = createMemoryReviewPresentation(agent, f.runtime as any)
-    assert.equal(tools.modeFor(agent), 'ptc')
-    const boundInventory = tools.schemas(agent).map((schema: any) => schema.name).sort()
-    await presentation.sync(f.task.runId)
-    assert.equal(tools.modeFor(agent), 'both')
-    assert.deepEqual(tools.schemas(agent).map((schema: any) => schema.name).sort(), boundInventory, 'temporary review presentation must preserve the bound capability inventory')
-    assert.deepEqual(tools.wireSchemas(agent).schemas.map((schema: any) => schema.name).sort(), ['run_code', 'task_memory_review'])
-    presentation.dispose() // agent idle: release the temporary mode before a later Lisp choice
-    assert.equal(tools.modeFor(agent), 'ptc')
-    const releaseLisp = tools.presentAs('native')
-    await presentation.sync(f.task.runId)
-    assert.equal(tools.modeFor(agent), 'native', 'an existing native owner needs no second declaration')
-    releaseLisp()
-    await presentation.sync(f.task.runId)
-    assert.equal(tools.modeFor(agent), 'both')
-    recordMemoryApplicationReview(f.db, f.identity, 'review', f.review('not_applicable'))
-    await presentation.sync(f.task.runId)
     assert.equal(tools.modeFor(agent), 'ptc')
     assert.deepEqual(tools.wireSchemas(agent).schemas.map((schema: any) => schema.name), ['run_code'])
+    assert.equal(tools.modeFor(agent), 'ptc')
+    const review = tools.get('task_memory_review', agent)
+    assert.ok(review, 'pending review remains available to the run_code SDK')
+    const result = await review.execute({ action: 'status' }, { agent, name: 'task_memory_review', callId: 'review-status', parent: { callId: 'run' }, rootCallId: 'run', signal: new AbortController().signal })
+    assert.deepEqual(result, {})
   } finally {
-    presentation?.dispose()
     await scoped?.dispose()
     for (const fiber of fibers.reverse()) await fiber.dispose()
     releaseRuntime()
@@ -474,7 +462,10 @@ test('refresh reviews only new entries while invalidating prior execution proof'
     assert.equal(refreshed.items.find(item => item.entryId === f.memory.id)?.decision, 'adopted')
     assert.equal(refreshed.items.find(item => item.entryId === f.memory.id)?.problem, 'verification_missing_failed_or_stale')
     assert.equal(refreshed.items.find(item => item.entryId === added.id)?.problem, 'decision_missing')
-    assert.throws(() => beginMemoryExecution(f.db, f.identity, 'blocked', null), /resolve memory decisions/)
+    // An unresolved decision never rejects the call; it must still keep the run incomplete.
+    beginMemoryExecution(f.db, f.identity, 'unresolved-effect', null)
+    completeMemoryExecution(f.db, f.identity, 'unresolved-effect', { value: {} })
+    assert.equal(f.status().ready, false, 'an unresolved decision still blocks completion')
     recordMemoryApplicationReview(f.db, f.identity, 'added-review', { generation, entryId: added.id,
       entryRevision: added.revision, expectedRevision: 0, decision: 'not_applicable',
       basis: 'The batching signal is unrelated to migration checks.', paths: [] })
@@ -534,7 +525,7 @@ test('native batch reviews multiple memories atomically with exact replay', asyn
   } finally { dispose(); await f.close() }
 })
 
-test('superseding an ordinary reviewed memory blocks further effects and completion without a revision change', async () => {
+test('superseding an ordinary reviewed memory allows the effect but blocks re-review and completion without a revision change', async () => {
   const f = await fixture()
   try {
     recordMemoryApplicationReview(f.db, f.identity, 'review', f.review('not_applicable'))
@@ -544,7 +535,9 @@ test('superseding an ordinary reviewed memory blocks further effects and complet
     f.db.prepare("UPDATE entries SET status='superseded',superseded_by=? WHERE id=?").run(replacement.id, f.memory.id)
     assert.equal(f.status().ready, false)
     assert.equal(f.status().pending[0]?.problem, 'entry_changed')
-    assert.throws(() => beginMemoryExecution(f.db, f.identity, 'edit', null), /resolve memory decisions/)
+    beginMemoryExecution(f.db, f.identity, 'edit', null)
+    completeMemoryExecution(f.db, f.identity, 'edit', { value: {} })
+    assert.equal(f.status().ready, false, 'the effect runs, but the run stays incomplete')
     assert.throws(() => recordMemoryApplicationReview(f.db, f.identity, 'retry', { ...f.review('not_applicable'), expectedRevision: 1 }), /Memory entry changed/)
     assert.throws(() => new LedgerStore(f.db).updateRunStatus(f.task.runId, 'completed'), /incomplete/)
   } finally { await f.close() }
@@ -596,4 +589,90 @@ test('existing approved Enno verifier supplies proof; skipped checks beyond the 
     completeMemoryExecution(f.db, f.identity, 'failed-repeat', { value: { exitCode: 1 } })
     assert.equal(f.status().ready, false, 'a former success cannot hide the latest failing result')
   } finally { await f.close() }
+})
+
+
+// Real native tool dispatch plus a genuinely unresolved isolated memory binding.
+for (const kind of ['direct', 'carrier', 'resumed'] as const) test(`host-only ${kind} preparation is not a memory execution`, async () => {
+  const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
+  const { pathToFileURL } = await import('node:url')
+  const [cordis, tools, prompt] = await Promise.all(['cordis', 'dsh-tools', 'dsh-system-prompt'].map(name => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)))
+  const { OnDemandIntake, TASK_PREPARE_TOOL } = await import('../../../src/dsh/on-demand-intake.js')
+  const f = await fixture(), ctx = new cordis.Context()
+  const sessionModule = kind === 'carrier' ? await import(pathToFileURL(join(packages, '@deepseek-ai', 'dsh-session', 'lib/index.js')).href) : undefined
+  const session = sessionModule
+    ? sessionModule.Session.create(sessionModule.SessionId('preparation-carrier'), [], { version: 4, id: 'preparation-carrier', createdAt: 1, isSeeded: false, cwd: f.root })
+    : { id: 'session', header: { cwd: f.root }, snapshotEvents: () => [{ type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } }] }
+  const agent: any = { id: 'preparation-agent', session }
+  if (kind === 'carrier') agent.ctx = ctx
+  let preparations = 0, effects = 0, ready = kind === 'resumed'
+  const fibers: any[] = []
+  fibers.push(await ctx.plugin(prompt.default, {}))
+  if (kind === 'carrier') {
+    for (const name of ['dsh-session-projection', 'dsh-fs-local', 'dsh-working-directory', 'dsh-subprocess-local', 'dsh-sandbox-local', 'dsh-sandbox-policy', 'dsh-ptc-runtime-node'] as const) {
+      const plugin = (await import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)).default
+      const config = name === 'dsh-fs-local' ? { cwd: f.root } : name === 'dsh-working-directory' ? { defaultDirectory: f.root }
+        : name === 'dsh-sandbox-policy' ? { mode: 'read-only', workspaceRoot: f.root } : name === 'dsh-ptc-runtime-node' ? { timeoutMs: 10000 } : {}
+      fibers.push(await ctx.plugin(plugin, config))
+    }
+  }
+  const fiber = ctx.plugin(tools.default, { mode: kind === 'carrier' ? 'ptc' : 'native' }); fibers.push(fiber); await fiber
+  const intake = new OnDemandIntake({
+    validate: async input => { assert.equal(input.agent, agent); assert.equal(input.agent.session, session) },
+    existing: async () => kind === 'resumed', classify: async () => ({ deferInference: true }),
+    prepare: async () => { preparations++; ready = true; return true },
+    ready: candidate => candidate === agent && ready,
+  })
+  const disposeMemory = mountMemoryApplication(ctx, { runtime: f.runtime as any,
+    resolve: (execution: any) => execution.agent === agent ? f.identity : undefined,
+    preparationOnly: execution => intake.preparationOnly(execution),
+    refresh: async () => undefined,
+  })
+  intake.mount(ctx, ctx.tools)
+  const releaseEffect = ctx.tools.register({ name: 'effect_probe', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => { effects++; return 'unexpected effect' } })
+  let call = 0
+  const invoke = (name: string, args: any = {}, overrides: any = {}) => ctx.tools.execute({ callId: `memory-preparation-${++call}`, name, arguments: args, agent, signal: new AbortController().signal, ...overrides })
+  try {
+    await intake.capture({ agent, turn: 1, step: 0, messages: [{ role: 'user', id: 'original', content: [{ type: 'text', text: 'Fix the migration expectations without unrelated edits.' }] }], signal: new AbortController().signal })
+    assert.equal(f.status().ready, false)
+    const name = kind === 'carrier' ? 'run_code' : TASK_PREPARE_TOOL
+    const args = kind === 'carrier' ? { description: 'Prepare only', code: 'return await tools.prepare_requested_work({"taskType":"debug"})' } : { taskType: 'debug' }
+    const call = (tool: string, input: any, overrides: any = {}) => kind === 'carrier' && tool !== 'run_code'
+      ? invoke('run_code', { description: `Dispatch ${tool}`, code: `return await tools.${tool}(${JSON.stringify(input)})` }, overrides)
+      : invoke(tool, input, overrides)
+    const releaseDenial = ctx.tools.guard((execution: any) => execution.name === name ? 'native preparation denial' : undefined)
+    try { assert.equal((await invoke(name, args)).isError, true); assert.equal(preparations, 0) } finally { releaseDenial() }
+    const result = await invoke(name, args)
+    assert.equal(result.isError, false, JSON.stringify(result))
+    assert.equal(preparations, kind === 'resumed' ? 0 : 1)
+    assert.equal(f.status().ready, false, 'preparation must not resolve or bypass memory decisions')
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_executions WHERE run_id=?').get(f.task.runId)?.n, 0, 'control preparation must not create an execution receipt')
+    // The unresolved binding no longer rejects the call; it keeps the run incomplete.
+    const effectResult = await call('effect_probe', {})
+    assert.equal(effectResult.isError, false, JSON.stringify(effectResult))
+    assert.equal(effects, 1)
+    assert.equal(f.status().ready, false, 'an unresolved decision still blocks completion')
+    assert.equal((await invoke(name, args, { agent: { ...agent } })).isError, true, 'copied identity cannot borrow preparation proof')
+    const statusResult = await call('task_memory_review', { action: 'status' })
+    const status = kind === 'carrier' ? statusResult.value.result : statusResult.value
+    assert.equal(status.ready, false)
+    assert.equal((await call('task_memory_review', { action: 'review', review: f.review('not_applicable') })).isError, false)
+    assert.equal((await call('effect_probe', {})).isError, false)
+    assert.equal(effects, 2)
+  } finally { await intake.dispose(); disposeMemory(); releaseEffect(); for (const mounted of fibers.reverse()) await mounted.dispose(); await f.close() }
+})
+
+test('a same-name preparation tool without host proof is tracked, not control-exempt', async () => {
+  const f = await fixture(), listeners = new Map<string, any>()
+  let effects = 0
+  const dispose = mountMemoryApplication({ tools: { register: () => () => {} }, on(name, listener) { listeners.set(name, listener); return () => {} } }, {
+    runtime: f.runtime as any, resolve: () => f.identity, refresh: async () => undefined,
+  })
+  try {
+    const forged = { callId: 'forged-prepare', name: 'prepare_requested_work', arguments: { taskType: 'debug' }, signal: new AbortController().signal }
+    await listeners.get('tools/pre-execute')(forged, async () => { effects++ })
+    await listeners.get('tools/result')(forged, { value: {} })
+    assert.equal(effects, 1, 'a forged preparation call is tracked, not control-exempt')
+    assert.equal(f.status().ready, false, 'a forged preparation call cannot resolve memory decisions')
+  } finally { dispose(); await f.close() }
 })

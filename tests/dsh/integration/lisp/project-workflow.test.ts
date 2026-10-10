@@ -131,11 +131,15 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     const diagnosticResult = await evaluate('diagnostic-verifier', printAndVerify)
     assert.equal(diagnosticResult.ok, true, JSON.stringify(diagnosticResult))
     assert.equal(diagnosticResult.value.json.code, 2)
-    assert.equal(diagnosticResult.value.json.stderr, verifierLog)
+    // npm may prefix its own configuration warnings; preserve the full fixture
+    // stream, including its CRLF bytes, without stripping wrapper diagnostics.
+    assert.ok(diagnosticResult.value.json.stderr.endsWith(verifierLog))
     assert.ok(diagnosticResult.value.json.stdout.endsWith(verifierLog)) // npm adds its script header.
     const journalBefore = (await store.get(owner, 'diagnostic-verifier'))!.result
     const replayed = await evaluate('diagnostic-verifier', printAndVerify)
     assert.equal(replayed.replay, true)
+    assert.equal(replayed.result.value.json.stderr, diagnosticResult.value.json.stderr)
+    assert.equal(replayed.result.value.json.stdout, diagnosticResult.value.json.stdout)
     assert.equal(await readFile(join(scratch, 'project/runs.txt'), 'utf8'), '1')
     for (const result of [diagnosticResult, replayed]) {
       const rendered = renderResult(result), visible = JSON.parse(rendered)
@@ -183,8 +187,10 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     await evaluate('large-log-fixture', put('project/logs.mjs', "import{writeSync}from'node:fs';const log='x'.repeat(300*1024);writeSync(1,log);writeSync(2,log);process.exitCode=2;"))
     assert.ok(Buffer.byteLength(JSON.stringify({ code: 2, state: 'FAILED', stdout: largeStream, stderr: largeStream })) > 524288)
     const missingLogs = await evaluate('oversize-verifier', `(let ((r ${verify}))
-      (assert (>= (length (gethash "stdout" r)) (* 300 1024)))
-      (assert (= (length (gethash "stderr" r)) (* 300 1024)))
+      (dolist (stream '("stdout" "stderr"))
+        (let ((output (gethash stream r)) (size (* 300 1024)))
+          (assert (>= (length output) size))
+          (assert (string= (make-string size :initial-element #\\x) output :start2 (- (length output) size)))))
       (let ((bytes (length (sb-ext:string-to-octets (kioku.data:encode-json r) :external-format :utf-8))))
         (assert (> bytes 524288)) (format t "oversize-bytes=~D~%" bytes)) r)`)
     assert.equal(missingLogs.ok, true, JSON.stringify(missingLogs))

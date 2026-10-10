@@ -56,6 +56,6 @@ open-trace ceilings have separate tests. The compressed package was approximatel
 
 Reproduce with `npm run typecheck`, `npm test`, `npm run build`,
 `npm run pack:check`, `npm run publint`, and `npm run test:orca:package`.
-For required native verification, install DSH 0.1.2-rc.1 in a disposable directory,
+For required native verification, install DSH 0.2.1-alpha.2 in a disposable directory,
 set `DSH_BIN` and `KIOKUKO_DSH_PACKAGE_ROOT` to that installation, then run
 `KIOKUKO_REQUIRE_DSH_CLI=1 npm run test:e2e:dsh`.

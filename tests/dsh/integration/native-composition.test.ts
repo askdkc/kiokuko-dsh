@@ -91,7 +91,16 @@ test('explicit legacy execution host deliberately opts out and mounts native too
     callId: 'native-call', name: 'enno_work_report', arguments: {}, agent: { id: 'native-agent', session: { id: 'native-agent' } }, signal: new AbortController().signal,
   })
   assert.deepEqual(calls, ['enno_work_report'])
+  const missingSearch = { isError: true, error: {
+    message: 'grep search failed (exit 2): missing.ts: IO error for operation on missing.ts: No such file or directory (os error 2)',
+    info: { name: 'SearchError', code: 'SEARCH_FAILED' },
+  } }
+  const postSearch = () => (root.waterfall as Function)('tools/post-execute', {
+    name: 'grep', arguments: { pattern: 'needle', path: 'missing.ts' },
+  }, missingSearch, async () => ({ kind: 'accept' }))
+  assert.match((await postSearch()).content[0].text, /cannot search "missing.ts": not found/)
   await plugin.dispose()
+  assert.deepEqual(await postSearch(), { kind: 'accept' }, 'composition disposal removes the search presentation hook')
   assert.deepEqual(tools, [])
   assert.deepEqual(commands, [])
   assert.deepEqual(guards, [])

@@ -364,7 +364,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const memoryRetrievalConfig = MemoryRetrievalConfig.parse(options.memoryRetrieval ?? {})
   const native = ctx as unknown as AdapterContext
   const skills = native.get('skills', false) as NativeSkills | undefined
-  const systemPrompt = native.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] | undefined
+  const systemPrompt = native.get('systemPrompt', false) as
+    (NonNullable<DshCompositionHost['systemPrompt']> & NonNullable<Parameters<DshExecutionSupport['mount']>[0]['systemPrompt']>) | undefined
   const tools = native.get('tools', false) as NativeTools | undefined
   const commands = native.get('commands', false) as NativeCommands | undefined
   const userQuestions = native.get('userQuestions', false) as DshUserQuestions | undefined
@@ -443,6 +444,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const executionSupport = new DshExecutionSupport(runtime, { continuity: continuityConfig,
     observe: value => efficiencyHost.efficiency?.recordContinuity(value) })
   executionSupport.mount({ on: (name, listener, options) => onNativeServiceEvent(ctx, name, listener, options),
+    ...(systemPrompt === undefined ? {} : { systemPrompt }),
     ...(tools === undefined ? {} : { tools: { guard: tools.guard.bind(tools) } }) })
   const ennoMemory = new DshEnnoMemoryRefresh(runtime, EnnoMemoryConfig.parse(options.ennoMemory ?? {}),
     value => efficiencyHost.efficiency?.recordEnnoMemory(value))
@@ -507,7 +509,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   // tool/agent plane is not that read-only case and must not silently downgrade.
   const conversationFirst = IntakeModeConfig.parse(options.intakeMode) === 'on-demand'
   const hasExecutionIngress = tools !== undefined || agents !== undefined
-  if (conversationFirst && hasExecutionIngress && (!tools || !agents || !sessions)) {
+  const hasDemandTools = typeof objectRecord(tools)?.get === 'function' && typeof tools?.guard === 'function' && typeof tools?.register === 'function'
+  if (conversationFirst && hasExecutionIngress && (!hasDemandTools || !agents || !sessions)) {
     throw new Error('Conversation-first execution requires native tools, agents and sessions; read-only history adapters must not expose a partial execution plane')
   }
   const answerCwd = (agent: import('./on-demand-intake.js').DemandAgent): string => {
@@ -516,7 +519,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       || typeof session.header?.cwd !== 'string' || !session.header.cwd) throw new Error('On-demand native identity mismatch')
     return realpathSync(session.header.cwd)
   }
-  const demand = conversationFirst && hasExecutionIngress ? new OnDemandIntake({
+  const demand = hasDemandTools && agents && sessions ? new OnDemandIntake({
     answerContext: new DshAnswerContext(runtime, { root, cwd: answerCwd, projectOnly: false, memoryRetrieval: memoryRetrievalConfig,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills: skills as AnswerSkillRegistry, prompts: skillPrompts, decisions, cwd: answerCwd(input.agent) }),
     }),
@@ -531,6 +534,9 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const current = currentSession(input.agent.session!.id)
       // A retired native identity is not live execution authority. Keep its durable
       // owner intact, but let a reopened session answer before attempting recovery.
+      // A queued human request is not a continuation grant from a stale normal
+      // turn. Preserve its owner, but infer the new request before any effects.
+      if (current && current.turn < input.turn && input.messages.some(isHumanMessage) && !current.prepared.ennoOduno.applicable) return false
       if (current) return !current.closed && !current.failed && current.nativeAgent === input.agent && current.nativeSession === input.agent.session
       const project = await resolveProjectWorkspaceReadOnly(db, answerCwd(input.agent), { allowDirectory: true })
       if (!project) return false
@@ -557,7 +563,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         && ['ready', 'exhausted'].includes(current.prepared.intake.status) && current.prepared.nextAction === 'proceed'
         && !selections.get(current.runId)?.value.discussion
     },
-  }) : undefined
+  }, { onlyWhenDeferred: !conversationFirst }) : undefined
   const demandEnd = demand ? onNativeEvent(ctx, 'session/event', (session, event) => {
     if (event.type === 'turn/end') demand.finish(session, (event.data as any)?.turn)
     if (event.type === 'request/context' && !currentSession(session.id)) {
@@ -628,7 +634,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const { boundaryWorker, ennoController, deliverCompletionReport, boundarySessionStartDisposer } = boundaries
   const applicationDisposer = mountHostMemoryApplication({
     ctx, runtime, tools, commands, skills, agents, sessions, delegation, currentSession,
-    turnState, gate, capabilityCatalog, memoryRetrievalConfig,
+    turnState, gate, capabilityCatalog, memoryRetrievalConfig, demand,
   })
   const completionDisposer = tools ? mountTaskCompletion({ tools: tools as any,
     on: (name, listener, options) => onNativeServiceEvent(ctx, name, listener, options) }, {

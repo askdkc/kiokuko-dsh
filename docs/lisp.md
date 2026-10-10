@@ -65,10 +65,14 @@ completed effects. Crashes and explicit cancellation still require human recover
 
 Enter a normal implementation or debugging request in DSH, including dsh-cli.
 With `typedDecisions.mode: auto`, an accepted Jev/Laya `build` or `debug`
-classification reaches the existing Lisp question. Laya admits short single
-implementation requests with an explicit target; wording only determines whether
-to ask the classifier, never the classification itself. Unclear, combined or
-oversized requests retain intake confirmation. The host asks whether to use Lisp
+classification reaches the existing Lisp question without repeating the task-category
+question. Laya receives complete requests up to 4096 UTF-8 bytes, including quoted
+filenames, multiple sentences, combined actions and negations. The selected model
+chooses the type; it does not grant permission or drop other requested actions.
+Missing context, explicitly undecided alternatives, envelope/provider capacity
+rejection and model abstention defer classification. Native adapters let the
+ordinary model infer advisory intent or ask a concrete clarification; they do not
+repeat the generic category dialog merely because the classifier abstained. The host asks whether to use Lisp
 before coding begins; it resolves unclear task intent first. Both enable and decline choices
 persist for that session, including after a restart. Conversation and review
 requests do not trigger this prompt. Free text returns to conversation without
@@ -386,12 +390,17 @@ Native `ask_user_question` and `exit_plan_mode` remain available in both Lisp mo
 <!-- kiokuko:runtime approval-policy -->
 ## Profile-wide Lisp approval policy
 
-`lisp.approvalMode` defaults to `auto`; no enabling command is needed. Explicit
-configuration and saved profile settings can select `ask`. Use General settings
-or `/kioku-lisp approval ask` for manual consent on subsequent operations. Return
-to auto with `/kioku-lisp approval auto` or “Auto-approve all Lisp actions for this
-profile and continue” in a Lisp approval dialog. Native profile settings persist
-across chats and restarts and override the composition default.
+`lisp.approvalMode` defaults to `ask`; auto-approval is never inferred from an
+unknown request or from selecting Lisp. Ordinary questions keep normal execution
+without a Lisp choice or an approval selector in the chat composer. Once a task
+is identified as coding implementation or debugging, the existing coding choice
+can offer protected Lisp or normal execution; coding plans do not require Lisp.
+Auto-approval is an explicit opt-in through General settings,
+`/kioku-lisp approval auto`, or “Auto-approve all Lisp actions for this profile and
+continue” in a Lisp approval dialog. Use `/kioku-lisp approval ask` to return to
+manual consent. Explicit configuration and saved profile settings persist across
+chats and restarts and override the default; changing the default does not revoke
+a previously saved choice.
 All Lisp permission categories are covered, including file restoration, host
 verification, public npm package operations, and shared-function changes.
 

@@ -1,32 +1,24 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { updateVolatile, createVolatile } from '@deepseek-ai/cosmokit'
+import { Config } from '../../../../src/dsh/config.js'
+import { APPROVAL_CONFIG_SERVICE, bindApprovalConfig, nativeApprovalConfig } from '../../../../src/dsh/live-approval-config.js'
 import { mountApprovalPolicy } from '../../../../src/dsh/lisp/approval-settings.js'
 
-test('legacy native settings persist approval across restarts and isolate profiles in one document', async () => {
-  // This regression targets the removed namespace/file API specifically.
-  // The current ConfigForms API is exercised by packed Web acceptance.
-  const packages = resolve('tests/fixtures/dsh-runtime/node_modules')
-  const [cordis, file] = await Promise.all(['cordis', 'dsh-settings-file'].map(name => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)))
-  const dir = await mkdtemp(join(tmpdir(), 'lisp-approval-settings-'))
-  const open = async (profile: string, document = profile) => {
-    const ctx = new cordis.Context()
-    const provider = await ctx.plugin(file.default, { path: join(dir, document + '.yaml'), watch: false })
-    let policy!: ReturnType<typeof mountApprovalPolicy>
-    const owner = await ctx.plugin({ name: 'approval-consumer', apply(scope: any) { scope.provide('loader', { filename: join(dir, profile, 'cordis.yml') }); policy = mountApprovalPolicy(scope, 'ask', () => {}) } })
-    await new Promise(resolve => setTimeout(resolve, 20))
-    return { policy, close: async () => { await owner.dispose(); await provider.dispose() } }
-  }
-  try {
-    const first = await open('one')
-    assert.equal(first.policy.mode(), 'ask'); assert.equal(first.policy.writable(), true)
-    await first.policy.set('auto'); assert.equal(first.policy.mode(), 'auto')
-    await first.close()
-    const restarted = await open('one'), other = await open('two', 'one')
-    try { assert.equal(restarted.policy.mode(), 'auto'); assert.equal(other.policy.mode(), 'ask'); await restarted.policy.set('ask'); assert.equal(restarted.policy.mode(), 'ask') }
-    finally { await restarted.close(); await other.close() }
-  } finally { await rm(dir, { recursive: true, force: true }) }
+test('native ConfigForms approval settings persist through the current profile service', async () => {
+  const schema = nativeApprovalConfig(Config)
+  const resolved = schema({ lisp: { enabled: true, approvalMode: 'auto' } }) as any
+  const services: Record<string, any> = {}
+  const ctx: any = { fiber: { entry: { options: { id: 'kiokuko-dsh' } } }, get: (name: string) => services[name], provide: (name: string, value: unknown) => { services[name] = value } }
+  const configuration = Config.parse(bindApprovalConfig(ctx, resolved))
+  assert.equal(configuration.lisp.approvalMode, 'auto')
+  const source = services[APPROVAL_CONFIG_SERVICE]
+  assert.equal(source.namespace, 'kiokuko-dsh')
+  assert.deepEqual(source.path, ['lisp', 'approvalMode'])
+  let writes = 0
+  services.settings = { writable: true, async update(namespace: string, patch: any) { assert.equal(namespace, 'kiokuko-dsh'); writes++; updateVolatile(resolved.lisp.approvalMode, createVolatile(patch.lisp.approvalMode)) } }
+  const policy = mountApprovalPolicy(ctx, configuration.lisp.approvalMode, () => {})
+  assert.equal(policy.mode(), 'auto'); assert.equal(policy.writable(), true)
+  await policy.set('ask')
+  assert.equal(policy.mode(), 'ask'); assert.equal(writes, 1)
 })

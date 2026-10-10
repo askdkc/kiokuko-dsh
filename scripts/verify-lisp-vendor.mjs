@@ -7,7 +7,7 @@ const files = {}
 // Runtime Unicode tables (lists/hash-tables/methods.lisp) remain required.
 const generatedTests = new Set(['cl-unicode/test/derived-properties', 'cl-unicode/test/normalization-forms'])
 async function scan(directory) {
-  for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a,b) => a.name.localeCompare(b.name))) {
+  for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a,b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
     // npm omits these control files even with an explicit files allowlist.
     if (entry.name === '.gitignore' || entry.name === '.npmignore') continue
     const path = join(directory, entry.name)
@@ -23,6 +23,8 @@ const path = resolve(root, '../vendor-manifest.json')
 if (process.argv.includes('--write')) await writeFile(path, JSON.stringify({ format: 1, files }, null, 2) + '\n')
 else {
   const expected = JSON.parse(await readFile(path, 'utf8'))
-  if (JSON.stringify(expected.files) !== JSON.stringify(files)) throw new Error('Lisp vendor content differs from the reviewed manifest')
+  const names = [...new Set([...Object.keys(expected.files), ...Object.keys(files)])].sort()
+  const changed = names.filter(name => !Object.hasOwn(expected.files, name) || !Object.hasOwn(files, name) || expected.files[name] !== files[name])
+  if (changed.length) throw new Error(`Lisp vendor content differs from the reviewed manifest: ${JSON.stringify(changed)}`)
 }
 console.log(`Lisp vendor: ${Object.keys(files).length} files verified`)

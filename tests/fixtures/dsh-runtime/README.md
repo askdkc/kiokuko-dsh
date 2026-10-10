@@ -1,28 +1,25 @@
 # Native DSH CI runtime
 
-Both native CI jobs copy this manifest and lockfile into a disposable directory
-and install with `npm ci`. Pinning only `@deepseek-ai/dsh` is insufficient:
-its internal dependencies use caret ranges, so an install of `0.1.5-rc.1` can
-resolve internal packages to `0.1.5-rc.2` or later releases.
+This is the single runtime fixture used by native tests and CI. Its manifest
+selects the supported DSH release; the lockfile fixes the full dependency graph
+and package integrity. Install it with `npm ci --prefix tests/fixtures/dsh-runtime`.
 
-The overrides keep all DSH packages at the tested release; the lockfile also
-fixes the remaining dependency graph and package integrity. These are test
-dependencies, independent of Kiokuko's published package dependencies.
+Runtime runners and CI derive their expected DSH version from this manifest.
+There is no separate old-release test target. These are test dependencies,
+independent of Kiokuko's published package version.
 
-To intentionally update the runtime, update the CLI dependency and every DSH
-override together, regenerate the lockfile from an empty temporary directory,
-and copy the resulting lockfile back here:
+To update the baseline, verify the intended upstream release and its npm
+publication, then update the exact dependency and regenerate the lockfile:
 
 ```sh
-dsh_lock_dir="$(mktemp -d)"
-cp tests/fixtures/dsh-runtime/package.json "$dsh_lock_dir/"
-npm install --prefix "$dsh_lock_dir" --package-lock-only --ignore-scripts
-cp "$dsh_lock_dir/package-lock.json" tests/fixtures/dsh-runtime/package-lock.json
+npm install --prefix tests/fixtures/dsh-runtime --save-exact '@deepseek-ai/dsh@<verified-version>'
+npm run test:ci:unit
+npm run test:ci:integration
 ```
 
-Check every locked `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` package, including
-nested packages, against the intended release and add overrides for any newly
-introduced DSH packages. Update the native tests' expected version and both CI
-jobs together, then run the complete mandatory native lifecycle suite using a
-clean install of this fixture and the CI Node.js version. Do not weaken the
-version assertions to accept a mixed runtime.
+Check the locked DSH package versions against the selected release. Align root
+DSH development dependencies and the package compatibility declaration. Regenerate
+the root npm lockfile, then run `pnpm import` to synchronize its pnpm lockfile. Then
+run the native lifecycle and packaged checks with the CI Node.js version.
+The npm `latest` tag may lag behind an upstream prerelease, so do not treat the
+tag name as proof of the newest release.

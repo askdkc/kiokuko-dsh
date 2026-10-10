@@ -21,8 +21,9 @@ if (!available && (packages !== undefined || process.env.KIOKUKO_REQUIRE_DSH_NAT
 async function runPendingMemory(hostMode: 'core' | 'full') {
   const checkout = process.cwd()
   const version = JSON.parse(await readFile(join(packages!, '@deepseek-ai/dsh/package.json'), 'utf8')).version
-  assert.ok(['0.1.5-rc.1', '0.2.0-rc.2'].includes(version))
-  if (process.env.KIOKUKO_EXPECTED_DSH_VERSION) assert.equal(version, process.env.KIOKUKO_EXPECTED_DSH_VERSION)
+  const expectedVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
+    ?? JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+  assert.equal(version, expectedVersion)
   const load = (name: string) => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)
   const [cordis, llm, sessions, projections, prompt, tools, agents, loop, skills, commands] = await Promise.all([
     'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop', 'dsh-skill', 'dsh-commands',
@@ -43,13 +44,12 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
       restoreGate = () => { DshIntakeGate.prototype.prepare = originalPrepare }
     }
     const runtimePlugins: any[][] = []
-    if (version.startsWith('0.1.5')) runtimePlugins.push([(await load('dsh-code-runtime-worker-thread')).default])
-    else for (const [name, config] of [['dsh-fs-local', { cwd: root }], ['dsh-subprocess-local', undefined], ['dsh-sandbox-local', undefined], ['dsh-sandbox-policy', { mode: 'read-only', workspaceRoot: root }], ['dsh-ptc-runtime-node', { timeoutMs: 10000 }]] as const) runtimePlugins.push([(await load(name)).default, config])
+    for (const [name, config] of [['dsh-fs-local', { cwd: root }], ['dsh-working-directory', { defaultDirectory: root }], ['dsh-subprocess-local', undefined], ['dsh-sandbox-local', undefined], ['dsh-sandbox-policy', { mode: 'read-only', workspaceRoot: root }], ['dsh-ptc-runtime-node', { timeoutMs: 10000 }]] as const) runtimePlugins.push([(await load(name)).default, config])
     for (const [plugin, config] of [[llm.default], [sessions.default], [projections.default], [prompt.default, { persona: '' }], ...runtimePlugins,
       [tools.default, { mode: 'ptc' }], [agents.default], [skills.default], [commands.default], [loop.default, { agents: [] }]]) {
       const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
     }
-    const runtime = ctx.get(version.startsWith('0.1.5') ? 'codeRuntime' : 'ptcRuntime', false)
+    const runtime = ctx.get('ptcRuntime', false)
     const originalRun = runtime.run
     runtime.run = function (...args: any[]) { row.runtimePrograms.push(args[0]?.code ?? args[0]?.source?.code); return originalRun.apply(this, args) }
     restoreRuntime = () => { runtime.run = originalRun }
@@ -81,33 +81,34 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
           try { row.bindingsAfterPreparation = diagnostic.prepare('SELECT mode,required_json FROM task_memory_bindings').all() } finally { diagnostic.close() }
           row.preparation = messageResult('prepare')
           assert.equal(row.runtimePrograms.length, 0, 'carrier must not invoke interpreter')
-          assert.ok(names.includes('task_memory_review'), 'pending memory must expose the direct review surface')
-          assert.ok(names.includes('run_code'), 'pending presentation must preserve the bound capability inventory')
+          assert.deepEqual(names, ['run_code'], 'pending memory keeps the native PTC transport')
           row.preparation = messageResult('prepare')
           assert.equal(row.preparation.isError, false)
-          response = mock.toolCallResponse('status', 'task_memory_review', { action: 'status' })
+          response = mock.toolCallResponse('status', 'run_code', { description: 'Inspect pending memory review', code: 'return JSON.stringify(await tools.task_memory_review({ action: "status" }))' })
         } else if (step === 3) {
-          row.status = JSON.parse(messageResult('status').text)
+          const statusResult = messageResult('status')
+          if (statusResult.isError) throw new Error(`status subdispatch failed: ${JSON.stringify(statusResult)}`)
+          row.status = JSON.parse(statusResult.text)
           assert.equal(row.status.pending[0]?.problem, 'decision_missing')
           response = mock.toolCallResponse('premature', 'run_code', { description: 'Attempt arbitrary program before memory review', code: 'return "MUST_NOT_RUN"' })
         } else if (step === 4) {
-          row.premature = messageResult('premature'); assert.equal(row.premature.isError, true)
-          assert.ok(row.premature.text.includes('resolve memory decisions'), 'the actual memory gate must refuse arbitrary code')
-          assert.equal(row.runtimePrograms.length, 0, 'pending memory must block arbitrary interpreter execution')
-          assert.ok(names.includes('task_memory_review'))
+          row.premature = messageResult('premature'); assert.equal(row.premature.isError, false)
+          assert.ok(row.premature.text.includes('MUST_NOT_RUN'), 'an unresolved decision must never block the program')
+          assert.equal(row.runtimePrograms.length, 2, 'the program runs while the decision is unresolved, after the SDK review status call')
+          assert.deepEqual(names, ['run_code'])
           const item = row.status.pending[0]
-          response = mock.toolCallResponse('review', 'task_memory_review', { action: 'review', review: {
+          response = mock.toolCallResponse('review', 'run_code', { description: 'Submit the pending memory review', code: `return await tools.task_memory_review({ action: "review", review: ${JSON.stringify({
             generation: row.status.generation, entryId: item.entryId, entryRevision: item.revision, expectedRevision: 0,
             decision: 'not_applicable', paths: [], basis: 'The stored production-migration lesson does not apply to this fixed isolated protocol fixture.',
-          } })
+          })} })` })
         } else if (step === 5) {
           row.review = messageResult('review'); assert.equal(row.review.isError, false)
-          assert.deepEqual(names, ['run_code'], 'PTC-only presentation must return after memory decisions')
+          assert.deepEqual(names, ['run_code'], 'PTC presentation stays unchanged after memory decisions')
           response = mock.toolCallResponse('work', 'run_code', { description: 'Perform prepared work after memory review', code: 'return "PTC_MEMORY_REVIEW_COMPLETE"' })
         } else if (step === 6) {
           row.work = messageResult('work'); assert.equal(row.work.isError, false)
           assert.ok(row.work.text.includes('PTC_MEMORY_REVIEW_COMPLETE'))
-          assert.equal(row.runtimePrograms.length, 1, 'exactly the approved later program invokes actual PTC runtime')
+          assert.equal(row.runtimePrograms.length, 4, 'review status, review submission and both work programs invoke the actual PTC runtime')
           response = mock.textResponse('SCRIPTED_COMPLETION')
         } else throw new Error('Unexpected native model request')
         yield* response
@@ -147,6 +148,6 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
   }
 }
 
-for (const hostMode of ['core', 'full'] as const) test(`native ${hostMode}: pending memory keeps PTC blocked until direct review completes`, {
+for (const hostMode of ['core', 'full'] as const) test(`native ${hostMode}: pending memory never blocks prepared PTC work and SDK review completes the obligation`, {
   skip: available ? false : 'requires explicit pinned DSH native package root', timeout: 120_000,
 }, () => runPendingMemory(hostMode))

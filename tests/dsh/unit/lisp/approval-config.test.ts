@@ -6,18 +6,21 @@ import { nativeApprovalConfig, bindApprovalConfig, APPROVAL_CONFIG_SERVICE } fro
 import { mountApprovalPolicy } from '../../../../src/dsh/lisp/approval-settings.js'
 import { confirm } from '../../../../src/dsh/lisp/approval.js'
 
-test('omitted approval mode defaults to auto through plain and native configuration', async () => {
+test('omitted approval mode requires consent through plain and native configuration', async () => {
   const ctx: any = {fiber: {}, get: () => undefined}
   for (const input of [{}, {lisp: {enabled: true}}]) {
     const plain = Config.parse(input)
     const native = Config.parse(bindApprovalConfig(ctx, nativeApprovalConfig(Config)(input)))
-    assert.equal(plain.lisp.approvalMode, 'auto')
-    assert.equal(native.lisp.approvalMode, 'auto')
+    assert.equal(plain.lisp.approvalMode, 'ask')
+    assert.equal(native.lisp.approvalMode, 'ask')
     const approvalPolicy = mountApprovalPolicy(ctx, native.lisp.approvalMode, () => {})
     let questions = 0
-    const decision = await confirm({approvalPolicy, ask: async () => { questions++; throw new Error('unexpected question') }} as any, 'agent', {} as any, new AbortController().signal)
-    assert.equal(decision.approved, true)
-    assert.equal(questions, 0)
+    const question = { id: 'apply', question: 'Apply?', options: [{ label: 'No' }, { label: 'Yes' }], intent: { kind: 'plan-review', approve: 'Yes' } }
+    const decision = await confirm({approvalPolicy, ask: async () => { questions++; return { answers: [{ id: 'apply', selected: ['No'] }] } }} as any, 'agent', question as any, new AbortController().signal)
+    assert.deepEqual(decision, { approved: false, reason: 'declined' })
+    assert.equal(questions, 1)
+    const unavailable = await confirm({approvalPolicy, ask: async () => { throw new Error('UI unavailable') }} as any, 'agent', question as any, new AbortController().signal)
+    assert.deepEqual(unavailable, { approved: false, reason: 'unavailable' })
   }
   const explicit = {lisp: {approvalMode: 'ask'}}
   assert.equal(Config.parse(explicit).lisp.approvalMode, 'ask')
@@ -41,5 +44,20 @@ test('native live Config preserves ordinary config, profile entry identity and c
   assert.equal(first.mode(),'auto'); assert.equal(first.writable(),true)
   await first.set('ask'); assert.equal(second.mode(),'ask'); assert.equal(writes,1)
   assert.throws(()=>schema({lisp:{approvalMode:'invalid'}}))
-  assert.equal(nativeApprovalConfig(Config).parse({}).lisp.approvalMode,'auto')
+  assert.equal(nativeApprovalConfig(Config).parse({}).lisp.approvalMode,'ask')
+})
+
+for (const mode of ['ask', 'auto'] as const) test(`explicit ${mode} remains authoritative without enabling Lisp`, async () => {
+  const ctx: any = { fiber: {}, get: () => undefined }
+  const input = { lisp: { approvalMode: mode } }
+  for (const configuration of [Config.parse(input), Config.parse(bindApprovalConfig(ctx, nativeApprovalConfig(Config)(input)))]) {
+    assert.equal(configuration.lisp.enabled, false)
+    assert.equal(configuration.lisp.approvalMode, mode)
+    const approvalPolicy = mountApprovalPolicy(ctx, configuration.lisp.approvalMode, () => {})
+    let asks = 0
+    const question = { id: 'apply', question: 'Apply?', options: [{ label: 'No' }, { label: 'Yes' }], intent: { kind: 'plan-review', approve: 'Yes' } }
+    const decision = await confirm({ approvalPolicy, ask: async () => { asks++; return { answers: [{ id: 'apply', selected: ['Yes'] }] } } } as any, 'agent', question as any, new AbortController().signal)
+    assert.equal(decision.approved, true)
+    assert.equal(asks, mode === 'ask' ? 1 : 0)
+  }
 })

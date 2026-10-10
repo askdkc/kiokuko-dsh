@@ -1,6 +1,6 @@
 {
   "name": "kiokuko-dsh",
-  "version": "0.1.99",
+  "version": "0.2.0",
   "description": "Kiokuko plugin for DeepSeek Harness",
   "type": "module",
   "license": "MIT",
@@ -92,13 +92,9 @@
       "patch": "./dsh/cordis.patch.yml"
     },
     "compatibility": {
-      "dsh": "0.2.0-rc.2",
+      "dsh": "0.2.1-alpha.2",
       "dshReleases": {
-        "0.1.2-rc.1": "compatible",
-        "0.1.5-rc.1": "compatible",
-        "0.1.6-alpha.1": "compatible",
-        "0.1.7-rc.2": "compatible",
-        "0.2.0-rc.2": "compatible"
+        "0.2.1-alpha.2": "compatible"
       },
       "profiles": [
         "web",
@@ -163,10 +159,12 @@
     "test": "node scripts/run-tests.mjs tests/dsh",
     "test:harness": "node --import tsx scripts/run-harness-evaluation.mjs",
     "test:unit": "node scripts/run-tests.mjs tests/dsh/unit",
+    "test:intake:queued": "node scripts/run-ci-native.mjs queued-intent",
     "test:memory-reuse": "node scripts/run-tests.mjs tests/dsh/unit/decisions/memory-reuse.test.ts tests/dsh/integration/memory-reuse.test.ts",
     "test:evaluation:memory-reuse": "node --import tsx scripts/run-memory-reuse-evaluation.mjs",
     "probe:lisp:p0": "node --import tsx scripts/probe-lisp-p0.ts",
     "test:integration": "node scripts/run-tests.mjs tests/dsh/integration",
+    "test:memory:admission": "node scripts/run-tests.mjs tests/dsh/integration/memory-application.test.ts tests/dsh/integration/on-demand-native.test.ts tests/dsh/unit/on-demand-review-regressions.test.ts",
     "test:integration:tool-exposure": "node scripts/run-tests.mjs tests/dsh/integration/tool-exposure-native.test.ts",
     "test:sqlite-vec": "node --import tsx tests/ci/sqlite-vec-package-smoke.ts",
     "test:evaluation": "npm run build && node scripts/run-retrieval-evaluation.mjs",
@@ -199,6 +197,7 @@
     "test:packages:live": "KIOKUKO_REQUIRE_LISP_RUNTIME=1 KIOKUKO_PACKAGE_LIVE=1 node scripts/run-tests.mjs tests/dsh/integration/lisp/packages-live.test.ts",
     "test:packages": "KIOKUKO_REQUIRE_LISP_RUNTIME=1 node scripts/run-tests.mjs tests/dsh/unit/lisp/packages.test.ts tests/dsh/integration/lisp/packages-runtime.test.ts tests/dsh/integration/lisp/packages-update.test.ts",
     "test:lisp": "node scripts/run-tests.mjs tests/dsh/unit/lisp tests/dsh/integration/lisp",
+    "test:lisp:defaults": "node scripts/run-tests.mjs tests/dsh/unit/lisp/approval-config.test.ts tests/dsh/unit/lisp/approval-policy.test.ts tests/dsh/unit/lisp/coding-choice.test.ts tests/dsh/unit/lisp/approval-client.test.ts",
     "test:lisp:prototype-planning": "node --import tsx scripts/run-lisp-prototype-planning.mjs",
     "test:lisp:efficiency": "node --import tsx scripts/run-lisp-efficiency.mjs",
     "test:lisp:web": "node scripts/verify-lisp-web.mjs",
@@ -221,7 +220,24 @@
     "test:skill-coding:offline": "node --test tests/fixtures/skill-coding/offline.test.mjs",
     "test:skill-coding": "node scripts/run-skill-coding.mjs",
     "test:shortcuts:web": "npm run build && node scripts/verify-shortcuts-web.mjs",
-    "test:lisp:approval:web": "npm run build && node scripts/verify-lisp-approval-web.mjs"
+    "test:lisp:approval:web": "npm run build && node scripts/verify-lisp-approval-web.mjs",
+    "test:ci:unit": "node scripts/run-ci-native.mjs unit",
+    "test:ci:integration": "node scripts/run-ci-native.mjs integration",
+    "test:ci:e2e": "node scripts/run-ci-native.mjs e2e",
+    "test:ci:metadata": "npm run publint",
+    "test:ci:e2e:core": "node scripts/run-ci-native.mjs e2e-core",
+    "test:ci:e2e:agent": "node scripts/run-ci-native.mjs e2e-agent",
+    "test:ci:e2e:repeated": "node scripts/run-ci-native.mjs e2e-repeated",
+    "test:ci:repeated:deep": "node scripts/run-ci-native.mjs e2e-repeated-deep",
+    "test:ci:repeated:normal": "node scripts/run-ci-native.mjs e2e-repeated-normal",
+    "test:ci:repeated:enno": "node scripts/run-ci-native.mjs e2e-repeated-enno",
+    "test:ci:repeated:enno:prefix": "node scripts/run-ci-native.mjs e2e-repeated-enno-prefix",
+    "test:ci:repeated:enno:bounded": "node scripts/run-ci-native.mjs e2e-repeated-enno-bounded",
+    "test:ci:lisp": "node scripts/run-ci-native.mjs lisp",
+    "test:ci:prepare": "npm run verify:prepare",
+    "test:ci:embedding": "node scripts/run-local-embedding-smoke.mjs --offline",
+    "test:ci:approval:web": "npm run build && node scripts/run-ci-native.mjs browser-approval",
+    "test:ci:shortcuts:web": "npm run build && node scripts/run-ci-native.mjs browser-shortcuts"
   },
   "dependencies": {
     "@deepseek-ai/cosmokit": "1.8.5",
@@ -240,7 +256,7 @@
     "global-agent": "4.1.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/cordis": "~4.0.5-alpha.1",
     "@huggingface/hub": "2.16.1",
     "@huggingface/transformers": "4.2.0",
     "sqlite-vec": "0.1.9"
@@ -257,11 +273,11 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-llm": "0.1.5-rc.2",
-    "@deepseek-ai/dsh-session-format": "0.1.5-rc.1",
-    "@deepseek-ai/dsh-session-format-v0-to-v1": "0.1.5-rc.1",
-    "@deepseek-ai/dsh-session-format-v1-to-v2": "0.1.5-rc.1",
+    "@deepseek-ai/cordis": "4.0.5-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-format": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-format-v0-to-v1": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-format-v1-to-v2": "0.2.1-alpha.2",
     "@huggingface/hub": "2.16.1",
     "@huggingface/transformers": "4.2.0",
     "@types/node": "24.13.3",

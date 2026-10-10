@@ -53,12 +53,12 @@ KIOKUKO_REQUIRE_LISP_RUNTIME=1 \
   KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" \
   npm run test:lisp
 KIOKUKO_REQUIRE_DSH_NATIVE=1 \
-  KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime-current/node_modules" \
+  KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" \
   npm test
 ```
 
 Native preparation, PTC/memory review, Deep follow-up, and tombstone tests
-must be run with both pinned DSH fixtures. Protected Lisp and source/packed
+must run with the canonical DSH fixture. Protected Lisp and source/packed
 delivery require the actual supported runtime. A socket-denied test is a
 failed environmental check, not passing evidence. The optional macOS P0
 seatbelt probe has a separate explicit opt-in; its skip is not protection
@@ -69,8 +69,7 @@ an injected HTTP fixture. Its scripted preparation, runtime inspection, and
 seed execute in the same native turn before measured requests. The wrapper
 preserves the provider generation frozen by `prepareCall`; wrapping only
 `adapter.stream` misses DeepSeek's frozen dispatch path. This fixture proves
-ordering and budgets, not live model quality. The two pinned provider versions
-use Chat Completions and Messages respectively. Fixtures retain each version's
+ordering and budgets, not live model quality. Fixtures retain the selected runtime's
 native serializer, authentication callback, SSE format, and tool-result identity;
 the request boundary accepts only the corresponding endpoint on the configured
 origin. It never retries through another provider or protocol.

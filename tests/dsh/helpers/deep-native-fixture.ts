@@ -14,8 +14,8 @@ import { mountDshOrcaCommand } from '../../../src/dsh/orca-command-surface.js'
 
 export async function deepNativeFixture(makeScript: (mock: ReturnType<typeof nativeMock>, root: string, dbPath: string) => any[], options: { budget?: object; orca?: boolean; questions?: (request: any) => Promise<any>; root?: string; dataRoot?: string; keepFiles?: boolean; sessionId?: string } = {}) {
   const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT!
-  const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,skills,subagents,spawn,commands] = await Promise.all(
-    ['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','subagent','subagent-spawn-in-process','commands'].map(name => import(pathToFileURL(join(packages,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
+  const [cordis,llm,session,projection,systemPrompt,workingDirectory,fsLocal,scope,tools,agents,loop,skills,subagents,spawn,commands] = await Promise.all(
+    ['cordis','llm','session','session-projection','system-prompt','working-directory','fs-local','scope','tools','agent','agent-loop','skill','subagent','subagent-spawn-in-process','commands'].map(name => import(pathToFileURL(join(packages,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
   const root=realpathSync(options.root ?? await mkdtemp(join(tmpdir(),'deep-native-cases-'))), data=options.dataRoot ?? await mkdtemp(join(tmpdir(),'deep-native-state-'))
   execFileSync('git',['init','-q',root])
   await mkdir(data,{recursive:true})
@@ -24,7 +24,7 @@ export async function deepNativeFixture(makeScript: (mock: ReturnType<typeof nat
   if(!db.prepare("SELECT 1 FROM repositories WHERE workspace='deep-cases'").get()) registerRepositoryAndLocation(db,{repositoryId:'deep-cases',workspace:'deep-cases',displayName:'Deep cases',canonicalRoot:root,remoteFingerprint:null,bindingSchemaVersion:1,agentTemplateVersion:1});db.close()
   const mock=nativeMock(llm), provider=new mock.MockAdapter(makeScript(mock,root,dbPath))
   const ctx=new cordis.Context(), fibers:any[]=[]
-  for(const plugin of [llm,session,projection,systemPrompt,tools,agents,skills,subagents,commands]) fibers.push(await ctx.plugin(plugin.default,plugin===systemPrompt?{persona:''}:undefined))
+  for(const plugin of [llm,session,projection,systemPrompt,workingDirectory,fsLocal,tools,agents,skills,subagents,commands]) fibers.push(await ctx.plugin(plugin.default,plugin===systemPrompt?{persona:''}:plugin===workingDirectory?{defaultDirectory:root}:plugin===fsLocal?{cwd:root}:plugin===tools?{mode:'native'}:undefined))
   fibers.push(await ctx.plugin(loop.default,{agents:[]}));fibers.push(await ctx.plugin(spawn,{providerName:'spawn'}))
   if(options.questions) fibers.push(await ctx.plugin({name:'deep-case-questions',apply(c:any){return c.provide('userQuestions',{ask:options.questions})}}))
   ctx.llm.registerAdapter(['mock'],provider)
@@ -32,9 +32,10 @@ export async function deepNativeFixture(makeScript: (mock: ReturnType<typeof nat
   const composition=await mountDshComposition(ctx,adapter.host)
   const disposeOrca=options.orca&&adapter.host.orca?mountDshOrcaCommand(ctx,true,adapter.host.orca):undefined
   const parent=await ctx.agentLoop.create(session.SessionId(options.sessionId ?? 'deep-case-parent'),{provider:'mock',model:'mock'},{cwd:root})
+  const parentScope=scope.createScope(ctx,parent); parent.ctx=parentScope.ctx; const releaseNative=parent.ctx.get('tools').presentAs('native')
   const deep=adapter.host.deepPlanning!
   const command=(line:string)=>ctx.commands.execute(parent,line,[],new AbortController().signal)
   const complete=async()=>{await parent.whenIdle();const intent=await deep.store.intent(parent.session.id);if(intent?.runId){await deep.kick(parent);await deep.scheduler.idle(intent.runId)};await adapter.host.memoryFinalizer!.whenIdle();return intent}
   return {root,dbPath,ctx,parent,provider,adapter,deep,command,complete,mock,llm,
-    close:async()=>{composition.stopIngress();disposeOrca?.();await adapter.dispose();await composition.dispose();for(const fiber of fibers.reverse())await fiber?.dispose?.();if(!options.keepFiles){await rm(root,{recursive:true,force:true});await rm(data,{recursive:true,force:true})}} }
+    close:async()=>{composition.stopIngress();disposeOrca?.();releaseNative();await adapter.dispose();await composition.dispose();await parentScope.dispose();for(const fiber of fibers.reverse())await fiber?.dispose?.();if(!options.keepFiles){await rm(root,{recursive:true,force:true});await rm(data,{recursive:true,force:true})}} }
 }

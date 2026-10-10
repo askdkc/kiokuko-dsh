@@ -14,14 +14,16 @@ import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 isolateSkillHome()
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
-  ?? join(process.cwd(), 'tests/fixtures/dsh-runtime-current/node_modules')
+  ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const dshManifest = join(packageRoot, '@deepseek-ai/dsh/package.json')
 const explicitRuntime = process.env.KIOKUKO_DSH_PACKAGE_ROOT !== undefined || process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1'
 if (!existsSync(dshManifest) && explicitRuntime) throw new Error('Current DSH native subagent runtime is required')
 const available = existsSync(dshManifest)
 if (available) {
   const version = JSON.parse(readFileSync(dshManifest, 'utf8')).version
-  if (version !== '0.2.0-rc.2') throw new Error(`Subagent test requires DSH 0.2.0-rc.2, received ${version}`)
+  const expectedVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
+    ?? JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+  if (version !== expectedVersion) throw new Error(`Subagent test requires ${expectedVersion}, received ${version}`)
 }
 const current = available
 const moduleUrl = (name: string) => pathToFileURL(join(packageRoot, '@deepseek-ai', name, 'lib/index.js')).href
@@ -46,7 +48,7 @@ function continuableIds(agent: any): string[] {
 }
 
 for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(`shipped standard preset ${mode} runs without Kiokuko child intake`, {
-  skip: current ? false : 'requires the pinned DSH 0.2.0-rc.2 runtime', timeout: 120_000,
+  skip: current ? false : 'requires the canonical current DSH runtime', timeout: 120_000,
 }, async () => {
   const [cordis, appBoot, llm, session, cmdline] = await Promise.all([
     import(moduleUrl('cordis')), import(moduleUrl('dsh-app-boot')),
@@ -73,11 +75,10 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
     for (const [id, provider, toolName] of [
       ['tool-subagent', 'spawn', 'subagent'], ['tool-subagent-fork', 'fork', 'subagent_fork'],
     ] as const) {
-      const row = findPatchRows(patches, id).find(item => item.config?.backgroundMode === 'continuable')
+      const row = findPatchRows(patches, id).find(item => item.config?.provider === provider && item.config?.toolName === toolName)
       assert.equal(row?.name, '@deepseek-ai/dsh-tool-subagent')
       assert.equal(row?.config?.provider, provider)
       assert.equal(row?.config?.toolName, toolName)
-      assert.equal(row?.config?.backgroundMode, 'continuable')
     }
     const overrides = [
       { id: 'storage-json', config: { root: join(temporary, 'storage') } },
@@ -184,7 +185,7 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
       } finally { releaseChildren?.() }
     }
     await parent.agent.whenIdle()
-    if (mode === 'parallel') await waitBounded(childrenFinished, 'Continuable children did not settle')
+    await waitBounded(childrenFinished, 'Continuable children did not settle')
     assert.ok(requests.some(request => request.sessionId !== 'standard-parent'),
       `real child LLM request must occur: ${JSON.stringify({ requests: requests.map(request => ({ sessionId: request.sessionId, tools: request.tools?.map((tool: any) => tool.name) })), questions: questions.map(request => request.questions?.map((question: any) => ({ id: question.id, options: question.options?.map((option: any) => option.label) }))), events: parent.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result' || event.type === 'tool/call').map((event: any) => event.data) })}`)
     const preparation = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId === 'prepare-parent')
@@ -197,8 +198,15 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
       request.tools?.some((tool: any) => tool.name === 'subagent_fork')), 'both tools must reach the parent model request')
     if (mode !== 'parallel') {
       const result = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId !== 'prepare-parent')
-      assert.match(JSON.stringify(result), mode === 'failure' ? /subagent run failed/ : /CHILD_COMPLETE/)
-      if (mode === 'failure') assert.equal(result?.data.message.isError, true)
+      const child = ended.find(item => item.id === started[0]?.id)
+      assert.ok(child)
+      if (mode === 'failure') {
+        assert.equal(child.stopReason, 'error')
+      } else {
+        assert.equal(child.stopReason, 'completed')
+        assert.match(JSON.stringify(child.lastAssistantMessage), /CHILD_COMPLETE/)
+      }
+      assert.equal(result?.data.message.isError, false, 'launch result reports asynchronous child startup')
     }
     assert.equal(started.length, mode === 'parallel' ? 2 : 1,
       JSON.stringify(parent.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/call' || event.type === 'tool/result').map((event: any) => event.data)))

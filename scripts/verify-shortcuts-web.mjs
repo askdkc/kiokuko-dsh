@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { chromium } from 'playwright'
 const exec = promisify(execFile), repository = resolve(import.meta.dirname, '..')
-const fixtureName = process.env.KIOKUKO_SHORTCUT_RUNTIME ?? 'dsh-runtime-current'
+const fixtureName = process.env.KIOKUKO_SHORTCUT_RUNTIME ?? 'dsh-runtime'
 const reuse = process.env.KIOKUKO_SHORTCUT_REUSE
 const base = reuse ?? await realpath(await mkdtemp(join(tmpdir(), 'kiokuko-shortcuts-')))
 const project = join(base, 'project'), answers = join(base, 'answers.jsonl')

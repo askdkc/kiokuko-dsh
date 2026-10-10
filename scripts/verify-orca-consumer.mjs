@@ -7,7 +7,13 @@ import { join } from 'node:path'
 const exec = promisify(execFile)
 const root = process.cwd()
 const temporary = await mkdtemp(join(tmpdir(), 'kiokuko-orca-consumer-'))
-const env = { ...process.env, npm_config_cache: join(temporary, 'cache') }
+// Match the reproducibility check: an empty consumer must not inherit a
+// developer's npm build-approval configuration. Lifecycle scripts stay disabled.
+const userConfig = join(temporary, 'npmrc')
+await writeFile(userConfig, '')
+const env = { ...process.env, npm_config_cache: join(temporary, 'cache'), npm_config_userconfig: userConfig, NPM_CONFIG_USERCONFIG: userConfig }
+delete env.npm_config_allow_scripts
+delete env.NPM_CONFIG_ALLOW_SCRIPTS
 try {
   const packed = JSON.parse((await exec('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', temporary], { cwd: root, env })).stdout)[0]
   const consumer = join(temporary, 'consumer')

@@ -29,7 +29,7 @@ Explicit hosts must implement `configureEfficiency` to accept non-default settin
 npm run typecheck
 npm test
 npm run test:efficiency
-# Requires the pinned DSH 0.1.2-rc.1 CLI/runtime, using a disposable profile:
+# Requires the pinned DSH 0.2.1-alpha.2 CLI/runtime, using a disposable profile:
 KIOKUKO_REQUIRE_DSH_CLI=1 npm run test:e2e:dsh
 ```
 

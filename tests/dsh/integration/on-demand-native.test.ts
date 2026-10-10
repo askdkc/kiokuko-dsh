@@ -25,13 +25,14 @@ import { nativeMock } from '../helpers/native-mock.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 
 const isolatedHome = isolateSkillHome()
-const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime-current/node_modules')
+const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const manifest = join(packages, '@deepseek-ai/dsh/package.json')
 const nativeAvailable = existsSync(manifest)
 if (!nativeAvailable && (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' || process.env.KIOKUKO_DSH_PACKAGE_ROOT)) throw new Error('On-demand native tests require an installed pinned DSH fixture')
 const runtimeVersion = nativeAvailable ? JSON.parse(await readFile(manifest, 'utf8')).version : 'unavailable'
-if (nativeAvailable) assert.ok(['0.1.5-rc.1', '0.2.0-rc.2'].includes(runtimeVersion), `Unsupported native test fixture: ${runtimeVersion}`)
-if (nativeAvailable && process.env.KIOKUKO_EXPECTED_DSH_VERSION) assert.equal(runtimeVersion, process.env.KIOKUKO_EXPECTED_DSH_VERSION)
+const expectedRuntimeVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
+  ?? JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+if (nativeAvailable) assert.equal(runtimeVersion, expectedRuntimeVersion)
 const actualLaya = process.env.PR72_ACTUAL_LAYA === '1'
 const baselineCheckout = process.env.PR72_BASELINE_CHECKOUT
 const implementation = baselineCheckout ? {
@@ -83,17 +84,14 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
   try {
     const runtimePlugins: any[][] = []
     if (presentation !== 'native') {
-      if (runtimeVersion.startsWith('0.1.5')) runtimePlugins.push([(await load('dsh-code-runtime-worker-thread')).default])
-      else {
-        for (const [name, config] of [['dsh-fs-local', { cwd: root }], ['dsh-subprocess-local', undefined], ['dsh-sandbox-local', undefined], ['dsh-sandbox-policy', { mode: 'read-only', workspaceRoot: root }], ['dsh-ptc-runtime-node', { timeoutMs: 10000 }]] as const) runtimePlugins.push([(await load(name)).default, config])
-      }
+      for (const [name, config] of [['dsh-fs-local', { cwd: root }], ['dsh-working-directory', { defaultDirectory: root }], ['dsh-subprocess-local', undefined], ['dsh-sandbox-local', undefined], ['dsh-sandbox-policy', { mode: 'read-only', workspaceRoot: root }], ['dsh-ptc-runtime-node', { timeoutMs: 10000 }]] as const) runtimePlugins.push([(await load(name)).default, config])
     }
     for (const [plugin, config] of [[llm.default], [session.default], [projections.default], [prompt.default, { persona: '' }],
       ...runtimePlugins, [tools.default, { mode: presentation === 'ptc-scoped' ? 'native' : presentation }], [agents.default], [skills.default], [loop.default, { agents: [] }], [approval.default], [commands.default]]) {
       const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
     }
     if (presentation !== 'native') {
-      const runtime = ctx.get(runtimeVersion.startsWith('0.1.5') ? 'codeRuntime' : 'ptcRuntime', false)
+      const runtime = ctx.get('ptcRuntime', false)
       assert.ok(runtime, 'official PTC runtime must be mounted')
       const originalRun = runtime.run
       runtime.run = function (...args: any[]) { runtimeRuns.push({ code: args[0]?.code ?? args[0]?.source?.code }); return originalRun.apply(this, args) }
@@ -281,7 +279,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
         assert.equal(runtimeRuns.length, 1, 'only the later real tool program may run; preparation carrier must not run interpreter')
         assert.deepEqual(requests[1].toolNames, ['run_code'], 'the configured PTC-only surface must be restored for execution')
       }
-      const shouldExecute = scenario === 'auto-web' || scenario === 'prepared' || scenario === 'native-allow-once' || scenario === 'build-write' || scenario === 'writing-write' || scenario === 'debug-write' || scenario === 'multi-tool' || scenario === 'direct-advisory' || scenario === 'uncertain-recovery' || scenario === 'restart'
+      const shouldExecute = scenario === 'auto-web' || scenario === 'prepared' || scenario === 'native-allow-once' || scenario === 'build-write' || scenario === 'writing-write' || scenario === 'debug-write' || scenario === 'multi-tool' || scenario === 'direct-advisory' || scenario === 'uncertain-recovery' || scenario === 'restart' || scenario === 'memory-pending' || scenario === 'memory-direct'
       const expectedBodies = scenario === 'multi-tool' || scenario === 'auto-web' ? 2 : shouldExecute ? 1 : 0
       assert.equal(bodies.length, expectedBodies, JSON.stringify(row))
       assert.equal(state.intakes.length, 1, 'one exact original request must own intake')
@@ -293,8 +291,8 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       }
       if (scenario === 'memory-pending' || scenario === 'memory-direct') {
         assert.ok(state.memoryBindings?.some((binding: any) => JSON.parse(binding.required_json).length > 0), 'real recalled memory must create an unresolved application obligation')
-        assert.ok(JSON.stringify(toolResults).includes('resolve memory decisions'), 'actual mounted memory gate must block the very first tool body')
-        assert.equal(bodies.length, 0)
+        assert.ok(!JSON.stringify(toolResults).includes('resolve memory decisions'), 'an unresolved decision must never surface as a tool error')
+        assert.equal(bodies.length, 1, 'the prepared tool body runs while the decision is unresolved')
       }
       if (scenario === 'auto-web') {
         assert.equal(requests.length, 3); assert.equal(questions.length, 0)
@@ -365,7 +363,7 @@ if (process.env.PR72_MATRIX_ONLY !== '1') for (const mode of ['core', 'full'] as
   test(`default native ${mode}: same-id impostor cannot consume native scope`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'scope-spoof', '対象はまだ決めていない。'))
   test(`default native ${mode}: replaced native definition cannot consume an admitted call`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'definition-rebound', 'srcを調べて結果を説明して。'))
   test(`default native ${mode}: unbound destructive reference cannot be laundered through research preparation`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'unknown-action', 'それを消してくれる？'))
-  test(`default native ${mode}: recalled unresolved memory blocks the first prepared tool`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'memory-pending', 'Fix the failing test in parser.test.ts', 'debug'))
+  test(`default native ${mode}: recalled unresolved memory never blocks the first prepared tool`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'memory-pending', 'Fix the failing test in parser.test.ts', 'debug'))
   test(`default native ${mode}: host and session reload cannot reuse prior tool authority`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'restart', 'srcを調べて結果を説明して。'))
   test(`default native ${mode}: global PTC preparation carrier leaves PTC surface unchanged`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'prepared', '変更しないで。srcを調べて結果を説明して。', 'research', 'ptc'))
   test(`default native ${mode}: scoped PTC admits only the canonical preparation carrier`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'prepared', '変更しないで。srcを調べて結果を説明して。', 'research', 'ptc-scoped'))
@@ -373,7 +371,7 @@ if (process.env.PR72_MATRIX_ONLY !== '1') for (const mode of ['core', 'full'] as
   test(`default native ${mode}: scoped PTC rejects added preparation-carrier statements`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'ptc-malicious', '変更しないで。srcを調べて結果を説明して。', 'research', 'ptc-scoped'))
   if (actualLaya) {
     test(`default native ${mode}: real Laya research advisory prepares direct native demand`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'direct-advisory', '富士山の標高を公式資料で調べて'))
-    test(`default native ${mode}: real Laya direct preparation retains first-action memory gate`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'memory-direct', 'ログイン時の例外を修正して', 'debug'))
+    test(`default native ${mode}: real Laya direct preparation keeps the unresolved memory obligation`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'memory-direct', 'ログイン時の例外を修正して', 'debug'))
     test(`default native ${mode}: real Laya abstention rejects premature demand and permits explicit preparation`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'uncertain-recovery', '最新のNode.jsリリースノートを探して'))
     test(`default native ${mode}: dotted filename eligibility boundary rejects premature demand and preserves explicit preparation`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'uncertain-recovery', 'Fix the failing test in parser.test.ts', 'debug'))
   }

@@ -27,8 +27,8 @@ const modulePath = (name: string) => pathToFileURL(join(packages!, '@deepseek-ai
 for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human input' : 'command body'}, no parent model request, same Session report`, {
   skip: packages ? false : 'requires the pinned DSH package runtime', timeout: 45_000,
 }, async () => {
-  const [cordis, llm, session, projection, systemPrompt, tools, agents, loop, skills, subagents, spawn, commands] = await Promise.all(
-    ['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','subagent','subagent-spawn-in-process','commands'].map(name => import(modulePath(name))))
+  const [cordis, llm, session, projection, systemPrompt, workingDirectory, fsLocal, scope, tools, agents, loop, skills, subagents, spawn, commands] = await Promise.all(
+    ['cordis','llm','session','session-projection','system-prompt','working-directory','fs-local','scope','tools','agent','agent-loop','skill','subagent','subagent-spawn-in-process','commands'].map(name => import(modulePath(name))))
   const root = realpathSync(await mkdtemp(join(tmpdir(), 'deep-native-root-'))), data = await mkdtemp(join(tmpdir(), 'deep-native-data-'))
   execFileSync('git', ['init', '-q', root])
   const databasePath = join(data, 'state.sqlite3'); await initializeDatabase({ databasePath })
@@ -47,12 +47,14 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
   ])
   provider.listModels = async (id: string) => [{ provider: id, id: 'mock', name: 'Mock' }]
   const ctx = new cordis.Context()
-  for (const plugin of [llm, session, projection, systemPrompt, tools, agents, skills, subagents, commands]) await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined)
+  for (const plugin of [llm, session, projection, systemPrompt, workingDirectory, fsLocal, tools, agents, skills, subagents, commands]) await ctx.plugin(plugin.default,
+    plugin === systemPrompt ? { persona: '' } : plugin === workingDirectory ? { defaultDirectory: root } : plugin === fsLocal ? { cwd: root } : plugin === tools ? { mode: 'native' } : undefined)
   await ctx.plugin(loop.default, { agents: [] }); await ctx.plugin(spawn, { providerName: 'spawn' })
   ctx.llm.registerAdapter(['mock'], provider)
   const adapter = createDshHostAdapter(ctx, {  repositoryRoot: root, databasePath, modelRoutes: [{ provider: 'mock', family: 'other', connection: 'api', protocol: 'chat-completions' }], orca: { enabled: false }, deepPlanning: { budget: { maxConcurrentAgents: 1 } } })
   const composition = await mountDshComposition(ctx, adapter.host)
   const parent = await ctx.agentLoop.create(session.SessionId('deep-parent'), { provider: 'mock', model: 'mock' }, { cwd: root })
+  const parentScope = scope.createScope(ctx, parent); parent.ctx = parentScope.ctx; const releaseNative = parent.ctx.get('tools').presentAs('native')
   try {
     const task = 'Design a read-only analysis stage.\nPreserve this code: `const x = 1`.'
     const executed = await ctx.commands.execute(parent, armed ? '/deep-planning' : `/deep-planning ${task}`, [], new AbortController().signal)
@@ -76,7 +78,7 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
     assert.ok((await adapter.host.deepPlanning!.reports.snapshot(parent.session.id)).some(e => e.kind === 'report' && e.text.includes('read-only analysis stage')))
     assert.equal(await adapter.host.deepPlanning!.store.database(db => db.prepare('SELECT count(*) AS count FROM enno_contracts').get<{count:number}>()!.count), 0)
   } finally {
-    composition.stopIngress(); await adapter.dispose(); await composition.dispose()
+    composition.stopIngress(); releaseNative(); await adapter.dispose(); await composition.dispose(); await parentScope.dispose()
     await rm(root, { recursive: true, force: true }); await rm(data, { recursive: true, force: true })
   }
 })
@@ -186,7 +188,7 @@ test('Deep native: authenticated report transport is Session-bound and leaves na
     await fixture.complete()
     const url = `http://localhost/api/kiokuko.deep?sessionId=${fixture.parent.session.id}`
     const transport = fixture.ctx.connection.createSharedFetchHandler('/api')
-    // 0.1.5's real HTTP bridge treats omitted requestBody as streaming, which
+    // The native HTTP bridge treats omitted requestBody as streaming, which
     // constructs an invalid GET-with-body before dispatching either route.
     assert.equal(transport.requestBodyMode({method:'GET',url:new URL(url)}),'buffered')
     assert.equal(transport.requestBodyMode({method:'GET',url:new URL('http://localhost/api/session.export')}),'buffered')
@@ -303,7 +305,7 @@ test('Deep native: armed attachments are retained and never reach a model',nativ
     assert.match(intent!.problem,/添付/u);assert.deepEqual(intent!.messages[0],input);assert.equal(f.provider.requests.length,0)
   }finally{await f.close()}
 })
-test('Deep native: 0.1.5 file command admission retains the body and file without starting a model',nativeOptions,async()=>{
+test('Deep native: file command admission retains the body and file without starting a model',nativeOptions,async()=>{
   const f=await deepNativeFixture(()=>[])
   const attachment={attachmentId:'deep-file-fixture',name:'plan.txt',bytes:3}
   const scope=await f.ctx.plugin({name:'deep-file-store-fixture',apply(ctx:any){ctx.provide('attachments',{})}})
@@ -370,12 +372,19 @@ test('Deep native: child recordings inherit only the exact parent choice and lin
     const recording=await f.command('/kioku-orca start');assert.equal(recording.result.kind,'success',JSON.stringify(recording))
     await f.command('/deep-planning Create a recorded plan');const intent=await f.complete()
     await f.command('/kioku-orca stop')
-    const evidence=await f.deep.store.database(db=>({
-      choices:db.prepare('SELECT dsh_session_id FROM dsh_orca_session_choices').all<{dsh_session_id:string}>(),
-      traces:db.prepare('SELECT t.dsh_session_id,l.kiokuko_run_id FROM dsh_orca_traces t JOIN dsh_orca_trace_run_links l USING(orca_run_id) WHERE t.dsh_session_id<>?').all<{dsh_session_id:string;kiokuko_run_id:string}>(f.parent.session.id),
-    }))
+    let evidence!: { choices: { dsh_session_id: string }[]; traces: { dsh_session_id: string; state: string; kiokuko_run_id: string }[] }
+    for (let attempt = 0; attempt < 200; attempt++) {
+      evidence = await f.deep.store.database(db => ({
+        choices: db.prepare('SELECT dsh_session_id FROM dsh_orca_session_choices').all<{ dsh_session_id: string }>(),
+        traces: db.prepare('SELECT t.dsh_session_id,t.state,l.kiokuko_run_id FROM dsh_orca_traces t JOIN dsh_orca_trace_run_links l USING(orca_run_id) WHERE t.dsh_session_id<>?').all<{ dsh_session_id: string; state: string; kiokuko_run_id: string }>(f.parent.session.id),
+      }))
+      const expected = evidence.traces.filter(trace => trace.kiokuko_run_id === intent!.runId && trace.state === 'completed')
+      if (expected.length === 3) break
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
     assert.equal(asked,0);assert.deepEqual(evidence.choices.map(row=>row.dsh_session_id),[f.parent.session.id])
-    assert.equal(evidence.traces.length,3);assert.ok(evidence.traces.every(t=>t.kiokuko_run_id===intent!.runId))
+    assert.equal(evidence.traces.length, 3, JSON.stringify(evidence))
+    assert.ok(evidence.traces.every(trace => trace.kiokuko_run_id === intent!.runId && trace.state === 'completed'))
   }finally{await f.close()}
 })
 test('Deep native: unloading during initial configuration preserves claimed input and closes before database teardown',nativeOptions,async()=>{

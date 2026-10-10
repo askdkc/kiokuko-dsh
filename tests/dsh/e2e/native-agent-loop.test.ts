@@ -38,7 +38,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   skip: !dshSourceRoot && !dshPackageRoot ? 'requires the pinned DeepSeek Harness runtime' : false,
   timeout: 60_000,
 }, async () => {
-  const [cordis, llm, session, projection, systemPrompt, tools, agentRegistry, agentLoop, skills] = await Promise.all([
+  const [cordis, llm, session, projection, systemPrompt, tools, agentRegistry, agentLoop, skills, fsLocal, workingDirectory, scope] = await Promise.all([
     import(dshModule('vendor/cordis/lib/index.js')),
     import(dshModule('packages/llm/llm/lib/index.js')),
     import(dshModule('packages/core/session/lib/index.js')),
@@ -48,6 +48,9 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     import(dshModule('packages/core/agent/lib/index.js')),
     import(dshModule('packages/core/agent-loop/lib/index.js')),
     import(dshModule('packages/skill/skill/lib/index.js')),
+    import(dshModule('packages/fs/fs-local/lib/index.js')),
+    import(dshModule('packages/session/working-directory/lib/index.js')),
+    import(dshModule('packages/core/scope/lib/index.js')),
   ])
   const mock = nativeMock(llm)
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-real-loop-'))
@@ -179,7 +182,9 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   await ctx.plugin(session.default)
   await ctx.plugin(projection.default)
   await ctx.plugin(systemPrompt.default, { persona: '' })
-  await ctx.plugin(tools.default)
+  await ctx.plugin(fsLocal.default, { cwd: fixtureRoot })
+  await ctx.plugin(workingDirectory.default, { defaultDirectory: fixtureRoot })
+  await ctx.plugin(tools.default, { mode: 'native' })
   await ctx.plugin(agentRegistry.default)
   await ctx.plugin(skills.default)
   await ctx.plugin(agentLoop.default, { agents: [] })
@@ -207,6 +212,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   const confirmationQuestions: string[] = []
   const confirmationDetails: string[] = []
   let liveAgent: any
+  let liveScope: any
   const boundaryFailures: string[] = []
   const questionFiber = ctx.plugin({
     name: 'kiokuko-dsh-real-loop-questions',
@@ -309,6 +315,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       { provider: 'mock', model: 'mock' },
       { cwd: fixtureRoot },
     )
+    liveScope = scope.createScope(ctx, liveAgent); liveAgent.ctx = liveScope.ctx; liveAgent.ctx.get('tools').presentAs('native')
     const signal = new AbortController().signal
     const nativeSkillSnapshot = await ctx.skills.snapshot({ scope: liveAgent, cwd: fixtureRoot, signal })
     const nativeToolSnapshot = await ctx.tools.schemas(liveAgent)
@@ -655,6 +662,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   } finally {
     observeRouting()
     composition.stopIngress()
+    await liveScope?.dispose()
     await adapter.dispose()
     await composition.dispose()
     await questionFiber.dispose()

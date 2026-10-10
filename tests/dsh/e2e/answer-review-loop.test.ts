@@ -100,7 +100,9 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
         const runs = check.prepare('SELECT status FROM ledger_runs').all()
         admitted = runs.length===2
         assert.equal(runs.length,admitted?2:1)
-        assert.equal(runs.filter(run=>run.status==='active').length,admitted?1:0,'the superseded run is retired before the next model request')
+        const retained = host==='full' && scenario!=='claimed-superseded'
+        assert.equal(runs.filter(run=>run.status==='active').length,admitted || retained ? 1 : 0,
+          'queued full-host work retains its owner until preparation; completed and core turns retire it first')
       } finally { check.close() }
       // Cancellation may leave the old execution owner in place until the
       // existing-owner admission path retires it and admits the new request.
@@ -149,7 +151,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()!.n,newRequest ? 2 : 1)
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()!.n,0)
       assert.equal(taskTypeQuestions,0,'explicit preparation supplies the advisory task type')
-      assert.equal(taskTypeCalls,newRequest?1:0,'only the new direct request invokes automated classification');assert.equal(rows.length,scenario==='off'?0:newRequest ? 2 : 1);assert.equal(reviewCalls,scenario==='off'?0:newRequest ? 2 : 1)
+      assert.equal(taskTypeCalls,newRequest?2:1,'each human request invokes classification once; corrective model requests do not');assert.equal(rows.length,scenario==='off'?0:newRequest ? 2 : 1);assert.equal(reviewCalls,scenario==='off'?0:newRequest ? 2 : 1)
       assert.ok(rows.every(row=>row.status==='closed'))
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ledger_runs WHERE status='active'").get()!.n,0)
       if(host==='full') assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_memory_finalizations').get()!.n,newRequest?2:1)

@@ -22,20 +22,27 @@ function modulePath(name: string, source: string) {
   return pathToFileURL(packageRoot ? join(packageRoot, '@deepseek-ai', name, 'lib/index.js') : join(sourceRoot!, source, 'lib/index.js')).href
 }
 async function harness() {
-  const [cordis, llm, session, projection, prompt, tools, agents, loop, skills, subagents, spawn] = await Promise.all([
+  const [cordis, llm, session, projection, prompt, tools, agents, loop, skills, subagents, spawn, fsLocal, workingDirectory, scope] = await Promise.all([
     import(modulePath('cordis', 'vendor/cordis')), import(modulePath('dsh-llm', 'packages/llm/llm')),
     import(modulePath('dsh-session', 'packages/core/session')), import(modulePath('dsh-session-projection', 'packages/session/session-projection')),
     import(modulePath('dsh-system-prompt', 'packages/core/system-prompt')), import(modulePath('dsh-tools', 'packages/core/tools')),
     import(modulePath('dsh-agent', 'packages/core/agent')), import(modulePath('dsh-agent-loop', 'packages/core/agent-loop')),
     import(modulePath('dsh-skill', 'packages/skill/skill')), import(modulePath('dsh-subagent', 'packages/subagent/subagent')),
     import(modulePath('dsh-subagent-spawn-in-process', 'packages/subagent/subagent-spawn-in-process')),
+    import(modulePath('dsh-fs-local', 'packages/fs/fs-local')),
+    import(modulePath('dsh-working-directory', 'packages/session/working-directory')),
+    import(modulePath('dsh-scope', 'packages/core/scope')),
   ])
-  const ctx = new cordis.Context(), fibers: any[] = []
-  for (const [plugin, config] of [[llm.default], [session.default], [projection.default], [prompt.default, { persona: '' }], [tools.default], [agents.default], [skills.default], [loop.default, { agents: [] }], [subagents.default], [spawn, { providerName: 'spawn' }]]) {
+  const ctx = new cordis.Context(), fibers: any[] = [], scopes: any[] = []
+  const root = await mkdtemp(join(tmpdir(), 'kiokuko-model-native-'))
+  for (const [plugin, config] of [[llm.default], [session.default], [projection.default], [fsLocal.default, { cwd: root }], [workingDirectory.default, { defaultDirectory: root }], [prompt.default, { persona: '' }], [tools.default, { mode: 'native' }], [agents.default], [skills.default], [loop.default, { agents: [] }], [subagents.default], [spawn, { providerName: 'spawn' }]]) {
     const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
   }
-  const root = await mkdtemp(join(tmpdir(), 'kiokuko-model-native-'))
-  return { ctx, llm, session, root, mock: nativeMock(llm), dispose: async () => { for (const f of fibers.reverse()) await f.dispose(); await rm(root, { recursive: true, force: true }) } }
+  const scopeListener = ctx.on('agent/created', ({ agent }: { agent: any }) => {
+    const local = scope.createScope(ctx, agent); scopes.push(local); agent.ctx = local.ctx
+    agent.ctx.get('tools').presentAs('native')
+  }, { global: true, prepend: true })
+  return { ctx, llm, session, root, mock: nativeMock(llm), dispose: async () => { scopeListener(); for (const local of scopes.reverse()) await local.dispose(); for (const f of fibers.reverse()) await f.dispose(); await rm(root, { recursive: true, force: true }) } }
 }
 async function turn(h: Awaited<ReturnType<typeof harness>>, agent: any, text: string) {
   agent.followup(h.llm.createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
@@ -89,7 +96,7 @@ for (const failure of ['insert', 'first-request', 'late-request', 'late-request-
         return { id: q.id, selected: [answer] }
       }) }) })
     } }); await questions
-    const adapter = createDshHostAdapter(h.ctx, { intakeMode: 'eager', repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
+    const adapter = createDshHostAdapter(h.ctx, { intakeMode: 'eager', typedDecisions: { mode: 'off' }, repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
       migrationsDirectory: join(process.cwd(), 'migrations'), llm: { async *stream() { throw new Error('Optional memory backend unavailable') } } })
     const composition = await mountDshComposition(h.ctx, adapter.host)
     const model = new h.mock.MockAdapter(failure === 'insert' || failure === 'first-request' ? [h.mock.textResponse('verified')]
@@ -101,7 +108,7 @@ for (const failure of ['insert', 'first-request', 'late-request', 'late-request-
     agent.steer = (message: unknown) => { replayed.push(message); steer(message) }
     const observeError = h.ctx.on('agent/error', (event: any) => { errors.push(event.error) })
     let requests = 0, writes = 0
-    const failRequest = agent.ctx.on('agent/request', async (_event: unknown, next: () => Promise<unknown>) => {
+    const failRequest = h.ctx.on('agent/request', async (_event: unknown, next: () => Promise<unknown>) => {
       if (++requests === (failure === 'first-request' ? 1 : 2)) throw new Error('injected request failure')
       return next()
     }, { prepend: true })
@@ -390,10 +397,10 @@ test('native loop and spawn route every template role, freeze assembly, isolate 
         assert.equal(request.reasoningEffort, undefined)
         assert.equal(observed.at(-1)?.model, active.model)
       }
-      const child = await h.ctx.subagents.start('spawn', { parent, signal: new AbortController().signal,
+      const child = await h.ctx.subagents.startActivation({ provider: 'spawn', label: 'model route verification', delivery: 'caller', signal: new AbortController().signal, request: { parent,
         agentOptions: { provider: `route-${template.id}`, model: template.models.worker[0]! }, maxDepth: 1,
-        toolFilter: { allow: [] }, prompt: [{ type: 'text', text: 'Return verification evidence only.' }] })
-      try { assert.equal((await child.result).stopReason, 'completed'); assert.equal(script.requests.at(-1)?.model, template.models.worker[0]); assert.equal(script.requests.at(-1)?.sessionId, child.id) } finally { await child.dispose() }
+        toolFilter: { allow: [] }, prompt: [{ type: 'text', text: 'Return verification evidence only.' }] } })
+      try { assert.equal((await child.result).stopReason, 'completed'); assert.equal(script.requests.at(-1)?.model, template.models.worker[0]); assert.equal(script.requests.at(-1)?.sessionId, child.childId) } finally { await child.dispose() }
     }
     await turn(h, other, 'independent'); assert.equal(script.requests.at(-1)?.model, 'other')
     active = undefined

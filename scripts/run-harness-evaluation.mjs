@@ -21,7 +21,7 @@ const scenarios = [
 ]
 // A fixture change is reviewed with this digest rather than silently changing
 // what the mandatory offline gate measures.
-const EXPECTED_FIXTURE_DIGEST = 'acb1a18eb295e06bb43d115c03dd379cb749167e33d16c96c4b3506385db0a15'
+const EXPECTED_FIXTURE_DIGEST = 'd9dcc13bab74cc48f3d5ac5f8087de7a2f8ae71d210d6d95335934f1870c1308'
 const root = process.cwd()
 const reportPath = resolve(process.env.KIOKUKO_HARNESS_REPORT ?? '.artifacts/harness-report.json')
 await rm(reportPath, { force: true })

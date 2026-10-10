@@ -9,7 +9,7 @@ import type { AkinatorTaskClassification } from './decisions/akinator-classifica
 
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
-export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. No execution task has been prepared yet. Preserve all requested actions, negations, alternatives and target uncertainty. Native web_search and web_fetch demands automatically prepare the original request with research advice when no non-chat action type is resolved. Other tool-backed work requires prepare_requested_work(taskType); its type is advisory and grants no permission. Do not silently replace a requested action with a text-only answer or claim work was done. Ask a concrete clarification in ordinary conversation when the actual target or requested action is unclear. Do not prepare work merely to load a conversational skill. Existing native tool permissions and approvals still apply. If only run_code is exposed, prepare with exactly return await tools.prepare_requested_work({"taskType":"research"}) using the appropriate advisory type; the host intercepts that preparation-only carrier without evaluating code. Extra statements or expressions are refused until preparation completes.'
+export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. No execution task has been prepared yet. Preserve all requested actions, negations, alternatives and target uncertainty. Native web_search and web_fetch demands automatically prepare the original request with research advice when no non-chat action type is resolved. Other tool-backed work requires prepare_requested_work(taskType); its type is advisory and grants no permission. Do not silently replace a requested action with a text-only answer or claim work was done. Ask a concrete clarification in ordinary conversation when the actual target or requested action is unclear. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Existing native tool permissions and approvals still apply. If only run_code is exposed, prepare with exactly return await tools.prepare_requested_work({"taskType":"research"}) using the appropriate advisory type; the host intercepts that preparation-only carrier without evaluating code. Extra statements or expressions are refused until preparation completes.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(type => type !== 'chat')
 
 export interface DemandAgent { readonly ctx?: unknown; readonly id: string; readonly session?: { readonly id: string; snapshotEvents?(): readonly DshLogEvent[] } }
@@ -82,13 +82,15 @@ export function preparationCarrier(value: unknown): TaskType | undefined {
 /** Conversation entry and execution intake are distinct; neither this mode nor a type hint grants native permission. */
 export class OnDemandIntake {
   readonly #turns = new Map<string, Turn>()
-  readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: TaskType; skillRead?: boolean }>()
+  readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: TaskType; skillRead?: boolean; requestPreparation?: boolean }>()
   readonly #disposers: (() => void)[] = []
   readonly #pending = new Set<Promise<unknown>>()
   readonly #lifecycle = new AbortController()
   #tools?: NativeTools
+  #startupSkillReader: Definition['execute'] | undefined
+  readonly #skillReaders = new WeakMap<DemandAgent, Definition['execute'] | undefined>()
   #stopped = false
-  constructor(private readonly host: Dependencies) {}
+  constructor(private readonly host: Dependencies, private readonly options: { onlyWhenDeferred?: boolean } = {}) {}
   private watch<T>(promise: Promise<T>): Promise<T> {
     this.#pending.add(promise)
     void promise.then(() => this.#pending.delete(promise), () => this.#pending.delete(promise))
@@ -128,6 +130,10 @@ export class OnDemandIntake {
     const promise = (async () => {
       await this.host.validate(input)
       this.assertCurrent(state)
+      // Presets and later host plugins register readers after mount. Pin the
+      // validated owner's first reader once, including absence; never rebind it.
+      if (!this.#skillReaders.has(input.agent)) this.#skillReaders.set(input.agent,
+        this.#startupSkillReader ?? this.#tools?.get('skill', input.agent)?.execute)
       if (await this.host.existing(input)) {
         this.assertCurrent(state)
         // Retain the exact resumed request for the public preparation receipt.
@@ -139,6 +145,14 @@ export class OnDemandIntake {
       if (!humanMessages(input.messages).length) throw new Error('Original human input is required before on-demand intake')
       state.intent = await this.host.classify(input, state.task)
       this.assertCurrent(state)
+      // Eager mode still binds known work before generation. Classifier uncertainty
+      // instead reaches ordinary reasoning, with no execution grant or purpose UI.
+      if (this.options.onlyWhenDeferred && !state.intent.deferInference) {
+        this.#turns.delete(sessionId)
+        state.status = 'closed'
+        controller.abort(new Error('Known intent continues through eager admission'))
+        return false
+      }
       await this.host.answerContext?.prepare(state.input, state.task, state.intent.taskType ?? null)
       this.assertCurrent(state)
       state.status = 'answer'
@@ -203,6 +217,16 @@ export class OnDemandIntake {
     const state = this.#turns.get(sessionId)
     return state && { task: state.task, taskType: state.taskType ?? state.intent.taskType ?? null, status: state.status, turn: state.input.turn }
   }
+  /** A current host-validated control call, never arbitrary code or a name-based exemption. */
+  preparationOnly(execution: Execution): boolean {
+    const state = this.bound(execution), proof = this.#executions.get(execution)
+    if (this.#stopped || execution.signal.aborted || execution.parent !== undefined || !state || state.input.signal.aborted
+      || !proof || proof.turn !== state || this.definition(execution)?.execute !== proof.execute
+      || state.preparationCalls.has(execution.callId)) return false
+    if (proof.carrier) return execution.name === 'run_code' && state.status === 'answer' && preparationCarrier(execution.arguments) === proof.carrier
+    return proof.requestPreparation === true && execution.name === TASK_PREPARE_TOOL
+      && (state.status === 'answer' || state.existing === true && state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn))
+  }
   pending(agent: DemandAgent): boolean {
     const state = agent.session && this.#turns.get(agent.session.id)
     return !!state && state.input.agent === agent && !['prepared', 'closed', 'stale'].includes(state.status)
@@ -216,10 +240,10 @@ export class OnDemandIntake {
   mount(context: { on(name: string, listener: (...args: any[]) => any, options?: { prepend: boolean }): () => void }, tools: NativeTools, systemPrompt?: { section(section: any): () => void }): void {
     if (!tools.get || !tools.guard || !tools.register) throw new Error('On-demand intake requires native tool identity and monotonic guards')
     this.#tools = tools
-    // Bind the already installed native Skill reader by executable identity.
-    // A tool later registered under the same name cannot acquire this exception.
-    const skillReader = tools.get('skill')?.execute
-    if (systemPrompt) this.#disposers.push(systemPrompt.section({ name: 'kiokuko:on-demand-intake', order: -99999, text: 'On-demand host contract: text answers do not require execution intake. The public prepare_requested_work tool accepts an advisory type only; task_prepare/task_answer remain host-only. ' + ON_DEMAND_GUIDANCE }))
+    // Preserve an already installed reader across replacement before capture.
+    // When absent, capture binds the validated agent's installed preset reader.
+    this.#startupSkillReader = tools.get('skill')?.execute
+    if (systemPrompt && !this.options.onlyWhenDeferred) this.#disposers.push(systemPrompt.section({ name: 'kiokuko:on-demand-intake', order: -99999, text: 'On-demand host contract: text answers do not require execution intake. The public prepare_requested_work tool accepts an advisory type only; task_prepare/task_answer remain host-only. ' + ON_DEMAND_GUIDANCE }))
     const definition = { name: TASK_PREPARE_TOOL, modelFacing: true,
       description: 'Prepare the original user request for tool-backed work. Supply only an advisory taskType, never a rewritten task or target. This does not grant native tool permissions. Answer ordinary questions directly; clarify unknown actions or targets first.',
       parameters: { type: 'object', properties: { taskType: { type: 'string', enum: ACTION_TYPES } }, required: ['taskType'], additionalProperties: false },
@@ -254,6 +278,7 @@ export class OnDemandIntake {
       }
       try {
         this.assertCurrent(state)
+        const skillReader = this.#skillReaders.get(state.input.agent)
         const skillRead = execution.name === 'skill' && skillReader !== undefined && actual.execute === skillReader && state.status === 'answer'
         const carrier = execution.name === 'run_code' && state.status !== 'prepared' ? preparationCarrier(execution.arguments) : undefined
         if (execution.name === 'run_code' && state.status !== 'prepared' && !carrier) return denied('Before PTC execution, use exactly the preparation-only carrier: return await tools.prepare_requested_work({"taskType":"research"}). No other program is admitted until work is prepared.')
@@ -271,7 +296,7 @@ export class OnDemandIntake {
         }
         this.assertCurrent(state)
         if (this.definition(execution)?.execute !== actual.execute) return denied('Native tool definition changed during preparation')
-        this.#executions.set(execution, { turn: state, execute: actual.execute, ...(carrier ? { carrier } : {}), ...(skillRead ? { skillRead: true } : {}) })
+        this.#executions.set(execution, { turn: state, execute: actual.execute, ...(carrier ? { carrier } : {}), ...(skillRead ? { skillRead: true } : {}), ...(execution.name === TASK_PREPARE_TOOL ? { requestPreparation: true } : {}) })
         // Preserve native allow/deny/ask unchanged. Approval is resolved by the native registry AFTER this waterfall.
         const decision = await next()
         // DSH 0.1.5 does not understand cancel and otherwise dispatches it without running guards.
@@ -306,7 +331,7 @@ export class OnDemandIntake {
       const proof = this.#executions.get(execution)
       if (!proof || proof.turn !== state || proof.execute !== actual.execute || ['closed', 'stale', 'capturing'].includes(state.status)) return 'Tool execution has no current on-demand preparation'
       if (proof.carrier) return state.status === 'answer' && preparationCarrier(execution.arguments) === proof.carrier ? undefined : 'Preparation carrier is not current'
-      if (proof.skillRead) return state.status === 'answer' && actual.execute === skillReader ? undefined : 'Conversational Skill read is not current'
+      if (proof.skillRead) return state.status === 'answer' && actual.execute === this.#skillReaders.get(state.input.agent) ? undefined : 'Conversational Skill read is not current'
       if (execution.name === TASK_PREPARE_TOOL) return actual.execute === definition.execute && (state.status === 'answer' || state.existing && state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) ? undefined : 'Task preparation is not current'
       return state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn) ? undefined : 'Execution task is not prepared'
     }))

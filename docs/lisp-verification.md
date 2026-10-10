@@ -14,7 +14,7 @@
 | Vendor/package | 392 Git-tracked vendored files verified in a clean-source copy; tarball contents, import closure, client artifact and publint passed (see correction below) |
 | Installed Web package | Isolated tarball install, fresh Lisp cache, explicit enable, restart recovery, native deletion refusal/approval, timeout guidance, explicit recovery, stop, backup restoration and safe disable verified |
 
-The pinned native fixture and installed Web host use DSH **0.1.5-rc.1** (CLI,
+This historical verification used DSH **0.1.5-rc.1** (CLI,
 `dsh-tools`, `dsh-user-questions` and Web app).
 
 Linux was tested using an already-installed development container engine with a

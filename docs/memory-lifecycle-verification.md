@@ -15,7 +15,7 @@ export DSH_BIN=/absolute/path/to/node_modules/.bin/dsh
 export KIOKUKO_DSH_PACKAGE_ROOT=/absolute/path/to/node_modules
 export KIOKUKO_REQUIRE_DSH_NATIVE=1
 export KIOKUKO_REQUIRE_DSH_CLI=1
-export KIOKUKO_EXPECTED_DSH_VERSION=0.1.5-rc.1
+export KIOKUKO_EXPECTED_DSH_VERSION=0.2.1-alpha.2
 export KIOKUKO_REPEATED_REPORT_DIR=/tmp/kiokuko-lifecycle-results
 export KIOKUKO_DSH_EVIDENCE_PATH=/tmp/kiokuko-package-lifecycle.json
 

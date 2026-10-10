@@ -23,7 +23,6 @@ Diffレビューでは、比較対象・ターン・タスク・モデルの選�
 
 ```sh
 npm ci --prefix tests/fixtures/dsh-runtime
-npm ci --prefix tests/fixtures/dsh-runtime-current
 npx playwright install chromium
 npm run test:shortcuts:web
 KIOKUKO_SHORTCUT_RUNTIME=dsh-runtime npm run test:shortcuts:web
