@@ -40,7 +40,11 @@ const mock=nativeMock(llm), responses=[], model=new mock.MockAdapter(responses);
 await ctx.workspaceRegistry.create(${JSON.stringify(project)},'Lisp approval verification');
 ctx.commands.register({name:'lisp-approval-fixture',description:'Approval acceptance',input:{hint:'seed | enable | apply | verify | packages'},handler:async request=>{
  const mode=request.rawInput.trim(); const agent=ctx.agents.get(request.agent.id); let result;
- if(mode==='seed'){agent.session.append('user/message',{id:randomUUID(),role:'user',content:[{type:'text',text:'Approval fixture'}],source:{kind:'user'}},{surfaceOp:'append'}); result={kind:'success'};}
+ if(mode==='seed'){
+ // The native loop establishes v4's protected system head before the user message.
+ responses.push(()=>{result={kind:'success'};return mock.textResponse('Approval fixture ready')});
+ agent.followup(llm.createUserMessage({content:[{type:'text',text:'Approval fixture'}],source:{kind:'user'}}));await agent.whenIdle();
+ }
  else if(mode==='approval-status') result=(await ctx.commands.execute(agent,'/kioku-lisp approval status',[],request.signal)).result;
  else if(mode==='enable') result=(await ctx.commands.execute(agent,'/kioku-lisp enable',[],request.signal)).result;
  else if(mode==='approval-ask') result=(await ctx.commands.execute(agent,'/kioku-lisp approval ask',[],request.signal)).result;
@@ -49,6 +53,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
  responses.push(...mock.prepareWork([mock.toolCallResponse(randomUUID(),'lisp_eval',{operationId:randomUUID(),code}),(input)=>{const results=nativeToolResults(input.messages);result=results.at(-1);return mock.textResponse('Fixture complete')}],'research',randomUUID()));
  agent.followup(llm.createUserMessage({content:[{type:'text',text:'Perform the requested repository verification using Lisp.'}],source:{kind:'user'}}));await agent.whenIdle();
  }
+ if(result===undefined) throw new Error('Native fixture '+mode+' produced no result: '+JSON.stringify(nativeToolResults(model.requests.at(-1)?.messages??[]).slice(-2)));
  await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode,result})+'\\n'); return {kind:'success',text:'Recorded '+mode};
 }});}
 `)
@@ -136,6 +141,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   // A cold Host and new chat must consume the same persisted profile policy.
   await new Promise(resolve => { host.once('exit', resolve); host.kill('SIGTERM') })
   await page.goto(await boot())
+  assert.doesNotMatch(logs, /stored log is corrupt|SessionFormatError/, 'cold restart accepts the native session log')
   await newSession()
   for (const mode of ['seed','enable']) {
     const count=(await records()).length
@@ -152,9 +158,12 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   const resetCount=(await records()).length
   await command('/lisp-approval-fixture approval-ask')
   assert.equal((await poll(async()=>{const rows=await records();return rows.length>resetCount ? rows.at(-1).result : undefined})).kind,'success')
+  const deniedCount=(await records()).length
   await command('/lisp-approval-fixture verify')
   await page.getByText('Auto-approve all Lisp actions for this profile and continue',{exact:false}).first().waitFor()
   await page.keyboard.press('2'); await page.keyboard.press('Enter')
+  const denied=await poll(async()=>{const rows=await records();return rows.length>deniedCount ? rows.at(-1) : undefined})
+  assert.match(JSON.stringify(denied.result),/NOT_APPLIED/,'disabling auto-approval restores denial without execution')
   console.log(JSON.stringify({result:'passed',runtime,checks:['ordinary chat has no Lisp approval selector','fresh profile asks by default','denial preserves bytes','explicit enable and continue','file effect','multiple file changes','consecutive verifiers','cold restart and new chat','disable restores manual'],externalModelCalls:0}))
 
 } catch (e) { console.error(await readFile(receipts,'utf8').catch(()=>'')); console.error(logs.slice(-5000)); if (page) console.error((await page.locator('body').innerText().catch(() => '')).slice(-4000)); throw e }
