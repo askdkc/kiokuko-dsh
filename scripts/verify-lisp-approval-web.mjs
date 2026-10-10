@@ -36,10 +36,19 @@ import * as llm from ${JSON.stringify(pathToFileURL(join(root,`tests/fixtures/${
 import {nativeMock,nativeToolResults} from ${JSON.stringify(pathToFileURL(mockPath).href)};
 export const name='lisp-approval-fixture'; export const inject=['workspaceRegistry','commands','tools','agents','llm'];
 export async function apply(ctx){
-const mock=nativeMock(llm), responses=[], model=new mock.MockAdapter(responses);ctx.llm.registerAdapter(['approval-fixture'],model);
+const mock=nativeMock(llm), responses=[], attempts=[];
+class FixtureAdapter extends mock.MockAdapter {
+ async *stream(input){
+  const attempt={purpose:input.purpose??'conversation',sessionId:input.sessionId,pending:responses.length,messages:input.messages.map(message=>({role:message.role,id:message.id,source:message.source?.kind,toolCallId:message.toolCallId,calls:(message.content??[]).filter(block=>block.type==='tool-call').map(block=>({id:block.id,name:block.name}))})).slice(-6)};
+  attempts.push(attempt);
+  try { yield* super.stream(input) } catch(error){attempt.error=String(error);throw error}
+ }
+}
+const model=new FixtureAdapter(responses);ctx.llm.registerAdapter(['approval-fixture'],model);
 await ctx.workspaceRegistry.create(${JSON.stringify(project)},'Lisp approval verification');
 ctx.commands.register({name:'lisp-approval-fixture',description:'Approval acceptance',input:{hint:'seed | enable | apply | verify | packages'},handler:async request=>{
  const mode=request.rawInput.trim(); const agent=ctx.agents.get(request.agent.id); let result;
+ if(responses.length) throw new Error('Unconsumed native fixture responses before '+mode+': '+JSON.stringify(attempts.slice(-5)));
  if(mode==='seed'){
  // The native loop establishes v4's protected system head before the user message.
  responses.push(()=>{result={kind:'success'};return mock.textResponse('Approval fixture ready')});
@@ -50,10 +59,11 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
  else if(mode==='approval-ask') result=(await ctx.commands.execute(agent,'/kioku-lisp approval ask',[],request.signal)).result;
  else {
  const code=mode.startsWith('apply')?'(kioku.files:propose-write "change.txt" "'+mode+'")':mode==='verify'?'(kioku.ci:verify :typecheck)':'(kioku.ci:verify :test :script "test:packages")';
- responses.push(...mock.prepareWork([mock.toolCallResponse(randomUUID(),'lisp_eval',{operationId:randomUUID(),code}),(input)=>{const results=nativeToolResults(input.messages);result=results.at(-1);return mock.textResponse('Fixture complete')}],'research',randomUUID()));
+ const callId=randomUUID();
+ responses.push(...mock.prepareWork([mock.toolCallResponse(callId,'lisp_eval',{operationId:randomUUID(),code}),(input)=>{result=nativeToolResults(input.messages).find(value=>value.toolCallId===callId);return mock.textResponse('Fixture complete')}],'research',randomUUID()));
  agent.followup(llm.createUserMessage({content:[{type:'text',text:'Perform the requested repository verification using Lisp.'}],source:{kind:'user'}}));await agent.whenIdle();
  }
- if(result===undefined) throw new Error('Native fixture '+mode+' produced no result: '+JSON.stringify(nativeToolResults(model.requests.at(-1)?.messages??[]).slice(-2)));
+ if(result===undefined||responses.length) throw new Error('Native fixture '+mode+' did not complete its script: '+JSON.stringify(attempts.slice(-5)));
  await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode,result})+'\\n'); return {kind:'success',text:'Recorded '+mode};
 }});}
 `)
