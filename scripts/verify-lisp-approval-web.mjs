@@ -66,13 +66,34 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   await page.goto(url)
   const welcome = page.getByRole('button', { name: 'Continue', exact: true })
   const credentials = page.getByRole('dialog', { name: 'Add an API key to get started', exact: true })
+  // The mock provider can make credentials optional. Dismiss the dialog if it
+  // appears during a later action, rather than racing a one-shot visibility check.
+  await page.addLocatorHandler(credentials, async () => {
+    await credentials.getByRole('button', { name: 'Configure later', exact: true }).click()
+  })
   await welcome.or(credentials).first().waitFor()
   if (await welcome.isVisible()) await welcome.click()
-  if(await credentials.isVisible()) { await credentials.getByRole('button', { name: 'Configure later', exact: true }).click(); await credentials.waitFor({state:'hidden'}) }
-  await page.getByRole('button', { name: 'New session', exact: true }).first().click()
-  const editor = page.locator('[contenteditable="true"]:visible').first()
-  const command = async text => { await editor.fill(text); await editor.press('Enter') }
+  const conversation = page.locator('[data-conversation-content]:visible').first()
+  const newSession = async () => {
+    const previous = await conversation.getAttribute('data-conversation-session')
+    await page.getByRole('button', { name: 'New session', exact: true }).first().click()
+    // New session starts asynchronous navigation. Wait for its rendered binding
+    // before filling the composer, or the replacement discards the first command.
+    await poll(async () => {
+      const current = await conversation.getAttribute('data-conversation-session')
+      return current && current !== previous
+        && await conversation.getAttribute('data-content-phase') !== 'settling'
+    })
+  }
+  const editor = conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first()
+  const command = async text => {
+    await editor.fill(text)
+    // The enabled button reflects the current draft and submits through DSH's
+    // native input state machine without racing installation of the Enter keymap.
+    await page.getByRole('button', { name: 'Send message', exact: true }).click()
+  }
   const records = async () => (await readFile(receipts, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse)
+  await newSession()
   await command('/lisp-approval-fixture seed')
   await poll(async()=> (await records()).find(r=>r.mode==='seed'))
   assert.equal(await page.getByRole('combobox',{name:'Lisp approvals'}).count(),0,'ordinary chat has no global Lisp approval selector')
@@ -113,7 +134,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   // A cold Host and new chat must consume the same persisted profile policy.
   await new Promise(resolve => { host.once('exit', resolve); host.kill('SIGTERM') })
   await page.goto(await boot())
-  await page.getByRole('button', {name:'New session',exact:true}).first().click()
+  await newSession()
   for (const mode of ['seed','enable']) {
     const count=(await records()).length
     await command('/lisp-approval-fixture '+mode)
