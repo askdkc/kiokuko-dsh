@@ -29,7 +29,7 @@ test('missing, multiple, duplicate, truncated and oversized evidence cannot beco
   const large = structuredClone(events); large[1]!.data.message!.content[0]!.text = 'x'.repeat(262144)
   assert.equal(groundingPairs('Claim [tool-result:2]', large, 1, 0, 3).skipped[0]?.reason, 'too_large')
 })
-test('DSH 0.1.5 wrapped and 0.2.0 tool-role results preserve the same cited call', () => {
+test('legacy wrapped and current tool-role results preserve the same cited call', () => {
   const legacy = structuredClone(events) as any[]
   const message = legacy[1].data.message
   legacy[1].data.message = { role: 'user', source: message.source,

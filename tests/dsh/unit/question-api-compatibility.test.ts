@@ -4,7 +4,7 @@ import { nativeQuestionClass } from '../helpers/native-question.js'
 import { apply } from '../../../src/client.js'
 
 // Exercise the shipped native class, not a hand-written cancel-only carrier.
-for (const fixture of [process.env.KIOKUKO_DSH_PACKAGE_ROOT?.includes('dsh-runtime-current') ? 'dsh-runtime-current' : 'dsh-runtime']) test(`numbered composer claims real ${fixture} question carriers`, () => {
+for (const fixture of ['dsh-runtime']) test(`numbered composer claims real ${fixture} question carriers`, () => {
   const PendingQuestion = nativeQuestionClass()
   const store = (state: any) => ({ getSnapshot: () => state, update() {} })
   const globals = globalThis as any, previous = globals.createSnapshotStore

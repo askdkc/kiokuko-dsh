@@ -5,7 +5,7 @@
 上限付きの表示に置き換えます。圧縮で消えた snapshot は再提示の抑制に使いません。
 設定、限界、無効化と検証結果は [continuity.md](continuity.md) を参照してください。
 
-対応するDSHは `0.1.2-rc.1`。この機能はKiokukoの任意の補助状態として動作し、モデル呼び出しや独立した承認画面を追加しません。Ennoの必須検証、改訂番号、WorkUnitの実行権限、receipt、outbox、最終回答の境界は従来の処理が管理します。
+対応するDSHは `0.2.1-alpha.2`。この機能はKiokukoの任意の補助状態として動作し、モデル呼び出しや独立した承認画面を追加しません。Ennoの必須検証、改訂番号、WorkUnitの実行権限、receipt、outbox、最終回答の境界は従来の処理が管理します。
 
 ## 作業条件の指定
 
@@ -95,7 +95,7 @@ observer、キャッシュ、証拠集計の失敗は成功したツール結果
 npm run typecheck
 # DSH_BIN と KIOKUKO_DSH_PACKAGE_ROOT は検証用に用意した対応版の場所を指定する。
 KIOKUKO_REQUIRE_DSH_NATIVE=1 npm test
-KIOKUKO_REQUIRE_DSH_CLI=1 KIOKUKO_EXPECTED_DSH_VERSION=0.1.2-rc.1 npm run test:e2e:dsh
+KIOKUKO_REQUIRE_DSH_CLI=1 KIOKUKO_EXPECTED_DSH_VERSION=0.2.1-alpha.2 npm run test:e2e:dsh
 npm run test:sampledb
 npm run publint
 npm run pack:check

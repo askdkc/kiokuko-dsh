@@ -17,6 +17,7 @@ const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packageRoot && !sourceRoot) throw new Error('Orca native E2E requires a DSH runtime')
 const expectedVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
+  ?? JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
 async function load(name: string, source: string) {
   const base = packageRoot ? join(packageRoot, '@deepseek-ai', name) : join(sourceRoot!, source)
   const meta = JSON.parse(await readFile(join(base, 'package.json'), 'utf8'))

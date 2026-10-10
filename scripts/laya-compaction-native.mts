@@ -10,7 +10,7 @@ import type { DecisionService } from '../src/dsh/decisions/service.js'
 
 export interface EvaluationFixture { id: string; family: string; language: 'en' | 'ja'; task: string; body: string; tool: string; constraints: string }
 
-/** Actual pinned native services; scripted generation captures requests and is never graded as quality. */
+/** Actual native services; scripted generation captures requests and is never graded as quality. */
 export async function captureCompactionArm(fixture: EvaluationFixture, arm: 'original' | 'deterministic' | 'laya', service: DecisionService, signal: AbortSignal) {
   // The evaluation contract pins its own fixture, independently of a CI matrix's runtime override.
   const packages = join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
@@ -18,7 +18,8 @@ export async function captureCompactionArm(fixture: EvaluationFixture, arm: 'ori
   const [cordis, llm, sessions, projection, prompt, tools, registry, loop, meter, compaction] = await Promise.all(
     ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic'].map(load))
   const version = JSON.parse(await readFile(join(packages, '@deepseek-ai/dsh-compaction-basic/package.json'), 'utf8')).version
-  if (version !== '0.1.5-rc.1') throw new Error('Unpinned native evaluation runtime')
+  const expected = JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+  if (version !== expected) throw new Error(`Native evaluation runtime mismatch: expected ${expected}, got ${version}`)
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
   class Capture extends mock.MockAdapter {
     override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, context: { contextWindow: 16000 } } }

@@ -51,18 +51,18 @@ test('delegation requires the live lease, limits Ollama concurrency, preserves c
     const started = deferred<void>()
     let starts = 0
     const runtime = { withDatabase: async <T>(fn: DshDatabaseOperation<T>): Promise<T> => fn(db, undefined as never) }
-    const delegation = new DshEnnoDelegation(runtime, { start: async (backend, request) => {
-      starts++; assert.equal(backend, 'spawn'); assert.deepEqual(request.agentOptions, model); assert.equal(request.maxDepth, 1)
+    const delegation = new DshEnnoDelegation(runtime, { startActivation: async ({ provider, request }) => {
+      starts++; assert.equal(provider, 'spawn'); assert.deepEqual(request.agentOptions, model); assert.equal(request.maxDepth, 1)
       assert.deepEqual(request.toolFilter.allow, ['read', 'write'])
       delegation.created(child); await delegation.restoreOrPersist(child); started.resolve()
-      return { id: 'child', localAgent: child, result: finished.promise, dispose: async () => {} }
+      return { childId: 'child', result: finished.promise, dispose: async () => {} }
     } })
     const binding = { ...identity, dshSessionId: 'parent', revision: 2, routeEpoch: approved.executionLease!.routeEpoch, leaseToken: approved.executionLease!.leaseToken, workUnitId: 'unit', idempotencyKey: 'delegate-1' }
     const signal = new AbortController().signal
     await assert.rejects(delegation.execute(parent, { instruction: 'Inspect' }, { ...binding, leaseToken: 'wrong' }, ['read'], signal), /lease/u)
     const pending = delegation.execute(parent, { instruction: 'Inspect' }, binding, ['read', 'write', 'bash', 'enno_delegate'], signal)
     await started.promise
-    const reloadedActive = new DshEnnoDelegation(runtime, { start: async () => { throw new Error('Must not start another child') } })
+    const reloadedActive = new DshEnnoDelegation(runtime, { startActivation: async () => { throw new Error('Must not start another child') } })
     await assert.rejects(reloadedActive.execute(parent, { instruction: 'After reload' }, { ...binding, idempotencyKey: 'delegate-reload' }, ['read'], signal), /concurrency/u)
     await delegation.assertCurrent(child)
     db.prepare("UPDATE dsh_enno_delegations SET authority_json = json_set(authority_json, '$.leaseToken', 'stale') WHERE delegation_id = ?").run(binding.idempotencyKey)

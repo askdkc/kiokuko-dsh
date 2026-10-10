@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
-import { existsSync, realpathSync } from 'node:fs'
+import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -13,7 +13,6 @@ import { CoreTasks } from '../../../src/dsh/core/tasks.js'
 import { LedgerStore } from '../../../src/ledger/store.js'
 import { mountMemoryApplication } from '../../../src/dsh/memory-application.js'
 import { runMemoryAwareVerifiers } from '../../../src/enno-oduno/memory-verification.js'
-import { createMemoryReviewPresentation } from '../../../src/dsh/memory-review-presentation.js'
 import { memoryApplicationStatus, recordMemoryApplicationReview, beginMemoryExecution, completeMemoryExecution, bindMemoryApplication, applicationSourceDigest } from '../../../src/memory/application.js'
 import { AutoGlobalizationWorker, autoGlobalizationStatus, autoGlobalApplicable } from '../../../src/memory/auto-globalization.js'
 import { readEntry } from '../../../src/memory/entries.js'
@@ -203,7 +202,7 @@ test('PTC transport and nested effects run before direct review, which then supp
   } finally { dispose(); await f.close() }
 })
 
-test('pending memory review presents native tools for a PTC agent and restores PTC after review', {
+test('pending memory review keeps the native PTC transport and uses SDK subdispatch', {
   skip: !process.env.KIOKUKO_DSH_PACKAGE_ROOT && 'requires pinned native DSH',
 }, async () => {
   const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT!
@@ -213,9 +212,8 @@ test('pending memory review presents native tools for a PTC agent and restores P
       .map(name => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)))
   const f = await fixture()
   const ctx = new cordis.Context(), fibers: any[] = []
-  let scoped: any, presentation: ReturnType<typeof createMemoryReviewPresentation> | undefined
-  const runtimeName = existsSync(join(packages, '@deepseek-ai', 'dsh-ptc-runtime-node')) ? 'ptcRuntime' : 'codeRuntime'
-  const releaseRuntime = ctx.provide(runtimeName, { language: 'typescript' })
+  let scoped: any
+  const releaseRuntime = ctx.provide('ptcRuntime', { language: 'typescript' })
   try {
     fibers.push(await ctx.plugin(prompt.default, {}), await ctx.plugin(toolModule.default, { mode: 'ptc' }))
     const session = { id: 'session' }, agent: any = { id: 'ordinary-agent', session }
@@ -223,27 +221,14 @@ test('pending memory review presents native tools for a PTC agent and restores P
     const tools = scoped.ctx.get('tools')
     tools.register(toolModule.defineTool({ name: 'task_memory_review', description: 'Review memory', parameters: {},
       output: { schema: { type: 'json' }, render: () => [] }, execute: async () => ({}) }))
-    presentation = createMemoryReviewPresentation(agent, f.runtime as any)
-    assert.equal(tools.modeFor(agent), 'ptc')
-    const boundInventory = tools.schemas(agent).map((schema: any) => schema.name).sort()
-    await presentation.sync(f.task.runId)
-    assert.equal(tools.modeFor(agent), 'both')
-    assert.deepEqual(tools.schemas(agent).map((schema: any) => schema.name).sort(), boundInventory, 'temporary review presentation must preserve the bound capability inventory')
-    assert.deepEqual(tools.wireSchemas(agent).schemas.map((schema: any) => schema.name).sort(), ['run_code', 'task_memory_review'])
-    presentation.dispose() // agent idle: release the temporary mode before a later Lisp choice
-    assert.equal(tools.modeFor(agent), 'ptc')
-    const releaseLisp = tools.presentAs('native')
-    await presentation.sync(f.task.runId)
-    assert.equal(tools.modeFor(agent), 'native', 'an existing native owner needs no second declaration')
-    releaseLisp()
-    await presentation.sync(f.task.runId)
-    assert.equal(tools.modeFor(agent), 'both')
-    recordMemoryApplicationReview(f.db, f.identity, 'review', f.review('not_applicable'))
-    await presentation.sync(f.task.runId)
     assert.equal(tools.modeFor(agent), 'ptc')
     assert.deepEqual(tools.wireSchemas(agent).schemas.map((schema: any) => schema.name), ['run_code'])
+    assert.equal(tools.modeFor(agent), 'ptc')
+    const review = tools.get('task_memory_review', agent)
+    assert.ok(review, 'pending review remains available to the run_code SDK')
+    const result = await review.execute({ action: 'status' }, { agent, name: 'task_memory_review', callId: 'review-status', parent: { callId: 'run' }, rootCallId: 'run', signal: new AbortController().signal })
+    assert.deepEqual(result, {})
   } finally {
-    presentation?.dispose()
     await scoped?.dispose()
     for (const fiber of fibers.reverse()) await fiber.dispose()
     releaseRuntime()
@@ -611,15 +596,27 @@ test('existing approved Enno verifier supplies proof; skipped checks beyond the 
 for (const kind of ['direct', 'carrier', 'resumed'] as const) test(`host-only ${kind} preparation is not a memory execution`, async () => {
   const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
   const { pathToFileURL } = await import('node:url')
-  const [cordis, tools] = await Promise.all(['cordis', 'dsh-tools'].map(name => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)))
+  const [cordis, tools, prompt] = await Promise.all(['cordis', 'dsh-tools', 'dsh-system-prompt'].map(name => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)))
   const { OnDemandIntake, TASK_PREPARE_TOOL } = await import('../../../src/dsh/on-demand-intake.js')
   const f = await fixture(), ctx = new cordis.Context()
-  const events = [{ type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } }]
-  const session = { id: 'session', snapshotEvents: () => events }, agent = { id: 'preparation-agent', session }
-  let preparations = 0, effects = 0, programs = 0, ready = kind === 'resumed'
-  ctx.provide('systemPrompt', { tools: () => () => {}, section: () => () => {}, getSectionOrder: () => 0 })
-  ctx.provide(existsSync(join(packages, '@deepseek-ai/dsh-ptc-runtime-node')) ? 'ptcRuntime' : 'codeRuntime', { language: 'typescript', run: async () => { programs++; throw new Error('Preparation must not run a program') } })
-  const fiber = ctx.plugin(tools.default, { mode: kind === 'carrier' ? 'both' : 'native' }); await fiber
+  const sessionModule = kind === 'carrier' ? await import(pathToFileURL(join(packages, '@deepseek-ai', 'dsh-session', 'lib/index.js')).href) : undefined
+  const session = sessionModule
+    ? sessionModule.Session.create(sessionModule.SessionId('preparation-carrier'), [], { version: 4, id: 'preparation-carrier', createdAt: 1, isSeeded: false, cwd: f.root })
+    : { id: 'session', header: { cwd: f.root }, snapshotEvents: () => [{ type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } }] }
+  const agent: any = { id: 'preparation-agent', session }
+  if (kind === 'carrier') agent.ctx = ctx
+  let preparations = 0, effects = 0, ready = kind === 'resumed'
+  const fibers: any[] = []
+  fibers.push(await ctx.plugin(prompt.default, {}))
+  if (kind === 'carrier') {
+    for (const name of ['dsh-session-projection', 'dsh-fs-local', 'dsh-working-directory', 'dsh-subprocess-local', 'dsh-sandbox-local', 'dsh-sandbox-policy', 'dsh-ptc-runtime-node'] as const) {
+      const plugin = (await import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)).default
+      const config = name === 'dsh-fs-local' ? { cwd: f.root } : name === 'dsh-working-directory' ? { defaultDirectory: f.root }
+        : name === 'dsh-sandbox-policy' ? { mode: 'read-only', workspaceRoot: f.root } : name === 'dsh-ptc-runtime-node' ? { timeoutMs: 10000 } : {}
+      fibers.push(await ctx.plugin(plugin, config))
+    }
+  }
+  const fiber = ctx.plugin(tools.default, { mode: kind === 'carrier' ? 'ptc' : 'native' }); fibers.push(fiber); await fiber
   const intake = new OnDemandIntake({
     validate: async input => { assert.equal(input.agent, agent); assert.equal(input.agent.session, session) },
     existing: async () => kind === 'resumed', classify: async () => ({ deferInference: true }),
@@ -640,25 +637,29 @@ for (const kind of ['direct', 'carrier', 'resumed'] as const) test(`host-only ${
     assert.equal(f.status().ready, false)
     const name = kind === 'carrier' ? 'run_code' : TASK_PREPARE_TOOL
     const args = kind === 'carrier' ? { description: 'Prepare only', code: 'return await tools.prepare_requested_work({"taskType":"debug"})' } : { taskType: 'debug' }
+    const call = (tool: string, input: any, overrides: any = {}) => kind === 'carrier' && tool !== 'run_code'
+      ? invoke('run_code', { description: `Dispatch ${tool}`, code: `return await tools.${tool}(${JSON.stringify(input)})` }, overrides)
+      : invoke(tool, input, overrides)
     const releaseDenial = ctx.tools.guard((execution: any) => execution.name === name ? 'native preparation denial' : undefined)
     try { assert.equal((await invoke(name, args)).isError, true); assert.equal(preparations, 0) } finally { releaseDenial() }
     const result = await invoke(name, args)
     assert.equal(result.isError, false, JSON.stringify(result))
     assert.equal(preparations, kind === 'resumed' ? 0 : 1)
-    assert.equal(programs, 0)
     assert.equal(f.status().ready, false, 'preparation must not resolve or bypass memory decisions')
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_executions WHERE run_id=?').get(f.task.runId)?.n, 0, 'control preparation must not create an execution receipt')
     // The unresolved binding no longer rejects the call; it keeps the run incomplete.
-    assert.equal((await invoke('effect_probe')).isError, false)
+    const effectResult = await call('effect_probe', {})
+    assert.equal(effectResult.isError, false, JSON.stringify(effectResult))
     assert.equal(effects, 1)
     assert.equal(f.status().ready, false, 'an unresolved decision still blocks completion')
     assert.equal((await invoke(name, args, { agent: { ...agent } })).isError, true, 'copied identity cannot borrow preparation proof')
-    const status = (await invoke('task_memory_review', { action: 'status' })).value
+    const statusResult = await call('task_memory_review', { action: 'status' })
+    const status = kind === 'carrier' ? statusResult.value.result : statusResult.value
     assert.equal(status.ready, false)
-    assert.equal((await invoke('task_memory_review', { action: 'review', review: f.review('not_applicable') })).isError, false)
-    assert.equal((await invoke('effect_probe')).isError, false)
+    assert.equal((await call('task_memory_review', { action: 'review', review: f.review('not_applicable') })).isError, false)
+    assert.equal((await call('effect_probe', {})).isError, false)
     assert.equal(effects, 2)
-  } finally { await intake.dispose(); disposeMemory(); releaseEffect(); await fiber.dispose(); await f.close() }
+  } finally { await intake.dispose(); disposeMemory(); releaseEffect(); for (const mounted of fibers.reverse()) await mounted.dispose(); await f.close() }
 })
 
 test('a same-name preparation tool without host proof is tracked, not control-exempt', async () => {

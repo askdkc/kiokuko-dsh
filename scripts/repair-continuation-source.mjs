@@ -19,18 +19,26 @@ function repairRecord(value) {
   return repairContinuationRecord(repairInformationalRecord(value))
 }
 
-function validateCatalog(catalog, records) {
+function validateCatalog(catalog, records, createCatalogWithChildren) {
   const header = records[0]
   if (header === undefined) throw new Error('session log has no header record')
-  if (typeof catalog?.createRestore === 'function') {
-    const restore = catalog.createRestore(header, { recovery: 'strict', validation: 'current' })
+  // DSH 0.2.1-alpha.2 made the V3-to-V4 migration deliberately explicit:
+  // a parent catalog must bind the historical child evidence it has. This
+  // repair only has the parent log, so bind an empty evidence set and let the
+  // catalog's own rows supply any already-recorded child facts. Never invent
+  // child identity or descriptor data here.
+  const effectiveCatalog = typeof createCatalogWithChildren === 'function'
+    ? createCatalogWithChildren([])
+    : catalog
+  if (typeof effectiveCatalog?.createRestore === 'function') {
+    const restore = effectiveCatalog.createRestore(header, { recovery: 'strict', validation: 'current' })
     for (const row of records.slice(1)) restore.decodeRow(row)
     restore.finish()
     return
   }
-  if (typeof catalog?.decodeRecoverableArtifact === 'function' && typeof catalog?.migrate === 'function') {
-    const decoded = catalog.decodeRecoverableArtifact(header, records.slice(1))
-    catalog.migrate(decoded)
+  if (typeof effectiveCatalog?.decodeRecoverableArtifact === 'function' && typeof effectiveCatalog?.migrate === 'function') {
+    const decoded = effectiveCatalog.decodeRecoverableArtifact(header, records.slice(1))
+    effectiveCatalog.migrate(decoded)
     return
   }
   throw new Error('Unsupported session-format catalog API: expected createRestore or decodeRecoverableArtifact and migrate')
@@ -65,17 +73,17 @@ async function loadCatalog(configured) {
     if (!candidate) throw new Error('configured session-format catalog does not exist')
     const module = await import(pathToFileURL(candidate).href)
     if (!module.sessionFormatCatalog) throw new Error('catalog module has no sessionFormatCatalog export')
-    return module.sessionFormatCatalog
+    return { catalog: module.sessionFormatCatalog, createCatalogWithChildren: module.createSessionFormatCatalogWithChildren }
   }
   try {
     const module = await import('@deepseek-ai/dsh-session-format-catalog')
-    if (module.sessionFormatCatalog) return module.sessionFormatCatalog
+    if (module.sessionFormatCatalog) return { catalog: module.sessionFormatCatalog, createCatalogWithChildren: module.createSessionFormatCatalogWithChildren }
   } catch (error) { errors.push(error) }
   for (const candidate of catalogCandidates()) {
     if (!existsSync(candidate)) continue
     try {
       const module = await import(pathToFileURL(candidate).href)
-      if (module.sessionFormatCatalog !== undefined) return module.sessionFormatCatalog
+      if (module.sessionFormatCatalog !== undefined) return { catalog: module.sessionFormatCatalog, createCatalogWithChildren: module.createSessionFormatCatalogWithChildren }
       errors.push(new Error(`catalog module has no sessionFormatCatalog export: ${candidate}`))
     } catch (error) {
       errors.push(error)
@@ -106,7 +114,7 @@ function ensureBackup(path, original) {
   return backup
 }
 
-async function repair(path, catalog, dryRun = false) {
+async function repair(path, catalog, dryRun = false, createCatalogWithChildren) {
   const original = readFileSync(path)
   const plaintext = decodeSessionLog(original)
   const parsed = parseJsonl(plaintext)
@@ -120,7 +128,7 @@ async function repair(path, catalog, dryRun = false) {
     record === parsed.records[index] ? parsed.lines[index] : JSON.stringify(record)
   ))
   const repairedPlaintext = Buffer.from(`${outputLines.join('\n')}\n`, 'utf8')
-  validateCatalog(catalog, repairedRecords)
+  validateCatalog(catalog, repairedRecords, createCatalogWithChildren)
   if (changedRecords === 0) return { changedRecords: 0, backup: undefined }
   if (dryRun) return { changedRecords, backup: undefined }
 
@@ -164,8 +172,8 @@ function parseArguments(args) {
 async function main() {
   const options = parseArguments(process.argv.slice(2))
   requireRegularFile(options.path, 'session log')
-  const catalog = await loadCatalog(options.catalog)
-  const result = await repair(options.path, catalog, options.dryRun)
+  const loaded = await loadCatalog(options.catalog)
+  const result = await repair(options.path, loaded.catalog, options.dryRun, loaded.createCatalogWithChildren)
   if (result.changedRecords === 0) {
     console.log(`No repairs needed in ${options.path}`)
   } else if (options.dryRun) {

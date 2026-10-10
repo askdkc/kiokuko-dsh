@@ -30,9 +30,9 @@ export async function compactionEnno(child: any) {
   const runtime = { withDatabase: async <T>(fn: DshDatabaseOperation<T>): Promise<T> => fn(db, undefined as never) }
   let finish!: (value: any) => void, started!: () => void
   const finished = new Promise<any>(resolve => { finish = resolve }), ready = new Promise<void>(resolve => { started = resolve })
-  const delegation = new DshEnnoDelegation(runtime, { start: async () => {
+  const delegation = new DshEnnoDelegation(runtime, { startActivation: async ({ request }) => {
     delegation.created(child); await delegation.restoreOrPersist(child); started()
-    return { id: child.id, localAgent: child, result: finished, dispose: async () => {} }
+    return { childId: child.id, result: finished, dispose: async () => {} }
   } })
   const binding = { ...identity, dshSessionId: 'parent', revision: 2, routeEpoch: approved.executionLease!.routeEpoch, leaseToken: approved.executionLease!.leaseToken, workUnitId: 'unit', idempotencyKey: 'worker-1' }
   const pending = delegation.execute({ id: 'parent', session: { id: 'parent', header: { cwd: process.cwd() } } } as any, { instruction: 'Inspect old files' }, binding, ['read'], new AbortController().signal)

@@ -170,8 +170,8 @@ individual source files are limited to 1 MiB. Search inspects at most 2,000
 entries and returns at most 100 matches. Shell, writes, arbitrary MCP calls,
 grandchildren and parent completion tools are unavailable.
 
-The capability contract is tested against the published DSH `0.1.5-rc.1`
-package graph. Unsupported environments fail closed with an explanation.
+The capability tests use the published DSH package graph selected by
+`tests/fixtures/dsh-runtime/package.json`. Unsupported environments fail closed with an explanation.
 Deep-owned input never falls back to an ordinary model request.
 
 ## Verification

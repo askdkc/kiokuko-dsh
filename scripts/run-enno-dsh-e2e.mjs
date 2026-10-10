@@ -108,7 +108,7 @@ async function localDshPackageRoot() {
 async function runCordisComposition() {
   const [sourceRoot, packageRoot] = await Promise.all([localDshSourceRoot(), localDshPackageRoot()])
   if (requireDshCli && sourceRoot === undefined && packageRoot === undefined) {
-    throw new Error('Mandatory native DSH workflow coverage has no pinned runtime')
+    throw new Error('Mandatory native DSH workflow coverage has no installed runtime')
   }
   const nativeEnvironment = {
     ...(sourceRoot === undefined ? {} : { KIOKUKO_DSH_SOURCE_ROOT: sourceRoot }),
@@ -117,7 +117,7 @@ async function runCordisComposition() {
   }
   const baseTests = (await readdir(join(root, 'tests/dsh/e2e'))).filter(name => name.endsWith('.test.ts') && name !== 'repeated-memory-lifecycle.test.ts').map(name => `tests/dsh/e2e/${name}`)
   baseTests.push('tests/dsh/integration/enno-memory/native-loop.test.ts')
-  // The native e2e suite runs the whole tests/dsh/e2e directory against a pinned
+  // The native e2e suite runs the whole tests/dsh/e2e directory against the
   // runtime; on macOS runners it exceeds the 180 s default and was killed while
   // still passing. Give the suite its own, larger budget.
   const result = await run(process.execPath, ['scripts/run-tests.mjs', ...baseTests], nativeEnvironment, 600_000)
@@ -233,7 +233,7 @@ async function authenticatedWebRoot(tokenUrl) {
 async function verifyBrowserBundle(tokenUrl) {
   const { rootUrl, cookie, html } = await authenticatedWebRoot(tokenUrl)
   // Exercise the actual HTTP bridge as well as the browser bundle. Native
-  // 0.1.5 requires an explicit buffered body mode even for exact GET routes.
+  // The native bridge uses an explicit buffered body mode for exact GET routes.
   const reports = await fetch(new URL('/api/kiokuko.deep?sessionId=package-lifecycle-unused-session', rootUrl), { headers: { cookie } })
   if (reports.status !== 200 || JSON.stringify(await reports.json()) !== '{"items":[]}') throw new Error('Deep report HTTP route failed through the native bridge')
   const exported = await fetch(new URL('/api/session.export', rootUrl), { headers: { cookie } })

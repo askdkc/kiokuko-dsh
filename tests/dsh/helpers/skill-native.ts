@@ -12,9 +12,9 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   if (prompts && explicit !== true) throw new Error('Custom source snapshots require the explicit production host')
   const subject: typeof import('../../../src/dsh/index.js') = await import(packageRoot
     ? pathToFileURL(join(packageRoot, 'dist/index.js')).href : '../../../src/dsh/index.js')
-  const modules = await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','tool-skill','commands','subagent','subagent-spawn-in-process']
+  const modules = await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','tool-skill','commands','subagent','subagent-spawn-in-process','fs-local','working-directory']
     .map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
-  const [cordis,llm,session,projection,prompt,tools,agents,loop,skills,skillTool,commands,subagents,spawn]=modules
+  const [cordis,llm,session,projection,prompt,tools,agents,loop,skills,skillTool,commands,subagents,spawn,fsLocal,workingDirectory]=modules
   const dir = await realpath(await mkdtemp(join(tmpdir(),'skill-delivery-'))), previousData = process.env.KIOKUKO_DATA_DIR
   process.env.KIOKUKO_DATA_DIR = dir
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
@@ -45,6 +45,8 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   }
   try {
   await mkdir(workspace, { recursive: true })
+  fibers.push(await ctx.plugin(fsLocal.default, { cwd: workspace }))
+  fibers.push(await ctx.plugin(workingDirectory.default, { defaultDirectory: workspace }))
   fibers.push(await ctx.plugin({name:'headless-web-connection',apply(c:any){return c.provide('connection',{fetch:{register:()=>()=>{}}})}}))
   if('lisp' in extra) {
     if (nativeAnswer) {

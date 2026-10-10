@@ -24,8 +24,9 @@ const manifest = join(packages, '@deepseek-ai/dsh/package.json')
 const installed = existsSync(manifest)
 if (installed) {
   const version = JSON.parse(await readFile(manifest, 'utf8')).version
-  assert.ok(['0.1.5-rc.1', '0.2.0-rc.2'].includes(version))
-  if (process.env.KIOKUKO_EXPECTED_DSH_VERSION) assert.equal(version, process.env.KIOKUKO_EXPECTED_DSH_VERSION)
+  const expectedVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
+    ?? JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+  assert.equal(version, expectedVersion)
 }
 if (!installed && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Native DSH required for queued intake regression')
 const instructions = ['Fix `src/parser.ts` and add input validation.', 'Also fix empty-input handling and cover the regression; do not deploy.']

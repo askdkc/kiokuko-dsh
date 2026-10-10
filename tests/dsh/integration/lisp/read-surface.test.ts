@@ -23,8 +23,8 @@ const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-preset'] as const) test(`Lisp preserves native reads and Skill loading (${placement} tools) without granting mutations`, {
   skip: packages ? false : 'requires pinned native DSH', timeout: 15000,
 }, async t => {
-  const [cordis, prompt, tools, scope, fsTools, skillTools] = await Promise.all(
-    ['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope', 'dsh-tool-fs', 'dsh-tool-skill']
+  const [cordis, prompt, tools, scope, fsTools, skillTools, workingDirectory] = await Promise.all(
+    ['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope', 'dsh-tool-fs', 'dsh-tool-skill', 'dsh-working-directory']
       .map(name => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)))
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-reads-')))
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
@@ -59,16 +59,24 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     fibers.push(await ctx.plugin({ name: 'read-fixture', apply(c: any) {
       c.provide('agents', { get: (id: string) => agents.get(id) })
       c.provide('sessions', { get: (id: string) => agents.get(id)?.session })
+      c.provide('sessionProjections', {
+        register: () => () => undefined,
+        stateOf: (session: any, key: string) => key === 'workingDirectory' ? session.header.cwd : undefined,
+      })
       c.provide('commands', { register: (d: any) => { commands.set(d.name, d); return () => commands.delete(d.name) } })
       c.provide('skills', { list: async () => [skill], get: async () => skill })
       c.provide('fs', {
         resolve: async (path: string) => ({ displayPath: path }),
-        stat: async () => ({ type: 'file', size: 10, version: 'fixture-v1' }),
+        processPath: (target: { displayPath: string }) => target.displayPath,
+        stat: async (target: { displayPath: string }) => target.displayPath === base
+          ? { type: 'directory' }
+          : { type: 'file', size: 10, version: 'fixture-v1' },
         readText: async () => { reads++; return 'PLAN fixture' },
         writeText: async () => { mutations++; throw new Error('must not write') },
         editText: async () => { mutations++; throw new Error('must not edit') },
       })
     } }))
+    fibers.push(await ctx.plugin(workingDirectory.default, { defaultDirectory: base }))
     const preset = { agentPreset: 'fixture' }
     const presetScope = scope.createScope(ctx, preset)
     scopes.push(presetScope)

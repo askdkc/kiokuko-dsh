@@ -11,7 +11,7 @@ import { transform } from 'esbuild'
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
 const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-approval-web-')))
 const project = join(base, 'project'), receipts = join(base, 'receipts.jsonl')
-const runtime = process.env.KIOKUKO_LISP_APPROVAL_RUNTIME ?? 'dsh-runtime-current'
+const runtime = process.env.KIOKUKO_LISP_APPROVAL_RUNTIME ?? 'dsh-runtime'
 const dsh = process.env.DSH_BIN ?? join(root, `tests/fixtures/${runtime}/node_modules/.bin/dsh`)
 const env = { ...process.env, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'cache') }
 let host, browser, page, logs = ''

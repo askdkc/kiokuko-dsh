@@ -30,8 +30,9 @@ const manifest = join(packages, '@deepseek-ai/dsh/package.json')
 const nativeAvailable = existsSync(manifest)
 if (!nativeAvailable && (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' || process.env.KIOKUKO_DSH_PACKAGE_ROOT)) throw new Error('On-demand native tests require an installed pinned DSH fixture')
 const runtimeVersion = nativeAvailable ? JSON.parse(await readFile(manifest, 'utf8')).version : 'unavailable'
-if (nativeAvailable) assert.ok(['0.1.5-rc.1', '0.2.0-rc.2'].includes(runtimeVersion), `Unsupported native test fixture: ${runtimeVersion}`)
-if (nativeAvailable && process.env.KIOKUKO_EXPECTED_DSH_VERSION) assert.equal(runtimeVersion, process.env.KIOKUKO_EXPECTED_DSH_VERSION)
+const expectedRuntimeVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
+  ?? JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+if (nativeAvailable) assert.equal(runtimeVersion, expectedRuntimeVersion)
 const actualLaya = process.env.PR72_ACTUAL_LAYA === '1'
 const baselineCheckout = process.env.PR72_BASELINE_CHECKOUT
 const implementation = baselineCheckout ? {
@@ -83,17 +84,14 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
   try {
     const runtimePlugins: any[][] = []
     if (presentation !== 'native') {
-      if (runtimeVersion.startsWith('0.1.5')) runtimePlugins.push([(await load('dsh-code-runtime-worker-thread')).default])
-      else {
-        for (const [name, config] of [['dsh-fs-local', { cwd: root }], ['dsh-subprocess-local', undefined], ['dsh-sandbox-local', undefined], ['dsh-sandbox-policy', { mode: 'read-only', workspaceRoot: root }], ['dsh-ptc-runtime-node', { timeoutMs: 10000 }]] as const) runtimePlugins.push([(await load(name)).default, config])
-      }
+      for (const [name, config] of [['dsh-fs-local', { cwd: root }], ['dsh-working-directory', { defaultDirectory: root }], ['dsh-subprocess-local', undefined], ['dsh-sandbox-local', undefined], ['dsh-sandbox-policy', { mode: 'read-only', workspaceRoot: root }], ['dsh-ptc-runtime-node', { timeoutMs: 10000 }]] as const) runtimePlugins.push([(await load(name)).default, config])
     }
     for (const [plugin, config] of [[llm.default], [session.default], [projections.default], [prompt.default, { persona: '' }],
       ...runtimePlugins, [tools.default, { mode: presentation === 'ptc-scoped' ? 'native' : presentation }], [agents.default], [skills.default], [loop.default, { agents: [] }], [approval.default], [commands.default]]) {
       const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
     }
     if (presentation !== 'native') {
-      const runtime = ctx.get(runtimeVersion.startsWith('0.1.5') ? 'codeRuntime' : 'ptcRuntime', false)
+      const runtime = ctx.get('ptcRuntime', false)
       assert.ok(runtime, 'official PTC runtime must be mounted')
       const originalRun = runtime.run
       runtime.run = function (...args: any[]) { runtimeRuns.push({ code: args[0]?.code ?? args[0]?.source?.code }); return originalRun.apply(this, args) }

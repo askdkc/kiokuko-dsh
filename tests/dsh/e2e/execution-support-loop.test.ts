@@ -20,13 +20,14 @@ for (const mode of ['research', 'writing'] as const) {
 test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, human resume and visible completion`, {
   skip: !packageRoot && !sourceRoot ? 'requires the pinned DSH runtime' : false, timeout: 60_000,
 }, async () => {
-  const [cordis, llm, session, projection, systemPrompt, tools, agents, loop, skills, fsLocal, fsTools] = await Promise.all([
+  const [cordis, llm, session, projection, systemPrompt, workingDirectory, tools, agents, loop, skills, fsLocal, scope, fsTools] = await Promise.all([
     import(modulePath('cordis', 'vendor/cordis')), import(modulePath('dsh-llm', 'packages/llm/llm')),
     import(modulePath('dsh-session', 'packages/core/session')), import(modulePath('dsh-session-projection', 'packages/session/session-projection')),
-    import(modulePath('dsh-system-prompt', 'packages/core/system-prompt')), import(modulePath('dsh-tools', 'packages/core/tools')),
+    import(modulePath('dsh-system-prompt', 'packages/core/system-prompt')), import(modulePath('dsh-working-directory', 'packages/core/working-directory')),
+    import(modulePath('dsh-tools', 'packages/core/tools')),
     import(modulePath('dsh-agent', 'packages/core/agent')), import(modulePath('dsh-agent-loop', 'packages/core/agent-loop')),
     import(modulePath('dsh-skill', 'packages/skill/skill')),
-    import(modulePath('dsh-fs-local', 'packages/fs/fs-local')), import(modulePath('dsh-tool-fs', 'packages/fs/tool-fs')),
+    import(modulePath('dsh-fs-local', 'packages/fs/fs-local')), import(modulePath('dsh-scope', 'packages/core/scope')), import(modulePath('dsh-tool-fs', 'packages/fs/tool-fs')),
   ])
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-execution-native-'))
   await mkdir(join(root, 'src')) // Deliberately not a Git repository.
@@ -35,7 +36,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
   const ctx = new cordis.Context()
   const fibers: any[] = []
   for (const [plugin, config] of [[llm.default], [session.default], [projection.default], [systemPrompt.default, { persona: '' }],
-    [tools.default], [agents.default], [skills.default], [loop.default, { agents: [] }]]) {
+    [workingDirectory.default, { defaultDirectory: root }], [fsLocal.default, { cwd: root }], [tools.default, { mode: 'native' }], [agents.default], [skills.default], [loop.default, { agents: [] }]]) {
     const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
   }
   const mock = nativeMock(llm)
@@ -50,7 +51,6 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
   ctx.llm.registerAdapter(['execution-mock'], model)
   let writes = 0; let reads = 0
   const questions: { id: string; agentId: string | undefined }[] = []
-  const localFiber = ctx.plugin(fsLocal.default, { cwd: root }); fibers.push(localFiber); await localFiber
   const fsFiber = ctx.plugin(fsTools); fibers.push(fsFiber); await fsFiber
   const observeTools = ctx.on('tools/execute', (execution: any, next: () => unknown) => {
     if (execution.name === 'read') reads++
@@ -70,9 +70,11 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     llm: { async *stream() { throw new Error('Memory backend deliberately unavailable after completion') } } }
   let adapter = createDshHostAdapter(ctx, options)
   let composition = await mountDshComposition(ctx, adapter.host)
+  let agentScope: any, otherScope: any, releaseNative: (() => void) | undefined, releaseOtherNative: (() => void) | undefined
 
   try {
     const agent = await ctx.agentLoop.create(session.SessionId('execution-session'), { provider: 'execution-mock', model: 'mock' }, { cwd: root })
+    agentScope = scope.createScope(ctx, agent); agent.ctx = agentScope.ctx; releaseNative = agent.ctx.get('tools').presentAs('native')
     const snapshots = () => adapter.host.runtime!.withDatabase(db => Object.fromEntries([
       'ledger_runs', 'dsh_turn_receipts', 'dsh_boundary_jobs', 'dsh_exploration_states',
     ].map(table => [table, db.prepare(`SELECT * FROM ${table}`).all().map((row: any) => Object.fromEntries(Object.entries(row).filter(([key]) => !['title', 'metadata_json'].includes(key))))])))
@@ -105,6 +107,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     const running = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status = 'active' AND dsh_session_id = 'execution-session'").get<{ id: string }>())
     assert.ok(running)
     const other = await ctx.agentLoop.create(session.SessionId('other-session'), { provider: 'execution-mock', model: 'mock' }, { cwd: root })
+    otherScope = scope.createScope(ctx, other); other.ctx = otherScope.ctx; releaseOtherNative = other.ctx.get('tools').presentAs('native')
     await settle(other, 'こんにちは', () => model.requests.length === 9)
     expectedQuestions.push({ id: 'kioku-orca-recording', agentId: other.id })
     assert.deepEqual(questions, expectedQuestions, 'each session asks once, without task clarification or approval')
@@ -139,7 +142,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM dsh_turn_receipts').get<{ n: number }>()!.n), 0,
       'pause never fabricates Enno receipts or turn seals')
   } finally {
-    composition.stopIngress(); await adapter.dispose(); await composition.dispose()
+    composition.stopIngress(); releaseNative?.(); releaseOtherNative?.(); await agentScope?.dispose(); await otherScope?.dispose(); await adapter.dispose(); await composition.dispose()
     observeTools(); await questionFiber.dispose()
     for (const fiber of fibers.reverse()) await fiber.dispose()
     await rm(root, { recursive: true, force: true })

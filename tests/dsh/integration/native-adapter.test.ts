@@ -99,7 +99,12 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       },
     },
 
-    systemPrompt: { getSectionOrder: () => 0, section(input: { name: string; text: string }) { sections.set(input.name, input.text); return () => sections.delete(input.name) } },
+    systemPrompt: {
+      getSectionOrder: () => 0,
+      getContextOrder: () => 0,
+      context() { return () => undefined },
+      section(input: { name: string; text: string }) { sections.set(input.name, input.text); return () => sections.delete(input.name) },
+    },
     tools: {
       register(definition: any) { registered.push(definition); return () => undefined },
       guard(guard: (execution: any) => string | undefined) {

@@ -382,8 +382,8 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
         on: (name, listener, options) => ctx.on(name as never, listener as never, options),
       }, host.toolPolicy))
       ingressDisposers.push(mountDshModelTools({ tools: registration }, host.toolHost, host.modelToolDefinitionsChanged))
-      // The plugin owns its search tool: a scoped registration shadows the native global grep per agent.
-      ingressDisposers.push(mountNativeSearch(ctx as unknown as Parameters<typeof mountNativeSearch>[0]))
+      // Improve missing-target guidance while preserving the native ripgrep definition and policies.
+      ingressDisposers.push(mountNativeSearch(ctx))
     }
     if (host.intakeGate !== undefined) {
       if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')

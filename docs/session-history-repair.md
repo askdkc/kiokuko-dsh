@@ -2,7 +2,7 @@
 
 `unknown to this harness and not marked ignorable` means DSH refused an event
 outside its supported vocabulary. It does not by itself mean that chat content
-was deleted. DSH 0.1.5-rc.1 accepts `ignorable` while reading, but its public
+was deleted. DSH 0.2.1-alpha.2 accepts `ignorable` while reading, but its public
 `Session.append` does not preserve that option while writing.
 
 Kiokuko now stores execution observations and completion/pause notices in its

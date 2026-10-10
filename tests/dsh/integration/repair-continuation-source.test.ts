@@ -67,6 +67,15 @@ async function loadCatalog(): Promise<Catalog | undefined> {
   return (await import(pathToFileURL(catalogPath).href)).sessionFormatCatalog
 }
 
+async function loadCatalogModule(): Promise<any | undefined> {
+  try {
+    await access(catalogPath)
+  } catch {
+    return undefined
+  }
+  return import(pathToFileURL(catalogPath).href)
+}
+
 function validate(catalog: Catalog, header: unknown, rows: readonly unknown[]) {
   if ('createRestore' in catalog) {
     const restore = catalog.createRestore(header, { recovery: 'strict', validation: 'current' })
@@ -78,11 +87,12 @@ function validate(catalog: Catalog, header: unknown, rows: readonly unknown[]) {
 }
 
 test('repairs legacy continuation sources with backup, catalog validation, atomic output, and idempotence', async (t) => {
-  const catalog = await loadCatalog()
-  if (catalog === undefined) {
+  const catalogModule = await loadCatalogModule()
+  if (catalogModule === undefined) {
     t.skip('built DeepSeek Harness session-format catalog is unavailable')
     return
   }
+  const catalog = catalogModule.createSessionFormatCatalogWithChildren([])
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-repair-source-'))
   const path = join(root, 'session.jsonl.zstd')
   const artifact = artifactLines()
@@ -226,16 +236,18 @@ for (const [name, implementation, expectedError] of [
 
 
 for (const version of [0, 3]) test(`handles optional Kiokuko events in v${version} without losing content or sequence`, async (t) => {
-  const catalog = await loadCatalog() as any
-  if (!catalog) { t.skip('pinned DSH catalog unavailable'); return }
+  const catalogModule = await loadCatalogModule()
+  if (!catalogModule) { t.skip('installed DSH catalog unavailable'); return }
+  const catalog = catalogModule.createSessionFormatCatalogWithChildren([])
+  const historicalCatalog = catalogModule.historicalSessionFormatCatalog
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-repair-events-'))
   try {
     const path = join(root, 'session.jsonl.zstd')
     const types = ['kiokuko/evolution-observation', 'kiokuko/completion-report', 'kiokuko/execution-status', 'kiokuko/deep-report', 'kiokuko/deep-status']
     const events = types.map((type, seq) => ({ type, seq, time: seq + 1, data: { preserved: '情報を消さない', nested: { callSeq: 21 } } }))
     const header = { ...(version === 0 ? { type: 'session' } : { isSeeded: false }), version, id: 'historical-events', createdAt: 1, delegationDepth: 0 }
-    const physicalHeader = version === 3 ? catalog.encodeCurrentHeader(header, 0) : header
-    const rows = version === 3 ? events.map(event => catalog.encodeCurrentEvent(event)) : events
+    const physicalHeader = version === 3 ? historicalCatalog.encodeCurrentHeader(header, 0) : header
+    const rows = version === 3 ? events.map(event => historicalCatalog.encodeCurrentEvent(event)) : events
     const original = frame(`${[physicalHeader, ...rows].map(row => JSON.stringify(row)).join('\n')}\n`)
     await writeFile(path, original)
     const run = (extra: string[] = []) => spawnSync(process.execPath, [join(process.cwd(), 'scripts/repair-session-log.mjs'), path, '--catalog', catalogPath, ...extra], { encoding: 'utf8' })

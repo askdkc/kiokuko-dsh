@@ -2,11 +2,11 @@
 
 The private legacy-history codec bundle includes code from the following MIT-licensed DeepSeek packages. These packages are not installed as runtime dependencies.
 
-- `@deepseek-ai/dsh-util-values@0.1.5-rc.2`
-- `@deepseek-ai/dsh-session-format@0.1.5-rc.1`
-- `@deepseek-ai/dsh-session-format-v0-to-v1@0.1.5-rc.1`
-- `@deepseek-ai/dsh-session-format-v1-to-v2@0.1.5-rc.1`
-- `@deepseek-ai/dsh-llm@0.1.5-rc.2`
+- `@deepseek-ai/dsh-util-values@0.2.1-alpha.2`
+- `@deepseek-ai/dsh-session-format@0.2.1-alpha.2`
+- `@deepseek-ai/dsh-session-format-v0-to-v1@0.2.1-alpha.2`
+- `@deepseek-ai/dsh-session-format-v1-to-v2@0.2.1-alpha.2`
+- `@deepseek-ai/dsh-llm@0.2.1-alpha.2`
 
 MIT License
 

@@ -55,7 +55,7 @@ Use a normal nonempty `description` alongside `code`. The optional final semicol
 
 The host intercepts this carrier after native pre-policy and before the PTC interpreter. Its result explicitly says that no program was evaluated. Once the original task is prepared, ordinary PTC execution and nested native tools retain their usual permissions, sandbox, and guards.
 
-With deployment-level PTC, pending memory-application decisions temporarily use the native `both` presentation to expose the existing review tools while retaining the bound `run_code` transport in the capability inventory. This transition is awaited after dispatch normalization and before the preparation result returns, so the next native schema snapshot includes `task_memory_review`. Completing the review restores PTC before the next snapshot. Arbitrary programs remain blocked by the unchanged memory gate while those decisions are pending.
+With PTC, pending memory-application decisions preserve DSH's `run_code` presentation and bound capability inventory. The model calls the existing review tool through the generated SDK, for example `return await tools.task_memory_review({ action: "status" })`. Unresolved decisions prevent successful completion but do not block prepared tool execution. Completing the review leaves the native PTC presentation unchanged.
 
 A same-agent explicit `presentAs('ptc')` declaration combined with pending memory decisions remains unsupported: the native registry rejects a second presentation declaration in that scope. This fails closed rather than bypassing memory review or changing the user's owned presentation. PTC without pending memory decisions, and deployment-level PTC with review, are covered separately.
 

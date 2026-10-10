@@ -364,7 +364,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const memoryRetrievalConfig = MemoryRetrievalConfig.parse(options.memoryRetrieval ?? {})
   const native = ctx as unknown as AdapterContext
   const skills = native.get('skills', false) as NativeSkills | undefined
-  const systemPrompt = native.get('systemPrompt', false) as DshCompositionHost['systemPrompt'] | undefined
+  const systemPrompt = native.get('systemPrompt', false) as
+    (NonNullable<DshCompositionHost['systemPrompt']> & NonNullable<Parameters<DshExecutionSupport['mount']>[0]['systemPrompt']>) | undefined
   const tools = native.get('tools', false) as NativeTools | undefined
   const commands = native.get('commands', false) as NativeCommands | undefined
   const userQuestions = native.get('userQuestions', false) as DshUserQuestions | undefined
@@ -443,6 +444,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const executionSupport = new DshExecutionSupport(runtime, { continuity: continuityConfig,
     observe: value => efficiencyHost.efficiency?.recordContinuity(value) })
   executionSupport.mount({ on: (name, listener, options) => onNativeServiceEvent(ctx, name, listener, options),
+    ...(systemPrompt === undefined ? {} : { systemPrompt }),
     ...(tools === undefined ? {} : { tools: { guard: tools.guard.bind(tools) } }) })
   const ennoMemory = new DshEnnoMemoryRefresh(runtime, EnnoMemoryConfig.parse(options.ennoMemory ?? {}),
     value => efficiencyHost.efficiency?.recordEnnoMemory(value))

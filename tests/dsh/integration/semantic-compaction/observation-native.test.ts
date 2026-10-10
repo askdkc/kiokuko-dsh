@@ -14,10 +14,10 @@ import { nativeMock } from '../../helpers/native-mock.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href)
-const [cordis, llm, sessions, projection, prompt, tools, registry, loop, meter, compaction, fsLocal, fsTools] = await Promise.all(['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic', 'fs-local', 'tool-fs'].map(load))
+const [cordis, llm, sessions, projection, prompt, workingDirectory, scope, tools, registry, loop, meter, compaction, fsLocal, fsTools] = await Promise.all(['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'working-directory', 'scope', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic', 'fs-local', 'tool-fs'].map(load))
 
 for (const mode of ['auto', 'off'] as const) test(`native read -> two full requests -> pack -> middle-page read -> actual write (${mode})`, async t => {
-  const root = realpathSync(await mkdtemp(join(tmpdir(), 'observation-native-'))), ctx = new cordis.Context(), fibers: any[] = []
+  const root = realpathSync(await mkdtemp(join(tmpdir(), 'observation-native-'))), ctx = new cordis.Context(), fibers: any[] = [], scopes: any[] = []
   const source = Array.from({ length: 600 }, (_, i) => `line ${i}: ${i === 300 ? '中央の根拠🙂𠮷=verified' : 'ordinary source material'.repeat(2)}`).join('\n')
   await writeFile(join(root, 'source.txt'), source)
   const mock = nativeMock(llm), script: any[] = [], full: string[] = []
@@ -51,7 +51,7 @@ for (const mode of ['auto', 'off'] as const) test(`native read -> two full reque
   else script.push(mock.textResponse('Evidence written.'))
   class Provider extends mock.MockAdapter { override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, context: { contextWindow: 200000 } } } }
   const provider = new Provider(script)
-  for (const plugin of [llm, sessions, projection, prompt, tools, registry, meter]) fibers.push(await ctx.plugin(plugin.default, plugin === prompt ? { persona: '' } : undefined))
+  for (const plugin of [llm, sessions, projection, prompt, workingDirectory, tools, registry, meter]) fibers.push(await ctx.plugin(plugin.default, plugin === prompt ? { persona: '' } : plugin === workingDirectory ? { defaultDirectory: root } : plugin === tools ? { mode: 'native' } : undefined))
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   fibers.push(await ctx.plugin(compaction.default, { thresholdRatio: .8, retainTokens: 1000 }))
   fibers.push(await ctx.plugin(fsLocal.default, { cwd: root })); fibers.push(await ctx.plugin(fsTools))
@@ -59,6 +59,8 @@ for (const mode of ['auto', 'off'] as const) test(`native read -> two full reque
   const d = decisions({ mode: 'off' }), coordinator = new SemanticCompactionCoordinator(ctx, d.service, root, { mode })
   const agentHandle = await ctx.agents.create({ sessionId: sessions.SessionId('observation-native'), agentOptions: { provider: 'mock', model: 'mock' }, meta: { cwd: root } })
   const agent = agentHandle.agent
+  const agentScope = scope.createScope(ctx, agent); scopes.push(agentScope); agent.ctx = agentScope.ctx
+  const releaseNative = agent.ctx.get('tools').presentAs('native')
   const run = async () => {
     agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Continue.' }], source: { kind: 'user' } })); await agent.whenIdle()
     const end = agent.session.snapshotEvents().filter((e: any) => e.type === 'turn/end').at(-1)
@@ -97,5 +99,5 @@ for (const mode of ['auto', 'off'] as const) test(`native read -> two full reque
       assert.equal((d.service.status() as any).observationPack.metrics.restored, 1)
     }
     t.diagnostic(JSON.stringify(measured))
-  } finally { coordinator.stop(); await coordinator.drain(); await agentHandle.dispose(); for (const fiber of fibers.reverse()) await fiber.dispose(); await rm(root, { recursive: true, force: true }) }
+  } finally { releaseNative(); coordinator.stop(); await coordinator.drain(); await agentHandle.dispose(); for (const scope of scopes.reverse()) await scope.dispose(); for (const fiber of fibers.reverse()) await fiber.dispose(); await rm(root, { recursive: true, force: true }) }
 })

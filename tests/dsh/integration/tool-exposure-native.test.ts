@@ -24,7 +24,9 @@ const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 
 const nativeAvailable = sourceRoot !== undefined || existsSync(join(packageRoot, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !nativeAvailable) throw new Error('Mandatory native tool-exposure coverage requires the pinned DSH runtime')
 const runtimeVersion = nativeAvailable ? (JSON.parse(await readFile(join(packageRoot, '@deepseek-ai/dsh/package.json'), 'utf8')) as { version?: string }).version ?? 'unknown' : 'unavailable'
-if (process.env.KIOKUKO_EXPECTED_DSH_VERSION) assert.equal(runtimeVersion, process.env.KIOKUKO_EXPECTED_DSH_VERSION)
+const expectedRuntimeVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
+  ?? JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+if (nativeAvailable) assert.equal(runtimeVersion, expectedRuntimeVersion)
 function modulePath(name: string, source: string) {
   return pathToFileURL(sourceRoot !== undefined ? join(sourceRoot, source, 'lib/index.js') : join(packageRoot, '@deepseek-ai', name, 'lib/index.js')).href
 }
@@ -266,7 +268,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     let lean: ReturnType<typeof measure> | undefined
     let leanTools: unknown
     let leanSavings: { tools: number; body: number } | undefined
-    if (runtimeVersion === '0.2.0-rc.2') {
+    if (nativeAvailable) {
       await composition?.dispose(); composition = undefined
       await adapter?.dispose(); adapter = undefined
       adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'lean' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
@@ -301,7 +303,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     }
     const auto: (ReturnType<typeof measure> & { taskType: string; requestedMode: 'auto'; effectiveMode: 'lean' | 'minimal' })[] = []
     let fullResearch: ReturnType<typeof measure> | undefined
-    if (runtimeVersion === '0.2.0-rc.2') {
+    if (nativeAvailable) {
       fixtureTaskType = 'research'
       await composition?.dispose(); composition = undefined
       await adapter?.dispose(); adapter = undefined
@@ -356,7 +358,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
         auto.push(measurement)
       }
     }
-    if (runtimeVersion === '0.2.0-rc.2') {
+    if (nativeAvailable) {
       const chatAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-auto-chat'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
       const before = requests.length
       roundtrip = 'final-answer'
@@ -368,7 +370,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
       assert.equal(state?.n, 0, 'answer-only turn must not create execution intake')
       assert.ok(completedSessions.has(chatAgent.session.id))
     }
-    if (runtimeVersion === '0.2.0-rc.2' && protocol.name === 'deepseek') {
+    if (nativeAvailable && protocol.name === 'deepseek') {
       fixtureTaskType = 'build'
       for (const mode of ['auto', 'lean', 'phase'] as const) {
         await composition?.dispose(); composition = undefined
@@ -442,5 +444,5 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
 
 // Each case replaces global fetch, so keep protocol cases serial.
 for (const protocol of protocols) {
-  test(`native ${protocol.name} serializer preserves task-aware tool exposure and external execution`, { concurrency: false, skip: !nativeAvailable ? 'requires the pinned DSH runtime' : (protocol.name === 'deepseek' || protocol.name === 'anthropic') && runtimeVersion !== '0.2.0-rc.2' ? 'Messages wire coverage requires the current fixture' : false, timeout: 30_000 }, () => verifyNativeToolExposure(protocol))
+  test(`native ${protocol.name} serializer preserves task-aware tool exposure and external execution`, { concurrency: false, skip: !nativeAvailable ? 'requires the canonical current DSH runtime' : false, timeout: 30_000 }, () => verifyNativeToolExposure(protocol))
 }
