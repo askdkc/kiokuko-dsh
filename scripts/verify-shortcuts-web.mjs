@@ -1,11 +1,13 @@
-// Real DSH Web + packed Kiokuko + a no-model question producer, in a disposable profile.
+// Real DSH Web + packed Kiokuko + scripted local seeding and questions, in a disposable profile.
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from 'node:fs/promises'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
+import { transform } from 'esbuild'
 const exec = promisify(execFile), repository = resolve(import.meta.dirname, '..')
 const fixtureName = process.env.KIOKUKO_SHORTCUT_RUNTIME ?? 'dsh-runtime'
 const reuse = process.env.KIOKUKO_SHORTCUT_REUSE
@@ -32,14 +34,27 @@ try {
   console.log(`Installing ${fixtureName}: ${archive}`)
   await exec(dsh, ['plugin', '--profile', 'web', 'add', archive, '--force'], { env, cwd: project, maxBuffer: 8 * 1024 ** 2 })
   const fixture = join(base, 'questions.mjs')
+  const mockPath = join(base, 'mock.mjs')
+  await writeFile(mockPath, (await transform(await readFile(join(repository, 'tests/dsh/helpers/native-mock.ts'), 'utf8'), { loader: 'ts', format: 'esm' })).code)
   await writeFile(fixture, `import {appendFile} from 'node:fs/promises';
-export const name='shortcut-fixture'; export const inject=['workspaceRegistry','commands','userQuestions'];
+import * as llm from ${JSON.stringify(pathToFileURL(join(repository,`tests/fixtures/${fixtureName}/node_modules/@deepseek-ai/dsh-llm/lib/index.js`)).href)};
+import {nativeMock} from ${JSON.stringify(pathToFileURL(mockPath).href)};
+export const name='shortcut-fixture'; export const inject=['workspaceRegistry','commands','userQuestions','sessionProjections','agents','llm','sessions'];
 export async function apply(ctx) {
+  const mock=nativeMock(llm), responses=[];
+  const model=new mock.MockAdapter(responses); ctx.llm.registerAdapter(['shortcut-fixture'],model);
   await ctx.workspaceRegistry.create(${JSON.stringify(project)}, 'Shortcut verification');
-  ctx.commands.register({name:'shortcut-fixture',description:'No-model shortcut regression',input:{hint:'1 | 9 | 10 | 24 | multi | batch | empty | search | value | review'},handler:async request=>{
+  ctx.commands.register({name:'shortcut-fixture',description:'Local shortcut regression',input:{hint:'1 | 9 | 10 | 24 | multi | batch | empty | search | value | review'},handler:async request=>{
     const mode=request.rawInput.trim(); const count=Number(mode)||24;
     if(mode==='seed') {
-      request.agent.session.append('user/message',{id:'shortcut-fixture-seed',role:'user',content:[{type:'text',text:'Shortcut fixture (no model execution)'}],source:{kind:'user'}},{surfaceOp:'append'});
+      // DSH establishes persistent non-blank metadata at turn/start, not user/message.
+      // Use its real loop and protected system head, with a scripted local response.
+      const agent=ctx.agents.get(request.agent.id);
+      responses.push(mock.textResponse('Shortcut fixture ready'));
+      agent.followup(llm.createUserMessage({content:[{type:'text',text:'Shortcut fixture (scripted local model)'}],source:{kind:'user'}}));
+      await agent.whenIdle(); await ctx.sessions.flush(agent.session);
+      if(responses.length) throw new Error('Shortcut seed did not consume its local response');
+      await appendFile(${JSON.stringify(answers)},JSON.stringify({mode,blank:ctx.sessionProjections.snapshot(request.agent.session).values.sessionListMetadata?.blank,modelRequests:model.requests.length})+'\\n');
       return {kind:'success',text:'Fixture history ready'};
     }
     const q={id:mode==='search'?'enno-model-zenki':mode==='value'?'deep-budget-value':'unknown-shortcut',header:mode==='search'?'実行方式とモデル':mode==='value'?'Deep planning':'Shortcut verification',question:'Shortcut fixture '+mode,
@@ -51,7 +66,7 @@ export async function apply(ctx) {
     } catch(e){await appendFile(${JSON.stringify(answers)},JSON.stringify({mode,error:e.code??e.message})+'\\n');return {kind:'success',text:'Dismissed '+mode};}
   }});
 }`)
-  await writeFile(patch, `- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n- insert:\n    - id: shortcut-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, userQuestions]\n`)
+  await writeFile(patch, `- id: session-title-llm\n  disabled: true\n- id: agent-default-model\n  config: {provider: shortcut-fixture, model: mock}\n- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n- insert:\n    - id: shortcut-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, userQuestions, sessionProjections, agents, llm, sessions]\n`)
   }
   child = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', '0'], { env, cwd: project, stdio: ['ignore', 'pipe', 'pipe'] })
   for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { logs += chunk.toString() })
@@ -69,10 +84,12 @@ export async function apply(ctx) {
     // Reused profiles may already have acknowledged the welcome notice.
     const welcome = page.getByRole('button', { name: 'Continue', exact: true })
     const credentials = page.getByRole('dialog', { name: 'Add an API key to get started', exact: true })
-    await welcome.or(credentials).first().waitFor()
+    // The local provider can make credentials optional; a reload can offer them again.
+    await page.addLocatorHandler(credentials, async () => {
+      await credentials.getByRole('button', { name: 'Configure later', exact: true }).click()
+    })
+    if (!reuse) await welcome.waitFor()
     if (await welcome.isVisible()) await welcome.click()
-    await credentials.getByRole('button', { name: 'Configure later', exact: true }).click()
-    await credentials.waitFor({ state: 'hidden' })
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
     const editor = page.locator('[contenteditable="true"]').first()
     await editor.waitFor()
@@ -80,6 +97,13 @@ export async function apply(ctx) {
     await editor.fill('/shortcut-fixture seed'); await editor.press('Enter')
     await page.getByRole('button',{name:'Diff レビュー',exact:true}).waitFor()
     const records = async () => (await readFile(answers, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+    const seed = await poll(async () => (await records()).find(r => r.mode === 'seed'))
+    assert.equal(seed.blank, false,
+      'fixture seed must establish a non-blank native session before keyboard cases')
+    assert.equal(seed.modelRequests, 1, 'fixture must complete exactly one scripted local model request')
+    // Verify the durable fixture through a fresh snapshot, not transient live chrome.
+    await page.reload()
+    await page.getByRole('button',{name:'Diff レビュー',exact:true}).waitFor()
     const ask = async mode => { await editor.fill('/shortcut-fixture '+mode); await editor.press('Enter'); await page.locator('.kiokuko-intake').waitFor(); await page.locator('.kiokuko-intake').focus() }
     await ask('intake')
     await page.keyboard.press('ControlOrMeta+4')
@@ -117,6 +141,7 @@ export async function apply(ctx) {
     await card.waitFor({state:'hidden'})
     await ask('cancel'); await page.keyboard.press('Escape')
     assert.ok((await poll(async () => (await records()).find(r => r.mode==='cancel'))).error)
+    await card.waitFor({state:'hidden'})
     await page.getByRole('button',{name:'Diff レビュー',exact:true}).click()
     const review = page.locator('.kiokuko-review')
     await review.getByRole('button',{name:'比較対象: 未コミット全体',exact:true}).waitFor()
@@ -169,7 +194,7 @@ export async function apply(ctx) {
     await page.keyboard.press('Enter')
     assert.deepEqual((await poll(async ()=>(await records()).find(r=>r.mode==='simultaneous'))).answer.answers[0].selected,['Choice 24 — 長い候補名も表示する'])
     await card.waitFor({state:'hidden'})
-    console.log(JSON.stringify({fixtureName, packed: archive, passed: true, caseCount: (await records()).length, screenshots: [join(base,'shortcuts.png'),join(base,'shortcuts-narrow.png')]}))
+    console.log(JSON.stringify({fixtureName, packed: archive, passed: true, caseCount: (await records()).filter(record => record.mode !== 'seed').length, screenshots: [join(base,'shortcuts.png'),join(base,'shortcuts-narrow.png')]}))
   }
 } catch (error) { if(page){console.error(await page.locator('body').ariaSnapshot());await page.screenshot({path:join(base,'failure.png')})} console.error(logs.slice(-8000).replace(/token=[^\s]+/g, 'token=[redacted]')); console.error('Evidence:',base); throw error }
 finally { await browser?.close(); if(child){child.kill('SIGTERM'); await new Promise(resolve=>{child.once('exit',resolve);setTimeout(resolve,5000).unref()})} if(process.env.KIOKUKO_KEEP_SHORTCUT_EVIDENCE!=='1')await rm(base,{recursive:true,force:true}) }
