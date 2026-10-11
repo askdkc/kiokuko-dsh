@@ -29,13 +29,13 @@ export interface RoundFault { saveFailure?: boolean; duplicateCompletion?: boole
 export interface RoundReport { round: number; runId: string; session: string; start: number; end: number; mainCalls: number; auxiliaryCalls: number; planReviewCalls: number; toolExecutions: number; suppliedIds: string[]; finalizations: number; episodes: number; lessons: number; stages: string[] }
 export const fixtureData = ['account rows: Ada, Ken; schema accounts(email)', 'inventory rows: bolt, nut, washer; schema parts(sku, quantity)', 'audit rows: created, revised, reviewed, approved; schema events(actor, action, time)']
 const applicationPaths = fixtureData.map((_, index) => `fixtures/${index}.txt`)
-const applicationCommand = `${process.execPath} fixtures/verify.mjs`
+const applicationCommand = `${process.execPath} --test --test-reporter=tap fixtures/verify.mjs`
 
 export async function prepareRepeatedWorkspace(root: string, migrationsDirectory?: string): Promise<void> {
   execFileSync('git', ['init', '-q', root])
   await mkdir(join(root, 'fixtures'), { recursive: true })
   for (const [index, data] of fixtureData.entries()) await writeFile(join(root, 'fixtures', `${index}.txt`), data)
-  await writeFile(join(root, 'fixtures', 'verify.mjs'), `import assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nconst expected = ${JSON.stringify(fixtureData)};\nfor (const [index, value] of expected.entries()) assert.equal(readFileSync(new URL(index + '.txt', import.meta.url), 'utf8'), value);\n`)
+  await writeFile(join(root, 'fixtures', 'verify.mjs'), `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nconst expected = ${JSON.stringify(fixtureData)};\ntest('All fixture inputs match their expected values', () => { for (const [index, value] of expected.entries()) assert.equal(readFileSync(new URL(index + '.txt', import.meta.url), 'utf8'), value); });\n`)
   const databasePath = join(root, '.git', 'state.sqlite3')
   await initializeDatabase({ databasePath, ...(migrationsDirectory ? { migrationsDirectory } : {}) })
   const db = openConnection(databasePath)
@@ -118,7 +118,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     return context.provide('userQuestions', { async ask(request: any) {
       return { answers: request.questions.map((question: any) => {
         if (/^(boundary-|loop-|effect-)/u.test(question.id)) throw new Error(`Unexpected workflow hold: ${question.id}: ${question.detail}`)
-        const selected = question.id === 'kioku-agenticreplay-recording' ? '記録しない' : question.id === 'kiokuko-plan-confirmation' ? 'approve'
+        const selected = question.id.startsWith('coding-lisp-') ? '使わない' : question.id === 'kioku-agenticreplay-recording' ? '記録しない' : question.id === 'kiokuko-plan-confirmation' ? 'approve'
           : modelSelectionAnswer(question) ?? 'debug'
         return { id: question.id, selected: [selected] }
       }) }
@@ -336,7 +336,7 @@ export function ennoScript(mock: ReturnType<typeof nativeMock>, round: number, r
   const ideal = dispositions(['constraint_guardian','skill_trust_analyst','success_signal_critic'])
   const planning = dispositions(['workunit_architect','protocol_risk_reviewer','verification_designer'])
   const final = dispositions(['acceptance_auditor','regression_adversary','evidence_freshness_reviewer'])
-  const verifier = { id: 'fixture-check', kind: 'test', executable: process.execPath, args: ['fixtures/verify.mjs'], cwd: '.', timeoutMs: 5000 }
+  const verifier = { id: 'fixture-check', kind: 'test', executable: process.execPath, args: ['--test','--test-reporter=tap','fixtures/verify.mjs'], cwd: '.', timeoutMs: 5000 }
   const plan = {
     executionHints: [], scope: ['fixtures'], exclusions: [], acceptanceCriteria: [{ id: 'verified', description: VERIFICATION }],
     workPlan: { objective: PROCEDURE, units: [{ id: 'verify-fixture', objective: PROCEDURE, scope: ['fixtures'], dependencies: [], routes: ['code'], skillNames: ['kiokuko-single-purpose-functions'], expertRefs: [{ id: 'code.verification.v1', reason: 'Verify source evidence.' }], acceptanceCriteria: [VERIFICATION], focusedVerifiers: [verifier] }] },

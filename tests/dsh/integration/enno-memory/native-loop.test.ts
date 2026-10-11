@@ -1,3 +1,4 @@
+import {assessTaskCompletion} from '../../../../src/dsh/task-completion.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, rm, writeFile, realpath } from 'node:fs/promises'
@@ -54,7 +55,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
   fibers.push(await ctx.plugin({ name: 'refresh-fixture-questions', apply(context: any) { return context.provide('userQuestions', { async ask(request: any) {
     return { answers: request.questions.map((q: any) => {
       if (/^(boundary-|loop-|effect-)/u.test(q.id)) throw new Error(`Unexpected workflow hold: ${q.id}: ${q.detail}`)
-      return { id: q.id, selected: [q.id === 'kiokuko-plan-confirmation' ? 'approve' : modelSelectionAnswer(q) ?? 'debug'] }
+      return { id: q.id, selected: [q.id.startsWith('coding-lisp-') ? '使わない' : q.id === 'kiokuko-plan-confirmation' ? 'approve' : modelSelectionAnswer(q) ?? 'debug'] }
     }) }
   } }) } }))
   const adapter = createDshHostAdapter(ctx, { repositoryRoot: root, databasePath: join(root, '.git/state.sqlite3'), agenticReplay: { enabled: false },
@@ -149,7 +150,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
     const task = '役小角を使って QUEUE_TEST_BASELINE のテストを修正してください。read paths: fixtures\nwrite paths: fixtures\n完了条件: 検証して報告'
     agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
     await waitFor(() => {
-      if (errors.length) throw new Error(errors.join('\n'))
+      if (errors.length) throw new Error(JSON.stringify({errors,assessment:runId?assessTaskCompletion(db,runId):null,verifiers:db.prepare('SELECT verifier_json,tap_summary_json,explicit_test_cases,stdout_preview FROM enno_verifier_runs WHERE run_id=?').all(runId),last:agent.session.snapshotEvents().filter((e:any)=>e.type==='tool/result').slice(-4).map((e:any)=>e.data)}))
       return agent.status === 'idle' && (invalidationBlocked || agent.session.snapshotEvents().some((e: any) => e.type === 'assistant/message' && JSON.stringify(e.data).includes('REFRESH_FIXTURE_COMPLETE')))
     }, 'enno memory native completion')
     assert.equal(calls, 4)

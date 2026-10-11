@@ -10,7 +10,11 @@ description: Compose reusable Common Lisp task tools alongside owned development
 
 ## Admission and tools
 
-Persistent mode: coding choice or /kioku-lisp enable. Task mode uses /kioku-lisp enable-task with fresh workers per definition/call. Lisp and ordinary tools coexist. Worker startup/recovery failures leave normal development available. Never spoof host-bound session/agent/directory/generation.
+Coding: coding_workflow defines Goal/items/checks before the task Lisp choice. Pending blocks effects; next reopens. Resume saved choice; new task/scope asks again. No uses ordinary tools. Verify items, then the user entry with fresh host results.
+
+
+
+Persistent mode: coding choice or /kioku-lisp enable. Task mode uses /kioku-lisp enable-task with fresh workers per definition/call. Lisp and ordinary tools coexist. Coding-task startup failure blocks until recovery or explicit route change; legacy ordinary tools remain available. Never spoof host-bound session/agent/directory/generation.
 
 Use kioku_read, kioku_write, kioku_edit, kioku_remove, kioku_exec and kioku_result for observed development. PATH commands, bash/zsh, builds/tests, coding-needed external investigation and project edits need no routine confirmation. Source/data deletion and existing durable user database mutation need a concrete review; generated/temp/disposable artifacts and routine Kioku saving are authorized. Declare destructiveTargets when executing commands with destructive intent. The host does not attempt to classify every side effect of arbitrary code.
 

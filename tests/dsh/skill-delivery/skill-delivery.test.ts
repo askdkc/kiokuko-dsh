@@ -7,6 +7,7 @@ import { nativeSkillFixture } from '../helpers/skill-native.js'
 import { nativeToolResults } from '../helpers/native-mock.js'
 import { deepSeekFixtureResponse, wireText } from '../helpers/deepseek-wire.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
+import { codingPrelude } from '../helpers/coding-script.js'
 
 isolateSkillHome()
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
@@ -23,10 +24,10 @@ const artifact = enabled ? JSON.parse(await readFile(join(packageRoot ?? process
 const content = (name: string) => artifact.resources.find((r: any) => r.id === `${name}/SKILL.md`).content as string
 const names: string[] = artifact.resources.filter((r: any) => r.id.endsWith('/SKILL.md')).map((r: any) => r.id.slice(0,-'/SKILL.md'.length))
 // Exact model-facing contract: protected Lisp, native reads and memory recovery.
-const expectedLispTools = ['lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
+const expectedLispTools = ['coding_workflow', 'lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
   'lisp_hot_call', 'lisp_hot_contract', 'lisp_hot_deactivate', 'lisp_hot_install', 'lisp_hot_status',
   'lisp_inspect', 'lisp_observe', 'lisp_reset', 'lisp_stage', 'lisp_status', 'lisp_verify',
-  'observation_read', 'prepare_requested_work', 'skill', 'task_memory_review']
+  'observation_read', 'prepare_requested_work', 'skill', 'task_completion', 'task_memory_review']
 const textOf = (request: any): string => [request.system ?? '', ...request.messages.flatMap((m: any) => m.content.flatMap((b: any) =>
   b.type === 'text' ? [b.text] : b.type === 'tool-result' ? b.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text) : []))].join('\n')
 function requireBody(request: any, name: string) { assert.ok(textOf(request).includes(content(name)), `${name}: compiled body absent at adapter boundary`) }
@@ -211,7 +212,8 @@ test('Lisp selected during initial admission executes shared functions without s
     const q = request.questions[0]
     asked.push(q.id)
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['debug'] }] }
-    if (q.id === 'lisp-coding-mode') return { answers: [{ id: q.id, selected: ['Lispモードを使う（通常実行）'] }] }
+    if (q.id.startsWith('coding-lisp-')) return { answers: [{ id: q.id, selected: ['使う'] }] }
+    if (q.id === 'execution-mode') return { answers: [{ id: q.id, selected: ['通常実行'] }] }
     if (q.id.startsWith('lisp-hot-')) return { answers: [{ id: q.id, selected: [q.intent.approve] }] }
     throw new Error(`Unexpected admission question: ${JSON.stringify(q)}`)
   })
@@ -223,7 +225,7 @@ test('Lisp selected during initial admission executes shared functions without s
       const block = nativeToolResults(request.messages).at(-1)
       return JSON.parse(block.content.find((b: any) => b.type === 'text').text)
     }
-    f.responses.push(f.mock.toolCallResponse('prepare-initial-lisp', 'prepare_requested_work', { taskType: 'debug' }),
+    f.responses.push(f.mock.toolCallResponse('prepare-initial-lisp', 'prepare_requested_work', { taskType: 'debug' }), ...codingPrelude(f.mock, 'initial'),
       f.mock.toolCallResponse('initial-lisp', 'lisp_describe', { operationId: 'initial-guide' }),
       f.mock.toolCallResponse('initial-contract', 'lisp_hot_contract', { operationId: 'initial-contract', name: 'add-one', description: 'Add one',
         inputSchema: { type: 'integer' }, outputSchema: { type: 'integer' }, properties: [{ input: 1, expected: 2 }] }),
@@ -241,15 +243,15 @@ test('Lisp selected during initial admission executes shared functions without s
         assert.equal(resultOf(request).value, 42, JSON.stringify(resultOf(request)))
         return f.mock.toolCallResponse('legacy-eval', 'lisp_eval', { operationId: 'legacy-eval', code: '(+ 20 22)' })
       }, f.mock.textResponse('Verified.'))
-    await f.turn('Fix the failing implementation in src/main.js and verify that its tests pass.')
-    assert.equal(f.model.requests.length, 7, JSON.stringify(f.agent.session.snapshotEvents().slice(-6)))
+    await f.turn('Fix the failing implementation in src/main.js and verify that its tests pass. 通常実行で。')
+    assert.equal(f.model.requests.length, 9, JSON.stringify(f.agent.session.snapshotEvents().slice(-6)))
     assert.ok(f.model.requests[0].tools.some((tool: any) => tool.name === 'prepare_requested_work'))
-    for (const request of f.model.requests.slice(1)) {
+    for (const request of f.model.requests.slice(3)) {
       requireBody(request, 'kiokuko-lisp')
       assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
     }
     assert.equal(resultOf(f.model.requests.at(-1)).ok, true, JSON.stringify(resultOf(f.model.requests.at(-1))))
-    assert.equal(asked.filter(id => id === 'lisp-coding-mode').length, 1)
+    assert.equal(asked.filter(id => id.startsWith('coding-lisp-')).length, 1)
   } finally { await f.close() }
 })
 
@@ -285,7 +287,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
       assert.equal(result.data, 'a'.repeat(2000)); assert.equal(result.nextOffset, 2000)
       return f.mock.textResponse('適用と結果取得を確認しました。')
     })
-    await f.turn('Use protected Lisp to update a.txt and b.txt, inspect the output, and verify the recorded changes.')
+    await f.turn('Save the requested notes in a.txt and b.txt using protected Lisp, inspect the output, and verify the recorded changes.')
     assert.equal(approvals, 1); assert.match(observedDetail, /a\.txt/u); assert.match(observedDetail, /b\.txt/u)
     assert.match(observedDetail, /-old-a\n\+new-a/u); assert.match(observedDetail, /-old-b\n\+new-b/u)
     const before = (await stat(join(f.dir, 'a.txt'))).mtimeMs
@@ -304,7 +306,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
       assert.equal(receipts.length, 2); assert.ok(receipts.every((r: any) => r.state === 'APPLIED'))
       return f.mock.textResponse('再開後も再適用せず履歴を確認できました。')
     })
-    await f.turn()
+    await f.turn('Inspect the recorded Lisp operations and verify their exact replay.')
     requireBody(f.model.requests[firstAfterRecovery], 'kiokuko-lisp')
     assert.equal(approvals, 1); assert.equal((await stat(join(f.dir, 'a.txt'))).mtimeMs, before)
     assert.equal(await readFile(join(f.dir, 'a.txt'), 'utf8'), 'new-a'); assert.equal(await readFile(join(f.dir, 'b.txt'), 'utf8'), 'new-b')

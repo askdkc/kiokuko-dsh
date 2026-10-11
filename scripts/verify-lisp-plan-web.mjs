@@ -1,4 +1,4 @@
-// Packed Kiokuko, real native Plan tools and Web approval UI; disposable profile, no model calls.
+// Packed Kiokuko, native agent-loop Plan tools and Web approval UI; scripted local generation.
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from 'node:fs/promises'
 import { spawn, execFile } from 'node:child_process'
@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
+import { transform } from 'esbuild'
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
 const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-plan-web-')))
 const project = join(base, 'project'), receipts = join(base, 'receipts.jsonl')
@@ -24,27 +25,33 @@ try {
   console.log('Installing packed fixture')
   await exec(dsh, ['plugin', '--profile', 'web', 'add', join(base, JSON.parse(packed.stdout)[0].filename), '--force'], { cwd: project, env, timeout: 120000, maxBuffer: 16 * 1024 ** 2 })
   const fixture = join(base, 'fixture.mjs')
+  const mockPath = join(base, 'mock.mjs')
+  await writeFile(mockPath, (await transform(await readFile(join(root,'tests/dsh/helpers/native-mock.ts'),'utf8'), {loader:'ts',format:'esm'})).code)
   await writeFile(fixture, `import {appendFile} from 'node:fs/promises'; import {randomUUID} from 'node:crypto';
-import {agentEvents} from ${JSON.stringify(pathToFileURL(join(root,'tests/fixtures/dsh-runtime/node_modules/@deepseek-ai/dsh-agent/lib/index.js')).href)};
-export const name='lisp-plan-fixture'; export const inject=['workspaceRegistry','commands','tools','agents','sessionProjections'];
+import * as llm from ${JSON.stringify(pathToFileURL(join(root,'tests/fixtures/dsh-runtime/node_modules/@deepseek-ai/dsh-llm/lib/index.js')).href)};
+import {nativeMock,nativeToolResults} from ${JSON.stringify(pathToFileURL(mockPath).href)};
+export const name='lisp-plan-fixture'; export const inject=['workspaceRegistry','commands','tools','agents','sessionProjections','llm'];
 export async function apply(ctx){
+const mock=nativeMock(llm),responses=[];ctx.llm.registerAdapter(['plan-fixture'],new mock.MockAdapter(responses));
 await ctx.workspaceRegistry.create(${JSON.stringify(project)},'Lisp Plan verification');
-ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan acceptance without a model',input:{hint:'seed | enable | start | question | keep | approve'},handler:async request=>{
+ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan acceptance with scripted generation',input:{hint:'seed | enable | start | question | keep | approve'},handler:async request=>{
  const mode=request.rawInput.trim(); const agent=ctx.agents.get(request.agent.id); let result;
- if(mode==='seed'){agent.session.append('user/message',{id:randomUUID(),role:'user',content:[{type:'text',text:'Plan fixture'}],source:{kind:'user'}},{surfaceOp:'append'});await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode})+'\\n');return {kind:'success',text:'Ready'};}
+ if(mode==='seed'){responses.push(mock.textResponse('Plan fixture ready'));agent.followup(llm.createUserMessage({content:[{type:'text',text:'Plan fixture'}],source:{kind:'user'}}));await agent.whenIdle();await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode})+'\\n');return {kind:'success',text:'Ready'};}
  if(mode==='enable'||mode==='start'){const executed=await ctx.commands.execute(agent,mode==='enable'?'/kioku-lisp enable-task':'/plan',[],request.signal);await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode,result:executed.result})+'\\n');return {kind:'success',text:'Recorded '+mode};}
  const state=()=>ctx.sessionProjections.stateOf(agent.session,'plan');
  const name=mode==='question'?'ask_user_question':'exit_plan_mode';
  const args=mode==='question'?{questions:[{id:'choice',question:'Plan preference?',options:[{label:'Yes'},{label:'No'}]}]}:{plan:'# Lisp Plan acceptance\\n\\nPreserve protected effects.'};
- result=await ctx.tools.execute({name,arguments:args,callId:randomUUID(),agent:agent,signal:request.signal});
- const before=state();
- if(mode==='approve'&&!result.isError) await agentEvents(ctx,agent).waterfall('agent/pre-step',{messages:[],turn:1,step:1,signal:request.signal},async()=>({kind:'enter',messages:[]}));
- await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode,isError:result.isError,value:result.value,content:result.content,before,after:state()})+'\\n');
+ const before=state(),callId=randomUUID();let settled;
+ const off=ctx.on('tools/result',(execution,value)=>{if(execution.callId===callId)settled=value});
+ responses.push(...mock.prepareWork([mock.toolCallResponse(callId,name,args),(input)=>{result=nativeToolResults(input.messages).find(value=>value.toolCallId===callId);return mock.textResponse('Plan fixture recorded '+mode)}],'research',randomUUID()));
+ try{agent.followup(llm.createUserMessage({content:[{type:'text',text:'Plan the repository workflow using Lisp. Do not implement changes. 通常実行で。'}],source:{kind:'user'}}));await agent.whenIdle();}finally{off()}
+ if(!result||!settled||responses.length)throw Error('Incomplete native Plan fixture '+mode);
+ await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode,isError:settled.isError,value:settled.value,content:result.content,before,after:state()})+'\\n');
  return {kind:'success',text:'Recorded '+mode};
 }});}
 `)
   const patch = join(base, 'patch.yml')
-  await writeFile(patch, `- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n    lisp: {enabled: true}\n- insert:\n    - id: lisp-plan-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, tools, agents, sessionProjections]\n`)
+  await writeFile(patch, `- id: session-title-llm\n  disabled: true\n- id: agent-default-model\n  config: {provider: plan-fixture, model: mock}\n- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n    lisp: {enabled: true}\n- insert:\n    - id: lisp-plan-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, tools, agents, sessionProjections, llm]\n`)
   host = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', '0'], { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] })
   for (const stream of [host.stdout, host.stderr]) stream.on('data', c => { logs += c })
   const url = await poll(() => logs.match(/https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/)?.[0])
@@ -53,13 +60,18 @@ ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan accepta
   await page.goto(url)
   const welcome = page.getByRole('button', { name: 'Continue', exact: true })
   const credentials = page.getByRole('dialog', { name: 'Add an API key to get started', exact: true })
+  await page.addLocatorHandler(credentials, () => credentials.getByRole('button', { name: 'Configure later', exact: true }).click())
   await welcome.or(credentials).first().waitFor()
   if (await welcome.isVisible()) await welcome.click()
-  await credentials.getByRole('button', { name: 'Configure later', exact: true }).click()
-  await credentials.waitFor({ state: 'hidden' })
+  const conversation = page.locator('[data-conversation-content]:visible').first()
+  const previous = await poll(() => conversation.getAttribute('data-conversation-session'))
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
-  const editor = page.locator('[contenteditable="true"]:visible').first()
-  const command = async text => { await editor.fill(text); await editor.press('Enter') }
+  await poll(async () => {
+    const current = await conversation.getAttribute('data-conversation-session')
+    return current && current !== previous && await conversation.getAttribute('data-content-phase') !== 'settling'
+  })
+  const editor = conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first()
+  const command = async text => { await editor.fill(text); await page.getByRole('button', { name: 'Send message', exact: true }).click() }
   const records = async () => (await readFile(receipts, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse)
   await command('/lisp-plan-fixture seed')
   await poll(async () => (await records()).find(r => r.mode === 'seed'))
@@ -83,8 +95,8 @@ ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan accepta
   await page.keyboard.press('3'); await page.keyboard.press('Enter')
   const approved = await poll(async () => (await records()).find(r => r.mode === 'approve'))
   assert.equal(approved.isError, false, JSON.stringify(approved)); assert.equal(approved.value.approved, true); assert.equal(approved.after.active, false)
-  console.log(JSON.stringify({ result: 'passed', checks: ['native question', 'keep planning', 'approve'], package: 'packed', modelCalls: 0 }))
-} catch (e) { console.error(logs.slice(-5000)); if (page) console.error((await page.locator('body').innerText().catch(() => '')).slice(-4000)); throw e }
+  console.log(JSON.stringify({ result: 'passed', checks: ['native question', 'keep planning', 'approve'], package: 'packed', externalModelCalls: 0 }))
+} catch (e) { console.error((await readFile(receipts,'utf8').catch(()=>'' )).slice(-4000)); console.error(logs.slice(-5000)); if (page) console.error((await page.locator('body').innerText().catch(() => '')).slice(-4000)); throw e }
 finally {
   await browser?.close()
   if (host && host.exitCode === null) { host.kill('SIGTERM'); await Promise.race([new Promise(r => host.once('exit', r)), new Promise(r => setTimeout(r, 5000))]); if (host.exitCode === null) host.kill('SIGKILL') }

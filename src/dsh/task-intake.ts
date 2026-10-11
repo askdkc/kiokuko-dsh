@@ -66,6 +66,8 @@ import type { SkillDiscoverySummary, SkillDiscoveryMode } from '../skills/types.
 import { canonicalDirectory } from '../repository/detect-root.js';
 import { ennoStateForPreparedTask } from '../enno-oduno/service.js';
 import { initializeTaskCompletion, type CompletionMode } from './task-completion.js';
+import { codingIntent } from './coding-workflow/intent.js';
+import { initializeCodingWorkflowInTransaction } from './coding-workflow/store.js';
 import { prepareEmbeddingSearchRuntime } from '../embedding/runtime.js';
 import type { EmbeddingRuntime } from '../embedding/types.js';
 import { MemoryRetrievalConfig, timeConstraintForRequest, validateMemoryTimeConstraint, type MemoryTimeConstraint } from '../memory/retrieval-contracts.js';
@@ -905,6 +907,11 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
     deferTaskTypeInference: input.deferTaskTypeInference === true,
     onRunCreatedInTransaction: ({ database: transactionDatabase, runId, workspace, dshSessionId, now }) => {
       if (input.completionMode) initializeTaskCompletion(transactionDatabase, runId, input.completionMode);
+      if (input.sessionOwnership && codingIntent(input.task)) {
+        initializeTaskCompletion(transactionDatabase, runId, 'enforce');
+        initializeCodingWorkflowInTransaction(transactionDatabase, { runId, sessionId: dshSessionId, requestId,
+          repositoryRoot: project.repositoryRoot, task: input.task });
+      }
       if (input.executionSelection) initializeExecutionSelection(transactionDatabase, runId);
       if (input.sessionOwnership || input.deepSelection) claimExecutionOwner(transactionDatabase, {
         sessionId: dshSessionId, workspace, mode: input.deepSelection ? 'deep-thinker' : 'normal',

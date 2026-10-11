@@ -22,8 +22,8 @@ const input = z.discriminatedUnion('action', [
 ])
 const transport = z.object({ action: z.enum(['status', 'bind']), criterionId: z.string().optional(),
   method: z.object({ kind: z.enum(['native_command', 'enno_verifier']), command: z.string().optional(),
-    cwd: z.string().optional(), sourcePaths: z.array(z.string()).optional(), verifierId: z.string().optional(),
-    assertion: z.enum(['exit_zero', 'selected_tests_pass']).optional() }).strict().optional(),
+    cwd: z.string().optional(), sourcePaths: z.array(z.string()).optional(), verifierId: z.string().optional(), workUnitId: z.string().optional(),
+    assertion: z.enum(['exit_zero', 'selected_tests_pass','output_matches','artifact_matches']).optional(),expectedOutput:z.string().optional(),artifactPath:z.string().optional(),artifactSha256:z.string().optional() }).strict().optional(),
 }).strict()
 
 /** A model proposes a check; the host owns identity, approval, observation and verdict. */
@@ -36,7 +36,7 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
     output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args: unknown, execution: NativeExecution) => {
       const identity = host.resolve(execution)
-      if (!identity || execution.name !== 'task_completion' || execution.parent !== undefined) {
+      if (!identity || execution.name !== 'task_completion') {
         throw new KiokukoError('CONFLICT', 'Task completion requires an exact active native run')
       }
       execution.signal.throwIfAborted()

@@ -1,3 +1,4 @@
+import {fixtureDefinition,toolValue} from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
@@ -140,9 +141,11 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
         const chunks = child ? mock.textResponse('CHILD_COMPLETE')
           : mode === 'fork' && parentStep === 1 ? mock.textResponse('PARENT_SEED')
           : parentStep === (mode === 'fork' ? 2 : 1) ? mock.toolCallResponse('prepare-parent', TASK_PREPARE_TOOL, { taskType: 'build' })
-          : mode === 'fork' && parentStep === 3 ? tool('fork-1', 'subagent_fork', false)
-          : mode === 'parallel' && parentStep === 2 ? multi([['spawn-1', 'subagent'], ['spawn-2', 'subagent']])
-          : (mode === 'foreground' || mode === 'failure') && parentStep === 2 ? tool('spawn-1', 'subagent', false)
+          : parentStep === (mode === 'fork' ? 3 : 2) ? mock.toolCallResponse('goal-status','coding_workflow',{action:'status'})
+          : parentStep === (mode === 'fork' ? 4 : 3) ? mock.toolCallResponse('goal-propose','coding_workflow',{action:'propose',expectedRevision:toolValue(options,'goal-status').revision,definition:fixtureDefinition()})
+          : mode === 'fork' && parentStep === 5 ? tool('fork-1', 'subagent_fork', false)
+          : mode === 'parallel' && parentStep === 4 ? multi([['spawn-1', 'subagent'], ['spawn-2', 'subagent']])
+          : (mode === 'foreground' || mode === 'failure') && parentStep === 4 ? tool('spawn-1', 'subagent', false)
           : mock.textResponse('PARENT_COMPLETE')
         for (const chunk of chunks) yield chunk
       }
@@ -155,7 +158,7 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
       questions.push(request)
       if (request.agent?.session?.header?.origin === 'subagent') throw new Error('Kiokuko asked a generic child')
       return { answers: request.questions.map((question: any) => ({ id: question.id,
-        selected: [question.id === 'enno-execution-mode' ? '通常実行' : question.options?.[0]?.label ?? 'build'] })) }
+        selected: [question.id.startsWith('coding-lisp-') ? '使わない' : question.id === 'enno-execution-mode' ? '通常実行' : question.options?.[0]?.label ?? 'build'] })) }
     }
     adapter = createDshHostAdapter(ctx as typeof cordis.Context, {
       repositoryRoot: repository, databasePath: join(temporary, 'kiokuko.sqlite3'),

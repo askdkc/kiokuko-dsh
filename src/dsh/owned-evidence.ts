@@ -1,5 +1,6 @@
 import type { SqliteDatabase } from '../db/adapter.js'
 import { applicationSourceDigest } from '../memory/application.js'
+import { completionSourceDigest } from './task-completion.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import type { ReviewEvidence } from '../memory/review/contracts.js'
 import type { ExecutionReceipt } from './owned-execution.js'
@@ -50,7 +51,7 @@ export function memoryExecutionEvidence(db:SqliteDatabase,entryId:string,revisio
       const checks=(receipt.checks??[]).map(check=>{
         const observed=db.prepare('SELECT outcome FROM dsh_completion_executions WHERE run_id=? AND call_id=?').get<{outcome:string}>(receipt.runId,receipt.operationId)
         let current:string|undefined
-        try{current=applicationSourceDigest(receipt.repositoryRoot,check.sourcePaths)}catch{/* missing sources remain unknown */}
+        try{current=completionSourceDigest(db,receipt.runId,receipt.repositoryRoot,check.sourcePaths)}catch{/* missing sources remain unknown */}
         return {...check,state:current===undefined?'unknown':current!==check.sourceDigest?'stale':observed?.outcome??check.outcome}
       })
       return {evidenceRef:receipt.evidenceRef,runId:receipt.runId,sessionId:receipt.sessionId,generation:receipt.generation,

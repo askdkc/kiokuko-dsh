@@ -34,9 +34,11 @@
     "migrations/032_memory_evidence.sql",
     "migrations/033_memory_forgetting.sql",
     "migrations/034_agenticreplay.sql",
-    "migrations/035_owned_execution.sql"
+    "migrations/035_owned_execution.sql",
+    "migrations/036_coding_workflow.sql"
   ],
   "runtimeAssets": [
+    "lisp/supervisor.mjs",
     "dist/dsh/models/vendor/THIRD_PARTY_NOTICES.txt",
     "dist/models-client.cjs",
     "dist/models-client.d.ts",

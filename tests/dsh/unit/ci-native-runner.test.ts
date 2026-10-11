@@ -61,10 +61,11 @@ test('native CI runs every suite with the canonical current fixture', async () =
     assert.equal(new Set(repeated).size, repeated.length)
     const lisp = nativeCiPlan('lisp', environment)
     assert.equal(lisp.env.KIOKUKO_REQUIRE_LISP_RUNTIME, '1')
-    assert.ok(lisp.args.slice(1).every((file: string) => ['tests/dsh/unit/lisp/', 'tests/dsh/integration/lisp/'].some(prefix => file.startsWith(prefix))))
-    for (const browser of ['browser-approval', 'browser-shortcuts']) {
+    assert.ok(lisp.args.slice(1).every((file: string) => file === 'tests/dsh/e2e/coding-workflow-native.test.ts' || ['tests/dsh/unit/lisp/', 'tests/dsh/integration/lisp/'].some(prefix => file.startsWith(prefix))))
+    assert.ok(lisp.args.includes('tests/dsh/e2e/coding-workflow-native.test.ts'), 'Lisp jobs require the real coding session');
+    for (const browser of ['browser-approval', 'browser-shortcuts', 'browser-coding']) {
       const plan = nativeCiPlan(browser, environment)
-      assert.deepEqual(plan.args, [browser === 'browser-approval' ? 'scripts/verify-lisp-approval-web.mjs' : 'scripts/verify-shortcuts-web.mjs'])
+      assert.deepEqual(plan.args, [browser === 'browser-approval' ? 'scripts/verify-lisp-approval-web.mjs' : browser === 'browser-coding' ? 'scripts/verify-coding-workflow-web.mjs' : 'scripts/verify-shortcuts-web.mjs'])
       assert.equal(plan.env.KIOKUKO_LISP_APPROVAL_RUNTIME, fixture)
       assert.equal(plan.env.KIOKUKO_SHORTCUT_RUNTIME, fixture)
     }
@@ -74,4 +75,18 @@ test('native CI rejects old selectors and unknown suites before constructing a l
   for (const suite of ['pinned', 'current', '../outside', '', '../../outside']) {
     assert.throws(() => nativeCiPlan(suite, {}), /Usage:/)
   }
+})
+test('coding-session CI provides Lisp on each supported platform before mandatory execution', async () => {
+  const workflow = parse(await readFile('.github/workflows/ci.yml', 'utf8'))
+  for (const [jobName, installation] of [['verify', /apt-get install[^\n]*sbcl/u], ['dsh-runtime-macos', /brew install sbcl/u]] as const) {
+    const job = workflow.jobs[jobName]
+    assert.equal(job.env.KIOKUKO_REQUIRE_LISP_RUNTIME, '1', jobName)
+    const install = job.steps.findIndex((step: any) => installation.test(step.run ?? ''))
+    const execution = job.steps.findIndex((step: any) => /npm (?:test|run test:e2e:dsh)/u.test(step.run ?? ''))
+    assert.ok(install >= 0 && execution > install, `${jobName} must install its actual runtime before execution`)
+  }
+  const matrixSteps = workflow.jobs['lisp-runtime'].steps
+  assert.ok(!matrixSteps.some((step: any) => /^sudo apt-get/u.test(step.run ?? '')), 'A macOS matrix job cannot execute an unconditional Linux install')
+  const browserRuns = workflow.jobs['shortcut-browser'].steps.map((step: any) => step.run)
+  for (const command of ['npm run test:ci:coding:web', 'npm run test:lisp:approval:web', 'npm run test:lisp:plan:web']) assert.ok(browserRuns.includes(command), command)
 })

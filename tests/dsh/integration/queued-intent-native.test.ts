@@ -1,4 +1,5 @@
 /** Real queued native messages; scripted generation/provider responses prove routing, not model accuracy. */
+import { CODING_READ_ONLY } from '../../../src/dsh/coding-workflow/intent.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync, realpathSync } from 'node:fs'
@@ -60,7 +61,7 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
         return { answers: [{ id, selected: [id === 'lisp-coding-mode' ? 'Lispモードを使わない' : '通常実行'] }] }
       } }) } }); fibers.push(questions); await questions
       ctx.on('agent/error', (event: any) => errors.push(String(event.error)))
-      ctx.tools.register({ name: 'fixture_probe', description: 'Harmless read-only fixture probe.', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => { probes++; return 'probe result' } })
+      ctx.tools.register({ name: 'fixture_probe', [CODING_READ_ONLY]: true, description: 'Harmless read-only fixture probe.', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => { probes++; return 'probe result' } })
       const mock = nativeMock(llm), provider = new mock.MockAdapter(instructions.flatMap((_, index) => {
         const work = [mock.toolCallResponse(`queued-probe-${index}`, 'fixture_probe', {}), mock.textResponse('QUEUED_NATIVE_RESULT')]
         return intakeMode === 'on-demand' || host === 'full-laya-abstain' || host === 'full-laya-unavailable' ? mock.prepareWork(work, 'debug', `queued-prepare-${index}`) : work
@@ -77,7 +78,7 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       for (const text of instructions) handle.agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }))
       await handle.agent.whenIdle()
       assert.deepEqual(errors, [], JSON.stringify(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message))); assert.equal(probes, instructions.length, JSON.stringify({ asked, results: handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message) })); assert.ok(!asked.includes('taskType'))
-      assert.deepEqual(asked.filter(id => id === 'lisp-coding-mode'), ['lisp-coding-mode'], 'inference does not waive Lisp opt-in')
+      assert.deepEqual(asked.filter(id => id.startsWith('coding-lisp-')), [], 'read-only probes cannot ask before Goal/items/criteria exist')
       assert.ok(handle.agent.session.snapshotEvents().some((event: any) => event.type === 'assistant/message' && JSON.stringify(event.data).includes('QUEUED_NATIVE_RESULT')))
       const db = openConnection(databasePath)
       try {

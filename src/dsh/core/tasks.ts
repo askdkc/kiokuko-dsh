@@ -26,7 +26,11 @@ import type { TaskProfile } from '../../akinator/types.js'
 import { MemoryRetrievalConfig, timeConstraintForRequest, type MemoryRetrievalConfig as MemoryRetrievalConfiguration } from '../../memory/retrieval-contracts.js'
 import type { MemoryTimeConstraint } from '../../memory/retrieval-contracts.js'
 import { reportMemoryRetrievalObservation } from '../memory-retrieval-observer.js'
-import { initializeTaskCompletion } from '../task-completion.js'
+import { initializeTaskCompletion, assessTaskCompletion, taskCompletionBlocksClose } from '../task-completion.js'
+import { initializeCodingWorkflow, readCodingWorkflow } from '../coding-workflow/store.js'
+import { readAkinatorSession, readRunIntakeLink } from '../../akinator/store.js'
+import { codingIntent } from '../coding-workflow/intent.js'
+import { stopCodingWorkflow, synchronizeCodingWorkflow } from '../coding-workflow/service.js'
 import { saveExecutionFrame, updateExecutionFrame } from '../execution-frame.js'
 
 export interface CoreTaskInput {
@@ -66,6 +70,7 @@ function finishCoreTask(db: SqliteDatabase, task: CoreTaskIdentity, outcome: Cor
     if (!run || run.workspace !== task.workspace || run.dshSessionId !== task.sessionId) throw new Error('Task completion identity mismatch')
     const owner = readExecutionOwner(db, task.sessionId)
     if (owner && (owner.run_id !== task.runId || owner.start_id !== task.requestId || owner.workspace !== task.workspace || owner.mode !== 'normal')) throw new Error('Task completion owner mismatch')
+    if (outcome === 'completed' && taskCompletionBlocksClose(assessTaskCompletion(db, task.runId))) throw new Error('Required coding Goal evidence is unresolved')
     if (run.status === 'active' || run.status === 'intake' && outcome !== 'completed') store.updateRunStatusInTransaction(task.runId, outcome === 'completed' && !memoryApplicationStatus(db, task.runId).ready ? 'interrupted' : outcome)
     else if (!TERMINAL_RUN_STATUSES.some(status => status === run.status)) throw new Error('Task is not ready for completion')
     db.prepare("DELETE FROM dsh_execution_owners WHERE dsh_session_id=? AND run_id=? AND start_id=? AND workspace=? AND mode='normal'").run(task.sessionId, task.runId, task.requestId, task.workspace)
@@ -92,6 +97,26 @@ function recallView(db: SqliteDatabase, context: ScopedContextResult | null): Sc
 export class CoreTasks {
   constructor(private readonly runtime: DshCoreRuntime, private readonly answerer?: DshIntakeAnswerer, private readonly moduleIds: readonly string[] = [], private readonly decisions?: DecisionService,
     private readonly memoryRetrieval: MemoryRetrievalConfiguration = MemoryRetrievalConfig.parse({})) {}
+  /** Recover only the session's exact active coding owner after explicit human continuation. */
+  async resume(input: CoreTaskInput): Promise<CoreTask> {
+    input.signal.throwIfAborted()
+    return this.runtime.withDatabase(async db => {
+      const owner = readExecutionOwner(db, input.sessionId)
+      if (!owner?.run_id || owner.mode !== 'normal') throw new Error('No resumable coding task owner')
+      const run = new LedgerStore(db).readRun(owner.run_id), coding = readCodingWorkflow(db, owner.run_id)
+      if (run?.status !== 'active' || !coding || coding.sessionId !== input.sessionId || coding.repositoryRoot !== realpathSync(input.cwd)
+        || ['completed', 'cancelled', 'superseded'].includes(coding.state)) throw new Error('Coding task is not resumable')
+      assertCapabilityCatalogBinding(run.metadata, input.capabilities)
+      const link = readRunIntakeLink(db, { workspace: owner.workspace, runId: owner.run_id })
+      const intake = readAkinatorSession(db, { workspace: owner.workspace, sessionId: link.sessionId })
+      if (intake.status === 'active') throw new Error('Resumable coding task has unfinished intake')
+      const resolution = resolveCapabilities({ task: coding.request, profile: intake.profile, recommendedTags: link.recommendedTags,
+        capabilities: input.capabilities, memoryUse: 'none' })
+      if (hasBlockingRequiredCapability(resolution)) throw new Error('Resumed coding task lacks required capabilities')
+      return Object.freeze({ requestId: owner.start_id, sessionId: input.sessionId, runId: owner.run_id, workspace: owner.workspace,
+        cwd: realpathSync(input.cwd), profile: intake.profile, admitted: true, memory: null, context: null, capabilities: input.capabilities })
+    })
+  }
   async prepare(input: CoreTaskInput): Promise<CoreTask> {
     const retrievalAnchorTimeMs = Date.now()
     input.signal.throwIfAborted()
@@ -150,7 +175,8 @@ export class CoreTasks {
           }
         }
         input.signal.throwIfAborted()
-        if(admitted){initializeTaskCompletion(db,identity.runId,'shadow');saveExecutionFrame(db,identity.runId,updateExecutionFrame(undefined,project.repositoryRoot,input.task))}
+        if(admitted){initializeTaskCompletion(db,identity.runId,'shadow');saveExecutionFrame(db,identity.runId,updateExecutionFrame(undefined,project.repositoryRoot,input.task))
+          if(codingIntent(input.task))initializeCodingWorkflow(db,{...identity,repositoryRoot:project.repositoryRoot,task:input.task})}
         if (admitted) bindMemoryApplication(db, { ...identity, repositoryRoot: project.repositoryRoot }, state.session.profile, memory,
           memoryRetrievalStatus(db, identity.workspace, memory, deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities).contextWithheld))
         return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted, memory: recallView(db, memory), context: memory, capabilities: input.capabilities, selectedSkills })
@@ -196,7 +222,7 @@ export class CoreTasks {
   }
   async finish(task: CoreTaskIdentity & { admitted: boolean }, outcome: CoreTaskOutcome): Promise<void> {
     if (!task.admitted && outcome === 'completed') throw new Error('Task is not admitted')
-    await this.runtime.withDatabase(db => finishCoreTask(db, task, outcome))
+    await this.runtime.withDatabase(db => { if(outcome==='completed')synchronizeCodingWorkflow(db,task.runId);else if(outcome==='cancelled')stopCodingWorkflow(db,task.runId,'cancelled');finishCoreTask(db, task, outcome) })
   }
 }
 

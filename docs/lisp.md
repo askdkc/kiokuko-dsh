@@ -74,15 +74,9 @@ chooses the type; it does not grant permission or drop other requested actions.
 Missing context, explicitly undecided alternatives, envelope/provider capacity
 rejection and model abstention defer classification. Native adapters let the
 ordinary model infer advisory intent or ask a concrete clarification; they do not
-repeat the generic category dialog merely because the classifier abstained. The host asks whether to use Lisp
-before coding begins; it resolves unclear task intent first. Both enable and decline choices
-persist for that session, including after a restart. Conversation and review
-requests do not trigger this prompt. Free text returns to conversation without
-starting Lisp; cancellation preserves pending work; startup failure leaves ordinary coding available.
+repeat the generic category dialog merely because the classifier abstained. Classification does not authorize implementation. For an explicit coding request the agent defines the Goal, implementation items and their observable criteria, then the host asks whether to use Lisp for that task. Both yes and no persist for the task and scope across restart. Conversation, review and plan-only requests do not trigger this prompt. Closing, free text without a clear choice or a disconnected question leaves implementation pending. Cancellation preserves the prepared work. A selected Lisp startup failure remains a recoverable blocker.
 
-Choosing Lisp also selects normal execution; Enno requires choosing not to use
-Lisp. The prompt is available only when `lisp.enabled` is true. To enable Lisp
-manually or inspect its state, use these commands in the desired DSH session:
+Normal/Enno execution mode and Lisp choice are separate. The task question remains available when the Lisp module is disabled; no needs no Lisp runtime, while yes requires the enabled module and working SBCL. To explicitly change the current task's Lisp route or inspect its state, use these commands in the desired DSH session:
 
 ```text
 /kioku-lisp enable
@@ -92,7 +86,7 @@ manually or inspect its state, use these commands in the desired DSH session:
 This enables the Lisp tools and supplies the bundled `kiokuko-lisp` Skill.
 Existing DSH `read`, `glob`, `grep` and `skill` tools remain available under native
 session permissions, so project files and applicable Skills can be inspected.
-File changes can use owned native tools or Lisp proposals. Ordinary writes/edits do not request approval; destructive source/data deletion retains a concrete review. Lisp startup/recovery failures do not block ordinary tools.
+File changes can use owned native tools or Lisp proposals. Ordinary writes/edits do not request approval; destructive source/data deletion retains a concrete review. For a coding task with a saved yes, recover Lisp or explicitly choose another task route before continuing implementation.
 The protected agent uses native tool presentation even in a PTC deployment.
 
 `sbclPath` can point to an explicit installed SBCL launcher. Its runtime files must
@@ -470,3 +464,7 @@ is exercised on macOS; Linux protection remains a separate native-suite check. A
 is not evidence that the remote job passed.
 
 Clean installation and platform status: [code intelligence setup](code-intelligence.md).
+
+## Coding task choice and recovery
+
+For a new coding task, `coding_workflow` first defines and displays the Goal, implementation items and observable conditions. The host then asks whether to use Lisp. Existing enabled settings never imply yes. Closing the question leaves it pending and `coding_workflow next` reopens the same question. Explicit continuation after a host restart restores the task choice; a new task or material scope change asks again. A saved yes followed by startup failure remains a visible blocker; recover the runtime or explicitly change the task route with `/kioku-lisp disable`. No uses ordinary tools and still requires fresh item checks followed by a final user-entry Goal check. Lisp evaluation success alone is insufficient: bind `task_completion` and collect actual host process evidence. See [coding workflow](coding-workflow.md).

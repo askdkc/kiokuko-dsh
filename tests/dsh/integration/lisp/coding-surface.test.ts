@@ -59,7 +59,7 @@ for (const outcome of ['ready', 'task-ready', 'startup-failure', 'decline'] as c
       assert.equal((await commands.get('kioku-lisp').handler({ rawInput: 'enable-task', agent, signal: input.signal })).kind, 'success')
       await service.prepare(input)
       await service.prepare({ ...input, turn: 2 })
-      assert.equal(asked, 0, 'an explicit task-mode choice is retained')
+      assert.equal(asked, 1, 'a manual runtime setting is not this task’s human choice')
       assert.deepEqual([...definitions.keys()], [...LISP_TOOLS])
       assert.equal((await surface.manager.status({ sessionId: agent.session.id, agentId: agent.id, root: base }) as any).state, 'TASK_READY')
     } else if (outcome === 'startup-failure') {

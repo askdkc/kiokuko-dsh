@@ -7,6 +7,7 @@ import { canonicalContentHash } from '../serialization/validate.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import type { AkinatorTaskClassification } from './decisions/akinator-classification.js'
 import {deriveProfile} from '../akinator/domain.js'
+import { codingIntent } from './coding-workflow/intent.js'
 
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
@@ -57,7 +58,8 @@ function eventTurn(event: { data?: unknown } | undefined): number | undefined {
   return Number.isSafeInteger(data?.turn) ? data!.turn as number : undefined
 }
 /** Tool names select advice only; admission and native permissions remain authoritative. */
-function automaticPreparationType(intent: AkinatorTaskClassification, name: string): TaskType | undefined {
+function automaticPreparationType(intent: AkinatorTaskClassification, name: string, task: string): TaskType | undefined {
+  if (codingIntent(task)) return 'build'
   if (intent.taskType && intent.taskType !== 'chat') return intent.taskType
   return ['read', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name) ? 'research' : undefined
 }
@@ -151,7 +153,8 @@ export class OnDemandIntake {
         return false
       }
       if (!humanMessages(input.messages).length) throw new Error('Original human input is required before on-demand intake')
-      state.intent = await this.host.classify(input, state.task)
+      try { state.intent = await this.host.classify(input, state.task) }
+      catch { input.signal.throwIfAborted(); state.intent = { deferInference: true } }
       if(!state.intent.taskType&&!state.intent.deferInference&&!executionClarification(state.task)){
         const type=deriveProfile(state.task).taskType
         if(type==='build'||type==='debug'||type==='devops')state.intent={...state.intent,taskType:type}
@@ -293,14 +296,14 @@ export class OnDemandIntake {
         const skillReader = this.#skillReaders.get(state.input.agent)
         const skillRead = execution.name === 'skill' && skillReader !== undefined && actual.execute === skillReader && state.status === 'answer'
         const carrier = execution.name === 'run_code' && state.status !== 'prepared' ? preparationCarrier(execution.arguments) : undefined
-        if (execution.name === 'run_code' && state.status !== 'prepared' && !carrier && !automaticPreparationType(state.intent, execution.name)) return denied('Clarify the requested work before code execution.')
+        if (execution.name === 'run_code' && state.status !== 'prepared' && !carrier && !automaticPreparationType(state.intent, execution.name, state.task)) return denied('Clarify the requested work before code execution.')
         if (carrier) {
           if (state.status !== 'answer' || state.preparationCalls.has(execution.callId)) return denied('Preparation carrier is not current')
         } else if (execution.name === TASK_PREPARE_TOOL) {
           if (actual.execute !== definition.execute || !(state.status === 'answer' || state.existing && state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) || state.preparationCalls.has(execution.callId)) return denied('Task preparation is not current')
         } else if (!skillRead) {
           if (state.status !== 'prepared') {
-            const type = automaticPreparationType(state.intent, execution.name)
+            const type = automaticPreparationType(state.intent, execution.name, state.task)
             if (!type) return denied('Before tool-backed work, call prepare_requested_work with its advisory taskType. Clarify unknown actions or targets first; the original request is preserved.')
             await this.prepare(state, type, execution.signal)
           }

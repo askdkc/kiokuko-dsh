@@ -48,6 +48,8 @@ import { DshExecutionSupport, type ExecutionBinding } from '../execution-support
 import { resetLoopGuardForUserInTransaction } from '../loop-guard.js'
 import type { NativeSkills, NativeTools, NativeSessions, NativeAgents, AdapterContext } from './native-events.js'
 import type { TurnRecord } from './turn-state.js'
+import { codingContinuation } from '../coding-workflow/intent.js'
+import { readCodingWorkflow } from '../coding-workflow/store.js'
 
 interface AdmissionDependencies {
   readonly completionMode: import('../task-completion.js').CompletionMode
@@ -268,14 +270,6 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
         return result
       }
       setSelection(runId, stored)
-      const lispCoding = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
-      if (stored.value.mode === 'pending' && !stored.value.discussion && event.nativeAgent && lispCoding?.enabled(event.nativeAgent)) {
-        if (explicitExecutionMode(event.task) === 'enno') throw new ExecutionSelectionPending('Lispモードでは役小角を使えません。/kioku-lisp disable で解除してから選択してください。')
-        stored = await runtime.withDatabase(db => writeExecutionSelection(db, runId, stored!.revision, {
-          mode: 'normal', status: 'ready', ...(stored!.value.ordinaryModel ? { ordinaryModel: stored!.value.ordinaryModel } : {}),
-        }))
-        setSelection(runId, stored)
-      }
       const selected = await selectExecution({
         task: event.task, turn: event.turn, signal: event.signal, stored, routes: modelRoutes ?? [],
         ...(event.nativeAgent ? { agent: event.nativeAgent } : {}),
@@ -389,7 +383,9 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
         const previousWasChat = previous.prepared.intake.profile.taskType === 'chat'
         const superseded = previous.prepared.ennoOduno.applicable && supersedesUnstartedEnno(event, previousState)
         const selection = getSelection(previous.runId)?.value
-        const continuePrevious = selection && (selection.status !== 'ready' || selection.mode === 'normal' && previous.failed)
+        const coding = await runtime.withDatabase(db => readCodingWorkflow(db, previous.runId))
+        const resumeCoding = codingContinuation(event.task) && coding && !['completed', 'cancelled', 'superseded'].includes(coding.state)
+        const continuePrevious = resumeCoding || selection && (selection.status !== 'ready' || selection.mode === 'normal' && previous.failed)
           ? true : previousWasChat
           ? event.profileHints?.taskType === 'chat'
           : !superseded
@@ -616,11 +612,13 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       LEFT JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
       LEFT JOIN dsh_exploration_states AS es ON es.run_id = lr.run_id
       LEFT JOIN dsh_execution_selections AS xs ON xs.run_id = lr.run_id
+      LEFT JOIN dsh_coding_workflows AS cw ON cw.run_id = lr.run_id
       WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active'
         AND ((ec.repository_root = ? AND ec.status NOT IN ('completed', 'cancelled', 'blocked'))
           OR (ec.run_id IS NULL AND (json_extract(es.state_json, '$.paused') = 1 OR xs.run_id IS NOT NULL)))
+        AND (cw.run_id IS NULL OR (? = 1 AND json_extract(cw.snapshot_json, '$.state') NOT IN ('completed', 'cancelled', 'superseded')))
       ORDER BY lr.created_at, lr.run_id LIMIT 2
-    `).all<{ runId: string; orchestrationId: string | null }>(project.workspace, event.sessionId, project.repositoryRoot)
+    `).all<{ runId: string; orchestrationId: string | null }>(project.workspace, event.sessionId, project.repositoryRoot, codingContinuation(event.task) ? 1 : 0)
     if (candidates.length === 0) return undefined
     if (candidates.length !== 1) throw new KiokukoError('CONFLICT', 'Multiple active runs match this session; refusing to guess')
     const candidate = candidates[0]!
@@ -748,16 +746,8 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       if (classification.taskType) profile = { ...profile, taskType: classification.taskType }
       else if (deferTaskTypeInference && profile) profile = { ...profile, taskType: null }
     }
-    const lispCoding = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
-    if (lispCoding && !reviewing && bound === undefined && !previous?.prepared.ennoOduno.applicable && !delegation.isChild(payload.agent)) {
-      const grounded = resolveGroundedIntakeProfile({ task, cwd, deferTaskTypeInference, ...(profile === undefined ? {} : { profileHints: profile }) })
-      const choice = await lispCoding.prepare({ agent: payload.agent, task, taskType: grounded.profileHints.taskType,
-        turn: payload.turn, signal: payload.signal })
-      profile = { ...profile, taskType: choice.taskType, ...(choice.clarification ? { constraints: choice.clarification } : {}) }
-      deferTaskTypeInference = false
-    }
-    // Lisp changes the scoped tool surface. Bind capabilities only after its
-    // explicit selection and activation, never mutate an already-bound catalog.
+    // Coding Lisp choice belongs to the admitted Goal, after all criteria exist.
+    // Task intake never starts Lisp or interrupts an explanation with a mode question.
     const catalog = await capabilityCatalog(skills, tools, {
       agent: { id: payload.agent.id }, nativeAgent: payload.agent, cwd, signal: payload.signal,
     })

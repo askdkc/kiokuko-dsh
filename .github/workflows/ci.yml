@@ -56,7 +56,7 @@ jobs:
         run: |
           KIOKUKO_REQUIRE_LISP_RUNTIME=1 \
           KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" \
-          npm run test:lisp
+          npm run test:ci:lisp
       - name: Verify owned Node and Cargo receipts
         shell: bash
         run: |
@@ -75,6 +75,7 @@ jobs:
     timeout-minutes: 30
     env:
       KIOKUKO_REQUIRE_DSH_NATIVE: "1"
+      KIOKUKO_REQUIRE_LISP_RUNTIME: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -92,6 +93,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install actual coding Lisp runtime
+        run: sudo apt-get update && sudo apt-get install -y sbcl
 
       - name: Install DeepSeek Harness CLI
         run: |
@@ -191,6 +195,8 @@ jobs:
     name: DSH runtime smoke (macOS)
     runs-on: macos-15
     timeout-minutes: 20
+    env:
+      KIOKUKO_REQUIRE_LISP_RUNTIME: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -208,6 +214,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install actual coding Lisp runtime
+        run: brew install sbcl
 
       - name: Install DeepSeek Harness CLI
         run: |
@@ -266,6 +275,7 @@ jobs:
       - run: npm ci --prefix tests/fixtures/${{ matrix.fixture }}
       - run: npx playwright install --with-deps chromium
       - run: npm run test:models:web
+      - run: npm run test:ci:coding:web
       - run: npm run test:shortcuts:web
         env:
           KIOKUKO_SHORTCUT_RUNTIME: ${{ matrix.fixture }}
@@ -277,6 +287,7 @@ jobs:
       - run: npm run test:lisp:approval:web
         env:
           KIOKUKO_LISP_APPROVAL_RUNTIME: ${{ matrix.fixture }}
+      - run: npm run test:lisp:plan:web
 
   semantic-platform-smoke:
     name: Semantic smoke (${{ matrix.platform }})

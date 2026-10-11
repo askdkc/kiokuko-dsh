@@ -146,7 +146,7 @@ async function runCase({ scenario, variant, sources, artifact, packages, config,
     signal.addEventListener('abort', abort, { once: true })
     timeout = setTimeout(() => { timedOut = true; abort() }, Math.min(config?.maxDurationMs ?? 90000, 90000))
     const shape = scenario.expected ? `Audit stdout keys: ${Object.keys(scenario.expected).join(', ')}. Use actual runtime values, not constants.` : scenario.id === 'B03' ? 'Audit stdout: JSON {warmup: count, samples: [{arrayMs, setMs, equal}]}, with nonnegative durations.' : ''
-    const prompt = `${scenario.prompt}\nThis is plan-only. Use the enabled protected Lisp path and its declared read-only inputs/private scratch. Do not stage, propose or apply changes. ${shape}\nReturn one plan, alternatives, observed limits and proving checks. Cite actual operation/result IDs as [evidence:ID].${scenario.seed ? `\nThe host will supply a fresh protected seed result in this turn (runtime ${process.version}); use that exact evidence without rerunning it.` : ''}`
+    const prompt = `${scenario.prompt}\nThis is plan-only. Run protected Lisp runtime inspection and read-only probes using declared inputs/private scratch to verify the plan. Do not stage, propose or apply workspace changes. ${shape}\nReturn one plan, alternatives, observed limits and proving checks. Cite actual operation/result IDs as [evidence:ID].${scenario.seed ? `\nThe host will supply a fresh protected seed result in this turn (runtime ${process.version}); use that exact evidence without rerunning it.` : ''}`
     row.promptDigest = digest(prompt)
     await f.turn(prompt)
     signal.throwIfAborted()

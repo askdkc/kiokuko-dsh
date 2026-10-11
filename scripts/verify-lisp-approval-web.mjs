@@ -61,7 +61,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
  const code=mode.startsWith('apply')?'(kioku.files:propose-write "change.txt" "'+mode+'")':mode==='verify'?'(kioku.ci:verify :typecheck)':'(kioku.ci:verify :test :script "test:packages")';
  const callId=randomUUID();
  responses.push(...mock.prepareWork([mock.toolCallResponse(callId,'lisp_eval',{operationId:randomUUID(),code}),(input)=>{result=nativeToolResults(input.messages).find(value=>value.toolCallId===callId);return mock.textResponse('Fixture complete')}],'research',randomUUID()));
- agent.followup(llm.createUserMessage({content:[{type:'text',text:'Perform the requested repository verification using Lisp.'}],source:{kind:'user'}}));await agent.whenIdle();
+ agent.followup(llm.createUserMessage({content:[{type:'text',text:mode.startsWith('apply')?'Save the requested note in change.txt using Lisp.':'Verify the repository using Lisp.'}],source:{kind:'user'}}));await agent.whenIdle();
  }
  if(result===undefined||responses.length) throw new Error('Native fixture '+mode+' did not complete its script: '+JSON.stringify(attempts.slice(-5)));
  await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode,result})+'\\n'); return {kind:'success',text:'Recorded '+mode};

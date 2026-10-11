@@ -8,7 +8,7 @@ import { canonicalDirectory } from '../repository/detect-root.js';
 import { captureRepositoryState, repositoryStatePaths, repositoryPathDigest } from './repository-state.js';
 import { assertVerifierCwd, parseVerifierSpec } from './schemas.js';
 import type { VerifierRunResult, VerifierSpec } from './types.js';
-import { parseNodeTapSummary, selectedNodeTestCommand } from '../dsh/node-tap-summary.js';
+import { hasExplicitTestCases, parseNodeTapSummary, selectedNodeTestCommand } from '../dsh/node-tap-summary.js';
 
 const MAX_PREVIEW_BYTES = 8 * 1024;
 const DESCENDANT_SETTLE_MS = 500;
@@ -127,6 +127,7 @@ export async function runVerifier(
   let stderrPreview: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let skipped = false;
   let tapTail = '';
+  let explicitCases = false;
   const tails = { stdout: '', stderr: '' };
   const observeSkip = (lane: keyof typeof tails, chunk: Buffer | string): void => {
     const value = tails[lane] + chunk.toString();
@@ -166,6 +167,7 @@ export async function runVerifier(
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     observeSkip('stdout', bytes);
     tapTail = (tapTail + bytes.toString('utf8')).slice(-4096);
+    explicitCases ||= hasExplicitTestCases(tapTail);
     stdoutHash.update(bytes);
     stdoutPreview = appendPreview(stdoutPreview, bytes);
   });
@@ -234,6 +236,7 @@ export async function runVerifier(
     verifier: { ...verifier, args: [...verifier.args] },
     ...completion,
     skipped,
+    explicitCases,
     ...(selectedNodeTestCommand([normalized.executable, ...normalized.args].join(' '))
       && parseNodeTapSummary(tapTail) ? { tapSummary: parseNodeTapSummary(tapTail)! } : {}),
     durationMs: Math.max(0, Math.round((dependencies.now?.() ?? performance.now()) - start)),

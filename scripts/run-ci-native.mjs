@@ -11,7 +11,7 @@ const scenarioRoutes = new Map([
   ['e2e-repeated-deep', 'deep'], ['e2e-repeated-normal', 'normal'], ['e2e-repeated-enno', 'enno'],
   ['e2e-repeated-enno-prefix', 'enno/prefix_reuse'], ['e2e-repeated-enno-bounded', 'enno/bounded_evidence'],
 ])
-const suites = new Set(['unit', 'integration', 'lisp', 'queued-intent', 'browser-approval', 'browser-shortcuts', 'e2e', 'e2e-core', 'e2e-agent', 'e2e-repeated', ...scenarioRoutes.keys()])
+const suites = new Set(['unit', 'integration', 'lisp', 'queued-intent', 'browser-approval', 'browser-shortcuts', 'browser-coding', 'e2e', 'e2e-core', 'e2e-agent', 'e2e-repeated', ...scenarioRoutes.keys()])
 function testFiles(directory) {
   return readdirSync(join(root, directory), { withFileTypes: true }).flatMap(entry => {
     const file = `${directory}/${entry.name}`
@@ -27,14 +27,14 @@ export function nativeCiPlan(suite, environment = process.env) {
     KIOKUKO_EXPECTED_DSH_VERSION: manifest.dependencies['@deepseek-ai/dsh'], KIOKUKO_REQUIRE_DSH_NATIVE: '1' }
   delete env.KIOKUKO_DSH_SOURCE_ROOT
   delete env.KIOKUKO_REPEATED_SCENARIO
-  if (suite === 'browser-approval' || suite === 'browser-shortcuts') {
+  if (suite === 'browser-approval' || suite === 'browser-shortcuts' || suite === 'browser-coding') {
     env.KIOKUKO_LISP_APPROVAL_RUNTIME = fixture
     env.KIOKUKO_SHORTCUT_RUNTIME = fixture
-    return { command: process.execPath, args: [suite === 'browser-approval' ? 'scripts/verify-lisp-approval-web.mjs' : 'scripts/verify-shortcuts-web.mjs'], cwd: root, env }
+    return { command: process.execPath, args: [suite === 'browser-approval' ? 'scripts/verify-lisp-approval-web.mjs' : suite === 'browser-coding' ? 'scripts/verify-coding-workflow-web.mjs' : 'scripts/verify-shortcuts-web.mjs'], cwd: root, env }
   }
   const directory = `tests/dsh/${suite.startsWith('e2e') ? 'e2e' : suite}`
   if (suite === 'lisp') env.KIOKUKO_REQUIRE_LISP_RUNTIME = '1'
-  const files = (suite === 'queued-intent' ? ['tests/dsh/unit/decisions/akinator-classification.test.ts', 'tests/dsh/unit/decisions/akinator-scope.test.ts', 'tests/dsh/integration/queued-intent-native.test.ts'] : suite === 'lisp' ? [...testFiles('tests/dsh/unit/lisp'), ...testFiles('tests/dsh/integration/lisp')] : testFiles(directory)).filter(file => {
+  const files = (suite === 'queued-intent' ? ['tests/dsh/unit/decisions/akinator-classification.test.ts', 'tests/dsh/unit/decisions/akinator-scope.test.ts', 'tests/dsh/integration/queued-intent-native.test.ts'] : suite === 'lisp' ? [...testFiles('tests/dsh/unit/lisp'), ...testFiles('tests/dsh/integration/lisp'), 'tests/dsh/e2e/coding-workflow-native.test.ts'] : testFiles(directory)).filter(file => {
     const agent = file.endsWith('/native-agent-loop.test.ts'), repeated = file.endsWith('/repeated-memory-lifecycle.test.ts')
     return suite === 'e2e-core' ? !agent && !repeated : suite === 'e2e-agent' ? agent : suite.startsWith('e2e-repeated') ? repeated : true
   })

@@ -21,6 +21,22 @@ function fixture(answers: Array<{ selected: string[]; custom?: string }>) {
   return { service, input, asked, effects }
 }
 
+test('a misclassified explanation cannot open a coding choice or start Lisp', async () => {
+  const f = fixture([])
+  const result = await f.service.prepare({ ...f.input, task: 'Explain how this parser works.', taskType: 'build' })
+  assert.equal(result.taskType, 'chat')
+  assert.deepEqual(f.asked, [])
+  assert.deepEqual(f.effects, [])
+})
+
+test('a new coding request does not inherit the previous task Lisp answer', async () => {
+  const f = fixture([{ selected: ['Lispモードを使う（通常実行）'] }, { selected: ['Lispモードを使わない'] }])
+  await f.service.prepare(f.input)
+  await f.service.prepare({ ...f.input, turn: 2, task: 'Fix the parser overflow in src/parser.ts', taskType: 'debug' })
+  assert.equal(f.asked.length, 2)
+  assert.deepEqual(f.effects, ['enable', 'decline'])
+})
+
 test('first coding admission asks once and activates Lisp before returning; exact retries share the result', async () => {
   const f = fixture([{ selected: ['Lispモードを使う（通常実行）'] }])
   const [first, retry] = await Promise.all([f.service.prepare(f.input), f.service.prepare(f.input)])

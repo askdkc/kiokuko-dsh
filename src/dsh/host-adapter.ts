@@ -20,6 +20,10 @@ import { isNativeSubagent } from './native-subagent.js'
 import { createLifecycle } from './host-adapter/lifecycle.js'
 import { mountHostMemoryApplication } from './host-adapter/memory-application-host.js'
 import { mountTaskCompletion } from './task-completion-host.js'
+import { mountCodingWorkflow } from './coding-workflow/host.js'
+import { codingContinuation } from './coding-workflow/intent.js'
+import { readCodingWorkflow } from './coding-workflow/store.js'
+import { stableLispCapabilities } from './lisp-service-key.js'
 import { createEfficiencyHost } from './host-adapter/efficiency-host.js'
 import { createMemoryReviewHost } from './host-adapter/memory-review-host.js'
 import { createEnnoMemoryHost } from './host-adapter/enno-memory-host.js'
@@ -321,7 +325,7 @@ async function capabilityCatalog(
   // that can satisfy the model's required route. Treat it as unavailable by
   // excluding it before the mandatory-catalog check below.
   const nativeSkills = skillSnapshot.skills.filter((skill) => skill.invocation?.modelInvocable !== false)
-  const nativeTools = await tools.schemas(scope)
+  const nativeTools = stableLispCapabilities(await tools.schemas(scope), scope)
   const mandatoryOrder = new Map<string, number>()
   STANDARD_SKILL_MANIFESTS.forEach((manifest, index) => mandatoryOrder.set(manifest.name, index))
   const skillDescriptors = nativeSkills
@@ -538,17 +542,21 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       // owner intact, but let a reopened session answer before attempting recovery.
       // A queued human request is not a continuation grant from a stale normal
       // turn. Preserve its owner, but infer the new request before any effects.
-      if (current && current.turn < input.turn && input.messages.some(isHumanMessage) && !current.prepared.ennoOduno.applicable) return false
+      const text = input.messages.filter(isHumanMessage).flatMap((message: any) => typeof message.content === 'string' ? [message.content] : (message.content ?? []).filter((block: any) => block.type === 'text').map((block: any) => block.text)).join('\n')
+      const resumeCoding = codingContinuation(text) && current && readCodingWorkflow(db, current.runId)
+      if (current && current.turn < input.turn && input.messages.some(isHumanMessage) && !current.prepared.ennoOduno.applicable && !resumeCoding) return false
       if (current) return !current.closed && !current.failed && current.nativeAgent === input.agent && current.nativeSession === input.agent.session
       const project = await resolveProjectWorkspaceReadOnly(db, answerCwd(input.agent), { allowDirectory: true })
       if (!project) return false
       // The full adapter owns ledger runs, not the modular core ownership table.
       // Recovery still goes through admission's exact workspace/session checks.
       return Boolean(db.prepare(`SELECT 1 FROM ledger_runs lr
-        JOIN enno_contracts ec ON ec.run_id=lr.run_id
+        LEFT JOIN enno_contracts ec ON ec.run_id=lr.run_id
+        LEFT JOIN dsh_coding_workflows cw ON cw.run_id=lr.run_id
         WHERE lr.workspace=? AND lr.dsh_session_id=? AND lr.status='active'
-          AND ec.repository_root=? AND ec.status NOT IN ('completed','cancelled','blocked') LIMIT 1`)
-        .get(project.workspace, input.agent.session!.id, project.repositoryRoot))
+          AND ((ec.repository_root=? AND ec.status NOT IN ('completed','cancelled','blocked'))
+            OR (?=1 AND json_extract(cw.snapshot_json,'$.state') NOT IN ('completed','cancelled','superseded'))) LIMIT 1`)
+        .get(project.workspace, input.agent.session!.id, project.repositoryRoot, codingContinuation(text) ? 1 : 0))
     }),
     classify: (input, task) => classifyTaskForIntake(decisions, dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, undefined, input.signal),
     prepare: async (input, taskType) => {
@@ -638,6 +646,20 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ctx, runtime, tools, commands, skills, agents, sessions, delegation, currentSession,
     turnState, gate, capabilityCatalog, memoryRetrievalConfig, demand,
   })
+  const codingDisposer = tools ? mountCodingWorkflow({ tools: tools as any,
+    on: (name, listener, options) => onNativeServiceEvent(ctx, name, listener, options) }, {
+    runtime, ...(userQuestions ? { questions: userQuestions } : {}),
+    lisp: () => native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined,
+    preparationOnly: execution => demand?.preparationOnly(execution) === true,
+    resolve(execution) {
+      const agent = execution.agent as NativeAgent | undefined, session = agent?.session
+      if (!agent || !session || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session) return undefined
+      const child = delegation.observationBinding(agent)
+      const item = currentSession(child?.parentSessionId ?? session.id)
+      if (!item || item.closed || child && child.runId !== item.runId || !child && (item.nativeAgent !== agent || item.nativeSession !== session)) return undefined
+      return { runId: item.runId, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot, agent, task: item.task }
+    },
+  }) : undefined
   const completionDisposer = tools ? mountTaskCompletion({ tools: tools as any,
     on: (name, listener, options) => onNativeServiceEvent(ctx, name, listener, options) }, {
     runtime,
@@ -661,7 +683,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const item=currentSession(child?.parentSessionId??session.id)
       if(!item||item.closed||child&&child.runId!==item.runId||!child&&(item.nativeAgent!==agent||item.nativeSession!==session))return undefined
       if(child&&delegation.toolDenial(agent,execution.name,execution.arguments))return undefined
-      return {runId:item.runId,sessionId:session.id,workspace:item.workspace,repositoryRoot:item.repositoryRoot,generation:executionBinding(item).generation,agent}
+      return {runId:item.runId,sessionId:session.id,workflowSessionId:item.sessionId,workspace:item.workspace,repositoryRoot:item.repositoryRoot,generation:executionBinding(item).generation,agent}
     },
     planActive:agent=>(ctx.get('planMode',false) as any)?.get(agent)?.active===true,
     async confirm(identity,detail,signal) {
@@ -803,6 +825,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       efficiencyHost.close()
       try { applicationDisposer?.() } catch (error) { failures.push(error) }
       try { completionDisposer?.() } catch (error) { failures.push(error) }
+      try { codingDisposer?.() } catch (error) { failures.push(error) }
       try { observationMount.disposeResult() } catch (error) { failures.push(error) }
       try { await sessionMirror.close() } catch (error) { failures.push(error) }
       try { if (!options.runtime) await runtime.close() } catch (error) { failures.push(error) }

@@ -90,11 +90,18 @@ export async function apply(ctx) {
     })
     if (!reuse) await welcome.waitFor()
     if (await welcome.isVisible()) await welcome.click()
+    const conversation = page.locator('[data-conversation-content]:visible').first()
+    const previous = await poll(() => conversation.getAttribute('data-conversation-session'))
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
-    const editor = page.locator('[contenteditable="true"]').first()
+    await poll(async () => {
+      const current = await conversation.getAttribute('data-conversation-session')
+      return current && current !== previous && await conversation.getAttribute('data-content-phase') !== 'settling'
+    })
+    const editor = conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first()
+    const command = async text => { await editor.fill(text); await page.getByRole('button', { name: 'Send message', exact: true }).click() }
     await editor.waitFor()
     await page.screenshot({ path: join(base, 'initial.png') })
-    await editor.fill('/shortcut-fixture seed'); await editor.press('Enter')
+    await command('/shortcut-fixture seed')
     await page.getByRole('button',{name:'Diff レビュー',exact:true}).waitFor()
     const records = async () => (await readFile(answers, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
     const seed = await poll(async () => (await records()).find(r => r.mode === 'seed'))
@@ -104,7 +111,7 @@ export async function apply(ctx) {
     // Verify the durable fixture through a fresh snapshot, not transient live chrome.
     await page.reload()
     await page.getByRole('button',{name:'Diff レビュー',exact:true}).waitFor()
-    const ask = async mode => { await editor.fill('/shortcut-fixture '+mode); await editor.press('Enter'); await page.locator('.kiokuko-intake').waitFor(); await page.locator('.kiokuko-intake').focus() }
+    const ask = async mode => { await command('/shortcut-fixture '+mode); await page.locator('.kiokuko-intake').waitFor(); await page.locator('.kiokuko-intake').focus() }
     await ask('intake')
     await page.keyboard.press('ControlOrMeta+4')
     await page.screenshot({path:join(base,'intake-shortcuts.png')})

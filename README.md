@@ -89,8 +89,9 @@ Install SBCL first:
 - Arch Linux: `sudo pacman -S sbcl`
 
 Add this to the `kiokuko-dsh` row in `~/.dsh/profiles/web/cordis.patch.yml`
-(keep other `config` values), then reload the plugin. The first implementation or
-debugging request asks whether to use Lisp; the session retains your choice.
+(keep other `config` values), then reload the plugin. Each implementation task
+shows its Goal, items and observable checks before asking whether to use Lisp.
+The choice belongs to that task and scope; a new task asks again.
 You can also enable it with `/kioku-lisp enable`.
 Check the loaded configuration with `dsh --profile web --dump-config`.
 
@@ -103,9 +104,8 @@ Check the loaded configuration with `dsh --profile web --dump-config`.
 ```
 
 The default development mode does not require Bubblewrap. The explicit protected compatibility mode does on Linux.
-Choosing Lisp starts normal execution with the Lisp tools. Choose not to use Lisp
-if you want Enno. Free text is passed to the AI as a discussion or correction.
-Ordinary edits and tests run without confirmation. Source/data deletion and existing durable user database mutation require a concrete review. Lisp and ordinary tools coexist; worker failures leave ordinary development available. See [owned execution, receipts and memory reuse](docs/owned-execution.md).
+Choose “使う” to use Lisp, “使わない” to use ordinary tools, or “取消・作業を保持” to cancel while preserving prepared work. Closing the question leaves implementation pending. Lisp choice and normal/Enno selection are separate. A failed Lisp startup remains a recoverable blocker until the selected route works or you explicitly change it.
+Ordinary edits and tests run without further confirmation after that choice. Source/data deletion and existing durable user database mutation require a concrete review. Lisp and ordinary tools coexist. Completion requires current item evidence and a fresh final check through the user’s entry point. See [Goal-driven coding](docs/coding-workflow.md) and [owned execution, receipts and memory reuse](docs/owned-execution.md).
 See [setup, APIs, limits and recovery](docs/lisp.md).
 Persistent Lisp can optionally inspect parser-backed disk snapshots and read-only
 LSP results through `kioku.code`. The provider must advertise V1; published

@@ -10,6 +10,7 @@ import { DecisionError } from '../decisions/contracts.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { DshSkillPrompts } from '../skill-prompts.js'
 import { realpathSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +22,8 @@ import { LispManager } from './manager.js'
 import { LispStore } from './store.js'
 import { HotCallInput, HotContractInput, HotDeactivateInput, HotInstallInput, HotStatusInput } from './hot-contracts.js'
 import { createLispCodingChoice, LISP_CODING_SERVICE } from './coding-choice.js'
+import { sessionCodingWorkflow } from '../coding-workflow/store.js'
+import { overrideCodingChoice } from '../coding-workflow/service.js'
 import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './request-surface.js'
 import { mountLispHttp } from './http.js'
 import { createLispCiAdapter } from './ci.js'
@@ -42,7 +45,7 @@ const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill', 'observation_read'] as const
 // Keep host-owned review, questions and Plan approval reachable while Lisp blocks native effects.
 // Pin its implementation just like reads; its own run/session checks still apply.
-const LISP_NATIVE_TOOLS = [...LISP_READ_TOOLS, TASK_PREPARE_TOOL, 'task_memory_review', 'ask_user_question', 'exit_plan_mode'] as const
+const LISP_NATIVE_TOOLS = [...LISP_READ_TOOLS, TASK_PREPARE_TOOL, 'task_memory_review', 'task_completion', 'coding_workflow', 'ask_user_question', 'exit_plan_mode'] as const
 
 /** Keep admitted inherited tools without naming agent-owned tools in restrict(). */
 function restrictInheritedTools(tools: Tools, scopedTools: Tools, agent: Agent, names: string[]): () => void {
@@ -269,6 +272,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const registeredAgents = new WeakSet<object>()
   const agentDisposers = new Map<string, (() => void)[]>()
   const boundAgents = new Map<string, Agent>()
+  const inventoryReaders = new Map<string, () => ReturnType<Tools['schemas']>>()
   const runtimePrompts = new Map<string, () => void>()
   const unregister = (agent: Agent) => {
     if (boundAgents.get(agent.id) !== agent) return
@@ -295,7 +299,19 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       const definition = tools.get(name, agent)
       if (definition) { fence!.definitions.set(`${agent.id}:${name}`, definition); nativeTools.push(name) }
     }
-    if(!development)local.push(restrictInheritedTools(tools, scopedTools, agent, nativeTools))
+    if(!development) {
+      let release = restrictInheritedTools(tools, scopedTools, agent, nativeTools)
+      // Inventory binding must see installed definitions, independently of this
+      // plugin's protected presentation. Lift only our mask synchronously, never
+      // across an await, and retain all other host/preset restrictions.
+      inventoryReaders.set(agent.id, () => {
+        release()
+        try { return tools.schemas(agent) }
+        finally { release = restrictInheritedTools(tools, scopedTools, agent,
+          nativeTools.filter(name => tools.get(name, agent) === fence!.definitions.get(`${agent.id}:${name}`))) }
+      })
+      local.push(() => { inventoryReaders.delete(agent.id); release() })
+    }
     // Lisp and owned/native tools coexist. A worker failure does not restrict
     // the inherited development surface.
     for (const name of LISP_TOOLS) {
@@ -325,6 +341,8 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const guide = skillPrompts ? await skillPrompts.require('kiokuko-lisp') : await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
   fence.prepareAgent = async candidate => {
     const binding = owner(candidate)
+    const workflow=await runtime.withDatabase(db=>sessionCodingWorkflow(db,binding.owner.sessionId))
+    if(workflow&&(workflow.choice.state!=='yes'||['preparing','awaiting_lisp_choice','cancelled','superseded'].includes(workflow.state))){unregister(binding.agent);return true}
     runtimePrompts.get(candidate.id)?.(); runtimePrompts.delete(candidate.id)
     manager.setAgentBusy(binding.owner, true)
     if (await manager.isTaskMode(binding.owner)) {
@@ -380,15 +398,23 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (saved && saved.root_path !== binding.owner.root) fail('SCOPE_CONFLICT', 'セッションの作業場所が変わっています。')
       return saved !== undefined
     },
-    decline: candidate => store.decline(owner(candidate).owner),
+    decline: async candidate => {const binding=owner(candidate);if(manager.enabled.has(binding.owner.sessionId))await manager.disable(binding.owner);else await store.decline(binding.owner);unregister(binding.agent);hostFence?.release(binding.owner.sessionId)},
     enable: async candidate => {
       const result = await enable(owner(candidate)) as { state?: string }
       if (!['READY', 'EVALUATING', 'TASK_READY'].includes(result.state ?? '')) fail('RECOVERY_REQUIRED', 'Lisp の起動・復旧が必要です。/kioku-lisp status で状態を確認してください。')
     },
   })))
   const requestSurface: LispAssemblyService = {
-    project(candidate, assembly) {
+    capabilities: LISP_TOOLS.map(name => ({ name, description: description(name) })),
+    inventory: candidate => inventoryReaders.get(candidate.id)?.() ?? tools.schemas(candidate),
+    async project(candidate, assembly) {
       const binding = owner(candidate)
+      const workflow = await runtime.withDatabase(db => sessionCodingWorkflow(db, binding.owner.sessionId))
+      if (workflow && (workflow.choice.state !== 'yes' || ['preparing', 'awaiting_lisp_choice', 'cancelled', 'superseded', 'completed'].includes(workflow.state))) {
+        unregister(binding.agent)
+        const surface = assembly as typeof assembly & { tools?: { name: string }[] }
+        return { ...assembly, tools: surface.tools?.filter(tool => !LISP_TOOLS.includes(tool.name as LispTool)) ?? [] }
+      }
       if (!manager.enabled.has(binding.owner.sessionId)) return assembly
       register(binding.agent)
       // Native DSH snapshots providers before its assembly waterfall. Admission
@@ -423,6 +449,13 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
           if (argument && !['ask', 'auto', 'status'].includes(argument)) fail('INVALID_COMMAND', 'Use /kioku-lisp approval ask|auto|status')
           if (argument === 'ask' || argument === 'auto') await approvalPolicy.set(argument)
           return { kind: 'success', text: `Lisp approvals: ${approvalPolicy.mode()} · Profile` }
+        }
+        if (['enable', 'enable-task', 'disable'].includes(action)) {
+          await runtime.withDatabase(db => {
+            const workflow = sessionCodingWorkflow(db, binding.owner.sessionId)
+            if (workflow) overrideCodingChoice(db, { runId: workflow.runId, sessionId: binding.owner.sessionId, repositoryRoot: binding.owner.root },
+              action === 'disable' ? 'no' : 'yes', `human-command:${randomUUID()}:${action}`)
+          })
         }
         if (action === 'enable') result = await enable(binding)
         else if (action === 'enable-task') {

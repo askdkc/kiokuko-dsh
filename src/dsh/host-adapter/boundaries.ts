@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { DshCoreRuntime } from '../core-runtime.js'
+import { assertCodingDispatch } from '../coding-workflow/service.js'
 import { onNativeEvent } from './native-events.js'
 import type { NativeAgent, NativeAgents, NativeSessions, NativeSkills, NativeTools } from './native-events.js'
 import type { TurnRecord } from './turn-state.js'
@@ -445,6 +446,7 @@ export function createBoundaries(deps: BoundaryDependencies) {
         return { kind: 'completed', nextKind: 'classify_boundary' }
       }
       if (job.kind === 'final_verification') {
+        await runtime.withDatabase(db => assertCodingDispatch(db, { runId:item.runId,sessionId:item.sessionId,repositoryRoot:item.repositoryRoot }, 'enno_finish'))
         await runFinalVerificationBoundary(item)
         return { kind: 'completed', nextKind: 'classify_boundary' }
       }

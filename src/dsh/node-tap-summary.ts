@@ -34,13 +34,19 @@ export function parseTestSummary(output: string, completeHostOutput = false): Ta
   return parseNodeTapSummary(output, completeHostOutput) ?? parseCargoSummary(output)
 }
 
+/** Node counts an assertion-free test file as a passing implicit file test. */
+export function hasExplicitTestCases(output: string): boolean {
+  return parseCargoSummary(output) !== undefined || [...output.matchAll(/^\s*# Subtest: (.+)\s*$/gmu)]
+    .some(match => !/(?:^|[/\\])[^/\\]*\.(?:ts|[cm]?js)$/u.test(match[1]!.trim()))
+}
+
 export function selectedNodeTestCommand(command: string): boolean {
   if (/[;&|><`$()\\'"\n\r]/u.test(command)) return false
   const args = command.trim().split(/\s+/u)
   if (!/(?:^|[/\\])node(?:\.exe)?$/iu.test(args[0] ?? '')) return false
   if (!args.includes('--test') || !args.includes('--test-reporter=tap')
     || args.some(arg => ['--eval', '-e', '--print', '-p'].includes(arg))) return false
-  return args.some(arg => /\.test\.(?:ts|js|mjs)$/u.test(arg)
+  return args.some(arg => /\.(?:ts|[cm]?js)$/u.test(arg)
     && !pathIsUnsafe(arg))
 }
 

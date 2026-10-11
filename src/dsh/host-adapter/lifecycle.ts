@@ -22,6 +22,8 @@ import { terminalizeLedgerRunInTransaction } from '../../enno-oduno/store.js'
 import { handoffReview } from '../../memory/review/store.js'
 import { KiokukoError } from '../../errors.js'
 import { saveTaskCompletionReceipt, taskCompletionBlocksClose } from '../task-completion.js'
+import { readCodingWorkflow } from '../coding-workflow/store.js'
+import { stopCodingWorkflow, synchronizeCodingWorkflow } from '../coding-workflow/service.js'
 import { saveSessionNotice } from '../plugin-records.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { DshRunLifecycle, type DshCloseIntent, type DshRunClose } from '../session-bridge.js'
@@ -57,6 +59,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
   const getSelection = deps.getSelection
   const completionReady = async (item: TurnRecord): Promise<boolean> => runtime.withDatabase(database => {
     try {
+      synchronizeCodingWorkflow(database,item.runId)
       const assessment = saveTaskCompletionReceipt(database, item.runId)
       if (!taskCompletionBlocksClose(assessment)) return true
       const unresolved = assessment.criteria.filter(criterion => criterion.state !== 'satisfied')
@@ -80,6 +83,8 @@ export function createLifecycle(deps: LifecycleDependencies) {
     if (selection?.discussion) return undefined
     if (selection && (selection.status !== 'ready' && item.prepared.intake.profile.taskType !== 'chat' || item.failed && selection.mode === 'normal')) return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
+    const coding = await runtime.withDatabase(db=>readCodingWorkflow(db,item.runId))
+    if(coding?.state==='cancelled'||coding?.state==='superseded')return {runId:item.runId,status:'cancelled',terminalTurn:item.turn}
     if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
     if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
     // A chat run spans the quiet time between user messages. Enno's
@@ -126,6 +131,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
     return { runId: item.runId, status: 'cancelled' }
   }
   const closeRun = async (input: DshRunClose): Promise<void> => {
+    if (input.status === 'cancelled') await runtime.withDatabase(db => stopCodingWorkflow(db, input.runId, 'cancelled'))
     const completionBlocked = await runtime.withDatabase(db => {
       try { return taskCompletionBlocksClose(saveTaskCompletionReceipt(db, input.runId)) }
       catch { return db.prepare('SELECT mode FROM dsh_completion_runs WHERE run_id = ?').get<{ mode: string }>(input.runId)?.mode === 'enforce' }
@@ -195,7 +201,9 @@ export function createLifecycle(deps: LifecycleDependencies) {
     } catch { return {} }
   }
   const retireSupersededRun = async (item: TurnRecord, status: 'completed' | 'failed' | 'cancelled'): Promise<void> => {
+    if (status === 'completed' && !await completionReady(item)) status = 'cancelled'
     if (status !== 'completed') {
+      if (status === 'cancelled') await runtime.withDatabase(db => stopCodingWorkflow(db, item.runId, 'superseded'))
       await runLifecycle.closeTurn({ runId: item.runId, status, ...(status === 'failed' ? await failedBoundary(item) : {}) })
       return
     }

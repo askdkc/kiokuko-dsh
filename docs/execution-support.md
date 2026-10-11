@@ -118,3 +118,7 @@ npm run pack:check
 | 元の5課題による実モデルの能力比較 | 未実施。課題文・合格条件の提示待ち |
 
 全体試験後に、証拠のログ位置を会話全体の再走査からネイティブの追加イベントによる記録へ変更しています。この最終変更は上記の関連試験と実ファイルツール試験で再検証し、配布物も再ビルドしています。実DSH試験のモデルは固定応答であり、実モデルの推論品質の改善を測定した数値ではありません。
+
+## Coding Goals and task continuation
+
+Explicit coding requests use a durable Goal, implementation-item dependency graph and observable item/final conditions. The host shows them before asking whether to use Lisp for that task. No uses ordinary tools; closed or missing answers stay pending. `coding_workflow status` shows unmet conditions and `next` returns a safe item or reopens the pending question. Say “continue the current task” to recover its saved choice after reconnect or host restart. A different implementation request or material scope revision requires a new choice. Cancellation aborts current dispatch; interrupted effects retain their existing journals and must be reconciled before retry. Completion requires fresh item checks followed by a separate final check through the user entry. See [coding workflow](coding-workflow.md).

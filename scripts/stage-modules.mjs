@@ -73,7 +73,7 @@ export async function stageModules(output) {
   const { coreSkills, codingSkills } = await import(pathToFileURL(join(root, 'dist/dsh/modules/resources.js')))
   const { ennoModule } = await import(pathToFileURL(join(root, entries.enno)))
   const { lispModule } = await import(pathToFileURL(join(root, entries.lisp)))
-  const resources = { core: coreSkills.resources, enno: [...codingSkills.resources, ...ennoModule.resources], lisp: [...codingSkills.resources, ...lispModule.resources] }
+  const resources = { core: [...coreSkills.resources, ...codingSkills.resources], enno: [...codingSkills.resources, ...ennoModule.resources], lisp: [...codingSkills.resources, ...lispModule.resources] }
   const { compileSkillBundle } = await import(pathToFileURL(join(root, 'dist/dsh/skill-compiler.js')))
   const migrations = (await walk(join(root, 'migrations'))).map(file => `migrations/${file}`)
   assert.deepEqual(migrations, compatibility.migrations, 'Update the explicit migration compatibility allowlist before packaging')
@@ -82,7 +82,7 @@ export async function stageModules(output) {
     const directory = join(output, name)
     await mkdir(directory, { recursive: true })
     const files = [...graphs[name].files].filter(file => name === 'core' || !graphs.core.files.has(file))
-    const assetFiles = name === 'core' ? [...migrations, 'docs/memory-evidence.md', 'docs/index-reasoning.md', 'docs/answer-review.md', 'docs/evaluations/answer-review-2026-09-22-laya.json', 'docs/evaluations/answer-review-2026-09-22-jev.json', 'scripts/evaluate-answer-review.mjs', 'scripts/answer-review-evaluation.mjs', 'scripts/answer-review-evaluation.d.mts', 'docs/typed-decisions.md', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/semantic-compaction.md', 'docs/typesafe.md', 'PERMISSIONS.md'] : name === 'lisp' ? [...(await walk(join(root, 'lisp'))).map(file => `lisp/${file}`), 'docs/typesafe.md', 'docs/lisp.md', 'docs/lisp-hot-tools.md', 'scripts/smoke-typesafe.mjs', 'PERMISSIONS.md'] : []
+    const assetFiles = name === 'core' ? [...migrations, 'docs/coding-workflow.md', 'docs/memory-evidence.md', 'docs/index-reasoning.md', 'docs/answer-review.md', 'docs/evaluations/answer-review-2026-09-22-laya.json', 'docs/evaluations/answer-review-2026-09-22-jev.json', 'scripts/evaluate-answer-review.mjs', 'scripts/answer-review-evaluation.mjs', 'scripts/answer-review-evaluation.d.mts', 'docs/typed-decisions.md', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/semantic-compaction.md', 'docs/typesafe.md', 'PERMISSIONS.md'] : name === 'lisp' ? [...(await walk(join(root, 'lisp'))).map(file => `lisp/${file}`), 'docs/typesafe.md', 'docs/lisp.md', 'docs/lisp-hot-tools.md', 'scripts/smoke-typesafe.mjs', 'PERMISSIONS.md'] : []
     const declarations = [...graphs[name].declarations].filter(file => name === 'core' || !graphs.core.declarations.has(file))
     for (const file of [...files, ...declarations, ...assetFiles]) {
       await copyFile(join(root, file), join(directory, file))
@@ -104,7 +104,7 @@ export async function stageModules(output) {
     const dependencies = Object.fromEntries([...graphs[name].dependencies].filter(dep => manifest.dependencies[dep] && (name === 'core' || !graphs.core.dependencies.has(dep))).sort().map(dep => [dep, manifest.dependencies[dep]]))
     const peerDependencies = Object.fromEntries([...graphs[name].dependencies].filter(dep => manifest.peerDependencies[dep]).sort().map(dep => [dep, manifest.peerDependencies[dep]]))
     const packageJson = { name: manifest.name, version: manifest.version, private: true, type: 'module', license: manifest.license, engines: manifest.engines,
-      exports: { ...(name === 'core' ? {'./client':{types:'./dist/models-client.d.ts',default:'./dist/models-client.cjs'}} : {}), '.': { types: `./${entries[name].replace(/\.js$/, '.d.ts')}`, default: `./${entries[name]}` } }, ...(name === 'core' ? {dsh:{client:manifest.dsh.client}} : {}), files: ['dist/', 'skills/', 'scripts/', ...(name === 'core' ? ['migrations/', 'docs/', 'PERMISSIONS.md'] : name === 'lisp' ? ['lisp/', 'docs/', 'PERMISSIONS.md'] : []), `module-${name}.json`, 'LICENSE', 'THIRD_PARTY_NOTICES.md'], dependencies, peerDependencies,
+      exports: { ...(name === 'core' ? {'./client':{types:'./dist/models-client.d.ts',default:'./dist/models-client.cjs'}} : {}), '.': { types: `./${entries[name].replace(/\.js$/, '.d.ts')}`, default: `./${entries[name]}` } }, ...(name === 'core' ? {dsh:{client:manifest.dsh.client}} : {}), files: ['dist/', 'skills/', 'scripts/', ...(name === 'core' ? ['migrations/', 'docs/', 'lisp/supervisor.mjs', 'PERMISSIONS.md'] : name === 'lisp' ? ['lisp/', 'docs/', 'PERMISSIONS.md'] : []), `module-${name}.json`, 'LICENSE', 'THIRD_PARTY_NOTICES.md'], dependencies, peerDependencies,
       peerDependenciesMeta: Object.fromEntries(Object.entries(manifest.peerDependenciesMeta).filter(([dep]) => dep in peerDependencies)) }
     await writeFile(join(directory, 'package.json'), JSON.stringify(packageJson, null, 2) + '\n')
     for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) await copyFile(join(root, file), join(directory, file))

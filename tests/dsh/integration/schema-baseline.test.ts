@@ -172,6 +172,8 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_agenticreplay_traces',
         'dsh_answer_reviews',
         'dsh_boundary_jobs',
+        'dsh_coding_operations',
+        'dsh_coding_workflows',
         'dsh_completion_bind_ops',
         'dsh_completion_bindings',
         'dsh_completion_executions',

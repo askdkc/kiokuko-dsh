@@ -3,12 +3,15 @@ import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { realpathSync } from 'node:fs'
 
 const [packagePath, nativeRoot, combination = 'core', intakeProbe = 'admitted'] = process.argv.slice(2)
 assert.ok(['admitted', 'default'].includes(intakeProbe))
 const packageRoot = realpathSync(packagePath)
+const exec = promisify(execFile)
 const legacy = combination.endsWith('full')
 const loaded = new Set()
 registerHooks({ load(url, context, next) { loaded.add(url); return next(url, context) } })
@@ -67,7 +70,7 @@ globalThis.fetch = async (_url, init) => {
 try {
   for (const plugin of [llm, session, projection, systemPrompt, tools, agents, skills, commands, tokenMeter]) fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined))
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
-  fibers.push(await ctx.plugin({ name: 'module-questions', apply(context) { context.provide('userQuestions', { async ask(request) { const question = request.questions[0]; questions.push(question.id); if (question.id === 'taskType') return { answers: [{ id: question.id, selected: ['文章作成'] }] }; throw new Error('Ordinary tasks must not open a module selection question') } }) } }))
+  fibers.push(await ctx.plugin({ name: 'module-questions', apply(context) { context.provide('userQuestions', { async ask(request) { const question = request.questions[0]; questions.push(question.id); if (question.id === 'taskType') return { answers: [{ id: question.id, selected: ['文章作成'] }] }; if (question.id.startsWith('coding-lisp-')) return { answers: [{ id: question.id, selected: ['使わない'] }] }; if (question.id === 'execution-mode') return { answers: [{ id: question.id, selected: ['通常実行'] }] }; throw new Error('Unexpected packed question: '+question.id) } }) } }))
   fibers.push(await ctx.plugin(compaction.default, { thresholdRatio: .8 }))
   fibers.push(await ctx.plugin({ name: 'semantic-fixture-credentials', apply(context) { context.provide('credentials', {
     resolve: async () => semanticReady ? { value: 'fixture-only', source: 'env' } : undefined,
@@ -91,6 +94,7 @@ try {
   assert.equal(inventory.complete, true)
   const names = inventory.skills.map(skill => skill.name)
   assert.ok(names.includes('kiokuko-soul'))
+  for (const name of ['coding-ideal-routine-skill', 'kiokuko-single-purpose-functions', 'one-shot-software-completion']) assert.ok(names.includes(name), `Packed coding Skill missing: ${name}`)
   assert.equal(names.includes('kiokuko-enno-oduno'), legacy || combination.includes('enno'))
   assert.equal(names.includes('kiokuko-lisp'), legacy || combination.includes('lisp'))
   const parent = await ctx.agentLoop.create(session.SessionId('module-fixture'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
@@ -188,6 +192,28 @@ try {
       assert.ok(result, `Missing native result: ${id}`)
       return result
     })
+  }
+  // Public coding controls in every isolated composition, including core alone.
+  const coding = await ctx.agentLoop.create(session.SessionId('packed-coding'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
+  const command = 'node --test --test-reporter=tap module-entry.test.mjs'
+  const criterion = id => ({criterionId:id,revision:1,outcome:'Public entry returns 42',procedure:'Run actual public entry assertions',expected:'All selected assertions pass',evidence:'selected_tests'})
+  provider.script.push(call('coding-prepare','prepare_requested_work',{taskType:'build'}),call('coding-status','coding_workflow',{action:'status'}),()=>call('coding-propose','coding_workflow',{action:'propose',expectedRevision:toolResults.get('coding-status').value.revision,definition:{
+    goal:{goalId:'goal',revision:1,ideal:'The public entry adds one to its numeric input',target:'module-entry.mjs',outOfScope:['Publication'],constraints:['Use Node'],requestBasis:'Implement module-entry.mjs',criterionIds:['entry']},
+    items:[{itemId:'implementation',change:'Create the public entry and assertions',dependsOn:[],criterionIds:['regression'],goalCriterionIds:['entry']}],criteria:[criterion('regression'),criterion('entry')]
+  }}),call('coding-write','kioku_write',{path:'module-entry.mjs',content:"console.log(Number(process.argv[2])+1)\n"}),call('coding-write-test','kioku_write',{path:'module-entry.test.mjs',content:"import test from 'node:test';import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';test('public entry',()=>assert.equal(execFileSync(process.execPath,['module-entry.mjs','41'],{encoding:'utf8'}).trim(),'42'))\n"}))
+  for(const id of ['regression','entry'])provider.script.push(()=>call('coding-bind-'+id,'task_completion',{action:'bind',criterionId:`coding:${toolResults.get('coding-propose').value.workflowId}:${id}`,method:{kind:'native_command',command,cwd:'.',sourcePaths:['module-entry.mjs','module-entry.test.mjs'],assertion:'selected_tests_pass'}}))
+  provider.script.push(call('coding-item-check','kioku_exec',{command}),call('coding-after-item','task_completion',{action:'status'}),()=>{
+    const status=toolResults.get('coding-after-item')
+    assert.equal(status.value.criteria.find(item=>item.criterionId.endsWith(':regression'))?.state,'satisfied',JSON.stringify({status,item:toolResults.get('coding-item-check')}))
+    return call('coding-goal-check','kioku_exec',{command})
+  },call('coding-completed','coding_workflow',{action:'status'}))
+  {
+    coding.followup(llm.createUserMessage({content:[{type:'text',text:'Implement module-entry.mjs so the public command adds one to its numeric input. 通常実行で。'}],source:{kind:'user'}}))
+    await coding.whenIdle()
+    assert.deepEqual(failures,[])
+    for(const id of ['coding-prepare','coding-status','coding-propose','coding-write','coding-write-test','coding-bind-regression','coding-bind-entry','coding-item-check','coding-goal-check','coding-completed'])assert.equal(toolResults.get(id)?.isError,false,JSON.stringify(toolResults.get(id)))
+    assert.equal(toolResults.get('coding-completed').value.state,'completed',JSON.stringify(toolResults.get('coding-completed').value.assessment))
+    assert.equal((await exec(process.execPath,['module-entry.mjs','41'],{cwd:directory})).stdout.trim(),'42')
   }
   // Start with a web demand against the installed package, without a prepare call.
   const webParent = await ctx.agentLoop.create(session.SessionId('packed-web-first'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })

@@ -449,7 +449,7 @@ function DeepSessionReports(props: Record<string, unknown>): unknown {
         if (!Array.isArray(data.items) || data.items.some(item => typeof item.id !== 'string' || typeof item.text !== 'string')) throw new Error(`${label}の応答を読み取れません。`)
         if (controller.signal.aborted) return
         setItems(data.items); setError('')
-        for (const item of data.items) if ((item.kind === 'report' || notices) && !item.delivered && !seen.current.has(item.id)) { seen.current.add(item.id); setOpen(true) }
+        for (const item of data.items) if ((item.kind === 'report' || notices && !item.id.startsWith('completion-wait:')) && !item.delivered && !seen.current.has(item.id)) { seen.current.add(item.id); setOpen(true) }
       } catch (failure) { if (!controller.signal.aborted) setError(messageOf(failure)) }
       finally { if (!controller.signal.aborted) timer = setTimeout(() => void refresh(), document.hidden ? 10_000 : 2_000) }
     }
@@ -761,7 +761,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
         jsx('button', { type: 'button', disabled: busy || snapshot.closed, onClick: () => settle(true), 'aria-label': '質問を閉じる', children: '閉じる（Esc）' })] }),
       jsx('p', { id: `${titleId}-keys`, children: pending.review ? '回答済みの内容です。Enterで次の質問を表示、Escで閉じます。' : hint }),
       jsxs('div', { className: 'kiokuko-intake-body', children: [
-        reviewing ? jsx(MarkdownText, { text: question.detail, labels: reviewCopy!.labels }) : question.detail ? jsx('p', { children: question.detail }) : null,
+        reviewing ? jsx(MarkdownText, { text: question.detail, labels: reviewCopy!.labels }) : question.detail ? jsx('p', { children: question.detail, ...(question.id.startsWith('coding-lisp-') ? { 'data-coding-goal': true, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } } : {}) }) : null,
         !pending.review && !snapshot.closed && snapshot.state === 'continued' ? jsx('p', { children: '処理は継続中です。この質問には後から回答できます。' }) : null,
         snapshot.countdown ? jsx('p', { children: `回答待ち: ${Math.ceil(snapshot.countdown.remainingMs / 1000)}秒${snapshot.countdown.running ? '' : '（操作中は停止）'}` }) : null,
         pending.review ? jsx('p', { children: `回答済み: ${pending.review.find(a => a.id === question.id)?.selected.join('、') ?? ''} ${pending.review.find(a => a.id === question.id)?.custom ?? ''}` }) : null,

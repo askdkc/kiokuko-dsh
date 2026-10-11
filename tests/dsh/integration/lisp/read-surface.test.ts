@@ -113,7 +113,16 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     assert.equal(firstRead.isError, false, JSON.stringify(firstRead))
     const admittedReads = placement === 'restricted-preset' ? ['read', 'glob', 'skill', 'observation_read'] : ['read', 'glob', 'grep', 'skill', 'observation_read']
     for (const name of admittedReads) assert.ok(ctx.tools.schemas(parent).some((s: any) => s.name === name), name)
-    const projected = ctx.get(LISP_ASSEMBLY_SERVICE).project(parent, { sections: [], variables: {}, tools: [] })
+    const projected = await ctx.get(LISP_ASSEMBLY_SERVICE).project(parent, { sections: [], variables: {}, tools: [] })
+    const assembly = ctx.get(LISP_ASSEMBLY_SERVICE)
+    assert.ok(assembly.inventory(parent).some((schema: any) => schema.name === 'write'), 'installed mutations remain in the bound catalog')
+    assert.equal(ctx.tools.schemas(parent).some((schema: any) => schema.name === 'write'), placement === 'agent', 'inventory restores protected visibility')
+    const removeLate = ctx.tools.register(define('late_inventory_probe', async () => ({ ok: true })))
+    try {
+      assert.ok(assembly.inventory(parent).some((schema: any) => schema.name === 'late_inventory_probe'), 'inventory notices real registration changes')
+      assert.equal((await call('late_inventory_probe')).isError, true, 'catalog reads never grant execution')
+    } finally { removeLate() }
+    assert.equal(assembly.inventory(parent).some((schema: any) => schema.name === 'late_inventory_probe'), false, 'removed definitions are not cached')
     assert.ok(projected.tools.some((s: any) => s.name === 'task_memory_review'), 'memory recovery must reach the model in Lisp mode')
     for (const name of ['ask_user_question', 'exit_plan_mode']) {
       assert.equal(projected.tools.some((s: any) => s.name === name), false, 'unregistered control tools are not invented')

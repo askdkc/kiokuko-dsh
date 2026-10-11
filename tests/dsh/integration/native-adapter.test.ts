@@ -126,6 +126,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     commands: { register() { return () => undefined } },
     userQuestions: { async ask(request: { questions: readonly [{ id: string; options?: { label: string }[] }]; agent?: object }) {
       if (request.agent === undefined) throw new Error('no user-questions answerer accepted the request')
+      if (request.questions[0].id === 'enno-execution-mode' && (request.agent as {id:string}).id === 'lisp-coding-agent') {
+        selectionQuestions.push(request.questions[0].id)
+        return { answers: [{ id: request.questions[0].id, selected: ['通常実行'] }] }
+      }
       if (request.questions[0].id === 'enno-execution-mode' && executionCustom !== undefined) {
         selectionQuestions.push(request.questions[0].id)
         return { answers: [{ id: request.questions[0].id, selected: [], custom: executionCustom }] }
@@ -177,7 +181,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   })
   const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
-    assert.equal(registered.length, 18)
+    assert.equal(registered.length, 19)
     for(const name of ['kioku_read','kioku_write','kioku_edit','kioku_remove','kioku_exec','kioku_result']) assert.ok(registered.some((definition:any)=>definition.name===name))
     assert.ok(registered.some((definition: any) => definition.name === 'memory_explain'))
     assert.ok(registered.some((definition: any) => definition.name === 'task_completion'))
@@ -727,10 +731,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
         messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'src/index.ts を実装。tests pass' }], source: { kind: 'user' as const } }] }
       const selectionsBeforeLisp = selectionQuestions.length
       const mapped = await adapter.host.mapPreStep!(input)
-      assert.equal(lispQuestions, 1)
-      assert.deepEqual(mapped.capabilities.tools.map(tool => tool.name), [...LISP_TOOLS].sort())
+      assert.equal(lispQuestions, 0, 'Lisp choice waits for the visible Goal proposal')
+      assert.ok(registered.some(tool => tool.name === 'coding_workflow'))
       assert.equal((await adapter.host.intakeGate!.preStep(mapped, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
-      assert.equal(selectionQuestions.length, selectionsBeforeLisp, 'Lisp choice already authorized normal execution')
+      assert.ok(selectionQuestions.slice(selectionsBeforeLisp).includes('enno-execution-mode'), 'Execution mode is separate from the later task-bound Lisp choice')
       const db = openConnection(f.databasePath)
       try {
         const runId = adapter.host.resolveSessionRunId!(lispSession)!
@@ -741,20 +745,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       const repeated = await adapter.host.mapPreStep!({ ...input, step: 2 })
       assert.deepEqual(repeated.capabilities, mapped.capabilities)
       assert.equal((await adapter.host.intakeGate!.preStep(repeated, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
-      assert.equal(lispQuestions, 1)
-
-      lispCustom = 'ただのチャット。Lisp の用途を説明して'
-      const discussionSession = createNativeSession('lisp-discussion-session')
-      const discussionAgent = { id: 'lisp-discussion-agent', session: discussionSession }
-      const discussion = await adapter.host.mapPreStep!({ ...input, agent: discussionAgent })
-      assert.equal(discussion.profileHints?.taskType, 'chat')
-      assert.equal(discussion.profileHints?.constraints, lispCustom)
-      assert.equal(lispAgents.has(discussionAgent.id), false)
-      const decision = await adapter.host.intakeGate!.preStep(discussion, async () => ({ kind: 'enter', messages: [] }))
-      assert.equal(decision.kind, 'enter')
-      assert.match(JSON.stringify(decision), /ただのチャット。Lisp の用途を説明して/u)
-      assert.ok(guards.some(guard => guard({ agent: discussionAgent })?.includes('自由入力')))
-      assert.equal(selectionQuestions.length, selectionsBeforeLisp)
+      assert.equal(lispQuestions, 0)
     } finally { await lispFiber.dispose() }
   } finally {
     await disposeComposition.dispose()

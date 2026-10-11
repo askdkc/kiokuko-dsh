@@ -15,6 +15,8 @@ import type { StoredExecutionSelection } from '../execution-selection.js'
 import type { DshSessionEventSource } from '../session-memory-finalizer.js'
 import type { DshAdvisoryRoundResult } from '../advisory-runner.js'
 import type { TurnRecord } from './turn-state.js'
+import { codingStatus } from '../coding-workflow/service.js'
+import { CODING_GUIDANCE } from '../coding-workflow/host.js'
 
 interface ContextDependencies {
   readonly ctx: Context
@@ -49,7 +51,7 @@ export function createContextMessages({
     const directive = projectDshDirective(prepared.ennoOduno)
     const selection = directive === null ? { routeSkillNames: [], expertRefs: [] } : selectDshDirectiveSources(directive)
     const advisoryEvidence = await advisoryEvidenceFor(item, prepared.ennoOduno)
-    const messages = await injectDshContext({
+    const messages = [...await injectDshContext({
       skillPrompts: getSkillPrompts(),
       systemSkillNames: systemSkillsFor(event.nativeAgent ?? event.agent) ?? new Set(),
       prepared,
@@ -61,8 +63,10 @@ export function createContextMessages({
       runtime,
       soulInSystemPrompt: ctx.get('systemPrompt', false) !== undefined,
       userTaskInConversation: true,
-    })
+    })]
     const previousReport = await deepPlanning.previousReport(event.sessionId)
+    const workflow = await runtime.withDatabase(db=>codingStatus(db,{runId:item.runId,sessionId:item.sessionId,repositoryRoot:item.repositoryRoot}))
+    if(workflow.applicable)messages.push({role:'user',source:'user-task',name:'coding-workflow',content:`${CODING_GUIDANCE}\n${JSON.stringify(workflow)}`})
     if (continuityMode !== 'off' && prepared.ennoOduno.applicable && !executionBinding(item).terminal && !executionSupport.paused(event.sessionId)) {
       // One service read at the request boundary; reuse its verdict without running verifiers.
       try {

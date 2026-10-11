@@ -128,7 +128,7 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
       row.memory = recordEntry(db, { workspace, kind: 'lesson', title: 'migration expectations', body: 'Current migration expectations must include the next migration.', createdBy: 'fixture', scope: { visibility: 'project' } })
     } finally { db.close() }
     handle = await ctx.agents.create({ sessionId: sessions.SessionId(`ptc-memory-${hostMode}`), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: root } })
-    handle.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Implement migration expectations' }], source: { kind: 'user' } }))
+    handle.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Run the memory review programs for migration expectations' }], source: { kind: 'user' } }))
     await handle.agent.whenIdle()
     row.results = handle.agent.session.snapshotEvents().filter((e: any) => e.type === 'tool/result').map((e: any) => e.data.message)
     assert.deepEqual(row.errors, [])

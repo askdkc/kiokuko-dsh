@@ -78,7 +78,8 @@ try {
     assert.ok(coreFiles.has(path), `Missing Laya core asset: ${path}`)
   }
   for (const name of ['enno', 'lisp']) for (const file of report.artifacts[name].sourceFiles) assert.ok(!coreFiles.has(file), `${name} duplicates core implementation: ${file}`)
-  assert.ok(!packed.core.files.some(file => /^lisp\/|^skills\/kiokuko-(lisp|enno-oduno)\//.test(file.path)))
+  assert.deepEqual(packed.core.files.filter(file => file.path.startsWith('lisp/')).map(file => file.path), ['lisp/supervisor.mjs'], 'core includes only the shared native process supervisor, never the Lisp runtime')
+  assert.ok(!packed.core.files.some(file => /^skills\/kiokuko-(lisp|enno-oduno)\//.test(file.path)))
   assert.ok(!Object.keys(report.artifacts.core.dependencies).some(name => name === 'agenticreplay' || name.startsWith('@agenticreplay/')))
   assert.deepEqual(packed.core.files.filter(file => file.path.startsWith('migrations/')).map(file => file.path).sort(), report.sharedCompatibilityAssets.map(asset => asset.path).sort())
   const results = []

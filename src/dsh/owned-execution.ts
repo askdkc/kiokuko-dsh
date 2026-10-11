@@ -8,14 +8,17 @@ import * as z from 'zod/v4'
 import type { DshCoreRuntime } from './core-runtime.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { findSecret } from '../memory/secrets.js'
+import { KiokukoError } from '../errors.js'
 import { applicationSourceDigest, beginMemoryExecution, completeMemoryExecution, type MemoryApplicationIdentity } from '../memory/application.js'
-import { beginTaskCompletionExecution, finishTaskCompletionExecution, saveTaskCompletionReceipt } from './task-completion.js'
+import { beginTaskCompletionExecution, finishTaskCompletionExecution, saveTaskCompletionReceipt, completionSourceDigest } from './task-completion.js'
 import { observeProcessResult } from './execution-result.js'
 import { parseTestSummary, type TapSummary } from './node-tap-summary.js'
 import {ExecutionJournal} from './execution-journal.js'
 import {shellArguments} from './execution-command.js'
+import { assertCodingDispatch, assertCodingCommandRetry } from './coding-workflow/service.js'
+import { readCodingWorkflow } from './coding-workflow/store.js'
 
-export interface ExecutionIdentity extends MemoryApplicationIdentity { generation: string; agent: any }
+export interface ExecutionIdentity extends MemoryApplicationIdentity { generation: string; agent: any; workflowSessionId?: string }
 export interface ExecutionReceipt {
   version: 1; operationId: string; runId: string; sessionId: string; generation: string
   kind: string; repositoryRoot:string; cwd: string; command?: string; commandDigest?: string
@@ -45,6 +48,7 @@ const resultInput = z.object({operationId:z.string().min(1),cancel:z.boolean().d
 /** One owner for effects and observed evidence. Saved-result reads never execute an effect. */
 export class OwnedExecutionService {
   readonly #operations = new Map<string, { digest:string; receipt:ExecutionReceipt; value?:unknown; controller:AbortController; done?:Promise<unknown> }>()
+  readonly #legacyRuns = new Set<string>()
   constructor(private readonly host: OwnedHost) {}
   private current(execution: NativeExecution): ExecutionIdentity {
     execution.signal.throwIfAborted()
@@ -76,6 +80,9 @@ export class OwnedExecutionService {
     const identity=this.host.resolve(execution)
     if(!identity)return
     try{await this.host.runtime.withDatabase(db=>{
+      // Coding checks carry source/config/artifact dependencies. Assessment
+      // invalidates the affected checks instead of discarding unrelated items.
+      if (readCodingWorkflow(db, identity.runId)) { saveTaskCompletionReceipt(db, identity.runId); return }
       db.prepare("UPDATE dsh_completion_executions SET outcome='unknown' WHERE run_id=? AND outcome='passed'").run(identity.runId)
       saveTaskCompletionReceipt(db,identity.runId)
     })}catch{/* Missing auxiliary evidence never rejects development. */}
@@ -108,7 +115,7 @@ export class OwnedExecutionService {
             JOIN dsh_completion_bindings b ON b.run_id=e.run_id AND b.method_digest=e.method_digest WHERE e.run_id=? AND e.call_id=? LIMIT 1`)
             .get<{source_digest:string;outcome:string;method_json:string}>(identity.runId,receipt.operationId)
           if(row){const method=JSON.parse(row.method_json);let postSourceDigest:string|undefined
-            try{postSourceDigest=applicationSourceDigest(identity.repositoryRoot,method.sourcePaths)}catch{/* Missing inputs remain unknown. */}
+            try{postSourceDigest=completionSourceDigest(db,identity.runId,identity.repositoryRoot,method.sourcePaths)}catch{/* Missing inputs remain unknown. */}
             receipt.checks=[{sourcePaths:method.sourcePaths,sourceDigest:row.source_digest,...(postSourceDigest?{postSourceDigest}:{}),outcome:row.outcome,assertion:method.assertion}];receipt.verification=row.outcome==='passed'?'passed':row.outcome==='failed'?'failed':'unknown'}
         }
         if (memory) completeMemoryExecution(db,identity,receipt.operationId,result)
@@ -128,8 +135,24 @@ export class OwnedExecutionService {
   async execute(name: string, raw: unknown, execution: NativeExecution): Promise<unknown> {
     const identity = this.current(execution)
     ownedCalls.add(execution)
+    if (name === 'kioku_read' || name === 'kioku_result') {
+      await this.host.runtime.withDatabase(db => {
+        if (!readCodingWorkflow(db,identity.runId)) this.#legacyRuns.add(identity.runId)
+        else this.#legacyRuns.delete(identity.runId)
+      }).catch(()=>{})
+    }
     if (name === 'kioku_result') return this.result(identity,resultInput.parse(raw))
     const input = name === 'kioku_exec' ? commandInput.parse(raw) : fileInput.parse(raw)
+    if(name!=='kioku_read') {
+      try {
+        await this.host.runtime.withDatabase(db=>{
+          const workflowIdentity = { ...identity, sessionId: identity.workflowSessionId ?? identity.sessionId }
+          if (!assertCodingDispatch(db,workflowIdentity,name)) this.#legacyRuns.add(identity.runId)
+          else this.#legacyRuns.delete(identity.runId)
+          if (name === 'kioku_exec') assertCodingCommandRetry(db, workflowIdentity, (input as z.infer<typeof commandInput>).command)
+        })
+      } catch (error) { if (error instanceof KiokukoError || !this.#legacyRuns.has(identity.runId)) throw error }
+    }
     if (name !== 'kioku_read' && this.host.planActive?.(identity.agent)) throw new Error('Plan is active. An explicit human implementation instruction or plan approval must exit it first.')
     // Native call identity survives a generation change. Rebinding a replay to
     // a new run/generation must conflict rather than repeat its side effects.

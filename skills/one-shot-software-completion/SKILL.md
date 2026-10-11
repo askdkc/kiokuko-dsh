@@ -16,12 +16,9 @@ defaults never override intent, permissions or host integrity checks.
 
 **本当に、それを全部計算・保存・検索する必要があるのか？**
 
-Complete the required outcome with only the computation, persistence and search
-it needs. Before implementation, eliminate unnecessary work and narrow the rest;
-justify exhaustive processing or retention with a concrete requirement. Search
-for missing evidence and stop when it is sufficient. Verify that omitted work
-does not change required behavior or weaken integration, recovery or checks.
-Completion means meeting the user's requirements, not processing everything.
+Before implementation, remove unnecessary computation, persistence and search;
+justify exhaustive work by a required outcome. Stop when evidence suffices.
+Verify that omissions preserve behavior, integration, recovery and checks.
 
 ## Read economically
 
@@ -40,6 +37,8 @@ Use the current agent unless delegation is required. Widen reads for new evidenc
 failures or lost context. Token budgets use host usage, not bytes or capacity.
 
 ## Completion contract
+
+Coding: coding_workflow binds Goal/items/checks before the task Lisp choice. Verify items, then the user entry with fresh host evidence. Pending checks prevent completion; resume exact task/operation IDs.
 
 Bind behavior, required method, preserved contracts and evidence before editing.
 No unapproved proxy: raster for required geometry, hardcoded output, mocks or

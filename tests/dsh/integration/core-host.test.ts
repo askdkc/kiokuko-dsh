@@ -1,3 +1,4 @@
+import { fixtureDefinition } from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -94,7 +95,7 @@ const requireIntakeChoice: DshModule<CoreModuleHost> = {
 }
 
 test('mounted core gates actionable memory and exposes a session-bound diagnostic after interrupted completion', async () => {
-  const f = await fixture(), commands: any[] = []
+  const f = await fixture({ask: async r => ({answers:r.questions.map((q:any)=>({id:q.id,selected:['使わない']}))})}), commands: any[] = []
   f.services.commands = { register(command: any) { commands.push(command); return () => commands.splice(commands.indexOf(command), 1) } }
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
   try {
@@ -107,6 +108,8 @@ test('mounted core gates actionable memory and exposes a session-bound diagnosti
     const messages = [{ role: 'user', content: 'Implement code migration expectations' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
     await f.prepare('build')
+    const coding=await f.execute('coding_workflow',{action:'status'})
+    await f.execute('coding_workflow',{action:'propose',expectedRevision:coding.revision,definition:fixtureDefinition()})
     const execution = { callId: 'write', name: 'Edit', arguments: {}, agent: f.agent, signal: new AbortController().signal }
     await f.execute('Edit', {})
     assert.equal(mutated, true, 'an unresolved decision never rejects the call')
@@ -124,7 +127,7 @@ test('mounted core gates actionable memory and exposes a session-bound diagnosti
     assert.equal(diagnostic.verification, 'unobserved')
     assert.equal('body' in diagnostic.pending[0], false)
     const stored = openConnection(join(f.root, 'memory.sqlite3'))
-    assert.equal(stored.prepare('SELECT status FROM ledger_runs').get()?.status, 'interrupted')
+    assert.equal(stored.prepare('SELECT status FROM ledger_runs').get()?.status, 'active')
     stored.close()
   } finally { await handle.dispose(); await f.cleanup() }
 })
@@ -135,7 +138,10 @@ test('core native path handles conversation, research, writing and project memor
   try {
     assert.equal(f.sections.length, 2)
     assert.doesNotMatch(f.sections[0].text, /\| `kiokuko-enno-oduno`|\| `kiokuko-single-purpose-functions`/)
-    assert.deepEqual((await f.providers[0].list({})).candidates.map((item: any) => item.name), ['kiokuko-soul', 'memory-reasoning', 'natural-japanese-output'])
+    const skills = (await f.providers[0].list({})).candidates.map((item: any) => item.name)
+    for (const name of ['kiokuko-soul', 'memory-reasoning', 'natural-japanese-output', 'coding-ideal-routine-skill', 'kiokuko-single-purpose-functions', 'one-shot-software-completion']) assert.ok(skills.includes(name), name)
+    assert.equal(skills.includes('kiokuko-enno-oduno'), false)
+    assert.equal(skills.includes('kiokuko-lisp'), false)
     const db = openConnection(join(f.root, 'memory.sqlite3'))
     const workspace = db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{ workspace: string }>()!.workspace
     await recordEntry(db, { workspace, kind: 'fact', title: '文章作成の表記', body: '文章作成では見出しを短くする。', status: 'verified', provenance: { type: 'user', reference: 'fixture' } })
@@ -243,7 +249,7 @@ test('core PTC mode exposes memory review only after requested work is prepared'
       body: 'Current migration expectations must include the next migration.', createdBy: 'fixture' })
     db.close()
     f.listeners.get('agent/created')!({ agent: f.agent })
-    const message = { role: 'user', content: [{ type: 'text', text: 'Implement migration expectations' }], source: { kind: 'user' } }
+    const message = { role: 'user', content: [{ type: 'text', text: 'Run migration expectations review programs' }], source: { kind: 'user' } }
     hooks.get('agent/inbox/claimed')!({ agent: f.agent, turn: 1, message })
     const routingAssemble = hooks.get('system-prompt/assemble')!
     const assemble = () => routingAssemble({}, { signal: new AbortController().signal },

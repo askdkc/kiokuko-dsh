@@ -9,6 +9,7 @@ import { z } from 'zod'
 import type { DshUserQuestions } from '../user-interaction.js'
 import { EvalInput, LispError, digest, fail, failure, identifier, type LispConfiguration, type LispOwner, type LispState, type LispTool } from './contracts.js'
 import { LispStore } from './store.js'
+import { sessionCodingWorkflow } from '../coding-workflow/store.js'
 import { LispWorker, type LispRpcContext } from './worker.js'
 import { prepareLayout } from './sandbox.js'
 import { verifyLispVendor } from './integrity.js'
@@ -113,7 +114,13 @@ export class LispManager {
     return state
   }
   private protectedRoots(): string[] { return [this.options.dataRoot, dirname(this.#library), ...this.options.protectedRoots ?? []] }
+  private async authorizeCodingTask(owner:LispOwner):Promise<void> {
+    const workflow=await this.#store.database(db=>sessionCodingWorkflow(db,owner.sessionId))
+    if(workflow&&(workflow.repositoryRoot!==owner.root||workflow.choice.state!=='yes'||!workflow.definition||['cancelled','superseded','completed'].includes(workflow.state)))
+      fail('CODING_CHOICE_PENDING','このタスクの Goal と条件を定め、Lisp の選択に回答してから実行してください。')
+  }
   async enable(owner: LispOwner, hostBusy = false, signal?: AbortSignal): Promise<unknown> {
+    await this.authorizeCodingTask(owner)
     signal?.throwIfAborted()
     if (await this.isTaskMode(owner)) fail('TASK_MODE_ACTIVE', 'このセッションは作業用ツール形態です。Lisp worker 形態へ切り替えるには一度 disable してください。')
     if (!this.#config.enabled) fail('LISP_DISABLED', '設定の lisp.enabled を true にしてプラグインを再読み込みしてください。')
@@ -129,6 +136,7 @@ export class LispManager {
     return this.status(owner)
   }
   async enableTask(owner: LispOwner, signal?: AbortSignal): Promise<unknown> {
+    await this.authorizeCodingTask(owner)
     signal?.throwIfAborted()
     if (!this.#config.enabled || this.#closed) fail('LISP_DISABLED', 'Lisp の設定と状態を確認してください。')
     if (await realpath(owner.root) !== owner.root) fail('SCOPE_CONFLICT', '作業ディレクトリを確認できません。')
@@ -166,6 +174,7 @@ export class LispManager {
   }
   /** A managed call uses the same admission queue and OS sandbox as legacy Lisp. */
   private async runTask(owner: LispOwner, code: string, input: unknown, signal?: AbortSignal, mode: 'call' | 'compile' | 'eval' = 'call'): Promise<{ value: unknown; output: unknown; generation: string }> {
+    await this.authorizeCodingTask(owner)
     if ([...this.#agents.values()].some(s => s.owner.sessionId === owner.sessionId && s.state === 'STOP_UNCONFIRMED'))
       fail('STOP_UNCONFIRMED', '停止未確認の Lisp worker があります。新しい実行を開始できません。')
     const state: AgentState = { owner, state: 'PREFLIGHT', active: new Set(), hostBusy: true }
@@ -222,6 +231,7 @@ export class LispManager {
     }
   }
   private async startWorker(state: AgentState): Promise<LispWorker> {
+    await this.authorizeCodingTask(state.owner)
     if (state.admission) return state.admission
     if (this.#closed || state.disposed) fail('HOST_STOPPED', 'Lisp のセッションが停止しています。')
     clearTimeout(state.idleTimer)
@@ -316,6 +326,7 @@ export class LispManager {
   }
   /** Normal suspension is resumable; crashes and explicit cancellation are not. */
   async prepare(owner: LispOwner): Promise<unknown> {
+    await this.authorizeCodingTask(owner)
     const state = this.entry(owner)
     if (state.suspension) await state.suspension
     if (state.state === 'SUSPENDED') { await this.startWorker(state); state.resumed = true }
@@ -505,6 +516,7 @@ export class LispManager {
   }
   private async dispatch(owner: LispOwner, tool: LispTool, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     try {
+      if(!['lisp_status','lisp_hot_status','lisp_inspect','lisp_cancel'].includes(tool))await this.authorizeCodingTask(owner)
       if (tool === 'lisp_status') return await this.status(owner, z.number().int().nonnegative().parse(input.offset ?? 0))
       const state = this.entry(owner)
       if (tool === 'lisp_hot_status') return await this.#hot.status(owner, input)

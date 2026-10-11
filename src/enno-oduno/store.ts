@@ -1,4 +1,7 @@
 import { registerCompletionVerifiers } from '../dsh/completion-verifiers.js'
+import { completionSourceDigest } from '../dsh/task-completion.js'
+import { readCodingWorkflow } from '../dsh/coding-workflow/store.js'
+import { ennoCodingProjection } from './coding-workflow.js'
 import { readPlanDraft } from './plan-draft.js'
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -103,6 +106,8 @@ interface VerifierResultRow extends SqliteRow {
   verifier_spec_digest: string | null;
   changed_during_verification: number | null;
   finished_at: string | null;
+  coding_source_paths_json: string | null;
+  coding_source_digest: string | null;
 }
 
 interface AdvisoryStateRow extends SqliteRow {
@@ -820,6 +825,21 @@ export function startVerifierRunsInTransaction(database: SqliteDatabase, input: 
       input.repositoryEvidence?.verifierSpecDigest ?? null,
       now,
     );
+    const coding = readCodingWorkflow(database, input.runId)
+    if (coding) {
+      const row = contractRow(database, input.runId)!
+      const contract = parseEnnoContract(parseCanonicalJson(row.contract_json, 'Stored Enno contract is invalid'))
+      const scopes = input.workUnitId ? contract.workPlan.units.find(unit=>unit.id===input.workUnitId)?.scope ?? [] : contract.scope
+      const sources = scopes.map(scope=>scope.replace(/[*?].*$/u,'').replace(/\/$/u,''))
+        .filter(scope=>scope.length>0 && scope!=='.' && !path.isAbsolute(scope) && !scope.split(/[\\/]/u).includes('..'))
+      const tests = verifier.args.filter(arg=>/\.(?:test|spec)\.(?:js|mjs|ts)$/u.test(arg)).map(arg=>path.relative(coding.repositoryRoot,path.resolve(coding.repositoryRoot,verifier.cwd,arg)))
+      const paths = [...new Set([...sources,...tests])]
+      if (paths.length) {
+        const digest = completionSourceDigest(database,input.runId,coding.repositoryRoot,paths)
+        database.prepare('UPDATE enno_verifier_runs SET coding_source_paths_json=?,coding_source_digest=? WHERE verifier_run_id=?')
+          .run(JSON.stringify(paths),digest,verifierRunId)
+      }
+    }
     return verifierRunId;
   });
 }
@@ -859,6 +879,8 @@ export function finishVerifierRunsInTransaction(
       verifierRunId,
     );
     if (updated?.verifierRunId !== verifierRunId) throw new KiokukoError('CONFLICT', 'Enno verifier state changed concurrently');
+    database.prepare('UPDATE enno_verifier_runs SET explicit_test_cases=? WHERE verifier_run_id=?')
+      .run(result.explicitCases === undefined ? null : result.explicitCases ? 1 : 0, verifierRunId)
   });
 }
 
@@ -874,7 +896,8 @@ export function readFreshFinalVerifierResults(database: SqliteDatabase, input: {
     SELECT verifier_id, verifier_json, status, exit_code, signal, duration_ms,
            stdout_preview, stderr_preview, stdout_digest, stderr_digest, skipped, tap_summary_json,
            repository_state_policy_version, pre_repository_digest, post_repository_digest,
-           verifier_spec_digest, changed_during_verification, finished_at
+           verifier_spec_digest, changed_during_verification, finished_at, explicit_test_cases,
+           coding_source_paths_json, coding_source_digest
     FROM enno_verifier_runs
     WHERE run_id = ? AND work_unit_id IS NULL
       AND contract_revision = ? AND mutation_revision = ?
@@ -886,6 +909,8 @@ export function readFreshFinalVerifierResults(database: SqliteDatabase, input: {
   if (byId.size !== input.verifiers.length || input.verifiers.some((verifier) => !byId.has(verifier.id))) return undefined;
   for (const verifier of input.verifiers) {
     const row = byId.get(verifier.id)!;
+    const coding = readCodingWorkflow(database, input.runId)
+    if (coding && (!row.coding_source_paths_json || row.coding_source_digest !== completionSourceDigest(database, input.runId, coding.repositoryRoot, JSON.parse(row.coding_source_paths_json)))) return undefined
     const storedVerifier = parseVerifierSpec(parseCanonicalJson(row.verifier_json, 'Stored Enno verifier is invalid'));
     if (canonicalJson(storedVerifier) !== canonicalJson(verifier)) return undefined;
     // Missing audit evidence is unknown, never proof of an unchanged tree.
@@ -902,9 +927,10 @@ export function readFreshFinalVerifierResults(database: SqliteDatabase, input: {
     const bindings = database.prepare(`SELECT method_json, updated_at FROM dsh_completion_bindings
       WHERE run_id = ? AND approved = 1 AND criterion_revision = ?`).all<{ method_json: string; updated_at: string }>(input.runId, input.revision);
     for (const binding of bindings) {
-      let method: { kind?: unknown; verifierId?: unknown };
+      let method: { kind?: unknown; verifierId?: unknown; workUnitId?: unknown };
       try { method = JSON.parse(binding.method_json); } catch { return undefined; }
       if (method.kind !== 'enno_verifier') continue;
+      if (method.workUnitId !== undefined) continue;
       if (typeof method.verifierId !== 'string' || !byId.get(method.verifierId)?.finished_at
         || byId.get(method.verifierId)!.finished_at! <= binding.updated_at) return undefined;
     }
@@ -924,6 +950,7 @@ export function readFreshFinalVerifierResults(database: SqliteDatabase, input: {
       stderrDigest: row.stderr_digest,
       ...(row.skipped === null ? {} : { skipped: row.skipped === 1 }),
       ...(row.tap_summary_json === null ? {} : { tapSummary: JSON.parse(row.tap_summary_json) }),
+      explicitCases: (row as VerifierResultRow & {explicit_test_cases?:number}).explicit_test_cases === 1,
       ...(row.repository_state_policy_version === null ? {} : { repositoryStatePolicyVersion: row.repository_state_policy_version }),
       ...(row.post_repository_digest === null ? {} : { repositoryStateDigest: row.post_repository_digest }),
       ...(row.changed_during_verification === null ? {} : { changedDuringVerification: row.changed_during_verification === 1 }),
@@ -1067,13 +1094,26 @@ export function terminalizeLedgerRunInTransaction(database: SqliteDatabase, runI
 }
 
 registerCompletionVerifiers({
+  codingProjection(database,identity) { return ennoCodingProjection(readEnnoSnapshot(database,identity)) },
   criteria(database,identity) {
     const snapshot=readEnnoSnapshot(database,identity)
     return {revision:snapshot.revision,criteria:snapshot.contract.acceptanceCriteria}
   },
-  results(database,identity,root) {
+  results(database,identity,root,workUnitId) {
     const snapshot=readEnnoSnapshot(database,identity)
+    if (workUnitId) {
+      const unit = snapshot.workUnits.find(unit=>unit.workUnit.id===workUnitId)
+      if (!unit) return
+      return unit.workUnit.focusedVerifiers.flatMap(verifier=>{
+        const row = database.prepare(`SELECT verifier_run_id,verifier_json,status,tap_summary_json,explicit_test_cases,coding_source_paths_json,coding_source_digest,finished_at
+          FROM enno_verifier_runs WHERE run_id=? AND work_unit_id=? AND contract_revision=? AND verifier_id=?
+          ORDER BY rowid DESC LIMIT 1`).get<{verifier_run_id:string;verifier_json:string;status:string;tap_summary_json:string|null;explicit_test_cases:number|null;coding_source_paths_json:string|null;coding_source_digest:string|null;finished_at:string|null}>(identity.runId,workUnitId,snapshot.revision,verifier.id)
+        if (!row || !row.finished_at || canonicalContentHash(JSON.parse(row.verifier_json))!==canonicalContentHash(verifier)) return []
+        if (readCodingWorkflow(database,identity.runId) && (!row.coding_source_paths_json || row.coding_source_digest!==completionSourceDigest(database,identity.runId,root,JSON.parse(row.coding_source_paths_json)))) return []
+        return [{verifierId:verifier.id,status:row.status,receiptId:row.verifier_run_id,explicitCases:row.explicit_test_cases===1,...(row.tap_summary_json?{tapSummary:JSON.parse(row.tap_summary_json)}:{})}]
+      })
+    }
     return readFreshFinalVerifierResults(database,{runId:identity.runId,revision:snapshot.revision,mutationRevision:snapshot.mutationRevision,
-      verifiers:snapshot.contract.finalVerifiers,repositoryDigest:captureRepositoryState(root).digest})?.map(result=>({verifierId:result.verifier.id,status:result.status,...(result.tapSummary?{tapSummary:result.tapSummary}:{})}))
+      verifiers:snapshot.contract.finalVerifiers,repositoryDigest:captureRepositoryState(root).digest})?.map(result=>({verifierId:result.verifier.id,status:result.status,explicitCases:result.explicitCases===true,...(result.tapSummary?{tapSummary:result.tapSummary}:{})}))
   },
 })

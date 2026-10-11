@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import type { DshModule, ModuleResource } from '../core/modules.js'
+import type { DshModule, ModuleResource, ModuleRegistration } from '../core/modules.js'
 import { STANDARD_SKILL_MANIFESTS } from '../standard-skills.js'
 
 /** Explicit trusted build inventory. Resource names never originate in user input. */
@@ -14,3 +14,7 @@ export function skillModule<Host>(id: string, names: readonly string[]): DshModu
 }
 export const coreSkills = skillModule('core-skills', ['kiokuko-soul', 'memory-reasoning', 'natural-japanese-output'])
 export const codingSkills = skillModule('coding-skills', ['coding-ideal-routine-skill', 'kiokuko-single-purpose-functions', 'one-shot-software-completion', 'kiokuko-simple-work', 'kiokuko-ui-design-soul', 'veteran-programmer-skill', 'kiokuko-investigate', 'kiokuko-architecture', 'kiokuko-review', 'kiokuko-benchmark', 'kiokuko-verification', 'kiokuko-skill-authoring', 'kiokuko-technical-writing'])
+/** Coding is a core workflow, including compositions without optional modules. */
+export function withCoreSkills<Host>(registrations: readonly ModuleRegistration<Host>[]): readonly ModuleRegistration<Host>[] {
+  return [{ module: coreSkills }, ...(registrations.some(entry => entry.module.id === codingSkills.id) ? [] : [{ module: codingSkills }]), ...registrations]
+}

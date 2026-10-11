@@ -68,7 +68,8 @@ test('prototype live path uses the native HTTP serializer and stops before a sec
         'scripted runtime setup must finish before any HTTP dispatch')
       return deepSeekFixtureResponse(String(url), config.model, { tool: { id: 'probe', name: 'lisp_eval', arguments: { operationId: 'probe', code: '(+ 20 22)' } } })
     } })
-    assert.equal(bodies.length, 1, 'budget must stop the continuation before network dispatch')
+    assert.equal(bodies.length, 1, JSON.stringify(report.records.map((row: any) => ({ stage: row.stage, failure: row.failure,
+      errors: row.evidence?.results?.filter((result: any) => result.isError).map((result: any) => result.text) }))))
     assert.equal(report.status, 'budget_exhausted', JSON.stringify(report.records.map((row: any) => ({ stage: row.stage, failure: row.failure,
       calls: row.evidence?.calls?.map((call: any) => ({ name: call.name, callId: call.callId })),
       errors: row.evidence?.results?.filter((result: any) => result.isError).map((result: any) => result.text) }))))

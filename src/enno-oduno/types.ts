@@ -458,6 +458,7 @@ export interface VerifierRunResult {
   skipped?: boolean;
   /** Complete Node TAP trailer when the selected verifier used explicit TAP output. */
   tapSummary?: import('../dsh/node-tap-summary.js').TapSummary;
+  explicitCases?: boolean;
   repositoryStatePolicyVersion?: number | undefined;
   repositoryStateDigest?: string | undefined;
   changedDuringVerification?: boolean | undefined;

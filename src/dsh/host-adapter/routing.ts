@@ -229,7 +229,7 @@ export function createRouting({
       assembled: async assembly => {
         semanticCompaction.recordRoute(agent as unknown as CompactionAgent, assembly.variables)
         const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
-        if (lisp) assembly = lisp.project(agent, assembly)
+        if (lisp) assembly = await lisp.project(agent, assembly)
         const exposureMode = getToolExposureConfig().mode
         if (exposureMode !== 'full') {
           let fallback: string | undefined

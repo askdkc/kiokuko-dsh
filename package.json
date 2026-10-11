@@ -240,6 +240,7 @@
     "test:ci:prepare": "npm run verify:prepare",
     "test:ci:embedding": "node scripts/run-local-embedding-smoke.mjs --offline",
     "test:ci:approval:web": "npm run build && node scripts/run-ci-native.mjs browser-approval",
+    "test:ci:coding:web": "npm run build && node scripts/run-ci-native.mjs browser-coding",
     "test:ci:shortcuts:web": "npm run build && node scripts/run-ci-native.mjs browser-shortcuts",
     "test:models:web": "npm run build && node scripts/verify-models-web.mjs",
     "test:code-intelligence": "node scripts/run-code-intelligence.mjs",

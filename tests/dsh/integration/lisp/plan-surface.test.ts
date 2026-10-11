@@ -54,7 +54,7 @@ for (const mode of ['persistent', 'task'] as const) test(`Lisp ${mode}: native q
     assert.equal(enabled.kind, 'success', enabled.text)
     for (const name of ['exit_plan_mode', 'ask_user_question']) {
       assert.ok(ctx.tools.schemas(agent).some((s: any) => s.name === name), name)
-      assert.ok(ctx.get(LISP_ASSEMBLY_SERVICE).project(agent, { sections: [], variables: {}, tools: [] }).tools.some((s: any) => s.name === name), 'request projection retains ' + name)
+      assert.ok((await ctx.get(LISP_ASSEMBLY_SERVICE).project(agent, { sections: [], variables: {}, tools: [] })).tools.some((s: any) => s.name === name), 'request projection retains ' + name)
     }
     const child = await ctx.agentLoop.create(session.SessionId('plan-child'), { provider: 'mock', model: 'qwen3-coder' }, { cwd: root, parentSession: agent.session.id })
     for (const name of ['exit_plan_mode', 'ask_user_question']) {
