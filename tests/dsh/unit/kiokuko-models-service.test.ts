@@ -522,16 +522,29 @@ test("discovery adopts an id-only listing with the adapter defaults and keeps di
           maxTokens: 8192,
           inputModalities: ["text", "image"],
         },
+        {
+          id: "gateway-huge",
+          name: "Gateway Huge",
+          contextWindow: 204800,
+          maxTokens: 262144,
+        },
+        {
+          id: "gateway-1m",
+          name: "Gateway 1M",
+          contextWindow: 1048576,
+          maxTokens: 262144,
+        },
       ];
     });
     await f.service.refresh(c.id);
     assert.equal(f.asked.length, 1);
-    assert.deepEqual((await f.config.read()).connections[0]!.models, [
+    const stored = (await f.config.read()).connections[0]!;
+    assert.deepEqual(stored.models, [
       {
         id: "gateway-small",
         name: "gateway-small",
         contextWindow: 262144,
-        maxTokens: 32768,
+        maxTokens: 31744,
         reasoning: false,
         image: false,
       },
@@ -539,13 +552,84 @@ test("discovery adopts an id-only listing with the adapter defaults and keeps di
         id: "gateway-large",
         name: "Gateway Large",
         contextWindow: 200000,
-        maxTokens: 8192,
+        maxTokens: 7168,
         reasoning: false,
         image: true,
       },
+      {
+        id: "gateway-huge",
+        name: "Gateway Huge",
+        contextWindow: 204800,
+        maxTokens: 203776,
+        reasoning: false,
+        image: false,
+      },
+      {
+        id: "gateway-1m",
+        name: "Gateway 1M",
+        contextWindow: 1048576,
+        maxTokens: 261120,
+        reasoning: false,
+        image: false,
+      },
     ]);
+    // A 1M window stays 1M, and no request asks for the advertised maximum.
+    const profile = connectionProfile(stored);
+    assert.equal(profile.configuredMaxTokens.get("gateway-1m"), 32768);
+    assert.equal(profile.configuredMaxTokens.get("gateway-huge"), 32768);
+    assert.equal(profile.configuredMaxTokens.get("gateway-large"), 7168);
+    assert.equal(profile.configuredMaxTokens.get("gateway-small"), 31744);
   } finally {
     await f.close();
+  }
+});
+
+test("a provider rejection naming max_model_len lowers only that model's output cap", async () => {
+  const body =
+    '{"error":{"message":"max_completion_tokens=227398 cannot be greater than max_model_len=max_total_tokens=204800. Please request fewer output tokens."}}';
+  const server = createServer(async (req, res) => {
+    for await (const _part of req) void _part;
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(body);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const f = await fixture();
+  const chat = () =>
+    collect(
+      f.adapter().stream({
+        provider: "kiokuko-infron",
+        model: model.id,
+        messages: [
+          createUserMessage({
+            content: [{ type: "text", text: "hello" }],
+            source: { kind: "user" },
+          }),
+        ],
+      }),
+    );
+  try {
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
+      c = ConnectionSchema.parse({
+        id: "kiokuko-infron",
+        kind: "infron",
+        name: "Infron",
+        baseURL: url,
+        protocol: "chat-completions",
+        models: [{ ...model, contextWindow: 1048576, maxTokens: 262144 }],
+      });
+    await f.service.save(c, 0);
+    await f.service.setKey(c.id, "private-infron-key");
+    await assert.rejects(chat());
+    const stored = (await f.config.read()).connections[0]!;
+    assert.equal(stored.models[0]!.maxTokens, 203776);
+    assert.equal(stored.models[0]!.contextWindow, 1048576);
+    // The same or a higher ceiling is not an upward rewrite.
+    await assert.rejects(chat());
+    assert.equal((await f.config.read()).connections[0]!.models[0]!.maxTokens, 203776);
+  } finally {
+    await f.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 

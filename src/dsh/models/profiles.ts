@@ -13,6 +13,41 @@ import {
 import type { CredentialFile } from "./vendor/credentials.js";
 
 type PiModel = ReturnType<PiAiProvider["getModels"]>[number];
+/**
+ * Output tokens kept below whatever the provider advertises.
+ *
+ * A router advertises the model's maximum, while the deployment serving it
+ * accepts slightly less, so asking for the advertised number is rejected with
+ * `max_completion_tokens ... cannot be greater than max_model_len` — an Infron
+ * Qwen entry advertises 262144 for a vLLM deployment whose `max_model_len` is
+ * 204800. Every stored output cap stays this far below the advertised value.
+ */
+export const OUTPUT_TOKEN_MARGIN = 1024;
+/**
+ * Ceiling for one request's output tokens.
+ *
+ * With no cap set, pi-ai offers the *remaining* window
+ * (`options.maxTokens ?? model.maxTokens`, clamped to the model's
+ * contextWindow), so an advertised window larger than the deployment serves
+ * lets one request ask for more than that endpoint accepts. This ceiling bounds
+ * a request independently of the advertised numbers; a model's own `maxTokens`
+ * still declares its capability, and no context window is ever reduced here.
+ */
+export const REQUEST_OUTPUT_TOKENS = 32_768;
+/** The output cap to store for one model: 1K under what the provider advertises, never above its window. */
+export function storableMaxTokens(
+  advertised: number,
+  contextWindow: number,
+): number {
+  return Math.max(1, Math.min(advertised, contextWindow) - OUTPUT_TOKEN_MARGIN);
+}
+/** The output cap one request may ask for; the margin lives in the stored value. */
+function requestMaxTokens(maxTokens: number, contextWindow: number): number {
+  return Math.max(
+    1,
+    Math.min(maxTokens, contextWindow, REQUEST_OUTPUT_TOKENS),
+  );
+}
 /** The wire protocol pi-ai serves for one Kiokuko connection protocol. */
 export function protocolApi(protocol: Connection["protocol"]): string {
   return protocol === "responses"
@@ -214,7 +249,9 @@ export function connectionProfile(
     maxRequestImageBytes: 20 * 1024 * 1024,
     requestImagePixelBudget: 2048 * 2048,
     requestImageMaxBytes: 1024 * 1024,
-    configuredMaxTokens: new Map(),
+    configuredMaxTokens: new Map(
+      models.map((m) => [m.id, requestMaxTokens(m.maxTokens, m.contextWindow)]),
+    ),
     modelErrors: new Map(),
     retryPolicy: resolveRetryPolicy(undefined, connection.id),
   };

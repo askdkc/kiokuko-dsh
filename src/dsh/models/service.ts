@@ -29,7 +29,13 @@ import type {
   AuthInteraction,
 } from "./vendor/auth-contract.js";
 import { loginNous, refreshNous } from "./vendor/nous-oauth.js";
-import { connectionProfile, protocolApi, sharedCredentialStore } from "./profiles.js";
+import {
+  connectionProfile,
+  OUTPUT_TOKEN_MARGIN,
+  protocolApi,
+  sharedCredentialStore,
+  storableMaxTokens,
+} from "./profiles.js";
 import { OpenCodeAdapter } from "./vendor/opencode-adapter.js";
 import {
   OpenCodeCatalog,
@@ -62,6 +68,11 @@ class ModelsAdapter extends LlmAdapter {
   constructor(
     private readonly lifecycle: AbortSignal,
     private readonly store: CredentialFile,
+    private readonly onRejection: (
+      provider: string,
+      model: string,
+      error: unknown,
+    ) => Promise<void>,
   ) {
     super();
   }
@@ -130,17 +141,22 @@ class ModelsAdapter extends LlmAdapter {
             ...(options.signal ? [options.signal] : []),
             this.lifecycle,
           ]),
-        });
+        }, id);
       },
     };
   }
-  private async *run(call: PreparedAdapterCall, options: GenerateOptions): AsyncIterable<StreamChunk> {
+  private async *run(call: PreparedAdapterCall, options: GenerateOptions, provider: string): AsyncIterable<StreamChunk> {
     this.lifecycle.throwIfAborted();
     let finish!: () => void;
     const done = new Promise<void>((resolve) => { finish = resolve; });
     this.active.add(done);
     try {
       yield* call.stream(options);
+    } catch (error) {
+      // A rejection that names the endpoint's own ceiling teaches the stored
+      // output cap; the provider's failure still reaches the caller unchanged.
+      await this.onRejection(provider, options.model, error);
+      throw error;
     } finally {
       this.active.delete(done);
       finish();
@@ -203,7 +219,42 @@ export class KiokukoModelsService {
     this.adapter = new ModelsAdapter(
       this.lifecycle.signal,
       options.credentials,
+      (provider, model, error) => this.learnCeiling(provider, model, error),
     );
+  }
+  /**
+   * A provider rejection that names its own ceiling ("max_completion_tokens=…
+   * cannot be greater than max_model_len=…") is the only place a deployment
+   * discloses a limit below its listing. Record it as that model's output cap —
+   * never the context window, never upward, only for the route and model that
+   * failed — so the next request fits. Best effort: the provider's failure is
+   * what the caller sees.
+   */
+  private async learnCeiling(
+    provider: string,
+    model: string,
+    error: unknown,
+  ): Promise<void> {
+    const detail = error instanceof Error ? error.message : "",
+      match = /max_model_len=(\d{1,9})/.exec(detail);
+    if (!match || !detail.includes("max_completion_tokens")) return;
+    const c = this.document.connections.find((v) => v.id === provider),
+      row = c?.models.find((m) => m.id === model),
+      capped = Math.max(1, Number(match[1]) - OUTPUT_TOKEN_MARGIN);
+    if (!c || !row || capped >= row.maxTokens) return;
+    try {
+      await this.save(
+        {
+          ...c,
+          models: c.models.map((m) =>
+            m.id === model ? { ...m, maxTokens: capped } : m,
+          ),
+        },
+        this.document.revision,
+      );
+    } catch {
+      // Learning is best effort; a concurrent save wins over this correction.
+    }
   }
   bindRequest(
     signal: AbortSignal,
@@ -544,19 +595,22 @@ export class KiokukoModelsService {
     return discovered.flatMap((entry) => {
       const known = shipped.find((m) => m.id === entry.id),
         prior = c.models.find((m) => m.id === entry.id),
+        contextWindow =
+          entry.contextWindow ??
+          known?.contextWindow ??
+          prior?.contextWindow ??
+          DEFAULT_CONTEXT_WINDOW,
         parsed = ManualModelSchema.safeParse({
           id: entry.id,
           name: entry.name ?? entry.id,
-          contextWindow:
-            entry.contextWindow ??
-            known?.contextWindow ??
-            prior?.contextWindow ??
-            DEFAULT_CONTEXT_WINDOW,
-          maxTokens:
+          contextWindow,
+          maxTokens: storableMaxTokens(
             entry.maxTokens ??
-            known?.maxTokens ??
-            prior?.maxTokens ??
-            DEFAULT_MAX_TOKENS,
+              known?.maxTokens ??
+              prior?.maxTokens ??
+              DEFAULT_MAX_TOKENS,
+            contextWindow,
+          ),
           reasoning: known?.reasoning ?? prior?.reasoning ?? false,
           image:
             entry.inputModalities !== undefined
