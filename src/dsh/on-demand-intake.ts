@@ -6,10 +6,11 @@ import { TASK_TYPES, type TaskType } from '../akinator/types.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import type { AkinatorTaskClassification } from './decisions/akinator-classification.js'
+import {deriveProfile} from '../akinator/domain.js'
 
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
-export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. No execution task has been prepared yet. Preserve all requested actions, negations, alternatives and target uncertainty. Native read, glob, grep, web_search and web_fetch demands automatically prepare the original request with research advice when no non-chat action type is resolved. Use these tools directly to gather requested evidence; do not call prepare_requested_work merely to read a plan or inspect files. Other tool-backed work requires prepare_requested_work(taskType); its type is advisory and grants no permission. Do not silently replace a requested action with a text-only answer or claim work was done. Ask a concrete clarification in ordinary conversation when the actual target or requested action is unclear. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Existing native tool permissions and approvals still apply. If only run_code is exposed, prepare with exactly return await tools.prepare_requested_work({"taskType":"research"}) using the appropriate advisory type; the host intercepts that preparation-only carrier without evaluating code. Extra statements or expressions are refused until preparation completes.'
+export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. No execution task has been prepared yet. Preserve all requested actions, negations, alternatives and target uncertainty. Native read, glob, grep, web_search and web_fetch demands automatically prepare the original request with research advice when no non-chat action type is resolved. Use these tools directly to gather requested evidence; do not call prepare_requested_work merely to read a plan or inspect files. An explicit development request is prepared automatically on its first tool demand. prepare_requested_work(taskType) remains an advisory control operation. Do not silently replace a requested action with a text-only answer or claim work was done. Ask a concrete clarification in ordinary conversation when the actual target or requested action is unclear. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Owned development tools use their own authorization; Plan, goal, cancellation and execution ownership still apply. If only run_code is exposed and the request is ambiguous, prepare with exactly return await tools.prepare_requested_work({"taskType":"research"}) using the appropriate advisory type; the host intercepts that preparation-only carrier without evaluating code. For an explicit development request, its first run_code demand prepares automatically before evaluating the program.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(type => type !== 'chat')
 
 export interface DemandAgent { readonly ctx?: unknown; readonly id: string; readonly session?: { readonly id: string; snapshotEvents?(): readonly DshLogEvent[] } }
@@ -114,11 +115,18 @@ export class OnDemandIntake {
       if (previous.input.turn === input.turn) {
         if (previous.status === 'closed') throw new Error('On-demand turn is closed')
         const fresh = humanMessages(input.messages).filter(message => previous.humanContents.get(humanId(message)) !== canonicalContentHash(message))
-        if (fresh.length) { previous.status = 'stale'; previous.controller.abort(new Error('Human instructions changed')) }
-        if (previous.capture && !await previous.capture) return false
-        return previous.status !== 'prepared'
+        if (!fresh.length) {
+          if (previous.capture && !await previous.capture) return false
+          return previous.status !== 'prepared'
+        }
+        previous.status = 'stale'; previous.controller.abort(new Error('Human instructions changed'))
+        // A new native batch can contain only the steering message. Preserve
+        // the original request while replacing changed messages by identity.
+        const merged = new Map(previous.input.messages.map(message => [humanId(message), message]))
+        for (const message of input.messages) merged.set(humanId(message), message)
+        input = { ...input, messages: [...merged.values()] }
       }
-      if (!['closed', 'prepared'].includes(previous.status)) throw new Error('Previous on-demand turn has not ended')
+      if (previous.input.turn !== input.turn && !['closed', 'prepared'].includes(previous.status)) throw new Error('Previous on-demand turn has not ended')
       previous.controller.abort(new Error('A newer native turn superseded this request'))
     }
     // Install the pending state synchronously, before any host or classifier awaits.
@@ -134,7 +142,7 @@ export class OnDemandIntake {
       // validated owner's first reader once, including absence; never rebind it.
       if (!this.#skillReaders.has(input.agent)) this.#skillReaders.set(input.agent,
         this.#startupSkillReader ?? this.#tools?.get('skill', input.agent)?.execute)
-      if (await this.host.existing(input)) {
+      if (previous?.input.turn !== input.turn && await this.host.existing(input)) {
         this.assertCurrent(state)
         // Retain the exact resumed request for the public preparation receipt.
         // Existing ownership alone grants nothing: readiness is rechecked at dispatch.
@@ -144,6 +152,10 @@ export class OnDemandIntake {
       }
       if (!humanMessages(input.messages).length) throw new Error('Original human input is required before on-demand intake')
       state.intent = await this.host.classify(input, state.task)
+      if(!state.intent.taskType&&!state.intent.deferInference&&!executionClarification(state.task)){
+        const type=deriveProfile(state.task).taskType
+        if(type==='build'||type==='debug'||type==='devops')state.intent={...state.intent,taskType:type}
+      }
       this.assertCurrent(state)
       // Eager mode still binds known work before generation. Classifier uncertainty
       // instead reaches ordinary reasoning, with no execution grant or purpose UI.
@@ -281,7 +293,7 @@ export class OnDemandIntake {
         const skillReader = this.#skillReaders.get(state.input.agent)
         const skillRead = execution.name === 'skill' && skillReader !== undefined && actual.execute === skillReader && state.status === 'answer'
         const carrier = execution.name === 'run_code' && state.status !== 'prepared' ? preparationCarrier(execution.arguments) : undefined
-        if (execution.name === 'run_code' && state.status !== 'prepared' && !carrier) return denied('Before PTC execution, use exactly the preparation-only carrier: return await tools.prepare_requested_work({"taskType":"research"}). No other program is admitted until work is prepared.')
+        if (execution.name === 'run_code' && state.status !== 'prepared' && !carrier && !automaticPreparationType(state.intent, execution.name)) return denied('Clarify the requested work before code execution.')
         if (carrier) {
           if (state.status !== 'answer' || state.preparationCalls.has(execution.callId)) return denied('Preparation carrier is not current')
         } else if (execution.name === TASK_PREPARE_TOOL) {

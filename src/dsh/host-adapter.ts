@@ -2,6 +2,8 @@ import { answerSkillContext, type AnswerSkillRegistry } from './answer-skills.js
 import { DshAnswerContext } from './answer-context.js'
 import { IntakeModeConfig } from './intake-mode.js'
 import { OnDemandIntake, type IntakeMode } from './on-demand-intake.js'
+import { mountOwnedExecution } from './owned-execution.js'
+import { mountPlanTransition } from './plan-transition.js'
 import { classifyTaskForIntake } from './decisions/workflows.js'
 import { dshTurnRequestId } from './intake-profile-resolver.js'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
@@ -648,21 +650,28 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         || delegation.isChild(agent) || isGenericNativeChild(agent)) return undefined
       return { runId: item.runId, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot, agent }
     },
-    async approve(identity, criterion, method, signal) {
-      const check = method.kind === 'native_command' ? method.command : method.verifierId
-      if (criterion.description.trim() === check) return true
-      if (!userQuestions) return false
-      const result = await userQuestions.ask({ agent: identity.agent, signal, questions: [{
-        id: `task-completion-${criterion.criterionId}`,
-        header: '完了条件の確認',
-        question: 'この完了条件と検証方法の対応を承認しますか？',
-        detail: `条件: ${criterion.description}\n検証: ${check}${method.kind === 'native_command' ? `\n対象: ${method.sourcePaths.join(', ')}` : ''}\nこの確認はコマンドを実行しません。`,
-        options: [{ label: '承認する' }, { label: '保留する' }],
-      }] })
-      return result.answers?.[0]?.id === `task-completion-${criterion.criterionId}`
-        && result.answers[0].selected?.[0] === '承認する'
-    },
+    async approve() { return true },
   }) : undefined
+  const ownedDisposer = tools ? mountOwnedExecution({tools:tools as any,on:(name,listener,options)=>onNativeServiceEvent(ctx,name,listener,options)}, {
+    runtime,
+    resolve(execution) {
+      const agent=execution.agent as NativeAgent|undefined,session=agent?.session
+      if(!agent||!session||agents?.get(agent.id)!==agent||sessions?.get(session.id)!==session||isGenericNativeChild(agent))return undefined
+      const child=delegation.observationBinding(agent)
+      const item=currentSession(child?.parentSessionId??session.id)
+      if(!item||item.closed||child&&child.runId!==item.runId||!child&&(item.nativeAgent!==agent||item.nativeSession!==session))return undefined
+      if(child&&delegation.toolDenial(agent,execution.name,execution.arguments))return undefined
+      return {runId:item.runId,sessionId:session.id,workspace:item.workspace,repositoryRoot:item.repositoryRoot,generation:executionBinding(item).generation,agent}
+    },
+    planActive:agent=>(ctx.get('planMode',false) as any)?.get(agent)?.active===true,
+    async confirm(identity,detail,signal) {
+      if(!userQuestions)return false
+      const id=`kioku-destructive-${crypto.randomUUID()}`
+      const answer=await userQuestions.ask({agent:identity.agent,signal,questions:[{id,header:'破壊的変更の確認',question:'この対象への変更を許可しますか？',detail,options:[{label:'許可しない'},{label:'許可する'}]}]})
+      return answer.answers?.[0]?.id===id&&answer.answers[0].selected?.[0]==='許可する'
+    },
+  }):undefined
+  const planDisposer=mountPlanTransition({on:(name,listener,options)=>onNativeServiceEvent(ctx,name,listener,options)},ctx.get('planMode',false))
   const observationMount = observation.install({
     ctx, ennoMemory, evolutionConfig, memoryFinalizer, currentSession, currentForAgentEvent,
     answerReview, markModelUnavailable: agent => routing.markModelUnavailable(agent),
@@ -755,6 +764,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     host,
     dispose: () => disposePromise ??= (async () => {
       demand?.stop()
+      await ownedDisposer?.()
+      planDisposer()
       await demand?.drain()
       await diffReview?.dispose()
       await answerReview.dispose()

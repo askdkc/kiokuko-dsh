@@ -20,7 +20,7 @@ test('crash-state journal between file receipts and parent commit remains inspec
   const owner = { sessionId: 'restart-session', agentId: 'restart-agent', root }, store = new LispStore(async fn => fn(db))
   const crashPath = join(base, 'interrupted.sqlite3'), transition = store.transition.bind(store)
   let asks = 0, snapshotted = false, reopened: NodeSqliteAdapter | undefined
-  const options: ManagerOptions = { store, dataRoot: join(base, 'data'), config: LispConfig.parse({ enabled: true, startupTimeoutMs: 60000 }),
+  const options: ManagerOptions = { store, dataRoot: join(base, 'data'), config: LispConfig.parse({ executionMode: 'protected', enabled: true, startupTimeoutMs: 60000 }),
     questions: { ask: async request => { asks++; return { answers: [{ id: request.questions[0].id, selected: [request.questions[0].intent!.approve] }] } } } }
   let manager = new LispManager(options)
   const request = { operationId: 'batch', code: '(kioku.files:propose-write "a.txt" "new-a") (kioku.files:propose-write "b.txt" "new-b")' }

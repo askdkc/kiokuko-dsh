@@ -51,6 +51,9 @@ import { coreSkills } from '../modules/resources.js'
 import { AnswerReviewConfig, ANSWER_REVIEW_FORM, hasHumanInput, type AnswerReviewConfiguration, type ReviewAgent } from '../answer-review/contracts.js'
 import { AnswerReviewCoordinator } from '../answer-review/coordinator.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
+import { mountOwnedExecution } from '../owned-execution.js'
+import { mountPlanTransition } from '../plan-transition.js'
+import { mountTaskCompletion } from '../task-completion-host.js'
 
 export interface CoreModuleHost {
   readonly intakeMode: IntakeMode
@@ -94,7 +97,8 @@ interface PreStep { agent: NativeAgent; messages: readonly any[]; turn: number; 
 /** One runtime and one resource manifest shared by every configured local feature. */
 export async function mountCore(ctx: Context, input: CoreConfig = {}, registrations: readonly ModuleRegistration<CoreModuleHost>[] = []): Promise<ModuleHandle> {
   const config = CoreConfig.parse(input)
-  const disposers: (() => void)[] = [], beforeTask = new Set<(input: CoreTaskInput) => Promise<Partial<TaskProfile> | void>>()
+  const disposers: (() => void|Promise<void>)[] = [], beforeTask = new Set<(input: CoreTaskInput) => Promise<Partial<TaskProfile> | void>>()
+  const disposalWork:Promise<void>[]=[]
   const active = new Map<string, { agent: NativeAgent; turn: number; task: CoreTask; taskText: string; attachmentTypes: readonly string[];
     failed: boolean; checkpointed: boolean; contextDelivered: boolean; finishing?: Promise<void> }>()
   const preparingTasks = new Map<string, Promise<CoreTask>>()
@@ -206,9 +210,15 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   async function prepareCoreTask(payload: PreStep, signal: AbortSignal, advisoryType?: TaskProfile['taskType']): Promise<CoreTask> {
     const key = `${payload.agent.session.id}\u0000${payload.turn}`
     const existing = active.get(payload.agent.session.id)
+    const newText=payload.messages.filter(message=>message?.role==='user'&&(!message.source||message.source.kind==='user'))
+      .flatMap(message=>typeof message.content==='string'?[message.content]:(message.content??[]).filter((block:any)=>block.type==='text').map((block:any)=>block.text)).join('\n').trim()
+    const steering=existing?.turn===payload.turn && newText.length>0 && newText!==existing.taskText
     if (existing?.turn === payload.turn) {
       if (existing.agent !== payload.agent) throw new Error('Core task agent changed')
-      return existing.task
+      if(!steering)return existing.task
+      answerReview.humanInput(payload.agent.session.id,payload.turn)
+      await tasks.finish(existing.task,'cancelled')
+      active.delete(payload.agent.session.id)
     }
     const inFlight = preparingTasks.get(key)
     if (inFlight) return inFlight
@@ -226,7 +236,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       const human = originals
       const text = human.flatMap(message => typeof message.content === 'string' ? [message.content] : (message.content ?? []).filter((block: any) => block.type === 'text').map((block: any) => block.text)).join('\n').trim()
       // Attachment-only turns still require identity, intake and persisted-feature checks.
-      let request: CoreTaskInput = { requestId: dshTurnRequestId({ dshSessionId: payload.agent.session.id, turn: payload.turn }), sessionId: payload.agent.session.id,
+      let request: CoreTaskInput = { requestId: dshTurnRequestId({ dshSessionId: payload.agent.session.id, turn: payload.turn })+(steering?`:generation:${canonicalContentHash(text)}`:''), sessionId: payload.agent.session.id,
         turn: payload.turn, task: text || 'User input contains no text.', cwd: root, signal, agent: payload.agent, capabilities: [] }
       const inferred = resolveGroundedIntakeProfile({ task: request.task, cwd: root }).profileHints.taskType
       const continuingChat = conversationSessions.has(payload.agent.session) && (inferred === null || inferred === 'chat')
@@ -282,9 +292,11 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     modelHandoff.stop()
     lifecycle.abort(new Error('Kiokuko core stopped'))
     modules.stopIngress()
-    for (const dispose of disposers.reverse()) { try { dispose() } catch (error) { stopErrors.push(error) } }
+    for (const dispose of disposers.reverse()) { try { const result=dispose();if(result)disposalWork.push(result) } catch (error) { stopErrors.push(error) } }
   }
   const drain = async () => {
+    const disposalResults=await Promise.allSettled(disposalWork)
+    for(const result of disposalResults)if(result.status==='rejected')stopErrors.push(result.reason)
     await demand?.drain()
     await indexReasoning?.dispose()
     await answerReview.dispose()
@@ -296,8 +308,9 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   }
   const dispose = () => shutdown ??= (async () => {
     stopIngress()
-    const failures = [...stopErrors]
+    const failures:unknown[] = []
     try { await drain() } catch (error) { failures.push(error) }
+    failures.push(...stopErrors)
     if (modules.drained) { try { await runtime.close() } catch (error) { failures.push(error) } }
     if (failures.length === 1) throw failures[0]
     if (failures.length > 1) throw new AggregateError(failures, 'Core teardown failed')
@@ -321,6 +334,15 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     await modules.mount({ intakeMode: config.intakeMode, context: ctx, repositoryRoot: root, runtime, prompts, decisions, semanticCompaction, answerReviewConfig: config.answerReview, memoryIndexReasoningConfig: config.memoryIndexReasoning, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
       beforeTask(handler) { beforeTask.add(handler); return () => { beforeTask.delete(handler) } } })
     if (!claimed) {
+      const resolveOwned = (execution:any) => {
+        if(!execution.agent)return undefined
+        bind(execution.agent)
+        const current=active.get(execution.agent.session.id)
+        return current&&current.agent===execution.agent&&current.task.admitted&&!current.failed&&!current.checkpointed
+          ? {...current.task,repositoryRoot:root,generation:canonicalContentHash({run:current.task.runId,task:current.taskText}),agent:execution.agent}:undefined
+      }
+      disposers.push(mountTaskCompletion({tools,on:ctx.on.bind(ctx) as any},{runtime,resolve:resolveOwned,approve:async()=>true}))
+      disposers.push(mountPlanTransition({on:ctx.on.bind(ctx) as any},get('planMode')))
       const nativeLlm=get('llm')
       indexReasoning=new IndexReasoningService(runtime,config.memoryIndexReasoning,nativeLlm?.stream?nativeLlm:undefined)
       await indexReasoning.start()
@@ -359,6 +381,14 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           return memory
         },
       }))
+      disposers.push(mountOwnedExecution({tools,on:ctx.on.bind(ctx) as any},{runtime,resolve:resolveOwned,
+        planActive:agent=>get('planMode')?.get(agent)?.active===true,
+        async confirm(identity,detail,signal){
+          if(!questions)return false
+          const id=`kioku-destructive-${randomUUID()}`
+          const answer=await questions.ask({agent:identity.agent,signal,questions:[{id,header:'破壊的変更の確認',question:'この対象への変更を許可しますか？',detail,options:[{label:'許可しない'},{label:'許可する'}]}]})
+          return answer.answers?.[0]?.id===id&&answer.answers[0].selected?.[0]==='許可する'
+        }}))
       if (demand) demand.mount(ctx as any, tools, systemPrompt)
       const listen = (name: string, handler: (...args: any[]) => unknown) => disposers.push((ctx.on as any)(name, handler, { prepend: true }))
       const claims = new WeakMap<NativeAgent, { turn: number; messages: any[] }>()

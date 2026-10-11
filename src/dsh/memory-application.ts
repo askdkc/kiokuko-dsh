@@ -9,6 +9,7 @@ import { beginMemoryExecution, completeMemoryExecution, memoryApplicationReviewS
   memoryApplicationStatus, recordMemoryApplicationReview, recordMemoryApplicationReviewBatch, type MemoryApplicationIdentity } from '../memory/application.js'
 import { autoGlobalizationStatus } from '../memory/auto-globalization.js'
 import { MemoryTimeConstraint } from '../memory/retrieval-contracts.js'
+import { isOwnedExecutionCall } from './owned-execution.js'
 
 const inputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('status') }).strict(),
@@ -25,7 +26,7 @@ const transportSchema = z.object({
   query: z.string().trim().min(1).max(4000).optional(),
   timeConstraint: MemoryTimeConstraint.optional(),
 }).strict()
-export const MEMORY_APPLICATION_GUIDANCE = 'Use task_memory_review(action=status) once, then submit independent pending decisions with action=review_batch (up to 32); action=review remains available for one. Adoption and contradiction require relevant source paths. Adoption also needs an invariant, counterexample, method and command: an exact foreground Bash command at repository-root cwd, or an approved Enno verifier expressed as executable and arguments joined by single spaces. For topic-based non-applicability, use paths:[]; supply paths when the judgment depends on current source. Refresh retains decisions when delivered entry revisions and mode stay unchanged; a revised entry or mode change starts a new review generation. New entries need decisions, and changed delivery invalidates execution proof. Only a typed successful foreground result on unchanged declared sources counts as observed proof. Use action=refresh for a concrete new error or target; it keeps the run. Missing proof cannot complete successfully. Unresolved decisions never block a tool call; they keep the run incomplete until resolved. Host-validated request preparation is control-only; it neither resolves memory decisions nor authorizes execution or edits. Judgments are model-reported.'
+export const MEMORY_APPLICATION_GUIDANCE = 'Use task_memory_review(action=status) once, then submit independent pending decisions with action=review_batch (up to 32); action=review remains available for one. Adoption and contradiction require relevant source paths. Adoption also needs an invariant, counterexample, method and command: a pre-bound command executed through Kiokuko owned shell/Lisp tools at the declared project cwd (including subdirectories), or an approved Enno verifier. Host receipts distinguish process completion from test coverage. For topic-based non-applicability, use paths:[]; supply paths when the judgment depends on current source. Refresh retains decisions when delivered entry revisions and mode stay unchanged; a revised entry or mode change starts a new review generation. New entries need decisions, and changed delivery invalidates execution proof. Only an observed final process result with the required test coverage on unchanged declared sources counts as proof. Use action=refresh for a concrete new error or target; it keeps the run. Missing proof cannot complete successfully. Unresolved decisions never block a tool call; they keep the run incomplete until resolved. Host-validated request preparation is control-only; it neither resolves memory decisions nor authorizes execution or edits. Judgments are model-reported.'
 
 interface NativeExecution { callId: string; rootCallId?: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
 interface SurfaceContext {
@@ -156,14 +157,14 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
     } }))
   disposers.push(ctx.on('tools/pre-execute', async (execution: NativeExecution, next: () => Promise<unknown>) => {
     const identity = host.resolve(execution)
-    if (!identity || READ_TOOLS.has(execution.name) || CONTROL_TOOLS.has(execution.name) || isSavedLispResultRead(execution) || host.preparationOnly?.(execution) === true) return next()
+    if (!identity || isOwnedExecutionCall(execution) || READ_TOOLS.has(execution.name) || CONTROL_TOOLS.has(execution.name) || isSavedLispResultRead(execution) || host.preparationOnly?.(execution) === true) return next()
     // A child without its own admitted binding cannot borrow its parent's proof.
     const command = foregroundNativeCommand(execution, identity.repositoryRoot)
     const tracked = await host.runtime.withDatabase(db => {
       execution.signal.throwIfAborted()
       if (host.resolve(execution)?.runId !== identity.runId) throw new Error('Native task changed')
       return beginMemoryExecution(db, identity, execution.callId, command)
-    })
+    }).catch(() => false)
     if (tracked) pending.set(execution, identity)
     return next()
   }, { prepend: true }))

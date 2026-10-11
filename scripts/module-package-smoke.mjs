@@ -84,7 +84,7 @@ try {
     const composition = await publicEntry.mountDshComposition(ctx, adapter.host, undefined, prompts)
     handle = { stopIngress: composition.stopIngress, async dispose() { await composition.dispose(); await adapter.dispose() } }
   } else {
-    const plugin = await ctx.plugin(publicEntry, { ...configuration, ...(combination.includes('lisp') ? { modules: { lisp: { enabled: true } } } : {}) })
+    const plugin = await ctx.plugin(publicEntry, { ...configuration, ...(combination.includes('lisp') ? { modules: { lisp: { executionMode: 'protected', enabled: true } } } : {}) })
     handle = { dispose: () => plugin.dispose() }
   }
   const inventory = await ctx.skills.snapshot({ cwd: directory, signal: new AbortController().signal })

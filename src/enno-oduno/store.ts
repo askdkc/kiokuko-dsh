@@ -1,3 +1,4 @@
+import { registerCompletionVerifiers } from '../dsh/completion-verifiers.js'
 import { readPlanDraft } from './plan-draft.js'
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -1064,3 +1065,15 @@ export function completeOperationInTransaction(
 export function terminalizeLedgerRunInTransaction(database: SqliteDatabase, runId: string, status: 'completed' | 'failed' | 'cancelled'): void {
   new LedgerStore(database).updateRunStatusInTransaction(runId, status);
 }
+
+registerCompletionVerifiers({
+  criteria(database,identity) {
+    const snapshot=readEnnoSnapshot(database,identity)
+    return {revision:snapshot.revision,criteria:snapshot.contract.acceptanceCriteria}
+  },
+  results(database,identity,root) {
+    const snapshot=readEnnoSnapshot(database,identity)
+    return readFreshFinalVerifierResults(database,{runId:identity.runId,revision:snapshot.revision,mutationRevision:snapshot.mutationRevision,
+      verifiers:snapshot.contract.finalVerifiers,repositoryDigest:captureRepositoryState(root).digest})?.map(result=>({verifierId:result.verifier.id,status:result.status,...(result.tapSummary?{tapSummary:result.tapSummary}:{})}))
+  },
+})

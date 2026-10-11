@@ -28,7 +28,7 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     assert.match(request.questions[0]!.detail!, /scratch\/project|workspace/u)
     return { answers: [{ id: request.questions[0]!.id, selected: [request.questions[0]!.options![approve ? 1 : 0]!.label] }] }
   } })
-  const manager = new LispManager({ store, config: LispConfig.parse({ enabled: true, startupTimeoutMs: 60000 }),
+  const manager = new LispManager({ store, config: LispConfig.parse({ executionMode: 'protected', enabled: true, startupTimeoutMs: 60000 }),
     dataRoot: join(base, 'data'), ciCall: adapter,
     verifiedCall: async (_owner, operationId, generation, request, result) => {
       if (request.kind === 'verify' && request.location !== 'scratch')

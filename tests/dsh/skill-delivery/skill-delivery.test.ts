@@ -39,7 +39,7 @@ for (const mode of ['full', 'compiled'] as const) for (const activation of ['ena
   test(`Lisp planning delivery: ${mode}, ${activation}, first/follow-up/reload`, {
     ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
   }, async () => {
-    const f = await fixture(false, mode, { lisp: { enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } })
+    const f = await fixture(false, mode, { lisp: { executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } })
     try {
       const source = await readFile(join(packageRoot ?? process.cwd(), 'skills/kiokuko-lisp/SKILL.md'), 'utf8')
       const expected = mode === 'full' ? source : content('kiokuko-lisp')
@@ -140,7 +140,7 @@ test('delivery counterexample: disconnected native Skill reader is caught while 
 })
 
 test('Lisp task mode preserves on-demand preparation while blocking native mutation', native, async () => {
-  const f = await fixture(false, 'compiled', { lisp: { enabled: true, sbclPath: 'must-not-start-sbcl' } })
+  const f = await fixture(false, 'compiled', { lisp: { executionMode: 'protected', enabled: true, sbclPath: 'must-not-start-sbcl' } })
   let writes = 0
   const resultOf = (request: any) => nativeToolResults(request.messages).at(-1)
   try {
@@ -171,7 +171,7 @@ test('Lisp task mode preserves on-demand preparation while blocking native mutat
 test('compiled Skill delivery: protected Lisp enable and lisp_describe reach the native model',{
   ...native,skip:!enabled||process.env.KIOKUKO_REQUIRE_LISP_RUNTIME!=='1',timeout:180000,
 },async()=>{
-  const f=await fixture(false,'compiled',{lisp:{enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}})
+  const f=await fixture(false,'compiled',{lisp:{executionMode:'protected',enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}})
   try {
     const enabled=await f.ctx.commands.execute(f.agent,'/kioku-lisp enable',[],new AbortController().signal)
     assert.equal(enabled.result.kind,'success',JSON.stringify(enabled.result))
@@ -207,7 +207,7 @@ test('Lisp selected during initial admission executes shared functions without s
   ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
 }, async () => {
   const asked: string[] = []
-  const f = await fixture(false, 'compiled', { lisp: { enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
+  const f = await fixture(false, 'compiled', { lisp: { executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
     const q = request.questions[0]
     asked.push(q.id)
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['debug'] }] }
@@ -257,7 +257,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
   ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
 }, async () => {
   let approvals = 0, observedDetail = ''
-  const f = await fixture(false, 'compiled', { lisp: { enabled: true, approvalMode: 'ask', sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
+  const f = await fixture(false, 'compiled', { lisp: { executionMode: 'protected', enabled: true, approvalMode: 'ask', sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
     const q = request.questions[0]
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['chat'] }] }
     assert.match(q.id, /^batch-/u); assert.equal(request.agent.id, 'skill-main')
@@ -337,7 +337,7 @@ test('compiled Skill delivery: real DeepSeek serializer sends the bodies in the 
 for (const taskMode of [false, true]) for (const representation of ['compiled', 'full'] as const) test(`Lisp ${taskMode ? 'task' : 'persistent'} ${representation} delivers auto policy on activation, follow-up and reload`, {
   ...native, skip: !enabled || (!taskMode && process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1'), timeout: 180000,
 }, async () => {
-  const f = await fixture(false, representation, {lisp:{enabled:true, approvalMode:'auto', startupTimeoutMs:60000}})
+  const f = await fixture(false, representation, {lisp:{executionMode:'protected',enabled:true, approvalMode:'auto', startupTimeoutMs:60000}})
   const enable = () => f.ctx.commands.execute(f.agent, taskMode ? '/kioku-lisp enable-task' : '/kioku-lisp enable', [], new AbortController().signal)
   try {
     assert.equal((await enable()).result.kind, 'success')
@@ -346,7 +346,7 @@ for (const taskMode of [false, true]) for (const representation of ['compiled', 
       f.responses.push(f.mock.textResponse('Policy received.'))
       await f.turn('Explain the current Lisp approval policy without executing anything.')
       const delivered = textOf(f.model.requests.at(-1))
-      assert.match(delivered, /Lisp approval mode: auto \(entire profile\)/)
+      assert.match(delivered, /Lisp execution mode: protected; approval mode: auto \(entire profile\)/)
       assert.match(delivered, /Do not ask permission to submit, resubmit, run verification or apply changes/)
     }
   } finally { await f.close() }

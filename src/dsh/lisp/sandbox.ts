@@ -1,16 +1,16 @@
 import { access, mkdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 import { fail } from './contracts.js'
 import { networkFilter } from './seccomp.js'
 import { checkedDirectory } from './files.js'
 
-export interface SandboxLayout { base: string; scratch: string; inputs: string; cache: string; library: string; compiled?: string }
-export interface Launch { command: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string; seccompPath?: string }
+export interface SandboxLayout { base: string; scratch: string; inputs: string; cache: string; library: string; compiled?: string; workspace?: string; protected?: boolean }
+export interface Launch { command: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string; seccompPath?: string; group?: boolean }
 const systemPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
 export async function executable(name: string): Promise<string> {
   if (/\p{Cc}/u.test(name)) fail('INVALID_EXECUTABLE', '実行ファイル名が不正です。')
-  for (const path of isAbsolute(name) ? [name] : systemPaths.map(p => join(p, name))) {
+  for (const path of isAbsolute(name) ? [name] : (process.env.PATH??systemPaths.join(delimiter)).split(delimiter).map(p => join(p, name))) {
     try { await access(path, constants.X_OK); const resolved = await realpath(path); if ((await stat(resolved)).isFile()) return resolved } catch { /* try the next fixed search directory */ }
   }
   return fail('RUNTIME_MISSING', `${name} が見つかりません。インストール後に /kioku-lisp enable を実行してください。`)
@@ -27,10 +27,14 @@ export async function prepareLayout(base: string, library: string): Promise<Sand
 /** The OS boundary applies to arbitrary Lisp, FFI, exec, Python and shell alike. */
 export async function sandboxLaunch(layout: SandboxLayout, program: string, args: string[], generation: string, protocol = false, directory = '.'): Promise<Launch> {
   const binary = await executable(program)
+  if(!layout.protected) {
+    const cwd=await realpath(directory==='.'?(layout.workspace??layout.scratch):isAbsolute(directory)?directory:join(layout.workspace??layout.scratch,directory))
+    return {command:binary,args,group:true,env:{...process.env,KIOKU_SCRATCH:`${layout.scratch}/`,KIOKU_CACHE:`${layout.cache}/`,KIOKU_GENERATION:generation,KIOKU_EXECUTION_MODE:'development',...(layout.compiled?{KIOKU_COMPILED:`${layout.compiled}/`}:{})},cwd}
+  }
   const cwd = (await checkedDirectory(layout.scratch, directory)).path
   if (!protocol && !['/usr/', '/bin/', '/opt/homebrew/Cellar/', '/opt/homebrew/bin/'].some(root => binary.startsWith(root))) fail('EXECUTABLE_SCOPE', '実行ファイルは OS またはインストール済みランタイムの場所から指定してください。')
   const env: Record<string, string> = { PATH: systemPaths.join(':'), HOME: layout.scratch, TMPDIR: layout.scratch, LANG: 'C.UTF-8',
-    KIOKU_SCRATCH: `${layout.scratch}/`, KIOKU_CACHE: `${layout.cache}/`, KIOKU_GENERATION: generation }
+    KIOKU_SCRATCH: `${layout.scratch}/`, KIOKU_CACHE: `${layout.cache}/`, KIOKU_GENERATION: generation, KIOKU_EXECUTION_MODE: 'protected' }
   if (layout.compiled) env.KIOKU_COMPILED = `${layout.compiled}/`
   // Homebrew Node otherwise reads host OpenSSL configuration outside its
   // allowed runtime roots. A fixed empty config needs no extra read permission.

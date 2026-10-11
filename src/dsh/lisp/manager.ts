@@ -25,6 +25,7 @@ import { CallInput, DefineInput, TaskToolCatalog, selectFields, validateValue } 
 import { ApplyInput, CompareInput, StageInput, VerifyInput, candidateFromResult, compareCandidates, loadCandidate, loadVerification, materializeCandidate, stageCandidate } from './candidate.js'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus
+  ownedJobs?:Set<string>;
   slotReserved?: boolean; hostBusy?: boolean; idleSince?: number; idleTimer?: ReturnType<typeof setTimeout>; suspension?: Promise<void>; resumed?: boolean; disposed?: boolean;
   packageBase?: NonNullable<PackageResult['base']>;
   currentVerification?: { operationId: string; generation: string; results: Array<{ request: LispCiRequest; result: unknown }> } }
@@ -32,7 +33,8 @@ export interface ManagerOptions {
   skillPrompts?: DshSkillPrompts
   store: LispStore; config: LispConfiguration; dataRoot: string; library?: string; protectedRoots?: string[]; questions?: DshUserQuestions
   notify?: (owner: LispOwner, message: string) => void
-  toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>) => Promise<unknown>
+  toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>, signal?:AbortSignal,callId?:string) => Promise<unknown>
+  toolCatalog?: (owner:LispOwner)=>{name:string;parameters:unknown;adapterVersion:number}[]
   packagesCall?: (owner: LispOwner, request: PackageRequest, signal: AbortSignal) => Promise<PackageResult>
   ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal, scratchRoot?: string) => Promise<unknown>
   verifiedCall?: (owner: LispOwner, operationId: string, generation: string, request: LispCiRequest, result: unknown) => Promise<void>
@@ -59,7 +61,8 @@ export class LispManager {
   readonly #inflight = new Map<string, string>()
   constructor(readonly options: ManagerOptions) {
     this.#config = options.config; this.#store = options.store
-    this.#proposals = new LispProposalBatch({ store: options.store, backupRoot: join(options.dataRoot, 'backups'), protectedRoots: () => this.protectedRoots(), ...(options.questions ? { questions: options.questions } : {}), stopped: () => this.#closed })
+    this.#proposals = new LispProposalBatch({ store: options.store, backupRoot: join(options.dataRoot, 'backups'), protectedRoots: () => this.protectedRoots(), ...(options.questions ? { questions: options.questions } : {}), stopped: () => this.#closed,
+      ...(options.config.executionMode==='development'&&options.toolCall?{execute:options.toolCall}:{}) })
     this.#library = options.library ?? fileURLToPath(new URL('../../../lisp/', import.meta.url))
     this.#compiled = new CompiledLispCache(join(options.dataRoot, 'compiled'), this.#library, this.#config)
     this.#taskTools = new TaskToolCatalog(options.store)
@@ -172,13 +175,18 @@ export class LispManager {
       const base = await mkdtemp(join(this.options.dataRoot, 'w-'))
       const layout = await prepareLayout(base, this.#library)
       layout.compiled = compiled.path
-      worker = new LispWorker(layout, this.#config, undefined, () => false)
+      layout.workspace = owner.root
+      layout.protected = this.#config.executionMode === 'protected'
+      worker = this.#config.executionMode==='protected' ? new LispWorker(layout,this.#config,undefined,()=>false) : new LispWorker(layout, this.#config, (method,args,context)=>this.bridge(state,method,args,context))
       state.worker = worker
       await worker.start()
+      if(this.#config.executionMode==='protected'){
       const canary = join(base, 'host-canary')
       await writeFile(canary, 'protected', { mode: 0o600 })
       const probe = await worker.request('eval', { inputs: [], code: `(let ((read-denied (handler-case (progn (with-open-file (s ${JSON.stringify(canary)}) (read-char s)) nil) (file-error () t))) (delete-denied (handler-case (progn (delete-file ${JSON.stringify(canary)}) nil) (file-error () t)))) (unless (and read-denied delete-denied) (error "ISOLATION_FAILED")) :protected)` }, this.#config.startupTimeoutMs, signal)
       if (!probe.ok || await readFile(canary, 'utf8') !== 'protected') fail('ISOLATION_FAILED', 'OS によるファイル保護を確認できません。')
+      }
+      state.state='EVALUATING'
       if (mode === 'compile') {
         const checked = await worker.request('task-compile', { code }, this.#config.timeoutMs, signal)
         if (!checked.ok || checked.proposals.length) fail('TASK_COMPILE_FAILED', String(checked.value).slice(0, 1000))
@@ -225,16 +233,20 @@ export class LispManager {
         const base = await mkdtemp(join(this.options.dataRoot, 'w-'))
         const layout = await prepareLayout(base, this.#library)
         layout.compiled = compiled.path
+        layout.workspace = state.owner.root
+        layout.protected = this.#config.executionMode === 'protected'
         worker = new LispWorker(layout, this.#config, (method, args, context) => this.bridge(state, method, args, context))
         state.worker = worker
         if (this.#closed || state.state !== 'PREFLIGHT' || abort.signal.aborted) fail('CANCELLED', '起動は取り消されています。')
         await worker.start()
+        if(this.#config.executionMode==='protected'){
         // Real runtime probe: private host file is outside every granted read/write root.
         const canary = join(base, 'host-canary')
         await writeFile(canary, 'protected', { mode: 0o600 })
         const quote = (value: string) => JSON.stringify(value)
         const probe = await worker.request('eval', { inputs: [], code: `(let ((read-denied (handler-case (progn (with-open-file (s ${quote(canary)}) (read-char s)) nil) (file-error () t))) (delete-denied (handler-case (progn (delete-file ${quote(canary)}) nil) (file-error () t)))) (unless (and read-denied delete-denied) (error "ISOLATION_FAILED")) (kioku.files:write-text (merge-pathnames "probe" (kioku.files:scratch)) "ok") :protected)` }, this.#config.startupTimeoutMs)
         if (!probe.ok || await readFile(canary, 'utf8') !== 'protected') fail('ISOLATION_FAILED', 'OS によるファイル保護を確認できません。')
+        }
         if (this.#closed || state.state !== 'PREFLIGHT') { await worker.stop(); fail('CANCELLED', '起動を取り消しました。') }
         state.state = 'READY'; state.inputBytes = 0; delete state.error
         return worker
@@ -365,11 +377,26 @@ export class LispManager {
       if (this.#closed || state.state !== 'EVALUATING' || state.worker.generation !== context.generation || context.signal.aborted) fail('STALE_RPC', '現在の評価に属さない要求です。')
       return result
     }
-    if (method === 'tools-list') return this.options.toolCall ? [{ name: 'lisp_status', parameters: { type: 'object', additionalProperties: false }, effects: 'read-only', adapterVersion: 1 }] : []
+    if (['run','start-job','job-status','cancel-job'].includes(method)) {
+      if(!this.options.toolCall)fail('HOST_ADAPTER_UNAVAILABLE','Owned execution is unavailable.')
+      if(method==='job-status'||method==='cancel-job') {
+        const request=z.object({id:z.string().min(1)}).strict().parse(args)
+        const value=await this.options.toolCall(state.owner,'kioku_result',{operationId:request.id,cancel:method==='cancel-job'},context.signal) as any
+        if(value.receipt?.state!=='started')state.ownedJobs?.delete(request.id)
+        return value
+      }
+      const input=z.object({program:z.string().min(1),argv:z.array(z.string()),timeoutMs:z.number().int().positive(),directory:z.string().optional()}).strict().parse(args)
+      const quote=(value:string)=>"'" + value.replaceAll("'", "'\\''") + "'"
+      const directory=input.directory??'.'
+      const value=await this.options.toolCall(state.owner,'kioku_exec',{command:[input.program,...input.argv].map(quote).join(' '),cwd:isAbsolute(directory)?directory:join(state.owner.root,directory),timeoutMs:input.timeoutMs,background:method==='start-job'},method==='start-job'?undefined:context.signal,`lisp-rpc:${context.generation}:${context.evaluationId}:${context.rpcId}`) as any
+      if(method==='start-job'){(state.ownedJobs??=new Set()).add(value.receipt.operationId);return value.receipt.operationId}
+      return {code:value.exitCode,stdout:value.output??'',stderr:'',receipt:value.receipt}
+    }
+    if (method === 'tools-list') return this.options.toolCatalog?.(state.owner)??[]
     if (method === 'tool-call') {
-      const parsed = z.object({ name: z.literal('lisp_status'), args: z.object({}).strict() }).strict().parse(args)
+      const parsed = z.object({ name: z.enum(['lisp_status','kioku_read','kioku_write','kioku_edit','kioku_remove','kioku_exec','kioku_result']), args: z.record(z.string(),z.unknown()) }).strict().parse(args)
       if (!this.options.toolCall) fail('HOST_ADAPTER_UNAVAILABLE', 'このホストには監査済みアダプターがありません。')
-      return this.options.toolCall(state.owner, parsed.name, parsed.args)
+      return this.options.toolCall(state.owner, parsed.name, parsed.args, context.signal,`lisp-rpc:${context.generation}:${context.evaluationId}:${context.rpcId}`)
     }
     if (method === 'ci-list-runs' || method === 'ci-failed-log' || method === 'ci-verify') {
       if (!this.options.ciCall) fail('HOST_ADAPTER_UNAVAILABLE', 'このホストには CI アダプターがありません。')
@@ -420,11 +447,12 @@ export class LispManager {
     const taskSummary = taskMode ? await this.#store.taskSummary(owner) : undefined
     const operations = summary.operations.map(o => ({ id: o.operation_id, agent: o.agent_id, kind: o.kind, state: o.state, updatedAt: o.updated_at }))
     return { approval, enabled: true, state: unconfirmed ? 'STOP_UNCONFIRMED' : taskMode && state.state === 'RECOVERY_REQUIRED' && !state.worker ? 'TASK_READY' : state.state,
-      generation: state.worker?.generation ?? null, error: unconfirmed?.error ?? (taskMode && !state.worker ? null : state.error ?? null),
-      jobs: state.worker?.jobStatus() ?? [],
+      generation: state.worker?.generation ?? null, supervisorPid: state.worker?.supervisorPid ?? null, error: unconfirmed?.error ?? (taskMode && !state.worker ? null : state.error ?? null),
+      jobs: [...(state.worker?.jobStatus() ?? []),...[...state.ownedJobs??[]].map(operationId=>({operationId,owner:'kiokuko-execution'}))],
+      executionMode:this.#config.executionMode,
       compilation: state.compilation ?? null, resumed: state.resumed ?? false,
       limits: { timeoutMs: this.#config.timeoutMs, maxOutputBytes: this.#config.maxOutputBytes, maxWorkers: this.#config.maxWorkers, idleTimeoutMs: this.#config.idleTimeoutMs,
-        aggregateMemory: 'unavailable', aggregateCpu: 'unavailable', scratchQuota: 'unavailable', termination: 'supervised', fileBoundary: process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap' },
+        aggregateMemory: 'unavailable', aggregateCpu: 'unavailable', scratchQuota: 'unavailable', termination: 'supervised', fileBoundary: this.#config.executionMode==='development'?'normal-user-environment':process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap' },
       operations,
       ...(taskSummary ? { task: taskSummary } : {}),
       hot: await this.#hot.status(owner),
@@ -487,8 +515,8 @@ export class LispManager {
           typesafe: '(kioku.typesafe:status); (kioku.typesafe:evaluate state questions :model "jev-latest" :timeout-ms 30000). Explicit semantic decisions via the host; consume answers with gethash. Strings/hash tables/vectors use JSON conventions. Catch kioku.typesafe:service-error; no retries or approval bypass. Configure with /kioku-typesafe-key.',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
           workflow: 'Define task-specific defun helpers once, compose them into one useful operation, and call that function in later evaluations. Batch known reads and checks; return a compact result. Definitions last for this worker generation. Stop before decisions requiring new evidence or approval.',
-          hot: 'Use lisp_hot_contract, lisp_hot_install and lisp_hot_call for approved project-shared functions. They run in separate protected workers without access to this worker heap. No mode switch is needed. lisp_hot_status reads active versions.',
-          run: '(kioku.process:run "node" (list "--test" "--experimental-test-isolation=none" "test/public.test.mjs") :directory "project") uses a scratch-relative directory. Check result-code.',
+          hot: 'Use lisp_hot_contract, lisp_hot_install and lisp_hot_call for approved project-shared functions. They run in separate workers in the selected execution mode without access to this worker heap. No mode switch is needed. lisp_hot_status reads active versions.',
+          run: '(kioku.process:run "node" (list "--test" "--experimental-test-isolation=none" "test/public.test.mjs") :directory "project") uses a project-relative directory in development mode (scratch-relative in protected mode). Check final receipts and result-code.',
           inspect: 'lisp_inspect accepts ref, or resultOperationId with section/offset/limit (Unicode characters). Never rerun to retrieve output.',
           reads: 'Use native read/glob/grep/skill for repository exploration; lisp_eval.inputs for read-only workspace or session-attachment copies.',
           verify: '(kioku.ci:verify :test :script "test:unit") runs a focused npm script. For an extracted project: (kioku.ci:verify :test :location :scratch :directory "extract/project"). Uses the current profile approval policy and runs the actual npm command.' },
@@ -834,6 +862,8 @@ export class LispManager {
     state.state = 'STOPPING'
     for (const abort of state.active) abort.abort(new LispError('CANCELLED', 'Lisp の処理を取り消しました。'))
     try {
+      for(const operationId of state.ownedJobs??[])await this.options.toolCall?.(state.owner,'kioku_result',{operationId,cancel:true})
+      state.ownedJobs?.clear()
       await state.worker?.stop()
       if (state.admission) {
         try { await state.admission } catch (error) { if (error instanceof LispError && error.code === 'STOP_UNCONFIRMED') throw error }

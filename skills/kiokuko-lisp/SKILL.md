@@ -1,6 +1,6 @@
 ---
 name: kiokuko-lisp
-description: Compose reusable Common Lisp task tools in protected disposable workers or use the legacy persistent session.
+description: Compose reusable Common Lisp task tools alongside owned development tools, in disposable or persistent workers.
 ---
 
 <!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-lisp -->
@@ -10,22 +10,19 @@ description: Compose reusable Common Lisp task tools in protected disposable wor
 
 ## Admission and tools
 
-Persistent mode: coding choice or `/kioku-lisp enable`. Task mode: separate session
-via `/kioku-lisp enable-task`, fresh protected workers per definition/call. Missing
-runtime or failed protection blocks admission.
-Never spoof host-bound session/agent/directory/generation. Native read/glob/grep/skill retain
-DSH permissions; ordinary bash/mutation/delegation stay blocked. Lisp/FFI/programs:
-runtime files, declared read-only copies, scratch only; no private host files, project
-writes, database, network or host sockets. Helpers cannot expand permissions. Use
-proposals/audited brokers, never escape protection.
+Persistent mode: coding choice or /kioku-lisp enable. Task mode uses /kioku-lisp enable-task with fresh workers per definition/call. Lisp and ordinary tools coexist. Worker startup/recovery failures leave normal development available. Never spoof host-bound session/agent/directory/generation.
+
+Use kioku_read, kioku_write, kioku_edit, kioku_remove, kioku_exec and kioku_result for observed development. PATH commands, bash/zsh, builds/tests, coding-needed external investigation and project edits need no routine confirmation. Source/data deletion and existing durable user database mutation need a concrete review; generated/temp/disposable artifacts and routine Kioku saving are authorized. Declare destructiveTargets when executing commands with destructive intent. The host does not attempt to classify every side effect of arbitrary code.
+
+Lisp uses the normal user environment and child processes. Prefer kioku.tools:call-tool with the owned tools or kioku.process broker APIs to obtain host receipts. Direct Lisp/FFI effects are not independently observed and cannot establish successful verification. Bind task_completion conditions/source paths before executing checks, including subdirectory checks. Collect asynchronous final receipts with kioku_result. A model/Lisp passed field is never process evidence. Plan, goal, cancellation and execution ownership remain authoritative. During Plan use read/search/status; explicit human implementation instructions or Plan approval exit at the next accepted boundary.
 
 Schemas define arguments; never guess. `lisp_describe` without a symbol gives the
 API/verifier map, even during recovery. Persistent `lisp_eval`: declared inputs;
 `lisp_describe`: functions; `lisp_inspect`: paged evidence; `lisp_status`: state;
 `lisp_cancel`: stop; `lisp_reset`: healthy, confirmed-stopped worker only, no recovery bypass.
-Task `lisp_define`: protected example-checked lambda; `lisp_call`: inline input/inputRef;
+Task `lisp_define`: compiled, schema/example-checked lambda; `lisp_call`: inline input/inputRef;
 `lisp_observe`: workspace capture without bodies; `lisp_stage`: freeze against observed
-baseRef; `lisp_verify`: private-scratch check; `lisp_apply`: host approval/frozen-target
+baseRef; `lisp_verify`: private-scratch check; `lisp_apply`: frozen-target
 recheck; `lisp_compare`: no execution. Status/inspection read refs/receipts. Unknown
 test status or generated `passed` fields never prove host verification.
 
@@ -57,19 +54,15 @@ identity/size/digest and read-only copies; other absolute paths fail. Limits: 64
 256 MiB/generation. `kioku.files:input`: read; `kioku.files:scratch`: write/unzip. Reimport
 applied files for comparison; export only when authorized. `kioku.files:propose-write`:
 relative paths, successful evaluation, durable recording.
-Deletion/replacement: profile policy on frozen targets/diffs. Duplicate targets fail;
+Development mode: ordinary replacement is authorized; deletion of source/data requires concrete confirmation. Protected compatibility mode retains its frozen-target profile policy. Duplicate targets fail;
 unchanged writes do nothing. Refusal/skip/UI failure/cancellation never authorizes.
 Trust APPLIED/UNCHANGED/NOT_APPLIED/UNKNOWN receipts; partial failure stops later writes.
-Never retry unknown effects. Refuse protected paths/databases/links, recursive deletion
-and database mutation. Independent backups never auto-prune. RUNNING lasts until
+Never retry unknown effects. Use owned tools for ordinary project files and confirmed durable DB changes; protected compatibility mode refuses its protected paths/databases/links and recursive deletion. Independent backups never auto-prune. RUNNING lasts until
 receipts save; restart repairs finalization without reapplying effects.
 
 ## Programs, verification and packages
 
-`kioku.process:run`/`start-job`: program/args/timeout/scratch-relative directory, no
-links/traversal; job-status/cancel-job manage bounded credential-free jobs. macOS:
-no fork, use Lisp/direct brokers, not shell/npm/multiprocessing. Node (22.8+):
-`--test --experimental-test-isolation=none` avoids children. Linux: Bubblewrap PID namespaces.
+`kioku.process:run`/`start-job` use project-relative or absolute directories in development mode, normal PATH/environment and child processes. Use job-status/cancel-job and inspect final receipts. Explicit protected mode retains scratch-only directories, sandboxed environment and its OS child/network restrictions; never escape protection.
 
 `kioku.ci:list-runs :limit 10`/`failed-log`: bound-repo host gh/auth, no Lisp credentials.
 `verify`: only `:typecheck`, `:lisp`, `:test`, `:build`, `:package`, `:vendor`, never shell
@@ -82,23 +75,8 @@ ok=true is not process success: check result-code/verifier state/code. Report ob
 results; partial reads cannot prove byte equality. Separate scratch/applied-file
 checks; validate custom checkers on known cases.
 
-`kioku.packages`: separately approved public npm host broker, never arbitrary URLs,
-registry credentials or shell args; workers remain network-denied:
-- `metadata "sharp"`: latest metadata, or one exact canonical `:version`; verify advisory ranges.
-- `audit versions`: hash table of at most ten names/exact versions sent to npm bulk
-  advisories. Empty results cover only those versions, not the whole project.
-- `update-lockfiles versions`: capture root manifest and existing npm/pnpm locks,
-  add explicit security overrides; installed managers generate locks in private
-  OS-protected scratch. `:directory`: workspace-relative root. Refuse Local/Git deps
-  and multi-project workspaces; exclude scripts/hooks/original npm config/inherited
-  credentials. Separate sandbox allows networking/children, unchanged worker protection.
-Updates: persistent eval, one call, no unrelated proposals; ordinary review/backups/
-journal. Recheck captures before generation returns and before application. Generation
-approval never authorizes writes. SUCCEEDED/generatedOnly means generation; only host
-`changes` receipts establish APPLIED/UNCHANGED. Refusal/failure/cancellation: no proposals;
-exact replay sends nothing. HTTP: 30 seconds/256 KiB; each fixed package-manager command:
-90 seconds/256 KiB output. No retries/runtime downloads/dependency installation/
-profile changes/auto-reload. New host APIs need plugin build/reload, never just worker reset.
+`kioku.packages` remains a bounded public npm broker: metadata (latest/exact version), audit (at most ten exact names/versions), update-lockfiles (persistent eval, one call, root npm/pnpm manifests/locks and security overrides). No arbitrary URLs, credentials, shell arguments, Local/Git dependencies or multi-project workspaces. Managers generate frozen proposals in separate network scratch; scripts/hooks and inherited config/credentials are excluded. Recheck captured inputs before returning and applying. Generation
+approval never authorizes writes; only host changes receipts establish APPLIED/UNCHANGED. SUCCEEDED/generatedOnly is generation. Failure/refusal/cancellation returns no proposals; exact replay sends nothing. HTTP: 30s/256KiB; manager: 90s/256KiB. No retries, runtime downloads, installs, profile changes or reloads. New host APIs require plugin build/reload, not worker reset.
 
 ## Evidence, recovery and adapters
 
@@ -149,7 +127,7 @@ DSH guards/registry, refuses others/recursive eval. Bounded stdout/stderr. See l
 
 <!-- kiokuko:runtime prototype-driven-planning -->
 For Lisp coding, plans or reviews, settle testable doubts with current evidence or authorized target-runtime probes. Choose controls and counterexamples first; record commands, failures, observations and refs in one reasoned plan. Stop when evidence suffices or budgets expire; ask only for needed intent or authority.
-ask_user_question/exit_plan_mode keep Lisp guards.
+ask_user_question/exit_plan_mode preserve ownership, cancellation and the selected execution mode.
 
 <!-- /kiokuko:runtime -->
 
@@ -157,7 +135,7 @@ ask_user_question/exit_plan_mode keep Lisp guards.
 ## Project-shared functions
 
 Project-shared functions work in both Lisp modes without a mode switch after the
-coding choice. They execute in separate protected workers, preserving the persistent
+coding choice. They execute in separate workers under the selected execution mode, preserving the persistent
 worker's APIs and heap. `lisp_hot_contract` applies the profile approval policy to
 schemas and 1–32 finite input/expected cases. Only the host grants approval. `lisp_hot_install` validates against that immutable contract and replaces
 the active version only at the expected revision. Dependency code is snapshotted.
@@ -176,7 +154,7 @@ Native tool schemas remain authoritative for exact arguments.
 - `lisp_define`: `{operationId, name, description, source, inputSchema,
   outputSchema, dependencies?: [{binding,toolRef}], examples?: [{input,expected}],
   firstInput?}`. Source is one Lisp lambda. The host saves an immutable toolRef
-  only after protected compilation and declared examples pass.
+  only after compilation and declared examples pass.
 - `lisp_call`: `{operationId, toolRef, input}` or `{operationId, toolRef, inputRef}`.
   Select bounded `fields` with JSON pointers when the full body is unnecessary;
   pass its resultRef to later calls without sending that body through the model.
@@ -189,14 +167,13 @@ Native tool schemas remain authoritative for exact arguments.
   captured bytes in private scratch and runs an approved host verifier. Observe
   all required files, including `package.json`; missing dependencies/scripts
   fail or return NOT_APPLIED. `testStatus:unknown` is not a passing test.
-- `lisp_apply`: `{operationId, candidateRef, verificationRef?}` requires host
-  approval, rechecks the read set and frozen targets, and accepts only a successful
+- `lisp_apply`: `{operationId, candidateRef, verificationRef?}` uses owned execution in development mode and concrete approval for destructive changes; it rechecks the read set and frozen targets, and accepts only a successful
   verification receipt for the same candidate. Without one, it reports `not-run`.
 - `lisp_compare`: `{operationId, leftRef, rightRef}` compares saved bases and
   operation/content hashes without executing either candidate.
 
 The task worker recompiles saved source for each call. Global variables and
-process RPC cannot carry state between calls. Saved resultRefs remain owner-bound
+process RPC cannot carry heap state between calls. Development mode can invoke owned host tools; protected compatibility task workers deny host RPC. Saved resultRefs remain owner-bound
 for up to 30 days across worker/host restart; expired refs do not read live files.
 `lisp_status` lists recent refs and unresolved attempts; `lisp_inspect` reads
 receipts without replay. Persistent `lisp_inspect` accepts a current-generation
@@ -352,32 +329,11 @@ shortlist order for selection; source and test for diagnosis. Define `obj` first
 <!-- /kiokuko:documentation -->
 
 <!-- kiokuko:documentation approval-help -->
-## Profile-wide Lisp approval policy
+## Development approval policy
 
-`lisp.approvalMode` defaults to `ask`; auto-approval is never inferred from an
-unknown request or from selecting Lisp. Ordinary questions keep normal execution
-without a Lisp choice or an approval selector in the chat composer. Once a task
-is identified as coding implementation or debugging, the existing coding choice
-can offer protected Lisp or normal execution; coding plans do not require Lisp.
-Auto-approval is an explicit opt-in through General settings,
-`/kioku-lisp approval auto`, or “Auto-approve all Lisp actions for this profile and
-continue” in a Lisp approval dialog. Use `/kioku-lisp approval ask` to return to
-manual consent. Explicit configuration and saved profile settings persist across
-chats and restarts and override the default; changing the default does not revoke
-a previously saved choice.
-All Lisp permission categories are covered, including file restoration, host
-verification, public npm package operations, and shared-function changes.
-
-Follow the current host-reported mode. In auto mode execute authorized work
-without asking whether to submit, resubmit, run tests, or apply changes. Ask only
-for missing intent that materially changes the work. In ask mode submit the
-operation directly to the host approval dialog without an extra conversational
-permission question. Earlier references to human approval describe ask mode.
-Explicit refusal, cancellation, stale inputs and unknown outcomes still stop
-execution; changing mode does not replay completed or refused operations.
-Identity checks, protected paths, backups and journal recovery remain enforced.
+Project edits, verification, helper compilation/registration and ordinary Kioku storage are authorized. Source/data deletion and durable user DB mutations need a concrete review, regardless of the legacy lisp.approvalMode ask/auto value. Old profile settings still load. Do not request conversational permission before a required host review. Refusal, cancellation, stale targets and uncertain outcomes remain authoritative; never replay effects.
 
 <!-- /kiokuko:documentation -->
 <!-- kiokuko:runtime approval-policy -->
-Follow the live host approval mode. Profile auto-approve covers every Lisp permission: execute authorized actions without permission or resubmission questions. Ask only for materially missing intent. Ask mode uses host dialogs without an extra conversational permission request. Refusal, cancellation, stale inputs and unknown outcomes still stop work; never replay effects because mode changed.
+Routine development and helper registration are authorized. Concrete destructive review remains required. Lisp failure does not block ordinary tools. Report execution, verification and saving separately; retry saving without replaying effects.
 <!-- /kiokuko:runtime -->

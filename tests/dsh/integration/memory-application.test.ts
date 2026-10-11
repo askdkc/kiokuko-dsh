@@ -676,3 +676,19 @@ test('a same-name preparation tool without host proof is tracked, not control-ex
     assert.equal(f.status().ready, false, 'a forged preparation call cannot resolve memory decisions')
   } finally { dispose(); await f.close() }
 })
+
+
+test('memory proof binds the actual working directory and keeps legacy root reviews compatible', async () => {
+  const f = await fixture()
+  try {
+    await mkdir(join(f.root, 'sub'))
+    recordMemoryApplicationReview(f.db, f.identity, 'cwd-review', {...f.review(), cwd:'sub'})
+    beginMemoryExecution(f.db, f.identity, 'wrong-directory', 'node check.mjs', f.root)
+    completeMemoryExecution(f.db, f.identity, 'wrong-directory', {value:{exitCode:0}})
+    assert.equal(f.status().ready, false)
+    beginMemoryExecution(f.db, f.identity, 'correct-directory', 'node check.mjs', join(f.root,'sub'))
+    completeMemoryExecution(f.db, f.identity, 'correct-directory', {value:{exitCode:0}})
+    assert.equal(f.status().ready, true)
+    f.reopen(); assert.equal(f.status().ready, true)
+  } finally { await f.close() }
+})

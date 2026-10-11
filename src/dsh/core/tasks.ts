@@ -26,6 +26,8 @@ import type { TaskProfile } from '../../akinator/types.js'
 import { MemoryRetrievalConfig, timeConstraintForRequest, type MemoryRetrievalConfig as MemoryRetrievalConfiguration } from '../../memory/retrieval-contracts.js'
 import type { MemoryTimeConstraint } from '../../memory/retrieval-contracts.js'
 import { reportMemoryRetrievalObservation } from '../memory-retrieval-observer.js'
+import { initializeTaskCompletion } from '../task-completion.js'
+import { saveExecutionFrame, updateExecutionFrame } from '../execution-frame.js'
 
 export interface CoreTaskInput {
   readonly requestId: string
@@ -78,6 +80,7 @@ function recallView(db: SqliteDatabase, context: ScopedContextResult | null): Sc
     const entry = readEntry(db, { workspace: project.workspace, entryId: item.entryId })
     return { id: entry.id, workspace: entry.workspace, kind: entry.kind, status: entry.status, title: item.title,
       summary: item.summary, snippet: item.bodyPreview, tags: entry.tags, origin: 'project' as const, selectionReasons: item.selectionReasons,
+      ...(entry.evidence?{evidence:entry.evidence}:{}),
       metadata: { storedData: true as const, untrusted: true as const, instructions: false as const } }
   })
   const memory = { items, count: items.length, characterCount: items.reduce((n, item) => n + Array.from(item.title + '\n' + item.snippet).length, 0), truncated: context.truncated }
@@ -147,6 +150,7 @@ export class CoreTasks {
           }
         }
         input.signal.throwIfAborted()
+        if(admitted){initializeTaskCompletion(db,identity.runId,'shadow');saveExecutionFrame(db,identity.runId,updateExecutionFrame(undefined,project.repositoryRoot,input.task))}
         if (admitted) bindMemoryApplication(db, { ...identity, repositoryRoot: project.repositoryRoot }, state.session.profile, memory,
           memoryRetrievalStatus(db, identity.workspace, memory, deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities).contextWithheld))
         return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted, memory: recallView(db, memory), context: memory, capabilities: input.capabilities, selectedSkills })

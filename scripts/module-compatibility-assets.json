@@ -33,7 +33,8 @@
     "migrations/031_dsh_lisp_hot_tools.sql",
     "migrations/032_memory_evidence.sql",
     "migrations/033_memory_forgetting.sql",
-    "migrations/034_agenticreplay.sql"
+    "migrations/034_agenticreplay.sql",
+    "migrations/035_owned_execution.sql"
   ],
   "runtimeAssets": [
     "dist/security/sanitize.js"

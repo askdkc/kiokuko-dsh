@@ -34,7 +34,7 @@ async function fixture(auto = false) {
   const options = {
     store,
     questions,
-    config: LispConfig.parse({ enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }),
+    config: LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }),
     dataRoot: join(base, 'data'),
   }
   let manager = new LispManager(options)

@@ -223,9 +223,18 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
   }
 
   class CapturingGate extends DshIntakeGate {
+    readonly supersededChoices=new Map<string,StoredExecutionSelection>()
     async choose(event: DshPreStepEvent, result: DshIntakeGateResult): Promise<DshIntakeGateResult> {
       const runId = result.prepared.run.runId
       let stored = await runtime.withDatabase(db => readExecutionSelection(db, runId))
+      const key=`${event.sessionId}\u0000${event.turn}`
+      const inherited=this.supersededChoices.get(key)
+      if(stored?.value.mode==='pending'&&inherited?.value.status==='ready'&&['normal','enno'].includes(inherited.value.mode)
+        &&(!explicitExecutionMode(event.task)||explicitExecutionMode(event.task)===inherited.value.mode)){
+        const revision=stored.revision
+        stored=await runtime.withDatabase(db=>writeExecutionSelection(db,runId,revision,inherited.value))
+        this.supersededChoices.delete(key)
+      }
       if (result.admitted && result.prepared.selectedSkills === undefined) {
         const task = await runtime.withDatabase(db => readAkinatorSession(db, { workspace: result.prepared.project.workspace, sessionId: result.prepared.intake.sessionId }).task)
         result.prepared.selectedSkills = await selectInstalledSkills(decisions, `run:${runId}`, task, [...event.capabilities.skills, ...event.capabilities.tools], result.prepared.capabilities, event.signal)
@@ -289,6 +298,14 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       // work. Revision ordering alone cannot distinguish two same-revision
       // context deliveries that finish out of order.
       const generation = ++prepareGeneration
+      const prior=currentForAgentEvent(event.agent.id,event.sessionId,undefined,event.nativeSession,event.nativeAgent)
+      if(prior && prior.turn===event.turn && !prior.closed && prior.task!==event.task && hasHumanInput(event.nativeMessages??[])) {
+        const choice=getSelection(prior.runId)
+        if(choice?.value.status==='ready')this.supersededChoices.set(`${event.sessionId}\u0000${event.turn}`,choice)
+        await retireSupersededRun(prior,'cancelled')
+        this.supersedeTurn(event.sessionId,event.turn)
+        continuedTurns.delete(`${event.sessionId}\u0000${event.turn}`);resumedTurns.delete(`${event.sessionId}\u0000${event.turn}`)
+      }
       const reviewProject=await runtime.withDatabase((database) => resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true }))
       if(reviewProject)await autoReview.acceptInput(reviewProject.workspace,event.sessionId,event.task)
       const cacheKey = `${event.sessionId}\u0000${event.turn}`
@@ -574,6 +591,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
     }
     override clearTurn(sessionId: string, turn: number): void {
       super.clearTurn(sessionId, turn)
+      this.supersededChoices.delete(`${sessionId}\u0000${turn}`)
       continuedTurns.delete(`${sessionId}\u0000${turn}`)
       resumedTurns.delete(`${sessionId}\u0000${turn}`)
     }

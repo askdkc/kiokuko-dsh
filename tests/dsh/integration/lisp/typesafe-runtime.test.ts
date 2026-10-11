@@ -38,7 +38,7 @@ test('protected Lisp consumes TypeSafe decisions, catches API errors, preserves 
     return Response.json({ model: 'fixture-model', answers: { next: { type: 'choice', choice: decision,
       probabilities: { inspect: decision === 'inspect' ? 1 : 0, propose: decision === 'propose' ? 1 : 0, insufficient: decision === 'insufficient' ? 1 : 0 }, confidence: 1 } }, usage: { input_tokens: 30, output_tokens: 10 } })
   })
-  const manager = new LispManager({ store, config: LispConfig.parse({ enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'),
+  const manager = new LispManager({ store, config: LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'),
     questions: { ask: async request => { approvals++; return { answers: [{ id: request.questions[0].id, selected: [request.questions[0].options![0]!.label] }] } } },
     typesafeCall: async (bound, method, args, context) => { bindings.push({ owner: bound, generation: context.generation, evaluationId: context.evaluationId }); return method === 'typesafe-status' ? client.status() : client.evaluate(args, context.signal) },
   })
@@ -119,11 +119,9 @@ test('protected Lisp consumes TypeSafe decisions, catches API errors, preserves 
       if (termination === 'cancel') await manager.execute(owner, 'lisp_cancel', {})
       if (termination === 'signal') controller.abort()
       if (termination === 'exit') {
-        const generation = (await manager.status(owner) as any).generation
-        const { execFileSync } = await import('node:child_process')
-        const ps = execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' })
-        const worker = ps.split('\n').find(line => line.includes('supervisor.mjs') && line.includes(generation))
-        assert.ok(worker, 'find only this fixture worker supervisor'); process.kill(Number(worker.trim().split(/\s+/)[0]), 'SIGTERM')
+        const pid = (await manager.status(owner) as any).supervisorPid
+        assert.ok(Number.isSafeInteger(pid) && pid > 0, 'host identifies only this fixture worker supervisor')
+        process.kill(pid, 'SIGTERM')
       }
       if (termination === 'dispose') await manager.dispose()
       const result = await pending

@@ -7,6 +7,8 @@ import { KiokukoError } from '../errors.js'
 import { captureProjectManifestSnapshot, resolveProjectFingerprint } from '../repository/project-fingerprint.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { findSecret } from './secrets.js'
+import { isHostExecutionResult } from '../dsh/execution-result.js'
+import { executionCommand } from '../dsh/execution-command.js'
 import { readEntry } from './entries.js'
 import { isRetrievableEntry, retrievableWorkspaceEntryCount } from './hybrid-retrieval.js'
 import { hasActionableMemorySelection, memoryReasoningRequired, hasExplicitCodingIntent } from '../akinator/capabilities.js'
@@ -23,7 +25,7 @@ export const memoryApplicationReviewSchema = z.object({
   generation: z.number().int().positive(), entryId: z.string().min(1).max(256), entryRevision: z.number().int().positive(),
   expectedRevision: z.number().int().nonnegative(), decision: z.enum(['adopted', 'not_applicable', 'contradicted']),
   basis: text, paths: z.array(relativePath).max(32),
-  invariant: text.optional(), counterexample: text.optional(), method: text.optional(), command: text.optional(),
+  invariant: text.optional(), counterexample: text.optional(), method: text.optional(), command: text.optional(), cwd: relativePath.optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.decision === 'adopted' && (!value.invariant || !value.counterexample || !value.method)) {
     ctx.addIssue({ code: 'custom', message: 'Adoption requires an invariant, counterexample and verification method' })
@@ -33,6 +35,13 @@ export const memoryApplicationReviewSchema = z.object({
   }
 })
 export type MemoryApplicationReview = z.infer<typeof memoryApplicationReviewSchema>
+/** Root executions retain their historical key; subdirectory proofs bind the actual directory. */
+function executionKey(root: string, command: string | null, cwd = root): string {
+  const actual = realpathSync(path.resolve(root, cwd)), relative = path.relative(root, actual)
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) conflict('Verification directory is outside the repository')
+  const normalized = command === null ? null : executionCommand(command)
+  return canonicalContentHash(relative ? {command: normalized, cwd: relative} : normalized)
+}
 export interface MemoryApplicationIdentity { runId: string; workspace: string; sessionId: string; repositoryRoot: string }
 interface Binding extends Record<string, unknown> {
   run_id: string; workspace: string; session_id: string; repository_root: string; delivery_id: string | null;
@@ -242,14 +251,15 @@ export function memoryApplicationStatus(db: SqliteDatabase, runId: string) {
           if (digest !== row.source_digest) problem ??= 'basis_changed'
           verification = 'model_reported'
         } else {
-          let group = evidenceByCommand.get(review.command!)
+          const command=executionKey(current.repository_root,review.command!,review.cwd)
+          let group = evidenceByCommand.get(command)
           if (!group) {
-            const selected = stored.filter(candidate => { const value = parsed.get(candidate.entry_id)!; return value.decision === 'adopted' && value.command === review.command })
+            const selected = stored.filter(candidate => { const value = parsed.get(candidate.entry_id)!; return value.decision === 'adopted' && value.command!==undefined && executionKey(current.repository_root,value.command,value.cwd)===command })
             group = { latest: db.prepare(`SELECT * FROM task_memory_executions WHERE run_id=? AND generation=? AND epoch=? AND command_hash=? ORDER BY rowid DESC LIMIT 1`)
-              .get<ExecutionRow>(runId, current.generation, current.epoch, canonicalContentHash(review.command)),
+              .get<ExecutionRow>(runId, current.generation, current.epoch, command),
               reviewHash: canonicalContentHash(selected.map(candidate => candidate.request_hash)),
               sourceDigest: digestFor(selected.flatMap(candidate => parsed.get(candidate.entry_id)!.paths)) }
-            evidenceByCommand.set(review.command!, group)
+            evidenceByCommand.set(command, group)
           }
           const evidence = group.latest?.outcome === 'passed' && group.latest.review_hash === group.reviewHash
             && group.latest.source_digest === group.sourceDigest ? group.latest : undefined
@@ -332,7 +342,7 @@ export function recordCompletedMemoryApplicationsInTransaction(db: SqliteDatabas
  * An unresolved decision never rejects the call: the effect runs so the user's work continues, the
  * run stays incomplete until `task_memory_review` resolves it, and the epoch bump below still
  * invalidates prior proof. */
-export function beginMemoryExecution(db: SqliteDatabase, identity: MemoryApplicationIdentity, callId: string, command: string | null): boolean {
+export function beginMemoryExecution(db: SqliteDatabase, identity: MemoryApplicationIdentity, callId: string, command: string | null, cwd = identity.repositoryRoot): boolean {
   const initial = assertIdentity(db, identity)
   if ((JSON.parse(initial.required_json) as RequiredMemory[]).length === 0) return false
   return withImmediateTransaction(db, () => {
@@ -342,12 +352,12 @@ export function beginMemoryExecution(db: SqliteDatabase, identity: MemoryApplica
     if (old) conflict('Native tool call was already observed; do not replay effects')
     const selected = command ? reviews(db, current).filter(row => {
       const review = JSON.parse(row.review_json) as MemoryApplicationReview
-      return review.decision === 'adopted' && review.command === command
+      return review.decision === 'adopted' && review.command !== undefined && executionKey(current.repository_root,review.command,review.cwd) === executionKey(current.repository_root,command,cwd)
     }) : []
     const epoch = current.epoch + (selected.length ? 0 : 1)
     if (epoch !== current.epoch) db.prepare('UPDATE task_memory_bindings SET epoch=? WHERE run_id=?').run(epoch, identity.runId)
     db.prepare('INSERT INTO task_memory_executions(run_id,call_id,generation,epoch,command_hash,review_hash,source_digest,outcome) VALUES(?,?,?,?,?,?,?,?)')
-      .run(identity.runId, callId, current.generation, epoch, canonicalContentHash(command), canonicalContentHash(selected.map(row => row.request_hash)),
+      .run(identity.runId, callId, current.generation, epoch, executionKey(current.repository_root,command,cwd), canonicalContentHash(selected.map(row => row.request_hash)),
         applicationSourceDigest(current.repository_root, selected.flatMap(row => (JSON.parse(row.review_json) as MemoryApplicationReview).paths)), 'running')
     return true
   })
@@ -366,15 +376,18 @@ export function completeMemoryExecution(db: SqliteDatabase, identity: MemoryAppl
       if (execution.result_hash !== resultHash) conflict('Native result changed on replay')
       return
     }
-    const selected = reviews(db, current).filter(row => canonicalContentHash((JSON.parse(row.review_json) as MemoryApplicationReview).command ?? null) === execution.command_hash)
+    const selected = reviews(db, current).filter(row => { const review=JSON.parse(row.review_json) as MemoryApplicationReview; return executionKey(current.repository_root,review.command??null,review.cwd) === execution.command_hash })
     let fresh = false
     try { fresh = execution.generation === current.generation && execution.epoch === current.epoch
       && execution.review_hash === canonicalContentHash(selected.map(row => row.request_hash))
       && execution.source_digest === applicationSourceDigest(current.repository_root, selected.flatMap(row => (JSON.parse(row.review_json) as MemoryApplicationReview).paths)) } catch { /* remains stale */ }
     const content = rawContent.slice(0, 64_000)
-    const skipped = value?.skipped === true || /(?:# SKIP|\b[1-9]\d* (?:skipped|pending)\b|# (?:skipped|todo) [1-9])/iu.test(content)
-    const unknown = rawContent.length > 64_000 || !Number.isSafeInteger(exit) || value?.kind === 'background' || skipped
-    const outcome = value?.kind === 'background' ? 'running' : !fresh ? 'stale' : unknown ? 'unknown' : exit !== 0 || r?.isError || value?.timedOut || value?.aborted || value?.signal != null ? 'failed' : 'passed'
+    const skipped = value?.skipped === true || /(?:# SKIP\b|\b[1-9]\d* (?:skipped|pending)\b|# (?:skipped|todo) [1-9])/iu.test(content)
+    const hostSummary = isHostExecutionResult(result) ? result.value.summary : undefined
+    const unknown = !isHostExecutionResult(result) && rawContent.length > 64_000 || !Number.isSafeInteger(exit) || value?.kind === 'background' || skipped
+      || isHostExecutionResult(result) && selected.some(row=>/\b(?:test|cargo)\b/iu.test((JSON.parse(row.review_json) as MemoryApplicationReview).command??'')) && !hostSummary
+    const failed=exit!==undefined&&exit!==0 || r?.isError || value?.timedOut || value?.aborted || value?.signal!=null || hostSummary && (hostSummary.fail>0 || hostSummary.skipped>0 || hostSummary.cancelled>0 || hostSummary.todo>0)
+    const outcome = value?.kind === 'background' ? 'running' : !fresh ? 'stale' : failed ? 'failed' : unknown ? 'unknown' : 'passed'
     db.prepare('UPDATE task_memory_executions SET outcome=?,exit_code=?,result_hash=? WHERE run_id=? AND call_id=? AND outcome=\'running\'')
       .run(outcome, Number.isSafeInteger(exit) ? exit! : null, resultHash, identity.runId, callId)
   })

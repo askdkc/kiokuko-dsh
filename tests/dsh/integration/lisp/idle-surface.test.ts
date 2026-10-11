@@ -34,7 +34,7 @@ for (const hostFences of [false,true]) test(`native lifecycle hooks (${hostFence
     on(name: string, fn: any) { listeners.set(name, fn); return () => listeners.delete(name) } }
   ctx.root = ctx
   const runtime: any = { withDatabase: async (fn: any) => fn(db) }
-  const surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true, idleTimeoutMs: 1000, startupTimeoutMs: 60000 }))
+  const surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: true, idleTimeoutMs: 1000, startupTimeoutMs: 60000 }))
   const owner = { sessionId: 'one', agentId: 'one', root: base }
   const state = async () => await surface.manager.status(owner) as any
   const step = () => listeners.get('agent/pre-step')!({ agent }, () => 'model-ready')

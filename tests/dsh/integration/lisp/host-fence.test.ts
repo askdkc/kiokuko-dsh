@@ -51,7 +51,7 @@ for (const outcome of ['ready', 'startup-failure', 'disabled-config'] as const) 
   await services
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined
   try {
-    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: outcome !== 'disabled-config', sbclPath: join(base, 'missing-sbcl') }))
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: outcome !== 'disabled-config', sbclPath: join(base, 'missing-sbcl') }))
     assert.equal(attaches, 1)
     assert.deepEqual(request.tools, LISP_TOOLS)
     const invocation = { rawInput: 'enable', agent, signal: new AbortController().signal }

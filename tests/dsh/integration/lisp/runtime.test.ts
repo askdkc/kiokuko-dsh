@@ -28,7 +28,7 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     if (approval === 'mutate') await writeFile(join(root, 'delete.txt'), 'changed during review')
     return { answers: [{ id: request.questions[0].id, selected: approval === 'skip' ? [] : [request.questions[0].options![approval === 'allow' || approval === 'mutate' ? 1 : 0]!.label] }] }
   } }
-  const config = LispConfig.parse({ enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 })
+  const config = LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 })
   const ciRequests: unknown[] = []
   const options = { store, config, dataRoot: join(base, 'data'), questions: ui, ciCall: async (_owner: unknown, request: any) => {
     ciRequests.push(request)

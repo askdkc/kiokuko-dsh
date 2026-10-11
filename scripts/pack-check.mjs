@@ -12,6 +12,12 @@ const cache = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-cache-'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
+  'migrations/035_owned_execution.sql',
+  'dist/dsh/owned-execution.js',
+  'dist/dsh/owned-evidence.js',
+  'dist/dsh/execution-journal.js',
+  'dist/dsh/plan-transition.js',
+  'docs/owned-execution.md',
   'migrations/034_agenticreplay.sql',
   'dist/dsh/agenticreplay-libraries.js',
   'dist/dsh/agenticreplay-libraries.d.ts',
@@ -252,6 +258,11 @@ async function createAndSmokeTestTarball() {
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
   await assertDshClientArtifact(packageRoot)
   if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') {
+    const ownedEnv={...process.env,KIOKUKO_OWNED_PACKAGE_ROOT:packageRoot}
+    const demand=await exec(process.execPath,['--import',join(root,'tests/dsh/helpers/offline-skill-catalog.mjs'),'--import','tsx','--test','--test-name-pattern=owned execution','tests/dsh/integration/on-demand-native.test.ts'],{cwd:root,env:ownedEnv,timeout:120000,maxBuffer:16*1024*1024})
+    process.stdout.write(demand.stdout)
+    const receipts=await exec(process.execPath,['scripts/run-tests.mjs','tests/dsh/integration/owned-execution.test.ts','tests/dsh/integration/lisp/owned-development.test.ts','tests/dsh/integration/owned-native-lifecycle.test.ts'],{cwd:root,env:ownedEnv,timeout:180000,maxBuffer:16*1024*1024})
+    process.stdout.write(receipts.stdout)
     const wire = await exec(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/integration/tool-exposure-native.test.ts', 'tests/dsh/integration/on-demand-file-read.test.ts'], {
       cwd: root,
       env: { ...process.env, KIOKUKO_TOOL_EXPOSURE_ENTRY: join(packageRoot, 'dist/dsh/index.js'), KIOKUKO_TEST_PLUGIN_PACKAGE_ROOT: packageRoot },

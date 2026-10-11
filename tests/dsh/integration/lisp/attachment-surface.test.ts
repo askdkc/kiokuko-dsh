@@ -41,7 +41,7 @@ test('uploaded binary reaches protected Lisp through the native attachment servi
     const ref = await ctx.attachments.saveFile({ data: bytes, name: 'semantic-test.zip' })
     const path = ctx.attachments.fileHostPath(ref)
     session.append('user/message', { role: 'user', id: randomUUID(), source: { kind: 'user' }, content: [{ type: 'file', attachment: ref }] }, { surfaceOp: 'append' })
-    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }))
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }))
     const enabled = await commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal: new AbortController().signal })
     assert.equal(enabled.kind, 'success', enabled.text)
     const evaluate = async (code: string, inputs: string[]) => {

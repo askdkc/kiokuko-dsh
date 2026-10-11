@@ -102,7 +102,7 @@
       ]
     },
     "permissions": {
-      "summary": "Local Kiokuko state and managed files, optional network-backed Skills, embeddings and configured provider-independent typed decisions, DSH-managed TypeSafe credentials, and protected or approved subprocesses.",
+      "summary": "Kiokuko-owned local development execution, candidate memory and host receipts; normal user environment, PATH commands and child processes. Concrete confirmation for source/data deletion and durable user database changes.",
       "readPaths": [
         "Configured Kiokuko SQLite database and embedding assets",
         "Registered project roots and their repository metadata",
@@ -117,12 +117,13 @@
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",
         ".agenticreplay/runs and .agenticreplay/exports inside verified session workspaces, or the configured Kiokuko data directory",
         "Legacy history compatibility under DSH's native write lease: exact rejected v3 file or validated new v3 generation from retained v0, identical .bak, disposable validation artifacts, and automatic deletion of confirmed identity-mismatched native logs",
-        "Opt-in Lisp scratch, input snapshots, verified compiled bundle cache, durable operation journal, and approved file changes with host backups"
+        "Opt-in Lisp scratch, input snapshots, verified compiled bundle cache, durable operation journal, and approved file changes with host backups",
+        "Project files through owned native tools; private execution outbox beside the configured Kiokuko database"
       ],
       "commands": [
         "Restricted repository-relative verifier and backup subprocesses when explicitly requested",
         "Read-only fixed-argument Git commands for an explicitly captured Diff review",
-        "Opt-in protected SBCL and brokered subprocesses; no implicit runtime installation or VM"
+        "Owned bash/zsh, PATH commands, builds/tests and Lisp with the normal user environment; explicit protected Lisp compatibility mode remains available"
       ],
       "externalServices": [
         "GitHub or skills.sh for optional Skill discovery and source retrieval",

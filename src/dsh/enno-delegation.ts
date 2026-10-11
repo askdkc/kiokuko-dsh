@@ -16,7 +16,7 @@ import { readExecutionSelection } from './execution-selection.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 
 interface ChildBinding { readonly runId: string; readonly parent?: RoutableAgent; readonly parentSessionId: string; readonly model: ModelBinding; readonly toolNames: readonly string[]; readonly root: string; readonly scope: readonly string[]; readonly delegationId: string; child?: RoutableAgent }
-const CHILD_FILE_TOOLS = new Set(['read', 'write', 'edit', 'multiedit', 'str_replace_editor', 'glob', 'grep', 'skill', 'observation_read'])
+const CHILD_FILE_TOOLS = new Set(['read', 'write', 'edit', 'multiedit', 'str_replace_editor', 'glob', 'grep', 'skill', 'observation_read','kioku_read','kioku_write','kioku_edit','kioku_remove'])
 /** Child shells/custom execution tools cannot enforce a WorkUnit file boundary.
  * The Goki head owns commands and final focused verification in this version. */
 export function childFileScopeDenial(root: string, scope: readonly string[], name: string, args: unknown): string | undefined {
@@ -37,7 +37,7 @@ export function childFileScopeDenial(root: string, scope: readonly string[], nam
   }
   const relative = path.relative(root, absolute)
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return 'Child path leaves the canonical repository'
-  const mutating = ['write', 'edit', 'multiedit'].includes(name) || name === 'str_replace_editor' && fields.command !== 'view'
+  const mutating = ['write', 'edit', 'multiedit','kioku_write','kioku_edit','kioku_remove'].includes(name) || name === 'str_replace_editor' && fields.command !== 'view'
   if (mutating && ![relative, path.relative(root, canonicalTarget)].every(target => scope.some(entry => entry === '.' || target === entry || target.startsWith(`${entry}${path.sep}`) || path.matchesGlob(target, entry)))) return 'Child mutation is outside the approved WorkUnit scope'
   return undefined
 }

@@ -18,7 +18,7 @@ test('pathname write proposals preserve the worker and its scratch after rejecti
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
   db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const manager = new LispManager({ store: new LispStore(async fn => fn(db)), dataRoot: join(base, 'data'),
-    config: LispConfig.parse({ enabled: true, startupTimeoutMs: 60000, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl' }) })
+    config: LispConfig.parse({ executionMode: 'protected', enabled: true, startupTimeoutMs: 60000, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl' }) })
   const owner = { sessionId: 'session', agentId: 'agent', root }
   const evaluate = (operationId: string, code: string) => manager.execute(owner, 'lisp_eval', { operationId, code }) as Promise<any>
   try {

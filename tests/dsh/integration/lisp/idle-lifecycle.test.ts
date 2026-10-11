@@ -20,7 +20,7 @@ async function fixture(idleTimeoutMs = 300000, questions?: DshUserQuestions) {
   db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db))
   const manager = new LispManager({ store, dataRoot: join(base, 'data'), ...(questions ? { questions } : {}),
-    config: LispConfig.parse({ enabled: true, maxWorkers: 1, idleTimeoutMs, startupTimeoutMs: 60000, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl' }) })
+    config: LispConfig.parse({ executionMode: 'protected', enabled: true, maxWorkers: 1, idleTimeoutMs, startupTimeoutMs: 60000, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl' }) })
   await manager.start()
   const owner = (id: string): LispOwner => ({ sessionId: id, agentId: id, root })
   return { manager, store, root, owner, async close() { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) } }

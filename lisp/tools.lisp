@@ -275,7 +275,7 @@
     (vector (question "change" "Does the change satisfy the requirement without an evident regression?"
       (vector (choice "yes" "Satisfies requirement") (choice "no" "Missing requirement or regression") (choice "abstain" "Insufficient evidence"))))))
 (in-package :kioku.environment)
-(defun status () (kioku.internal:object "generation" kioku.internal:*generation* "sbcl" (lisp-implementation-version) "os" (software-type) "architecture" (machine-type) "scratch" (namestring (kioku.files:scratch)) "network" yason:false "hostWrites" "proposals only" "libraries" #("yason" "cl-ppcre" "cl-csv")))
+(defun status () (kioku.internal:object "generation" kioku.internal:*generation* "sbcl" (lisp-implementation-version) "os" (software-type) "architecture" (machine-type) "scratch" (namestring (kioku.files:scratch)) "executionMode" (or (uiop:getenv "KIOKU_EXECUTION_MODE") "protected") "network" (if (equal (uiop:getenv "KIOKU_EXECUTION_MODE") "development") "normal user environment" yason:false) "hostWrites" (if (equal (uiop:getenv "KIOKU_EXECUTION_MODE") "development") "owned tools and direct Lisp; only host receipts prove observed effects" "proposals only") "libraries" #("yason" "cl-ppcre" "cl-csv")))
 (in-package :kioku.tools)
 (defun available-tools () (kioku.internal:rpc "tools-list" (kioku.internal:object)))
 (defun call-tool (name &optional (arguments (kioku.internal:object)))

@@ -59,9 +59,9 @@ test('Lisp planning and execution safeguards survive full, compiled and fallback
   const safeguards = ['Never spoof host-bound session/agent/directory/generation',
     'never escape protection', 'Unknown\ntest status or generated `passed` fields never prove host verification',
     'IN_PROGRESS', 'ID_CONFLICT', 'RUNNING/UNKNOWN', 'RESULT_EXPIRED', 'Never replay effects',
-    'profile policy on frozen targets/diffs', 'Refusal/skip/UI failure/cancellation never authorizes',
+    'Protected compatibility mode retains its frozen-target profile policy', 'Refusal/skip/UI failure/cancellation never authorizes',
     'Generation\napproval never authorizes writes', 'no reapply/\nrollback', 'Cancellation stops work',
-    'execute authorized actions without permission or resubmission questions']
+    'Routine development and helper registration are authorized']
   const check = (body: string) => { for (const safeguard of safeguards) assert.ok(body.includes(safeguard), safeguard) }
   const expected = 'For Lisp coding, plans or reviews, settle testable doubts with current evidence or authorized target-runtime probes. Choose controls and counterexamples first; record commands, failures, observations and refs in one reasoned plan. Stop when evidence suffices or budgets expire; ask only for needed intent or authority.'
   const compiled = compileSkillResource(lisp)
@@ -134,7 +134,7 @@ test('runtime never compiles: absent, stale and corrupt artifacts deliver full s
   const dir = await mkdtemp(join(tmpdir(), 'lisp-approval-guidance-'))
   try {
     const artifact = pathToFileURL(join(dir,'missing.json'))
-    const expected = 'execute authorized actions without permission or resubmission questions'
+    const expected = 'Routine development and helper registration are authorized'
     for (const mode of ['compiled','full'] as const) {
       const prompts = new DshSkillPrompts({mode}, artifact, async()=>sources)
       assert.ok((await prompts.require('kiokuko-lisp')).includes(expected))

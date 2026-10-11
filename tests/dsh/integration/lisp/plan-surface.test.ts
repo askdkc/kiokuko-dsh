@@ -44,7 +44,7 @@ for (const mode of ['persistent', 'task'] as const) test(`Lisp ${mode}: native q
     assert.equal((await call('exit_plan_mode', { plan: '# Test plan' })).isError, true, 'inactive Plan mode retains native rejection')
     assert.equal((await call('bash')).isError, false, 'Lisp disabled preserves native effects')
     effects = 0
-    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true }))
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: true }))
     if (mode === 'persistent') t.mock.method(surface.manager, 'enable', async (owner: any) => {
       await new LispStore(fn => runtime.withDatabase(fn)).enable(owner)
       surface!.manager.enabled.set(owner.sessionId, owner.root)

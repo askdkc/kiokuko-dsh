@@ -259,7 +259,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       })
       await (adapter.host.memoryFinalizer as DshMemoryFinalizer).retryFailed(failed)
       await deadline(adapter.host.memoryFinalizer!.whenIdle(), 'explicit finalization retry')
-      assert.equal(auxiliaryCalls - beforeAux - (planReviewCalls - beforeReview), 2, 'one failed extraction plus one authorized retry')
+      assert.equal(auxiliaryCalls - beforeAux - (planReviewCalls - beforeReview), 1, 'storage-only retry reuses the staged extraction without another model call')
     }
     const state = await database(db => {
       const runs = db.prepare('SELECT run_id,status,dsh_session_id FROM ledger_runs').all<{run_id:string;status:string;dsh_session_id:string}>().filter(run => !prior.some(old => old.run_id === run.run_id))

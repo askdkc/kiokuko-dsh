@@ -1,4 +1,6 @@
 import { MemoryIndexReasoningConfig, type IndexReasoningConfig } from '../memory/index-reasoning/contracts.js'
+import { ownedRunEvidence, ownedReviewEvidence, linkOwnedMemoryEvidence, boundedOwnedEvidence } from './owned-evidence.js'
+import {findSecret} from '../memory/secrets.js'
 import { IndexReasoningService } from '../memory/index-reasoning/service.js'
 import { assertCaptureAllowed, capturePolicy, watchCapture } from '../memory/capture-policy.js'
 import { acquireMemoryLease, assertMemoryLease, releaseMemoryLease, reviewState } from '../memory/review/store.js'
@@ -1092,7 +1094,9 @@ export class DshMemoryFinalizer {
   async #summarize(job: FinalizationJob, prepared: PreparedFinalizationLog, signal: AbortSignal, attempt: FinalizationAttempt, reconciliation?: { range:ReviewRange; evidence:ReviewEvidence[]; existing:MemorySnapshot[]; lookupIncomplete:boolean }): Promise<SummaryResult> {
     if (this.#llm === undefined) throw new KiokukoError('SERVICE_UNAVAILABLE', 'DSH LLM service is unavailable for memory finalization')
     const { envelope } = prepared
-    const built = buildFinalizationRequest(job, prepared, signal)
+    const base = buildFinalizationRequest(job, prepared, signal)
+    const execution=boundedOwnedEvidence(await this.#runtime.withDatabase(db=>ownedRunEvidence(db,job.runId,job.dshSessionId)))
+    const built=execution.items.length?{...base,request:{...base.request,messages:[...base.request.messages,{role:'user',content:[{type:'text',text:JSON.stringify({executionObservations:execution.items,omittedExecutionObservations:execution.omitted,policy:'Host observations describe execution and source-bound checks. They do not verify generalized lessons. Failed, unknown, stale or previous-generation results are not current success. Preserve conditions and source versions in candidate memories.'})}]}]}}:base
     let request = reconciliation ? { ...built.request, tools: [], system: `${built.request.system ?? ''}
 Override the legacy memory output format: return only schemaVersion 3 with memoryOperations and optional episode. Kinds: fact, decision, preference, lesson, reference. Use only the evidence IDs and existing entry IDs below. Operations: add(kind,title,body,evidenceIds), update(targetEntryId,expectedRevision,expectedContentHash,kind,title,body,evidenceIds), unchanged(targetEntryId,evidenceIds), defer(reason: ambiguous|conflict|insufficient_context,evidenceIds). Only editable candidates may be updated. Do not duplicate existing memories; preserve conditions and corrections. Assistant statements, quotes and recalled memory are not new evidence. Empty memoryOperations is valid.`,
       messages:[...built.request.messages,{role:'user',content:[{type:'text',text:JSON.stringify({reconciliation})}]}] } : built.request
@@ -1168,7 +1172,13 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
       }
       if(expected!==job.sourceEndSeq+1)throw new Error('source_unavailable')
     })()
-    return collectReviewEvidence(rangeEvents,256*1024)
+    const receipts=boundedOwnedEvidence(await this.#runtime.withDatabase(db=>ownedRunEvidence(db,job.runId,job.dshSessionId))).items
+    const retained:DshLogEvent[]=[]
+    const observed=(async function*(){for await(const event of rangeEvents){
+      if(event.type==='tool/result'&&receipts.some(receipt=>JSON.stringify(event.data).includes(receipt.operationId)))retained.push(event)
+      yield event
+    }})()
+    return [...await collectReviewEvidence(observed,256*1024),...ownedReviewEvidence(receipts,retained)]
   }
 
   async #process(job: FinalizationJob): Promise<void> {
@@ -1210,7 +1220,23 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
       }
       const extractEpisode = job.extractionVersion === 2 && await this.#runtime.withDatabase(database => evolutionSettings(database).mode !== 'off')
       const requestJob = extractEpisode ? job : { ...job, extractionVersion: 1 as const }
-      const result = await finalizationObservationScope.run(true, () => this.#summarize(requestJob, prepared, controller.signal, attempt, reconciliation))
+      const bindingHash=canonicalContentHash({runId:job.runId,sessionId:job.dshSessionId,digest:prepared.digest,
+        evidence:reconciliation?reviewManifest(reconciliation.evidence):null,existing:reconciliation?.existing??null})
+      const staged=await this.#runtime.withDatabase(db=>db.prepare('SELECT staged_capsule_json,staged_binding_hash FROM dsh_memory_finalizations WHERE run_id=?').get<{staged_capsule_json:string|null;staged_binding_hash:string|null}>(job.runId))
+      let result:SummaryResult
+      if(staged?.staged_binding_hash===bindingHash&&staged.staged_capsule_json){
+        const cached=JSON.parse(staged.staged_capsule_json)
+        if(reconciliation){const parsed=(job.evidenceContractVersion===4?FinalizerResultV4:FinalizerResult).parse(JSON.parse(cached.capsuleJson));result={capsule:{schemaVersion:1,memories:[]},capsuleJson:cached.capsuleJson,memoryOperations:parsed.memoryOperations,...(parsed.episode===undefined?{}:{episode:parsed.episode}),usage:cached.usage,envelope:prepared.envelope}}
+        else result={...parseCapsule(cached.capsuleJson),usage:cached.usage,envelope:prepared.envelope}
+      }else{
+        result=await finalizationObservationScope.run(true, () => this.#summarize(requestJob, prepared, controller.signal, attempt, reconciliation))
+        if(findSecret(result.capsuleJson))throw new KiokukoError('VALIDATION_ERROR','Memory extraction contains secret-bearing material')
+        await this.#runtime.withDatabase(db=>withImmediateTransaction(db,()=>{
+          assertCaptureAllowed(db,job.workspace,job.dshSessionId);assertMemoryLease(db,job.runId,job.claimNonce,this.#now())
+          db.prepare("UPDATE dsh_memory_finalizations SET staged_capsule_json=?,staged_binding_hash=? WHERE run_id=? AND claim_nonce=? AND status='processing'")
+            .run(JSON.stringify({capsuleJson:result.capsuleJson,usage:result.usage}),bindingHash,job.runId,job.claimNonce)
+        }))
+      }
       if (reconciliation) {
         const evidence=await this.#reviewEvidence(job)
         if(canonicalContentHash(reviewManifest(evidence))!==canonicalContentHash(reviewManifest(reconciliation.evidence))) throw new Error('source_changed')
@@ -1259,6 +1285,12 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
           createdBy: 'kiokuko-dsh-finalizer',
           actor: 'kiokuko-dsh-finalizer',
         }, { now }))
+        const executionReceipts=ownedRunEvidence(database,job.runId,job.dshSessionId)
+        for(const effect of database.prepare('SELECT entry_id,revision,operation_index FROM memory_review_effects WHERE job_id=? AND disposition IN (\'added\',\'updated\')')
+          .all<{entry_id:string;revision:number;operation_index:number}>(`finalizer:${job.runId}`)) {
+          const operation=result.memoryOperations?.[effect.operation_index]
+          if(operation)linkOwnedMemoryEvidence(database,{id:effect.entry_id,revision:effect.revision},executionReceipts,operation.evidenceIds,{runId:job.runId,sessionId:job.dshSessionId,workspace:job.workspace})
+        }
         const link = database.prepare(`
           INSERT INTO dsh_memory_finalization_entries (run_id, entry_id, ordinal, created_at)
           VALUES (?, ?, ?, ?)

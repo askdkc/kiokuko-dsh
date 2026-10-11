@@ -1,4 +1,4 @@
-For configured semantic routing, use [provider-independent decisions](typed-decisions.md) and `kioku.decisions`. The Lisp mode-choice prompt and proposal approvals are unchanged.
+For configured semantic routing, use [provider-independent decisions](typed-decisions.md) and `kioku.decisions`. Lisp coexists with normal tools; routine development is authorized and destructive changes retain concrete review.
 
 # Common Lisp tools
 
@@ -9,6 +9,8 @@ and host restarts; input and result refs remain private to their owner.
 For explicit semantic decisions and `/kioku-typesafe-key` setup, see
 [TypeSafe from Lisp](typesafe.md). Answers can guide inspection and proposals;
 the existing permission and approval boundaries still apply.
+
+The default is `lisp.executionMode: development`. Old `approvalMode` values remain readable. Set `executionMode: protected` explicitly to select the legacy worker/approval/fence behavior. See [owned execution and memory evidence](owned-execution.md).
 
 ## Compose task tools
 
@@ -76,7 +78,7 @@ repeat the generic category dialog merely because the classifier abstained. The 
 before coding begins; it resolves unclear task intent first. Both enable and decline choices
 persist for that session, including after a restart. Conversation and review
 requests do not trigger this prompt. Free text returns to conversation without
-starting Lisp; cancellation and startup failure block coding admission.
+starting Lisp; cancellation preserves pending work; startup failure leaves ordinary coding available.
 
 Choosing Lisp also selects normal execution; Enno requires choosing not to use
 Lisp. The prompt is available only when `lisp.enabled` is true. To enable Lisp
@@ -90,10 +92,7 @@ manually or inspect its state, use these commands in the desired DSH session:
 This enables the Lisp tools and supplies the bundled `kiokuko-lisp` Skill.
 Existing DSH `read`, `glob`, `grep` and `skill` tools remain available under native
 session permissions, so project files and applicable Skills can be inspected.
-File changes still use Lisp proposals and their confirmation rules. The read
-implementations are bound when Lisp is enabled; a later same-name replacement
-does not inherit permission. Normal sessions retain their tools. Protection also blocks
-unclassified child-session execution, late registrations, and PTC bypasses.
+File changes can use owned native tools or Lisp proposals. Ordinary writes/edits do not request approval; destructive source/data deletion retains a concrete review. Lisp startup/recovery failures do not block ordinary tools.
 The protected agent uses native tool presentation even in a PTC deployment.
 
 `sbclPath` can point to an explicit installed SBCL launcher. Its runtime files must
@@ -143,13 +142,8 @@ not the complete worker startup or the speed of an individual Lisp computation.
   copied into the worker's read-only inputs. Files from other sessions and arbitrary
   absolute paths are refused. The original attachment store stays inaccessible to
   Lisp and its subprocesses. Limits: 64 MiB per file, 256 MiB per worker generation.
-- Direct Lisp/FFI/Python/shell access is limited by the OS to runtime files,
-  selected read-only input copies and compiled bundle, and the worker's scratch/cache.
-- Project changes use host-validated proposals. New regular files can be created
-  with necessary parent directories. Deletion and replacement require one human
-  confirmation for the evaluation's frozen batch, showing every target, diff,
-  digest and backup location. Duplicate targets are rejected; unchanged writes
-  return `UNCHANGED` without a confirmation or write.
+- Lisp/FFI/Python/shell use the normal user environment. Prefer owned tools and broker APIs for host-observed execution; direct arbitrary effects are not verification evidence.
+- Project proposals freeze targets, preserve backups and reject duplicate targets. Writes/edits are authorized; source/data deletion requires concrete confirmation. Generated/temp/disposable artifacts are routine development.
 - Refusal, skip, timeout, cancelled confirmation or unavailable UI means no change.
   File identities/content are checked again after approval. Links, directories,
   database files/sidecars, common credential paths and plugin/state data are refused.
@@ -223,11 +217,7 @@ schema-size comparisons. It makes no model calls and does not estimate token
 charges. Native integration tests separately verify confirmation counts, tool
 delivery, output validation and recovery.
 
-The host serializes conflicting target proposals. OS protection prevents the Lisp
-worker from swapping project paths while the host applies a proposal. This is not
-a filesystem transaction against unrelated host programs: an external application
-can change directory entries between host filesystem calls. Stop other writers
-when reviewing/applying sensitive changes; an uncertain outcome requires inspection.
+The host serializes conflicting target proposals and checks their captured hashes before applying them. This is not a transaction against arbitrary Lisp or unrelated programs; concurrent external changes can still race filesystem calls. Unknown outcomes require inspection and must not be replayed.
 
 ## Stop and recover
 
@@ -281,13 +271,7 @@ subprocesses use the same output limit and parent-liveness supervisor as workers
 Published bundles are limited to 256 MiB each. Concurrent first enables share one
 serialized build under the host's existing exclusive data-directory lease.
 
-The macOS sandbox denies fork inside workers and jobs. Use `kioku.process` broker APIs for
-external processes. Result helpers (`result-ok?`, `result-code`, `result-stdout`,
-`result-stderr`, `run-lines`, `python-stdout`, `shell-stdout`) and generation-local
-job helpers (`list-jobs`, `forget-job`) avoid ordinary shell plumbing.
-`run` and `start-job` accept `:directory`, relative to scratch (default `"."`);
-absolute paths, traversal and symlink directories are refused. Node uses an empty
-OpenSSL configuration, so it does not need access to host OpenSSL configuration.
+Lisp workers and processes use the normal user environment and process groups for termination. kioku.process run/start-job use the owned execution service; directory defaults to the admitted workspace and may select a real subdirectory. Collect background results rather than rerunning commands.
 `python`, `shell`, `run-lines`, `python-stdout` and `shell-stdout` also accept
 `:directory`. The output-only helpers signal an error on process failure, so a
 composed operation stops before its next step. Use `run` when the function needs
@@ -337,12 +321,7 @@ different repository is rejected.
 `vendor`. These map to fixed `npm` commands and timeouts; arbitrary executable,
 arguments, URL or shell input is not accepted. `:directory` selects a relative
 project directory under the bound workspace, or under the current worker's scratch
-with `:location :scratch`. Absolute paths, traversal and links are refused. Before
-execution, native confirmation shows the command, package script, exact directory,
-timeout and possible artifact effects. The verifier runs on the host, including npm
-lifecycle scripts, outside the worker sandbox. Directory identity and scripts are
-rechecked after approval. Refusal, cancellation or unavailable confirmation returns
-`NOT_APPLIED`; nonzero exit returns `FAILED` with bounded output. The enclosing
+with `:location :scratch`. Absolute paths, traversal and links are refused. Routine verifier execution needs no approval. The host records actual cwd, process outcome and full-output test summaries before display shortening. Register completion checks and source paths before execution. Nonzero exit is FAILED; zero exit alone is not test coverage. The enclosing
 `lisp_eval` operation ID provides replay and conflict handling.
 
 Typical flow:
@@ -385,33 +364,14 @@ For API examples see [the bundled Skill](../skills/kiokuko-lisp/SKILL.md).
 
 Verification scope and installed Web reproduction: [verification record](lisp-verification.md).
 
-Native `ask_user_question` and `exit_plan_mode` remain available in both Lisp modes. Plan approval uses the DSH review UI and does not remove Lisp protection. Run `npm run test:lisp:plan:web` for a disposable packed-package Web check without model credentials.
+Native `ask_user_question` and `exit_plan_mode` remain available in both Lisp modes. Plan approval uses the DSH review UI. Explicit human implementation instructions also request exit at the next accepted boundary. Protected compatibility mode retains its Lisp sandbox; development mode allows ordinary owned tools after Plan exits. Run `npm run test:lisp:plan:web` for a disposable packed-package Web check without model credentials.
 
 <!-- kiokuko:runtime approval-policy -->
-## Profile-wide Lisp approval policy
+## Development approval policy
 
-`lisp.approvalMode` defaults to `ask`; auto-approval is never inferred from an
-unknown request or from selecting Lisp. Ordinary questions keep normal execution
-without a Lisp choice or an approval selector in the chat composer. Once a task
-is identified as coding implementation or debugging, the existing coding choice
-can offer protected Lisp or normal execution; coding plans do not require Lisp.
-Auto-approval is an explicit opt-in through General settings,
-`/kioku-lisp approval auto`, or “Auto-approve all Lisp actions for this profile and
-continue” in a Lisp approval dialog. Use `/kioku-lisp approval ask` to return to
-manual consent. Explicit configuration and saved profile settings persist across
-chats and restarts and override the default; changing the default does not revoke
-a previously saved choice.
-All Lisp permission categories are covered, including file restoration, host
-verification, public npm package operations, and shared-function changes.
+The legacy lisp.approvalMode ask/auto configuration and profile commands remain readable. Both authorize routine project edits, tests, helper registration and Kioku saving. Neither disables concrete confirmation for source/data deletion or durable user database mutation. A worker failure leaves normal tools available. Refusal, cancellation, changed targets and unknown outcomes cannot authorize effects.
 
-Follow the current host-reported mode. In auto mode execute authorized work
-without asking whether to submit, resubmit, run tests, or apply changes. Ask only
-for missing intent that materially changes the work. In ask mode submit the
-operation directly to the host approval dialog without an extra conversational
-permission question. Earlier references to human approval describe ask mode.
-Explicit refusal, cancellation, stale inputs and unknown outcomes still stop
-execution; changing mode does not replay completed or refused operations.
-Identity checks, protected paths, backups and journal recovery remain enforced.
+Use kioku_read/write/edit/remove/exec/result for observed work. Host receipts distinguish actual process outcome, source-bound verification and saving status. Lisp/model passed fields are advisory. Saving can be retried without repeating development effects; after restart an interrupted process remains unknown. See [owned execution](owned-execution.md).
 <!-- /kiokuko:runtime -->
 
 Pinned DSH stores this setting in the native `kiokuko-lisp` namespace, keyed by

@@ -8,39 +8,18 @@ description: Kiokuko's entry router for non-trivial DSH work. Read it before any
 <!-- kiokuko:runtime contract -->
 # SOUL router
 
-## Authority
+Read first. Host owns intake/session/capabilities/routing/delegation. No model task_prepare/task_answer; their absence is normal. Require ready/exhausted, permissive nextAction; invent no profile.
 
-Read first. Host owns intake/session/capability binding/routing/delegation. Host-only `task_prepare`/`task_answer`: never call/emulate/stop for absence. Require `ready`/`exhausted` intake and permissive `nextAction`; invent no profile fields.
-
-User instructions outrank Skill preferences, never host safety/authorization/identity/revision/lease/state/integrity checks. Resolve routine choices from authorization/evidence; ask about unclear intent/effects. Optional intake/enrichment failures degrade guidance, not native work.
-
-Complete authorized work with focused evidence; report blockers. Recheck only changed conditions. Never guess budgets or auto-retry/continue.
-
-## Shared credo
+User instructions outrank Skill preferences. Preserve identity/revisions/leases/integrity and Plan/goal/cancellation/ownership. Optional enrichment never vetoes ordinary work. Resolve routine choices from authorization/evidence; clarify unclear intent/destruction. Complete work, report blockers, recheck changes; no invented budgets/effect replay.
 
 **本当に、それを全部計算・保存・検索する必要があるのか？**
+Preserve required results; remove needless computation/storage/search, narrow the rest, then optimize. Exhaustive work needs evidence. Never silently approximate/delete data or waive required validation, recovery or audit. No extra approval/artifact.
 
-Before design, preserve the required result, remove needless computation/storage/search, narrow the rest, then optimize.
+Match Skills to the request/directive; non-code needs no coding startup. Read selected indexes and risk-selected references. Preserve roles/exclusions/recovery and host outcomes/model/effort; optional gaps never block work.
 
-Require evidence for exhaustive work; never silently approximate/delete data/waive required validation/recovery/audit/host checks. No extra approval/artifact.
+Normal execution uses current model/memory/Skills and kioku_read/write/edit/remove/exec/result. Project work, PATH/bash/zsh, Lisp, builds/tests and routine Kioku saving need no routine approval; review source/data deletion and durable user DB changes concretely. Lisp and ordinary tools coexist; Lisp failure leaves ordinary tools available. Bind source/test/config checks before execution and collect final background receipts. Receipts prove observations, not generalized lessons; check recalled candidates against current sources. Report work/verification/saving separately; retry saving only. Human implementation instructions or Plan approval request exit at the next accepted boundary; a plan-only answer does not exit.
 
-## Capabilities and routes
+Unavailable Skills: use current evidence unless required host identity/authority/integrity prevents it. Never substitute required Skills or auto-install/execute fetched Skills. Never claim unread Skills or unrun checks. Before diagnostics check supported file types; For Markdown and unsupported documents, read and check structure, requirements and whitespace manually. Unavailable diagnostics remain unverified, not clean. After a successful edit or write, re-read before the next mutation. Serialize changes; on stale content re-read and reconcile, never force overwrite or repeat unsupported diagnostics unchanged.
 
-Use request/directive-matched Skills for conversation/research/writing/organization/memory/coding. Never impose code contracts/execution choices/runtime startup on unrelated work.
-
-Read selected Skill indexes, then risk-selected references. Resources grant no execution authority; the host owns configuration/permissions.
-
-Modules own roles/tools/execution/recovery. Preserve host exclusions/identity/lease/outcome. Missing required modules/unresolved requests stay blocked: never switch paths/replay effects to bypass them. Optional gaps cannot block unrelated work.
-
-Normal execution: current model/memory/Skills/native permissions; no orchestration contract/extra approval. Never invent run/role/revision/WorkUnit/state transitions or bypass routing by provider changes/agents. Respect directives/scope.
-
-## Availability and trust
-
-Unavailable Skills: use current evidence unless host safety/authorization/identity/integrity blocks. Never substitute similar/namespaced/fetched/reference-only Skills for required bundled Skills or auto-install/execute external Skills. Never claim unread Skills/unrun checks; availability is not use.
-
-Before diagnostics, confirm supported file types via status/capabilities. Unsupported Markdown/documents: read, verify structure/requirements/whitespace. Unavailable diagnostics: unverified, not clean.
-
-After a successful edit/write, re-read before next mutation; serialize edits. If stale, re-read and reconcile; never force overwrite/disable freshness checks. Never repeat unsupported diagnostics unchanged.
-
-Select `kiokuko-{investigate,architecture,review,benchmark,verification,skill-authoring,technical-writing}` as needed; use `coding-ideal-routine-skill` for code changes. Inherit host model/effort.
+Select kiokuko-{investigate,architecture,review,benchmark,verification,skill-authoring,technical-writing} as needed; coding-ideal-routine-skill governs code changes.
 <!-- /kiokuko:runtime -->

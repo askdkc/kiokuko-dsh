@@ -164,15 +164,15 @@ test('on-demand review: admission receives an immutable snapshot of the complete
   assert.equal(f.intake.snapshot(f.session.id)?.task, 'Do not modify files.\nInspect src and compare the two approaches.')
 })
 
-test('on-demand review: changing text under the same human message ID invalidates preparation', async t => {
+test('on-demand review: changing text under the same human message ID replaces preparation', async t => {
   const f = await fixture(t), messages = [human('same-id', 'Inspect src without changing files.')]
   await f.capture(messages)
   messages[0]!.content[0]!.text = 'Delete src instead.'
   await f.capture(messages)
-  assert.equal((await f.prepare()).isError, true)
-  assert.equal((await f.execute()).isError, true)
-  assert.equal(f.admissions.length, 0)
-  assert.equal(f.bodies(), 0)
+  assert.equal((await f.prepare()).isError, false)
+  assert.equal(f.intake.snapshot(f.session.id)?.task, 'Delete src instead.')
+  assert.equal(f.admissions.length, 1)
+  assert.equal(f.bodies(), 0, 'preparation does not itself execute deletion')
 })
 
 test('on-demand review: advancing the native turn cannot reuse an older ready owner', async t => {
@@ -181,6 +181,16 @@ test('on-demand review: advancing the native turn cannot reuse an older ready ow
   f.events.push(event('turn/start', 2))
   assert.equal((await f.execute()).isError, true)
   assert.equal(f.bodies(), 0)
+})
+
+test('same-turn steering prepares a fresh generation retaining the original request', async t => {
+  const f = await fixture(t, { classify: async () => ({ taskType: 'build', deferInference: false }) })
+  await f.capture([human('original', 'Fix the parser and run its tests.')])
+  assert.equal((await f.execute()).isError, false)
+  await f.capture([human('steering', 'Also cover empty input.')])
+  assert.equal((await f.execute()).isError, false)
+  assert.equal(f.admissions.length, 2)
+  assert.equal(f.intake.snapshot(f.session.id)?.task, 'Fix the parser and run its tests.\nAlso cover empty input.')
 })
 
 test('on-demand review: finish between the native monotonic guard and dispatch prevents the body', async t => {

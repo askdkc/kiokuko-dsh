@@ -41,6 +41,10 @@ async function collectTestFiles(targets) {
 }
 
 function runNodeTests(testFiles, testTempRoot) {
+  const concurrency = process.env.KIOKUKO_TEST_CONCURRENCY === undefined
+    ? (testFiles.some(file => file.includes(`${path.sep}lisp${path.sep}`)) ? 2 : 4)
+    : Number(process.env.KIOKUKO_TEST_CONCURRENCY);
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 64) throw new Error('KIOKUKO_TEST_CONCURRENCY must be an integer from 1 to 64');
   return new Promise((resolve, reject) => {
     const childEnvironment = {
       ...process.env,
@@ -52,7 +56,7 @@ function runNodeTests(testFiles, testTempRoot) {
     };
     delete childEnvironment.NODE_TEST_CONTEXT;
 
-    const child = spawn(process.execPath, ['--import', path.resolve(import.meta.dirname, '../tests/dsh/helpers/offline-skill-catalog.mjs'), '--import', 'tsx', '--test', ...testFiles], {
+    const child = spawn(process.execPath, ['--import', path.resolve(import.meta.dirname, '../tests/dsh/helpers/offline-skill-catalog.mjs'), '--import', 'tsx', '--test', `--test-concurrency=${concurrency}`, ...testFiles], {
       cwd: process.cwd(),
       env: childEnvironment,
       stdio: 'inherit',

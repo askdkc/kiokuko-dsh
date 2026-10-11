@@ -45,7 +45,7 @@ test('real protected Lisp workspace CI becomes one completed application; scratc
   }]})})
   let mutateNextWorkspace = false
   const manager = new LispManager({store:new LispStore(async operation => operation(db)),
-    config:LispConfig.parse({enabled:true,startupTimeoutMs:60000}),dataRoot:join(base,'data'),
+    config:LispConfig.parse({ executionMode: 'protected',enabled:true,startupTimeoutMs:60000}),dataRoot:join(base,'data'),
     ciCall:async (subject,request,signal,scratch) => {
       await evidence.beforeCall(subject,request)
       if (mutateNextWorkspace && request.kind === 'verify' && request.location !== 'scratch') {

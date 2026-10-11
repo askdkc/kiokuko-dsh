@@ -7,21 +7,22 @@ export interface LispApprovalPolicy {
   validate(agentId: string, owner?: LispOwner): void
   set(mode: ApprovalMode): Promise<void>
 }
-export type ApprovalQuestions = DshUserQuestions & { approvalPolicy?: LispApprovalPolicy }
+export type ApprovalQuestions = DshUserQuestions & { approvalPolicy?: LispApprovalPolicy; executionMode?:'development'|'protected' }
 export const AUTO_APPROVE_LABEL = 'Auto-approve all Lisp actions for this profile and continue'
 export type Approval = { approved: true; source?: 'manual' | 'profile' } | { approved: false; reason: 'declined' | 'cancelled' | 'timed_out' | 'unavailable' | 'invalid_answer' | 'policy_update_failed'; message?: string }
 
 /** One concrete review; no timeout, UI failure or free text can grant authority. */
 export async function confirm(questions: DshUserQuestions | undefined, identity: string | LispOwner,
-  question: Parameters<DshUserQuestions['ask']>[0]['questions'][0], signal: AbortSignal, timeoutMs = 300000): Promise<Approval> {
+  question: Parameters<DshUserQuestions['ask']>[0]['questions'][0], signal: AbortSignal, timeoutMs = 300000, destructive = false): Promise<Approval> {
   const agentId = typeof identity === 'string' ? identity : identity.agentId
   const owner = typeof identity === 'string' ? undefined : identity
   if (signal.aborted) return { approved: false, reason: 'cancelled' }
   const policy = (questions as ApprovalQuestions | undefined)?.approvalPolicy
   policy?.validate(agentId, owner)
-  if (policy?.mode() === 'auto') return { approved: true, source: 'profile' }
+  const development=(questions as ApprovalQuestions|undefined)?.executionMode==='development'
+  if (development && !destructive || !development && policy?.mode()==='auto') return { approved: true, source: 'profile' }
   if (!questions) return { approved: false, reason: 'unavailable' }
-  const canEnable = policy?.writable() === true
+  const canEnable = !development && policy?.writable()===true
   if (canEnable) question = { ...question, options: [...(question.options ?? []), { label: AUTO_APPROVE_LABEL }] }
   const timeout = new AbortController(), combined = AbortSignal.any([signal, timeout.signal])
   const timer = setTimeout(() => timeout.abort(), timeoutMs)

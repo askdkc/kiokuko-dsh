@@ -177,7 +177,8 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   })
   const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
-    assert.equal(registered.length, 12)
+    assert.equal(registered.length, 18)
+    for(const name of ['kioku_read','kioku_write','kioku_edit','kioku_remove','kioku_exec','kioku_result']) assert.ok(registered.some((definition:any)=>definition.name===name))
     assert.ok(registered.some((definition: any) => definition.name === 'memory_explain'))
     assert.ok(registered.some((definition: any) => definition.name === 'task_completion'))
     const archivedExportSession = createNativeSession('archived-export-session')

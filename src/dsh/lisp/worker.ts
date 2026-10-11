@@ -9,7 +9,7 @@ import { sandboxLaunch, type SandboxLayout } from './sandbox.js'
 const Rpc = z.object({ version: z.literal(1), type: z.literal('rpc'), id: z.string().max(256), request: z.string(), method: z.enum(['run', 'start-job', 'job-status', 'cancel-job', 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'packages']), arguments: z.unknown() }).strict()
 const Program = z.object({ program: z.string().min(1).max(4096), argv: z.array(z.string().max(262144)).max(128), timeoutMs: z.number().int().min(100).max(600000), directory: z.string().min(1).max(4096).optional() }).strict()
 interface Job { child: ChildProcess; done: Promise<void>; settled?: boolean; result?: { code: number | null; signal: string | null; stdout: string; stderr: string }; error?: string }
-export interface LispRpcContext { generation: string; evaluationId: string; signal: AbortSignal }
+export interface LispRpcContext { generation: string; evaluationId: string; signal: AbortSignal; rpcId?:string }
 interface Pending { id: string; abort: AbortController; resolve: (r: WorkerResult) => void; reject: (e: unknown) => void }
 /** A worker has one evaluation slot; cancellation never waits for that slot. */
 export class LispWorker {
@@ -38,10 +38,11 @@ export class LispWorker {
   get stopped(): boolean { return (!this.#child || this.#stopped) && !this.hasRunningJobs }
   output(): unknown { return { stdout: Buffer.concat(this.#stdout).toString('utf8'), stderr: Buffer.concat(this.#stderr).toString('utf8'), bytes: this.#bytes, truncated: this.#bytes > this.config.maxOutputBytes } }
   jobStatus(): unknown[] { return [...this.jobs].map(([id, job]) => ({ id, state: job.error ? 'FAILED' : job.result ? 'FINISHED' : 'RUNNING', code: job.result?.code ?? null, error: job.error ?? null })) }
+  get supervisorPid(): number | null { return this.#child?.pid ?? null }
   async start(): Promise<void> {
     const launch = await sandboxLaunch(this.layout, this.config.sbclPath, ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(this.layout.library, 'bootstrap.lisp')], this.generation, true)
     const ready = new Promise<void>((resolve, reject) => { this.#ready = resolve; this.#startupReject = reject })
-    const child = this.#child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, protocol: true })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] })
+    const child = this.#child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: true })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] })
     this.#exit = new Promise(resolve => {
       child.once('error', error => { this.#stopped = true; this.break(error); resolve() })
       child.once('exit', () => { this.#stopped = true; this.break(new LispError('WORKER_EXITED', 'Lisp が終了しました。')); resolve() })
@@ -128,9 +129,9 @@ export class LispWorker {
       if (!this.#pending || this.#pending.id !== rpc.request) throw new Error('RPC outside evaluation')
       if (!this.rpcAllowed(rpc.method)) throw new LispError('CAPABILITY_DENIED', 'この作業用ツールからは host RPC を実行できません。')
       let value: unknown
-      if (['tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'packages'].includes(rpc.method)) {
+      if (['tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'packages',...(this.config.executionMode==='development'?['run','start-job','job-status','cancel-job']:[])].includes(rpc.method)) {
         if (!this.hostCall) throw new Error('HOST_ADAPTER_UNAVAILABLE')
-        value = await this.hostCall(rpc.method, rpc.arguments, { generation: this.generation, evaluationId: this.#pending.id, signal: this.#pending.abort.signal })
+        value = await this.hostCall(rpc.method, rpc.arguments, { generation: this.generation, evaluationId: this.#pending.id, signal: this.#pending.abort.signal, rpcId:rpc.id })
       } else if (rpc.method === 'run' || rpc.method === 'start-job') {
         const input = Program.parse(rpc.arguments)
         if ([...this.jobs.values()].filter(j => !j.result && !j.error).length >= 4 || this.jobs.size >= 100) throw new Error('JOB_LIMIT')
@@ -157,7 +158,7 @@ export class LispWorker {
   private async launchJob(input: z.infer<typeof Program>): Promise<Job> {
     const launch = await sandboxLaunch(this.layout, input.program, input.argv, this.generation, false, input.directory)
     if (this.#closed || this.#fatal || !this.#pending) throw new Error('Worker stopped before job launch')
-    const child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, protocol: false })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: false })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] })
     const job: Job = { child, done: Promise.resolve() }
     let bytes = 0, stdout = '', stderr = ''
     for (const [stream, target] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']] as const) stream.on('data', (chunk: Buffer) => {

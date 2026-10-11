@@ -35,7 +35,7 @@ export async function runLispSetup(layout: SandboxLayout, config: LispConfigurat
     ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(layout.library, script)], 'setup', true)
   signal.throwIfAborted()
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [join(layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, protocol: false })],
+    const child = spawn(process.execPath, [join(layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: false })],
       { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), bytes = 0, failure: Error | undefined
     let stopTimer: ReturnType<typeof setTimeout> | undefined
@@ -95,7 +95,7 @@ export class CompiledLispCache {
       const actual = await realpath(path)
       binaries[actual] = (await fileHash(actual, 1024 * 1024 * 1024)).hash
     }
-    return digest({ format: 1, platform: process.platform, architecture: process.arch,
+    return digest({ format: 1, executionMode:this.config.executionMode, platform: process.platform, architecture: process.arch,
       library: await realpath(this.library), source, runtime: output, binaries })
   }
   private async existing(path: string, key: string): Promise<boolean> {
@@ -122,6 +122,7 @@ export class CompiledLispCache {
     let stopped = true
     try {
       const layout = await prepareLayout(base, this.library)
+      layout.protected=this.config.executionMode==='protected'
       const key = await this.identity(layout, signal), path = join(this.root, key)
       signal.throwIfAborted()
       const reused = await this.existing(path, key)

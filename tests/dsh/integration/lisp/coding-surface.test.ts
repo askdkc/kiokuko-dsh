@@ -47,7 +47,7 @@ for (const outcome of ['ready', 'task-ready', 'startup-failure', 'decline'] as c
   await fiber
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined
   try {
-    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true, sbclPath: join(base, 'missing-sbcl') }))
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: join(base, 'missing-sbcl') }))
     if (outcome === 'ready') t.mock.method(surface.manager, 'enable', async (owner: LispOwner) => {
       activated++
       surface!.manager.enabled.set(owner.sessionId, owner.root)

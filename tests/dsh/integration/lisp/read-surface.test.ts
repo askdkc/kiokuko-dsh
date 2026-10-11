@@ -98,7 +98,7 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     disposeMemory = mountMemoryApplication(ctx, { runtime,
       resolve: execution => execution.agent === parent ? identity : undefined,
       refresh: async (_execution, query) => tasks.refresh(task, query, new AbortController().signal) })
-    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true }))
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: true }))
     t.mock.method(surface.manager, 'enable', async (owner: LispOwner) => {
       await new LispStore(fn => runtime.withDatabase(fn)).enable(owner)
       surface!.manager.enabled.set(owner.sessionId, owner.root)

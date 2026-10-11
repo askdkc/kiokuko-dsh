@@ -35,7 +35,7 @@ for (const mode of ['apply', 'decline', 'stale'] as const) test(`protected publi
     if (args[0] !== '--version') await writeFile(join(directory, 'package-lock.json'), '{"lockfileVersion":3,"packages":{"node_modules/sprintf-js":{"version":"1.1.3"}}}')
     return { code: 0, stdout: args[0] === '--version' ? '11.0.0' : '', stderr: '' }
   })
-  const manager = new LispManager({ store, config: LispConfig.parse({ enabled: true, startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'), questions, packagesCall: adapter })
+  const manager = new LispManager({ store, config: LispConfig.parse({ executionMode: 'protected', enabled: true, startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'), questions, packagesCall: adapter })
   t.after(async () => { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) })
   await manager.start(); await manager.enable(owner)
   const code = `(let ((v (make-hash-table :test 'equal))) (setf (gethash "sprintf-js" v) "1.1.3") (kioku.packages:update-lockfiles v))`

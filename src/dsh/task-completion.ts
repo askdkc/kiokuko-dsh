@@ -6,10 +6,11 @@ import { withImmediateTransaction } from '../db/transaction.js'
 import { KiokukoError } from '../errors.js'
 import { applicationSourceDigest } from '../memory/application.js'
 import { canonicalContentHash } from '../serialization/validate.js'
-import { captureRepositoryState } from '../enno-oduno/repository-state.js'
-import { readEnnoSnapshot, readFreshFinalVerifierResults } from '../enno-oduno/store.js'
+import { completionVerifiers } from './completion-verifiers.js'
 import { readExecutionFrame } from './execution-frame.js'
-import { parseNodeTapSummary, selectedNodeTestCommand, type TapSummary } from './node-tap-summary.js'
+import { parseNodeTapSummary, parseTestSummary, selectedNodeTestCommand, type TapSummary } from './node-tap-summary.js'
+import { isHostExecutionResult } from './execution-result.js'
+import { executionCommand } from './execution-command.js'
 
 export const CompletionConfig = z.object({ mode: z.enum(['shadow', 'enforce']).default('shadow') }).strict()
 export type CompletionMode = z.infer<typeof CompletionConfig>['mode']
@@ -58,8 +59,8 @@ function criteriaForRun(database: SqliteDatabase, runId: string): { criteria: Co
     .get<{ root: string; workspace: string | null; orchestrationId: string | null }>(runId)
   if (!row) throw new KiokukoError('NOT_FOUND', 'Task completion run does not exist')
   if (row.workspace && row.orchestrationId && row.root) {
-    const snapshot = readEnnoSnapshot(database, { runId, workspace: row.workspace, orchestrationId: row.orchestrationId })
-    return { repositoryRoot: row.root, enno: true, criteria: snapshot.contract.acceptanceCriteria.map(item => ({
+    const snapshot = completionVerifiers().criteria(database, { runId, workspace: row.workspace, orchestrationId: row.orchestrationId })
+    return { repositoryRoot: row.root, enno: true, criteria: snapshot.criteria.map(item => ({
       id: item.id, description: item.description, revision: snapshot.revision, approval: 'approved',
     })) }
   }
@@ -80,11 +81,11 @@ function validateMethod(database: SqliteDatabase, runId: string, method: Complet
   if (enno !== (method.kind === 'enno_verifier')) throw new KiokukoError('VALIDATION_ERROR', 'Completion method does not match execution mode')
   if (method.kind === 'native_command') {
     const cwd = realpathSync(path.resolve(repositoryRoot, method.cwd))
-    if (cwd !== realpathSync(repositoryRoot)) throw new KiokukoError('SECURITY_REJECTION', 'Completion command must run from the repository root')
+    const relative = path.relative(realpathSync(repositoryRoot), cwd)
+    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new KiokukoError('SECURITY_REJECTION', 'Completion cwd must be inside the repository')
     applicationSourceDigest(repositoryRoot, method.sourcePaths)
-    if (method.assertion === 'selected_tests_pass' && !selectedNodeTestCommand(method.command)) {
-      throw new KiokukoError('VALIDATION_ERROR', 'Selected-test proof requires an explicit Node TAP test command')
-    }
+    // The pre-bound command selects the operation; complete process output,
+    // rather than a command-name allowlist, establishes test coverage.
   } else {
     const row = database.prepare('SELECT contract_json FROM enno_contracts WHERE run_id = ?').get<{ contract_json: string }>(runId)
     const contract = row ? JSON.parse(row.contract_json) as { finalVerifiers?: { id: string; executable: string; args: string[] }[] } : undefined
@@ -146,7 +147,7 @@ export function readTaskCriterionBindingReplay(database: SqliteDatabase, runId: 
 }
 
 export function beginTaskCompletionExecution(database: SqliteDatabase, input: {
-  runId: string; callId: string; command: string; repositoryRoot: string
+  runId: string; callId: string; command: string; repositoryRoot: string; cwd?: string
 }): boolean {
   const source = criteriaForRun(database, input.runId)
   if (source.enno || realpathSync(input.repositoryRoot) !== realpathSync(source.repositoryRoot)) return false
@@ -154,7 +155,8 @@ export function beginTaskCompletionExecution(database: SqliteDatabase, input: {
     .all<BindingRow>(input.runId)
   const current = rows.find(row => {
     const method = CompletionMethodSchema.parse(JSON.parse(row.method_json))
-    return method.kind === 'native_command' && method.command === input.command
+    return method.kind === 'native_command' && executionCommand(method.command) === executionCommand(input.command)
+      && realpathSync(path.resolve(source.repositoryRoot, method.cwd)) === realpathSync(input.cwd ?? input.repositoryRoot)
       && source.criteria.some(criterion => criterion.id === row.criterion_id && criterion.revision === row.criterion_revision)
   })
   if (!current) return false
@@ -189,15 +191,16 @@ export function finishTaskCompletionExecution(database: SqliteDatabase, input: {
   if (method.kind !== 'native_command') return
   let sourceDigest: string | undefined
   try { sourceDigest = applicationSourceDigest(source.repositoryRoot, method.sourcePaths) } catch { /* stale or unavailable */ }
-  const response = input.result as { isError?: boolean; value?: { exitCode?: number; exit_code?: number; kind?: string; timedOut?: boolean }; content?: unknown }
+  const response = input.result as { isError?: boolean; value?: { exitCode?: number; exit_code?: number; kind?: string; timedOut?: boolean; aborted?:boolean; signal?:unknown }; content?: unknown }
   const exit = response?.value?.exitCode ?? response?.value?.exit_code
   const content = typeof response?.content === 'string' ? response.content : Array.isArray(response?.content)
     ? response.content.map(block => typeof block?.text === 'string' ? block.text : '').join('\n') : ''
-  const tap = method.assertion === 'selected_tests_pass' ? parseNodeTapSummary(content) : undefined
+  const tap = method.assertion === 'selected_tests_pass' ? parseTestSummary(content, isHostExecutionResult(input.result)) : undefined
   const outcome = sourceDigest !== row.source_digest ? 'stale'
-    : response?.isError || response?.value?.timedOut || response?.value?.kind === 'background'
+    : response?.isError || response?.value?.timedOut || response?.value?.aborted || response?.value?.signal || response?.value?.kind === 'background'
       || Number.isSafeInteger(exit) && exit !== 0 ? 'failed'
-      : !Number.isSafeInteger(exit) || method.assertion === 'selected_tests_pass' && !tap ? 'unknown' : 'passed'
+      : !Number.isSafeInteger(exit) || method.assertion === 'selected_tests_pass' && !tap ? 'unknown'
+        : tap && (tap.fail>0||tap.cancelled>0||tap.skipped>0||tap.todo>0) ? 'failed' : 'passed'
   database.prepare(`UPDATE dsh_completion_executions SET outcome=?,exit_code=?,tap_summary_json=?,result_digest=?,updated_at=?
     WHERE run_id=? AND call_id=? AND outcome='started'`)
     .run(outcome, Number.isSafeInteger(exit) ? exit as number : null, tap ? JSON.stringify(tap) : null,
@@ -217,11 +220,8 @@ export function assessTaskCompletion(database: SqliteDatabase, runId: string): C
     if (method.kind === 'enno_verifier') {
       const contractRow = database.prepare('SELECT workspace, orchestration_session_id AS orchestrationId FROM enno_contracts WHERE run_id = ?')
         .get<{ workspace: string; orchestrationId: string }>(runId)!
-      const snapshot = readEnnoSnapshot(database, { runId, ...contractRow })
-      const digest = captureRepositoryState(source.repositoryRoot).digest
-      const fresh = readFreshFinalVerifierResults(database, { runId, revision: snapshot.revision,
-        mutationRevision: snapshot.mutationRevision, verifiers: snapshot.contract.finalVerifiers, repositoryDigest: digest })
-      const result = fresh?.find(item => item.verifier.id === method.verifierId)
+      const fresh = completionVerifiers().results(database, {runId,...contractRow}, source.repositoryRoot)
+      const result = fresh?.find(item => item.verifierId === method.verifierId)
       if (!result) return { criterionId: criterion.id, description: criterion.description, state: 'stale', reason: 'verifier_evidence_missing_or_stale' }
       const complete = method.assertion === 'exit_zero' || result.tapSummary !== undefined && result.tapSummary.tests > 0
         && result.tapSummary.pass === result.tapSummary.tests && result.tapSummary.skipped === 0 && result.tapSummary.todo === 0

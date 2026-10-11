@@ -44,7 +44,7 @@ for (const provider of ['typesafe', 'nimble', 'laya-coreml', 'laya-v1'] as const
     return reply(input, (_id, keys) => mode === 'abstained' ? 'abstain' : keys[0]!)
   }
   const service = new DecisionService(config, () => provider === 'laya-v1' ? new LayaV1DecisionProvider(config['laya-coreml']!, layaRequest) : provider === 'laya-coreml' ? new LayaCoreMLDecisionProvider(config['laya-coreml'], layaRequest) : provider === 'typesafe' ? new TypeSafeDecisionProvider(config.typesafe, async () => 'private-host-key', request) : new NimbleDecisionProvider(config.nimble, async () => undefined, request))
-  const manager = new LispManager({ store: new LispStore(async fn => fn(db)), config: LispConfig.parse({ enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'),
+  const manager = new LispManager({ store: new LispStore(async fn => fn(db)), config: LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'),
     decisionCall: async (bound, method, args, context) => { assert.deepEqual(bound, owner); assert.ok(context.generation && context.evaluationId); return method === 'decisions-status' ? service.status() : service.evaluate(context.evaluationId, args, context.signal) },
   })
   const evaluate = (id: string, code: string, signal?: AbortSignal) => manager.execute(owner, 'lisp_eval', { operationId: id, code }, signal) as Promise<any>

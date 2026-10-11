@@ -33,11 +33,11 @@ jobs:
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then
             sudo apt-get update
-            sudo apt-get install -y sbcl bubblewrap python3
+            sudo apt-get install -y sbcl bubblewrap python3 cargo
             # Dedicated CI runner: permit the user namespaces required by bwrap.
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           else
-            brew install sbcl python
+            brew install sbcl python rust
           fi
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/dsh-runtime
@@ -57,6 +57,13 @@ jobs:
           KIOKUKO_REQUIRE_LISP_RUNTIME=1 \
           KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" \
           npm run test:lisp
+      - name: Verify owned Node and Cargo receipts
+        shell: bash
+        run: |
+          KIOKUKO_REQUIRE_DSH_NATIVE=1 \
+          KIOKUKO_REQUIRE_CARGO_RUNTIME=1 \
+          KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" \
+          node scripts/run-tests.mjs tests/dsh/integration/owned-execution.test.ts tests/dsh/integration/owned-native-lifecycle.test.ts
       - run: npm run pack:check
       - name: Verify Skill bodies through native and packed model delivery
         run: npm run test:skill-delivery

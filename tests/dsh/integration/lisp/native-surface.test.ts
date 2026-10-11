@@ -35,7 +35,7 @@ test('recover on a disabled session leaves native tools available without requir
     agentScope = scope.createScope(ctx, agent); agent.ctx = agentScope.ctx
     ctx.tools.register(tools.defineTool({ name: 'ordinary_tool', description: 'counter', parameters: {},
       output: { schema: { type: 'integer' }, render: () => [] }, execute: async () => ++effects }))
-    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true, sbclPath: '/does-not-exist' }))
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: '/does-not-exist' }))
     const call = () => ctx.tools.execute({ callId: randomUUID(), name: 'ordinary_tool', arguments: {}, agent, signal: new AbortController().signal })
     assert.equal((await call()).isError, false)
     for (let i = 0; i < 2; i++) {
@@ -77,7 +77,7 @@ for (const scenario of ['disabled-config', 'scope-conflict', 'startup-failure'] 
     for (const agent of agents) { const local = scope.createScope(ctx, agent); scopes.push(local); agent.ctx = local.ctx }
     ctx.tools.register(tools.defineTool({ name: 'ordinary_tool', description: 'counter', parameters: {},
       output: { schema: { type: 'integer' }, render: () => [] }, execute: async () => ++effects }))
-    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: scenario !== 'disabled-config', sbclPath: join(base, 'missing-sbcl') }))
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: scenario !== 'disabled-config', sbclPath: join(base, 'missing-sbcl') }))
     const call = (agent: any, name = 'ordinary_tool') => ctx.tools.execute({ callId: randomUUID(), name, arguments: {}, agent, signal: new AbortController().signal })
     const command = (agent: any) => commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal: new AbortController().signal })
     assert.equal((await call(agents[0])).isError, true, 'saved session remains protected')
@@ -125,7 +125,7 @@ test('real DSH registry: session tools, nested/child/late-tool denial, unload fe
   const child: any = { id: 'child', session: { id: 'child', header: { cwd: workspace, parentSession: 'parent' } } }
   const outsider: any = { id: 'outsider', session: { id: 'outsider', header: { cwd: workspace } } }
   const agentMap = new Map([parent, child, outsider].map(agent => [agent.id, agent]))
-  const config = LispConfig.parse({ enabled: true, approvalMode: 'ask', sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 })
+  const config = LispConfig.parse({ executionMode: 'protected', enabled: true, approvalMode: 'ask', sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 })
   const command = (rawInput: string) => commands.get('kioku-lisp').handler({ rawInput, agent: parent, signal: new AbortController().signal })
   const call = (name: string, agent = parent, nested = false, args = {}) => ctx.tools.execute({ callId: `call-${randomUUID()}`, name, arguments: args, agent,
     signal: new AbortController().signal, ...(nested ? { parent: Symbol('parent'), rootCallId: 'root' } : {}) })

@@ -88,3 +88,16 @@ test('a selected skipped test is unmet while an unsupported or incomplete output
     assert.equal(selectedNodeTestCommand('echo ok; node --test --test-reporter=tap src/check.test.ts'), false)
   } finally { await f.cleanup() }
 })
+
+test('pre-bound subdirectory checks accept complete Cargo coverage and retain unrelated artifacts', async () => {
+  const f = await fixture('enforce')
+  try {
+    const method = { ...f.method, cwd: 'src', command: 'cargo test' }
+    bindTaskCriterion(f.database, { runId: f.runId, callId: 'cargo-bind', criterionId: f.criteria[0]!.criterionId, method, approved: true })
+    assert.equal(beginTaskCompletionExecution(f.database, { runId: f.runId, callId: 'cargo', command: method.command, repositoryRoot: f.root, cwd: join(f.root, 'src') } as any), true)
+    finishTaskCompletionExecution(f.database, { runId: f.runId, callId: 'cargo', result: { value: { exitCode: 0 }, content: [{type:'text',text:'running 1 test\ntest sample ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n'}] } })
+    assert.equal(assessTaskCompletion(f.database, f.runId).criteria[0]?.state, 'satisfied')
+    await writeFile(join(f.root, 'generated.txt'), 'unrelated build output')
+    assert.equal(assessTaskCompletion(f.database, f.runId).criteria[0]?.state, 'satisfied')
+  } finally { await f.cleanup() }
+})

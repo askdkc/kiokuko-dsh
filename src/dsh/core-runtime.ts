@@ -1,5 +1,5 @@
 import { realpathSync, statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, dirname, join } from 'node:path'
 import { initializeDatabase, type InitOptions } from './database.js'
 import { getDshDatabasePath, type DshPathEnvironment } from './paths.js'
 import { openConnection } from '../db/connection.js'
@@ -108,6 +108,10 @@ export class DshCoreRuntime {
 
   constructor(options: DshRuntimeOptions) {
     this.#options = options
+  }
+
+  get executionJournalDirectory():string {
+    return join(dirname(this.#options.databasePath ?? getDshDatabasePath(this.#options)),'execution-journal')
   }
 
   async #initialize(): Promise<RuntimeResources> {

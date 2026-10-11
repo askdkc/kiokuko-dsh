@@ -6,7 +6,7 @@ import type { DshModule } from '../core/modules.js'
 import type { CoreModuleHost } from '../core/host.js'
 import { bundledResources } from './resources.js'
 
-/** Protected execution stays host-owned. Unload preserves the existing root fence. */
+/** Lisp uses the shared development executor; explicit protected mode retains its root fence. */
 export const lispModule: DshModule<CoreModuleHost> = {
   id: 'lisp', coreVersion: 1, requires: ['tools', 'sessions', 'agents', 'commands'], conflicts: ['enno'],
   resources: bundledResources(['kiokuko-lisp']),

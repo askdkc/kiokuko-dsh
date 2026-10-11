@@ -43,7 +43,7 @@ test('native DSH surface exposes hot tools only after task admission and preserv
       assert.ok(question.options?.length >= 2)
       return { answers: [{ id: question.id, selected: [question.options[1].label] }] }
     })
-    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }))
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }))
     assert.equal(ctx.tools.get('lisp_hot_contract', agent), undefined, 'task tools stay hidden before enable-task')
     const command = commands.get('kioku-lisp')
     assert.ok(command)

@@ -17,6 +17,7 @@ export interface LispCodingService {
 
 /** Resolve intent and the session's Lisp choice before binding its tool catalog. */
 export function createLispCodingChoice(input: {
+  optional?:boolean
   questions?: DshUserQuestions
   enabled(agent: DshUserQuestionAgent): boolean
   decided(agent: DshUserQuestionAgent): Promise<boolean>
@@ -40,7 +41,7 @@ export function createLispCodingChoice(input: {
     else conversations.delete(request.agent)
     if (taskType !== 'build' && taskType !== 'debug') return { taskType }
     if (input.enabled(request.agent)) {
-      await input.enable(request.agent)
+      try { await input.enable(request.agent) } catch(error) { if(!input.optional)throw error }
       request.signal.throwIfAborted()
       discussions.delete(request.agent)
       return { taskType }
@@ -62,7 +63,7 @@ export function createLispCodingChoice(input: {
     const value = custom || answer.selected[0]
     const choice = /^\d+$/u.test(value ?? '') ? [use, skip, cancel][Number(value) - 1] : value
     if (!choice || choice === cancel) throw new ExecutionSelectionPending()
-    if (choice === use) await input.enable(request.agent)
+    if (choice === use) { try { await input.enable(request.agent) } catch(error) { if(!input.optional)throw error } }
     else if (choice === skip) await input.decline(request.agent)
     else if (custom) {
       discussions.add(request.agent)
@@ -78,8 +79,7 @@ export function createLispCodingChoice(input: {
     discussing: agent => discussions.has(agent),
     prepare(request) {
       const previous = turns.get(request.agent)
-      if (previous?.turn === request.turn) {
-        if (previous.task !== request.task) return Promise.reject(new ExecutionSelectionPending())
+      if (previous?.turn === request.turn && previous.task === request.task) {
         return previous.result
       }
       const result = prepare(request).catch(error => {

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import type { DshUserQuestions } from '../user-interaction.js'
-import { confirm } from './approval.js'
+import { confirm, type ApprovalQuestions } from './approval.js'
 import { digest, fail, failure, LispError, type LispOwner, type ProposalInput } from './contracts.js'
 import { applyChange, backupUsage, checkedBytes, freezeChange, restoreBytes, sameFile, snapshot, type FrozenChange, type CreatedParents, type FileSnapshot } from './files.js'
 import type { LispStore } from './store.js'
@@ -29,12 +29,33 @@ function changeDiff(before: string, after: string): string {
 export class LispProposalBatch {
   readonly #targets = new Set<string>()
   #backupReserved = 0
-  constructor(readonly options: { store: LispStore; backupRoot: string; protectedRoots: () => string[]; questions?: DshUserQuestions; stopped: () => boolean }) {}
+  constructor(readonly options: { store: LispStore; backupRoot: string; protectedRoots: () => string[]; questions?: DshUserQuestions; stopped: () => boolean;
+    execute?: (owner:LispOwner,name:string,args:Record<string,unknown>,signal:AbortSignal,callId:string)=>Promise<any> }) {}
 
   async apply(owner: LispOwner, evalId: string, generation: string, requests: readonly ProposalInput[], signal: AbortSignal,
     restoration?: FrozenChange['restoration'], expected?: { readSet: FileSnapshot[]; targets: Record<string, FileSnapshot> }): Promise<ChangeOutcome[]> {
     requests = requests.map(request => ({ ...request }))
     if (!requests.length) return []
+    if(this.options.execute){
+      const outcomes:ChangeOutcome[]=[]
+      if(expected)for(const before of expected.readSet){
+        if(!sameFile(before,await snapshot(owner.root,before.path.slice(owner.root.length+1),this.options.protectedRoots())))
+          return requests.map((request,index)=>({id:`${evalId}:${index}`,path:request.path,state:'NOT_APPLIED',code:'BASE_CHANGED'}))
+      }
+      for(const [index,request] of requests.entries()){
+        if(signal.aborted||this.options.stopped())break
+        try{
+          const before=expected?.targets[request.path]
+          const result=await this.options.execute(owner,request.operation==='delete'?'kioku_remove':'kioku_write',
+            {path:request.path,...(request.operation==='write'?{content:restoration?(await restoreBytes(restoration)).toString('utf8'):request.content}:{}),...(before?{expectedHash:before.hash??null}:{})},signal,`lisp-proposal:${evalId}:${index}`)
+          const state=result.applied?'APPLIED':result.receipt?.state==='unknown'?'UNKNOWN':'NOT_APPLIED'
+          outcomes.push({id:`${evalId}:${index}`,path:request.path,state,...(result.receipt?.error?{message:result.receipt.error}:{})})
+          if(state!=='APPLIED')break
+        }catch(error){outcomes.push({id:`${evalId}:${index}`,path:request.path,state:'UNKNOWN',message:failure(error).message});break}
+      }
+      for(const [index,request] of requests.entries())if(!outcomes.some(outcome=>outcome.path===request.path))outcomes.push({id:`${evalId}:${index}`,path:request.path,state:'NOT_APPLIED',reason:'batch_stopped'})
+      return outcomes
+    }
     const { store, backupRoot } = this.options, roots = this.options.protectedRoots()
     const changes: FrozenChange[] = [], reserved = new Map<string, string>(), outcomes: ChangeOutcome[] = []
     let backupReservation = 0
@@ -73,7 +94,9 @@ export class LispProposalBatch {
       backupReservation = active.reduce((sum, c) => sum + (c.before.size ?? 0), 0)
       this.#backupReserved += backupReservation
       if (await backupUsage(backupRoot) + this.#backupReserved > 1024 ** 3) fail('BACKUP_LIMIT', 'バックアップが 1 GiB に達するため変更を適用していません。')
-      if (active.some(c => c.before.exists || c.request.operation === 'delete' || c.restoration)) {
+      if ((this.options.questions as ApprovalQuestions|undefined)?.executionMode==='development'
+        ? active.some(c => c.request.operation === 'delete' && !/^(?:dist|build|target|node_modules)(?:[/\\]|$)/u.test(c.request.path))
+        : active.some(c=>c.before.exists||c.request.operation==='delete'||c.restoration)) {
         const details = []
         for (const c of active) {
           await store.transition(owner, id(c), ['RUNNING'], 'AWAITING_APPROVAL', { evalId }); reserved.set(id(c), 'AWAITING_APPROVAL')
@@ -87,7 +110,7 @@ export class LispProposalBatch {
           question: `${active.length}件の確定した変更を適用しますか？`,
           detail: `${details.join('\n\n')}\n\n途中で競合・取消が起きた場合、残りの適用を止めます。適用済みの変更とバックアップは保持します。`,
           options: [{ label: '許可しない' }, { label }], intent: { kind: 'plan-review', approve: label },
-        }, signal)
+        }, signal, 300000, true)
         if (!approval.approved) {
           for (const c of active) await record(c, { id: id(c), path: c.request.path, state: 'NOT_APPLIED', reason: approval.reason, ...(approval.message ? { message: approval.message } : {}) })
           return outcomes

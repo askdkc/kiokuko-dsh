@@ -101,10 +101,10 @@ Check the loaded configuration with `dsh --profile web --dump-config`.
       sbclPath: sbcl
 ```
 
-Linux also requires Bubblewrap.
+The default development mode does not require Bubblewrap. The explicit protected compatibility mode does on Linux.
 Choosing Lisp starts normal execution with the Lisp tools. Choose not to use Lisp
 if you want Enno. Free text is passed to the AI as a discussion or correction.
-Deletion and replacement of existing files require human confirmation.
+Ordinary edits and tests run without confirmation. Source/data deletion and existing durable user database mutation require a concrete review. Lisp and ordinary tools coexist; worker failures leave ordinary development available. See [owned execution, receipts and memory reuse](docs/owned-execution.md).
 See [setup, APIs, limits and recovery](docs/lisp.md).
 
 ## Typed decisions (Jev / Laya / Nimble)

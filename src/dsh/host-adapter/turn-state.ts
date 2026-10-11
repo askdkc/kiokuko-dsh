@@ -190,7 +190,7 @@ export function createTurnState(
     chat: item.prepared.intake.profile.taskType === 'chat' || !!getSelection(item.runId)?.value.discussion,
     terminal: item.closed || ['complete', 'report_blocker'].includes(item.prepared.ennoOduno.nextAction)
       && item.prepared.ennoOduno.applicable,
-    generation: canonicalContentHash({ revision: item.prepared.ennoOduno.contractRevision,
+    generation: canonicalContentHash({ runId:item.runId, task:item.task, revision: item.prepared.ennoOduno.contractRevision,
       route: item.prepared.ennoOduno.routeEpoch ?? null, action: item.prepared.ennoOduno.nextAction,
       lease: states.get(item.runId)?.leaseToken ?? null }),
   })

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { KiokukoError } from '../errors.js'
+import { memoryExecutionEvidence } from '../dsh/owned-evidence.js'
 
 const source = z.object({
   evidenceId: z.string().min(1), sessionId: z.string().min(1), sourceGeneration: z.string().min(1), kind: z.enum(['native_user_message', 'native_tool_result']),
@@ -21,6 +22,7 @@ export interface EvidenceIdentity {
   entryId: string
   revision: number
   claimIds: string[]
+  execution?:ReturnType<typeof memoryExecutionEvidence>
 }
 
 /** Old revisions have no detailed manifest; never reconstruct one from prose. */
@@ -40,6 +42,7 @@ export function readRevisionEvidence(db: SqliteDatabase, entryId: string, revisi
 
 export function evidenceIdentity(db: SqliteDatabase, entry: { id: string; revision: number; workspace: string }): EvidenceIdentity {
   const manifest = readRevisionEvidence(db, entry.id, entry.revision, entry.workspace)
+  const execution=memoryExecutionEvidence(db,entry.id,entry.revision)
   return { status: manifest ? 'source_attached' : 'details_unavailable', entryId: entry.id, revision: entry.revision,
-    claimIds: manifest?.claims.map(claim => claim.id) ?? [] }
+    claimIds: manifest?.claims.map(claim => claim.id) ?? [],...(execution.length?{execution}:{}) }
 }

@@ -28,7 +28,7 @@ test('AI task tools survive worker and host restarts, compose by exact ref, and 
     approvalCount++
     return { answers: [{ id: request.questions[0]!.id, selected: [request.questions[0]!.options![1]!.label] }] }
   } }
-  const options = { store, questions, config: LispConfig.parse({ enabled: true, maxWorkers: 1, startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'),
+  const options = { store, questions, config: LispConfig.parse({ executionMode: 'protected', enabled: true, maxWorkers: 1, startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'),
     ciCall: createLispCiAdapter(questions, async (file, args, run) => {
       assert.equal(file, 'npm'); assert.deepEqual(args, ['test'])
       assert.deepEqual(JSON.parse(await readFile(join(run.cwd, 'manifest.json'), 'utf8')), { entries: ['a', 'z'] })

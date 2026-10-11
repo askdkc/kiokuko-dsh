@@ -9,7 +9,7 @@ This document describes the full compatibility package. The
 Skills and uses the shared database, intake, ledger and scoped memory. It mounts
 source-backed index reasoning by default. AgenticReplay, Deep, other advanced-memory workers,
 session-history repair and the full browser client are optional. Enno retains the existing compatibility host adapter;
-Lisp adds protected execution and its existing explicit approval boundaries.
+Lisp adds composable tools in the normal development environment; explicit protected mode retains its legacy approval boundaries.
 Omitted managed Skills are preserved on disk. Configured startup rejects unsafe
 Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
 
@@ -72,8 +72,8 @@ Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
 
 - Repository-relative final verifiers and backup operations may run restricted
   subprocesses only when the corresponding Kiokuko operation explicitly
-  requests them. The plugin does not provide an implicit model-facing shell
-  tool.
+  requests them. Ordinary development uses the explicit owned `kioku_exec`
+  shell tool described below.
 - Diff review runs fixed-argument, read-only Git subprocesses. A user-started
   analysis sends the selected, sanitized snapshot and limited Kiokuko context
   to the exact DSH model connection chosen in the review UI. It supplies no
@@ -193,31 +193,14 @@ uploaded automatically. Deletion and disabling instructions are in
 [AgenticReplay recording](docs/agenticreplay-recording.md).
 # Optional Common Lisp mode
 
-With `lisp.enabled: true`, `/kioku-lisp enable` starts an OS-protected SBCL for the
-current session. It reads bundled runtime libraries and explicitly selected input
-copies and a verified compiled bundle, and writes its own scratch/cache. Initial
-Lisp enable compiles bundled sources in a supervised sandbox; the host publishes
-the completed bundle for read-only reuse. Runtime/compiler/source changes select
-a new entry. Invalid entries are quarantined and require explicit recovery. The
-host stores operation records and
-independent backups beside the Kiokuko database. No credentials or inherited
-environment are forwarded, and direct network/host IPC access is denied. The
-host may run repository-scoped `gh run list`/`gh run view --log-failed` reads on
-behalf of Lisp without copying credentials into the worker. Verification accepts
-only six fixed npm targets and requires native human confirmation showing the
-command, package script, exact working directory and timeout. The directory may
-be the workspace root, a workspace subdirectory, or a subdirectory of the current
-worker's scratch. Traversal and symlink directories are refused, and directory
-identity and scripts are rechecked after approval. These approved verifiers run
-on the host, including npm lifecycle scripts, outside the worker sandbox;
-arbitrary shell input is not accepted. Brokered worker programs can select only a
-scratch-relative working directory and retain the existing OS restrictions.
+With lisp.enabled: true, Lisp runs in supervised workers with the normal user environment and child processes. It coexists with ordinary tools; worker failure does not restrict normal coding. Kiokuko-owned kioku_read/write/edit/remove/exec/result use Node filesystem/process APIs, independently of stock DSH filesystem/bash sandbox and approval configuration. DSH tool identity, Plan/goal state, cancellation and admitted execution ownership still apply.
 
-File deletion and replacement require the native human confirmation for the exact
-proposal. Generic operations reject databases/sidecars, credential paths, links,
-directories, plugin files and host state. Refusal, skip, cancellation and missing
-confirmation UI never grant permission. Normal tools and child bypasses remain
-blocked until a human safely disables the mode. Plugin unload retains the fence.
+Project edits, development-related external reads, PATH commands, builds/tests, generated/temp/disposable artifacts, helper compilation/registration and routine Kioku saving need no additional approval. Source/data deletion and existing durable user DB mutations require concrete confirmation. Declare destructiveTargets for such commands. Arbitrary Lisp/shell code is not a security sandbox; unclassified code is not rejected merely because static side-effect analysis is impossible. Direct effects bypassing the owned tools have no host verification receipt.
+
+Host receipts record operation/run/session/generation, cwd, sanitized command, file hashes, process exit/signal/cancel/timeout, complete-output digest and test summaries before preview truncation. Environment variables and full outputs are not persisted. Known secret-bearing command/output text is redacted, but arbitrary secrets cannot all be recognized. Process groups are terminated on cancellation. Background results are collected without replaying effects.
+
+Receipts and source-bound checks feed existing completion/memory application and candidate finalization. Related source/test/config edits make checks stale; unrelated generated files do not. Saving failure is explicit and does not undo or rerun development. Interrupted started records remain unknown after restart. Memory candidates carry evidence references and current source freshness; evidence never automatically verifies a generalized lesson. Legacy profile approval settings still load; destructive review cannot be disabled by their ask/auto values.
+
 See [Common Lisp setup and recovery](docs/lisp.md) for commands and limits.
 
 # Configured typed decisions

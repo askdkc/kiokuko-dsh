@@ -81,6 +81,12 @@ function assertAgentId(value: unknown): asserts value is string {
 
 /** Host-native Akinator gate. It replays one bound result per logical turn and never calls next while unresolved. */
 export class DshIntakeGate {
+  readonly #generations = new Map<string, number>()
+  supersedeTurn(sessionId:string,turn:number):void {
+    const key=`${sessionId}\u0000${turn}`
+    this.#generations.set(key,(this.#generations.get(key)??0)+1)
+    this.clearTurn(sessionId,turn)
+  }
   readonly #runtime: Pick<DshRuntime, 'withDatabase'>
   readonly #answerer: DshIntakeAnswerer | undefined
   readonly #readCapabilities: ((context: DshCapabilityReadContext) => DshCapabilityCatalog | PromiseLike<DshCapabilityCatalog>) | undefined
@@ -134,7 +140,9 @@ export class DshIntakeGate {
       ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
       ...(event.evidence === undefined ? {} : { evidence: event.evidence }),
     })
-    const requestId = dshTurnRequestId({ dshSessionId: event.sessionId, turn: event.turn })
+    const baseRequestId = dshTurnRequestId({ dshSessionId: event.sessionId, turn: event.turn })
+    const generation = this.#generations.get(`${event.sessionId}\u0000${event.turn}`) ?? 0
+    const requestId = generation ? `${baseRequestId}:generation:${generation}` : baseRequestId
     const cacheKey = `${event.sessionId}\u0000${event.turn}`
     const fingerprint = canonicalContentHash({
       sessionId: event.sessionId,
