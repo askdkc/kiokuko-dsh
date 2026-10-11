@@ -1,0 +1,56 @@
+name: Optional code intelligence
+on:
+  pull_request:
+    paths: ['src/dsh/lisp/**', 'lisp/**', 'patches/code-intelligence/**', 'scripts/*code*.mjs', 'tests/dsh/**/lisp/code-intelligence*.ts', '.github/workflows/code-intelligence.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.16.0', cache: npm}
+      - run: brew install sbcl
+      - run: npm ci
+      - run: npm ci --prefix tests/fixtures/dsh-runtime
+      - run: node scripts/prepare-code-provider.mjs
+      - run: npm run test:code-intelligence
+      - run: npm run test:code-intelligence:packed
+      - run: npm run test:code-intelligence:benchmark
+      - uses: actions/upload-artifact@v4
+        with: {name: code-intelligence-macos, path: '.artifacts/code-intelligence/benchmark.json'}
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-26.04
+            image: ubuntu:26.04
+          - name: arch
+            image: archlinux:base-devel
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    timeout-minutes: 25
+    steps:
+      - name: Install operating-system tools
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update
+            apt-get install -y git ca-certificates curl sbcl python3 build-essential
+          else
+            pacman -Syu --noconfirm git ca-certificates curl sbcl python base-devel
+          fi
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.16.0'}
+      - run: npm ci
+      - run: npm ci --prefix tests/fixtures/dsh-runtime
+      - run: node scripts/prepare-code-provider.mjs
+      - run: npm run test:code-intelligence -- --development-only
+      - run: npm run test:code-intelligence:packed -- --development-only
+      - run: npm run test:code-intelligence:benchmark
+      - uses: actions/upload-artifact@v4
+        with: {name: 'code-intelligence-${{ matrix.name }}', path: '.artifacts/code-intelligence/benchmark.json'}

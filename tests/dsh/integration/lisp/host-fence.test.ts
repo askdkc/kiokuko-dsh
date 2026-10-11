@@ -31,12 +31,15 @@ for (const outcome of ['ready', 'startup-failure', 'disabled-config'] as const) 
   }
   const agent = { id: 'agent', session: { id: 'session', header: { cwd: base } },
     ctx: { get: (name: string) => name === 'tools' ? tools : undefined } }
+  const child = { id: 'child-agent', session: { id: 'child-session', header: { cwd: base, parentSession: agent.session.id } }, ctx: agent.ctx }
+  const agents = new Map([[agent.id, agent], [child.id, child]])
+  const sessions = new Map([[agent.session.id, agent.session], [child.session.id, child.session]])
   const protectedSessions = new Set<string>()
   let request: any, attaches = 0, asked = 0
   const services = ctx.plugin({ name: 'host-fence-services', apply(c) {
     c.provide('tools', tools)
-    c.provide('agents', { get: (id: string) => id === agent.id ? agent : undefined })
-    c.provide('sessions', { get: (id: string) => id === agent.session.id ? agent.session : undefined })
+    c.provide('agents', { get: (id: string) => agents.get(id) })
+    c.provide('sessions', { get: (id: string) => sessions.get(id) })
     c.provide('commands', { register: (definition: any) => { commands.set(definition.name, definition); return () => commands.delete(definition.name) } })
     c.provide('executionFences', { attach(input: any) {
       attaches++; request = input
@@ -54,6 +57,7 @@ for (const outcome of ['ready', 'startup-failure', 'disabled-config'] as const) 
     surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: outcome !== 'disabled-config', sbclPath: join(base, 'missing-sbcl') }))
     assert.equal(attaches, 1)
     assert.deepEqual(request.tools, LISP_TOOLS)
+    for (const name of ['lsp', 'lsp_extra']) assert.ok(!request.tools.includes(name), `${name} is not a Lisp-owned tool`)
     const invocation = { rawInput: 'enable', agent, signal: new AbortController().signal }
     if (outcome === 'disabled-config') {
       assert.equal((await commands.get('kioku-lisp').handler(invocation)).kind, 'error')
@@ -74,6 +78,12 @@ for (const outcome of ['ready', 'startup-failure', 'disabled-config'] as const) 
     assert.ok(protectedSessions.has(agent.session.id))
     assert.equal(request.check({ name: 'lisp_status', agent }), undefined)
     assert.equal(typeof request.check({ name: 'bash', agent }), 'string')
+    for (const name of ['lsp', 'lsp_extra']) {
+      assert.equal(typeof request.check({ name, agent }), 'string', `${name} cannot bypass the code bridge`)
+      assert.equal(typeof request.check({ name, agent: child }), 'string', `${name} cannot bypass parent protection through a child`)
+    }
+    assert.equal(typeof request.check({ name: 'lisp_status', agent: child }), 'string', 'a child cannot reuse parent Lisp admission')
+    assert.equal(await request.beforeStep(child), false)
     assert.equal((await commands.get('kioku-lisp').handler({ ...invocation, rawInput: 'disable' })).kind, 'success')
     assert.equal(protectedSessions.size, 0, 'successful disable explicitly releases protection')
     await commands.get('kioku-lisp').handler(invocation)
@@ -81,6 +91,8 @@ for (const outcome of ['ready', 'startup-failure', 'disabled-config'] as const) 
     surface.stop()
     assert.ok(protectedSessions.has(agent.session.id), 'stop never releases protection')
     assert.equal(typeof request.check({ name: 'bash', agent }), 'string')
+    for (const caller of [agent, child]) for (const name of ['lsp', 'lsp_extra'])
+      assert.equal(typeof request.check({ name, agent: caller }), 'string', `${name} remains denied after stop`)
     assert.equal(await request.beforeStep(agent), false)
   } finally {
     surface?.stop(); await surface?.dispose()

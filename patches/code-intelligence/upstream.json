@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/askdkc/dsh-lsp-server.git",
+  "baseRevision": "e7c92d33d60f4c340b99f6a7a6bf8f23b4f085a4",
+  "package": "@askdkc/dsh-lsp-server",
+  "baseVersion": "0.1.12",
+  "protocol": "code-intelligence/v1"
+}

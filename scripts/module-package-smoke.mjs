@@ -272,17 +272,21 @@ try {
     assert.ok(deliveredText.includes(expected), 'the packed core+Lisp model receives the complete compiled contract')
     assert.ok(expected.includes('settle testable doubts'), 'the package contains the new mandatory contract')
     const arguments_ = { operationId: 'packed-eval', code: '(+ 20 22)' }
-    const [result, discovery, status, replay] = await runTools(parent, 'protected Lisp で (+ 20 22) を実行し、TypeSafeの状態と保存済みの実行結果を検証してください。', [
+    const [result, discovery, status, replay, codeCapabilities] = await runTools(parent, 'protected Lisp で (+ 20 22) を実行し、TypeSafeの状態と保存済みの実行結果を検証してください。', [
       ['packed-lisp-eval', 'lisp_eval', arguments_],
       ['packed-typesafe-discovery', 'lisp_describe', { operationId: 'typesafe-discovery' }],
       ['packed-typesafe-status', 'lisp_eval', { operationId: 'typesafe-status', code: '(kioku.typesafe:status)' }],
       ['packed-lisp-replay', 'lisp_eval', arguments_],
+      ['packed-code-capabilities','lisp_eval',{operationId:'code-capabilities',code:'(kioku.code:capabilities)'}],
     ])
     assert.notEqual(result.isError, true, JSON.stringify(result))
     assert.equal(result.value.ok, true, JSON.stringify(result))
     assert.match(JSON.stringify(result), /42/)
     assert.equal(discovery.value.ok, true, JSON.stringify(discovery))
     assert.ok(JSON.stringify(discovery).includes('kioku.typesafe:evaluate'), JSON.stringify(discovery))
+    assert.ok(JSON.stringify(discovery).includes('kioku.code:capabilities'),JSON.stringify(discovery))
+    assert.equal(codeCapabilities.value.value.json.status,'unavailable')
+    assert.equal(codeCapabilities.value.value.json.reason,'provider_missing')
     assert.equal(status.value.ok, true, JSON.stringify(status))
     assert.equal(typeof status.value.value.json.configured, 'boolean')
     assert.equal(replay.value.replay, true, 'exact completed effects must not execute twice')

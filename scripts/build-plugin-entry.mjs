@@ -1,8 +1,12 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { build } from 'esbuild'
 
 const root = resolve(import.meta.dirname, '..')
+// Optional provider types must remain available without installing its parser/server runtime.
+await copyFile(resolve(root, 'src/dsh/lisp/code-intelligence-provider.d.ts'), resolve(root, 'dist/dsh/lisp/code-intelligence-provider.d.ts'))
+const codeDeclaration = resolve(root, 'dist/dsh/lisp/code-intelligence-contracts.d.ts')
+await writeFile(codeDeclaration, (await readFile(codeDeclaration, 'utf8')).replace(/(<reference path=")[^"]*code-intelligence-provider\.d\.ts/, '$1./code-intelligence-provider.d.ts'))
 // DSH inventory reads exported locale resources without evaluating plugin code.
 // Derive the displayed version from the manifest on every build.
 const manifest = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'))

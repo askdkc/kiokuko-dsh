@@ -44,7 +44,7 @@ test('compiler retains rules, excludes only documentation, preserves unannotated
 test('compiled Lisp guidance retains TypeSafe discovery and answer-consuming examples', async () => {
   const compiled = compileSkillBundle(await loadSkillSources())
   const lisp = compiled.resources.find(resource => resource.id === 'kiokuko-lisp/SKILL.md')!.content
-  for (const contract of ['kioku.typesafe:evaluate', '/kioku-typesafe-key', 'inspect-diagnosis', 'kioku.decisions:status', 'assess-relevance', 'result.answers', 'Cancellation stops work', 'Existing approvals remain authoritative', 'See lisp_hot_* schemas.']) assert.ok(lisp.includes(contract), contract)
+  for (const contract of ['kioku.code', 'Missing V1 returns unavailable', 'Handles expire per evaluation', 'Aggregate before returning', 'kioku.typesafe:evaluate', '/kioku-typesafe-key', 'inspect-diagnosis', 'kioku.decisions:status', 'assess-relevance', 'result.answers', 'Cancellation stops work', 'Existing approvals remain authoritative', 'See lisp_hot_* schemas.']) assert.ok(lisp.includes(contract), contract)
   // The protected runtime suite locates and executes this delivered example.
   const example = lisp.match(/^### TypeSafe\n[\s\S]*?```lisp\n([\s\S]*?)```/m)?.[1]
   assert.ok(example, 'compiled TypeSafe section must expose its executable Lisp example')

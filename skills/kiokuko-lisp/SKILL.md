@@ -37,12 +37,14 @@ remain owner-bound until expiry. Never replay effects.
 
 Common Lisp/CL-PPCRE/CL-CSV/YASON via `kioku.tools`, `kioku.data`,
 `kioku.files`, `kioku.process`, `kioku.objects`, `kioku.environment`, `kioku.ci`,
-`kioku.decisions`, `kioku.typesafe`; no Quicklisp/network downloads. First enable
+`kioku.decisions`, `kioku.typesafe`, `kioku.code`; no Quicklisp/network downloads. First enable
 compiles; later starts reuse verified code, not session state. Compile/cache failure
 blocks startup: report `/kioku-lisp recover`; never modify compiled files or replay effects.
 Task mode: bounded JSON schemas, exact dependency toolRefs, no heap/worker refs
 between calls. Disposable `lisp_eval`; workspace inputs use `lisp_observe`, never
 legacy inputs/proposals. Expired refs never read current files; persistent mode owns shared heap.
+
+Persistent `kioku.code`: negotiate V1 with capabilities; use with-snapshot; check status/freshness. Handles expire per evaluation. Missing V1 returns unavailable, with no tool/parser fallback. Aggregate before returning. Fixed DTOs and budgets: docs/lisp.md.
 
 Persistent: define/test/use cohesive `defun` tools in one `lisp_eval`, reuse on new
 inputs. Batch known work/compact evidence; split at decisions/approvals/limits. Never
@@ -337,3 +339,27 @@ Project edits, verification, helper compilation/registration and ordinary Kioku 
 <!-- kiokuko:runtime approval-policy -->
 Routine development and helper registration are authorized. Concrete destructive review remains required. Lisp failure does not block ordinary tools. Report execution, verification and saving separately; retry saving without replaying effects.
 <!-- /kiokuko:runtime -->
+
+
+<!-- kiokuko:documentation code-intelligence -->
+## Read-only code intelligence
+
+Persistent evaluations may use `kioku.code` when the calling agent has a V1
+provider. Call `capabilities` first; absence/old version returns `unavailable`.
+There is no generic LSP/tool/parser fallback. Task workers cannot use host RPC.
+Use `with-snapshot` around `open`/`outline`/`enclosing`/fixed `query`/`span`/read-only
+`semantic`; it releases accepted snapshots with `unwind-protect`. Check `status`
+before `data`: preserve partial, unsupported, unavailable, stale, cancelled,
+timeout and limit-exceeded results. Unready diagnostics are not clean diagnostics.
+Queries are only `declarations`, `calls`, `imports`; semantic kinds are definition,
+references, implementation, hover, diagnostics, completion. Never request writes,
+rename, commands, arbitrary query text, or arbitrary RPC.
+Aggregate/filter in Lisp and return counts plus chosen spans and outcome metadata.
+Do not return an entire large corpus just because the worker can hold it. Positions
+are zero-based UTF-16; ranges half-open; snapshots are disk-only. Reopen after a
+file/checkout change. Handles expire at evaluation end and saved results are not
+live authority. Keep 100 calls, 16 MiB input, 64 KiB responses, 30 seconds per code
+batch; per response 32 KiB, document 2 MiB, captures 200, outline 100, span 8000.
+Release stays available after limits. Check `lisp_describe` for exact arguments.
+
+<!-- /kiokuko:documentation -->

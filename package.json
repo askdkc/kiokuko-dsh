@@ -241,7 +241,10 @@
     "test:ci:embedding": "node scripts/run-local-embedding-smoke.mjs --offline",
     "test:ci:approval:web": "npm run build && node scripts/run-ci-native.mjs browser-approval",
     "test:ci:shortcuts:web": "npm run build && node scripts/run-ci-native.mjs browser-shortcuts",
-    "test:models:web": "npm run build && node scripts/verify-models-web.mjs"
+    "test:models:web": "npm run build && node scripts/verify-models-web.mjs",
+    "test:code-intelligence": "node scripts/run-code-intelligence.mjs",
+    "test:code-intelligence:packed": "node scripts/run-code-intelligence.mjs --packed",
+    "test:code-intelligence:benchmark": "node scripts/benchmark-code-intelligence.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cosmokit": "1.8.5",

@@ -79,11 +79,34 @@ function boundedData(value: unknown, characters: number, items: number, omitted:
     return value.slice(0, items).map((item, i) => boundedData(item, characters, items, omitted, `${path}/${i}`))
   }
   if (record(value)) {
+    if (value.protocol === 'code-intelligence/v1') {
+      const { data, ...metadata } = value
+      return { ...metadata, ...(data !== undefined ? { data: boundedData(data, characters, items, omitted, `${path}/data`) } : {}) }
+    }
     const entries = Object.entries(value)
     if (entries.length > items) omitted.push(path)
-    return Object.fromEntries(entries.slice(0, items).map(([key, item]) => [key, boundedData(item, characters, items, omitted, `${path}/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`)]))
+    return Object.fromEntries(entries.filter(([key], index) => index < items || key === 'value' || key === 'json').map(([key, item]) => [key, boundedData(item, characters, items, omitted, `${path}/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`)]))
   }
   return value
+}
+
+/** Keep aggregate failures visible even when an array page omits the failed item. */
+function codeOutcomes(value: unknown): RecordValue | undefined {
+  const pending = [value], seen = new WeakSet<object>(), statuses: Record<string, number> = Object.create(null), freshness: Record<string, number> = Object.create(null)
+  const versions = new Set<string>(); let total = 0
+  while (pending.length) {
+    const item = pending.pop()
+    if (!item || typeof item !== 'object' || seen.has(item)) continue
+    seen.add(item)
+    if (record(item) && item.protocol === 'code-intelligence/v1' && typeof item.status === 'string' && ['ok','partial','unsupported','unavailable','stale','cancelled','timeout','limit_exceeded'].includes(item.status)) {
+      total++; statuses[item.status] = (statuses[item.status] ?? 0) + 1
+      if (typeof item.freshness === 'string' && ['pinned','current','unknown','stale'].includes(item.freshness)) freshness[item.freshness] = (freshness[item.freshness] ?? 0) + 1
+      if (typeof item.snapshotVersion === 'string') versions.add(item.snapshotVersion.slice(0,256))
+    } else for (const child of Array.isArray(item) ? item : Object.values(item)) pending.push(child)
+  }
+  if (!total) return
+  const page = [...versions].slice(0, 40)
+  return { total, statuses, freshness, snapshotVersions: page, omittedVersions: versions.size - page.length }
 }
 
 /** Preserve outcome metadata even when source, verifier output or values are large. */
@@ -95,6 +118,8 @@ export function renderResult(value: unknown): string {
     'resultOperationId', 'section', 'pointer', 'offset', 'nextOffset', 'totalCharacters', 'operationCount', 'pendingCount', 'pendingStates']) {
     if (source[key] !== undefined) core[key] = source[key]
   }
+  const summary = codeOutcomes(source.value)
+  if (summary) core.codeOutcomes = summary
   const rest = { ...source }
   for (const key of Object.keys(core)) delete rest[key]
   if (value.replay === true) delete rest.result

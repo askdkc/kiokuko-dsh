@@ -107,6 +107,9 @@ Choosing Lisp starts normal execution with the Lisp tools. Choose not to use Lis
 if you want Enno. Free text is passed to the AI as a discussion or correction.
 Ordinary edits and tests run without confirmation. Source/data deletion and existing durable user database mutation require a concrete review. Lisp and ordinary tools coexist; worker failures leave ordinary development available. See [owned execution, receipts and memory reuse](docs/owned-execution.md).
 See [setup, APIs, limits and recovery](docs/lisp.md).
+Persistent Lisp can optionally inspect parser-backed disk snapshots and read-only
+LSP results through `kioku.code`. The provider must advertise V1; published
+`dsh-lsp-server` v0.1.12 does not. See the [local provider prerequisite](patches/code-intelligence/README.md) and [API and budgets](docs/lisp.md#read-only-code-intelligence).
 
 ## Typed decisions (Jev / Laya / Nimble)
 
@@ -179,3 +182,5 @@ are optional; `memoryReuse.mode: off` disables this additional selection.
 ObservationPack (`observationPack: { mode: auto }`) preserves large successful native tool results for two model calls, then replaces them with excerpts and an `observation_read` handle. [Semantic compaction](docs/semantic-compaction.md) evaluates TODO completion boundaries and selectively shortens old tool results before native automatic compaction in normal, Enno and Lisp modes. It defaults to `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` and requires a ready typed-decision backend and supported native services. Inspect activation and the last outcome with `/kioku-decisions status`.
 
 Laya compaction separately defaults to `typedDecisions.laya-coreml.compaction.mode: off`. Explicit `shadow` evaluates without changing history; `auto` remains `experimental_not_qualified`. This switch preserves ObservationPack and native summaries. Akinator uses only the verified debug/research/writing range, and optional Skill selection uses up to four complete candidates with at most one model-selected addition. See [Laya settings and evaluation](docs/semantic-compaction.md#local-laya).
+
+For the optional V1 code provider, see [installation and verified platform status](docs/code-intelligence.md).

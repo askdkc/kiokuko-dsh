@@ -1,3 +1,4 @@
+import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
 import { mountApprovalPolicy } from './approval-settings.js'
 import type { ApprovalQuestions } from './approval.js'
 import type { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
@@ -114,6 +115,18 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const packageAdapter = createLispPackageAdapter(ownerQuestions)
   const memoryVerification = createLispMemoryVerification(runtime)
   const manager = new LispManager({ store, config,
+    codeSession: (binding, context) => {
+      const agent = agents.get(binding.agentId)
+      if (!agent) fail('CODE_STALE_SCOPE', 'Code caller is missing.')
+      const agentContext = agent.ctx
+      const assertCurrent = () => {
+        const current = ownerForOwned(binding)
+        if (fence?.stopped || current.signal.aborted || agents.get(binding.agentId) !== agent || sessions.get(binding.sessionId) !== agent.session || agent.ctx !== agentContext || agent.session.id !== binding.sessionId || realpathSync(agent.session.header.cwd) !== binding.root || context.signal.aborted)
+          fail('CODE_STALE_SCOPE', 'Code caller, workspace or scope changed.')
+      }
+      assertCurrent()
+      return new CodeIntelligenceAdapterV1({ owner: binding, workspaceRoot: binding.root, scope: agentContext, context: agentContext, assertCurrent }, () => agentContext.get('codeIntelligence', false))
+    },
     toolCatalog:owner=>['lisp_status','kioku_read','kioku_write','kioku_edit','kioku_remove','kioku_exec','kioku_result'].flatMap(name=>{
       const tool=tools.get(name,agents.get(owner.agentId))
       return tool?[{name,parameters:tool.parameters,adapterVersion:2}]:[]

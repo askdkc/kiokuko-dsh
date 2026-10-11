@@ -1,3 +1,5 @@
+import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
+import { CODE_METHODS } from './code-intelligence-contracts.js'
 import type { ApprovalQuestions } from './approval.js'
 import { mkdir, mkdtemp, open, readFile, realpath, rm, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
@@ -25,11 +27,13 @@ import { CallInput, DefineInput, TaskToolCatalog, selectFields, validateValue } 
 import { ApplyInput, CompareInput, StageInput, VerifyInput, candidateFromResult, compareCandidates, loadCandidate, loadVerification, materializeCandidate, stageCandidate } from './candidate.js'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus
+  codeLease?: { evaluationId: string; adapter: CodeIntelligenceAdapterV1 };
   ownedJobs?:Set<string>;
   slotReserved?: boolean; hostBusy?: boolean; idleSince?: number; idleTimer?: ReturnType<typeof setTimeout>; suspension?: Promise<void>; resumed?: boolean; disposed?: boolean;
   packageBase?: NonNullable<PackageResult['base']>;
   currentVerification?: { operationId: string; generation: string; results: Array<{ request: LispCiRequest; result: unknown }> } }
 export interface ManagerOptions {
+  codeSession?: (owner: LispOwner, context: LispRpcContext) => CodeIntelligenceAdapterV1
   skillPrompts?: DshSkillPrompts
   store: LispStore; config: LispConfiguration; dataRoot: string; library?: string; protectedRoots?: string[]; questions?: DshUserQuestions
   notify?: (owner: LispOwner, message: string) => void
@@ -352,6 +356,19 @@ export class LispManager {
   private async bridge(state: AgentState, method: string, args: unknown, context: LispRpcContext): Promise<unknown> {
     if (state.state !== 'EVALUATING' || !state.worker?.healthy || this.#closed) fail('STALE_RPC', '現在の評価に属さない要求です。')
     if (context.generation !== state.worker.generation || context.signal.aborted) fail('STALE_RPC', '現在の評価に属さない要求です。')
+    if ((CODE_METHODS as readonly string[]).includes(method)) {
+      if (state.codeLease && state.codeLease.evaluationId !== context.evaluationId) fail('CODE_STALE_SCOPE', 'Code lease belongs to an earlier evaluation.')
+      if (!state.codeLease) {
+        const adapter = this.options.codeSession?.(state.owner, context) ?? new CodeIntelligenceAdapterV1({ owner: state.owner, workspaceRoot: state.owner.root, scope: state, context: { get: () => undefined }, assertCurrent: () => {
+          if (this.#closed || state.disposed || context.signal.aborted) fail('CODE_STALE_SCOPE', 'Code evaluation ended.')
+        } }, () => undefined)
+        state.codeLease = { evaluationId: context.evaluationId, adapter }
+        context.signal.addEventListener('abort', () => { void adapter.dispose().catch(() => {}) }, { once: true })
+      }
+      const value = await state.codeLease.adapter.request(method, args, context.signal)
+      if (this.#closed || state.state !== 'EVALUATING' || state.worker.generation !== context.generation || context.signal.aborted) fail('STALE_RPC', 'Code evaluation is no longer current.')
+      return value
+    }
     if (method === 'decisions-status' || method === 'decisions-evaluate') {
       if (!this.options.decisionCall) fail('DECISION_UNAVAILABLE', 'Typed decision host is unavailable.')
       if (method === 'decisions-status' && !z.object({}).strict().safeParse(args).success) fail('DECISION_INVALID_INPUT', 'Status takes no arguments.')
@@ -509,8 +526,8 @@ export class LispManager {
           hot: 'lisp_hot_contract authorizes schemas through the current profile approval policy and finite input/expected cases. lisp_hot_install validates and atomically selects immutable code by name for this project. lisp_hot_call pins the active version. lisp_hot_status reads revisions; lisp_hot_deactivate uses the current profile approval policy to stop new calls. Results remain session/agent-local.',
         } }
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
-        packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.packages', 'kioku.typesafe', 'kioku.decisions'],
-        api: { packages: 'kioku.packages:metadata, audit and update-lockfiles use an approval-gated public npm broker. Updates generate in protected scratch and propose frozen files, never install dependencies or write the repository directly.', scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
+        packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.packages', 'kioku.typesafe', 'kioku.decisions', 'kioku.code'],
+        api: { code: 'kioku.code:capabilities, open, outline, enclosing, query, span, semantic, release, with-snapshot. Read-only disk snapshots; handles expire at evaluation end. Check status before using data.', packages: 'kioku.packages:metadata, audit and update-lockfiles use an approval-gated public npm broker. Updates generate in protected scratch and propose frozen files, never install dependencies or write the repository directly.', scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
           decisions: '(kioku.decisions:status), evaluate, assess-relevance, classify-failure, assess-change. Consume selected/abstained results; ordinary reasoning on fallback, cancellation is terminal.',
           typesafe: '(kioku.typesafe:status); (kioku.typesafe:evaluate state questions :model "jev-latest" :timeout-ms 30000). Explicit semantic decisions via the host; consume answers with gethash. Strings/hash tables/vectors use JSON conventions. Catch kioku.typesafe:service-error; no retries or approval bypass. Configure with /kioku-typesafe-key.',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
@@ -840,7 +857,7 @@ export class LispManager {
         } else if (!worker.healthy) { try { await worker.stop() } catch (stop) { error = stop }; this.halted(state, error) }
         else if (state.state === 'EVALUATING') state.state = 'READY'
         return outcome
-      } finally { state.active.delete(abort); delete state.packageBase; if (state.currentVerification?.operationId === id) delete state.currentVerification }
+      } finally { await state.codeLease?.adapter.dispose(); delete state.codeLease; state.active.delete(abort); delete state.packageBase; if (state.currentVerification?.operationId === id) delete state.currentVerification }
     } catch (error) { return failure(error) }
   }
   private async taskResult(owner: LispOwner, ref: string): Promise<unknown> {

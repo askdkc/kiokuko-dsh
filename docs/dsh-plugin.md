@@ -561,3 +561,22 @@ recording. `/kioku-agenticreplay stop`, `list`, `show <run ID>` and
 DSH internal events, not a complete replayable HTTP/filesystem capture.
 See [AgenticReplay recording](agenticreplay-recording.md) for configuration, limits, sensitive data,
 storage, disabling and removal.
+
+
+## Optional code-intelligence provider
+
+Enable Lisp through the existing session/preset route. Mount a V1-capable
+`@askdkc/dsh-lsp-server` bundle in the same intended preset/service realm; Kiokuko
+uses the calling agent's `codeIntelligence` service, scoped filesystem and process
+services. It never looks up a parent-global provider as a fallback. The V1 contract
+export is side-effect-free and imported only as a type. The checked-in declaration
+is generated from the unreleased provider prerequisite, so optional runtime absence
+does not prevent compilation or startup.
+
+The current v0.1.12 registry artifact lacks V1. Use the [local patch recipe](../patches/code-intelligence/README.md)
+for development and review; it does not update your active CLI profile. For an
+installed compatible provider, confirm `(kioku.code:capabilities)` in the actual
+session instead of treating a download, build, or package version as activation.
+The suite and optional Lisp module contain the bridge; the core artifact contains
+neither Lisp code nor parser/server dependencies. See [the API](lisp.md#read-only-code-intelligence)
+for outcomes, scope, disk freshness, budgets, and protected fences.

@@ -105,6 +105,7 @@ Lisp を選ぶと、Lisp 用ツールで通常実行します。役小角を使�
 自由入力は相談・訂正として AI に渡します。
 通常の編集・テストには追加確認を求めません。ソース・実データの削除と既存の永続DB変更は対象を確認します。Lisp と通常ツールを併用でき、Lisp の障害でも通常の開発は継続できます。[独自実行、レシート、記憶の再利用](docs/owned-execution.md)を参照してください。
 [設定、API、停止・復旧方法](docs/lisp.md)を参照してください。
+永続 Lisp では、`kioku.code` からディスク上のコードの構造と読み取り専用の LSP 結果を取得できます。V1 service を提供する任意の provider が必要です。公開済みの `dsh-lsp-server` v0.1.12 は未対応なので、現時点では[ローカルの provider 修正](patches/code-intelligence/README.md)を使います。[API と上限](docs/lisp.md#read-only-code-intelligence)を確認してください。
 
 ## 型付き判定（Jev / Laya / Nimble）
 
@@ -177,3 +178,5 @@ TypeSafe または Nimble の利用確認が成功すると、既存検索の候
 ObservationPack（既定値 `observationPack: { mode: auto }`）は、大きな正常終了のツール結果をモデルへ2回提示した後、抜粋と `observation_read` で原文を取得できる参照に置き換えます。[Semantic compaction](docs/semantic-compaction.md) は、TODOの完了境界でも前倒し判定を行い、通常・Enno・Lisp モードで、DSH の自動圧縮前に古いツール出力を選んで短縮します。既定値は `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` です。利用可能と確認された型付き判定バックエンドと、対応するネイティブサービスが必要です。`/kioku-decisions status` で有効状態と直近の結果を確認できます。
 
 Layaの圧縮には独立した設定があり、`typedDecisions.laya-coreml.compaction.mode: off` が既定です。明示的な `shadow` は履歴を変えずに評価し、`auto` は `experimental_not_qualified` として停止します。ObservationPackとnative summaryは既存設定を維持します。Akinatorは検証済みのdebug／research／writingだけを自動判定し、任意Skillは完全な説明を持つ最大4候補から最大1個を選びます。[Layaの設定と評価](docs/semantic-compaction.md#local-laya)を参照してください。
+
+任意の V1 code provider の導入手順と検証済みの構成は、[連携ガイド](docs/code-intelligence.md)を参照してください。

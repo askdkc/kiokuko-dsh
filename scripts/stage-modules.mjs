@@ -32,7 +32,13 @@ async function graph(entry, feature) {
     let source
     try { source = await readFile(join(root, file), 'utf8') } catch (error) { if (error.code === 'ENOENT') continue; throw error }
     declarations.add(file)
-    for (const imported of ts.preProcessFile(source, true, true).importedFiles) {
+    const parsed = ts.preProcessFile(source, true, true)
+    for (const referenced of parsed.referencedFiles) {
+      const path = relative(root, resolve(root, dirname(file), referenced.fileName))
+      if (path.startsWith('../')) throw new Error(`Declaration reference escapes package: ${path}`)
+      pending.push(path)
+    }
+    for (const imported of parsed.importedFiles) {
       const specifier = imported.fileName
       if (specifier.startsWith('.')) {
         const path = relative(root, resolve(root, dirname(file), specifier)).replace(/\.m?js$/, specifier.endsWith('.mjs') ? '.d.mts' : '.d.ts')

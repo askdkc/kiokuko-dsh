@@ -379,3 +379,94 @@ the host-owned profile identity. Current DSH exposes `lisp.approvalMode` through
 the native `kiokuko-dsh` configuration form and saves its profile patch. This
 compatibility difference does not change the controls or scope. No separate
 preference file or database migration is used.
+
+
+## Read-only code intelligence
+
+Persistent `lisp_eval` can use an optional `CodeIntelligenceServiceV1` from
+`@askdkc/dsh-lsp-server`. Kiokuko resolves it in the calling agent's context.
+The provider owns Tree-sitter, grammars, source snapshots, coordinates, and LSP
+processes. Kiokuko does not install them or fall back to generic LSP tools.
+Core alone has no code-intelligence runtime dependency.
+
+The published provider v0.1.12 does not supply V1. The local prerequisite is kept
+as a reproducible [upstream patch](../patches/code-intelligence/README.md). A
+future compatible provider should advertise V1 and the required capabilities;
+package version alone is insufficient. Absence, an old provider, missing grammar,
+and an unready language server return explicit outcomes. They do not block the
+ordinary Lisp APIs. Node must satisfy Kiokuko's `>=24.16.0` requirement.
+
+Start with `(kioku.code:capabilities)`. Its response includes `status`, `reason`
+when relevant, `data.version`, `data.capabilities`, `data.languages`, distributed
+`data.queryIds`, and `data.semanticReady`. The last field stays false until this lease completes a semantic query: a
+server executable's presence does not establish a synchronized semantic result.
+
+```lisp
+;; One evaluation: aggregate locally, return selected source and metadata.
+(kioku.code:with-snapshot (snapshot "src/example.ts")
+  (let ((outline (kioku.code:outline snapshot :limit 20)))
+    (if (member (gethash "status" outline) '("ok" "partial") :test #'equal)
+        (let ((items (gethash "items" (gethash "data" outline))))
+          (kioku.internal:object
+            "status" (gethash "status" outline)
+            "omitted" (gethash "omitted" outline)
+            "declarationCount" (length items)
+            "selected" (if (plusp (length items))
+                           (kioku.code:span (gethash "handle" (aref items 0))
+                                            :max-chars 1000)
+                           #())))
+        outline)))
+```
+
+Check `status` before accessing `data`. `ok` with an empty array means the query
+completed with no results. `partial` preserves parse-error/truncation information.
+`unsupported`, `unavailable`, `stale`, `cancelled`, `timeout`, and `limit_exceeded`
+are separate states. Missing diagnostics publication never becomes a clean file.
+`with-snapshot` returns the opening failure unchanged and always releases an
+accepted snapshot, including on a Lisp error. For other queries, branch explicitly
+on `ok`/`partial` before using their `data`.
+
+| Lisp function | Arguments | Purpose |
+| --- | --- | --- |
+| `capabilities` | none | Negotiate V1, per-language readiness, disk sources and limits |
+| `open` | path | Pin a bounded disk source snapshot |
+| `outline` | handle, `:range`, `:limit` | Bounded declaration map |
+| `enclosing` | handle, position, `:kinds` | Nearest matching node and ancestors |
+| `query` | handle, query ID, `:range`, `:limit` | Distributed `declarations`, `calls`, `imports` captures |
+| `span` | node handle, `:max-chars` | Bounded original source span |
+| `semantic` | handle, kind, `:position`, `:limit` | `definition`, `references`, `implementation`, `hover`, `diagnostics`, `completion` |
+| `release` | handle | Idempotent release |
+
+Positions are JSON objects such as `(kioku.internal:object "line" 1 "character" 2)`:
+zero-based lines and UTF-16 character offsets. Ranges have `start` and `end` and
+are half-open. The provider performs conversion. There is no unsaved-editor
+synchronization claim: `sourceKind` is `disk`, with freshness and a snapshot version
+on every accepted source result. File/checkout changes require an explicit reopen.
+Handles and node handles expire at evaluation end; journal replay and saved
+`lisp_inspect` output are historical evidence, never live capabilities. Task workers
+retain their host-RPC prohibition. Neither `lsp` nor `lsp_extra` is added to the
+protected tool allowlist; child sessions cannot borrow admission.
+
+Each evaluation has 100 charged calls (including capabilities and failed attempts),
+100 files, 16 MiB cumulative source input, 64 KiB cumulative code responses, and a
+30-second code budget. Individual documents are at most 2 MiB; captures 200,
+outline entries 100, source spans 8,000 UTF-16 units, responses 32 KiB. Structural
+calls have a 2-second deadline and semantic calls 10 seconds, capped by the batch
+and caller deadlines. Release/disposal remain available outside exhausted budgets.
+Model presentation remains capped at 16 KiB and retains code outcome metadata;
+use bounded `lisp_inspect` pages for saved detail. Aggregate counts and chosen spans
+inside Lisp; returning full outlines can increase output instead of reducing it.
+
+The local prerequisite currently supports JavaScript/JSX/TypeScript/TSX. Its
+checkout metadata read must be allowed by the scoped host filesystem. Linked Git
+worktrees whose metadata is outside that scope return
+`unavailable` rather than read through another filesystem. This condition is
+reported independently from grammar and language-server readiness.
+
+Development verification is `npm run test:code-intelligence` after preparing the
+provider fixture. The source/native and packed paths are separate checks. The CI
+matrix runs normal development on macOS, Ubuntu 26.04, and Arch; the protected code-provider path
+is exercised on macOS; Linux protection remains a separate native-suite check. A configured job
+is not evidence that the remote job passed.
+
+Clean installation and platform status: [code intelligence setup](code-intelligence.md).
