@@ -144,3 +144,22 @@ test('configuration change resets persisted session mode so off plus restart dis
   const restarted = new ModelAutoStore(f.runtime, disabled.mode, canonicalContentHash(disabled))
   assert.equal((await restarted.session('s1')).mode, 'off')
 })
+
+test('model-auto uses owned Codex metadata and validates capabilities rather than a fixed provider ID', async () => {
+  const owned = catalog(), provider = 'kiokuko-codex-fixture'
+  owned.listProviders = () => [{id:provider,name:'Owned Codex',route:{provider,family:'openai',connection:'codex',protocol:'responses'}}]
+  const result = await modelAutoCandidates(owned,ModelAutoConfig.parse({mode:'auto'}),[],signal,0)
+  assert.ok(result.routes.length >= 2)
+  assert.ok(result.routes.every(route => route.binding.provider === provider))
+  owned.listProviders = () => [{id:provider,name:'Looks like Codex',route:{provider,family:'openai',connection:'api',protocol:'responses'}}]
+  assert.equal((await modelAutoCandidates(owned,ModelAutoConfig.parse({mode:'auto'}),[],signal,0)).reason,'candidate_unavailable')
+  owned.listProviders = () => [{id:'openai-codex',name:'Incorrect native configuration',route:{provider:'openai-codex',family:'openai',connection:'api',protocol:'responses'}}]
+  assert.equal((await modelAutoCandidates(owned,ModelAutoConfig.parse({mode:'auto'}),[],signal,0)).reason,'candidate_unavailable')
+  owned.listProviders = () => [{id:'openai-codex',name:'Empty native Codex'}, {id:provider,name:'Owned Codex',route:{provider,family:'openai',connection:'codex',protocol:'responses'}}]
+  owned.listModels = async id => id === provider ? catalog().listModels(id) : []
+  const coexist = await modelAutoCandidates(owned,ModelAutoConfig.parse({mode:'auto'}),[],signal,0)
+  assert.equal(coexist.routes.length,4)
+  assert.ok(coexist.routes.every(route=>route.binding.provider===provider))
+  owned.listModels = async id => { if (id === 'openai-codex') throw new Error('Native connection is signed out'); return catalog().listModels(id) }
+  assert.equal((await modelAutoCandidates(owned,ModelAutoConfig.parse({mode:'auto'}),[],signal,0)).routes.length,4)
+})

@@ -194,7 +194,7 @@ test('minimal removes owned tools without changing external definitions or accep
   assert.strictEqual(projectToolsForMinimal(tools, state('normal'), registered, () => ({ execute: async () => undefined })).tools, tools)
 })
 
-for (const family of ['openai', 'deepseek', 'opencode-go', 'opencode-zen', 'openrouter', 'orcarouter', 'ollama', 'other'] as const) {
+for (const family of ['openai', 'deepseek', 'opencode-go', 'opencode-zen', 'openrouter', 'ollama', 'other'] as const) {
   for (const connection of ['api', 'codex', 'local'] as const) {
     test(`auto ignores ${family}/${connection} route metadata`, () => {
       const input = { mode: 'auto', taskType: 'build', selectionMode: 'normal', state: state('normal') } as const

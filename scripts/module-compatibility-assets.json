@@ -37,6 +37,10 @@
     "migrations/035_owned_execution.sql"
   ],
   "runtimeAssets": [
-    "dist/security/sanitize.js"
+    "dist/dsh/models/vendor/THIRD_PARTY_NOTICES.txt",
+    "dist/models-client.cjs",
+    "dist/models-client.d.ts",
+    "dist/security/sanitize.js",
+    "docs/dsh-auth-LICENSE.txt"
   ]
 }

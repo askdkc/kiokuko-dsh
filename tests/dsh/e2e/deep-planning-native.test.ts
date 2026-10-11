@@ -84,7 +84,7 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
 })
 
 const nativeOptions = { skip: packages ? false : 'requires the pinned DSH package runtime', timeout: 30_000 }
-for (const [providerId, modelId] of [['orcarouter', 'deepseek/deepseek-v4.1-flash'], ['deepseek-official', 'deepseek-flash']]) {
+for (const [providerId, modelId] of [['openrouter', 'deepseek/deepseek-v4.1-flash'], ['deepseek-official', 'deepseek-flash']]) {
   test(`Deep native: select ${providerId} once per role, save, reopen and dispatch without connection questions`, nativeOptions, async () => {
     const steps = ['分解', '解決', '検証', '集約'].flatMap(role => [
       { id: 'deep-configuration', prefix: `${role}:` },

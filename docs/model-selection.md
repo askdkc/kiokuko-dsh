@@ -13,7 +13,9 @@ plan approval or automatic Enno continuation.
 
 ## Automatic model selection
 
-`modelAutoMode` is off by default in both the full plugin and modular core. To try it, install and authenticate dsh-codex in the same DSH profile, configure a Jev or Laya typed-decision backend, then use `observe` before enabling automatic routing:
+In Web profiles, [Kiokuko Models](kiokuko-models.md) manages connections without requiring DSH's Models settings. Its registered models are available to ordinary chat, Enno and Deep alongside native connections.
+
+`modelAutoMode` is off by default in both the full plugin and modular core. To try it, authenticate Codex through Kiokuko Models or dsh-codex in the same DSH profile, configure a Jev or Laya typed-decision backend, then use `observe` before enabling automatic routing:
 
 ```yaml
 modelAutoMode:
@@ -31,7 +33,7 @@ modelAutoMode:
 
 The command changes only the current native session. `on` also clears its manual model pin; a model selected in DSH's picker pins that session until `on` is run again. Changes apply at the next new task boundary, without changing a request already sent. `/kioku-decisions status` includes the same session projection. To reset session overrides after a configuration change, restart DSH; changing `modelAutoMode.mode` to `off` and restarting disables routing.
 
-The initial preset offers `gpt-6-luna` at low, medium and high effort, plus `gpt-6-sol` at high effort. Up to four exact route bindings can be configured under `modelAutoMode.routes`; each has an `id` from `luna-low`, `luna-medium`, `luna-high`, `sol-high`, and a `binding` with `provider`, `model`, and `reasoningEffort`. These are route labels, so a registered Astra or other GPT model may be assigned explicitly. No new model ID is guessed or substituted. DSH's live `openai-codex` catalog, model context and modality metadata, supported efforts, call-config validation and token meter must all confirm a candidate. Fewer than two valid bindings skips classification.
+The initial preset offers `gpt-6-luna` at low, medium and high effort, plus `gpt-6-sol` at high effort. Up to four exact route bindings can be configured under `modelAutoMode.routes`; each has an `id` from `luna-low`, `luna-medium`, `luna-high`, `sol-high`, and a `binding` with `provider`, `model`, and `reasoningEffort`. These are route labels, so a registered Astra or other GPT model may be assigned explicitly. No new model ID is guessed or substituted. A candidate must have a validated Codex origin and Responses protocol, live model context and modality metadata, supported efforts, call-config validation and token meter. Both native `openai-codex` and Kiokuko-owned Codex routes qualify; an arbitrary provider name or OpenAI API connection does not. Fewer than two valid bindings skips classification.
 
 For a new admitted normal task, Kiokuko sends the current task text, task type, attachment kinds, route IDs and rubric to the selected Jev or Laya backend. It does not send attachment bytes, full history or repository contents for this classification. One Choice result selects a route or abstains. The route is stored against the exact run and reused for continuations; an unknown in-flight decision after restart is retained without another classifier call. `observe` records a proposal but keeps the current model. A failed probe, missing metadata, unsupported effort, timeout, oversized input or abstention also keeps the current model. Cancellation, stale session identity and storage integrity failures stop the request. Dispatch authentication, quota and unavailable-model errors remain ordinary failures; no alternate model is retried automatically.
 
@@ -63,8 +65,8 @@ above nine, type consecutive digits (`1`, `2`, Enter selects option 12); Backspa
 corrects the number. Digits typed in the search field remain search text, and Enter
 submits the search. IME composition and repeated key events do not select or submit.
 
-Enno offers twelve versioned templates across **OpenAI, DeepSeek, OpenCode Go,
-OpenCode Zen, OpenRouter, OrcaRouter and Ollama**, plus a custom configured-model selector. The complete
+Enno offers eleven versioned templates across **OpenAI, DeepSeek, OpenCode Go,
+OpenCode Zen, OpenRouter and Ollama**, plus a custom configured-model selector. The complete
 [template table and configuration reference](model-selection.ja.md) lists exact
 model IDs. OpenAI assigns Astra to ideal/Zenki/check, Sol to the Goki head and
 Luna to workers. Go and OpenRouter provide GLM and Qwen variants; Zen uses GLM.
@@ -74,14 +76,12 @@ downloads models. Reasoning uses model defaults; reflection uses the check model
 All DeepSeek recommendations use **V4.1 Flash for all five roles**. Exact IDs differ:
 `deepseek-flash` on [DeepSeek's API](https://www.deepseek.com/en/news/deepseek-v4-1-flash/),
 `deepseek-v4.1-flash` on [OpenCode Go](https://opencode.ai/docs/go/), and
-`deepseek/deepseek-v4.1-flash` on [OpenRouter](https://openrouter.ai/deepseek/deepseek-v4.1-flash)
-and [OrcaRouter](https://www.orcarouter.ai/models/deepseek/deepseek-v4.1-flash).
+`deepseek/deepseek-v4.1-flash` on [OpenRouter](https://openrouter.ai/deepseek/deepseek-v4.1-flash).
 The direct DeepSeek template uses DSH's `deepseek-official` connection. These templates
 never substitute V4 Pro or an older Flash ID when V4.1 Flash is unavailable.
 The [OpenCode model registry](https://models.opencode.ai/api.json) was also checked
 on 2026-09-11. Its `opencode-go` entry includes V4.1 Flash; its Zen entry (`opencode`)
-does not. Its OrcaRouter entry also lacks V4.1 Flash, although OrcaRouter's own model
-page lists the ID above. Registry entries can lag provider changes. Zen and Ollama
+does not. Registry entries can lag provider changes. Zen and Ollama
 use the configured-model selector for models without a verified template ID.
 
 For [dsh-codex](https://github.com/askdkc/dsh-codex), choose **OpenAI Codex・推奨（dsh-codex）**
@@ -89,8 +89,10 @@ from the template menu, then confirm the configuration. It assigns Astra to
 ideal/planning/check, Sol to the Goki head and Luna to workers, following the
 [OpenAI model guide](https://developers.openai.com/api/docs/models). This is a
 quality/workload recommendation, not a measured per-task latency or quota optimum.
-The plugin-specific template binds the exact `openai-codex` / `codex` / `responses`
-contract from [dsh-codex's implementation](https://github.com/askdkc/dsh-codex/blob/e2e61b6d8f3b511cf2dac99688e97b8728cb122c/src/index.ts)
+The template also accepts a Kiokuko Models Codex connection with verified origin
+and Responses metadata, storing its stable `kiokuko-…` registration ID. The native
+route retains the `openai-codex` / `codex` / `responses` contract from
+[dsh-codex's implementation](https://github.com/askdkc/dsh-codex/blob/e2e61b6d8f3b511cf2dac99688e97b8728cb122c/src/index.ts)
 without asking for the connection again. Native DSH model validation takes
 precedence over legacy `modelRoutes` declarations; the plugin configuration file
 remains untouched. Recommended models must exist in the current DSH catalog;
@@ -116,9 +118,9 @@ than requested again. Back and cancel retain confirmed model assignments.
 
 To choose by model name, select **DSHに設定済みのモデルから選ぶ**, edit a role,
 select its connection, then search or select a model name and confirm the configuration.
-This works with configured **OpenCode Go, OpenCode Zen, OpenRouter, Ollama and OrcaRouter**
+This works with configured **OpenCode Go, OpenCode Zen, OpenRouter and Ollama**
 connections. Every entry displays its name and exact ID; the same model on OpenRouter
-and OrcaRouter remains a distinct binding. Lists come from the current DSH profile.
+Each connection remains a distinct binding. Lists come from the current DSH profile.
 Register a missing connection in DSH and select **一覧を再取得** to refresh it.
 The public registry is a recommendation reference; it does not register models in
 DSH. Its `ollama-cloud` catalog is separate from a local Ollama installation.

@@ -86,3 +86,11 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+# dsh-auth and model transports
+
+The selected MIT-licensed dsh-auth sources are vendored at
+`348082d873f563ed76ec7a70f2ff717038d5fe70`. See
+[provenance and local changes](docs/dsh-auth-provenance.md) and the complete
+[upstream license](docs/dsh-auth-LICENSE.txt). Bundled AI SDK dependency licenses
+are shipped in `dist/dsh/models/vendor/THIRD_PARTY_NOTICES.txt`.

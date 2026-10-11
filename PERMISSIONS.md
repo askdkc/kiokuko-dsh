@@ -282,3 +282,13 @@ the host-owned profile identity. Current DSH exposes `lisp.approvalMode` through
 the native `kiokuko-dsh` configuration form and saves its profile patch. This
 compatibility difference does not change the controls or scope. No separate
 preference file or database migration is used.
+
+## Web model management
+
+Settings → Kiokuko Models and `/kiokuko model` permit explicit human connection,
+login, API-key replacement, logout, model discovery and selection. Non-secret settings
+are profile-local. Credentials share dsh-auth's existing canonical store and locks;
+logout affects dsh-cli too. The authenticated Web transport protects the JSON POST
+operations. No secret enters model-visible commands or ordinary settings responses.
+Infron sends the explicitly selected Standard/Flex tier; it does not silently change
+tier on failure. [Storage, permissions and recovery](docs/kiokuko-models.md).

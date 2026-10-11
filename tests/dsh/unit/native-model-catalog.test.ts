@@ -37,7 +37,7 @@ test('native connection metadata recognizes aliases without reading credentials 
   assert.equal(descriptions, 1, 'read redacted connection metadata once per catalog')
   const routes = modelRoutesForCatalog(catalog, [{ provider: 'my-orca', family: 'openai', connection: 'api', protocol: 'responses' }])
   const route = (provider: string) => routes.find(r => r.provider === provider)
-  assert.deepEqual(route('my-orca'), { provider: 'my-orca', family: 'orcarouter', connection: 'api', protocol: 'chat-completions' })
+  assert.deepEqual(route('my-orca'), { provider: 'my-orca', family: 'other', connection: 'api', protocol: 'chat-completions' })
   assert.equal(route('my-go')?.family, 'opencode-go'); assert.equal(route('my-go')?.protocol, 'unknown')
   assert.equal(route('my-zen')?.family, 'opencode-zen'); assert.equal(route('my-zen')?.protocol, 'messages')
   assert.equal(route('my-router')?.family, 'openrouter')
@@ -88,14 +88,14 @@ test('optional settings metadata failure cannot block the DSH model catalog', as
 
 test('DSH validation keeps the native service receiver and rejects unavailable or substituted models', async () => {
   let calls = 0, mode = 'valid'
-  const binding = { provider: 'orcarouter', model: 'deepseek/deepseek-v4.1-flash' }
+  const binding = { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' }
   const llm = {
-    listProviders() { assert.equal(this, llm); return [{ id: binding.provider, name: 'OrcaRouter' }] },
+    listProviders() { assert.equal(this, llm); return [{ id: binding.provider, name: 'OpenRouter' }] },
     async listModels(provider: string) { assert.equal(this, llm); return [{ provider, id: binding.model, name: 'Flash' }] },
     async resolveCallConfig(input: ModelBinding) {
       assert.equal(this, llm); assert.notEqual(input, binding); calls++
       if (mode === 'invalid') throw new Error('Configured model unavailable')
-      return mode === 'substitute' ? { ...input, provider: 'openrouter' } : input
+      return mode === 'substitute' ? { ...input, provider: 'another-router' } : input
     },
   }
   const catalog = await readModelCatalog(nativeModelCatalog(llm)!)
@@ -107,7 +107,7 @@ test('DSH validation keeps the native service receiver and rejects unavailable o
     const problems = await modelBindingProblems(roles, catalog, [])
     assert.equal(problems.length, 4); assert.ok(problems.every(problem => problem.includes(message!)))
   }
-  assert.deepEqual(binding, { provider: 'orcarouter', model: 'deepseek/deepseek-v4.1-flash' })
+  assert.deepEqual(binding, { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash' })
   assert.match((await modelBindingProblems([{ label: '解決', binding: { ...binding, model: 'missing' } }], catalog, []))[0]!, /設定済みモデルがありません/u)
   assert.equal(calls, 3, 'missing catalog models never reach the adapter')
 })

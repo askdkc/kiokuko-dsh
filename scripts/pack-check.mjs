@@ -12,6 +12,12 @@ const cache = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-cache-'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
+  'dist/dsh/models/service.js',
+  'dist/models-client.cjs',
+  'dist/dsh/models/vendor/THIRD_PARTY_NOTICES.txt',
+  'docs/dsh-auth-LICENSE.txt',
+  'docs/dsh-auth-provenance.md',
+  'docs/kiokuko-models.md',
   'migrations/035_owned_execution.sql',
   'dist/dsh/owned-execution.js',
   'dist/dsh/owned-evidence.js',
@@ -218,6 +224,9 @@ async function assertDshClientArtifact(packageRoot) {
   const requested = []
   const client = registrations[0].factory((specifier) => {
     requested.push(specifier)
+    if (specifier === '@deepseek-ai/dsh-client-store') return {
+      createSnapshotStore: (initial) => ({ getSnapshot: () => initial, update: (change) => change(initial), subscribe: () => () => {} }),
+    }
     return {}
   })
   if (typeof client?.apply !== 'function' || typeof client?.downloadDshSessionLog !== 'function') {
@@ -231,6 +240,16 @@ async function assertDshClientArtifact(packageRoot) {
   ]
   if (JSON.stringify(requested) !== JSON.stringify(expected)) {
     throw new Error(`Kiokuko DSH client factory requested an unexpected module set: ${JSON.stringify(requested)}`)
+  }
+  const slots = []
+  client.apply({
+    slots: { inject: (_name, mount) => mount(), register: (definition) => { slots.push(definition); return () => {} } },
+    effect: () => {}, on: () => {}, locale: { register: () => {} }, uiConversation: { events: { register: () => {} } },
+  })
+  if (!slots.some((slot) => slot.name === 'settings.section' && slot.id === 'kiokuko-models')
+      || !slots.some((slot) => slot.name === 'conversation.composer')
+      || !slots.some((slot) => slot.id === 'kiokuko-session-log-download')) {
+    throw new Error('Packed full client apply must retain both model settings and existing conversation surfaces')
   }
 }
 

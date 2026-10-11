@@ -14,7 +14,7 @@ test('Deep budget option labels remain exact numbers instead of being reinterpre
   }
 })
 
-for (const family of ['deepseek', 'orcarouter'] as const) test(`Deep configuration accepts, saves and reloads the shared ${family} route`, async () => {
+for (const family of ['deepseek', 'openrouter'] as const) test(`Deep configuration accepts, saves and reloads the shared ${family} route`, async () => {
   const f = await deepFixture()
   const routes: ModelRoute[] = (['other', family] as const).map((family, index) => ({ provider: `route-${index}`, family, connection: 'api', protocol: 'chat-completions' }))
   const catalog: DshModelCatalog = {
@@ -56,4 +56,19 @@ test('quality configuration requires an alternative, preserves drafts and allows
     assert.match((await ui.problems(missing)).join(' '),/別案のモデル/)
     assert.match((await ui.problems({...saved,alternativeSolver:{provider:'mock',model:'missing'}})).join(' '),/ありません/)
   } finally{await f.close()}
+})
+
+test('legacy OrcaRouter preferences remain readable and require explicit replacement without overwriting saved data',async()=>{
+  const f=await deepFixture(), binding={provider:'retired-router',model:'old-model'}
+  const saved={...f.configuration,roles:Object.fromEntries(DEEP_ROLES.map(role=>[role,binding])),routeBindings:[{provider:binding.provider,family:'orcarouter',connection:'api',protocol:'chat-completions'}]}
+  const raw=JSON.stringify(saved)
+  const catalog:DshModelCatalog={listProviders:()=>[{id:'retired-router',name:'Retired'},{id:'new-router',name:'Replacement'}],listModels:async provider=>[{provider,id:'old-model',name:'Model'}]}
+  const ui=new DeepConfigurationUI(f.store,catalog,{ask:async request=>{const q=request.questions[0];assert.equal(q.id,'deep-configuration');assert.ok(!q.options?.some(o=>o.label==='保存'));assert.ok(q.options?.some(o=>o.label==='分解: 未設定'));return{answers:[{id:q.id,selected:['閉じる・下書きを保持']}]}}},[],undefined,f.configuration.budget)
+  try{
+    await f.store.database(db=>db.prepare('INSERT INTO dsh_deep_preferences(workspace,configuration_json) VALUES(?,?)').run(f.state.workspace,raw))
+    assert.deepEqual(await ui.resolve(f.state.workspace,{id:'parent'}),saved)
+    assert.match((await ui.problems(saved as any)).join(' '),/OrcaRouter/)
+    await assert.rejects(ui.configure(f.state.workspace,{id:'parent'},new AbortController().signal),/設定待ち/)
+    assert.equal(await f.store.database(db=>db.prepare('SELECT configuration_json FROM dsh_deep_preferences WHERE workspace=?').get<{configuration_json:string}>(f.state.workspace)?.configuration_json),raw)
+  }finally{await f.close()}
 })

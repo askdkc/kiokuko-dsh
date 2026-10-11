@@ -95,9 +95,9 @@ test('a removed role connection opens provider selection without silently adopti
   assert.equal(saved.length, 0)
   assert.deepEqual(stored, initial)
 })
-test('twelve versioned templates cover seven families with exact IDs and conservative local concurrency', () => {
-  assert.equal(MODEL_TEMPLATES.length, 12)
-  assert.equal(new Set(MODEL_TEMPLATES.map(t => t.group)).size, 7)
+test('eleven versioned templates cover six families with exact IDs and conservative local concurrency', () => {
+  assert.equal(MODEL_TEMPLATES.length, 11)
+  assert.equal(new Set(MODEL_TEMPLATES.map(t => t.group)).size, 6)
   for (const t of MODEL_TEMPLATES) { assert.equal(t.version, 1); assert.deepEqual(Object.keys(t.models), [...MODEL_ROLES]) }
   const local = MODEL_TEMPLATES.at(-1)!
   assert.equal(local.maxConcurrentChildren, 1)
@@ -111,7 +111,6 @@ test('DeepSeek recommendations bind every role to the provider-specific V4.1 Fla
     ['deepseek-flash', 'deepseek-flash'],
     ['go-deepseek-flash', 'deepseek-v4.1-flash'],
     ['router-deepseek-flash', 'deepseek/deepseek-v4.1-flash'],
-    ['orca-deepseek-flash', 'deepseek/deepseek-v4.1-flash'],
   ] as const
   for (const [templateId, model] of recommendations) {
     const t = MODEL_TEMPLATES.find(t => t.id === templateId)!
@@ -134,6 +133,12 @@ test('catalog failures are distinct from empty models and duplicate names never 
   const broken = await readModelCatalog({ ...llm, listModels: async provider => { if (provider === 'api-one') throw new Error('No connection'); return [] } })
   assert.deepEqual(broken.failures, ['api-one'])
   assert.equal(broken.models.length, 0)
+})
+test('retired OrcaRouter registrations remain outside new model choices', async () => {
+  const retired = [{ id: 'orcarouter', name: 'Retired' }, { id: 'old-router-alias', name: 'Legacy alias', route: {provider:'old-router-alias',family:'orcarouter' as const,connection:'api' as const,protocol:'chat-completions' as const} }]
+  const snapshot = await readModelCatalog({ ...llm, listProviders: () => [...catalog.providers, ...retired] })
+  assert.deepEqual(snapshot.providers, catalog.providers)
+  assert.ok(snapshot.models.every(model => !retired.some(provider => provider.id === model.provider)))
 })
 test('ordinary execution does not read provider catalogs, and explicit choice is not asked twice', async () => {
   assert.equal(explicitExecutionMode('役小角を使わずREADMEを直して'), 'normal')

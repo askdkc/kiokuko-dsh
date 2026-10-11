@@ -8,14 +8,14 @@ import { LedgerStore } from '../ledger/store.js'
 import type { DshRuntime } from '../dsh/runtime.js'
 import { claimExecutionOwner, readExecutionOwner } from '../dsh/orchestration/execution-owner.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from '../dsh/plugin-source.js'
-import { DeepArtifactSchema, DeepConfigurationSchema, DeepStateSchema, GoalNodeSchema, terminal, type DeepState, type DeepArtifact, type DeepRole } from './core/contracts.js'
+import { DeepArtifactSchema, LegacyDeepConfigurationSchema, DeepStateSchema, GoalNodeSchema, terminal, type DeepState, type DeepArtifact, type DeepRole } from './core/contracts.js'
 import { budgetProblem, stopClock } from './core/budget.js'
 
 export const IntentSchema = z.object({
   revision: z.number().int().nonnegative().default(0),
   startId: z.string(), workspace: z.string(), sessionId: z.string(), rootPath: z.string(), commandId: z.string(), messageId: z.string(),
   task: z.string().max(32_768), status: z.enum(['armed','pending','accepted','paused','cancelled','completed']),
-  runId: z.string().nullable(), configuration: DeepConfigurationSchema.nullable(),
+  runId: z.string().nullable(), configuration: LegacyDeepConfigurationSchema.nullable(),
   messages: z.array(z.unknown()).max(64), problem: z.string().max(4_096),
 })
 export type DeepIntent = z.infer<typeof IntentSchema>

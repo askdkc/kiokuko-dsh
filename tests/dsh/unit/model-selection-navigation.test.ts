@@ -272,13 +272,13 @@ test('catalog changes at final adoption return to review with no ready selection
   assert.equal(saved.some(s => s.value.status === 'ready'), false)
 })
 
-test('Go, Zen, OpenRouter, Ollama and OrcaRouter models are searchable by name and retain distinct connections', async () => {
+test('Go, Zen, OpenRouter, Ollama and a second router models are searchable by name and retain distinct connections', async () => {
   const connections = [
     { id: 'go-account', name: 'OpenCode Go', family: 'opencode-go', model: 'deepseek-v4.1-flash', modelName: 'DeepSeek V4.1 Flash' },
     { id: 'zen-account', name: 'OpenCode Zen', family: 'opencode-zen', model: 'configured-zen-model', modelName: 'Zen configured model' },
     { id: 'router-account', name: 'OpenRouter', family: 'openrouter', model: 'deepseek/deepseek-v4.1-flash', modelName: 'DeepSeek V4.1 Flash' },
     { id: 'local-account', name: 'Ollama', family: 'ollama', model: 'qwen3-coder:30b', modelName: 'Qwen Coder' },
-    { id: 'orca-account', name: 'OrcaRouter', family: 'orcarouter', model: 'deepseek/deepseek-v4.1-flash', modelName: 'DeepSeek V4.1 Flash' },
+    { id: 'router-two', name: 'Second router', family: 'openrouter', model: 'deepseek/deepseek-v4.1-flash', modelName: 'DeepSeek V4.1 Flash' },
   ] as const
   const llm: DshModelCatalog = {
     listProviders: () => connections.map(({ id, name, family }) => ({ id, name, route: { provider: id, family, connection: family === 'ollama' ? 'local' : 'api', protocol: 'chat-completions' } })),

@@ -1,16 +1,16 @@
 import { z } from 'zod'
-import { DeepConfigurationSchema } from '../deep-thinker/core/contracts.js'
+import { LegacyDeepConfigurationSchema, DeepConfigurationSchema } from '../deep-thinker/core/contracts.js'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { KiokukoError } from '../errors.js'
-import { ModelConfigurationSchema, ModelConfigurationDraftSchema, ModelBindingSchema } from './model-configuration.js'
+import { LegacyModelConfigurationSchema, ModelConfigurationSchema, LegacyModelConfigurationDraftSchema, ModelBindingSchema } from './model-configuration.js'
 
 export const ExecutionSelectionSchema = z.object({
   mode: z.enum(['pending', 'normal', 'enno', 'deep-thinker']),
   status: z.enum(['selecting', 'ready', 'reselect']),
-  configuration: ModelConfigurationSchema.optional(),
-  deepConfiguration: DeepConfigurationSchema.optional(),
+  configuration: z.union([ModelConfigurationSchema, LegacyModelConfigurationSchema]).optional(),
+  deepConfiguration: z.union([DeepConfigurationSchema, LegacyDeepConfigurationSchema]).optional(),
   ordinaryModel: ModelBindingSchema.optional(),
-  draft: ModelConfigurationDraftSchema.optional(),
+  draft: LegacyModelConfigurationDraftSchema.optional(),
   problem: z.string().max(1024).optional(),
   discussion: z.object({
     questionId: z.string().min(1).max(256),
@@ -30,7 +30,13 @@ export function readExecutionSelection(database: SqliteDatabase, runId: string):
   if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dsh_execution_selections'").get()) return undefined
   const row = database.prepare('SELECT revision, state_json FROM dsh_execution_selections WHERE run_id = ?').get<{ revision: number; state_json: string }>(runId)
   if (!row) return undefined // Legacy runs retain their original contract.
-  return { revision: row.revision, value: ExecutionSelectionSchema.parse(JSON.parse(row.state_json)) }
+  const value = ExecutionSelectionSchema.parse(JSON.parse(row.state_json))
+  const configurations = [value.configuration, value.deepConfiguration, value.draft].filter(Boolean)
+  if (configurations.some(c => c!.routeBindings?.some(r => r.family === 'orcarouter') || Object.values(c!.roles).some(binding => binding?.provider === 'orcarouter'))) {
+    value.status = 'reselect'
+    value.problem = 'OrcaRouter is retired; explicitly select replacement models before running again'
+  }
+  return { revision: row.revision, value }
 }
 export function initializeExecutionSelection(database: SqliteDatabase, runId: string): void {
   database.prepare('INSERT OR IGNORE INTO dsh_execution_selections (run_id, state_json, updated_at) VALUES (?, ?, ?)')
@@ -38,6 +44,10 @@ export function initializeExecutionSelection(database: SqliteDatabase, runId: st
 }
 export function writeExecutionSelection(database: SqliteDatabase, runId: string, expectedRevision: number, value: ExecutionSelection): StoredExecutionSelection {
   const parsed = ExecutionSelectionSchema.parse(value)
+  if (parsed.status === 'ready') {
+    if (parsed.configuration) ModelConfigurationSchema.parse(parsed.configuration)
+    if (parsed.deepConfiguration) DeepConfigurationSchema.parse(parsed.deepConfiguration)
+  }
   database.prepare('UPDATE dsh_execution_selections SET state_json = ?, revision = revision + 1, updated_at = ? WHERE run_id = ? AND revision = ?')
     .run(JSON.stringify(parsed), new Date().toISOString(), runId, expectedRevision)
   if (database.prepare('SELECT changes() AS count').get<{ count: number }>()?.count !== 1) throw new KiokukoError('CONFLICT', 'Execution selection changed; reload the exact task before choosing again')

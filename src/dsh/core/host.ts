@@ -109,6 +109,13 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   let indexReasoning: IndexReasoningService | undefined
   const get = (name: string): any => ctx.get(name, false)
   const skills = get('skills'), tools = get('tools'), sessions = get('sessions'), agents = get('agents'), systemPrompt = get('systemPrompt')
+  const modelScope = get('profileContext') && typeof ctx.inject === 'function'
+    ? ctx.inject(['connection', 'llm', 'commands'], scope => {
+      if (scope.get('profileContext', false) && (scope.get('connection', false) as any)?.fetch) {
+        scope.effect(async () => (await import('../models/surface.js')).mountKiokukoModels(scope), 'kiokuko models')
+      }
+    }) : undefined
+  if (modelScope) disposers.push(() => modelScope.dispose())
   const capabilityNames = [...new Set(['skills', 'tools', 'sessions', 'agents', 'commands', 'systemPrompt', 'userQuestions', 'llm', 'subagents', ...registrations.flatMap(entry => entry.module.requires)])].filter(name => get(name))
   const modules = new DshModules<CoreModuleHost>([{ module: coreSkills }, ...registrations], capabilityNames)
   const root = realpathSync(config.repositoryRoot ?? process.cwd())

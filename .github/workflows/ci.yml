@@ -265,6 +265,7 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/${{ matrix.fixture }}
       - run: npx playwright install --with-deps chromium
+      - run: npm run test:models:web
       - run: npm run test:shortcuts:web
         env:
           KIOKUKO_SHORTCUT_RUNTIME: ${{ matrix.fixture }}

@@ -1,24 +1,14 @@
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { build } from 'esbuild'
 
 const root = resolve(import.meta.dirname, '..')
-const compiledOutput = resolve(root, 'dist/client.js')
-const output = resolve(root, 'dist/client.cjs')
-const sourceMap = resolve(root, 'dist/client.js.map')
-const compiled = await readFile(compiledOutput, 'utf8')
-
-const exportsToStrip = ['apply', 'downloadDshSessionLog', 'inject']
-let body = compiled.replace(/\n?\/\/# sourceMappingURL=client\.js\.map\s*$/u, '')
-for (const name of exportsToStrip) {
-  const pattern = new RegExp(`^export (?=(?:async )?(?:function|const) ${name}\\b)`, 'mu')
-  if (!pattern.test(body)) throw new Error(`DSH client build did not find exported ${name}`)
-  body = body.replace(pattern, '')
-}
-if (/^\s*(?:import|export)\b/mu.test(body)) {
-  throw new Error('DSH client build left ESM syntax in the lazy-CJS artifact')
-}
-
-const artifact = `window.__ModuleLoader__.load({
+/** Let the bundler preserve export aliases when shared modules have identical names. */
+async function clientArtifact(entry, output) {
+  const result = await build({ entryPoints: [resolve(root, entry)], bundle: true,
+    packages: 'external', format: 'cjs', platform: 'browser', write: false })
+  const body = result.outputFiles[0].text
+  const artifact = `window.__ModuleLoader__.load({
   id: "kiokuko-dsh",
   factory: (require) => {
     var module = { exports: {} };
@@ -28,13 +18,12 @@ const artifact = `window.__ModuleLoader__.load({
     const { useState, useRef, useEffect } = require("react");
     const { Modal, Button, IconDownloadOutline16, MarkdownText } = require("@deepseek-ai/dsh-client-ui-primitives");
 ${body.split('\n').map(line => `    ${line}`).join('\n')}
-    exports.apply = apply;
-    exports.downloadDshSessionLog = downloadDshSessionLog;
-    exports.inject = inject;
     return module.exports;
   }
 });
 `
-
-await writeFile(output, artifact, 'utf8')
-await Promise.all([rm(compiledOutput, { force: true }), rm(sourceMap, { force: true })])
+  await writeFile(resolve(root, output), artifact, 'utf8')
+}
+await clientArtifact('dist/client.js', 'dist/client.cjs')
+await clientArtifact('dist/models-client.js', 'dist/models-client.cjs')
+await Promise.all(['dist/client.js', 'dist/client.js.map'].map(file => rm(resolve(root, file), { force: true })))

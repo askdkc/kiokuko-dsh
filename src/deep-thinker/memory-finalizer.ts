@@ -8,13 +8,13 @@ import { canonicalContentHash } from '../serialization/validate.js'
 import { findSecretInValue } from '../memory/secrets.js'
 import { DeepStore } from './store.js'
 import { budgetProblem, estimateRequestTokens } from './core/budget.js'
-import { DeepConfigurationSchema, CandidateSchema, GoalNodeSchema, QualityNodeSchema } from './core/contracts.js'
+import { LegacyDeepConfigurationSchema, CandidateSchema, GoalNodeSchema, QualityNodeSchema } from './core/contracts.js'
 import { deepMemoryRequestScope } from './memory-request.js'
 import { currentArtifacts, changedSources } from './evidence.js'
 import { abortableStream } from './abortable-stream.js'
 import { processDeepSlots } from './slots.js'
 
-export const DeepFinalizationSourceSchema = z.object({ kind: z.literal('deep-report'), workspace: z.string(), sessionId: z.string(), configuration: DeepConfigurationSchema,
+export const DeepFinalizationSourceSchema = z.object({ kind: z.literal('deep-report'), workspace: z.string(), sessionId: z.string(), configuration: LegacyDeepConfigurationSchema,
   report: z.object({ reportId: z.string(), runId: z.string(), revision: z.number().int(), phase: z.string(), text: z.string().max(131_072), summary: z.string().max(8_192), protocolVersion: z.union([z.literal(1), z.literal(2)]),
     quality: z.array(z.object({ nodeId: z.string(), status: GoalNodeSchema.shape.status, checks: QualityNodeSchema.shape.checks, issues: QualityNodeSchema.shape.issues, review: QualityNodeSchema.shape.review, candidates: QualityNodeSchema.shape.candidates, receipt: GoalNodeSchema.shape.receipt }).strict()).max(128).optional() }).strict(),
   accepted: z.array(z.object({ nodeId: z.string(), revision: z.number().int(), candidate: CandidateSchema.nullable(), receipt: GoalNodeSchema.shape.receipt })).max(128),

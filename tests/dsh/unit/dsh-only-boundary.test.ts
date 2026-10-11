@@ -63,7 +63,10 @@ test('active source has no legacy client branch or generic Enno projection', asy
   const violations: Array<{ file: string; matches: string[] }> = []
   for (const file of allSources) {
     const source = await readFile(file, 'utf8')
-    const audited = /model-(?:configuration|selection-ui)\.ts$/u.test(file) ? source.replaceAll('OpenCode', 'ModelProvider').replaceAll('Codex', 'ProviderAuthentication') : source
+    // Provider names in Web connection management and vendored transports are
+    // protocol identities, not retired generic client implementations.
+    const providerIntegration = /model-(?:configuration|selection-ui)\.ts$/u.test(file) || /src\/dsh\/models\//u.test(file) || file === path.join(root, 'src/models-client.ts')
+    const audited = providerIntegration ? source.replace(/\b(?:OpenCode|Codex|Claude|Hermes)\b/gu, 'ModelProvider') : source
     const matches = [...audited.matchAll(forbidden)].map((match) => match[0])
     if (matches.length > 0) violations.push({ file: path.relative(root, file), matches })
   }

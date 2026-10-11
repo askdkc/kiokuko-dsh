@@ -1,3 +1,4 @@
+import { mountModelsClient } from './models-client.js'
 interface SnapshotStore<T> {
   getSnapshot(): T
   update(update: (state: T) => void): void
@@ -26,7 +27,7 @@ interface SessionLogDownloadState {
   bySession: Record<string, SessionLogDownloadEntry | undefined>
 }
 
-interface DshClientContext {
+export interface DshClientContext {
   readonly configForms?: { get(namespace: string): LispApprovalScope }
   readonly settingsScope?: { bind(spec: { namespace: string }): LispApprovalScope }
   readonly uiConversation: { readonly events: { register(definition: unknown): unknown } }
@@ -45,6 +46,8 @@ interface DshClientContext {
         readonly id?: string
         readonly key?: string
         readonly priority?: number
+        readonly order?: number
+        readonly label?: string
         readonly select?: (props: Record<string, unknown>) => unknown
         readonly locale: string
         readonly inject?: () => Record<string, unknown>
@@ -1303,6 +1306,7 @@ function installReviewStyle(): () => void {
 
 /** Register Kiokuko's streaming Session-export browser surface. */
 export function apply(ctx: DshClientContext): void {
+  mountModelsClient(ctx)
   const installApprovals = (scope: DshClientContext, approvalScope: LispApprovalScope, modern: boolean) => {
     scope.slots.inject('settings.general.item', () => scope.slots.register({ name: 'settings.general.item', id: 'kiokuko-lisp-approval', locale: LOCALE_NAMESPACE,
       inject: () => ({ approvalScope, modern }),

@@ -36,14 +36,16 @@ export const ModelRouteSchema = z
       "orcarouter",
       "ollama",
       "other",
-    ]),
+    ]).refine((value): boolean => value !== "orcarouter", "OrcaRouter requires model reselection"),
     connection: z.enum(["api", "codex", "local"]).default("api"),
     protocol: z
       .enum(["responses", "chat-completions", "messages", "unknown"])
       .default("unknown"),
   })
   .strict();
-export type ModelRoute = z.infer<typeof ModelRouteSchema>;
+/** Released configurations are readable; new configuration writes use ModelRouteSchema. */
+export const LegacyModelRouteSchema = ModelRouteSchema.extend({family: z.enum(['openai','deepseek','opencode-go','opencode-zen','openrouter','orcarouter','ollama','other'])})
+export type ModelRoute = z.infer<typeof LegacyModelRouteSchema>;
 export const ModelBindingSchema = z
   .object({
     provider: identity,
@@ -72,10 +74,12 @@ export const ModelConfigurationSchema = z
     maxConcurrentChildren: z.number().int().min(1).max(8),
   })
   .strict();
-export type ModelConfiguration = z.infer<typeof ModelConfigurationSchema>;
+export const LegacyModelConfigurationSchema = ModelConfigurationSchema.extend({routeBindings:z.array(LegacyModelRouteSchema).max(128).optional()})
+export type ModelConfiguration = z.infer<typeof LegacyModelConfigurationSchema>;
 export const ModelConfigurationDraftSchema = ModelConfigurationSchema.extend({
   roles: ModelConfigurationSchema.shape.roles.partial(),
 });
+export const LegacyModelConfigurationDraftSchema = ModelConfigurationDraftSchema.extend({ routeBindings: z.array(LegacyModelRouteSchema).max(128).optional() });
 export type ModelConfigurationDraft = z.infer<
   typeof ModelConfigurationDraftSchema
 >;
@@ -218,14 +222,6 @@ export const MODEL_TEMPLATES: readonly ModelTemplate[] = [
     "qwen/qwen3.8-flash",
   ),
   template(
-    "orca-deepseek-flash",
-    "OrcaRouter・DeepSeek V4.1 Flash",
-    "OrcaRouter",
-    "orcarouter",
-    "deepseek/deepseek-v4.1-flash",
-    "deepseek/deepseek-v4.1-flash",
-  ),
-  template(
     "ollama",
     "Ollama・ローカル標準",
     "Ollama",
@@ -275,7 +271,9 @@ export interface ModelCatalogSnapshot {
 export async function readModelCatalog(
   llm: DshModelCatalog,
 ): Promise<ModelCatalogSnapshot> {
-  const providers = await llm.listProviders();
+  const providers = (await llm.listProviders()).filter(
+    (provider) => provider.id !== "orcarouter" && provider.route?.family !== "orcarouter",
+  );
   const results = await Promise.allSettled(
     providers.map((provider) => llm.listModels(provider.id)),
   );
@@ -377,6 +375,10 @@ export async function modelBindingProblems(
   const problems: string[] = [];
   const validations = new Map<string, PromiseLike<ModelBinding>>();
   for (const { label, binding } of bindings) {
+    if (binding.provider === 'orcarouter' || routes.some(route => route.provider === binding.provider && route.family === 'orcarouter')) {
+      problems.push(`${label}: OrcaRouter はサポートを終了しました。接続とモデルを選び直してください (${binding.provider})`);
+      continue;
+    }
     if (catalog.failures.includes(binding.provider)) {
       problems.push(
         `${label}: 接続のモデル一覧を取得できません (${binding.provider})`,

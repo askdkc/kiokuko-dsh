@@ -122,6 +122,8 @@ async function pickModel(input: SelectionUiInput, catalog: ModelCatalogSnapshot,
 function templateRoutes(template: ModelTemplate, catalog: ModelCatalogSnapshot, known: readonly ModelRoute[]): readonly ModelRoute[] {
   const required = template.route
   if (!required) return known.filter(r => r.family === template.family && catalog.providers.some(p => p.id === r.provider))
+  const owned = known.filter(r => r.provider.startsWith('kiokuko-') && r.family === required.family && r.connection === required.connection && r.protocol === required.protocol && catalog.providers.some(p => p.id === r.provider))
+  if (owned.length) return owned
   if (!catalog.providers.some(p => p.id === required.provider)) return []
   const declared = known.find(r => r.provider === required.provider)
   if (!catalog.resolveCallConfig && declared && (declared.family !== required.family || declared.connection !== required.connection || declared.protocol !== required.protocol)) return []
@@ -162,6 +164,8 @@ async function selectExecutionChoices(input: SelectionUiInput): Promise<StoredEx
   const save = async (value: ExecutionSelection) => { stored = await input.save(stored.revision, value) }
   if (stored.value.status === 'ready' || stored.value.discussion) return stored
   let draft: ModelConfigurationDraft = structuredClone(stored.value.draft ?? stored.value.configuration ?? { roles: {}, custom: true, maxConcurrentChildren: 4 })
+  const retired = new Set(['orcarouter', ...(draft.routeBindings ?? []).filter(r => r.family === 'orcarouter').map(r => r.provider)])
+  draft = { ...draft, roles: Object.fromEntries(Object.entries(draft.roles).filter(([, binding]) => !retired.has(binding!.provider))), ...(draft.routeBindings ? {routeBindings: draft.routeBindings.filter(r => r.family !== 'orcarouter')} : {}) }
   let explicit = stored.value.mode === 'pending' ? explicitExecutionMode(input.task) : undefined
   let screen: 'mode' | 'source' | 'templates' | 'review' = stored.value.mode === 'pending' ? 'mode' : Object.keys(draft.roles).length ? 'review' : 'source'
   while (true) {
@@ -178,7 +182,7 @@ async function selectExecutionChoices(input: SelectionUiInput): Promise<StoredEx
     }
     if (screen === 'source') {
       const source = await ask(input, 'enno-model-source', 'モデル構成の設定方法', ['おすすめテンプレートから選ぶ', 'DSHに設定済みのモデルから選ぶ', BACK],
-        [stored.value.problem, 'モデル名から選ぶ場合は「DSHに設定済みのモデルから選ぶ」。OpenCode Go / Zen、OpenRouter、Ollama、OrcaRouterなど、登録した接続の一覧を使えます。'].filter(Boolean).join('\n'))
+        [stored.value.problem, 'モデル名から選ぶ場合は「DSHに設定済みのモデルから選ぶ」。OpenCode Go / Zen、OpenRouter、Ollamaなど、登録した接続の一覧を使えます。'].filter(Boolean).join('\n'))
       if (source === BACK) { screen = stored.value.status === 'reselect' ? 'review' : 'mode'; continue }
       screen = source === 'おすすめテンプレートから選ぶ' ? 'templates' : 'review'
       continue
@@ -188,7 +192,7 @@ async function selectExecutionChoices(input: SelectionUiInput): Promise<StoredEx
       const statusRoutes = modelRoutesForCatalog(catalog, [...input.routes, ...(draft.routeBindings ?? []).filter(r => !input.routes.some(k => k.provider === r.provider))])
       const statuses = await Promise.all(MODEL_TEMPLATES.map(t => templateStatus({ ...input, routes: statusRoutes }, t, catalog)))
       const labels = MODEL_TEMPLATES.map((t, i) => `${t.name} — ${statuses[i]}`)
-      const picked = await ask(input, 'enno-template', 'おすすめテンプレート', [...labels, BACK], 'OpenAI / DeepSeek / OpenCode Go / OpenCode Zen / OpenRouter / OrcaRouter / Ollama。接続・認証はDSHが管理します。')
+      const picked = await ask(input, 'enno-template', 'おすすめテンプレート', [...labels, BACK], 'OpenAI / DeepSeek / OpenCode Go / OpenCode Zen / OpenRouter / Ollama。Web では Settings → Kiokuko Models で接続できます。')
       if (picked === BACK) { screen = 'source'; continue }
       const template = MODEL_TEMPLATES[labels.indexOf(picked)]
       if (!template) continue

@@ -21,7 +21,7 @@ export const DeepBudgetSchema = z.object({
   maxActiveSeconds: z.number().int().min(1).max(7_200).default(600),
 }).strict()
 export type DeepBudget = z.infer<typeof DeepBudgetSchema>
-export const DeepRouteSchema = z.object({ provider: id, family: z.enum(['openai', 'deepseek', 'opencode-go', 'opencode-zen', 'openrouter', 'orcarouter', 'ollama', 'other']),
+export const DeepRouteSchema = z.object({ provider: id, family: z.enum(['openai', 'deepseek', 'opencode-go', 'opencode-zen', 'openrouter', 'orcarouter', 'ollama', 'other']).refine((value): boolean=>value!=='orcarouter','OrcaRouter requires model reselection'),
   connection: z.enum(['api', 'codex', 'local']), protocol: z.enum(['responses', 'chat-completions', 'messages', 'unknown']) }).strict()
 export const DeepConfigurationSchema = z.object({
   roles: z.object({ planner: DeepModelSchema, solver: DeepModelSchema, critic: DeepModelSchema, synthesizer: DeepModelSchema }).strict(),
@@ -31,7 +31,9 @@ export const DeepConfigurationSchema = z.object({
   localProviders: z.array(id).max(128).default([]),
   routeBindings: z.array(DeepRouteSchema).max(128).default([]),
 }).strict()
-export type DeepConfiguration = z.infer<typeof DeepConfigurationSchema>
+export const LegacyDeepRouteSchema = DeepRouteSchema.extend({family:z.enum(['openai','deepseek','opencode-go','opencode-zen','openrouter','orcarouter','ollama','other'])})
+export const LegacyDeepConfigurationSchema = DeepConfigurationSchema.extend({routeBindings:z.array(LegacyDeepRouteSchema).max(128).default([])})
+export type DeepConfiguration = z.infer<typeof LegacyDeepConfigurationSchema>
 export const DeepThinkerConfigSchema = z.object({
   enabled: z.boolean().default(true),
   maxConcurrentAgentsTotal: z.number().int().min(1).max(32).default(6),
@@ -120,7 +122,7 @@ export const DeepStateSchema = z.object({
   ownerEpoch: z.number().int().min(0), ownerId: id.nullable(), leaseUntil: z.number().nonnegative(),
   phase: z.enum(['ready', 'running', 'paused', 'answered', 'partial', 'blocked', 'failed', 'cancelled']),
   task: text, constraints: strings, context: z.string().max(32_768), reason: z.string().max(32_768),
-  configuration: DeepConfigurationSchema,
+  configuration: LegacyDeepConfigurationSchema,
   usage: z.object({ jobs: z.number().int().nonnegative(), requests: z.number().int().nonnegative(), tokens: z.number().nonnegative(), reservedTokens: z.number().nonnegative(), estimated: z.boolean(), activeMs: z.number().nonnegative(), activeSince: z.number().nonnegative().nullable() }).strict(),
   nodes: z.array(GoalNodeSchema).min(1).max(128),
   pendingInputs: z.array(z.object({ id, text, source: z.enum(['user', 'plugin']), consumed: z.boolean() }).strict()).max(64),

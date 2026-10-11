@@ -10,6 +10,7 @@ Inspect sources and corrections with `/kioku-memory explain ENTRY_ID`; explicitl
 
 ## Features
 
+- **Kiokuko Models** — Connect and authenticate from Web Settings or `/kiokuko model`, independently of native Models settings. Includes Infron Standard/Flex. [Setup and shared credentials](docs/kiokuko-models.md)
 - **Execution modes** — Choose normal execution or 役小角(enno-oduno) for role-based planning and verification. [Details](docs/model-selection.md)
 - **Project memory** — Retrieve useful project knowledge for later work. [Concepts](docs/concepts.md)
 - **Deep planning** — Run bounded, read-only investigation with four roles. [Usage](docs/deep-planning.md)

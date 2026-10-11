@@ -1,3 +1,4 @@
+import { ownedModelRoute } from './models/metadata.js'
 import type { ConfiguredProvider, DshModelCatalog, ModelRoute } from './model-configuration.js'
 
 interface ProviderDirectoryEntry { provider: string; settingsNs: string; settingsPath: readonly string[]; declared?: boolean }
@@ -8,7 +9,7 @@ const object = (value: unknown): Record<string, unknown> | undefined => value !=
 const families: Readonly<Record<string, ModelRoute['family']>> = {
   openai: 'openai', 'openai-codex': 'openai', deepseek: 'deepseek', 'deepseek-official': 'deepseek',
   'opencode-go': 'opencode-go', opencode: 'opencode-zen', 'opencode-zen': 'opencode-zen',
-  openrouter: 'openrouter', orcarouter: 'orcarouter', ollama: 'ollama',
+  openrouter: 'openrouter', ollama: 'ollama',
 }
 
 /** Read only connection metadata; never copy credentials, headers or whole profiles. */
@@ -25,7 +26,7 @@ function providerRoute(provider: string, entry: ProviderDirectoryEntry | undefin
   const isPath = (path: string) => endpoint?.pathname === path || endpoint?.pathname.startsWith(`${path}/`)
   const family = host === 'opencode.ai' && isPath('/zen/go') ? 'opencode-go'
     : host === 'opencode.ai' && isPath('/zen') ? 'opencode-zen'
-    : host === 'openrouter.ai' ? 'openrouter' : host === 'api.orcarouter.ai' ? 'orcarouter'
+    : host === 'openrouter.ai' ? 'openrouter'
     : host === 'api.deepseek.com' ? 'deepseek' : host === 'api.openai.com' ? 'openai'
     : entry.declared === false ? families[provider] ?? 'other' : 'other'
   const local = family === 'ollama' || host === 'localhost' || host === '127.0.0.1' || host === '[::1]'
@@ -48,7 +49,7 @@ export function nativeModelCatalog(llm: NativeCatalog | undefined, settings?: Na
         try { descriptions = describe() } catch { /* Optional metadata must not prevent model discovery. */ }
       }
       return providers.map((provider): ConfiguredProvider => {
-        const route = providerRoute(provider.id, directory.find(entry => entry.provider === provider.id), descriptions)
+        const route = ownedModelRoute(llm, provider.id) ?? providerRoute(provider.id, directory.find(entry => entry.provider === provider.id), descriptions)
         return { ...provider, ...(route ? { route } : {}) }
       })
     },

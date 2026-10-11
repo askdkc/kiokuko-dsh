@@ -12,7 +12,9 @@ DSHの権限判定、必要な検証を維持し、役小角の契約・WorkUnit
 
 ## 通常実行のモデル自動選択
 
-通常版・modular coreとも `modelAutoMode.mode: off` が既定です。同じDSHプロファイルにdsh-codexを登録して認証し、JevかLayaの判定を準備したうえで、まず `observe` で選択案を確認します。
+Webプロファイルでは [Kiokuko Models](kiokuko-models.md) から接続を設定できます。DSH本体のModelsで設定する必要はありません。登録したモデルは、通常会話・Enno・Deepでネイティブ接続と併用できます。
+
+通常版・modular coreとも `modelAutoMode.mode: off` が既定です。同じDSHプロファイルでKiokuko Modelsまたはdsh-codexからCodexを認証し、JevかLayaの判定を準備したうえで、まず `observe` で選択案を確認します。
 
 ```yaml
 modelAutoMode:
@@ -30,7 +32,7 @@ modelAutoMode:
 
 コマンドは現在のnativeセッションだけを変更します。`on` は手動のモデル指定も解除します。DSHのpickerでモデルを手動選択すると、同じセッションで `on` を再実行するまで手動指定が優先します。変更は次の新しいタスクから反映し、送信済みの要求を途中で切り替えません。`/kioku-decisions status` にも同じ状態を表示します。設定を `off` に変更してDSHを再起動すれば、保存済みのセッション指定も無効になります。
 
-初期候補は `gpt-6-luna` の low・medium・high と `gpt-6-sol` の high です。`modelAutoMode.routes` には最大4件、`id`（`luna-low`、`luna-medium`、`luna-high`、`sol-high`）と `binding`（`provider`、`model`、`reasoningEffort`）を指定できます。IDは経路のラベルなので、登録済みのAstraなども正確なbindingで割り当てられます。候補はDSHの現在の `openai-codex` 一覧、文脈容量・入力形式・推論強度、要求設定の検証、token meterを通ったものに限定します。有効なbindingが2件未満なら判定しません。
+初期候補は `gpt-6-luna` の low・medium・high と `gpt-6-sol` の high です。`modelAutoMode.routes` には最大4件、`id`（`luna-low`、`luna-medium`、`luna-high`、`sol-high`）と `binding`（`provider`、`model`、`reasoningEffort`）を指定できます。IDは経路のラベルなので、登録済みのAstraなども正確なbindingで割り当てられます。候補はCodex由来とResponses方式を確認でき、現在のモデル一覧、文脈容量・入力形式・推論強度、要求設定の検証、token meterを通った接続に限定します。ネイティブの `openai-codex` とKiokuko所有のCodex接続が対象です。名前だけを似せた接続やOpenAI API接続は対象外です。有効なbindingが2件未満なら判定しません。
 
 新しい受付済みの通常タスクでは、現在の依頼文、タスク種別、添付の種類、経路IDと判定基準を選択中のJevかLayaへ送ります。この判定のために添付の内容、全履歴、リポジトリ全体は送信しません。Choice 1問の結果をrunに保存し、継続では同じ経路を使います。再起動時に判定結果が不明なら再送せず元のモデルを維持します。`observe`、棄権、probe失敗、metadata不足、非対応effort、timeout、入力超過でも元のモデルを維持します。取消、セッション同一性の不一致、保存の整合性エラーでは要求を止めます。認証・利用枠・モデル利用不可によるdispatch失敗を別モデルへ自動再送しません。
 
@@ -74,7 +76,6 @@ npm run test:evaluation:model-routing -- --live --provider laya --config PATH
 | OpenRouter・DeepSeek V4.1 Flash | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` |
 | OpenRouter・GLM | `z-ai/glm-5.3` | `z-ai/glm-5.3` | `z-ai/glm-5.3-flash` | `z-ai/glm-5.3` |
 | OpenRouter・Qwen | `qwen/qwen3.8-max-0902` | `qwen/qwen3.8-max-0902` | `qwen/qwen3.8-flash` | `qwen/qwen3.8-max-0902` |
-| OrcaRouter・DeepSeek V4.1 Flash | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` | `deepseek/deepseek-v4.1-flash` |
 | Ollama・ローカル標準 | `qwen3-coder:30b` | `qwen3-coder:30b` | `qwen3-coder:30b` | `qwen3-coder:30b` |
 
 これらは版1の構成候補です。適用時にDSHの登録モデルと正確なIDで照合します。
@@ -84,13 +85,11 @@ npm run test:evaluation:model-routing -- --live --provider laya --config PATH
 DeepSeek系の推奨は全5役を **V4.1 Flash** に統一しています。IDは提供元ごとに、
 [DeepSeek公式API](https://www.deepseek.com/en/news/deepseek-v4-1-flash/)、
 [OpenCode Go](https://opencode.ai/docs/go/)、
-[OpenRouter](https://openrouter.ai/deepseek/deepseek-v4.1-flash)、
-[OrcaRouter](https://www.orcarouter.ai/models/deepseek/deepseek-v4.1-flash)で確認しています。
+[OpenRouter](https://openrouter.ai/deepseek/deepseek-v4.1-flash)で確認しています。
 公式APIの専用テンプレートはDSHの`deepseek-official`接続を使います。
 V4.1 Flashが未登録の場合、V4 Proや旧FlashのIDには置き換えません。
 2026-09-11に[OpenCodeのモデル一覧](https://models.opencode.ai/api.json)も確認しています。
 `opencode-go`にはV4.1 Flashが掲載されていますが、Zenに相当する`opencode`にはありません。
-この一覧のOrcaRouter欄にも未掲載で、OrcaRouter公式モデルページの更新と差があります。
 Zen・Ollamaで推奨テンプレートにないモデルを使う場合は、以下の登録済みモデル選択を使います。
 
 [dsh-codex](https://github.com/askdkc/dsh-codex)を使う場合は、
@@ -100,7 +99,7 @@ Zen・Ollamaで推奨テンプレートにないモデルを使う場合は、�
 [OpenAIのモデルガイド](https://developers.openai.com/api/docs/models)を基にした推奨で、
 タスク別の速度・利用枠消費を実測して最適化したものではありません。
 
-この専用テンプレートは、[dsh-codexの登録・接続実装](https://github.com/askdkc/dsh-codex/blob/e2e61b6d8f3b511cf2dac99688e97b8728cb122c/src/index.ts)
+このテンプレートはKiokuko ModelsのCodex接続にも対応し、Codex由来とResponses方式を確認して、安定した `kiokuko-…` 登録IDを保存します。ネイティブ接続は [dsh-codexの登録・接続実装](https://github.com/askdkc/dsh-codex/blob/e2e61b6d8f3b511cf2dac99688e97b8728cb122c/src/index.ts)
 に合わせて`openai-codex` / `codex` / `responses`を使用します。接続先や通信方式を
 重ねて質問せず、選択した構成に保存します。DSH本体のモデル検証を優先し、
 旧`modelRoutes`の値を再入力させません。プラグイン設定ファイルは変更しません。モデルはDSH経由の現在の登録一覧に存在する正確なIDだけを割り当て、
@@ -114,9 +113,8 @@ DSHの設定を使い、重ねて質問しません。Kiokukoは認証情報を�
 
 モデル名から選ぶ場合は、**「DSHに設定済みのモデルから選ぶ」→役割を変更→接続を選択→
 モデル名で検索・選択→構成を確認して開始**と進みます。
-**OpenCode Go、OpenCode Zen、OpenRouter、Ollama、OrcaRouter**の登録済み接続を選べます。
+**OpenCode Go、OpenCode Zen、OpenRouter、Ollama**の登録済み接続を選べます。
 一覧は現在のDSHプロファイルから取得し、接続名・モデル名と正確なIDを表示します。
-同じモデル名でもOpenRouterとOrcaRouterの割り当ては別々に保持します。
 接続が表示されない場合はDSHに登録し、「一覧を再取得」で更新してください。
 公開モデル一覧は推奨IDの参照元で、DSHへのモデル登録は行いません。
 公開一覧の`ollama-cloud`と、ローカルOllamaのインストール済みモデルは別の一覧です。
