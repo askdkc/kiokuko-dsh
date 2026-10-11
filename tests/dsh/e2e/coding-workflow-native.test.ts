@@ -14,7 +14,7 @@ isolateSkillHome()
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const installed = existsSync(join(packages, '@deepseek-ai/dsh/package.json'))
 if (!installed && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Pinned native DSH is required')
-const program = "export function parse(value){return Number(value)+1}\nif(process.argv[1]?.endsWith('parser.mjs'))console.log(parse(process.argv[2]))\n"
+const program = "export function parse(value){return Number(value)+1}\nif(process.argv[1]?.endsWith('parser.mjs'))console.log(String(parse(process.argv[2])))\n"
 const check = "import test from 'node:test';import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';import {parse} from './parser.mjs';test('regression',()=>assert.equal(parse('41'),42));test('public entry',()=>assert.equal(execFileSync(process.execPath,['src/parser.mjs','41'],{encoding:'utf8'}).trim(),'42'));\n"
 const command = 'node --test --test-reporter=tap src/parser.test.mjs'
 const lispString = (value: string) => `"${value.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"')}"`

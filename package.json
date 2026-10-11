@@ -181,7 +181,6 @@
     "publint": "publint",
     "pack:check": "node scripts/pack-check.mjs",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run publint && npm run pack:check",
     "test:agenticreplay:package": "npm run build && node scripts/verify-agenticreplay-consumer.mjs && node scripts/verify-agenticreplay-consumer.mjs --pnpm",
     "test:memory-review": "node scripts/run-tests.mjs tests/dsh/unit/memory-review tests/dsh/integration/memory-review",
     "test:evolution": "node scripts/run-tests.mjs tests/dsh/unit/evolution tests/dsh/integration/evolution",

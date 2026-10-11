@@ -124,6 +124,9 @@ jobs:
 
       - name: Run test suite
         run: npm test
+        env:
+          # Exercise CLI fixtures when ANSI color is explicitly enabled.
+          FORCE_COLOR: "1"
       - name: Check coding evaluation without model calls
         run: npm run test:skill-coding:offline
       - name: Verify index reasoning and native model delivery

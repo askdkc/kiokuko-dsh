@@ -180,13 +180,13 @@ test('literal output evidence rejects a different value containing the expected 
   try {
     const value = structuredClone(definition); value.criteria[0]!.evidence = 'output'
     const workflow = proposeCodingWorkflow(f.db, f.identity, 'output-definition', 1, value); f.choose()
-    await writeFile(join(f.root, 'src/output.mjs'), 'console.log(142)\n')
+    await writeFile(join(f.root, 'src/output.mjs'), "console.log('142')\n")
     const command = 'node src/output.mjs'
     bindTaskCriterion(f.db, { runId: f.identity.runId, callId: 'output-binding', criterionId: `coding:${workflow.workflowId}:parser-check`, approved: true,
       method: { kind: 'native_command', command, cwd: '.', sourcePaths: ['src/output.mjs'], assertion: 'output_matches', expectedOutput: '42' } })
     await f.execute('kioku_exec', { command }, 'different-value')
     assert.equal(assessTaskCompletion(f.db, f.identity.runId).criteria[0]!.state, 'unmet')
-    await writeFile(join(f.root, 'src/output.mjs'), 'console.log(42)\n')
+    await writeFile(join(f.root, 'src/output.mjs'), "console.log('42')\n")
     await f.execute('kioku_exec', { command }, 'expected-value')
     assert.equal(assessTaskCompletion(f.db, f.identity.runId).criteria[0]!.state, 'satisfied')
   } finally { await f.close() }

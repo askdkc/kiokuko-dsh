@@ -19,7 +19,7 @@ for (const routeChanged of [false, true]) test(`Enno actual focused/final user-e
   const base = await mkdtemp(join(tmpdir(), 'coding-enno-')), root = await realpath(base)
   await mkdir(join(root, 'repo')); const repository = join(root, 'repo')
   execFileSync('git', ['init', '-q', repository])
-  await writeFile(join(repository, 'parser.mjs'), 'console.log(Number(process.argv[2])+1)\n')
+  await writeFile(join(repository, 'parser.mjs'), 'console.log(String(Number(process.argv[2])+1))\n')
   await writeFile(join(repository, 'parser.test.mjs'), "import test from 'node:test';import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';test('public parser command',()=>assert.equal(execFileSync(process.execPath,['parser.mjs','41'],{encoding:'utf8'}).trim(),'42'));\n")
   const db = openConnection(join(root, 'state.sqlite3'))
   try {
@@ -78,7 +78,7 @@ for (const routeChanged of [false, true]) test(`Enno actual focused/final user-e
     assert.equal(execFileSync(process.execPath, ['parser.mjs', '41'], { cwd: repository, encoding: 'utf8' }).trim(), '42')
     await writeFile(join(repository, 'parser.mjs'), 'console.log(0)\n')
     assert.equal(assessTaskCompletion(db, identity.runId).verified, false, 'A changed artifact invalidates Enno evidence')
-    await writeFile(join(repository, 'parser.mjs'), 'console.log(Number(process.argv[2])+1)\n')
+    await writeFile(join(repository, 'parser.mjs'), 'console.log(String(Number(process.argv[2])+1))\n')
     const replanned = await finishEnno(db, { ...identity, expectedRevision: 2, idempotencyKey: 'final-replan', review: { decision: 'replan', summary: 'Final review requires the next contract revision' } })
     assert.equal(replanned.ennoOduno.status, 'zenki_planning')
     const resumed = codingStatus(db, codingIdentity)
