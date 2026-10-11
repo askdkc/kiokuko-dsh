@@ -13,6 +13,14 @@ import {
 import type { CredentialFile } from "./vendor/credentials.js";
 
 type PiModel = ReturnType<PiAiProvider["getModels"]>[number];
+/** The wire protocol pi-ai serves for one Kiokuko connection protocol. */
+export function protocolApi(protocol: Connection["protocol"]): string {
+  return protocol === "responses"
+    ? "openai-responses"
+    : protocol === "messages"
+      ? "anthropic-messages"
+      : "openai-completions";
+}
 /** Compose the public payload hook after any caller hook; the closure freezes tier. */
 export function infronProvider(
   source: PiAiProvider,
@@ -146,11 +154,7 @@ export function connectionProfile(
   const api =
     connection.kind === "codex"
       ? "openai-codex-responses"
-      : connection.protocol === "responses"
-        ? "openai-responses"
-        : connection.protocol === "messages"
-          ? "anthropic-messages"
-          : "openai-completions";
+      : protocolApi(connection.protocol);
   const shipped = original?.getModels() ?? [];
   const models: PiModel[] = connection.models.length
     ? connection.models.map(

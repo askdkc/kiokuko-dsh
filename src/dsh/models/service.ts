@@ -1,7 +1,9 @@
 import { registerOwnedModels } from "./metadata.js";
 import { randomUUID } from "node:crypto";
 import {
+  INVALID_CREDENTIAL_CODE,
   LlmAdapter,
+  type LlmDiscoveredModel,
   type LlmRuntime,
   type GenerateOptions,
   type StreamChunk,
@@ -10,9 +12,11 @@ import {
 import { PiAiAdapter } from "@deepseek-ai/dsh-llm-pi-ai";
 import {
   ConnectionSchema,
+  CONNECTION_DEFAULTS,
   credentialKey,
   type Connection,
   type InfronServiceTier,
+  type ManualModel,
   type ModelsDocument,
   ManualModelSchema,
 } from "./contracts.js";
@@ -25,7 +29,7 @@ import type {
   AuthInteraction,
 } from "./vendor/auth-contract.js";
 import { loginNous, refreshNous } from "./vendor/nous-oauth.js";
-import { connectionProfile, sharedCredentialStore } from "./profiles.js";
+import { connectionProfile, protocolApi, sharedCredentialStore } from "./profiles.js";
 import { OpenCodeAdapter } from "./vendor/opencode-adapter.js";
 import {
   OpenCodeCatalog,
@@ -39,6 +43,14 @@ type Route = {
   adapter: LlmAdapter;
   underlying: string;
 };
+/**
+ * Capacities for a discovered model whose endpoint and catalog disclose none.
+ * These are the pi-ai profile defaults (`defaultContextWindow`,
+ * `defaultMaxTokens`), so the stored row matches what the adapter resolves for
+ * that same route instead of inventing a third number.
+ */
+const DEFAULT_CONTEXT_WINDOW = 262_144,
+  DEFAULT_MAX_TOKENS = 32_768;
 /** A stable registered adapter; each prepared call retains its own generation. */
 class ModelsAdapter extends LlmAdapter {
   routes = new Map<string, Route>();
@@ -155,7 +167,10 @@ interface AuthRun {
   done: Promise<void>;
 }
 export interface ModelsServiceOptions {
-  llm: Pick<LlmRuntime, "registerAdapter" | "resolveCallConfig">;
+  llm: Pick<
+    LlmRuntime,
+    "registerAdapter" | "resolveCallConfig" | "discoverModels"
+  >;
   config: ModelsConfigStore;
   credentials: CredentialFile;
   attachments?: () => any;
@@ -431,8 +446,7 @@ export class KiokukoModelsService {
     return this.adapter.listModels(id);
   }
   async refresh(id: string): Promise<void> {
-    const c = this.require(id),
-      signal = this.lifecycle.signal;
+    const c = this.require(id);
     if (c.kind === "opencode" || c.kind === "opencode-go") {
       const state = await this.catalogs.get(c.kind)!.refresh();
       if (state.warning) throw new Error(state.warning);
@@ -441,66 +455,116 @@ export class KiokukoModelsService {
     }
     if (c.kind === "codex") return;
     const key = await this.apiKey(c),
-      headers: Record<string, string> = {
-        accept: "application/json",
-        ...(key ? { Authorization: `Bearer ${key}` } : {}),
-      };
-    if (c.protocol === "messages" && key) {
-      headers["x-api-key"] = key;
-      headers["anthropic-version"] = "2023-06-01";
-    }
-    let response: Response;
-    const baseURL = c.baseURL.replace(/\/+$/, "");
-    try {
-      response = await fetch(
-        `${baseURL}${c.protocol === "messages" && !baseURL.endsWith("/v1") ? "/v1" : ""}/models`,
-        {
-          headers,
-          signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-          redirect: "error",
-        },
-      );
-    } catch {
-      throw new Error("Model discovery could not reach the connection");
-    }
-    if (!response.ok)
+      models = this.adopt(c, await this.discover(c, key));
+    if (!models.length)
       throw new Error(
-        `Model discovery failed (HTTP ${response.status}); check authentication or register models manually`,
+        "Model discovery returned no models; register models manually",
       );
-    const json = (await response.json()) as any;
-    if (!Array.isArray(json.data))
-      throw new Error("Model discovery returned an invalid list");
+    await this.save({ ...c, models }, this.document.revision);
+  }
+  /**
+   * Ask the adapter for the models this connection serves. A route the
+   * installed pi-ai catalog ships answers from that catalog, capacities
+   * included and without a network call; every other endpoint — a gateway, a
+   * self-hosted server — is interrogated over the wire. Nothing is stored, so a
+   * failed interrogation leaves the saved connections untouched.
+   */
+  private async discover(
+    c: Connection,
+    key: string | undefined,
+  ): Promise<readonly LlmDiscoveredModel[]> {
+    const catalog = this.catalogRoute(c),
+      timeout = AbortSignal.timeout(15_000);
+    try {
+      return await this.options.llm.discoverModels(
+        "llm-pi-ai",
+        {
+          ...(catalog === undefined ? {} : { provider: catalog }),
+          baseURL: c.baseURL,
+          api: protocolApi(c.protocol),
+          ...(key ? { apiKey: key } : {}),
+        },
+        AbortSignal.any([this.lifecycle.signal, timeout]),
+      );
+    } catch (error) {
+      if (this.closed || this.lifecycle.signal.aborted)
+        throw new Error("Model discovery cancelled");
+      if (timeout.aborted)
+        throw new Error("Model discovery timed out; check the endpoint");
+      // Route on the harness code, never on message text; the detail is kept
+      // only because it names the user's own endpoint and refusal status.
+      const code = (error as { code?: unknown }).code;
+      if (code === "NO_DISCOVERY")
+        throw new Error(
+          "Model discovery is unavailable in this profile; register models manually",
+        );
+      if (code === "DISCOVERY_UNSUPPORTED")
+        throw new Error(
+          "Model discovery does not support this protocol; register models manually",
+        );
+      if (code === "ABORTED") throw new Error("Model discovery cancelled");
+      if (code === INVALID_CREDENTIAL_CODE)
+        throw new Error(
+          "Model discovery rejected this API key; paste the raw key only",
+        );
+      const detail = error instanceof Error ? error.message : "";
+      throw new Error(
+        `Model discovery failed: ${(detail || "the endpoint did not answer with a model list").slice(0, 200)}`,
+      );
+    }
+  }
+  /**
+   * Choose the catalog route to name when asking for models. Naming it lets the
+   * adapter answer from its own registry, which is right only while the
+   * connection still points at that provider's own endpoint: an edited Base URL
+   * is a different service that must be interrogated instead.
+   */
+  private catalogRoute(c: Connection): string | undefined {
+    if (c.kind === "custom") return undefined;
+    const [, standard] = CONNECTION_DEFAULTS[c.kind];
+    return c.baseURL.replace(/\/+$/, "") === standard.replace(/\/+$/, "")
+      ? credentialKey(c)
+      : undefined;
+  }
+  /**
+   * Adopt discovered rows as stored models. Capacities the endpoint withholds
+   * come from the adapter's catalog entry, the row already stored for that id,
+   * or the pi-ai profile defaults the native Models page applies to the same
+   * route — so an id-only listing still yields a usable model instead of
+   * failing the whole refresh.
+   */
+  private adopt(
+    c: Connection,
+    discovered: readonly LlmDiscoveredModel[],
+  ): ManualModel[] {
     const shipped =
       adapterBuiltinProviders()
         .find((p) => p.id === credentialKey(c))
         ?.getModels() ?? [];
-    const models = json.data.flatMap((r: any) => {
-      const known = shipped.find((m) => m.id === r.id),
-        prior = c.models.find((m) => m.id === r.id);
-      const parsed = ManualModelSchema.safeParse({
-        id: r.id,
-        name: r.name ?? r.id,
-        contextWindow:
-          r.context_length ??
-          r.context_window ??
-          known?.contextWindow ??
-          prior?.contextWindow,
-        maxTokens:
-          r.max_output_tokens ??
-          r.max_completion_tokens ??
-          r.top_provider?.max_completion_tokens ??
-          known?.maxTokens ??
-          prior?.maxTokens,
-        reasoning: known?.reasoning ?? prior?.reasoning ?? false,
-        image: known?.input.includes("image") ?? prior?.image ?? false,
-      });
+    return discovered.flatMap((entry) => {
+      const known = shipped.find((m) => m.id === entry.id),
+        prior = c.models.find((m) => m.id === entry.id),
+        parsed = ManualModelSchema.safeParse({
+          id: entry.id,
+          name: entry.name ?? entry.id,
+          contextWindow:
+            entry.contextWindow ??
+            known?.contextWindow ??
+            prior?.contextWindow ??
+            DEFAULT_CONTEXT_WINDOW,
+          maxTokens:
+            entry.maxTokens ??
+            known?.maxTokens ??
+            prior?.maxTokens ??
+            DEFAULT_MAX_TOKENS,
+          reasoning: known?.reasoning ?? prior?.reasoning ?? false,
+          image:
+            entry.inputModalities !== undefined
+              ? entry.inputModalities.includes("image")
+              : (known?.input.includes("image") ?? prior?.image ?? false),
+        });
       return parsed.success ? [parsed.data] : [];
     });
-    if (!models.length)
-      throw new Error(
-        "No models with known context/output limits; register models manually",
-      );
-    await this.save({ ...c, models }, this.document.revision);
   }
   async select(
     id: string,

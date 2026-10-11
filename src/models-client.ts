@@ -67,6 +67,8 @@ const MODEL_CONNECTION_DEFAULTS: Record<string, readonly string[]> = {
   ollama: ["Ollama", "http://localhost:11434/v1", "chat-completions"],
   custom: ["Custom connection", "http://localhost:8080/v1", "chat-completions"],
 };
+/** Providers whose stored credential can also be an OAuth sign-in. */
+const OAUTH_KINDS = ["codex", "claude", "xai", "openai", "openrouter", "nous"];
 async function modelsApi(
   body?: Record<string, unknown>,
   query = "",
@@ -105,6 +107,11 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
     reasoning: false,
     image: false,
   });
+  // Both disclosures are state-held: a rerender that shifts the leading
+  // status paragraphs remounts the editor, and a DOM-held `open` would snap
+  // shut under the user mid-task.
+  const [advanced, setAdvanced] = useState(false),
+    [manualOpen, setManualOpen] = useState(false);
   const operation = useRef<string | undefined>(undefined),
     mounted = useRef(true),
     working = useRef(false);
@@ -140,20 +147,25 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
       if (mounted.current) setBusy(false);
     }
   };
-  const choose = async (c: any) => {
+  const choose = async (c: any): Promise<any[]> => {
     setConnection({ ...c });
     setKey("");
     setError("");
     setModels([]);
     try {
-      setModels(
-        await modelsApi(undefined, "?op=models&id=" + encodeURIComponent(c.id)),
-      );
+      const list = (await modelsApi(
+        undefined,
+        "?op=models&id=" + encodeURIComponent(c.id),
+      )) as any[];
+      setModels(list);
+      return list;
     } catch (e) {
       setError(messageOf(e));
+      return [];
     }
   };
-  const save = async () => {
+  /** Store the editor's current fields. Every action below needs this first. */
+  const persist = async () => {
     await modelsApi({
       op: "save",
       connection: {
@@ -165,11 +177,47 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
         serviceTier: connection.serviceTier,
         models: connection.models,
       },
-      revision: state.revision,
+      revision: (await load()).revision,
     });
-    const next = await load();
-    await choose(next.connections.find((c: any) => c.id === connection.id));
-    setNotice("Connection saved");
+  };
+  const reopen = async (): Promise<any[]> => {
+    const saved = await load();
+    return choose(
+      saved.connections.find((c: any) => c.id === connection.id) ?? connection,
+    );
+  };
+  /**
+   * The whole add-a-provider flow in one action: store the connection, store the
+   * typed key, then ask the adapter which models it serves. A discovery that
+   * fails still leaves the connection and key stored, so the panel reports the
+   * cause and keeps the manual registration path instead of discarding work.
+   */
+  const connect = async () => {
+    const draft = { ...connection };
+    await persist();
+    const typed = key.trim();
+    if (typed) {
+      await modelsApi({ op: "key", id: draft.id, key: typed });
+      setKey("");
+    }
+    let failure = "";
+    try {
+      await modelsApi({ op: "refresh", id: draft.id });
+    } catch (e) {
+      failure = messageOf(e);
+    }
+    const list = await reopen();
+    if (failure) {
+      setNotice(typed ? "Connection and key saved" : "Connection saved");
+      setError(
+        failure + " Register a model manually if this endpoint stays unusable.",
+      );
+    } else
+      setNotice(
+        list.length
+          ? "Connected · " + list.length + " model(s)"
+          : "Connected; no models discovered yet",
+      );
   };
   const newConnection = (kind: string) => {
     const spec = MODEL_CONNECTION_DEFAULTS[kind]!;
@@ -185,11 +233,12 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
     setModels([]);
     setKey("");
     setError("");
+    setNotice("");
   };
   const update = (field: string, value: unknown) =>
     setConnection({ ...connection, [field]: value });
   const startLogin = async () => {
-    await save();
+    await persist();
     const result = await modelsApi({ op: "login", id: connection.id });
     operation.current = result.operationId;
     setAuth({ id: result.operationId, status: "pending", events: [] });
@@ -207,13 +256,10 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
           setAuth(next);
           if (next.status !== "pending") {
             operation.current = undefined;
-            void load()
-              .then((value) => {
-                if (next.status === "success")
-                  return choose(
-                    value.connections.find((c: any) => c.id === connection.id),
-                  );
-                setError(next.error ?? "Authentication cancelled");
+            void reopen()
+              .then(() => {
+                if (next.status !== "success")
+                  setError(next.error ?? "Authentication cancelled");
               })
               .catch((e) => setError(messageOf(e)));
           }
@@ -233,6 +279,7 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
     value: unknown,
     onChange: (value: string) => void,
     type = "text",
+    submit?: () => void,
   ) =>
     jsx("label", {
       children: jsxs(Fragment, {
@@ -249,6 +296,15 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                   connection?.kind,
                 )),
             onChange: (e: any) => onChange(e.target.value),
+            ...(submit
+              ? {
+                  onKeyDown: (e: any) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    submit();
+                  },
+                }
+              : {}),
             autoComplete: type === "password" ? "new-password" : "off",
           }),
         ],
@@ -271,9 +327,15 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
         children:
           "Connect directly for chat, Enno and Deep. Credentials are shared with dsh-cli. Signing out also signs dsh-cli out.",
       }),
-      ...(error ? [jsx("p", { role: "alert", children: error })] : []),
-      ...(notice ? [jsx("p", { role: "status", children: notice })] : []),
-      ...(busy ? [jsx("p", { role: "status", children: "Working…" })] : []),
+      ...(error
+        ? [jsx("p", { role: "alert", children: error }, "error")]
+        : []),
+      ...(notice
+        ? [jsx("p", { role: "status", children: notice }, "notice")]
+        : []),
+      ...(busy
+        ? [jsx("p", { role: "status", children: "Working…" }, "busy")]
+        : []),
       button("Reload", () => void run(load)),
       jsx("label", {
         children: jsxs(Fragment, {
@@ -312,143 +374,52 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
         ? [
             jsxs("div", {
               className: "kiokuko-models-editor",
+              key: "editor",
               children: [
-                input("Connection name", connection.name, (value) =>
-                  update("name", value),
-                ),
-                input("Base URL", connection.baseURL, (value) =>
-                  update("baseURL", value),
-                ),
-                jsx("label", {
-                  children: jsxs(Fragment, {
-                    children: [
-                      "Protocol",
-                      jsx("select", {
-                        "aria-label": "Protocol",
-                        value: connection.protocol,
-                        disabled:
-                          busy ||
-                          [
-                            "codex",
-                            "infron",
-                            "opencode",
-                            "opencode-go",
-                          ].includes(connection.kind),
-                        onChange: (e: any) =>
-                          update("protocol", e.target.value),
-                        children: [
-                          ["chat-completions", "Chat Completions"],
-                          ["responses", "Responses"],
-                          ["messages", "Messages"],
-                        ].map(([id, name]) =>
-                          jsx("option", { value: id, children: name }, id),
-                        ),
-                      }),
-                    ],
-                  }),
+                jsxs("h3", {
+                  children: [
+                    connection.name,
+                    jsx("span", {
+                      className: "kiokuko-models-state",
+                      children:
+                        " · " + (connection.authState ?? "not saved yet"),
+                    }),
+                  ],
                 }),
-                ...(connection.kind === "infron"
-                  ? [
-                      jsx("label", {
-                        children: jsxs(Fragment, {
-                          children: [
-                            "Service tier",
-                            jsx("select", {
-                              "aria-label": "Service tier",
-                              value: connection.serviceTier,
-                              disabled: busy,
-                              onChange: (e: any) =>
-                                update("serviceTier", e.target.value),
-                              children: [
-                                jsx("option", {
-                                  value: "standard",
-                                  children: "Standard",
-                                }),
-                                jsx("option", {
-                                  value: "flex",
-                                  children: "Flex",
-                                }),
-                              ],
-                            }),
-                          ],
-                        }),
-                      }),
-                      jsx("p", {
-                        children:
-                          "Requested tier: " +
-                          connection.serviceTier +
-                          ". Last request: " +
-                          (connection.lastRequestedTier ?? "none") +
-                          ". Actual served tier: " +
-                          (connection.actualTier ?? "unknown") +
-                          ". Infron may serve Standard for a Flex request.",
-                      }),
-                    ]
-                  : []),
-                button("Save connection", () => void run(save)),
                 ...(connection.kind !== "codex" && connection.kind !== "ollama"
                   ? [
-                      input("API key / bearer token", key, setKey, "password"),
-                      button(
-                        "Save key",
-                        () =>
-                          void run(async () => {
-                            await save();
-                            await modelsApi({
-                              op: "key",
-                              id: connection.id,
-                              key,
-                            });
-                            setKey("");
-                            await load();
-                            await choose(connection);
-                            setNotice("Key saved");
-                          }),
-                        !key,
+                      input(
+                        "API key / bearer token",
+                        key,
+                        setKey,
+                        "password",
+                        () => {
+                          if (!busy && key.trim()) void run(connect);
+                        },
                       ),
                     ]
                   : []),
-                ...([
-                  "codex",
-                  "claude",
-                  "xai",
-                  "openai",
-                  "openrouter",
-                  "nous",
-                ].includes(connection.kind)
-                  ? [
-                      button(
-                        "Log in",
-                        () => void run(startLogin),
-                        auth?.status === "pending",
-                      ),
-                    ]
-                  : []),
-                button(
-                  "Log out (also dsh-cli)",
-                  () =>
-                    void run(async () => {
-                      await modelsApi({ op: "logout", id: connection.id });
-                      setKey("");
-                      setModels([]);
-                      await load();
-                      setNotice("Signed out");
-                    }),
-                ),
-                button(
-                  "Refresh models",
-                  () =>
-                    void run(async () => {
-                      await modelsApi({ op: "refresh", id: connection.id });
-                      const next = await load();
-                      await choose(
-                        next.connections.find(
-                          (c: any) => c.id === connection.id,
-                        ),
-                      );
-                      setNotice("Models refreshed");
-                    }),
-                ),
+                jsxs("div", {
+                  className: "kiokuko-models-actions",
+                  children: [
+                    button("Save and connect", () => void run(connect)),
+                    ...(OAUTH_KINDS.includes(connection.kind)
+                      ? [
+                          button(
+                            "Log in",
+                            () => void run(startLogin),
+                            auth?.status === "pending",
+                          ),
+                        ]
+                      : []),
+                  ],
+                }),
+                jsx("p", {
+                  children:
+                    connection.kind === "ollama"
+                      ? "Ollama needs no key. Save and connect to list its models."
+                      : "Paste the API key and press Enter, or use Save and connect. The key is stored with dsh-cli's shared credentials.",
+                }),
                 ...(auth?.status === "pending"
                   ? [
                       jsxs("div", {
@@ -587,86 +558,219 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                       }),
                     ]
                   : []),
-                ...(!["opencode", "opencode-go"].includes(connection.kind)
-                  ? [
-                      jsx("details", {
-                        children: jsxs(Fragment, {
-                          children: [
-                            jsx("summary", {
-                              children: "Register model manually",
-                            }),
-                            input("Model ID", manual.id, (value) =>
-                              setManual({ ...manual, id: value }),
+                jsxs("details", {
+                  open: advanced,
+                  children: [
+                    jsx("summary", {
+                      onClick: (e: any) => {
+                        e.preventDefault();
+                        setAdvanced(!advanced);
+                      },
+                      children: "Advanced settings",
+                    }),
+                    input("Connection name", connection.name, (value) =>
+                      update("name", value),
+                    ),
+                    input("Base URL", connection.baseURL, (value) =>
+                      update("baseURL", value),
+                    ),
+                    jsx("label", {
+                      children: jsxs(Fragment, {
+                        children: [
+                          "Protocol",
+                          jsx("select", {
+                            "aria-label": "Protocol",
+                            value: connection.protocol,
+                            disabled:
+                              busy ||
+                              [
+                                "codex",
+                                "infron",
+                                "opencode",
+                                "opencode-go",
+                              ].includes(connection.kind),
+                            onChange: (e: any) =>
+                              update("protocol", e.target.value),
+                            children: [
+                              ["chat-completions", "Chat Completions"],
+                              ["responses", "Responses"],
+                              ["messages", "Messages"],
+                            ].map(([id, name]) =>
+                              jsx("option", { value: id, children: name }, id),
                             ),
-                            input(
-                              "Context window",
-                              manual.contextWindow,
-                              (value) =>
-                                setManual({
-                                  ...manual,
-                                  contextWindow: Number(value),
+                          }),
+                        ],
+                      }),
+                    }),
+                    ...(connection.kind === "infron"
+                      ? [
+                          jsx("label", {
+                            children: jsxs(Fragment, {
+                              children: [
+                                "Service tier",
+                                jsx("select", {
+                                  "aria-label": "Service tier",
+                                  value: connection.serviceTier,
+                                  disabled: busy,
+                                  onChange: (e: any) =>
+                                    update("serviceTier", e.target.value),
+                                  children: [
+                                    jsx("option", {
+                                      value: "standard",
+                                      children: "Standard",
+                                    }),
+                                    jsx("option", {
+                                      value: "flex",
+                                      children: "Flex",
+                                    }),
+                                  ],
                                 }),
-                              "number",
-                            ),
-                            input(
-                              "Maximum output tokens",
-                              manual.maxTokens,
-                              (value) =>
-                                setManual({
-                                  ...manual,
-                                  maxTokens: Number(value),
-                                }),
-                              "number",
-                            ),
-                            jsx("label", {
-                              children: jsxs(Fragment, {
-                                children: [
-                                  jsx("input", {
-                                    type: "checkbox",
-                                    checked: manual.reasoning,
-                                    onChange: (e: any) =>
-                                      setManual({
-                                        ...manual,
-                                        reasoning: e.target.checked,
-                                      }),
-                                  }),
-                                  "Reasoning supported",
-                                ],
-                              }),
+                              ],
                             }),
-                            jsx("label", {
-                              children: jsxs(Fragment, {
-                                children: [
-                                  jsx("input", {
-                                    type: "checkbox",
-                                    checked: manual.image,
-                                    onChange: (e: any) =>
-                                      setManual({
-                                        ...manual,
-                                        image: e.target.checked,
-                                      }),
-                                  }),
-                                  "Image input supported",
-                                ],
-                              }),
-                            }),
-                            button(
-                              "Add manual model",
-                              () => {
-                                update("models", [
-                                  ...connection.models.filter(
-                                    (m: any) => m.id !== manual.id,
-                                  ),
-                                  { ...manual, name: manual.id },
-                                ]);
-                                setNotice(
-                                  "Model added to draft. Save connection to register it.",
-                                );
-                              },
-                              !manual.id,
-                            ),
-                          ],
+                          }),
+                          jsx("p", {
+                            children:
+                              "Requested tier: " +
+                              connection.serviceTier +
+                              ". Last request: " +
+                              (connection.lastRequestedTier ?? "none") +
+                              ". Actual served tier: " +
+                              (connection.actualTier ?? "unknown") +
+                              ". Infron may serve Standard for a Flex request.",
+                          }),
+                        ]
+                      : []),
+                    button(
+                      "Save connection",
+                      () =>
+                        void run(async () => {
+                          await persist();
+                          await reopen();
+                          setNotice("Connection saved");
                         }),
+                    ),
+                    button(
+                      "Refresh models",
+                      () =>
+                        void run(async () => {
+                          await persist();
+                          await modelsApi({ op: "refresh", id: connection.id });
+                          const list = await reopen();
+                          setNotice(
+                            list.length
+                              ? "Models refreshed"
+                              : "Models refreshed; none discovered",
+                          );
+                        }),
+                    ),
+                    button(
+                      "Log out (also dsh-cli)",
+                      () =>
+                        void run(async () => {
+                          await persist();
+                          await modelsApi({ op: "logout", id: connection.id });
+                          setKey("");
+                          setModels([]);
+                          await load();
+                          setNotice("Signed out");
+                        }),
+                    ),
+                    ...(!["opencode", "opencode-go"].includes(connection.kind)
+                      ? [
+                          jsx("details", {
+                            open: manualOpen,
+                            children: jsxs(Fragment, {
+                              children: [
+                                jsx("summary", {
+                                  onClick: (e: any) => {
+                                    e.preventDefault();
+                                    setManualOpen(!manualOpen);
+                                  },
+                                  children: "Register model manually",
+                                }),
+                                input("Model ID", manual.id, (value) =>
+                                  setManual({ ...manual, id: value }),
+                                ),
+                                input(
+                                  "Context window",
+                                  manual.contextWindow,
+                                  (value) =>
+                                    setManual({
+                                      ...manual,
+                                      contextWindow: Number(value),
+                                    }),
+                                  "number",
+                                ),
+                                input(
+                                  "Maximum output tokens",
+                                  manual.maxTokens,
+                                  (value) =>
+                                    setManual({
+                                      ...manual,
+                                      maxTokens: Number(value),
+                                    }),
+                                  "number",
+                                ),
+                                jsx("label", {
+                                  children: jsxs(Fragment, {
+                                    children: [
+                                      jsx("input", {
+                                        type: "checkbox",
+                                        checked: manual.reasoning,
+                                        onChange: (e: any) =>
+                                          setManual({
+                                            ...manual,
+                                            reasoning: e.target.checked,
+                                          }),
+                                      }),
+                                      "Reasoning supported",
+                                    ],
+                                  }),
+                                }),
+                                jsx("label", {
+                                  children: jsxs(Fragment, {
+                                    children: [
+                                      jsx("input", {
+                                        type: "checkbox",
+                                        checked: manual.image,
+                                        onChange: (e: any) =>
+                                          setManual({
+                                            ...manual,
+                                            image: e.target.checked,
+                                          }),
+                                      }),
+                                      "Image input supported",
+                                    ],
+                                  }),
+                                }),
+                                button(
+                                  "Add manual model",
+                                  () => {
+                                    update("models", [
+                                      ...connection.models.filter(
+                                        (m: any) => m.id !== manual.id,
+                                      ),
+                                      { ...manual, name: manual.id },
+                                    ]);
+                                    setNotice(
+                                      "Model added to draft. Save connection to register it.",
+                                    );
+                                  },
+                                  !manual.id,
+                                ),
+                              ],
+                            }),
+                          }),
+                        ]
+                      : []),
+                  ],
+                }),
+                jsx("h4", { children: "Models" }),
+                ...(models.length === 0
+                  ? [
+                      jsx("p", {
+                        children:
+                          "No models yet. Save and connect to discover them, or register one under Advanced settings.",
                       }),
                     ]
                   : []),
@@ -784,7 +888,7 @@ export function mountModelsClient(ctx: DshClientContext): void {
   ctx.effect(() => {
     const style = document.createElement("style");
     style.textContent =
-      ".kiokuko-models-modal{width:min(900px,calc(100vw - 32px))}.kiokuko-models-panel{box-sizing:border-box;width:100%;max-width:900px;padding:16px;overflow:auto;max-height:75vh}.kiokuko-models-panel label{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}.kiokuko-models-panel input,.kiokuko-models-panel select{max-width:100%;box-sizing:border-box;border:1px solid #888;border-radius:6px;padding:8px;color:inherit;background:transparent}.kiokuko-models-panel button{border:1px solid #888;border-radius:6px;padding:8px;margin:4px;color:inherit}.kiokuko-models-panel button:disabled{opacity:.5}.kiokuko-models-panel li{margin:8px 0}.kiokuko-models-panel :focus-visible{outline:2px solid #3286ff;outline-offset:3px}";
+      ".kiokuko-models-modal{width:min(900px,calc(100vw - 32px))}.kiokuko-models-panel{box-sizing:border-box;width:100%;max-width:900px;padding:16px;overflow:auto;max-height:75vh}.kiokuko-models-panel label{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0}.kiokuko-models-panel input,.kiokuko-models-panel select{max-width:100%;box-sizing:border-box;border:1px solid #888;border-radius:6px;padding:8px;color:inherit;background:transparent}.kiokuko-models-panel button{border:1px solid #888;border-radius:6px;padding:8px;margin:4px;color:inherit}.kiokuko-models-panel button:disabled{opacity:.5}.kiokuko-models-panel li{margin:8px 0}.kiokuko-models-panel :focus-visible{outline:2px solid #3286ff;outline-offset:3px}.kiokuko-models-panel summary{cursor:pointer;margin:12px 0}.kiokuko-models-panel h3,.kiokuko-models-panel h4{margin:12px 0 0}.kiokuko-models-state{font-weight:400;font-size:.85em;opacity:.75}.kiokuko-models-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}";
     document.head.append(style);
     return () => style.remove();
   }, "kiokuko models style");

@@ -37,9 +37,16 @@ async function fixture() {
       await adapter!.resolveModel(binding.provider, binding.model);
       return binding;
     },
+    async discoverModels(namespace: string, request: any): Promise<any[]> {
+      assert.equal(namespace, "llm-pi-ai");
+      asked.push(request);
+      return discovery ? [...(await discovery(request))] : [];
+    },
   };
   const selected: any[] = [],
-    defaults: any[] = [];
+    defaults: any[] = [],
+    asked: any[] = [];
+  let discovery: ((request: any) => Promise<readonly any[]>) | undefined;
   const config = new ModelsConfigStore(join(dir, "models.json"));
   const service = new KiokukoModelsService({
     llm,
@@ -59,6 +66,10 @@ async function fixture() {
     llm,
     service,
     config,
+    asked,
+    discover(fn: (request: any) => Promise<readonly any[]>) {
+      discovery = fn;
+    },
     adapter: () => adapter!,
     routes: () => routes,
     selected,
@@ -482,6 +493,153 @@ test("shared Nous device OAuth supports cancellation, re-login, CLI visibility a
     await f.close();
   }
 });
+test("discovery adopts an id-only listing with the adapter defaults and keeps disclosed capacities", async () => {
+  const f = await fixture();
+  try {
+    const c = ConnectionSchema.parse({
+      id: "kiokuko-gateway",
+      kind: "custom",
+      name: "Gateway",
+      baseURL: "https://gateway.example/v1",
+      protocol: "chat-completions",
+      models: [],
+    });
+    await f.service.save(c, 0);
+    await assert.rejects(f.service.refresh(c.id), /signed out/);
+    await f.service.setKey(c.id, "private-gateway-key");
+    f.discover(async (request) => {
+      assert.deepEqual(request, {
+        baseURL: "https://gateway.example/v1",
+        api: "openai-completions",
+        apiKey: "private-gateway-key",
+      });
+      return [
+        { id: "gateway-small" },
+        {
+          id: "gateway-large",
+          name: "Gateway Large",
+          contextWindow: 200000,
+          maxTokens: 8192,
+          inputModalities: ["text", "image"],
+        },
+      ];
+    });
+    await f.service.refresh(c.id);
+    assert.equal(f.asked.length, 1);
+    assert.deepEqual((await f.config.read()).connections[0]!.models, [
+      {
+        id: "gateway-small",
+        name: "gateway-small",
+        contextWindow: 262144,
+        maxTokens: 32768,
+        reasoning: false,
+        image: false,
+      },
+      {
+        id: "gateway-large",
+        name: "Gateway Large",
+        contextWindow: 200000,
+        maxTokens: 8192,
+        reasoning: false,
+        image: true,
+      },
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a standard endpoint is discovered as its catalog route and an edited one over the wire", async () => {
+  const f = await fixture();
+  try {
+    const openai = ConnectionSchema.parse({
+      id: "kiokuko-openai",
+      kind: "openai",
+      name: "OpenAI API",
+      baseURL: "https://api.openai.com/v1",
+      protocol: "responses",
+      models: [],
+    });
+    await f.service.save(openai, 0);
+    await f.service.setKey(openai.id, "private-openai-key");
+    f.discover(async () => [
+      { id: "gpt-5", name: "GPT-5", contextWindow: 400000, maxTokens: 128000 },
+    ]);
+    await f.service.refresh(openai.id);
+    assert.deepEqual(f.asked[0], {
+      provider: "openai",
+      baseURL: "https://api.openai.com/v1",
+      api: "openai-responses",
+      apiKey: "private-openai-key",
+    });
+    await f.service.save(
+      { ...openai, baseURL: "https://proxy.example/v1" },
+      (await f.config.read()).revision,
+    );
+    await f.service.refresh(openai.id);
+    assert.deepEqual(f.asked[1], {
+      baseURL: "https://proxy.example/v1",
+      api: "openai-responses",
+      apiKey: "private-openai-key",
+    });
+  } finally {
+    await f.close();
+  }
+});
+
+test("a failed discovery keeps the saved connection and reports a bounded cause to the browser", async () => {
+  const f = await fixture();
+  try {
+    const c = ConnectionSchema.parse({
+      id: "kiokuko-gateway",
+      kind: "custom",
+      name: "Gateway",
+      baseURL: "https://gateway.example/v1",
+      protocol: "chat-completions",
+      models: [model],
+    });
+    await f.service.save(c, 0);
+    await f.service.setKey(c.id, "private-gateway-key");
+    f.discover(async () => {
+      throw Object.assign(
+        new Error(
+          "https://gateway.example/v1/models answered 401; check the API key",
+        ),
+        { code: "DISCOVERY_FAILED" },
+      );
+    });
+    await assert.rejects(
+      f.service.refresh(c.id),
+      /Model discovery failed: .*answered 401/,
+    );
+    assert.deepEqual((await f.config.read()).connections[0]!.models, [model]);
+    const response = await modelsResponse(
+      f.service,
+      new Request("http://localhost/api/kiokuko.models", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ op: "refresh", id: c.id }),
+      }),
+    );
+    assert.equal(response.status, 400);
+    assert.match(
+      ((await response.json()) as { error: string }).error,
+      /Model discovery failed: .*answered 401/,
+    );
+    f.discover(async () => {
+      throw Object.assign(new Error("no model discovery is registered"), {
+        code: "NO_DISCOVERY",
+      });
+    });
+    await assert.rejects(
+      f.service.refresh(c.id),
+      /Model discovery is unavailable in this profile/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 async function until(check: () => boolean): Promise<void> {
   const deadline = Date.now() + 5000;
   while (!check()) {

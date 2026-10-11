@@ -33,16 +33,21 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
-      JSON.stringify({
-        data: [
-          {
-            id: "z-ai/glm-5.3",
-            name: "Local GLM",
-            context_length: 1024000,
-            max_output_tokens: 128000,
-          },
-        ],
-      }),
+      JSON.stringify(
+        String(req.url).includes("/nolimits/")
+          ? // A gateway that lists ids without any capacity metadata.
+            { data: [{ id: "gateway-model", name: "Gateway Model" }] }
+          : {
+              data: [
+                {
+                  id: "z-ai/glm-5.3",
+                  name: "Local GLM",
+                  context_length: 1024000,
+                  max_output_tokens: 128000,
+                },
+              ],
+            },
+      ),
     );
     return;
   }
@@ -212,35 +217,37 @@ try {
     exact: true,
   });
   await panel.waitFor();
+  const advanced = async (scope) => {
+    const summary = scope.getByText("Advanced settings", { exact: true });
+    if (!(await summary.evaluate((element) => element.closest("details").open)))
+      await summary.click();
+  };
+  // The user-visible path: add a provider, paste its key, then one action that
+  // stores both and discovers the models this endpoint serves.
   await panel
     .getByLabel("Add connection", { exact: true })
     .selectOption("infron");
+  await advanced(panel);
   await panel.getByLabel("Base URL", { exact: true }).fill(endpoint);
   let failSave=true;
   await page.route('**/api/kiokuko.models',async route=>{if(route.request().method()==='POST'&&route.request().postDataJSON().op==='save'&&failSave){failSave=false;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Fixture save failure; retry'})})}else await route.continue()});
-  await panel.getByRole('button',{name:'Save connection',exact:true}).click();
+  const keyField = panel.getByLabel("API key / bearer token", { exact: true });
+  await keyField.fill("private-browser-key");
+  assert.equal(await keyField.getAttribute("type"), "password");
+  const connect = panel.getByRole("button", { name: "Save and connect", exact: true });
+  await connect.click();
   await panel.getByRole('alert').filter({hasText:'Fixture save failure; retry'}).waitFor();
-  await panel
-    .getByRole("button", { name: "Save connection", exact: true })
-    .click();
+  assert.equal(
+    await keyField.inputValue(),
+    "private-browser-key",
+    "a failed save must keep the typed key so the retry needs no retyping",
+  );
+  await connect.click();
   await panel
     .getByRole("status")
-    .filter({ hasText: "Connection saved" })
+    .filter({ hasText: /^Connected · 1 model/ })
     .waitFor();
-  await panel
-    .getByLabel("API key / bearer token", { exact: true })
-    .fill("private-browser-key");
-  assert.equal(
-    await panel
-      .getByLabel("API key / bearer token", { exact: true })
-      .getAttribute("type"),
-    "password",
-  );
-  await panel.getByRole("button", { name: "Save key", exact: true }).click();
-  await panel.getByRole("status").filter({ hasText: "Key saved" }).waitFor();
-  await panel
-    .getByRole("button", { name: "Refresh models", exact: true })
-    .click();
+  await panel.getByText("z-ai/glm-5.3", { exact: false }).first().waitFor();
   await panel
     .getByRole("button", { name: "Default for new chats", exact: true })
     .click();
@@ -308,6 +315,7 @@ try {
   await page.getByRole('button',{name:'Settings',exact:true}).click();
   await page.getByRole('button',{name:'Kiokuko Models',exact:true}).click();
   await panel.getByRole('button',{name:/^Infron · connected/}).click();
+  await advanced(panel);
   await panel.getByLabel('Service tier',{exact:true}).selectOption('standard');
   await panel.getByRole('button',{name:'Save connection',exact:true}).click();
   await panel.getByRole('status').filter({hasText:'Connection saved'}).waitFor();
@@ -343,6 +351,7 @@ try {
     .waitFor();
   await commandPanel.getByRole('button',{name:'Log in',exact:true}).click();
   await commandPanel.getByRole('button',{name:/^Nous \/ Hermes · connected/}).waitFor();
+  await advanced(commandPanel);
   await commandPanel.getByRole('button',{name:'Log out (also dsh-cli)',exact:true}).click();
   await commandPanel.getByRole('button',{name:/^Nous \/ Hermes · disconnected/}).waitFor();
   await commandPanel.getByRole('button',{name:'Log in',exact:true}).click();
@@ -368,6 +377,37 @@ try {
     }
   }
   assert.ok(!logs.includes("private-browser-key"));
+  assert.ok(!logs.includes("private-gateway-key"));
+  // A provider that discloses no capacities must still produce usable models:
+  // the stored row takes the pi-ai profile defaults instead of being dropped.
+  await panel
+    .getByLabel("Add connection", { exact: true })
+    .selectOption("custom");
+  await advanced(panel);
+  await panel
+    .getByLabel("Base URL", { exact: true })
+    .fill(`${endpoint}/nolimits`);
+  const gatewayKey = panel.getByLabel("API key / bearer token", { exact: true });
+  await gatewayKey.fill("private-gateway-key");
+  await gatewayKey.press("Enter");
+  await panel
+    .getByRole("status")
+    .filter({ hasText: /^Connected · 1 model/ })
+    .waitFor();
+  await panel.getByText("gateway-model", { exact: false }).first().waitFor();
+  await panel
+    .getByRole("button", { name: "Default for new chats", exact: true })
+    .click();
+  await panel
+    .getByRole("status")
+    .filter({ hasText: "Default model saved" })
+    .waitFor();
+  await panel.getByRole("button", { name: "Refresh models", exact: true }).click();
+  await panel
+    .getByRole("status")
+    .filter({ hasText: "Models refreshed" })
+    .waitFor();
+  await page.screenshot({ path: join(base, "gateway.png") });
   console.log(
     JSON.stringify({
       passed: true,
@@ -377,7 +417,9 @@ try {
         "empty native configuration",
         "Settings",
         "exact command",
-        "masked key",
+        "Add provider plus key in one action",
+        "listed capacities and id-only capacities",
+        "discovery failure keeps the typed key",
         "refresh/search",
         "current/default selection",
         "native retry and tier changes",

@@ -4,11 +4,20 @@ In the Web profile, open **Settings → Kiokuko Models**, or enter exactly
 `/kiokuko model` in a chat. The host executes this command without a model request.
 Both entry points use the same panel, including before a native provider is configured.
 
-Choose a provider, save the connection, then enter an API key in the masked field
-or choose **Log in** where OAuth is supported by the installed adapter. The browser
-shows the authentication link, device code or manual prompt and a cancellation button.
-Authentication errors require an explicit retry; closing the panel cancels pending login.
-**Log out** also signs the shared credential out of dsh-cli.
+Choose a provider under **Add connection** and paste its API key: **Save and connect**
+stores the connection and the key together, then asks the adapter which models the
+connection serves. Pressing Enter in the key field runs the same action. OAuth
+providers also offer **Log in**, which shows the authentication link, device code or
+manual prompt and a cancellation button in the same panel. Authentication errors
+require an explicit retry; closing the panel cancels a pending login. **Log out** also
+signs the shared credential out of dsh-cli.
+
+Connection name, Base URL, protocol, service tier, **Save connection**, **Refresh models**,
+**Log out** and manual model registration live under **Advanced settings**. Discovery
+that fails still leaves the connection and key stored, reports the cause and keeps
+manual registration available. A model whose endpoint and catalog both withhold
+capacities is stored with the adapter's profile defaults (`defaultContextWindow` 262144,
+`defaultMaxTokens` 32768) so a listing that names ids only still yields usable models.
 
 Supported connections: OpenAI API, Codex, Claude, xAI, DeepSeek, OpenCode Zen/Go,
 OpenRouter, Nous/Hermes, Infron, Ollama and custom connections. OAuth availability
@@ -18,12 +27,13 @@ or Messages. Use HTTPS, or HTTP on loopback for a local server. For Messages,
 an origin or API prefix ending in `/v1` is accepted; the SDK adds `/v1/messages`
 once, preserving any preceding path prefix.
 
-**Refresh models** imports models with known context and output limits. If discovery
-fails or returns no limits, register the exact model ID and limits manually, then
-save the connection. Search the resulting list. **Use in current chat** only changes
-that idle chat; **Default for new chats** saves the native default for future chats.
-Enno, Deep and model-auto use the same registered adapters and model capabilities.
-An unavailable model is rejected rather than silently substituted.
+**Refresh models** re-imports the models an endpoint serves. If discovery fails or
+returns nothing usable, register the exact model ID and limits manually under
+**Advanced settings → Register model manually**, then **Save connection**. Search the
+resulting list. **Use in current chat** only changes that idle chat; **Default for new
+chats** saves the native default for future chats. Enno, Deep and model-auto use the
+same registered adapters and model capabilities. An unavailable model is rejected
+rather than silently substituted.
 
 ## Infron
 
@@ -58,8 +68,10 @@ migrations are unaffected.
 ## Verification
 
 `npm run test:models:web` installs the packed package in a disposable Web profile,
-uses a local provider and tests Settings, commands, authentication cancellation,
-selection, reload/restart and the native tool loop. Unit tests send actual Pi adapter
+uses a local provider and tests Settings, commands, the add-provider-and-key action,
+a listing that discloses no capacities, a refused save that must keep the typed key,
+authentication cancellation, selection, reload/restart and the native tool loop. Unit
+tests drive the discovery contract through a stub runtime and send actual Pi adapter
 requests to a local server. Real account OAuth completion and live Infron generation
 are separate acceptance gates; local fixtures do not establish either.
 
