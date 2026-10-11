@@ -52,10 +52,12 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     assert.equal(fixture.ok, true, JSON.stringify(fixture))
     const scratch = fixture.value.json
     const nodeVersion = await evaluate('broker-node-version', '(kioku.process:run "node" (list "--version"))')
+    assert.equal(nodeVersion.ok, true, JSON.stringify(nodeVersion))
     assert.equal(nodeVersion.value.json.code, 0, JSON.stringify(nodeVersion))
     t.diagnostic(`Host Node ${process.version}; protected broker Node ${nodeVersion.value.json.stdout.trim()}`)
     const historySource = await evaluate('history-profile', `(progn (defparameter *history-retained* 42)
       (kioku.process:run "node" (list "-e" "process.stdout.write('old output '.repeat(800))")))`)
+    assert.equal(historySource.ok, true, JSON.stringify(historySource))
     const originalHistoryRow = (await store.get(owner, 'history-profile'))!.result
     const historyText = renderHistoryResult(renderResult(historySource))
     assert.ok(historyText, 'supported display data must fit the history profile')

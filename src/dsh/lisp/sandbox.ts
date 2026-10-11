@@ -26,14 +26,17 @@ export async function prepareLayout(base: string, library: string): Promise<Sand
 }
 /** The OS boundary applies to arbitrary Lisp, FFI, exec, Python and shell alike. */
 export async function sandboxLaunch(layout: SandboxLayout, program: string, args: string[], generation: string, protocol = false, directory = '.'): Promise<Launch> {
-  const binary = await executable(program)
+  // The broker's Node is the running host runtime, including version-manager
+  // and CI tool-cache installs. A caller-controlled PATH cannot replace it.
+  const hostNode = await realpath(process.execPath)
+  const binary = await executable(layout.protected && program === 'node' ? hostNode : program)
   if(!layout.protected) {
     const cwd=await realpath(directory==='.'?(layout.workspace??layout.scratch):isAbsolute(directory)?directory:join(layout.workspace??layout.scratch,directory))
     return {command:binary,args,group:true,env:{...process.env,KIOKU_SCRATCH:`${layout.scratch}/`,KIOKU_CACHE:`${layout.cache}/`,KIOKU_GENERATION:generation,KIOKU_EXECUTION_MODE:'development',...(layout.compiled?{KIOKU_COMPILED:`${layout.compiled}/`}:{})},cwd}
   }
   const cwd = (await checkedDirectory(layout.scratch, directory)).path
-  if (!protocol && !['/usr/', '/bin/', '/opt/homebrew/Cellar/', '/opt/homebrew/bin/'].some(root => binary.startsWith(root))) fail('EXECUTABLE_SCOPE', '実行ファイルは OS またはインストール済みランタイムの場所から指定してください。')
-  const env: Record<string, string> = { PATH: systemPaths.join(':'), HOME: layout.scratch, TMPDIR: layout.scratch, LANG: 'C.UTF-8',
+  if (!protocol && binary !== hostNode && !['/usr/', '/bin/', '/opt/homebrew/Cellar/', '/opt/homebrew/bin/'].some(root => binary.startsWith(root))) fail('EXECUTABLE_SCOPE', '実行ファイルは OS またはインストール済みランタイムの場所から指定してください。')
+  const env: Record<string, string> = { PATH: [...new Set([dirname(hostNode), ...systemPaths])].join(':'), HOME: layout.scratch, TMPDIR: layout.scratch, LANG: 'C.UTF-8',
     KIOKU_SCRATCH: `${layout.scratch}/`, KIOKU_CACHE: `${layout.cache}/`, KIOKU_GENERATION: generation, KIOKU_EXECUTION_MODE: 'protected' }
   if (layout.compiled) env.KIOKU_COMPILED = `${layout.compiled}/`
   // Homebrew Node otherwise reads host OpenSSL configuration outside its
