@@ -259,14 +259,23 @@ try {
   await page.screenshot({ path: join(base, "settings.png") });
   // Reload persists the settings and catalog; the native default is separate.
   await page.reload();
+  const conversation = page.locator('[data-conversation-content]:visible').first();
+  const previousSession = await poll(() => conversation.getAttribute('data-conversation-session'));
   await page
     .getByRole("button", { name: "New session", exact: true })
     .first()
     .click();
-  const editor = page.locator('[contenteditable="true"]').first();
+  // New-session navigation can leave the previous composer mounted until the
+  // native session is ready. Sending into it loses the command during settling.
+  await poll(async () => {
+    const current = await conversation.getAttribute('data-conversation-session');
+    return current && current !== previousSession
+      && await conversation.getAttribute('data-content-phase') !== 'settling';
+  });
+  const editor = conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first();
   await editor.waitFor();
   await editor.fill("/kiokuko model");
-  await editor.press("Enter");
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
   const dialog = page.getByRole("dialog", {
     name: "Kiokuko Models",
     exact: true,

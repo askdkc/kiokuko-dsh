@@ -48,7 +48,7 @@ function continuableIds(agent: any): string[] {
     }) ?? [] : [])
 }
 
-for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(`shipped standard preset ${mode} runs without Kiokuko child intake`, {
+for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'failure'] as const) test(`shipped standard preset ${mode} runs without Kiokuko child intake`, {
   skip: current ? false : 'requires the canonical current DSH runtime', timeout: 120_000,
 }, async () => {
   const [cordis, appBoot, llm, session, cmdline] = await Promise.all([
@@ -63,6 +63,8 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
   let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
   let parent: any
   let releaseChildren: (() => void) | undefined
+  let releaseSecondChild: (() => void) | undefined
+  const parallel = mode === 'parallel' || mode === 'parallel-staggered'
   try {
     await mkdir(repository)
     await mkdir(profileDir, { recursive: true })
@@ -106,13 +108,20 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
     const requests: any[] = []
     const started: any[] = [], ended: any[] = []
     const childrenReleased = new Promise<void>(resolve => { releaseChildren = resolve })
+    const secondChildReleased = new Promise<void>(resolve => { releaseSecondChild = resolve })
     let bothStarted!: () => void
     const childrenStarted = new Promise<void>(resolve => { bothStarted = resolve })
     let childRequests = 0
     let finishChildren!: () => void
     const childrenFinished = new Promise<void>(resolve => { finishChildren = resolve })
+    let firstSpliced!: () => void
+    const firstNoticeSpliced = new Promise<void>(resolve => { firstSpliced = resolve })
+    ctx.on('session/event', (nativeSession: any, event: any) => {
+      if (nativeSession.id === 'standard-parent' && event.type === 'agent/inbox/spliced'
+        && event.data?.inserted?.some((message: any) => message.source?.kind === 'subagent-settled')) firstSpliced()
+    })
     ctx.on('subagent/start', (info: any) => { started.push({ ...info, header: ctx.sessions.get(info.id)?.header }) })
-    ctx.on('subagent/end', (info: any) => { ended.push(info); if (ended.length === (mode === 'parallel' ? 2 : 1)) finishChildren() })
+    ctx.on('subagent/end', (info: any) => { ended.push(info); if (ended.length === (parallel ? 2 : 1)) finishChildren() })
     let parentRequests = 0
     class ScriptedAdapter extends llm.LlmAdapter {
       async listModels(provider: string) { return [{ provider, id: 'mock', name: 'mock' }] }
@@ -121,9 +130,11 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
         requests.push(options)
         const child = options.sessionId !== 'standard-parent'
         if (child && mode === 'failure') throw new Error('child fixture failure')
-        if (child && mode === 'parallel') {
-          if (++childRequests === 2) bothStarted()
+        if (child && parallel) {
+          const childRequest = ++childRequests
+          if (childRequest === 2) bothStarted()
           await childrenReleased
+          if (mode === 'parallel-staggered' && childRequest === 2) await secondChildReleased
         }
         const tool = (id: string, name: string, background: boolean) => mock.toolCallResponse(id, name,
           { description: 'Implement bounded change', prompt: `Implement ${id} bounded change.`, ...(background ? {} : { run_in_background: false }) })
@@ -144,7 +155,7 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
           : parentStep === (mode === 'fork' ? 3 : 2) ? mock.toolCallResponse('goal-status','coding_workflow',{action:'status'})
           : parentStep === (mode === 'fork' ? 4 : 3) ? mock.toolCallResponse('goal-propose','coding_workflow',{action:'propose',expectedRevision:toolValue(options,'goal-status').revision,definition:fixtureDefinition()})
           : mode === 'fork' && parentStep === 5 ? tool('fork-1', 'subagent_fork', false)
-          : mode === 'parallel' && parentStep === 4 ? multi([['spawn-1', 'subagent'], ['spawn-2', 'subagent']])
+          : parallel && parentStep === 4 ? multi([['spawn-1', 'subagent'], ['spawn-2', 'subagent']])
           : (mode === 'foreground' || mode === 'failure') && parentStep === 4 ? tool('spawn-1', 'subagent', false)
           : mock.textResponse('PARENT_COMPLETE')
         for (const chunk of chunks) yield chunk
@@ -176,7 +187,7 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
       await parent.agent.whenIdle()
     }
     parent.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Implement a bounded change using a subagent.' }], source: { kind: 'user' } }))
-    if (mode === 'parallel') {
+    if (parallel) {
       try {
         await waitBounded(childrenStarted, 'Two children did not start together')
         assert.equal(ended.length, 0, 'both children must start before either finishes')
@@ -185,7 +196,13 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
         assert.equal(ids.length, 2, 'both continuable launches must return child ids')
         assert.equal(new Set(ids).size, 2)
         assert.deepEqual(new Set(ids), new Set(started.map(item => item.id)))
-      } finally { releaseChildren?.() }
+        releaseChildren?.()
+        if (mode === 'parallel-staggered') {
+          await waitBounded(firstNoticeSpliced, 'First child notification did not reach the parent')
+          await waitBounded(parent.agent.whenIdle(), 'Parent did not settle after the first child notification')
+          assert.equal(ended.length, 1, 'second child stays running while the parent consumes the first result')
+        }
+      } finally { releaseChildren?.(); releaseSecondChild?.() }
     }
     await parent.agent.whenIdle()
     await waitBounded(childrenFinished, 'Continuable children did not settle')
@@ -199,7 +216,7 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
     assert.ok(requests.some(request => request.sessionId === 'standard-parent' &&
       request.tools?.some((tool: any) => tool.name === 'subagent') &&
       request.tools?.some((tool: any) => tool.name === 'subagent_fork')), 'both tools must reach the parent model request')
-    if (mode !== 'parallel') {
+    if (!parallel) {
       const result = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId !== 'prepare-parent')
       const child = ended.find(item => item.id === started[0]?.id)
       assert.ok(child)
@@ -211,7 +228,7 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
       }
       assert.equal(result?.data.message.isError, false, 'launch result reports asynchronous child startup')
     }
-    assert.equal(started.length, mode === 'parallel' ? 2 : 1,
+    assert.equal(started.length, parallel ? 2 : 1,
       JSON.stringify(parent.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/call' || event.type === 'tool/result').map((event: any) => event.data)))
     assert.equal(ended.length, started.length)
     assert.equal(new Set(started.map(item => item.id)).size, started.length)
@@ -230,7 +247,7 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
       assert.match(seed, /PARENT_SEED/)
       assert.doesNotMatch(seed, /Implement a bounded change using a subagent\./)
     }
-    if (mode === 'parallel') {
+    if (parallel) {
       await parent.agent.whenIdle()
       const notices = parent.agent.session.snapshotEvents().flatMap((event: any) => event.type === 'agent/inbox/spliced' ? event.data?.inserted ?? [] : [])
         .filter((message: any) => message.source?.kind === 'subagent-settled')
@@ -240,6 +257,7 @@ for (const mode of ['foreground', 'parallel', 'fork', 'failure'] as const) test(
     }
   } finally {
     releaseChildren?.()
+    releaseSecondChild?.()
     composition?.stopIngress()
     let cleanupError: unknown
     for (const cleanup of [

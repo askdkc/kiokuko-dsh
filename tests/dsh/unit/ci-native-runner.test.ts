@@ -84,6 +84,12 @@ test('coding-session CI provides Lisp on each supported platform before mandator
     const install = job.steps.findIndex((step: any) => installation.test(step.run ?? ''))
     const execution = job.steps.findIndex((step: any) => /npm (?:test|run test:e2e:dsh)/u.test(step.run ?? ''))
     assert.ok(install >= 0 && execution > install, `${jobName} must install its actual runtime before execution`)
+    if (jobName === 'verify') {
+      assert.match(job.steps[install].run, /apt-get install[^\n]*\bbubblewrap\b/u,
+        'mandatory protected Lisp tests also require bubblewrap on Linux')
+      assert.match(job.steps[install].run, /sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0/u,
+        'the dedicated Linux runner must permit the user namespaces used by bubblewrap')
+    }
   }
   const matrixSteps = workflow.jobs['lisp-runtime'].steps
   assert.ok(!matrixSteps.some((step: any) => /^sudo apt-get/u.test(step.run ?? '')), 'A macOS matrix job cannot execute an unconditional Linux install')

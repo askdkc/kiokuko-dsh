@@ -384,7 +384,10 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
         const superseded = previous.prepared.ennoOduno.applicable && supersedesUnstartedEnno(event, previousState)
         const selection = getSelection(previous.runId)?.value
         const coding = await runtime.withDatabase(db => readCodingWorkflow(db, previous.runId))
-        const resumeCoding = codingContinuation(event.task) && coding && !['completed', 'cancelled', 'superseded'].includes(coding.state)
+        // Child results and other generated turns continue the admitted Goal.
+        // Only a new human request can replace it without an explicit continuation.
+        const resumeCoding = coding && !['completed', 'cancelled', 'superseded'].includes(coding.state)
+          && (!hasHumanInput(event.nativeMessages ?? []) || codingContinuation(event.task))
         const continuePrevious = resumeCoding || selection && (selection.status !== 'ready' || selection.mode === 'normal' && previous.failed)
           ? true : previousWasChat
           ? event.profileHints?.taskType === 'chat'

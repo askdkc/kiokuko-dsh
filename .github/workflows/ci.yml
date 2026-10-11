@@ -95,7 +95,11 @@ jobs:
         run: npm ci
 
       - name: Install actual coding Lisp runtime
-        run: sudo apt-get update && sudo apt-get install -y sbcl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sbcl bubblewrap
+          # Dedicated CI runner: permit the user namespaces required by bwrap.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
       - name: Install DeepSeek Harness CLI
         run: |
