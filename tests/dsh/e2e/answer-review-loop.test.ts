@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { mountCore } from '../../../src/dsh/core/host.js'
+import { CODING_READ_ONLY } from '../../../src/dsh/coding-workflow/intent.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { nativeMock } from '../helpers/native-mock.js'
@@ -39,6 +40,8 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
     }
     return layaV1Reply(request, (id, choices) => {
     if (id === 'task-type') { taskTypeCalls++; return 'research' }
+    if (id === 'request-relation') return 'new'
+    if (id === 'request-action') return 'research'
     if (id.startsWith('grounding:')) return 'contradicted'
     if (id === 'request_fit') { reviewCalls++; onReview?.(); onReview = undefined; return paired || scenario === 'no-finding' || reviewCalls > 1 ? 'satisfied' : 'finding' }
     return choices.includes('abstain') ? 'abstain' : choices[0]!
@@ -116,7 +119,8 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
     else if(correction) script.push(mock.textResponse('Correction: the answer is four.'))
     const model = new mock.MockAdapter(script)
     ctx.llm.registerAdapter(['ordinary'],model)
-    ctx.tools.register({name:'verify_sum',description:'Return a known sum.',parameters:{type:'object',properties:{}},output:{schema:{type:'string'},render:(_args:unknown,value:string)=>[{type:'text',text:value}]},execute:async()=>{toolCalls++;return 'Verified sum: four'}})
+    // This fixture only returns a constant observation; mark its native effect contract read-only.
+    ctx.tools.register({[CODING_READ_ONLY]:true,name:'verify_sum',description:'Return a known sum.',parameters:{type:'object',properties:{}},output:{schema:{type:'string'},render:(_args:unknown,value:string)=>[{type:'text',text:value}]},execute:async()=>{toolCalls++;return 'Verified sum: four'}})
     const agent = await ctx.agentLoop.create(session.SessionId(`answer-${host}`),{provider:'ordinary',model:'mock'},{cwd:root})
     if (scenario === 'superseded') onReview = () => queueMicrotask(() => agent.followup(llm.createUserMessage({content:[{type:'text',text:followupRequest}],source:{kind:'user'}})))
     if (scenario === 'queued-superseded' || scenario === 'claimed-superseded') {
@@ -158,7 +162,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       if(expectedRequests>=2) assert.equal(model.requests.at(-1).provider,model.requests[0].provider);if(expectedRequests>=2) assert.equal(model.requests.at(-1).model,model.requests[0].model)
       const answers=agent.session.snapshotEvents().filter((event:any)=>event.type==='assistant/message' && event.data.message.content.some((b:any)=>b.type==='text'))
       assert.equal(answers.length,newRequest || correction ? 2 : 1);assert.match(JSON.stringify(answers[0]),/five/)
-      assert.equal(toolCalls,newRequest?2:1,'only independently requested work executes tools')
+      assert.equal(toolCalls,newRequest?2:1,'only independently requested work executes tools: '+JSON.stringify(agent.session.snapshotEvents().filter((event:any)=>event.type==='tool/result').map((event:any)=>event.data)))
       if(scenario==='finding' || scenario==='tool-evidence') assert.match(JSON.stringify(model.requests.at(-1).messages),/unverified suggestions/)
       if(newRequest) for(const request of model.requests.slice(3)) assert.doesNotMatch(JSON.stringify(request.messages),/unverified suggestions/)
       if(paired) { assert.equal(toolCalls,1); if(scenario==='paired-candidate') assert.deepEqual(model.requests.at(-1).tools,[]) }

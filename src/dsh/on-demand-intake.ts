@@ -1,3 +1,4 @@
+import { ExecutionSelectionPending } from './execution-pending.js'
 import type { DshAnswerContext } from './answer-context.js'
 import { executionClarification } from './intake-clarification.js'
 import type { DshLogEvent } from './session-memory-finalizer.js'
@@ -69,6 +70,7 @@ interface Turn {
   capture?: Promise<boolean>
   captureError?: unknown
   preparation?: Promise<void>
+  selectionPending?: boolean
   readonly preparationCalls: Set<string>
   readonly controller: AbortController
 }
@@ -311,6 +313,7 @@ export class OnDemandIntake {
   private async prepare(state: Turn, taskType: TaskType, signal: AbortSignal, requestIntent?: RequestIntentDecision,
     explicitIntent = false): Promise<void> {
     this.assertCurrent(state); signal.throwIfAborted()
+    if (state.selectionPending) throw new ExecutionSelectionPending()
     const resolved = requestIntent ?? state.requestIntent
     const clarification = executionClarification(state.task, resolved, state.requestIntentContext)
     if (clarification) throw new Error(clarification)
@@ -340,7 +343,15 @@ export class OnDemandIntake {
     })()
     this.watch(operation)
     state.preparation = operation
-    try { await operation } catch (error) { if (!['closed', 'stale'].includes(state.status)) state.status = 'stale'; throw error }
+    try { await operation } catch (error) {
+      if (!['closed', 'stale'].includes(state.status)) {
+        // A declined selection preserves this request for a conversational acknowledgement.
+        // It is not admission: preparation remains consumed and tools still need a ready host.
+        state.selectionPending = error instanceof ExecutionSelectionPending && !state.input.signal.aborted && !signal.aborted
+        state.status = state.selectionPending ? 'answer' : 'stale'
+      }
+      throw error
+    }
     finally { delete state.preparation }
   }
   private bindIntent(state: Turn, submission?: RequestIntentSubmission): RequestIntentDecision | undefined {

@@ -11,8 +11,8 @@ import { openConnection } from '../../../src/db/connection.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
-import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 import { nativeMock } from './native-mock.js'
+import { interpretedPreparation } from './coding-script.js'
 import { mockModelRoutes, modelSelectionAnswer, openaiModels } from './model-selection.js'
 import type { FinalizationInputMode } from '../../../src/dsh/efficiency.js'
 import type { DshMemoryFinalizer } from '../../../src/dsh/session-memory-finalizer.js'
@@ -73,7 +73,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined))
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   ctx.llm.registerAdapter(['mock'], provider)
-  const disposeApplicationVerifier = ctx.tools.register(tools.defineTool({ name: 'Bash', description: 'Run only the disposable fixture regression verifier.',
+  const disposeApplicationVerifier = ctx.tools.register(tools.defineTool({ name: 'bash', description: 'Run only the disposable fixture regression verifier.',
     parameters: { command: { type: 'string', required: true } },
     output: { schema: { type: 'object', additionalProperties: false, properties: { exitCode: { type: 'number', required: true } } },
       render: (_args: unknown, value: any) => [{ type: 'text', text: JSON.stringify(value) }] },
@@ -82,7 +82,9 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       await promisify(execFile)(process.execPath, ['fixtures/verify.mjs'], { cwd: root, timeout: 5000 })
       return { exitCode: 0 }
     } }))
-  const disposeTool = ctx.tools.register(tools.defineTool({ name: 'verify_migration', description: 'Validate a disposable fixture schema and checksum.',
+  // Use native process-tool names so verification intent exercises the real
+  // effect contract; arbitrary extension names have no verification authority.
+  const disposeTool = ctx.tools.register(tools.defineTool({ name: 'exec', description: 'Validate a disposable fixture schema and checksum.',
     parameters: { fixture: { type: 'number', required: true }, procedure: { type: 'string', required: true } },
     output: { schema: { type: 'object', additionalProperties: false, properties: { exitCode: { type: 'number', required: true }, observation: { type: 'string', required: true } } },
       render: (_args: unknown, result: any) => [{ type: 'text', text: result.observation }] },
@@ -160,7 +162,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
         const action = evidence.find(item => item.kind === 'action' && item.text.includes(PROCEDURE))
         const result = evidence.find(item => item.kind === 'result' && item.outcome === 'passed' && (item.actionSeq === undefined || item.actionSeq === action?.seq))
         const episode = action && result ? { goal: 'Validate a fixture migration', applicability: APPLICABILITY,
-          anchors: { error: 'SQLITE_BUSY', tool: 'verify_migration', target: 'fixture-store', version: 'fixture-v1' },
+          anchors: { error: 'SQLITE_BUSY', tool: 'exec', target: 'fixture-store', version: 'fixture-v1' },
           events: [{ kind: 'action', description: action.text, evidence: [action.seq] }, { kind: 'verification', description: result.text, evidence: [result.seq] }],
           procedure: PROCEDURE, verification: VERIFICATION, boundary: BOUNDARY, unresolved: [UNRESOLVED], avoidance: null } : evidence.length ? {
           goal: 'Read previous observations', applicability: 'Read-only probe', anchors: { error: 'unknown', tool: 'unknown', target: 'unknown', version: 'unknown' },
@@ -192,6 +194,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
         .at(-1)
       assert.ok(result && !result.isError, `Native memory review failed: ${JSON.stringify(result)}`)
       const status = JSON.parse(result.content.find((block: any) => block.type === 'text').text)
+      assert.equal(status.supported, true, `The current request must own execution memory: ${JSON.stringify(status)}`)
       const unresolved = status.items.find((item: any) => item.problem && item.problem !== 'verification_missing_failed_or_stale')
       if (unresolved) {
         assert.ok(++reviews <= 128, 'memory disposition did not converge')
@@ -208,7 +211,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
         assert.equal(verified, false, `Native verification did not satisfy the obligation: ${JSON.stringify(status)}`)
         verified = true
         script.unshift(start)
-        return call('Bash', { command: applicationCommand })
+        return call('bash', { command: applicationCommand })
       }
       return typeof step === 'function' ? step(request) : step
     }
@@ -225,16 +228,17 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     if (fault.saveFailure) await database(db => db.exec(`CREATE TEMP TRIGGER repeated_fail_before_commit BEFORE UPDATE OF status ON dsh_memory_finalizations
       WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'injected memory commit failure'); END;`))
     const response = `Completed fixture lifecycle ${number}.`
-    const task = `${route === 'normal' ? '通常実行で' : '役小角を使って'}、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測を確認' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`
-    // Match the existing fixture's verification request and read-only follow-up
-    // profiles while exercising the explicit default preparation protocol.
-    script.push(mock.toolCallResponse(`prepare-${number}`, TASK_PREPARE_TOOL, { taskType: readonly ? 'debug' : 'review' }))
+    const task = `${route === 'normal' ? '通常実行で' : '役小角を使って'}、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測の適用範囲を検証' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`
+    // Each round is a new request, including the read-only observation probe.
+    // Bind the scripted main-model interpretation to this turn's host evidence;
+    // legacy taskType alone leaves ownership unresolved without a decision provider.
+    script.push(interpretedPreparation(mock, `prepare-${number}`, 'new', 'verify', readonly ? 'debug' : 'review'))
     if (route === 'enno') script.push(...ennoScript(mock, number, readonly).map(step => {
       const name = step.find((chunk: any) => chunk.type === 'block-end' && chunk.block.type === 'tool-call')?.block.name
       return ['enno_ideal_submit', 'enno_work_report', 'enno_finish', 'enno_meditation_submit'].includes(name) ? withMemoryReview(step, readonly, false) : step
     }))
     else {
-      if (!readonly) script.push(withMemoryReview(mock.toolCallResponse(`verify-${number}`, 'verify_migration', { fixture: (number - 1) % 3, procedure: PROCEDURE }), false, false))
+      if (!readonly) script.push(withMemoryReview(mock.toolCallResponse(`verify-${number}`, 'exec', { fixture: (number - 1) % 3, procedure: PROCEDURE }), false, false))
     }
     script.push(route === 'normal' ? withMemoryReview(mock.textResponse(response), readonly, true) : mock.textResponse(response))
     agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
@@ -346,7 +350,7 @@ export function ennoScript(mock: ReturnType<typeof nativeMock>, round: number, r
     ideal: { objective: 'Validate the requested disposable fixture.', principles: ['Preserve the source data.'], skillContributions: [], successSignals: [VERIFICATION] }, advisoryDisposition: ideal }),
   mock.textResponse('The plan is ready.'), mock.toolCallResponse(`review-${round}`, 'enno_plan_review', plan),
   mock.toolCallResponse(`plan-${round}`, 'enno_plan_submit', { ...plan, advisoryDisposition: planning }),
-  ...(readonly ? [] : [mock.toolCallResponse(`verify-${round}`, 'verify_migration', { fixture: (round - 1) % 3, procedure: PROCEDURE })]),
+  ...(readonly ? [] : [mock.toolCallResponse(`verify-${round}`, 'exec', { fixture: (round - 1) % 3, procedure: PROCEDURE })]),
   mock.toolCallResponse(`work-${round}`, 'enno_work_report', { result: { outcome: 'completed', summary: VERIFICATION, mutated: false, changedPaths: [] } }),
   mock.toolCallResponse(`finish-${round}`, 'enno_finish', { advisoryDisposition: final, review: { decision: 'accept', summary: VERIFICATION } }),
   mock.toolCallResponse(`meditate-${round}`, 'enno_meditation_submit', { meditation: { summary: 'All fixture evidence remains applicable only to fixture-v1.', inspectedPaths: ['fixtures'], deletionCandidates: [] } })]

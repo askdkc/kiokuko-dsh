@@ -68,7 +68,7 @@ import { readExecutionFrame } from '../execution-frame.js'
 import { findSecret } from '../../memory/secrets.js'
 import { classifyRequestIntent, createRequestIntentContext, rebindRequestIntentDecision, requestIntentMessageRefs,
   requestIntentReferenceIds, requestIntentTaskType, type RequestIntentContext, type RequestIntentDecision } from '../decisions/request-intent.js'
-import { assertMemoryOwner } from '../memory-owner.js'
+import { assertMemoryOwner, createMemoryOwner } from '../memory-owner.js'
 import { executionClarification } from '../intake-clarification.js'
 
 export interface CoreModuleHost {
@@ -736,7 +736,11 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       listen('agent/pre-step', (payload: PreStep, next: () => Promise<any>) => track((async () => {
         if (stopped) return { kind: 'reject' }
         bind(payload.agent)
-        if (demand && (hasHumanInput(payload.messages) || demand.pending(payload.agent) || demand.continuing(payload.agent)) && await demand.capture(payload)) {
+        const reviewMessages = payload.messages.filter(message => message?.source?.form === ANSWER_REVIEW_FORM)
+        // The review coordinator validates its reserved continuation below.
+        // It retains the admitted request instead of advancing ordinary intake.
+        if (demand && (hasHumanInput(payload.messages) || reviewMessages.length === 0)
+          && (hasHumanInput(payload.messages) || demand.pending(payload.agent) || demand.continuing(payload.agent)) && await demand.capture(payload)) {
           const result = await next()
           return result.kind === 'enter' ? { ...result, messages: await demand.answerMessages(payload, result.messages) } : result
         }
@@ -751,7 +755,6 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           await tasks.finish({ ...row, admitted: true }, row.status)
         })
         const previous = active.get(payload.agent.session.id)
-        const reviewMessages = payload.messages.filter(message => message?.source?.form === ANSWER_REVIEW_FORM)
         if (hasHumanInput(payload.messages)) {
           answerReview.humanInput(payload.agent.session.id, payload.turn)
           if (reviewMessages.length) payload = { ...payload, messages: payload.messages.filter(message => message?.source?.form !== ANSWER_REVIEW_FORM) }
@@ -765,6 +768,9 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           try {
             if (!await answerReview.accept(payload.agent as ReviewAgent, payload.messages, payload.turn, capabilityCatalogDigest(capabilities))) return { kind: 'reject' }
           } catch { return { kind: 'reject' } }
+          const owner = previous.task.memoryOwner
+          if (owner) previous.task = { ...previous.task,
+            memoryOwner: createMemoryOwner(owner.kind, { ...owner, turn: payload.turn }) }
           previous.turn = payload.turn
           return nextInput()
         }

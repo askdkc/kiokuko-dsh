@@ -306,6 +306,22 @@ export class DshExecutionSupport {
     } catch { return messages }
   }
 
+  /** Capture the current identity before policy can refuse a call without running guards. */
+  mountPreExecution(ctx: Pick<SupportContext, 'on'>): void {
+    this.#disposers.push(ctx.on('tools/pre-execute', (execution: any, next: () => Promise<unknown>) => {
+      try {
+        const state = this.#states.get(execution.agent?.session?.id)
+        if (state && state.binding.nativeAgent === execution.agent && state.binding.nativeSession === execution.agent.session
+          && !state.binding.chat && !state.binding.terminal && !this.#started.has(execution)) {
+          this.#started.set(execution, {
+            binding: state.binding, epoch: state.monitor.humanEpoch, warnings: [...(state.monitor.presented ?? [])],
+          })
+        }
+      } catch { /* Observation never changes native policy. */ }
+      return next()
+    }, { prepend: true }))
+  }
+
   mount(ctx: SupportContext): void {
     const stateFor = (agent: any): SupportState | undefined => {
       const state = this.#states.get(agent?.session?.id)
@@ -325,7 +341,8 @@ export class DshExecutionSupport {
       const state = stateFor(execution.agent)
       if (!state || state.binding.chat || state.binding.terminal) return undefined
       try {
-        if (!this.#started.has(execution)) this.#started.set(execution, {
+        // The post-preparation guard supersedes the preliminary identity snapshot.
+        this.#started.set(execution, {
           binding: state.binding, epoch: state.monitor.humanEpoch, warnings: [...(state.monitor.presented ?? [])],
         })
         const operation = explorationOperation(execution.name, execution.arguments, state.binding.cwd)

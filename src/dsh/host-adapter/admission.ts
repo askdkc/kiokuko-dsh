@@ -393,7 +393,12 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
       if (hasHumanInput(reviewMessages)) answerReview.humanInput(event.sessionId, event.turn)
       if (!hasHumanInput(reviewMessages) && reviewMessages.some(message => objectRecord(objectRecord(message)?.source)?.form === ANSWER_REVIEW_FORM)) {
         if (!previous || !event.nativeAgent || !await answerReview.accept(event.nativeAgent as ReviewAgent, reviewMessages, event.turn, event.capabilities.digest)) throw new Error('Unbound answer review continuation')
-        const continued = { admitted: true, prepared: previous.prepared, catalog: previous.catalog }
+        // Only the coordinator's exact reserved message may carry this owner
+        // into another native turn; the request and run remain unchanged.
+        const owner = previous.prepared.memoryOwner
+        const prepared = owner ? { ...previous.prepared,
+          memoryOwner: createMemoryOwner(owner.kind, { ...owner, turn: event.turn }) } : previous.prepared
+        const continued = { admitted: true, prepared, catalog: previous.catalog }
         continuedTurns.set(cacheKey, { fingerprint, result: continued, nativeAgent: event.nativeAgent, ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }) })
         await bindAndRecord(event, continued, generation)
         return continued

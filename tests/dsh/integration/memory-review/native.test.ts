@@ -7,20 +7,22 @@ import { pathToFileURL } from 'node:url'
 import { createDshHostAdapter } from '../../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../../src/dsh/composition.js'
 import { nativeMock } from '../../helpers/native-mock.js'
+import { interpretedPreparation, toolValue } from '../../helpers/coding-script.js'
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT
 
-for(const intakeMode of ['on-demand','eager'] as const)for(const mode of ['off','observe','active'] as const)test(`${intakeMode==='eager'?'legacy eager native T01/T06/T11/T39: open chat saves and retrieves on the next request':'default on-demand native: ordinary answers do not open a review execution'} with ennoMemory=${mode}`, {skip:!packages,timeout:30000},async()=>{
+for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const mode of ['off','observe','active'] as const)test(`${intakeMode==='legacy-owner'?'legacy-owner native T01/T06/T11/T39: open chat saves and retrieves on the next request':`${intakeMode} native: ordinary answers do not open a review execution`} with ennoMemory=${mode}`, {skip:!packages,timeout:30000},async()=>{
   const modules=await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','commands'].map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
   const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,skills,commands]=modules
   const root=await mkdtemp(join(tmpdir(),'native-memory-review-'));await mkdir(join(root,'.git'))
   const ctx=new cordis.Context(),fibers:any[]=[]
+  let releaseLegacyOwner:(()=>void)|undefined
   let adapter:ReturnType<typeof createDshHostAdapter>|undefined,composition:Awaited<ReturnType<typeof mountDshComposition>>|undefined
   try{
     for(const plugin of [llm,session,projection,systemPrompt,tools,agents,skills,commands])fibers.push(await ctx.plugin(plugin.default,plugin===systemPrompt?{persona:''}:undefined))
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
-    fibers.push(await ctx.plugin({name:'review-questions',apply(context:any){return context.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:['chat']}))}}})}}))
+    fibers.push(await ctx.plugin({name:'review-questions',apply(context:any){return context.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='enno-execution-mode'?'通常実行':'chat']}))}}})}}))
     const mock=nativeMock(llm)
-    let mainCalls=0,reviewCalls=0,explainNext:string|undefined
+    let mainCalls=0,reviewCalls=0,explainNext:string|undefined,prepareExplanation=false
     const requests:any[]=[];const errors:string[]=[];ctx.on('agent/error',(event:any)=>errors.push(String(event.error?.message)))
     class Provider extends llm.LlmAdapter {
       async listModels(provider:string){return [{provider,id:'fixed',name:'fixed'}]}
@@ -36,7 +38,8 @@ for(const intakeMode of ['on-demand','eager'] as const)for(const mode of ['off',
           // from ordinary responses and Memory Review's own extraction.
           assert.deepEqual(request.tools,[])
           yield*mock.textResponse('[]')
-        }else if(explainNext){const entryId=explainNext;explainNext=undefined;yield*mock.toolCallResponse('explain-memory','memory_explain',{entryId})
+        }else if(prepareExplanation){prepareExplanation=false;yield*interpretedPreparation(mock,'prepare-explanation','new','research','research')(request)
+        }else if(explainNext){assert.equal(toolValue(request,'prepare-explanation').prepared,true);const entryId=explainNext;explainNext=undefined;yield*mock.toolCallResponse('explain-memory','memory_explain',{entryId})
         }else{mainCalls++;yield*mock.textResponse('回答しました。')}
       }
     }
@@ -44,9 +47,26 @@ for(const intakeMode of ['on-demand','eager'] as const)for(const mode of ['off',
     // A real native durability listener snapshots only the prefix present on entry.
     const persisted:any[]=[]
     ctx.on('session/flush',(s:any)=>{persisted.splice(0,persisted.length,...s.snapshotEvents());return Promise.resolve()})
-    // This fixture deliberately tests legacy chat-ledger review with classification disabled, not the new uncertainty-to-reasoning path. The default path has no intake override.
-    adapter=createDshHostAdapter(ctx,{...(intakeMode==='eager'?{intakeMode,typedDecisions:{mode:'off'}}:{}),repositoryRoot:root,databasePath:join(root,'state.sqlite3'),agenticReplay:{enabled:false},ennoMemory:{mode}})
+    // Disabling decisions defers interpretation to the model in eager mode too.
+    // A legacy owner is seeded separately to cover historical chat-ledger review.
+    adapter=createDshHostAdapter(ctx,{...(intakeMode!=='on-demand'?{intakeMode:'eager',typedDecisions:{mode:'off'}}:{}),repositoryRoot:root,databasePath:join(root,'state.sqlite3'),agenticReplay:{enabled:false},ennoMemory:{mode}})
     composition=await mountDshComposition(ctx,adapter.host)
+    if(intakeMode==='legacy-owner'){
+      const seeded=new Set<string>()
+      releaseLegacyOwner=ctx.on('agent/pre-step',async(payload:any,next:()=>Promise<unknown>)=>{
+        if(['native-review','native-held'].includes(payload.agent.session.id)&&!seeded.has(payload.agent.session.id)){
+          seeded.add(payload.agent.session.id)
+          const {requestIntent:_intent,...event}=await adapter!.host.mapPreStep!(payload)
+          // Reconstruct a chat owner accepted by the pre-conversation-first host.
+          // Keep the real current ingress for all subsequent native turns.
+          const admitted=await adapter!.host.intakeGate!.prepare({...event,profileHints:{taskType:'chat'},
+            deferTaskTypeInference:false,memoryOwner:'conversation'})
+          assert.equal(admitted.admitted,true,'the legacy owner fixture must be admitted')
+          assert.equal(admitted.prepared.intake.profile.taskType,'chat')
+        }
+        return next()
+      },{prepend:true})
+    }
     const excluded=await ctx.agentLoop.create(session.SessionId('native-excluded'),{provider:'review-native',model:'fixed'},{cwd:root,delegationDepth:0})
     assert.equal((await adapter.host.memoryReview!.command(excluded.session,'exclude session')).state,'excluded')
     assert.equal(((await adapter.host.memoryReview!.command(excluded.session,'status')).capture as {mode:string}).mode,'excluded')
@@ -56,7 +76,7 @@ for(const intakeMode of ['on-demand','eager'] as const)for(const mode of ['off',
       agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:`EMBERLANGプロジェクトでは回答に日本語を使う。 ${turn}`}]}))
       await wait(()=>agent.status==='idle'&&mainCalls===turn)
     }
-    if(intakeMode==='on-demand'){
+    if(intakeMode!=='legacy-owner'){
       assert.equal(reviewCalls,0,'ordinary answers must not dispatch run-bound memory review')
       assert.equal(adapter.host.resolveSessionRunId!(agent.session),undefined)
       const counts=await adapter.host.runtime!.withDatabase(db=>Object.fromEntries(['ledger_runs','task_memory_bindings','memory_review_jobs']
@@ -77,14 +97,23 @@ for(const intakeMode of ['on-demand','eager'] as const)for(const mode of ['off',
     const final=requests.filter(r=>!r.system?.startsWith('Review durable')).at(-1)
     assert.match(JSON.stringify(final.messages),/EMBERLANGプロジェクトの応答言語設定は日本語/)
     const delivered=await adapter.host.runtime!.withDatabase(db=>db.prepare('SELECT count(*) AS n FROM context_delivery_entries WHERE entry_id=?').get<{n:number}>(saved.id)!.n)
-    assert.ok(delivered>0,'new memory must be selected, not merely echoed from native chat history')
+    assert.equal(delivered,0,'conversational retrieval must not create execution delivery receipts')
+    const memorySnapshots=final.messages.filter((message:any)=>message.source?.form==='snapshot')
+      .flatMap((message:any)=>message.source.sections??[]).filter((section:any)=>section.name===`memory:memory:${saved.id}`)
+    assert.ok(memorySnapshots.length>0,'new memory must be selected into a source-bound snapshot, not merely echoed from native chat history')
+    assert.match(JSON.stringify(memorySnapshots),/EMBERLANGプロジェクトの応答言語設定は日本語/)
     assert.ok(persisted.length>0)
-    const explained=await ctx.commands.execute(agent, `/kioku-memory explain ${saved.id} --json`, [], new AbortController().signal)
-    assert.equal(explained.result.kind,'success');assert.equal(JSON.parse(explained.result.text).evidenceStatus,'source_attached')
-    explainNext=saved.id
-    agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'保存した根拠を確認して。'}]}))
-    await wait(()=>agent.status==='idle'&&mainCalls===10)
-    const forgotten=await ctx.commands.execute(agent, `/kioku-memory forget ${saved.id} --revision 1 --json`, [], new AbortController().signal)
+    // Explaining stored evidence is independently requested tool-backed work.
+    // Exclude further capture before preparing it; the saved memory remains usable.
+    assert.equal((await adapter.host.memoryReview!.command(agent.session,'exclude session')).state,'excluded')
+    const inspector=await ctx.agentLoop.create(session.SessionId('native-inspector'),{provider:'review-native',model:'fixed'},{cwd:root,delegationDepth:0})
+    assert.equal((await adapter.host.memoryReview!.command(inspector.session,'exclude session')).state,'excluded')
+    explainNext=saved.id;prepareExplanation=true
+    inspector.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'保存した根拠を確認して。'}]}))
+    await wait(()=>inspector.status==='idle'&&mainCalls===10)
+    const explained=await ctx.commands.execute(inspector, `/kioku-memory explain ${saved.id} --json`, [], new AbortController().signal)
+    assert.equal(explained.result.kind,'success',explained.result.text);assert.equal(JSON.parse(explained.result.text).evidenceStatus,'source_attached')
+    const forgotten=await ctx.commands.execute(inspector, `/kioku-memory forget ${saved.id} --revision 1 --json`, [], new AbortController().signal)
     assert.equal(forgotten.result.kind,'success',forgotten.result.text)
     agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'EMBERLANG の回答言語は？'}]}))
     await wait(()=>agent.status==='idle'&&mainCalls===11)
@@ -101,5 +130,5 @@ for(const intakeMode of ['on-demand','eager'] as const)for(const mode of ['off',
     const notice=await adapter.host.runtime!.withDatabase(db=>db.prepare("SELECT text FROM dsh_session_notices WHERE dsh_session_id=? AND kind='status'").get<{text:string}>(held.session.id))
     assert.match(notice?.text??'',/kioku-memory-review exclude session/)
     assert.equal(((await adapter.host.memoryReview!.command(held.session,'status')).capture as {mode:string}).mode,'held')
-  }finally{await composition?.dispose();await adapter?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();await rm(root,{recursive:true,force:true})}
+  }finally{releaseLegacyOwner?.();await composition?.dispose();await adapter?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();await rm(root,{recursive:true,force:true})}
 })

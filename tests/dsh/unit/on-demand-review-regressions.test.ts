@@ -1,3 +1,4 @@
+import { ExecutionSelectionPending } from '../../../src/dsh/execution-pending.js'
 /** Independent intake-boundary regressions using the actual published native tool registry.
  * Host admission is a dependency double; these tests do not claim model intent quality.
  */
@@ -654,4 +655,28 @@ test('pending confirmation resumes only after the host admits the exact current 
   try { assert.equal((await f.execute()).isError, true) } finally { deny() }
   f.ready(2)
   assert.equal((await f.execute()).isError, true, 'the confirmation cannot authorize another turn')
+})
+
+
+test('declining execution selection keeps acknowledgement available without admitting tools or replaying preparation', async t => {
+  let attempts = 0
+  const f = await fixture(t, { prepare: async () => { attempts++; throw new ExecutionSelectionPending() } })
+  await f.capture()
+  assert.equal((await f.prepare()).isError, true)
+  assert.equal(f.intake.snapshot(f.session.id)?.status, 'answer')
+  assert.equal(await f.capture(), true, 'the same human input can reach the next reasoning step')
+  assert.equal((await f.execute()).isError, true)
+  assert.equal(f.bodies(), 0)
+  assert.equal((await f.prepare()).isError, true, 'the model cannot reopen a declined choice within the same turn')
+  assert.equal(attempts, 1)
+})
+
+test('unexpected preparation failure remains stale instead of reopening conversational admission', async t => {
+  const f = await fixture(t, { prepare: async () => { throw new Error('Admission state was superseded') } })
+  await f.capture()
+  assert.equal((await f.prepare()).isError, true)
+  assert.equal(f.intake.snapshot(f.session.id)?.status, 'stale')
+  await assert.rejects(f.capture(), /stale/)
+  assert.equal((await f.execute()).isError, true)
+  assert.equal(f.bodies(), 0)
 })

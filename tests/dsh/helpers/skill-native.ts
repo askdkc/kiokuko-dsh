@@ -45,6 +45,9 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   }
   try {
   await mkdir(workspace, { recursive: true })
+  // Keep repository discovery inside this disposable workspace, even when the
+  // system temporary directory belongs to an enclosing checkout.
+  await mkdir(join(workspace, '.git'), { recursive: true })
   fibers.push(await ctx.plugin(fsLocal.default, { cwd: workspace }))
   fibers.push(await ctx.plugin(workingDirectory.default, { defaultDirectory: workspace }))
   fibers.push(await ctx.plugin({name:'headless-web-connection',apply(c:any){return c.provide('connection',{fetch:{register:()=>()=>{}}})}}))

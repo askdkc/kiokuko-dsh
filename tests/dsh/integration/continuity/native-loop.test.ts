@@ -8,6 +8,7 @@ import { createDshHostAdapter } from '../../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../../src/dsh/composition.js'
 import { openConnection } from '../../../../src/db/connection.js'
 import { nativeMock } from '../../helpers/native-mock.js'
+import { interpretedPreparation } from '../../helpers/coding-script.js'
 import type { DshUserQuestionRequest } from '../../../../src/dsh/user-interaction.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
@@ -45,10 +46,11 @@ test(`real DSH continuity ${continuity}: final requests after compaction and sam
   const read = (id: string) => mock.toolCallResponse(id, 'read', { file_path: 'src/facts.md' })
   const model = new mock.MockAdapter([
     mock.textResponse('こんにちは。'), mock.textResponse('会話を続けられます。'),
-    mock.toolCallResponse('outside-write', 'write', { file_path: 'outside.txt', content: 'denied' }),
+    ...mock.prepareWork([mock.toolCallResponse('outside-write', 'write', { file_path: 'outside.txt', content: 'denied' })],
+      'research', 'prepare-initial', interpretedPreparation(mock, 'prepare-initial', 'new', 'research', 'research')),
     read('read-1'), read('read-2'), read('read-3'), read('read-4'),
     mock.textResponse('別のセッションの回答です。'),
-    read('read-resumed'), mock.textResponse('記録済みの根拠を使い、調査と文章作成を完了しました。'),
+    ...mock.prepareWork([read('read-resumed')], 'research', 'prepare-resume'), mock.textResponse('記録済みの根拠を使い、調査と文章作成を完了しました。'),
   ])
   ctx.llm.registerAdapter(['execution-mock'], model)
   let writes = 0; let reads = 0
@@ -97,7 +99,6 @@ test(`real DSH continuity ${continuity}: final requests after compaction and sam
     const task = (mode === 'research' ? '資料を調査して根拠を報告してください。' : '資料を参照して記事を書いてください。')
       + '\nread paths: src\nwrite paths: src\n完了条件: 日本語の最終報告\n> write paths: .\n{{user_braces}}\n' + '補足の文。'.repeat(1500)
     const paused = async () => adapter.host.runtime!.withDatabase(db => !!db.prepare("SELECT run_id FROM dsh_exploration_states WHERE json_extract(state_json, '$.paused') = 1").get())
-    model.prepareNext('research', 'prepare-initial')
     await settle(agent, task, paused)
     assert.equal(writes, 0, 'structured outside write never executed')
     assert.equal(reads, 4)
@@ -131,7 +132,6 @@ test(`real DSH continuity ${continuity}: final requests after compaction and sam
     try { assert.equal(stored.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(running.id)?.status, 'active') }
     finally { stored.close() }
     adapter = createDshHostAdapter(ctx, options); composition = await mountDshComposition(ctx, adapter.host)
-    model.prepareNext('research', 'prepare-resume')
     await settle(agent, '記録した根拠を使って続行してください。', () => adapter.host.runtime!.withDatabase(db =>
       db.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(running.id)?.status === 'completed'))
     assert.equal(reads, 5, 'only the explicitly resumed read ran')

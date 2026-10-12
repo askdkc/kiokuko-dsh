@@ -35,6 +35,7 @@ async function fixture() {
   let guard!: (execution: any) => string | undefined
   support.mount({ on(name, fn) { callbacks.set(name, fn); return () => { callbacks.delete(name) } },
     tools: { guard(fn) { guard = fn; return () => undefined } } })
+  support.mountPreExecution({ on(name, fn) { callbacks.set(name, fn); return () => { callbacks.delete(name) } } })
   await support.refresh(binding, true)
   const result = { isError: false, content: [{ type: 'text', text: 'facts' }] }
   function read(id: string, overrides: object = {}) {
@@ -322,5 +323,71 @@ test('a late result from a prior human generation cannot affect the resumed expl
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_execution_evidence').get<{ n: number }>()!.n, 0)
     f.read('new'); await f.assemble()
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_execution_evidence').get<{ n: number }>()!.n, 1)
+  } finally { await f.close() }
+})
+
+
+test('pre-execute denials retain bound failure evidence without guards or stale-generation leakage', async () => {
+  const f = await fixture()
+  try {
+    const refused = { name: 'write', arguments: { file_path: 'outside.md' }, agent: f.agent, callId: 'refused' }
+    const decision = { kind: 'deny', reason: 'Inspection cannot change artifacts' }
+    const failed = { isError: true, content: [{ type: 'text', text: decision.reason }] }
+    const preExecute = f.callbacks.get('tools/pre-execute')!
+    assert.equal(await preExecute(refused, async () => decision), decision, 'observation preserves the exact native decision')
+    f.callbacks.get('tools/result')!(refused, failed)
+    f.callbacks.get('tools/result')!(refused, failed)
+    await f.assemble()
+    const evidence = f.db.prepare('SELECT evidence_json AS json FROM dsh_execution_evidence').all<{ json: string }>()
+    assert.equal(evidence.length, 1, 'a denied call is retained once even though no monotonic guard ran')
+    assert.equal(JSON.parse(evidence[0]!.json).toolSucceeded, false)
+    assert.equal(JSON.parse(evidence[0]!.json).operation.kind, 'write')
+    const delayed = { ...refused, callId: 'delayed-refusal' }
+    await preExecute(delayed, async () => decision)
+    await f.support.refresh({ ...f.binding, turn: 2, task: 'Continue inspecting' }, true)
+    f.callbacks.get('tools/result')!(delayed, failed)
+    const unbound = { ...refused, callId: 'unbound', agent: { session: f.agent.session } }
+    await preExecute(unbound, async () => decision)
+    f.callbacks.get('tools/result')!(unbound, failed)
+    await f.assemble()
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_execution_evidence').get<{ n: number }>()!.n, 1)
+  } finally { await f.close() }
+})
+
+for (const change of ['human-input', 'generation', 'run'] as const) test(`pre-execute refusal from an older ${change} binding is ignored`, async () => {
+  const f = await fixture()
+  try {
+    const execution = { agent: f.agent, name: 'write', arguments: { file_path: 'outside.md' }, callId: 'old-refusal' }
+    await f.callbacks.get('tools/pre-execute')!(execution, async () => ({ kind: 'deny', reason: 'refused' }))
+    let binding = { ...f.binding }
+    if (change === 'human-input') binding.humanInput = 'new-human-input-in-same-native-turn'
+    if (change === 'generation') binding.generation = 'next-work-lease'
+    if (change === 'run') {
+      const prepared = await prepareAgentTask(f.db, { requestId: 'next-execution', cwd: f.root, task: f.binding.task,
+        dshSessionId: 'session', profileHints: { taskType: 'research', target: 'src', expected: 'Report evidence', constraints: null }, capabilities: [], skillDiscoveryMode: 'off' })
+      binding.runId = prepared.run.runId
+      assert.notEqual(binding.runId, f.binding.runId)
+    }
+    await f.support.refresh(binding, change === 'human-input')
+    f.callbacks.get('tools/result')!(execution, { isError: true, content: [{ type: 'text', text: 'refused' }] })
+    await f.assemble()
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_execution_evidence').get<{ n: number }>()!.n, 0)
+  } finally { await f.close() }
+})
+
+test('post-preparation guard refreshes the preliminary observation identity for admitted reads', async () => {
+  const f = await fixture()
+  try {
+    const execution = { agent: f.agent, name: 'read', arguments: { file_path: 'src/facts.md' }, callId: 'fresh-read' }
+    await f.callbacks.get('tools/pre-execute')!(execution, async () => {
+      await f.support.refresh({ ...f.binding, turn: 2, humanInput: 'new-request' }, true)
+      return { kind: 'allow' }
+    })
+    assert.equal(f.guard(execution), undefined)
+    f.callbacks.get('tools/result')!(execution, f.result)
+    await f.assemble()
+    const evidence = f.db.prepare('SELECT evidence_json AS json FROM dsh_execution_evidence').all<{ json: string }>()
+    assert.equal(evidence.length, 1)
+    assert.equal(JSON.parse(evidence[0]!.json).turn, 2)
   } finally { await f.close() }
 })

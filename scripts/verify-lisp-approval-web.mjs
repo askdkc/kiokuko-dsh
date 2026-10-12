@@ -60,8 +60,16 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
  else {
  const code=mode.startsWith('apply')?'(kioku.files:propose-write "change.txt" "'+mode+'")':mode==='verify'?'(kioku.ci:verify :typecheck)':'(kioku.ci:verify :test :script "test:packages")';
  const callId=randomUUID();
- responses.push(...mock.prepareWork([mock.toolCallResponse(callId,'lisp_eval',{operationId:randomUUID(),code}),(input)=>{result=nativeToolResults(input.messages).find(value=>value.toolCallId===callId);return mock.textResponse('Fixture complete')}],'research',randomUUID()));
- agent.followup(llm.createUserMessage({content:[{type:'text',text:mode.startsWith('apply')?'Save the requested note in change.txt using Lisp.':'Verify the repository using Lisp.'}],source:{kind:'user'}}));await agent.whenIdle();
+ const taskType=mode.startsWith('apply')?'writing':'review';
+ // Script the main model's interpretation using the current host-bound evidence.
+ // A task label alone cannot authorize a file effect or verifier process.
+ const prepareId=randomUUID();
+ const prepare=input=>{const text=input.messages.flatMap(message=>message.source?.sections??[]).filter(section=>section.name==='on-demand-intake').at(-1)?.text;
+ const json=text?.split('Current request references and same-session work (host-bound, advisory only):\\n')[1]?.split('\\n')[0];
+ if(!json)throw new Error('Missing current host references before Lisp approval');
+ return mock.toolCallResponse(prepareId,'prepare_requested_work',{taskType,requestIntent:{relation:'new',action:mode.startsWith('apply')?'change':'verify',evidenceRefs:JSON.parse(json).references}})};
+ responses.push(...mock.prepareWork([mock.toolCallResponse(callId,'lisp_eval',{operationId:randomUUID(),code}),(input)=>{result=nativeToolResults(input.messages).find(value=>value.toolCallId===callId);return mock.textResponse('Fixture complete')}],taskType,prepareId,prepare));
+ agent.followup(llm.createUserMessage({content:[{type:'text',text:mode.startsWith('apply')?'Save the requested note in change.txt using Lisp.':'Verify the repository using Lisp. 通常実行で。'}],source:{kind:'user'}}));await agent.whenIdle();
  }
  if(result===undefined||responses.length) throw new Error('Native fixture '+mode+' did not complete its script: '+JSON.stringify(attempts.slice(-5)));
  await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode,result})+'\\n'); return {kind:'success',text:'Recorded '+mode};

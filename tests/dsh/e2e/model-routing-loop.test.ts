@@ -11,6 +11,7 @@ import { openConnection } from '../../../src/db/connection.js'
 import { installDshModelRouting } from '../../../src/dsh/model-routing.js'
 import { MODEL_ROLES, MODEL_TEMPLATES, type ModelBinding } from '../../../src/dsh/model-configuration.js'
 import { nativeMock } from '../helpers/native-mock.js'
+import { fixtureDefinition, interpretedPreparation, toolValue } from '../helpers/coding-script.js'
 import { loadJapaneseOutputSkill } from '../../../src/dsh/japanese-output-skill.js'
 import { DecisionService } from '../../../src/dsh/decisions/service.js'
 import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
@@ -96,7 +97,16 @@ for (const failure of ['insert', 'first-request', 'late-request', 'late-request-
         return { id: q.id, selected: [answer] }
       }) }) })
     } }); await questions
-    const adapter = createDshHostAdapter(h.ctx, { intakeMode: 'eager', typedDecisions: { mode: 'off' }, repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
+    const decisions = new DecisionService(TypedDecisionsConfig.parse({ mode: 'auto' }), () => ({
+      capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 },
+      evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'input-recovery-fixture',
+        answers: batch.questions.map(question => {
+          const choiceId = ({ 'task-type': 'writing', 'request-relation': 'new', 'request-action': 'change' } as Record<string, string>)[question.id] ?? (question.id.startsWith('request-proposal-') ? 'not_selected' : undefined)
+          return choiceId ? { id: question.id, status: 'selected' as const, choiceId }
+            : { id: question.id, status: 'abstained' as const, reason: 'insufficient' as const }
+        }) }),
+    }))
+    const adapter = createDshHostAdapter(h.ctx, { intakeMode: 'eager', decisions, repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
       migrationsDirectory: join(process.cwd(), 'migrations'), llm: { async *stream() { throw new Error('Optional memory backend unavailable') } } })
     const composition = await mountDshComposition(h.ctx, adapter.host)
     const model = new h.mock.MockAdapter(failure === 'insert' || failure === 'first-request' ? [h.mock.textResponse('verified')]
@@ -132,7 +142,7 @@ for (const failure of ['insert', 'first-request', 'late-request', 'late-request-
         assert.ok(JSON.stringify(model.requests[0]!.messages).includes('README.mdを修正してください。'))
       } else assert.deepEqual(replayed, [])
       assert.equal(model.requests.length, 1)
-      assert.equal(writes, failure === 'insert' || failure === 'first-request' ? 0 : 1)
+      assert.equal(writes, failure === 'insert' || failure === 'first-request' ? 0 : 1, JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result')))
       assert.deepEqual(errors.map(error => (error as Error).message), failure === 'insert' ? [] : ['injected request failure'])
       const claims = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT recovery_count, status FROM dsh_input_claim_backups ORDER BY native_turn').all())
       if (failure === 'insert') assert.deepEqual(claims, [])
@@ -287,7 +297,7 @@ test('native modular core applies model-auto to its first prepared prompt and re
     decisionCalls.push(Object.keys(request.questions).join(','))
     return Response.json({ model: request.model, answers: Object.fromEntries(Object.entries(request.questions).map(([id, q]: [string, any]) => {
       const keys = Object.keys(q.criteria), choice = id === 'model-route' ? 'luna-high'
-        : id === 'task-type' ? 'research' : keys[0]
+        : id === 'task-type' || id === 'request-action' ? 'research' : id === 'request-relation' ? 'new' : keys[0]
       return [id, { type: 'choice', choice, probabilities: Object.fromEntries(keys.map(key => [key, key === choice ? 1 : 0])), confidence: 1 }]
     })) })
   }
@@ -329,46 +339,119 @@ test('native modular core applies model-auto to its first prepared prompt and re
     assert.equal(headers[1].data.header.config.reasoningEffort, 'high')
   } finally { watchErrors(); watch(); await core.dispose(); globalThis.fetch = originalFetch; await meter.dispose(); await credentials.dispose(); await questions.dispose(); await h.dispose() }
 })
-test('native README normal execution: cancel, plugin reload, original input recovery, write, verification and fresh next-task choice', {
+test('native README document execution: reload, write, verification and next task without a coding choice', {
   skip: !packageRoot && !sourceRoot, timeout: 30_000,
 }, async () => {
   const h = await harness()
   await writeFile(join(h.root, 'README.md'), 'before\n')
-  let writes = 0, questionCount = 0
+  let writes = 0
+  const questions: string[] = []
   const edit = h.ctx.tools.register({ name: 'edit_readme', description: 'Apply the requested README correction.', parameters: { type: 'object', properties: {} },
     output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
     execute: async () => { writes++; await writeFile(join(h.root, 'README.md'), 'after\n'); assert.equal(await readFile(join(h.root, 'README.md'), 'utf8'), 'after\n'); return 'README edit verified' },
   })
-  const model = new h.mock.MockAdapter([h.mock.toolCallResponse('prepare-cancelled', 'prepare_requested_work', { taskType: 'debug' }), (request: any) => { assert.match(JSON.stringify(request.messages), /Execution preparation did not admit/); return h.mock.textResponse('作業を保持しました。') }, h.mock.toolCallResponse('edit-1', 'edit_readme', {}), h.mock.textResponse('READMEを修正し、内容を検証しました。'), h.mock.textResponse('次の修正も完了しました。')])
+  const model = new h.mock.MockAdapter([
+    ...h.mock.prepareWork([h.mock.toolCallResponse('edit-1', 'edit_readme', {})], 'writing', 'prepare-document',
+      interpretedPreparation(h.mock, 'prepare-document', 'new', 'change', 'writing')),
+    h.mock.textResponse('READMEを修正し、内容を検証しました。'),
+    ...h.mock.prepareWork([h.mock.toolCallResponse('edit-2', 'edit_readme', {})], 'writing', 'prepare-next-document',
+      interpretedPreparation(h.mock, 'prepare-next-document', 'new', 'change', 'writing')),
+    h.mock.textResponse('次のREADME修正も検証しました。'),
+  ])
+  h.ctx.llm.registerAdapter(['ordinary'], model)
+  const questionHost = h.ctx.plugin({ name: 'document-test-ui', apply(ctx: any) { return ctx.provide('userQuestions', { ask: async (request: any) => {
+    questions.push(...request.questions.map((question: any) => question.id)); return { answers: [] }
+  } }) } }); await questionHost
+  const options = { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'),
+    llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } }
+  let adapter = createDshHostAdapter(h.ctx, options)
+  let composition = await mountDshComposition(h.ctx, adapter.host)
+  const agent = await h.ctx.agentLoop.create(h.session.SessionId('document-session'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+  try {
+    await turn(h, agent, 'README.mdを修正してください。')
+    assert.equal(writes, 1)
+    assert.equal(model.requests.length, 3)
+    assert.match(JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'assistant/message').at(-1)), /検証しました/)
+    await composition.dispose(); await adapter.dispose()
+    adapter = createDshHostAdapter(h.ctx, options); composition = await mountDshComposition(h.ctx, adapter.host)
+    await turn(h, agent, 'README.mdの追記も実装してください。')
+    assert.equal(writes, 2)
+    assert.equal(model.requests.length, 6)
+    assert.deepEqual(questions, [], 'document editing does not require a coding or execution-mode choice')
+    assert.equal(await readFile(join(h.root, 'README.md'), 'utf8'), 'after\n')
+    const counts = await adapter.host.runtime!.withDatabase(db => ['enno_contracts', 'dsh_turn_receipts', 'dsh_continuation_outbox', 'dsh_coding_workflows'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
+    assert.deepEqual(counts, [0, 0, 0, 0])
+  } finally { await composition.dispose(); await adapter.dispose(); edit(); await questionHost.dispose(); await h.dispose() }
+})
+test('native code normal execution: cancel, plugin reload, original input recovery, write, verification and fresh next-task choice', {
+  skip: !packageRoot && !sourceRoot, timeout: 30_000,
+}, async () => {
+  const h = await harness()
+  await writeFile(join(h.root, 'feature.mjs'), 'before\n')
+  let writes = 0, questionCount = 0, codingChoices = 0
+  const edit = h.ctx.tools.register({ name: 'edit_feature', description: 'Apply the requested feature implementation.', parameters: { type: 'object', properties: {} },
+    output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
+    execute: async () => { writes++; await writeFile(join(h.root, 'feature.mjs'), 'after\n'); assert.equal(await readFile(join(h.root, 'feature.mjs'), 'utf8'), 'after\n'); return 'feature edit verified' },
+  })
+  const model = new h.mock.MockAdapter([
+    interpretedPreparation(h.mock, 'prepare-cancelled', 'new', 'change', 'debug'),
+    (request: any) => {
+      assert.match(JSON.stringify(request.messages), /実行方式・モデル構成の選択待ち/)
+      return h.mock.textResponse('作業を保持しました。')
+    },
+    h.mock.toolCallResponse('coding-status', 'coding_workflow', { action: 'status' }),
+    (request: any) => h.mock.toolCallResponse('coding-propose', 'coding_workflow', {
+      action: 'propose', expectedRevision: toolValue(request, 'coding-status').revision, definition: fixtureDefinition('feature.mjs'),
+    }),
+    h.mock.toolCallResponse('edit-1', 'edit_feature', {}),
+    h.mock.textResponse('feature.mjsを書き込み、内容を検証しました。受け入れ条件の検証は残っています。'),
+    h.mock.textResponse('次の変更を準備しました。'),
+  ])
   h.ctx.llm.registerAdapter(['ordinary'], model)
   const questions = h.ctx.plugin({ name: 'selection-test-ui', apply(ctx: any) { return ctx.provide('userQuestions', { ask: async (request: any) => {
-    const question = request.questions[0]; assert.equal(question.id, 'enno-execution-mode'); questionCount++
+    const question = request.questions[0];
+    if (question.id.startsWith('coding-lisp-')) { codingChoices++; return { answers: [{ id: question.id, selected: ['使わない'] }] } }
+    assert.equal(question.id, 'enno-execution-mode'); questionCount++
     return { answers: [{ id: question.id, selected: [questionCount === 1 ? '取消・作業を保持' : '通常実行'] }] }
   } }) } }); await questions
-  const options = { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'),
+  const decisions = new DecisionService(TypedDecisionsConfig.parse({ mode: 'auto' }), () => ({
+    capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 },
+    evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'cancel-reload-fixture',
+      answers: batch.questions.map(question => {
+        const choiceId = ({ 'task-type': 'debug', 'request-action': 'change',
+          'request-relation': (batch.state as { currentUserMessage?: string }).currentUserMessage === '続けてください。' ? 'same_scope_continuation' : 'new' } as Record<string, string>)[question.id] ?? (question.id.startsWith('request-proposal-') ? 'not_selected' : undefined)
+        return choiceId ? { id: question.id, status: 'selected' as const, choiceId }
+          : { id: question.id, status: 'abstained' as const, reason: 'insufficient' as const }
+      }) }),
+  }))
+  const options = { decisions, repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'),
     llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } }
   let adapter = createDshHostAdapter(h.ctx, options)
   let composition = await mountDshComposition(h.ctx, adapter.host)
   const agent = await h.ctx.agentLoop.create(h.session.SessionId('normal-session'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
   try {
-    await turn(h, agent, 'README.mdを修正してください。')
-    assert.equal(model.requests.length, 2)
+    await turn(h, agent, 'feature.mjsを実装してください。')
+    assert.equal(model.requests.length, 2, JSON.stringify(agent.session.snapshotEvents().slice(-5)))
     assert.equal(writes, 0)
+    assert.equal(questionCount, 1)
+    assert.equal(codingChoices, 0)
+    assert.equal(await readFile(join(h.root, 'feature.mjs'), 'utf8'), 'before\n')
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()?.n), 0)
     await composition.dispose(); await adapter.dispose()
     adapter = createDshHostAdapter(h.ctx, options); composition = await mountDshComposition(h.ctx, adapter.host)
     model.prepareNext('debug', 'prepare-recovered')
     await turn(h, agent, '続けてください。')
     await new Promise(resolve => setTimeout(resolve, 30))
-    assert.equal(writes, 1)
+    assert.equal(writes, 1, JSON.stringify(agent.session.snapshotEvents().filter((event: any) => ['turn/end', 'tool/result'].includes(event.type))))
     assert.equal(questionCount, 2)
-    assert.equal(model.requests.length, 5)
-    assert.ok(JSON.stringify(model.requests[3].messages).includes('README.mdを修正してください。'))
+    assert.equal(codingChoices, 1)
+    assert.equal(model.requests.length, 7)
+    assert.ok(JSON.stringify(model.requests[3].messages).includes('feature.mjsを実装してください。'))
     assert.equal(model.requests.every(r => r.provider === 'ordinary' && r.model === 'mock'), true)
     const counts = await adapter.host.runtime!.withDatabase(db => ['enno_contracts', 'dsh_turn_receipts', 'dsh_continuation_outbox'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
     assert.deepEqual(counts, [0, 0, 0])
-    model.prepareNext('debug', 'prepare-next-readme')
-    await turn(h, agent, 'README.mdの追記も実装してください。')
+    model.prepareNext('debug', 'prepare-next-feature')
+    await turn(h, agent, '別のfeature.mjsの変更も実装してください。')
     assert.equal(questionCount, 3)
   } finally { await composition.dispose(); await adapter.dispose(); edit(); await questions.dispose(); await h.dispose() }
 })

@@ -783,6 +783,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   efficiencyHost.configure({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
   // Register last so deferred preparation precedes the existing memory/completion pre-execute checks.
   if (demand) demand.mount(ctx as any, tools as any, systemPrompt)
+  // Observe the bound identity before inner pre-execute policies can refuse a tool.
+  executionSupport.mountPreExecution({ on: (name, listener, options) => onNativeServiceEvent(ctx, name, listener, options) })
   const host: DshCompositionHost = {
     ...(demand ? { onDemandIntake: demand } : {}),
     bypassNativeIntake: isGenericNativeChild,
