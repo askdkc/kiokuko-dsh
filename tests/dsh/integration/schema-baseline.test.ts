@@ -215,6 +215,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_memory_finalizations',
         'dsh_model_auto_routes',
         'dsh_model_auto_sessions',
+        'dsh_native_worker_routes',
         'dsh_orca_session_choices',
         'dsh_orca_trace_run_links',
         'dsh_orca_traces', 'dsh_owned_operations',
@@ -290,6 +291,18 @@ test('baseline initialization creates the complete DSH schema with clean integri
         "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'entries_fts_%' AND name NOT LIKE 'entries_trigram_%' ORDER BY name",
       ).all<{ name: string }>().map(({ name }) => name)
       assert.deepEqual(tables, expectedTables)
+
+      // Migration 037 persists child ownership without accepting invalid receipts.
+      const workerColumns = database.prepare('PRAGMA table_info(dsh_native_worker_routes)')
+        .all<{ name: string; pk: number }>()
+      assert.deepEqual(workerColumns.map(({ name }) => name),
+        ['child_session_id', 'parent_session_id', 'owner_json', 'state', 'created_at'])
+      assert.equal(workerColumns.find(({ name }) => name === 'child_session_id')?.pk, 1)
+      assert.deepEqual(database.prepare('PRAGMA index_info(idx_dsh_native_worker_routes_parent)')
+        .all<{ name: string }>().map(({ name }) => name), ['parent_session_id'])
+      const workerInsert = database.prepare('INSERT INTO dsh_native_worker_routes VALUES (?, ?, ?, ?, ?)')
+      assert.throws(() => workerInsert.run('child', 'parent', '{', 'active', '2026-10-12T00:00:00Z'), /CHECK/u)
+      assert.throws(() => workerInsert.run('child', 'parent', '{}', 'unknown', '2026-10-12T00:00:00Z'), /CHECK/u)
 
       // The ledger binds every run to exactly one DSH session identity.
       const runColumns = database.prepare('PRAGMA table_info(ledger_runs)').all<{ name: string }>().map(({ name }) => name)

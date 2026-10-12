@@ -1,29 +1,16 @@
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
 import type { Context } from "@deepseek-ai/cordis";
 import { join } from "node:path";
-import type { HeadWorkerConfiguration } from "../head-worker-configuration.js";
 import { nativeModelCatalog } from "../native-model-catalog.js";
 import { KiokukoModelsService } from "./service.js";
 import { ModelsConfigStore } from "./config-store.js";
+import { mounted } from "./session-selection.js";
+export { getHeadWorkerSessionSelection, getHeadWorkerForSession, clearHeadWorkerForSession, updateHeadWorkerEffortForSession } from "./session-selection.js";
 import {
   CredentialFile,
   defaultCredentialsFile,
 } from "./vendor/credentials.js";
 
-const mounted = new WeakMap<object, KiokukoModelsService>();
-/** The profile service owns durable choices; callers receive defensive snapshots. */
-export async function getHeadWorkerSessionSelection(llm: object, sessionId: string): Promise<{ configuration?: HeadWorkerConfiguration; revision: number }> {
-  return mounted.get(llm)?.headWorkerSelection(sessionId) ?? { revision: 0 };
-}
-export async function getHeadWorkerForSession(llm: object, sessionId: string) {
-  return (await getHeadWorkerSessionSelection(llm, sessionId)).configuration;
-}
-export async function clearHeadWorkerForSession(llm: object, sessionId: string, isCurrent?: () => boolean): Promise<void> {
-  await mounted.get(llm)?.clearHeadWorker(sessionId, isCurrent);
-}
-export async function updateHeadWorkerEffortForSession(llm: object, sessionId: string, reasoningEffort: string, isCurrent?: () => boolean): Promise<void> {
-  await mounted.get(llm)?.updateHeadWorkerEffort(sessionId, reasoningEffort, isCurrent);
-}
 export const MODELS_PATH = "/api/kiokuko.models";
 /** Secret operations are POST-only and never reflect input or provider response bodies. */
 export async function modelsResponse(

@@ -1,7 +1,7 @@
 import type { RoutableAgent } from './model-routing.js'
 import { NativeWorkerRouting } from './native-worker-routing.js'
 import { validateHeadWorker } from './head-worker-configuration.js'
-import { getHeadWorkerSessionSelection, clearHeadWorkerForSession, updateHeadWorkerEffortForSession } from './models/surface.js'
+import { getHeadWorkerSessionSelection, clearHeadWorkerForSession, updateHeadWorkerEffortForSession } from './models/session-selection.js'
 import { answerSkillContext, type AnswerSkillRegistry } from './answer-skills.js'
 import { DshAnswerContext } from './answer-context.js'
 import { IntakeModeConfig } from './intake-mode.js'
