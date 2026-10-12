@@ -46,7 +46,7 @@ test('isolated native profile: repair -> real test -> receipt -> candidate -> re
   }
   const command='node --test --test-reporter=tap src/parser.test.mjs'
   try{
-    await mkdir(join(f.dir,'.git'));await mkdir(join(f.dir,'src'))
+    await mkdir(join(f.dir,'src'))
     await writeFile(join(f.dir,'src/parser.test.mjs'),"import test from 'node:test';import assert from 'node:assert/strict';test('Native parser',()=>assert.equal(1+1,3));\n")
     f.responses.push(
       ...codingPrelude(f.mock,'repair-goal'),
