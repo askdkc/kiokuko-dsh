@@ -430,3 +430,32 @@ test('recording store ignores itself in Git and separates an actual worktree', a
     assert.match(execFileSync('git', ['-C', root, 'check-ignore', `.agenticreplay/runs/${b.agenticreplay_run_id}/manifest.json`], { encoding: 'utf8' }), /\.agenticreplay/u)
   } finally { await f.dispose() }
 })
+
+
+test('native structured errors and process failures remain failures despite a false flag; domain error data remains ordinary content', async () => {
+  const f = await agenticReplayFixture()
+  try {
+    const cases = [
+      { isError: false, error: { type: 'tool.execution', message: 'PRIVATE-ERROR-BODY' }, content: [] },
+      { isError: false, error: { type: 'provider.transport', status: 200, message: 'PRIVATE-ERROR-BODY' }, content: [] },
+      { isError: false, value: { exitCode: 1 }, content: [] },
+      { isError: false, value: { timedOut: true }, content: [] },
+      { isError: false, value: { error: { type: 'domain' } }, content: [{ type: 'text', text: '{"error":{"type":"example"}}' }] },
+    ]
+    for (const [index, result] of cases.entries()) {
+      const exec = { token: Symbol(), callId: `outcome-${index}`, rootCallId: `outcome-${index}`, name: 'patch', arguments: {} }
+      f.recorder.preTool(f.binding, exec)
+      f.recorder.toolResult(f.binding, exec, result)
+      assert.equal(result.isError, false, 'observation must not mutate native behavior')
+    }
+    await f.recorder.shutdown()
+    const row = (await f.reader.list(f.binding))[0]!
+    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    const results = events.filter(event => event.type === 'tool.result')
+    assert.deepEqual(results.map(event => event.attrs?.is_error), [true, true, true, true, false])
+    assert.ok(results.every(event => event.attrs?.native_is_error === false))
+    assert.ok(results.slice(0, 4).every(event => event.attrs?.error_flag_conflict === true))
+    assert.equal(results[4]?.attrs?.error_flag_conflict, undefined)
+    assert.equal(JSON.stringify(events).includes('PRIVATE-ERROR-BODY'), false)
+  } finally { await f.dispose() }
+})

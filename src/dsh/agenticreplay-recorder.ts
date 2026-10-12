@@ -4,7 +4,7 @@ import { constants } from 'node:fs'
 import { join } from 'node:path'
 import { loadAgenticReplayLibrary, installedAgenticReplayCoreVersion, type EventInit, type TraceWriter, type CreateTraceWriter, type CoreLibrary, type SchemaLibrary } from './agenticreplay-libraries.js'
 import type { AgenticReplayConfig } from './config.js'
-import { AGENTICREPLAY_CAPTURE, boundedAgenticReplayPayload, label, modelRequest, projectBlocks, record, usageAttrs } from './agenticreplay-event-mapper.js'
+import { AGENTICREPLAY_CAPTURE, boundedAgenticReplayPayload, label, modelRequest, projectBlocks, record, usageAttrs, toolResultOutcome } from './agenticreplay-event-mapper.js'
 import { checkPrivatePath, prepareAgenticReplayParent, workspaceKey } from './agenticreplay-security.js'
 import { agenticReplayDiskBytes, scanAgenticReplayTrace } from './agenticreplay-files.js'
 import { AgenticReplayError, agenticReplayErrorCode, type DshAgenticReplayBinding, type AgenticReplayToolExecution, type AgenticReplayTrace, type WithAgenticReplayIndex } from './agenticreplay-types.js'
@@ -407,7 +407,7 @@ export class DshAgenticReplayRecorder {
         projected = { payload: { format: 'dsh.tool.result.v1', content_omitted: true, omission_reason: 'payload_limit' },
           omitted: true, omissionReason: 'payload_limit' }
       }
-      this.#enqueue(trace, { type: 'tool.result', actor: 'tool', attrs: { name: label(exec.name), attemptId: id, is_error: r.isError,
+      this.#enqueue(trace, { type: 'tool.result', actor: 'tool', attrs: { name: label(exec.name), attemptId: id, ...toolResultOutcome(r),
         ...(projected.omitted ? { content_omitted: true, omission_reason: projected.omissionReason ?? 'payload_limit' } : {}) },
         payload: projected.payload }, ref)
       if (projected.omitted) this.#recordOmission(trace, 'tool.result', id, projected.omissionReason ?? 'payload_limit', ref)

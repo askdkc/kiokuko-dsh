@@ -585,3 +585,21 @@ session instead of treating a download, build, or package version as activation.
 The suite and optional Lisp module contain the bridge; the core artifact contains
 neither Lisp code nor parser/server dependencies. See [the API](lisp.md#read-only-code-intelligence)
 for outcomes, scope, disk freshness, budgets, and protected fences.
+
+### Observation and early verification
+
+DSH host intake is independent of same-named tools from external Kiokuko MCP
+servers; those tools must not substitute for the admitted DSH request.
+AgenticReplay classifies native structured error envelopes and failed process
+results as errors even when the native flag is false, retaining that flag and a
+conflict marker without copying private exception bodies. Domain JSON/text is
+not interpreted as a failure signal. This protects new DSH recordings; existing
+OpenCode recordings and the upstream recorder are not rewritten.
+
+Each execution-context refresh includes a bounded snapshot of the current coding
+workflow's pending or stale focused checks. It reads host evidence, survives a
+restart through the existing workflow ledger, and separates item checks from the
+final Goal check. The model is instructed to verify small edits early and reserve
+actual host capacity for verification/reporting. DSH does not expose a remaining
+step budget at this seam, so no numeric capacity or automatic budget enforcement
+is claimed. Missing or unavailable evidence cannot become a passing check.

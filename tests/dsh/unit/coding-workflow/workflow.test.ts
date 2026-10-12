@@ -10,10 +10,11 @@ import { CodingDefinitionSchema, type CodingDefinition } from '../../../../src/d
 import { codingControlOrRead, codingIntent, codingContinuation, documentEditIntent, documentContinuation } from '../../../../src/dsh/coding-workflow/intent.js'
 import { initializeCodingWorkflow, readCodingWorkflow } from '../../../../src/dsh/coding-workflow/store.js'
 import { answerCodingChoice, assertCodingDispatch, codingItems, codingStatus, nextCodingWork, proposeCodingWorkflow,
-  recordCodingAttempt, stopCodingWorkflow, synchronizeCodingWorkflow } from '../../../../src/dsh/coding-workflow/service.js'
+  recordCodingAttempt, stopCodingWorkflow, synchronizeCodingWorkflow, codingVerificationText, reportCodingBlocker } from '../../../../src/dsh/coding-workflow/service.js'
 import { assessTaskCompletion, bindTaskCriterion, taskCompletionBlocksClose, beginTaskCompletionExecution, finishTaskCompletionExecution } from '../../../../src/dsh/task-completion.js'
 import { OwnedExecutionService, runOwnedProcess } from '../../../../src/dsh/owned-execution.js'
 import { parseCodingChoice, mountCodingWorkflow } from '../../../../src/dsh/coding-workflow/host.js'
+import { DshExecutionSupport } from '../../../../src/dsh/execution-support.js'
 import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../../src/dsh/decisions/request-intent.js'
 
 export const definition: CodingDefinition = {
@@ -311,4 +312,51 @@ test('scope revision during native approval invalidates the queued effect and th
     assert.equal(readCodingWorkflow(f.db, f.identity.runId)!.choice.state, 'pending')
     await assert.rejects(readFile(join(f.root, 'late')), { code: 'ENOENT' })
   } finally { host.unmount(); await f.close() }
+})
+
+
+test('current and restarted model snapshots expose pending and stale checks before more implementation', async () => {
+  const f = await fixture()
+  const runtime = { withDatabase: async (fn: any) => fn(f.db) }
+  const binding = { ...f.identity, cwd: f.root, task: 'Implement the parser in src/parser.mjs', turn: 1,
+    generation: 'verification-fixture', terminal: false, chat: false }
+  const support = new DshExecutionSupport(runtime)
+  try {
+    f.propose()
+    assert.match(codingVerificationText(f.db, f.identity), /"next":"answer_lisp_choice"/)
+    f.choose(); f.bind('parser-check'); f.bind('goal-check')
+    await support.refresh(binding, true)
+    const assembly = support.projectMessages('session', []) as any[]
+    const initial = assembly.at(-1)?.content[0].text
+    assert.match(initial, /Current coding verification/)
+    assert.match(initial, /"activeItemId":"parser"/)
+    assert.match(initial, /"criterionId":"parser-check","state":"unknown"/)
+    assert.match(initial, /Remaining capacity is unknown here/)
+    await f.execute('kioku_exec', { command: f.command }, 'verify-item')
+    await support.refresh(binding, false)
+    assert.match(support.text('session'), /"criterionId":"goal-check","state":"unknown"/)
+    assert.match(support.text('session'), /"activeItemId":null/)
+    await support.refresh({ ...binding, terminal: true }, false)
+    assert.match(support.text('session'), /"next":"report_observed_checks"/)
+    assert.doesNotMatch(support.text('session'), /Run the bound focused checks/)
+    await f.restart()
+    const resumed = new DshExecutionSupport(runtime)
+    try {
+      await resumed.refresh(binding, false)
+      assert.match(resumed.text('session'), /"criterionId":"goal-check","state":"unknown"/)
+      await writeFile(join(f.root, 'src/check.test.mjs'), 'changed source')
+      await resumed.refresh(binding, false)
+      assert.match(resumed.text('session'), /"criterionId":"parser-check","state":"stale"/)
+      assert.match(resumed.text('session'), /"verified":false/)
+      assert.throws(() => codingVerificationText(f.db, { ...f.identity, sessionId: 'foreign' }), /owner/)
+      const current = readCodingWorkflow(f.db, f.identity.runId)!
+      reportCodingBlocker(f.db, f.identity, 'verification-blocker', current.revision, {
+        criterionIds: [], kind: 'environment', cause: 'Verifier unavailable', required: 'Restore verifier', recovery: [], resumeWhen: 'Verifier is available',
+      })
+      await resumed.refresh(binding, false)
+      assert.match(resumed.text('session'), /"next":"resolve_blocker"/)
+      assert.doesNotMatch(resumed.text('session'), /Run the bound focused checks/)
+
+    } finally { resumed.dispose() }
+  } finally { support.dispose(); await f.close() }
 })

@@ -106,3 +106,18 @@ export function usageAttrs(value: unknown): Record<string, unknown> {
     ...(output === undefined ? {} : { output_tokens: output }),
     ...(read === undefined ? {} : { cache_read_tokens: read }), ...(write === undefined ? {} : { cache_write_tokens: write }) }
 }
+
+
+/** Classify only the native result envelope; JSON/text returned as domain data is not an error signal. */
+export function toolResultOutcome(value: Record<string, any>): Record<string, unknown> {
+  const error = record(value.error)
+  const structured = Object.keys(error).length > 0
+  const process = record(value.value)
+  const processFailed = process.timedOut === true || process.aborted === true
+    || typeof process.signal === 'string' && process.signal.length > 0
+    || Number.isSafeInteger(process.exitCode) && process.exitCode !== 0
+  const failed = value.isError === true || structured || processFailed
+  return { is_error: failed, native_is_error: value.isError,
+    ...(structured ? { error_source: 'native_error_envelope' } : processFailed ? { error_source: 'native_process_result' } : {}),
+    ...(failed && value.isError === false ? { error_flag_conflict: true } : {}) }
+}

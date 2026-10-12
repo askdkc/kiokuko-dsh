@@ -10,6 +10,7 @@ import { withImmediateTransaction } from '../db/transaction.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { executionFrameText, executionPathDenial, executionProposals, readExecutionFrame, saveExecutionFrame,
   updateExecutionFrame, extractExecutionConditions, type TaskExecutionFrame } from './execution-frame.js'
+import { codingVerificationText } from './coding-workflow/service.js'
 import { explorationOperation, newExplorationState, observeExploration, recordObject, evidencePresentation, acquiredReadRange,
   type ExecutionEvidence, type ExplorationState } from './exploration.js'
 
@@ -33,6 +34,7 @@ interface SupportState {
   frame?: TaskExecutionFrame
   policyReady: boolean
   degraded: boolean
+  verification?: string
   monitor: ExplorationState
   pending: ExecutionEvidence[]
   pendingIds: Set<string>
@@ -87,6 +89,7 @@ export class DshExecutionSupport {
     const current = state
     const serial = ++current.serial
     current.policyReady = false
+    delete current.verification
     if (this.#config.mode !== 'off') {
       delete current.canonicalWorkspace
       try { current.canonicalWorkspace = realpathSync(binding.cwd) } catch { /* Only the supplemental owner is unavailable. */ }
@@ -112,6 +115,13 @@ export class DshExecutionSupport {
     } catch {
       if (current.binding === binding && !this.#disposed) current.degraded = true
       return
+    }
+    try {
+      const verification = await this.runtime.withDatabase(db => codingVerificationText(db, { runId: binding.runId,
+        sessionId: binding.sessionId, repositoryRoot: binding.cwd }, binding.terminal))
+      if (current.binding === binding && current.serial === serial && !this.#disposed) current.verification = verification
+    } catch {
+      if (current.binding === binding && current.serial === serial && !this.#disposed) current.verification = 'Coding verification evidence unavailable. Do not claim checks passed; recover the current workflow before relying on it.'
     }
     try {
       const pending = [...current.pending]
@@ -239,10 +249,10 @@ export class DshExecutionSupport {
     const state = this.#states.get(sessionId)
     if (!state || state.binding.chat) return ''
     if (!state.policyReady) return 'Kiokuko task path policy is unavailable. Structured file operations are paused; conversation and recovery remain available.'
-    if (state.degraded) return [state.frame ? executionFrameText(state.frame) : '',
+    if (state.degraded) return [state.frame ? executionFrameText(state.frame) : '', state.verification ?? '',
       'Kiokuko exploration evidence is degraded. Do not claim evidence coverage is complete.'].filter(Boolean).join('\n')
     const evidence = state.evidence.slice(-16).map(item => `${item.id.slice(0, 12)} ${item.operation.paths.join(', ').slice(0, 512)} ${JSON.stringify(item.operation.range).slice(0, 256)}: ${item.presentation} (tool success: ${item.toolSucceeded ?? 'unknown'}; acquired range: ${JSON.stringify(item.acquiredRange ?? null)}; acquired: ${item.acquisition ?? 'unknown'}; source event: ${item.sourceSeq ?? 'unknown'}; result digest: ${item.digest.slice(0, 12)})`)
-    const legacy = [state.frame ? executionFrameText(state.frame) : '', state.binding.terminal ? 'Terminal state: report recorded results now. Do not run more tools.' : state.monitor.notice ?? '',
+    const legacy = [state.frame ? executionFrameText(state.frame) : '', state.verification ?? '', state.binding.terminal ? 'Terminal state: report recorded results now. Do not run more tools.' : state.monitor.notice ?? '',
       evidence.length ? `Recent evidence presentation (specified ranges only):\n${evidence.join('\n').slice(0, 4096)}` : ''].filter(Boolean).join('\n')
     if (this.#config.mode === 'off') return legacy
     try {
@@ -254,11 +264,11 @@ export class DshExecutionSupport {
       const projection = renderContinuationView(view, this.#config)
       state.projection = projection
       if (this.#config.mode === 'shadow') return legacy
-      return [state.frame ? executionFrameText(state.frame) : '', state.binding.terminal
+      return [state.frame ? executionFrameText(state.frame) : '', state.verification ?? '', state.binding.terminal
         ? 'Terminal state: report recorded results now. Do not run more tools.' : state.monitor.notice ?? '', projection.text].filter(Boolean).join('\n')
     } catch {
       delete state.projection
-      return this.#config.mode === 'shadow' ? legacy : [state.frame ? executionFrameText(state.frame) : '',
+      return this.#config.mode === 'shadow' ? legacy : [state.frame ? executionFrameText(state.frame) : '', state.verification ?? '',
         state.binding.terminal ? 'Terminal state: report recorded results now. Do not run more tools.' : state.monitor.notice ?? '',
         'Continuity unavailable. Preserve the original request and current directive; no completeness or verification claim.'].filter(Boolean).join('\n')
     }

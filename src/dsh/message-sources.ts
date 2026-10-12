@@ -3,6 +3,7 @@ import { findSecret } from '../memory/secrets.js'
 import { assertMemoryProjection, redactDshSourceText, renderMemoryFields } from '../context/memory-projection.js'
 export { redactDshSourceText } from '../context/memory-projection.js'
 import type { ScopedContextItem, ScopedContextResult } from '../context/scoped-broker.js'
+import { DSH_INTAKE_OWNERSHIP_GUIDANCE } from './standard-skills.js'
 import { loadStandardSkillParity } from './standard-skill-integrity.js'
 import { loadBundledDshSkillContent } from './standard-skill-provider.js'
 import type { AdvisoryContribution, AdvisoryPhase, RoleDirective } from '../enno-oduno/types.js'
@@ -85,7 +86,7 @@ function skillFile(files: Awaited<ReturnType<typeof loadStandardSkillParity>>['f
 }
 
 function admittedSoulText(soul: string, intakeStatus: DshMessageSourceInput['intakeStatus']): string {
-  return `${soul}\n\n## DeepSeek Harness host admission\n\nThe DSH host completed the Akinator intake gate before this model request. \`task_prepare\` and \`task_answer\` are host-only operations and are intentionally absent from the model tool list. Do not call them or stop because they are absent. This request is admitted with intake status \`${intakeStatus}\` and \`nextAction=proceed\`; continue from the current directive and supplied context.`
+  return `${soul}\n\n## DeepSeek Harness host admission\n\nThe DSH host completed the Akinator intake gate before this model request. \`task_prepare\` and \`task_answer\` are host-only operations and are intentionally absent from the model tool list. Do not call them or stop because they are absent. ${DSH_INTAKE_OWNERSHIP_GUIDANCE} This request is admitted with intake status \`${intakeStatus}\` and \`nextAction=proceed\`; continue from the current directive and supplied context.`
 }
 
 /** Build the fixed model-visible source order from a prepared, already-gated snapshot. */

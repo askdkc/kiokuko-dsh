@@ -54,3 +54,14 @@ test('completion guidance is discoverable and delivers only the selected referen
     } finally { provider.dispose() }
   }
 })
+
+
+test('admitted DSH prompts reject external MCP substitution in full and preloaded-SOUL contexts', async () => {
+  for (const soulInSystemPrompt of [false, true]) {
+    const sources = await buildDshMessageSources({ ...admitted, soulInSystemPrompt })
+    const admission = sources.find(source => source.kind === 'soul')!.text
+    assert.match(admission, /Never substitute same-named task_prepare\/task_answer MCP tools from kiokuko or kiokuko-ai/)
+    assert.match(admission, /A failed external MCP call does not prove DSH intake failed/)
+    assert.match(admission, /nextAction=proceed/)
+  }
+})
