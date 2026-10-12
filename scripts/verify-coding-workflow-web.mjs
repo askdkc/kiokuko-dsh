@@ -51,9 +51,10 @@ if(responses.length)throw Error('Unconsumed fixture script');
 if(mode==='seed'){responses.push(()=>{result={ready:true};return mock.textResponse('Fixture ready')});}
 else {
 const call=(id,name,args)=>responses.push(mock.toolCallResponse(prefix+id,name,args));
+const prepare=(relation)=>request=>{const text=request.messages.flatMap(m=>m.source?.sections??[]).filter(s=>s.name==='on-demand-intake').at(-1)?.text;const json=text?.split('Current request references and same-session work (host-bound, advisory only):\\n')[1]?.split('\\n')[0];if(!json)throw Error('Missing current host references');return mock.toolCallResponse(prefix+'prepare','prepare_requested_work',{requestIntent:{relation,action:'change',evidenceRefs:JSON.parse(json).references}})};
 if(mode!=='resume'){
- responses.push(...mock.prepareWork([mock.toolCallResponse(prefix+'status','coding_workflow',{action:'status'}),(r)=>mock.toolCallResponse(prefix+'propose','coding_workflow',{action:'propose',expectedRevision:value(r,prefix+'status').revision,definition})],'build',prefix+'prepare'));
-}else call('reopen','coding_workflow',{action:'next'});
+ responses.push(prepare('new'),r=>{const result=value(r,prefix+'prepare');if(!result.prepared)throw Error('Preparation failed');return mock.toolCallResponse(prefix+'status','coding_workflow',{action:'status'})},(r)=>mock.toolCallResponse(prefix+'propose','coding_workflow',{action:'propose',expectedRevision:value(r,prefix+'status').revision,definition}));
+}else {responses.push(prepare('same_scope_continuation'));call('reopen','coding_workflow',{action:'next'});}
 if(mode==='complete'){
  call('program','kioku_write',{path:'src/parser.mjs',content:${JSON.stringify(program)}});call('test','kioku_write',{path:'src/parser.test.mjs',content:${JSON.stringify(check)}});
  for(const id of ['regression','user-entry'])responses.push(r=>mock.toolCallResponse(prefix+'bind-'+id,'task_completion',{action:'bind',criterionId:'coding:'+value(r,prefix+'propose').workflowId+':'+id,method:{kind:'native_command',command,cwd:'.',sourcePaths:['src/parser.mjs','src/parser.test.mjs'],assertion:'selected_tests_pass'}}));

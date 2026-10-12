@@ -584,13 +584,19 @@ test("discovery adopts an id-only listing with the adapter defaults and keeps di
   }
 });
 
-test("a provider rejection naming max_model_len lowers only that model's output cap", async () => {
-  const body =
-    '{"error":{"message":"max_completion_tokens=227398 cannot be greater than max_model_len=max_total_tokens=204800. Please request fewer output tokens."}}';
+for (const [ceiling, expectedCap] of [
+  ["max_model_len=max_total_tokens=204800", 203776],
+  ["max_model_len=204800", 203776],
+  ["max_model_len=16384", 15360],
+] as const) test(`a streamed provider rejection (${ceiling}) lowers only that model's output cap`, async () => {
+  let detail = `max_completion_tokens=227398 cannot be greater than ${ceiling}. Please request fewer output tokens.`;
+  const requests: any[] = [];
   const server = createServer(async (req, res) => {
-    for await (const _part of req) void _part;
+    let text = "";
+    for await (const part of req) text += part;
+    requests.push(JSON.parse(text));
     res.writeHead(400, { "content-type": "application/json" });
-    res.end(body);
+    res.end(JSON.stringify({ error: { message: detail } }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const f = await fixture();
@@ -615,17 +621,41 @@ test("a provider rejection naming max_model_len lowers only that model's output 
         name: "Infron",
         baseURL: url,
         protocol: "chat-completions",
-        models: [{ ...model, contextWindow: 1048576, maxTokens: 262144 }],
+        models: [{ ...model, contextWindow: 1048576, maxTokens: 262144 }, { ...model, id: "untouched-model" }],
       });
     await f.service.save(c, 0);
+    const other = connection(url, "custom", "kiokuko-other");
+    await f.service.save(other, 1);
     await f.service.setKey(c.id, "private-infron-key");
-    await assert.rejects(chat());
-    const stored = (await f.config.read()).connections[0]!;
-    assert.equal(stored.models[0]!.maxTokens, 203776);
+    const failed = async () => {
+      const count = requests.length;
+      const chunks = await chat();
+      const finish = chunks.find(chunk => chunk.type === "finish");
+      assert.equal(finish?.reason.kind, "error");
+      assert.ok(finish?.reason.kind === "error");
+      assert.ok(finish.reason.failure.message.includes(detail), "the original provider failure reaches the caller");
+      assert.equal(requests.length, count + 1, "learning never retries the failed call");
+    };
+    await failed();
+    const document = await f.config.read();
+    const stored = document.connections.find(value => value.id === c.id)!;
+    assert.equal(stored.models[0]!.maxTokens, expectedCap);
     assert.equal(stored.models[0]!.contextWindow, 1048576);
+    assert.deepEqual(stored.models[1], c.models[1]);
+    assert.deepEqual(document.connections.find(value => value.id === other.id), other);
     // The same or a higher ceiling is not an upward rewrite.
-    await assert.rejects(chat());
-    assert.equal((await f.config.read()).connections[0]!.models[0]!.maxTokens, 203776);
+    await failed();
+    assert.equal(requests[1].max_completion_tokens ?? requests[1].max_tokens, expectedCap,
+      "the next bare adapter call uses the learned model cap");
+    assert.equal((await f.adapter().resolveModel(c.id, model.id)).defaultMaxTokens, Math.min(expectedCap, 32768),
+      "the native caller's default output budget also stays below the learned cap");
+    assert.deepEqual(await f.config.read(), document);
+    detail = "max_completion_tokens cannot be greater than max_model_len=262144";
+    await failed();
+    assert.deepEqual(await f.config.read(), document);
+    detail = "max_completion_tokens is invalid; no deployment limit was disclosed";
+    await failed();
+    assert.deepEqual(await f.config.read(), document);
   } finally {
     await f.close();
     server.closeAllConnections();

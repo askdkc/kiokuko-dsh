@@ -17,6 +17,8 @@ import { dshTurnRequestId, resolveGroundedIntakeProfile } from './intake-profile
 import type { DshIntakeAnswerer, DshUserQuestionAgent } from './user-interaction.js'
 import type { SkillDiscoveryMode } from '../skills/types.js'
 import { MemoryRetrievalConfig, type MemoryRetrievalConfig as MemoryRetrievalConfiguration } from '../memory/retrieval-contracts.js'
+import { requestIntentTaskType, type RequestIntentContext, type RequestIntentDecision } from './decisions/request-intent.js'
+import { assertMemoryOwner, createMemoryOwner, memoryOwnerKind, type MemoryOwnerKind } from './memory-owner.js'
 
 export interface DshPreStepEvent {
   readonly agent: { readonly id: string }
@@ -36,6 +38,9 @@ export interface DshPreStepEvent {
   readonly cwd: string
   readonly profileHints?: Partial<TaskProfile>
   readonly deferTaskTypeInference?: boolean
+  readonly requestIntent?: RequestIntentDecision
+  readonly requestIntentContext?: RequestIntentContext
+  readonly memoryOwner?: MemoryOwnerKind
   readonly evidence?: readonly string[]
   readonly skillDiscoveryMode?: SkillDiscoveryMode
   readonly capabilities: DshCapabilityCatalog
@@ -140,6 +145,7 @@ export class DshIntakeGate {
       ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
       ...(event.evidence === undefined ? {} : { evidence: event.evidence }),
     })
+    const ownerKind = event.memoryOwner ?? memoryOwnerKind(event.requestIntent, grounded.profileHints.taskType)
     const baseRequestId = dshTurnRequestId({ dshSessionId: event.sessionId, turn: event.turn })
     const generation = this.#generations.get(`${event.sessionId}\u0000${event.turn}`) ?? 0
     const requestId = generation ? `${baseRequestId}:generation:${generation}` : baseRequestId
@@ -154,6 +160,9 @@ export class DshIntakeGate {
       ...(event.deferTaskTypeInference ? { deferTaskTypeInference: true } : {}),
       ...(grounded.profileHints === undefined ? {} : { profileHints: grounded.profileHints }),
       ...(event.evidence === undefined ? {} : { evidence: event.evidence }),
+      requestIntent: event.requestIntent ?? null,
+      requestIntentContextDigest: event.requestIntentContext ? canonicalContentHash(event.requestIntentContext) : null,
+      memoryOwner: ownerKind,
       ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
       catalogDigest: event.capabilities.digest,
     })
@@ -181,18 +190,26 @@ export class DshIntakeGate {
       return event.signal.aborted ? { ...result, admitted: false } : result
     }
     const operation = (async (): Promise<DshIntakeGateResult> => {
-      const classification = await classifyTaskForIntake(this.decisions, requestId, grounded.task, event.profileHints?.taskType, event.signal)
+      const intentType = event.requestIntent && event.requestIntent.relation !== 'unknown' && event.requestIntent.action !== 'unknown'
+        ? requestIntentTaskType(event.requestIntent) : undefined
+      const classification = await classifyTaskForIntake(this.decisions, requestId, grounded.task,
+        event.profileHints?.taskType ?? intentType, event.signal)
       const deferTaskTypeInference = !event.profileHints?.taskType && (event.deferTaskTypeInference || classification.deferInference)
       const memoryReuse = await createMemoryReuseRuntime(this.decisions, requestId, event.signal)
-      let prepared = await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
+      const bindMemoryOwner = (value: PreparedAgentTask): PreparedAgentTask => ({ ...value,
+        memoryOwner: createMemoryOwner(ownerKind, { agentId: event.agent.id, sessionId: event.sessionId, turn: event.turn,
+          requestDigest: canonicalContentHash(event.task), runId: value.run.runId }) })
+      let prepared = bindMemoryOwner(await this.#runtime.withDatabase((database) => prepareAgentTask(database, {
         requestId, memoryReuse,
         executionSelection: this.executionSelection,
         completionMode: this.completionMode,
         sessionOwnership: true,
+        ...(event.requestIntent ? { requestIntent: event.requestIntent } : {}),
         task: grounded.task,
         cwd: grounded.cwd,
         profileHints: { ...grounded.profileHints, ...(classification.taskType ? { taskType: classification.taskType } : deferTaskTypeInference ? { taskType: null } : {}) },
         deferTaskTypeInference,
+        memoryOwner: ownerKind,
         capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
         dshSessionId: event.sessionId,
         ...(event.sourceStartSeq === undefined ? {} : {
@@ -201,7 +218,7 @@ export class DshIntakeGate {
         ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
         memoryRetrieval: this.memoryRetrieval,
         signal: event.signal,
-      }, { akinatorMemory: this.akinatorMemory }))
+      }, { akinatorMemory: this.akinatorMemory })))
       await this.decisions?.alias(`run:${prepared.run.runId}`, requestId)
       while (prepared.intake.status === 'needs_answer') {
         if (event.signal.aborted) break
@@ -227,10 +244,11 @@ export class DshIntakeGate {
             signal: event.signal,
           })
         assertDshCapabilityCatalogStable(event.capabilities, currentCapabilities)
-        prepared = await this.#runtime.withDatabase((database) => answerAgentTask(database, {
+        prepared = bindMemoryOwner(await this.#runtime.withDatabase((database) => answerAgentTask(database, {
           memoryReuse, sessionId: prepared.intake.sessionId,
           runId: prepared.run.runId,
           dshSessionId: event.sessionId,
+          memoryOwner: ownerKind,
           questionId: prepared.intake.question!.id,
           value,
           cwd: grounded.cwd,
@@ -238,7 +256,7 @@ export class DshIntakeGate {
           ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
           memoryRetrieval: this.memoryRetrieval,
           signal: event.signal,
-        }, { akinatorMemory: this.akinatorMemory }))
+        }, { akinatorMemory: this.akinatorMemory })))
       }
       if (prepared.nextAction === 'proceed') prepared.selectedSkills = await selectInstalledSkills(this.decisions, requestId, grounded.task, [...event.capabilities.skills, ...event.capabilities.tools], prepared.capabilities, event.signal)
       const result = prepared.nextAction !== 'proceed'

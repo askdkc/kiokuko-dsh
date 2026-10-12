@@ -151,7 +151,13 @@ class ModelsAdapter extends LlmAdapter {
     const done = new Promise<void>((resolve) => { finish = resolve; });
     this.active.add(done);
     try {
-      yield* call.stream(options);
+      for await (const chunk of call.stream(options)) {
+        // pi-ai reports provider failures in-band; retain its original finish.
+        if (chunk.type === "finish" && chunk.reason.kind === "error") {
+          await this.onRejection(provider, options.model, new Error(chunk.reason.failure.message));
+        }
+        yield chunk;
+      }
     } catch (error) {
       // A rejection that names the endpoint's own ceiling teaches the stored
       // output cap; the provider's failure still reaches the caller unchanged.
@@ -236,7 +242,7 @@ export class KiokukoModelsService {
     error: unknown,
   ): Promise<void> {
     const detail = error instanceof Error ? error.message : "",
-      match = /max_model_len=(\d{1,9})/.exec(detail);
+      match = /max_model_len=(?:max_total_tokens=)?(\d{1,9})(?!\d)/.exec(detail);
     if (!match || !detail.includes("max_completion_tokens")) return;
     const c = this.document.connections.find((v) => v.id === provider),
       row = c?.models.find((m) => m.id === model),

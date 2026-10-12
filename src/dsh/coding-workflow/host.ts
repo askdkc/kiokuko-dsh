@@ -6,13 +6,18 @@ import { KiokukoError } from '../../errors.js'
 import { foregroundNativeCommand } from '../memory-application.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { CodingBlockerSchema, CodingDefinitionSchema, type CodingIdentity, type CodingWorkflow } from './contracts.js'
-import { codingControlOrRead, codingControlCarrier, codingLiteralCarrier, codingIntent, documentEditIntent, documentContinuation, codingMutationTool, CODING_READ_ONLY } from './intent.js'
+import { codingControlOrRead, codingControlCarrier, codingLiteralCarrier, executionRequestAction, CODING_READ_ONLY } from './intent.js'
+import type { RequestIntentDecision, RequestIntentContext } from '../decisions/request-intent.js'
 import { readCodingWorkflow } from './store.js'
 import { answerCodingChoice, beginCodingDispatch, codingStatus, nextCodingWork, proposeCodingWorkflow,
   reportCodingBlocker, synchronizeCodingWorkflow, clearCodingRuntimeBlocker, assertCodingCommandRetry, projectEnnoCodingWorkflow, onCodingInterrupted } from './service.js'
 
 interface Execution { name: string; callId: string; arguments: unknown; agent?: any; parent?: unknown; signal: AbortSignal }
-interface HostIdentity extends CodingIdentity { agent: any; task?: string | undefined }
+interface HostIdentity extends CodingIdentity {
+  agent: any; task?: string | undefined
+  requestIntent?: RequestIntentDecision | undefined
+  requestIntentContext?: RequestIntentContext | undefined
+}
 export interface CodingHost {
   runtime: DshCoreRuntime;
   resolve(execution: Execution): HostIdentity | undefined
@@ -20,14 +25,35 @@ export interface CodingHost {
   lisp(): LispCodingService | undefined
   preparationOnly?(execution: Execution): boolean
 }
-const schema = z.discriminatedUnion('action', [
-  z.object({ action: z.enum(['status', 'next']) }).strict(),
-  z.object({ action: z.enum(['propose', 'revise']), expectedRevision: z.number().int().min(1), definition: CodingDefinitionSchema }).strict(),
-  z.object({ action: z.literal('report_blocker'), expectedRevision: z.number().int().min(1), blocker: CodingBlockerSchema }).strict(),
-])
-const transport = z.object({ action: z.enum(['status', 'propose', 'revise', 'next', 'report_blocker']),
-  expectedRevision: z.number().int().min(1).optional(), definition: CodingDefinitionSchema.optional(), blocker: CodingBlockerSchema.optional() }).strict()
-export const CODING_GUIDANCE = 'For this coding task, use coding_workflow status, then propose an ideal Goal, implementation items with dependencies, observable item criteria and a separate final user-entry Goal check. Read-only investigation may come first. The host shows the Goal/items/criteria and asks once whether to use Lisp for this task. Pending choice blocks implementation, not conversation or reads. Use next to inspect the next dependency-ready item or reopen a pending question. Bind checks with task_completion before executing them. Use host-observed selected tests, output/artifact assertions or browser assertions; exit 0 and model claims alone cannot complete this workflow. Fix failures autonomously within existing permissions. Final Goal verification must run after item checks on the current artifact. Report the Goal, evidence, ordinary-use result and remaining blockers.'
+const statusSchema = z.object({ action: z.literal('status') }).strict()
+const nextSchema = z.object({ action: z.literal('next') }).strict()
+const applySchema = z.object({ action: z.enum(['propose', 'revise']), expectedRevision: z.number().int().min(1), definition: CodingDefinitionSchema }).strict()
+const blockerSchema = z.object({ expectedRevision: z.number().int().min(1), blocker: CodingBlockerSchema }).strict()
+const legacyBlockerSchema = z.object({ action: z.literal('report_blocker'), expectedRevision: z.number().int().min(1), blocker: CodingBlockerSchema }).strict()
+const legacySchema = z.discriminatedUnion('action', [statusSchema, nextSchema, applySchema, legacyBlockerSchema])
+type LegacyInput = z.infer<typeof legacySchema>
+function jsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(z.toJSONSchema(schema))) as Record<string, unknown>
+}
+const legacyParameters = { type: 'object', oneOf: [statusSchema, nextSchema, applySchema, legacyBlockerSchema].map(jsonSchema) }
+function validationCorrection(field: string): string {
+  if (field === 'expectedRevision') return 'Use the current revision returned by coding_workflow status.'
+  if (field === 'definition' || field.startsWith('definition.')) return 'Follow minimumValidInput: put constraints inside definition.goal; use unique goalId/itemId/criterionId values across the whole definition, and separate item checks from final Goal checks.'
+  if (field === 'blocker' || field.startsWith('blocker.')) return 'Supply a blocker object with kind, cause, required recovery, and affected criterion IDs.'
+  if (field === 'action') return 'Choose status/next on coding_workflow, propose/revise on coding_workflow_apply, or use coding_workflow_blocker.'
+  return 'Correct the indicated field and retry with the current workflow revision.'
+}
+function parseInput<T extends z.ZodTypeAny>(schema: T, raw: unknown, toolName: string): z.infer<T> {
+  const parsed = schema.safeParse(raw)
+  if (parsed.success) return parsed.data
+  const issues = parsed.error.issues.map(issue => {
+    const field = issue.path.map(String).join('.') || 'input'
+    return { field, reason: issue.message.slice(0, 240), correction: validationCorrection(field) }
+  })
+  const summary = issues.map(issue => `${issue.field}: ${issue.reason}. Correction: ${issue.correction}`).join('\n')
+  throw new KiokukoError('VALIDATION_ERROR', `Invalid ${toolName} input.\n${summary}`, { issues })
+}
+export const CODING_GUIDANCE = 'For this coding task, use coding_workflow status/next to inspect the current revision and pending action. Submit new or revised Goals with coding_workflow_apply (action propose/revise, expectedRevision, definition); register blockers with coding_workflow_blocker. Legacy coding_workflow propose/revise/report_blocker calls remain accepted for compatibility. Preserve the exact request interpretation and evidence references shown by the host. A pending scope change requires a revised Goal before implementation; a same-scope continuation keeps its existing Goal, Lisp choice, and unfinished items. The host shows the Goal/items/criteria and asks once whether to use Lisp for this task. Pending choice blocks implementation, not conversation or reads. Bind checks with task_completion before executing them. Use host-observed selected tests, output/artifact assertions or browser assertions; exit 0 and model claims alone cannot complete this workflow. Fix failures autonomously within existing permissions. Final Goal verification must run after item checks on the current artifact. Report the Goal, evidence, ordinary-use result and remaining blockers.'
 
 export function codingChoiceDetail(value: CodingWorkflow): string {
   const definition = value.definition!
@@ -121,26 +147,33 @@ export function mountCodingWorkflow(ctx: {
   }
   const definitions: (() => void)[] = []
   definitions.push(onCodingInterrupted(runId => controllers.get(runId)?.controller.abort(new Error('Coding task stopped'))))
-  const definition = { name: 'coding_workflow', modelFacing: true, description: CODING_GUIDANCE,
-    parameters: JSON.parse(JSON.stringify(z.toJSONSchema(transport, { unrepresentable: 'any' }))),
+  const executeAction = async (input: LegacyInput, identity: HostIdentity, execution: Execution) => {
+    execution.signal.throwIfAborted()
+    if (input.action === 'propose' || input.action === 'revise') {
+      const before = await host.runtime.withDatabase(db => readCodingWorkflow(db, identity.runId))
+      const updated = await host.runtime.withDatabase(db => proposeCodingWorkflow(db, identity, execution.callId,
+        input.expectedRevision, input.definition, input.action === 'revise'))
+      if (before?.scopeVersion !== updated.scopeVersion) controllers.get(identity.runId)?.controller.abort(new Error('Coding scope changed'))
+      await choose(identity, execution)
+    } else if (input.action === 'report_blocker') {
+      await host.runtime.withDatabase(db => reportCodingBlocker(db, identity, execution.callId, input.expectedRevision, input.blocker))
+    } else if (input.action === 'next') await choose(identity, execution)
+    current(identity, execution)
+    return host.runtime.withDatabase(db => { synchronizeCodingWorkflow(db, identity.runId); return nextCodingWork(db, identity) })
+  }
+  const tool = (name: string, schema: z.ZodTypeAny, parameters: Record<string, unknown>, normalize: (value: any) => LegacyInput) => ({
+    name, modelFacing: true, description: CODING_GUIDANCE, parameters,
     output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: JSON.stringify(result) }] },
     execute: async (raw: unknown, execution: Execution) => {
       const identity = host.resolve(execution)
-      if (!identity || execution.name !== 'coding_workflow') throw new KiokukoError('CONFLICT', 'Coding workflow requires this active native task')
-      const input = schema.parse(raw); execution.signal.throwIfAborted()
-      if (input.action === 'propose' || input.action === 'revise') {
-        const before = await host.runtime.withDatabase(db => readCodingWorkflow(db, identity.runId))
-        const updated = await host.runtime.withDatabase(db => proposeCodingWorkflow(db, identity, execution.callId, input.expectedRevision, input.definition, input.action === 'revise'))
-        if (before?.scopeVersion !== updated.scopeVersion) controllers.get(identity.runId)?.controller.abort(new Error('Coding scope changed'))
-        await choose(identity, execution)
-      } else if (input.action === 'report_blocker') {
-        await host.runtime.withDatabase(db => reportCodingBlocker(db, identity, execution.callId, input.expectedRevision, input.blocker))
-      } else if (input.action === 'next') await choose(identity, execution)
-      current(identity, execution)
-      return host.runtime.withDatabase(db => { synchronizeCodingWorkflow(db, identity.runId); return nextCodingWork(db, identity) })
+      if (!identity || execution.name !== name) throw new KiokukoError('CONFLICT', 'Coding workflow requires this active native task')
+      const input = normalize(parseInput(schema, raw, name))
+      return executeAction(input, identity, execution)
     },
-  }
-  definitions.push(ctx.tools.register(definition))
+  })
+  definitions.push(ctx.tools.register(tool('coding_workflow', legacySchema, legacyParameters, input => input)))
+  definitions.push(ctx.tools.register(tool('coding_workflow_apply', applySchema, jsonSchema(applySchema), input => input)))
+  definitions.push(ctx.tools.register(tool('coding_workflow_blocker', blockerSchema, jsonSchema(blockerSchema), input => ({ action: 'report_blocker', ...input }))))
   definitions.push(ctx.on('tools/pre-execute', async (execution: Execution, next: () => Promise<any>) => {
     const identity = host.resolve(execution)
     if (!identity || host.preparationOnly?.(execution)) return next()
@@ -149,21 +182,14 @@ export function mountCodingWorkflow(ctx: {
       || carrier && ctx.tools.get?.(carrier, identity.agent)?.[CODING_READ_ONLY] === true
       || ctx.tools.get?.(execution.name, identity.agent)?.[CODING_READ_ONLY] === true) return next()
     const workflow = await host.runtime.withDatabase(db => readCodingWorkflow(db, identity.runId))
-    // Arbitrary process/extension tools cannot be proved read-only by their name.
-    if (!workflow) {
-      const resumedDocument = identity.task && documentContinuation(identity.task)
-        && await host.runtime.withDatabase(db => {
-          const original = db.prepare('SELECT title FROM ledger_runs WHERE run_id=? AND dsh_session_id=?')
-            .get<{ title: string }>(identity.runId, identity.sessionId)
-          return !!original && documentEditIntent(original.title)
-        })
-      if (identity.task && !codingIntent(identity.task) && codingMutationTool(execution.name)
-        && !documentEditIntent(identity.task)
-        && !resumedDocument
-        && !/(?:\b(?:write|create|save|draft|deploy|restart|install|run|execute|verify|test)\b|(?:保存|作成|配備|再起動|インストール|実行|検証)(?:して|し、|してください))/iu.test(identity.task))
-        return { kind: 'deny', reason: 'The original human request does not authorize implementation. Use read-only tools or clarify the requested action.' }
-      return next()
-    }
+    try {
+      const action = executionRequestAction(identity.requestIntent, identity.requestIntentContext, carrier ?? execution.name)
+      if (action === 'verify') {
+        if (workflow?.pendingScopeChange) return { kind: 'deny', reason: 'Revise the pending Goal scope before execution.' }
+        return next() // Verification is authorized by the request and still goes through native permissions.
+      }
+    } catch (error) { return { kind: 'deny', reason: error instanceof Error ? error.message : 'Request interpretation is not current' } }
+    if (!workflow) return next()
     try {
       const value = await host.runtime.withDatabase(db => beginCodingDispatch(db, identity, execution.callId, execution.name))
       if (value) {

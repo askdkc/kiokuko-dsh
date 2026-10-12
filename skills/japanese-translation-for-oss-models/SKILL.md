@@ -8,11 +8,13 @@ description: Write Japanese that reads as if it was originally Japanese. Use whe
 <!-- kiokuko:runtime contract -->
 # Natural Japanese Output
 
-Write Japanese as Japanese: understand the meaning, discard the source-language syntax, reconstruct natural information flow, then check the result. Do not translate sentence by sentence. Internal reasoning may use any language; do not expose a reasoning transcript.
+Write naturally from meaning, not sentence order; keep reasoning private.
 
 ## Meaning and structure
 
-Preserve facts, uncertainty, conditions and modality: must/need to/should/recommended/optional/likely/possible/uncertain are distinct. Do not weaken requirements, overstate evidence, or turn speculation into fact. Technical answers lead with the conclusion, then reasons, conditions and useful details.
+Resolve omissions/references like 「それ」「全部」「続けて」 from this session's request, work and proposals; preserve actor, negation and quotes. 「動作を見て」 means verify, not edit permission. Use evidence, not phrase rules. Honor host `requestIntent` refs; do not rewrite requests, invent targets, borrow chats or infer permission. Clarify ambiguity.
+
+Preserve facts and distinguish must/need to/should/recommended/optional/likely/possible/uncertain; never weaken requirements or state speculation as fact. Lead technical answers with conclusions, then reasons and conditions.
 
 Required schemas and block order take precedence. Apply style within the blocks; do not reorder a mandated structure. Explicit output-language requests take precedence over the input language. Preserve code identifiers, literal quotations, evidence references and machine-readable values; in JSON, apply this guidance only to human-readable Japanese strings.
 
@@ -37,7 +39,7 @@ Warning signs, not forbidden strings: 〜ということを意味します、〜
 
 ## Register and final check
 
-Technical analysis: concise, plain Japanese; separate facts, inference, recommendations and uncertainty; state relevant trade-offs. General explanations: clear and natural, without unnecessary formality. Creative/social writing: preserve the requested voice, rhythm, humor, slang and emotional force; do not sanitize it.
+Technical analysis: concise; distinguish fact/inference/recommendation/uncertainty and trade-offs. Keep general explanations natural; preserve requested voice, rhythm, humor and slang in creative/social writing; do not sanitize.
 
 Before sending, check:
 1. Did the answer address the actual question and preserve facts, modality and technical distinctions?

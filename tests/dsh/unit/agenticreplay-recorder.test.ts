@@ -10,6 +10,42 @@ import { agenticReplayFixture, chunks, collect, request, response } from '../hel
 
 const { TraceReader, TraceWriter } = await loadAgenticReplayLibrary('core')
 
+test('oversized model requests keep bounded metadata and a correlated response', async () => {
+  const f = await agenticReplayFixture({ maxQueuedBytesPerTrace: 16_384 })
+  try {
+    const huge = { ...request, messages: [{ role: 'user', content: [{ type: 'text', text: 'x'.repeat(100_000) }] }] }
+    assert.deepEqual(await collect(f.recorder.stream(f.binding, huge, () => chunks(response()))), response())
+    await f.recorder.shutdown()
+    const row = (await f.reader.list(f.binding))[0]!
+    assert.equal(row.state, 'completed', JSON.stringify(row))
+    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    const modelRequest = events.find(event => event.type === 'model.request')!
+    const modelResponse = events.find(event => event.type === 'model.response')!
+    assert.equal(modelRequest.attrs?.content_omitted, true)
+    assert.equal((modelRequest.payload as any).omission_reason, 'payload_limit')
+    assert.equal(events.find(event => event.seq === modelResponse.causes?.[0])?.seq, modelRequest.seq)
+    assert.equal(events.filter(event => event.type === 'note' && event.attrs?.diagnostic === 'content_omitted').length, 1)
+    assert.ok(!JSON.stringify(events).includes('x'.repeat(1024)))
+  } finally { await f.dispose() }
+})
+
+test('native failure and memory finish failure stay observable without private exception text', async () => {
+  const f = await agenticReplayFixture()
+  try {
+    const values = response().map((value: any) => value.type === 'finish' ? { ...value,
+      reason: { kind: 'error', failure: { code: 'DSH_MEMORY_REBUILD_EXHAUSTED', message: 'PRIVATE-EXCEPTION-TEXT' } } } : value)
+    assert.deepEqual(await collect(f.recorder.stream(f.binding, request, () => chunks(values))), values)
+    f.recorder.nativeFailure(f.binding)
+    await f.recorder.shutdown()
+    const row = (await f.reader.list(f.binding))[0]!
+    const events = (await f.reader.show(f.binding, row.agenticreplay_run_id)).events
+    assert.ok(events.some(event => event.type === 'error' && event.attrs?.code === 'DSH_MEMORY_REBUILD_EXHAUSTED'))
+    assert.ok(events.some(event => event.type === 'error' && event.attrs?.code === 'native_turn_failed'))
+    assert.ok(events.some(event => event.type === 'model.response' && event.attrs?.failure_code === 'DSH_MEMORY_REBUILD_EXHAUSTED'))
+    assert.equal(JSON.stringify(events).includes('PRIVATE-EXCEPTION-TEXT'), false)
+  } finally { await f.dispose() }
+})
+
 for (const initial of [undefined, '# keep\nnode_modules/', '# keep\r\nnode_modules/\r\n', '.agenticreplay\nnode_modules/\n', '.agenticreplay/\n!.agenticreplay/\n']) {
   test(`recording protects the storage root before writer creation and preserves ignore content: ${JSON.stringify(initial)}`, async () => {
     let creates = 0
@@ -198,7 +234,7 @@ test('pre-execute survives permission wait and shutdown until the final rejected
     await closing
     const row = (await f.reader.list(f.binding))[0]!
     assert.equal(row.state, 'completed')
-    const events = (await f.reader.show(f.binding, row.agenticreplay_run_id)).events
+    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
     assert.equal(events.filter(e => e.type === 'tool.call').length, 1)
     const result = events.find(e => e.type === 'tool.result')!
     assert.equal(result.attrs?.is_error, true)
@@ -249,9 +285,44 @@ test('oversized event and cyclic/accessor values cannot bypass the projection bu
   try {
     const input = response('x'.repeat(100_000))
     assert.deepEqual(await collect(f.recorder.stream(f.binding, request, () => chunks(input))), input)
+    // Separate payload omission from a subsequent burst exceeding the queue.
+    // Only the test drains capture; native completion never waits for it.
+    await f.recorder.flushDiagnostics(f.binding.sessionId)
+    assert.deepEqual(await collect(f.recorder.stream(f.binding, request, () => chunks(response('later event')))), response('later event'))
     await f.recorder.shutdown()
     const row = (await f.reader.list(f.binding))[0]!
-    assert.notEqual(row.state, 'completed'); assert.ok(row.missing_event_count > 0)
+    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    assert.equal(row.state, 'completed', JSON.stringify({ row, diagnostics: f.recorder.status(f.binding.sessionId).diagnostics,
+      events: events.map(({ type, attrs, causes }) => ({ type, attrs, causes })) })); assert.equal(row.missing_event_count, 0)
+    const responses = events.filter(e => e.type === 'model.response')
+    assert.equal(responses.length, 2)
+    assert.equal(responses[0]!.attrs?.content_omitted, true)
+    assert.equal((responses[0]!.payload as any).omission_reason, 'payload_limit')
+    assert.equal(events.find(e => e.seq === responses[0]!.causes?.[0])?.type, 'model.request')
+    assert.match(JSON.stringify(events.find(e => e.type === 'note')?.attrs), /content_omitted/u)
+    assert.ok(!JSON.stringify(events).includes('x'.repeat(1024)))
+    assert.equal(f.recorder.status(f.binding.sessionId).diagnostics.omittedBodies, 1)
+  } finally { await f.dispose() }
+})
+test('oversized tool call and result bodies retain correlated metadata and diagnostics', async () => {
+  const f = await agenticReplayFixture({ maxQueuedBytesPerTrace: 4096 })
+  try {
+    const exec = { token: Symbol(), callId: 'large-tool', rootCallId: 'large-tool', name: 'large_tool', arguments: { value: 'a'.repeat(20_000) } }
+    f.recorder.preTool(f.binding, exec)
+    f.recorder.toolResult(f.binding, exec, { isError: true, content: [{ type: 'text', text: 'b'.repeat(20_000) }] })
+    await f.recorder.shutdown()
+    const row = (await f.reader.list(f.binding))[0]!
+    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    assert.equal(row.state, 'completed', JSON.stringify({ row, diagnostics: f.recorder.status(f.binding.sessionId).diagnostics,
+      events: events.map(({ type, attrs, causes }) => ({ type, attrs, causes })) }))
+    const call = events.find(e => e.type === 'tool.call')!, result = events.find(e => e.type === 'tool.result')!
+    assert.equal(call.attrs?.content_omitted, true)
+    assert.equal(result.attrs?.content_omitted, true)
+    assert.equal(result.attrs?.is_error, true)
+    assert.equal(events.find(e => e.seq === result.causes?.[0])?.seq, call.seq)
+    assert.equal(events.filter(e => e.type === 'note' && e.attrs?.diagnostic === 'content_omitted').length, 2)
+    assert.ok(!JSON.stringify(events).includes('a'.repeat(1024)))
+    assert.ok(!JSON.stringify(events).includes('b'.repeat(1024)))
   } finally { await f.dispose() }
 })
 for (const failure of ['ENOSPC','EACCES','append','close'] as const) test(`writer ${failure} cannot change DSH results`, async () => {
@@ -289,7 +360,7 @@ for (const dependency of ['loadCore', 'loadSchema', 'loadCoreVersion'] as const)
     await assert.rejects(access(join(f.root, '.agenticreplay')))
   } finally { await f.dispose() }
 })
-test('global queue and open trace ceilings apply during writer creation', async () => {
+test('global queue and open trace ceilings apply during writer creation', { timeout: 5000 }, async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
   const f = await agenticReplayFixture({ maxQueuedBytesTotal: 1600, maxOpenTraces: 1 }, { createWriter: async (...args) => { await gate; return TraceWriter.create(...args) } })
@@ -301,6 +372,10 @@ test('global queue and open trace ceilings apply during writer creation', async 
     const rows = await f.reader.list(f.binding)
     assert.equal(rows.length, 1)
     assert.notEqual(rows[0]?.state, 'completed')
+    assert.equal(rows[0]?.last_error_code, 'queue_limit')
+    const diagnostic = JSON.parse(await readFile(join(f.root, '.agenticreplay/runs', rows[0]!.agenticreplay_run_id, 'capture-status.json'), 'utf8'))
+    assert.equal(diagnostic.lastErrorCode, 'queue_limit')
+    assert.ok(diagnostic.missingEvents > 0)
   } finally { release(); await f.dispose() }
 })
 test('nested tools preserve parent identity and a result-only attempt has no invented start', async () => {

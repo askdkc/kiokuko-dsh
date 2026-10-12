@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import nativeTest, { type TestContext } from 'node:test'
 import { OnDemandIntake, TASK_PREPARE_TOOL, type DemandAgent, type DemandInput } from '../../../src/dsh/on-demand-intake.js'
+import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds,
+  type RequestIntentContext, type RequestIntentDecision, type RequestRelationship, type RequestAction } from '../../../src/dsh/decisions/request-intent.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const nativeAvailable = ['cordis', 'dsh-tools'].every(name => existsSync(join(packages, '@deepseek-ai', name, 'lib/index.js')))
@@ -47,11 +49,16 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}, skil
   }) }
   if (skillPlacement === 'global') installSkill()
   let readyTurn: number | undefined, bodies = 0, call = 0
+  const prepareRequests: Array<{ input: DemandInput; taskType: string; requestIntent?: RequestIntentDecision; context?: RequestIntentContext }> = []
   const intake = new OnDemandIntake({
     validate: async input => { assert.equal(input.agent, agent); assert.equal(input.agent.session, session) },
     existing: async () => false,
     classify: async () => ({ deferInference: true }),
-    prepare: async (input, type) => { advice.push(type); admissions.push(input); readyTurn = input.turn; return true },
+    prepare: async (input, type, requestIntent, context) => {
+      advice.push(type); admissions.push(input); prepareRequests.push({ input, taskType: type,
+        ...(requestIntent === undefined ? {} : { requestIntent }), ...(context === undefined ? {} : { context }) })
+      readyTurn = input.turn; return true
+    },
     ready: (candidate, turn) => candidate === agent && readyTurn !== undefined && (turn === undefined || turn === readyTurn),
     ...options,
   })
@@ -63,7 +70,7 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}, skil
   })
   t.after(async () => { await intake.dispose(); releaseProbe(); releaseSkill(); await scope?.dispose(); await fiber.dispose() })
   return {
-    ctx, agent, session, events, intake, admissions, advice,
+    ctx, agent, session, events, intake, admissions, advice, prepareRequests,
     bodies: () => bodies,
     skillReads: () => skillReads,
     removeSkill() { releaseSkill(); releaseSkill = () => {} },
@@ -78,6 +85,29 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}, skil
     prepare() { return this.execute(TASK_PREPARE_TOOL, { taskType: 'research' }) },
   }
 }
+
+function activeIntent(messages: readonly unknown[], task: string, relation: RequestRelationship, action: RequestAction) {
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(messages, task), activeGoal: {
+    runId: 'run-current', workflowRevision: 4, goalId: 'goal-current', goalRevision: 2, scopeRevision: 3,
+    ideal: 'Finish the parser task', target: 'src/parser.ts', outOfScope: ['Publishing'], constraints: ['Keep the public API stable'],
+  }, proposals: [] })!
+  const decision = bindMainModelRequestIntent({ relation, action, evidenceRefs: requestIntentReferenceIds(context) }, context)!
+  return { context, decision }
+}
+
+test('automatic native read preparation can be acknowledged explicitly without another admission', async t => {
+  const f = await fixture(t, { classify: async () => ({ taskType: 'research', deferInference: false }) })
+  const release = f.ctx.tools.register({ name: 'read', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => 'source' })
+  t.after(release)
+  await f.capture()
+  assert.equal((await f.execute('read')).isError, false)
+  assert.equal(f.admissions.length, 1)
+  assert.equal((await f.prepare()).isError, false)
+  assert.equal((await f.prepare()).isError, false, 'a receipt may be requested more than once')
+  assert.equal(f.admissions.length, 1)
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, { taskType: 'build' })).isError, true)
+  assert.equal(f.admissions.length, 1, 'a conflicting receipt cannot replace the admitted request')
+})
 
 test('on-demand review: installed Skill reads need no execution intake and cannot authorize work', async t => {
   const f = await fixture(t)
@@ -142,15 +172,107 @@ test('on-demand review: startup reader replacement before first capture cannot i
 })
 
 test('on-demand review: resumed native ownership still requires exact ready identity for explicit preparation', async t => {
-  const f = await fixture(t, { existing: async () => true })
+  const message = human('original', 'Inspect src without changing any files.')
+  const intent = activeIntent([message], 'Inspect src without changing any files.', 'same_scope_continuation', 'research')
+  const f = await fixture(t, { existing: async () => true, interpret: async () => intent })
   f.ready(1)
-  assert.equal(await f.capture(), false)
+  assert.equal(await f.capture([message]), false)
   const result = await f.execute('prepare_requested_work', { taskType: 'research' })
   assert.equal(result.isError, false)
   assert.equal(f.admissions.length, 0, 'acknowledging exact existing admission must not open another run')
   assert.equal((await f.execute()).isError, false)
   f.ready(2)
   assert.equal((await f.execute()).isError, true, 'existing ownership does not waive the current-turn guard')
+})
+
+test('on-demand review: a cold same-scope owner stays conversational until explicit preparation binds this turn', async t => {
+  const message = human('cold-resume', 'Inspect src without changing any files.')
+  const intent = activeIntent([message], 'Inspect src without changing any files.', 'same_scope_continuation', 'verify')
+  const f = await fixture(t, { existing: async () => true, interpret: async () => intent })
+  assert.equal(await f.capture([message]), true, 'durable existence alone does not bind the new native turn')
+  assert.equal(f.admissions.length, 0)
+  const result = await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })
+  assert.equal(result.isError, false, JSON.stringify(result))
+  assert.equal(f.admissions.length, 1, 'explicit preparation establishes the exact current-turn owner')
+})
+
+test('on-demand review: exact request replay is separate from same-scope continuation', async t => {
+  const message = human('replayed-request', 'Inspect src without changing any files.')
+  let replayChecks = 0, continuationLookups = 0
+  const f = await fixture(t, {
+    replay: async input => {
+      replayChecks++
+      assert.equal(input.turn, 1)
+      assert.deepEqual(input.messages, [message])
+      return true
+    },
+    existing: async () => { continuationLookups++; return true },
+  })
+  f.ready(1)
+  assert.equal(await f.capture([message]), false)
+  assert.equal(replayChecks, 1)
+  assert.equal(continuationLookups, 0)
+  assert.equal(f.intake.snapshot(f.session.id)?.status, 'prepared')
+  assert.equal(f.admissions.length, 0, 'an exact replay does not open a second run')
+})
+
+test('scope-changing preparation updates the exact existing request instead of acknowledging the old Goal', async t => {
+  const message = human('scope-change', 'Add the new API endpoint to this parser task.')
+  const task = 'Add the new API endpoint to this parser task.'
+  const intent = activeIntent([message], task, 'scope_change', 'change')
+  const f = await fixture(t, {
+    existing: async () => true,
+    interpret: async () => intent,
+  })
+  f.ready(1)
+  assert.equal(await f.capture([message]), true, 'scope changes remain conversational until the host admits their explicit preparation')
+  assert.equal(f.admissions.length, 0, 'capturing a scope change must not claim the previous run')
+  const result = await f.execute(TASK_PREPARE_TOOL, { taskType: 'build' })
+  assert.equal(result.isError, false, JSON.stringify(result))
+  assert.equal(f.admissions.length, 1)
+  assert.equal(f.prepareRequests[0]?.requestIntent?.relation, 'scope_change')
+  assert.equal(f.prepareRequests[0]?.context?.activeGoal?.scopeRevision, 3)
+  assert.equal(f.bodies(), 0, 'scope preparation never executes a project tool')
+})
+
+test('same-scope continuation acknowledges the exact active run without creating a second one', async t => {
+  const message = human('same-scope', 'Check the current parser tests.')
+  const task = 'Check the current parser tests.'
+  const intent = activeIntent([message], task, 'same_scope_continuation', 'verify')
+  const f = await fixture(t, { existing: async () => true, interpret: async () => intent })
+  f.ready(1)
+  assert.equal(await f.capture([message]), false)
+  const result = await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })
+  assert.equal(result.isError, false, JSON.stringify(result))
+  assert.equal(f.admissions.length, 0)
+  assert.equal(result.value.requestIntent.relation, 'same_scope_continuation')
+})
+
+test('unknown relationship cannot borrow an active Goal through a legacy taskType hint', async t => {
+  const message = human('unknown-scope', 'Check that.')
+  const task = 'Check that.'
+  const intent = activeIntent([message], task, 'unknown', 'unknown')
+  const f = await fixture(t, { existing: async () => true, interpret: async () => intent })
+  f.ready(1)
+  assert.equal(await f.capture([message]), true)
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })).isError, true)
+  assert.equal(f.admissions.length, 0)
+  assert.equal(f.bodies(), 0)
+})
+
+test('a new request never consults the existing-run continuation lookup', async t => {
+  const message = human('new-scope', 'Start a separate parser benchmark.')
+  const task = 'Start a separate parser benchmark.'
+  const intent = activeIntent([message], task, 'new', 'change')
+  let ownerLookups = 0
+  const f = await fixture(t, { existing: async () => { ownerLookups++; return true }, interpret: async () => intent })
+  f.ready(1)
+  assert.equal(await f.capture([message]), true)
+  const result = await f.execute(TASK_PREPARE_TOOL, { taskType: 'build' })
+  assert.equal(result.isError, false, JSON.stringify(result))
+  assert.equal(ownerLookups, 0)
+  assert.equal(f.admissions.length, 1)
+  assert.equal(f.prepareRequests[0]?.requestIntent?.relation, 'new')
 })
 
 test('on-demand review: admission receives an immutable snapshot of the complete original human batch', async t => {
@@ -181,6 +303,28 @@ test('on-demand review: advancing the native turn cannot reuse an older ready ow
   f.events.push(event('turn/start', 2))
   assert.equal((await f.execute()).isError, true)
   assert.equal(f.bodies(), 0)
+})
+
+test('on-demand review: a host-driven empty turn retires only the closed conversational binding', async t => {
+  const advanced: number[] = []
+  const f = await fixture(t, { advance: async input => { advanced.push(input.turn) } })
+  await f.capture(); assert.equal((await f.prepare()).isError, false)
+  f.intake.finish(f.session, 1)
+  f.events.push(event('turn/start', 2))
+  assert.equal(await f.intake.capture({ agent: f.agent, turn: 2, step: 0, messages: [], signal: signal() }), false)
+  assert.deepEqual(advanced, [1, 2], 'the host advances the policy boundary without inventing human input')
+  assert.equal(f.intake.snapshot(f.session.id), undefined)
+  assert.equal(f.admissions.length, 1)
+})
+
+test('on-demand review: a pending host confirmation yields the next human turn to native admission', async t => {
+  const f = await fixture(t, { resumeConfirmation: async input => input.turn === 2 })
+  await f.capture(); assert.equal((await f.prepare()).isError, false)
+  f.intake.finish(f.session, 1)
+  f.events.push(event('turn/start', 2))
+  assert.equal(await f.capture([human('confirmation-revision', 'Narrow the plan to src.')], 2), false)
+  assert.equal(f.intake.snapshot(f.session.id)?.status, 'answer')
+  assert.equal(f.admissions.length, 1, 'native admission, not model-facing preparation, owns the pending confirmation')
 })
 
 test('same-turn steering prepares a fresh generation retaining the original request', async t => {
@@ -257,10 +401,14 @@ test('on-demand review: shutdown cancels and drains an in-flight host preparatio
 })
 
 test('on-demand review: an existing owner must match the exact open native turn', async t => {
-  const f = await fixture(t, { existing: async () => true })
+  const message = human('original', 'Inspect src without changing any files.')
+  const intent = activeIntent([message], 'Inspect src without changing any files.', 'same_scope_continuation', 'research')
+  const f = await fixture(t, { existing: async () => true, interpret: async () => intent })
   f.ready(1)
-  assert.equal(await f.capture(), false)
-  assert.deepEqual(f.intake.snapshot(f.session.id), { task: 'Inspect src without changing any files.', taskType: null, status: 'prepared', turn: 1 })
+  assert.equal(await f.capture([message]), false)
+  assert.equal(f.intake.snapshot(f.session.id)?.task, 'Inspect src without changing any files.')
+  assert.equal(f.intake.snapshot(f.session.id)?.memoryOwner, 'execution')
+  assert.equal(f.intake.snapshot(f.session.id)?.requestIntent?.relation, 'same_scope_continuation')
   assert.equal((await f.execute()).isError, false)
   f.events.push(event('turn/end', 1))
   assert.equal((await f.execute()).isError, true)
@@ -343,7 +491,7 @@ test('on-demand review: concurrent preparation is consumed once and never replac
   } finally { release.resolve() }
   assert.equal((await first).isError, false)
   assert.equal(f.intake.snapshot(f.session.id)?.taskType, 'research')
-  assert.equal((await f.prepare()).isError, true)
+  assert.equal((await f.prepare()).isError, false, 'a later receipt acknowledges the single admission')
   assert.equal(prepared, 1)
 })
 
@@ -490,4 +638,20 @@ test('automatic web preparation: pending memory guard remains authoritative afte
   await f.capture()
   assert.equal((await f.execute('web_search')).isError, true)
   assert.equal(f.admissions.length, 1); assert.equal(calls.length, 0)
+})
+
+
+test('pending confirmation resumes only after the host admits the exact current native turn', async t => {
+  const f = await fixture(t, { resumeConfirmation: async () => true })
+  assert.equal(await f.capture([human('revision', 'Limit the plan to src and continue.')]), false)
+  assert.equal(f.intake.pending(f.agent), false, 'host confirmation must not borrow retired conversational memory')
+  assert.equal((await f.execute()).isError, true, 'a pending confirmation grants no execution')
+  f.ready(1)
+  assert.equal((await f.execute()).isError, false, 'host admission may resume its confirmation route without another preparation')
+  assert.equal(f.admissions.length, 0)
+  assert.equal((await f.execute('review_probe', {}, { agent: { ...f.agent } })).isError, true)
+  const deny = f.ctx.tools.guard(() => 'native denial')
+  try { assert.equal((await f.execute()).isError, true) } finally { deny() }
+  f.ready(2)
+  assert.equal((await f.execute()).isError, true, 'the confirmation cannot authorize another turn')
 })

@@ -35,3 +35,4 @@ GEMINI.md
 
 # Local module staging and measurements
 .artifacts/
+.kiokuko-ai.json

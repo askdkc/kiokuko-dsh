@@ -1,4 +1,4 @@
-import {fixtureDefinition,toolValue} from '../helpers/coding-script.js'
+import {fixtureDefinition,toolValue,interpretedPreparation} from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
@@ -151,7 +151,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
         const parentStep = child || !options.tools?.length ? 0 : ++parentRequests
         const chunks = child ? mock.textResponse('CHILD_COMPLETE')
           : mode === 'fork' && parentStep === 1 ? mock.textResponse('PARENT_SEED')
-          : parentStep === (mode === 'fork' ? 2 : 1) ? mock.toolCallResponse('prepare-parent', TASK_PREPARE_TOOL, { taskType: 'build' })
+          : parentStep === (mode === 'fork' ? 2 : 1) ? interpretedPreparation(mock, 'prepare-parent', 'new', 'change', 'build')(options)
           : parentStep === (mode === 'fork' ? 3 : 2) ? mock.toolCallResponse('goal-status','coding_workflow',{action:'status'})
           : parentStep === (mode === 'fork' ? 4 : 3) ? mock.toolCallResponse('goal-propose','coding_workflow',{action:'propose',expectedRevision:toolValue(options,'goal-status').revision,definition:fixtureDefinition()})
           : mode === 'fork' && parentStep === 5 ? tool('fork-1', 'subagent_fork', false)

@@ -286,6 +286,11 @@ async function createAndSmokeTestTarball() {
   await assertDshClientArtifact(packageRoot)
   if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') {
     const ownedEnv={...process.env,KIOKUKO_OWNED_PACKAGE_ROOT:packageRoot}
+    const intent = await exec(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/e2e/request-intent-native.test.ts', 'tests/dsh/integration/memory-evidence-native.test.ts'], {
+      cwd: root, env: ownedEnv, timeout: 240_000, maxBuffer: 16 * 1024 * 1024,
+    })
+    process.stdout.write(intent.stdout)
+    process.stderr.write(intent.stderr)
     const demand=await exec(process.execPath,['--import',join(root,'tests/dsh/helpers/offline-skill-catalog.mjs'),'--import','tsx','--test','--test-name-pattern=owned execution','tests/dsh/integration/on-demand-native.test.ts'],{cwd:root,env:ownedEnv,timeout:120000,maxBuffer:16*1024*1024})
     process.stdout.write(demand.stdout)
     const receipts=await exec(process.execPath,['scripts/run-tests.mjs','tests/dsh/integration/owned-execution.test.ts','tests/dsh/integration/lisp/owned-development.test.ts','tests/dsh/integration/owned-native-lifecycle.test.ts'],{cwd:root,env:ownedEnv,timeout:180000,maxBuffer:16*1024*1024})

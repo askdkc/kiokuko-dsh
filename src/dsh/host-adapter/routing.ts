@@ -1,3 +1,6 @@
+import { MemoryRequestFence, MemorySnapshotStale } from '../memory-request-fence.js'
+import { assertMemoryOwner } from '../memory-owner.js'
+import { canonicalContentHash } from '../../serialization/validate.js'
 import type { OnDemandIntake } from '../on-demand-intake.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { attachmentTypesFromMessages, nativeContextTokens } from '../model-auto/policy.js'
@@ -59,6 +62,7 @@ interface RoutingDependencies {
   readonly mapPreStep: (payload: DshNativePreStepPayload) => Promise<DshPreStepEvent>
   readonly currentSession: (sessionId: string) => TurnRecord | undefined
   readonly readStateForRun: (item: TurnRecord) => Promise<EnnoOdunoState>
+  readonly refreshMemoryOwner: (item: TurnRecord, signal: AbortSignal) => Promise<void>
 }
 
 export function createRouting({
@@ -67,7 +71,7 @@ export function createRouting({
   getToolExposureConfig, reportToolExposureFallback, reportToolExposureProjection, modelCatalog,
   getSelection, setSelection, hasSelection,
   getPolicyState, captureInitialInput, prepareTurn, mapPreStep, currentSession,
-  readStateForRun, demand,
+  readStateForRun, refreshMemoryOwner, demand,
 }: RoutingDependencies) {
   const systemSkillNames = new WeakMap<object, ReadonlySet<string>>()
   const ownedModelToolDefinitions = new Map<string, { readonly execute: unknown }>()
@@ -112,16 +116,23 @@ export function createRouting({
           ...(item.prepared.intake.profile.constraints ? { constraints: item.prepared.intake.profile.constraints } : {}) },
         state: await readStateForRun(item) } : { sessionId: agent.session?.id }
     })
-    const disposeMemory = onNativeEvent(agent.ctx, 'agent/request', async (_event: unknown, next: () => Promise<any>) => {
+    const memoryFence = new MemoryRequestFence()
+    const disposeRetry = onNativeEvent(agent.ctx, 'agent/request-error', async (event: any, next: () => Promise<any>) => {
+      const action = memoryFence.retry(event)
+      return action === undefined ? next() : action
+    }, { prepend: true })
+    const disposeMemory = onNativeEvent(agent.ctx, 'agent/request', async (event: any, next: () => Promise<any>) => {
+      memoryFence.begin(event)
       const request = await next()
       if (delegation.isChild(agent)) return request
       if (demand?.pending(agent)) { await demand.beforeRequest(agent); return request }
-      const prepared = agent.session ? currentSession(agent.session.id)?.prepared : undefined
+      const item = agent.session ? currentSession(agent.session.id) : undefined
+      const prepared = item?.turn === memoryFence.turn ? item.prepared : undefined
       if (!prepared || !agent.session) return request
       // A unavailable memory catalog degrades to no owned memory, never to a
       // stale snapshot retained by the native session's historical surface.
       let allowed: ReadonlyMap<string, string> = new Map()
-      try { allowed = await runtime.withDatabase(db => currentRequestMemory(db, prepared)) } catch { /* no memory is safer than stale memory */ }
+      allowed = await runtime.withDatabase(db => currentRequestMemory(db, prepared))
       pruneDshMemorySurface(agent.session, allowed)
       const retired=await runtime.withDatabase(db=>retiredExplanationCalls(db,agent.session!.id))
       pruneExplainedMemorySurface(agent.session,retired)
@@ -347,25 +358,34 @@ export function createRouting({
         return assembly
       },
     })
-    const disposeMemoryFence = onNativeEvent(agent.ctx, 'llm/stream', (request: any, next: () => AsyncIterable<any>) => (async function* () {
+    const disposeMemoryFence = onNativeEvent(agent.ctx, 'llm/stream', (request: any, next: () => AsyncIterable<any>) => memoryFence.stream(async () => {
       await demand?.fence(agent, request)
       const item = agent.session ? currentSession(agent.session.id) : undefined
-      if (item && !item.closed && !delegation.isChild(agent) && request.sessionId === agent.session?.id && request.purpose !== 'compaction') {
+      if (!demand?.pending(agent) && item && item.prepared.memoryOwner?.kind === 'execution' && !item.closed && item.turn === memoryFence.turn && !delegation.isChild(agent) && request.sessionId === agent.session?.id && request.purpose !== 'compaction') {
         let allowed: ReadonlyMap<string,string> = new Map()
-        try { allowed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared)) } catch { /* fail closed for owned memory */ }
+        if (item.nativeAgent !== agent || item.nativeSession !== agent.session || item.prepared.memoryOwner?.kind !== 'execution') throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+        assertMemoryOwner(item.prepared.memoryOwner, { agentId: agent.id, sessionId: item.sessionId, turn: memoryFence.turn, requestDigest: canonicalContentHash(item.task), runId: item.runId }, 'execution')
+        allowed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared))
         const retired=await runtime.withDatabase(db=>retiredExplanationCalls(db,agent.session!.id))
         if (JSON.stringify(filterExplainedMemory(request.messages,retired))!==JSON.stringify(request.messages)) {
           pruneExplainedMemorySurface(agent.session!,retired)
-          throw new KiokukoError('CONFLICT','Memory explanation forgotten after request assembly; rebuild the request')
+          if (item.memoryRebuildAttempts === 0) {
+            await refreshMemoryOwner(item, request.signal instanceof AbortSignal ? request.signal : new AbortController().signal)
+            item.memoryRebuildAttempts++
+          }
+          throw new MemorySnapshotStale()
         }
         if (filterRequestMemory(request.messages, allowed).length !== request.messages.length) {
           pruneDshMemorySurface(agent.session!, allowed)
-          throw new KiokukoError('CONFLICT', 'Memory changed after native request assembly; rebuild the request')
+          if (item.memoryRebuildAttempts === 0) {
+            await refreshMemoryOwner(item, request.signal instanceof AbortSignal ? request.signal : new AbortController().signal)
+            item.memoryRebuildAttempts++
+          }
+          throw new MemorySnapshotStale()
         }
       }
-      yield* next()
-    })())
-    routingDisposers.set(agent, () => { releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeClaim() })
+    }, next))
+    routingDisposers.set(agent, () => { releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeRetry(); disposeClaim() })
   }
   const routingCreatedDisposer = onNativeEvent(ctx, 'agent/created', (event: { agent: RoutableAgent }) => {
     delegation.created(event.agent)

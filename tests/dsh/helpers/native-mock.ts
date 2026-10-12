@@ -23,12 +23,12 @@ export function nativeMock(llm: any) {
       { type: 'usage', usage: { inputTokens: 10, outputTokens: 5 } },
       { type: 'finish', reason: { kind: 'tool-calls' } }]
   }
-  function prepareWork(script: any[], taskType: string, id: string): any[] {
+  function prepareWork(script: any[], taskType: string, id: string, prepare?: (request: any) => any): any[] {
     const [first, ...rest] = script
     assert.ok(first, 'prepared work must have a consumer')
     return [(request: any) => {
       assert.ok(request.tools.some((tool: any) => tool.name === 'prepare_requested_work'), 'native preparation must be discoverable')
-      return toolCallResponse(id, 'prepare_requested_work', { taskType })
+      return prepare ? prepare(request) : toolCallResponse(id, 'prepare_requested_work', { taskType })
     }, (request: any) => {
       const result = request.messages.flatMap((message: any) => message.role === 'tool' && message.toolCallId === id ? [message]
         : (message.content ?? []).filter((block: any) => block.type === 'tool-result' && block.toolCallId === id)).at(-1)

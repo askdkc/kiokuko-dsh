@@ -13,6 +13,10 @@ import { MemoryDecisionConcurrency } from './concurrency.js'
 import type { DecisionSelectionStore } from './selection-store.js'
 
 export type DecisionOutcome = { status: 'completed'; result: DecisionBatchResult } | { status: 'fallback'; reason: string }
+export interface DecisionEvaluationHooks {
+  /** Fires immediately before a provider receives this decision batch; cache hits do not fire it. */
+  readonly onProviderDispatch?: () => void
+}
 export interface DecisionObservation { purpose: DecisionBatch['purpose']; questionTypes: Record<string, number>; provider: string; requestedModel: string | null;
   returnedModel: string | null; policyVersion: string; cacheHit: boolean; selected: number; measured: number; abstained: number;
   fallbackReason: string | null; elapsedMs: number; inputBytes: number; inputTokens: number | null; outputTokens: number | null;
@@ -284,7 +288,8 @@ export class DecisionService {
       readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' },
       decisionObservations: structuredClone(this.decisionObservations) }
   }
-  async evaluate(requestId: string, input: unknown, signal: AbortSignal, catalogDigest = '', memoryCandidateTotal?: number): Promise<DecisionOutcome> {
+  async evaluate(requestId: string, input: unknown, signal: AbortSignal, catalogDigest = '', memoryCandidateTotal?: number,
+    hooks?: DecisionEvaluationHooks): Promise<DecisionOutcome> {
     const started = performance.now()
     if (signal.aborted) throw new DecisionError('CANCELLED')
     const config = await this.bind(requestId, signal)
@@ -377,6 +382,7 @@ export class DecisionService {
           }
           for (const part of inputs) {
             combined.throwIfAborted()
+            hooks?.onProviderDispatch?.()
             parts.push(parseDecisionResult(await abortable(provider.evaluate(part, combined), combined), part))
           }
         }

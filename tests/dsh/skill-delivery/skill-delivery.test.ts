@@ -7,7 +7,7 @@ import { nativeSkillFixture } from '../helpers/skill-native.js'
 import { nativeToolResults } from '../helpers/native-mock.js'
 import { deepSeekFixtureResponse, wireText } from '../helpers/deepseek-wire.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
-import { codingPrelude } from '../helpers/coding-script.js'
+import { codingPrelude, interpretedPreparation } from '../helpers/coding-script.js'
 
 isolateSkillHome()
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
@@ -30,7 +30,11 @@ const expectedLispTools = ['coding_workflow', 'lisp_apply', 'lisp_call', 'lisp_c
   'observation_read', 'prepare_requested_work', 'skill', 'task_completion', 'task_memory_review']
 const textOf = (request: any): string => [request.system ?? '', ...request.messages.flatMap((m: any) => m.content.flatMap((b: any) =>
   b.type === 'text' ? [b.text] : b.type === 'tool-result' ? b.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text) : []))].join('\n')
-function requireBody(request: any, name: string) { assert.ok(textOf(request).includes(content(name)), `${name}: compiled body absent at adapter boundary`) }
+function requireBody(request: any, name: string, detail = '') {
+  const sections = request.messages?.flatMap((message: any) => message.source?.sections?.map((section: any) => section.name) ?? []) ?? []
+  const tools = request.tools?.map((tool: any) => tool.name) ?? []
+  assert.ok(textOf(request).includes(content(name)), `${name}: compiled body absent at adapter boundary${detail ? ` (${detail})` : ''}; sections=${JSON.stringify(sections)}; tools=${JSON.stringify(tools)}`)
+}
 
 function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' = 'compiled', extra: object = {}, nativeAnswer?: (request: any) => Promise<any>) {
   return nativeSkillFixture({ packages: packages!, ...(packageRoot ? { packageRoot } : {}), explicit, mode, extra, ...(nativeAnswer ? { nativeAnswer } : {}) })
@@ -244,10 +248,12 @@ test('Lisp selected during initial admission executes shared functions without s
         return f.mock.toolCallResponse('legacy-eval', 'lisp_eval', { operationId: 'legacy-eval', code: '(+ 20 22)' })
       }, f.mock.textResponse('Verified.'))
     await f.turn('Fix the failing implementation in src/main.js and verify that its tests pass. 通常実行で。')
-    assert.equal(f.model.requests.length, 9, JSON.stringify(f.agent.session.snapshotEvents().slice(-6)))
+    assert.equal(f.model.requests.length, 10, 'all ten scripted preparation, Goal, Lisp and final-response rounds ran exactly once')
     assert.ok(f.model.requests[0].tools.some((tool: any) => tool.name === 'prepare_requested_work'))
-    for (const request of f.model.requests.slice(3)) {
-      requireBody(request, 'kiokuko-lisp')
+    // Round 3 is the pending execution-mode discussion; protected Lisp is
+    // delivered only after that host choice is resolved.
+    for (const [offset, request] of f.model.requests.slice(4).entries()) {
+      requireBody(request, 'kiokuko-lisp', `model round ${offset + 4}; tools=${JSON.stringify(request.tools?.map((tool: any) => tool.name))}`)
       assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
     }
     assert.equal(resultOf(f.model.requests.at(-1)).ok, true, JSON.stringify(resultOf(f.model.requests.at(-1))))
@@ -262,13 +268,16 @@ test('Lisp workflow reaches the next model request through native approval, evid
   const f = await fixture(false, 'compiled', { lisp: { executionMode: 'protected', enabled: true, approvalMode: 'ask', sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
     const q = request.questions[0]
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['chat'] }] }
+    if (q.id === 'enno-execution-mode') return { answers: [{ id: q.id, selected: ['通常実行'] }] }
     assert.match(q.id, /^batch-/u); assert.equal(request.agent.id, 'skill-main')
     approvals++; observedDetail = q.detail
     return { answers: [{ id: q.id, selected: [q.intent.approve] }] }
   })
   const latestResult = (request: any) => {
     const block = nativeToolResults(request.messages).at(-1)
-    return JSON.parse(block.content.find((b: any) => b.type === 'text').text)
+    const text = block.content.find((b: any) => b.type === 'text').text
+    try { return JSON.parse(text) }
+    catch (error) { throw new Error(`Invalid ${block.toolCallId} result: ${text.slice(0, 500)}`, { cause: error }) }
   }
   const args = { operationId: 'workflow-batch', code: '(kioku.files:propose-write "a.txt" "new-a") (kioku.files:propose-write "b.txt" "new-b") (write-string (make-string 12000 :initial-element #\\a)) :done' }
   let hostId = ''
@@ -294,8 +303,10 @@ test('Lisp workflow reaches the next model request through native approval, evid
     await f.reload('compiled')
     assert.equal((await f.ctx.commands.execute(f.agent, '/kioku-lisp recover', [], new AbortController().signal)).result.kind, 'success')
     const firstAfterRecovery = f.model.requests.length
-    f.responses.push(f.mock.toolCallResponse('prepare-workflow-recovery', 'prepare_requested_work', { taskType: 'research' }), (request: any) => {
+    f.responses.push(interpretedPreparation(f.mock, 'prepare-workflow-recovery', 'new', 'verify'), (request: any) => {
       assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
+      const preparation = nativeToolResults(request.messages).find(result => result.toolCallId === 'prepare-workflow-recovery')
+      assert.ok(preparation && !preparation.isError, JSON.stringify(preparation))
       return f.mock.toolCallResponse('workflow-replay', 'lisp_eval', args)
     }, (request: any) => {
       const result = latestResult(request)

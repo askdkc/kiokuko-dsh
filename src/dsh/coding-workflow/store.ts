@@ -10,7 +10,15 @@ export function readCodingWorkflow(db: SqliteDatabase, runId: string): CodingWor
   // choice or catch database failures as though they were a legacy task.
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_coding_workflows'").get()) return undefined
   const row = db.prepare('SELECT snapshot_json FROM dsh_coding_workflows WHERE run_id=?').get<{ snapshot_json: string }>(runId)
-  return row ? JSON.parse(row.snapshot_json) as CodingWorkflow : undefined
+  if (!row) return undefined
+  const value = JSON.parse(row.snapshot_json) as CodingWorkflow
+  if (value.pendingScopeChange !== undefined && (!value.pendingScopeChange
+    || !/^[a-f0-9]{64}$/u.test(value.pendingScopeChange.requestDigest)
+    || !Array.isArray(value.pendingScopeChange.evidenceRefs) || value.pendingScopeChange.evidenceRefs.length > 32
+    || value.pendingScopeChange.evidenceRefs.some(ref => typeof ref !== 'string' || !ref || ref.length > 256 || /[\p{Cc}\p{Cf}]/u.test(ref)))) {
+    throw new KiokukoError('INTEGRITY_ERROR', 'Invalid pending coding scope-change evidence')
+  }
+  return value
 }
 export function sessionCodingWorkflow(db: SqliteDatabase, sessionId: string): CodingWorkflow | undefined {
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_coding_workflows'").get()) return undefined

@@ -5,6 +5,8 @@ import { createMemoryReuseRuntime } from '../memory-reuse.js'
 import type { DecisionService } from '../decisions/service.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
 import { classifyTaskForIntake, selectInstalledSkills } from '../decisions/workflows.js'
+import { classifyRequestIntent, createRequestIntentContext, rebindRequestIntentDecision, requestIntentMessageRefs,
+  requestIntentReferenceIds, requestIntentTaskType, type RequestIntentContext, type RequestIntentDecision, type RequestIntentInterpretation } from '../decisions/request-intent.js'
 import { humanInput } from '../../memory/review/evidence.js'
 import { AnswerReviewCoordinator } from '../answer-review/coordinator.js'
 import { ANSWER_REVIEW_FORM, hasHumanInput, type ReviewAgent } from '../answer-review/contracts.js'
@@ -48,8 +50,12 @@ import { DshExecutionSupport, type ExecutionBinding } from '../execution-support
 import { resetLoopGuardForUserInTransaction } from '../loop-guard.js'
 import type { NativeSkills, NativeTools, NativeSessions, NativeAgents, AdapterContext } from './native-events.js'
 import type { TurnRecord } from './turn-state.js'
-import { codingContinuation } from '../coding-workflow/intent.js'
 import { readCodingWorkflow } from '../coding-workflow/store.js'
+import { markCodingScopeChange } from '../coding-workflow/service.js'
+import { readExecutionFrame } from '../execution-frame.js'
+import { assertMemoryOwner, createMemoryOwner, memoryOwnerKind } from '../memory-owner.js'
+import { findSecret } from '../../memory/secrets.js'
+import { executionClarification, isContinuationReference } from '../intake-clarification.js'
 
 interface AdmissionDependencies {
   readonly completionMode: import('../task-completion.js').CompletionMode
@@ -99,7 +105,9 @@ interface AdmissionDependencies {
 
 interface AdmissionOwner {
   readonly gate: DshIntakeGate & { prepareRequestedWork(event: DshPreStepEvent): Promise<DshIntakeGateResult> }
-  readonly mapPreStep: (payload: DshNativePreStepPayload, advisoryType?: TaskType) => Promise<DshPreStepEvent>
+  readonly mapPreStep: (payload: DshNativePreStepPayload, advisoryType?: TaskType, requestIntent?: RequestIntentDecision) => Promise<DshPreStepEvent>
+  readonly interpret: (payload: DshNativePreStepPayload) => Promise<RequestIntentInterpretation | undefined>
+  readonly refreshMemoryOwner: (item: TurnRecord, signal: AbortSignal) => Promise<void>
   readonly clear: () => void
 }
 
@@ -127,10 +135,23 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
   return incomingType !== null && !ENNO_APPLICABLE_TASK_TYPES.includes(incomingType as (typeof ENNO_APPLICABLE_TASK_TYPES)[number])
 }
 
+  function eventTurn(event: { readonly data?: unknown }): number | undefined {
+  const data = typeof event.data === 'object' && event.data !== null && !Array.isArray(event.data)
+    ? event.data as Record<string, unknown> : undefined
+  return Number.isSafeInteger(data?.turn) ? data!.turn as number : undefined
+}
+
+function continuesCodingScope(event: DshPreStepEvent): boolean {
+  const intent = event.requestIntent
+  return !!intent && (intent.relation === 'same_scope_continuation' || intent.relation === 'scope_change')
+    && intent.action !== 'answer' && intent.action !== 'unknown'
+}
+
   let prepareGeneration = 0
   const continuedTurns = new Map<string, {
     readonly fingerprint: string
     readonly profileHints?: DshPreStepEvent['profileHints']
+    readonly unresolvedBinding?: string
     readonly result: DshIntakeGateResult
     readonly nativeAgent?: object
     readonly nativeSession?: object
@@ -175,7 +196,11 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
         },
       })
     }
-    if (result.admitted && result.prepared.run.status === 'active' && currentSession(event.sessionId)?.prepareGeneration === generation && !delegation.isChild(event.nativeAgent ?? {})) {
+    if (result.admitted && event.requestIntent?.relation !== 'scope_change' && result.prepared.run.status === 'active'
+      && result.prepared.memoryOwner?.kind === 'execution'
+      && currentSession(event.sessionId)?.prepareGeneration === generation && !delegation.isChild(event.nativeAgent ?? {})) {
+      assertMemoryOwner(result.prepared.memoryOwner, { agentId: event.agent.id, sessionId: event.sessionId, turn: event.turn,
+        requestDigest: canonicalContentHash(event.task), runId: result.prepared.run.runId }, 'execution')
       await runtime.withDatabase(db => {
         if (currentSession(event.sessionId)?.prepareGeneration !== generation) return
         bindMemoryApplication(db, {
@@ -189,6 +214,17 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       try { await autoReview.bind({workspace:result.prepared.project.workspace,runId:result.prepared.run.runId,session:event.nativeSession as ReviewNativeSession,startSeq:sourceStartSeq}) }
       catch { /* Unsupported or unavailable review source must not veto a native request. */ }
     }
+  }
+
+  async function hasPendingExecutionDiscussion(sessionId: string, cwd: string): Promise<boolean> {
+    return runtime.withDatabase(async db => {
+      const project = await resolveProjectWorkspaceReadOnly(db, cwd, { allowDirectory: true })
+      if (!project) return false
+      const activeRuns = db.prepare(`SELECT run_id FROM ledger_runs
+        WHERE workspace=? AND dsh_session_id=? AND status='active'`).all<{ run_id: string }>(project.workspace, sessionId)
+      if (activeRuns.length !== 1) return false
+      return readExecutionSelection(db, activeRuns[0]!.run_id)?.value.discussion !== undefined
+    })
   }
 
   const refreshContinuedWorkLease = async (
@@ -293,7 +329,8 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       // context deliveries that finish out of order.
       const generation = ++prepareGeneration
       const prior=currentForAgentEvent(event.agent.id,event.sessionId,undefined,event.nativeSession,event.nativeAgent)
-      if(prior && prior.turn===event.turn && !prior.closed && prior.task!==event.task && hasHumanInput(event.nativeMessages??[])) {
+      if(prior && prior.turn===event.turn && !prior.closed && prior.task!==event.task && hasHumanInput(event.nativeMessages??[])
+        && event.requestIntent?.relation === 'new') {
         const choice=getSelection(prior.runId)
         if(choice?.value.status==='ready')this.supersededChoices.set(`${event.sessionId}\u0000${event.turn}`,choice)
         await retireSupersededRun(prior,'cancelled')
@@ -313,11 +350,33 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
         profileHints: event.profileHints ?? null,
         ...(event.deferTaskTypeInference ? { deferTaskTypeInference: true } : {}),
         evidence: event.evidence ?? null,
+        requestIntent: event.requestIntent ?? null,
+        requestIntentContextDigest: event.requestIntentContext ? canonicalContentHash(event.requestIntentContext) : null,
+        memoryOwner: event.memoryOwner ?? null,
         skillDiscoveryMode: event.skillDiscoveryMode ?? null,
         catalogDigest: event.capabilities.digest,
       })
+      const unresolvedBinding = canonicalContentHash({ sessionId: event.sessionId, agentId: event.agent.id,
+        turn: event.turn, sourceStartSeq: event.sourceStartSeq ?? null, task: event.task, cwd: event.cwd,
+        evidence: event.evidence ?? null, context: event.requestIntentContext ?? null, catalogDigest: event.capabilities.digest,
+        skillDiscoveryMode: event.skillDiscoveryMode ?? null })
       const cached = continuedTurns.get(cacheKey) ?? resumedTurns.get(cacheKey)
       if (cached !== undefined) {
+        if (cached.fingerprint !== fingerprint && 'unresolvedBinding' in cached && cached.unresolvedBinding === unresolvedBinding
+          && cached.nativeAgent === event.nativeAgent && cached.nativeSession === event.nativeSession
+          && event.requestIntentContext && event.requestIntent
+          && continuesCodingScope(event) && rebindRequestIntentDecision(event.requestIntent, event.requestIntentContext)) {
+          // A host-owned confirmation may resume before optional interpretation.
+          // Resolve that exact unresolved input once; changing resolved input still conflicts.
+          const kind = memoryOwnerKind(event.requestIntent, event.profileHints?.taskType)
+          const prepared: PreparedAgentTask = { ...cached.result.prepared,
+            memoryOwner: createMemoryOwner(kind, { agentId: event.agent.id, sessionId: event.sessionId, turn: event.turn,
+              requestDigest: canonicalContentHash(event.task), runId: cached.result.prepared.run.runId }) }
+          const resolved = await this.choose(event, { ...cached.result, prepared })
+          continuedTurns.set(cacheKey, { fingerprint, result: resolved, ...(event.nativeAgent ? { nativeAgent: event.nativeAgent } : {}), ...(event.nativeSession ? { nativeSession: event.nativeSession } : {}) })
+          await bindAndRecord(event, resolved, generation)
+          return resolved
+        }
         if (cached.fingerprint !== fingerprint
           || cached.nativeAgent !== event.nativeAgent
           || cached.nativeSession !== event.nativeSession) {
@@ -340,6 +399,26 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
         return continued
       }
       if (previous !== undefined && previous.turn === event.turn && !previous.closed) {
+        if (previous.task !== event.task && hasHumanInput(event.nativeMessages ?? [])) {
+          if (!continuesCodingScope(event)) return { admitted: false, prepared: previous.prepared, catalog: event.capabilities }
+          const workflow = await runtime.withDatabase(db => readCodingWorkflow(db, previous.runId))
+          const scopeChanging = !!workflow && event.requestIntent?.relation === 'scope_change'
+          if (scopeChanging && event.requestIntent) {
+            const evidenceRefs = event.requestIntentContext ? requestIntentReferenceIds(event.requestIntentContext) : []
+            await runtime.withDatabase(db => markCodingScopeChange(db,
+              { runId: previous.runId, sessionId: previous.sessionId, repositoryRoot: previous.repositoryRoot },
+              `request-intent:${event.sessionId}:${event.turn}:${event.requestIntent!.evidence.requestDigest}`,
+              event.requestIntent!.evidence.requestDigest, evidenceRefs))
+          }
+          const ownerKind = event.memoryOwner ?? memoryOwnerKind(event.requestIntent, event.profileHints?.taskType ?? previous.prepared.intake.profile.taskType)
+          const prepared: PreparedAgentTask = { ...previous.prepared,
+            ...(scopeChanging ? { context: null, memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false, withheldReason: null, deliveryEmpty: true } } : {}),
+            memoryOwner: createMemoryOwner(ownerKind, { agentId: event.agent.id, sessionId: event.sessionId, turn: event.turn,
+              requestDigest: canonicalContentHash(event.task), runId: previous.runId }) }
+          const selected = await this.choose(event, { admitted: !event.signal.aborted, prepared, catalog: event.capabilities })
+          if (selected.admitted) await bindAndRecord(event, selected, generation)
+          return selected
+        }
         // Model routing prepares before native pre-step. Reuse that exact
         // intake result instead of treating its newly active run as a cold
         // resume (which deliberately starts without historical context).
@@ -387,7 +466,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
         // Child results and other generated turns continue the admitted Goal.
         // Only a new human request can replace it without an explicit continuation.
         const resumeCoding = coding && !['completed', 'cancelled', 'superseded'].includes(coding.state)
-          && (!hasHumanInput(event.nativeMessages ?? []) || codingContinuation(event.task))
+          && (!hasHumanInput(event.nativeMessages ?? []) || continuesCodingScope(event))
         const continuePrevious = resumeCoding || selection && (selection.status !== 'ready' || selection.mode === 'normal' && previous.failed)
           ? true : previousWasChat
           ? event.profileHints?.taskType === 'chat'
@@ -398,6 +477,15 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
             && (previousState.nextAction !== 'complete' || executionSupport.paused(previous.sessionId))
         if (continuePrevious) {
           this.assertCatalog(previous.catalog, event.capabilities)
+          const intent = event.requestIntent
+          const scopeChanging = !!coding && intent?.relation === 'scope_change' && intent.action !== 'answer' && intent.action !== 'unknown'
+          if (scopeChanging && intent) {
+            const evidenceRefs = event.requestIntentContext ? requestIntentReferenceIds(event.requestIntentContext) : []
+            await runtime.withDatabase(db => markCodingScopeChange(db,
+              { runId: previous.runId, sessionId: previous.sessionId, repositoryRoot: previous.repositoryRoot },
+              `request-intent:${event.sessionId}:${event.turn}:${intent.evidence.requestDigest}`,
+              intent.evidence.requestDigest, evidenceRefs))
+          }
           const refreshedWork = await refreshContinuedWorkLease(previous, previousState)
           if (refreshedWork !== undefined) {
             previous.prepared = { ...previous.prepared, ennoOduno: refreshedWork.state }
@@ -405,7 +493,9 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
             turnState.applyPolicy(previous.runId, next)
           }
           let continuedMemory:Pick<PreparedAgentTask,'context'|'memoryPolicy'>|undefined
-          if(!ennoMemory.ownsActiveRefresh(previous.prepared.ennoOduno)) {
+          if (scopeChanging) continuedMemory = { context: null,
+            memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false, withheldReason: null, deliveryEmpty: true } }
+          else if(!ennoMemory.ownsActiveRefresh(previous.prepared.ennoOduno)) {
             const captured=previous.prepared, started=performance.now()
             const inboxIdentity=()=>canonicalContentHash([...((event.nativeAgent as any)?.inbox?.nextStep??[]),...((event.nativeAgent as any)?.inbox?.nextTurn??[])].filter(isHumanMessage))
             const pendingInput=inboxIdentity()
@@ -425,10 +515,15 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
               /* Optional retrieval failure retains the previous delivery, whose state is validated before injection. */
             }
           }
-          const continued = await this.choose(event, { admitted: !event.signal.aborted, prepared: continuedMemory?{...previous.prepared,...continuedMemory}:previous.prepared, catalog: event.capabilities })
+          const ownerKind = event.memoryOwner ?? memoryOwnerKind(intent, event.profileHints?.taskType ?? previous.prepared.intake.profile.taskType)
+          const continuedPrepared: PreparedAgentTask = { ...previous.prepared, ...(continuedMemory ?? {}),
+            memoryOwner: createMemoryOwner(ownerKind, { agentId: event.agent.id, sessionId: event.sessionId, turn: event.turn,
+              requestDigest: canonicalContentHash(event.task), runId: previous.runId }) }
+          const continued = await this.choose(event, { admitted: !event.signal.aborted, prepared: continuedPrepared, catalog: event.capabilities })
           if (continued.admitted) {
             continuedTurns.set(cacheKey, {
               fingerprint,
+              ...(event.requestIntent?.relation === 'unknown' || event.requestIntent?.action === 'unknown' ? { unresolvedBinding } : {}),
               result: continued,
               ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
               ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
@@ -606,6 +701,47 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
     completionMode,
     memoryRetrievalConfig,
   )
+  const refreshMemoryOwner = async (item: TurnRecord, signal: AbortSignal): Promise<void> => {
+    const prepared = item.prepared
+    const owner = prepared.memoryOwner
+    if (!owner || owner.kind !== 'execution') throw new KiokukoError('CONFLICT', 'memory_owner_unavailable')
+    const ownerIdentity = { agentId: item.agentId, sessionId: item.sessionId, turn: item.turn,
+      requestDigest: canonicalContentHash(item.task), runId: item.runId }
+    assertMemoryOwner(owner, ownerIdentity, 'execution')
+    const started = performance.now()
+    const refreshed = await runtime.withDatabase(async (database, embedding) => {
+      const assertCurrent = () => {
+        signal.throwIfAborted()
+        if (currentSession(item.sessionId) !== item || item.prepared !== prepared || item.closed || item.failed
+          || item.nativeAgent === undefined || agents?.get(item.nativeAgent.id) !== item.nativeAgent
+          || item.nativeSession === undefined || sessions?.get(item.sessionId) !== item.nativeSession) {
+          throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+        }
+        assertMemoryOwner(owner, ownerIdentity, 'execution')
+        if (performance.now() - started > 1000 + (decisions.memoryReuse.mode === 'auto' ? decisions.memoryReuse.budgetMs : 0)) {
+          throw new KiokukoError('CONFLICT', 'memory_owner_rebuild_deadline')
+        }
+      }
+      if (embedding.mode === 'required') throw new KiokukoError('SERVICE_UNAVAILABLE', 'required_embedding_unavailable')
+      const capabilities = [...item.catalog.skills, ...item.catalog.tools]
+      const memoryReuse = await createMemoryReuseRuntime(decisions, `run:${item.runId}`, signal)
+      return refreshContinuedTaskContext({ database, memoryReuse, memoryRetrieval: memoryRetrievalConfig, prepared,
+        task: item.memoryInput ?? item.task, capabilities, assertCurrent,
+        validateCapabilities: async () => {
+          const fresh = await capabilityCatalog(skills, tools, { agent: { id: item.agentId },
+            ...(item.nativeAgent ? { nativeAgent: item.nativeAgent } : {}), cwd: item.cwd, signal })
+          gate.assertCatalog(item.catalog, fresh)
+          assertCurrent()
+        } })
+    })
+    signal.throwIfAborted()
+    if (currentSession(item.sessionId) !== item || item.prepared !== prepared) throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+    item.prepared = { ...prepared, ...refreshed }
+    await runtime.withDatabase(database => bindMemoryApplication(database, {
+      runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot,
+    }, item.prepared.intake.profile, item.prepared.context,
+    memoryRetrievalStatus(database, item.workspace, item.prepared.context, item.prepared.memoryPolicy.contextWithheld)))
+  }
   resumeExistingRun = async (event): Promise<DshIntakeGateResult | undefined> => runtime.withDatabase(async (database) => {
     const project = await resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true })
     if (project === undefined) return undefined
@@ -621,7 +757,7 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
           OR (ec.run_id IS NULL AND (json_extract(es.state_json, '$.paused') = 1 OR xs.run_id IS NOT NULL)))
         AND (cw.run_id IS NULL OR (? = 1 AND json_extract(cw.snapshot_json, '$.state') NOT IN ('completed', 'cancelled', 'superseded')))
       ORDER BY lr.created_at, lr.run_id LIMIT 2
-    `).all<{ runId: string; orchestrationId: string | null }>(project.workspace, event.sessionId, project.repositoryRoot, codingContinuation(event.task) ? 1 : 0)
+    `).all<{ runId: string; orchestrationId: string | null }>(project.workspace, event.sessionId, project.repositoryRoot, continuesCodingScope(event) ? 1 : 0)
     if (candidates.length === 0) return undefined
     if (candidates.length !== 1) throw new KiokukoError('CONFLICT', 'Multiple active runs match this session; refusing to guess')
     const candidate = candidates[0]!
@@ -663,7 +799,11 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       memoryUse: 'none',
     })
     const canonicalCwd = realpathSync(event.cwd)
-    const prepared: PreparedAgentTask = {
+      const prepared: PreparedAgentTask = {
+      memoryOwner: createMemoryOwner(event.memoryOwner ?? memoryOwnerKind(event.requestIntent, intake.profile.taskType), {
+        agentId: event.agent.id, sessionId: event.sessionId, turn: event.turn,
+        requestDigest: canonicalContentHash(event.task), runId,
+      }),
       project,
       executionContext: {
         canonicalCwd,
@@ -693,7 +833,97 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
     if (decision?.executionLease) turnState.stageLease(runId, decision.executionLease)
     return { admitted: !event.signal.aborted, prepared, catalog: event.capabilities }
   })
-  const mapPreStep = async (payload: DshNativePreStepPayload, advisoryType?: TaskType): Promise<DshPreStepEvent> => {
+  const requestIntentContextFor = async (input: DshNativePreStepPayload, sessionId: string, nativeSession: object | undefined,
+    previous: TurnRecord | undefined, task: string): Promise<RequestIntentContext | undefined> => {
+    const human = input.messages.filter(isHumanMessage)
+    if (!human.length || !task.trim()) return undefined
+    const sessionHeader = objectRecord(objectRecord(nativeSession)?.header)
+    const cwd = typeof sessionHeader?.cwd === 'string' ? sessionHeader.cwd : undefined
+    if (!cwd) return undefined
+    const messageRefs = requestIntentMessageRefs(human, task)
+    let activeGoal: RequestIntentContext['activeGoal']
+    let proposals: NonNullable<RequestIntentContext['proposals']> = []
+    const sameOwner = previous && previous.sessionId === sessionId && previous.nativeAgent === input.agent && previous.nativeSession === nativeSession
+    const persistedRun = sameOwner ? undefined : await runtime.withDatabase(async database => {
+      const project = await resolveProjectWorkspaceReadOnly(database, cwd, { allowDirectory: true })
+      if (!project) return undefined
+      const candidates = database.prepare(`SELECT lr.run_id AS runId,
+          ec.orchestration_session_id AS orchestrationId
+        FROM ledger_runs AS lr
+        LEFT JOIN dsh_coding_workflows AS cw ON cw.run_id = lr.run_id
+        LEFT JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
+        WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active'
+          AND ((json_extract(cw.snapshot_json, '$.repositoryRoot') = ?
+              AND json_extract(cw.snapshot_json, '$.sessionId') = ?
+              AND json_extract(cw.snapshot_json, '$.state') NOT IN ('completed', 'cancelled', 'superseded'))
+            OR (ec.repository_root = ? AND ec.status NOT IN ('completed', 'cancelled', 'blocked')))
+        ORDER BY lr.created_at, lr.run_id LIMIT 2`)
+        .all<{ runId: string; orchestrationId: string | null }>(project.workspace, sessionId,
+          project.repositoryRoot, sessionId, project.repositoryRoot)
+      if (candidates.length > 1) throw new KiokukoError('CONFLICT', 'Multiple active tasks match this session; refusing to guess')
+      return candidates[0] === undefined ? undefined : { ...candidates[0], workspace: project.workspace }
+    })
+    const runId = sameOwner ? previous.runId : persistedRun?.runId
+    if (runId) {
+      const state = await runtime.withDatabase(database => {
+        const workflow = readCodingWorkflow(database, runId)
+        const definition = workflow?.definition
+        const frame = readExecutionFrame(database, runId)
+        const enno = !workflow && persistedRun?.runId === runId && persistedRun.orchestrationId !== null
+          ? readEnnoSnapshot(database, { runId, workspace: persistedRun.workspace, orchestrationId: persistedRun.orchestrationId })
+          : undefined
+        const active: RequestIntentContext['activeGoal'] = definition ? {
+          runId, workflowRevision: workflow!.revision, goalId: definition.goal.goalId,
+          goalRevision: definition.goal.revision, scopeRevision: workflow!.scopeVersion, ideal: definition.goal.ideal,
+          target: definition.goal.target, outOfScope: [...definition.goal.outOfScope], constraints: [...definition.goal.constraints],
+        } : workflow ? { runId, workflowRevision: workflow.revision, scopeRevision: workflow.scopeVersion, outOfScope: [], constraints: [] }
+        : enno ? {
+          runId, workflowRevision: enno.revision, goalRevision: enno.revision, scopeRevision: enno.revision,
+          ideal: enno.ideal?.objective ?? enno.handoff.objective,
+          ...(enno.handoff.target === null ? {} : { target: enno.handoff.target }),
+          outOfScope: [...enno.contract.exclusions], constraints: [...enno.handoff.constraints],
+        }
+        : sameOwner && previous.prepared.ennoOduno.applicable ? {
+          runId,
+          ...(previous.prepared.ennoOduno.contractRevision === null ? {} : {
+            workflowRevision: previous.prepared.ennoOduno.contractRevision,
+            goalRevision: previous.prepared.ennoOduno.contractRevision,
+            scopeRevision: previous.prepared.ennoOduno.contractRevision,
+          }),
+          ...(previous.prepared.ennoOduno.directive?.objective ? { ideal: previous.prepared.ennoOduno.directive.objective } : {}),
+          ...(previous.prepared.intake.profile.target ? { target: previous.prepared.intake.profile.target } : {}),
+          outOfScope: [],
+          constraints: previous.prepared.intake.profile.constraints ? [previous.prepared.intake.profile.constraints] : [],
+        } : undefined
+        const candidates = (frame?.conditions ?? []).filter(condition => condition.approval === 'proposed').slice(0, 7)
+          .map(condition => ({ id: `condition-${canonicalContentHash([runId, frame!.revision, condition.field, condition.text, condition.planRevision])}`,
+            revision: condition.planRevision ?? frame!.revision, digest: canonicalContentHash(condition),
+            text: `${condition.field}: ${condition.text}`, field: condition.field }))
+        return { active, candidates }
+      })
+      activeGoal = state.active
+      proposals = state.candidates
+    }
+    const eventSource = sessionEventSource(nativeSession)
+    const precedingAssistant = [...eventSource.snapshotEvents()].reverse().find(event => event.type === 'assistant/message'
+      && (eventTurn(event) ?? Number.MAX_SAFE_INTEGER) < input.turn)
+    if (precedingAssistant && proposals.length < 8) {
+      const data = objectRecord(precedingAssistant.data)
+      const message = objectRecord(data?.message) ?? data
+      const content = Array.isArray(message?.content) ? message.content : []
+      const text = content.filter((block: unknown) => objectRecord(block)?.type === 'text')
+        .map((block: unknown) => objectRecord(block)?.text).filter((value): value is string => typeof value === 'string').join('\n').trim()
+      const messageId = typeof message?.id === 'string' ? message.id : `seq:${precedingAssistant.seq}`
+      if (message?.role === 'assistant' && text && text.length <= 8192 && findSecret(text) === undefined) {
+        proposals = [...proposals, { id: `assistant-${canonicalContentHash([sessionId, messageId])}`, revision: null,
+          digest: canonicalContentHash(text), text }]
+      }
+    }
+    return createRequestIntentContext({ task, messageRefs, ...(activeGoal ? { activeGoal } : {}), proposals: proposals.slice(0, 8) })
+  }
+
+  const mapPreStep = async (payload: DshNativePreStepPayload, advisoryType?: TaskType,
+    suppliedIntent?: RequestIntentDecision, interpretationOnly = false): Promise<DshPreStepEvent> => {
     const nativeSession = payload.agent.session
     const registered = nativeSession === undefined && payload.agent.sessionId === undefined
       ? sessions?.get(payload.agent.id)
@@ -726,7 +956,8 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
     // model, while any supplied step-local user text still replaces this
     // fallback and is recorded as the continuation instruction.
     const reviewing = !hasHumanInput(payload.messages) && payload.messages.some(message => objectRecord(objectRecord(message)?.source)?.form === ANSWER_REVIEW_FORM)
-    const task = bound?.task ?? (reviewing && previous ? previous.task : textFromMessages(payload.messages, previous?.task))
+    const intentTask = hasHumanInput(payload.messages) ? textFromMessages(payload.messages.filter(isHumanMessage), '') : ''
+    const task = intentTask.trim() ? intentTask : bound?.task ?? (reviewing && previous ? previous.task : textFromMessages(payload.messages, previous?.task))
     let profile = (() => {
       if (bound !== undefined) return bound.profileHints
       if (advisoryType) return { taskType: advisoryType }
@@ -737,17 +968,53 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       return inferred === null || previousType === 'chat' && inferred === 'chat' ? { taskType: previousType } : undefined
     })()
     let deferTaskTypeInference = bound?.deferTaskTypeInference ?? (reviewing ? previous?.deferTaskTypeInference : false) ?? false
-    if (!reviewing && bound === undefined && !delegation.isChild(payload.agent)) {
+    let requestIntentContext: RequestIntentContext | undefined
+    let requestIntent: RequestIntentDecision | undefined
+    const activeRecord = bound ?? previous
+    if (!reviewing && hasHumanInput(payload.messages) && !delegation.isChild(payload.agent) && intentTask.trim()) {
+      requestIntentContext = await requestIntentContextFor(payload, sessionId, boundSession as object | undefined, activeRecord, intentTask)
       const requestId = dshTurnRequestId({ dshSessionId: sessionId, turn: payload.turn })
+      const establishedConversation = profile?.taskType === 'chat' && !requestIntentContext?.activeGoal
+      if (requestIntentContext && !establishedConversation) {
+        requestIntent = await classifyRequestIntent(decisions, requestId, requestIntentContext, payload.signal)
+      }
       const configuration = await decisions?.bind(requestId, payload.signal)
       // This profile is inherited from a previous turn, not a current user choice.
       // Let Laya assess new work, but retain the user's chat choice for an
       // ambiguous continuation instead of asking the same classification again.
       const explicit = advisoryType ?? (configuration?.provider === 'laya-coreml' && profile?.taskType !== 'chat' ? undefined : profile?.taskType)
-      const classification = await classifyTaskForIntake(decisions, requestId, task, explicit, payload.signal)
+      const classification = await classifyTaskForIntake(decisions, requestId, intentTask, explicit, payload.signal)
       deferTaskTypeInference = classification.deferInference
       if (classification.taskType) profile = { ...profile, taskType: classification.taskType }
       else if (deferTaskTypeInference && profile) profile = { ...profile, taskType: null }
+    } else if (activeRecord) {
+      requestIntent = activeRecord.requestIntent
+      requestIntentContext = activeRecord.requestIntentContext
+    }
+    if (suppliedIntent) {
+      if (!requestIntentContext) throw new KiokukoError('CONFLICT', 'request_intent_context_unavailable')
+      const rebound = rebindRequestIntentDecision(suppliedIntent, requestIntentContext)
+      if (!rebound) throw new KiokukoError('CONFLICT', 'request_intent_evidence_stale')
+      if (requestIntent?.source === 'decision-provider' && requestIntent.relation !== 'unknown' && requestIntent.action !== 'unknown'
+        && (requestIntent.relation !== rebound.relation || requestIntent.action !== rebound.action)) {
+        throw new KiokukoError('CONFLICT', 'request_intent_provider_conflict')
+      }
+      requestIntent = requestIntent?.source === 'decision-provider' && requestIntent.relation !== 'unknown' && requestIntent.action !== 'unknown'
+        ? { ...requestIntent, evidence: rebound.evidence } : rebound
+    }
+    const pendingDiscussion = isContinuationReference(intentTask)
+      && await hasPendingExecutionDiscussion(sessionId, cwd)
+    const establishedConversation = profile?.taskType === 'chat' && !requestIntentContext?.activeGoal
+    if (!interpretationOnly && intentTask.trim() && !pendingDiscussion && !establishedConversation) {
+      const clarification = executionClarification(intentTask, requestIntent, requestIntentContext)
+      if (clarification) throw new KiokukoError('VALIDATION_ERROR', clarification)
+    }
+    const legacyTaskType = advisoryType !== undefined && advisoryType !== 'chat'
+      && !requestIntentContext?.activeGoal && (requestIntentContext?.proposals.length ?? 0) === 0
+    if (requestIntent?.source === 'unresolved' && legacyTaskType) requestIntent = undefined
+    if (requestIntent?.source !== 'unresolved') {
+      const intentType = requestIntentTaskType(requestIntent, profile?.taskType ?? advisoryType)
+      if (intentType !== undefined) profile = { ...profile, taskType: intentType }
     }
     // Coding Lisp choice belongs to the admitted Goal, after all criteria exist.
     // Task intake never starts Lisp or interrupts an explanation with a mode question.
@@ -767,6 +1034,9 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
       cwd,
       ...(profile === undefined ? {} : { profileHints: profile }),
       ...(deferTaskTypeInference ? { deferTaskTypeInference: true } : {}),
+      ...(requestIntent === undefined ? {} : { requestIntent }),
+      ...(requestIntentContext === undefined ? {} : { requestIntentContext }),
+      memoryOwner: memoryOwnerKind(requestIntent, profile?.taskType),
       capabilities: catalog,
       signal: payload.signal,
     }
@@ -774,6 +1044,12 @@ function supersedesUnstartedEnno(event: DshPreStepEvent, state: EnnoOdunoState):
   return {
     gate,
     mapPreStep,
+    interpret: async payload => {
+      const event = await mapPreStep(payload, undefined, undefined, true)
+      if (!event.requestIntentContext || !event.requestIntent) return undefined
+      return { context: event.requestIntentContext, decision: event.requestIntent }
+    },
+    refreshMemoryOwner,
     clear: (): void => { continuedTurns.clear(); resumedTurns.clear() },
   }
 }

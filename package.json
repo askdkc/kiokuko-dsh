@@ -216,6 +216,7 @@
     "test:answer-review": "node scripts/run-tests.mjs tests/dsh/unit/decisions/answer-review.test.ts tests/dsh/unit/decisions/grounding.test.ts tests/dsh/unit/decisions/answer-review-evaluation.test.ts tests/dsh/e2e/answer-review-loop.test.ts",
     "test:evaluation:answer-review": "npm run build && node scripts/evaluate-answer-review.mjs",
     "test:evaluation:decisions": "node --import tsx scripts/run-decision-evaluation.mjs",
+    "test:evaluation:request-intent": "node --import tsx scripts/run-request-intent-evaluation.mjs",
     "test:evaluation:model-routing": "node --import tsx scripts/run-model-routing-evaluation.mjs",
     "test:index-reasoning": "node scripts/run-tests.mjs tests/dsh/integration/index-reasoning.test.ts tests/dsh/integration/index-reasoning-native.test.ts tests/dsh/integration/index-reasoning-evaluation.test.ts",
     "test:evaluation:index-reasoning": "node --import tsx scripts/run-index-reasoning-evaluation.mjs",

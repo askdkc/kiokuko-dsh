@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, open, rename, rm } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import { join } from 'node:path'
 import { loadAgenticReplayLibrary, installedAgenticReplayCoreVersion, type EventInit, type TraceWriter, type CreateTraceWriter, type CoreLibrary, type SchemaLibrary } from './agenticreplay-libraries.js'
 import type { AgenticReplayConfig } from './config.js'
-import { AGENTICREPLAY_CAPTURE, label, modelRequest, projectBlocks, record, usageAttrs } from './agenticreplay-event-mapper.js'
-import { prepareAgenticReplayParent, projectAgenticReplayJson, workspaceKey } from './agenticreplay-security.js'
+import { AGENTICREPLAY_CAPTURE, boundedAgenticReplayPayload, label, modelRequest, projectBlocks, record, usageAttrs } from './agenticreplay-event-mapper.js'
+import { checkPrivatePath, prepareAgenticReplayParent, workspaceKey } from './agenticreplay-security.js'
 import { agenticReplayDiskBytes, scanAgenticReplayTrace } from './agenticreplay-files.js'
 import { AgenticReplayError, agenticReplayErrorCode, type DshAgenticReplayBinding, type AgenticReplayToolExecution, type AgenticReplayTrace, type WithAgenticReplayIndex } from './agenticreplay-types.js'
 
@@ -22,6 +23,7 @@ interface ActiveTrace {
   waiters: Set<() => void>
   persistenceFailed: boolean
   modelCleanups: Set<() => void>
+  diagnosticPromise?: Promise<void>
 }
 interface Attempt { trace: ActiveTrace; ref: Ref; id: string; started?: number; phase: string; bytes: number }
 export interface AgenticReplayRecorderDependencies {
@@ -33,7 +35,7 @@ export interface AgenticReplayRecorderDependencies {
 /** Owns all writers. Observation methods never throw into the DSH pipeline. */
 export class DshAgenticReplayRecorder {
   readonly instanceId = `pid_${process.pid}_${randomBytes(12).toString('hex')}`
-  readonly diagnostics = { unattributed: 0, auxiliary: 0, lateResults: 0, unsupportedChunks: 0 }
+  readonly diagnostics = { unattributed: 0, auxiliary: 0, lateResults: 0, unsupportedChunks: 0, omittedBodies: 0 }
   readonly #traces = new Map<string, ActiveTrace>()
   readonly #attempts = new Map<symbol, Attempt>()
   // Node 24 supports nonregistered symbols as weak keys. No unbounded token tombstones.
@@ -55,6 +57,38 @@ export class DshAgenticReplayRecorder {
     trace.row.missing_event_count++
     trace.row.last_error_code ??= code
     if (!trace.sealed) trace.row.state = trace.writer ? 'incomplete' : 'failed'
+    // The event queue may have stopped. Persist a bounded independent diagnostic,
+    // without retrying the failed capture or delaying the native operation.
+    if (!trace.diagnosticPromise) {
+      const pending = trace.tail
+      trace.diagnosticPromise = pending.then(() => this.#persistDiagnostic(trace)).catch(() => { trace.persistenceFailed = true })
+    }
+  }
+  async #persistDiagnostic(trace: ActiveTrace): Promise<void> {
+    try { await this.withIndex(store => store.save({ ...trace.row })) } catch { trace.persistenceFailed = true }
+    if (!trace.writer) return
+    const dir = trace.writer.runDir
+    const temporary = join(dir, `.capture-status-${randomBytes(12).toString('hex')}.tmp`)
+    try {
+      await checkPrivatePath(dir, true)
+      const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600)
+      try {
+        await handle.writeFile(JSON.stringify({ format: 'dsh.capture-status.v1', httpCapture: false,
+          runId: trace.row.agenticreplay_run_id, state: trace.row.state, lastErrorCode: trace.row.last_error_code,
+          missingEvents: trace.row.missing_event_count, unresolvedCalls: trace.row.unresolved_call_count,
+          endedAt: trace.row.ended_at }) + '\n')
+        await handle.sync()
+      } finally { await handle.close() }
+      await rename(temporary, join(dir, 'capture-status.json'))
+    } catch { trace.persistenceFailed = true }
+    finally { await rm(temporary, { force: true }).catch(() => undefined) }
+  }
+  /** Diagnostic flush is separate from capture, including traces stopped by limits. */
+  async flushDiagnostics(sessionId: string): Promise<void> {
+    const trace = this.#traces.get(sessionId)
+    if (!trace) return
+    await trace.tail
+    await trace.diagnosticPromise
   }
   #safe(trace: ActiveTrace, operation: () => void) {
     if (trace.sealed) return
@@ -65,6 +99,16 @@ export class DshAgenticReplayRecorder {
       this.#fail(trace, 'queue_limit'); return false
     }
     trace.pendingBytes += bytes; this.#bytes += bytes; return true
+  }
+  #reserveBody(trace: ActiveTrace, bytes: number): boolean {
+    if (trace.pendingBytes + bytes > this.config.maxQueuedBytesPerTrace || this.#bytes + bytes > this.config.maxQueuedBytesTotal) return false
+    trace.pendingBytes += bytes; this.#bytes += bytes; return true
+  }
+  #recordOmission(trace: ActiveTrace, eventType: string, id: string, reason: string, cause?: Ref): void {
+    this.diagnostics.omittedBodies++
+    this.#enqueue(trace, { type: 'note', actor: 'harness', attrs: {
+      diagnostic: 'content_omitted', event_type: eventType, correlation_id: label(id), omission_reason: label(reason),
+    } }, cause)
   }
   #release(trace: ActiveTrace, bytes: number) { trace.pendingBytes -= bytes; this.#bytes -= bytes }
   async #save(trace: ActiveTrace) {
@@ -154,9 +198,22 @@ export class DshAgenticReplayRecorder {
       let ref: Ref | undefined
       const id = randomBytes(12).toString('hex')
       const blocks = new Map<number, Record<string, any>>()
-      let heldBytes = 0, finish: string | undefined, usage: unknown, failure = false
+      const seenBlocks = new Set<number>()
+      let heldBytes = 0, finish: string | undefined, usage: unknown, failure = false, finishFailureCode: string | undefined
+      let bodyOmitted = false, bodyOmissionReason: string | undefined, omissionRecorded = false, bodyBytes = 0, bodyChars = 0, blockCount = 0
       const started = performance.now()
       const releaseModel = () => { if (trace) { self.#release(trace, heldBytes); heldBytes = 0; blocks.clear(); trace.modelCleanups.delete(releaseModel) } }
+      const countBody = (text: string) => {
+        bodyBytes = Math.min(Number.MAX_SAFE_INTEGER, bodyBytes + Buffer.byteLength(text, 'utf8'))
+        bodyChars = Math.min(Number.MAX_SAFE_INTEGER, bodyChars + text.length)
+      }
+      const omitBody = (reason: string) => {
+        if (bodyOmitted) return
+        bodyOmitted = true
+        bodyOmissionReason = reason
+        blocks.clear()
+        if (trace && heldBytes > 0) { self.#release(trace, heldBytes); heldBytes = 0 }
+      }
       try {
         if (!binding) self.diagnostics.unattributed++
         else if (options.purpose !== undefined && !self.config.includeAuxiliary) self.diagnostics.auxiliary++
@@ -168,7 +225,11 @@ export class DshAgenticReplayRecorder {
             trace.modelCleanups.add(releaseModel)
             trace.active++
             self.#safe(trace, () => {
-              ref = self.#enqueue(trace!, modelRequest(options, id, self.config))
+              const requestEvent = modelRequest(options, id, self.config)
+              ref = self.#enqueue(trace!, requestEvent)
+              const attrs = record(requestEvent.attrs)
+              if (attrs.content_omitted === true) self.#recordOmission(trace!, 'model.request', id,
+                typeof attrs.omission_reason === 'string' ? attrs.omission_reason : 'payload_limit', ref)
               self.#link(trace!, binding)
             })
           }
@@ -178,22 +239,41 @@ export class DshAgenticReplayRecorder {
         for await (const chunk of next()) {
           if (trace && !trace.sealed && trace.row.last_error_code === null) self.#safe(trace, () => {
             const c = record(chunk)
-            if (c.type === 'finish') { finish = label(record(c.reason).kind); return }
+            if (c.type === 'finish') {
+              finish = label(record(c.reason).kind)
+              const code = record(record(c.reason).failure).code
+              if (finish === 'error' && ['DSH_MEMORY_SNAPSHOT_STALE', 'DSH_MEMORY_REBUILD_EXHAUSTED'].includes(code)) {
+                finishFailureCode = code
+                self.#enqueue(trace!, { type: 'error', actor: 'harness', attrs: { code, modelCallId: id } }, ref)
+              }
+              return
+            }
             if (c.type === 'usage') { usage = usageAttrs(c.usage); return }
             if (c.type === 'block-start') return
             if (c.type === 'reasoning-delta' && !self.config.capture.reasoning) return
             if (c.type === 'text-delta' || c.type === 'reasoning-delta' || c.type === 'tool-call-delta' || c.type === 'block-end') {
+              const n = c.index
+              if (!Number.isSafeInteger(n) || n < 0) throw new AgenticReplayError('unsupported_chunk')
+              if (blocks.get(n)?.closed) return
+              const firstBlockObservation = !seenBlocks.has(n)
+              if (firstBlockObservation) {
+                if (seenBlocks.size >= 256) { blockCount = 257; omitBody('metadata_limit'); return }
+                seenBlocks.add(n); blockCount++
+              }
+              const sourceBlock = c.type === 'block-end' ? record(c.block) : undefined
+              const observedText = c.type === 'block-end'
+                ? firstBlockObservation ? sourceBlock?.text ?? sourceBlock?.arguments : undefined
+                : c.type === 'tool-call-delta' ? c.argumentsDelta : c.text
+              if (typeof observedText === 'string') countBody(observedText)
+              if (bodyOmitted) return
               const value = c.type === 'block-end' ? projectBlocks([c.block], self.config)[0] :
                 c.type === 'tool-call-delta' ? { type: 'tool-call', id: label(c.id), name: label(c.name), arguments: c.argumentsDelta } :
                 { type: c.type === 'text-delta' ? 'text' : 'reasoning', text: c.text }
               const v = record(value)
               if (v.omitted) return
-              const n = c.index
-              if (!Number.isSafeInteger(n) || n < 0) throw new AgenticReplayError('unsupported_chunk')
-              if (blocks.get(n)?.closed) return
               if (self.config.capture.content === 'metadata') {
                 if (!blocks.has(n)) {
-                  if (!self.#reserve(trace!, 128)) return
+                  if (!self.#reserveBody(trace!, 128)) { omitBody('payload_limit'); return }
                   heldBytes += 128; blocks.set(n, { type: v.type, chars: 0 })
                 }
                 const block = blocks.get(n)!
@@ -204,7 +284,7 @@ export class DshAgenticReplayRecorder {
               const text = v.text ?? v.arguments ?? ''
               if (typeof text !== 'string') throw new AgenticReplayError('unsupported_chunk')
               const bytes = text.length * 6 + (blocks.has(n) ? 0 : 256)
-              if (!self.#reserve(trace!, bytes)) return
+              if (!self.#reserveBody(trace!, bytes)) { omitBody('payload_limit'); return }
               heldBytes += bytes
               const previous = blocks.get(n)
               if (c.type === 'block-end' || !previous) blocks.set(n, { ...v, closed: c.type === 'block-end' })
@@ -224,11 +304,34 @@ export class DshAgenticReplayRecorder {
       } finally {
         if (trace) {
           self.#release(trace, heldBytes); heldBytes = 0
+          // Capture is observational. Never wait for writer creation or disk
+          // drain before returning the native response.
           self.#safe(trace, () => {
             if (finish === undefined && !failure) self.#fail(trace!, 'model_finish_missing')
-            const payload = projectAgenticReplayJson({ format: 'dsh.llm.response.v1', blocks: [...blocks.values()] }, self.config.maxQueuedBytesPerTrace)
+            // Projection can fail before a request exists. Never invent an
+            // uncaused response, which looks like a missing API request.
+            if (!ref) return
+            let payload: Record<string, unknown>
+            if (bodyOmitted) {
+              payload = { format: 'dsh.llm.response.v1', content_omitted: true, omission_reason: bodyOmissionReason ?? 'payload_limit',
+                observed_body_bytes: bodyBytes, observed_body_chars: bodyChars, block_count: blockCount }
+            } else {
+              const bounded = boundedAgenticReplayPayload({ format: 'dsh.llm.response.v1', blocks: [...blocks.values()] },
+                Math.max(1, self.config.maxQueuedBytesPerTrace - 2048), 'dsh.llm.response.v1')
+              if (bounded.omitted) {
+                bodyOmitted = true
+                bodyOmissionReason = bounded.omissionReason ?? 'payload_limit'
+                payload = { ...bounded.payload, observed_body_bytes: bodyBytes, observed_body_chars: bodyChars, block_count: blockCount }
+              } else payload = bounded.payload
+            }
+            if (bodyOmitted && !omissionRecorded) {
+              self.#recordOmission(trace!, 'model.response', id, bodyOmissionReason ?? 'payload_limit', ref)
+              omissionRecorded = true
+            }
             self.#enqueue(trace!, { type: 'model.response', actor: 'model', attrs: { modelCallId: id,
               stop_reason: finish ?? (failure ? 'exception' : 'incomplete'), duration_ms: performance.now() - started,
+              ...(finishFailureCode ? { failure_code: finishFailureCode } : {}),
+              ...(bodyOmitted ? { content_omitted: true, omission_reason: bodyOmissionReason ?? 'payload_limit', observed_body_bytes: bodyBytes, observed_body_chars: bodyChars } : {}),
               ...(usage === undefined ? { usage_known: false } : record(usage)) }, payload: payload as Record<string, unknown> }, ref)
           })
           releaseModel(); self.#settle(trace)
@@ -243,14 +346,18 @@ export class DshAgenticReplayRecorder {
       const trace = this.#admit(binding)
       if (!trace) return
       this.#safe(trace, () => {
-        const projected = this.config.capture.content === 'metadata' ? undefined : projectAgenticReplayJson(exec.arguments, this.config.maxQueuedBytesPerTrace)
+        const projected = this.config.capture.content === 'metadata' ? undefined
+          : boundedAgenticReplayPayload(exec.arguments, Math.max(1, this.config.maxQueuedBytesPerTrace - 2048), 'dsh.tool.arguments.v1')
         const name = label(exec.name), callId = label(exec.callId), rootCallId = label(exec.rootCallId)
         if (!this.#reserve(trace, 512)) return
         const id = randomBytes(12).toString('hex')
         const parent = exec.parent === undefined ? undefined : this.#attempts.get(exec.parent)
+        const omitted = projected?.omitted === true
         const ref = this.#enqueue(trace, { type: 'tool.call', actor: 'harness', attrs: { name, callId,
-          rootCallId, attemptId: id, startObserved, ...(parent && parent.trace === trace ? { parentAttemptId: parent.id } : {}) },
-          ...(this.config.capture.content === 'metadata' ? {} : { payload: projected as Record<string, unknown> }) })
+          rootCallId, attemptId: id, startObserved, ...(omitted ? { content_omitted: true, omission_reason: projected.omissionReason ?? 'payload_limit' } : {}),
+          ...(parent && parent.trace === trace ? { parentAttemptId: parent.id } : {}) },
+          ...(this.config.capture.content === 'metadata' ? {} : { payload: projected!.payload }) })
+        if (omitted) this.#recordOmission(trace, 'tool.call', id, projected!.omissionReason ?? 'payload_limit', ref)
         trace.active++
         this.#attempts.set(exec.token, { trace, ref, id, phase: 'permission_pending', bytes: 512 })
         this.#link(trace, binding)
@@ -291,12 +398,32 @@ export class DshAgenticReplayRecorder {
     this.#safe(trace, () => {
       const r = record(result)
       if (typeof r.isError !== 'boolean') throw new AgenticReplayError('unsupported_tool_result')
-      this.#enqueue(trace, { type: 'tool.result', actor: 'tool', attrs: { name: label(exec.name), attemptId: id, is_error: r.isError },
-        payload: projectAgenticReplayJson({ content: projectBlocks(r.content, this.config) }, this.config.maxQueuedBytesPerTrace) as Record<string, unknown> }, ref)
+      let projected: ReturnType<typeof boundedAgenticReplayPayload>
+      try {
+        projected = boundedAgenticReplayPayload({ content: projectBlocks(r.content, this.config) },
+          Math.max(1, this.config.maxQueuedBytesPerTrace - 2048), 'dsh.tool.result.v1')
+      } catch (error) {
+        if (!(error instanceof AgenticReplayError) || error.code !== 'queue_limit') throw error
+        projected = { payload: { format: 'dsh.tool.result.v1', content_omitted: true, omission_reason: 'payload_limit' },
+          omitted: true, omissionReason: 'payload_limit' }
+      }
+      this.#enqueue(trace, { type: 'tool.result', actor: 'tool', attrs: { name: label(exec.name), attemptId: id, is_error: r.isError,
+        ...(projected.omitted ? { content_omitted: true, omission_reason: projected.omissionReason ?? 'payload_limit' } : {}) },
+        payload: projected.payload }, ref)
+      if (projected.omitted) this.#recordOmission(trace, 'tool.result', id, projected.omissionReason ?? 'payload_limit', ref)
     })
     this.#settle(trace)
   }
   stopAccepting(): void { this.#accepting = false; for (const t of this.#traces.values()) t.accepting = false }
+  nativeFailure(binding: DshAgenticReplayBinding | undefined): void {
+    try {
+      if (!binding) return
+      const trace = this.#admit(binding)
+      if (trace) this.#safe(trace, () => this.#enqueue(trace, { type: 'error', actor: 'harness', attrs: {
+        code: 'native_turn_failed', phase: 'agent', httpCapture: false,
+      } }))
+    } catch { this.diagnostics.unattributed++ }
+  }
   closeSessionRecording(sessionId: string, reason: string): Promise<void> {
     const trace = this.#traces.get(sessionId)
     if (!trace) return Promise.resolve()
@@ -318,11 +445,15 @@ export class DshAgenticReplayRecorder {
     for (const [token, attempt] of this.#attempts) if (attempt.trace === trace) {
       this.#release(trace, attempt.bytes); this.#attempts.delete(token)
     }
+    // Let all already-reserved event writes release their bounded queue bytes
+    // before reserving the final diagnostic/end event.
+    await trace.tail
     this.#safe(trace, () => { this.#enqueue(trace, { type: 'run.end', actor: 'harness', attrs: {
       reason: label(reason), missing_events: trace.row.missing_event_count, unresolved_calls: trace.row.unresolved_call_count,
-      recording_complete: trace.row.last_error_code === null } }) })
+      last_error_code: trace.row.last_error_code, recording_complete: trace.row.last_error_code === null } }) })
     trace.sealed = true // late observations cannot append behind run.end
     await trace.tail
+    await trace.diagnosticPromise
     if (this.#unavailable && !trace.writer) return
     try {
       if (!trace.writer) throw new AgenticReplayError('writer_unavailable')
@@ -335,6 +466,7 @@ export class DshAgenticReplayRecorder {
     } catch (error) { trace.row.state = 'failed'; trace.row.last_error_code ??= agenticReplayErrorCode(error) }
     trace.row.ended_at = new Date().toISOString()
     await this.#save(trace)
+    if (trace.row.last_error_code) await this.#persistDiagnostic(trace)
     if (trace.persistenceFailed && trace.row.state === 'completed') trace.row.state = 'incomplete'
     delete trace.writer
   }

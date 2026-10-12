@@ -29,6 +29,19 @@ export function projectBlocks(value: unknown, config: AgenticReplayConfig): unkn
   })
 }
 
+export function boundedAgenticReplayPayload(value: unknown, maxBytes: number, format: string): {
+  payload: Record<string, unknown>; omitted: boolean; omissionReason?: string;
+} {
+  try {
+    const projected = projectAgenticReplayJson(value, maxBytes)
+    if (typeof projected !== 'object' || projected === null || Array.isArray(projected)) throw new AgenticReplayError('unsupported_payload')
+    return { payload: projected as Record<string, unknown>, omitted: false }
+  } catch (error) {
+    if (!(error instanceof AgenticReplayError) || error.code !== 'queue_limit') throw error
+    return { payload: { format, content_omitted: true, omission_reason: 'payload_limit' }, omitted: true, omissionReason: 'payload_limit' }
+  }
+}
+
 /** Hash only host-attributed sections still present at the final request seam. */
 export function requestSourceManifest(messages: unknown, config: AgenticReplayConfig): {
   coverage: 'observed' | 'partial' | 'unknown'; omittedCount: number;
@@ -48,8 +61,9 @@ export function requestSourceManifest(messages: unknown, config: AgenticReplayCo
     if (typeof body !== 'string') continue
     for (const candidate of source.sections) {
       const section = record(candidate)
-      if (typeof section.name !== 'string' || typeof section.text !== 'string'
-        || section.name.length > 256 || !body.includes(section.text)) continue
+      if (typeof section.name !== 'string' || typeof section.text !== 'string' || section.name.length > 256) continue
+      if (Buffer.byteLength(section.text) > limit) { omittedCount++; continue }
+      if (!body.includes(section.text)) continue
       if (source.kind === 'runtime-context' && section.name !== 'kiokuko:execution') continue
       if (source.kind !== 'runtime-context' && !/^(?:soul|directive|memory-reasoning|route-skill|expert|advisory|memory|user-task):/u.test(section.name)) continue
       const kind = source.kind === 'runtime-context' ? 'execution' : section.name.split(':', 1)[0]!
@@ -64,17 +78,23 @@ export function requestSourceManifest(messages: unknown, config: AgenticReplayCo
 }
 export function modelRequest(options: Record<string, any>, id: string, config: AgenticReplayConfig): EventInit {
   const messages = Array.isArray(options.messages) ? options.messages : []
-  if (messages.length * 64 > config.maxQueuedBytesPerTrace) throw new AgenticReplayError('queue_limit')
   const sources = requestSourceManifest(options.messages, config)
-  const payload = config.capture.content === 'metadata' ? { format: 'dsh.llm.request.v1', sources } : {
-    format: 'dsh.llm.request.v1', system: options.system,
-    sources,
-    messages: messages.map(item => ({ role: label(record(item).role), content: projectBlocks(record(item).content, config) })),
-    tools: Array.isArray(options.tools) ? options.tools.map(item => ({ name: label(record(item).name) })) : [],
+  const attrs = { modelCallId: id, provider: label(options.provider), model: label(options.model),
+    messages: messages.length, purpose: options.purpose === undefined ? 'conversation' : label(options.purpose) }
+  try {
+    if (messages.length * 64 > config.maxQueuedBytesPerTrace) throw new AgenticReplayError('queue_limit')
+    const payload = config.capture.content === 'metadata' ? { format: 'dsh.llm.request.v1', sources } : {
+      format: 'dsh.llm.request.v1', system: options.system, sources,
+      messages: messages.map(item => ({ role: label(record(item).role), content: projectBlocks(record(item).content, config) })),
+      tools: Array.isArray(options.tools) ? options.tools.map(item => ({ name: label(record(item).name) })) : [],
+    }
+    return { type: 'model.request', actor: 'harness', attrs,
+      payload: projectAgenticReplayJson(payload, config.maxQueuedBytesPerTrace) as Record<string, unknown> }
+  } catch (error) {
+    if (!(error instanceof AgenticReplayError) || error.code !== 'queue_limit') throw error
+    return { type: 'model.request', actor: 'harness', attrs: { ...attrs, content_omitted: true, omission_reason: 'payload_limit' },
+      payload: { format: 'dsh.llm.request.v1', sources, content_omitted: true, omission_reason: 'payload_limit' } }
   }
-  return { type: 'model.request', actor: 'harness', attrs: { modelCallId: id, provider: label(options.provider), model: label(options.model),
-    messages: messages.length, purpose: options.purpose === undefined ? 'conversation' : label(options.purpose) },
-    payload: projectAgenticReplayJson(payload, config.maxQueuedBytesPerTrace) as Record<string, unknown> }
 }
 /** DSH uses a replacement usage snapshot, with disjoint cache counters. */
 export function usageAttrs(value: unknown): Record<string, unknown> {

@@ -66,12 +66,13 @@ import type { SkillDiscoverySummary, SkillDiscoveryMode } from '../skills/types.
 import { canonicalDirectory } from '../repository/detect-root.js';
 import { ennoStateForPreparedTask } from '../enno-oduno/service.js';
 import { initializeTaskCompletion, type CompletionMode } from './task-completion.js';
-import { codingIntent } from './coding-workflow/intent.js';
+import { codingWorkRequested } from './coding-workflow/intent.js';
 import { initializeCodingWorkflowInTransaction } from './coding-workflow/store.js';
 import { prepareEmbeddingSearchRuntime } from '../embedding/runtime.js';
 import type { EmbeddingRuntime } from '../embedding/types.js';
 import { MemoryRetrievalConfig, timeConstraintForRequest, validateMemoryTimeConstraint, type MemoryTimeConstraint } from '../memory/retrieval-contracts.js';
 import { reportMemoryRetrievalObservation } from './memory-retrieval-observer.js';
+import type { MemoryOwnerBinding, MemoryOwnerKind } from './memory-owner.js';
 import {
   ENNO_MAX_EXTERNAL_SKILLS,
   ENNO_MAX_TOTAL_SKILL_QUERIES,
@@ -84,6 +85,7 @@ export interface PrepareAgentTaskInput {
   executionSelection?: boolean;
   completionMode?: CompletionMode;
   sessionOwnership?: boolean;
+  requestIntent?: import('./decisions/request-intent.js').RequestIntentDecision;
   deepSelection?: { startId: string; configuration: import('../deep-thinker/core/contracts.js').DeepConfiguration };
   requestId: string;
   task: string;
@@ -91,6 +93,8 @@ export interface PrepareAgentTaskInput {
   profileHints?: Partial<TaskProfile>;
   /** Host-owned; never grants an answer or permission. */
   deferTaskTypeInference?: boolean;
+  /** Conversation and unresolved requests must not borrow run-scoped memory. */
+  memoryOwner?: MemoryOwnerKind;
   capabilities?: unknown;
   maxContextChars?: number;
   dshSessionId: string;
@@ -106,6 +110,7 @@ export interface PrepareAgentTaskInput {
 
 export interface AnswerAgentTaskInput {
   memoryReuse?: MemoryReuseRuntime | undefined;
+  memoryOwner?: MemoryOwnerKind;
   sessionId: string;
   questionId: keyof TaskProfile;
   value: string;
@@ -124,6 +129,7 @@ export interface AnswerAgentTaskInput {
 }
 
 export interface PreparedAgentTask {
+  memoryOwner?: MemoryOwnerBinding;
   selectedSkills?: readonly string[];
   executionFrame?: TaskExecutionFrame;
   project: ResolvedProjectWorkspace;
@@ -474,6 +480,7 @@ interface FinalizeAgentTaskInput {
   memoryRetrieval?: import('../memory/retrieval-contracts.js').MemoryRetrievalConfig;
   timeConstraint?: MemoryTimeConstraint;
   retrievalAnchorTimeMs: number;
+  memoryOwner: MemoryOwnerKind;
   signal?: AbortSignal;
 }
 
@@ -781,6 +788,11 @@ async function finalizeAgentTask(input: FinalizeAgentTaskInput, dshSessionId: st
     }, null, emptySkillDiscovery(input.discoveryMode), 'none'), dshSessionId);
   }
 
+  if (input.memoryOwner !== 'execution') {
+    return withPreparedEnno(input.database, buildPreparedTaskBase(input.database, input.project, input.executionContext, context,
+      input.capabilities, { runId: input.runId, status: run.status }, null, emptySkillDiscovery(input.discoveryMode), 'none'), dshSessionId);
+  }
+
   const prepared = prepareTaskContextQuery(input, context);
   const chat = context.session.profile.taskType === 'chat';
   const replayedAttempt = input.discoveryMode === 'off' || chat
@@ -907,7 +919,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
     deferTaskTypeInference: input.deferTaskTypeInference === true,
     onRunCreatedInTransaction: ({ database: transactionDatabase, runId, workspace, dshSessionId, now }) => {
       if (input.completionMode) initializeTaskCompletion(transactionDatabase, runId, input.completionMode);
-      if (input.sessionOwnership && codingIntent(input.task)) {
+      if (input.sessionOwnership && codingWorkRequested(input.task, input.requestIntent, profileHints.taskType)) {
         initializeTaskCompletion(transactionDatabase, runId, 'enforce');
         initializeCodingWorkflowInTransaction(transactionDatabase, { runId, sessionId: dshSessionId, requestId,
           repositoryRoot: project.repositoryRoot, task: input.task });
@@ -970,6 +982,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
       ...(input.memoryRetrieval === undefined ? {} : { memoryRetrieval: input.memoryRetrieval }),
       ...(input.timeConstraint === undefined ? {} : { timeConstraint: input.timeConstraint }),
       retrievalAnchorTimeMs,
+      memoryOwner: input.memoryOwner ?? 'execution',
       ...(input.embeddingRuntime === undefined ? {} : { embeddingRuntime: input.embeddingRuntime }),
       ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
@@ -1039,6 +1052,7 @@ export async function answerAgentTask(database: SqliteDatabase, input: AnswerAge
       ...(input.memoryRetrieval === undefined ? {} : { memoryRetrieval: input.memoryRetrieval }),
       ...(input.timeConstraint === undefined ? {} : { timeConstraint: input.timeConstraint }),
       retrievalAnchorTimeMs,
+      memoryOwner: input.memoryOwner ?? 'execution',
       ...(input.embeddingRuntime === undefined ? {} : { embeddingRuntime: input.embeddingRuntime }),
       ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),

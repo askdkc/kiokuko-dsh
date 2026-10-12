@@ -9,6 +9,7 @@ import { classifyTaskForIntake, selectInstalledSkills } from '../decisions/workf
 import { legacyModuleRequirements } from '../modules/legacy-bindings.js'
 import { realpathSync } from 'node:fs'
 import { canonicalContentHash } from '../../serialization/validate.js'
+import { KiokukoError } from '../../errors.js'
 import { DshRunIntakeService } from '../run-intake-service.js'
 import { getAkinatorStateService } from '../../akinator/service.js'
 import { hasBlockingRequiredCapability, resolveCapabilities, deriveMemoryPolicy } from '../../akinator/capabilities.js'
@@ -29,9 +30,11 @@ import { reportMemoryRetrievalObservation } from '../memory-retrieval-observer.j
 import { initializeTaskCompletion, assessTaskCompletion, taskCompletionBlocksClose } from '../task-completion.js'
 import { initializeCodingWorkflow, readCodingWorkflow } from '../coding-workflow/store.js'
 import { readAkinatorSession, readRunIntakeLink } from '../../akinator/store.js'
-import { codingIntent } from '../coding-workflow/intent.js'
-import { stopCodingWorkflow, synchronizeCodingWorkflow } from '../coding-workflow/service.js'
+import { codingWorkRequested } from '../coding-workflow/intent.js'
+import { markCodingScopeChange, stopCodingWorkflow, synchronizeCodingWorkflow } from '../coding-workflow/service.js'
 import { saveExecutionFrame, updateExecutionFrame } from '../execution-frame.js'
+import { requestIntentReferenceIds, requestIntentTaskType, rebindRequestIntentDecision, type RequestIntentContext, type RequestIntentDecision } from '../decisions/request-intent.js'
+import { assertMemoryOwner, createMemoryOwner, memoryOwnerKind, type MemoryOwnerBinding } from '../memory-owner.js'
 
 export interface CoreTaskInput {
   readonly requestId: string
@@ -42,6 +45,8 @@ export interface CoreTaskInput {
   readonly capabilities: readonly { kind: 'skill' | 'tool'; name: string; description?: string }[]
   readonly profileHints?: Partial<TaskProfile>
   readonly deferTaskTypeInference?: boolean
+  readonly requestIntent?: RequestIntentDecision
+  readonly requestIntentContext?: RequestIntentContext
   readonly timeConstraint?: MemoryTimeConstraint
   readonly signal: AbortSignal
   readonly agent?: DshUserQuestionAgent
@@ -58,6 +63,9 @@ export interface CoreTask {
   readonly capabilities: CoreTaskInput['capabilities']
   readonly selectedSkills?: readonly string[]
   readonly admitted: boolean
+  readonly memoryOwner?: MemoryOwnerBinding
+  readonly requestIntent?: RequestIntentDecision
+  readonly requestIntentContext?: RequestIntentContext
 }
 
 type CoreTaskIdentity = Pick<CoreTask, 'requestId' | 'sessionId' | 'runId' | 'workspace'>
@@ -100,6 +108,12 @@ export class CoreTasks {
   /** Recover only the session's exact active coding owner after explicit human continuation. */
   async resume(input: CoreTaskInput): Promise<CoreTask> {
     input.signal.throwIfAborted()
+    const requestIntentContext = input.requestIntentContext
+    if (!input.requestIntent || !requestIntentContext) throw new Error('A source-bound request interpretation is required to resume a Core task')
+    const intent = rebindRequestIntentDecision(input.requestIntent, requestIntentContext)
+    if (!intent || intent.relation === 'new' || intent.relation === 'unknown' || intent.action === 'unknown' || intent.action === 'answer') {
+      throw new Error('The current request does not authorize continuation of the active Core Goal')
+    }
     return this.runtime.withDatabase(async db => {
       const owner = readExecutionOwner(db, input.sessionId)
       if (!owner?.run_id || owner.mode !== 'normal') throw new Error('No resumable coding task owner')
@@ -110,18 +124,45 @@ export class CoreTasks {
       const link = readRunIntakeLink(db, { workspace: owner.workspace, runId: owner.run_id })
       const intake = readAkinatorSession(db, { workspace: owner.workspace, sessionId: link.sessionId })
       if (intake.status === 'active') throw new Error('Resumable coding task has unfinished intake')
+      if (intent.relation === 'scope_change') markCodingScopeChange(db,
+        { runId: owner.run_id, sessionId: input.sessionId, repositoryRoot: coding.repositoryRoot },
+        `request-intent:${input.sessionId}:${input.turn}:${intent.evidence.requestDigest}`,
+        intent.evidence.requestDigest, requestIntentReferenceIds(requestIntentContext))
       const resolution = resolveCapabilities({ task: coding.request, profile: intake.profile, recommendedTags: link.recommendedTags,
         capabilities: input.capabilities, memoryUse: 'none' })
       if (hasBlockingRequiredCapability(resolution)) throw new Error('Resumed coding task lacks required capabilities')
+      const ownerKind = memoryOwnerKind(intent, intake.profile.taskType)
+      const memoryOwner = input.agent ? createMemoryOwner(ownerKind, { agentId: input.agent.id, sessionId: input.sessionId,
+        turn: input.turn, requestDigest: canonicalContentHash(input.task), runId: owner.run_id }) : undefined
       return Object.freeze({ requestId: owner.start_id, sessionId: input.sessionId, runId: owner.run_id, workspace: owner.workspace,
-        cwd: realpathSync(input.cwd), profile: intake.profile, admitted: true, memory: null, context: null, capabilities: input.capabilities })
+        cwd: realpathSync(input.cwd), profile: intake.profile, admitted: true, memory: null, context: null, capabilities: input.capabilities,
+        ...(memoryOwner ? { memoryOwner } : {}), requestIntent: intent, requestIntentContext })
     })
   }
   async prepare(input: CoreTaskInput): Promise<CoreTask> {
     const retrievalAnchorTimeMs = Date.now()
     input.signal.throwIfAborted()
     const cwd = realpathSync(input.cwd)
-    const classification = await classifyTaskForIntake(this.decisions, input.requestId, input.task, input.profileHints?.taskType, input.signal)
+    const requestIntentContext = input.requestIntentContext
+    let requestIntent = input.requestIntent
+    if (requestIntent) {
+      if (!requestIntentContext) throw new KiokukoError('CONFLICT', 'request_intent_context_unavailable')
+      requestIntent = rebindRequestIntentDecision(requestIntent, requestIntentContext)
+      if (!requestIntent) throw new KiokukoError('CONFLICT', 'request_intent_evidence_stale')
+    }
+    if (requestIntent?.action === 'answer') throw new KiokukoError('CONFLICT', 'request_intent_is_conversation')
+    const unresolvedIntent = requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown'
+    if (unresolvedIntent && requestIntentContext?.activeGoal) throw new KiokukoError('CONFLICT', 'request_intent_unresolved')
+    if (requestIntentContext?.activeGoal && requestIntent === undefined) {
+      throw new KiokukoError('CONFLICT', 'request_intent_required_for_active_goal')
+    }
+    if (requestIntent?.relation === 'same_scope_continuation' || requestIntent?.relation === 'scope_change') {
+      return this.resume({ ...input, requestIntent })
+    }
+    const intentType = requestIntent && !unresolvedIntent
+      ? requestIntentTaskType(requestIntent, input.profileHints?.taskType ?? undefined) : undefined
+    const classification = await classifyTaskForIntake(this.decisions, input.requestId, input.task,
+      intentType ?? input.profileHints?.taskType, input.signal)
     const deferTaskTypeInference = !input.profileHints?.taskType && (input.deferTaskTypeInference || classification.deferInference)
     const grounded = resolveGroundedIntakeProfile({ task: input.task, cwd, deferTaskTypeInference,
       profileHints: { ...input.profileHints, ...(classification.taskType ? { taskType: classification.taskType } : {}) } })
@@ -151,13 +192,16 @@ export class CoreTasks {
             request: { apiVersion: '1', questionId: question.id, value, capabilities: input.capabilities } })
           state = await getAkinatorStateService(db, { workspace: project.workspace, sessionId: opened.intakeSessionId })
         }
+        const ownerKind = memoryOwnerKind(requestIntent, state.session.profile.taskType ?? undefined)
+        const memoryOwner = input.agent ? createMemoryOwner(ownerKind, { agentId: input.agent.id, sessionId: input.sessionId,
+          turn: input.turn, requestDigest: canonicalContentHash(input.task), runId: opened.runId }) : undefined
         const capabilities = resolveCapabilities({ task: input.task, profile: state.session.profile, recommendedTags: [], capabilities: input.capabilities, memoryUse: 'none' })
         const run = new LedgerStore(db).readRun(opened.runId)
         const admitted = state.status !== 'needs_answer' && run?.status === 'active' && !hasBlockingRequiredCapability(capabilities)
         const admissionState = admitted ? readContextRunRetrievalState(db, opened.runId).stateHash : null
         const selectedSkills = admitted ? await selectInstalledSkills(this.decisions, input.requestId, input.task, input.capabilities, capabilities, input.signal) : []
         let memory: ScopedContextResult | null = null
-        if (admitted) {
+        if (admitted && ownerKind === 'execution') {
           const policy = deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities)
           if (!policy.contextWithheld) {
             const memoryReuse = await createMemoryReuseRuntime(this.decisions, input.requestId, input.signal)
@@ -176,10 +220,14 @@ export class CoreTasks {
         }
         input.signal.throwIfAborted()
         if(admitted){initializeTaskCompletion(db,identity.runId,'shadow');saveExecutionFrame(db,identity.runId,updateExecutionFrame(undefined,project.repositoryRoot,input.task))
-          if(codingIntent(input.task))initializeCodingWorkflow(db,{...identity,repositoryRoot:project.repositoryRoot,task:input.task})}
-        if (admitted) bindMemoryApplication(db, { ...identity, repositoryRoot: project.repositoryRoot }, state.session.profile, memory,
+          if(codingWorkRequested(input.task,requestIntent,state.session.profile.taskType))initializeCodingWorkflow(db,{...identity,repositoryRoot:project.repositoryRoot,task:input.task})}
+        if (admitted && ownerKind === 'execution') bindMemoryApplication(db, { ...identity, repositoryRoot: project.repositoryRoot }, state.session.profile, memory,
           memoryRetrievalStatus(db, identity.workspace, memory, deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities).contextWithheld))
-        return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted, memory: recallView(db, memory), context: memory, capabilities: input.capabilities, selectedSkills })
+        return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted,
+          memory: ownerKind === 'execution' ? recallView(db, memory) : null,
+          context: ownerKind === 'execution' ? memory : null, capabilities: input.capabilities, selectedSkills,
+          ...(memoryOwner ? { memoryOwner } : {}),
+          ...(requestIntent ? { requestIntent, requestIntentContext: input.requestIntentContext } : {}) })
       } catch (error) {
         try { finishCoreTask(db, identity, input.signal.aborted ? 'cancelled' : 'failed') }
         catch (cleanup) { throw new AggregateError([error, cleanup], 'Task preparation and cleanup failed') }
@@ -191,6 +239,11 @@ export class CoreTasks {
     const retrievalAnchorTimeMs = Date.now()
     return this.runtime.withDatabase(async db => {
       signal.throwIfAborted()
+      if (task.memoryOwner) {
+        assertMemoryOwner(task.memoryOwner, { agentId: task.memoryOwner.agentId, sessionId: task.sessionId,
+          turn: task.memoryOwner.turn, requestDigest: task.memoryOwner.requestDigest, runId: task.runId }, task.memoryOwner.kind)
+        if (task.memoryOwner.kind !== 'execution') return { memory: null, context: null }
+      }
       const assertCurrent = () => {
         signal.throwIfAborted()
         const owner = readExecutionOwner(db, task.sessionId), run = new LedgerStore(db).readRun(task.runId)

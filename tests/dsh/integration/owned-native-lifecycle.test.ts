@@ -1,4 +1,4 @@
-import {codingPrelude,toolValue} from '../helpers/coding-script.js'
+import {codingPrelude,interpretedPreparation,toolValue} from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {mkdir,writeFile,readFile} from 'node:fs/promises'
@@ -73,7 +73,7 @@ test('isolated native profile: repair -> real test -> receipt -> candidate -> re
     assert.equal(old.currentTaskVerification,false)
     await f.reload('compiled')
     f.responses.push(
-      f.mock.toolCallResponse('prepare-verification','prepare_requested_work',{taskType:'debug'}),
+      interpretedPreparation(f.mock,'prepare-verification','new','verify','debug'),
       f.mock.toolCallResponse('application','task_memory_review',{action:'status'}),
       (request:any)=>{
         assert.ok(JSON.stringify(request.messages).includes(entry.id),'next request receives the saved candidate')

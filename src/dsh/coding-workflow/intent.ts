@@ -1,4 +1,34 @@
 import { executionClarification } from '../intake-clarification.js'
+import { rebindRequestIntentDecision, type RequestIntentDecision, type RequestIntentContext, type RequestAction } from '../decisions/request-intent.js'
+import type { TaskType } from '../../akinator/types.js'
+
+/** Native admission owns interpretation. Only legacy direct callers infer from text. */
+export function codingWorkRequested(task: string, intent?: RequestIntentDecision, taskType?: TaskType | null): boolean {
+  return intent === undefined ? codingIntent(task) : intent.action === 'change' && taskType !== 'writing'
+}
+
+/** Effect categories are a tool contract, never another interpretation of the user. */
+export function codingToolEffect(name: string): 'read' | 'change' | 'process' | 'unknown' {
+  if (codingControlOrRead(name)) return 'read'
+  if (['kioku_write', 'kioku_edit', 'kioku_remove', 'write', 'edit', 'delete', 'remove'].includes(name)) return 'change'
+  if (['kioku_exec', 'bash', 'zsh', 'exec', 'run_code', 'lisp_eval', 'lisp_load', 'lisp_compile', 'lisp_run'].includes(name)) return 'process'
+  return 'unknown'
+}
+
+/** Both native dispatch and the owned executor consume this same bound decision. */
+export function executionRequestAction(decision: RequestIntentDecision | undefined, context: RequestIntentContext | undefined,
+  name: string): RequestAction | undefined {
+  if (!decision) return undefined // Legacy direct callers keep their existing workflow checks.
+  const effect = codingToolEffect(name)
+  if (effect === 'read') return decision.action // Evidence gathering cannot acquire effect authority.
+  const intent = context && rebindRequestIntentDecision(decision, context)
+  if (!intent || intent.relation === 'unknown' || intent.action === 'unknown')
+    throw new Error('A current source-bound request interpretation is required before execution.')
+  if (intent.action === 'answer' || intent.action === 'research'
+    || intent.action === 'verify' && effect !== 'process')
+    throw new Error('This request authorizes inspection or verification, not artifact changes. Native permissions remain in force.')
+  return intent.action
+}
 
 /** An explicit README text edit stays on the document path unless code/config is also requested. */
 export function documentEditIntent(task: string): boolean {
@@ -42,8 +72,9 @@ export function codingContinuation(task: string): boolean {
 
 const readers = new Set(['read', 'glob', 'grep', 'skill', 'web_search', 'web_fetch', 'kioku_read', 'kioku_result',
   'task_memory_review', 'task_completion', 'coding_workflow', 'prepare_requested_work', 'ask_user_question',
-  'exit_plan_mode', 'lisp_status', 'lisp_hot_status', 'lisp_describe', 'lisp_inspect', 'lisp_cancel', 'observation_read',
-  'enno_ideal_submit', 'enno_plan_submit', 'enno_plan_review', 'enno_finish', 'enno_meditation_submit', 'memory_checkpoint', 'curator_check'])
+  'coding_workflow_apply', 'coding_workflow_blocker',
+  'exit_plan_mode', 'lisp_status', 'lisp_hot_status', 'lisp_describe', 'lisp_inspect', 'lisp_cancel', 'observation_read', 'enno_work_report',
+  'enno_ideal_submit', 'enno_plan_submit', 'enno_plan_review', 'enno_finish', 'enno_meditation_submit', 'memory_checkpoint', 'curator_check', 'memory_explain'])
 export function codingControlOrRead(name: string): boolean { return readers.has(name) }
 export function codingControlCarrier(name: string, arguments_: unknown): boolean {
   const tool = codingLiteralCarrier(name, arguments_)

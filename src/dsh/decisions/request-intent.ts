@@ -1,0 +1,287 @@
+import { z } from 'zod'
+import { canonicalContentHash } from '../../serialization/validate.js'
+import type { TaskType } from '../../akinator/types.js'
+import { DecisionError, type DecisionBatch } from './contracts.js'
+import type { DecisionService } from './service.js'
+
+export const REQUEST_INTENT_POLICY_VERSION = 'request-intent-choice-v1'
+export const MAX_REQUEST_INTENT_BYTES = 32 * 1024
+
+export const RequestRelationship = z.enum(['new', 'same_scope_continuation', 'scope_change', 'unknown'])
+export const RequestAction = z.enum(['answer', 'research', 'verify', 'change', 'operate', 'unknown'])
+export type RequestRelationship = z.infer<typeof RequestRelationship>
+export type RequestAction = z.infer<typeof RequestAction>
+
+const safeId = z.string().min(1).max(256).refine(value => !/[\p{Cc}\p{Cf}]/u.test(value))
+const boundedText = z.string().min(1).max(8192)
+const messageReference = z.object({ id: safeId, digest: z.string().regex(/^[a-f0-9]{64}$/u) }).strict()
+const proposalReference = z.object({
+  id: safeId,
+  revision: z.number().int().min(0).nullable(),
+  digest: z.string().regex(/^[a-f0-9]{64}$/u),
+  text: boundedText,
+  field: z.enum(['readPaths', 'writePaths', 'excludedPaths', 'constraints', 'completion']).optional(),
+}).strict()
+const activeGoal = z.object({
+  runId: safeId,
+  workflowRevision: z.number().int().min(1).optional(),
+  goalId: safeId.optional(),
+  goalRevision: z.number().int().min(1).optional(),
+  scopeRevision: z.number().int().min(1).optional(),
+  ideal: boundedText.optional(),
+  target: boundedText.optional(),
+  outOfScope: z.array(boundedText).max(32).default([]),
+  constraints: z.array(boundedText).max(32).default([]),
+}).strict()
+
+export const RequestIntentContextSchema = z.object({
+  /** Exact current user request. No transcript or other session is accepted. */
+  task: z.string().min(1).max(16_384),
+  messageRefs: z.array(messageReference).min(1).max(16),
+  activeGoal: activeGoal.optional(),
+  proposals: z.array(proposalReference).max(8).default([]),
+}).strict().superRefine((value, context) => {
+  if (new Set(value.messageRefs.map(item => item.id)).size !== value.messageRefs.length) {
+    context.addIssue({ code: 'custom', path: ['messageRefs'], message: 'Message references must be unique' })
+  }
+  if (new Set(value.proposals.map(item => item.id)).size !== value.proposals.length) {
+    context.addIssue({ code: 'custom', path: ['proposals'], message: 'Proposal references must be unique' })
+  }
+  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > MAX_REQUEST_INTENT_BYTES) {
+    context.addIssue({ code: 'custom', message: 'Request intent context exceeds its byte limit' })
+  }
+})
+export type RequestIntentContext = z.infer<typeof RequestIntentContextSchema>
+
+/** Bind exact current user messages; injected/plugin messages are never candidates. */
+export function requestIntentMessageRefs(messages: readonly unknown[], task: string): RequestIntentContext['messageRefs'] {
+  const refs = messages.flatMap(value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+    const message = value as Record<string, unknown>
+    const source = message.source && typeof message.source === 'object' && !Array.isArray(message.source)
+      ? message.source as Record<string, unknown> : undefined
+    if (message.role !== 'user' || source !== undefined && source.kind !== 'user') return []
+    const id = typeof message.id === 'string' && message.id.length > 0 ? message.id : `message:${canonicalContentHash(message)}`
+    return [{ id, digest: canonicalContentHash(message) }]
+  })
+  if (refs.length) return refs.slice(-16)
+  return [{ id: `input:${canonicalContentHash(task)}`, digest: canonicalContentHash(task) }]
+}
+
+export function createRequestIntentContext(input: {
+  readonly task: string
+  readonly messageRefs: RequestIntentContext['messageRefs']
+  readonly activeGoal?: RequestIntentContext['activeGoal']
+  readonly proposals?: RequestIntentContext['proposals']
+}): RequestIntentContext | undefined {
+  const parsed = RequestIntentContextSchema.safeParse({ task: input.task, messageRefs: input.messageRefs,
+    ...(input.activeGoal === undefined ? {} : { activeGoal: input.activeGoal }), proposals: input.proposals ?? [] })
+  return parsed.success ? parsed.data : undefined
+}
+
+export const RequestIntentSubmissionSchema = z.object({
+  relation: RequestRelationship,
+  action: RequestAction,
+  /** Exact opaque references supplied in the current host context. */
+  evidenceRefs: z.array(safeId).min(1).max(32),
+}).strict().superRefine((value, context) => {
+  if (new Set(value.evidenceRefs).size !== value.evidenceRefs.length) {
+    context.addIssue({ code: 'custom', path: ['evidenceRefs'], message: 'Evidence references must be unique' })
+  }
+})
+export type RequestIntentSubmission = z.infer<typeof RequestIntentSubmissionSchema>
+
+export interface RequestIntentEvidence {
+  readonly requestDigest: string
+  readonly messageRefs: readonly { readonly id: string; readonly digest: string }[]
+  readonly runId?: string
+  readonly workflowRevision?: number
+  readonly goalRevision?: number
+  readonly scopeRevision?: number
+  readonly proposalRefs: readonly { readonly id: string; readonly revision: number | null; readonly digest: string }[]
+}
+
+export interface RequestIntentDecision {
+  readonly relation: RequestRelationship
+  readonly action: RequestAction
+  readonly source: 'decision-provider' | 'main-model' | 'unresolved'
+  readonly policyVersion: string
+  readonly evidence: RequestIntentEvidence
+  readonly providerSent: boolean
+  readonly unresolvedReason?: string
+}
+
+export interface RequestIntentInterpretation {
+  readonly context: RequestIntentContext
+  readonly decision: RequestIntentDecision
+}
+
+const relationshipChoices = [
+  { id: 'new', description: 'A new task, not a continuation or revision of the active Goal or listed proposals.' },
+  { id: 'same_scope_continuation', description: 'Continue, inspect, verify, or finish the active Goal without changing its target, exclusions, or requirements.' },
+  { id: 'scope_change', description: 'Change the active Goal, target, exclusions, requirements, or adopt proposals that expand or alter its scope.' },
+  { id: 'unknown', description: 'The current message does not establish its relationship to the active Goal or proposals.' },
+] as const
+const actionChoices = [
+  { id: 'answer', description: 'Answer, explain, or discuss; no tool-backed work is requested.' },
+  { id: 'research', description: 'Inspect sources or gather information without changing project state.' },
+  { id: 'verify', description: 'Inspect behavior, run or review checks, or establish whether something works.' },
+  { id: 'change', description: 'Modify code, files, configuration, or another project artifact.' },
+  { id: 'operate', description: 'Perform deployment, restart, installation, or other system/service operation.' },
+  { id: 'unknown', description: 'The requested action is ambiguous, mixed without a dominant action, or not supported by the current evidence.' },
+] as const
+
+/** Finite choices preserve both the action and the proposals it refers to. */
+export function buildRequestIntentBatch(raw: unknown): DecisionBatch | undefined {
+  const parsed = RequestIntentContextSchema.safeParse(raw)
+  if (!parsed.success) return undefined
+  return {
+    purpose: 'request-intent',
+    state: {
+      currentUserMessage: parsed.data.task,
+      currentMessageRefs: parsed.data.messageRefs,
+      activeGoal: parsed.data.activeGoal ?? null,
+      referencedProposalCandidates: parsed.data.proposals,
+      boundary: 'Use only this exact current request and the supplied active Goal/proposal candidates. Never use another chat, infer a free-text target, or grant execution permission.',
+    },
+    questions: [
+      { id: 'request-relation', instructions: 'Classify the relationship of the current user message to the supplied active Goal and proposals. Respect negation, quotation, actor, and omitted references. An exact continuation phrase is not required. If the intended reference or scope is not established, choose unknown.', choices: [...relationshipChoices], abstainId: 'unknown' },
+      { id: 'request-action', instructions: 'Classify the action the user requests now, not a quoted example or an action they forbid. “See whether it works” is verify/research, not a file edit. Classification grants no permission. If the action is unclear, choose unknown.', choices: [...actionChoices], abstainId: 'unknown' },
+      ...parsed.data.proposals.map((proposal, index) => ({ id: `request-proposal-${index}`,
+        instructions: `Does the current user instruction adopt or refer to proposal ${JSON.stringify(proposal.id)}? Interpret omitted Japanese subjects and references such as 全部, それ, 続けて against the supplied context. Quoted or forbidden actions are not approvals.`,
+        choices: [{ id: 'selected', description: 'The current request refers to this proposal.' },
+          { id: 'not_selected', description: 'This proposal is not referenced by the current request.' },
+          { id: 'unknown', description: 'The reference cannot be resolved from the supplied context.' }], abstainId: 'unknown' })),
+    ],
+  }
+}
+
+export function requestIntentReferenceIds(context: RequestIntentContext): string[] {
+  const refs = context.messageRefs.map(item => `message:${canonicalContentHash(item)}`)
+  if (context.activeGoal) {
+    refs.push(`run:${canonicalContentHash(context.activeGoal.runId)}`)
+    if (context.activeGoal.workflowRevision !== undefined) refs.push(`workflow:${canonicalContentHash([context.activeGoal.runId, context.activeGoal.workflowRevision])}`)
+    if (context.activeGoal.goalRevision !== undefined) refs.push(`goal:${canonicalContentHash([context.activeGoal.runId, context.activeGoal.goalRevision])}`)
+    if (context.activeGoal.scopeRevision !== undefined) refs.push(`scope:${canonicalContentHash([context.activeGoal.runId, context.activeGoal.scopeRevision])}`)
+  }
+  refs.push(...context.proposals.map(item => `proposal:${canonicalContentHash([item.id, item.revision, item.digest])}`))
+  return refs
+}
+
+function evidenceFor(context: RequestIntentContext, selectedProposalIds: ReadonlySet<string> = new Set()): RequestIntentEvidence {
+  const active = context.activeGoal
+  return {
+    requestDigest: canonicalContentHash(context.task),
+    messageRefs: context.messageRefs.map(item => ({ ...item })),
+    ...(active ? {
+      runId: active.runId,
+      ...(active.workflowRevision === undefined ? {} : { workflowRevision: active.workflowRevision }),
+      ...(active.goalRevision === undefined ? {} : { goalRevision: active.goalRevision }),
+      ...(active.scopeRevision === undefined ? {} : { scopeRevision: active.scopeRevision }),
+    } : {}),
+    proposalRefs: context.proposals.filter(item => selectedProposalIds.has(item.id))
+      .map(({ id, revision, digest }) => ({ id, revision, digest })),
+  }
+}
+
+export function unresolvedRequestIntent(context: RequestIntentContext, reason: string, providerSent = false): RequestIntentDecision {
+  return { relation: 'unknown', action: 'unknown', source: 'unresolved', policyVersion: REQUEST_INTENT_POLICY_VERSION,
+    evidence: evidenceFor(context), providerSent, unresolvedReason: reason }
+}
+
+/** Validate a main-model interpretation against exact refs from this request and its active session only. */
+export function bindMainModelRequestIntent(raw: unknown, context: RequestIntentContext): RequestIntentDecision | undefined {
+  const parsed = RequestIntentSubmissionSchema.safeParse(raw)
+  if (!parsed.success || parsed.data.relation === 'unknown' || parsed.data.action === 'unknown') return undefined
+  const allowed = new Set(requestIntentReferenceIds(context))
+  if (parsed.data.evidenceRefs.some(reference => !allowed.has(reference))) return undefined
+  const requiredRefs = requestIntentReferenceIds(context).filter(reference =>
+    reference.startsWith('message:') || reference.startsWith('run:') || reference.startsWith('workflow:')
+      || reference.startsWith('goal:') || reference.startsWith('scope:'))
+  if (!requiredRefs.every(reference => parsed.data.evidenceRefs.includes(reference))) return undefined
+  if (parsed.data.relation !== 'new' && !context.activeGoal) return undefined
+  const selectedProposalIds = new Set(context.proposals.filter(item => parsed.data.evidenceRefs
+    .includes(`proposal:${canonicalContentHash([item.id, item.revision, item.digest])}`)).map(item => item.id))
+  return { relation: parsed.data.relation, action: parsed.data.action, source: 'main-model',
+    policyVersion: REQUEST_INTENT_POLICY_VERSION, evidence: evidenceFor(context, selectedProposalIds), providerSent: false }
+}
+
+/** Rebind a prior decision to current host facts before it crosses admission. */
+export function rebindRequestIntentDecision(raw: unknown, context: RequestIntentContext): RequestIntentDecision | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const value = raw as RequestIntentDecision
+  if (!RequestRelationship.safeParse(value.relation).success || !RequestAction.safeParse(value.action).success
+    || !['decision-provider', 'main-model', 'unresolved'].includes(value.source)
+    || value.policyVersion !== REQUEST_INTENT_POLICY_VERSION || !value.evidence
+    || !Array.isArray(value.evidence.messageRefs) || !Array.isArray(value.evidence.proposalRefs)
+    || value.evidence.requestDigest !== canonicalContentHash(context.task)) return undefined
+  const refs = requestIntentReferenceIds(context)
+  const messagesMatch = value.evidence.messageRefs.length === context.messageRefs.length
+    && context.messageRefs.every((item, index) => value.evidence.messageRefs[index]?.id === item.id
+      && value.evidence.messageRefs[index]?.digest === item.digest)
+  const active = context.activeGoal
+  if (!messagesMatch || (active ? value.evidence.runId !== active.runId
+    || value.evidence.workflowRevision !== active.workflowRevision || value.evidence.goalRevision !== active.goalRevision
+    || value.evidence.scopeRevision !== active.scopeRevision
+    : value.evidence.runId !== undefined)) return undefined
+  const selected = new Set<string>()
+  for (const proposal of value.evidence.proposalRefs) {
+    if (!proposal || typeof proposal !== 'object') return undefined
+    const current = context.proposals.find(item => item.id === proposal.id && item.revision === proposal.revision && item.digest === proposal.digest)
+    if (!current || !refs.includes(`proposal:${canonicalContentHash([proposal.id, proposal.revision, proposal.digest])}`)) return undefined
+    selected.add(proposal.id)
+  }
+  return { ...value, evidence: evidenceFor(context, selected) }
+}
+
+/** A selected action can advise intake type; it never supplies a target or execution permission. */
+export function requestIntentTaskType(decision: RequestIntentDecision | undefined, fallback?: TaskType): TaskType | undefined {
+  switch (decision?.action) {
+    case 'answer': return 'chat'
+    case 'research': return 'research'
+    case 'verify': return fallback === 'debug' ? 'debug' : 'review'
+    case 'change': return fallback === 'writing' ? 'writing' : fallback === 'debug' ? 'debug' : 'build'
+    case 'operate': return 'devops'
+    default: return fallback
+  }
+}
+
+export async function classifyRequestIntent(service: DecisionService | undefined, requestId: string, rawContext: unknown,
+  signal: AbortSignal): Promise<RequestIntentDecision | undefined> {
+  const parsed = RequestIntentContextSchema.safeParse(rawContext)
+  if (!parsed.success) return undefined
+  const context = parsed.data
+  if (!service) return unresolvedRequestIntent(context, 'decision_service_unavailable')
+  let providerSent = false
+  try {
+    const configuration = await service.bind(requestId, signal)
+    if (configuration.mode === 'off') return unresolvedRequestIntent(context, 'decision_service_disabled')
+    const batch = buildRequestIntentBatch(context)
+    if (!batch) return unresolvedRequestIntent(context, 'context_not_usable')
+    const outcome = await service.evaluate(requestId, batch, signal, REQUEST_INTENT_POLICY_VERSION, undefined, {
+      onProviderDispatch: () => { providerSent = true },
+    })
+    if (outcome.status !== 'completed') return unresolvedRequestIntent(context, outcome.reason, providerSent)
+    const relation = outcome.result.answers.find(answer => answer.id === 'request-relation')
+    const action = outcome.result.answers.find(answer => answer.id === 'request-action')
+    const relationValue = relation?.status === 'selected' && RequestRelationship.safeParse(relation.choiceId).success
+      ? relation.choiceId as RequestRelationship : 'unknown'
+    const actionValue = action?.status === 'selected' && RequestAction.safeParse(action.choiceId).success
+      ? action.choiceId as RequestAction : 'unknown'
+    const selected = new Set<string>()
+    let uncertainProposal = false
+    for (const [index, proposal] of context.proposals.entries()) {
+      const answer = outcome.result.answers.find(answer => answer.id === `request-proposal-${index}`)
+      if (answer?.status === 'selected' && answer.choiceId === 'selected') selected.add(proposal.id)
+      else if (answer?.status !== 'selected' || answer.choiceId !== 'not_selected') uncertainProposal = true
+    }
+    const unresolved = relationValue === 'unknown' || actionValue === 'unknown' || uncertainProposal
+    if (uncertainProposal) return unresolvedRequestIntent(context, 'proposal_reference_uncertain', providerSent)
+    return { relation: relationValue, action: actionValue, source: unresolved ? 'unresolved' : 'decision-provider',
+      policyVersion: REQUEST_INTENT_POLICY_VERSION, evidence: evidenceFor(context, selected), providerSent,
+      ...(unresolved ? { unresolvedReason: 'provider_abstained_or_uncertain' } : {}) }
+  } catch (error) {
+    if (signal.aborted) throw error instanceof DecisionError ? error : new DecisionError('CANCELLED')
+    return unresolvedRequestIntent(context, error instanceof DecisionError ? error.code : 'decision_provider_failed', providerSent)
+  }
+}

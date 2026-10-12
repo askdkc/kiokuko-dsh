@@ -2,17 +2,29 @@ import type { DshAnswerContext } from './answer-context.js'
 import { executionClarification } from './intake-clarification.js'
 import type { DshLogEvent } from './session-memory-finalizer.js'
 import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
 import { TASK_TYPES, type TaskType } from '../akinator/types.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import type { AkinatorTaskClassification } from './decisions/akinator-classification.js'
-import {deriveProfile} from '../akinator/domain.js'
-import { codingIntent } from './coding-workflow/intent.js'
+import { bindMainModelRequestIntent, requestIntentReferenceIds, requestIntentTaskType, RequestIntentSubmissionSchema,
+  type RequestIntentContext, type RequestIntentDecision, type RequestIntentInterpretation, type RequestIntentSubmission } from './decisions/request-intent.js'
+import { memoryOwnerKind, type MemoryOwnerIdentity, type MemoryOwnerKind } from './memory-owner.js'
 
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
-export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. No execution task has been prepared yet. Preserve all requested actions, negations, alternatives and target uncertainty. Native read, glob, grep, web_search and web_fetch demands automatically prepare the original request with research advice when no non-chat action type is resolved. Use these tools directly to gather requested evidence; do not call prepare_requested_work merely to read a plan or inspect files. An explicit development request is prepared automatically on its first tool demand. prepare_requested_work(taskType) remains an advisory control operation. Do not silently replace a requested action with a text-only answer or claim work was done. Ask a concrete clarification in ordinary conversation when the actual target or requested action is unclear. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Owned development tools use their own authorization; Plan, goal, cancellation and execution ownership still apply. If only run_code is exposed and the request is ambiguous, prepare with exactly return await tools.prepare_requested_work({"taskType":"research"}) using the appropriate advisory type; the host intercepts that preparation-only carrier without evaluating code. For an explicit development request, its first run_code demand prepares automatically before evaluating the program.'
+export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. No execution task has been prepared yet. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, Goal, cancellation, memory-owner and execution ownership still apply. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(type => type !== 'chat')
+
+const preparationFieldsSchema = z.object({
+  taskType: z.enum(ACTION_TYPES).optional(),
+  requestIntent: RequestIntentSubmissionSchema.optional(),
+}).strict()
+type PreparationRequest = z.infer<typeof preparationFieldsSchema>
+function parsePreparationRequest(value: unknown): PreparationRequest | undefined {
+  const parsed = preparationFieldsSchema.safeParse(value)
+  return parsed.success && (parsed.data.taskType !== undefined || parsed.data.requestIntent !== undefined) ? parsed.data : undefined
+}
 
 export interface DemandAgent { readonly ctx?: unknown; readonly id: string; readonly session?: { readonly id: string; snapshotEvents?(): readonly DshLogEvent[] } }
 export interface DemandInput { readonly agent: DemandAgent; readonly turn: number; readonly step: number; readonly messages: readonly unknown[]; readonly signal: AbortSignal }
@@ -27,9 +39,17 @@ interface Dependencies {
   readonly answerContext?: DshAnswerContext | undefined
   readonly nativeChild?: (agent: DemandAgent) => boolean
   readonly validate: (input: DemandInput) => Promise<void>
-  readonly existing: (input: DemandInput) => Promise<boolean>
+  /** Exact idempotent request replay; never accepts a new turn as continuation. */
+  readonly replay?: (input: DemandInput) => Promise<boolean>
+  /** Finalize or preserve the prior native turn only after its matching boundary is observed. */
+  readonly advance?: (input: DemandInput, requestIntent?: RequestIntentDecision) => Promise<void>
+  /** Route an answer to a pending host-owned confirmation before model generation. */
+  readonly resumeConfirmation?: (input: DemandInput) => Promise<boolean>
+  readonly existing: (input: DemandInput, requestIntent?: RequestIntentDecision) => Promise<boolean>
   readonly classify: (input: DemandInput, task: string) => Promise<AkinatorTaskClassification>
-  readonly prepare: (input: DemandInput, taskType: TaskType) => Promise<boolean>
+  readonly interpret?: (input: DemandInput, task: string) => Promise<RequestIntentInterpretation | undefined>
+  readonly prepare: (input: DemandInput, taskType: TaskType, requestIntent?: RequestIntentDecision,
+    requestIntentContext?: RequestIntentContext) => Promise<boolean>
   readonly ready: (agent: DemandAgent, turn?: number) => boolean
 }
 interface Turn {
@@ -38,9 +58,16 @@ interface Turn {
   readonly humanContents: ReadonlyMap<string, string>
   status: 'capturing' | 'answer' | 'preparing' | 'prepared' | 'closed' | 'stale'
   intent: AkinatorTaskClassification
+  requestIntent?: RequestIntentDecision
+  requestIntentContext?: RequestIntentContext
+  requestIntentContextDigest?: string
+  preparedIntentDigest?: string
+  memoryOwner: MemoryOwnerKind
   taskType?: TaskType
   existing?: boolean
+  confirmationResume?: boolean
   capture?: Promise<boolean>
+  captureError?: unknown
   preparation?: Promise<void>
   readonly preparationCalls: Set<string>
   readonly controller: AbortController
@@ -58,26 +85,34 @@ function eventTurn(event: { data?: unknown } | undefined): number | undefined {
   return Number.isSafeInteger(data?.turn) ? data!.turn as number : undefined
 }
 /** Tool names select advice only; admission and native permissions remain authoritative. */
-function automaticPreparationType(intent: AkinatorTaskClassification, name: string, task: string): TaskType | undefined {
-  if (codingIntent(task)) return 'build'
+function automaticPreparationType(intent: AkinatorTaskClassification, requestIntent: RequestIntentDecision | undefined,
+  name: string): TaskType | undefined {
+  if (requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown') {
+    // Gathering evidence grants no change/process authority. An active Goal
+    // still requires its reference to be resolved before opening another run.
+    return ['read', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name) ? 'research' : undefined
+  }
+  if (requestIntent?.action === 'answer') return undefined
+  const interpreted = requestIntentTaskType(requestIntent, intent.taskType)
+  if (interpreted && interpreted !== 'chat') return interpreted
   if (intent.taskType && intent.taskType !== 'chat') return intent.taskType
   return ['read', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name) ? 'research' : undefined
 }
 function denied(reason: string): { kind: 'deny'; reason: string } { return { kind: 'deny', reason } }
 /** A protocol carrier, not JavaScript evaluation. Only this exact JSON-literal call is recognized. */
-export function preparationCarrier(value: unknown): TaskType | undefined {
+export function preparationCarrier(value: unknown): PreparationRequest | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const args = value as Record<string, unknown>
   if (Object.keys(args).sort().join(',') !== 'code,description' || typeof args.description !== 'string' || !args.description.trim()
-    || typeof args.code !== 'string' || args.code.length > 256) return undefined
+     || typeof args.code !== 'string' || args.code.length > 8192) return undefined
   const code = args.code.trim().replace(/;$/u, '')
   const prefix = 'return await tools.prepare_requested_work('
   if (!code.startsWith(prefix) || !code.endsWith(')')) return undefined
   try {
-    const input = JSON.parse(code.slice(prefix.length, -1)) as { taskType?: TaskType }
-    if (!input || Array.isArray(input) || Object.keys(input).length !== 1 || !ACTION_TYPES.includes(input.taskType!)
-      || code !== prefix + JSON.stringify(input) + ')') return undefined
-    return input.taskType
+    const input = JSON.parse(code.slice(prefix.length, -1)) as unknown
+    const parsed = parsePreparationRequest(input)
+    if (!parsed || code !== prefix + JSON.stringify(input) + ')') return undefined
+    return parsed
   } catch { return undefined }
 }
 
@@ -85,7 +120,7 @@ export function preparationCarrier(value: unknown): TaskType | undefined {
 /** Conversation entry and execution intake are distinct; neither this mode nor a type hint grants native permission. */
 export class OnDemandIntake {
   readonly #turns = new Map<string, Turn>()
-  readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: TaskType; skillRead?: boolean; requestPreparation?: boolean }>()
+  readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; requestPreparation?: boolean }>()
   readonly #disposers: (() => void)[] = []
   readonly #pending = new Set<Promise<unknown>>()
   readonly #lifecycle = new AbortController()
@@ -103,6 +138,14 @@ export class OnDemandIntake {
     const last = execution.agent?.session?.snapshotEvents?.().filter(event => event.type === 'turn/start' || event.type === 'turn/end').at(-1)
     return last?.type === 'turn/start' ? eventTurn(last) : undefined
   }
+  private acknowledgeExisting(state: Turn): void {
+    this.assertCurrent(state)
+    state.existing = true
+    state.status = 'prepared'
+    const taskType = requestIntentTaskType(state.requestIntent, state.intent.taskType)
+    if (taskType !== undefined) state.taskType = taskType
+    state.preparedIntentDigest = canonicalContentHash({ taskType: state.taskType ?? null, requestIntent: state.requestIntent ?? null })
+  }
 
   /** True means ordinary text may continue; false leaves an existing execution on its original path. */
   async capture(input: DemandInput): Promise<boolean> {
@@ -119,6 +162,7 @@ export class OnDemandIntake {
         const fresh = humanMessages(input.messages).filter(message => previous.humanContents.get(humanId(message)) !== canonicalContentHash(message))
         if (!fresh.length) {
           if (previous.capture && !await previous.capture) return false
+          if (previous.status === 'stale') throw previous.captureError ?? new Error('Previous on-demand request is stale')
           return previous.status !== 'prepared'
         }
         previous.status = 'stale'; previous.controller.abort(new Error('Human instructions changed'))
@@ -128,14 +172,32 @@ export class OnDemandIntake {
         for (const message of input.messages) merged.set(humanId(message), message)
         input = { ...input, messages: [...merged.values()] }
       }
+      if (previous.input.turn !== input.turn && !humanMessages(input.messages).length && this.host.ready(input.agent)) {
+        // A host-driven next turn may carry no new human message. Leave its
+        // active execution bound to the host instead of creating an empty intake.
+        if (previous.status === 'closed') {
+          await this.host.validate(input)
+          input.signal.throwIfAborted()
+          await this.host.advance?.(input)
+          this.#turns.delete(sessionId)
+          this.host.answerContext?.retire(input.agent)
+          return false
+        }
+      }
       if (previous.input.turn !== input.turn && !['closed', 'prepared'].includes(previous.status)) throw new Error('Previous on-demand turn has not ended')
       previous.controller.abort(new Error('A newer native turn superseded this request'))
+    } else if (!humanMessages(input.messages).length && this.host.ready(input.agent)) {
+      await this.host.validate(input)
+      input.signal.throwIfAborted()
+      await this.host.advance?.(input)
+      return false
     }
+    this.host.answerContext?.retire(input.agent)
     // Install the pending state synchronously, before any host or classifier awaits.
     const controller = new AbortController()
     const state: Turn = { input: { ...input, signal: AbortSignal.any([input.signal, controller.signal]), messages: Object.freeze(structuredClone([...input.messages])) }, task: humanTask(input.messages),
       humanContents: new Map(humanMessages(input.messages).map(message => [humanId(message), canonicalContentHash(message)])),
-      status: 'capturing', intent: { deferInference: true }, preparationCalls: new Set(), controller }
+      status: 'capturing', intent: { deferInference: true }, memoryOwner: 'none', preparationCalls: new Set(), controller }
     this.#turns.set(sessionId, state)
     const promise = (async () => {
       await this.host.validate(input)
@@ -144,38 +206,85 @@ export class OnDemandIntake {
       // validated owner's first reader once, including absence; never rebind it.
       if (!this.#skillReaders.has(input.agent)) this.#skillReaders.set(input.agent,
         this.#startupSkillReader ?? this.#tools?.get('skill', input.agent)?.execute)
-      if (previous?.input.turn !== input.turn && await this.host.existing(input)) {
-        this.assertCurrent(state)
-        // Retain the exact resumed request for the public preparation receipt.
-        // Existing ownership alone grants nothing: readiness is rechecked at dispatch.
-        if (state.task) { state.existing = true; state.status = 'prepared' }
-        else this.#turns.delete(sessionId)
-        return false
-      }
       if (!humanMessages(input.messages).length) throw new Error('Original human input is required before on-demand intake')
       try { state.intent = await this.host.classify(input, state.task) }
       catch { input.signal.throwIfAborted(); state.intent = { deferInference: true } }
-      if(!state.intent.taskType&&!state.intent.deferInference&&!executionClarification(state.task)){
-        const type=deriveProfile(state.task).taskType
-        if(type==='build'||type==='debug'||type==='devops')state.intent={...state.intent,taskType:type}
+      try {
+        const interpreted = await this.host.interpret?.(state.input, state.task)
+        if (interpreted) {
+          state.requestIntentContext = interpreted.context
+          state.requestIntent = interpreted.decision
+          state.requestIntentContextDigest = canonicalContentHash(interpreted.context)
+        }
+      } catch (error) {
+        input.signal.throwIfAborted()
       }
+      state.memoryOwner = memoryOwnerKind(state.requestIntent, state.intent.taskType)
       this.assertCurrent(state)
+      if (previous?.input.turn !== input.turn) await this.host.advance?.(input, state.requestIntent)
+      this.assertCurrent(state)
+      const resumeConfirmation = previous?.input.turn !== input.turn && state.task
+        ? await this.host.resumeConfirmation?.(input) ?? false : false
+      if (process.env.KIOKUKO_INTENT_DEBUG === '1' && previous?.input.turn !== input.turn) {
+        console.error('on-demand confirmation route', { turn: input.turn, previousTurn: previous?.input.turn,
+          hasTask: state.task.length > 0, resumeConfirmation })
+      }
+      if (resumeConfirmation) {
+        this.assertCurrent(state)
+        state.confirmationResume = true
+        state.status = 'answer'
+        if (previous?.taskType !== undefined) state.taskType = previous.taskType
+        this.host.answerContext?.retire(input.agent)
+        return false
+      }
+      if (process.env.KIOKUKO_INTENT_DEBUG === '1' && previous?.input.turn !== input.turn && state.task && this.host.resumeConfirmation) {
+        console.error('confirmation resume not selected', input.turn, state.task.length)
+      }
+      if (state.task && await this.host.replay?.(state.input)) {
+        this.acknowledgeExisting(state)
+        return false
+      }
+      const canContinue = state.requestIntent?.relation === 'same_scope_continuation'
+        && state.requestIntent.action !== 'answer' && state.requestIntent.action !== 'unknown'
+      if (previous?.input.turn !== input.turn && state.task && canContinue
+        && await this.host.existing(input, state.requestIntent)) {
+        // Persisted ownership is only an acknowledgement when this exact native
+        // agent/session/turn is already bound. A cold resume stays conversational
+        // until explicit preparation reconstructs that binding.
+        if (this.host.ready(state.input.agent, state.input.turn)) {
+          this.acknowledgeExisting(state)
+          return false
+        }
+      }
       // Eager mode still binds known work before generation. Classifier uncertainty
       // instead reaches ordinary reasoning, with no execution grant or purpose UI.
-      if (this.options.onlyWhenDeferred && !state.intent.deferInference) {
+      const requestIntentUnresolved = state.requestIntent !== undefined
+        && (state.requestIntent.relation === 'unknown' || state.requestIntent.action === 'unknown')
+      const requestAsAnswer = state.requestIntent?.action === 'answer'
+      const knownIntent = this.host.interpret === undefined
+        ? !state.intent.deferInference && state.intent.taskType !== undefined && state.intent.taskType !== 'chat'
+        : state.requestIntent !== undefined && !requestIntentUnresolved && !requestAsAnswer
+          && state.requestIntent.relation !== 'unknown' && state.requestIntent.action !== 'unknown'
+      if (this.options.onlyWhenDeferred && knownIntent) {
         this.#turns.delete(sessionId)
         state.status = 'closed'
         controller.abort(new Error('Known intent continues through eager admission'))
         return false
       }
-      await this.host.answerContext?.prepare(state.input, state.task, state.intent.taskType ?? null)
+      // The current request is on the conversational path until actual admission.
+      // Provisional intent cannot select a different run's memory validator.
+      state.memoryOwner = 'conversation'
+      await this.host.answerContext?.prepare(state.input, state.task, state.intent.taskType ?? null, state.memoryOwner)
       this.assertCurrent(state)
       state.status = 'answer'
       return true
     })()
     this.watch(promise)
     state.capture = promise
-    try { return await promise } catch (error) { if (this.#turns.get(sessionId) === state) state.status = 'stale'; throw error }
+    try { return await promise } catch (error) {
+      if (this.#turns.get(sessionId) === state) { state.status = 'stale'; state.captureError = error }
+      throw error
+    }
     finally { delete state.capture }
   }
   private assertCurrent(state: Turn): void {
@@ -191,46 +300,104 @@ export class OnDemandIntake {
     if (latest !== undefined && latest !== state.input.turn) return undefined
     return state
   }
+  private ownerIdentity(state: Turn): MemoryOwnerIdentity {
+    const session = state.input.agent.session!
+    return { agentId: state.input.agent.id, sessionId: session.id, turn: state.input.turn,
+      requestDigest: canonicalContentHash(state.task) }
+  }
   private definition(execution: Execution): Definition | undefined {
     try { return this.#tools?.get(execution.name, execution.agent) } catch { return undefined }
   }
-  private async prepare(state: Turn, taskType: TaskType, signal: AbortSignal): Promise<void> {
+  private async prepare(state: Turn, taskType: TaskType, signal: AbortSignal, requestIntent?: RequestIntentDecision,
+    explicitIntent = false): Promise<void> {
     this.assertCurrent(state); signal.throwIfAborted()
-    const clarification = executionClarification(state.task)
+    const resolved = requestIntent ?? state.requestIntent
+    const clarification = executionClarification(state.task, resolved, state.requestIntentContext)
     if (clarification) throw new Error(clarification)
     if (!ACTION_TYPES.includes(taskType)) throw new Error('Answer conversational questions directly; prepare_requested_work is for requested work')
+    if (state.status === 'prepared' && state.confirmationResume && explicitIntent
+      && (state.requestIntent?.relation === 'unknown' || state.requestIntent?.action === 'unknown')) state.status = 'answer'
     if (state.status === 'prepared') {
       if (state.taskType !== taskType) throw new Error('Prepared intent cannot be replaced within a turn')
+      if (explicitIntent && state.preparedIntentDigest !== canonicalContentHash({ taskType, requestIntent: requestIntent ?? null })) {
+        throw new Error('Prepared interpretation cannot be replaced within a turn')
+      }
       return
     }
     if (state.preparation) { await state.preparation; this.assertCurrent(state); return }
     state.status = 'preparing'; state.taskType = taskType
     const operation = (async () => {
       // Retain exact original messages. The only caller-supplied input is an advisory task type.
-      const admitted = await this.host.prepare({ ...state.input, signal: AbortSignal.any([state.input.signal, signal]) }, taskType)
+      const admitted = await this.host.prepare({ ...state.input, signal: AbortSignal.any([state.input.signal, signal]) }, taskType,
+        requestIntent ?? state.requestIntent, state.requestIntentContext)
       this.assertCurrent(state); signal.throwIfAborted()
       if (!admitted || !this.host.ready(state.input.agent, state.input.turn)) throw new Error('Execution preparation did not admit this exact request')
+      const preparedIntent = requestIntent ?? state.requestIntent
+      if (preparedIntent !== undefined) state.requestIntent = preparedIntent
+      state.preparedIntentDigest = canonicalContentHash({ taskType, requestIntent: state.requestIntent ?? null })
       state.status = 'prepared'
+      delete state.confirmationResume
     })()
     this.watch(operation)
     state.preparation = operation
     try { await operation } catch (error) { if (!['closed', 'stale'].includes(state.status)) state.status = 'stale'; throw error }
     finally { delete state.preparation }
   }
+  private bindIntent(state: Turn, submission?: RequestIntentSubmission): RequestIntentDecision | undefined {
+    if (!submission) return state.requestIntent
+    if (!state.requestIntentContext || state.requestIntentContextDigest !== canonicalContentHash(state.requestIntentContext)) {
+      throw new Error('Request interpretation context is stale')
+    }
+    const bound = bindMainModelRequestIntent(submission, state.requestIntentContext)
+    if (!bound) throw new Error('Request interpretation references another request, stale revision, or unknown proposal')
+    const prior = state.requestIntent
+    if (prior?.source === 'decision-provider' && prior.relation !== 'unknown' && prior.action !== 'unknown') {
+      if (prior.relation !== bound.relation || prior.action !== bound.action) {
+        throw new Error('Main-model interpretation conflicts with the configured decision provider')
+      }
+      return { ...prior, evidence: bound.evidence }
+    }
+    return bound
+  }
   async answerMessages(input: DemandInput, messages: readonly unknown[]): Promise<readonly unknown[]> {
-    return this.guidance(await this.host.answerContext?.project(input, messages) ?? messages)
+    const state = this.#turns.get(input.agent.session!.id)
+    // Native pre-step may augment its payload while downstream hooks run.
+    // Project the immutable human batch captured before that waterfall.
+    if (state?.input.turn === input.turn && state.input.agent !== input.agent) throw new Error('Answer projection native agent changed')
+    const projected = state?.input.turn === input.turn && !state.confirmationResume && this.host.answerContext
+      ? await this.host.answerContext.project(state.input, messages, this.ownerIdentity(state)) : messages
+    return this.guidance(projected, state?.input.turn === input.turn ? state : undefined)
   }
-  async beforeRequest(agent: DemandAgent): Promise<void> { if (this.pending(agent)) await this.host.answerContext?.beforeRequest(agent) }
+  async beforeRequest(agent: DemandAgent): Promise<void> {
+    const state = agent.session && this.#turns.get(agent.session.id)
+    if (state && state.input.agent === agent && state.status === 'answer' && this.pending(agent)) {
+      await this.host.answerContext?.beforeRequest(state.input, this.ownerIdentity(state))
+    }
+  }
   async fence(agent: DemandAgent, request: { sessionId?: string; purpose?: string; messages?: readonly unknown[] }): Promise<void> {
-    if (this.pending(agent)) await this.host.answerContext?.fence(agent, request)
+    const state = agent.session && this.#turns.get(agent.session.id)
+    if (state && state.input.agent === agent && state.status === 'answer' && this.pending(agent)) {
+      await this.host.answerContext?.fence(state.input, request, this.ownerIdentity(state))
+    }
   }
-  guidance(messages: readonly unknown[]): readonly unknown[] {
-    return [...messages, { id: randomUUID(), role: 'user', content: [{ type: 'text', text: ON_DEMAND_GUIDANCE }],
-      source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'snapshot', sections: [{ name: 'on-demand-intake', text: ON_DEMAND_GUIDANCE }] } }]
+  guidance(messages: readonly unknown[], state?: Turn): readonly unknown[] {
+    const context = state?.requestIntentContext
+    const interpretation = state?.requestIntent
+    const intentText = context ? `\n\nCurrent request references and same-session work (host-bound, advisory only):\n${JSON.stringify({
+      references: requestIntentReferenceIds(context),
+      activeGoal: context.activeGoal ?? null,
+      proposals: context.proposals.map(({ id, revision, digest, text }) => ({ id, revision, digest, text })),
+      decision: interpretation ? { relation: interpretation.relation, action: interpretation.action, source: interpretation.source,
+        policyVersion: interpretation.policyVersion, evidence: interpretation.evidence, unresolvedReason: interpretation.unresolvedReason ?? null } : null,
+    })}\nUse only these exact references in requestIntent.evidenceRefs. The original human message remains unchanged.` : ''
+    const text = ON_DEMAND_GUIDANCE + intentText
+    return [...messages, { id: randomUUID(), role: 'user', content: [{ type: 'text', text }],
+      source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'snapshot', sections: [{ name: 'on-demand-intake', text }] } }]
   }
-  snapshot(sessionId: string): { task: string; taskType: TaskType | null; status: string; turn: number } | undefined {
+  snapshot(sessionId: string): { task: string; taskType: TaskType | null; status: string; turn: number; requestIntent?: RequestIntentDecision; memoryOwner: MemoryOwnerKind } | undefined {
     const state = this.#turns.get(sessionId)
-    return state && { task: state.task, taskType: state.taskType ?? state.intent.taskType ?? null, status: state.status, turn: state.input.turn }
+    return state && { task: state.task, taskType: state.taskType ?? state.intent.taskType ?? null, status: state.status, turn: state.input.turn,
+      ...(state.requestIntent ? { requestIntent: structuredClone(state.requestIntent) } : {}), memoryOwner: state.memoryOwner }
   }
   /** A current host-validated control call, never arbitrary code or a name-based exemption. */
   preparationOnly(execution: Execution): boolean {
@@ -238,19 +405,23 @@ export class OnDemandIntake {
     if (this.#stopped || execution.signal.aborted || execution.parent !== undefined || !state || state.input.signal.aborted
       || !proof || proof.turn !== state || this.definition(execution)?.execute !== proof.execute
       || state.preparationCalls.has(execution.callId)) return false
-    if (proof.carrier) return execution.name === 'run_code' && state.status === 'answer' && preparationCarrier(execution.arguments) === proof.carrier
+    if (proof.carrier) return execution.name === 'run_code' && state.status === 'answer'
+      && canonicalContentHash(preparationCarrier(execution.arguments) ?? null) === proof.carrierDigest
     return proof.requestPreparation === true && execution.name === TASK_PREPARE_TOOL
       && (state.status === 'answer' || state.existing === true && state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn))
   }
   pending(agent: DemandAgent): boolean {
     const state = agent.session && this.#turns.get(agent.session.id)
-    return !!state && state.input.agent === agent && !['prepared', 'closed', 'stale'].includes(state.status)
+    return !!state && !state.confirmationResume && state.input.agent === agent && !['prepared', 'closed', 'stale'].includes(state.status)
   }
   /** An admitted host continuation still needs capture to retire the previous turn's receipt. */
   continuing(agent: DemandAgent): boolean { return !this.#stopped && this.host.ready(agent) }
   finish(session: object & { id: string }, turn: number): void {
     const state = this.#turns.get(session.id)
-    if (state?.input.agent.session === session && state.input.turn === turn) { state.status = 'closed'; state.controller.abort(new Error('Native turn ended')) }
+    if (state?.input.agent.session === session && state.input.turn === turn) {
+      state.status = 'closed'; state.controller.abort(new Error('Native turn ended'))
+      this.host.answerContext?.retire(state.input.agent)
+    }
   }
   mount(context: { on(name: string, listener: (...args: any[]) => any, options?: { prepend: boolean }): () => void }, tools: NativeTools, systemPrompt?: { section(section: any): () => void }): void {
     if (!tools.get || !tools.guard || !tools.register) throw new Error('On-demand intake requires native tool identity and monotonic guards')
@@ -258,21 +429,60 @@ export class OnDemandIntake {
     // Preserve an already installed reader across replacement before capture.
     // When absent, capture binds the validated agent's installed preset reader.
     this.#startupSkillReader = tools.get('skill')?.execute
-    if (systemPrompt && !this.options.onlyWhenDeferred) this.#disposers.push(systemPrompt.section({ name: 'kiokuko:on-demand-intake', order: -99999, text: 'On-demand host contract: text answers do not require execution intake. The public prepare_requested_work tool accepts an advisory type only; task_prepare/task_answer remain host-only. ' + ON_DEMAND_GUIDANCE }))
+    if (systemPrompt && !this.options.onlyWhenDeferred) this.#disposers.push(systemPrompt.section({ name: 'kiokuko:on-demand-intake', order: -99999, text: 'On-demand host contract: text answers do not require execution intake. The public prepare_requested_work tool accepts an advisory taskType or a source-bound requestIntent; task_prepare/task_answer remain host-only. ' + ON_DEMAND_GUIDANCE }))
     const definition = { name: TASK_PREPARE_TOOL, modelFacing: true,
-      description: 'Prepare the original user request for tool-backed work. Supply only an advisory taskType, never a rewritten task or target. This does not grant native tool permissions. Answer ordinary questions directly; clarify unknown actions or targets first.',
-      parameters: { type: 'object', properties: { taskType: { type: 'string', enum: ACTION_TYPES } }, required: ['taskType'], additionalProperties: false },
+      description: 'Prepare the exact original user request for tool-backed work. Supply either legacy advisory taskType or requestIntent with exact evidenceRefs from the host context; never rewrite the task or invent a target. This does not grant native tool permissions. Answer ordinary questions directly; clarify unknown actions or targets first.',
+      parameters: { ...JSON.parse(JSON.stringify(z.toJSONSchema(preparationFieldsSchema))), anyOf: [{ required: ['taskType'] }, { required: ['requestIntent'] }] },
       output: { schema: {}, render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
       execute: async (args: unknown, execution: Execution) => {
         const state = this.bound(execution)
-        const value = args as { taskType?: TaskType }
-        if (!state || execution.name !== TASK_PREPARE_TOOL || this.definition(execution)?.execute !== definition.execute
-          || !value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || !ACTION_TYPES.includes(value.taskType!)) throw new Error('Invalid task preparation request')
-        if (state.preparationCalls.has(execution.callId) || !(state.status === 'answer' || state.existing && state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn))) throw new Error('Task preparation was already consumed for this turn')
+        const value = parsePreparationRequest(args)
+        if (!state || execution.name !== TASK_PREPARE_TOOL || this.definition(execution)?.execute !== definition.execute || !value) throw new Error('Invalid task preparation request')
+        if (state.preparationCalls.has(execution.callId) || !(state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn))) throw new Error('Task preparation was already consumed for this turn')
         state.preparationCalls.add(execution.callId)
-        if (state.existing) { this.assertCurrent(state); execution.signal.throwIfAborted() }
-        else await this.prepare(state, value.taskType!, execution.signal)
-        return { prepared: true, taskType: state.taskType ?? value.taskType, originalTask: state.task, permissions: 'unchanged_native_policy' }
+        if (state.existing) {
+          this.assertCurrent(state); execution.signal.throwIfAborted()
+          const boundIntent = this.bindIntent(state, value.requestIntent)
+          if (boundIntent?.relation === 'same_scope_continuation' && boundIntent.action !== 'answer' && boundIntent.action !== 'unknown') {
+            const intentType = requestIntentTaskType(boundIntent, state.taskType ?? state.intent.taskType ?? value.taskType)
+            if (value.taskType !== undefined && intentType !== undefined && value.taskType !== intentType) {
+              throw new Error('The advisory taskType conflicts with the bound request action')
+            }
+            state.requestIntent = boundIntent
+          } else {
+            if (!boundIntent || boundIntent.relation === 'unknown' || boundIntent.action === 'unknown' || boundIntent.action === 'answer') {
+              throw new Error('Clarify whether this request continues, changes, or starts work before preparing it')
+            }
+            const intentType = requestIntentTaskType(boundIntent, state.taskType ?? state.intent.taskType ?? value.taskType)
+            if (!intentType || intentType === 'chat' || value.taskType !== undefined && value.taskType !== intentType) {
+              throw new Error('The advisory taskType conflicts with the bound request action')
+            }
+            state.existing = false
+            state.status = 'answer'
+            state.memoryOwner = memoryOwnerKind(boundIntent, intentType)
+            await this.prepare(state, intentType, execution.signal, boundIntent, value.requestIntent !== undefined)
+          }
+        } else {
+          const suppliedIntent = this.bindIntent(state, value.requestIntent)
+          const currentIntent = suppliedIntent ?? state.requestIntent
+          const unresolved = currentIntent?.relation === 'unknown' || currentIntent?.action === 'unknown'
+          if (unresolved && (state.requestIntentContext?.activeGoal || value.requestIntent !== undefined || value.taskType === undefined)) {
+            throw new Error('Clarify the request before preparing work')
+          }
+          if (state.requestIntentContext?.activeGoal && currentIntent === undefined) {
+            throw new Error('Clarify whether this request continues, changes, or starts the active Goal')
+          }
+          const intentType = unresolved ? undefined : requestIntentTaskType(currentIntent, state.taskType ?? state.intent.taskType ?? value.taskType)
+          if (value.taskType !== undefined && intentType !== undefined && value.taskType !== intentType) {
+            throw new Error('The advisory taskType conflicts with the bound request action')
+          }
+          const taskType = intentType ?? value.taskType
+          if (!taskType || taskType === 'chat' || !ACTION_TYPES.includes(taskType)) throw new Error('Answer ordinary questions directly; clarify unknown actions before preparing work')
+          state.memoryOwner = memoryOwnerKind(currentIntent, taskType)
+          await this.prepare(state, taskType, execution.signal, currentIntent, value.requestIntent !== undefined)
+        }
+        return { prepared: true, taskType: state.taskType ?? value.taskType ?? requestIntentTaskType(state.requestIntent), originalTask: state.task,
+          ...(state.requestIntent ? { requestIntent: state.requestIntent } : {}), memoryOwner: state.memoryOwner, permissions: 'unchanged_native_policy' }
       } }
     this.#disposers.push(tools.register(definition))
     this.#disposers.push(context.on('tools/pre-execute', async (execution: Execution, next: () => Promise<any>) => {
@@ -293,25 +503,30 @@ export class OnDemandIntake {
       }
       try {
         this.assertCurrent(state)
+        if (state.confirmationResume && execution.name !== TASK_PREPARE_TOOL && this.host.ready(state.input.agent, state.input.turn)) this.acknowledgeExisting(state)
         const skillReader = this.#skillReaders.get(state.input.agent)
         const skillRead = execution.name === 'skill' && skillReader !== undefined && actual.execute === skillReader && state.status === 'answer'
-        const carrier = execution.name === 'run_code' && state.status !== 'prepared' ? preparationCarrier(execution.arguments) : undefined
-        if (execution.name === 'run_code' && state.status !== 'prepared' && !carrier && !automaticPreparationType(state.intent, execution.name, state.task)) return denied('Clarify the requested work before code execution.')
+        const carrier = execution.name === 'run_code' ? preparationCarrier(execution.arguments) : undefined
+        const carrierDigest = carrier ? canonicalContentHash(carrier) : undefined
+        if (execution.name === 'run_code' && state.status !== 'prepared' && !carrier
+          && !automaticPreparationType(state.intent, state.requestIntent, execution.name)) return denied('Clarify the requested work before code execution.')
         if (carrier) {
-          if (state.status !== 'answer' || state.preparationCalls.has(execution.callId)) return denied('Preparation carrier is not current')
+          if (!(state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) || state.preparationCalls.has(execution.callId)) return denied('Preparation carrier is not current')
         } else if (execution.name === TASK_PREPARE_TOOL) {
-          if (actual.execute !== definition.execute || !(state.status === 'answer' || state.existing && state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) || state.preparationCalls.has(execution.callId)) return denied('Task preparation is not current')
+          if (actual.execute !== definition.execute || !(state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) || state.preparationCalls.has(execution.callId)) return denied('Task preparation is not current')
         } else if (!skillRead) {
           if (state.status !== 'prepared') {
-            const type = automaticPreparationType(state.intent, execution.name, state.task)
+            const type = automaticPreparationType(state.intent, state.requestIntent, execution.name)
             if (!type) return denied('Before tool-backed work, call prepare_requested_work with its advisory taskType. Clarify unknown actions or targets first; the original request is preserved.')
-            await this.prepare(state, type, execution.signal)
+            await this.prepare(state, type, execution.signal, state.requestIntent)
           }
           if (!this.host.ready(state.input.agent, state.input.turn)) return denied('Prepared execution is no longer current')
         }
         this.assertCurrent(state)
         if (this.definition(execution)?.execute !== actual.execute) return denied('Native tool definition changed during preparation')
-        this.#executions.set(execution, { turn: state, execute: actual.execute, ...(carrier ? { carrier } : {}), ...(skillRead ? { skillRead: true } : {}), ...(execution.name === TASK_PREPARE_TOOL ? { requestPreparation: true } : {}) })
+        this.#executions.set(execution, { turn: state, execute: actual.execute,
+          ...(carrier && carrierDigest ? { carrier, carrierDigest } : {}), ...(skillRead ? { skillRead: true } : {}),
+          ...(execution.name === TASK_PREPARE_TOOL ? { requestPreparation: true } : {}) })
         // Preserve native allow/deny/ask unchanged. Approval is resolved by the native registry AFTER this waterfall.
         const decision = await next()
         // DSH 0.1.5 does not understand cancel and otherwise dispatches it without running guards.
@@ -322,16 +537,34 @@ export class OnDemandIntake {
       if (execution.agent && this.host.nativeChild?.(execution.agent)) return next()
       const proof = this.#executions.get(execution)
       if (!proof) return next() // Existing independently admitted runs keep their original path.
-      const state = this.bound(execution)
-      if (!state || proof.turn !== state || this.definition(execution)?.execute !== proof.execute) throw new Error('On-demand dispatch identity changed')
-      this.assertCurrent(state)
-      ;(execution as { signal: AbortSignal }).signal = AbortSignal.any([execution.signal, state.input.signal, this.#lifecycle.signal])
-      if (!proof.carrier) return next()
-      if (state.status !== 'answer' || state.preparationCalls.has(execution.callId) || preparationCarrier(execution.arguments) !== proof.carrier) throw new Error('Preparation carrier was already consumed or changed')
-      state.preparationCalls.add(execution.callId)
-      await this.prepare(state, proof.carrier, execution.signal)
-      const result = { prepared: true, taskType: state.taskType, originalTask: state.task, permissions: 'unchanged_native_policy', programExecuted: false }
-      return { isError: false, value: { logs: ['Host intake prepared. No program was evaluated.'], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
+       const state = this.bound(execution)
+       if (!state || proof.turn !== state || this.definition(execution)?.execute !== proof.execute) throw new Error('On-demand dispatch identity changed')
+       this.assertCurrent(state)
+       ;(execution as { signal: AbortSignal }).signal = AbortSignal.any([execution.signal, state.input.signal, this.#lifecycle.signal])
+       if (!proof.carrier) return next()
+        const carrier = preparationCarrier(execution.arguments)
+        if (!(state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) || state.preparationCalls.has(execution.callId)
+          || !carrier || canonicalContentHash(carrier) !== proof.carrierDigest) throw new Error('Preparation carrier was already consumed or changed')
+        state.preparationCalls.add(execution.callId)
+        const requestIntent = this.bindIntent(state, carrier.requestIntent)
+        const clarification = executionClarification(state.task, requestIntent, state.requestIntentContext)
+        if (clarification) throw new Error(clarification)
+        const unresolved = requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown'
+        const legacyTaskTypeAllowed = carrier.taskType !== undefined && !state.requestIntentContext?.activeGoal
+          && (state.requestIntentContext?.proposals.length ?? 0) === 0
+        if (unresolved && !legacyTaskTypeAllowed) throw new Error('Clarify the requested action and scope before preparing work')
+        const intentType = unresolved ? undefined : requestIntentTaskType(requestIntent, state.taskType ?? state.intent.taskType ?? carrier.taskType)
+        const taskType = intentType ?? carrier.taskType
+        if (carrier.taskType !== undefined && taskType !== carrier.taskType) throw new Error('The advisory taskType conflicts with the bound request action')
+        if (!taskType || taskType === 'chat') {
+          throw new Error('Clarify the requested action and scope before preparing work')
+        }
+        state.memoryOwner = memoryOwnerKind(requestIntent, taskType)
+        await this.prepare(state, taskType, execution.signal, requestIntent, carrier.requestIntent !== undefined)
+       const result = { prepared: true, taskType: state.taskType, originalTask: state.task,
+         ...(state.requestIntent ? { requestIntent: state.requestIntent } : {}), memoryOwner: state.memoryOwner,
+         permissions: 'unchanged_native_policy', programExecuted: false }
+       return { isError: false, value: { logs: ['Host intake prepared. No program was evaluated.'], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
     }, { prepend: true }))
     this.#disposers.push(tools.guard(execution => {
       if (this.#stopped || execution.signal.aborted) return 'On-demand intake is stopped or cancelled'
@@ -345,16 +578,19 @@ export class OnDemandIntake {
       }
       const proof = this.#executions.get(execution)
       if (!proof || proof.turn !== state || proof.execute !== actual.execute || ['closed', 'stale', 'capturing'].includes(state.status)) return 'Tool execution has no current on-demand preparation'
-      if (proof.carrier) return state.status === 'answer' && preparationCarrier(execution.arguments) === proof.carrier ? undefined : 'Preparation carrier is not current'
+       if (proof.carrier) return (state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn))
+         && canonicalContentHash(preparationCarrier(execution.arguments) ?? null) === proof.carrierDigest ? undefined : 'Preparation carrier is not current'
       if (proof.skillRead) return state.status === 'answer' && actual.execute === this.#skillReaders.get(state.input.agent) ? undefined : 'Conversational Skill read is not current'
-      if (execution.name === TASK_PREPARE_TOOL) return actual.execute === definition.execute && (state.status === 'answer' || state.existing && state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) ? undefined : 'Task preparation is not current'
+      if (execution.name === TASK_PREPARE_TOOL) return actual.execute === definition.execute && (state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) ? undefined : 'Task preparation is not current'
       return state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn) ? undefined : 'Execution task is not prepared'
     }))
   }
   answerOwner(session: object & { id: string }): { agent: DemandAgent; workspace: string } | undefined {
     if (this.#stopped) return undefined
-    const state = this.#turns.get(session.id), owner = this.host.answerContext?.owner(session)
-    return state && state.status !== 'stale' && state.input.agent === owner?.agent ? owner : undefined
+    const state = this.#turns.get(session.id)
+    if (!state || state.status !== 'answer' || state.input.agent.session !== session || state.memoryOwner !== 'conversation') return undefined
+    const owner = this.host.answerContext?.owner(session, this.ownerIdentity(state))
+    return state.input.agent === owner?.agent ? owner : undefined
   }
   retire(agent: DemandAgent): void {
     this.host.answerContext?.retire(agent)

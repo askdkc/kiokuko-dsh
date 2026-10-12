@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { openConnection } from '../../../src/db/connection.js'
 import { nativeSkillFixture } from '../helpers/skill-native.js'
-import { codingPrelude, toolValue, fixtureDefinition } from '../helpers/coding-script.js'
+import { codingPrelude, toolValue, fixtureDefinition, interpretedPreparation } from '../helpers/coding-script.js'
 import { nativeToolResults } from '../helpers/native-mock.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 
@@ -18,7 +18,7 @@ const program = "export function parse(value){return Number(value)+1}\nif(proces
 const check = "import test from 'node:test';import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';import {parse} from './parser.mjs';test('regression',()=>assert.equal(parse('41'),42));test('public entry',()=>assert.equal(execFileSync(process.execPath,['src/parser.mjs','41'],{encoding:'utf8'}).trim(),'42'));\n"
 const command = 'node --test --test-reporter=tap src/parser.test.mjs'
 const lispString = (value: string) => `"${value.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"')}"`
-const extra = { lisp: { enabled: true }, answerReview: { mode: 'off' }, typedDecisions: { mode: 'off' },
+const extra = { lisp: { enabled: true, startupTimeoutMs: 60000 }, answerReview: { mode: 'off' }, typedDecisions: { mode: 'off' },
   memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, memoryIndexReasoning: { mode: 'off' }, deepPlanning: { enabled: false }, modelAutoMode: { mode: 'off' } }
 
 for (const choice of ['使わない', '使う'] as const) test(`native coding session ${choice}: real artifact, item evidence, fresh user-entry Goal`, { skip: !installed, timeout: 120000 }, async () => {
@@ -54,7 +54,7 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
     call('completed', 'coding_workflow', { action: 'status' })
     f.responses.push((request: any) => {
       const failed = nativeToolResults(request.messages).filter(value => value.isError)
-      assert.deepEqual(failed, [])
+      assert.deepEqual(failed, [], JSON.stringify({ proposal: toolValue(request, 'coding-propose'), final: toolValue(request, 'completed') }))
       const status = toolValue(request, 'completed'); assert.equal(status.state, 'completed', JSON.stringify(status.assessment)); assert.equal(status.assessment.verified, true)
       return f.mock.textResponse('Goal achieved: the public entry returns 42; regression and final user-entry checks passed.')
     })
@@ -140,7 +140,8 @@ test('native core reload restores the exact pending task and question before all
     await f.turn('Implement src/parser.mjs. 通常実行で。完了条件: public entry outputs 42')
     assert.equal(existsSync(join(f.dir, 'src/parser.mjs')), false)
     await f.reload('compiled')
-    f.responses.push(f.mock.toolCallResponse('resume-task', 'coding_workflow', { action: 'next' }),
+    f.responses.push(interpretedPreparation(f.mock, 'resume-prepare', 'same_scope_continuation', 'change'),
+      (request: any) => { toolValue(request, 'resume-prepare'); return f.mock.toolCallResponse('resume-task', 'coding_workflow', { action: 'next' }) },
       f.mock.toolCallResponse('resumed-write', 'kioku_write', { path: 'src/parser.mjs', content: 'console.log(42)\n' }),
       f.mock.toolCallResponse('resumed-state', 'coding_workflow', { action: 'status' }),
       (request: any) => {

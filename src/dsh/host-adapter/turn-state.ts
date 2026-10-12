@@ -7,6 +7,8 @@ import type { EnnoOdunoState } from '../../enno-oduno/types.js'
 import type { DshCapabilityCatalog } from '../capability-catalog.js'
 import type { DshUserQuestionAgent } from '../user-interaction.js'
 import type { ExecutionBinding } from '../execution-support.js'
+import type { RequestIntentContext, RequestIntentDecision } from '../decisions/request-intent.js'
+import type { MemoryOwnerKind } from '../memory-owner.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 
 export interface TurnRecord {
@@ -19,6 +21,9 @@ export interface TurnRecord {
   readonly cwd: string
   readonly profileHints?: DshPreStepEvent['profileHints']
   readonly deferTaskTypeInference?: boolean
+  requestIntent?: RequestIntentDecision
+  requestIntentContext?: RequestIntentContext
+  memoryOwner: MemoryOwnerKind
   nativeAgent?: DshUserQuestionAgent
   nativeSession?: object
   task: string
@@ -28,6 +33,7 @@ export interface TurnRecord {
   /** Monotonic host generation assigned before each prepare begins. */
   prepareGeneration: number
   memoryInput?: string
+  memoryRebuildAttempts: number
   failed: boolean
   closed: boolean
 }
@@ -108,11 +114,15 @@ export function createTurnState(
       task: event.task,
       ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
       ...(event.deferTaskTypeInference ? { deferTaskTypeInference: true } : {}),
+      ...(event.requestIntent === undefined ? {} : { requestIntent: event.requestIntent }),
+      ...(event.requestIntentContext === undefined ? {} : { requestIntentContext: event.requestIntentContext }),
+      memoryOwner: event.memoryOwner ?? result.prepared.memoryOwner?.kind ?? 'none',
       turn: event.turn,
       prepared: result.prepared,
       catalog: result.catalog,
       prepareGeneration: generation,
       ...(latest?.runId === run && latest.memoryInput !== undefined ? { memoryInput: latest.memoryInput } : {}),
+      memoryRebuildAttempts: 0,
       failed: false,
       closed: false,
     }
@@ -121,16 +131,27 @@ export function createTurnState(
     item.turn = event.turn
     const sameRevision = previous !== undefined && incomingRevision === previousRevision
       && previous.prepared.ennoOduno.applicable === result.prepared.ennoOduno.applicable
+    const previousMemoryOwner = previous?.prepared.memoryOwner
+    const nextMemoryOwner = result.prepared.memoryOwner
+    const sameMemoryOwner = previousMemoryOwner?.kind === nextMemoryOwner?.kind
+      && previousMemoryOwner?.agentId === nextMemoryOwner?.agentId && previousMemoryOwner?.sessionId === nextMemoryOwner?.sessionId
+      && previousMemoryOwner?.turn === nextMemoryOwner?.turn && previousMemoryOwner?.requestDigest === nextMemoryOwner?.requestDigest
+      && previousMemoryOwner?.runId === nextMemoryOwner?.runId
     if (sameRevision) {
       // A newer prepare may carry a newer context delivery while Enno has not
       // advanced its revision. Preserve the active lease and other policy
       // state; only replace the authoritative prepared context and delivery.
-      item.prepared = { ...item.prepared, context: result.prepared.context, memoryPolicy: result.prepared.memoryPolicy }
+      item.prepared = { ...item.prepared, context: result.prepared.context, memoryPolicy: result.prepared.memoryPolicy,
+        ...(nextMemoryOwner === undefined ? {} : { memoryOwner: nextMemoryOwner }) }
     } else {
       item.prepared = result.prepared
     }
     item.prepareGeneration = generation
     item.task = event.task
+    if (event.requestIntent !== undefined) item.requestIntent = event.requestIntent
+    if (event.requestIntentContext !== undefined) item.requestIntentContext = event.requestIntentContext
+    item.memoryOwner = event.memoryOwner ?? result.prepared.memoryOwner?.kind ?? item.memoryOwner
+    if (!sameMemoryOwner) item.memoryRebuildAttempts = 0
     item.catalog = result.catalog
     turns.set(key, item)
     latestBySession.set(event.sessionId, item)

@@ -181,8 +181,11 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   })
   const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
-    assert.equal(registered.length, 19)
+    assert.equal(registered.length, 21, 'the explicit coding apply and blocker contracts add two public operations')
     for(const name of ['kioku_read','kioku_write','kioku_edit','kioku_remove','kioku_exec','kioku_result']) assert.ok(registered.some((definition:any)=>definition.name===name))
+    for (const name of ['coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker']) {
+      assert.ok(registered.some((definition: any) => definition.name === name), `missing registered operation ${name}`)
+    }
     assert.ok(registered.some((definition: any) => definition.name === 'memory_explain'))
     assert.ok(registered.some((definition: any) => definition.name === 'task_completion'))
     const archivedExportSession = createNativeSession('archived-export-session')
@@ -315,7 +318,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.deepEqual(replay.messages, [])
     const nextStepEvent = await adapter.host.mapPreStep!({
       agent: event.nativeAgent as any,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Injected continuation context.' }] }],
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: userTask }], source: { kind: 'user' } },
+        { role: 'user', content: [{ type: 'text', text: 'Injected continuation context.' }], source: { kind: 'plugin:test-context' } },
+      ],
       turn: 1, step: 2, signal: event.signal,
     })
     assert.equal(nextStepEvent.task, event.task)
@@ -403,7 +409,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     commitContext(fallbackSession, fallbackDecision.messages)
     const fallbackNextEvent = await adapter.host.mapPreStep!({
       agent: fallbackAgent,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Injected fallback context.' }] }],
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'Fallback task.' }], source: { kind: 'user' } },
+        { role: 'user', content: [{ type: 'text', text: 'Injected fallback context.' }], source: { kind: 'plugin:test-context' } },
+      ],
       turn: 1, step: 2, signal: event.signal,
     })
     assert.equal(fallbackNextEvent.task, fallbackEvent.task)
@@ -549,7 +558,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
     const firstChatStep = await adapter.host.mapPreStep!({
       agent: chatAgent,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Injected first-turn context.' }] }],
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'Tell me something.' }], source: { kind: 'user' } },
+        { role: 'user', content: [{ type: 'text', text: 'Injected first-turn context.' }], source: { kind: 'plugin:test-context' } },
+      ],
       turn: 1, step: 2, signal: event.signal,
     })
     assert.equal(firstChatStep.task, chatEvent.task)
@@ -577,7 +589,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     await adapter.host.boundaryWorker!.whenIdle()
     const secondChatStep = await adapter.host.mapPreStep!({
       agent: chatAgent,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Injected continuation context.' }] }],
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'What do you think about that?' }], source: { kind: 'user' } },
+        { role: 'user', content: [{ type: 'text', text: 'Injected continuation context.' }], source: { kind: 'plugin:test-context' } },
+      ],
       turn: 2, step: 2, signal: event.signal,
     })
     assert.equal(secondChatStep.task, secondChatEvent.task)
@@ -643,7 +658,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     soulModelInvocable = false
     await assert.rejects(Promise.resolve(adapter.host.mapPreStep!({
       agent: event.nativeAgent as any,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'Injected continuation context.' }] }],
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: userTask }], source: { kind: 'user' } },
+        { role: 'user', content: [{ type: 'text', text: 'Injected continuation context.' }], source: { kind: 'plugin:test-context' } },
+      ],
       turn: 1, step: 3, signal: event.signal,
     })), /incomplete|mandatory|catalog/u)
 

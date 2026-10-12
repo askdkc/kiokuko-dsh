@@ -2,6 +2,7 @@ import * as z from 'zod/v4'
 
 const text = z.string().trim().min(1).max(4096)
 export const CodingId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/u)
+  .describe('Declaration IDs (goalId/itemId/criterionId) must be unique across the definition; reference arrays reuse those declared IDs.')
 const revision = z.number().int().min(1)
 export const CodingCriterionSchema = z.object({
   criterionId: CodingId, revision, outcome: text, procedure: text, expected: text,
@@ -20,7 +21,11 @@ const definition = z.object({ goal: CodingGoalSchema, items: z.array(CodingItemS
   criteria: z.array(CodingCriterionSchema).min(2).max(128) }).strict()
 export const CodingDefinitionSchema = definition.superRefine((value, ctx) => {
   const reject = (message: string) => ctx.addIssue({ code: 'custom', message })
-  const ids = (values: string[]) => { if (new Set(values).size !== values.length) reject('Duplicate IDs'); return new Set(values) }
+  const ids = (values: string[]) => {
+    const duplicates = [...new Set(values.filter((id, index) => values.indexOf(id) !== index))]
+    if (duplicates.length) reject(`Duplicate IDs: ${duplicates.join(', ')}`)
+    return new Set(values)
+  }
   const criteria = ids(value.criteria.map(item => item.criterionId))
   const items = ids(value.items.map(item => item.itemId))
   ids(value.goal.criterionIds)
@@ -53,6 +58,18 @@ export const CodingDefinitionSchema = definition.superRefine((value, ctx) => {
 })
 export type CodingDefinition = z.infer<typeof CodingDefinitionSchema>
 export type CodingCriterion = z.infer<typeof CodingCriterionSchema>
+export const CODING_MINIMUM_DEFINITION_EXAMPLE: CodingDefinition = {
+  goal: { goalId: 'goal-example', revision: 1, ideal: 'The requested outcome is observable.', target: 'one-target',
+    outOfScope: [], constraints: [], requestBasis: 'The exact current user request.', criterionIds: ['goal-check'] },
+  items: [{ itemId: 'implementation', change: 'Implement the requested behavior.', dependsOn: [],
+    goalCriterionIds: ['goal-check'], criterionIds: ['item-check'] }],
+  criteria: [
+    { criterionId: 'item-check', revision: 1, outcome: 'The requested behavior is implemented',
+      procedure: 'Run the focused regression check', expected: 'The asserted behavior passes', evidence: 'selected_tests' },
+    { criterionId: 'goal-check', revision: 1, outcome: 'The ordinary user entry works',
+      procedure: 'Exercise the real entry point after item checks', expected: 'The requested result is observable', evidence: 'selected_tests' },
+  ],
+}
 export interface CodingIdentity { runId: string; sessionId: string; repositoryRoot: string }
 export type CodingState = 'preparing' | 'awaiting_lisp_choice' | 'ready' | 'implementing' | 'verifying_goal' | 'completed' | 'blocked' | 'cancelled' | 'superseded'
 export const CodingBlockerSchema = z.object({ criterionIds: z.array(CodingId).max(128),
@@ -70,5 +87,6 @@ export interface CodingWorkflow extends CodingIdentity {
   choice: CodingChoice; retiredIds: string[]; activeItemId?: string; blocker?: CodingBlocker;
   attempts: Record<string, { fingerprint: string; count: number; retryAt: number; sourceDigest?: string }>;
   ennoProjectionDigest?: string;
+  pendingScopeChange?: { requestDigest: string; evidenceRefs: string[] }
 }
 export const CODING_WORKFLOW_SERVICE = 'kiokukoCodingWorkflow'

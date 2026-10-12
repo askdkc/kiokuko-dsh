@@ -17,6 +17,7 @@ import { DecisionError } from '../../../src/dsh/decisions/contracts.js'
 import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { nativeMock } from '../helpers/native-mock.js'
+import { interpretedPreparation } from '../helpers/coding-script.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 
 isolateSkillHome()
@@ -45,10 +46,10 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
     const configuration = TypedDecisionsConfig.parse(host.startsWith('full-laya')
       ? { provider: 'laya-coreml', 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } } : { provider: 'typesafe' })
     const decisions = new DecisionService(configuration, config => ({ capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 }, async evaluate(batch) {
-      if (batch.purpose === 'akinator') classified.push(batch.state)
+      if (batch.purpose === 'akinator' || batch.purpose === 'request-intent') classified.push(batch.state)
       if (host === 'full-laya-unavailable') throw new DecisionError('UNAVAILABLE')
-      return { provider: config.provider, requestedModel: config.provider === 'laya-coreml' ? 'laya-rl-agent' : config.typesafe.model, policyVersion: 'queued-fixture', answers: batch.questions.map(q => q.id === 'task-type' && host !== 'full-laya-abstain'
-        ? { id: q.id, status: 'selected' as const, choiceId: 'debug' } : { id: q.id, status: 'abstained' as const, reason: 'insufficient' as const }) }
+      return { provider: config.provider, requestedModel: config.provider === 'laya-coreml' ? 'laya-rl-agent' : config.typesafe.model, policyVersion: 'queued-fixture', answers: batch.questions.map(q => (['task-type', 'request-relation', 'request-action'].includes(q.id) || q.id.startsWith('request-proposal-')) && host !== 'full-laya-abstain'
+        ? { id: q.id, status: 'selected' as const, choiceId: ({ 'task-type': 'debug', 'request-relation': (batch.state as { currentUserMessage?: string }).currentUserMessage === instructions[1] ? 'same_scope_continuation' : 'new', 'request-action': 'change' } as Record<string, string>)[q.id] ?? 'not_selected' } : { id: q.id, status: 'abstained' as const, reason: 'insufficient' as const }) }
     } }))
     try {
       for (const plugin of [llm, session, projection, prompt, tools, agents, skills, commands]) {
@@ -64,7 +65,7 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       ctx.tools.register({ name: 'fixture_probe', [CODING_READ_ONLY]: true, description: 'Harmless read-only fixture probe.', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => { probes++; return 'probe result' } })
       const mock = nativeMock(llm), provider = new mock.MockAdapter(instructions.flatMap((_, index) => {
         const work = [mock.toolCallResponse(`queued-probe-${index}`, 'fixture_probe', {}), mock.textResponse('QUEUED_NATIVE_RESULT')]
-        return intakeMode === 'on-demand' || host === 'full-laya-abstain' || host === 'full-laya-unavailable' ? mock.prepareWork(work, 'debug', `queued-prepare-${index}`) : work
+        return intakeMode === 'on-demand' || host === 'full-laya-abstain' || host === 'full-laya-unavailable' || host === 'core-off' ? mock.prepareWork(work, 'debug', `queued-prepare-${index}`, interpretedPreparation(mock, `queued-prepare-${index}`, index === 0 ? 'new' : 'same_scope_continuation', 'change', 'debug')) : work
       }))
       ctx.llm.registerAdapter(['fixture'], provider)
       const common = { repositoryRoot: root, databasePath, intakeMode, answerReview: { mode: 'off' as const }, modelAutoMode: { mode: 'off' as const }, memoryReuse: { mode: 'off' as const }, semanticCompaction: { mode: 'off' as const } }
@@ -83,10 +84,11 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       const db = openConnection(databasePath)
       try {
         const rows = db.prepare('SELECT task_text AS task FROM akinator_sessions').all() as Array<{ task: string }>
-        for (const text of instructions) assert.ok(rows.some(row => row.task.includes(text)), JSON.stringify(rows))
+        assert.ok(rows.some(row => row.task.includes(instructions[0]!)), JSON.stringify(rows))
+        for (const text of instructions) assert.ok(provider.requests.some(request => JSON.stringify(request.messages).includes(text)), 'every original queued request reaches the native model')
         assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_lisp_sessions WHERE enabled=1').get()?.n, 0)
       } finally { db.close() }
-      if (host !== 'core-off') for (const text of instructions) assert.ok(classified.some(state => (typeof state === 'string' ? state : (state as any).task).includes(text)), JSON.stringify(classified))
+      if (host !== 'core-off') for (const text of instructions) assert.ok(classified.some(state => JSON.stringify(state).includes(text)), JSON.stringify(classified))
     } finally {
       await composition?.dispose(); await adapter?.dispose(); await core?.dispose(); await handle?.dispose()
       for (const fiber of fibers.reverse()) await fiber.dispose()

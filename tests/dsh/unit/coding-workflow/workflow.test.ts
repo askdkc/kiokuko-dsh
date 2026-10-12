@@ -7,13 +7,14 @@ import { openConnection } from '../../../../src/db/connection.js'
 import { migrateDatabase } from '../../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../../src/dsh/task-intake.js'
 import { CodingDefinitionSchema, type CodingDefinition } from '../../../../src/dsh/coding-workflow/contracts.js'
-import { codingIntent, codingContinuation, documentEditIntent, documentContinuation } from '../../../../src/dsh/coding-workflow/intent.js'
+import { codingControlOrRead, codingIntent, codingContinuation, documentEditIntent, documentContinuation } from '../../../../src/dsh/coding-workflow/intent.js'
 import { initializeCodingWorkflow, readCodingWorkflow } from '../../../../src/dsh/coding-workflow/store.js'
 import { answerCodingChoice, assertCodingDispatch, codingItems, codingStatus, nextCodingWork, proposeCodingWorkflow,
   recordCodingAttempt, stopCodingWorkflow, synchronizeCodingWorkflow } from '../../../../src/dsh/coding-workflow/service.js'
 import { assessTaskCompletion, bindTaskCriterion, taskCompletionBlocksClose, beginTaskCompletionExecution, finishTaskCompletionExecution } from '../../../../src/dsh/task-completion.js'
 import { OwnedExecutionService, runOwnedProcess } from '../../../../src/dsh/owned-execution.js'
 import { parseCodingChoice, mountCodingWorkflow } from '../../../../src/dsh/coding-workflow/host.js'
+import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../../src/dsh/decisions/request-intent.js'
 
 export const definition: CodingDefinition = {
   goal: { goalId: 'goal', revision: 1, ideal: 'The user can run the parser and get the expected result', target: 'src/parser.mjs',
@@ -200,6 +201,59 @@ function mounted(f: Awaited<ReturnType<typeof fixture>>, overrides: any = {}) {
   })
   return { tools, hooks, agent, unmount }
 }
+test('public apply schema, minimum example and validation errors agree with execution', async () => {
+  const f = await fixture(), host = mounted(f)
+  try {
+    const apply = host.tools.get('coding_workflow_apply')
+    assert.ok(apply.parameters.required.includes('expectedRevision'))
+    const execution = (callId: string) => ({ name: 'coding_workflow_apply', callId, agent: host.agent, signal: new AbortController().signal })
+    await assert.rejects(apply.execute({ action: 'propose', definition }, execution('missing-revision')), /expectedRevision.*current revision/s)
+    const invalid = structuredClone(definition); invalid.items[0]!.itemId = invalid.goal.goalId
+    await assert.rejects(apply.execute({ action: 'propose', expectedRevision: 1, definition: invalid }, execution('duplicate')), /Duplicate IDs: goal.*unique/s)
+    const status = codingStatus(f.db, f.identity) as any
+    const example = status.minimumValidInput
+    assert.equal(example.tool, 'coding_workflow_apply')
+    const result = await host.tools.get(example.tool).execute(example.arguments, execution('valid-example'))
+    assert.equal(result.applicable, true)
+    await assert.rejects(apply.execute({ ...example.arguments, action: 'revise' }, execution('stale')), /revision/i)
+  } finally { host.unmount(); await f.close() }
+})
+test('execution consumes the bound action: verification Bash is allowed, direct writes are not', async () => {
+  const f = await fixture()
+  const task = 'パッケージを更新した。動作を見てくれ。'
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([], task) })!
+  const requestIntent = bindMainModelRequestIntent({ relation: 'new', action: 'verify', evidenceRefs: requestIntentReferenceIds(context) }, context)!
+  const agent = { id: 'verification-agent' }
+  const host = mounted(f, { resolve: (execution: any) => execution.agent === agent
+    ? { ...f.identity, agent, task, requestIntent, requestIntentContext: context } : undefined })
+  try {
+    // This request is verification even if an old task's coding workflow remains.
+    const run = (name: string) => host.hooks.get('tools/pre-execute')({ name, agent, callId: name, arguments: {}, signal: new AbortController().signal }, async () => 'native')
+    assert.equal(await run('bash'), 'native')
+    assert.equal((await run('kioku_write')).kind, 'deny')
+    assert.equal(await run('read'), 'native')
+    assert.equal(codingControlOrRead('enno_work_report'), true, 'host-bound Enno reports do not need a human tool-action interpretation on each worker turn')
+    assert.equal(await run('enno_work_report'), 'native')
+  } finally { host.unmount(); await f.close() }
+})
+test('opaque implementation shorthand still requires Goal and choice; forged intent cannot authorize effects', async () => {
+  const f = await fixture(), task = 'A/B/C をまとめて入れて'
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([], task), proposals: [
+    { id: 'proposal', revision: 1, digest: 'a'.repeat(64), text: 'A/B/C: repair the three parser defects' },
+  ] })!
+  const requestIntent = bindMainModelRequestIntent({ relation: 'new', action: 'change', evidenceRefs: requestIntentReferenceIds(context) }, context)!
+  const agent = { id: 'change-agent' }
+  const identity = { ...f.identity, agent, task, requestIntent, requestIntentContext: context }
+  const host = mounted(f, { resolve: (execution: any) => execution.agent === agent ? identity : undefined })
+  try {
+    const run = () => host.hooks.get('tools/pre-execute')({ name: 'kioku_write', agent, callId: 'write', arguments: {}, signal: new AbortController().signal }, async () => 'native')
+    assert.equal((await run()).kind, 'deny')
+    f.propose(); f.choose()
+    assert.equal(await run(), 'native')
+    identity.requestIntent = { ...requestIntent, evidence: { ...requestIntent.evidence, requestDigest: 'b'.repeat(64) } }
+    assert.equal((await run()).kind, 'deny')
+  } finally { host.unmount(); await f.close() }
+})
 test('missing native question service preserves the Goal and pending choice, while effects remain denied', async () => {
   const f = await fixture(), host = mounted(f)
   try {

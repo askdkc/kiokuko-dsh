@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { realpathSync } from 'node:fs'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -10,14 +10,17 @@ import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { createDshCapabilityCatalog } from '../../../src/dsh/capability-catalog.js'
+import { initializeExecutionSelection, writeExecutionSelection } from '../../../src/dsh/execution-selection.js'
 import { submitEnnoAdvice } from '../../../src/enno-oduno/service.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
 import { compareCanonicalStrings } from '../../../src/serialization/validate.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
 import { dshTurnBoundarySeq } from '../../../src/dsh/session-memory-finalizer.js'
 import type { EfficiencyObservation } from '../../../src/dsh/efficiency.js'
+import { assessTaskCompletion } from '../../../src/dsh/task-completion.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 import { nativeMock } from '../helpers/native-mock.js'
+import { interpretedPreparation } from '../helpers/coding-script.js'
 import { mockModelRoutes, modelSelectionAnswer, openaiModels } from '../helpers/model-selection.js'
 const { createDshHostAdapter, mountDshComposition, DshSkillPrompts } = await import(process.env.KIOKUKO_SKILL_PACKAGE_ROOT
   ? pathToFileURL(join(process.env.KIOKUKO_SKILL_PACKAGE_ROOT,'dist/index.js')).href : '../../../src/dsh/index.js') as typeof import('../../../src/dsh/index.js')
@@ -81,6 +84,8 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     successSignals: ['The requested implementation is verified.'],
   }
   const focusedRetryMarker = join(fixtureRoot, 'focused-verifier-retry-ready')
+  await writeFile(join(fixtureRoot, 'focused-check.test.mjs'), `import test from 'node:test'; import assert from 'node:assert/strict'; import fs from 'node:fs'; test('focused retry reaches the required state', () => { const marker = ${JSON.stringify(focusedRetryMarker)}; if (!fs.existsSync(marker)) { fs.writeFileSync(marker, 'ready'); assert.fail('fixture requires one implementation retry'); } assert.equal(fs.readFileSync(marker, 'utf8'), 'ready'); });`)
+  await writeFile(join(fixtureRoot, 'final-check.test.mjs'), `import test from 'node:test'; import assert from 'node:assert/strict'; import fs from 'node:fs'; test('the final user path retains the verified state', () => { assert.equal(fs.readFileSync(${JSON.stringify(focusedRetryMarker)}, 'utf8'), 'ready'); assert.ok(fs.statSync('src').isDirectory()); });`)
   const plan = {
     executionHints: [{ field: 'constraints', text: 'Keep the native workflow recoverable.', quote: '@PLAN.md を実装' }],
     scope: ['src'],
@@ -99,10 +104,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         acceptanceCriteria: ['The final verifier passes.'],
         focusedVerifiers: [{
           id: 'focused-fail-once', kind: 'test', executable: process.execPath,
-          args: [
-            '--eval',
-            `const fs = require("node:fs"); const marker = ${JSON.stringify(focusedRetryMarker)}; if (fs.existsSync(marker)) process.exit(0); fs.writeFileSync(marker, "ready"); process.exit(1);`,
-          ],
+          args: ['--test', '--test-reporter=tap', 'focused-check.test.mjs'],
           cwd: '.', timeoutMs: 5_000,
         }],
       }],
@@ -110,8 +112,8 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     skillRequirements: [],
     finalVerifiers: [{
       id: 'final-test', kind: 'test', executable: process.execPath,
-      args: ['--eval', finalMode === 'verifier_mutation' || finalMode === 'boundary_blocked'
-        ? 'require("node:fs").writeFileSync("compiled.elc", "artifact")' : 'process.exit(0)'], cwd: '.', timeoutMs: 5_000,
+      args: finalMode === 'verifier_mutation' || finalMode === 'boundary_blocked'
+        ? ['--eval', 'require("node:fs").writeFileSync("compiled.elc", "artifact")'] : ['--test', '--test-reporter=tap', 'final-check.test.mjs'], cwd: '.', timeoutMs: 5_000,
     }],
     maxAttempts: finalMode === 'verifier_mutation' ? 8 : finalMode === 'last_attempt' || finalMode === 'boundary_blocked' ? 2 : 3,
     provenance: {
@@ -141,13 +143,14 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     mock.toolCallResponse(`plan-${suffix}`, 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
     ...(finalMode === 'pause' && suffix === 'one' ? [1, 2, 3, 4].map(index => mock.toolCallResponse(`repeated-${index}`, 'read', { file_path: 'src/fixture.ts' })) : []),
     ...(failBeforeWork ? [() => { throw new llm.LlmError('WebSocket error', 'PI_AI_ERROR') }] : []),
+    ...(finalMode === 'pause' && suffix === 'one' ? [interpretedPreparation(mock, 'prepare-paused-resume', 'same_scope_continuation', 'change', 'build')] : []),
     mock.toolCallResponse(`work-${suffix}`, 'enno_work_report', workResult),
     ...(retryWork ? [mock.toolCallResponse(`work-${suffix}-retry`, 'enno_work_report', workResult)] : []),
     ...(finalMode === 'verifier_mutation' ? [
-      mock.toolCallResponse(`review-${suffix}-repair`, 'enno_plan_review', { ...plan, finalVerifiers: [{ ...plan.finalVerifiers[0], args: ['--eval', 'process.exit(0)'] }] }),
+      mock.toolCallResponse(`review-${suffix}-repair`, 'enno_plan_review', { ...plan, finalVerifiers: [{ ...plan.finalVerifiers[0], args: ['--test', '--test-reporter=tap', 'final-check.test.mjs'] }] }),
       mock.toolCallResponse(`plan-${suffix}-repair`, 'enno_plan_submit', {
         ...plan, advisoryDisposition: planningDispositions,
-        finalVerifiers: [{ ...plan.finalVerifiers[0], args: ['--eval', 'process.exit(0)'] }],
+        finalVerifiers: [{ ...plan.finalVerifiers[0], args: ['--test', '--test-reporter=tap', 'final-check.test.mjs'] }],
       }),
       mock.toolCallResponse(`work-${suffix}-repair`, 'enno_work_report', workResult),
     ] : []),
@@ -163,17 +166,21 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   ]
   const secondFlow = flowResponses('two')
   const adapterScript = new mock.MockAdapter(finalMode === 'stall'
-    ? Array.from({ length: 8 }, () => mock.textResponse('I have not submitted the required phase.')) : [
+    ? [...Array.from({ length: 4 }, () => mock.textResponse('I have not submitted the required phase.')),
+      interpretedPreparation(mock, 'prepare-stalled-resume', 'same_scope_continuation', 'change', 'build'),
+      ...Array.from({ length: 4 }, () => mock.textResponse('I have not submitted the required phase.'))] : [
     ...flowResponses('one', true, false, true),
-    mock.toolCallResponse('prepare-two', TASK_PREPARE_TOOL, { taskType: 'build' }),
-    ...secondFlow.slice(0, 5),
-    mock.toolCallResponse('review-two-revised', 'enno_plan_review', plan),
-    mock.toolCallResponse('plan-two-revised', 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
+    interpretedPreparation(mock, 'prepare-two', 'new', 'change', 'build'),
+     ...secondFlow.slice(0, 5),
+     interpretedPreparation(mock, 'prepare-revised-plan', 'scope_change', 'change', 'build'),
+     mock.toolCallResponse('review-two-revised', 'enno_plan_review', plan),
+     mock.toolCallResponse('plan-two-revised', 'enno_plan_submit', { ...plan, advisoryDisposition: planningDispositions }),
     mock.toolCallResponse('delegate-two', 'enno_delegate', { instruction: 'Inspect the current WorkUnit and return verification evidence. Do not edit files.' }),
-    (request: any) => { assert.equal(request.model, 'gpt-6-luna'); assert.notEqual(request.sessionId, 'real-loop-session'); return mock.textResponse('Child evidence: no additional changes are required.') },
-    ...secondFlow.slice(5, 6),
-    () => { throw new llm.LlmError('Selected model is unavailable', 'MODEL_NOT_FOUND') },
-    ...secondFlow.slice(6),
+     (request: any) => { assert.equal(request.model, 'gpt-6-luna'); assert.notEqual(request.sessionId, 'real-loop-session'); return mock.textResponse('Child evidence: no additional changes are required.') },
+     ...secondFlow.slice(5, 6),
+     () => { throw new llm.LlmError('Selected model is unavailable', 'MODEL_NOT_FOUND') },
+     interpretedPreparation(mock, 'prepare-final-review', 'same_scope_continuation', 'verify', 'review'),
+     ...secondFlow.slice(6),
     mock.textResponse('Yes. The requested implementation and verification are complete.'),
     mock.textResponse('fix(dsh): keep long Enno sessions recoverable'),
   ])
@@ -247,7 +254,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
               throw Object.assign(new Error('the user chose Chat about it'), { code: 'ASK_CANCELLED' })
             }
           }
-          return { answers: [{ id: question.id, selected: [question.id === 'kiokuko-plan-confirmation' ? 'approve' : 'build'] }] }
+          return { answers: [{ id: question.id, selected: [question.id === 'kiokuko-plan-confirmation' ? 'approve' : question.id.startsWith('coding-lisp-') ? '使わない' : 'build'] }] }
         },
       })
     },
@@ -347,6 +354,19 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         signal,
       })
       seededRunId = seeded.run.runId
+      // Model a fully persisted Enno run as it would exist after the user has
+      // selected its route; resume must not start with an ambiguous selection.
+      initializeExecutionSelection(seedDatabase, seeded.run.runId)
+      writeExecutionSelection(seedDatabase, seeded.run.runId, 0, {
+        mode: 'enno', status: 'ready',
+        configuration: {
+          routeBindings: [...mockModelRoutes],
+          roles: { ideal: { provider: 'mock', model: 'gpt-6-astra' }, zenki: { provider: 'mock', model: 'gpt-6-astra' },
+            goki: { provider: 'mock', model: 'gpt-6-sol' }, worker: { provider: 'mock', model: 'gpt-6-luna' },
+            check: { provider: 'mock', model: 'gpt-6-astra' } },
+          template: { id: 'openai', version: 1 }, custom: false, maxConcurrentChildren: 4,
+        },
+      })
       const advisory = seeded.ennoOduno.directive?.advisoryRound
       assert.ok(advisory)
       submitEnnoAdvice(seedDatabase, {
@@ -379,7 +399,8 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       const state = await adapter.host.runtime!.withDatabase(db => Object.fromEntries([
         'enno_contracts', 'dsh_turn_receipts', 'dsh_boundary_jobs', 'dsh_exploration_states', 'dsh_execution_evidence',
       ].map(table => [table, db.prepare(`SELECT * FROM ${table}`).all().map((row: any) => Object.fromEntries(Object.entries(row).filter(([key]) => !['contract_json', 'handoff_json', 'ideal_json', 'intake_discovery_json', 'meditation_json', 'payload_json'].includes(key))))])))
-      throw new Error('Native workflow did not settle: ' + JSON.stringify({ state, events: liveAgent.session.snapshotEvents()
+      const completion = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status='active'").all<{id:string}>().map(row => assessTaskCompletion(db,row.id)))
+      throw new Error('Native workflow did not settle: ' + JSON.stringify({ completion, state, events: liveAgent.session.snapshotEvents()
         .filter((e: any) => e.type === 'tool/result' || e.type === 'turn/end').slice(-16) }))
     }
     const completed = async (count: number) => adapter.host.runtime!.withDatabase(db =>
@@ -393,7 +414,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       await adapter.host.boundaryWorker!.whenIdle()
       assert.equal(recoveryQuestions, 1, 'empty answer must not automatically repeat the question')
       await completeTurn('現在の指示に従って処理を再開してください。', () => waiting(2))
-      assert.equal(adapterScript.requests.length, 8, 'real human input opens exactly one new bounded generation')
+      assert.equal(adapterScript.requests.length, 9, 'real human input opens exactly one new bounded generation')
       return
     }
     if (finalMode === 'pause') {
@@ -527,7 +548,8 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     } else assert.ok(longAssistantMessage.sourceEventSeqs?.length > 2_048, 'legacy logs exercise the former bridge source-reference limit')
     const resultCallId = (event: any) => event.data.message.toolCallId ?? event.data.message.content[0]?.toolCallId
     const resultContent = (event: any) => event.data.message.role === 'tool' ? event.data.message.content : event.data.message.content[0].content
-    assert.deepEqual(results.map((event: any) => event.data.message.isError ?? event.data.message.content[0]?.isError), Array(17).fill(false), JSON.stringify({ toolEvents, turnEnds }))
+    assert.deepEqual(results.map((event: any) => event.data.message.isError ?? event.data.message.content[0]?.isError), Array(19).fill(false),
+      'both user-authored continuations are prepared before host-directed tools; ' + JSON.stringify({ toolEvents, turnEnds }))
     const delegation = results.find((event: any) => resultCallId(event) === 'delegate-two')
     const delegated = JSON.parse(resultContent(delegation)[0].text)
     assert.equal(delegated.accepted, false)

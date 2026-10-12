@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
+import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { mountCore } from '../../../src/dsh/core/host.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { recordEntry } from '../../../src/memory/entries.js'
@@ -11,20 +13,31 @@ import { nativeMock } from '../helpers/native-mock.js'
 import { createRun } from './evolution/fixture.js'
 
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT
+const ownedPackageRoot=process.env.KIOKUKO_OWNED_PACKAGE_ROOT
+const implementation=ownedPackageRoot ? {
+  mountCore:(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/core/index.js')).href)).mountCore,
+  createDshHostAdapter:(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/host-adapter.js')).href)).createDshHostAdapter,
+  mountDshComposition:(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/composition.js')).href)).mountDshComposition,
+} : {mountCore,createDshHostAdapter,mountDshComposition}
 if(process.env.KIOKUKO_REQUIRE_DSH_NATIVE==='1'&&!packages)throw new Error('Memory lifecycle requires native DSH')
-test('native modular core: explain before review, explicit forget and next-request retirement', {skip:!packages,timeout:30000},async()=>{
+for (const mode of ['core', 'full'] as const) test(`native ${mode}: conversation owner survives prior execution and pre-send forget rebuilds once`, {skip:!packages,timeout:30000},async()=>{
   const [cordis,llm,session,projection,prompt,tools,agents,loop,skills,commands]=await Promise.all(
     ['cordis','dsh-llm','dsh-session','dsh-session-projection','dsh-system-prompt','dsh-tools','dsh-agent','dsh-agent-loop','dsh-skill','dsh-commands']
       .map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name,'lib/index.js')).href)))
   const root=await mkdtemp(join(tmpdir(),'memory-native-core-')),databasePath=join(root,'state.sqlite3'),ctx=new cordis.Context(),fibers:any[]=[]
-  let handle:Awaited<ReturnType<typeof mountCore>>|undefined
+  let handle:{dispose():Promise<unknown>}|undefined
   const requests:any[]=[];const errors:unknown[]=[]
   try {
     await mkdir(join(root,'.git')) // Keep workspace identity independent of parent directories.
     for(const plugin of [llm,session,projection,prompt,tools,agents,skills,commands])fibers.push(await ctx.plugin(plugin.default,plugin===prompt?{persona:''}:undefined))
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
     fibers.push(await ctx.plugin({name:'core-memory-questions',apply(c:any){return c.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']}))}}})}}))
-    handle=await mountCore(ctx,{repositoryRoot:root,databasePath,answerReview:{mode:'off'},memoryIndexReasoning:{mode:'off'}})
+    const config={repositoryRoot:root,databasePath,answerReview:{mode:'off' as const},memoryIndexReasoning:{mode:'off' as const},typedDecisions:{mode:'off' as const}}
+    if(mode==='core') handle=await implementation.mountCore(ctx,config)
+    else {
+      const adapter=implementation.createDshHostAdapter(ctx,{...config,agenticReplay:{enabled:false}})
+      handle=await implementation.mountDshComposition(ctx,adapter.host)
+    }
     const db=openConnection(databasePath),workspace=db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
     const memory=recordEntry(db,{workspace,kind:'preference',title:'CYCLEROOT response',body:'CYCLEROOT answer uses exactly three sentences.',scope:{visibility:'project'}})
     createRun(db,'foreign','other-workspace')
@@ -37,7 +50,10 @@ test('native modular core: explain before review, explicit forget and next-reque
       async *stream(request:any){
         requests.push(request)
         if(request.purpose==='compaction'){yield*mock.textResponse('{"schemaVersion":4,"memoryOperations":[]}');return}
-        if(prepare){prepare=false;yield*mock.toolCallResponse('prepare-memory-inspection','prepare_requested_work',{taskType:'research'});return}
+        if(prepare){prepare=false;const guidance = request.messages.flatMap((m:any)=>m.content??[]).find((b:any)=>b.text?.includes('Current request references and same-session work'))?.text
+          assert.ok(guidance, 'main model must receive current request references')
+          const context = JSON.parse(guidance.split('Current request references and same-session work (host-bound, advisory only):\n')[1].split('\nUse only')[0])
+          yield*mock.toolCallResponse('prepare-memory-inspection','prepare_requested_work',{taskType:'research',requestIntent:{relation:'new',action:'research',evidenceRefs:context.references}});return}
         if(explain){explain=false;yield*mock.toolCallResponse('core-explain','memory_explain',{entryId:memory.id});return}
         yield*mock.textResponse('Acknowledged.')
       }
@@ -71,6 +87,15 @@ test('native modular core: explain before review, explicit forget and next-reque
     const raceDb=openConnection(databasePath)
     const late=recordEntry(raceDb,{workspace,kind:'fact',title:'CYCLELATE',body:'CYCLELATE private memory assembled before forgetting.',scope:{visibility:'project'}})
     raceDb.close()
+    for (let i=0;i<3;i++) {
+      await turn('CYCLELATE の内容を説明して。')
+      assert.ok(JSON.stringify(requests.at(-1).messages).includes(late.body), 'fresh conversation memory must survive a previous execution owner')
+    }
+    const eventsBeforeRace=agent.session.snapshotEvents()
+    const lateSnapshots=new Set(eventsBeforeRace.filter((e:any)=>e.type==='user/message'&&JSON.stringify(e.data).includes(late.body)).map((e:any)=>e.seq))
+    assert.ok(!eventsBeforeRace.some((e:any)=>e.surfaceOp?.op==='replace'&&e.sourceEventSeqs?.some((seq:number)=>lateSnapshots.has(seq))), 'current conversation snapshots must not be retired by a prior execution owner')
+    const attemptsBeforeRace=eventsBeforeRace.filter((e:any)=>e.type==='assistant/attempt').length
+    const requestsBeforeRace=requests.length
     let raced=false
     const releaseFence=agent.ctx.on('llm/stream',(request:any,next:()=>AsyncIterable<unknown>)=>(async function*(){
       if(!raced&&request.purpose!=='compaction'&&JSON.stringify(request.messages).includes(late.body)){
@@ -83,9 +108,10 @@ test('native modular core: explain before review, explicit forget and next-reque
     try{
       agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'CYCLELATE の内容を確認してください'}]}));await agent.whenIdle()
       assert.equal(raced,true,'forget must occur after native request assembly')
-      assert.ok(!requests.some(r=>JSON.stringify(r.messages).includes(late.body)),'the provider must never receive the retired snapshot')
-      assert.ok(errors.some(e=>String((e as {message?:string}).message).includes('after request assembly')))
-      errors.splice(0)
+      assert.ok(!requests.slice(requestsBeforeRace).some(r=>JSON.stringify(r.messages).includes(late.body)),'the provider must never receive the retired snapshot')
+      assert.deepEqual(errors, [], 'a pre-send forget race must rebuild in the same native turn')
+      assert.equal(agent.session.snapshotEvents().filter((e:any)=>e.type==='assistant/attempt').length,attemptsBeforeRace+1,'native must rebuild exactly once')
+      assert.equal(requests.slice(requestsBeforeRace).filter(r=>r.purpose!=='compaction').length,1,'only the rebuilt request reaches the provider')
       await turn()
       assert.ok(!JSON.stringify(requests.at(-1).messages).includes(late.body))
     }finally{releaseFence()}

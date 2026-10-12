@@ -154,6 +154,8 @@ jobs:
 
       - name: Check typed decision Skill evaluation fixtures
         run: npm run test:evaluation:decisions
+      - name: Check synthetic request interpretation evaluation pipeline
+        run: npm run test:evaluation:request-intent
       - name: Check Answer Review evaluation pipeline offline
         run: npm run test:evaluation:answer-review
       - name: Check memory reuse Choice and Noul evaluation fixtures

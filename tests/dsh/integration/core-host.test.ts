@@ -641,7 +641,7 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
     const messages = [{ role: 'user', content: '文章を読みやすく修正して' }]
     const output = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
     assert.equal(output.kind, 'enter'); assert.match(JSON.stringify(output.messages), /fixture-writing/); assert.ok(!JSON.stringify(output.messages).includes('excluded-skill'))
-    assert.equal(calls, 2)
+    assert.equal(calls, 3, 'request intent, task type and Skill selection each use the configured decision provider')
     const db = openConnection(join(f.root, 'memory.sqlite3'))
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()?.n, 0)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, 0)

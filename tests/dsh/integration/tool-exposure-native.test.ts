@@ -1,3 +1,4 @@
+import { CODING_READ_ONLY } from '../../../src/dsh/coding-workflow/intent.js'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -98,7 +99,13 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     requests.push({ url: request.url, bodyText, body })
     const preparing = roundtrip === 'prepare'
     const toolName = preparing ? TASK_PREPARE_TOOL : 'fixture_external'
-    const toolArguments = preparing ? JSON.stringify({ taskType: fixtureTaskType }) : '{"message":"payload-1"}'
+    const strings = (value: any): string[] => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(strings) : []
+    const referenceLine = strings(body).flatMap(text => text.split('Current request references and same-session work (host-bound, advisory only):\n').slice(1).map(part => part.split('\n')[0])).at(-1)
+    assert.ok(!preparing || referenceLine, 'the provider must receive the current request evidence')
+    const action = ['research', 'analysis'].includes(fixtureTaskType) ? 'research' : fixtureTaskType === 'review' ? 'verify' : fixtureTaskType === 'devops' ? 'operate' : 'change'
+    const toolArguments = preparing ? JSON.stringify(fixtureTaskType === 'analysis' ? { taskType: fixtureTaskType } : { taskType: fixtureTaskType, requestIntent: {
+      relation: 'new', action, evidenceRefs: JSON.parse(referenceLine!).references,
+    } }) : '{"message":"payload-1"}'
     const toolCallId = preparing ? 'call_fixture_prepare' : 'call_fixture_external'
     if (preparing) {
       const names = body.tools.map((tool: any) => tool.name ?? tool.function?.name)
@@ -170,6 +177,11 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   let questions: any, credentials: any, settings: any
   let wire: any, adapter: ReturnType<typeof createDshHostAdapter> | undefined, composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
   let disposeExternalTool: (() => void) | undefined
+  const cancelFixtureRuns = async () => {
+    if (!adapter) return
+    const runs = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS runId FROM ledger_runs WHERE status='active'").all<{runId:string}>())
+    for (const run of runs) await adapter.host.lifecycle!.closeTurn({ runId: run.runId, status: 'cancelled' })
+  }
   try {
     questions = h.ctx.plugin({ name: 'tool-exposure-baseline-ui', apply(ctx: any) {
       return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((question: any) => ({ id: question.id, selected: [({ taskType: fixtureTaskType, target: 'src/dsh/tool-exposure.ts', expected: 'phase-eligible tools are the only Kiokuko tools in the native request' } as Record<string, string>)[question.id] ?? '通常実行'] })) }) })
@@ -199,7 +211,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'full' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
     composition = await mountDshComposition(h.ctx, adapter.host)
     disposeExternalTool = (h.ctx as any).get('tools').register({
-      name: 'fixture_external', description: 'Fixture-owned tool description must stay intact.',
+      name: 'fixture_external', [CODING_READ_ONLY]: true, description: 'Fixture-owned tool description must stay intact.',
       parameters: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'], additionalProperties: false },
       output: { schema: {}, render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
       async execute(args: any) { toolCalls.push(args); return { received: args.message } },
@@ -213,7 +225,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     const fullBody = requests[1]?.body
     assert.ok(fullBody)
     assert.deepEqual(modelFacingNames(fullBody), [...DSH_MODEL_FACING_OPERATIONS].sort())
-    await composition?.dispose(); composition = undefined
+    await cancelFixtureRuns(); await composition?.dispose(); composition = undefined
     await adapter?.dispose(); adapter = undefined
     adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'phase' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
     composition = await mountDshComposition(h.ctx, adapter.host)
@@ -226,7 +238,30 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     const phaseBody = requests[3]!.body
     const phaseNames = modelFacingNames(phaseBody)
     assert.deepEqual(phaseNames, ['curator_check', 'memory_checkpoint'], `phase fallback diagnostics: ${phaseWarnings.join(' | ') || '(none)'}`)
-    assert.deepEqual(phaseBody.input ?? phaseBody.messages, fullBody.input ?? fullBody.messages)
+    // Each native session owns different message identities. Normalize only the
+    // host-bound reference values; all other serialized content must match.
+    const comparableMessages = (body: any) => {
+      const messages = body.input ?? body.messages
+      const strings = (value: any): string[] => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(strings) : []
+      const line = strings(messages).flatMap(text => text.split('Current request references and same-session work (host-bound, advisory only):\n').slice(1).map(part => part.split('\n')[0])).at(-1)!
+      const context = JSON.parse(line)
+      let serialized = JSON.stringify(messages)
+      for (const [index, ref] of context.decision.evidence.messageRefs.entries()) {
+        serialized = serialized.replaceAll(ref.id, `message-${index}`).replaceAll(ref.digest, `message-digest-${index}`)
+      }
+      for (const [index, ref] of context.references.entries()) serialized = serialized.replaceAll(ref, `reference-${index}`)
+      for (const line of strings(messages).flatMap(text => text.split('\n'))) {
+        if (!line.startsWith('{')) continue
+        let value: any
+        try { value = JSON.parse(line) } catch { continue }
+        if (value.applicable !== true || typeof value.workflowId !== 'string') continue
+        const identities: Record<string, string> = { runId: value.runId, sessionId: value.sessionId,
+          requestId: value.requestId, workflowId: value.workflowId, questionId: value.choice.questionId }
+        for (const [key, id] of Object.entries(identities).sort((a, b) => b[1].length - a[1].length)) serialized = serialized.replaceAll(id, `workflow-${key}`)
+      }
+      return JSON.parse(serialized)
+    }
+    assert.deepEqual(comparableMessages(phaseBody), comparableMessages(fullBody))
     const externalTools = (body: Record<string, any>) => (body.tools as any[]).filter(tool => !DSH_MODEL_FACING_OPERATIONS.includes(tool.name ?? tool.function?.name))
     const toolFor = (body: Record<string, any>, name: string) => (body.tools as any[]).find(tool => tool.name === name || tool.function?.name === name)
     const descriptionFor = (tool: any) => tool?.description ?? tool?.function?.description
@@ -269,7 +304,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     let leanTools: unknown
     let leanSavings: { tools: number; body: number } | undefined
     if (nativeAvailable) {
-      await composition?.dispose(); composition = undefined
+      await cancelFixtureRuns(); await composition?.dispose(); composition = undefined
       await adapter?.dispose(); adapter = undefined
       adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'lean' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
       composition = await mountDshComposition(h.ctx, adapter.host)
@@ -293,7 +328,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
       assert.ok(diagnostics.join(' | ').includes('unownedSurfaceReductionCount'))
       assert.ok(diagnostics.join(' | ').includes('registration_provenance_unavailable'))
       assert.deepEqual(registry.schemas(leanAgent), registeredSchemas, 'assembly projection must not mutate registered tool schemas')
-      assert.equal(toolCalls.length, 1)
+      assert.equal(toolCalls.length, 1, JSON.stringify(leanAgent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message)))
       assert.deepEqual(toolCalls[0], { message: 'payload-1' })
       assertRoundtrip(leanAgent, leanBefore + 1, leanNames)
       lean = measure(leanBody, requests[leanBefore + 1]!.bodyText, leanNames)
@@ -305,7 +340,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     let fullResearch: ReturnType<typeof measure> | undefined
     if (nativeAvailable) {
       fixtureTaskType = 'research'
-      await composition?.dispose(); composition = undefined
+      await cancelFixtureRuns(); await composition?.dispose(); composition = undefined
       await adapter?.dispose(); adapter = undefined
       adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'full' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
       composition = await mountDshComposition(h.ctx, adapter.host)
@@ -322,7 +357,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
         ['research', 'minimal'], ['analysis', 'minimal'], ['writing', 'minimal'], ['review', 'minimal'],
       ] as const) {
         fixtureTaskType = taskType
-        await composition?.dispose(); composition = undefined
+        await cancelFixtureRuns(); await composition?.dispose(); composition = undefined
         await adapter?.dispose(); adapter = undefined
         adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
         composition = await mountDshComposition(h.ctx, adapter.host)
@@ -373,7 +408,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     if (nativeAvailable && protocol.name === 'deepseek') {
       fixtureTaskType = 'build'
       for (const mode of ['auto', 'lean', 'phase'] as const) {
-        await composition?.dispose(); composition = undefined
+        await cancelFixtureRuns(); await composition?.dispose(); composition = undefined
         await adapter?.dispose(); adapter = undefined
         adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
         composition = await mountDshComposition(h.ctx, adapter.host)
@@ -398,7 +433,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
           assert.ok(warnings.every(line => !/model_route_unavailable|unsupported_route/.test(line)))
         } finally { registry.get = originalGet; console.warn = previousWarn }
       }
-      await composition?.dispose(); composition = undefined
+      await cancelFixtureRuns(); await composition?.dispose(); composition = undefined
       await adapter?.dispose(); adapter = undefined
       adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' }, toolExposure: { mode: 'lean' }, llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } })
       composition = await mountDshComposition(h.ctx, adapter.host)

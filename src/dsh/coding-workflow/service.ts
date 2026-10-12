@@ -4,7 +4,7 @@ import { canonicalContentHash } from '../../serialization/validate.js'
 import { assessTaskCompletion, bindTaskCriterion, completionSourceDigest, type CompletionAssessment, type CompletionMethod } from '../task-completion.js'
 import { completionVerifiers } from '../completion-verifiers.js'
 import { executionCommand } from '../execution-command.js'
-import { CodingBlockerSchema, CodingDefinitionSchema, type CodingDefinition, type CodingIdentity, type CodingWorkflow } from './contracts.js'
+import { CODING_MINIMUM_DEFINITION_EXAMPLE, CodingBlockerSchema, CodingDefinitionSchema, type CodingDefinition, type CodingIdentity, type CodingWorkflow } from './contracts.js'
 import { assertCodingIdentity, mutateCodingWorkflow, readCodingWorkflow } from './store.js'
 
 const terminal = (value: CodingWorkflow) => ['completed', 'cancelled', 'superseded'].includes(value.state)
@@ -27,7 +27,9 @@ export function codingItems(value: CodingWorkflow, assessment: CompletionAssessm
 export function codingStatus(db: SqliteDatabase, identity: CodingIdentity) {
   projectEnnoCodingWorkflow(db, identity)
   let value = readCodingWorkflow(db, identity.runId)
-  if (!value) return { applicable: false as const }
+  if (!value) return { applicable: false as const, revision: 0, expectedRevision: 1,
+    minimumValidInput: { tool: 'coding_workflow_apply', arguments: { action: 'propose', expectedRevision: 1,
+      definition: CODING_MINIMUM_DEFINITION_EXAMPLE } } }
   assertCodingIdentity(value, identity)
   if (value.blocker?.kind === 'retry_budget') {
     const changed = value.blocker.criterionIds.every(id => {
@@ -41,7 +43,12 @@ export function codingStatus(db: SqliteDatabase, identity: CodingIdentity) {
     })
   }
   const assessment = assessTaskCompletion(db, value.runId)
-  return { applicable: true as const, ...value, items: codingItems(value, assessment), assessment }
+  return { applicable: true as const, ...value, expectedRevision: value.revision,
+    minimumValidInput: value.definition
+      ? { tool: 'coding_workflow', arguments: { action: 'next' } }
+      : { tool: 'coding_workflow_apply', arguments: { action: 'propose', expectedRevision: value.revision,
+        definition: CODING_MINIMUM_DEFINITION_EXAMPLE } },
+    items: codingItems(value, assessment), assessment }
 }
 
 /** Definitions propose observable work; only host evidence can satisfy it. */
@@ -72,15 +79,47 @@ export function proposeCodingWorkflow(db: SqliteDatabase, identity: CodingIdenti
       // A material target/constraint/item change invalidates the task's choice. Reordering preserves it; changed observable behavior requires a new choice.
       const oldScope = scopeDigest(old), newScope = scopeDigest(definition)
       scopeChanged ||= oldScope !== newScope
+      if (value.pendingScopeChange && !scopeChanged) {
+        throw new KiokukoError('CONFLICT', 'The revised Goal must include the pending scope change')
+      }
     }
     value.definition = definition
     delete value.activeItemId; delete value.blocker
     if (scopeChanged) {
-      value.scopeVersion++
-      value.choice = { state: 'pending', scopeVersion: value.scopeVersion,
-        questionId: `coding-lisp-${value.workflowId}-${value.scopeVersion}`, revision: value.choice.revision + 1 }
+      if (!value.pendingScopeChange) {
+        value.scopeVersion++
+        value.choice = { state: 'pending', scopeVersion: value.scopeVersion,
+          questionId: `coding-lisp-${value.workflowId}-${value.scopeVersion}`, revision: value.choice.revision + 1 }
+      }
     }
+    delete value.pendingScopeChange
     value.state = value.choice.state === 'pending' ? 'awaiting_lisp_choice' : 'ready'
+  })
+}
+
+/** A host-classified scope change immediately stales old checks and blocks effects until the Goal is revised. */
+export function markCodingScopeChange(db: SqliteDatabase, identity: CodingIdentity, callId: string,
+  requestDigest: string, evidenceRefs: readonly string[]): CodingWorkflow | undefined {
+  const value = readCodingWorkflow(db, identity.runId)
+  if (!value) return undefined
+  assertCodingIdentity(value, identity)
+  if (terminal(value)) throw new KiokukoError('CONFLICT', 'Coding workflow is terminal')
+  if (db.prepare("SELECT 1 FROM dsh_execution_selections WHERE run_id=? AND json_extract(state_json,'$.mode')='enno'").get(identity.runId)) {
+    return value // Enno remains authoritative for its own contract revision and evidence invalidation.
+  }
+  if (!/^[a-f0-9]{64}$/u.test(requestDigest) || evidenceRefs.length > 32
+    || evidenceRefs.some(ref => typeof ref !== 'string' || !ref || ref.length > 256 || /[\p{Cc}\p{Cf}]/u.test(ref))) {
+    throw new KiokukoError('VALIDATION_ERROR', 'Request intent evidence is invalid')
+  }
+  const refs = [...new Set(evidenceRefs)]
+  return mutateCodingWorkflow(db, identity, callId, value.revision, { requestDigest, evidenceRefs: refs }, current => {
+    if (current.pendingScopeChange?.requestDigest === requestDigest) return
+    current.pendingScopeChange = { requestDigest, evidenceRefs: refs }
+    current.scopeVersion++
+    current.choice = { state: 'pending', scopeVersion: current.scopeVersion,
+      questionId: `coding-lisp-${current.workflowId}-${current.scopeVersion}`, revision: current.choice.revision + 1 }
+    delete current.activeItemId; delete current.blocker
+    current.state = 'preparing'
   })
 }
 
@@ -126,6 +165,7 @@ export function nextCodingWork(db: SqliteDatabase, identity: CodingIdentity) {
   const status = codingStatus(db, identity)
   if (!status.applicable) return status
   if (!status.definition) return { ...status, next: 'propose_goal_items_and_criteria' }
+  if (status.pendingScopeChange) return { ...status, next: 'revise_goal_for_scope_change' }
   if (status.choice.state === 'pending') return { ...status, next: 'answer_lisp_choice' }
   if (terminal(status)) return { ...status, next: status.state }
   if (status.blocker?.criterionIds.length === 0) return { ...status, next: 'resolve_blocker' }
@@ -145,6 +185,7 @@ export function assertCodingDispatch(db: SqliteDatabase, identity: CodingIdentit
   const value = readCodingWorkflow(db, identity.runId)
   if (!value) return undefined // Explicit legacy boundary: old tasks retain their contract.
   assertCodingIdentity(value, identity)
+  if (value.pendingScopeChange) throw new KiokukoError('CONFLICT', 'Revise the Goal for the current request before implementation or verification')
   if (terminal(value) || !value.definition || value.choice.state === 'pending') throw new KiokukoError('CONFLICT', 'Define Goal, items and checks, then answer this task’s Lisp choice before implementation')
   if (name.startsWith('lisp_') && value.choice.state !== 'yes') throw new KiokukoError('CONFLICT', 'Lisp is not selected for this coding task')
   if (value.blocker?.kind === 'retry_budget' && ['kioku_write', 'kioku_edit', 'lisp_eval'].includes(name)) return value

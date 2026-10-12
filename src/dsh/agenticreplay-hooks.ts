@@ -4,7 +4,7 @@ import type { DshAgenticReplayHostServices, AgenticReplayToolExecution } from '.
 /** Global Cordis observation with exact host bindings; result observer survives ingress shutdown. */
 export function mountDshAgenticReplayHooks(ctx: Context, services: DshAgenticReplayHostServices): () => void {
   const disposers: (() => void)[] = []
-  const on = (name: string, listener: (...args: any[]) => any) => disposers.push((ctx as any).on(name, listener, { global: true }))
+  const on = (name: string, listener: (...args: any[]) => any, prepend = false) => disposers.push((ctx as any).on(name, listener, { global: true, prepend }))
   const binding = (exec: AgenticReplayToolExecution) => {
     try {
       const resolved = exec.agent?.session ? services.resolveSessionBinding(exec.agent, exec.agent.session) : undefined
@@ -17,6 +17,13 @@ export function mountDshAgenticReplayHooks(ctx: Context, services: DshAgenticRep
       try { if (typeof options.sessionId === 'string') resolved = services.resolveModelBinding(options.sessionId) } catch { /* no guessed attribution */ }
       if (resolved && !services.canRecord(resolved)) return next()
       return services.recorder.stream(resolved, options, next)
+    }, true)
+    on('agent/error', (event: { agent?: AgenticReplayToolExecution['agent'] }) => {
+      try {
+        const agent = event.agent
+        const resolved = agent?.session ? services.resolveSessionBinding(agent, agent.session) : undefined
+        if (resolved && services.canRecord(resolved)) services.recorder.nativeFailure(resolved)
+      } catch { /* an observer never replaces the native error */ }
     })
     on('tools/pre-execute', async (exec: AgenticReplayToolExecution, next: () => Promise<unknown>) => {
       try { services.recorder.preTool(binding(exec), exec) } catch { /* observation cannot veto */ }

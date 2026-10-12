@@ -145,9 +145,16 @@ try {
   ]
   const nativeResult = (request, id) => request.messages.flatMap(message => message.role === 'tool' && message.toolCallId === id ? [message]
     : (message.content ?? []).filter(block => block.type === 'tool-result' && block.toolCallId === id)).at(-1)
+  const prepare = (id, action) => request => {
+    const text = request.messages.flatMap(message => message.source?.sections ?? [])
+      .filter(section => section.name === 'on-demand-intake').at(-1)?.text
+    const json = text?.split('Current request references and same-session work (host-bound, advisory only):\n')[1]?.split('\n')[0]
+    assert.ok(json, 'Packed preparation requires current host references')
+    return call(id, 'prepare_requested_work', { requestIntent: { relation: 'new', action, evidenceRefs: JSON.parse(json).references } })
+  }
   provider.script.push(request => {
     assert.ok(request.tools.some(tool => tool.name === 'prepare_requested_work'))
-    return call('packed-prepare-memory', 'prepare_requested_work', { taskType: 'research' })
+    return prepare('packed-prepare-memory', 'research')(request)
   }, async request => {
     const result = nativeResult(request, 'packed-prepare-memory')
     assert.equal(result.isError, false)
@@ -175,9 +182,9 @@ try {
   assert.ok(!JSON.stringify(provider.requests.at(-1).messages).includes(memory.body), 'packed forgotten memory cannot reach the next request')
   const forgottenRead = await ctx.commands.execute(parent, `/kioku-memory explain ${memory.id} --json`, [], new AbortController().signal)
   assert.equal(forgottenRead.result.kind,'error')
-  const runTools = async (agent, task, operations) => {
+  const runTools = async (agent, task, operations, action = 'research') => {
     const preparation = `prepare-${operations[0][0]}`
-    provider.script.push(call(preparation, 'prepare_requested_work', { taskType: 'research' }),
+    provider.script.push(prepare(preparation, action),
       request => {
         const result = nativeResult(request, preparation)
         assert.equal(result.isError, false, JSON.stringify(result))
@@ -197,7 +204,7 @@ try {
   const coding = await ctx.agentLoop.create(session.SessionId('packed-coding'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
   const command = 'node --test --test-reporter=tap module-entry.test.mjs'
   const criterion = id => ({criterionId:id,revision:1,outcome:'Public entry returns 42',procedure:'Run actual public entry assertions',expected:'All selected assertions pass',evidence:'selected_tests'})
-  provider.script.push(call('coding-prepare','prepare_requested_work',{taskType:'build'}),call('coding-status','coding_workflow',{action:'status'}),()=>call('coding-propose','coding_workflow',{action:'propose',expectedRevision:toolResults.get('coding-status').value.revision,definition:{
+  provider.script.push(prepare('coding-prepare','change'),call('coding-status','coding_workflow',{action:'status'}),()=>call('coding-propose','coding_workflow',{action:'propose',expectedRevision:toolResults.get('coding-status').value.revision,definition:{
     goal:{goalId:'goal',revision:1,ideal:'The public entry adds one to its numeric input',target:'module-entry.mjs',outOfScope:['Publication'],constraints:['Use Node'],requestBasis:'Implement module-entry.mjs',criterionIds:['entry']},
     items:[{itemId:'implementation',change:'Create the public entry and assertions',dependsOn:[],criterionIds:['regression'],goalCriterionIds:['entry']}],criteria:[criterion('regression'),criterion('entry')]
   }}),call('coding-write','kioku_write',{path:'module-entry.mjs',content:"console.log(Number(process.argv[2])+1)\n"}),call('coding-write-test','kioku_write',{path:'module-entry.test.mjs',content:"import test from 'node:test';import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';test('public entry',()=>assert.equal(execFileSync(process.execPath,['module-entry.mjs','41'],{encoding:'utf8'}).trim(),'42'))\n"}))
@@ -304,7 +311,7 @@ try {
       ['packed-typesafe-status', 'lisp_eval', { operationId: 'typesafe-status', code: '(kioku.typesafe:status)' }],
       ['packed-lisp-replay', 'lisp_eval', arguments_],
       ['packed-code-capabilities','lisp_eval',{operationId:'code-capabilities',code:'(kioku.code:capabilities)'}],
-    ])
+    ], 'verify')
     assert.notEqual(result.isError, true, JSON.stringify(result))
     assert.equal(result.value.ok, true, JSON.stringify(result))
     assert.match(JSON.stringify(result), /42/)

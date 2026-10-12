@@ -5,6 +5,7 @@ import { OnDemandIntake, type IntakeMode } from './on-demand-intake.js'
 import { mountOwnedExecution } from './owned-execution.js'
 import { mountPlanTransition } from './plan-transition.js'
 import { classifyTaskForIntake } from './decisions/workflows.js'
+import type { RequestIntentDecision } from './decisions/request-intent.js'
 import { dshTurnRequestId } from './intake-profile-resolver.js'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
 import { MemoryIndexReasoningConfig } from '../memory/index-reasoning/contracts.js'
@@ -21,7 +22,6 @@ import { createLifecycle } from './host-adapter/lifecycle.js'
 import { mountHostMemoryApplication } from './host-adapter/memory-application-host.js'
 import { mountTaskCompletion } from './task-completion-host.js'
 import { mountCodingWorkflow } from './coding-workflow/host.js'
-import { codingContinuation } from './coding-workflow/intent.js'
 import { readCodingWorkflow } from './coding-workflow/store.js'
 import { stableLispCapabilities } from './lisp-service-key.js'
 import { createEfficiencyHost } from './host-adapter/efficiency-host.js'
@@ -535,7 +535,57 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       answerCwd(agent)
       await captureInitialInput(session!.id, input.turn, input.messages)
     },
-    existing: async input => runtime.withDatabase(async db => {
+    advance: async input => {
+      policy.beginTurn(input.agent.session!.id, input.turn)
+    },
+    resumeConfirmation: async input => runtime.withDatabase(async db => {
+      const sessionId = input.agent.session!.id
+      if (detachedDemandSessions.has(sessionId)) return false
+      const current = currentSession(sessionId)
+      if (current !== undefined) {
+        if (current.nativeAgent !== input.agent || current.nativeSession !== input.agent.session
+          || current.turn > input.turn) {
+          if (process.env.KIOKUKO_INTENT_DEBUG === '1') console.error('confirmation resume current mismatch', {
+            turn: input.turn, currentTurn: current.turn, agent: current.nativeAgent === input.agent,
+            session: current.nativeSession === input.agent.session,
+          })
+          return false
+        }
+      }
+      const project = await resolveProjectWorkspaceReadOnly(db, answerCwd(input.agent), { allowDirectory: true })
+      if (!project) return false
+      const candidates = db.prepare(`SELECT lr.run_id AS runId
+        FROM ledger_runs AS lr
+        JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
+        WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active'
+          AND ec.repository_root = ? AND ec.status = 'needs_confirmation'
+        ORDER BY lr.created_at, lr.run_id LIMIT 2`)
+        .all<{ runId: string }>(project.workspace, sessionId, project.repositoryRoot)
+      if (process.env.KIOKUKO_INTENT_DEBUG === '1') console.error('confirmation resume candidates', candidates.length)
+      return candidates.length === 1 && (current === undefined || current.runId === candidates[0]!.runId)
+    }),
+    replay: async input => runtime.withDatabase(async db => {
+      const sessionId = input.agent.session!.id
+      if (detachedDemandSessions.has(sessionId)) return false
+      const human = input.messages.filter(isHumanMessage)
+      if (!human.length) return false
+      const task = textFromMessages(human)
+      const project = await resolveProjectWorkspaceReadOnly(db, answerCwd(input.agent), { allowDirectory: true })
+      if (!project) return false
+      const matches = db.prepare(`SELECT lr.run_id AS runId
+        FROM ledger_runs AS lr
+        LEFT JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
+        LEFT JOIN dsh_coding_workflows AS cw ON cw.run_id = lr.run_id
+        WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active' AND lr.title = ?
+          AND ((ec.repository_root = ? AND ec.status NOT IN ('completed', 'cancelled', 'blocked'))
+            OR (json_extract(cw.snapshot_json, '$.repositoryRoot') = ?
+              AND json_extract(cw.snapshot_json, '$.sessionId') = ?
+              AND json_extract(cw.snapshot_json, '$.state') NOT IN ('completed', 'cancelled', 'superseded')))
+        ORDER BY lr.created_at, lr.run_id LIMIT 2`)
+        .all<{ runId: string }>(project.workspace, sessionId, task, project.repositoryRoot, project.repositoryRoot, sessionId)
+      return matches.length === 1
+    }),
+    existing: async (input, requestIntent?: RequestIntentDecision) => runtime.withDatabase(async db => {
       if (detachedDemandSessions.has(input.agent.session!.id)) return false
       const current = currentSession(input.agent.session!.id)
       // A retired native identity is not live execution authority. Keep its durable
@@ -543,7 +593,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       // A queued human request is not a continuation grant from a stale normal
       // turn. Preserve its owner, but infer the new request before any effects.
       const text = input.messages.filter(isHumanMessage).flatMap((message: any) => typeof message.content === 'string' ? [message.content] : (message.content ?? []).filter((block: any) => block.type === 'text').map((block: any) => block.text)).join('\n')
-      const resumeCoding = codingContinuation(text) && current && readCodingWorkflow(db, current.runId)
+      const keepsCurrentScope = requestIntent?.relation !== 'new'
+      const resumeCoding = keepsCurrentScope && current && readCodingWorkflow(db, current.runId)
       if (current && current.turn < input.turn && input.messages.some(isHumanMessage) && !current.prepared.ennoOduno.applicable && !resumeCoding) return false
       if (current) return !current.closed && !current.failed && current.nativeAgent === input.agent && current.nativeSession === input.agent.session
       const project = await resolveProjectWorkspaceReadOnly(db, answerCwd(input.agent), { allowDirectory: true })
@@ -556,11 +607,12 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         WHERE lr.workspace=? AND lr.dsh_session_id=? AND lr.status='active'
           AND ((ec.repository_root=? AND ec.status NOT IN ('completed','cancelled','blocked'))
             OR (?=1 AND json_extract(cw.snapshot_json,'$.state') NOT IN ('completed','cancelled','superseded'))) LIMIT 1`)
-        .get(project.workspace, input.agent.session!.id, project.repositoryRoot, codingContinuation(text) ? 1 : 0))
+        .get(project.workspace, input.agent.session!.id, project.repositoryRoot, requestIntent?.relation === 'new' ? 0 : 1))
     }),
     classify: (input, task) => classifyTaskForIntake(decisions, dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, undefined, input.signal),
-    prepare: async (input, taskType) => {
-      const event = await admission.mapPreStep(input, taskType)
+    interpret: input => admission.interpret({ agent: input.agent as NativeAgent, messages: input.messages, turn: input.turn, step: input.step, signal: input.signal } as any),
+    prepare: async (input, taskType, requestIntent) => {
+      const event = await admission.mapPreStep(input, taskType, requestIntent)
       const result = await gate.prepareRequestedWork(event)
       if (result.admitted) detachedDemandSessions.delete(input.agent.session!.id)
       return result.admitted && result.prepared.intake.profile.taskType !== 'chat'
@@ -617,6 +669,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     hasSelection: runId => selections.has(runId), getPolicyState: runId => turnState.policyState(runId),
     captureInitialInput, prepareTurn: event => gate.prepare(event), mapPreStep, currentSession,
     readStateForRun: item => runtime.withDatabase(db => stateForRun(db, item)),
+    refreshMemoryOwner: admission.refreshMemoryOwner,
   })
   const contextMessages = createContextMessages({
     ctx, runtime, deepPlanning, executionSupport, continuityMode: continuityConfig.mode,
@@ -657,7 +710,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const child = delegation.observationBinding(agent)
       const item = currentSession(child?.parentSessionId ?? session.id)
       if (!item || item.closed || child && child.runId !== item.runId || !child && (item.nativeAgent !== agent || item.nativeSession !== session)) return undefined
-      return { runId: item.runId, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot, agent, task: item.task }
+      return { runId: item.runId, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot, agent, task: item.task,
+        requestIntent: item.requestIntent, requestIntentContext: item.requestIntentContext }
     },
   }) : undefined
   const completionDisposer = tools ? mountTaskCompletion({ tools: tools as any,
@@ -683,7 +737,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       const item=currentSession(child?.parentSessionId??session.id)
       if(!item||item.closed||child&&child.runId!==item.runId||!child&&(item.nativeAgent!==agent||item.nativeSession!==session))return undefined
       if(child&&delegation.toolDenial(agent,execution.name,execution.arguments))return undefined
-      return {runId:item.runId,sessionId:session.id,workflowSessionId:item.sessionId,workspace:item.workspace,repositoryRoot:item.repositoryRoot,generation:executionBinding(item).generation,agent}
+      return {runId:item.runId,sessionId:session.id,workflowSessionId:item.sessionId,workspace:item.workspace,repositoryRoot:item.repositoryRoot,generation:executionBinding(item).generation,agent,
+        requestIntent:item.requestIntent,requestIntentContext:item.requestIntentContext}
     },
     planActive:agent=>(ctx.get('planMode',false) as any)?.get(agent)?.active===true,
     async confirm(identity,detail,signal) {

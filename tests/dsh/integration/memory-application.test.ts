@@ -11,6 +11,7 @@ import { resolveProjectWorkspace } from '../../../src/memory/workspaces.js'
 import { recordEntry, updateCandidateEntry } from '../../../src/memory/entries.js'
 import { CoreTasks } from '../../../src/dsh/core/tasks.js'
 import { LedgerStore } from '../../../src/ledger/store.js'
+import { createRequestIntentContext, bindMainModelRequestIntent, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 import { mountMemoryApplication } from '../../../src/dsh/memory-application.js'
 import { runMemoryAwareVerifiers } from '../../../src/enno-oduno/memory-verification.js'
 import { memoryApplicationStatus, recordMemoryApplicationReview, beginMemoryExecution, completeMemoryExecution, bindMemoryApplication, applicationSourceDigest } from '../../../src/memory/application.js'
@@ -619,7 +620,11 @@ for (const kind of ['direct', 'carrier', 'resumed'] as const) test(`host-only ${
   const fiber = ctx.plugin(tools.default, { mode: kind === 'carrier' ? 'ptc' : 'native' }); fibers.push(fiber); await fiber
   const intake = new OnDemandIntake({
     validate: async input => { assert.equal(input.agent, agent); assert.equal(input.agent.session, session) },
-    existing: async () => kind === 'resumed', classify: async () => ({ deferInference: true }),
+    existing: async () => kind === 'resumed', classify: async () => ({ deferInference: true, ...(kind === 'resumed' ? { taskType: 'debug' as const } : {}) }),
+    ...(kind === 'resumed' ? { interpret: async (input: any, task: string) => {
+      const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(input.messages, task), activeGoal: { runId: f.task.runId, outOfScope: [], constraints: [] } })!
+      return { context, decision: bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'change', evidenceRefs: requestIntentReferenceIds(context) }, context)! }
+    } } : {}),
     prepare: async () => { preparations++; ready = true; return true },
     ready: candidate => candidate === agent && ready,
   })
