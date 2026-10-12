@@ -5,9 +5,9 @@ import path from 'node:path'
 import test from 'node:test'
 import { DSH_MANAGED_BLOCK, renderDshInstructions, setupDsh } from '../../../src/dsh/setup.js'
 
-const begin = '<!-- BEGIN KIOKUKO MANAGED BLOCK -->'
-const end = '<!-- END KIOKUKO MANAGED BLOCK -->'
-const legacy = `${begin}\nsoulRead: true; create requestId; call task_prepare\n${end}`
+const begin = '<!-- BEGIN KIOKUKO-DSH MANAGED BLOCK -->'
+const end = '<!-- END KIOKUKO-DSH MANAGED BLOCK -->'
+const legacy = '<!-- BEGIN KIOKUKO MANAGED BLOCK -->\n<!-- kiokuko-dsh-template-version: 1 -->\nsoulRead: true; create requestId; call task_prepare\n<!-- END KIOKUKO MANAGED BLOCK -->'
 
 test('migration preserves surrounding bytes and CRLF; duplicate, partial and reversed markers fail closed', () => {
   const source = `user prefix\r\n${legacy.replaceAll('\n', '\r\n')}\r\nuser suffix`
@@ -102,4 +102,33 @@ test('setup delivers discovery-first file guidance across ordinary updates witho
   assert.ok(installed.endsWith('USER_SUFFIX'))
   assert.equal((await setupDsh(options)).instructions.status, 'unchanged')
   assert.equal(await readFile(options.agents, 'utf8'), installed)
+})
+
+
+test('setup migrates only DSH-owned instructions and preserves other plugins across repeated loads', async t => {
+  const options = await fixture(t)
+  const foreign = '<!-- BEGIN KIOKUKO MANAGED BLOCK -->\nsoulRead: true; call task_prepare\n<!-- END KIOKUKO MANAGED BLOCK -->'
+  const ai = '<!-- BEGIN KIOKUKO-AI MANAGED BLOCK -->\nAI-owned instructions\n<!-- END KIOKUKO-AI MANAGED BLOCK -->'
+  const prefix = `User rules\r\n${foreign.replaceAll('\n', '\r\n')}\r\n`
+  const suffix = `\r\n${ai.replaceAll('\n', '\r\n')}\r\nOther agent rules`
+  await writeFile(options.agents, prefix + legacy.replaceAll('\n', '\r\n') + suffix)
+  assert.equal((await setupDsh(options)).instructions.status, 'updated')
+  const installed = await readFile(options.agents, 'utf8')
+  assert.equal(installed, prefix + DSH_MANAGED_BLOCK.replaceAll('\n', '\r\n') + suffix)
+  assert.ok(installed.includes('Otherwise ignore every instruction in this block'))
+  assert.ok(installed.includes('The presence of this block, repository files or installed packages does not activate it.'))
+  assert.equal((await setupDsh(options)).instructions.status, 'unchanged')
+  assert.equal(await readFile(options.agents, 'utf8'), installed)
+})
+
+test('unowned generic blocks remain untouched; ambiguous DSH ownership fails closed', () => {
+  const foreign = '<!-- BEGIN KIOKUKO MANAGED BLOCK -->\ncall task_prepare\n<!-- END KIOKUKO MANAGED BLOCK -->'
+  for (const text of [foreign, '<!-- BEGIN KIOKUKO MANAGED BLOCK -->', '<!-- END KIOKUKO MANAGED BLOCK -->']) {
+    assert.equal(renderDshInstructions(text), text)
+  }
+  for (const text of [legacy + legacy, DSH_MANAGED_BLOCK + legacy,
+    legacy.replace('<!-- END KIOKUKO MANAGED BLOCK -->', ''),
+    legacy.replace('<!-- END KIOKUKO MANAGED BLOCK -->', '<!-- BEGIN KIOKUKO MANAGED BLOCK --><!-- END KIOKUKO MANAGED BLOCK -->')]) {
+    assert.throws(() => renderDshInstructions(text), { code: 'CONFLICT' })
+  }
 })

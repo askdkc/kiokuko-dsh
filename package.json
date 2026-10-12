@@ -112,7 +112,7 @@
       ],
       "writePaths": [
         "Seventeen bundled managed Skills and references under ~/.agents/skills on enabled plugin load",
-        "Existing Kiokuko managed block in startup-directory AGENTS.md; instructions outside the markers are preserved",
+        "Existing kiokuko-dsh managed block in startup-directory AGENTS.md, including explicitly DSH-owned legacy blocks; other instructions are preserved",
         "Configured Kiokuko database and pre-migration backups",
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",
         ".agenticreplay/runs and .agenticreplay/exports inside verified session workspaces, or the configured Kiokuko data directory",

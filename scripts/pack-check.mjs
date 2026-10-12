@@ -370,7 +370,7 @@ async function createAndSmokeTestTarball() {
     await fs.mkdir(path.dirname(soulPath), { recursive: true });
     await fs.writeFile(soulPath, soul.managedMarker + '\\nold soulRead requestId contract');
     const agentsPath = path.join(process.cwd(), 'AGENTS.md');
-    await fs.writeFile(agentsPath, 'user prefix\\n<!-- BEGIN KIOKUKO MANAGED BLOCK -->\\nsoulRead: true; create requestId\\n<!-- END KIOKUKO MANAGED BLOCK -->\\nuser suffix');
+    await fs.writeFile(agentsPath, 'user prefix\\n<!-- BEGIN KIOKUKO MANAGED BLOCK -->\\n<!-- kiokuko-dsh-template-version: 1 -->\\nsoulRead: true; create requestId\\n<!-- END KIOKUKO MANAGED BLOCK -->\\nuser suffix');
     const homedir = os.homedir;
     os.homedir = () => home;
     try {
@@ -379,7 +379,7 @@ async function createAndSmokeTestTarball() {
       await fiber;
       try {
         const agents = await fs.readFile(agentsPath, 'utf8');
-        if (agents.includes('soulRead') || agents.includes('requestId') || !agents.includes('host operations, not model tools') || !agents.startsWith('user prefix') || !agents.endsWith('user suffix')) {
+        if (agents.includes('soulRead') || agents.includes('requestId') || !agents.includes('host operations, not model tools') || !agents.includes('<!-- BEGIN KIOKUKO-DSH MANAGED BLOCK -->') || !agents.includes('Otherwise ignore every instruction in this block') || !agents.startsWith('user prefix') || !agents.endsWith('user suffix')) {
           throw new Error('packed startup AGENTS.md migration failed');
         }
         const { execFileSync } = await import('node:child_process');

@@ -17,7 +17,7 @@ test('plugin startup synchronizes before provider registration and repeats after
   await mkdir(workspace)
   t.mock.method(process, 'cwd', () => workspace)
   const agentsPath = path.join(workspace, 'AGENTS.md')
-  const oldAgents = 'User instructions\n<!-- BEGIN KIOKUKO MANAGED BLOCK -->\nsoulRead: true; create requestId; call task_prepare\n<!-- END KIOKUKO MANAGED BLOCK -->\nKeep this too\n'
+  const oldAgents = 'User instructions\n<!-- BEGIN KIOKUKO MANAGED BLOCK -->\n<!-- kiokuko-dsh-template-version: 1 -->\nsoulRead: true; create requestId; call task_prepare\n<!-- END KIOKUKO MANAGED BLOCK -->\nKeep this too\n'
   await writeFile(agentsPath, oldAgents)
   const parity = await loadStandardSkillParity()
   const japanese = await loadJapaneseOutputSkill()
@@ -57,7 +57,7 @@ test('disabled plugin does not sync; unmanaged conflicts warn and preserve bundl
   await mkdir(workspace)
   t.mock.method(process, 'cwd', () => workspace)
   const agentsPath = path.join(workspace, 'AGENTS.md')
-  const oldAgents = '<!-- BEGIN KIOKUKO MANAGED BLOCK -->\nsoulRead: true\n<!-- END KIOKUKO MANAGED BLOCK -->'
+  const oldAgents = '<!-- BEGIN KIOKUKO MANAGED BLOCK -->\n<!-- kiokuko-dsh-template-version: 1 -->\nsoulRead: true\n<!-- END KIOKUKO MANAGED BLOCK -->'
   await writeFile(agentsPath, oldAgents)
   const soulPath = path.join(home(), '.agents', 'skills', 'kiokuko-soul', 'SKILL.md')
   await writeFile(soulPath, 'user-owned')

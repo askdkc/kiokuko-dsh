@@ -241,18 +241,23 @@ The enabled plugin runs setup on every load, before registering its DSH surfaces
 1. Validate the bundled Skills and preflight the deployment targets.
 2. Synchronize all eight managed Skill directories to the process user's
    `~/.agents/skills/`, creating missing files and replacing stale managed files.
-3. Replace the existing `<!-- BEGIN KIOKUKO MANAGED BLOCK -->` through
-   `<!-- END KIOKUKO MANAGED BLOCK -->` section of the startup directory's
+3. Replace the existing `<!-- BEGIN KIOKUKO-DSH MANAGED BLOCK -->` through
+   `<!-- END KIOKUKO-DSH MANAGED BLOCK -->` section of the startup directory's
    `AGENTS.md` with the DSH contract. Preserve all text outside those markers.
-   Absent or unmanaged `AGENTS.md` files are left alone.
+   Absent or unmanaged `AGENTS.md` files are left alone. A legacy generic block
+   is migrated only when its opening marker is followed by an explicit
+   `kiokuko-dsh-template-version` ownership marker. Unowned generic blocks and
+   other plugins' sections remain byte-for-byte intact.
 
 The DSH contract comes from `SOUL_ROUTING_ENTRY_CONTRACT`, also used by the
 host prompt. `task_prepare` and `task_answer` are host operations; the model does
 not manufacture request identity or attest that it read a Skill. The DSH host
 owns intake, session binding, memory delivery and finalization. The generic
 `kiokuko use` command is not part of this package and must not be used to
-regenerate DSH instructions. If it recreates a legacy block, the next DSH setup
-replaces that block again.
+regenerate DSH instructions. Setup never adopts an unowned generic Kiokuko
+block as DSH configuration. Apply the entire DSH section only in a DSH session
+with kiokuko-dsh enabled; otherwise ignore all instructions inside it. The
+section's presence does not activate the plugin or its instructions.
 
 Updating the npm package changes the bundled source. Setup executes when the
 updated plugin is loaded, **not inside npm's install/update lifecycle**. Stop the

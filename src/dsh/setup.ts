@@ -6,17 +6,24 @@ import { deploymentParent, publishFile, type DeploymentFile } from './managed-fi
 import { planStandardSkills } from './standard-skill-deployment.js'
 import { SOUL_ROUTING_ENTRY_CONTRACT } from './standard-skills.js'
 
-const BEGIN = '<!-- BEGIN KIOKUKO MANAGED BLOCK -->'
-const END = '<!-- END KIOKUKO MANAGED BLOCK -->'
+const BEGIN = '<!-- BEGIN KIOKUKO-DSH MANAGED BLOCK -->'
+const END = '<!-- END KIOKUKO-DSH MANAGED BLOCK -->'
+const LEGACY_BEGIN = '<!-- BEGIN KIOKUKO MANAGED BLOCK -->'
+const LEGACY_END = '<!-- END KIOKUKO MANAGED BLOCK -->'
+// A generic Kiokuko marker alone does not establish DSH ownership.
+const LEGACY_DSH_START = /<!-- BEGIN KIOKUKO MANAGED BLOCK -->(?=\r?\n<!-- kiokuko-dsh-template-version: \d+ -->)/u
 
 export const DSH_MANAGED_BLOCK = `${BEGIN}
-<!-- kiokuko-dsh-template-version: 1 -->
+<!-- kiokuko-dsh-template-version: 2 -->
 <!-- Managed by kiokuko-dsh setup on plugin load. Edit outside the markers. -->
 
 ## Kiokuko DSH
 
-These instructions apply to requests running in DSH with kiokuko-dsh enabled.
-Outside DSH, this block does not require unavailable host operations or tools.
+Apply this entire block only when the current host is DSH and kiokuko-dsh is enabled for this session.
+Otherwise ignore every instruction in this block, including Skill routing, tools, planning, memory and completion rules.
+The presence of this block, repository files or installed packages does not activate it.
+Only kiokuko-dsh may update this block; other plugins and agents must preserve it verbatim.
+Do not apply kiokuko or kiokuko-ai instruction blocks as kiokuko-dsh configuration.
 
 ${SOUL_ROUTING_ENTRY_CONTRACT}
 
@@ -29,24 +36,35 @@ Discover unfamiliar repository filenames with native glob/grep before read; use 
 
 ${END}`
 
-/** Replace only an existing, unambiguous managed block. Never add project files. */
+/** Replace only a DSH-owned block, preserving every other product's instructions. */
 export function renderDshInstructions(existing: string): string {
+  const conflict = () => new KiokukoError('CONFLICT', 'AGENTS.md must contain exactly one complete kiokuko-dsh managed block; repair its markers before setup')
   const starts = existing.split(BEGIN).length - 1
   const ends = existing.split(END).length - 1
-  if (starts === 0 && ends === 0) return existing
-  const start = existing.indexOf(BEGIN)
-  const end = existing.indexOf(END)
-  if (starts !== 1 || ends !== 1 || end < start) {
-    throw new KiokukoError('CONFLICT', 'AGENTS.md must contain exactly one complete Kiokuko managed block; repair its markers before setup')
-  }
+  const legacyStarts = [...existing.matchAll(new RegExp(LEGACY_DSH_START.source, 'gu'))].map(match => match.index)
+  if (legacyStarts.length > 1 || legacyStarts.length && (starts || ends)) throw conflict()
+  let start: number, end: number, closing: string
+  if (starts || ends) {
+    start = existing.indexOf(BEGIN)
+    end = existing.indexOf(END)
+    if (starts !== 1 || ends !== 1 || end < start) throw conflict()
+    closing = END
+  } else if (legacyStarts.length === 1) {
+    start = legacyStarts[0]!
+    end = existing.indexOf(LEGACY_END, start + LEGACY_BEGIN.length)
+    const nested = existing.indexOf(LEGACY_BEGIN, start + LEGACY_BEGIN.length)
+    if (end < start || nested !== -1 && nested < end) throw conflict()
+    closing = LEGACY_END
+  } else return existing
   const newline = existing.includes('\r\n') ? '\r\n' : '\n'
-  return existing.slice(0, start) + DSH_MANAGED_BLOCK.replaceAll('\n', newline) + existing.slice(end + END.length)
+  return existing.slice(0, start) + DSH_MANAGED_BLOCK.replaceAll('\n', newline) + existing.slice(end + closing.length)
 }
 
 async function planInstructions(workspace: string): Promise<DeploymentFile | undefined> {
   const target = path.join(workspace, 'AGENTS.md')
   const previous = await readRegularFile(target, { containmentRoot: workspace })
-  if (previous === undefined || !previous.content.includes(BEGIN) && !previous.content.includes(END)) return undefined
+  if (previous === undefined || !previous.content.includes(BEGIN) && !previous.content.includes(END)
+    && !LEGACY_DSH_START.test(previous.content)) return undefined
   const content = renderDshInstructions(previous.content)
   if (content !== previous.content) await deploymentParent(workspace, target, false)
   return { target, previous, content }
