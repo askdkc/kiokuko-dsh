@@ -100,6 +100,8 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
     [key, setKey] = useState(""),
     [auth, setAuth] = useState<any>(null),
     [answer, setAnswer] = useState("");
+  const [headChoice, setHeadChoice] = useState(""),
+    [workerChoice, setWorkerChoice] = useState("");
   const [manual, setManual] = useState({
     id: "",
     contextWindow: 262144,
@@ -114,11 +116,29 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
     [manualOpen, setManualOpen] = useState(false);
   const operation = useRef<string | undefined>(undefined),
     mounted = useRef(true),
-    working = useRef(false);
+    working = useRef(false),
+    loadSequence = useRef(0);
   const sessionId = props.sessionId as string | undefined;
+  const currentSession = useRef(sessionId);
+  currentSession.current = sessionId;
+  const bindingKey = (binding: any) => binding ? JSON.stringify({ provider: binding.provider, model: binding.model }) : "";
+  const restorePairDraft = (value: any) => {
+    const candidates = value.headWorker?.candidates,
+      selected = value.headWorker?.current;
+    const choice = (role: "head" | "worker", list: any[]) => {
+      const saved = list.find(candidate => bindingKey(candidate) === bindingKey(selected?.[role]));
+      return bindingKey(saved ?? (list.length === 1 ? list[0] : undefined));
+    };
+    setHeadChoice(choice("head", candidates?.heads ?? []));
+    setWorkerChoice(choice("worker", candidates?.workers ?? []));
+  };
   const load = async () => {
-    const value = await modelsApi();
-    if (mounted.current) setState(value);
+    const sequence = ++loadSequence.current;
+    const value = await modelsApi(undefined, sessionId ? "?sessionId=" + encodeURIComponent(sessionId) : "");
+    if (mounted.current && currentSession.current === sessionId && loadSequence.current === sequence) {
+      setState(value);
+      restorePairDraft(value);
+    }
     return value;
   };
   useEffect(() => {
@@ -131,7 +151,7 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
           () => undefined,
         );
     };
-  }, []);
+  }, [sessionId]);
   const run = async (action: () => Promise<void>) => {
     if (working.current) return;
     working.current = true;
@@ -317,6 +337,39 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
       onClick: action,
       children: label,
     });
+  const pair = state.headWorker,
+    headCandidates: any[] = pair?.candidates?.heads ?? [],
+    workerCandidates: any[] = pair?.candidates?.workers ?? [];
+  const selectedHead = headCandidates.find(binding => bindingKey(binding) === headChoice),
+    selectedWorker = workerCandidates.find(binding => bindingKey(binding) === workerChoice);
+  const pairReady = !!selectedHead && !!selectedWorker;
+  const pairSummary = (configuration: any) => configuration
+    ? configuration.head.provider + " / " + configuration.head.model + " → " + configuration.worker.provider + " / " + configuration.worker.model
+    : "Ordinary model selection";
+  const savePair = async (scope: "current" | "default", enabled: boolean) => {
+    if (enabled && !pairReady) throw new Error("Choose an available connection for both models");
+    const retainEffort = (role: "head" | "worker", binding: any) => {
+      const saved = [pair?.current?.[role], pair?.default?.[role]].find(candidate => candidate && bindingKey(candidate) === bindingKey(binding));
+      return saved?.reasoningEffort ? { ...binding, reasoningEffort: saved.reasoningEffort } : binding;
+    };
+    await modelsApi({
+      op: "head-worker", scope, revision: state.revision,
+      ...(scope === "current" ? { sessionId } : {}),
+      configuration: enabled ? { preset: "gpt-6.1-sol-deepseek-v4.1-flash", head: retainEffort("head", selectedHead), worker: retainEffort("worker", selectedWorker) } : null,
+    });
+    await load();
+    if (mounted.current && currentSession.current === sessionId)
+      setNotice(scope === "current"
+        ? enabled ? "Head/worker pair selected for this chat" : "Ordinary model selection restored for this chat"
+        : enabled ? "Head/worker pair saved for new chats" : "Ordinary model default restored for new chats");
+  };
+  const pairSelect = (label: string, value: string, candidates: any[], change: (value: string) => void) =>
+    jsx("label", { children: jsxs(Fragment, { children: [label, jsxs("select", {
+      "aria-label": label, value, disabled: busy || !candidates.length,
+      onChange: (event: any) => change(event.target.value),
+      children: [jsx("option", { value: "", children: candidates.length ? "Choose connection…" : "Unavailable" }),
+        ...candidates.map(binding => jsx("option", { value: bindingKey(binding), children: binding.provider + " / " + binding.model }, bindingKey(binding)))],
+    })] }) });
   return jsxs("section", {
     className: "kiokuko-models-panel",
     "aria-label": "Kiokuko Models",
@@ -337,6 +390,24 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
         ? [jsx("p", { role: "status", children: "Working…" }, "busy")]
         : []),
       button("Reload", () => void run(load)),
+      jsxs("fieldset", {
+        "aria-label": "Head/worker pair",
+        children: [
+          jsx("legend", { children: "Head/worker pair (optional)" }),
+          jsx("p", { children: "GPT-6.1-Sol head + DeepSeek V4.1 Flash subagents for normal chat, Lisp and Enno. Both exact models must be available; there is no automatic replacement. An approved Enno task keeps its selected models until the next task." }),
+          jsx("p", { children: "Current chat: " + (sessionId ? pairSummary(pair?.current) : "Open a chat to select its pair") }),
+          jsx("p", { children: "Default for new chats: " + pairSummary(pair?.default) }),
+          ...(pair?.currentAvailable === false ? [jsx("p", { role: "status", children: "The saved head/worker pair is unavailable. Reconnect its exact models or choose another available pair." })] : []),
+          ...((pair?.candidates?.problems ?? []) as string[]).map(problem => jsx("p", { role: "status", children: problem }, problem)),
+          pairSelect("Head connection · GPT-6.1-Sol", headChoice, headCandidates, setHeadChoice),
+          pairSelect("Worker connection · DeepSeek V4.1 Flash", workerChoice, workerCandidates, setWorkerChoice),
+          button("Use pair in current chat", () => void run(() => savePair("current", true)), !sessionId || !pairReady),
+          button("Pair default for new chats", () => void run(() => savePair("default", true)), !pairReady),
+          button("Disable pair in current chat", () => void run(() => savePair("current", false)), !sessionId || !pair?.current),
+          button("Clear pair default", () => void run(() => savePair("default", false)), !pair?.default),
+          button("Cancel pair changes", () => restorePairDraft(state)),
+        ],
+      }),
       jsx("label", {
         children: jsxs(Fragment, {
           children: [
@@ -800,7 +871,8 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                                       scope: "current",
                                       sessionId,
                                     });
-                                    setNotice("Model selected for this chat");
+                                    await load();
+                                    if (mounted.current && currentSession.current === sessionId) setNotice("Model selected for this chat");
                                   }),
                                 !sessionId,
                               ),
@@ -814,9 +886,8 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                                       model: m.id,
                                       scope: "default",
                                     });
-                                    setNotice(
-                                      "Default model saved for new chats",
-                                    );
+                                    await load();
+                                    if (mounted.current && currentSession.current === sessionId) setNotice("Default model saved for new chats");
                                   }),
                               ),
                             ],
@@ -846,7 +917,7 @@ function KiokukoModelsDialog(props: Record<string, unknown>): unknown {
     closeLabel: "Close",
     onClose: close,
     children: state.open
-      ? jsx(KiokukoModelsPanel, { sessionId: state.sessionId })
+      ? jsx(KiokukoModelsPanel, { sessionId: state.sessionId }, state.sessionId ?? "no-session")
       : null,
   });
 }
@@ -901,7 +972,7 @@ export function mountModelsClient(ctx: DshClientContext): void {
         label: "Kiokuko Models",
         locale: MODELS_NS,
       },
-      () => jsx(KiokukoModelsPanel, { sessionId: active.current }),
+      () => jsx(KiokukoModelsPanel, { sessionId: active.current }, active.current ?? "no-session"),
     ),
   );
   ctx.slots.inject("conversation.input.left", () =>

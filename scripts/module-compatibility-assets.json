@@ -35,7 +35,8 @@
     "migrations/033_memory_forgetting.sql",
     "migrations/034_agenticreplay.sql",
     "migrations/035_owned_execution.sql",
-    "migrations/036_coding_workflow.sql"
+    "migrations/036_coding_workflow.sql",
+    "migrations/037_native_worker_routing.sql"
   ],
   "runtimeAssets": [
     "lisp/supervisor.mjs",

@@ -1,6 +1,8 @@
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
 import type { Context } from "@deepseek-ai/cordis";
 import { join } from "node:path";
+import type { HeadWorkerConfiguration } from "../head-worker-configuration.js";
+import { nativeModelCatalog } from "../native-model-catalog.js";
 import { KiokukoModelsService } from "./service.js";
 import { ModelsConfigStore } from "./config-store.js";
 import {
@@ -9,6 +11,19 @@ import {
 } from "./vendor/credentials.js";
 
 const mounted = new WeakMap<object, KiokukoModelsService>();
+/** The profile service owns durable choices; callers receive defensive snapshots. */
+export async function getHeadWorkerSessionSelection(llm: object, sessionId: string): Promise<{ configuration?: HeadWorkerConfiguration; revision: number }> {
+  return mounted.get(llm)?.headWorkerSelection(sessionId) ?? { revision: 0 };
+}
+export async function getHeadWorkerForSession(llm: object, sessionId: string) {
+  return (await getHeadWorkerSessionSelection(llm, sessionId)).configuration;
+}
+export async function clearHeadWorkerForSession(llm: object, sessionId: string, isCurrent?: () => boolean): Promise<void> {
+  await mounted.get(llm)?.clearHeadWorker(sessionId, isCurrent);
+}
+export async function updateHeadWorkerEffortForSession(llm: object, sessionId: string, reasoningEffort: string, isCurrent?: () => boolean): Promise<void> {
+  await mounted.get(llm)?.updateHeadWorkerEffort(sessionId, reasoningEffort, isCurrent);
+}
 export const MODELS_PATH = "/api/kiokuko.models";
 /** Secret operations are POST-only and never reflect input or provider response bodies. */
 export async function modelsResponse(
@@ -26,7 +41,7 @@ export async function modelsResponse(
           ? service.authStatus(id)
           : op === "models"
             ? await service.models(id)
-            : await service.list(),
+            : await service.list(url.searchParams.get("sessionId") ?? undefined),
         { headers },
       );
     }
@@ -71,6 +86,9 @@ export async function modelsResponse(
       service.answer(id, body.answer);
     } else if (body.op === "cancel") {
       service.cancel(id);
+    } else if (body.op === "head-worker") {
+      if (body.scope !== "current" && body.scope !== "default") throw new Error("Head/worker selection scope is invalid");
+      await service.selectHeadWorker(body.configuration, body.scope, body.revision, body.sessionId);
     } else if (body.op === "select") {
       if (body.scope !== "current" && body.scope !== "default")
         throw new Error("Invalid selection scope");
@@ -81,7 +99,7 @@ export async function modelsResponse(
     // Only locally generated, bounded diagnostics; validation/provider/token errors are not wire-safe.
     const message = error instanceof Error ? error.message : "";
     const safe =
-      /^(Unknown |Connection |Configuration |Model discovery |No models |No authentication |Authentication |OAuth |Codex |Saving the default |Open a chat |Model is not available |This connection |Enter a valid |Origin |JSON |Request exceeds|Installed adapter|Kiokuko Models)/.test(
+      /^(Unknown |Connection |Configuration |Model discovery |No models |No authentication |Authentication |OAuth |Codex |Saving the default |Open a chat |Model is not available |This connection |Enter a valid |Origin |JSON |Request exceeds|Installed adapter|Kiokuko Models|Head\/worker)/.test(
         message,
       )
         ? message.slice(0, 300)
@@ -106,6 +124,7 @@ export async function mountKiokukoModels(
     return async () => {};
   if (mounted.has(llm)) return async () => {};
   const agents = get("agents"),
+    sessions = get("sessions"),
     defaults = get("agentDefaultModel");
   const selections = new Map<
     any,
@@ -117,6 +136,17 @@ export async function mountKiokukoModels(
   >();
   const service = new KiokukoModelsService({
     llm,
+    catalog: nativeModelCatalog(llm, get("settings"))!,
+    sessionCreatedAt: sessionId => {
+      const session = agents?.get(sessionId)?.session ?? sessions?.get(sessionId);
+      return session?.id === sessionId && typeof session.header?.createdAt === "number" ? session.header.createdAt : undefined;
+    },
+    onCurrentHeadWorkerChange: sessionId => (ctx as unknown as { parallel(name: string, sessionId: string): Promise<void> }).parallel("kiokuko/head-worker-selected", sessionId),
+    assertCurrent: (sessionId) => {
+      const agent = agents?.get(sessionId);
+      if (!agent) throw new Error("Open a chat before selecting its model");
+      if (agent.status === "running") throw new Error("Connection selection must wait until this chat is idle");
+    },
     config: new ModelsConfigStore(join(profile.dir, "kiokuko-models.json")),
     credentials: new CredentialFile(defaultCredentialsFile()),
     attachments: () => get("attachments"),

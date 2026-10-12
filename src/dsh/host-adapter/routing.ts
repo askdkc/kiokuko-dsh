@@ -1,3 +1,4 @@
+import type { NativeWorkerRouting } from '../native-worker-routing.js'
 import { MemoryRequestFence, MemorySnapshotStale } from '../memory-request-fence.js'
 import { assertMemoryOwner } from '../memory-owner.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
@@ -35,6 +36,7 @@ import type { DshToolDefinition } from '../tools.js'
 import type { AdapterContext, NativeAgents, NativeSessions, NativeTools } from './native-events.js'
 
 interface RoutingDependencies {
+  readonly nativeWorkers: NativeWorkerRouting
   readonly demand?: OnDemandIntake | undefined
   readonly ctx: Context
   readonly native: AdapterContext
@@ -71,7 +73,7 @@ export function createRouting({
   getToolExposureConfig, reportToolExposureFallback, reportToolExposureProjection, modelCatalog,
   getSelection, setSelection, hasSelection,
   getPolicyState, captureInitialInput, prepareTurn, mapPreStep, currentSession,
-  readStateForRun, refreshMemoryOwner, demand,
+  readStateForRun, refreshMemoryOwner, demand, nativeWorkers,
 }: RoutingDependencies) {
   const systemSkillNames = new WeakMap<object, ReadonlySet<string>>()
   const ownedModelToolDefinitions = new Map<string, { readonly execute: unknown }>()
@@ -147,19 +149,20 @@ export function createRouting({
     let autoRoute: { runId: string; sessionId: string; binding: import('../model-configuration.js').ModelBinding } | undefined
     const disposeRouting = installDshModelRouting(agent, async signal => {
       autoRoute = undefined
+      nativeWorkers.clearRequest(agent)
       // An armed/native Deep request owns its ingress before ordinary intake.
       const deep = await deepPlanning.beforeAssembly(agent, signal)
       if (deep.owned) { assemblyClaims.delete(agent); return deep.model }
       if (demand && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent) && !isGenericNativeChild(agent)) {
         const claim = assemblyClaims.get(agent)
         if (claim && hasHumanInput(claim.messages) && await demand.capture({ agent, messages: claim.messages, turn: claim.turn, step: 0, signal })) {
-          assemblyClaims.delete(agent); return { kind: 'native' }
+          assemblyClaims.delete(agent); return await nativeWorkers.head(agent, signal) ?? { kind: 'native' }
         }
-        if (demand.pending(agent)) return { kind: 'native' }
+        if (demand.pending(agent)) return await nativeWorkers.head(agent, signal) ?? { kind: 'native' }
       }
       const childModel = await delegation.restoreOrPersist(agent)
       if (childModel) { await delegation.assertCurrent(agent); return childModel }
-      if (isGenericNativeChild(agent)) { assemblyClaims.delete(agent); return { kind: 'native' } }
+      if (isGenericNativeChild(agent)) { assemblyClaims.delete(agent); return await nativeWorkers.worker(agent, signal) ?? { kind: 'native' } }
       selectionBlocked.delete(agent)
       const claim = assemblyClaims.get(agent)
       assemblyClaims.delete(agent)
@@ -168,7 +171,7 @@ export function createRouting({
       const turn = claim?.turn ?? current?.turn
       if (turn === undefined) {
         reportToolExposureFallback('pre_step_missing_turn')
-        return undefined
+        return await nativeWorkers.head(agent, signal)
       }
       const messages = claim?.messages ?? []
       // DSH claims input before assembly. Persist it before showing any UI so
@@ -192,12 +195,14 @@ export function createRouting({
         }
       }
       const item = agent.session ? currentSession(agent.session.id) : undefined
-      if (!item || item.closed) return undefined
+      if (!item || item.closed) return await nativeWorkers.head(agent, signal)
       const selection = getSelection(item.runId)?.value
       if (selection && selection.status !== 'ready' && !selection.discussion && item.prepared.intake.profile.taskType !== 'chat') selectionBlocked.add(agent)
       const role = modelRoleForState(item.prepared.ennoOduno)
       const reviewModel = answerReview.model(agent as ReviewAgent)
       if (reviewModel) return reviewModel
+      const headModel = !selectionBlocked.has(agent) ? await nativeWorkers.head(agent, signal) : undefined
+      if (headModel) return headModel
       if (selection?.mode === 'enno' && selection.status === 'ready' && role) return selection.configuration?.roles[role]
       if ((native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined)?.enabled(agent as DshUserQuestionAgent)) return { kind: 'native' }
       if (admitted && !role && !selectionBlocked.has(agent) && (!selection || selection.mode === 'normal' && selection.status === 'ready')
@@ -232,6 +237,7 @@ export function createRouting({
       prompts: () => getSkillPrompts(),
       owner: () => agent.session ? currentSession(agent.session.id)?.runId : undefined,
       beforeRequest: async binding => {
+        await nativeWorkers.assertRequest(agent, binding)
         if (!autoRoute || !binding) return
         const pendingManual = manualModelChanges.get(autoRoute.sessionId)
         if (pendingManual) await pendingManual

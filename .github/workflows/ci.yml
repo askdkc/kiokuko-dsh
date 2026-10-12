@@ -143,7 +143,7 @@ jobs:
 
       - name: Upload harness scenario report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kiokuko-harness-report
           path: ${{ runner.temp }}/kiokuko-harness-report.json
@@ -191,7 +191,7 @@ jobs:
 
       - name: Upload DSH lifecycle evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kiokuko-dsh-evidence-linux
           path: ${{ runner.temp }}/kiokuko-dsh-evidence.json
@@ -257,7 +257,7 @@ jobs:
 
       - name: Upload DSH lifecycle evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kiokuko-dsh-evidence-macos
           path: ${{ runner.temp }}/kiokuko-dsh-evidence.json

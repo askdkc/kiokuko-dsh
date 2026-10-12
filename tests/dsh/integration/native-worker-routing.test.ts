@@ -1,0 +1,293 @@
+import { HEAD_WORKER_LABEL } from '../../../src/dsh/head-worker-configuration.js'
+import {fixtureDefinition,toolValue,interpretedPreparation} from '../helpers/coding-script.js'
+import assert from 'node:assert/strict'
+import { existsSync, readFileSync } from 'node:fs'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import test from 'node:test'
+import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
+import { mountDshComposition } from '../../../src/dsh/composition.js'
+import { nativeMock } from '../helpers/native-mock.js'
+import { isolateSkillHome } from '../helpers/skill-home.js'
+import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
+
+isolateSkillHome()
+
+const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
+  ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
+const dshManifest = join(packageRoot, '@deepseek-ai/dsh/package.json')
+const explicitRuntime = process.env.KIOKUKO_DSH_PACKAGE_ROOT !== undefined || process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1'
+if (!existsSync(dshManifest) && explicitRuntime) throw new Error('Current DSH native subagent runtime is required')
+const available = existsSync(dshManifest)
+if (available) {
+  const version = JSON.parse(readFileSync(dshManifest, 'utf8')).version
+  const expectedVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
+    ?? JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+  if (version !== expectedVersion) throw new Error(`Subagent test requires ${expectedVersion}, received ${version}`)
+}
+const current = available
+const moduleUrl = (name: string) => pathToFileURL(join(packageRoot, '@deepseek-ai', name, 'lib/index.js')).href
+function findPatchRows(value: unknown, id: string): Record<string, any>[] {
+  if (!value || typeof value !== 'object') return []
+  if (Array.isArray(value)) return value.flatMap(item => findPatchRows(item, id))
+  const row = value as Record<string, any>
+  return [...(row.id === id ? [row] : []), ...Object.values(row).flatMap(item => findPatchRows(item, id))]
+}
+async function waitBounded(promise: Promise<unknown>, failure: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(failure)), 10_000) })])
+  } finally { if (timer) clearTimeout(timer) }
+}
+function continuableIds(agent: any): string[] {
+  return agent.session.snapshotEvents().flatMap((event: any) => event.type === 'tool/result'
+    ? event.data.message?.content?.flatMap((block: any) => {
+      const match = block.type === 'text' ? /^started subagent (\S+)$/.exec(block.text) : null
+      return match ? [match[1]!] : []
+    }) ?? [] : [])
+}
+
+for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'failure', 'lisp', 'same-head', 'same-head-effort', 'revoked-child-tool'] as const) test(`selected head/worker pair runs native standard ${mode} without child intake`, {
+  skip: current ? false : 'requires the canonical current DSH runtime', timeout: 120_000,
+}, async () => {
+  const [cordis, appBoot, llm, session, cmdline] = await Promise.all([
+    import(moduleUrl('cordis')), import(moduleUrl('dsh-app-boot')),
+    import(moduleUrl('dsh-llm')), import(moduleUrl('dsh-session')), import(moduleUrl('dsh-cmdline')),
+  ])
+  const temporary = await mkdtemp(join(tmpdir(), 'kiokuko-standard-subagent-'))
+  const profileDir = join(temporary, 'profiles/spec')
+  const repository = join(temporary, 'repository')
+  let ctx: any
+  let adapter: ReturnType<typeof createDshHostAdapter> | undefined
+  let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
+  let parent: any
+  let releaseChildren: (() => void) | undefined
+  let releaseSecondChild: (() => void) | undefined
+  const parallel = mode === 'parallel' || mode === 'parallel-staggered'
+  try {
+    await mkdir(repository)
+    await mkdir(profileDir, { recursive: true })
+    const base = join(packageRoot, '@deepseek-ai/dsh-base')
+    const web = join(packageRoot, '@deepseek-ai/dsh-web-app')
+    const bundle = JSON.parse(readFileSync(join(web, 'package.json'), 'utf8')).dsh.bundle
+    const patches = [
+      ...appBoot.loadOverlayPatches('subagent-test', join(base, 'cordis.patch.yml')),
+      ...appBoot.bundlePatchPaths(web, bundle).flatMap((file: string) => appBoot.loadOverlayPatches('subagent-test', file)),
+    ]
+    for (const [id, provider, toolName] of [
+      ['tool-subagent', 'spawn', 'subagent'], ['tool-subagent-fork', 'fork', 'subagent_fork'],
+    ] as const) {
+      const row = findPatchRows(patches, id).find(item => item.config?.provider === provider && item.config?.toolName === toolName)
+      assert.equal(row?.name, '@deepseek-ai/dsh-tool-subagent')
+      assert.equal(row?.config?.provider, provider)
+      assert.equal(row?.config?.toolName, toolName)
+    }
+    const overrides = [
+      { id: 'storage-json', config: { root: join(temporary, 'storage') } },
+      { id: 'session-persistence-jsonl', config: { root: join(temporary, 'sessions') } },
+      ...['webserver', 'hmr', 'web-runtime', 'session-telemetry-otel', 'modules', 'connection',
+        'session-log-download', 'open-in-app', 'client-hmr', 'directory-picker'].map(id => ({ id, disabled: true })),
+      { insert: [{ id: 'directory-picker-browse', name: '@deepseek-ai/dsh-host-directory-picker-browse' }] },
+      { id: 'agent-preset-registry', config: { default: 'standard' } },
+    ]
+    await writeFile(join(profileDir, 'cordis.yml'), '[]\n')
+    const installAnchor = join(packageRoot, '@deepseek-ai/dsh/package.json')
+    const profile = { skippedBundles: [], name: 'spec', dir: profileDir, layers: [],
+      patchPath: join(profileDir, 'cordis.patch.yml'), patches: [] }
+    const resolution = await appBoot.createRuntimeResolution({ installAnchor, home: temporary, profile })
+    ctx = await appBoot.boot('subagent-test', join(profileDir, 'cordis.yml'), [...patches, ...overrides], async (bootCtx: any) => {
+      bootCtx.provide('profileContext', { name: 'spec', dir: profileDir, patchPath: profile.patchPath,
+        installAnchor, home: temporary, cwd: repository,
+        startedBundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], overlays: [], telemetryDisabledEnv: '1' })
+      await bootCtx.plugin(appBoot.PluginPackages, { resolution })
+      bootCtx.provide('connection', { fetch: { register: () => () => {} }, rpc: { intercept: () => () => {} } })
+      cmdline.provideCmdline(bootCtx, { args: [], exit: () => {} })
+    })
+    const mock = nativeMock(llm)
+    const requests: any[] = []
+    let childToolEffects = 0
+    ctx.tools.register({ name: 'worker_effect', description: 'Scripted harmless effect for revocation checks.', parameters: {}, output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] }, execute: async () => { childToolEffects++; return 'effect' } })
+    const started: any[] = [], ended: any[] = []
+    const childrenReleased = new Promise<void>(resolve => { releaseChildren = resolve })
+    const secondChildReleased = new Promise<void>(resolve => { releaseSecondChild = resolve })
+    let bothStarted!: () => void
+    const childrenStarted = new Promise<void>(resolve => { bothStarted = resolve })
+    let childRequests = 0
+    let finishChildren!: () => void
+    const childrenFinished = new Promise<void>(resolve => { finishChildren = resolve })
+    let firstSpliced!: () => void
+    const firstNoticeSpliced = new Promise<void>(resolve => { firstSpliced = resolve })
+    ctx.on('session/event', (nativeSession: any, event: any) => {
+      if (nativeSession.id === 'standard-parent' && event.type === 'agent/inbox/spliced'
+        && event.data?.inserted?.some((message: any) => message.source?.kind === 'subagent-settled')) firstSpliced()
+    })
+    ctx.on('subagent/start', (info: any) => { started.push({ ...info, header: ctx.sessions.get(info.id)?.header }) })
+    ctx.on('subagent/end', (info: any) => { ended.push(info); if (ended.length === (parallel ? 2 : 1)) finishChildren() })
+    let parentRequests = 0
+    class ScriptedAdapter extends llm.LlmAdapter {
+      async listModels(provider: string) { const id = provider === 'head' ? 'gpt-6.1-sol' : provider === 'worker' ? 'deepseek-flash' : 'mock'; return [{ provider, id, name: id }] }
+      async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] } } }
+      async *stream(options: any) {
+        requests.push(options)
+        const child = options.sessionId !== 'standard-parent'
+        if (child && mode === 'failure') throw new Error('child fixture failure')
+        if (child && parallel) {
+          const childRequest = ++childRequests
+          if (childRequest === 2) bothStarted()
+          await childrenReleased
+          if (mode === 'parallel-staggered' && childRequest === 2) await secondChildReleased
+        }
+        const tool = (id: string, name: string, background: boolean) => mock.toolCallResponse(id, name,
+          { description: 'Implement bounded change', prompt: `Implement ${id} bounded change.`, ...(background ? {} : { run_in_background: false }) })
+        const multi = (calls: readonly [string, string][]) => [
+          ...calls.flatMap(([id, name], index) => [
+            { type: 'block-start', index, blockType: 'tool-call' },
+            { type: 'tool-call-delta', index, id, name, argumentsDelta: JSON.stringify({ description: 'Implement bounded change', prompt: `Implement ${id} bounded change.` }) },
+            { type: 'block-end', index, block: { type: 'tool-call', id, name,
+              arguments: JSON.stringify({ description: 'Implement bounded change', prompt: `Implement ${id} bounded change.` }) } },
+          ]),
+          { type: 'usage', usage: { inputTokens: 10, outputTokens: 10 } },
+          { type: 'finish', reason: { kind: 'tool-calls' } },
+        ]
+        const parentStep = child || !options.tools?.length ? 0 : ++parentRequests
+        if (!child && (mode === 'same-head' || mode === 'same-head-effort') && parentStep === 4) parent.agent.session.append('model/selection', { provider: 'head', model: 'gpt-6.1-sol', ...(mode === 'same-head-effort' ? { reasoningEffort: 'low' } : {}) })
+        if (child && mode === 'revoked-child-tool') parent.agent.session.append('model/selection', { provider: 'mock', model: 'mock' })
+        const chunks = child && mode === 'revoked-child-tool' ? mock.toolCallResponse('stale-tool', 'worker_effect', {}) : child ? mock.textResponse('CHILD_COMPLETE')
+          : mode === 'fork' && parentStep === 1 ? mock.textResponse('PARENT_SEED')
+          : parentStep === (mode === 'fork' ? 2 : 1) ? interpretedPreparation(mock, 'prepare-parent', 'new', 'change', 'build')(options)
+          : parentStep === (mode === 'fork' ? 3 : 2) ? mock.toolCallResponse('goal-status','coding_workflow',{action:'status'})
+          : parentStep === (mode === 'fork' ? 4 : 3) ? mock.toolCallResponse('goal-propose','coding_workflow',{action:'propose',expectedRevision:toolValue(options,'goal-status').revision,definition:fixtureDefinition()})
+          : mode === 'fork' && parentStep === 5 ? tool('fork-1', 'subagent_fork', false)
+          : parallel && parentStep === 4 ? multi([['spawn-1', 'subagent'], ['spawn-2', 'subagent']])
+          : (mode === 'foreground' || mode === 'failure' || mode === 'lisp' || mode === 'same-head' || mode === 'same-head-effort' || mode === 'revoked-child-tool') && parentStep === 4 ? tool('spawn-1', 'subagent', false)
+          : mock.textResponse('PARENT_COMPLETE')
+        for (const chunk of chunks) yield chunk
+      }
+    }
+    ctx.llm.registerAdapter(['mock', 'head', 'worker'], new ScriptedAdapter())
+    // Keep every selectable/provider request inside the deterministic mock transport.
+    const nativeProviders = ctx.llm.listProviders.bind(ctx.llm)
+    ctx.llm.listProviders = () => nativeProviders().filter((provider: any) => ['mock', 'head', 'worker'].includes(provider.id))
+    const activationRequests: any[] = []
+    const startActivation = ctx.subagents.startActivation
+    ctx.subagents.startActivation = function(spec: any) { activationRequests.push(spec); return startActivation.call(this, spec) }
+    const questions: any[] = []
+    const nativeQuestions = ctx.get('userQuestions', false)
+    assert.ok(nativeQuestions)
+    nativeQuestions.ask = async (request: any) => {
+      questions.push(request)
+      if (request.agent?.session?.header?.origin === 'subagent') throw new Error('Kiokuko asked a generic child')
+      return { answers: request.questions.map((question: any) => ({ id: question.id,
+        selected: [question.id === 'head-worker-worker' ? question.options.find((option: any) => option.label.includes('[worker]')).label : question.id === 'head-worker-head' ? question.options.find((option: any) => option.label.includes('[head]')).label : question.id.startsWith('coding-lisp-') ? mode === 'lisp' ? '使う' : '使わない' : question.id === 'enno-execution-mode' ? `通常実行: ${HEAD_WORKER_LABEL}` : question.options?.[0]?.label ?? 'build'] })) }
+    }
+    if (mode === 'lisp') ctx.provide('kiokukoLispCoding', { enabled: () => true, discussing: () => false, prepare: async () => ({ taskType: 'build' }), activate: async () => {} })
+    adapter = createDshHostAdapter(ctx as typeof cordis.Context, {
+      repositoryRoot: repository, databasePath: join(temporary, 'kiokuko.sqlite3'),
+      migrationsDirectory: join(process.cwd(), 'migrations'), agenticReplay: { enabled: false },
+      modelRoutes: [{ provider: 'head', family: 'openai', connection: 'api', protocol: 'responses' }, { provider: 'worker', family: 'deepseek', connection: 'api', protocol: 'chat-completions' }],
+    })
+    composition = await mountDshComposition(ctx, adapter.host)
+    parent = await ctx.agents.create({ sessionId: session.SessionId('standard-parent'),
+      agentOptions: { provider: 'mock', model: 'mock' }, meta: { cwd: repository },
+      setup: (agentCtx: any) => ctx.agentPresets.mount(agentCtx, 'standard').then(() => undefined) })
+    const names = ctx.tools.schemas(parent.agent).map((schema: any) => schema.name)
+    assert.ok(names.includes('subagent'))
+    assert.ok(names.includes('subagent_fork'))
+    if (mode === 'fork') {
+      parent.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Remember the first completed turn.' }], source: { kind: 'user' } }))
+      await parent.agent.whenIdle()
+    }
+    parent.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Implement a bounded change using a subagent.' }], source: { kind: 'user' } }))
+    if (parallel) {
+      try {
+        await waitBounded(childrenStarted, 'Two children did not start together')
+        assert.equal(ended.length, 0, 'both children must start before either finishes')
+        await waitBounded(parent.agent.whenIdle(), 'Continuable launch did not return before child completion')
+        const ids = continuableIds(parent.agent)
+        assert.equal(ids.length, 2, 'both continuable launches must return child ids')
+        assert.equal(new Set(ids).size, 2)
+        assert.deepEqual(new Set(ids), new Set(started.map(item => item.id)))
+        releaseChildren?.()
+        if (mode === 'parallel-staggered') {
+          await waitBounded(firstNoticeSpliced, 'First child notification did not reach the parent')
+          await waitBounded(parent.agent.whenIdle(), 'Parent did not settle after the first child notification')
+          assert.equal(ended.length, 1, 'second child stays running while the parent consumes the first result')
+        }
+      } finally { releaseChildren?.(); releaseSecondChild?.() }
+    }
+    await parent.agent.whenIdle()
+    await waitBounded(childrenFinished, 'Continuable children did not settle')
+    assert.ok(requests.some(request => request.sessionId !== 'standard-parent'),
+      `real child LLM request must occur: ${JSON.stringify({ requests: requests.map(request => ({ sessionId: request.sessionId, tools: request.tools?.map((tool: any) => tool.name) })), questions: questions.map(request => request.questions?.map((question: any) => ({ id: question.id, options: question.options?.map((option: any) => option.label) }))), events: parent.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result' || event.type === 'tool/call').map((event: any) => event.data) })}`)
+    const preparation = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId === 'prepare-parent')
+    assert.ok(preparation && !preparation.data.message.isError, 'parent must prepare through the real native tool registry before launching children')
+    assert.equal(questions.some(request => request.agent?.session?.header?.origin === 'subagent'), false)
+    assert.ok(activationRequests.length > 0)
+    assert.ok(activationRequests.every(spec => spec.request.agentOptions.provider === 'worker' && spec.request.agentOptions.model === 'deepseek-flash'))
+    assert.ok(requests.filter(request => request.sessionId !== 'standard-parent').every(request => request.provider === 'worker' && request.model === 'deepseek-flash'))
+    assert.ok(requests.some(request => request.sessionId === 'standard-parent' && request.provider === 'head' && request.model === 'gpt-6.1-sol'))
+    assert.equal(parent.agent.options.provider, 'mock', 'head overlay must not mutate the original native model')
+    if (mode === 'same-head-effort') assert.ok(requests.some(request => request.sessionId === 'standard-parent' && request.provider === 'head' && request.reasoningEffort === 'low'), 'same head effort updates must reach the parent provider')
+    if (mode === 'revoked-child-tool') assert.equal(childToolEffects, 0, 'an in-flight child response cannot execute tools after disabling its selection')
+    if (mode === 'lisp') assert.equal(ctx.get('kiokukoLispCoding').enabled(parent.agent), true, 'scripted Lisp service stays enabled while paired routing wins')
+    if (mode === 'same-head') assert.ok(parent.agent.session.snapshotEvents().some((event: any) => event.type === 'model/selection' && event.data.provider === 'head'))
+    const parentRows = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS count FROM ledger_runs WHERE dsh_session_id=?').get<{ count: number }>(parent.agent.session.id))
+    assert.equal(parentRows?.count, 1, 'only the explicitly prepared parent execution may create a run')
+    assert.ok(requests.some(request => request.sessionId === 'standard-parent' &&
+      request.tools?.some((tool: any) => tool.name === 'subagent') &&
+      request.tools?.some((tool: any) => tool.name === 'subagent_fork')), 'both tools must reach the parent model request')
+    if (!parallel) {
+      const result = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId !== 'prepare-parent')
+      const child = ended.find(item => item.id === started[0]?.id)
+      assert.ok(child)
+      if (mode === 'failure' || mode === 'revoked-child-tool') {
+        assert.equal(child.stopReason, 'error')
+      } else {
+        assert.equal(child.stopReason, 'completed')
+        assert.match(JSON.stringify(child.lastAssistantMessage), /CHILD_COMPLETE/)
+      }
+      assert.equal(result?.data.message.isError, false, 'launch result reports asynchronous child startup')
+    }
+    assert.equal(started.length, parallel ? 2 : 1,
+      JSON.stringify(parent.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/call' || event.type === 'tool/result').map((event: any) => event.data)))
+    assert.equal(ended.length, started.length)
+    assert.equal(new Set(started.map(item => item.id)).size, started.length)
+    for (const child of started) {
+      assert.ok(ended.some(item => item.runId === child.runId))
+      assert.equal(child.header?.origin, 'subagent')
+      assert.equal(child.header?.parentSession, parent.agent.session.id)
+      assert.throws(() => adapter!.host.toolHost!.bind({ agent: {
+        dshSessionId: child.id, nativeSession: ctx.sessions.get(child.id),
+      } } as any), /not bound to an active run/)
+      const childRows: { count: number } | undefined = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS count FROM ledger_runs WHERE dsh_session_id = ?').get<{count:number}>(child.id))
+      assert.equal(childRows?.count, 0)
+    }
+    if (mode === 'fork') {
+      const seed = JSON.stringify(requests.find(request => request.sessionId !== 'standard-parent')?.messages)
+      assert.match(seed, /PARENT_SEED/)
+      assert.doesNotMatch(seed, /Implement a bounded change using a subagent\./)
+    }
+    if (parallel) {
+      await parent.agent.whenIdle()
+      const notices = parent.agent.session.snapshotEvents().flatMap((event: any) => event.type === 'agent/inbox/spliced' ? event.data?.inserted ?? [] : [])
+        .filter((message: any) => message.source?.kind === 'subagent-settled')
+      assert.equal(notices.length, 2)
+      assert.ok(notices.every((notice: any) => JSON.stringify(notice).includes('CHILD_COMPLETE')))
+      assert.deepEqual(new Set(notices.map((notice: any) => notice.source.senderSessionId)), new Set(continuableIds(parent.agent)))
+    }
+  } finally {
+    releaseChildren?.()
+    releaseSecondChild?.()
+    composition?.stopIngress()
+    let cleanupError: unknown
+    for (const cleanup of [
+      () => adapter?.dispose(), () => parent?.dispose(), () => composition?.dispose(),
+      () => ctx?.fiber.dispose(), () => rm(temporary, { recursive: true, force: true }),
+    ]) {
+      try { await cleanup() } catch (error) { cleanupError ??= error }
+    }
+    if (cleanupError !== undefined) throw cleanupError
+  }
+})

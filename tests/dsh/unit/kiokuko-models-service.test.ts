@@ -11,7 +11,7 @@ import { ModelsConfigStore } from "../../../src/dsh/models/config-store.js";
 import { CredentialFile } from "../../../src/dsh/models/vendor/credentials.js";
 import { modelsResponse, mountKiokukoModels } from "../../../src/dsh/models/surface.js";
 import { ConnectionSchema, CONNECTION_DEFAULTS, CONNECTION_KINDS, credentialKey } from "../../../src/dsh/models/contracts.js";
-import { connectionProfile } from "../../../src/dsh/models/profiles.js";
+import { connectionProfile, requestMaxTokens } from "../../../src/dsh/models/profiles.js";
 
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), "models-test-")),
@@ -584,6 +584,63 @@ test("discovery adopts an id-only listing with the adapter defaults and keeps di
   }
 });
 
+test("request budgets remain bounded with missing or invalid adapter capacity metadata", () => {
+  for (const missing of [undefined, null, NaN, Infinity, -1, 0, 1.5, "204800", Number.MAX_SAFE_INTEGER + 1]) {
+    assert.equal(requestMaxTokens(missing, missing), 32768);
+    assert.equal(requestMaxTokens(missing, 1024), 1024);
+    assert.equal(requestMaxTokens(512, missing), 512);
+    assert.equal(requestMaxTokens(missing, missing, 128), 128);
+  }
+  for (const invalid of [NaN, Infinity, -1, 0, 1.5, Number.MAX_SAFE_INTEGER + 1])
+    assert.throws(() => requestMaxTokens(32768, 1048576, invalid), /positive safe integer/);
+  assert.equal(requestMaxTokens(4096, 2048, 8192), 2048);
+});
+
+test("managed adapter calls enforce the request budget on the wire without changing model capacities", async () => {
+  const requests: any[] = [];
+  const server = createServer(async (req, res) => {
+    let raw = "";
+    for await (const part of req) raw += part;
+    requests.push(JSON.parse(raw));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(`data: ${JSON.stringify({ id: "budget", choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const f = await fixture();
+  try {
+    const c = ConnectionSchema.parse({ ...connection(`http://127.0.0.1:${(server.address() as any).port}/v1`),
+      models: [{ ...model, maxTokens: 262144 }, { ...model, id: "small-output", maxTokens: 4096 }] });
+    await f.service.save(c, 0);
+    await f.service.setKey(c.id, "budget-fixture-key");
+    const saved = await f.config.read();
+    const options = { provider: c.id, model: model.id,
+      messages: [createUserMessage({ content: [{ type: "text", text: "hello" }], source: { kind: "user" } })] };
+    const prepared = await f.adapter().prepareCall(c.id, model.id);
+    for (const request of [options, { ...options, maxTokens: 225150 }, { ...options, maxTokens: 128 }]) {
+      await collect(f.adapter().stream(request));
+      await collect(prepared.stream(request));
+    }
+    await collect(f.adapter().stream({ ...options, model: "small-output" }));
+    assert.deepEqual(requests.map(r => r.max_completion_tokens ?? r.max_tokens), [32768, 32768, 32768, 32768, 128, 128, 4096]);
+    assert.equal(prepared.model.context?.contextWindow, model.contextWindow);
+    assert.deepEqual(await f.config.read(), saved, "request budgeting never rewrites advertised capacities");
+    assert.equal("maxTokens" in options, false, "caller-owned options remain unchanged");
+    for (const maxTokens of [0, -1, NaN, Infinity, 1.5]) {
+      await assert.rejects(collect(f.adapter().stream({ ...options, maxTokens })), /positive safe integer/);
+      assert.throws(() => prepared.stream({ ...options, maxTokens }), /positive safe integer/);
+    }
+    assert.equal(requests.length, 7, "invalid caller budgets never reach the provider");
+    await f.service.save({ ...c, models: [{ ...model, maxTokens: 1024 }] }, saved.revision);
+    await collect(prepared.stream(options));
+    await collect(f.adapter().stream(options));
+    assert.deepEqual(requests.slice(-2).map(r => r.max_completion_tokens ?? r.max_tokens), [32768, 1024],
+      "a prepared call retains its budget generation while new calls use the edited limit");
+  } finally {
+    await f.close(); server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
 for (const [ceiling, expectedCap] of [
   ["max_model_len=max_total_tokens=204800", 203776],
   ["max_model_len=204800", 203776],
@@ -645,8 +702,8 @@ for (const [ceiling, expectedCap] of [
     assert.deepEqual(document.connections.find(value => value.id === other.id), other);
     // The same or a higher ceiling is not an upward rewrite.
     await failed();
-    assert.equal(requests[1].max_completion_tokens ?? requests[1].max_tokens, expectedCap,
-      "the next bare adapter call uses the learned model cap");
+    assert.equal(requests[1].max_completion_tokens ?? requests[1].max_tokens, Math.min(expectedCap, 32768),
+      "the next bare adapter call uses the learned cap within the request budget");
     assert.equal((await f.adapter().resolveModel(c.id, model.id)).defaultMaxTokens, Math.min(expectedCap, 32768),
       "the native caller's default output budget also stays below the learned cap");
     assert.deepEqual(await f.config.read(), document);

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { HeadWorkerConfigurationSchema } from './head-worker-configuration.js'
 import { LegacyDeepConfigurationSchema, DeepConfigurationSchema } from '../deep-thinker/core/contracts.js'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { KiokukoError } from '../errors.js'
@@ -10,6 +11,7 @@ export const ExecutionSelectionSchema = z.object({
   configuration: z.union([ModelConfigurationSchema, LegacyModelConfigurationSchema]).optional(),
   deepConfiguration: z.union([DeepConfigurationSchema, LegacyDeepConfigurationSchema]).optional(),
   ordinaryModel: ModelBindingSchema.optional(),
+  headWorker: HeadWorkerConfigurationSchema.optional(),
   draft: LegacyModelConfigurationDraftSchema.optional(),
   problem: z.string().max(1024).optional(),
   discussion: z.object({
@@ -18,6 +20,13 @@ export const ExecutionSelectionSchema = z.object({
     turn: z.number().int().nonnegative(),
   }).strict().optional(),
 }).strict().superRefine((value, ctx) => {
+  if (value.headWorker && value.mode === 'enno' && value.status === 'ready' && value.configuration) {
+    for (const [role, actual] of Object.entries(value.configuration.roles)) {
+      const expected = role === 'worker' ? value.headWorker.worker : value.headWorker.head
+      if (actual.provider !== expected.provider || actual.model !== expected.model || actual.reasoningEffort !== expected.reasoningEffort) ctx.addIssue({ code: 'custom', message: 'Enno roles must match the selected head/worker configuration' })
+    }
+  }
+  if (value.headWorker && value.mode === 'deep-thinker') ctx.addIssue({ code: 'custom', message: 'Head/worker selection does not own Deep routing' })
   if (value.discussion && value.status === 'ready') ctx.addIssue({ code: 'custom', message: 'Discussion cannot authorize execution' })
   if (value.mode === 'deep-thinker' && (!value.deepConfiguration || value.configuration || value.draft)) ctx.addIssue({ code: 'custom', message: 'Deep requires its independent configuration' })
   if (value.mode !== 'deep-thinker' && value.deepConfiguration) ctx.addIssue({ code: 'custom', message: 'Deep configuration requires Deep ownership' })

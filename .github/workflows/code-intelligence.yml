@@ -20,7 +20,7 @@ jobs:
       - run: npm run test:code-intelligence
       - run: npm run test:code-intelligence:packed
       - run: npm run test:code-intelligence:benchmark
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: {name: code-intelligence-macos, path: '.artifacts/code-intelligence/benchmark.json'}
   linux:
     strategy:
@@ -52,5 +52,5 @@ jobs:
       - run: npm run test:code-intelligence -- --development-only
       - run: npm run test:code-intelligence:packed -- --development-only
       - run: npm run test:code-intelligence:benchmark
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: {name: 'code-intelligence-${{ matrix.name }}', path: '.artifacts/code-intelligence/benchmark.json'}

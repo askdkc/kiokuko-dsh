@@ -1,3 +1,7 @@
+import type { RoutableAgent } from './model-routing.js'
+import { NativeWorkerRouting } from './native-worker-routing.js'
+import { validateHeadWorker } from './head-worker-configuration.js'
+import { getHeadWorkerSessionSelection, clearHeadWorkerForSession, updateHeadWorkerEffortForSession } from './models/surface.js'
 import { answerSkillContext, type AnswerSkillRegistry } from './answer-skills.js'
 import { DshAnswerContext } from './answer-context.js'
 import { IntakeModeConfig } from './intake-mode.js'
@@ -69,7 +73,7 @@ import { MemoryEvolutionConfig, type EvolutionConfig } from '../memory/evolution
 import { evolutionStatus } from '../memory/evolution/store.js'
 import { AgenticReplayConfig, EfficiencyConfig, FinalizationConfig, AkinatorMemoryConfig, ContinuityConfig } from './config.js'
 
-import { type StoredExecutionSelection } from './execution-selection.js'
+import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from './execution-selection.js'
 
 import { LISP_CODING_SERVICE, type LispCodingService } from './lisp/coding-choice.js'
 
@@ -661,8 +665,116 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     }
     return undefined
   })
+  const pairChanges = new Map<string, Promise<void>>()
+  const pairLlm = native.get('llm', false) as object | undefined
+  const ownsPairRoot = (agent: RoutableAgent): boolean => {
+    if (!agent.session || isNativeSubagent(agent) || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session) return false
+    try { return typeof agent.session.header?.cwd === 'string' && realpathSync(agent.session.header.cwd) === root } catch { return false }
+  }
+  const nativeWorkers = new NativeWorkerRouting({
+    runtime, backend: native.get('subagents', false) as any, agents, sessions,
+    resolveOwner: async (agent, signal) => {
+      if (!ownsPairRoot(agent)) return undefined
+      await pairChanges.get(agent.session!.id)
+      signal.throwIfAborted()
+      const item = currentSession(agent.session!.id)
+      if (item && !item.closed) {
+        const stored = await runtime.withDatabase(db => readExecutionSelection(db, item.runId))
+        if (stored?.value.headWorker) {
+          if (item.nativeAgent !== agent || item.nativeSession !== agent.session || item.failed) throw new KiokukoError('CONFLICT', 'Head/worker execution owner changed')
+          if (stored.value.status !== 'ready' || stored.value.discussion) throw new KiokukoError('CONFLICT', 'Head/worker selection is not ready')
+          return { id: `run:${item.runId}`, sessionId: item.sessionId, selectionId: String(stored.revision), pair: stored.value.headWorker }
+        }
+        // An existing approved Enno or Deep configuration owns its own roles.
+        if (stored?.value.mode === 'enno' || stored?.value.mode === 'deep-thinker') return undefined
+      }
+      if (!pairLlm) return undefined
+      const saved = await getHeadWorkerSessionSelection(pairLlm, agent.session!.id)
+      return saved.configuration ? { id: `session:${agent.session!.id}`, sessionId: agent.session!.id, selectionId: String(saved.revision), pair: saved.configuration } : undefined
+    },
+    validate: async (pair, signal) => {
+      if (!modelCatalog) throw new KiokukoError('SERVICE_UNAVAILABLE', 'Head/worker model catalog is unavailable')
+      signal.throwIfAborted()
+      const problems = await validateHeadWorker(pair, modelCatalog, options.modelRoutes ?? [], modelCompatibility)
+      signal.throwIfAborted()
+      if (problems.length) throw new KiokukoError('CONFLICT', problems.join('\n'))
+    },
+  })
+  const nativeWorkerToolDisposer = onNativeEvent(ctx, 'tools/execute', async (execution, next) => {
+    if (execution.agent && isGenericNativeChild(execution.agent as RoutableAgent)) await nativeWorkers.assertCurrent(execution.agent as RoutableAgent)
+    return next()
+  }, { prepend: true })
+  const freezePair = (agent: RoutableAgent): void => {
+    if (!pairLlm || !ownsPairRoot(agent)) return
+    const pending = getHeadWorkerSessionSelection(pairLlm, agent.session!.id).then(() => {})
+    pairChanges.set(agent.session!.id, pending)
+    void pending.catch(() => {})
+  }
+  const freezePairDisposer = onNativeEvent(ctx, 'agent/created', ({ agent }) => freezePair(agent))
+  for (const agent of agents?.list?.() ?? []) freezePair(agent)
+  const clearRunPair = async (sessionId: string, isCurrent: () => boolean = () => true): Promise<void> => {
+    const session = sessions?.get(sessionId)
+    const agent = agents?.list?.().find(candidate => candidate.session === session)
+    if (!agent || !ownsPairRoot(agent)) return
+    const item = currentSession(sessionId)
+    if (item && !item.closed && item.nativeAgent === agent && item.nativeSession === session) await runtime.withDatabase(db => {
+      if (!isCurrent()) return
+      const stored = readExecutionSelection(db, item.runId)
+      if (stored?.value.mode === 'normal' && stored.value.headWorker) {
+        const { headWorker: _pair, ...value } = stored.value
+        selections.set(item.runId, writeExecutionSelection(db, item.runId, stored.revision, value))
+      }
+    })
+  }
+  const pairSettingsDisposer = onNativeServiceEvent(ctx, 'kiokuko/head-worker-selected', (sessionId: string) => {
+    // The settings commit and normal-run override removal are one dispatch fence.
+    const pending: Promise<void> = Promise.resolve().then(() => clearRunPair(sessionId, () => pairChanges.get(sessionId) === pending))
+    pairChanges.set(sessionId, pending)
+    void pending.catch(() => {})
+    return pending
+  })
+  const pairSelectionDisposer = onNativeEvent(ctx, 'session/event', (session, event) => {
+    if (event.type !== 'model/selection' || sessions?.get(session.id) !== session || !pairLlm) return
+    const agent = agents?.list?.().find(candidate => candidate.session === session)
+    if (!agent || !ownsPairRoot(agent)) return
+    const previous = pairChanges.get(session.id)
+    const pending: Promise<void> = Promise.resolve(previous).catch(() => {}).then(async () => {
+      const isCurrent = () => pairChanges.get(session.id) === pending
+      if (!isCurrent()) return
+      const item = currentSession(session.id)
+      const stored = item && !item.closed ? await runtime.withDatabase(db => readExecutionSelection(db, item.runId)) : undefined
+      if (!isCurrent()) return
+      const configured = stored?.value.headWorker ?? (await getHeadWorkerSessionSelection(pairLlm, session.id)).configuration
+      if (!isCurrent()) return
+      const selected = event.data as { provider?: unknown; model?: unknown; reasoningEffort?: unknown } | undefined
+      // Native pickers may publish an idempotent re-selection of the same head.
+      if (configured && selected?.provider === configured.head.provider && selected.model === configured.head.model) {
+        if (typeof selected.reasoningEffort === 'string' && selected.reasoningEffort && selected.reasoningEffort !== configured.head.reasoningEffort) {
+          const pair = { ...configured, head: { ...configured.head, reasoningEffort: selected.reasoningEffort } }
+          if (stored?.value.mode === 'normal' && stored.value.headWorker && item) {
+            if (!modelCatalog) throw new KiokukoError('SERVICE_UNAVAILABLE', 'Head/worker model catalog is unavailable')
+            const problems = await validateHeadWorker(pair, modelCatalog, options.modelRoutes ?? [], modelCompatibility)
+            if (problems.length) throw new KiokukoError('CONFLICT', problems.join('\n'))
+            await runtime.withDatabase(db => {
+              if (!isCurrent()) return
+              selections.set(item.runId, writeExecutionSelection(db, item.runId, stored.revision, { ...stored.value, headWorker: pair }))
+            })
+          }
+          const saved = await getHeadWorkerSessionSelection(pairLlm, session.id)
+          if (!isCurrent()) return
+          if (saved.configuration?.head.provider === selected.provider && saved.configuration.head.model === selected.model)
+            await updateHeadWorkerEffortForSession(pairLlm, session.id, selected.reasoningEffort, isCurrent)
+        }
+        return
+      }
+      await clearHeadWorkerForSession(pairLlm, session.id, isCurrent)
+      await clearRunPair(session.id, isCurrent)
+    })
+    pairChanges.set(session.id, pending)
+    void pending.catch(() => {})
+  })
   const routing = createRouting({
-    ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview, semanticCompaction, delegation, deepPlanning, isGenericNativeChild, demand,
+    ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview, semanticCompaction, delegation, deepPlanning, isGenericNativeChild, demand, nativeWorkers,
     getSkillPrompts: () => skillPrompts,
     getToolExposureConfig: () => toolExposureConfig, reportToolExposureFallback, reportToolExposureProjection, modelCatalog,
     getSelection: runId => selections.get(runId), setSelection: (runId, value) => { selections.set(runId, value) },
@@ -863,6 +975,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       discussionGuardDisposer?.()
       childExecutionDisposer()
       routing.dispose()
+      nativeWorkers.dispose()
+      nativeWorkerToolDisposer()
+      freezePairDisposer()
+      pairSelectionDisposer()
+      pairSettingsDisposer()
       const failures: unknown[] = []
       try { await agenticReplay?.shutdown() } catch (error) { failures.push(error) }
       const pausedSessions = new Set(turnState.sessionIds().filter(id => executionSupport.paused(id)))

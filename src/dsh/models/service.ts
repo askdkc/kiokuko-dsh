@@ -2,6 +2,7 @@ import { registerOwnedModels } from "./metadata.js";
 import { randomUUID } from "node:crypto";
 import {
   INVALID_CREDENTIAL_CODE,
+  ReasoningEffortId,
   LlmAdapter,
   type LlmDiscoveredModel,
   type LlmRuntime,
@@ -33,6 +34,7 @@ import {
   connectionProfile,
   OUTPUT_TOKEN_MARGIN,
   protocolApi,
+  requestMaxTokens,
   sharedCredentialStore,
   storableMaxTokens,
 } from "./profiles.js";
@@ -42,7 +44,8 @@ import {
   type OpenCodeRoute,
 } from "./vendor/opencode-catalog.js";
 import { OPEN_CODE_SNAPSHOTS } from "./vendor/opencode-owned.generated.js";
-import type { ModelRoute } from "../model-configuration.js";
+import { readModelCatalog, type DshModelCatalog, type ModelRoute } from "../model-configuration.js";
+import { HeadWorkerConfigurationSchema, headWorkerCandidates, validateHeadWorker, type HeadWorkerConfiguration } from "../head-worker-configuration.js";
 
 type Route = {
   connection: Connection;
@@ -136,6 +139,9 @@ class ModelsAdapter extends LlmAdapter {
           throw new Error("Prepared connection identity mismatch");
         return this.run(call, {
           ...options,
+          // Metadata alone is not enforced by pi-ai's stream API. Preserve the
+          // prepared generation while bounding both omitted and explicit budgets.
+          maxTokens: requestMaxTokens(call.model.defaultMaxTokens, call.model.context?.contextWindow, options.maxTokens),
           provider: r.underlying,
           signal: AbortSignal.any([
             ...(options.signal ? [options.signal] : []),
@@ -193,6 +199,11 @@ export interface ModelsServiceOptions {
     LlmRuntime,
     "registerAdapter" | "resolveCallConfig" | "discoverModels"
   >;
+  catalog?: DshModelCatalog;
+  sessionCreatedAt?: (sessionId: string) => number | undefined;
+  now?: () => number;
+  assertCurrent?: (sessionId: string) => void | Promise<void>;
+  onCurrentHeadWorkerChange?: (sessionId: string) => void | Promise<void>;
   config: ModelsConfigStore;
   credentials: CredentialFile;
   attachments?: () => any;
@@ -307,10 +318,39 @@ export class KiokukoModelsService {
       protocol: c.protocol,
     };
   }
-  async list() {
+  private catalog(): DshModelCatalog {
+    if (this.options.catalog) return this.options.catalog;
+    const native = this.options.llm as ModelsServiceOptions["llm"] & Partial<DshModelCatalog>;
+    return {
+      listProviders: () => native.listProviders?.() ?? this.document.connections.map(c => ({ id: c.id, name: c.name, route: this.routeMetadata(c.id)! })),
+      listModels: id => native.listModels?.(id) ?? this.adapter.listModels(id),
+      resolveCallConfig: binding => this.options.llm.resolveCallConfig({ provider: binding.provider, model: binding.model,
+        ...(binding.reasoningEffort !== undefined ? { reasoningEffort: ReasoningEffortId(binding.reasoningEffort) } : {}) }),
+    };
+  }
+  private defaultFor(sessionId: string): HeadWorkerConfiguration | undefined {
+    const createdAt = this.options.sessionCreatedAt?.(sessionId), selectedAt = this.document.defaultHeadWorkerSelectedAt;
+    // Unseen old chats and unverifiable sessions never silently adopt a new default.
+    return createdAt !== undefined && Number.isFinite(createdAt) && selectedAt !== undefined && createdAt >= selectedAt
+      ? this.document.defaultHeadWorker : undefined;
+  }
+  private selectionFor(sessionId?: string) {
+    return sessionId && Object.hasOwn(this.document.sessionHeadWorkers ?? {}, sessionId)
+      ? this.document.sessionHeadWorkers![sessionId] ?? undefined
+      : sessionId ? this.defaultFor(sessionId) : this.document.defaultHeadWorker;
+  }
+  async list(sessionId?: string) {
+    const candidates = await headWorkerCandidates(await readModelCatalog(this.catalog()).catch(() => ({ providers: [], models: [], failures: [] })), []);
     const auth = await this.options.credentials.describe();
     return {
       revision: this.document.revision,
+      headWorker: {
+        candidates, current: this.selectionFor(sessionId) ?? null, default: this.document.defaultHeadWorker ?? null,
+        currentAvailable: !this.selectionFor(sessionId) || (
+          candidates.heads.some(b => b.provider === this.selectionFor(sessionId)!.head.provider && b.model === this.selectionFor(sessionId)!.head.model) &&
+          candidates.workers.some(b => b.provider === this.selectionFor(sessionId)!.worker.provider && b.model === this.selectionFor(sessionId)!.worker.model)
+        ),
+      },
       connections: this.document.connections.map((c) => {
         const row = auth.find((a) => a.provider === credentialKey(c));
         const run = [...this.logins.values()].find(
@@ -365,7 +405,7 @@ export class KiokukoModelsService {
       if (previous && previous.kind !== c.kind)
         throw new Error("Connection kind cannot change; add a new connection");
       const next = {
-        version: 1 as const,
+        ...this.document,
         revision: revision + 1,
         connections: [
           ...this.document.connections.filter((v) => v.id !== c.id),
@@ -626,26 +666,113 @@ export class KiokukoModelsService {
       return parsed.success ? [parsed.data] : [];
     });
   }
+  /** Snapshot once, including an ordinary-model choice, so defaults only affect new chats. */
+  async headWorkerSelection(sessionId: string): Promise<{ configuration?: HeadWorkerConfiguration; revision: number }> {
+    this.checkSessionId(sessionId);
+    return this.serial(async () => {
+      if (!Object.hasOwn(this.document.sessionHeadWorkers ?? {}, sessionId))
+        await this.writeHeadWorker(this.defaultFor(sessionId) ?? null, "current", sessionId);
+      const configuration = this.document.sessionHeadWorkers![sessionId];
+      return {
+        ...(configuration ? { configuration: structuredClone(configuration) } : {}),
+        revision: this.document.sessionHeadWorkerRevisions?.[sessionId] ?? 0,
+      };
+    });
+  }
+  private checkSessionId(sessionId: unknown): asserts sessionId is string {
+    if (typeof sessionId !== "string" || !sessionId || sessionId.length > 256 || /[\p{Cc}\p{Cf}]/u.test(sessionId))
+      throw new Error("Open a chat before selecting its model");
+  }
+  private async writeHeadWorker(configuration: HeadWorkerConfiguration | null, scope: "current" | "default", sessionId?: string): Promise<void> {
+    const revision = this.document.revision + 1;
+    const next: ModelsDocument = scope === "current" ? {
+      ...this.document, revision,
+      sessionHeadWorkers: { ...this.document.sessionHeadWorkers, [sessionId!]: configuration },
+      sessionHeadWorkerRevisions: { ...this.document.sessionHeadWorkerRevisions, [sessionId!]: revision },
+    } : { ...this.document, revision };
+    if (scope === "default") {
+      if (configuration) {
+        next.defaultHeadWorker = configuration;
+        next.defaultHeadWorkerSelectedAt = (this.options.now ?? Date.now)();
+      } else {
+        delete next.defaultHeadWorker;
+        delete next.defaultHeadWorkerSelectedAt;
+      }
+    }
+    await this.options.config.write(next, this.document.revision);
+    this.document = next;
+  }
+  async selectHeadWorker(input: unknown, scope: "current" | "default", revision: number, sessionId?: string): Promise<void> {
+    return this.serial(async () => {
+      if (scope !== "current" && scope !== "default") throw new Error("Head/worker selection scope is invalid");
+      if (revision !== this.document.revision) throw new Error("Configuration changed; reload before saving");
+      const parsed = input === null ? null : HeadWorkerConfigurationSchema.safeParse(input);
+      if (parsed && !parsed.success) throw new Error("Head/worker configuration is invalid; choose both exact models");
+      const configuration = parsed?.success ? parsed.data : null;
+      if (configuration) {
+        let available = false;
+        try { available = !(await validateHeadWorker(configuration, this.catalog())).length; } catch { /* Do not expose provider diagnostics or credentials. */ }
+        if (!available) throw new Error("Head/worker unavailable; verify both exact connections and models, then reload");
+      }
+      if (scope === "current") {
+        this.checkSessionId(sessionId);
+        if (!this.options.assertCurrent) throw new Error("Open a chat before selecting its model");
+        await this.options.assertCurrent(sessionId);
+      }
+      await this.writeHeadWorker(configuration, scope, sessionId);
+      if (scope === "current") await this.options.onCurrentHeadWorkerChange?.(sessionId!);
+    });
+  }
+  /** An explicit native effort change keeps the pair and revokes older worker generations. */
+  async updateHeadWorkerEffort(sessionId: string, reasoningEffort: string, isCurrent: () => boolean = () => true): Promise<void> {
+    this.checkSessionId(sessionId);
+    return this.serial(async () => {
+      if (!isCurrent()) return;
+      const current = this.selectionFor(sessionId);
+      if (!current || current.head.reasoningEffort === reasoningEffort) return;
+      const parsed = HeadWorkerConfigurationSchema.safeParse({ ...current, head: { ...current.head, reasoningEffort } });
+      if (!parsed.success) throw new Error("Head/worker reasoning effort is invalid");
+      let available = false;
+      try { available = !(await validateHeadWorker(parsed.data, this.catalog())).length; } catch { /* Keep provider details private. */ }
+      if (!available) throw new Error("Head/worker reasoning effort is unavailable; reload and select an available effort");
+      if (!isCurrent()) return;
+      await this.writeHeadWorker(parsed.data, "current", sessionId);
+    });
+  }
+  /** Native model picker selections explicitly leave pair mode in just this chat. */
+  async clearHeadWorker(sessionId: string, isCurrent: () => boolean = () => true): Promise<void> {
+    this.checkSessionId(sessionId);
+    return this.serial(async () => {
+      if (!isCurrent()) return;
+      await this.writeHeadWorker(null, "current", sessionId);
+    });
+  }
   async select(
     id: string,
     model: string,
     scope: "current" | "default",
     sessionId?: string,
   ): Promise<void> {
-    const c = this.require(id);
-    if (!(await this.models(id)).some((m) => m.id === model))
-      throw new Error("Model is not available; connect and refresh first");
-    const binding = { provider: c.id, model };
-    await this.options.llm.resolveCallConfig(binding);
-    if (scope === "default") {
-      if (!this.options.saveDefault)
-        throw new Error("Saving the default is unavailable");
-      await this.options.saveDefault(binding);
-    } else {
-      if (!sessionId || !this.options.selectCurrent)
-        throw new Error("Open a chat before selecting its model");
-      await this.options.selectCurrent(sessionId, binding);
-    }
+    return this.serial(async () => {
+      const c = this.require(id);
+      if (!(await this.models(id)).some((m) => m.id === model))
+        throw new Error("Model is not available; connect and refresh first");
+      const binding = { provider: c.id, model };
+      await this.options.llm.resolveCallConfig(binding);
+      if (scope === "default") {
+        if (!this.options.saveDefault) throw new Error("Saving the default is unavailable");
+        await this.options.saveDefault(binding);
+        const pair = this.document.defaultHeadWorker;
+        if (pair && (pair.head.provider !== binding.provider || pair.head.model !== binding.model))
+          await this.writeHeadWorker(null, "default");
+      } else {
+        if (!sessionId || !this.options.selectCurrent) throw new Error("Open a chat before selecting its model");
+        const pair = this.selectionFor(sessionId);
+        await this.options.selectCurrent(sessionId, binding);
+        if (!pair || pair.head.provider !== binding.provider || pair.head.model !== binding.model)
+          await this.writeHeadWorker(null, "current", sessionId);
+      }
+    });
   }
   startLogin(id: string): string {
     const c = this.require(id);

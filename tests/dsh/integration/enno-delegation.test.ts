@@ -1,3 +1,4 @@
+import { headWorkerEnnoConfiguration } from '../../../src/dsh/head-worker-configuration.js'
 import { submitReviewedPlan } from '../helpers/reviewed-plan.js'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile, mkdir, symlink, realpath } from 'node:fs/promises'
@@ -25,7 +26,7 @@ test('child observation reads accept only session handles, never paths or caller
   assert.ok(childFileScopeDenial(process.cwd(), ['source.txt'], 'observation_read', { handle, path: '../private' }))
 })
 
-test('delegation requires the live lease, limits Ollama concurrency, preserves child identity on reload and never accepts a WorkUnit', async () => {
+for (const route of ['ollama', 'head-worker'] as const) test(`${route}: delegation requires the live lease, limits concurrency, preserves child identity on reload and never accepts a WorkUnit`, async () => {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-delegation-'))
   const repo = join(root, 'repo'); await mkdir(repo); await writeFile(join(repo, 'source.txt'), 'before')
   const db = openConnection(join(root, 'state.sqlite3'))
@@ -42,9 +43,11 @@ test('delegation requires the live lease, limits Ollama concurrency, preserves c
       provenance: { scope: 'explicit_user', exclusions: 'explicit_user', acceptanceCriteria: 'explicit_user', workPlan: 'inferred', skillSet: 'repository_evidence', finalVerifiers: 'repository_evidence', maxAttempts: 'inferred' },
     })
     const approved = answerEnno(db, { ...identity, expectedRevision: 2, idempotencyKey: 'approve', action: 'approve' })
-    const model = { provider: 'local-custom-name', model: 'qwen3-coder:30b' }
+    const pair = { preset: 'gpt-6.1-sol-deepseek-v4.1-flash' as const, head: { provider: 'sol-head', model: 'gpt-6.1-sol' }, worker: { provider: 'deepseek-worker', model: 'deepseek-flash' } }
+    const model = route === 'head-worker' ? pair.worker : { provider: 'local-custom-name', model: 'qwen3-coder:30b' }
     initializeExecutionSelection(db, identity.runId)
-    writeExecutionSelection(db, identity.runId, 0, { mode: 'enno', status: 'ready', configuration: { custom: false, template: { id: 'ollama', version: 1 }, maxConcurrentChildren: 1, roles: { ideal: model, zenki: model, goki: model, worker: model, check: model } } })
+    writeExecutionSelection(db, identity.runId, 0, { mode: 'enno', status: 'ready', ...(route === 'head-worker' ? { headWorker: pair } : {}), configuration: route === 'head-worker' ? { ...headWorkerEnnoConfiguration(pair), maxConcurrentChildren: 1 } : { custom: false, template: { id: 'ollama', version: 1 }, maxConcurrentChildren: 1, roles: { ideal: model, zenki: model, goki: model, worker: model, check: model } } })
+    if (route === 'head-worker') assert.deepEqual(readExecutionSelection(db, identity.runId)?.value.configuration?.roles.goki, pair.head)
     const parent = { id: 'parent', session: { id: 'parent', header: { cwd: repo } } }
     const child = { id: 'child', session: { id: 'child', header: { cwd: repo } } }
     const finished = deferred<{ output: unknown; stopReason: string }>()

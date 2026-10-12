@@ -35,6 +35,46 @@ chats** saves the native default for future chats. Enno, Deep and model-auto use
 same registered adapters and model capabilities. An unavailable model is rejected
 rather than silently substituted.
 
+Managed provider requests also enforce the output-token budget at dispatch,
+including bare adapter calls. A request never exceeds 32,768 output tokens, the
+prepared model output limit, or its context limit; a smaller explicit caller
+budget is preserved. Invalid caller budgets are rejected before transmission.
+Catalog/context capacity metadata is not rewritten by this request-level clamp.
+
+## GPT-6.1-Sol head with DeepSeek V4.1 Flash workers
+
+The **Head/worker pair (optional)** section offers the opt-in pair in the same
+Settings panel. Select the exact configured head and worker connections, then save
+for the current idle chat or as the default for new chats. Multiple connections
+remain separate choices, even when their display names match. Cancel does not
+change a saved choice. Disabling the pair restores native model selection; saving
+a different normal head model also leaves pair mode for the selected scope. Selecting
+the exact same provider and head model preserves the worker choice. Profile defaults are
+snapshotted per chat, so changing the default does not rewrite existing chats.
+
+The execution-choice card also offers the pair for just the current normal task,
+and Enno's model-configuration menu offers the same pair. Lisp is an execution-tool
+choice and uses the normal parent/worker routing. In Enno, `ideal`, `zenki`, `goki`
+and `check` use the head; the delegated `worker` uses Flash. A profile/chat pair
+seeds the initial Enno role review. An already approved Enno task keeps its explicit
+role configuration until the next task; selecting another Enno custom configuration
+continues to work.
+
+Selection and dispatch require the exact live catalog bindings. The head ID is
+`gpt-6.1-sol`. The worker ID is `deepseek-flash` on a DeepSeek route,
+`deepseek-v4.1-flash` on OpenCode Zen/Go, or `deepseek/deepseek-v4.1-flash` on
+OpenRouter. A bundled catalog is not proof of account access. Missing models,
+credentials or compatible connections produce an unavailable reason; there is no
+fallback to a different model or provider and no automatic login/download.
+
+Native `subagent` (spawn) and `subagent_fork` requests receive the selected worker
+model while the parent retains the head. The preset does not trigger delegation,
+add tools, change approval/sandbox policy, change depth/concurrency limits, or
+apply to Deep Planning. Child routes have durable identity-bound receipts and are
+revalidated against their current owner and selection before further requests.
+Local scripted-provider tests verify routing and persistence, not real-provider
+availability, billing or answer quality.
+
 ## Infron
 
 The default endpoint is `https://llm.onerouter.pro/v1`, using Chat Completions.
@@ -66,6 +106,13 @@ remain readable and require explicit model reselection before reuse. Replay hist
 migrations are unaffected.
 
 ## Verification
+
+After `npm run build`, `node scripts/verify-head-worker-settings-web.mjs` exercises
+the pair controls in a disposable native Web profile with localhost-only fixtures,
+including default/current scopes, Cancel, unavailable models and restart.
+`PLAYWRIGHT_EXECUTABLE_PATH` may select an installed browser. This check requires
+Chromium socket access; a blocked browser launch is not a passed UI test.
+
 
 `npm run test:models:web` installs the packed package in a disposable Web profile,
 uses a local provider and tests Settings, commands, the add-provider-and-key action,

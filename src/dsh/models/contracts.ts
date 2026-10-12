@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HeadWorkerConfigurationSchema } from "../head-worker-configuration.js";
 export const CONNECTION_KINDS = [
   "openai",
   "codex",
@@ -66,6 +67,11 @@ export const ModelsDocumentSchema = z
     version: z.literal(1),
     revision: z.number().int().nonnegative(),
     connections: z.array(ConnectionSchema).max(128),
+    defaultHeadWorker: HeadWorkerConfigurationSchema.optional(),
+    defaultHeadWorkerSelectedAt: z.number().int().nonnegative().optional(),
+    // Null is an explicit ordinary-model choice, even when a profile pair exists.
+    sessionHeadWorkers: z.record(z.string().min(1).max(256), HeadWorkerConfigurationSchema.nullable()).optional(),
+    sessionHeadWorkerRevisions: z.record(z.string().min(1).max(256), z.number().int().nonnegative()).optional(),
   })
   .strict()
   .refine(

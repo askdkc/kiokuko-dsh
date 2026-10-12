@@ -16,6 +16,7 @@ import { DshEnnoMemoryRefresh } from '../enno-memory-refresh.js'
 import { saveSessionNotice } from '../plugin-records.js'
 import { AkinatorMemoryConfig } from '../config.js'
 import { explicitExecutionMode, initializeExecutionSelection, readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from '../execution-selection.js'
+import { getHeadWorkerForSession } from '../models/surface.js'
 import { selectExecution, ExecutionSelectionPending } from '../model-selection-ui.js'
 import { LISP_CODING_SERVICE, type LispCodingService } from '../lisp/coding-choice.js'
 import type { ModelRoute, DshModelCatalog, DshModelCompatibility } from '../model-configuration.js'
@@ -306,8 +307,10 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
         return result
       }
       setSelection(runId, stored)
+      const savedHeadWorker = await getHeadWorkerForSession(native.get('llm', false) as object, event.sessionId)
       const selected = await selectExecution({
         task: event.task, turn: event.turn, signal: event.signal, stored, routes: modelRoutes ?? [],
+        ...(savedHeadWorker ? { savedHeadWorker } : {}),
         ...(event.nativeAgent ? { agent: event.nativeAgent } : {}),
         ...(userQuestions ? { questions: userQuestions } : {}),
         ...(modelCatalog ? { llm: modelCatalog } : {}),

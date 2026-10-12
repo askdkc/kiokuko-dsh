@@ -41,12 +41,14 @@ export function storableMaxTokens(
 ): number {
   return Math.max(1, Math.min(advertised, contextWindow) - OUTPUT_TOKEN_MARGIN);
 }
-/** The output cap one request may ask for; the margin lives in the stored value. */
-function requestMaxTokens(maxTokens: number, contextWindow: number): number {
-  return Math.max(
-    1,
-    Math.min(maxTokens, contextWindow, REQUEST_OUTPUT_TOKENS),
-  );
+/** Bound every request independently of catalog capacity; never enlarge a caller budget. */
+export function requestMaxTokens(maxTokens: unknown, contextWindow: unknown, requested?: number): number {
+  if (requested !== undefined && (!Number.isSafeInteger(requested) || requested < 1))
+    throw new Error("Request maxTokens must be a positive safe integer");
+  const capacity = (value: unknown): number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0
+      ? value : REQUEST_OUTPUT_TOKENS;
+  return Math.min(capacity(maxTokens), capacity(contextWindow), requested ?? REQUEST_OUTPUT_TOKENS, REQUEST_OUTPUT_TOKENS);
 }
 /** The wire protocol pi-ai serves for one Kiokuko connection protocol. */
 export function protocolApi(protocol: Connection["protocol"]): string {
