@@ -49,7 +49,7 @@ jobs:
           name: verification-lisp-runtime-${{ strategy.job-index }}
           path: ${{ runner.temp }}/verification-lisp-runtime
           if-no-files-found: error
-  verify:
+  verify-main:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env: {}
@@ -81,8 +81,8 @@ jobs:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
       - name: Export DSH fixture version
         run: node -e "const p=require('./tests/fixtures/dsh-runtime/package.json'); console.log('KIOKUKO_EXPECTED_DSH_VERSION='+p.dependencies['@deepseek-ai/dsh'])" >> "$GITHUB_ENV"
-      - name: Run repository verification (main)
-        run: npm run verify -- --profile main --output "${{ runner.temp }}/verification-verify"
+      - name: Run repository verification (CI main partition)
+        run: npm run verify -- --profile ci-main --output "${{ runner.temp }}/verification-verify"
       - name: Retain verification plan, logs and results
         if: always()
         uses: actions/upload-artifact@v7
@@ -90,6 +90,18 @@ jobs:
           name: verification-verify-${{ strategy.job-index }}
           path: ${{ runner.temp }}/verification-verify
           if-no-files-found: error
+  # Preserve the existing required check: omitted main tests are owned by Lisp.
+  verify:
+    needs: [verify-main, lisp-runtime]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require main and every protected runtime result
+        env:
+          MAIN_RESULT: ${{ needs.verify-main.result }}
+          LISP_RESULT: ${{ needs.lisp-runtime.result }}
+        run: test "$MAIN_RESULT" = success && test "$LISP_RESULT" = success
   dsh-runtime-macos:
     name: DSH runtime smoke (macOS)
     runs-on: macos-15

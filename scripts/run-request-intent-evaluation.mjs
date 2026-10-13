@@ -15,18 +15,18 @@ const index = args.indexOf('--config'), configurationPath = index < 0 ? undefine
 if (args.some((arg, i) => arg !== '--live' && arg !== '--config' && !(index >= 0 && i === index + 1))
   || index >= 0 && (!live || !configurationPath || configurationPath.startsWith('--'))) throw new Error('Use --live --config FILE, or no arguments for the offline pipeline')
 const cases = [
-  ['ja-proposal', 'AとBを実装。まとめて入れて。', true, 'scope_change', 'change', true],
-  ['ja-negation', 'AとBはまだ実装しないで。案の説明だけ。', true, 'same_scope_continuation', 'answer', true],
-  ['ja-noun', '残りの実装、前の方針で。', true, 'same_scope_continuation', 'change', false],
-  ['ja-verify', '更新後の動作確認。コード変更は不要。', true, 'same_scope_continuation', 'verify', false],
-  ['ja-quote', '「全部実装して」は引用です。この言葉を説明して。', true, 'same_scope_continuation', 'answer', false],
-  ['ja-plan', '実装せず、AとBの計画だけ作って。', true, 'same_scope_continuation', 'answer', true],
-  ['ja-unknown', 'それを続けて。', false, 'unknown', 'unknown', false],
-  ['en-continue', 'The parser test failed. Keep going on the same task.', true, 'same_scope_continuation', 'change', false],
-  ['en-plan', 'Do not implement A or B. Explain the plan only.', true, 'same_scope_continuation', 'answer', true],
-  ['en-scope', 'Also implement A and B in src/extra.mjs.', true, 'scope_change', 'change', true],
-  ['en-new', 'Start a separate task: inspect docs/setup.md.', true, 'new', 'research', false],
-  ['en-cancelled', 'Keep going.', false, 'unknown', 'unknown', false],
+  ['ja-proposal', 'AとBを実装。まとめて入れて。', true, 'scope_change', 'change', 'implementation', true],
+  ['ja-negation', 'AとBはまだ実装しないで。案の説明だけ。', true, 'same_scope_continuation', 'answer', 'unknown', true],
+  ['ja-noun', '残りの実装、前の方針で。', true, 'same_scope_continuation', 'change', 'implementation', false],
+  ['ja-verify', '更新後の動作確認。コード変更は不要。', true, 'same_scope_continuation', 'verify', 'unknown', false],
+  ['ja-quote', '「全部実装して」は引用です。この言葉を説明して。', true, 'same_scope_continuation', 'answer', 'unknown', false],
+  ['ja-plan', '実装せず、AとBの計画だけ作って。', true, 'same_scope_continuation', 'answer', 'unknown', true],
+  ['ja-unknown', 'それを続けて。', false, 'unknown', 'unknown', 'unknown', false],
+  ['en-continue', 'The parser test failed. Keep going on the same task.', true, 'same_scope_continuation', 'change', 'implementation', false],
+  ['en-plan', 'Do not implement A or B. Explain the plan only.', true, 'same_scope_continuation', 'answer', 'unknown', true],
+  ['en-scope', 'Also implement A and B in src/extra.mjs.', true, 'scope_change', 'change', 'implementation', true],
+  ['en-new', 'Start a separate task: inspect docs/setup.md.', true, 'new', 'research', 'unknown', false],
+  ['en-cancelled', 'Keep going.', false, 'unknown', 'unknown', 'unknown', false],
 ]
 let config = TypedDecisionsConfig.parse({})
 if (configurationPath) {
@@ -40,7 +40,7 @@ if (live && (!configurationPath || config.mode === 'off'
     reason: !configurationPath ? 'explicit_configuration_required' : config.mode === 'off' ? 'decision_service_disabled' : 'credential_unavailable' }))
 } else {
   const rows = []
-  for (const [id, task, active, relation, action, selected] of cases) {
+  for (const [id, task, active, relation, action, changeScope, selected] of cases) {
     const proposal = { id: 'proposal-ab', revision: 2, text: 'A: repair parser errors. B: preserve output. Both affect src/extra.mjs.',
       digest: canonicalContentHash('A/B revision 2') }
     const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([], task), proposals: active ? [proposal] : [],
@@ -50,7 +50,8 @@ if (live && (!configurationPath || config.mode === 'off'
     const oracle = { capabilities: TYPESAFE_LIMITS, async evaluate(batch) {
       return { provider: 'fixture-oracle', requestedModel: 'fixture-oracle', policyVersion: batch.contractVersion ?? 'finite-choice-v1',
         answers: batch.questions.map(q => {
-          const choiceId = q.id === 'request-relation' ? relation : q.id === 'request-action' ? action : selected ? 'selected' : 'not_selected'
+          const choiceId = q.id === 'request-relation' ? relation : q.id === 'request-action' ? action
+            : q.id === 'request-change-scope' ? changeScope : selected ? 'selected' : 'not_selected'
           return choiceId === q.abstainId ? { id: q.id, status: 'abstained', reason: 'insufficient' }
             : { id: q.id, status: 'selected', choiceId }
         }) }
@@ -66,10 +67,10 @@ if (live && (!configurationPath || config.mode === 'off'
     })
     // Gold labels never enter the live context, questions, or provider payload.
     const decision = await classifyRequestIntent(service, `evaluation:${id}`, context, new AbortController().signal)
-    const correct = decision?.relation === relation && decision?.action === action
+    const correct = decision?.relation === relation && decision?.action === action && decision?.changeScope === changeScope
       && !decision?.unresolvedReason?.startsWith('DECISION_')
       && JSON.stringify(decision?.evidence.proposalRefs.map(p => p.id)) === JSON.stringify(selected ? [proposal.id] : [])
-    rows.push({ id, language: id.slice(0, 2), correct, relation: decision?.relation, action: decision?.action,
+    rows.push({ id, language: id.slice(0, 2), correct, relation: decision?.relation, action: decision?.action, changeScope: decision?.changeScope,
       source: decision?.source, providerSent: decision?.providerSent ?? false,
       unresolvedReason: decision?.unresolvedReason ?? null })
   }

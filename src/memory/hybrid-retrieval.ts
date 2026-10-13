@@ -1,3 +1,4 @@
+import {lifecycleGlobalProjectionActive} from './lifecycle-global-state.js'
 import { memoryForgotten } from './forgotten.js'
 import { indexInstalled, indexSettings, indexFactEligible } from './index-reasoning/store.js'
 import { evolutionEntryState } from './evolution/store.js';
@@ -85,6 +86,7 @@ interface ExternalMappingRow extends SqliteRow {
 /** Decide eligibility only after the entry and the complete parent snapshot decode. */
 export function isRetrievableEntry(database: SqliteDatabase, entry: EntryRecord): boolean {
   if (memoryForgotten(database,entry.id)) return false;
+  if (!lifecycleGlobalProjectionActive(database, entry)) return false;
   if (!indexFactEligible(database, entry)) return false;
   if (!autoGlobalProjectionActive(database, entry)) return false;
   if (!evolutionEntryState(database, entry).eligible) return false;

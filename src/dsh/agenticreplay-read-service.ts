@@ -65,6 +65,16 @@ export class DshAgenticReplayReadService {
       rows: viewer.buildTimeline(page.events), events: page.events,
       ...(page.done ? {} : { cursor: this.#encode(id, page.offset, page.previousSeq) }) }
   }
+  /** Bounded public result metadata for memory; never return payloads/reasoning/blobs. */
+  async publicActions(binding: DshAgenticReplayBinding, id: string) {
+    const {dir} = await this.#authorized(binding, id)
+    const page = await readAgenticReplayPage(dir, 0, -1, 64, 65_536)
+    return page.events.filter(event => event.type === 'tool.result').slice(0, 16).map(event => ({
+      eventId: `agenticreplay:${id}:${event.seq}`,
+      name: typeof event.attrs?.name === 'string' ? event.attrs.name : 'unknown',
+      outcome: event.attrs?.is_error === true ? 'failed' as const : 'unknown' as const,
+    }))
+  }
   async export(binding: DshAgenticReplayBinding, id: string): Promise<string> {
     const { dir, row } = await this.#authorized(binding, id)
     const scan = await scanAgenticReplayTrace(dir, id, this.config.maxHtmlExportInputBytes, this.config.maxHtmlExportEvents)

@@ -4,6 +4,7 @@
   "profiles": [
     "full",
     "main",
+    "ci-main",
     "semantic",
     "lisp",
     "browser",
@@ -33,7 +34,8 @@
         "semantic",
         "lisp",
         "browser",
-        "runtime"
+        "runtime",
+        "ci-main"
       ],
       "result": "node",
       "requires": [],
@@ -48,7 +50,8 @@
         "typecheck"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "command",
       "requires": [],
@@ -70,7 +73,8 @@
         "runtime",
         "code-provider",
         "p0",
-        "packages-live"
+        "packages-live",
+        "ci-main"
       ],
       "result": "command",
       "requires": [],
@@ -102,6 +106,32 @@
       }
     },
     {
+      "id": "ci-native-unit",
+      "argv": [
+        "node",
+        "scripts/run-ci-native.mjs",
+        "ci-unit"
+      ],
+      "profiles": [
+        "ci-main"
+      ],
+      "result": "node",
+      "requires": [
+        "dsh-native",
+        "sbcl",
+        "cargo"
+      ],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ],
+      "env": {
+        "FORCE_COLOR": "1"
+      },
+      "optIn": true,
+      "exclusionReason": "CI-only partition: the full and main profiles run the original complete suite; the Protected Lisp matrix owns the omitted source tests."
+    },
+    {
       "id": "native-integration",
       "argv": [
         "node",
@@ -125,6 +155,33 @@
       "env": {
         "FORCE_COLOR": "1"
       }
+    },
+    {
+      "id": "ci-native-integration",
+      "argv": [
+        "node",
+        "scripts/run-ci-native.mjs",
+        "ci-integration"
+      ],
+      "profiles": [
+        "ci-main"
+      ],
+      "result": "node",
+      "requires": [
+        "dsh-native",
+        "sbcl",
+        "cargo",
+        "protected-python3"
+      ],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ],
+      "env": {
+        "FORCE_COLOR": "1"
+      },
+      "optIn": true,
+      "exclusionReason": "CI-only partition: the full and main profiles run the original complete suite; the Protected Lisp matrix owns the omitted source tests."
     },
     {
       "id": "native-e2e",
@@ -151,6 +208,32 @@
       }
     },
     {
+      "id": "ci-native-e2e",
+      "argv": [
+        "node",
+        "scripts/run-ci-native.mjs",
+        "ci-e2e"
+      ],
+      "profiles": [
+        "ci-main"
+      ],
+      "result": "node",
+      "requires": [
+        "dsh-native",
+        "sbcl",
+        "cargo"
+      ],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ],
+      "env": {
+        "FORCE_COLOR": "1"
+      },
+      "optIn": true,
+      "exclusionReason": "CI-only partition: the full and main profiles run the original complete suite; the Protected Lisp matrix owns the omitted source tests."
+    },
+    {
       "id": "skill-efficiency",
       "argv": [
         "npm",
@@ -158,7 +241,8 @@
         "test:skill-efficiency"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "script",
       "requires": [],
@@ -175,7 +259,8 @@
         "tests/fixtures/skill-coding/offline.test.mjs"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "node",
       "requires": [],
@@ -192,7 +277,8 @@
         "test:harness"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "script",
       "requires": [
@@ -213,7 +299,8 @@
         "test:evaluation"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "script",
       "requires": [],
@@ -230,7 +317,8 @@
         "test:evaluation:decisions"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "script",
       "requires": [],
@@ -247,7 +335,8 @@
         "test:evaluation:request-intent"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "script",
       "requires": [],
@@ -264,7 +353,8 @@
         "test:evaluation:answer-review"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "script",
       "requires": [],
@@ -283,7 +373,8 @@
         "--mode=all"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "script",
       "requires": [],
@@ -300,7 +391,8 @@
         "test:sampledb"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "script",
       "requires": [],
@@ -317,7 +409,8 @@
         "publint"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "command",
       "requires": [],
@@ -334,7 +427,8 @@
         "verify:prepare"
       ],
       "profiles": [
-        "main"
+        "main",
+        "ci-main"
       ],
       "result": "script",
       "requires": [],
@@ -615,7 +709,8 @@
       ],
       "profiles": [
         "main",
-        "runtime"
+        "runtime",
+        "ci-main"
       ],
       "result": "script",
       "requires": [],
@@ -634,7 +729,8 @@
       ],
       "profiles": [
         "main",
-        "runtime"
+        "runtime",
+        "ci-main"
       ],
       "result": "script",
       "requires": [
@@ -654,7 +750,8 @@
       ],
       "profiles": [
         "main",
-        "runtime"
+        "runtime",
+        "ci-main"
       ],
       "result": "script",
       "requires": [
@@ -684,7 +781,8 @@
       ],
       "profiles": [
         "main",
-        "semantic"
+        "semantic",
+        "ci-main"
       ],
       "result": "script",
       "requires": [

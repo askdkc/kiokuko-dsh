@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, existsSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { verificationPlan, validateNodeResult, evidenceCurrent } from './verification-contract.mjs';
 const check={id:'suite',argv:['node','test.mjs'],profiles:['main'],expected:'required assertions',dependsOn:[]};
@@ -131,4 +132,113 @@ export async function sandboxLaunch(layout){assert.equal(layout.protected,true);
   else assert.equal(observed.status,1,kind+' must remain non-success');
   const layout=readFileSync(path.join(root,'layout.txt'),'utf8');assert.equal(existsSync(layout),false,kind+' must remove its layout only after terminal child completion');
  }
+});
+
+test('CI main source partition has exact coverage union and a single Linux owner per omitted file', async () => {
+  const { nativeCiPlan } = await import('./run-ci-native.mjs');
+  const actual = JSON.parse(readFileSync(new URL('./verification.json', import.meta.url)));
+  const lisp = nativeCiPlan('lisp', {}).args.slice(1);
+  const owned = actual.checks.find(check => check.id === 'owned-native').argv.slice(2);
+  const owners = [...lisp, ...owned];
+  assert.equal(new Set(owners).size, owners.length, 'source ownership must be disjoint');
+  const original = [], partitioned = [];
+  for (const suite of ['unit', 'integration', 'e2e']) {
+    const full = nativeCiPlan(suite, {}), ci = nativeCiPlan('ci-' + suite, {});
+    original.push(...full.args.slice(1)); partitioned.push(...ci.args.slice(1));
+    assert.ok(ci.args.length > 1, 'partition must not become empty');
+    assert.ok(ci.args.slice(1).every(file => full.args.includes(file)), 'no invented tests');
+    assert.equal(ci.env.KIOKUKO_TEST_CONCURRENCY, full.args.some(file => file.includes('/lisp/')) ? '2' : '4');
+    assert.equal(nativeCiPlan('ci-' + suite, { KIOKUKO_TEST_CONCURRENCY: '1' }).env.KIOKUKO_TEST_CONCURRENCY, '1');
+    for (const key of ['KIOKUKO_DSH_PACKAGE_ROOT', 'KIOKUKO_EXPECTED_DSH_VERSION', 'KIOKUKO_REQUIRE_DSH_NATIVE'])
+      assert.equal(ci.env[key], full.env[key], key + ' must retain the same fixture');
+  }
+  const omitted = original.filter(file => !partitioned.includes(file));
+  assert.deepEqual([...omitted].sort(), [...owners].sort());
+  assert.deepEqual([...new Set([...partitioned, ...owners])].sort(), [...new Set(original)].sort());
+  assert.equal(new Set([...partitioned, ...owners]).size, partitioned.length + owners.length);
+});
+
+test('CI-only profile preserves all main checks through Linux ownership and leaves local main/full complete', () => {
+  const actual = JSON.parse(readFileSync(new URL('./verification.json', import.meta.url)));
+  const main = verificationPlan(actual, 'main', 'linux').checks;
+  const ci = verificationPlan(actual, 'ci-main', 'linux').checks;
+  const lisp = verificationPlan(actual, 'lisp', 'linux').checks;
+  const canonical = check => check.id.startsWith('ci-native-') ? check.id.slice(3) : check.id;
+  const removed = main.filter(check => !ci.some(candidate => canonical(candidate) === check.id));
+  assert.deepEqual(removed.map(check => check.id).sort(), ['pack-check', 'skill-delivery']);
+  for (const check of removed) {
+    const owner = lisp.find(candidate => candidate.id === check.id);
+    assert.equal(owner.status, 'required');
+    assert.deepEqual(owner.argv, check.argv);
+    assert.deepEqual(owner.env, check.env);
+    assert.equal(owner.packed, true, 'installed/source variants stay under the original script');
+  }
+  assert.deepEqual([...new Set([...ci.map(canonical), ...removed.map(check => check.id)])].sort(), main.map(check => check.id).sort());
+  for (const suite of ['unit', 'integration', 'e2e']) {
+    const original = main.find(check => check.id === 'native-' + suite);
+    const replacement = ci.find(check => check.id === 'ci-native-' + suite);
+    assert.equal(original.argv.at(-1), suite);
+    assert.equal(replacement.argv.at(-1), 'ci-' + suite);
+    for (const key of ['requires', 'result', 'expected', 'dependsOn', 'env'])
+      assert.deepEqual(replacement[key], original[key], suite + ': ' + key);
+  }
+  for (const platform of ['linux', 'darwin']) {
+    const full = verificationPlan(actual, 'full', platform);
+    for (const check of main) assert.equal(full.checks.find(candidate => candidate.id === check.id).status, 'required');
+    for (const check of ci.filter(check => check.id.startsWith('ci-native-')))
+      assert.equal(full.checks.find(candidate => candidate.id === check.id).status, 'scope-excluded');
+    const protection = verificationPlan(actual, 'lisp', platform);
+    for (const id of ['lisp-native', 'owned-native', 'modules', 'pack-check', 'skill-delivery'])
+      assert.equal(protection.checks.find(check => check.id === id).status, 'required');
+  }
+});
+
+test('CI workflow keeps the complete Protected Lisp platform matrix owning CI main omissions', () => {
+  // Parse YAML rather than matching comments or unrelated runner declarations.
+  const workflow = (createRequire(import.meta.url)('yaml')).parse(readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
+  const lisp = workflow.jobs['lisp-runtime'];
+  assert.deepEqual(lisp.strategy.matrix.os, ['ubuntu-24.04', 'ubuntu-24.04-arm', 'macos-latest']);
+  assert.equal(lisp.if, undefined, 'the owning matrix must not become conditional');
+  assert.equal(lisp['continue-on-error'], undefined, 'owned evidence must remain blocking');
+  assert.equal(lisp.strategy['fail-fast'], false);
+  assert.ok(lisp.steps.some(step => step.run?.includes('--profile lisp --output')));
+  assert.ok(workflow.jobs['verify-main'].steps.some(step => step.run?.includes('--profile ci-main --output')));
+  assert.ok(!workflow.jobs['verify-main'].steps.some(step => step.run?.includes('--profile main --output')));
+  assert.deepEqual(workflow.jobs.verify.needs, ['verify-main', 'lisp-runtime']);
+  assert.equal(workflow.jobs.verify.if, 'always()');
+  const aggregate = workflow.jobs.verify.steps[0];
+  assert.equal(aggregate.env.MAIN_RESULT, '${{ needs.verify-main.result }}');
+  assert.equal(aggregate.env.LISP_RESULT, '${{ needs.lisp-runtime.result }}');
+  for (const main of ['success', 'failure', 'cancelled', 'skipped']) {
+    for (const lisp of ['success', 'failure', 'cancelled', 'skipped']) {
+      const result = spawnSync('bash', ['-c', aggregate.run], {
+        env: { ...process.env, MAIN_RESULT: main, LISP_RESULT: lisp }, encoding: 'utf8',
+      });
+      assert.equal(result.status === 0, main === 'success' && lisp === 'success', main + '/' + lisp);
+    }
+  }
+});
+
+test('request-intent evaluation covers exact change scopes and writes a check-bound completion receipt', async () => {
+  const { validCompletion } = await import('./verification-completion.mjs');
+  const directory = mkdtempSync(path.join(tmpdir(), 'intent-evaluation-contract-'));
+  const completion = path.join(directory, 'completion.json');
+  const observed = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/run-request-intent-evaluation.mjs'], {
+    cwd: new URL('..', import.meta.url), encoding: 'utf8', timeout: 30000,
+    env: { ...process.env, KIOKUKO_VERIFY_COMPLETION_FILE: completion,
+      KIOKUKO_VERIFY_CHECK_ID: 'intent-evaluation', KIOKUKO_VERIFY_NONCE: 'intent-evaluation-regression' },
+  });
+  assert.equal(observed.status, 0, observed.stdout + '\n' + observed.stderr);
+  const report = JSON.parse(observed.stdout);
+  assert.equal(report.mode, 'fixture-oracle');
+  assert.equal(report.attempted, 12);
+  assert.equal(report.correct, 12);
+  const implementation = new Set(['ja-proposal', 'ja-noun', 'en-continue', 'en-scope']);
+  for (const row of report.rows) {
+    assert.equal(row.correct, true, row.id);
+    assert.equal(row.changeScope, implementation.has(row.id) ? 'implementation' : 'unknown', row.id);
+    assert.ok(!row.unresolvedReason?.startsWith('DECISION_'), row.id);
+  }
+  assert.equal(validCompletion(JSON.parse(readFileSync(completion, 'utf8')),
+    'intent-evaluation', 'intent-evaluation-regression'), true);
 });

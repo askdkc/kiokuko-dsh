@@ -40,6 +40,7 @@ import { isKiokukoDshSource, KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 
 import { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
 import { ModelHandoff, ModelHandoffConfig } from './model-handoff.js'
+import { DshLifecycleMemory } from './lifecycle-memory.js'
 import { ModelAutoConfig } from './model-auto/contracts.js'
 import { ModelAutoCoordinator } from './model-auto/coordinator.js'
 import { ModelAutoStore } from './model-auto/store.js'
@@ -415,6 +416,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const answerReview = new AnswerReviewCoordinator(runtime, decisions, AnswerReviewConfig.parse(options.answerReview ?? {}))
   const semanticCompaction = options.semanticCompactionCoordinator ?? new SemanticCompactionCoordinator(ctx as any, decisions, root, options.observationPack)
   const modelHandoff = new ModelHandoff(ctx as any, decisions, root, options.modelHandoff)
+  const lifecycleMemory = new DshLifecycleMemory(ctx as any, runtime, root)
   const delegation = new DshEnnoDelegation(runtime, native.get('subagents', false) as DshSpawnBackend | undefined)
   const deepPlanning = new DeepPlanningController({ runtime, decisions, ctx: ctx as any, backend: native.get('subagents', false) as DshSpawnBackend | undefined,
     sessions, agents, catalog: modelCatalog, questions: userQuestions, routes: options.modelRoutes ?? [], compatibility: modelCompatibility, sessionQuery, config: options.deepPlanning,
@@ -878,6 +880,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     ennoMemory, executionSupport, gate, turnState, getSelection: runId => selections.get(runId),
     currentSession, currentForAgentEvent, stateForRun, deliverCompletionReport, reviewBinding,
     evolutionConfig, clearToolRun: toolHostModule.clearRun, sessionEventSource,
+    onRunClosed: (runId, status, sessionId) => lifecycleMemory.completed(runId, status, sessionId),
   })
   const { runLifecycle, resolveIdleClose, resolveSessionRunId, resolveSessionClose } = lifecycle
   retireSupersededRun = lifecycle.retireSupersededRun
@@ -891,6 +894,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     recordingParent: agent => deepPlanning.executor.recordingParent(agent),
   })
   let disposePromise: Promise<void> | undefined
+  if (agenticReplay) lifecycleMemory.connectAgenticReplay(agenticReplay)
   const efficiencyHost = createEfficiencyHost({ ctx, memoryFinalizer, agents, sessions, delegation, deepPlanning, currentSession })
   efficiencyHost.configure({ observe: efficiencyConfig.observe, inputMode: finalizationConfig.inputMode })
   // Register last so deferred preparation precedes the existing memory/completion pre-execute checks.
@@ -994,6 +998,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       try { await boundaryWorker.dispose() } catch (error) { failures.push(error) }
       failures.push(...await lifecycle.closeRemainingRuns(pausedSessions))
       try { await runLifecycle.dispose() } catch (error) { failures.push(error) }
+      lifecycleMemory.stop()
+      try { await lifecycleMemory.whenIdle() } catch { /* optional observations cannot veto shutdown */ }
       try { observationMount.disposeIdle(); await autoReview.dispose() } catch (error) { failures.push(error) }
       try { await memoryFinalizer.dispose() } catch (error) { failures.push(error) }
       efficiencyHost.close()

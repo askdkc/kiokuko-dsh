@@ -49,6 +49,7 @@ interface LifecycleDependencies {
   readonly evolutionConfig: import('zod').z.infer<typeof MemoryEvolutionConfig>
   readonly clearToolRun: (runId: string) => void
   readonly sessionEventSource: (session: object | undefined) => DshSessionEventSource
+  readonly onRunClosed?: (runId: string, status: string, sessionId: string) => void
 }
 
 export function createLifecycle(deps: LifecycleDependencies) {
@@ -171,10 +172,17 @@ export function createLifecycle(deps: LifecycleDependencies) {
       handoffReview(database,input.runId,input.status)
     }))
     autoReview.worker.abort(input.runId)
+    const committedSessionId = turnState.allTurns().find(item => item.runId === input.runId)?.sessionId
+    if (committedSessionId) {
+      try { deps.onRunClosed?.(input.runId, input.status, committedSessionId) } catch { /* memory observation cannot veto the committed close */ }
+    }
     if (scheduled) {
       if (scheduledSessionId === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Completed run has no DSH session identity')
-      await sessionMirror.markUnfinalized(scheduledSessionId)
-      memoryFinalizer.kick()
+      // The terminal run and pending memory job have already committed.
+      // Cache retention and worker notification cannot prevent owner release;
+      // a later startup can retry the durable pending job.
+      try { await sessionMirror.markUnfinalized(scheduledSessionId) } catch { /* auxiliary cache is unavailable */ }
+      try { memoryFinalizer.kick() } catch { /* pending job remains retryable */ }
     }
     const items = turnState.allTurns().filter((candidate) => candidate.runId === input.runId)
     for (const item of items) {

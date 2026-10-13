@@ -18,6 +18,7 @@ import { memoryApplicationMode } from '../../memory/application.js'
 import { mountMemoryApplication, MEMORY_APPLICATION_GUIDANCE } from '../memory-application.js'
 import { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
 import { ModelHandoff, ModelHandoffConfig } from '../model-handoff.js'
+import { DshLifecycleMemory } from '../lifecycle-memory.js'
 import { ModelAutoConfig } from '../model-auto/contracts.js'
 import { ModelAutoCoordinator } from '../model-auto/coordinator.js'
 import { ModelAutoStore } from '../model-auto/store.js'
@@ -135,6 +136,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const lifecycle = new AbortController()
   let stopped = false, claimed = false, shutdown: Promise<void> | undefined
   let indexReasoning: IndexReasoningService | undefined
+  let lifecycleMemory: DshLifecycleMemory | undefined
   const get = (name: string): any => ctx.get(name, false)
   const skills = get('skills'), tools = get('tools'), sessions = get('sessions'), agents = get('agents'), systemPrompt = get('systemPrompt')
   const modelScope = get('profileContext') && typeof ctx.inject === 'function'
@@ -321,7 +323,9 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     if (reason === 'completed' && !current.failed && await runtime.withDatabase(db => taskCompletionBlocksClose(assessTaskCompletion(db, current.task.runId)))) return
     current.finishing = (async () => {
       await sessions.flush(current.agent.session)
-      await tasks.finish(current.task, reason === 'aborted' ? 'cancelled' : reason === 'max-tokens' ? 'interrupted' : reason === 'completed' && !current.failed && current.task.admitted ? 'completed' : 'failed')
+      const outcome = reason === 'aborted' ? 'cancelled' : reason === 'max-tokens' ? 'interrupted' : reason === 'completed' && !current.failed && current.task.admitted ? 'completed' : 'failed'
+      await tasks.finish(current.task, outcome)
+      lifecycleMemory?.completed(current.task.runId, outcome, sessionId)
       if (active.get(sessionId) === current) active.delete(sessionId)
       await answerReview.finish(current.agent as ReviewAgent)
     })()
@@ -514,6 +518,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     stopped = true
     semanticCompaction.stop()
     modelHandoff.stop()
+    lifecycleMemory?.stop()
     lifecycle.abort(new Error('Kiokuko core stopped'))
     modules.stopIngress()
     for (const dispose of disposers.reverse()) { try { const result=dispose();if(result)disposalWork.push(result) } catch (error) { stopErrors.push(error) } }
@@ -526,6 +531,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     await answerReview.dispose()
     await semanticCompaction.drain()
     await modelHandoff.drain()
+    await lifecycleMemory?.whenIdle()
     await Promise.allSettled([...pending])
     await modules.dispose()
     await demand?.dispose()
@@ -543,6 +549,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   try {
     if (!skills?.registerProvider || !skills.snapshot || !tools?.schemas || !tools.guard || !tools.register || !sessions?.get || !sessions.flush || !agents?.get || !systemPrompt?.section) throw new Error('Core requires native Skill, prompt, tool, session and agent services')
     await runtime.start()
+    lifecycleMemory = new DshLifecycleMemory(ctx as any, runtime, root)
     await decisions.initialize()
     const provider = configuredSkillProvider(modules.resources(), prompts)
     disposers.push(() => provider.dispose())

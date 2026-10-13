@@ -37,7 +37,8 @@
     "migrations/035_owned_execution.sql",
     "migrations/036_coding_workflow.sql",
     "migrations/037_native_worker_routing.sql",
-    "migrations/038_coding_admission.sql"
+    "migrations/038_coding_admission.sql",
+    "migrations/039_memory_lifecycle.sql"
   ],
   "runtimeAssets": [
     "lisp/supervisor.mjs",

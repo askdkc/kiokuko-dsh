@@ -14,7 +14,7 @@ const scenarioRoutes = new Map([
 const contract = JSON.parse(readFileSync(join(root,'scripts/verification.json'),'utf8'))
 const optIn = contract.nativeScopeExclusions
 const aliases = new Set(contract.testAliases.map(item=>item.file))
-const suites = new Set([...optIn.map(item=>item.profile),'unit', 'integration', 'lisp', 'queued-intent', 'browser-approval', 'browser-shortcuts', 'browser-coding', 'e2e', 'e2e-core', 'e2e-agent', 'e2e-repeated', ...scenarioRoutes.keys()])
+const suites = new Set([...optIn.map(item=>item.profile),'unit', 'integration', 'ci-unit', 'ci-integration', 'ci-e2e', 'lisp', 'queued-intent', 'browser-approval', 'browser-shortcuts', 'browser-coding', 'e2e', 'e2e-core', 'e2e-agent', 'e2e-repeated', ...scenarioRoutes.keys()])
 function testFiles(directory) {
   return readdirSync(join(root, directory), { withFileTypes: true }).flatMap(entry => {
     const file = `${directory}/${entry.name}`
@@ -24,6 +24,26 @@ function testFiles(directory) {
 
 export function nativeCiPlan(suite, environment = process.env) {
   if (!suites.has(suite)) throw new Error('Usage: run-ci-native.mjs unit|integration|e2e')
+  // Only the explicit CI main partition omits source cases owned by Protected Lisp.
+  // Standalone unit/integration/e2e and local full/main verification remain complete.
+  if (['ci-unit', 'ci-integration', 'ci-e2e'].includes(suite)) {
+    const plan = nativeCiPlan(suite.slice(3), environment)
+    const lisp = nativeCiPlan('lisp', environment)
+    const owned = contract.checks.find(check => check.id === 'owned-native')
+    if (!owned || !owned.profiles.includes('lisp') || owned.argv[0] !== 'node'
+      || owned.argv[1] !== 'scripts/run-tests.mjs' || !owned.argv.slice(2).length
+      || owned.argv.slice(2).some(file => !file.endsWith('.test.ts'))) {
+      throw new Error('Protected Lisp source ownership is missing or unsupported')
+    }
+    const covered = new Set([...lisp.args.slice(1), ...owned.argv.slice(2)])
+    const files = plan.args.slice(1).filter(file => !covered.has(file))
+    if (!files.length) throw new Error('CI main source partition is empty')
+    // Removing Lisp paths must not silently increase the test runner's concurrency.
+    const concurrency = plan.env.KIOKUKO_TEST_CONCURRENCY
+      ?? (plan.args.slice(1).some(file => file.includes('/lisp/')) ? '2' : '4')
+    return { ...plan, args: [plan.args[0], ...files],
+      env: { ...plan.env, KIOKUKO_TEST_CONCURRENCY: concurrency } }
+  }
   const fixtureRoot = join(root, 'tests/fixtures', fixture)
   const manifest = JSON.parse(readFileSync(join(fixtureRoot, 'package.json'), 'utf8'))
   const env = { ...environment, KIOKUKO_DSH_PACKAGE_ROOT: join(fixtureRoot, 'node_modules'),
