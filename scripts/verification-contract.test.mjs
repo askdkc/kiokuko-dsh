@@ -111,3 +111,24 @@ test('SIGTERM preserves an interrupted terminal result with no completion succes
    writeFileSync(file,JSON.stringify({...report,...change}));const observed=spawnSync(process.execPath,['scripts/verify.mjs','--status',file],{cwd:root,encoding:'utf8'});assert.equal(observed.status,1);assert.equal(JSON.parse(observed.stdout).completionReady,false);
   }
  });
+
+test('the actual Python capability delegates FD4, terminal errors and cleanup to the production supervisor',()=>{
+ for(const kind of ['passed','nonzero','missing-command','missing-filter','output-limit']){
+  const root=mkdtempSync(path.join(tmpdir(),'verification-filter-fixture-'));mkdirSync(path.join(root,'scripts'));mkdirSync(path.join(root,'lisp'));mkdirSync(path.join(root,'dist/dsh/lisp'),{recursive:true});
+  writeFileSync(path.join(root,'package.json'),'{"type":"module"}');
+  cpSync(new URL('verify-protected-python-capability.mjs',import.meta.url),path.join(root,'scripts/probe.mjs'));
+  cpSync(new URL('../lisp/supervisor.mjs',import.meta.url),path.join(root,'lisp/supervisor.mjs'));
+  const expected='exact seccomp fixture bytes';
+  const childCode="const fs=require('node:fs');require('node:assert/strict').equal(fs.readFileSync(4,'utf8'),"+JSON.stringify(expected)+");"+(kind==='nonzero'?"process.exit(7)":kind==='output-limit'?"process.stdout.write('x'.repeat(32768))":"console.log('protected-python:3')");
+  writeFileSync(path.join(root,'dist/dsh/lisp/sandbox.js'),`
+import {mkdir,writeFile} from 'node:fs/promises';import path from 'node:path';import assert from 'node:assert/strict';
+export async function prepareLayout(base,library){await mkdir(path.join(base,'scratch'));await writeFile(${JSON.stringify(path.join(root,'layout.txt'))},base);return {base,library,scratch:path.join(base,'scratch')};}
+export async function sandboxLaunch(layout){assert.equal(layout.protected,true);const filter=path.join(layout.base,'filter');${kind==='missing-filter'?'':`await writeFile(filter,${JSON.stringify(expected)});`}
+ return {command:${JSON.stringify(kind==='missing-command'?path.join(root,'absent'):process.execPath)},args:['--eval',${JSON.stringify(childCode)}],cwd:layout.scratch,env:{},seccompPath:filter};}
+`);
+  const observed=spawnSync(process.execPath,['scripts/probe.mjs'],{cwd:root,encoding:'utf8',timeout:20000});
+  if(kind==='passed'){assert.equal(observed.status,0,observed.stderr);assert.equal(observed.stdout.trim(),'protected-python:3');}
+  else assert.equal(observed.status,1,kind+' must remain non-success');
+  const layout=readFileSync(path.join(root,'layout.txt'),'utf8');assert.equal(existsSync(layout),false,kind+' must remove its layout only after terminal child completion');
+ }
+});

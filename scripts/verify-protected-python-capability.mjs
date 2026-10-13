@@ -9,5 +9,5 @@ import {prepareLayout,sandboxLaunch} from '../dist/dsh/lisp/sandbox.js';
 const root=path.resolve(import.meta.dirname,'..');const base=await realpath(await mkdtemp(path.join(tmpdir(),'kiokuko-python-capability-')));
 try{const layout=await prepareLayout(base,path.join(root,'lisp'));layout.protected=true;
  const launch=await sandboxLaunch(layout,process.env.KIOKUKO_PYTHON_BIN??'python3',['-I','-c','import sys; print("protected-python:"+str(sys.version_info.major))'],'capability');
- const result=await promisify(execFile)(launch.command,launch.args,{cwd:launch.cwd,env:launch.env,timeout:10000,maxBuffer:16384});assert.equal(result.stdout.trim(),'protected-python:3');console.log(result.stdout.trim());
+ const result=await promisify(execFile)(process.execPath,[path.join(layout.library,'supervisor.mjs'),JSON.stringify({...launch,env:undefined,protocol:false})],{cwd:launch.cwd,env:launch.env,timeout:10000,maxBuffer:16384,killSignal:'SIGTERM'});assert.equal(result.stdout.trim(),'protected-python:3');console.log(result.stdout.trim());
 }finally{await rm(base,{recursive:true,force:true});}
