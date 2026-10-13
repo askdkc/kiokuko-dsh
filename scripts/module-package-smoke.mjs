@@ -145,12 +145,12 @@ try {
   ]
   const nativeResult = (request, id) => request.messages.flatMap(message => message.role === 'tool' && message.toolCallId === id ? [message]
     : (message.content ?? []).filter(block => block.type === 'tool-result' && block.toolCallId === id)).at(-1)
-  const prepare = (id, action) => request => {
+  const prepare = (id, action, changeScope = 'unknown') => request => {
     const text = request.messages.flatMap(message => message.source?.sections ?? [])
       .filter(section => section.name === 'on-demand-intake').at(-1)?.text
     const json = text?.split('Current request references and same-session work (host-bound, advisory only):\n')[1]?.split('\n')[0]
     assert.ok(json, 'Packed preparation requires current host references')
-    return call(id, 'prepare_requested_work', { requestIntent: { relation: 'new', action, evidenceRefs: JSON.parse(json).references } })
+    return call(id, 'prepare_requested_work', { requestIntent: { relation: 'new', action, changeScope, evidenceRefs: JSON.parse(json).references } })
   }
   provider.script.push(request => {
     assert.ok(request.tools.some(tool => tool.name === 'prepare_requested_work'))
@@ -201,10 +201,15 @@ try {
     })
   }
   // Public coding controls in every isolated composition, including core alone.
+  const checkedToolValue = id => {
+    const result = toolResults.get(id)
+    assert.ok(result && !result.isError && result.value, `Native ${id} failed: ${JSON.stringify(result)}`)
+    return result.value
+  }
   const coding = await ctx.agentLoop.create(session.SessionId('packed-coding'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
   const command = 'node --test --test-reporter=tap module-entry.test.mjs'
   const criterion = id => ({criterionId:id,revision:1,outcome:'Public entry returns 42',procedure:'Run actual public entry assertions',expected:'All selected assertions pass',evidence:'selected_tests'})
-  provider.script.push(prepare('coding-prepare','change'),call('coding-status','coding_workflow',{action:'status'}),()=>call('coding-propose','coding_workflow',{action:'propose',expectedRevision:toolResults.get('coding-status').value.revision,definition:{
+  provider.script.push(prepare('coding-prepare','change','implementation'),call('coding-status','coding_workflow',{action:'status'}),()=>call('coding-propose','coding_workflow',{action:'propose',expectedRevision:checkedToolValue('coding-status').revision,definition:{
     goal:{goalId:'goal',revision:1,ideal:'The public entry adds one to its numeric input',target:'module-entry.mjs',outOfScope:['Publication'],constraints:['Use Node'],requestBasis:'Implement module-entry.mjs',criterionIds:['entry']},
     items:[{itemId:'implementation',change:'Create the public entry and assertions',dependsOn:[],criterionIds:['regression'],goalCriterionIds:['entry']}],criteria:[criterion('regression'),criterion('entry')]
   }}),call('coding-write','kioku_write',{path:'module-entry.mjs',content:"console.log(Number(process.argv[2])+1)\n"}),call('coding-write-test','kioku_write',{path:'module-entry.test.mjs',content:"import test from 'node:test';import assert from 'node:assert/strict';import {execFileSync} from 'node:child_process';test('public entry',()=>assert.equal(execFileSync(process.execPath,['module-entry.mjs','41'],{encoding:'utf8'}).trim(),'42'))\n"}))

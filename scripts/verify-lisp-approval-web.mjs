@@ -68,7 +68,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
  const prepare=input=>{const text=input.messages.flatMap(message=>message.source?.sections??[]).filter(section=>section.name==='on-demand-intake').at(-1)?.text;
  const json=text?.split('Current request references and same-session work (host-bound, advisory only):\\n')[1]?.split('\\n')[0];
  if(!json)throw new Error('Missing current host references before Lisp approval');
- return mock.toolCallResponse(prepareId,'prepare_requested_work',{taskType,requestIntent:{relation:'new',action:mode.startsWith('apply')?'change':'verify',evidenceRefs:JSON.parse(json).references}})};
+ return mock.toolCallResponse(prepareId,'prepare_requested_work',{taskType,requestIntent:{relation:'new',action:mode.startsWith('apply')?'change':'verify',changeScope:mode.startsWith('apply')?'document':'unknown',evidenceRefs:JSON.parse(json).references}})};
  responses.push(...mock.prepareWork([mock.toolCallResponse(callId,'lisp_eval',{operationId:randomUUID(),code}),(input)=>{result=nativeToolResults(input.messages).find(value=>value.toolCallId===callId);return mock.textResponse('Fixture complete')}],taskType,prepareId,prepare));
  agent.followup(llm.createUserMessage({content:[{type:'text',text:mode.startsWith('apply')?'Save the requested note in change.txt using Lisp.':'Verify the repository using Lisp. 通常実行で。'}],source:{kind:'user'}}));await agent.whenIdle();
  }

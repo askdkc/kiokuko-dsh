@@ -48,7 +48,7 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
     const decisions = new DecisionService(configuration, config => ({ capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 }, async evaluate(batch) {
       if (batch.purpose === 'akinator' || batch.purpose === 'request-intent') classified.push(batch.state)
       if (host === 'full-laya-unavailable') throw new DecisionError('UNAVAILABLE')
-      return { provider: config.provider, requestedModel: config.provider === 'laya-coreml' ? 'laya-rl-agent' : config.typesafe.model, policyVersion: 'queued-fixture', answers: batch.questions.map(q => (['task-type', 'request-relation', 'request-action'].includes(q.id) || q.id.startsWith('request-proposal-')) && host !== 'full-laya-abstain'
+      return { provider: config.provider, requestedModel: config.provider === 'laya-coreml' ? 'laya-rl-agent' : config.typesafe.model, policyVersion: 'queued-fixture', answers: batch.questions.map(q => (['task-type', 'request-relation', 'request-action', 'request-change-scope'].includes(q.id) || q.id.startsWith('request-proposal-')) && host !== 'full-laya-abstain'
         ? { id: q.id, status: 'selected' as const, choiceId: ({ 'task-type': 'debug', 'request-relation': (batch.state as { currentUserMessage?: string }).currentUserMessage === instructions[1] ? 'same_scope_continuation' : 'new', 'request-action': 'change', 'request-change-scope': 'implementation' } as Record<string, string>)[q.id] ?? 'not_selected' } : { id: q.id, status: 'abstained' as const, reason: 'insufficient' as const }) }
     } }))
     try {
