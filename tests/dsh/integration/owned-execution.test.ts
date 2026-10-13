@@ -14,6 +14,7 @@ import {recallScopedMemory} from '../../../src/memory/scoped-memory.js'
 import {ownedRunEvidence,linkOwnedMemoryEvidence,memoryExecutionEvidence} from '../../../src/dsh/owned-evidence.js'
 import {implementationRequested} from '../../../src/dsh/plan-transition.js'
 import {parseTestSummary} from '../../../src/dsh/node-tap-summary.js'
+import {ExecutionJournal} from '../../../src/dsh/execution-journal.js'
 import {DshMemoryFinalizer,type DshLogEvent} from '../../../src/dsh/session-memory-finalizer.js'
 import {MemoryEvolutionConfig} from '../../../src/memory/evolution/contracts.js'
 import {CoreTasks} from '../../../src/dsh/core/tasks.js'
@@ -25,7 +26,7 @@ const OwnedExecutionService:typeof SourceOwnedExecutionService=ownedPackageRoot?
 async function finalize(f:Awaited<ReturnType<typeof fixture>>,result:any,failStorage=false){
   const events:DshLogEvent[]=[
     {seq:1,time:1,type:'turn/start',data:{turn:1}},
-    {seq:2,time:2,type:'user/message',surfaceOp:'append',data:{role:'user',source:{kind:'user'},content:[{type:'text',text:'Cargo parser: edit and verify selected tests.'}]}},
+    {seq:2,time:2,type:'user/message',surfaceOp:'append',data:{role:'user',source:{kind:'user'},content:[{type:'text',text:'Parser: edit and verify selected tests.'}]}},
     {seq:3,time:3,type:'request/header',data:{header:{config:{provider:'fixture',model:'fixture'}}}},
     {seq:4,time:4,type:'request/context',data:{contextWindow:100000}},
     {seq:5,time:5,type:'tool/call',data:{callId:result.receipt.operationId,name:'kioku_exec',arguments:{command:result.receipt.command}}},
@@ -42,8 +43,8 @@ async function finalize(f:Awaited<ReturnType<typeof fixture>>,result:any,failSto
       const evidence=reconciliation.evidence.find((item:any)=>item.id===result.receipt.evidenceRef)
       assert.ok(evidence)
       calls++
-      const body='Cargo parser: the selected source-bound check passed in this run; changed sources require a new check.'
-      yield {type:'text-delta',text:JSON.stringify({schemaVersion:4,memoryOperations:[{action:'add',kind:'lesson',title:'Cargo parser verification condition',body,evidenceIds:[evidence.id],claims:[{id:'check',text:body,evidence:[{evidenceId:evidence.id,supportingText:'"verification":"passed"'}]}]}]})}
+      const body='Parser: the selected source-bound check passed in this run; changed sources require a new check.'
+      yield {type:'text-delta',text:JSON.stringify({schemaVersion:4,memoryOperations:[{action:'add',kind:'lesson',title:'Parser verification condition',body,evidenceIds:[evidence.id],claims:[{id:'check',text:body,evidence:[{evidenceId:evidence.id,supportingText:'"verification":"passed"'}]}]}]})}
       yield {type:'finish',reason:{kind:'stop'}}
     }}})
   let finalizer=createFinalizer()
@@ -73,7 +74,7 @@ async function fixture(){
   await mkdir(join(root,'.git'));await mkdir(join(root,'src'))
   await writeFile(join(root,'src/check.test.mjs'),"import test from 'node:test';test('actual process',()=>{});\n")
   let db=openConnection(join(root,'state.sqlite3'));migrateDatabase(db)
-  const task=await prepareAgentTask(db,{requestId:'owned',cwd:root,task:'Cargo parser\n完了条件:\n- テストが成功する',dshSessionId:'owned-session',completionMode:'enforce',profileHints:{taskType:'research',target:'src',expected:'tests pass',constraints:null},capabilities:[],skillDiscoveryMode:'off'})
+  const task=await prepareAgentTask(db,{requestId:'owned',cwd:root,task:'Parser\n完了条件:\n- テストが成功する',dshSessionId:'owned-session',completionMode:'enforce',profileHints:{taskType:'research',target:'src',expected:'tests pass',constraints:null},capabilities:[],skillDiscoveryMode:'off'})
   const agent={id:'owned-agent'},identity:ExecutionIdentity={runId:task.run.runId,sessionId:'owned-session',workspace:task.project.workspace,repositoryRoot:root,generation:'generation-1',agent}
   let unavailable=false,plan=false,approvals=0
   const runtime:any={withDatabase:async(fn:any)=>{if(unavailable)throw new Error('storage failed');return fn(db)}}
@@ -88,7 +89,7 @@ async function fixture(){
 test('edit -> real test -> durable evidence -> candidate memory -> restart -> recall with fresh/stale source state',async()=>{
   const f=await fixture()
   try {
-    const edited=await f.execute('kioku_edit',{path:'src/check.test.mjs',oldText:'actual process',newText:'Cargo parser'},'edit')
+    const edited=await f.execute('kioku_edit',{path:'src/check.test.mjs',oldText:'actual process',newText:'Parser'},'edit')
     assert.equal(edited.applied,true);assert.notEqual(edited.receipt.targets[0].before,edited.receipt.targets[0].after)
     const command='node --test --test-reporter=tap check.test.mjs';f.bind(command)
     const result=await f.execute('kioku_exec',{command:"'node' '--test' '--test-reporter=tap' 'check.test.mjs'",cwd:'src'},'test')
@@ -99,13 +100,13 @@ test('edit -> real test -> durable evidence -> candidate memory -> restart -> re
     assert.throws(()=>linkOwnedMemoryEvidence(f.db,entry,[],[result.receipt.evidenceRef],f.identity),/missing|another run/)
     assert.throws(()=>linkOwnedMemoryEvidence(f.db,entry,ownedRunEvidence(f.db,f.identity.runId,f.identity.sessionId),[result.receipt.evidenceRef],{...f.identity,runId:'another-run'}),/another run/)
     await f.restart()
-    const recall=await recallScopedMemory(f.db,{cwd:f.root,query:'Cargo parser',limit:5,maxChars:4000})
+    const recall=await recallScopedMemory(f.db,{cwd:f.root,query:'Parser',limit:5,maxChars:4000})
     assert.ok(JSON.stringify(recall).includes(entry.id))
     assert.equal(readEntry(f.db,{workspace:f.identity.workspace,entryId:entry.id}).status,'candidate')
     assert.equal(memoryExecutionEvidence(f.db,entry.id,entry.revision)[0]!.checks[0]!.state,'passed')
     const tasks=new CoreTasks({withDatabase:async(fn:any)=>fn(f.db)} as any)
-    const next=await tasks.prepare({requestId:'next-owned-request',sessionId:'next-owned-session',turn:2,task:'Implement Cargo parser verification condition tests',cwd:f.root,
-      profileHints:{taskType:'build',target:'Cargo parser src/check.test.mjs',expected:'Verify changed Cargo parser tests',constraints:'Preserve source-bound verification'},
+    const next=await tasks.prepare({requestId:'next-owned-request',sessionId:'next-owned-session',turn:2,task:'Implement Parser verification condition tests',cwd:f.root,
+      profileHints:{taskType:'build',target:'Parser src/check.test.mjs',expected:'Verify changed Parser tests',constraints:'Preserve source-bound verification'},
       capabilities:['kiokuko-soul','memory-reasoning'].map(name=>({kind:'skill' as const,name})),signal:new AbortController().signal})
     assert.equal(next.admitted,true)
     assert.ok(JSON.stringify(next.memory).includes(entry.id),'a new admitted request retrieves the stored candidate')
@@ -118,7 +119,7 @@ test('edit -> real test -> durable evidence -> candidate memory -> restart -> re
     assert.equal(memoryExecutionEvidence(f.db,entry.id,entry.revision)[0]!.checks[0]!.state,'passed')
     await f.execute('kioku_write',{path:'src/check.test.mjs',content:'changed'},'changed')
     assert.equal(memoryExecutionEvidence(f.db,entry.id,entry.revision)[0]!.checks[0]!.state,'stale')
-    const replay=await f.execute('kioku_edit',{path:'src/check.test.mjs',oldText:'actual process',newText:'Cargo parser'},'edit')
+    const replay=await f.execute('kioku_edit',{path:'src/check.test.mjs',oldText:'actual process',newText:'Parser'},'edit')
     assert.equal(replay.replayed,true);assert.equal(await readFile(join(f.root,'src/check.test.mjs'),'utf8'),'changed')
   }finally{await f.cleanup()}
 })
@@ -136,13 +137,31 @@ test('an actual failing process cannot become passed through JSON or Lisp claims
 test('asynchronous result collection and storage retry never replay process effects',async()=>{
   const f=await fixture()
   try{
-    const command=`node -e 'require("fs").appendFileSync("counter","x")'`
+    const command=`node -e 'require("fs").appendFileSync("counter","x");console.log("ordinary stdout");console.error("ordinary stderr")'`
+    f.bind(command,'.')
     const started=await f.execute('kioku_exec',{command,background:true},'async')
     let result:any
     for(let i=0;i<100;i++){result=await f.execute('kioku_result',{operationId:started.receipt.operationId},'poll-'+i);if(result.receipt.state!=='started')break;await new Promise(done=>setTimeout(done,10))}
     assert.equal(result.receipt.state,'completed')
+    assert.equal(result.exitCode,0);assert.match(result.output,/ordinary stdout/);assert.match(result.output,/ordinary stderr/)
+    assert.equal(result.receipt.summary,undefined)
+    assert.equal(result.receipt.verification,'unknown','unrecognized successful output cannot prove selected tests passed')
+    assert.equal(assessTaskCompletion(f.db,f.identity.runId).criteria[0]!.state,'unknown')
     await f.execute('kioku_result',{operationId:started.receipt.operationId},'again')
-    await f.restart();await f.execute('kioku_result',{operationId:started.receipt.operationId},'after-restart')
+    // Seed an older serialized receipt; reading it must not reinterpret its
+    // optional metadata as new verification or repeat the original process.
+    const journal=new ExecutionJournal(join(f.root,'.kioku','execution-journal'))
+    const stored=await journal.read(started.receipt.operationId)
+    assert.ok(stored)
+    const legacySummary={tests:1,pass:1,fail:0,cancelled:0,skipped:0,todo:0,filtered:2,measured:0}
+    stored.receipt.summary=legacySummary
+    await journal.save(stored)
+    f.db.prepare('UPDATE dsh_owned_operations SET receipt_json=? WHERE operation_id=?').run(JSON.stringify(stored.receipt),started.receipt.operationId)
+    await f.restart()
+    const restored=await f.execute('kioku_result',{operationId:started.receipt.operationId},'after-restart')
+    assert.deepEqual(restored.receipt.summary,legacySummary);assert.equal(restored.receipt.verification,'unknown')
+    const saved=JSON.parse(f.db.prepare('SELECT receipt_json FROM dsh_owned_operations WHERE operation_id=?').get<{receipt_json:string}>(started.receipt.operationId)!.receipt_json)
+    assert.deepEqual(saved.summary,legacySummary)
     assert.equal(await readFile(join(f.root,'counter'),'utf8'),'x')
     f.setUnavailable(true)
     const write=await f.execute('kioku_write',{path:'saved.txt',content:'developer result'},'save-failure')
@@ -175,30 +194,11 @@ test('Plan, generation, cancellation and explicit destructive review remain sepa
   }finally{await f.cleanup()}
 })
 
-test('whole output is parsed before preview and incomplete/zero/ignored Cargo coverage is distinct',()=>{
+test('whole Node TAP output is parsed before the public preview',()=>{
   const trailer='\n# tests 1\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n'
-  assert.equal(parseTestSummary('diagnostic\n'.repeat(10000)+trailer,true)?.tests,1)
-  assert.equal(parseTestSummary('running 1 test\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s')?.skipped,1)
-  assert.equal(parseTestSummary('running 0 tests\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'),undefined)
-  assert.equal(parseTestSummary('running 2 tests\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'),undefined)
-})
-
-test('actual Cargo harness records selected tests, filtered coverage and ignored tests',{
-  skip:process.env.KIOKUKO_REQUIRE_CARGO_RUNTIME!=='1'?'requires explicit Cargo runtime acceptance':false,
-},async()=>{
-  const f=await fixture()
-  try{
-    await mkdir(join(f.root,'rust/src'),{recursive:true})
-    await writeFile(join(f.root,'rust/Cargo.toml'),'[package]\nname="owned_receipt_fixture"\nversion="0.1.0"\nedition="2021"\n')
-    await writeFile(join(f.root,'rust/src/lib.rs'),'#[test] fn selected() { assert_eq!(2+2,4); }\n#[test] #[ignore] fn ignored() {}\n')
-    const sources=['rust/Cargo.toml','rust/src/lib.rs'],selected='cargo test --offline selected'
-    f.bind(selected,'rust',sources)
-    const passed=await f.execute('kioku_exec',{command:selected,cwd:'rust'},'cargo-selected')
-    assert.equal(passed.exitCode,0,passed.output);assert.equal(passed.receipt.verification,'passed');assert.equal(passed.receipt.summary.tests,1);assert.equal(passed.receipt.summary.filtered,1)
-    const all='cargo test --offline';f.bind(all,'rust',sources)
-    const ignored=await f.execute('kioku_exec',{command:all,cwd:'rust'},'cargo-ignored')
-    assert.equal(ignored.exitCode,0,ignored.output);assert.equal(ignored.receipt.verification,'failed');assert.equal(ignored.receipt.summary.skipped,1)
-  }finally{await f.cleanup()}
+  const output='diagnostic\n'.repeat(10000)+trailer
+  assert.equal(parseTestSummary(output,true)?.tests,1)
+  assert.equal(parseTestSummary(output),undefined,'only complete host output may bypass the preview size limit')
 })
 
 test('actual timeout and background cancellation persist terminal flags without replaying effects',async()=>{

@@ -1,3 +1,4 @@
+/** Historical receipts may retain optional filtered/measured metadata. */
 export interface TapSummary { tests: number; pass: number; fail: number; cancelled: number; skipped: number; todo: number; filtered?:number; measured?:number }
 const TAP_KEYS = ['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo'] as const
 
@@ -13,30 +14,13 @@ export function parseNodeTapSummary(output: string, completeHostOutput = false):
   return summary.tests === summary.pass + summary.fail + summary.cancelled + summary.skipped + summary.todo ? summary : undefined
 }
 
-/** Cargo emits one terminal summary for each harness, including doc tests. */
-export function parseCargoSummary(output: string): TapSummary | undefined {
-  const starts = [...output.matchAll(/^running (\d+) tests?\s*$/gmu)]
-  const ends = [...output.matchAll(/^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out; finished in .+$/gmu)]
-  if (!starts.length || starts.length !== ends.length) return undefined
-  const total: TapSummary = {tests:0,pass:0,fail:0,cancelled:0,skipped:0,todo:0}
-  for (let i = 0; i < ends.length; i++) {
-    const end = ends[i]!, start = starts[i]!
-    const pass = Number(end[2]), fail = Number(end[3]), skipped = Number(end[4]) + Number(end[5])
-    if (start.index! >= end.index! || (i > 0 && start.index! <= ends[i - 1]!.index!)
-      || Number(start[1]) !== pass + fail + skipped || end[1] === 'FAILED' && fail === 0) return undefined
-    total.tests += Number(start[1]); total.pass += pass; total.fail += fail; total.skipped += skipped
-    total.filtered=(total.filtered??0)+Number(end[6]);total.measured=(total.measured??0)+Number(end[5])
-  }
-  return total.tests > 0 ? total : undefined
-}
-
 export function parseTestSummary(output: string, completeHostOutput = false): TapSummary | undefined {
-  return parseNodeTapSummary(output, completeHostOutput) ?? parseCargoSummary(output)
+  return parseNodeTapSummary(output, completeHostOutput)
 }
 
 /** Node counts an assertion-free test file as a passing implicit file test. */
 export function hasExplicitTestCases(output: string): boolean {
-  return parseCargoSummary(output) !== undefined || [...output.matchAll(/^\s*# Subtest: (.+)\s*$/gmu)]
+  return [...output.matchAll(/^\s*# Subtest: (.+)\s*$/gmu)]
     .some(match => !/(?:^|[/\\])[^/\\]*\.(?:ts|[cm]?js)$/u.test(match[1]!.trim()))
 }
 

@@ -31,7 +31,7 @@ const require=createRequire(path.join(root,'package.json'));
 const npmrc=path.join(output,'empty.npmrc');writeFileSync(npmrc,'');
 const baseEnv={...process.env,...contract.environment,npm_config_cache:path.join(output,'npm-cache'),npm_config_userconfig:npmrc,NPM_CONFIG_USERCONFIG:npmrc};
 delete baseEnv.npm_config_allow_scripts;delete baseEnv.NPM_CONFIG_ALLOW_SCRIPTS;
-if(contract.native){const {nativeCiPlan}=await import('./run-ci-native.mjs');Object.assign(baseEnv,nativeCiPlan('unit',baseEnv).env);baseEnv.KIOKUKO_REQUIRE_LISP_RUNTIME='1';baseEnv.KIOKUKO_REQUIRE_CARGO_RUNTIME='1';baseEnv.KIOKUKO_REQUIRE_DSH_CLI='1';const bin=path.join(baseEnv.KIOKUKO_DSH_PACKAGE_ROOT,'.bin');baseEnv.PATH=bin+path.delimiter+baseEnv.PATH;if(existsSync(path.join(bin,'dsh')))baseEnv.DSH_BIN=path.join(bin,'dsh');}
+if(contract.native){const {nativeCiPlan}=await import('./run-ci-native.mjs');Object.assign(baseEnv,nativeCiPlan('unit',baseEnv).env);baseEnv.KIOKUKO_REQUIRE_LISP_RUNTIME='1';baseEnv.KIOKUKO_REQUIRE_DSH_CLI='1';const bin=path.join(baseEnv.KIOKUKO_DSH_PACKAGE_ROOT,'.bin');baseEnv.PATH=bin+path.delimiter+baseEnv.PATH;if(existsSync(path.join(bin,'dsh')))baseEnv.DSH_BIN=path.join(bin,'dsh');}
 baseEnv.KIOKUKO_REQUIRE_SQLITE_VEC_SMOKE='1';
 delete baseEnv.NODE_PATH;delete baseEnv.NODE_TEST_CONTEXT;
 async function command(argv,env=baseEnv,log='command') {

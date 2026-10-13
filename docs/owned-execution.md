@@ -51,8 +51,8 @@ be reconstructed from a model's success report. After restart, saved receipts re
 Register conditions and source/test/configuration paths with `task_completion`
 before running the check. Memory application reviews may specify a repository-relative `cwd`; omitted values retain the historical repository-root meaning. Actual directory, command, source digest, run and generation must match. Owned shell and Lisp process calls feed the existing
 completion and memory-application records. Exit zero alone does not establish
-test success: complete Node TAP and Cargo harness summaries distinguish passed,
-failed, cancelled, ignored/skipped, filtered and zero/incomplete test runs.
+test success: complete Node TAP summaries distinguish passed, failed, cancelled,
+skipped/todo and zero/incomplete test runs.
 Include every relevant input in the registered source set.
 
 Finalization receives structured observations and source-bound checks. Candidate
@@ -84,7 +84,7 @@ plan does not exit it.
 ```sh
 npm run typecheck
 KIOKUKO_REQUIRE_DSH_NATIVE=1 KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" node scripts/run-tests.mjs tests/dsh/integration/owned-native-lifecycle.test.ts
-KIOKUKO_REQUIRE_CARGO_RUNTIME=1 node scripts/run-tests.mjs tests/dsh/integration/owned-execution.test.ts
+node scripts/run-tests.mjs tests/dsh/integration/owned-execution.test.ts
 KIOKUKO_REQUIRE_LISP_RUNTIME=1 KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" npm run test:lisp
 npm run build
 npm run test:skill-delivery

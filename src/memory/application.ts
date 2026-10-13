@@ -385,7 +385,7 @@ export function completeMemoryExecution(db: SqliteDatabase, identity: MemoryAppl
     const skipped = value?.skipped === true || /(?:# SKIP\b|\b[1-9]\d* (?:skipped|pending)\b|# (?:skipped|todo) [1-9])/iu.test(content)
     const hostSummary = isHostExecutionResult(result) ? result.value.summary : undefined
     const unknown = !isHostExecutionResult(result) && rawContent.length > 64_000 || !Number.isSafeInteger(exit) || value?.kind === 'background' || skipped
-      || isHostExecutionResult(result) && selected.some(row=>/\b(?:test|cargo)\b/iu.test((JSON.parse(row.review_json) as MemoryApplicationReview).command??'')) && !hostSummary
+      || isHostExecutionResult(result) && selected.some(row=>/\btest\b/iu.test((JSON.parse(row.review_json) as MemoryApplicationReview).command??'')) && !hostSummary
     const failed=exit!==undefined&&exit!==0 || r?.isError || value?.timedOut || value?.aborted || value?.signal!=null || hostSummary && (hostSummary.fail>0 || hostSummary.skipped>0 || hostSummary.cancelled>0 || hostSummary.todo>0)
     const outcome = value?.kind === 'background' ? 'running' : !fresh ? 'stale' : failed ? 'failed' : unknown ? 'unknown' : 'passed'
     db.prepare('UPDATE task_memory_executions SET outcome=?,exit_code=?,result_hash=? WHERE run_id=? AND call_id=? AND outcome=\'running\'')

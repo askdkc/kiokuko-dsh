@@ -30,11 +30,11 @@ jobs:
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then
             sudo apt-get update
-            sudo apt-get install -y sbcl bubblewrap python3 cargo
+            sudo apt-get install -y sbcl bubblewrap python3
             # Dedicated CI runner: permit the user namespaces required by bwrap.
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           else
-            brew install sbcl python rust
+            brew install sbcl python
           fi
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/dsh-runtime
