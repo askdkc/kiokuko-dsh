@@ -5,23 +5,13 @@ import { pathToFileURL } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { parseNodeTapSummary } from '../src/dsh/node-tap-summary.js'
 
-const scenarios = [
-  ['normal-unmet', 'tests/dsh/integration/task-completion-lifecycle.test.ts', 'normal enforce keeps the run open until every approved condition has fresh host evidence'],
-  ['enno-unmet', 'tests/dsh/integration/final-verification/repository-mutation.test.ts', 'opted-in Enno acceptance requires a pre-bound fresh verifier for every criterion'],
-  ['required-skip', 'tests/dsh/integration/final-verification/repository-mutation.test.ts', 'opted-in Enno selected-test criterion rejects an exit-zero run with a skipped required test'],
-  ['normal-selected-skip', 'tests/dsh/unit/task-completion.test.ts', 'a selected skipped test is unmet while an unsupported or incomplete output is unknown'],
-  ['post-accept-edit', 'tests/dsh/integration/final-verification/repository-mutation.test.ts', 'an external edit after acceptance returns meditation to verification'],
-  ['cold-start-policy', 'tests/dsh/unit/execution-support.test.ts', 'cold-start policy read failure blocks structured file operations until the saved frame is restored'],
-  ['never-settling-flush', 'tests/dsh/integration/boundary-worker.test.ts', 'an unresponsive native flush times out without dispatch or an overlapping retry'],
-  ['dispatch-replay', 'tests/dsh/integration/boundary-worker.test.ts', 'dispatch-before-observed crash survives worker restart with the same deterministic delivery id'],
-  ['compacted-context', 'tests/dsh/integration/context-projection.test.ts', 'compaction and restart reinstate only fragments missing from the retained surface'],
-  ['context-provenance', 'tests/dsh/unit/agenticreplay-request-manifest.test.ts', 'AgenticReplay metadata records current host section digests without source text or a forged user section'],
-  ['native-resume', 'tests/dsh/e2e/native-agent-loop.test.ts', 'real DSH agent loop: persisted resume, verification retry, completion (text)'],
-  ['native-default-resume', 'tests/dsh/e2e/native-agent-loop.test.ts', 'real DSH agent loop: persisted resume, verification retry, completion (default_resume)'],
-]
+const manifestBytes = await readFile(new URL('../tests/fixtures/harness/expected-manifest.json', import.meta.url))
+const manifest = JSON.parse(manifestBytes)
+const scenarios = manifest.scenarios.map(({id,file,name}) => [id,file,name])
+if (manifest.schema !== 'harness-scenarios-v1' || !scenarios.length || new Set(scenarios.map(([id])=>id)).size !== scenarios.length) throw new Error('Invalid fixed scenario manifest')
 // A fixture change is reviewed with this digest rather than silently changing
 // what the mandatory offline gate measures.
-const EXPECTED_FIXTURE_DIGEST = '9f44c333a522e34c3fec6771bd76e3b93bc47e529fd457021a62a5113d0b2099'
+if (JSON.stringify(manifest.expected) !== JSON.stringify({tests:1,passed:1,failed:0,skipped:0,todo:0})) throw new Error('Harness requires one passing, non-skipped selected test per scenario')
 const root = process.cwd()
 const reportPath = resolve(process.env.KIOKUKO_HARNESS_REPORT ?? '.artifacts/harness-report.json')
 await rm(reportPath, { force: true })
@@ -31,10 +21,10 @@ const fixtureAvailable = await stat(existingRoot).then(value => value.isDirector
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
 const workingTreeClean = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim() === ''
 const fixtureDigest = createHash('sha256')
-for (const file of [...new Set(scenarios.map(([, file]) => file))]) fixtureDigest.update(file).update(await readFile(file))
+fixtureDigest.update(manifestBytes)
 const packageJson = JSON.parse(await readFile('tests/fixtures/dsh-runtime/package.json', 'utf8'))
 const report = { schemaVersion: 1, invocationId: randomUUID(), commit, workingTreeClean,
-  nodeVersion: process.version, dshVersion: packageJson.dependencies?.['@deepseek-ai/dsh-agent'] ?? 'unknown',
+  nodeVersion: process.version, dshVersion: packageJson.dependencies?.['@deepseek-ai/dsh'] ?? 'unknown',
   fixtureDigest: fixtureDigest.digest('hex'), mode: 'offline-native', scenarios: [],
   summary: { expected: scenarios.length, passed: 0, failed: 0, skipped: 0 }, realModelQuality: 'unmeasured' }
 
@@ -55,8 +45,8 @@ async function run(file, name) {
   const exitCode = await new Promise(resolve => child.once('exit', (code, signal) => resolve(signal ? 1 : code ?? 1)))
   clearTimeout(timer)
   const observed = parseNodeTapSummary(output)
-  const status = !timedOut && exitCode === 0 && observed?.tests === 1 && observed.pass === 1
-    && observed.fail === 0 && observed.skipped === 0 && observed.todo === 0 ? 'passed'
+  const status = !timedOut && exitCode === 0 && observed?.tests === manifest.expected.tests && observed.pass === manifest.expected.passed
+    && observed.fail === manifest.expected.failed && observed.skipped === manifest.expected.skipped && observed.todo === manifest.expected.todo ? 'passed'
       : observed?.skipped ? 'skipped' : 'failed'
   return { status, expected: { test: name, tests: 1, skipped: 0 },
     observed: { exitCode, tests: observed?.tests ?? null, pass: observed?.pass ?? null,
@@ -67,19 +57,12 @@ async function run(file, name) {
 }
 
 try {
-  if (report.fixtureDigest !== EXPECTED_FIXTURE_DIGEST) {
-    for (const [id, , name] of scenarios) report.scenarios.push({ id, status: 'failed', expected: { test: name },
-      observed: {}, elapsedMs: 0, reasonCode: 'fixture_digest_mismatch' })
-    report.summary.failed = scenarios.length
-    process.stderr.write('Harness fixture digest changed; review the fixed scenarios and update the expected digest.\n')
-  } else {
     for (const [id, file, name] of scenarios) {
       const result = await run(file, name)
       report.scenarios.push({ id, ...result })
       report.summary[result.status]++
       process.stdout.write(`${result.status === 'passed' ? 'PASS' : result.status === 'skipped' ? 'SKIP' : 'FAIL'} ${id}${result.reasonCode ? ` (${result.reasonCode})` : ''}\n`)
     }
-  }
 } finally {
   await mkdir(dirname(reportPath), { recursive: true })
   await writeFile(reportPath, JSON.stringify(report, null, 2) + '\n')

@@ -266,22 +266,24 @@ async function createAndSmokeTestTarball() {
   const extractRoot = join(work, 'extract')
   const consumerRoot = join(work, 'consumer')
   await Promise.all([mkdir(packageOutput), mkdir(extractRoot), mkdir(consumerRoot)])
-  const packed = JSON.parse((await exec('npm', ['pack', '--json', '--pack-destination', packageOutput, '--ignore-scripts'], {
+  const packed = process.env.KIOKUKO_VERIFY_TARBALL ? JSON.parse(await readFile(process.env.KIOKUKO_VERIFY_PACK_METADATA, 'utf8')) : JSON.parse((await exec('npm', ['pack', '--json', '--pack-destination', packageOutput, '--ignore-scripts'], {
     cwd: root,
     env: { ...process.env, npm_config_cache: cache, npm_config_dry_run: 'false' },
     maxBuffer: 16 * 1024 * 1024,
   })).stdout)
   const filename = packed[0]?.filename
   if (typeof filename !== 'string' || filename.length === 0) throw new Error('npm pack did not produce a tarball')
-  const tarball = join(packageOutput, filename)
+  const tarball = process.env.KIOKUKO_VERIFY_TARBALL ?? join(packageOutput, filename)
   await exec('tar', ['-xzf', tarball, '-C', extractRoot])
-  const packageRoot = join(extractRoot, 'package')
+  const extractedRoot = join(extractRoot, 'package')
   // Import the packed private readers before development dependencies can satisfy a leaked import.
   await exec(process.execPath, ['--input-type=module', '--eval',
-    `await import(${JSON.stringify(join(packageRoot, 'dist/dsh/legacy-session-codecs.js'))})`], {
+    `await import(${JSON.stringify(join(extractedRoot, 'dist/dsh/legacy-session-codecs.js'))})`], {
     cwd: extractRoot, env: { PATH: process.env.PATH, HOME: work },
   })
-  await symlink(join(root, 'node_modules'), join(packageRoot, 'node_modules'), 'dir')
+  await writeFile(join(consumerRoot, 'package.json'), '{"private":true,"type":"module"}\n')
+  await exec('npm', ['install', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', tarball], { cwd: consumerRoot, env: { PATH: process.env.PATH, HOME: work, npm_config_cache: cache }, timeout: 180_000, maxBuffer: 16 * 1024 * 1024 })
+  const packageRoot = join(consumerRoot, 'node_modules', 'kiokuko-dsh')
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
   await assertDshClientArtifact(packageRoot)
   if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') {
@@ -403,8 +405,6 @@ async function createAndSmokeTestTarball() {
     } finally { os.homedir = homedir; }
   `
   const smokePath = join(consumerRoot, 'import-smoke.mjs')
-  await mkdir(join(consumerRoot, 'node_modules'))
-  await symlink(packageRoot, join(consumerRoot, 'node_modules', 'kiokuko-dsh'), 'dir')
   await writeFile(smokePath, smokeCode, 'utf8')
   await exec(process.execPath, [smokePath], { cwd: consumerRoot, maxBuffer: 1024 * 1024 })
   return { filename, fileCount: packed[0]?.files?.length ?? 0, packageSize: packed[0]?.size, unpackedSize: packed[0]?.unpackedSize }

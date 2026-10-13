@@ -63,3 +63,15 @@ DSH の実装タスクでは、初回の変更前に `coding_workflow status` �
 - ユーザーには、変更内容、確認できた通常利用、実行した検証と結果、残る制約を簡潔に報告する。再現・実装・ローカル検証・公開／本番反映は別々の事実として扱う。許可のない公開やデプロイを完了条件に追加しない。
 
 この Skill は実行時の判断を支援する手順であり、ホストによる毎回の呼び出しや不具合の完全防止を保証する仕組みではない。
+
+## Repository verification entry
+
+When the target repository defines `npm run verify`, read `npm run verify:plan`
+(or `npm run verify -- --plan --profile <profile>`) and use that declared scope.
+Run the same profile locally and in CI; do not reconstruct independent checks
+from CI YAML. `npm test` and focused commands are partial evidence. The JSON
+result records each required check, prerequisite failure, platform exclusion,
+and source/artifact identity. Only a current full-scope `completionReady: true`
+result supports full verification. Recheck saved results with
+`npm run verify -- --status <result.json>` after related edits or artifact changes.
+Never derive skip permissions or expected failures from observed test output.

@@ -356,13 +356,13 @@ async function runCliLifecycle(nativeDependencies) {
     const packageCommit = (await run('git', ['rev-parse', 'HEAD'], env)).stdout.trim()
     if (!/^[0-9a-f]{40}$/u.test(packageCommit)) throw new Error('git did not return an exact package Commit')
     const workingTreeClean = (await run('git', ['status', '--porcelain'], env)).stdout.trim().length === 0
-    const packed = JSON.parse((await runIsolated('npm', ['pack', '--json', '--pack-destination', output], env, root)).stdout)
+    const packed = process.env.KIOKUKO_VERIFY_TARBALL ? JSON.parse(await readFile(process.env.KIOKUKO_VERIFY_PACK_METADATA, 'utf8')) : JSON.parse((await runIsolated('npm', ['pack', '--json', '--pack-destination', output], env, root)).stdout)
     const packageMetadata = packed[0]
     const filename = packageMetadata?.filename
     if (typeof filename !== 'string') throw new Error('npm pack did not return a tarball')
     if (typeof packageMetadata?.version !== 'string' || packageMetadata.version.length === 0) throw new Error('npm pack did not return the package version')
     if (typeof packageMetadata?.integrity !== 'string' || packageMetadata.integrity.length === 0) throw new Error('npm pack did not return artifact integrity')
-    const tarball = join(output, filename)
+    const tarball = process.env.KIOKUKO_VERIFY_TARBALL ?? join(output, filename)
     await access(tarball)
     await runIsolated(dsh, ['plugin', '--profile', profile, 'add', tarball], env, workspace)
     await writeFile(env.KIOKUKO_AGENTICREPLAY_E2E_PATCH, '- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay:\n      enabled: true\n    efficiency:\n      observe: true\n    finalization:\n      inputMode: bounded_evidence\n', { mode: 0o600 })

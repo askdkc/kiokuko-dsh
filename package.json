@@ -245,7 +245,10 @@
     "test:models:web": "npm run build && node scripts/verify-models-web.mjs",
     "test:code-intelligence": "node scripts/run-code-intelligence.mjs",
     "test:code-intelligence:packed": "node scripts/run-code-intelligence.mjs --packed",
-    "test:code-intelligence:benchmark": "node scripts/benchmark-code-intelligence.mjs"
+    "test:code-intelligence:benchmark": "node scripts/benchmark-code-intelligence.mjs",
+    "verify": "node scripts/verify.mjs",
+    "verify:plan": "node scripts/verify.mjs --plan",
+    "test:verification": "node --test scripts/verification-contract.test.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cosmokit": "1.8.5",

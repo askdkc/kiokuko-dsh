@@ -16,11 +16,11 @@ const env = { ...process.env, npm_config_cache: join(temporary, 'cache'), npm_co
 delete env.npm_config_allow_scripts
 delete env.NPM_CONFIG_ALLOW_SCRIPTS
 try {
-  const packed = JSON.parse((await exec('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', temporary], { cwd: root, env })).stdout)[0]
+  const packed = process.env.KIOKUKO_VERIFY_TARBALL ? null : JSON.parse((await exec('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', temporary], { cwd: root, env })).stdout)[0]
   const consumer = join(temporary, 'consumer')
   await mkdir(consumer)
   await writeFile(join(consumer, 'package.json'), '{"private":true,"type":"module"}\n')
-  const archive = join(temporary, packed.filename)
+  const archive = process.env.KIOKUKO_VERIFY_TARBALL ?? join(temporary, packed.filename)
   const installArgs = packageManager === 'pnpm'
     ? ['add', '--ignore-scripts', '--no-optional', '--config.minimumReleaseAge=0', archive]
     : ['install', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', archive]

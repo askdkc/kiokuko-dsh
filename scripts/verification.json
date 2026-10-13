@@ -1,0 +1,753 @@
+{
+  "schema": "verification-contract-v1",
+  "package": "kiokuko-dsh",
+  "profiles": [
+    "full",
+    "main",
+    "semantic",
+    "lisp",
+    "browser",
+    "runtime"
+  ],
+  "environment": {
+    "KIOKUKO_REQUIRE_SQLITE_VEC_SMOKE": "1",
+    "ONNXRUNTIME_NODE_INSTALL": "skip"
+  },
+  "checks": [
+    {
+      "id": "verification-contract",
+      "argv": [
+        "node",
+        "--test",
+        "scripts/verification-contract.test.mjs"
+      ],
+      "profiles": [
+        "main",
+        "semantic",
+        "lisp",
+        "browser",
+        "runtime"
+      ],
+      "result": "node",
+      "requires": [],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": []
+    },
+    {
+      "id": "typecheck",
+      "argv": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "command",
+      "requires": [],
+      "expected": "exit 0",
+      "dependsOn": []
+    },
+    {
+      "id": "build",
+      "argv": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "profiles": [
+        "main",
+        "semantic",
+        "lisp",
+        "browser",
+        "runtime"
+      ],
+      "result": "command",
+      "requires": [],
+      "expected": "exit 0",
+      "dependsOn": []
+    },
+    {
+      "id": "native-unit",
+      "argv": [
+        "node",
+        "scripts/run-ci-native.mjs",
+        "unit"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "node",
+      "requires": [
+        "dsh-native",
+        "sbcl",
+        "cargo"
+      ],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ],
+      "env": {
+        "FORCE_COLOR": "1"
+      }
+    },
+    {
+      "id": "native-integration",
+      "argv": [
+        "node",
+        "scripts/run-ci-native.mjs",
+        "integration"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "node",
+      "requires": [
+        "dsh-native",
+        "sbcl",
+        "cargo"
+      ],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ],
+      "env": {
+        "FORCE_COLOR": "1"
+      }
+    },
+    {
+      "id": "native-e2e",
+      "argv": [
+        "node",
+        "scripts/run-ci-native.mjs",
+        "e2e"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "node",
+      "requires": [
+        "dsh-native",
+        "sbcl",
+        "cargo"
+      ],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ],
+      "env": {
+        "FORCE_COLOR": "1"
+      }
+    },
+    {
+      "id": "skill-prompts",
+      "argv": [
+        "npm",
+        "run",
+        "test:skill-prompts"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "node",
+      "requires": [],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "skill-efficiency",
+      "argv": [
+        "npm",
+        "run",
+        "test:skill-efficiency"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "coding-offline",
+      "argv": [
+        "node",
+        "--test",
+        "tests/fixtures/skill-coding/offline.test.mjs"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "node",
+      "requires": [],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "index-reasoning",
+      "argv": [
+        "npm",
+        "run",
+        "test:index-reasoning"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "node",
+      "requires": [
+        "dsh-native",
+        "sbcl",
+        "cargo"
+      ],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "index-evaluation",
+      "argv": [
+        "npm",
+        "run",
+        "test:evaluation:index-reasoning"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "harness",
+      "argv": [
+        "npm",
+        "run",
+        "test:harness"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl",
+        "cargo"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "retrieval",
+      "argv": [
+        "npm",
+        "run",
+        "test:evaluation"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "decision-evaluation",
+      "argv": [
+        "npm",
+        "run",
+        "test:evaluation:decisions"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "intent-evaluation",
+      "argv": [
+        "npm",
+        "run",
+        "test:evaluation:request-intent"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "answer-evaluation",
+      "argv": [
+        "npm",
+        "run",
+        "test:evaluation:answer-review"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "memory-reuse-evaluation",
+      "argv": [
+        "npm",
+        "run",
+        "test:evaluation:memory-reuse",
+        "--",
+        "--mode=all"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "sampledb",
+      "argv": [
+        "npm",
+        "run",
+        "test:sampledb"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "publint",
+      "argv": [
+        "npm",
+        "run",
+        "publint"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "command",
+      "requires": [],
+      "expected": "exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "prepare-reproducibility",
+      "argv": [
+        "npm",
+        "run",
+        "verify:prepare"
+      ],
+      "profiles": [
+        "main"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "native-search",
+      "argv": [
+        "node",
+        "scripts/run-tests.mjs",
+        "tests/dsh/integration/native-search.test.ts"
+      ],
+      "profiles": [
+        "lisp",
+        "runtime"
+      ],
+      "result": "node",
+      "requires": [
+        "dsh-native"
+      ],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "laya-worker",
+      "argv": [
+        "npm",
+        "run",
+        "test:laya-worker"
+      ],
+      "profiles": [
+        "lisp"
+      ],
+      "result": "command",
+      "requires": [
+        "python3"
+      ],
+      "expected": "exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "lisp-vendor",
+      "argv": [
+        "npm",
+        "run",
+        "verify:lisp:vendor"
+      ],
+      "profiles": [
+        "lisp"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "lisp-native",
+      "argv": [
+        "npm",
+        "run",
+        "test:ci:lisp"
+      ],
+      "profiles": [
+        "lisp"
+      ],
+      "result": "node",
+      "requires": [
+        "sbcl",
+        "dsh-native"
+      ],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "owned-native",
+      "argv": [
+        "node",
+        "scripts/run-tests.mjs",
+        "tests/dsh/integration/owned-execution.test.ts",
+        "tests/dsh/integration/owned-native-lifecycle.test.ts"
+      ],
+      "profiles": [
+        "lisp"
+      ],
+      "result": "node",
+      "requires": [
+        "dsh-native",
+        "sbcl",
+        "cargo"
+      ],
+      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "modules",
+      "argv": [
+        "npm",
+        "run",
+        "test:modules"
+      ],
+      "profiles": [
+        "lisp"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "models-web",
+      "argv": [
+        "npm",
+        "run",
+        "test:models:web"
+      ],
+      "profiles": [
+        "browser"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "coding-web",
+      "argv": [
+        "npm",
+        "run",
+        "test:ci:coding:web"
+      ],
+      "profiles": [
+        "browser"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "shortcuts-web",
+      "argv": [
+        "npm",
+        "run",
+        "test:shortcuts:web"
+      ],
+      "profiles": [
+        "browser"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "lisp-approval-web",
+      "argv": [
+        "npm",
+        "run",
+        "test:lisp:approval:web"
+      ],
+      "profiles": [
+        "browser"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "lisp-plan-web",
+      "argv": [
+        "npm",
+        "run",
+        "test:lisp:plan:web"
+      ],
+      "profiles": [
+        "browser"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "pack-check",
+      "argv": [
+        "node",
+        "scripts/pack-check.mjs"
+      ],
+      "profiles": [
+        "main",
+        "lisp"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl",
+        "cargo"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ],
+      "packed": true
+    },
+    {
+      "id": "skill-delivery",
+      "argv": [
+        "node",
+        "scripts/run-skill-delivery.mjs"
+      ],
+      "profiles": [
+        "main",
+        "lisp"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ],
+      "packed": true
+    },
+    {
+      "id": "consumer-npm",
+      "argv": [
+        "node",
+        "scripts/verify-agenticreplay-consumer.mjs"
+      ],
+      "profiles": [
+        "main",
+        "runtime"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ],
+      "packed": true
+    },
+    {
+      "id": "consumer-pnpm",
+      "argv": [
+        "node",
+        "scripts/verify-agenticreplay-consumer.mjs",
+        "--pnpm"
+      ],
+      "profiles": [
+        "main",
+        "runtime"
+      ],
+      "result": "script",
+      "requires": [
+        "pnpm"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ],
+      "packed": true
+    },
+    {
+      "id": "dsh-lifecycle",
+      "argv": [
+        "node",
+        "scripts/run-enno-dsh-e2e.mjs"
+      ],
+      "profiles": [
+        "main",
+        "runtime"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "pnpm",
+        "sbcl"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ],
+      "packed": true
+    },
+    {
+      "id": "sqlite-vec",
+      "argv": [
+        "npm",
+        "run",
+        "test:sqlite-vec"
+      ],
+      "profiles": [
+        "main",
+        "semantic"
+      ],
+      "result": "script",
+      "requires": [
+        "sqlite-vec"
+      ],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    },
+    {
+      "id": "embedding",
+      "argv": [
+        "node",
+        "scripts/run-local-embedding-smoke.mjs",
+        "--offline"
+      ],
+      "profiles": [
+        "main",
+        "semantic"
+      ],
+      "result": "script",
+      "requires": [],
+      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "dependsOn": [
+        "build"
+      ]
+    }
+  ],
+  "testExclusions": [],
+  "native": true
+}

@@ -1,0 +1,72 @@
+{
+  "schema": "harness-scenarios-v1",
+  "expected": {
+    "tests": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "scenarios": [
+    {
+      "id": "normal-unmet",
+      "file": "tests/dsh/integration/task-completion-lifecycle.test.ts",
+      "name": "normal enforce keeps the run open until every approved condition has fresh host evidence"
+    },
+    {
+      "id": "enno-unmet",
+      "file": "tests/dsh/integration/final-verification/repository-mutation.test.ts",
+      "name": "opted-in Enno acceptance requires a pre-bound fresh verifier for every criterion"
+    },
+    {
+      "id": "required-skip",
+      "file": "tests/dsh/integration/final-verification/repository-mutation.test.ts",
+      "name": "opted-in Enno selected-test criterion rejects an exit-zero run with a skipped required test"
+    },
+    {
+      "id": "normal-selected-skip",
+      "file": "tests/dsh/unit/task-completion.test.ts",
+      "name": "a selected skipped test is unmet while an unsupported or incomplete output is unknown"
+    },
+    {
+      "id": "post-accept-edit",
+      "file": "tests/dsh/integration/final-verification/repository-mutation.test.ts",
+      "name": "an external edit after acceptance returns meditation to verification"
+    },
+    {
+      "id": "cold-start-policy",
+      "file": "tests/dsh/unit/execution-support.test.ts",
+      "name": "cold-start policy read failure blocks structured file operations until the saved frame is restored"
+    },
+    {
+      "id": "never-settling-flush",
+      "file": "tests/dsh/integration/boundary-worker.test.ts",
+      "name": "an unresponsive native flush times out without dispatch or an overlapping retry"
+    },
+    {
+      "id": "dispatch-replay",
+      "file": "tests/dsh/integration/boundary-worker.test.ts",
+      "name": "dispatch-before-observed crash survives worker restart with the same deterministic delivery id"
+    },
+    {
+      "id": "compacted-context",
+      "file": "tests/dsh/integration/context-projection.test.ts",
+      "name": "compaction and restart reinstate only fragments missing from the retained surface"
+    },
+    {
+      "id": "context-provenance",
+      "file": "tests/dsh/unit/agenticreplay-request-manifest.test.ts",
+      "name": "AgenticReplay metadata records current host section digests without source text or a forged user section"
+    },
+    {
+      "id": "native-resume",
+      "file": "tests/dsh/e2e/native-agent-loop.test.ts",
+      "name": "real DSH agent loop: persisted resume, verification retry, completion (text)"
+    },
+    {
+      "id": "native-default-resume",
+      "file": "tests/dsh/e2e/native-agent-loop.test.ts",
+      "name": "real DSH agent loop: persisted resume, verification retry, completion (default_resume)"
+    }
+  ]
+}

@@ -38,7 +38,7 @@ function config() {
 async function main(): Promise<void> {
   const loader = await createSqliteVecLoader();
   if (loader === null) {
-    if (process.env.KIOKUKO_REQUIRE_SQLITE_VEC_SMOKE === '1') {
+    if (process.env.KIOKUKO_REQUIRE_SQLITE_VEC_SMOKE !== '0') {
       throw new Error('sqlite-vec package or native extension is required for this smoke job');
     }
     process.stdout.write('sqlite-vec package or native extension is unavailable; smoke skipped.\n');

@@ -56,7 +56,7 @@ function runNodeTests(testFiles, testTempRoot) {
     };
     delete childEnvironment.NODE_TEST_CONTEXT;
 
-    const child = spawn(process.execPath, ['--import', path.resolve(import.meta.dirname, '../tests/dsh/helpers/offline-skill-catalog.mjs'), '--import', 'tsx', '--test', `--test-concurrency=${concurrency}`, ...testFiles], {
+    const child = spawn(process.execPath, ['--import', path.resolve(import.meta.dirname, '../tests/dsh/helpers/offline-skill-catalog.mjs'), '--import', 'tsx', '--test', ...(process.env.KIOKUKO_VERIFY_REPORT_DIR ? ['--import=' + path.resolve(import.meta.dirname, 'verification-test-environment.mjs'), '--test-reporter=tap', '--test-reporter-destination=stdout', '--test-reporter=' + path.resolve(import.meta.dirname, 'verification-reporter.mjs'), '--test-reporter-destination=' + path.join(process.env.KIOKUKO_VERIFY_REPORT_DIR, 'reporter.txt')] : []), `--test-concurrency=${concurrency}`, ...testFiles], {
       cwd: process.cwd(),
       env: childEnvironment,
       stdio: 'inherit',
