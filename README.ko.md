@@ -4,6 +4,8 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)에 프로젝트 기억, 작업 계획, 검증 지원을 추가합니다.
 AgenticReplay로 모델과 도구의 동작을 기록하고, 기록을 확인하거나 HTML로 내보낼 수 있습니다.
+
+기록 본문은 기본값 `capture.content: redacted`를 유지합니다. 본문 저장을 최소화하려면 `agenticReplay.capture.content: metadata`를 선택합니다. raw 모드는 없습니다. 알려진 자격 증명 대입, 따옴표 안의 값, 인증 header 및 URL 자격 증명을 제거하고 일반 본문은 유지합니다. 모든 비밀을 감지하는 것은 아니며 과거 trace와 export를 변경하지 않습니다. 기존 파일 처리는 사용자가 별도로 선택하는 작업입니다.
 DSH 표준 agent preset은 `subagent`와 `subagent_fork`를 제공합니다. 일반 하위 agent에서는 Kiokuko 실행 방식을 다시 묻지 않습니다. [설정](docs/dsh-plugin.md#subagents).
 
 
@@ -12,6 +14,8 @@ DSH 표준 agent preset은 `subagent`와 `subagent_fork`를 제공합니다. 일
 선택 기능인 [자동 모델 선택](docs/model-selection.md#automatic-model-selection)은 기본적으로 꺼져 있습니다(`modelAutoMode.mode: off`). `/kioku-model-auto on | observe | off | status`는 현재 세션만 바꿉니다. `observe`는 제안만 기록하고 실제 모델은 유지합니다. 일반 작업에서 준비된 Jev 또는 Laya, dsh-codex, DSH 모델 메타데이터와 token meter가 필요합니다. 판정에 실패하면 현재 모델을 유지하고 수동 선택을 우선합니다.
 
 자동 메모리 검토는 기본으로 활성화되며, 사람의 입력을 처리한 여덟 턴마다 대화 모델로 유용한 프로젝트 기억 후보를 저장하거나 갱신합니다. 대화를 닫을 필요가 없습니다. `/kioku-memory-review status`로 상태를 확인하거나 `/kioku-memory-review exclude session`으로 대화 전체를 제외할 수 있습니다. [설정, 비용과 복구](docs/auto-memory-review.md).
+
+ObservationPack은 기본값 `observationPack: { mode: auto }`를 유지합니다. 완전한 행의 발췌에 원문을 한 글자도 남길 수 없으면 pack하지 않고 전체 본문을 유지합니다. 기존 v1 pack과 handle은 계속 읽고 복원할 수 있습니다.
 
 ## 설치 및 사용
 

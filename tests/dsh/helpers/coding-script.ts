@@ -10,7 +10,8 @@ export function interpretedPreparation(mock: any, id: string, relation: string, 
     const json = text?.split('Current request references and same-session work (host-bound, advisory only):\n')[1]?.split('\n')[0]
     assert.ok(json, 'a main-model interpretation requires the current host evidence')
     return mock.toolCallResponse(id, 'prepare_requested_work', { ...(taskType ? { taskType } : {}),
-      requestIntent: { relation, action, evidenceRefs: JSON.parse(json).references } })
+      requestIntent: { relation, action, ...(action === 'change' ? { changeScope: taskType === 'writing' ? 'document' : 'implementation' } : {}),
+        evidenceRefs: JSON.parse(json).references } })
   }
 }
 

@@ -7,9 +7,73 @@ import { AgenticReplayError } from './agenticreplay-types.js'
 
 export const AGENTICREPLAY_RUN_ID = /^run_[0-9a-f]{6,32}$/u
 export const workspaceKey = (root: string): string => createHash('sha256').update(root).digest('hex')
+function isCredentialName(name: string): boolean {
+  const normalized = name.replace(/([a-z])([A-Z])/gu, '$1_$2').replace(/[- \t]+/gu, '_').toLowerCase()
+    .replace(/(^|_)apikey$/u, '$1api_key').replace(/(^|_)accesstoken$/u, '$1access_token')
+  return /(?:^|_)(?:api_key|access_key_id|secret_access_key|password|access_token|token|secret|authorization|cookie|set_cookie)$/u.test(normalized)
+}
+/** Return the closing quote or line boundary; escaped delimiters are part of the value. */
+function quotedValueEnd(text: string, start: number, escaped = false): number {
+  if (escaped) {
+    let end = start + 2
+    while (end < text.length && !/[\r\n]/u.test(text[end]!)) {
+      if (text[end] === '\\') {
+        const run = end
+        while (text[end] === '\\') end++
+        // One JSON escape layer: a delimiter has 4k+1 slashes, an inner escaped quote 4k+3.
+        if (text[end] === '"' && (end - run) % 4 === 1) return end - 1
+      }
+      end++
+    }
+    return end
+  }
+  const quote = text[start]
+  let end = start + 1
+  while (end < text.length && text[end] !== '\r' && text[end] !== '\n') {
+    if (text[end] === quote) break
+    if (text[end] === '\\' && end + 1 < text.length && !/[\r\n]/u.test(text[end + 1]!)) end++
+    end++
+  }
+  return end
+}
+function scrubCredentialUrl(url: string): string {
+  const authorityStart = url.indexOf('://') + 3
+  const authorityEnd = url.slice(authorityStart).search(/[/?#]/u)
+  const end = authorityEnd < 0 ? url.length : authorityStart + authorityEnd
+  const authority = url.slice(authorityStart, end), at = authority.lastIndexOf('@'), colon = authority.indexOf(':')
+  if (at >= 0 && colon >= 0 && colon < at) url = url.slice(0, authorityStart + colon + 1) + '[REDACTED]' + url.slice(authorityStart + at)
+  const query = url.indexOf('?'), fragment = url.indexOf('#')
+  if (query < 0 || fragment >= 0 && fragment < query) return url
+  const queryEnd = fragment < 0 ? url.length : fragment
+  return url.slice(0, query) + url.slice(query, queryEnd).replace(/([?&](?:api_key|api-key|apikey|access_token|access-token|accesstoken|token|password|secret)=)[^&#]*/giu, '$1[REDACTED]') + url.slice(queryEnd)
+}
+/** One pass owns URL spans and assignment boundaries; the caller's text is never mutated. */
 export function scrubAgenticReplayText(text: string): string {
-  return text.replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}/gu, '[REDACTED]')
-    .replace(/\b(?:authorization|cookie|set-cookie|api[-_ ]?key|password|access[-_ ]?token|secret)\s*[:=]\s*[^\r\n,;}]+/giu, '[REDACTED]')
+  text = text.replace(/^([ \t]*(?:authorization|cookie|set-cookie)[ \t]*:[ \t]*)[^\r\n]*/gimu, '$1[REDACTED]')
+  const tokens = /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>]+|(?<![A-Za-z0-9_])(?:\\"([^"\\\r\n]*)\\"|"([^"\r\n]*)"|'([^'\r\n]*)'|([A-Za-z_][A-Za-z0-9_-]*(?:[ \t]+(?:key|token))?))[ \t]*[:=][ \t]*/giu
+  const parts: string[] = []
+  let copied = 0
+  for (let match = tokens.exec(text); match; match = tokens.exec(text)) {
+    const name = match[1] ?? match[2] ?? match[3] ?? match[4]
+    if (name === undefined) {
+      // A JSON-escaped closing quote belongs to the surrounding text, not the URL value.
+      if (text[tokens.lastIndex] === '"' && text[tokens.lastIndex - 1] === '\\') tokens.lastIndex--
+      parts.push(text.slice(copied, match.index), scrubCredentialUrl(text.slice(match.index, tokens.lastIndex))); copied = tokens.lastIndex
+      continue
+    }
+    // An ordinary name owns no span: URLs inside quoted names still need their own rule.
+    if (!isCredentialName(name)) { tokens.lastIndex = match.index + 1; continue }
+    const start = tokens.lastIndex, escaped = text.startsWith('\\"', start), quote = escaped ? '\\"' : text[start], quoted = escaped || quote === '"' || quote === "'"
+    let end = start
+    if (quoted) end = quotedValueEnd(text, start, escaped)
+    else if (/authorization$/iu.test(name)) {
+      while (end < text.length && !/[\r\n]/u.test(text[end]!)) end++
+    } else while (end < text.length && !/[\s,;}&#]/u.test(text[end]!)) end++
+    parts.push(text.slice(copied, start), quoted ? quote + '[REDACTED]' : '[REDACTED]')
+    copied = end; tokens.lastIndex = quoted && quote !== undefined && text.startsWith(quote,end) ? end + quote.length : end
+  }
+  parts.push(text.slice(copied))
+  return parts.join('').replace(/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}/gu, '[REDACTED]')
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/giu, 'Bearer [REDACTED]')
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gu, '[REDACTED]')
 }
@@ -37,7 +101,7 @@ export function projectAgenticReplayJson(value: unknown, maxBytes: number): unkn
       for (const key in item) {
         if (!Object.hasOwn(item, key)) continue
         charge(key.length * 6 + 16)
-        if (/authorization|cookie|credential|api.?key|password|secret|token|replayState|signal|context/iu.test(key)) continue
+        if (/authorization|cookie|credential|api.?key|password|secret|token|replayState|signal|context/iu.test(key) || isCredentialName(key)) continue
         const descriptor = Object.getOwnPropertyDescriptor(item, key)
         if (!descriptor || !('value' in descriptor)) continue
         const safeKey = scrubAgenticReplayText(key)

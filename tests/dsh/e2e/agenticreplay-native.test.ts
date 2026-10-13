@@ -11,6 +11,7 @@ import { apply } from '../../../src/dsh/index.js'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { workspaceKey } from '../../../src/dsh/agenticreplay-security.js'
+import { S } from '../helpers/agenticreplay-redaction-cases.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
@@ -66,8 +67,8 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     }
     const model = new AgenticReplayModel([
       mock.toolCallResponse('prepare-a', TASK_PREPARE_TOOL, { taskType: 'research' }),
-      mock.toolCallResponse('call-one', 'agenticreplay_test_tool', {}),
-      mock.textResponse('A: fixture policy denied the tool result.'),
+      mock.toolCallResponse('call-one', 'agenticreplay_test_tool', {command:`OPENAI_API_KEY=${S}`} ),
+      mock.textResponse(`A: fixture policy denied the tool result. {"password":"${S}"}`),
       mock.toolCallResponse('prepare-b', TASK_PREPARE_TOOL, { taskType: 'research' }),
       mock.toolCallResponse('pending', 'agenticreplay_test_tool', {}),
       mock.textResponse('B: fixture policy denied the pending tool result.'),
@@ -89,7 +90,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     ctx.on('agent/error', (event: any) => { errors.push(event.error) })
     ctx.on('tools/result', (execution: any, result: any) => { results.set(execution.callId, result) }, { global: true })
     const run = (agent: any) => {
-      agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'Research the fixture using agenticreplay_test_tool without Enno and report its result.' }] }))
+      agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: `Research the fixture using agenticreplay_test_tool without Enno and report its result. {"password":"${S}"} OPENAI_API_KEY=${S}` }] }))
       return agent.whenIdle()
     }
     const command = async (agent: any, text: string) => {
@@ -111,7 +112,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     ctx.tools.register({ name: 'agenticreplay_test_tool', description: 'fixture', parameters: {},
       output: { schema: { type: 'string' }, render: (_: unknown, text: string) => [{ type: 'text', text }] }, execute: () => { toolCalls++; return 'body-success' } })
     ctx.on('tools/post-execute', (execution: any, _result: any, next: any) => execution.name === 'agenticreplay_test_tool'
-      ? { kind: 'block', feedback: [{ type: 'text', text: 'fixture policy denial' }] } : next(), { global: true })
+      ? { kind: 'block', feedback: [{ type: 'text', text: `fixture policy denial OPENAI_API_KEY=${S}` }] } : next(), { global: true })
     await run(a)
     assert.deepEqual(errors, [])
     assert.equal(results.get('prepare-a')?.isError, false, JSON.stringify([...results]))
@@ -131,6 +132,8 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     assert.equal(page.events.find((e: any) => e.type === 'tool.result' && e.attrs.name === TASK_PREPARE_TOOL).attrs.is_error, false)
     const exported = await command(a, `export ${id}`)
     assert.ok((await readFile(exported.path, 'utf8')).includes('kiokuko-dsh'))
+    assert.ok(!JSON.stringify(page).includes(S),JSON.stringify(page.events.filter((e:any)=>JSON.stringify(e).includes(S))));assert.ok(!(await readFile(exported.path,'utf8')).includes(S))
+    assert.ok(!(await readFile(join(root,'.agenticreplay/runs',id,'events.jsonl'),'utf8')).includes(S))
     execFileSync('git', ['-C', root, 'check-ignore', exported.path], { stdio: 'ignore' })
     const denied = await ctx.commands.execute(b, `/kioku-agenticreplay show ${id}`, [], signal)
     assert.equal(denied.result.text, 'trace_not_found')

@@ -7,8 +7,21 @@ import { loadAgenticReplayLibrary } from '../../../src/dsh/agenticreplay-librari
 import { Config, AgenticReplayConfig } from '../../../src/dsh/config.js'
 import { projectAgenticReplayJson } from '../../../src/dsh/agenticreplay-security.js'
 import { agenticReplayFixture, chunks, collect, request, response } from '../helpers/agenticreplay-fixture.js'
+import { secretCases, benignCases } from '../helpers/agenticreplay-redaction-cases.js'
+import { captureRedactionCase } from '../helpers/agenticreplay-redaction.js'
 
 const { TraceReader, TraceWriter } = await loadAgenticReplayLibrary('core')
+
+for(const content of ['redacted','metadata'] as const)for(const [name,input,needle] of secretCases) test(`real writer credentials through all payloads and files: ${content}/${name}`,async()=>{
+  const captured=await captureRedactionCase(input,content)
+  captured.inspect(needle)
+})
+for(const input of benignCases)test(`real writer preserves benign body: ${input}`,async()=>{
+  const captured=await captureRedactionCase(input,'redacted')
+  assert.ok(captured.persisted.includes(input.replaceAll('"','\\"')) || captured.persisted.includes(input))
+  assert.ok(captured.htmlText.includes(input.replaceAll('"','\\"')) || captured.htmlText.includes(input))
+})
+test('capture has no raw mode',()=>assert.equal(AgenticReplayConfig.safeParse({capture:{content:'raw'}}).success,false))
 
 test('oversized model requests keep bounded metadata and a correlated response', async () => {
   const f = await agenticReplayFixture({ maxQueuedBytesPerTrace: 16_384 })
@@ -429,6 +442,76 @@ test('recording store ignores itself in Git and separates an actual worktree', a
     assert.notEqual(a.store_root, b.store_root)
     assert.match(execFileSync('git', ['-C', root, 'check-ignore', `.agenticreplay/runs/${b.agenticreplay_run_id}/manifest.json`], { encoding: 'utf8' }), /\.agenticreplay/u)
   } finally { await f.dispose() }
+})
+
+test('malformed string arguments are redacted in a bounded envelope and capture continues', async () => {
+  const f = await agenticReplayFixture()
+  try {
+    const malformed = '{"action":"propose","token":"sk-testsecret123456789"}}'
+    const rejected = { token: Symbol(), callId: 'bad-call', rootCallId: 'bad-call', name: 'coding_workflow_apply', arguments: malformed }
+    const valid = { token: Symbol(), callId: 'valid-call', rootCallId: 'valid-call', name: 'coding_workflow_apply', arguments: { action: 'propose' } }
+    f.recorder.preTool(f.binding, rejected)
+    f.recorder.toolResult(f.binding, rejected, { isError: true, content: [{ type: 'text', text: 'Invalid arguments' }] })
+    f.recorder.preTool(f.binding, valid)
+    f.recorder.toolResult(f.binding, valid, { isError: false, content: [{ type: 'text', text: 'accepted' }] })
+    await f.recorder.shutdown()
+
+    const row = (await f.reader.list(f.binding))[0]!
+    assert.equal(row.state, 'completed')
+    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    const calls = events.filter(event => event.type === 'tool.call')
+    const results = events.filter(event => event.type === 'tool.result')
+    assert.equal(calls.length, 2)
+    assert.equal(results.length, 2)
+    assert.deepEqual(calls[0]?.payload, { format: 'dsh.tool.arguments.v1', encoding: 'invalid-json', text: '{"action":"propose","token":"[REDACTED]"}}' })
+    assert.deepEqual(calls[1]?.payload, { action: 'propose' })
+    assert.equal(JSON.stringify(events).includes('sk-testsecret123456789'), false)
+  } finally { await f.dispose() }
+})
+
+test('writer failure persists safe phase, event type, call id and code without arguments or exception text', async () => {
+  const f = await agenticReplayFixture({}, { createWriter: async (...args) => {
+    const writer = await TraceWriter.create(...args)
+    const append = writer.append.bind(writer)
+    writer.append = async event => {
+      if (event.type === 'tool.call') throw Object.assign(new Error('PRIVATE-APPEND-DETAIL'), { code: 'EIO' })
+      return append(event)
+    }
+    return writer
+  } })
+  try {
+    const secretArguments = '{"api_key":"PRIVATE-ARGUMENT"}}'
+    const exec = { token: Symbol(), callId: 'safe-call-id', rootCallId: 'safe-call-id', name: 'tool', arguments: secretArguments }
+    f.recorder.preTool(f.binding, exec)
+    f.recorder.toolResult(f.binding, exec, { isError: true, content: [{ type: 'text', text: 'rejected' }] })
+    await f.recorder.shutdown()
+
+    const row = (await f.reader.list(f.binding))[0]!
+    const diagnostic = JSON.parse(await readFile(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'capture-status.json'), 'utf8'))
+    assert.equal(diagnostic.lastErrorCode, 'recording_io_failed')
+    assert.deepEqual(diagnostic.failure, { phase: 'tool_call_append', eventType: 'tool.call', callId: 'safe-call-id', code: 'recording_io_failed' })
+    const serialized = JSON.stringify(diagnostic)
+    assert.equal(serialized.includes('PRIVATE-APPEND-DETAIL'), false)
+    assert.equal(serialized.includes('PRIVATE-ARGUMENT'), false)
+  } finally { await f.dispose() }
+})
+
+test('recording enabled or disabled leaves the same next model result', async () => {
+  const outputs = []
+  for (const enabled of [true, false]) {
+    const f = await agenticReplayFixture({ enabled })
+    try {
+      const expected = response()
+      const actual = await collect(f.recorder.stream(f.binding, request, () => chunks(expected)))
+      const malformed = { token: Symbol(), callId: 'invalid', rootCallId: 'invalid', name: 'coding_workflow_apply', arguments: '{"action":"propose"}}' }
+      const rejected = { isError: true, content: [{ type: 'text', text: 'Invalid arguments' }] }
+      f.recorder.preTool(f.binding, malformed)
+      f.recorder.toolResult(f.binding, malformed, rejected)
+      outputs.push({ actual, rejected })
+      await f.recorder.shutdown()
+    } finally { await f.dispose() }
+  }
+  assert.deepEqual(outputs[0], outputs[1])
 })
 
 

@@ -31,6 +31,8 @@ semanticCompaction:
 
 Successful native `read`, `glob`, `grep` and foreground `bash` results containing a single plain text block larger than 10 KiB remain full for two completed native model calls after their result event. Failed attempts and interrupted assistant messages do not count. Before a later request, packing replaces the display with its original byte count, digest, stable session-bound handle and complete head/tail lines totaling at most 1 KiB. The envelope adds metadata beyond that excerpt budget. ObservationPack makes no Jev call.
 
+If no complete source line fits that excerpt, the result stays full: no new pack or automatic read-back is created. Existing v1 packs with empty excerpts remain readable and can still be restored. This preserves source material rather than promising savings for oversized single lines.
+
 Failures, unknown success, background execution, Lisp and execution-control results are excluded. Bash additionally requires a captured structured foreground exit status of zero, without interruption or sandbox failure, and an exact match to the logged presentation. `isError: false` alone is insufficient. After reload, Bash results without that live proof remain untouched.
 
 The auxiliary native tool is separate from Enno business operations:

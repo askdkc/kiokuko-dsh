@@ -4,6 +4,73 @@ import { withImmediateTransaction } from '../../db/transaction.js'
 import { KiokukoError } from '../../errors.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import type { CodingIdentity, CodingWorkflow } from './contracts.js'
+import type { RequestIntentDecision } from '../decisions/request-intent.js'
+
+export const CODING_ADMISSION_CONTRACT_VERSION = 'lisp-choice-admission-v1'
+
+export interface CodingAdmission {
+  readonly runId: string
+  readonly requestId: string | null
+  readonly requestDigest: string | null
+  readonly admissionVersion: string
+  readonly intentPolicyVersion: string
+  readonly changeScope: 'implementation' | 'document' | 'unknown'
+  readonly confirmationRequired: boolean
+  readonly legacy: boolean
+}
+
+/** Persist the exact interpretation and whether this run must ask about Lisp. */
+export function recordCodingAdmissionInTransaction(db: SqliteDatabase, input: {
+  runId: string; requestId: string; task: string; intent?: RequestIntentDecision; now?: string
+}): CodingAdmission {
+  const requestDigest = canonicalContentHash(input.task)
+  if (input.intent && input.intent.evidence.requestDigest !== requestDigest)
+    throw new KiokukoError('CONFLICT', 'Coding admission does not match the current request')
+  const changeScope = input.intent?.action === 'change' ? input.intent.changeScope : 'unknown'
+  const confirmationRequired = input.intent?.action === 'change' && changeScope === 'implementation'
+  const value: CodingAdmission = { runId: input.runId, requestId: input.requestId,
+    requestDigest, admissionVersion: CODING_ADMISSION_CONTRACT_VERSION,
+    intentPolicyVersion: input.intent?.policyVersion ?? 'unknown', changeScope, confirmationRequired, legacy: false }
+  const existing = readCodingAdmission(db, input.runId)
+  if (existing) {
+    if (existing.legacy || existing.requestId !== value.requestId || existing.requestDigest !== value.requestDigest
+      || existing.admissionVersion !== value.admissionVersion || existing.intentPolicyVersion !== value.intentPolicyVersion
+      || existing.changeScope !== value.changeScope || existing.confirmationRequired !== value.confirmationRequired) {
+      throw new KiokukoError('CONFLICT', 'Coding admission identity or interpretation changed')
+    }
+    return existing
+  }
+  db.prepare(`INSERT INTO dsh_coding_admissions
+    (run_id,request_id,request_digest,admission_version,intent_policy_version,change_scope,confirmation_required,legacy,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?)`).run(input.runId, input.requestId, value.requestDigest, value.admissionVersion,
+      value.intentPolicyVersion, value.changeScope, confirmationRequired ? 1 : 0, 0, input.now ?? new Date().toISOString())
+  return value
+}
+
+/** An absent or malformed row is unknown, never implicitly treated as legacy. */
+export function readCodingAdmission(db: SqliteDatabase, runId: string): CodingAdmission | undefined {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_coding_admissions'").get()) return undefined
+  const row = db.prepare(`SELECT run_id,request_id,request_digest,admission_version,intent_policy_version,change_scope,
+    confirmation_required,legacy FROM dsh_coding_admissions WHERE run_id=?`).get<Record<string, unknown>>(runId)
+  if (!row) return undefined
+  if (typeof row.run_id !== 'string' || typeof row.admission_version !== 'string'
+    || typeof row.intent_policy_version !== 'string'
+    || !['implementation', 'document', 'unknown'].includes(String(row.change_scope))
+    || (row.confirmation_required !== 0 && row.confirmation_required !== 1)
+    || (row.legacy !== 0 && row.legacy !== 1)
+    || row.request_id !== null && typeof row.request_id !== 'string'
+    || row.request_digest !== null && (typeof row.request_digest !== 'string' || !/^[a-f0-9]{64}$/u.test(row.request_digest))) {
+    throw new KiokukoError('INTEGRITY_ERROR', 'Invalid durable coding admission state')
+  }
+  const legacy = row.legacy === 1
+  if (legacy && (row.admission_version !== 'legacy' || row.confirmation_required !== 0)
+    || !legacy && (!row.request_id || !row.request_digest || row.admission_version !== CODING_ADMISSION_CONTRACT_VERSION)) {
+    throw new KiokukoError('INTEGRITY_ERROR', 'Inconsistent durable coding admission state')
+  }
+  return { runId: row.run_id, requestId: row.request_id as string | null, requestDigest: row.request_digest as string | null,
+    admissionVersion: row.admission_version, intentPolicyVersion: row.intent_policy_version,
+    changeScope: row.change_scope as CodingAdmission['changeScope'], confirmationRequired: row.confirmation_required === 1, legacy }
+}
 
 export function readCodingWorkflow(db: SqliteDatabase, runId: string): CodingWorkflow | undefined {
   // Legacy consumers may use a pre-workflow schema. Do not manufacture a

@@ -39,6 +39,8 @@ If you use a globally installed `dsh` CLI, omit `pnpm` from the commands.
 Enter your task normally; no Kiokuko setup command is needed.
 For GitHub/local installation, see the [plugin guide](docs/dsh-plugin.md).
 
+Recordings keep `capture.content: redacted` by default. To minimize body storage, select `agenticReplay.capture.content: metadata`; raw capture is unavailable. Known credential assignments, quoted values, authentication headers and URL credentials are removed while ordinary text remains. This does not detect every secret or rewrite earlier traces and exports; managing earlier files is a separate user action.
+
 ## Update
 
 Finish active tasks and stop DSH before updating. Update the npm-installed plugin:
@@ -179,7 +181,7 @@ are optional; `memoryReuse.mode: off` disables this additional selection.
 
 ### Semantic compaction
 
-ObservationPack (`observationPack: { mode: auto }`) preserves large successful native tool results for two model calls, then replaces them with excerpts and an `observation_read` handle. [Semantic compaction](docs/semantic-compaction.md) evaluates TODO completion boundaries and selectively shortens old tool results before native automatic compaction in normal, Enno and Lisp modes. It defaults to `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` and requires a ready typed-decision backend and supported native services. Inspect activation and the last outcome with `/kioku-decisions status`.
+ObservationPack (`observationPack: { mode: auto }`) preserves large successful native tool results for two model calls, then replaces them with excerpts and an `observation_read` handle. [Semantic compaction](docs/semantic-compaction.md) evaluates TODO completion boundaries and selectively shortens old tool results before native automatic compaction in normal, Enno and Lisp modes. It defaults to `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` and requires a ready typed-decision backend and supported native services. Inspect activation and the last outcome with `/kioku-decisions status`. Results whose complete-line excerpt would contain no source text are retained in full instead of being packed. Existing v1 packs and handles remain readable and restorable.
 
 Laya compaction separately defaults to `typedDecisions.laya-coreml.compaction.mode: off`. Explicit `shadow` evaluates without changing history; `auto` remains `experimental_not_qualified`. This switch preserves ObservationPack and native summaries. Akinator uses only the verified debug/research/writing range, and optional Skill selection uses up to four complete candidates with at most one model-selected addition. See [Laya settings and evaluation](docs/semantic-compaction.md#local-laya).
 

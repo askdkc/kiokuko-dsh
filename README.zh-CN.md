@@ -4,6 +4,8 @@
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 添加项目记忆、任务规划和验证支持。
 AgenticReplay 可记录模型和工具活动，查看记录并导出 HTML。
+
+记录正文默认使用 `capture.content: redacted`。若要尽量减少正文保存，可选择 `agenticReplay.capture.content: metadata`；不提供 raw 模式。已知凭据赋值、引号中的值、认证 header 和 URL 凭据会被移除，普通正文保留。这不能保证检测所有秘密，也不会修改过去的 trace 或 export；处理旧文件需要用户另行选择。
 标准 DSH agent preset 提供 `subagent` 和 `subagent_fork`。普通子 agent 不会再次询问 Kiokuko 的执行模式。[配置说明](docs/dsh-plugin.md#subagents)。
 
 
@@ -12,6 +14,8 @@ AgenticReplay 可记录模型和工具活动，查看记录并导出 HTML。
 可选的[自动模型选择](docs/model-selection.md#automatic-model-selection)默认关闭（`modelAutoMode.mode: off`）。`/kioku-model-auto on | observe | off | status` 仅更改当前会话；`observe` 只记录建议，不更换模型。普通任务需要已就绪的 Jev 或 Laya、dsh-codex，以及 DSH 的模型元数据和 token meter。判定失败时保留当前模型，手动选择优先。
 
 自动记忆审查默认启用：每完成八个人类输入回合，使用会话模型保存或更新有用的项目记忆候选，无需关闭会话。使用 `/kioku-memory-review status` 查看状态，或用 `/kioku-memory-review exclude session` 排除整个会话。[设置、费用和恢复](docs/auto-memory-review.md)。
+
+ObservationPack 默认保持 `observationPack: { mode: auto }`。若完整行摘录无法保留任何原文，则不进行 pack，保留全文。已有 v1 pack 和 handle 仍可读取和恢复。
 
 ## 安装与使用
 

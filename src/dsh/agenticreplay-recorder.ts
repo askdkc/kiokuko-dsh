@@ -23,9 +23,17 @@ interface ActiveTrace {
   active: number
   waiters: Set<() => void>
   persistenceFailed: boolean
+  failure?: CaptureFailureDiagnostic
   modelCleanups: Set<() => void>
   diagnosticPromise?: Promise<void>
 }
+interface CaptureFailureDiagnostic {
+  readonly phase: string
+  readonly eventType: string
+  readonly callId?: string
+  readonly code: string
+}
+interface FailureContext { readonly phase: string; readonly eventType: string; readonly callId?: string }
 interface Attempt { trace: ActiveTrace; ref: Ref; id: string; started?: number; phase: string; bytes: number }
 export interface AgenticReplayRecorderDependencies {
   createWriter?: CreateTraceWriter
@@ -51,12 +59,20 @@ export class DshAgenticReplayRecorder {
     const trace = this.#traces.get(sessionId)
     return { capability: !this.config.enabled ? 'disabled' : this.#unavailable ? 'unavailable' : 'available',
       trace: trace === undefined ? null : { ...trace.row, ...((trace.writer?.runDir ?? trace.runDirectory) ? {run_directory:trace.writer?.runDir ?? trace.runDirectory} : {}) }, persistenceFailed: trace?.persistenceFailed ?? false,
-      diagnostics: { ...this.diagnostics }, unavailableReason: this.#unavailableReason, capture: AGENTICREPLAY_CAPTURE }
+      diagnostics: { ...this.diagnostics }, ...(trace?.failure ? { failure: { ...trace.failure } } : {}), unavailableReason: this.#unavailableReason, capture: AGENTICREPLAY_CAPTURE }
   }
-  #fail(trace: ActiveTrace, code: string) {
+  #fail(trace: ActiveTrace, code: string, context: FailureContext = { phase: 'capture', eventType: 'unknown' }) {
     trace.accepting = false
     trace.row.missing_event_count++
     trace.row.last_error_code ??= code
+    if (!trace.failure) {
+      const safeCode = /^[A-Za-z0-9_-]{1,64}$/u.test(code) ? code : 'capture_failure'
+      let callId: string | undefined
+      if (typeof context.callId === 'string' && context.callId) {
+        try { callId = label(context.callId.slice(0, 128)) } catch { callId = 'unavailable' }
+      }
+      trace.failure = { phase: context.phase, eventType: context.eventType, ...(callId ? { callId } : {}), code: safeCode }
+    }
     if (!trace.sealed) trace.row.state = trace.writer ? 'incomplete' : 'failed'
     // The event queue may have stopped. Persist a bounded independent diagnostic,
     // without retrying the failed capture or delaying the native operation.
@@ -76,6 +92,7 @@ export class DshAgenticReplayRecorder {
       try {
         await handle.writeFile(JSON.stringify({ format: 'dsh.capture-status.v1', httpCapture: false,
           runId: trace.row.agenticreplay_run_id, state: trace.row.state, lastErrorCode: trace.row.last_error_code,
+          failure: trace.failure,
           missingEvents: trace.row.missing_event_count, unresolvedCalls: trace.row.unresolved_call_count,
           endedAt: trace.row.ended_at }) + '\n')
         await handle.sync()
@@ -91,9 +108,9 @@ export class DshAgenticReplayRecorder {
     await trace.tail
     await trace.diagnosticPromise
   }
-  #safe(trace: ActiveTrace, operation: () => void) {
+  #safe(trace: ActiveTrace, operation: () => void, context?: FailureContext) {
     if (trace.sealed) return
-    try { operation() } catch (error) { this.#fail(trace, agenticReplayErrorCode(error)) }
+    try { operation() } catch (error) { this.#fail(trace, agenticReplayErrorCode(error), context) }
   }
   #reserve(trace: ActiveTrace, bytes: number): boolean {
     if (trace.pendingBytes + bytes > this.config.maxQueuedBytesPerTrace || this.#bytes + bytes > this.config.maxQueuedBytesTotal) {
@@ -157,7 +174,7 @@ export class DshAgenticReplayRecorder {
       await this.#save(trace)
     } catch (error) { this.#fail(trace, agenticReplayErrorCode(error)); await this.#save(trace) }
   }
-  #enqueue(trace: ActiveTrace, event: EventInit, cause?: Ref): Ref {
+  #enqueue(trace: ActiveTrace, event: EventInit, cause?: Ref, context?: FailureContext): Ref {
     const ref: Ref = {}
     if (trace.sealed) return ref
     // The event is already projected, but JSON overhead is charged as well.
@@ -173,7 +190,10 @@ export class DshAgenticReplayRecorder {
         const saved = await trace.writer.append({ ...event, occurredAt, ...(cause ? { causes: [cause.seq!] } : {}) })
         ref.seq = saved.seq
         trace.row.recorded_bytes = await agenticReplayDiskBytes(trace.writer.runDir, this.config.maxTraceBytes)
-      } catch (error) { this.#fail(trace, agenticReplayErrorCode(error)) }
+      } catch (error) { this.#fail(trace, agenticReplayErrorCode(error), context ?? {
+        phase: 'event_append', eventType: event.type,
+        ...(typeof event.attrs?.callId === 'string' ? { callId: event.attrs.callId } : {}),
+      }) }
     }).finally(() => this.#release(trace, bytes))
     return ref
   }
@@ -347,8 +367,14 @@ export class DshAgenticReplayRecorder {
       const trace = this.#admit(binding)
       if (!trace) return
       this.#safe(trace, () => {
+        let argumentValue = exec.arguments
+        if (typeof argumentValue === 'string') {
+          let encoding = 'invalid-json'
+          try { JSON.parse(argumentValue); encoding = 'json-text' } catch { /* Preserve malformed input as redacted diagnostic text. */ }
+          argumentValue = { format: 'dsh.tool.arguments.v1', encoding, text: argumentValue }
+        }
         const projected = this.config.capture.content === 'metadata' ? undefined
-          : boundedAgenticReplayPayload(exec.arguments, Math.max(1, this.config.maxQueuedBytesPerTrace - 2048), 'dsh.tool.arguments.v1')
+          : boundedAgenticReplayPayload(argumentValue, Math.max(1, this.config.maxQueuedBytesPerTrace - 2048), 'dsh.tool.arguments.v1')
         const name = label(exec.name), callId = label(exec.callId), rootCallId = label(exec.rootCallId)
         if (!this.#reserve(trace, 512)) return
         const id = randomBytes(12).toString('hex')
@@ -357,12 +383,13 @@ export class DshAgenticReplayRecorder {
         const ref = this.#enqueue(trace, { type: 'tool.call', actor: 'harness', attrs: { name, callId,
           rootCallId, attemptId: id, startObserved, ...(omitted ? { content_omitted: true, omission_reason: projected.omissionReason ?? 'payload_limit' } : {}),
           ...(parent && parent.trace === trace ? { parentAttemptId: parent.id } : {}) },
-          ...(this.config.capture.content === 'metadata' ? {} : { payload: projected!.payload }) })
+          ...(this.config.capture.content === 'metadata' ? {} : { payload: projected!.payload }) }, undefined,
+          { phase: 'tool_call_append', eventType: 'tool.call', callId: exec.callId })
         if (omitted) this.#recordOmission(trace, 'tool.call', id, projected!.omissionReason ?? 'payload_limit', ref)
         trace.active++
         this.#attempts.set(exec.token, { trace, ref, id, phase: 'permission_pending', bytes: 512 })
         this.#link(trace, binding)
-      })
+      }, { phase: 'tool_call_projection', eventType: 'tool.call', callId: exec.callId })
     } catch { this.diagnostics.unattributed++ }
   }
   toolDecision(exec: AgenticReplayToolExecution, decision: unknown): void {
@@ -410,9 +437,9 @@ export class DshAgenticReplayRecorder {
       }
       this.#enqueue(trace, { type: 'tool.result', actor: 'tool', attrs: { name: label(exec.name), attemptId: id, ...toolResultOutcome(r),
         ...(projected.omitted ? { content_omitted: true, omission_reason: projected.omissionReason ?? 'payload_limit' } : {}) },
-        payload: projected.payload }, ref)
+        payload: projected.payload }, ref, { phase: 'tool_result_append', eventType: 'tool.result', callId: exec.callId })
       if (projected.omitted) this.#recordOmission(trace, 'tool.result', id, projected.omissionReason ?? 'payload_limit', ref)
-    })
+    }, { phase: 'tool_result_projection', eventType: 'tool.result', callId: exec.callId })
     this.#settle(trace)
   }
   stopAccepting(): void { this.#accepting = false; for (const t of this.#traces.values()) t.accepting = false }

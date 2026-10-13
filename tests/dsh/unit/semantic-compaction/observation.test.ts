@@ -8,8 +8,8 @@ import { selectCandidates } from '../../../../src/dsh/semantic-compaction/policy
 import { Config } from '../../../../src/dsh/config.js'
 import { CoreConfig } from '../../../../src/dsh/core/host.js'
 
-function setup(tool = 'read', mode: 'auto' | 'off' = 'auto') {
-  const events = history('先頭🙂\n' + 'body material\n'.repeat(1200) + '末尾𠮷\n', tool)
+function setup(tool = 'read', mode: 'auto' | 'off' = 'auto', text = '先頭🙂\n' + 'body material\n'.repeat(1200) + '末尾𠮷\n') {
+  const events = history(text, tool)
   events.splice(7, 0, { seq: 7, type: 'tool/call', data: { callId: 'call-1', name: tool } }); events.forEach((e, i) => { e.seq = i })
   events[8]!.sourceEventSeqs = [7]
   for (const seq of [11, 12]) events[seq] = { seq, type: 'assistant/message', data: { stream: [], message: { id: `full-${seq}`, role: 'assistant', source: { kind: 'model' }, content: [{ type: 'text', text: 'continue' }] } } }
@@ -23,6 +23,16 @@ function setup(tool = 'read', mode: 'auto' | 'off' = 'auto') {
   const original = f.events[8]!, handle = observationHandle(f.session.id, original)
   return { ...f, definitions, listeners, assemble, original, handle, read: (args: unknown, agent = f.agent) => definitions.get('observation_read').execute(args, { agent, signal: new AbortController().signal }) }
 }
+for (const text of ['x'.repeat(120000), '日'.repeat(3414), '🙂'.repeat(3000)]) test('empty excerpt keeps exact source after repeated exposures', async () => {
+  const f = setup('read', 'auto', text)
+  try {
+    const original = structuredClone(f.original), seq = f.session.seq
+    assert.equal(observationExcerpt(text), '\n…\n')
+    await f.assemble(); await f.step(); await f.step()
+    assert.equal(f.session.seq, seq); assert.deepEqual(f.original, original)
+    assert.equal((f.service.status() as any).observationPack.metrics.packed, 0)
+  } finally { f.coordinator.stop() }
+})
 test('current native tool message can be packed and resolved by exact source event', () => {
   const events = history('long source\n'.repeat(1000))
   const original = events[7]!
@@ -55,18 +65,35 @@ test('pack, exact Unicode pages, off-mode historical reader, no second pack, res
   const off = setup('read', 'off')
   try { await off.assemble(); await off.step(); assert.equal(off.events.length, 15); assert.equal((await off.read({ handle: off.handle })).text.length > 0, true) } finally { off.coordinator.stop() }
 })
-for (const kind of ['ok', 'nonzero', 'unknown', 'background', 'mismatch', 'aborted', 'denied'] as const) test(`Bash structured proof: ${kind}`, async () => {
+for (const kind of ['ok', 'nonzero', 'unknown', 'background', 'mismatch', 'aborted', 'denied', 'timeout', 'signal', 'runnerFailed'] as const) test(`Bash structured proof: ${kind}`, async () => {
   const f = setup('bash'), block = f.original.data.message.content[0]
   const value: any = { kind: 'foreground', exitCode: 0, timedOut: false, aborted: false }
   if (kind === 'nonzero') value.exitCode = 7
   if (kind === 'background') value.kind = 'background'
   if (kind === 'aborted') value.aborted = true
   if (kind === 'denied') value.sandbox = { denied: true }
+  if (kind === 'timeout') value.timedOut = true
+  if (kind === 'signal') value.signal = 'SIGTERM'
+  if (kind === 'runnerFailed') value.sandbox = { runnerFailed: true }
   try {
     if (kind !== 'unknown') f.listeners.get('tools/result')!({ name: 'bash', callId: 'call-1', agent: f.agent }, { value, isError: false, content: kind === 'mismatch' ? [{ type: 'text', text: 'different' }] : block.content })
     await f.assemble(); await f.step()
     assert.equal(f.events.some(e => plainResult(e)?.text.startsWith(OBSERVATION_MARKER)), kind === 'ok')
   } finally { f.coordinator.stop() }
+})
+for(const mode of ['auto','off'] as const)test(`historical empty excerpt pack remains readable and restorable after restart: ${mode}`,async()=>{
+  const text='x'.repeat(120000),f=setup('read',mode,text)
+  try{
+    f.session.append('compaction/prune',{shadowedSeqs:[f.original.seq]})
+    const old=f.session.append('tool/result',{message:packedMessage(f.session.id,f.original)},{surfaceOp:{op:'replace',startSeq:f.original.seq,endSeq:f.original.seq},sourceEventSeqs:[f.original.seq]})
+    assert.equal(packedSource(f.session,old),f.original)
+    f.coordinator.stop();await f.coordinator.drain()
+    f.coordinator=new SemanticCompactionCoordinator(f.ctx,f.service,realpathSync(process.cwd()),{mode})
+    await f.assemble();const seq=f.session.seq;await f.step();assert.equal(f.session.seq,seq)
+    assert.equal((await f.read({handle:f.handle,offset:119999,limit:1})).text,'x')
+    f.definitions.delete('observation_read');await f.assemble();await f.step()
+    assert.equal(plainResult(f.events.at(-1)!)!.text,text)
+  }finally{f.coordinator.stop();await f.coordinator.drain()}
 })
 for (const kind of ['child', 'hidden', 'error', 'multi', 'interrupted', 'native-off', 'lisp_eval'] as const) test(`packing retains protected result: ${kind}`, async () => {
   const f = setup(kind === 'lisp_eval' ? kind : 'read')
@@ -143,4 +170,41 @@ test('unsupported native history APIs remain a no-op', async () => {
     await f.step()
     assert.equal(f.events.length, 15)
   } finally { f.coordinator.stop() }
+})
+test('reader input boundaries and Unicode reconstruction preserve original bytes and digest',async()=>{
+  const text='日本語🙂𠮷 line\r\n'.repeat(5000),f=setup('read','auto',text)
+  try{
+    await f.assemble();await f.step()
+    for(const args of [{offset:-1},{offset:0.5},{offset:Number.MAX_SAFE_INTEGER+1},{limit:0},{limit:2001},{sessionId:'foreign'}])await assert.rejects(f.read({handle:f.handle,...args}))
+    const points=Array.from(text);let joined='',offset=0
+    do{const page=await f.read({handle:f.handle,offset,limit:2000});joined+=page.text;assert.equal(page.bytes,Buffer.byteLength(text));if(page.nextOffset===null)break;offset=page.nextOffset}while(true)
+    assert.equal(joined,text);assert.equal(Buffer.byteLength(joined),Buffer.byteLength(text))
+    assert.equal((await f.read({handle:f.handle,offset:0,limit:1})).text,'日')
+    assert.equal((await f.read({handle:f.handle,offset:points.length})).text,'')
+    await assert.rejects(f.read({handle:f.handle,offset:points.length+1}))
+    await assert.rejects(f.read({handle:f.handle.slice(0,-1)+(f.handle.endsWith('a')?'b':'a')}))
+    const aborted=new AbortController();aborted.abort()
+    await assert.rejects(f.definitions.get('observation_read').execute({handle:f.handle},{agent:f.agent,signal:aborted.signal}))
+  }finally{f.coordinator.stop();await f.coordinator.drain()}
+})
+for(const change of ['authority','source','reader'] as const)test(`reader reauthenticates after awaiting: ${change}`,async()=>{
+  const f=setup();let calls=0
+  try{
+    await f.assemble()
+    f.coordinator.attach(f.agent,async()=>{
+      calls++
+      if(calls===2&&change==='source')f.events[f.original.seq]={...f.original,data:structuredClone(f.original.data)}
+      if(calls===2&&change==='reader')f.definitions.set('observation_read',{})
+      return {revision:change==='authority'?calls:1}
+    })
+    await assert.rejects(f.read({handle:f.handle}),/changed/)
+    assert.equal((f.service.status() as any).observationPack.metrics.reads,0)
+  }finally{f.coordinator.stop();await f.coordinator.drain()}
+})
+test('complete-line excerpt keeps byte boundaries, CRLF and surrogate pairs unchanged',()=>{
+  for(const line of ['a'.repeat(511)+'\n','日'.repeat(169)+'🙂\n','a'.repeat(510)+'\r\n']){
+    const text=line+'x'.repeat(120000)+'\nTAIL🙂𠮷\n'
+    assert.equal(observationExcerpt(text),line+'\n…\nTAIL🙂𠮷\n')
+  }
+  assert.equal(observationExcerpt('a'.repeat(512)+'\n'+'x'.repeat(120000)+'\nTAIL'),'\n…\nTAIL')
 })

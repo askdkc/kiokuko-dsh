@@ -42,6 +42,9 @@ export function observationExcerpt(text: string): string {
   for (const line of suffix.reverse()) { if (Buffer.byteLength(line + tail) > 512) break; tail = line + tail }
   return `${head}\n…\n${tail}`
 }
+export function hasObservationSourceExcerpt(text: string): boolean {
+  return observationExcerpt(text) !== '\n…\n'
+}
 export function packedMessage(sessionId: string, event: SurfaceEvent): SurfaceMessage {
   const result = plainResult(event)!
   const text = `${OBSERVATION_MARKER}\n${JSON.stringify({ session: sessionId, handle: observationHandle(sessionId, event), bytes: Buffer.byteLength(result.text), digest: textDigest(result.text) })}\nUse observation_read for the original (Unicode offset, up to 2000 characters).\n${observationExcerpt(result.text)}`

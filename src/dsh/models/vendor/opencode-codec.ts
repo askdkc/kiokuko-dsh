@@ -5,10 +5,74 @@ import type { LanguageModelV4Prompt } from '@ai-sdk/provider'
 import type { OpenCodeModel } from './opencode-catalog.js'
 import { projectReplay, requireReplaySignature } from './opencode-replay.js'
 import { createHash } from 'node:crypto'
+
+const MAX_RECOVERED_TOOL_ERROR_CHARS = 2048
+const MAX_RECOVERED_TOOL_LABEL_CHARS = 160
+
+interface RecoverableMalformedCall {
+  readonly name: string
+  readonly feedback: string
+}
+
+function boundedLabel(value: string): string {
+  const safe = value.replace(/[\p{Cc}]/gu, '').slice(0, MAX_RECOVERED_TOOL_LABEL_CHARS)
+  return safe || '(unknown)'
+}
+
+function recoverableMalformedCalls(messages: readonly GenerateOptions['messages'][number][], protocol: OpenCodeModel['protocol']): Map<string, RecoverableMalformedCall> {
+  const recovered = new Map<string, RecoverableMalformedCall>()
+  if (protocol !== 'chat') return recovered
+
+  const calls = new Map<string, Extract<ContentBlock, { type: 'tool-call' }>[]>()
+  const results = new Map<string, GenerateOptions['messages'][number][]>()
+  for (const message of messages) {
+    if (message.role === 'assistant') for (const block of message.content) {
+      if (block.type !== 'tool-call') continue
+      const entries = calls.get(block.id) ?? []
+      entries.push(block)
+      calls.set(block.id, entries)
+    }
+    if (message.role === 'tool') {
+      const entries = results.get(message.toolCallId) ?? []
+      entries.push(message)
+      results.set(message.toolCallId, entries)
+    }
+  }
+
+  for (const [callId, entries] of calls) {
+    if (entries.length !== 1) continue
+    const [call] = entries
+    const matchingResults = results.get(callId)
+    if (!call || matchingResults?.length !== 1 || matchingResults[0]?.role !== 'tool' || matchingResults[0].isError !== true) continue
+    try { JSON.parse(call.arguments); continue } catch { /* The call is eligible only with its unique failed result. */ }
+
+    const resultText: string[] = []
+    let remaining = MAX_RECOVERED_TOOL_ERROR_CHARS
+    for (const block of matchingResults[0].content) {
+      let text: string | undefined
+      if (block.type === 'text') text = block.text
+      else if (block.type === 'file') text = fileHandleText(block.attachment, undefined)
+      else if (block.type === 'image') text = '[image omitted]'
+      if (!text || remaining <= 0) continue
+      const bounded = text.slice(0, remaining)
+      resultText.push(bounded)
+      remaining -= bounded.length
+    }
+    const feedback = resultText.join('\n').slice(0, MAX_RECOVERED_TOOL_ERROR_CHARS) || '(no error details returned)'
+    recovered.set(callId, { name: call.name, feedback })
+  }
+  return recovered
+}
+
+function recoveredCallText(callId: string, call: RecoverableMalformedCall): string {
+  return `[Previous tool call ${JSON.stringify(boundedLabel(call.name))} (id ${JSON.stringify(boundedLabel(callId))}) was rejected because its arguments were not valid JSON. The tool returned: ${call.feedback}\nRetry by generating a new call with valid JSON arguments. Do not reuse or repair the stored arguments.]`
+}
+
 export async function encodePrompt(options: GenerateOptions, model: OpenCodeModel, attachments?: () => AttachmentStore | undefined, warn?: (reason: string) => void): Promise<LanguageModelV4Prompt> {
     const prompt: LanguageModelV4Prompt = []; const names = new Map<string, string>(); const callIds = new Map<string, string>(); const wireIds = new Set<string>()
     if (options.system) prompt.push({ role: 'system', content: options.system })
     const projection = projectToolUpdates(options.messages, options.tools, undefined, options.toolHistory)
+    const recoveredCalls = recoverableMalformedCalls(projection.messages, model.protocol)
     let imageBytes = 0
     const imagePart = async (block: Extract<ContentBlock, { type: 'image' }>) => {
       if (block.offloaded || !model.inputModalities.includes('image')) return { type: 'text' as const, text: '[image omitted from this request]' }
@@ -27,6 +91,7 @@ export async function encodePrompt(options: GenerateOptions, model: OpenCodeMode
         continue
       }
       if (message.role === 'tool') {
+        if (recoveredCalls.has(message.toolCallId)) continue
         const toolName = names.get(message.toolCallId)
         if (!toolName) throw new LlmError('Stored tool result has no matching call', 'INVALID_REPLAY_STATE')
         const parts = []
@@ -50,6 +115,11 @@ export async function encodePrompt(options: GenerateOptions, model: OpenCodeMode
           requireReplaySignature(block, model.protocol, providerOptions)
           content.push({ type: 'reasoning', text: block.text, ...(providerOptions ? {providerOptions} : {}) })
         } else if (block.type === 'tool-call' && message.role === 'assistant') {
+          const recovered = recoveredCalls.get(block.id)
+          if (recovered) {
+            content.push({ type: 'text', text: recoveredCallText(block.id, recovered) })
+            continue
+          }
           // Foreign pi Responses ids contain an opaque item suffix. Give the
           // call/result pair a portable id without restoring that foreign item.
           if (replay.foreign && model.protocol === 'responses' && block.id.includes('|')) callIds.set(block.id, `dsh_${createHash('sha256').update(block.id).digest('hex').slice(0, 48)}`)

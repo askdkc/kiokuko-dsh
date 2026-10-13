@@ -140,7 +140,7 @@ bypassed by a forced add. Check `git ls-files -- .agenticreplay` for previously
 tracked captures before pushing; remove them from the index and address any
 already published sensitive data separately.
 
-`redacted` preserves text after known secret-pattern filtering. It cannot detect
+`redacted` preserves ordinary text after filtering known credential assignments, quoted values (including escaped JSON quotes), authentication headers and URL credentials. There is no raw capture mode. This filtering applies to new recordings; it does not rewrite earlier traces or exports. It cannot detect
 all arbitrary secrets. `metadata` omits message bodies, arguments and tool result
 bodies. Neither mode records environment variables, replayState, attachment bytes,
 raw HTTP, shell frames or raw MCP transport. Reasoning defaults off. Auxiliary

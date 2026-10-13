@@ -8,6 +8,14 @@ import { DshAgenticReplayReadService } from '../../../src/dsh/agenticreplay-read
 import type { DshNativeCommandDefinition } from '../../../src/dsh/commands.js'
 import type { DshAgenticReplayHostServices } from '../../../src/dsh/agenticreplay-types.js'
 import { agenticReplayFixture, request, response, chunks, collect } from '../helpers/agenticreplay-fixture.js'
+import { captureRedactionCase } from '../helpers/agenticreplay-redaction.js'
+import { S } from '../helpers/agenticreplay-redaction-cases.js'
+
+for(const content of ['redacted','metadata'] as const)for(const reasoning of [false,true])test(`large payload disk, blob, paginated show, HTML and reasoning: ${content}/${reasoning}`,async()=>{
+  const captured=await captureRedactionCase('ordinary large material\n'.repeat(4000)+`OPENAI_API_KEY=${S}\n`+'safe suffix\n'.repeat(3000),content,reasoning)
+  captured.inspect(S)
+  if(content==='redacted')assert.ok(captured.blobCount>0,'must exercise real blob persistence')
+})
 
 async function completed(f: Awaited<ReturnType<typeof agenticReplayFixture>>) {
   await collect(f.recorder.stream(f.binding, request, () => chunks(response('hello'))))

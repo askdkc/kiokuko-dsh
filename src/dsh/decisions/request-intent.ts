@@ -4,13 +4,15 @@ import type { TaskType } from '../../akinator/types.js'
 import { DecisionError, type DecisionBatch } from './contracts.js'
 import type { DecisionService } from './service.js'
 
-export const REQUEST_INTENT_POLICY_VERSION = 'request-intent-choice-v1'
+export const REQUEST_INTENT_POLICY_VERSION = 'request-intent-change-scope-v2'
 export const MAX_REQUEST_INTENT_BYTES = 32 * 1024
 
 export const RequestRelationship = z.enum(['new', 'same_scope_continuation', 'scope_change', 'unknown'])
 export const RequestAction = z.enum(['answer', 'research', 'verify', 'change', 'operate', 'unknown'])
+export const RequestChangeScope = z.enum(['implementation', 'document', 'unknown'])
 export type RequestRelationship = z.infer<typeof RequestRelationship>
 export type RequestAction = z.infer<typeof RequestAction>
+export type RequestChangeScope = z.infer<typeof RequestChangeScope>
 
 const safeId = z.string().min(1).max(256).refine(value => !/[\p{Cc}\p{Cf}]/u.test(value))
 const boundedText = z.string().min(1).max(8192)
@@ -82,6 +84,8 @@ export function createRequestIntentContext(input: {
 export const RequestIntentSubmissionSchema = z.object({
   relation: RequestRelationship,
   action: RequestAction,
+  /** Missing legacy values normalize to unknown and can never authorize a change. */
+  changeScope: RequestChangeScope.optional(),
   /** Exact opaque references supplied in the current host context. */
   evidenceRefs: z.array(safeId).min(1).max(32),
 }).strict().superRefine((value, context) => {
@@ -104,6 +108,7 @@ export interface RequestIntentEvidence {
 export interface RequestIntentDecision {
   readonly relation: RequestRelationship
   readonly action: RequestAction
+  readonly changeScope: RequestChangeScope
   readonly source: 'decision-provider' | 'main-model' | 'unresolved'
   readonly policyVersion: string
   readonly evidence: RequestIntentEvidence
@@ -130,6 +135,11 @@ const actionChoices = [
   { id: 'operate', description: 'Perform deployment, restart, installation, or other system/service operation.' },
   { id: 'unknown', description: 'The requested action is ambiguous, mixed without a dominant action, or not supported by the current evidence.' },
 ] as const
+const changeScopeChoices = [
+  { id: 'implementation', description: 'The requested artifact change affects code, tests, runtime behavior, or configuration behavior. If documentation is changed together with implementation, choose implementation.' },
+  { id: 'document', description: 'The requested change is prose-only documentation and does not change code, tests, or behavior configuration.' },
+  { id: 'unknown', description: 'The requested artifact scope cannot be determined from the current request and supplied Goal/proposal references.' },
+] as const
 
 /** Finite choices preserve both the action and the proposals it refers to. */
 export function buildRequestIntentBatch(raw: unknown): DecisionBatch | undefined {
@@ -147,6 +157,7 @@ export function buildRequestIntentBatch(raw: unknown): DecisionBatch | undefined
     questions: [
       { id: 'request-relation', instructions: 'Classify the relationship of the current user message to the supplied active Goal and proposals. Respect negation, quotation, actor, and omitted references. An exact continuation phrase is not required. If the intended reference or scope is not established, choose unknown.', choices: [...relationshipChoices], abstainId: 'unknown' },
       { id: 'request-action', instructions: 'Classify the action the user requests now, not a quoted example or an action they forbid. “See whether it works” is verify/research, not a file edit. Classification grants no permission. If the action is unclear, choose unknown.', choices: [...actionChoices], abstainId: 'unknown' },
+      { id: 'request-change-scope', instructions: 'For action=change, classify the exact current requested artifact scope using only the current message and supplied Goal/proposal references. Code, tests, runtime behavior, or behavior configuration is implementation; a request that mixes implementation with documentation is implementation. Prose-only document edits are document. Do not infer scope from an advisory task label, wording style, or whether the message happens to say “write”. For other actions choose unknown.', choices: [...changeScopeChoices], abstainId: 'unknown' },
       ...parsed.data.proposals.map((proposal, index) => ({ id: `request-proposal-${index}`,
         instructions: `Does the current user instruction adopt or refer to proposal ${JSON.stringify(proposal.id)}? Interpret omitted Japanese subjects and references such as 全部, それ, 続けて against the supplied context. Quoted or forbidden actions are not approvals.`,
         choices: [{ id: 'selected', description: 'The current request refers to this proposal.' },
@@ -185,8 +196,13 @@ function evidenceFor(context: RequestIntentContext, selectedProposalIds: Readonl
 }
 
 export function unresolvedRequestIntent(context: RequestIntentContext, reason: string, providerSent = false): RequestIntentDecision {
-  return { relation: 'unknown', action: 'unknown', source: 'unresolved', policyVersion: REQUEST_INTENT_POLICY_VERSION,
+  return { relation: 'unknown', action: 'unknown', changeScope: 'unknown', source: 'unresolved', policyVersion: REQUEST_INTENT_POLICY_VERSION,
     evidence: evidenceFor(context), providerSent, unresolvedReason: reason }
+}
+
+export function requestIntentIsUnresolved(value: RequestIntentDecision | undefined): boolean {
+  return value === undefined || value.relation === 'unknown' || value.action === 'unknown'
+    || value.action === 'change' && value.changeScope === 'unknown'
 }
 
 /** Validate a main-model interpretation against exact refs from this request and its active session only. */
@@ -202,7 +218,9 @@ export function bindMainModelRequestIntent(raw: unknown, context: RequestIntentC
   if (parsed.data.relation !== 'new' && !context.activeGoal) return undefined
   const selectedProposalIds = new Set(context.proposals.filter(item => parsed.data.evidenceRefs
     .includes(`proposal:${canonicalContentHash([item.id, item.revision, item.digest])}`)).map(item => item.id))
-  return { relation: parsed.data.relation, action: parsed.data.action, source: 'main-model',
+  const changeScope = parsed.data.action === 'change' ? parsed.data.changeScope ?? 'unknown' : 'unknown'
+  return { relation: parsed.data.relation, action: parsed.data.action, changeScope,
+    source: 'main-model',
     policyVersion: REQUEST_INTENT_POLICY_VERSION, evidence: evidenceFor(context, selectedProposalIds), providerSent: false }
 }
 
@@ -211,6 +229,7 @@ export function rebindRequestIntentDecision(raw: unknown, context: RequestIntent
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const value = raw as RequestIntentDecision
   if (!RequestRelationship.safeParse(value.relation).success || !RequestAction.safeParse(value.action).success
+    || !RequestChangeScope.safeParse(value.changeScope).success
     || !['decision-provider', 'main-model', 'unresolved'].includes(value.source)
     || value.policyVersion !== REQUEST_INTENT_POLICY_VERSION || !value.evidence
     || !Array.isArray(value.evidence.messageRefs) || !Array.isArray(value.evidence.proposalRefs)
@@ -240,7 +259,9 @@ export function requestIntentTaskType(decision: RequestIntentDecision | undefine
     case 'answer': return 'chat'
     case 'research': return 'research'
     case 'verify': return fallback === 'debug' ? 'debug' : 'review'
-    case 'change': return fallback === 'writing' ? 'writing' : fallback === 'debug' ? 'debug' : 'build'
+    case 'change': return decision?.changeScope === 'implementation'
+      ? fallback === 'debug' ? 'debug' : 'build'
+      : decision?.changeScope === 'document' ? 'writing' : fallback
     case 'operate': return 'devops'
     default: return fallback
   }
@@ -264,10 +285,14 @@ export async function classifyRequestIntent(service: DecisionService | undefined
     if (outcome.status !== 'completed') return unresolvedRequestIntent(context, outcome.reason, providerSent)
     const relation = outcome.result.answers.find(answer => answer.id === 'request-relation')
     const action = outcome.result.answers.find(answer => answer.id === 'request-action')
+    const changeScopeAnswer = outcome.result.answers.find(answer => answer.id === 'request-change-scope')
     const relationValue = relation?.status === 'selected' && RequestRelationship.safeParse(relation.choiceId).success
       ? relation.choiceId as RequestRelationship : 'unknown'
     const actionValue = action?.status === 'selected' && RequestAction.safeParse(action.choiceId).success
       ? action.choiceId as RequestAction : 'unknown'
+    const changeScopeValue = actionValue === 'change' && changeScopeAnswer?.status === 'selected'
+      && RequestChangeScope.safeParse(changeScopeAnswer.choiceId).success
+      ? changeScopeAnswer.choiceId as RequestChangeScope : 'unknown'
     const selected = new Set<string>()
     let uncertainProposal = false
     for (const [index, proposal] of context.proposals.entries()) {
@@ -275,9 +300,9 @@ export async function classifyRequestIntent(service: DecisionService | undefined
       if (answer?.status === 'selected' && answer.choiceId === 'selected') selected.add(proposal.id)
       else if (answer?.status !== 'selected' || answer.choiceId !== 'not_selected') uncertainProposal = true
     }
-    const unresolved = relationValue === 'unknown' || actionValue === 'unknown' || uncertainProposal
+    const unresolved = relationValue === 'unknown' || actionValue === 'unknown' || actionValue === 'change' && changeScopeValue === 'unknown' || uncertainProposal
     if (uncertainProposal) return unresolvedRequestIntent(context, 'proposal_reference_uncertain', providerSent)
-    return { relation: relationValue, action: actionValue, source: unresolved ? 'unresolved' : 'decision-provider',
+    return { relation: relationValue, action: actionValue, changeScope: changeScopeValue, source: unresolved ? 'unresolved' : 'decision-provider',
       policyVersion: REQUEST_INTENT_POLICY_VERSION, evidence: evidenceFor(context, selected), providerSent,
       ...(unresolved ? { unresolvedReason: 'provider_abstained_or_uncertain' } : {}) }
   } catch (error) {

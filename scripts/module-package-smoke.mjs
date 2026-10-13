@@ -241,7 +241,7 @@ try {
   semanticReady = true
   const message = (id, text) => ({ id, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] })
   // Exercise native pressure with a payload inside the decision-provider byte limit.
-  const resultText = 'stale packed fixture output. '.repeat(6000)
+  const resultText = 'stale packed fixture output.\n'.repeat(6000)
   const events = [
     { type: 'turn/start', data: { turn: 1 } },
     { type: 'step/start', data: { turn: 1, step: 1 } },
@@ -289,6 +289,23 @@ try {
     assert.equal(status.observationPack.metrics.reads, 1); assert.equal(status.semanticCompaction.preemptive, true)
     assert.equal(semanticCalls, 1, 'packing and original retrieval do not call Jev')
   } finally { await observationAgent.dispose() }
+  // Long single-line results remain usable without a pack or a reader round trip.
+  const singleLineText = resultText.replaceAll('\n', ' ')
+  const singleLineEvents = structuredClone(observationEvents)
+  singleLineEvents[10].data.message.content[0].text = singleLineText
+  const singleLineAgent = await ctx.agents.create({ sessionId: session.SessionId('packed-single-line-observation'), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: directory }, seed: singleLineEvents })
+  try {
+    const before = JSON.parse((await registeredCommands.get('kioku-decisions').handler({ rawInput: 'status', agent: singleLineAgent.agent, signal: new AbortController().signal })).text).observationPack.metrics
+    singleLineAgent.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'こんにちは' }], source: { kind: 'user' } }))
+    await singleLineAgent.agent.whenIdle()
+    assert.equal(nativeResult(provider.requests.at(-1), 'packed-old').content[0].text, singleLineText)
+    assert.equal(singleLineAgent.agent.session.snapshotEvents().filter(event => event.type === 'tool/result').length, 1)
+    const status = JSON.parse((await registeredCommands.get('kioku-decisions').handler({ rawInput: 'status', agent: singleLineAgent.agent, signal: new AbortController().signal })).text)
+    assert.equal(status.observationPack.metrics.packed, before.packed)
+    assert.equal(status.observationPack.metrics.reads, before.reads)
+    assert.equal(semanticCalls, 1, 'single-line preservation does not call Jev')
+    assert.deepEqual(failures, [])
+  } finally { await singleLineAgent.dispose() }
   if (combination.includes('lisp')) {
     let effects = 0
     const removeProbe = ctx.tools.register({ name: 'module_fixture_write', description: 'fixture effect', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => ++effects })

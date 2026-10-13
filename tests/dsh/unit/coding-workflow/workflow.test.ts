@@ -16,6 +16,7 @@ import { OwnedExecutionService, runOwnedProcess } from '../../../../src/dsh/owne
 import { parseCodingChoice, mountCodingWorkflow } from '../../../../src/dsh/coding-workflow/host.js'
 import { DshExecutionSupport } from '../../../../src/dsh/execution-support.js'
 import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../../src/dsh/decisions/request-intent.js'
+import { codingWorkRequested } from '../../../../src/dsh/coding-workflow/intent.js'
 
 export const definition: CodingDefinition = {
   goal: { goalId: 'goal', revision: 1, ideal: 'The user can run the parser and get the expected result', target: 'src/parser.mjs',
@@ -237,12 +238,23 @@ test('execution consumes the bound action: verification Bash is allowed, direct 
     assert.equal(await run('enno_work_report'), 'native')
   } finally { host.unmount(); await f.close() }
 })
+test('implementation scope opens Lisp admission even when intake labels it writing; document and unknown scopes do not', () => {
+  const task = 'Write a parser in src/parser.ts and update its docs'
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([], task) })!
+  const refs = requestIntentReferenceIds(context)
+  const decide = (changeScope: 'implementation' | 'document' | 'unknown') => bindMainModelRequestIntent({
+    relation: 'new', action: 'change', changeScope, evidenceRefs: refs,
+  }, context)!
+  assert.equal(codingWorkRequested(task, decide('implementation'), 'writing'), true)
+  assert.equal(codingWorkRequested('README.mdを修正してください。', decide('document'), 'build'), false)
+  assert.equal(codingWorkRequested(task, decide('unknown'), 'build'), false)
+})
 test('opaque implementation shorthand still requires Goal and choice; forged intent cannot authorize effects', async () => {
   const f = await fixture(), task = 'A/B/C をまとめて入れて'
   const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([], task), proposals: [
     { id: 'proposal', revision: 1, digest: 'a'.repeat(64), text: 'A/B/C: repair the three parser defects' },
   ] })!
-  const requestIntent = bindMainModelRequestIntent({ relation: 'new', action: 'change', evidenceRefs: requestIntentReferenceIds(context) }, context)!
+  const requestIntent = bindMainModelRequestIntent({ relation: 'new', action: 'change', changeScope: 'implementation', evidenceRefs: requestIntentReferenceIds(context) }, context)!
   const agent = { id: 'change-agent' }
   const identity = { ...f.identity, agent, task, requestIntent, requestIntentContext: context }
   const host = mounted(f, { resolve: (execution: any) => execution.agent === agent ? identity : undefined })

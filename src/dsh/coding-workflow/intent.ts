@@ -4,7 +4,11 @@ import type { TaskType } from '../../akinator/types.js'
 
 /** Native admission owns interpretation. Only legacy direct callers infer from text. */
 export function codingWorkRequested(task: string, intent?: RequestIntentDecision, taskType?: TaskType | null): boolean {
-  return intent === undefined ? codingIntent(task) : intent.action === 'change' && taskType !== 'writing'
+  // Native admission must follow the source-bound scope, never the advisory
+  // intake label. Text inference remains only for legacy direct callers.
+  void taskType
+  return intent === undefined ? codingIntent(task)
+    : intent.action === 'change' && intent.changeScope === 'implementation'
 }
 
 /** Effect categories are a tool contract, never another interpretation of the user. */
@@ -22,7 +26,8 @@ export function executionRequestAction(decision: RequestIntentDecision | undefin
   const effect = codingToolEffect(name)
   if (effect === 'read') return decision.action // Evidence gathering cannot acquire effect authority.
   const intent = context && rebindRequestIntentDecision(decision, context)
-  if (!intent || intent.relation === 'unknown' || intent.action === 'unknown')
+  if (!intent || intent.relation === 'unknown' || intent.action === 'unknown'
+    || intent.action === 'change' && intent.changeScope === 'unknown')
     throw new Error('A current source-bound request interpretation is required before execution.')
   if (intent.action === 'answer' || intent.action === 'research'
     || intent.action === 'verify' && effect !== 'process')

@@ -109,6 +109,33 @@ async function poll(fn, timeout = 60000) {
   }
   throw new Error("Models Web acceptance timed out");
 }
+async function verifyPackedOpenCodeReplayRecovery() {
+  const { encodePrompt } = await import(pathToFileURL(join(root, "dist/dsh/models/vendor/opencode-codec.js")).href);
+  const model = { id: "fixture-model", name: "Fixture model", protocol: "chat", contextWindow: 16384,
+    maxTokens: 2048, inputModalities: ["text"], toolCall: true, reasoning: false, temperature: false, efforts: [] };
+  const source = { kind: "model", provider: "opencode", model: model.id };
+  const malformedHistory = JSON.parse(JSON.stringify([
+    { id: "assistant-bad", role: "assistant", source, content: [{ type: "tool-call", id: "bad-224",
+      name: "coding_workflow_apply", arguments: '{"action":"propose","token":"sk-testsecret123456789"}}' }] },
+    { id: "tool-error", role: "tool", source: { kind: "tool", callId: "bad-224" }, toolCallId: "bad-224",
+      isError: true, content: [{ type: "text", text: "Invalid input: expected an object" }] },
+  ]));
+  const options = { provider: "opencode", model: model.id, messages: malformedHistory };
+  const projected = await encodePrompt(options, model);
+  const feedback = projected.flatMap(message => message.role === "assistant" ? message.content : [])
+    .find(part => part.type === "text" && part.text.includes("bad-224"))?.text;
+  assert.match(feedback, /Invalid input: expected an object/u);
+  assert.match(feedback, /coding_workflow_apply/u);
+  assert.equal(JSON.stringify(projected).includes("sk-testsecret123456789"), false);
+  assert.equal(projected.some(message => message.role === "tool"), false);
+  const repairedHistory = [...malformedHistory, { id: "assistant-fixed", role: "assistant", source,
+    content: [{ type: "tool-call", id: "fixed-230", name: "coding_workflow_apply", arguments: '{"action":"propose"}' }] }];
+  const resumed = await encodePrompt({ ...options, messages: repairedHistory }, model);
+  assert.ok(resumed.some(message => message.role === "assistant" && message.content.some(part =>
+    part.type === "tool-call" && part.toolCallId === "fixed-230" && part.input.action === "propose")));
+  assert.deepEqual(malformedHistory[0].content[0].arguments,
+    '{"action":"propose","token":"sk-testsecret123456789"}}', "history stays untouched for the ordinary session save path");
+}
 async function stop() {
   if (host) {
     const current = host;
@@ -121,7 +148,8 @@ async function stop() {
   }
 }
 try {
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  await verifyPackedOpenCodeReplayRecovery();
+  await new Promise((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
   const endpoint = `http://127.0.0.1:${server.address().port}/v1`;
   for (const name of ["home", "dsh", "data", "project"])
     await mkdir(join(base, name));
@@ -415,6 +443,7 @@ try {
       packed,
       requests: bodies.length,
       scenarios: [
+        "packed OpenCode malformed-history rejection and corrected-call recovery",
         "empty native configuration",
         "Settings",
         "exact command",

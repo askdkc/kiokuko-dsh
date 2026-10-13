@@ -29,7 +29,7 @@ try {
     { cwd: consumer, env, timeout: 180_000, maxBuffer: 4_194_304 })
   await writeFile(join(consumer, 'verify.mjs'), `
 import assert from 'node:assert/strict';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { createRequire, findPackageJSON } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -46,8 +46,16 @@ await runtime.start();
 const recorder = new DshAgenticReplayRecorder(Config.parse({}).agenticReplay, op => runtime.withDatabase(async db => await op(new DshAgenticReplayStore(db))));
 const binding = { sessionId: 'clean-consumer', workspaceRoot: root, sessionCwd: root, storeRoot: root };
 try {
-  for await (const chunk of recorder.stream(binding, { provider: 'fixture', model: 'fixture', messages: [] }, async function* () {
-    yield { type: 'text-delta', index: 0, text: 'consumer fixture' }; yield { type: 'finish', reason: { kind: 'stop' } };
+  const samples = [
+    '{"password":"FAKEONLY_DUMMY_CREDENTIAL"}',
+    '{"https://example.invalid/?token=FAKEONLY_DUMMY_CREDENTIAL":"ordinary"}',
+    'OPENAI_API_KEY=FAKEONLY_DUMMY_CREDENTIAL',
+    'https://example.invalid/?token=FAKEONLY_DUMMY_CREDENTIAL&token_count=3#keep',
+  ];
+  const benign = 'ordinary-visible-evidence keyboard=mechanical token_budget=4096';
+  const body = samples.join('\\n')+'\\n'+benign;
+  for await (const chunk of recorder.stream(binding, { provider: 'fixture', model: 'fixture', system:body, messages:[{role:'user',content:[{type:'text',text:body}]}] }, async function* () {
+    yield { type: 'text-delta', index: 0, text: body }; yield { type: 'finish', reason: { kind: 'stop' } };
   })) {}
   await recorder.shutdown();
   const status = recorder.status(binding.sessionId); assert.equal(status.trace.state, 'completed');
@@ -61,6 +69,13 @@ try {
   const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.agenticreplay_version, installed.version);
   const reader = await TraceReader.open(dir); const events = await reader.events();
+  for(const type of ['model.request','model.response'])assert.ok(events.some(e=>e.type===type));
+  const files=[];
+  async function inspectFiles(path){for(const entry of await readdir(path,{withFileTypes:true})){const target=join(path,entry.name);if(entry.isDirectory())await inspectFiles(target);else files.push(await readFile(target,'utf8'));}}
+  await inspectFiles(dir);
+  const html=await readFile(exported,'utf8');
+  for(const value of [...files,JSON.stringify(shown),html])assert.ok(!value.includes('FAKEONLY_DUMMY_CREDENTIAL'));
+  assert.ok(files.join(' ').includes(benign));assert.ok(html.includes(benign));
   assert.equal(buildTimeline(events).length, events.length);
   assert.ok((await exportTraceHtml(dir, join(root, 'fixture.html'))).bytes > 0);
   console.log(JSON.stringify({ packageManager: '${packageManager}', automaticRuntimeDependencies: 'passed', agenticreplayVersion: installed.version, events: events.length, exactReplay: false }));

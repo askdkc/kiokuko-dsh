@@ -5,7 +5,7 @@ import { requestSize } from '../efficiency.js'
 import type { CompactionAgent, CompactionSession, NativeTokenMeter, ResultCandidate, SurfaceEvent } from '../semantic-compaction/contracts.js'
 import { compactionSurface, surfaceMessage } from '../semantic-compaction/policy.js'
 import type { SessionProgress } from '../semantic-compaction/progress.js'
-import { ObservationPackConfig, ObservationReadInput, packedMessage, packedSource, plainResult, resolveObservation, textDigest } from './policy.js'
+import { ObservationPackConfig, ObservationReadInput, hasObservationSourceExcerpt, packedMessage, packedSource, plainResult, resolveObservation, textDigest } from './policy.js'
 
 interface Host { get(name: string, strict?: boolean): any; on(name: string, listener: (...args: any[]) => any): () => void }
 export class ObservationPack {
@@ -102,6 +102,7 @@ export class ObservationPack {
       if (call?.type !== 'tool/call' || call.data.callId !== original.callId || !['read', 'glob', 'grep', 'bash'].includes(call.data.name)) continue
       const resultContent = original.message.role === 'tool' ? original.message.content : original.message.content[0]!.content
       if (call.data.name === 'bash' && this.proofs.get(session)?.get(call.seq) !== toolPresentationHash({ content: resultContent, isError: false, meta: event.data.meta, error: event.data.error })) continue
+      if (!hasObservationSourceExcerpt(original.text)) continue
       const replacement = packedMessage(session.id, event), savings = meter.estimateMessage(original.message) - meter.estimateMessage(replacement)
       if (savings > 0) result.push({ id: `o${event.seq}`, tool: call.data.name, callId: original.callId, event, original: original.message, replacement, savings, position })
     }
