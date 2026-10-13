@@ -34,7 +34,7 @@ export function codingPrelude(mock: any, prefix: string, definition = fixtureDef
   const status = `${prefix}-status`, propose = `${prefix}-propose`
   return [interpretedPreparation(mock, `${prefix}-prepare`, 'new', 'change'),
     mock.toolCallResponse(status, 'coding_workflow', { action: 'status' }),
-    (request: any) => mock.toolCallResponse(propose, 'coding_workflow', {
+    (request: any) => mock.toolCallResponse(propose, 'coding_workflow_apply', {
       action: 'propose', expectedRevision: toolValue(request, status).revision, definition,
     })]
 }

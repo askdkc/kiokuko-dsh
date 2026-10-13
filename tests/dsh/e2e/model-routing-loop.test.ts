@@ -401,7 +401,7 @@ test('native code normal execution: cancel, plugin reload, original input recove
       return h.mock.textResponse('作業を保持しました。')
     },
     h.mock.toolCallResponse('coding-status', 'coding_workflow', { action: 'status' }),
-    (request: any) => h.mock.toolCallResponse('coding-propose', 'coding_workflow', {
+    (request: any) => h.mock.toolCallResponse('coding-propose', 'coding_workflow_apply', {
       action: 'propose', expectedRevision: toolValue(request, 'coding-status').revision, definition: fixtureDefinition('feature.mjs'),
     }),
     h.mock.toolCallResponse('edit-1', 'edit_feature', {}),
