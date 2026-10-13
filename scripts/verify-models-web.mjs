@@ -126,7 +126,7 @@ try {
   for (const name of ["home", "dsh", "data", "project"])
     await mkdir(join(base, name));
   await exec("git", ["init", "-q"], { cwd: project });
-  const packed = JSON.parse(
+  const packed = process.env.KIOKUKO_VERIFY_TARBALL ?? JSON.parse(
     (
       await exec(
         "npm",
@@ -138,7 +138,7 @@ try {
   console.log("Installing packed models fixture");
   await exec(
     dsh,
-    ["plugin", "--profile", "web", "add", join(base, packed), "--force"],
+    ["plugin", "--profile", "web", "add", process.env.KIOKUKO_VERIFY_TARBALL ?? join(base, packed), "--force"],
     { cwd: project, env, timeout: 180000, maxBuffer: 16 * 1024 ** 2 },
   );
   const fixture = join(base, "fixture.mjs");

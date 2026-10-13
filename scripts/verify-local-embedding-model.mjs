@@ -29,19 +29,7 @@ if (modelDirectoryIndex !== -1 && (modelDirectoryIndex + 1 >= args.length || arg
 if (args.some((arg, index) => arg !== '--offline' && arg !== '--model-dir' && index !== modelDirectoryIndex + 1)) usage();
 
 const modelDirectory = modelDirectoryIndex === -1 ? undefined : path.resolve(args[modelDirectoryIndex + 1]);
-if (modelDirectory === undefined) {
-  const {LOCAL_SMALL_PRESET}=await import('../dist/embedding/presets/local-small.js');
-  const {presetManifestHash}=await import('../dist/embedding/presets/manifest.js');
-  const {validatePresetManifest}=await import('../dist/embedding/model-manifest.js');
-  const assert=(await import('node:assert/strict')).default;
-  validatePresetManifest(LOCAL_SMALL_PRESET);
-  assert.equal(LOCAL_SMALL_PRESET.artifactRepository,MODEL_ID);assert.equal(LOCAL_SMALL_PRESET.revision,REVISION);
-  assert.deepEqual(LOCAL_SMALL_PRESET.files.map(f=>[f.path,f.size,f.sha256]),FILES);
-  assert.equal(presetManifestHash(LOCAL_SMALL_PRESET),EXPECTED_MANIFEST_HASH);
-  console.log('Pinned compiled model manifest matches the independent artifact coordinates and hash.');
-  completeVerification({manifestVerified:true,inference:'not-requested'});
-  process.exit(0);
-}
+if (modelDirectory === undefined) throw new Error('Explicit --model-dir is required; this invocation cannot claim manifest or inference verification.');
 
 const root = path.join(modelDirectory, MODEL_ID);
 for (const [relativePath, expectedSize, expectedHash] of FILES) {

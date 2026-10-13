@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const TEST_FILE_SUFFIX = '.test.ts';
+const contract=JSON.parse(await readFile(new URL('./verification.json',import.meta.url),'utf8'));
+const aliases=new Set(contract.testAliases.map(item=>path.resolve(import.meta.dirname,'..',item.file)));
 
 async function collectDirectoryTests(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -17,7 +19,7 @@ async function collectDirectoryTests(directory) {
       return entry.isFile() && entry.name.endsWith(TEST_FILE_SUFFIX) ? [entryPath] : [];
     }),
   );
-  return nestedTests.flat();
+  return nestedTests.flat().filter(file=>!aliases.has(path.resolve(file)));
 }
 
 async function collectTargetTests(target) {
@@ -32,7 +34,7 @@ async function collectTargetTests(target) {
 }
 
 async function collectTestFiles(targets) {
-  const testFiles = (await Promise.all(targets.map(collectTargetTests))).flat();
+  const testFiles = [...new Set((await Promise.all(targets.map(collectTargetTests))).flat())];
   testFiles.sort();
   if (testFiles.length === 0) {
     throw new Error(`No ${TEST_FILE_SUFFIX} files found in: ${targets.join(', ')}`);
@@ -56,7 +58,7 @@ function runNodeTests(testFiles, testTempRoot) {
     };
     delete childEnvironment.NODE_TEST_CONTEXT;
 
-    const child = spawn(process.execPath, ['--import', path.resolve(import.meta.dirname, '../tests/dsh/helpers/offline-skill-catalog.mjs'), '--import', 'tsx', '--test', ...(process.env.KIOKUKO_VERIFY_REPORT_DIR ? ['--import=' + path.resolve(import.meta.dirname, 'verification-test-environment.mjs'), '--test-reporter=tap', '--test-reporter-destination=stdout', '--test-reporter=' + path.resolve(import.meta.dirname, 'verification-reporter.mjs'), '--test-reporter-destination=' + path.join(process.env.KIOKUKO_VERIFY_REPORT_DIR, 'reporter.txt')] : []), `--test-concurrency=${concurrency}`, ...testFiles], {
+    const child = spawn(process.execPath, ['--import', path.resolve(import.meta.dirname, '../tests/dsh/helpers/offline-skill-catalog.mjs'), '--import', 'tsx', '--test', ...(process.env.KIOKUKO_VERIFY_REPORT_DIR ? ['--import=' + pathToFileURL(path.resolve(import.meta.dirname, 'verification-test-environment.mjs')).href, '--test-reporter=tap', '--test-reporter-destination=stdout', '--test-reporter=' + pathToFileURL(path.resolve(import.meta.dirname, 'verification-reporter.mjs')).href, '--test-reporter-destination=' + path.join(process.env.KIOKUKO_VERIFY_REPORT_DIR, 'reporter.txt')] : []), `--test-concurrency=${concurrency}`, ...testFiles], {
       cwd: process.cwd(),
       env: childEnvironment,
       stdio: 'inherit',

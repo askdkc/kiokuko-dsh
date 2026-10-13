@@ -44,7 +44,8 @@
     "scripts/smoke-laya-coreml.mjs",
     "scripts/evaluate-answer-review.mjs",
     "scripts/answer-review-evaluation.mjs",
-    "scripts/answer-review-evaluation.d.mts"
+    "scripts/answer-review-evaluation.d.mts",
+    "scripts/verification-completion.mjs"
   ],
   "exports": {
     ".": {

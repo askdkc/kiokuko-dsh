@@ -13,6 +13,7 @@ test('vendor manifest and npm omit optional generated test data while requiring 
   const vendor = join(library, 'vendor/cl-unicode'), script = join(root, 'scripts/verify-lisp-vendor.mjs')
   await mkdir(join(vendor, 'test'), { recursive: true }); await mkdir(join(root, 'scripts'))
   await copyFile(new URL('../../../../scripts/verify-lisp-vendor.mjs', import.meta.url), script)
+  await copyFile(new URL('../../../../scripts/verification-completion.mjs',import.meta.url),join(root,'scripts/verification-completion.mjs'))
   await copyFile(new URL('../../../../lisp/vendor/cl-unicode/.npmignore', import.meta.url), join(vendor, '.npmignore'))
   const runtime = ['lists.lisp', 'hash-tables.lisp', 'methods.lisp']
   const generated = ['derived-properties', 'normalization-forms']

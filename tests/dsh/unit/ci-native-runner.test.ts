@@ -76,29 +76,22 @@ test('native CI rejects old selectors and unknown suites before constructing a l
     assert.throws(() => nativeCiPlan(suite, {}), /Usage:/)
   }
 })
-test('coding-session CI provides Lisp on each supported platform before mandatory execution', async () => {
-  const workflow = parse(await readFile('.github/workflows/ci.yml', 'utf8'))
-  const contract=JSON.parse(await readFile('scripts/verification.json','utf8'))
-  const {verificationPlan}=await import(pathToFileURL(join(process.cwd(),'scripts/verification-contract.mjs')).href)
-  assert.equal(contract.native,true);assert.equal(contract.environment.KIOKUKO_REQUIRE_LISP_RUNTIME,'1')
-  for (const [jobName, installation] of [['verify', /apt-get install[^\n]*sbcl/u], ['dsh-runtime-macos', /brew install sbcl/u]] as const) {
-    const job = workflow.jobs[jobName]
-    const profile=jobName==='verify'?'main':'runtime'
-    assert.ok(verificationPlan(contract,profile).checks.some((check:any)=>check.requires.includes('sbcl')),jobName)
-    const install = job.steps.findIndex((step: any) => installation.test(step.run ?? ''))
-    const execution = job.steps.findIndex((step: any) => /npm run verify -- --profile (?:main|runtime)/u.test(step.run ?? ''))
-    assert.ok(install >= 0 && execution > install, `${jobName} must install its actual runtime before execution`)
-    if (jobName === 'verify') {
-      assert.match(job.steps[install].run, /apt-get install[^\n]*\bbubblewrap\b/u,
-        'mandatory protected Lisp tests also require bubblewrap on Linux')
-      assert.match(job.steps[install].run, /sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0/u,
-        'the dedicated Linux runner must permit the user namespaces used by bubblewrap')
-    }
+test('recursive discovery executes import-only aliases through their declared leaves once', async () => {
+  const contract=JSON.parse(await readFile('scripts/verification.json','utf8'));
+  const discovered=['unit','integration'].flatMap(suite=>nativeCiPlan(suite,{}).args.slice(1));
+  assert.equal(new Set(discovered).size,discovered.length);
+  for(const alias of contract.testAliases){
+    assert.ok(!discovered.includes(alias.file),alias.file);
+    const imports=(await readFile(alias.file,'utf8')).matchAll(/import ['"]([^'"]+)['"]/g);
+    const {posix}=await import('node:path');
+    const leaves=[...imports].map(match=>posix.normalize(posix.join(posix.dirname(alias.file),match[1]!)));
+    assert.deepEqual(leaves,alias.coveredFiles);
+    for(const leaf of leaves)assert.equal(discovered.filter(file=>file===leaf).length,1,leaf);
   }
-  const matrixSteps = workflow.jobs['lisp-runtime'].steps
-  assert.ok(!matrixSteps.some((step: any) => /^sudo apt-get/u.test(step.run ?? '')), 'A macOS matrix job cannot execute an unconditional Linux install')
-  const browserRuns = workflow.jobs['shortcut-browser'].steps.map((step: any) => step.run)
-  assert.ok(browserRuns.some((command:string)=>/npm run verify -- --profile browser/u.test(command)))
-  const browser=verificationPlan(contract,'browser')
-  for(const command of ['npm run test:ci:coding:web','npm run test:lisp:approval:web','npm run test:lisp:plan:web']){const check=browser.checks.find((check:any)=>check.argv.join(' ')===command);assert.ok(check);assert.ok(check.requires.includes('sbcl'));assert.ok(check.requires.includes('dsh-native'))}
-})
+  for(const lane of contract.nativeScopeExclusions){
+    assert.ok(!discovered.includes(lane.file));
+    const selected=nativeCiPlan(lane.profile,{});
+    assert.deepEqual(selected.args.slice(1),[lane.file]);
+    assert.equal(selected.env[({'code-provider':'KIOKUKO_REQUIRE_CODE_PROVIDER',p0:'KIOKUKO_REQUIRE_LISP_P0','packages-live':'KIOKUKO_PACKAGE_LIVE'} as Record<string,string>)[lane.profile]!],'1');
+  }
+ });

@@ -13,6 +13,7 @@ type Ref = { seq?: number }
 interface ActiveTrace {
   readonly row: AgenticReplayTrace
   readonly binding: DshAgenticReplayBinding
+  runDirectory?: string
   writer?: TraceWriter
   tail: Promise<void>
   closePromise?: Promise<void>
@@ -49,7 +50,7 @@ export class DshAgenticReplayRecorder {
   status(sessionId: string) {
     const trace = this.#traces.get(sessionId)
     return { capability: !this.config.enabled ? 'disabled' : this.#unavailable ? 'unavailable' : 'available',
-      trace: trace === undefined ? null : { ...trace.row, ...(trace.writer ? {run_directory:trace.writer.runDir} : {}) }, persistenceFailed: trace?.persistenceFailed ?? false,
+      trace: trace === undefined ? null : { ...trace.row, ...((trace.writer?.runDir ?? trace.runDirectory) ? {run_directory:trace.writer?.runDir ?? trace.runDirectory} : {}) }, persistenceFailed: trace?.persistenceFailed ?? false,
       diagnostics: { ...this.diagnostics }, unavailableReason: this.#unavailableReason, capture: AGENTICREPLAY_CAPTURE }
   }
   #fail(trace: ActiveTrace, code: string) {
@@ -468,6 +469,7 @@ export class DshAgenticReplayRecorder {
     await this.#save(trace)
     if (trace.row.last_error_code) await this.#persistDiagnostic(trace)
     if (trace.persistenceFailed && trace.row.state === 'completed') trace.row.state = 'incomplete'
+    if(trace.writer)trace.runDirectory=trace.writer.runDir
     delete trace.writer
   }
   forgetSession(sessionId: string): void {

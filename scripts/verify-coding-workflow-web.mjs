@@ -1,3 +1,4 @@
+import {completeVerification} from './verification-completion.mjs';
 // Packed plugin + published DSH Web + Chromium. Only model generation is scripted.
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, writeFile, realpath, rm } from 'node:fs/promises'
@@ -24,8 +25,8 @@ async function poll(fn, timeout = 60000) {
 try {
   for (const directory of ['project','home','dsh','data']) await mkdir(join(base, directory))
   await mkdir(join(project, 'src'))
-  const packed = JSON.parse((await exec('npm', ['pack','--ignore-scripts','--pack-destination',base,'--json'], {cwd:root,env})).stdout)[0]
-  await exec(dsh, ['plugin','--profile','web','add',join(base,packed.filename),'--force'], {cwd:project,env,timeout:120000,maxBuffer:16*1024**2})
+  const packed = process.env.KIOKUKO_VERIFY_TARBALL ? JSON.parse(await readFile(process.env.KIOKUKO_VERIFY_PACK_METADATA,'utf8'))[0] : JSON.parse((await exec('npm', ['pack','--ignore-scripts','--pack-destination',base,'--json'], {cwd:root,env})).stdout)[0]
+  await exec(dsh, ['plugin','--profile','web','add',process.env.KIOKUKO_VERIFY_TARBALL ?? join(base,packed.filename),'--force'], {cwd:project,env,timeout:120000,maxBuffer:16*1024**2})
   const mockPath = join(base, 'mock.mjs'), fixture = join(base, 'fixture.mjs')
   await writeFile(mockPath, (await transform(await readFile(join(root,'tests/dsh/helpers/native-mock.ts'),'utf8'), {loader:'ts',format:'esm'})).code)
   const definition = {
@@ -137,3 +138,5 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
   if(host&&host.exitCode===null){host.kill('SIGTERM');await Promise.race([new Promise(resolve=>host.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);if(host.exitCode===null)host.kill('SIGKILL')}
   await rm(base,{recursive:true,force:true})
 }
+
+completeVerification({});

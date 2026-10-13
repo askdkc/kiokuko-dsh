@@ -22,9 +22,9 @@ async function poll(fn, timeout = 60000) {
 }
 try {
   for (const dir of ['project', 'home', 'dsh', 'data']) await mkdir(join(base, dir))
-  const packed = await exec('npm', ['pack', '--ignore-scripts', '--pack-destination', base, '--json'], { cwd: root, env })
+  const packed = process.env.KIOKUKO_VERIFY_TARBALL ? {stdout:await readFile(process.env.KIOKUKO_VERIFY_PACK_METADATA,'utf8')} : await exec('npm', ['pack', '--ignore-scripts', '--pack-destination', base, '--json'], { cwd: root, env })
   console.log('Installing packed fixture')
-  await exec(dsh, ['plugin', '--profile', 'web', 'add', join(base, JSON.parse(packed.stdout)[0].filename), '--force'], { cwd: project, env, timeout: 120000, maxBuffer: 16 * 1024 ** 2 })
+  await exec(dsh, ['plugin', '--profile', 'web', 'add', process.env.KIOKUKO_VERIFY_TARBALL ?? join(base, JSON.parse(packed.stdout)[0].filename), '--force'], { cwd: project, env, timeout: 120000, maxBuffer: 16 * 1024 ** 2 })
   const fixture = join(base, 'fixture.mjs')
   const mockPath = join(base, 'mock.mjs')
   await writeFile(mockPath, (await transform(await readFile(join(root,'tests/dsh/helpers/native-mock.ts'),'utf8'), {loader:'ts',format:'esm'})).code)

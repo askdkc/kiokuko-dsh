@@ -11,7 +11,9 @@ const scenarioRoutes = new Map([
   ['e2e-repeated-deep', 'deep'], ['e2e-repeated-normal', 'normal'], ['e2e-repeated-enno', 'enno'],
   ['e2e-repeated-enno-prefix', 'enno/prefix_reuse'], ['e2e-repeated-enno-bounded', 'enno/bounded_evidence'],
 ])
-const optIn = JSON.parse(readFileSync(join(root,'scripts/verification.json'),'utf8')).nativeScopeExclusions
+const contract = JSON.parse(readFileSync(join(root,'scripts/verification.json'),'utf8'))
+const optIn = contract.nativeScopeExclusions
+const aliases = new Set(contract.testAliases.map(item=>item.file))
 const suites = new Set([...optIn.map(item=>item.profile),'unit', 'integration', 'lisp', 'queued-intent', 'browser-approval', 'browser-shortcuts', 'browser-coding', 'e2e', 'e2e-core', 'e2e-agent', 'e2e-repeated', ...scenarioRoutes.keys()])
 function testFiles(directory) {
   return readdirSync(join(root, directory), { withFileTypes: true }).flatMap(entry => {
@@ -42,7 +44,7 @@ export function nativeCiPlan(suite, environment = process.env) {
     return suite === 'e2e-core' ? !agent && !repeated : suite === 'e2e-agent' ? agent : suite.startsWith('e2e-repeated') ? repeated : true
   })
   if (!files.length) throw new Error('Native CI suite is empty')
-  const scopedFiles = selectedOptional ? files : files.filter(file=>!optIn.some(item=>item.file===file))
+  const scopedFiles = selectedOptional ? files : files.filter(file=>!aliases.has(file)&&!optIn.some(item=>item.file===file))
   if(!scopedFiles.length)throw new Error('Native scope is empty')
   const route = scenarioRoutes.get(suite)
   const scenarios = route ? repeatedMemoryScenarios.filter(name => name.startsWith(`${route}/`)) : undefined

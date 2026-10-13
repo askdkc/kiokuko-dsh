@@ -115,7 +115,8 @@
       "requires": [
         "dsh-native",
         "sbcl",
-        "cargo"
+        "cargo",
+        "protected-python3"
       ],
       "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
       "dependsOn": [
@@ -411,7 +412,8 @@
       "result": "node",
       "requires": [
         "sbcl",
-        "dsh-native"
+        "dsh-native",
+        "protected-python3"
       ],
       "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
       "dependsOn": [
@@ -433,7 +435,8 @@
       "requires": [
         "dsh-native",
         "sbcl",
-        "cargo"
+        "cargo",
+        "protected-python3"
       ],
       "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
       "dependsOn": [
@@ -453,7 +456,8 @@
       "result": "script",
       "requires": [
         "dsh-native",
-        "sbcl"
+        "sbcl",
+        "protected-python3"
       ],
       "expected": "existing independent assertions finish, emit their result and exit 0",
       "dependsOn": [
@@ -463,9 +467,8 @@
     {
       "id": "models-web",
       "argv": [
-        "npm",
-        "run",
-        "test:models:web"
+        "node",
+        "scripts/verify-models-web.mjs"
       ],
       "profiles": [
         "browser"
@@ -478,14 +481,14 @@
       "expected": "existing independent assertions finish, emit their result and exit 0",
       "dependsOn": [
         "build"
-      ]
+      ],
+      "packed": true
     },
     {
       "id": "coding-web",
       "argv": [
-        "npm",
-        "run",
-        "test:ci:coding:web"
+        "node",
+        "scripts/verify-coding-workflow-web.mjs"
       ],
       "profiles": [
         "browser"
@@ -498,14 +501,14 @@
       "expected": "existing independent assertions finish, emit their result and exit 0",
       "dependsOn": [
         "build"
-      ]
+      ],
+      "packed": true
     },
     {
       "id": "shortcuts-web",
       "argv": [
-        "npm",
-        "run",
-        "test:shortcuts:web"
+        "node",
+        "scripts/verify-shortcuts-web.mjs"
       ],
       "profiles": [
         "browser"
@@ -518,14 +521,14 @@
       "expected": "existing independent assertions finish, emit their result and exit 0",
       "dependsOn": [
         "build"
-      ]
+      ],
+      "packed": true
     },
     {
       "id": "lisp-approval-web",
       "argv": [
-        "npm",
-        "run",
-        "test:lisp:approval:web"
+        "node",
+        "scripts/verify-lisp-approval-web.mjs"
       ],
       "profiles": [
         "browser"
@@ -538,14 +541,14 @@
       "expected": "existing independent assertions finish, emit their result and exit 0",
       "dependsOn": [
         "build"
-      ]
+      ],
+      "packed": true
     },
     {
       "id": "lisp-plan-web",
       "argv": [
-        "npm",
-        "run",
-        "test:lisp:plan:web"
+        "node",
+        "scripts/verify-lisp-plan-web.mjs"
       ],
       "profiles": [
         "browser"
@@ -558,7 +561,8 @@
       "expected": "existing independent assertions finish, emit their result and exit 0",
       "dependsOn": [
         "build"
-      ]
+      ],
+      "packed": true
     },
     {
       "id": "pack-check",
@@ -692,24 +696,6 @@
       ]
     },
     {
-      "id": "embedding",
-      "argv": [
-        "node",
-        "scripts/run-local-embedding-smoke.mjs",
-        "--offline"
-      ],
-      "profiles": [
-        "main",
-        "semantic"
-      ],
-      "result": "script",
-      "requires": [],
-      "expected": "existing independent assertions finish, emit their result and exit 0",
-      "dependsOn": [
-        "build"
-      ]
-    },
-    {
       "id": "code-provider",
       "profiles": [
         "code-provider"
@@ -826,5 +812,63 @@
       "file": "tests/dsh/integration/lisp/packages-live.test.ts",
       "reason": "Live public package registries are an explicitly selected integration lane."
     }
-  ]
+  ],
+  "retiredChecks": [
+    {
+      "id": "embedding",
+      "reason": "The old --offline invocation read no model manifest; DSH ships no preset manifest. Explicit --model-dir checksum/inference remains available."
+    }
+  ],
+  "testAliases": [
+    {
+      "file": "tests/dsh/integration/capability.test.ts",
+      "coveredFiles": [
+        "tests/dsh/integration/akinator-gate.test.ts",
+        "tests/dsh/integration/pre-step/gate.test.ts",
+        "tests/dsh/unit/capability-catalog.test.ts"
+      ],
+      "reason": "Import-only convenience alias; recursive discovery executes the actual leaf once."
+    },
+    {
+      "file": "tests/dsh/integration/close-resume.test.ts",
+      "coveredFiles": [
+        "tests/dsh/integration/run-close.test.ts",
+        "tests/dsh/integration/run-resume.test.ts",
+        "tests/dsh/integration/run-resume/exact-route.test.ts"
+      ],
+      "reason": "Import-only convenience alias; recursive discovery executes the actual leaf once."
+    },
+    {
+      "file": "tests/dsh/integration/enno-turn-stopping.test.ts",
+      "coveredFiles": [
+        "tests/dsh/integration/turn-stopping-gate.test.ts",
+        "tests/dsh/integration/enno-role-loop.test.ts"
+      ],
+      "reason": "Import-only convenience alias; recursive discovery executes the actual leaf once."
+    },
+    {
+      "file": "tests/dsh/integration/provider.test.ts",
+      "coveredFiles": [
+        "tests/dsh/integration/skill-provider.test.ts"
+      ],
+      "reason": "Import-only convenience alias; recursive discovery executes the actual leaf once."
+    },
+    {
+      "file": "tests/dsh/integration/pre-step.test.ts",
+      "coveredFiles": [
+        "tests/dsh/integration/pre-step/gate.test.ts"
+      ],
+      "reason": "Import-only convenience alias; recursive discovery executes the actual leaf once."
+    }
+  ],
+  "capabilities": {
+    "protected-python3": {
+      "environment": "KIOKUKO_PYTHON_BIN",
+      "binary": "python3",
+      "probe": [
+        "node",
+        "scripts/verify-protected-python-capability.mjs"
+      ]
+    }
+  }
 }
