@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import { createHash } from 'node:crypto'
 import { cp, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -81,3 +82,5 @@ try {
 } finally {
   await rm(workspace, { recursive: true, force: true })
 }
+
+completeVerification({});

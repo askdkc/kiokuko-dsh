@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 // Fixed paired QA evaluation. Offline fixtures measure delivery only; quality
 // remains unmeasured until an explicitly configured, pinned real model runs.
 import assert from 'node:assert/strict'
@@ -91,3 +92,5 @@ for(const arm of arms){
 }
 report.trials=trials
 console.log(JSON.stringify(report,null,2))
+
+completeVerification({});

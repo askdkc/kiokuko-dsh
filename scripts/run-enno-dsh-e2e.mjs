@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -427,3 +428,5 @@ await access(join(root, 'dist/dsh/index.js'))
 await access(join(root, 'dsh/cordis.patch.yml'))
 const nativeDependencies = cliOnly ? null : await runCordisComposition()
 await runCliLifecycle(nativeDependencies)
+
+completeVerification({cliOnly,requireDshCli});

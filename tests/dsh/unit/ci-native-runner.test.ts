@@ -78,11 +78,15 @@ test('native CI rejects old selectors and unknown suites before constructing a l
 })
 test('coding-session CI provides Lisp on each supported platform before mandatory execution', async () => {
   const workflow = parse(await readFile('.github/workflows/ci.yml', 'utf8'))
+  const contract=JSON.parse(await readFile('scripts/verification.json','utf8'))
+  const {verificationPlan}=await import(pathToFileURL(join(process.cwd(),'scripts/verification-contract.mjs')).href)
+  assert.equal(contract.native,true);assert.equal(contract.environment.KIOKUKO_REQUIRE_LISP_RUNTIME,'1')
   for (const [jobName, installation] of [['verify', /apt-get install[^\n]*sbcl/u], ['dsh-runtime-macos', /brew install sbcl/u]] as const) {
     const job = workflow.jobs[jobName]
-    assert.equal(job.env.KIOKUKO_REQUIRE_LISP_RUNTIME, '1', jobName)
+    const profile=jobName==='verify'?'main':'runtime'
+    assert.ok(verificationPlan(contract,profile).checks.some((check:any)=>check.requires.includes('sbcl')),jobName)
     const install = job.steps.findIndex((step: any) => installation.test(step.run ?? ''))
-    const execution = job.steps.findIndex((step: any) => /npm (?:test|run test:e2e:dsh)/u.test(step.run ?? ''))
+    const execution = job.steps.findIndex((step: any) => /npm run verify -- --profile (?:main|runtime)/u.test(step.run ?? ''))
     assert.ok(install >= 0 && execution > install, `${jobName} must install its actual runtime before execution`)
     if (jobName === 'verify') {
       assert.match(job.steps[install].run, /apt-get install[^\n]*\bbubblewrap\b/u,
@@ -94,5 +98,7 @@ test('coding-session CI provides Lisp on each supported platform before mandator
   const matrixSteps = workflow.jobs['lisp-runtime'].steps
   assert.ok(!matrixSteps.some((step: any) => /^sudo apt-get/u.test(step.run ?? '')), 'A macOS matrix job cannot execute an unconditional Linux install')
   const browserRuns = workflow.jobs['shortcut-browser'].steps.map((step: any) => step.run)
-  for (const command of ['npm run test:ci:coding:web', 'npm run test:lisp:approval:web', 'npm run test:lisp:plan:web']) assert.ok(browserRuns.includes(command), command)
+  assert.ok(browserRuns.some((command:string)=>/npm run verify -- --profile browser/u.test(command)))
+  const browser=verificationPlan(contract,'browser')
+  for(const command of ['npm run test:ci:coding:web','npm run test:lisp:approval:web','npm run test:lisp:plan:web']){const check=browser.checks.find((check:any)=>check.argv.join(' ')===command);assert.ok(check);assert.ok(check.requires.includes('sbcl'));assert.ok(check.requires.includes('dsh-native'))}
 })

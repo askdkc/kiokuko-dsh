@@ -1,3 +1,4 @@
+import { completeVerification } from '../../scripts/verification-completion.mjs';
 import assert from 'node:assert/strict'
 import { realpathSync } from 'node:fs'
 import { chmod, copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
@@ -204,3 +205,5 @@ async function main(): Promise<void> {
 }
 
 await main()
+
+completeVerification({});

@@ -36,7 +36,8 @@ export function formatDshAgenticReplayStatus(status: Status, storeRoot: string):
   }
   const lines = [`AgenticReplay: ${title}`, next]
   if (trace) {
-    lines.push(`保存先: ${join(trace.store_root, '.agenticreplay', 'runs', trace.agenticreplay_run_id)}`)
+    lines.push(`保存先: ${trace.run_directory ?? join(trace.store_root, '.agenticreplay', 'runs')}`)
+    if(!trace.run_directory)lines.push(`Run ID: ${trace.agenticreplay_run_id}`)
     // The recorder finalizes event_count on close; zero during capture is not a measured count.
     if (trace.ended_at !== null && trace.state !== 'failed') lines.push(`記録済み: ${trace.event_count} イベント`)
     if (trace.missing_event_count || trace.unresolved_call_count) {

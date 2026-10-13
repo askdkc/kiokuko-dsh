@@ -1,3 +1,4 @@
+import { completeVerification } from '../../scripts/verification-completion.mjs';
 import assert from 'node:assert/strict';
 import { detectSqliteVecCapability } from '../../src/db/capabilities.js';
 import { migrateDatabase } from '../../src/db/migrate.js';
@@ -103,6 +104,7 @@ async function main(): Promise<void> {
       assert.ok(Number.isFinite(nativeHit.distance));
       assert.ok(Math.abs(nativeHit.distance - javascriptHits[index]!.distance) < 1e-5);
     }
+    completeVerification({nativeHits:nativeHits.length});
   } finally {
     database.close();
   }

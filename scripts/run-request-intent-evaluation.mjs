@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 // Synthetic language evaluation is separate from native protocol acceptance.
 import { readFile } from 'node:fs/promises'
 import { TypedDecisionsConfig } from '../src/dsh/decisions/config.ts'
@@ -79,3 +80,5 @@ if (live && (!configurationPath || config.mode === 'off'
     limitation: 'Synthetic paired cases; offline gold responses test plumbing, not language understanding or production quality.', rows }, null, 2))
   if (correct !== rows.length) process.exitCode = 1
 }
+
+completeVerification({});

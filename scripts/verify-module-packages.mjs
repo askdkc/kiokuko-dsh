@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -130,3 +131,5 @@ try {
   await writeFile(output, JSON.stringify({ ...report, packed: Object.fromEntries(Object.entries(packed).map(([name, value]) => [name, { bytes: value.size, unpackedBytes: value.unpackedSize, files: value.files }])), results }, null, 2) + '\n')
   console.log(`Measurements: ${output}`)
 } finally { await rm(work, { recursive: true, force: true }) }
+
+completeVerification({});

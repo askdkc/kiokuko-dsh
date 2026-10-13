@@ -25,15 +25,15 @@ export function verificationPlan(contract, profile='full', platform=process.plat
   for(const check of selected) {
     if(!Array.isArray(check.argv)||!check.argv.length||!check.expected)throw new Error(`No execution contract: ${check.id}`);
     for(const dep of check.dependsOn??[])if(!ids.has(dep))throw new Error(`Missing dependency ${dep}: ${check.id}`);
-    if(check.platforms && !check.exclusionReason)throw new Error(`Missing platform exclusion declaration: ${check.id}`);
+    if((check.platforms||check.optIn) && !check.exclusionReason)throw new Error(`Missing platform exclusion declaration: ${check.id}`);
   }
-  return {schema:'verification-plan-v1',package:contract.package,profile,platform,completeScope:profile==='full',checks:selected.map(c=>({...c,status:c.platforms&&!c.platforms.includes(platform)?'platform-excluded':'required'}))};
+  return {schema:'verification-plan-v1',package:contract.package,profile,platform,completeScope:profile==='full',checks:selected.map(c=>({...c,status:profile==='full'&&c.optIn?'scope-excluded':c.profileExclusions?.[profile]?.platforms.includes(platform)?'scope-excluded':c.platforms&&!c.platforms.includes(platform)?'platform-excluded':'required',exclusionReason:c.profileExclusions?.[profile]?.platforms.includes(platform)?c.profileExclusions[profile].reason:c.exclusionReason}))};
 }
 export function validateNodeResult(report, exclusions=[], platform=process.platform) {
-  if(report?.schema!=='verification-node-v1'||report.complete!==true||report.summaryCount!==1||!Array.isArray(report.tests)||!report.tests.length)return false;
+  if(report?.schema!=='verification-node-v1'||report.complete!==true||report.summaryCount!==1||!Array.isArray(report.tests)||!report.tests.length||!Array.isArray(report.suites))return false;
   const seen=new Set();let passed=0,skipped=0,failed=0,todo=0;
   for(const event of report.tests) {
-    if(event.fileOnly||typeof event.id!=='string'||seen.has(event.id))return false;seen.add(event.id);
+    if(!event||event.fileOnly||typeof event.skipped!=='boolean'||typeof event.todo!=='boolean'||typeof event.id!=='string'||seen.has(event.id))return false;seen.add(event.id);
     if(event.todo)todo++;else if(event.skipped){skipped++;if(!exclusions.some(rule=>rule.platforms.includes(platform)&&event.file===rule.file&&new RegExp(rule.name).test(event.name)&&rule.reason))return false;}
     else if(event.type==='test:pass')passed++;else failed++;
   }

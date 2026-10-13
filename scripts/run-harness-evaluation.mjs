@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn, execFileSync } from 'node:child_process'
 import { readFile, mkdir, writeFile, stat, rm } from 'node:fs/promises'
@@ -69,3 +70,5 @@ try {
   process.stdout.write(`Harness report: ${reportPath}\n`)
 }
 if (report.summary.passed !== report.summary.expected || report.summary.failed || report.summary.skipped) process.exitCode = 1
+
+completeVerification({});

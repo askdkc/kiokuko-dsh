@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 // Real empty-consumer installation. No global/development AgenticReplay dependency is used.
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -32,7 +33,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { createRequire, findPackageJSON } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Config, DshRuntime, DshAgenticReplayStore, DshAgenticReplayRecorder } from 'kiokuko-dsh/dsh';
+import { Config, DshRuntime, DshAgenticReplayStore, DshAgenticReplayRecorder, DshAgenticReplayReadService, resolveDshAgenticReplayRunDirectory } from 'kiokuko-dsh/dsh';
 const plugin = createRequire(import.meta.resolve('kiokuko-dsh/dsh'));
 const distribution = createRequire(plugin.resolve('agenticreplay'));
 const coreEntry = distribution.resolve('@agenticreplay/core');
@@ -51,7 +52,11 @@ try {
   await recorder.shutdown();
   const status = recorder.status(binding.sessionId); assert.equal(status.trace.state, 'completed');
   assert.equal(await readFile(join(root, '.gitignore'), 'utf8'), '.agenticreplay/\\n');
-  const dir = join(root, '.agenticreplay/runs', status.trace.agenticreplay_run_id);
+  const dir = await resolveDshAgenticReplayRunDirectory(root,status.trace.agenticreplay_run_id);
+  assert.equal(status.trace.run_directory,dir);
+  const service=new DshAgenticReplayReadService(Config.parse({}).agenticReplay,op=>runtime.withDatabase(async db=>await op(new DshAgenticReplayStore(db))));
+  const shown=await service.show(binding,status.trace.agenticreplay_run_id);assert.ok(shown.events.length>0);
+  const exported=await service.export(binding,status.trace.agenticreplay_run_id);assert.ok((await readFile(exported)).length>0);
   const installed = JSON.parse(await readFile(findPackageJSON('@agenticreplay/core', coreEntry), 'utf8'));
   const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.agenticreplay_version, installed.version);
@@ -64,3 +69,5 @@ try {
   const result = await exec(process.execPath, ['verify.mjs'], { cwd: consumer, env, timeout: 30_000 })
   process.stdout.write(result.stdout)
 } finally { await rm(temporary, { recursive: true, force: true }) }
+
+completeVerification({});

@@ -197,3 +197,6 @@ export * from '../memory/evolution/contracts.js'
 
 export { DecisionService } from './decisions/service.js'
 export type { DecisionProvider, DecisionBatch, DecisionBatchResult, DecisionCapabilities } from './decisions/contracts.js'
+
+export { DshAgenticReplayReadService } from './agenticreplay-read-service.js'
+export { checkedRunDir as resolveDshAgenticReplayRunDirectory } from './agenticreplay-security.js'

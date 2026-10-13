@@ -41,6 +41,7 @@ export type CreateTraceWriter = (runsDir: string, init: {
   agenticreplayVersion: string; envAllowlist?: string[]
 }) => Promise<TraceWriter>
 export interface CoreLibrary {
+  runIdFromDirectory?(name: string): string | undefined
   TraceWriter: { create: CreateTraceWriter }
   TraceReader: { open(runDir: string): Promise<{ events(): Promise<TraceEvent[]> }> }
   ensureRunsDir(root: string): Promise<string>

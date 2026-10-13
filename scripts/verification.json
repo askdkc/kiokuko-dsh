@@ -7,11 +7,18 @@
     "semantic",
     "lisp",
     "browser",
-    "runtime"
+    "runtime",
+    "code-provider",
+    "p0",
+    "packages-live"
   ],
   "environment": {
     "KIOKUKO_REQUIRE_SQLITE_VEC_SMOKE": "1",
-    "ONNXRUNTIME_NODE_INSTALL": "skip"
+    "ONNXRUNTIME_NODE_INSTALL": "skip",
+    "KIOKUKO_REQUIRE_DSH_NATIVE": "1",
+    "KIOKUKO_REQUIRE_LISP_RUNTIME": "1",
+    "KIOKUKO_REQUIRE_CARGO_RUNTIME": "1",
+    "KIOKUKO_REQUIRE_DSH_CLI": "1"
   },
   "checks": [
     {
@@ -60,7 +67,10 @@
         "semantic",
         "lisp",
         "browser",
-        "runtime"
+        "runtime",
+        "code-provider",
+        "p0",
+        "packages-live"
       ],
       "result": "command",
       "requires": [],
@@ -140,23 +150,6 @@
       }
     },
     {
-      "id": "skill-prompts",
-      "argv": [
-        "npm",
-        "run",
-        "test:skill-prompts"
-      ],
-      "profiles": [
-        "main"
-      ],
-      "result": "node",
-      "requires": [],
-      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
-      "dependsOn": [
-        "build"
-      ]
-    },
-    {
       "id": "skill-efficiency",
       "argv": [
         "npm",
@@ -186,44 +179,6 @@
       "result": "node",
       "requires": [],
       "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
-      "dependsOn": [
-        "build"
-      ]
-    },
-    {
-      "id": "index-reasoning",
-      "argv": [
-        "npm",
-        "run",
-        "test:index-reasoning"
-      ],
-      "profiles": [
-        "main"
-      ],
-      "result": "node",
-      "requires": [
-        "dsh-native",
-        "sbcl",
-        "cargo"
-      ],
-      "expected": "complete official lifecycle; at least one passing leaf; no failures, cancellation, todo or undeclared skips",
-      "dependsOn": [
-        "build"
-      ]
-    },
-    {
-      "id": "index-evaluation",
-      "argv": [
-        "npm",
-        "run",
-        "test:evaluation:index-reasoning"
-      ],
-      "profiles": [
-        "main"
-      ],
-      "result": "script",
-      "requires": [],
-      "expected": "existing independent assertions finish, emit their result and exit 0",
       "dependsOn": [
         "build"
       ]
@@ -417,7 +372,7 @@
       "profiles": [
         "lisp"
       ],
-      "result": "command",
+      "result": "python",
       "requires": [
         "python3"
       ],
@@ -707,7 +662,14 @@
       "dependsOn": [
         "build"
       ],
-      "packed": true
+      "packed": true,
+      "env": {
+        "KIOKUKO_DSH_CLI_ONLY": "1"
+      },
+      "completionEvidence": {
+        "cliOnly": true,
+        "requireDshCli": true
+      }
     },
     {
       "id": "sqlite-vec",
@@ -746,8 +708,123 @@
       "dependsOn": [
         "build"
       ]
+    },
+    {
+      "id": "code-provider",
+      "profiles": [
+        "code-provider"
+      ],
+      "argv": [
+        "node",
+        "scripts/run-ci-native.mjs",
+        "code-provider"
+      ],
+      "dependsOn": [
+        "build"
+      ],
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "result": "node",
+      "expected": "Explicit selected native fixture; nonempty official lifecycle without skipped required cases.",
+      "optIn": true,
+      "exclusionReason": "This optional V1 provider requires an explicit built provider fixture."
+    },
+    {
+      "id": "p0",
+      "profiles": [
+        "p0"
+      ],
+      "argv": [
+        "node",
+        "scripts/run-ci-native.mjs",
+        "p0"
+      ],
+      "dependsOn": [
+        "build"
+      ],
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "result": "node",
+      "expected": "Explicit selected native fixture; nonempty official lifecycle without skipped required cases.",
+      "optIn": true,
+      "exclusionReason": "This experimental macOS P0 candidate is an explicit probe, not production protection evidence.",
+      "platforms": [
+        "darwin"
+      ]
+    },
+    {
+      "id": "packages-live",
+      "profiles": [
+        "packages-live"
+      ],
+      "argv": [
+        "node",
+        "scripts/run-ci-native.mjs",
+        "packages-live"
+      ],
+      "dependsOn": [
+        "build"
+      ],
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "result": "node",
+      "expected": "Explicit selected native fixture; nonempty official lifecycle without skipped required cases.",
+      "optIn": true,
+      "exclusionReason": "Live public package registries are an explicitly selected integration lane."
     }
   ],
   "testExclusions": [],
-  "native": true
+  "native": true,
+  "coveredChecks": [
+    {
+      "id": "skill-prompts",
+      "coveredBy": "native-unit",
+      "files": [
+        "tests/dsh/unit/skill-compiler.test.ts",
+        "tests/dsh/unit/skill-snapshot.test.ts"
+      ],
+      "reason": "The same tests and environment are already executed by the recursive suite."
+    },
+    {
+      "id": "index-reasoning",
+      "coveredBy": "native-integration",
+      "files": [
+        "tests/dsh/integration/index-reasoning.test.ts",
+        "tests/dsh/integration/index-reasoning-native.test.ts",
+        "tests/dsh/integration/index-reasoning-evaluation.test.ts"
+      ],
+      "reason": "The same tests and environment are already executed by the recursive suite."
+    },
+    {
+      "id": "index-evaluation",
+      "coveredBy": "native-integration",
+      "files": [
+        "tests/dsh/integration/index-reasoning-evaluation.test.ts"
+      ],
+      "reason": "The same tests and environment are already executed by the recursive suite."
+    }
+  ],
+  "nativeScopeExclusions": [
+    {
+      "profile": "code-provider",
+      "file": "tests/dsh/integration/lisp/code-intelligence-native.test.ts",
+      "reason": "This optional V1 provider requires an explicit built provider fixture."
+    },
+    {
+      "profile": "p0",
+      "file": "tests/dsh/integration/lisp/p0-seatbelt.test.ts",
+      "reason": "This experimental macOS P0 candidate is an explicit probe, not production protection evidence."
+    },
+    {
+      "profile": "packages-live",
+      "file": "tests/dsh/integration/lisp/packages-live.test.ts",
+      "reason": "Live public package registries are an explicitly selected integration lane."
+    }
+  ]
 }

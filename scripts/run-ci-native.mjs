@@ -11,7 +11,8 @@ const scenarioRoutes = new Map([
   ['e2e-repeated-deep', 'deep'], ['e2e-repeated-normal', 'normal'], ['e2e-repeated-enno', 'enno'],
   ['e2e-repeated-enno-prefix', 'enno/prefix_reuse'], ['e2e-repeated-enno-bounded', 'enno/bounded_evidence'],
 ])
-const suites = new Set(['unit', 'integration', 'lisp', 'queued-intent', 'browser-approval', 'browser-shortcuts', 'browser-coding', 'e2e', 'e2e-core', 'e2e-agent', 'e2e-repeated', ...scenarioRoutes.keys()])
+const optIn = JSON.parse(readFileSync(join(root,'scripts/verification.json'),'utf8')).nativeScopeExclusions
+const suites = new Set([...optIn.map(item=>item.profile),'unit', 'integration', 'lisp', 'queued-intent', 'browser-approval', 'browser-shortcuts', 'browser-coding', 'e2e', 'e2e-core', 'e2e-agent', 'e2e-repeated', ...scenarioRoutes.keys()])
 function testFiles(directory) {
   return readdirSync(join(root, directory), { withFileTypes: true }).flatMap(entry => {
     const file = `${directory}/${entry.name}`
@@ -32,17 +33,21 @@ export function nativeCiPlan(suite, environment = process.env) {
     env.KIOKUKO_SHORTCUT_RUNTIME = fixture
     return { command: process.execPath, args: [suite === 'browser-approval' ? 'scripts/verify-lisp-approval-web.mjs' : suite === 'browser-coding' ? 'scripts/verify-coding-workflow-web.mjs' : 'scripts/verify-shortcuts-web.mjs'], cwd: root, env }
   }
+  const selectedOptional=optIn.find(item=>item.profile===suite)
+  if(selectedOptional)env[{'code-provider':'KIOKUKO_REQUIRE_CODE_PROVIDER',p0:'KIOKUKO_REQUIRE_LISP_P0','packages-live':'KIOKUKO_PACKAGE_LIVE'}[suite]]='1'
   const directory = `tests/dsh/${suite.startsWith('e2e') ? 'e2e' : suite}`
   if (suite === 'lisp') env.KIOKUKO_REQUIRE_LISP_RUNTIME = '1'
-  const files = (suite === 'queued-intent' ? ['tests/dsh/unit/decisions/akinator-classification.test.ts', 'tests/dsh/unit/decisions/akinator-scope.test.ts', 'tests/dsh/integration/queued-intent-native.test.ts'] : suite === 'lisp' ? [...testFiles('tests/dsh/unit/lisp'), ...testFiles('tests/dsh/integration/lisp'), 'tests/dsh/e2e/coding-workflow-native.test.ts'] : testFiles(directory)).filter(file => {
+  const files = (selectedOptional?[selectedOptional.file]:suite === 'queued-intent' ? ['tests/dsh/unit/decisions/akinator-classification.test.ts', 'tests/dsh/unit/decisions/akinator-scope.test.ts', 'tests/dsh/integration/queued-intent-native.test.ts'] : suite === 'lisp' ? [...testFiles('tests/dsh/unit/lisp'), ...testFiles('tests/dsh/integration/lisp'), 'tests/dsh/e2e/coding-workflow-native.test.ts'] : testFiles(directory)).filter(file => {
     const agent = file.endsWith('/native-agent-loop.test.ts'), repeated = file.endsWith('/repeated-memory-lifecycle.test.ts')
     return suite === 'e2e-core' ? !agent && !repeated : suite === 'e2e-agent' ? agent : suite.startsWith('e2e-repeated') ? repeated : true
   })
   if (!files.length) throw new Error('Native CI suite is empty')
+  const scopedFiles = selectedOptional ? files : files.filter(file=>!optIn.some(item=>item.file===file))
+  if(!scopedFiles.length)throw new Error('Native scope is empty')
   const route = scenarioRoutes.get(suite)
   const scenarios = route ? repeatedMemoryScenarios.filter(name => name.startsWith(`${route}/`)) : undefined
   if (route && !scenarios.length) throw new Error('Native CI scenario batch is empty')
-  return { command: process.execPath, args: ['scripts/run-tests.mjs', ...files], cwd: root, env, scenarios }
+  return { command: process.execPath, args: ['scripts/run-tests.mjs', ...scopedFiles], cwd: root, env, scenarios }
 }
 
 async function run(plan) {

@@ -27,7 +27,7 @@ test('compact status distinguishes consent, waiting, active and completed record
     assert.equal(text.split('\n')[0], `AgenticReplay: ${title}`)
     assert.doesNotMatch(text, /記録済み:|private-|diagnostics|httpCapture|persistenceFailed/u)
   }
-  const completed = { ...trace('completed'), ended_at: '2026-09-08T00:01:00Z', event_count: 12 }
+  const completed = { ...trace('completed'), run_directory:join('/project','.agenticreplay','runs','run_abcdef'), ended_at: '2026-09-08T00:01:00Z', event_count: 12 }
   const text = formatDshAgenticReplayStatus({ ...base, trace: completed, sessionRecording: 'disabled' }, '/project')
   assert.match(text, /^AgenticReplay: 記録完了\n/u)
   assert.match(text, /HTML 出力: \/kioku-agenticreplay export run_abcdef/u)

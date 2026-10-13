@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 // Real DSH Web + packed Kiokuko + scripted local seeding and questions, in a disposable profile.
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from 'node:fs/promises'
@@ -206,3 +207,5 @@ export async function apply(ctx) {
 } catch (error) { if(page){console.error(await page.locator('body').ariaSnapshot());await page.screenshot({path:join(base,'failure.png')})} console.error(logs.slice(-8000).replace(/token=[^\s]+/g, 'token=[redacted]')); console.error('Evidence:',base); throw error }
 finally { await browser?.close(); if(child){child.kill('SIGTERM'); await new Promise(resolve=>{child.once('exit',resolve);setTimeout(resolve,5000).unref()})} if(process.env.KIOKUKO_KEEP_SHORTCUT_EVIDENCE!=='1')await rm(base,{recursive:true,force:true}) }
 async function poll(read, timeout=15_000) { const end=Date.now()+timeout;while(Date.now()<end){const value=await read();if(value)return value;await new Promise(resolve=>setTimeout(resolve,100))}throw new Error('Required browser fixture condition timed out') }
+
+completeVerification({});

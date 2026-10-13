@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, extname, join, relative, resolve } from 'node:path'
@@ -494,3 +495,5 @@ try {
     rm(work, { recursive: true, force: true }),
   ])
 }
+
+completeVerification({});

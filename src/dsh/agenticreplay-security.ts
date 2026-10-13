@@ -1,7 +1,7 @@
-import { loadAgenticReplayLibrary } from './agenticreplay-libraries.js'
+import { loadAgenticReplayLibrary, type SchemaLibrary } from './agenticreplay-libraries.js'
 import { createHash } from 'node:crypto'
 import { constants, type Stats } from 'node:fs'
-import { lstat, mkdir, open, realpath } from 'node:fs/promises'
+import { lstat, mkdir, open, realpath, opendir } from 'node:fs/promises'
 import path from 'node:path'
 import { AgenticReplayError } from './agenticreplay-types.js'
 
@@ -138,12 +138,47 @@ export async function prepareAgenticReplayParent(root: string): Promise<string> 
   await checkPrivatePath(ignore, false)
   return path.join(root, '.agenticreplay', 'runs')
 }
+/** The stable run ID is separate from the writer's mutable directory basename. */
+export function agenticReplayRunIdFromDirectory(name: string): string | undefined {
+  if (AGENTICREPLAY_RUN_ID.test(name)) return name
+  if (name.length > 255) return undefined
+  const suffix = /^\d{14}-[a-z0-9-]+-([0-9a-f]{6,32})$/u.exec(name)?.[1]
+  return suffix === undefined ? undefined : `run_${suffix}`
+}
 export async function checkedRunDir(root: string, runId: string): Promise<string> {
   if (!AGENTICREPLAY_RUN_ID.test(runId) || !path.isAbsolute(root) || await realpath(root) !== root) throw new AgenticReplayError('trace_not_found')
-  for (const directory of [path.join(root, '.agenticreplay'), path.join(root, '.agenticreplay', 'runs'), path.join(root, '.agenticreplay', 'runs', runId)]) {
-    await checkPrivatePath(directory, true)
-  }
-  return path.join(root, '.agenticreplay', 'runs', runId)
+  const runs=path.join(root,'.agenticreplay','runs')
+  for(const parent of [path.join(root,'.agenticreplay'),runs])await checkPrivatePath(parent,true)
+  const core=await loadAgenticReplayLibrary('core')
+  const identify=core.runIdFromDirectory ?? agenticReplayRunIdFromDirectory
+  const schema: SchemaLibrary=await loadAgenticReplayLibrary('schema')
+  const directory=await opendir(runs), valid:string[]=[]
+  let entries=0
+  try {
+    for(let entry=await directory.read();entry!==null;entry=await directory.read()) {
+      if(++entries>4096)throw new AgenticReplayError('discovery_limit')
+      if(identify(entry.name)!==runId)continue
+      const candidate=path.join(runs,entry.name)
+      await checkPrivatePath(candidate,true)
+      let bytes:Buffer
+      try {bytes=await readPrivateFile(path.join(candidate,'manifest.json'),65_536)}
+      catch(error){
+        // The exact legacy name is an exclusive ID reservation. Ignore only a completely empty claim.
+        if(entry.name!==runId||(error as NodeJS.ErrnoException).code!=='ENOENT')throw error
+        const claim=await opendir(candidate)
+        try{if(await claim.read()!==null)throw new AgenticReplayError('trace_integrity_mismatch')}finally{await claim.close()}
+        continue
+      }
+      const manifest:unknown=JSON.parse(bytes.toString('utf8'))
+      schema.assertManifest(manifest)
+      if(manifest.run_id!==runId)throw new AgenticReplayError('manifest_mismatch')
+      valid.push(candidate)
+      if(valid.length>1)throw new AgenticReplayError('trace_ambiguous')
+    }
+  } finally {await directory.close()}
+  if(valid.length!==1)throw new AgenticReplayError('trace_not_found')
+  await checkPrivatePath(runs,true);await checkPrivatePath(valid[0]!,true)
+  return valid[0]!
 }
 export async function openPrivateFile(target: string) {
   const before = await checkPrivatePath(target, false)

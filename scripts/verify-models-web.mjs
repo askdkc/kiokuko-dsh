@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 // Packed package, native Web profile with no configured keys, real local API and tool loop.
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
@@ -448,3 +449,5 @@ try {
   if (process.env.KIOKUKO_KEEP_MODELS_EVIDENCE !== "1")
     await rm(base, { recursive: true, force: true });
 }
+
+completeVerification({});

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { appendFile, chmod, readFile, writeFile, rm, symlink, access } from 'node:fs/promises'
+import { appendFile, chmod, readFile, writeFile, rm, symlink, access, rename, mkdir, cp } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { mountDshAgenticReplayCommand } from '../../../src/dsh/agenticreplay-command-surface.js'
@@ -200,4 +200,24 @@ test('hot reload binds an existing session at exact pre-step without scanning or
     await services.shutdown()
     assert.equal(listeners.size, 0)
   } finally { await services.shutdown(); await f.dispose() }
+})
+
+test('stable run IDs resolve titled directories, an empty exclusive claim, and close-time title rename',async()=>{
+ const f=await agenticReplayFixture()
+ try{
+  const row=await completed(f),runs=join(f.root,'.agenticreplay','runs'),legacy=join(runs,row.agenticreplay_run_id)
+  const first=join(runs,'20261013010101-dsh-session-'+row.agenticreplay_run_id.slice(4))
+  await rename(legacy,first);await mkdir(legacy,{mode:0o700})
+  assert.ok((await f.reader.show(f.binding,row.agenticreplay_run_id)).events.length>0)
+  const titled=join(runs,'20261013010101-dsh-current-title-'+row.agenticreplay_run_id.slice(4));await rename(first,titled)
+  assert.ok((await readFile(await f.reader.export(f.binding,row.agenticreplay_run_id))).length>0)
+ }finally{await f.dispose()}
+})
+test('duplicate physical runs and nonempty manifest-less reservations are never selected',async()=>{
+ const f=await agenticReplayFixture()
+ try{
+  const row=await completed(f),runs=join(f.root,'.agenticreplay','runs'),legacy=join(runs,row.agenticreplay_run_id),named=join(runs,'20261013010101-dsh-session-'+row.agenticreplay_run_id.slice(4))
+  await cp(legacy,named,{recursive:true});await assert.rejects(f.reader.show(f.binding,row.agenticreplay_run_id),/trace_ambiguous/)
+  await rm(join(legacy,'manifest.json'));await assert.rejects(f.reader.show(f.binding,row.agenticreplay_run_id),/trace_integrity_mismatch/)
+ }finally{await f.dispose()}
 })

@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -254,3 +255,5 @@ try {
 } finally {
   database.close();
 }
+
+completeVerification({});

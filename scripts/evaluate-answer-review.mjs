@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import { parseArgs } from 'node:util'
 import { readFile, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -126,3 +127,5 @@ const json=JSON.stringify(report,null,2)+'\n'
 if(values.output)await writeFile(values.output,json)
 process.stdout.write(json)
 if(report.cases.some(row=>row.status!=='completed') || warmupCases.some(row => row.status !== 'completed'))process.exitCode=1
+
+completeVerification({});

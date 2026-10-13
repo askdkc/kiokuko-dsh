@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 // Packed Kiokuko, native agent-loop Plan tools and Web approval UI; scripted local generation.
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from 'node:fs/promises'
@@ -102,3 +103,5 @@ finally {
   if (host && host.exitCode === null) { host.kill('SIGTERM'); await Promise.race([new Promise(r => host.once('exit', r)), new Promise(r => setTimeout(r, 5000))]); if (host.exitCode === null) host.kill('SIGKILL') }
   await rm(base, { recursive: true, force: true })
 }
+
+completeVerification({});

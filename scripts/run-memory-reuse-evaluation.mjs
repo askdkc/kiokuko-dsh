@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import assert from 'node:assert/strict'
 import { readFile, mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -211,3 +212,5 @@ if (process.argv.includes('--probe')) {
     rows: rows.map(({ sweep, ...row }) => row) }, null, 2))
   if (live && rows.some(row => row.selectionStatus !== 'completed')) process.exitCode = 1
 }
+
+completeVerification({});

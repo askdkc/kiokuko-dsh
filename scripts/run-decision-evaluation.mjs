@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import { readFile } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
 import { TypedDecisionsConfig } from '../src/dsh/decisions/config.ts'
@@ -84,3 +85,5 @@ const report = { version: 1, mode: live ? 'live-synthetic' : 'fixture-oracle', m
   cost: null, rows }
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
 if (rows.some(row => row.status !== 'completed') || !live && rows.some(row => row.fp || row.fn)) process.exitCode = 1
+
+completeVerification({});

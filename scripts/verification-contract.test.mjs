@@ -42,7 +42,7 @@ test('source, runtime, verification contract, archive or built artifact changes 
 });
 function fixture(checks){
  const root=mkdtempSync(path.join(tmpdir(),'verify-contract-fixture-'));mkdirSync(path.join(root,'scripts'));
- for(const f of ['verify.mjs','verification-contract.mjs','verification-reporter.mjs','verification-test-environment.mjs'])cpSync(new URL(f,import.meta.url),path.join(root,'scripts',f));
+ for(const f of ['verify.mjs','verification-contract.mjs','verification-reporter.mjs','verification-test-environment.mjs','verification-completion.mjs'])cpSync(new URL(f,import.meta.url),path.join(root,'scripts',f));
  writeFileSync(path.join(root,'package.json'),'{"private":true,"type":"module"}');
  writeFileSync(path.join(root,'scripts/verification.json'),JSON.stringify({package:'fixture',profiles:['full'],checks,testExclusions:[]}));
  execFileSync('git',['init','-q'],{cwd:root});return root;
@@ -65,9 +65,34 @@ test('fresh final archive installs and imports without optional peers; later arc
  writeFileSync(path.join(root,'build.mjs'),"import{rmSync,mkdirSync,writeFileSync}from'node:fs';rmSync('dist',{recursive:true,force:true});mkdirSync('dist');writeFileSync('dist/index.js',\"export const result='fresh';\\n\");\n");
  // Generated build output is deliberately excluded from the source fingerprint, as in the real repos.
  writeFileSync(path.join(root,'.gitignore'),'dist/\n');
- writeFileSync(path.join(root,'consumer.mjs'),`import assert from 'node:assert/strict';import{mkdtempSync,writeFileSync,existsSync}from'node:fs';import{tmpdir}from'node:os';import path from'node:path';import{execFileSync}from'node:child_process';const dir=mkdtempSync(path.join(tmpdir(),'verification-empty-consumer-'));writeFileSync(path.join(dir,'package.json'),'{}');execFileSync('npm',['install','--ignore-scripts','--omit=optional','--no-audit','--no-fund',process.env.KIOKUKO_VERIFY_TARBALL],{cwd:dir,env:{PATH:process.env.PATH,HOME:dir,npm_config_cache:path.join(dir,'cache'),npm_config_offline:'true'},stdio:'pipe'});assert.equal(existsSync(path.join(dir,'node_modules/verification-absent-optional-peer')),false);writeFileSync(path.join(dir,'check.mjs'),\"import assert from 'node:assert/strict';import{result}from'verification-fixture';assert.equal(result,'fresh');\");execFileSync(process.execPath,['check.mjs'],{cwd:dir,stdio:'pipe'});console.log('fresh installed assertion passed');`);
+ writeFileSync(path.join(root,'consumer.mjs'),`import assert from 'node:assert/strict';import{mkdtempSync,writeFileSync,existsSync}from'node:fs';import{tmpdir}from'node:os';import path from'node:path';import{execFileSync}from'node:child_process';const dir=mkdtempSync(path.join(tmpdir(),'verification-empty-consumer-'));writeFileSync(path.join(dir,'package.json'),'{}');execFileSync(process.platform==='win32'?process.execPath:'npm',[...(process.platform==='win32'?[process.env.npm_execpath??path.join(path.dirname(process.execPath),'node_modules/npm/bin/npm-cli.js')]:[]),'install','--ignore-scripts','--omit=optional','--no-audit','--no-fund',process.env.KIOKUKO_VERIFY_TARBALL],{cwd:dir,env:{PATH:process.env.PATH,HOME:dir,npm_config_cache:path.join(dir,'cache'),npm_config_offline:'true'},stdio:'pipe'});assert.equal(existsSync(path.join(dir,'node_modules/verification-absent-optional-peer')),false);writeFileSync(path.join(dir,'check.mjs'),\"import assert from 'node:assert/strict';import{result}from'verification-fixture';assert.equal(result,'fresh');\");execFileSync(process.execPath,['check.mjs'],{cwd:dir,stdio:'pipe'});console.log('fresh installed assertion passed');const {completeVerification}=await import('./scripts/verification-completion.mjs');completeVerification({installed:true});`);
  const {child,report}=execute(root);assert.equal(child.status,0,child.stdout+'\n'+child.stderr);assert.equal(report.completionReady,true);
  const output=path.dirname(report.artifact.path),saved=path.join(output,'result.json');
  const status=()=>spawnSync(process.execPath,['scripts/verify.mjs','--status',saved],{cwd:root,encoding:'utf8'});
- assert.equal(status().status,0);writeFileSync(report.artifact.path,'changed archive');assert.equal(status().status,1);
+ assert.equal(status().status,0);
+ const buildSource=readFileSync(path.join(root,'build.mjs'));writeFileSync(path.join(root,'build.mjs'),"console.log('no-op build');");assert.equal(status().status,1);
+ const noBuild=execute(root);assert.equal(noBuild.child.status,1,'old dist must not rescue a no-op build');assert.equal(noBuild.report.completionReady,false);
+ writeFileSync(path.join(root,'build.mjs'),buildSource);
+ writeFileSync(report.artifact.path,'changed archive');assert.equal(status().status,1);
+});
+
+test('arbitrary stdout, missing or wrong completion identities never satisfy a script check',()=>{
+ for(const code of ["console.log('starting assertions')","import{writeFileSync}from'node:fs';writeFileSync(process.env.KIOKUKO_VERIFY_COMPLETION_FILE,JSON.stringify({schema:'verification-completion-v1',id:'other-check',nonce:process.env.KIOKUKO_VERIFY_NONCE,status:'passed',evidence:{}}));"]){
+ const root=fixture([{...check,argv:['node','script.mjs'],result:'script'}]);writeFileSync(path.join(root,'script.mjs'),code);const {child,report}=execute(root);assert.equal(child.status,1);assert.equal(report.completionReady,false);}
+});
+test('a missing terminal result or progress array is incomplete, never successful',()=>{
+ const root=fixture([check]);const file=path.join(tmpdir(),'verification-progress-'+Date.now()+'.json');writeFileSync(file,JSON.stringify([{id:'suite',status:'passed'}]));
+ const r=spawnSync(process.execPath,['scripts/verify.mjs','--status',file],{cwd:root,encoding:'utf8'});assert.equal(r.status,1);assert.equal(JSON.parse(r.stdout).status,'incomplete');
+});
+
+test('completion schema, identity, nonce and evidence are independently required',async()=>{
+ const {validCompletion}=await import('./verification-completion.mjs');const good={schema:'verification-completion-v1',id:'suite',nonce:'fresh',status:'passed',evidence:{installed:true}};
+ assert.equal(validCompletion(good,'suite','fresh',{installed:true}),true);
+ for(const change of [{schema:'other'},{id:'other'},{nonce:'old'},{status:'running'},{evidence:[]},{evidence:{installed:false}}])assert.equal(validCompletion({...good,...change},'suite','fresh',{installed:true}),false);
+});
+test('SIGTERM preserves an interrupted terminal result with no completion success',async()=>{
+ const root=fixture([{...check,argv:['node','waiting.mjs'],result:'script'}]);writeFileSync(path.join(root,'waiting.mjs'),"console.log('waiting');setInterval(()=>{},1000)");
+ const output=mkdtempSync(path.join(tmpdir(),'verify-interrupt-'));const child=(await import('node:child_process')).spawn(process.execPath,['scripts/verify.mjs','--output',output],{cwd:root,stdio:['ignore','pipe','pipe']});
+ let stdout='';const completed=new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',resolve);});child.stdout.on('data',chunk=>{stdout+=chunk;if(stdout.includes('waiting'))child.kill('SIGTERM');});const timer=setTimeout(()=>child.kill('SIGKILL'),5000);
+ await completed;clearTimeout(timer);const report=JSON.parse(readFileSync(path.join(output,'result.json')));assert.equal(report.status,'interrupted');assert.equal(report.completionReady,false);
 });

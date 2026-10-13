@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, rm, access, mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -33,3 +34,5 @@ try {
   await verify(packageRoot)
   console.log(JSON.stringify({status:'passed',source:true,packed:true,nativeRuntime:true,protectedLisp:true,wireSerializer:'dsh-llm-deepseek',liveModelQuality:'unmeasured'}))
 } finally { await rm(work,{recursive:true,force:true}) }
+
+completeVerification({});

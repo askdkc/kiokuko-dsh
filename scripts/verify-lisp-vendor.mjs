@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { join, relative, resolve } from 'node:path'
@@ -28,3 +29,5 @@ else {
   if (changed.length) throw new Error(`Lisp vendor content differs from the reviewed manifest: ${JSON.stringify(changed)}`)
 }
 console.log(`Lisp vendor: ${Object.keys(files).length} files verified`)
+
+completeVerification({});

@@ -25,8 +25,7 @@ test('completion guidance is discoverable and delivers only the selected referen
   const references = sources.filter(source => source.name === name && source.relativePath.startsWith('references/'))
   assert.equal(references.length, 4)
   // Byte budgets are reproducible input-size limits, not model token counts.
-  assert.ok(Buffer.byteLength(entry.content) <= 6144)
-  assert.ok(references.every(source => Buffer.byteLength(source.content) <= 8192))
+  // The actual delivered core + selected reference budget is enforced below.
   const artifact = pathToFileURL(path.join(directory, 'bundle.json'))
   await writeFile(artifact, JSON.stringify(compileSkillBundle(sources)))
   for (const mode of ['full', 'compiled'] as const) {

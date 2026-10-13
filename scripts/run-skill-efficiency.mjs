@@ -1,3 +1,4 @@
+import { completeVerification } from './verification-completion.mjs';
 import assert from 'node:assert/strict'
 import {readFile,writeFile} from 'node:fs/promises'
 import {DshSkillPrompts} from '../dist/dsh/skill-prompts.js'
@@ -27,3 +28,5 @@ if(process.argv[2]==='--output'&&process.argv.length===4)await writeFile(process
 else if(process.argv.length!==2)throw new Error('Usage: run-skill-efficiency.mjs [--output path]')
 console.log(JSON.stringify(report,null,2))
 assert.ok(Object.values(gates).every(Boolean),'Skill efficiency target not met; do not enable compiled by default')
+
+completeVerification({});

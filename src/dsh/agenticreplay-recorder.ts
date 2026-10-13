@@ -49,7 +49,7 @@ export class DshAgenticReplayRecorder {
   status(sessionId: string) {
     const trace = this.#traces.get(sessionId)
     return { capability: !this.config.enabled ? 'disabled' : this.#unavailable ? 'unavailable' : 'available',
-      trace: trace === undefined ? null : { ...trace.row }, persistenceFailed: trace?.persistenceFailed ?? false,
+      trace: trace === undefined ? null : { ...trace.row, ...(trace.writer ? {run_directory:trace.writer.runDir} : {}) }, persistenceFailed: trace?.persistenceFailed ?? false,
       diagnostics: { ...this.diagnostics }, unavailableReason: this.#unavailableReason, capture: AGENTICREPLAY_CAPTURE }
   }
   #fail(trace: ActiveTrace, code: string) {
