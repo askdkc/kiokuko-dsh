@@ -101,7 +101,8 @@ for (const failure of ['insert', 'first-request', 'late-request', 'late-request-
       capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 },
       evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'input-recovery-fixture',
         answers: batch.questions.map(question => {
-          const choiceId = ({ 'task-type': 'writing', 'request-relation': 'new', 'request-action': 'change' } as Record<string, string>)[question.id] ?? (question.id.startsWith('request-proposal-') ? 'not_selected' : undefined)
+          const choiceId = ({ 'task-type': 'writing', 'request-relation': 'new', 'request-action': 'change',
+            'request-change-scope': 'document' } as Record<string, string>)[question.id] ?? (question.id.startsWith('request-proposal-') ? 'not_selected' : undefined)
           return choiceId ? { id: question.id, status: 'selected' as const, choiceId }
             : { id: question.id, status: 'abstained' as const, reason: 'insufficient' as const }
         }) }),
@@ -418,7 +419,7 @@ test('native code normal execution: cancel, plugin reload, original input recove
     capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 },
     evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'cancel-reload-fixture',
       answers: batch.questions.map(question => {
-        const choiceId = ({ 'task-type': 'debug', 'request-action': 'change',
+        const choiceId = ({ 'task-type': 'debug', 'request-action': 'change', 'request-change-scope': 'implementation',
           'request-relation': (batch.state as { currentUserMessage?: string }).currentUserMessage === '続けてください。' ? 'same_scope_continuation' : 'new' } as Record<string, string>)[question.id] ?? (question.id.startsWith('request-proposal-') ? 'not_selected' : undefined)
         return choiceId ? { id: question.id, status: 'selected' as const, choiceId }
           : { id: question.id, status: 'abstained' as const, reason: 'insufficient' as const }
