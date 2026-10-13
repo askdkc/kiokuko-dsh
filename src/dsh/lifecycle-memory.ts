@@ -13,6 +13,7 @@ import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
 import { redactDshSourceText } from '../context/memory-projection.js'
 import { assessTaskCompletion } from './task-completion.js'
 import type { DshCoreRuntime } from './core-runtime.js'
+import type { DshPreStepDecision } from './intake-gate.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import { CODING_READ_ONLY } from './coding-workflow/intent.js'
 
@@ -75,11 +76,15 @@ export class DshLifecycleMemory {
     if(this.stopped||!this.owned(agent)||this.states.has(agent.session.id))return
     const state:State={agent,lastSeq:-1,publicReply:'',calls:new Map(),actions:[],eventIds:[],summaries:new Map(),generation:0}
     this.states.set(agent.session.id,state)
-    if(agent.ctx?.on)this.disposers.push(agent.ctx.on('agent/pre-step',async(step:any,next:()=>Promise<unknown>)=>{
+    if(agent.ctx?.on)this.disposers.push(agent.ctx.on('agent/pre-step',async(step:any,next:()=>Promise<DshPreStepDecision>)=>{
       const human=(step.messages??[]).filter((message:any)=>message?.role==='user'&&(!message.source||message.source.kind==='user'))
       if(human.some((message:any)=>captureRefusal(Array.isArray(message.content)?message.content.filter((block:any)=>block?.type==='text').map((block:any)=>block.text??'').join('\n'):String(message.content??''))))state.captureBlocked=true
-      if(step.agent===agent&&!this.stopped)await this.projectContext(state,step.turn)
-      return next()
+      const decision=await next()
+      if(decision.kind!=='enter'||step.agent!==agent||this.stopped||step.signal?.aborted)return decision
+      if(agent.session.surface?.nodes.length===0&&decision.messages.length===0)return decision
+      const message=await this.projectContext(state,step.turn,step.signal)
+      if(this.stopped||step.signal?.aborted||!this.owned(agent))return decision
+      return message?{...decision,messages:[...decision.messages,message]}:decision
     },{prepend:true}))
     // Recover only bounded public metadata, never replay old observations or scan full history.
     const end=agent.session.seq??0
@@ -231,26 +236,33 @@ export class DshLifecycleMemory {
       const result=observeMemory(db,run.workspace,value,{hostVerified:verified});if(result.recorded)improveMemory(db,run.workspace)
     }));this.track(operation,true)
   }
-  private async projectContext(state:State,turn?:number):Promise<void>{
+  private async projectContext(state:State,turn?:number,signal?:AbortSignal){
     if(this.stopped||!this.owned(state.agent))return
     const session=state.agent.session
     if(!session.append||!session.surface?.nodes||!session.eventAt||!session.header?.version||session.header.version<3)return
-    const visible=()=>state.projection!==undefined&&session.surface!.nodes.includes(state.projection.seq)
+    const hasSystemHead=()=>{const head=session.surface!.nodes[0];return head!==undefined&&session.eventAt!(head)?.type==='system/message'}
+    const writable=()=>!this.stopped&&!signal?.aborted&&this.owned(state.agent)&&hasSystemHead()
+    const visible=()=>hasSystemHead()&&state.projection!==undefined&&session.surface!.nodes[0]!==state.projection.seq&&session.surface!.nodes.includes(state.projection.seq)
     const publish=(text:string,retired:boolean,contextHash?:string,contextStamp?:string)=>{
       const previous=visible()?state.projection:undefined,id=randomUUID()
-      const event=session.append!('user/message',{id,role:'user',content:[{type:'text',text}],source:{kind:KIOKUKO_DSH_SOURCE_KIND,form:'snapshot',sections:[{name:retired?'memory:lifecycle-status':'memory:lifecycle',text}]}},
+      const message={id,role:'user' as const,content:[{type:'text' as const,text}],source:{kind:KIOKUKO_DSH_SOURCE_KIND,form:'snapshot',sections:[{name:retired?'memory:lifecycle-status':'memory:lifecycle',text}]}}
+      // Native commits its system prompt after pre-step. A first snapshot must
+      // travel with the accepted input batch, never become the protected head.
+      if(!session.surface!.nodes.length&&!retired)return message
+      if(!writable())return
+      const event=session.append!('user/message',message,
         previous?{surfaceOp:{op:'replace',startSeq:previous.seq,endSeq:previous.seq},sourceEventSeqs:[previous.seq]}:{surfaceOp:'append'}) as Event|undefined
       const seq=Number.isSafeInteger(event?.seq)?event!.seq:session.surface!.nodes.find(seq=>session.eventAt!(seq)?.data?.id===id)
       if(seq!==undefined)state.projection={seq,id,textHash:canonicalContentHash(text),contextHash,contextStamp,retired}
     }
     const retireQueries=()=>{
-      if(this.host.get('tools',false)?.get?.('memory_context')?.[MEMORY_OWNER]!==this)return
+      if(!writable()||this.host.get('tools',false)?.get?.('memory_context')?.[MEMORY_OWNER]!==this)return
       try{
       const contextCalls=new Set<string>()
       for(const seq of session.surface!.nodes){const event=session.eventAt!(seq)
         for(const block of event?.data?.message?.content??[]){if(block?.type==='tool-call'&&block.name==='memory_context'&&typeof block.id==='string')contextCalls.add(block.id)}}
       for(const seq of [...session.surface!.nodes]){const event=session.eventAt!(seq),message=event?.data?.message,callId=message?.toolCallId??message?.source?.callId
-        if(event?.type!=='tool/result'||!contextCalls.has(callId)||typeof turn!=='number'||event.data.turn>=turn)continue
+        if(!writable()||seq===session.surface!.nodes[0]||!session.surface!.nodes.includes(seq)||event?.type!=='tool/result'||!contextCalls.has(callId)||typeof turn!=='number'||event.data.turn>=turn)continue
         const text='Earlier project memory lookup was retired. Read current source references again.'
         const content=message.role==='tool'?[{type:'text',text}]:Array.isArray(message.content)&&message.content[0]?.type==='tool-result'
           ?[{...message.content[0],content:[{type:'text',text}]}]:undefined
@@ -258,7 +270,7 @@ export class DshLifecycleMemory {
       }
       }catch{/* optional retirement never changes native work */}
     }
-    const retire=()=>{try{if(!state.failedProjection){retireQueries();state.failedProjection=true}if(visible()&&!state.projection!.retired)publish('Local memory reference was retired; current sources must be checked again.',true)}catch{/* optional source failure cannot veto native work */}}
+    const retire=()=>{try{if(!writable())return;if(!state.failedProjection){retireQueries();state.failedProjection=true}if(visible()&&!state.projection!.retired)publish('Local memory reference was retired; current sources must be checked again.',true)}catch{/* optional source failure cannot veto native work */}}
     try{
       // Recover once after attaching/reloading. Steady-state steps only check
       // the retained snapshot handle; no history/surface payload scan.
@@ -272,7 +284,7 @@ export class DshLifecycleMemory {
       const pending=Promise.allSettled(prior).then(()=>this.context({cwd:this.root,sessionId:session.id}));this.track(pending)
       let timer:ReturnType<typeof setTimeout>|undefined
       const context=await Promise.race([pending,new Promise<undefined>(resolve=>{timer=setTimeout(()=>resolve(undefined),50)})]).finally(()=>clearTimeout(timer))
-      if(this.stopped||!this.owned(state.agent))return
+      if(this.stopped||signal?.aborted||!this.owned(state.agent))return
       if(!context||!('sourceRefs'in context)||!context.available||state.generation!==generation||state.captureBlocked){retire();return}
       state.failedProjection=false
       const meta=contextMeta(context),previous=visible()?state.projection:undefined
@@ -286,7 +298,7 @@ export class DshLifecycleMemory {
       if(previous&&!previous.retired&&previous.textHash===canonicalContentHash(text)){
         previous.contextHash=meta?.hash;previous.contextStamp=meta?.stamp;return
       }
-      publish(text,false,meta?.hash,meta?.stamp)
+      return publish(text,false,meta?.hash,meta?.stamp)
     }catch{retire()/* optional retrieval never changes the native result */}
   }
   async whenIdle():Promise<void>{await Promise.allSettled([...this.pending])}

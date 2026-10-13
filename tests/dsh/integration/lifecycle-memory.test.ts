@@ -80,6 +80,32 @@ class Host {
   on(name:string,fn:Function){const list=this.handlers.get(name)??[];list.push(fn);this.handlers.set(name,list);return ()=>{this.handlers.set(name,(this.handlers.get(name)??[]).filter(x=>x!==fn))}}
   emit(name:string,...args:any[]){for(const fn of this.handlers.get(name)??[])fn(...args)}
 }
+/** Mirrors native acceptance: pre-step returns messages, then the loop commits its system head first. */
+const humanMessage=()=>({id:'human-input',role:'user',content:[{type:'text',text:'Explain parser'}],source:{kind:'user'}})
+function nativeSurface(host:Host,id:string,root:string){
+  const events:any[]=[],session:any={id,header:{cwd:root,version:4},seq:0,surface:{nodes:[]},eventAt:(seq:number)=>events[seq]}
+  session.append=(type:string,data:any,options:any={})=>{
+    const nodes:number[]=session.surface.nodes,operation=options.surfaceOp
+    if(operation){
+      assert.ok(nodes.length?events[nodes[0]!]!.type==='system/message':type==='system/message','native system message must own the first surface head')
+      if(operation.op==='replace')assert.notEqual(operation.startSeq,nodes[0],'the first surface head is protected')
+    }
+    const event={type,seq:session.seq++,data};events[event.seq]=event
+    if(operation?.op==='replace')nodes.splice(nodes.indexOf(operation.startSeq),1,event.seq)
+    else if(operation)nodes.push(event.seq)
+    host.emit('session/event',session,event);return event
+  }
+  const agent={id:`agent-${id}`,session,ctx:host}
+  host.agents.set(agent.id,agent);host.sessions.set(session.id,session)
+  const step=async(turn=1)=>{
+    const decision=await host.handlers.get('agent/pre-step')![0]!({agent,turn},async()=>({kind:'enter',messages:session.surface.nodes.length?[]:[humanMessage()]}))
+    assert.equal(decision.kind,'enter')
+    if(!session.surface.nodes.length)session.append('system/message',{message:{role:'system',content:[{type:'text',text:'Native system prompt'}]}},{surfaceOp:'append'})
+    for(const message of decision.messages)session.append('user/message',message,{surfaceOp:'append'})
+    return decision
+  }
+  return {events,session,agent,step}
+}
 test('public revisions correct one event, tombstones may omit summary and session handoff expires after 24 hours',()=>database(db=>{
   const first={...input('event','praise'),source:{...input('event').source,revision:1}}
   assert.equal(observeMemory(db,'repo-a',first).recorded,true)
@@ -101,13 +127,9 @@ test('core and optional modules share one observer and retain tools until the la
 test('local event adapter carries model/compaction context, native feedback withdrawal and bounded nonblocking reads without private reasoning',async()=>{
   const base=await mkdtemp(join(tmpdir(),'lifecycle-events-')),root=join(base,'repo');await mkdir(root)
   const runtime=new DshCoreRuntime({repositoryRoot:root,databasePath:join(base,'state.db'),autoRegisterRepository:true,migrationsDirectory:join(process.cwd(),'migrations')})
-  const host=new Host(),events:any[]=[],session:any={id:'native-a',header:{cwd:root,version:4},seq:0,surface:{nodes:[]},eventAt:(seq:number)=>events[seq]},agent={id:'agent-a',session,ctx:host}
-  session.append=(type:string,data:any,options:any={})=>{const event={type,seq:session.seq++,data};events.push(event)
-    if(options.surfaceOp?.op==='replace')session.surface.nodes=session.surface.nodes.filter((seq:number)=>seq!==options.surfaceOp.startSeq)
-    if(options.surfaceOp)session.surface.nodes.push(event.seq);host.emit('session/event',session,event)}
-  host.agents.set(agent.id,agent);host.sessions.set(session.id,session)
+  const host=new Host(),{events,session,step}=nativeSurface(host,'native-a',root)
   await runtime.start();const memory=new DshLifecycleMemory(host as any,runtime,realpathSync(root))
-  const emit=(type:string,data:any)=>{host.emit('session/event',session,{type,seq:session.seq++,data})}
+  const emit=(type:string,data:any)=>session.append(type,data)
   try{
     emit('request/header',{header:{config:{provider:'mock',model:'first'}}})
     emit('assistant/message',{message:{content:[{type:'text',text:'Public parser result'},{type:'reasoning',text:'PRIVATE_REASONING_SENTINEL'}]}})
@@ -119,8 +141,7 @@ test('local event adapter carries model/compaction context, native feedback with
     const context:any=await memory.context({cwd:root,sessionId:session.id})
     assert.equal(context.cautions.length,1);assert.equal(context.continuation.length,2)
     assert.ok(!JSON.stringify(context).includes('PRIVATE_'))
-    const hook=host.handlers.get('agent/pre-step')![0]!
-    assert.equal(await hook({agent},async()=>'native-response'),'native-response')
+    await step()
     assert.match(events.at(-1).data.content[0].text,/Untrusted project memory/)
     emit('feedback/message-delete',{sessionId:session.id,messageId:'answer-1'});await memory.whenIdle()
     assert.equal((await memory.context({cwd:root}) as any).cautions.length,0)
@@ -135,7 +156,8 @@ test('unavailable storage and slow context never veto a native stream',async()=>
   host.agents.set(agent.id,agent);host.sessions.set(session.id,session)
   const runtime:any={withDatabase:()=>new Promise(()=>{})},memory=new DshLifecycleMemory(host as any,runtime,root)
   const hook=host.handlers.get('agent/pre-step')![0]!,start=performance.now()
-  assert.equal(await hook({agent},async()=>'native'),'native');assert.ok(performance.now()-start<1000)
+  const decision={kind:'enter',messages:[humanMessage()]}
+  assert.equal(await hook({agent},async()=>decision),decision);assert.ok(performance.now()-start<1000)
   memory.stop()
   const failed=new DshLifecycleMemory(new Host() as any,{withDatabase:async()=>{throw new Error('DB unavailable')}} as any,root)
   assert.equal((await failed.observe({...input('failure'),cwd:root})).workMayContinue,true);failed.stop()
@@ -308,28 +330,112 @@ test('unchanged native steps retain one snapshot without history reads/audit app
   await runtime.start();let probe:ReturnType<typeof countedDatabase>|undefined,unavailable=false
   const instrumented:any={withDatabase:(fn:any)=>{if(unavailable)return Promise.reject(new Error('storage unavailable'))
     return runtime.withDatabase(db=>{probe??=countedDatabase(db);return fn(probe.db)})}}
-  const host=new Host(),events:any[]=[],session:any={id:'cached-native',header:{cwd:root,version:4},seq:0,surface:{nodes:[]},eventAt:(seq:number)=>events[seq]},agent={id:'cached-agent',session,ctx:host}
-  session.append=(type:string,data:any,options:any={})=>{const event={type,seq:session.seq++,data};events[event.seq]=event
-    if(options.surfaceOp?.op==='replace')session.surface.nodes=session.surface.nodes.filter((seq:number)=>seq!==options.surfaceOp.startSeq)
-    if(options.surfaceOp)session.surface.nodes.push(event.seq);host.emit('session/event',session,event);return event}
-  host.agents.set(agent.id,agent);host.sessions.set(session.id,session)
+  const host=new Host(),{events,session,step}=nativeSurface(host,'cached-native',root)
   let memory=new DshLifecycleMemory(host as any,instrumented,realpathSync(root))
-  const hook=()=>host.handlers.get('agent/pre-step')![0]!,snapshots=()=>events.filter(event=>event.type==='user/message'&&event.data.source.sections?.some((section:any)=>section.name==='memory:lifecycle'))
+  const snapshots=()=>events.filter(event=>event.type==='user/message'&&event.data.source.sections?.some((section:any)=>section.name==='memory:lifecycle'))
   try{
     await memory.observe({...input('stable','complaint'),cwd:root,sessionId:session.id})
-    await hook()({agent,turn:1},async()=>'native');const count=events.length,reads=probe!.reads(),first=snapshots()[0]!.seq
-    for(let i=0;i<20;i++){await runtime.withDatabase(db=>db.prepare('UPDATE repositories SET last_used_at=?').run(`ordinary-step-${i}`));await hook()({agent,turn:1},async()=>'native')}
+    await step(1);const count=events.length,reads=probe!.reads(),first=snapshots()[0]!.seq
+    for(let i=0;i<20;i++){await runtime.withDatabase(db=>db.prepare('UPDATE repositories SET last_used_at=?').run(`ordinary-step-${i}`));await step(1)}
     assert.equal(events.length,count);assert.equal(probe!.reads(),reads);assert.ok(session.surface.nodes.includes(first))
     memory.stop();await memory.whenIdle();memory=new DshLifecycleMemory(host as any,instrumented,realpathSync(root))
-    await hook()({agent,turn:2},async()=>'native');assert.equal(events.length,count,'reattachment must reuse the existing equal snapshot')
-    session.append('model/selection',{provider:'mock',model:'another'});await memory.whenIdle();await hook()({agent,turn:2},async()=>'native')
+    await step(2);assert.equal(events.length,count,'reattachment must reuse the existing equal snapshot')
+    session.append('model/selection',{provider:'mock',model:'another'});await memory.whenIdle();await step(2)
     assert.equal(snapshots().length,2);assert.match(snapshots().at(-1)!.data.content[0].text,/model_switch/)
-    session.surface.nodes=[];await hook()({agent,turn:3},async()=>'native')
+    session.surface.nodes=[session.surface.nodes[0]];await step(3)
     assert.equal(snapshots().length,3);assert.ok(session.surface.nodes.includes(snapshots().at(-1)!.seq),'fresh context must receive the retained memory')
-    unavailable=true;assert.equal(await hook()({agent,turn:4},async()=>'native'),'native')
+    unavailable=true;assert.equal((await step(4)).kind,'enter')
     const failedEvents=events.length
-    for(let i=0;i<10;i++)assert.equal(await hook()({agent,turn:4},async()=>'native'),'native')
+    for(let i=0;i<10;i++)assert.equal((await step(4)).kind,'enter')
     assert.equal(events.length,failedEvents,'unchanged failure must not append repeated retirement records')
-    unavailable=false;await hook()({agent,turn:4},async()=>'native');assert.equal(snapshots().length,4)
+    unavailable=false;await step(4);assert.equal(snapshots().length,4)
+  }finally{memory.stop();await memory.whenIdle();await runtime.close();await rm(base,{recursive:true,force:true})}
+})
+
+
+test('first memory follows native acceptance, preserves rejection, and never writes ahead of the system head',async()=>{
+  const base=await mkdtemp(join(tmpdir(),'lifecycle-first-')),root=join(base,'repo');await mkdir(root)
+  const runtime=new DshCoreRuntime({repositoryRoot:root,databasePath:join(base,'state.db'),autoRegisterRepository:true,migrationsDirectory:join(process.cwd(),'migrations')})
+  await runtime.start()
+  const host=new Host(),{events,session,agent,step}=nativeSurface(host,'first-native',root)
+  const memory=new DshLifecycleMemory(host as any,runtime,realpathSync(root))
+  try{
+    await memory.observe({...input('first-caution','complaint'),cwd:root,sessionId:session.id,summary:'Initial parser caution'})
+    const hook=host.handlers.get('agent/pre-step')![0]!,reject={kind:'reject',reason:'Native admission refused'},empty={kind:'enter',messages:[]}
+    assert.equal(await hook({agent,turn:1},async()=>empty),empty,'optional memory must not wake an empty native step')
+    assert.equal(events.length,0)
+    assert.equal(await hook({agent,turn:1},async()=>reject),reject)
+    assert.equal(events.length,0,'a rejected step must not persist optional memory')
+    const human={id:'human',role:'user',content:[{type:'text',text:'Explain parser'}],source:{kind:'user'}}
+    const accepted={kind:'enter',messages:[human],startsRequestSeries:true}
+    const decision=await hook({agent,turn:2},async()=>accepted)
+    assert.equal(events.length,0,'only native acceptance may persist first-step messages')
+    assert.equal(decision.startsRequestSeries,true);assert.equal(decision.messages[0],human)
+    assert.equal(accepted.messages.length,1,'the downstream decision stays caller-owned')
+    assert.equal(decision.messages.length,2,'the accepted batch must deliver initial memory')
+    assert.match(decision.messages[1].content[0].text,/Initial parser caution/)
+    session.append('system/message',{message:{role:'system',content:[{type:'text',text:'Native system prompt'}]}},{surfaceOp:'append'})
+    for(const message of decision.messages)session.append('user/message',message,{surfaceOp:'append'})
+    const count=events.length
+    await step(3);assert.equal(events.length,count,'the committed initial snapshot must be reused')
+    await memory.observe({...input('rejected-update','complaint'),cwd:root,sessionId:session.id,summary:'Changed parser caution'})
+    assert.equal(await hook({agent,turn:4},async()=>reject),reject)
+    assert.equal(events.length,count,'a rejected step must not replace an existing snapshot either')
+  }finally{memory.stop();await memory.whenIdle();await runtime.close();await rm(base,{recursive:true,force:true})}
+})
+
+test('snapshot replacement and retirement recheck the protected head after asynchronous retrieval',async()=>{
+  const base=await mkdtemp(join(tmpdir(),'lifecycle-head-')),root=join(base,'repo');await mkdir(root)
+  const runtime=new DshCoreRuntime({repositoryRoot:root,databasePath:join(base,'state.db'),autoRegisterRepository:true,migrationsDirectory:join(process.cwd(),'migrations')})
+  await runtime.start()
+  const host=new Host(),{events,session,agent,step}=nativeSurface(host,'head-native',root)
+  const memory=new DshLifecycleMemory(host as any,runtime,realpathSync(root))
+  try{
+    await memory.observe({...input('head-caution','complaint'),cwd:root,sessionId:session.id})
+    await step()
+    const head=session.surface.nodes[0],projection=session.surface.nodes.at(-1),original=memory.context.bind(memory)
+    for(const unavailable of [false,true]){
+      session.surface.nodes=[head,projection]
+      await memory.observe({...input(`head-change-${unavailable}`,'complaint'),cwd:root,sessionId:session.id})
+      memory.context=async value=>{const context=await original(value);session.surface.nodes=[projection];return unavailable?{workMayContinue:true,diagnostics:['memory_unavailable']}:context}
+      const count=events.length
+      const decision=await host.handlers.get('agent/pre-step')![0]!({agent,turn:2},async()=>({kind:'enter',messages:[]}))
+      assert.equal(decision.kind,'enter');assert.deepEqual(decision.messages,[])
+      assert.equal(events.length,count,'a snapshot promoted to the protected head must not be replaced or retired')
+      assert.deepEqual(session.surface.nodes,[projection])
+    }
+    session.surface.nodes=[head,projection]
+    memory.context=async()=>({workMayContinue:true,diagnostics:['memory_unavailable']})
+    const count=events.length
+    await step(3)
+    assert.equal(events.length,count+1,'retirement must retry once the protected system head is restored')
+    assert.match(events.at(-1).data.content[0].text,/Local memory reference was retired/)
+  }finally{memory.stop();await memory.whenIdle();await runtime.close();await rm(base,{recursive:true,force:true})}
+})
+
+
+for(const change of ['abort','dispose','replace-session'] as const)for(const initial of [true,false])test(`asynchronous ${change} leaves ${initial?'initial':'existing'} memory unchanged`,async()=>{
+  const base=await mkdtemp(join(tmpdir(),'lifecycle-ownership-')),root=join(base,'repo');await mkdir(root)
+  const runtime=new DshCoreRuntime({repositoryRoot:root,databasePath:join(base,'state.db'),autoRegisterRepository:true,migrationsDirectory:join(process.cwd(),'migrations')})
+  await runtime.start()
+  const host=new Host(),{events,session,agent,step}=nativeSurface(host,'ownership-native',root)
+  const memory=new DshLifecycleMemory(host as any,runtime,realpathSync(root))
+  try{
+    await memory.observe({...input('ownership-caution','complaint'),cwd:root,sessionId:session.id})
+    if(!initial)await step()
+    await memory.observe({...input('ownership-update','complaint'),cwd:root,sessionId:session.id,summary:'Updated parser caution'})
+    const context=await memory.context({cwd:root,sessionId:session.id}),controller=new AbortController()
+    let entered!:()=>void,release!:()=>void
+    const retrieving=new Promise<void>(resolve=>{entered=resolve})
+    memory.context=()=>new Promise(resolve=>{release=()=>resolve(context);entered()})
+    const decision={kind:'enter',messages:[humanMessage()]},count=events.length,surface=[...session.surface.nodes]
+    const pending=host.handlers.get('agent/pre-step')![0]!({agent,turn:2,signal:controller.signal},async()=>decision)
+    await retrieving
+    if(change==='abort')controller.abort()
+    else if(change==='dispose')memory.stop()
+    else host.sessions.set(session.id,{...session})
+    release()
+    assert.equal(await pending,decision,'stale optional memory must not change the native decision')
+    assert.equal(events.length,count);assert.deepEqual(session.surface.nodes,surface)
   }finally{memory.stop();await memory.whenIdle();await runtime.close();await rm(base,{recursive:true,force:true})}
 })

@@ -25,7 +25,8 @@ export function layaV1Reply(request: any, choose?: (id: string, choices: string[
 // A real framed socket fixture exercises the Node transport without a model or Python.
 export async function serveLaya(t: import('node:test').TestContext, reply: (request: any, raw: string) => unknown = request => layaReply(request)) {
   const { createServer } = await import('node:net'), { mkdtemp, rm } = await import('node:fs/promises')
-  const dir = await mkdtemp('/tmp/klaya-'), path = `${dir}/w.sock`, sockets = new Set<import('node:net').Socket>()
+  const { tmpdir } = await import('node:os'), { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'klaya-')), path = `${dir}/w.sock`, sockets = new Set<import('node:net').Socket>()
   let calls = 0
   const server = createServer(socket => {
     sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket))

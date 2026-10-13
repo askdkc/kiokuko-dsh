@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {join,dirname} from 'node:path'
+import {pathToFileURL} from 'node:url'
 import {openConnection} from '../../../src/db/connection.js'
 import {nativeSkillFixture} from '../helpers/skill-native.js'
 import {nativeToolResults} from '../helpers/native-mock.js'
@@ -69,4 +70,61 @@ for(const mode of ['full','compiled'] as const)test(`native ${mode}: feedback an
       assert.equal(completion.verification,'unknown','a read-only task ending is not a verified implementation result')
     }finally{db.close()}
   }finally{await f.close()}
+})
+
+test('native accepted first memory remains readable through JSONL and a resumed agent; rejected steps store no memory',async()=>{
+  const f=await nativeSkillFixture({packages,explicit:true,extra,prompts:new DshSkillPrompts({mode:'compiled'})})
+  let handle:any,readHandle:any,writer:any,reader:any,off:()=>void=()=>{}
+  const errors:unknown[]=[],offError=f.ctx.on('agent/error',({error}:any)=>errors.push(error))
+  try{
+    const [cordis,{default:jsonl},nativeSession]=await Promise.all(['cordis','dsh-session-persistence-jsonl','dsh-session']
+      .map(name=>import(pathToFileURL(join(packages,'@deepseek-ai',name,'lib/index.js')).href)))
+    const root=join(dirname(f.dir),'history')
+    writer=await f.ctx.plugin(jsonl,{root,compression:'none'})
+    const readerContext=new cordis.Context()
+    reader=await readerContext.plugin(jsonl,{root,compression:'none'})
+    const id=nativeSession.SessionId('lifecycle-persisted')
+    handle=await f.ctx.agentLoop.createAgent(f.ctx,{sessionId:id,meta:{cwd:f.dir},agentOptions:{provider:'mock',model:'qwen3-coder'}})
+    const observed=await f.ctx.tools.get('memory_observe').execute({cwd:f.dir,eventId:'first-native-caution',sessionId:id,kind:'complaint',
+      summary:'Initial parser caution must reach the first accepted request',tags:['parser'],outcome:'unknown',verification:'unknown',actions:[],
+      source:{producer:'kiokuko-dsh',runId:'first-native-caution',eventIds:['public:first-native-caution']}})
+    assert.equal(observed.recorded,true)
+    const turn=async(text:string)=>{handle.agent.followup(f.llm.createUserMessage({content:[{type:'text',text}],source:{kind:'user'}}));await handle.agent.whenIdle();assert.deepEqual(errors,[])}
+    off=handle.agent.ctx.on('agent/pre-step',async()=>({kind:'reject'}))
+    await turn('parser の仕組みを説明してください。')
+    assert.equal(handle.agent.session.surface.nodes.length,0,'native rejection must preserve the empty surface')
+    assert.equal(handle.agent.session.snapshotEvents().filter((event:any)=>event.type==='user/message').length,0)
+    off();off=()=>{}
+    f.responses.push((request:any)=>{
+      const memory=request.messages.filter((message:any)=>message.source?.sections?.some((section:any)=>section.name==='memory:lifecycle'))
+      assert.equal(memory.length,1);assert.match(JSON.stringify(memory),/Initial parser caution must reach the first accepted request/)
+      return f.mock.textResponse('Initial memory delivered.')
+    })
+    await turn('parser の仕組みを説明してください。')
+    assert.equal(f.responses.length,0,'the accepted native request must reach the mock model')
+    const session=handle.agent.session
+    assert.equal(session.eventAt(session.surface.nodes[0]).type,'system/message')
+    await f.ctx.sessions.flush(session)
+    readHandle=await readerContext.sessionPersistence.open(id,'read')
+    assert.deepEqual((await readHandle.read()).events,session.snapshotEvents(),'a separate JSONL reader validates the real persisted log')
+    await readHandle.close();readHandle=undefined
+    const previousCount=session.snapshotEvents().filter((event:any)=>event.type==='user/message'&&event.data.source?.sections?.some((section:any)=>section.name==='memory:lifecycle')).length
+    await handle.dispose();handle=undefined
+    handle=await f.ctx.agentLoop.resume(f.ctx,{resumeSessionId:id,agentOptions:{provider:'mock',model:'qwen3-coder'}})
+    f.responses.push((request:any)=>{
+      assert.match(JSON.stringify(request.messages),/Initial parser caution must reach the first accepted request/)
+      return f.mock.textResponse('Persisted memory restored.')
+    })
+    await turn('次の説明をお願いします。')
+    assert.equal(f.responses.length,0,'the resumed native model request must run')
+    const resumed=handle.agent.session
+    assert.equal(resumed.eventAt(resumed.surface.nodes[0]).type,'system/message')
+    assert.equal(resumed.snapshotEvents().filter((event:any)=>event.type==='user/message'&&event.data.source?.sections?.some((section:any)=>section.name==='memory:lifecycle')).length,previousCount,'reattachment reuses the stored snapshot')
+    await f.ctx.sessions.flush(resumed)
+    readHandle=await readerContext.sessionPersistence.open(id,'read')
+    assert.deepEqual((await readHandle.read()).events,resumed.snapshotEvents())
+  }finally{
+    off();offError()
+    try{await readHandle?.close()}finally{try{await handle?.dispose()}finally{try{await reader?.dispose()}finally{try{await writer?.dispose()}finally{await f.close()}}}}
+  }
 })

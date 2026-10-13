@@ -181,13 +181,17 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   })
   const disposeComposition = await mountDshComposition(root, adapter.host)
   try {
-    assert.equal(registered.length, 21, 'the explicit coding apply and blocker contracts add two public operations')
-    for(const name of ['kioku_read','kioku_write','kioku_edit','kioku_remove','kioku_exec','kioku_result']) assert.ok(registered.some((definition:any)=>definition.name===name))
-    for (const name of ['coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker']) {
-      assert.ok(registered.some((definition: any) => definition.name === name), `missing registered operation ${name}`)
-    }
-    assert.ok(registered.some((definition: any) => definition.name === 'memory_explain'))
-    assert.ok(registered.some((definition: any) => definition.name === 'task_completion'))
+    const registeredNames = registered.map((definition: any) => definition.name)
+    assert.equal(new Set(registeredNames).size, registeredNames.length, 'each public operation must be registered exactly once')
+    assert.deepEqual([...registeredNames].sort(), [
+      'coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker',
+      'curator_check', 'enno_delegate', 'enno_finish', 'enno_ideal_submit',
+      'enno_meditation_submit', 'enno_plan_review', 'enno_plan_submit', 'enno_work_report',
+      'kioku_edit', 'kioku_exec', 'kioku_read', 'kioku_remove', 'kioku_result', 'kioku_write',
+      'memory_checkpoint', 'memory_context', 'memory_explain', 'memory_improve', 'memory_observe',
+      'task_completion', 'task_memory_review',
+    ].sort(), 'the native adapter must expose the exact public operation contract')
+    assert.ok(registered.every((definition: any) => definition.modelFacing === true))
     const archivedExportSession = createNativeSession('archived-export-session')
     nativeSessions.delete(archivedExportSession.id)
     archivedSessions.set(archivedExportSession.id, archivedExportSession)
