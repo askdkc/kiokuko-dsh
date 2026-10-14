@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { resolveGuardrail } from './guardrail-artifacts.mjs'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +22,15 @@ export async function composeModules(sources, destination) {
   await mkdir(destination, { recursive: true })
   if ((await readdir(destination)).length) throw new Error('Composition output must be empty')
   const manifest = JSON.parse(await readFile(join(sources.core, 'package.json'), 'utf8'))
+  const inheritedPermissions = manifest.dsh?.permissions ?? {}
+  const executableArtifacts = new Map()
+  if (manifest.guardrail) {
+    const index = JSON.parse(await readFile(join(sources.core, 'guardrail/manifest.json'), 'utf8'))
+    for (const entry of Object.values(index.targets)) {
+      const checked = resolveGuardrail(sources.core, { platform: entry.platform, arch: entry.arch })
+      executableArtifacts.set(entry.binary, checked.engineDigest)
+    }
+  }
   const resources = new Map(), owned = new Map()
   for (const [name, directory] of Object.entries(sources)) {
     const descriptor = JSON.parse(await readFile(join(directory, `module-${name}.json`), 'utf8'))
@@ -42,7 +53,13 @@ export async function composeModules(sources, destination) {
       owned.set(path, content)
     }
   }
-  for (const [path, bytes] of owned) { await mkdir(dirname(join(destination, path)), { recursive: true }); await writeFile(join(destination, path), bytes) }
+  for (const [path, bytes] of owned) {
+    const expected = executableArtifacts.get(path)
+    if (expected && createHash('sha256').update(bytes).digest('hex') !== expected) throw new Error(`Guardrail artifact changed during composition: ${path}`)
+    await mkdir(dirname(join(destination, path)), { recursive: true })
+    // Only exact, resolver-verified declared engine artifacts acquire executable bits.
+    await writeFile(join(destination, path), bytes, { mode: expected ? 0o755 : 0o644 })
+  }
   const baseBundle = JSON.parse(await readFile(join(sources.core, 'dist/dsh/skill-prompts-core.json'), 'utf8'))
   await writeFile(join(destination, 'dist/dsh/skill-prompts.json'), JSON.stringify({ ...baseBundle, resources: [...resources.values()] }))
   const optional = Object.keys(sources).filter(name => name !== 'core')
@@ -60,7 +77,10 @@ export async function composeModules(sources, destination) {
     manifest.dsh.permissions.externalServices = ['Configured TypeSafe or explicit Nimble HTTPS/loopback endpoint for automatic task, Skill, draft and Lisp decisions; no redirects or retries', 'Explicit Laya-CoreML Unix socket for typed decisions; user-managed worker; no automatic startup or retry']
     manifest.dsh.permissions.credentials = ['Separate Nimble bearer credential reference through DSH; never TYPESAFE_API_KEY for Nimble', 'TYPESAFE_API_KEY through optional DSH-managed credentials; inherited environment precedence; no worker exposure; /kioku-typesafe-key input visible but unrecorded']
   }
-  manifest.files = ['dist/', 'skills/', 'scripts/', 'migrations/', 'docs/', 'PERMISSIONS.md', 'dsh/cordis.patch.yml', ...(sources.lisp ? ['lisp/'] : []), ...Object.keys(sources).map(name => `module-${name}.json`), 'LICENSE', 'THIRD_PARTY_NOTICES.md']
+  const permissionLists = ['readPaths', 'writePaths', 'commands', 'externalServices', 'credentials', 'failureBoundaries', 'lifecycleEvidence']
+  manifest.dsh.permissions = { ...inheritedPermissions, ...manifest.dsh.permissions,
+    ...Object.fromEntries(permissionLists.filter(key => inheritedPermissions[key] || manifest.dsh.permissions[key]).map(key => [key, [...new Set([...(inheritedPermissions[key] ?? []), ...(manifest.dsh.permissions[key] ?? [])])]])) }
+  manifest.files = ['dist/', 'skills/', 'scripts/', 'migrations/', 'docs/', 'PERMISSIONS.md', 'dsh/cordis.patch.yml', ...(manifest.guardrail ? ['guardrail/'] : []), ...(sources.lisp ? ['lisp/'] : ['lisp/supervisor.mjs']), ...Object.keys(sources).map(name => `module-${name}.json`), 'LICENSE', 'THIRD_PARTY_NOTICES.md']
   await writeFile(join(destination, 'package.json'), JSON.stringify(manifest, null, 2) + '\n')
   return manifest
 }

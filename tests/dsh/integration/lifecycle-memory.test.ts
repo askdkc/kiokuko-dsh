@@ -124,6 +124,24 @@ test('core and optional modules share one observer and retain tools until the la
   core.stop();assert.equal(host.definitions.size,3)
   addon.stop();assert.equal(host.definitions.size,0)
 })
+for (const [kind, header, expected] of [
+  ['main branch', {parentSession:'previous-main-session'}, 1],
+  ['native child origin', {parentSession:'parent',origin:'subagent'}, 0],
+  ['native child depth', {parentSession:'parent',delegationDepth:1}, 0],
+] as const) test(`lifecycle model observations distinguish ${kind}`,async()=>{
+  const base=await mkdtemp(join(tmpdir(),'lifecycle-lineage-')),root=join(base,'repo');await mkdir(root)
+  const runtime=new DshCoreRuntime({repositoryRoot:root,databasePath:join(base,'state.db'),autoRegisterRepository:true,migrationsDirectory:join(process.cwd(),'migrations')})
+  const host=new Host(),{session}=nativeSurface(host,'lineage-session',root)
+  Object.assign(session.header,header)
+  await runtime.start();const memory=new DshLifecycleMemory(host as any,runtime,realpathSync(root))
+  try{
+    session.append('request/header',{header:{config:{provider:'mock',model:'first'}}})
+    session.append('model/selection',{provider:'mock',model:'second'})
+    await memory.whenIdle()
+    const context:any=await memory.context({cwd:root,sessionId:session.id})
+    assert.equal(context.continuation.length,expected)
+  }finally{memory.stop();await memory.whenIdle();await runtime.close();await rm(base,{recursive:true,force:true})}
+})
 test('local event adapter carries model/compaction context, native feedback withdrawal and bounded nonblocking reads without private reasoning',async()=>{
   const base=await mkdtemp(join(tmpdir(),'lifecycle-events-')),root=join(base,'repo');await mkdir(root)
   const runtime=new DshCoreRuntime({repositoryRoot:root,databasePath:join(base,'state.db'),autoRegisterRepository:true,migrationsDirectory:join(process.cwd(),'migrations')})
@@ -240,6 +258,35 @@ test('praise consults a completed AgenticReplay trace through exact host binding
     const unbound=await runtime.withDatabase(db=>JSON.parse(db.prepare("SELECT observation_json FROM dsh_memory_observations WHERE event_id=?").get<{observation_json:string}>(`feedback:${session.id}:unbound-answer`)!.observation_json))
     assert.ok(!unbound.source.eventIds.some((id:string)=>id.startsWith('agenticreplay:')))
   }finally{memory.stop();await memory.whenIdle();await runtime.close();await f.dispose()}
+})
+
+test('canonical Done records local memory for the current task owner without inventing a legacy completed outcome',async()=>{
+  const base=realpathSync(await mkdtemp(join(tmpdir(),'lifecycle-done-')))
+  const runtime=new DshCoreRuntime({repositoryRoot:base,databasePath:join(base,'state.db'),autoRegisterRepository:true,migrationsDirectory:join(process.cwd(),'migrations')})
+  await runtime.start()
+  const host=new Host(),session={id:'current-owner',header:{cwd:base,version:4}},agent={id:'primary',session}
+  host.agents.set(agent.id,agent);host.sessions.set(session.id,session)
+  const memory=new DshLifecycleMemory(host as any,runtime,base)
+  const boundary={revision:3,generation:3,repositoryRoot:base}
+  try{
+    await runtime.withDatabase(db=>{
+      const workspace=db.prepare('SELECT workspace FROM repository_locations JOIN repositories USING(repository_id) WHERE canonical_root=?').get<{workspace:string}>(base)!.workspace
+      const now=new Date().toISOString()
+      db.prepare(`INSERT INTO ledger_runs(run_id,workspace,dsh_session_id,protocol_version,capture_profile,coverage_json,status,metadata_json,started_at,created_at,updated_at,
+        task_state,task_revision,task_generation,task_repository_root,task_owner_session_id,task_managed)
+        VALUES('canonical-done',?,'original-source','1','test','{}','active','{}',?,?,?,'Done',3,3,?,'current-owner',1)`).run(workspace,now,now,now,base)
+    })
+    host.emit('session/event',session,{seq:7,type:'assistant/message',data:{message:{id:'final-answer',content:[{type:'text',text:'The requested report is complete, grounded in the observed receipt.'}]}}})
+    memory.completed('canonical-done','completed',session.id,boundary);await memory.whenIdle()
+    await runtime.withDatabase(db=>{
+      const observation=JSON.parse(db.prepare('SELECT observation_json FROM dsh_memory_observations WHERE event_id=?').get<{observation_json:string}>('dsh:completion:canonical-done:generation:3')!.observation_json)
+      assert.match(observation.summary,/requested report/);assert.equal(observation.verification,'unknown')
+      assert.equal(db.prepare("SELECT status FROM ledger_runs WHERE run_id='canonical-done'").get()!.status,'active')
+      db.prepare("UPDATE ledger_runs SET task_state='Working',task_revision=4,task_generation=4 WHERE run_id='canonical-done'").run()
+    })
+    memory.completed('canonical-done','completed',session.id,boundary);await memory.whenIdle()
+    assert.equal(await runtime.withDatabase(db=>db.prepare('SELECT COUNT(*) n FROM dsh_memory_observations').get()!.n),1,'An obsolete completion callback cannot record the resumed task')
+  }finally{memory.stop();await memory.whenIdle();await runtime.close();await rm(base,{recursive:true,force:true})}
 })
 
 test('a real SQLite writer lock fails optional observation/extraction promptly and restores the host lock budget',()=>database(db=>{

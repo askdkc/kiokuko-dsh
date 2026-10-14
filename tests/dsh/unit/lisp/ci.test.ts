@@ -3,7 +3,10 @@ import test from 'node:test'
 import { mkdtemp, realpath, writeFile, rm, mkdir, symlink, rename } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createLispCiAdapter } from '../../../../src/dsh/lisp/ci.js'
+import { createLispCiAdapter as guardedCiAdapter } from '../../../../src/dsh/lisp/ci.js'
+
+// These approval/file fixtures explicitly provide task authority.
+const createLispCiAdapter = (...args: Parameters<typeof guardedCiAdapter>) => guardedCiAdapter(args[0], args[1], async () => {})
 import type { DshUserQuestions } from '../../../../src/dsh/user-interaction.js'
 
 const owner = { sessionId: 'session', agentId: 'agent', root: '/repo' }

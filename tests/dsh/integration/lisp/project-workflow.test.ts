@@ -1,3 +1,4 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -17,9 +18,8 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-project-'))), root = join(base, 'workspace')
   await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'state.sqlite3'), new DatabaseSync(join(base, 'state.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 'session', agentId: 'agent', root }
+  workingLispTask(db, owner)
   let approvals = 0, approve = true
   const observedWorkspace: Array<{operationId:string;generation:string;state:unknown}> = []
   const adapter = createLispCiAdapter({ ask: async request => {
@@ -27,7 +27,7 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     assert.match(request.questions[0]!.detail!, /npm test/u)
     assert.match(request.questions[0]!.detail!, /scratch\/project|workspace/u)
     return { answers: [{ id: request.questions[0]!.id, selected: [request.questions[0]!.options![approve ? 1 : 0]!.label] }] }
-  } })
+  } }, undefined, async owner => { await manager.taskAuthority.authorizeEffect(owner) })
   const manager = new LispManager({ store, config: LispConfig.parse({ executionMode: 'protected', enabled: true, startupTimeoutMs: 60000 }),
     dataRoot: join(base, 'data'), ciCall: adapter,
     verifiedCall: async (_owner, operationId, generation, request, result) => {

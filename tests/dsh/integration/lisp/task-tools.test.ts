@@ -1,3 +1,4 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -20,8 +21,6 @@ test('AI task tools survive worker and host restarts, compose by exact ref, and 
   await writeFile(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }))
   const path = join(base, 'db.sqlite3')
   const db = new NodeSqliteAdapter(path, new DatabaseSync(path))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db))
   let approvalCount = 0
   const questions: DshUserQuestions = { ask: async request => {
@@ -33,8 +32,9 @@ test('AI task tools survive worker and host restarts, compose by exact ref, and 
       assert.equal(file, 'npm'); assert.deepEqual(args, ['test'])
       assert.deepEqual(JSON.parse(await readFile(join(run.cwd, 'manifest.json'), 'utf8')), { entries: ['a', 'z'] })
       return { code: 0, stdout: 'fixture verifier', stderr: '' }
-    }) }
+    }, async owner => { await manager.taskAuthority.authorizeEffect(owner) }) }
   const owner = { sessionId: 'session', agentId: 'agent', root }
+  workingLispTask(db, owner)
   let manager = new LispManager(options)
   const arraySchema = { type: 'array', items: { type: 'string' } }
   try {

@@ -14,7 +14,7 @@ export type LispCiRequest =
   | { kind: 'verify'; target: keyof typeof VERIFIERS; script?: string | undefined; directory?: string | undefined; location?: 'workspace' | 'scratch' | undefined }
 
 interface CommandResult { code: number; stdout: string; stderr: string }
-type CommandRunner = (file: string, args: string[], options: { cwd: string; timeoutMs: number; signal: AbortSignal; excludedRoots?: readonly string[] }) => Promise<CommandResult>
+type CommandRunner = (file: string, args: string[], options: { cwd: string; timeoutMs: number; signal: AbortSignal; excludedRoots?: readonly string[]; beforeEffect?: () => Promise<void> }) => Promise<CommandResult>
 
 const OUTPUT_LIMIT = 1024 * 1024
 const VERIFIERS = {
@@ -44,6 +44,11 @@ const runCommand: CommandRunner = async (file, args, options) => {
   const env = { ...process.env }
   // This is a standalone verifier, never a child of a Node test worker.
   delete env.NODE_TEST_CONTEXT
+  if (file === 'npm') {
+    if (!options.beforeEffect) fail('TASK_REQUIRED', '検証実行には現在の有効なタスクが必要です。')
+    await options.beforeEffect()
+  }
+  options.signal.throwIfAborted()
   return new Promise((resolve, reject) => {
     execFile(executable, args, { cwd: options.cwd, timeout: options.timeoutMs, maxBuffer: OUTPUT_LIMIT, signal: options.signal, env }, (error, stdout, stderr) => {
       if (options.signal.aborted) return reject(new LispError('CANCELLED', 'ホスト処理を取り消しました。'))
@@ -78,7 +83,8 @@ export async function describeVerifiers(owner: LispOwner): Promise<unknown> {
 }
 
 /** Host-only CI adapter. Credentials remain in the host child process and are never copied into the Lisp worker. */
-export function createLispCiAdapter(questions?: DshUserQuestions, runner: CommandRunner = runCommand) {
+export function createLispCiAdapter(questions?: DshUserQuestions, runner: CommandRunner = runCommand,
+  authorizeEffect?: (owner: LispOwner) => Promise<void>) {
   return async (owner: LispOwner, request: LispCiRequest, signal: AbortSignal, scratchRoot?: string): Promise<unknown> => {
     if (request.kind === 'list-runs') {
       const result = await runner('gh', ['run', 'list', '--limit', String(request.limit), '--json', 'databaseId,name,status,conclusion,headBranch,headSha,url'], { cwd: owner.root, timeoutMs: 30_000, signal })
@@ -112,8 +118,14 @@ export function createLispCiAdapter(questions?: DshUserQuestions, runner: Comman
     if (digest(directory) !== digest(await checkedDirectory(root, request.directory)) || digest(scripts) !== digest(await scriptsFor(targetOwner))) {
       return { target: request.target, script, state: 'NOT_APPLIED', code: 'TARGET_CHANGED', reason: 'scripts_changed', message: '確認中に作業ディレクトリまたはnpmスクリプトが変わりました。実行していません。' }
     }
+    const beforeEffect = async () => {
+      if (!authorizeEffect) fail('TASK_REQUIRED', '検証実行には現在の有効なタスクが必要です。')
+      await authorizeEffect(owner)
+      signal.throwIfAborted()
+    }
+    await beforeEffect()
     const result = await runner(command.file, [...command.args], { cwd: directory.path, timeoutMs: command.timeoutMs, signal,
-      excludedRoots: [owner.root, ...(scratchRoot ? [scratchRoot] : [])] })
+      excludedRoots: [owner.root, ...(scratchRoot ? [scratchRoot] : [])], beforeEffect })
     return { approval: approval.source ?? 'manual', target: request.target, script, ...(request.directory || request.location ? { cwd: directory.path } : {}), state: result.code === 0 ? 'SUCCEEDED' : 'FAILED', ...result }
   }
 }

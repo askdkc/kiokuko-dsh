@@ -3,7 +3,7 @@ import type { SqliteDatabase } from '../../db/adapter.js'
 import type { DshCoreRuntime } from '../core-runtime.js'
 import { applicationSourceDigest, beginMemoryExecution, completeMemoryExecution } from '../../memory/application.js'
 import type { LispCiRequest } from './ci.js'
-import type { LispOwner } from './contracts.js'
+import { fail, type LispOwner } from './contracts.js'
 
 interface BoundRun extends Record<string, unknown> {
   run_id: string; workspace: string; delivery_id: string | null; generation: number; epoch: number
@@ -33,7 +33,8 @@ function reviewBasis(db: SqliteDatabase, owner: LispOwner, runId: string, genera
 }
 
 /** The CI result is host-owned; proof is admitted only after the separate eval commits without proposals. */
-export function createLispMemoryVerification(runtime: Pick<DshCoreRuntime, 'withDatabase'>) {
+export function createLispMemoryVerification(runtime: Pick<DshCoreRuntime, 'withDatabase'>,
+  options: { authorizePublication?: (db: SqliteDatabase, owner: LispOwner) => void } = {}) {
   const preflights = new WeakMap<object, Preflight>()
   return {
     async beforeCall(owner: LispOwner, request: LispCiRequest): Promise<void> {
@@ -64,6 +65,8 @@ export function createLispMemoryVerification(runtime: Pick<DshCoreRuntime, 'with
           || bound.epoch !== preflight.epoch || bound.delivery_id !== preflight.deliveryId) return
         const basis = reviewBasis(db, owner, bound.run_id, bound.generation)
         if (!basis || basis.reviewHash !== preflight.reviewHash || basis.sourceDigest !== preflight.sourceDigest) return
+        if (!options.authorizePublication) fail('TASK_REQUIRED', '検証証拠の確定には現在の有効なタスクが必要です。')
+        options.authorizePublication(db, owner)
         const identity = {runId:bound.run_id, workspace:bound.workspace, sessionId:owner.sessionId, repositoryRoot:owner.root}
         const callId = `lisp-ci:${operationId}:${generation}:${randomUUID()}`
         beginMemoryExecution(db, identity, callId, command)

@@ -45,7 +45,10 @@
     "scripts/evaluate-answer-review.mjs",
     "scripts/answer-review-evaluation.mjs",
     "scripts/answer-review-evaluation.d.mts",
-    "scripts/verification-completion.mjs"
+    "scripts/verification-completion.mjs",
+    "guardrail/",
+    "scripts/guardrail-artifacts.mjs",
+    "scripts/guardrail-artifacts.d.mts"
   ],
   "exports": {
     ".": {
@@ -99,6 +102,7 @@
       },
       "profiles": [
         "web",
+        "dsh-cli",
         "dsh-tui"
       ]
     },
@@ -109,7 +113,8 @@
         "Registered project roots and their repository metadata",
         "Selected session repository status, staged and working-tree diffs, and explicitly selected untracked files for Diff review",
         "AgenticReplay traces belonging to the exact native DSH session",
-        "Stored native DSH session IDs and histories for startup validation and legacy Kiokuko compatibility"
+        "Stored native DSH session IDs and histories for startup validation and legacy Kiokuko compatibility",
+        "Bundled Rust guardrail manifests, bounded protocol and exact precompiled host artifact for explicitly enrolled TDD units"
       ],
       "writePaths": [
         "Seventeen bundled managed Skills and references under ~/.agents/skills on enabled plugin load",
@@ -124,7 +129,8 @@
       "commands": [
         "Restricted repository-relative verifier and backup subprocesses when explicitly requested",
         "Read-only fixed-argument Git commands for an explicitly captured Diff review",
-        "Owned bash/zsh, PATH commands, builds/tests and Lisp with the normal user environment; explicit protected Lisp compatibility mode remains available"
+        "Owned bash/zsh, PATH commands, builds/tests and Lisp with the normal user environment; explicit protected Lisp compatibility mode remains available",
+        "Bundled Rust guardrail check/validate and the host-owned Node test runner for explicitly enrolled bounded TDD units; no download, Cargo, SBCL or PATH engine fallback"
       ],
       "externalServices": [
         "GitHub or skills.sh for optional Skill discovery and source retrieval",
@@ -147,7 +153,8 @@
         "Repository identity, run identity, lease, revision, and integrity mismatches fail closed",
         "Remote embedding is disabled by default and unavailable services do not become normal success",
         "Ordinary memory finalization failures are retryable; uncertain Deep requests are never automatically resent. Neither can veto completion or session-log export",
-        "AgenticReplay is configured by default; capture requires a session choice or start command, adds no network transmission, and cannot veto native outcomes"
+        "AgenticReplay is configured by default; capture requires a session choice or start command, adds no network transmission, and cannot veto native outcomes",
+        "Explicitly enrolled bounded TDD units fail closed on absent/invalid guardrail artifacts or stale authority/receipt bindings; only Linux x64 has native engine verification, other bundled targets are cross-built"
       ],
       "lifecycleEvidence": [
         "prepare runs only npm run build",
@@ -158,7 +165,7 @@
   },
   "scripts": {
     "clean:dist": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
-    "build": "npm run clean:dist && tsc -p tsconfig.build.json && node scripts/build-model-transports.mjs && node scripts/compile-skill-prompts.mjs && node scripts/build-dsh-client.mjs && node scripts/build-history-codecs.mjs && node scripts/build-plugin-entry.mjs",
+    "build": "npm run clean:dist && tsc -p tsconfig.build.json && node scripts/build-model-transports.mjs && node scripts/compile-skill-prompts.mjs && node scripts/build-dsh-client.mjs && node scripts/build-history-codecs.mjs && node scripts/build-plugin-entry.mjs && node scripts/guardrail-artifacts.mjs --verify-bundled",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs tests/dsh",
     "test:harness": "node --import tsx scripts/run-harness-evaluation.mjs",
@@ -176,6 +183,7 @@
     "test:benchmark:dsh-log": "npm run build && node scripts/run-dsh-million-event-benchmark.mjs",
     "test:efficiency": "node --import tsx scripts/run-token-efficiency-evaluation.mjs",
     "test:e2e:dsh": "npm run build && node scripts/run-enno-dsh-e2e.mjs",
+    "test:cli-profile": "node scripts/verify-cli-profile.mjs",
     "verify:prepare": "node scripts/verify-prepare-reproducibility.mjs",
     "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko-dsh.sqlite3",
     "test:sampledb": "npm run build && node --import tsx tests/ci/verify-sample-database.ts",
@@ -249,7 +257,9 @@
     "test:code-intelligence:benchmark": "node scripts/benchmark-code-intelligence.mjs",
     "verify": "node scripts/verify.mjs",
     "verify:plan": "node scripts/verify.mjs --plan",
-    "test:verification": "node --test scripts/verification-contract.test.mjs"
+    "test:verification": "node --test scripts/verification-contract.test.mjs",
+    "verify:guardrail": "node scripts/guardrail-artifacts.mjs --verify-bundled",
+    "check:guardrail": "node scripts/guardrail-artifacts.mjs --check-host"
   },
   "dependencies": {
     "@deepseek-ai/cosmokit": "1.8.5",
@@ -316,6 +326,7 @@
     "@deepseek-ai/dsh-session-format": "0.2.1-alpha.2",
     "@deepseek-ai/dsh-session-format-v0-to-v1": "0.2.1-alpha.2",
     "@deepseek-ai/dsh-session-format-v1-to-v2": "0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session-format-v2-to-v3": "0.2.1-alpha.2",
     "@huggingface/hub": "2.16.1",
     "@huggingface/transformers": "4.2.0",
     "@types/node": "24.13.3",
@@ -326,5 +337,11 @@
     "sqlite-vec": "0.1.9",
     "tsx": "4.23.13",
     "typescript": "5.9.3"
+  },
+  "guardrail": {
+    "manifest": "guardrail/manifest.json",
+    "manifestSha256": "0a48e29154e1bf498254dbeb4073d16a6526d1e27019e3e21d490d9c179048e4",
+    "availability": "Bundled Linux x64/arm64 static musl and macOS x64/arm64; only Linux x64 native smoke verified. Missing or invalid host artifact blocks protocol enrollment.",
+    "verification": "npm run verify:guardrail validates bundled identities without executing cross-built binaries; npm run check:guardrail checks current host availability."
   }
 }

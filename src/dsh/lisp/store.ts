@@ -11,7 +11,7 @@ export interface Session extends Record<string, unknown> { session_id: string; r
 
 /** Only the host uses this store; every mutation stays inside the runtime's DB service. */
 export class LispStore {
-  constructor(readonly database: LispDatabase) {}
+  constructor(readonly database: LispDatabase, readonly authorizePublication: (db: SqliteDatabase, owner: LispOwner) => void = () => {}) {}
   async start(): Promise<Session[]> {
     return this.database(db => {
       db.prepare("UPDATE dsh_lisp_operations SET state='UNKNOWN',updated_at=? WHERE state IN ('RUNNING','APPLYING','AWAITING_APPROVAL')").run(new Date().toISOString())
@@ -90,6 +90,7 @@ export class LispStore {
     await this.database(db => {
       const old = db.prepare('SELECT state FROM dsh_lisp_operations WHERE session_id=? AND agent_id=? AND operation_id=?').get<{state:string}>(owner.sessionId, owner.agentId, id)
       if (!old || !expected.includes(old.state)) fail('STATE_CONFLICT', '操作の状態が変わっています。再実行せず状態を確認してください。')
+      if (state === 'SUCCEEDED' || state === 'APPLIED') this.authorizePublication(db, owner)
       const encoded = JSON.stringify(result), nextPayload = payload === undefined ? null : JSON.stringify(payload)
       const usage = db.prepare('SELECT COALESCE(SUM(length(CAST(payload AS BLOB))+COALESCE(length(CAST(result AS BLOB)),0)),0) AS bytes FROM dsh_lisp_operations WHERE session_id=?').get<{bytes:number}>(owner.sessionId)!.bytes
       const total = db.prepare('SELECT COALESCE(SUM(length(CAST(payload AS BLOB))+COALESCE(length(CAST(result AS BLOB)),0)),0) AS bytes FROM dsh_lisp_operations').get<{bytes:number}>()!.bytes

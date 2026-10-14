@@ -57,6 +57,7 @@ function eraseEntry(db: SqliteDatabase, id: string, retirement: Retirement, now:
     for (const source of JSON.parse(effect.evidence_json) as {normalizedSourceHash: string}[]) sources.push({sessionId: effect.session_id, generation: effect.source_generation, hash: source.normalizedSourceHash})
   }
   for (const row of db.prepare('SELECT run_id FROM dsh_memory_finalization_entries WHERE entry_id=?').all<{run_id: string}>(id)) retirement.runs.add(row.run_id)
+  for (const row of db.prepare('SELECT run_id FROM dsh_task_source_entries WHERE entry_id=?').all<{run_id: string}>(id)) retirement.runs.add(row.run_id)
   retirement.sources.push(...sources)
   db.prepare('INSERT OR IGNORE INTO memory_forget_tombstones VALUES(?,?,?,?,?,?)')
     .run(id, entry.workspace, entry.current_revision, JSON.stringify(revisions.map(row => row.content_hash)), JSON.stringify(sources), now)
@@ -102,11 +103,16 @@ function eraseJobs(db: SqliteDatabase, retirement: Retirement): void {
       db.prepare(`UPDATE ${table} SET ${scrub} WHERE id=?`).run(String(row.id))
     }
   }
-  for (const row of db.prepare('SELECT run_id,episode_json FROM memory_episodes').all<{run_id: string; episode_json: string}>()) {
-    if (references(JSON.parse(row.episode_json), retirement.ids)) db.prepare('DELETE FROM memory_episodes WHERE run_id=?').run(row.run_id)
+  for (const row of db.prepare('SELECT run_id,source_epoch,episode_json FROM memory_episodes').all<{run_id: string; source_epoch: number; episode_json: string}>()) {
+    if (references(JSON.parse(row.episode_json), retirement.ids)) db.prepare('DELETE FROM memory_episodes WHERE run_id=? AND source_epoch=?').run(row.run_id, row.source_epoch)
   }
   for (const runId of retirement.runs) {
-    db.prepare("UPDATE dsh_memory_finalizations SET status='failed',claim_nonce=NULL,lease_until=NULL,last_error_code='MEMORY_FORGOTTEN',last_error_message=NULL WHERE run_id=?").run(runId)
+    db.prepare("UPDATE dsh_memory_finalizations SET status='failed',claim_nonce=NULL,lease_until=NULL,last_error_code='MEMORY_FORGOTTEN',last_error_message=NULL,staged_capsule_json=NULL,staged_binding_hash=NULL WHERE run_id=?").run(runId)
+    db.prepare(`UPDATE dsh_task_source_finalizations SET job_json=json_set(job_json,'$.status','failed','$.claim_nonce',NULL,'$.lease_until',NULL,
+      '$.last_error_code','MEMORY_FORGOTTEN','$.last_error_message',NULL,'$.staged_capsule_json',NULL,'$.staged_binding_hash',NULL) WHERE run_id=?`).run(runId)
+    db.prepare(`UPDATE dsh_task_source_history SET finalization_json=json_set(finalization_json,'$.staged_capsule_json',NULL,'$.staged_binding_hash',NULL)
+      WHERE run_id=? AND finalization_json IS NOT NULL AND EXISTS(SELECT 1 FROM dsh_task_source_entries s JOIN memory_forget_tombstones t ON t.entry_id=s.entry_id
+      WHERE s.run_id=dsh_task_source_history.run_id AND s.source_epoch=dsh_task_source_history.source_epoch)`).run(runId)
     db.prepare("UPDATE memory_review_states SET lease_nonce=NULL,lease_until=NULL,reason='memory_forgotten' WHERE run_id=?").run(runId)
     db.prepare("UPDATE dsh_deep_finalizations SET source_json='{}',status='skipped',process_id=NULL,lease_until=NULL,error='memory_forgotten' WHERE run_id=?").run(runId)
   }

@@ -1,0 +1,21 @@
+[package]
+name = "kiokuko-guardrail"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Bounded, pure S-expression protocol guard engine"
+
+[lib]
+name = "kiokuko_guardrail"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kiokuko-guardrail"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

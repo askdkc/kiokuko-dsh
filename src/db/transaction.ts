@@ -46,18 +46,40 @@ function commitOrRollback(database: SqliteDatabase): void {
   }
 }
 
-/** Run a synchronous write transaction with bounded retry for SQLite lock errors only. */
+// Track only transactions opened by this utility. A caller using raw BEGIN
+// remains responsible for its own composition; do not infer ownership from errors.
+const managedTransactions = new WeakMap<SqliteDatabase, number>();
+let savepointSequence = 0;
+function nestedTransaction<T>(database: SqliteDatabase, operation: () => T, depth: number): T {
+  const name = `kiokuko_nested_${++savepointSequence}`;
+  database.exec(`SAVEPOINT ${name}`);
+  managedTransactions.set(database, depth + 1);
+  try {
+    const result = operation();
+    database.exec(`RELEASE SAVEPOINT ${name}`);
+    return result;
+  } catch (error) {
+    try { database.exec(`ROLLBACK TO SAVEPOINT ${name}`); database.exec(`RELEASE SAVEPOINT ${name}`); }
+    catch (rollbackError) { throw new AggregateError([error, rollbackError], 'Nested transaction and savepoint rollback failed'); }
+    throw error;
+  } finally { managedTransactions.set(database, depth); }
+}
+
+/** Run a synchronous write transaction with bounded retry for SQLite lock errors only.
+ * Calls nested within this utility use savepoints and retain the outer writer lock. */
 export function withImmediateTransaction<T>(database: SqliteDatabase, operation: () => T): T {
+  const depth = managedTransactions.get(database);
+  if (depth !== undefined) return nestedTransaction(database, operation, depth);
   return withSqliteLockRetry(() => {
     database.exec('BEGIN IMMEDIATE');
-    let result: T;
+    managedTransactions.set(database, 1);
     try {
-      result = operation();
-    } catch (error) {
-      rollbackFailedTransaction(database, error);
-    }
-    commitOrRollback(database);
-    return result;
+      let result: T;
+      try { result = operation(); }
+      catch (error) { rollbackFailedTransaction(database, error); }
+      commitOrRollback(database);
+      return result;
+    } finally { managedTransactions.delete(database); }
   });
 }
 

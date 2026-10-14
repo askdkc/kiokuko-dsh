@@ -3,7 +3,10 @@ import test from 'node:test'
 import { mkdtemp, realpath, mkdir, writeFile, readFile, symlink, link, chmod, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { applyChange, freezeChange, snapshot } from '../../../../src/dsh/lisp/files.js'
+import { applyChange as guardedApplyChange, freezeChange, snapshot } from '../../../../src/dsh/lisp/files.js'
+
+// Filesystem fixtures explicitly model a current authorized task.
+const applyChange = (...args: Parameters<typeof guardedApplyChange>) => guardedApplyChange(args[0], args[1], args[2], args[3], async () => {})
 
 test('file proposals reject links/protected files and changed contents; deletion keeps an independent backup', async () => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lf-'))), root = join(base, 'workspace'), backups = join(base, 'backups')

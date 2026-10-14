@@ -17,6 +17,8 @@ import { synchronizeConfiguredSkills } from '../../../src/dsh/core/deployment.js
 import { compileSkillBundle } from '../../../src/dsh/skill-compiler.js'
 import { pathToFileURL } from 'node:url'
 import { layaV1Reply, serveLaya } from '../helpers/laya.js'
+import type { DshTaskWorkflow } from '../../../src/dsh/task-state-host.js'
+import { createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 
 function scopedHooks() {
@@ -42,7 +44,7 @@ async function fixture(questions?: { ask(request: any): Promise<any> }) {
   const listeners = new Map<string, Function>(), tools: any[] = [], providers: any[] = [], sections: any[] = []
   const events: any[] = [], guards: Function[] = []
   const handlers = new Map<string, Function[]>()
-  const session = { id: 'core-session', header: { cwd: root }, snapshotEvents: () => events }, agent = { id: 'core-agent', session }
+  const session = { id: 'core-session', header: { cwd: root }, snapshotEvents: () => events }, agent = { id: 'core-agent', session, status: 'idle', async whenIdle() {} }
   const services: Record<string, any> = {
     sessions: { get: (id: string) => id === session.id ? session : undefined, async flush() {} },
     agents: { get: (id: string) => id === agent.id ? agent : undefined },
@@ -54,7 +56,9 @@ async function fixture(questions?: { ask(request: any): Promise<any> }) {
     systemPrompt: { section(section: any) { sections.push(section); return () => { sections.splice(sections.indexOf(section), 1) } } },
     ...(questions ? { userQuestions: questions } : {}),
   }
-  const ctx = { get: (name: string) => services[name], on(name: string, callback: Function, options?: { prepend?: boolean }) {
+  const ctx = { get: (name: string) => services[name],
+    provide(name: string, service: unknown) { services[name] = service; return () => { if (services[name] === service) delete services[name] } },
+    emit(name: string, payload: unknown) { return listeners.get(name)?.(payload) }, on(name: string, callback: Function, options?: { prepend?: boolean }) {
     const registered = handlers.get(name) ?? []
     if (options?.prepend) registered.unshift(callback); else registered.push(callback)
     handlers.set(name, registered)
@@ -85,6 +89,26 @@ async function fixture(questions?: { ask(request: any): Promise<any> }) {
     async event(event: any) { events.push(event); await listeners.get('session/event')?.(session, event) },
     async cleanup() { await rm(root, { recursive: true, force: true }) } }
 
+}
+
+async function ignorePreviousTask(f: Awaited<ReturnType<typeof fixture>>) {
+  const service = f.services.kiokukoTaskWorkflow as DshTaskWorkflow
+  const previous = (await service.snapshot(f.agent)).task!
+  assert.notEqual(previous.state, 'Ignore', 'An execution error cannot silently ignore its task')
+  const observed = new Promise<void>(resolve => {
+    const dispose = (f.ctx.on as any)('kiokuko/task-state', (task: any) => {
+      if (task.taskId === previous.taskId && task.state === 'Ignore') { dispose(); resolve() }
+    })
+  })
+  await service.operate(f.agent, { operation: 'ignore', expected: previous, reason: 'The test user explicitly abandons this task before requesting new work' }, new AbortController().signal)
+  await observed
+  assert.equal((await service.snapshot(f.agent)).task!.runStatus, previous.runStatus, 'Past failure outcome remains observable')
+}
+async function prepareNewRequest(f: Awaited<ReturnType<typeof fixture>>, messages: readonly any[]) {
+  const task = messages.map(message => message.content).join('\n')
+  const activeTask = (await (f.services.kiokukoTaskWorkflow as DshTaskWorkflow).snapshot(f.agent)).task!
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(messages, task), activeTask })!
+  return f.execute(TASK_PREPARE_TOOL, { taskType: 'research', requestIntent: { relation: 'new', action: 'research', evidenceRefs: requestIntentReferenceIds(context) } })
 }
 
 // Exercise legacy module-driven intake questions after explicit model demand. The module
@@ -370,7 +394,7 @@ test('reload resumes the exact ordinary request and a completed checkpoint canno
     await f.tools.find(tool => tool.name === 'memory_checkpoint').execute({ outcome: 'completed', memories: [{ kind: 'fact', title: 'One saved fact', body: 'This exact request is saved once.' }] }, { name: 'memory_checkpoint', agent: f.agent, signal: new AbortController().signal })
     await handle.dispose(); handle = await mountCore(f.ctx, config)
     assert.equal((await prepare()).kind, 'enter')
-    await assert.rejects(f.prepare('research'), /not admit|not open|terminal|complete/i)
+    await assert.rejects(f.prepare('research'), /not admit|not open|terminal|complete|request_intent_unresolved/i)
     const db = openConnection(databasePath)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, 1)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n, 1)
@@ -411,9 +435,11 @@ test('native error and cancellation preserve distinct terminal outcomes', async 
     for (const [index, reason] of ['error', 'aborted'].entries()) {
       const turn = index + 1, messages = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
       await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
-      await f.prepare('research')
+      if (index === 0) await f.prepare('research')
+      else await prepareNewRequest(f, messages)
       await f.event({ type: 'turn/end', data: { turn, reason: { kind: reason } } })
       await f.listeners.get('agent/idle')!({ agent: f.agent })
+      if (index === 0) await ignorePreviousTask(f)
     }
     const db = openConnection(databasePath)
     assert.deepEqual(db.prepare('SELECT status FROM ledger_runs ORDER BY status').all().map(row => row.status), ['cancelled', 'failed'])
@@ -494,7 +520,8 @@ test('max-tokens is an interrupted boundary and releases ownership before the ne
     const beforePreparation = openConnection(databasePath)
     assert.deepEqual(beforePreparation.prepare('SELECT status FROM ledger_runs').all().map(row => row.status), ['interrupted'], 'the fresh turn has not requested execution yet')
     beforePreparation.close()
-    await f.prepare('research')
+    await ignorePreviousTask(f)
+    await prepareNewRequest(f, second)
     const afterBoundary = openConnection(databasePath)
     assert.deepEqual(afterBoundary.prepare('SELECT status FROM ledger_runs ORDER BY started_at').all().map((row: any) => row.status), ['interrupted', 'active'])
     afterBoundary.close()

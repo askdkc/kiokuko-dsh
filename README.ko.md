@@ -19,14 +19,22 @@ ObservationPack은 기본값 `observationPack: { mode: auto }`를 유지합니�
 
 ## 설치 및 사용
 
-런타임 호환 대상은 **DSH 0.1.7-rc.2**입니다. 네이티브 요청 경로, 이전 세션 기록 마이그레이션, 패키징된 Web 시작 검사가 로컬에서 통과했습니다 ([검증 범위](docs/dsh-plugin.md#compatibility)).
+런타임 호환 대상은 **DSH 0.2.1-alpha.2**의 `web` 및 `dsh-cli` 프로필입니다. [검증 범위](docs/dsh-plugin.md#compatibility)를 참고하세요.
 
 Node.js **24.16.0 이상**과 pnpm이 필요합니다.
-DSH 소스 디렉터리에서 다음 명령으로 공개된 npm 패키지를 설치하고 시작합니다.
+DSH 소스 디렉터리에서 Web 버전을 처음 설치하고 시작합니다.
 
 ```bash
 pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh web
+```
+
+CLI 버전을 처음 설치하고 시작합니다.
+
+```bash
+pnpm dsh plugin --profile dsh-cli add @askdkc/dsh-cli
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh
+pnpm dsh --profile dsh-cli
 ```
 
 전역으로 설치한 `dsh` CLI를 사용한다면 각 명령에서 `pnpm`을 생략하세요.
@@ -44,11 +52,18 @@ AgenticReplay 기능은 자동으로 설정되며 **수동 설정이 필요 없�
 
 ## 업데이트
 
-진행 중인 작업을 마치고 DSH를 종료한 뒤 업데이트합니다. npm으로 설치한 Kiokuko 업데이트:
+DSH를 종료한 뒤 Web 버전을 업데이트하고 다시 시작합니다.
 
 ```bash
 pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
+```
+
+DSH를 종료한 뒤 CLI 버전을 업데이트하고 다시 시작합니다.
+
+```bash
+pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh --profile dsh-cli
 ```
 
 공개 후 24시간이 지나지 않은 버전으로 업데이트하려면 pnpm 11의 기본
@@ -80,3 +95,15 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 DSH 업데이트 후 Kiokuko를 불러오지 못하면 [시작 오류 복구 절차](docs/dsh-plugin.md#startup-failure-after-a-dsh-update)에서 해당 프로필의 업데이트 및 재설치 명령을 확인하세요. 세션 로그와 Kiokuko 데이터베이스는 삭제하지 마세요. API 호환성 문제는 재설치만으로 해결되지 않을 수 있습니다.
 
 [문서](docs/README.md) · [권한](PERMISSIONS.md) · [MIT 라이선스](LICENSE)
+
+## 선택적 코드 분석
+
+`kioku.code`는 `@askdkc/dsh-lsp-server`를 통해 Lisp에서 코드 구조와 읽기 전용 LSP 결과를 가져옵니다.
+`kiokuko-dsh`와 같은 프로필에 설치하거나 업데이트하세요. CLI에서는 `web`을 `dsh-cli`로 바꾸세요.
+
+```sh
+pnpm dsh plugin --profile web add @askdkc/dsh-lsp-server@latest
+pnpm dsh plugin --profile web update @askdkc/dsh-lsp-server --latest
+```
+
+[설정, 지원 언어 및 제한](docs/code-intelligence.md)을 참고하세요.

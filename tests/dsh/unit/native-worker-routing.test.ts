@@ -6,10 +6,10 @@ import { NodeSqliteAdapter, type SqliteDatabase } from '../../../src/db/adapter.
 import { NativeWorkerRouting, type NativeWorkerOwner } from '../../../src/dsh/native-worker-routing.js'
 
 const pair = { preset: 'gpt-6.1-sol-deepseek-v4.1-flash' as const, head: { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'high' }, worker: { provider: 'deepseek', model: 'deepseek-flash' } }
-function fixture() {
+function fixture(header: { parentSession?: string; origin?: string; delegationDepth?: number } = {}) {
   const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
   db.exec(readFileSync(new URL('../../../migrations/037_native_worker_routing.sql', import.meta.url), 'utf8'))
-  const root = { id: 'root', session: { id: 'root-session', header: { cwd: '/repo', createdAt: 1 } } }
+  const root = { id: 'root', session: { id: 'root-session', header: { cwd: '/repo', createdAt: 1, ...header } } }
   const agents = new Map<string, any>([[root.id, root]])
   const sessions = new Map<string, any>([[root.session.id, root.session]])
   let owner: NativeWorkerOwner | undefined = { id: 'run:one', sessionId: root.session.id, selectionId: '1', pair }
@@ -61,6 +61,22 @@ test('unchanged defaults preserve native start and explicit managed delegation',
       assert.equal(calls.at(-1), request)
     }
   } finally { router.dispose() }
+})
+test('a main conversation branch retains its head route and delegates with its worker after reload', async t => {
+  const f = fixture({ parentSession: 'previous-main-session' }); t.after(f.close)
+  for (let epoch = 0; epoch < 2; epoch++) {
+    assert.deepEqual(await f.router.head(f.root, new AbortController().signal), pair.head)
+    const run = await f.launch()
+    assert.deepEqual(f.calls.at(-1).request.agentOptions, { ...pair.worker, maxTokens: 123 })
+    assert.deepEqual(await f.router.worker(f.agents.get(run.childId), new AbortController().signal), pair.worker)
+    f.restore()
+  }
+})
+test('explicit native children cannot become a head route through a root owner selection', async t => {
+  for (const header of [{ origin: 'subagent' }, { delegationDepth: 1 }]) {
+    const f = fixture({ parentSession: 'parent', ...header }); t.after(f.close)
+    assert.equal(await f.router.head(f.root, new AbortController().signal), undefined)
+  }
 })
 test('selection changes, owner replacement and forged identities revoke a durable child', async t => {
   const f = fixture(); t.after(f.close)

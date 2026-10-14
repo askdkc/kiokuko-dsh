@@ -101,7 +101,8 @@ async function registryJson(fetcher: typeof fetch, path: string, signal: AbortSi
 }
 
 /** Explicit approval for every network operation. Host credentials/configuration never enter worker or child. */
-export function createLispPackageAdapter(questions?: DshUserQuestions, fetcher: typeof fetch = fetch, command: PackageCommand = runPackageCommand) {
+export function createLispPackageAdapter(questions?: DshUserQuestions, fetcher: typeof fetch = fetch, command: PackageCommand = runPackageCommand,
+  authorizeEffect?: (owner: LispOwner) => Promise<void>) {
   return async (owner: LispOwner, input: unknown, signal: AbortSignal): Promise<PackageResult> => {
     const request = PackageRequest.parse(input)
     const before = request.kind === 'update' ? await capture(owner, request.directory) : undefined
@@ -129,7 +130,13 @@ export function createLispPackageAdapter(questions?: DshUserQuestions, fetcher: 
       if (Object.keys(result).some(name => !Object.hasOwn(body, name))) fail('PACKAGES_RESPONSE_INVALID', 'Advisory package identity does not match.')
       return { value: { state: 'SUCCEEDED', approval: approval.source ?? 'manual', source: REGISTRY, audited: request.versions, advisories: result } }
     }
-    const result = await generate(owner, request, before!, command, signal)
+    const beforeEffect = async () => {
+      if (!authorizeEffect) fail('TASK_REQUIRED', 'パッケージの更新には現在の有効なタスクが必要です。')
+      await authorizeEffect(owner)
+      signal.throwIfAborted()
+    }
+    await beforeEffect()
+    const result = await generate(owner, request, before!, command, signal, beforeEffect)
     return { ...result, value: { ...(result.value as object), approval: approval.source ?? 'manual' } }
   }
 }
@@ -146,7 +153,7 @@ async function capture(owner: LispOwner, directory: string) {
   return { root, files }
 }
 
-async function generate(owner: LispOwner, request: Extract<PackageRequest, { kind: 'update' }>, captured: Awaited<ReturnType<typeof capture>>, command: PackageCommand, signal: AbortSignal): Promise<PackageResult> {
+async function generate(owner: LispOwner, request: Extract<PackageRequest, { kind: 'update' }>, captured: Awaited<ReturnType<typeof capture>>, command: PackageCommand, signal: AbortSignal, beforeEffect: () => Promise<void>): Promise<PackageResult> {
   const original = z.record(z.string(), z.unknown()).parse(JSON.parse(captured.files[0]!.text!))
   const manifest = registryManifest(original, request.versions)
   const workspace = captured.files[3]!.text ? parseDocument(captured.files[3]!.text) : undefined
@@ -162,6 +169,7 @@ async function generate(owner: LispOwner, request: Extract<PackageRequest, { kin
     for (const file of captured.files) if (!sameFile(file.before, await snapshot(owner.root, file.path, []))) fail('PACKAGES_BASE_CHANGED', 'A captured package file changed; no generated proposals are returned.')
   }
   await unchanged()
+  await beforeEffect()
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'kiokuko-packages-')))
   try {
     await writeFile(join(directory, '.global-npmrc'), '', { mode: 0o600 })
@@ -175,13 +183,15 @@ async function generate(owner: LispOwner, request: Extract<PackageRequest, { kin
       await writeFile(join(directory, 'package.json'), JSON.stringify(model, null, 2))
       await writeFile(join(directory, name), input.text)
       if (manager === 'pnpm') await writeFile(join(directory, 'pnpm-workspace.yaml'), `overrides:\n${Object.entries(model.overrides as Record<string, string>).map(([key, version]) => `  '${key}': '${version}'`).join('\n')}\n`)
-      const version = await command(manager, ['--version'], directory, signal)
+      await beforeEffect()
+      const version = await command(manager, ['--version'], directory, signal, beforeEffect)
       if (version.code !== 0 || !valid(version.stdout.trim())) fail('PACKAGES_COMMAND_FAILED', 'Could not identify installed package manager.')
       managers[manager] = version.stdout.trim()
       const args = manager === 'npm'
         ? ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund', `--registry=${REGISTRY}`]
         : ['install', '--lockfile-only', '--ignore-scripts', '--ignore-pnpmfile', '--config.manage-package-manager-versions=false', '--config.package-manager-strict=false', `--registry=${REGISTRY}`]
-      const result = await command(manager, args, directory, signal)
+      await beforeEffect()
+      const result = await command(manager, args, directory, signal, beforeEffect)
       if (result.code !== 0) fail('PACKAGES_COMMAND_FAILED', `${manager} lockfile generation failed (exit ${result.code}); no proposals returned.`)
       signal.throwIfAborted()
       const output = await snapshot(directory, name, [])

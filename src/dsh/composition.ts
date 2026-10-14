@@ -1,5 +1,7 @@
 import { hasHumanInput } from './answer-review/contracts.js'
 import type { OnDemandIntake } from './on-demand-intake.js'
+import type { DshTaskWorkflow } from './task-state-host.js'
+import { mountTaskWorkflowSurface } from './task-state-surface.js'
 import { projectDshContext } from './context-projection.js'
 import type { SemanticCompactionCoordinator } from './semantic-compaction/coordinator.js'
 import { mountDecisionCommand } from './decisions/host.js'
@@ -65,6 +67,7 @@ export interface DshNativeTurnStoppingPayload {
 
 export interface DshCompositionHost {
   readonly onDemandIntake?: OnDemandIntake
+  readonly taskWorkflow?: DshTaskWorkflow
   readonly diffReview?: DiffReviewController
   readonly decisions?: DecisionService
   readonly modelAuto?: { readonly coordinator: import('./model-auto/coordinator.js').ModelAutoCoordinator;
@@ -309,6 +312,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       }
     }
     else if (lisp?.enabled) throw new Error('Lisp requires the DSH runtime')
+    if (host.taskWorkflow) ingressDisposers.push(mountTaskWorkflowSurface(ctx, host.taskWorkflow, host.onDemandIntake))
     if (host.sessionMirror !== undefined) {
       await host.sessionMirror.start()
       const closeMirror = async () => host.sessionMirror!.close()

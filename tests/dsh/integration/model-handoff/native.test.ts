@@ -16,7 +16,7 @@ const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai
 const [cordis, llm, sessions, projection, prompt, tools, registry, loop, meter, compaction] = await Promise.all(
   ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic'].map(load))
 
-for (const layaMode of [undefined, 'off', 'shadow', 'auto'] as const) test(`native model handoff preserves summary with Laya ${layaMode ?? 'non-Laya'} compaction`, async () => {
+for (const [layaMode, parentSession] of [[undefined, undefined], ['off', undefined], ['shadow', undefined], ['auto', undefined], [undefined, 'previous-main-session']] as const) test(`native model handoff preserves summary with Laya ${layaMode ?? 'non-Laya'} compaction${parentSession ? ' on a main conversation branch' : ''}`, async () => {
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
   class ReasoningAdapter extends mock.MockAdapter {
     override async resolveModel(provider: string, model: string) {
@@ -31,7 +31,7 @@ for (const layaMode of [undefined, 'off', 'shadow', 'auto'] as const) test(`nati
   const d = decisions({ ...(layaMode ? { decisionConfig: TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { model: 'aac6fef/laya-multilingual-coreml', runtimeFingerprint: `sha256:${'a'.repeat(64)}`, compaction: { mode: layaMode } } }), preflight: async () => {} } : {}), evaluate: async batch => ({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture',
     answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: q.id === 'fruit' ? 'apple' : layaMode ? 'lossless' : 'shorten' })) }) })
   const handoff = new ModelHandoff(ctx, d.service, realpathSync(process.cwd()))
-  const handle = await ctx.agents.create({ sessionId: sessions.SessionId('handoff-native'), agentOptions: { provider: 'mock', model: 'new', reasoningEffort: 'high' }, meta: { cwd: process.cwd() } })
+  const handle = await ctx.agents.create({ sessionId: sessions.SessionId('handoff-native'), agentOptions: { provider: 'mock', model: 'new', reasoningEffort: 'high' }, meta: { cwd: process.cwd(), ...(parentSession ? { parentSession: sessions.SessionId(parentSession) } : {}) } })
   const agent = handle.agent, original = 'Earlier discussion and observations. '.repeat(300)
   try {
     agent.session.append('turn/start', { turn: 1 })

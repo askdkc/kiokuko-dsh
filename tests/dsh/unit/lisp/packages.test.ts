@@ -91,7 +91,7 @@ test('dual-lock generation is private, script-free, bounded and leaves original 
     else await writeFile(join(directory, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\npackages:\n  sprintf-js@1.1.3: {}\n')
     return { code: 0, stdout: '', stderr: '' }
   }
-  const result = await createLispPackageAdapter(questions(true), undefined, command)(bound, { kind: 'update', versions: { 'sprintf-js': '1.1.3' } }, signal)
+  const result = await createLispPackageAdapter(questions(true), undefined, command, async () => {})(bound, { kind: 'update', versions: { 'sprintf-js': '1.1.3' } }, signal)
   assert.equal((result.value as any).generatedOnly, true)
   assert.equal((result.value as any).files.length, 4); assert.equal(result.base?.readSet.length, 4)
   assert.match((result.value as any).files.find((file: any) => file.path === 'pnpm-workspace.yaml').content, /# keep policy/u)
@@ -107,10 +107,10 @@ test('stale approval and command failure return no generated proposals or projec
     return questions(true).ask(request)
   } }
   const command: PackageCommand = async () => { calls++; return { code: 0, stdout: '11.0.0', stderr: '' } }
-  await assert.rejects(createLispPackageAdapter(changed, undefined, command)(bound, { kind: 'update', versions: { 'sprintf-js': '1.1.3' } }, signal), { code: 'PACKAGES_BASE_CHANGED' })
+  await assert.rejects(createLispPackageAdapter(changed, undefined, command, async () => {})(bound, { kind: 'update', versions: { 'sprintf-js': '1.1.3' } }, signal), { code: 'PACKAGES_BASE_CHANGED' })
   assert.equal(calls, 0)
   const failing: PackageCommand = async (_manager, args) => ({ code: args[0] === '--version' ? 0 : 2, stdout: '11.0.0', stderr: 'failed' })
-  await assert.rejects(createLispPackageAdapter(questions(true), undefined, failing)(bound, { kind: 'update', versions: { 'sprintf-js': '1.1.3' } }, signal), { code: 'PACKAGES_COMMAND_FAILED' })
+  await assert.rejects(createLispPackageAdapter(questions(true), undefined, failing, async () => {})(bound, { kind: 'update', versions: { 'sprintf-js': '1.1.3' } }, signal), { code: 'PACKAGES_COMMAND_FAILED' })
   assert.equal(await readFile(join(bound.root, 'package.json'), 'utf8'), '{"name":"changed"}')
 })
 

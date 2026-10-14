@@ -1,3 +1,4 @@
+import { isNativeSubagent } from '../native-subagent.js'
 import type { TaskType } from '../../akinator/types.js'
 import { createTurnState, policyState } from '../host-adapter/turn-state.js'
 import { bindMemoryApplication, memoryRetrievalStatus } from '../../memory/application.js'
@@ -6,7 +7,7 @@ import type { DecisionService } from '../decisions/service.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
 import { classifyTaskForIntake, selectInstalledSkills } from '../decisions/workflows.js'
 import { classifyRequestIntent, createRequestIntentContext, rebindRequestIntentDecision, requestIntentMessageRefs,
-  requestIntentReferenceIds, requestIntentTaskType, type RequestIntentContext, type RequestIntentDecision, type RequestIntentInterpretation } from '../decisions/request-intent.js'
+  requestIntentReferenceIds, requestIntentTaskType, requestIntentIsUnresolved, type RequestIntentContext, type RequestIntentDecision, type RequestIntentInterpretation } from '../decisions/request-intent.js'
 import { humanInput } from '../../memory/review/evidence.js'
 import { AnswerReviewCoordinator } from '../answer-review/coordinator.js'
 import { ANSWER_REVIEW_FORM, hasHumanInput, type ReviewAgent } from '../answer-review/contracts.js'
@@ -31,7 +32,7 @@ import { DshIntakeGate, type DshCapabilityReadContext, type DshIntakeGateResult,
 import { resolveGroundedIntakeProfile } from '../intake-profile-resolver.js'
 import type { PreparedAgentTask } from '../task-intake.js'
 import { deriveAkinatorReasoning } from '../../akinator/reasoning.js'
-import { resolveCapabilities } from '../../akinator/capabilities.js'
+import { resolveCapabilities, hasBlockingRequiredCapability } from '../../akinator/capabilities.js'
 import { readAkinatorSession, readRunIntakeLink } from '../../akinator/store.js'
 import { type DshCloseIntent, type DshRunClose } from '../session-bridge.js'
 import { DshMemoryFinalizer, dshTurnBoundarySeq, type DshLogEvent, type DshSessionEventSource } from '../session-memory-finalizer.js'
@@ -57,6 +58,14 @@ import { readExecutionFrame } from '../execution-frame.js'
 import { assertMemoryOwner, createMemoryOwner, memoryOwnerKind } from '../memory-owner.js'
 import { findSecret } from '../../memory/secrets.js'
 import { executionClarification, isContinuationReference } from '../intake-clarification.js'
+import { authorizeTaskLease, bindTaskRepository, captureTaskLease, clearTaskUnresolved, findSessionTask, readTaskSnapshot, recordTaskUnresolved,
+  taskCanExecute } from '../task-state.js'
+import { continueTaskIntake } from '../existing-task-intake.js'
+import { LedgerStore } from '../../ledger/store.js'
+import { claimExecutionOwner, readExecutionOwner } from '../orchestration/execution-owner.js'
+import { initializeCodingWorkflow } from '../coding-workflow/store.js'
+import { codingWorkRequested } from '../coding-workflow/intent.js'
+import { initializeTaskCompletion } from '../task-completion.js'
 
 interface AdmissionDependencies {
   readonly completionMode: import('../task-completion.js').CompletionMode
@@ -165,6 +174,12 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
     readonly nativeSession?: object
   }>()
   const bindAndRecord = async (event: DshPreStepEvent, result: DshIntakeGateResult, generation: number): Promise<void> => {
+    const authority = await runtime.withDatabase(database => {
+      const identity = { taskId: result.prepared.run.runId, sessionId: event.sessionId,
+        repositoryRoot: result.prepared.project.repositoryRoot }
+      bindTaskRepository(database, identity)
+      return result.admitted ? captureTaskLease(database, identity) : undefined
+    })
     const sourceStartSeq = event.sourceStartSeq
       ?? dshTurnBoundarySeq(sessionEventSource(event.nativeSession), event.turn, 'start')
     await memoryFinalizer.bindRunStart({
@@ -174,16 +189,16 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
       sourceStartSeq,
       sourceStartTurn: event.turn,
     })
-    turnState.record(event, result, generation)
+    if (authority) await runtime.withDatabase(database => authorizeTaskLease(database, authority))
+    turnState.record(event, result, generation, authority)
     const reviewItem = currentSession(event.sessionId)
     const reviewAgent = event.nativeAgent as ReviewAgent | undefined
     if (reviewItem && reviewAgent?.session && typeof reviewAgent.session.snapshotEvents === 'function') {
       const eligible = () => {
         const item = currentSession(event.sessionId), selection = getSelection(reviewItem.runId)?.value
-        const header = reviewAgent.session.header
         return item?.runId === reviewItem.runId && !item.closed && !item.failed && item.prepared.run.status === 'active'
           && !item.prepared.ennoOduno.applicable && !selection?.discussion && (!selection || selection.mode === 'normal' && selection.status === 'ready')
-          && !delegation.isChild(reviewAgent) && !deepPlanning.executor.isChild(reviewAgent) && !header?.parentSession && header?.origin !== 'subagent' && !header?.delegationDepth
+          && !delegation.isChild(reviewAgent) && !deepPlanning.executor.isChild(reviewAgent) && !isNativeSubagent(reviewAgent)
           && !executionSupport.paused(event.sessionId)
       }
       answerReview.bind({ runId: reviewItem.runId, workspace: reviewItem.workspace, requestId: `run:${reviewItem.runId}`, task: reviewItem.task,
@@ -204,6 +219,7 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
         requestDigest: canonicalContentHash(event.task), runId: result.prepared.run.runId }, 'execution')
       await runtime.withDatabase(db => {
         if (currentSession(event.sessionId)?.prepareGeneration !== generation) return
+        if (authority) authorizeTaskLease(db, authority)
         bindMemoryApplication(db, {
         runId: result.prepared.run.runId, workspace: result.prepared.project.workspace,
         sessionId: event.sessionId, repositoryRoot: result.prepared.project.repositoryRoot,
@@ -332,6 +348,24 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
       // context deliveries that finish out of order.
       const generation = ++prepareGeneration
       const prior=currentForAgentEvent(event.agent.id,event.sessionId,undefined,event.nativeSession,event.nativeAgent)
+      const canonical = event.requestIntentContext?.activeTask
+      if (canonical && continuesCodingScope(event)) {
+        const current = await runtime.withDatabase(database => readTaskSnapshot(database, canonical))
+        if (current.revision !== canonical.revision || current.generation !== canonical.generation)
+          throw new KiokukoError('CONFLICT', 'Task continuation revision changed')
+        // An explicit resume invalidates the old in-memory preparation and memory
+        // delivery, even when the native session and logical run ID are unchanged.
+        if (!taskCanExecute(current) || prior?.runId === current.taskId && prior.authority
+          && (prior.authority.revision !== current.revision || prior.authority.generation !== current.generation)) {
+          const refreshed = await resumeExistingRun?.(event)
+          if (!refreshed) throw new KiokukoError('CONFLICT', 'Current task could not be resumed')
+          continuedTurns.delete(`${event.sessionId}\u0000${event.turn}`)
+          resumedTurns.delete(`${event.sessionId}\u0000${event.turn}`)
+          const selected = refreshed.admitted ? await this.choose(event, refreshed) : refreshed
+          await bindAndRecord(event, selected, generation)
+          return selected
+        }
+      }
       if(prior && prior.turn===event.turn && !prior.closed && prior.task!==event.task && hasHumanInput(event.nativeMessages??[])
         && event.requestIntent?.relation === 'new') {
         const choice=getSelection(prior.runId)
@@ -720,6 +754,7 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
     const refreshed = await runtime.withDatabase(async (database, embedding) => {
       const assertCurrent = () => {
         signal.throwIfAborted()
+        if (item.authority) authorizeTaskLease(database, item.authority)
         if (currentSession(item.sessionId) !== item || item.prepared !== prepared || item.closed || item.failed
           || item.nativeAgent === undefined || agents?.get(item.nativeAgent.id) !== item.nativeAgent
           || item.nativeSession === undefined || sessions?.get(item.sessionId) !== item.nativeSession) {
@@ -745,34 +780,44 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
     signal.throwIfAborted()
     if (currentSession(item.sessionId) !== item || item.prepared !== prepared) throw new KiokukoError('CONFLICT', 'memory_owner_changed')
     item.prepared = { ...prepared, ...refreshed }
-    await runtime.withDatabase(database => bindMemoryApplication(database, {
-      runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot,
-    }, item.prepared.intake.profile, item.prepared.context,
-    memoryRetrievalStatus(database, item.workspace, item.prepared.context, item.prepared.memoryPolicy.contextWithheld)))
+    await runtime.withDatabase(database => {
+      if (item.authority) authorizeTaskLease(database, item.authority)
+      return bindMemoryApplication(database, {
+        runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot,
+      }, item.prepared.intake.profile, item.prepared.context,
+      memoryRetrievalStatus(database, item.workspace, item.prepared.context, item.prepared.memoryPolicy.contextWithheld))
+    })
   }
   resumeExistingRun = async (event): Promise<DshIntakeGateResult | undefined> => runtime.withDatabase(async (database) => {
     const project = await resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true })
     if (project === undefined) return undefined
-    const candidates = database.prepare(`
-      SELECT lr.run_id AS runId, ec.orchestration_session_id AS orchestrationId
-      FROM ledger_runs AS lr
-      LEFT JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
-      LEFT JOIN dsh_exploration_states AS es ON es.run_id = lr.run_id
-      LEFT JOIN dsh_execution_selections AS xs ON xs.run_id = lr.run_id
-      LEFT JOIN dsh_coding_workflows AS cw ON cw.run_id = lr.run_id
-      WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active'
-        AND ((ec.repository_root = ? AND ec.status NOT IN ('completed', 'cancelled', 'blocked'))
-          OR (ec.run_id IS NULL AND (json_extract(es.state_json, '$.paused') = 1 OR xs.run_id IS NOT NULL)))
-        AND (cw.run_id IS NULL OR (? = 1 AND json_extract(cw.snapshot_json, '$.state') NOT IN ('completed', 'cancelled', 'superseded')))
-      ORDER BY lr.created_at, lr.run_id LIMIT 2
-    `).all<{ runId: string; orchestrationId: string | null }>(project.workspace, event.sessionId, project.repositoryRoot, continuesCodingScope(event) ? 1 : 0)
-    if (candidates.length === 0) return undefined
-    if (candidates.length !== 1) throw new KiokukoError('CONFLICT', 'Multiple active runs match this session; refusing to guess')
-    const candidate = candidates[0]!
-    const runId = candidate.runId
-    const snapshot = candidate.orchestrationId === null ? undefined : readEnnoSnapshot(database, {
-      runId, workspace: project.workspace, orchestrationId: candidate.orchestrationId,
+    const task = findSessionTask(database, { sessionId: event.sessionId, repositoryRoot: project.repositoryRoot })
+    if (!task) return undefined
+    const context = event.requestIntentContext
+    if (hasHumanInput(event.nativeMessages ?? [])) {
+      if (!event.requestIntent || !context || !rebindRequestIntentDecision(event.requestIntent, context))
+        throw new KiokukoError('CONFLICT', 'A source-bound interpretation is required for the current task')
+      if (event.requestIntent.relation === 'new') return undefined
+      if (!continuesCodingScope(event) || context.activeTask?.taskId !== task.taskId
+        || context.activeTask.revision !== task.revision || context.activeTask.generation !== task.generation)
+        throw new KiokukoError('CONFLICT', 'The current task continuation is unresolved or stale')
+    }
+    const runId = task.taskId
+    const run = new LedgerStore(database).readRun(runId)!
+    const selection = readExecutionSelection(database, runId)?.value
+    if (selection?.mode === 'deep-thinker') throw new KiokukoError('CONFLICT', 'Deep Thinker recovery requires its own execution lane')
+    // Pending selection still goes through choose(); only an explicit persisted
+    // Enno selection can recover Enno ownership instead of ordinary execution.
+    const executionMode = selection?.mode === 'enno' ? 'enno' : 'normal'
+    const owner = readExecutionOwner(database, event.sessionId)
+    if (owner && (owner.run_id !== runId || owner.workspace !== project.workspace || owner.mode !== executionMode))
+      throw new KiokukoError('CONFLICT', 'Task execution owner changed')
+    const orchestration = database.prepare('SELECT orchestration_session_id AS id FROM enno_contracts WHERE run_id=?')
+      .get<{ id: string }>(runId)
+    const snapshot = !orchestration ? undefined : readEnnoSnapshot(database, {
+      runId, workspace: project.workspace, orchestrationId: orchestration.id,
     })
+    if (executionMode === 'enno' && !snapshot) throw new KiokukoError('CONFLICT', 'Persisted Enno selection has no matching execution contract')
     if (snapshot && !event.signal.aborted && supersedesUnstartedEnno(event, stateForSnapshot(snapshot))) {
       terminalizeLedgerRunInTransaction(database, runId, 'cancelled')
       return undefined
@@ -795,10 +840,16 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
     if (decision && (!decision.continue || decision.runId !== runId)) {
       throw new KiokukoError('CONFLICT', decision.warning ?? 'The active run cannot be resumed by this DSH session')
     }
-    const intakeLink = readRunIntakeLink(database, { workspace: project.workspace, runId })
-    const intake = readAkinatorSession(database, { workspace: project.workspace, sessionId: intakeLink.sessionId })
-    if (intake.status === 'active') throw new KiokukoError('INTEGRITY_ERROR', 'Resumable Enno-Oduno run has unfinished intake')
     const capabilityEntries = [...event.capabilities.skills, ...event.capabilities.tools]
+    const { state: intakeState, link: intakeLink } = await continueTaskIntake(database, {
+      ...task, workspace: project.workspace, expectedRevision: task.revision, expectedGeneration: task.generation,
+      capabilities: capabilityEntries, signal: event.signal,
+      answerer: userQuestions ? createDshIntakeAnswerer(userQuestions) : undefined,
+      agent: event.nativeAgent as { id: string } | undefined,
+      validateCapabilities: async () => gate.assertCatalog(event.capabilities, await capabilityCatalog(skills, tools,
+        { agent: event.agent, ...(event.nativeAgent ? { nativeAgent: event.nativeAgent } : {}), cwd: event.cwd, signal: event.signal })),
+    })
+    const intake = intakeState.session
     const capabilityResolution = resolveCapabilities({
       task: intake.task,
       profile: intake.profile,
@@ -807,7 +858,19 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
       memoryUse: 'none',
     })
     const canonicalCwd = realpathSync(event.cwd)
-      const prepared: PreparedAgentTask = {
+    const admitted = !event.signal.aborted && intakeState.status !== 'needs_answer'
+      && taskCanExecute(readTaskSnapshot(database, task)) && !hasBlockingRequiredCapability(capabilityResolution)
+    const runStatus = new LedgerStore(database).readRun(runId)!.status
+    if (runStatus !== 'active' && runStatus !== 'intake') throw new KiokukoError('CONFLICT', 'Task requires an explicit resume')
+    if (admitted) {
+      if (!owner) claimExecutionOwner(database, { sessionId: event.sessionId, workspace: project.workspace,
+        mode: executionMode, startId: typeof run.metadata.requestId === 'string' ? run.metadata.requestId : `run:${runId}`, runId })
+      initializeTaskCompletion(database, runId, completionMode)
+      if (executionMode === 'normal' && !readCodingWorkflow(database, runId) && codingWorkRequested(intake.task, event.requestIntent, intake.profile.taskType))
+        initializeCodingWorkflow(database, { runId, sessionId: event.sessionId, repositoryRoot: project.repositoryRoot,
+          requestId: typeof run.metadata.requestId === 'string' ? run.metadata.requestId : `run:${runId}`, task: intake.task })
+    }
+    const prepared: PreparedAgentTask = {
       memoryOwner: createMemoryOwner(event.memoryOwner ?? memoryOwnerKind(event.requestIntent, intake.profile.taskType), {
         agentId: event.agent.id, sessionId: event.sessionId, turn: event.turn,
         requestDigest: canonicalContentHash(event.task), runId,
@@ -820,26 +883,27 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
         pathPolicy: 'canonical_absolute_under_repository_root',
       },
       intake: {
-        status: intake.status,
+        status: intakeState.status,
         sessionId: intake.id,
         profile: intake.profile,
-        question: null,
-        missingFields: [],
+        question: intakeState.question,
+        missingFields: intakeState.missingFields,
         recommendedTags: intakeLink.recommendedTags,
         reasoning: deriveAkinatorReasoning(intake.task, intake.profile),
       },
       capabilities: capabilityResolution,
-      run: { runId, status: 'active' },
+      run: { runId, status: runStatus },
       skillDiscovery: { attempted: false, mode: 'off', requirements: [], queries: [], cacheHits: 0, candidates: 0, selected: [], failures: [] },
       context: null,
       memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false, withheldReason: null, deliveryEmpty: true },
       warnings: capabilityResolution.warnings,
-      nextAction: 'proceed',
+      nextAction: admitted ? 'proceed' : hasBlockingRequiredCapability(capabilityResolution)
+        ? 'required_capability_unavailable' : 'answer_from_evidence_or_ask_user',
       securityNotice: 'This resumed DSH run uses only current repository evidence and the current host capability catalog; previously delivered ordinary memory is not replayed implicitly. Active ennoMemory may make a new bounded selection under current authority.',
       ennoOduno: snapshot ? stateForSnapshot(snapshot) : inapplicableEnnoState(),
     }
     if (decision?.executionLease) turnState.stageLease(runId, decision.executionLease)
-    return { admitted: !event.signal.aborted, prepared, catalog: event.capabilities }
+    return { admitted, prepared, catalog: event.capabilities }
   })
   const requestIntentContextFor = async (input: DshNativePreStepPayload, sessionId: string, nativeSession: object | undefined,
     previous: TurnRecord | undefined, task: string): Promise<RequestIntentContext | undefined> => {
@@ -849,6 +913,10 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
     const cwd = typeof sessionHeader?.cwd === 'string' ? sessionHeader.cwd : undefined
     if (!cwd) return undefined
     const messageRefs = requestIntentMessageRefs(human, task)
+    const activeTask = await runtime.withDatabase(async database => {
+      const project = await resolveProjectWorkspaceReadOnly(database, cwd, { allowDirectory: true })
+      return project ? findSessionTask(database, { sessionId, repositoryRoot: project.repositoryRoot }) : undefined
+    })
     let activeGoal: RequestIntentContext['activeGoal']
     let proposals: NonNullable<RequestIntentContext['proposals']> = []
     const sameOwner = previous && previous.sessionId === sessionId && previous.nativeAgent === input.agent && previous.nativeSession === nativeSession
@@ -860,7 +928,8 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
         FROM ledger_runs AS lr
         LEFT JOIN dsh_coding_workflows AS cw ON cw.run_id = lr.run_id
         LEFT JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
-        WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active'
+        WHERE lr.workspace = ? AND COALESCE(lr.task_owner_session_id, lr.dsh_session_id) = ? AND lr.status = 'active'
+          AND lr.task_state NOT IN ('Done', 'Ignore')
           AND ((json_extract(cw.snapshot_json, '$.repositoryRoot') = ?
               AND json_extract(cw.snapshot_json, '$.sessionId') = ?
               AND json_extract(cw.snapshot_json, '$.state') NOT IN ('completed', 'cancelled', 'superseded'))
@@ -927,7 +996,8 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
           digest: canonicalContentHash(text), text }]
       }
     }
-    return createRequestIntentContext({ task, messageRefs, ...(activeGoal ? { activeGoal } : {}), proposals: proposals.slice(0, 8) })
+    return createRequestIntentContext({ task, messageRefs, ...(activeGoal ? { activeGoal } : {}),
+      ...(activeTask ? { activeTask } : {}), proposals: proposals.slice(0, 8) })
   }
 
   const mapPreStep = async (payload: DshNativePreStepPayload, advisoryType?: TaskType,
@@ -982,7 +1052,7 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
     if (!reviewing && hasHumanInput(payload.messages) && !delegation.isChild(payload.agent) && intentTask.trim()) {
       requestIntentContext = await requestIntentContextFor(payload, sessionId, boundSession as object | undefined, activeRecord, intentTask)
       const requestId = dshTurnRequestId({ dshSessionId: sessionId, turn: payload.turn })
-      const establishedConversation = profile?.taskType === 'chat' && !requestIntentContext?.activeGoal
+      const establishedConversation = profile?.taskType === 'chat' && !requestIntentContext?.activeGoal && !requestIntentContext?.activeTask
       if (requestIntentContext && !establishedConversation) {
         requestIntent = await classifyRequestIntent(decisions, requestId, requestIntentContext, payload.signal)
       }
@@ -1010,15 +1080,31 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
       requestIntent = requestIntent?.source === 'decision-provider' && requestIntent.relation !== 'unknown' && requestIntent.action !== 'unknown'
         ? { ...requestIntent, evidence: rebound.evidence } : rebound
     }
+    if (requestIntentContext?.activeTask && hasHumanInput(payload.messages)) {
+      const identity = requestIntentContext.activeTask
+      const contextDigest = canonicalContentHash(requestIntentContext)
+      const requestId = dshTurnRequestId({ dshSessionId: sessionId, turn: payload.turn })
+      await runtime.withDatabase(db => {
+        if (requestIntentIsUnresolved(requestIntent)) return recordTaskUnresolved(db, identity, {
+          operationId: `intent:${canonicalContentHash([requestId, contextDigest, requestIntent?.unresolvedReason ?? 'request_intent_unresolved'])}`,
+          expectedRevision: identity.revision, requestId, contextDigest,
+          reason: requestIntent?.unresolvedReason ?? 'request_intent_unresolved',
+          evidence: requestIntentReferenceIds(requestIntentContext!),
+        })
+        const current = readTaskSnapshot(db, identity)
+        return current.unresolved?.requestId === requestId && current.unresolved.contextDigest === contextDigest
+          ? clearTaskUnresolved(db, identity, { requestId, contextDigest, expectedRevision: identity.revision }) : undefined
+      })
+    }
     const pendingDiscussion = isContinuationReference(intentTask)
       && await hasPendingExecutionDiscussion(sessionId, cwd)
-    const establishedConversation = profile?.taskType === 'chat' && !requestIntentContext?.activeGoal
+    const establishedConversation = profile?.taskType === 'chat' && !requestIntentContext?.activeGoal && !requestIntentContext?.activeTask
     if (!interpretationOnly && intentTask.trim() && !pendingDiscussion && !establishedConversation) {
       const clarification = executionClarification(intentTask, requestIntent, requestIntentContext)
       if (clarification) throw new KiokukoError('VALIDATION_ERROR', clarification)
     }
     const legacyTaskType = advisoryType !== undefined && advisoryType !== 'chat'
-      && !requestIntentContext?.activeGoal && (requestIntentContext?.proposals.length ?? 0) === 0
+      && !requestIntentContext?.activeGoal && !requestIntentContext?.activeTask && (requestIntentContext?.proposals.length ?? 0) === 0
     if (requestIntent?.source === 'unresolved' && legacyTaskType) requestIntent = undefined
     if (requestIntent?.source !== 'unresolved') {
       const intentType = requestIntentTaskType(requestIntent, profile?.taskType ?? advisoryType)

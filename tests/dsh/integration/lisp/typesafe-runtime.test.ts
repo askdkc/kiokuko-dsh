@@ -1,3 +1,4 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -18,9 +19,8 @@ test('protected Lisp consumes TypeSafe decisions, catches API errors, preserves 
   const base = await realpath(await mkdtemp(join(tmpdir(), 'typesafe-lisp-'))), root = join(base, 'work')
   await mkdir(root); await writeFile(join(root, 'candidate.txt'), 'original')
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 'session', agentId: 'agent', root }
+  workingLispTask(db, owner)
   let decision = 'inspect', mode = 'ok', approvals = 0, requestSignal: AbortSignal | undefined, began!: () => void, late!: (response: Response) => void
   const bodies: any[] = [], bindings: any[] = []
   const client = new HttpTypeSafeClient(new TypeSafeCredentials(() => undefined, () => 'fixture-host-secret'), async (_url, options) => {

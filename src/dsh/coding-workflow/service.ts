@@ -1,4 +1,6 @@
+import { invalidateProtocol } from '../guardrail/service.js'
 import type { SqliteDatabase } from '../../db/adapter.js'
+import { withImmediateTransaction } from '../../db/transaction.js'
 import { KiokukoError } from '../../errors.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { assessTaskCompletion, bindTaskCriterion, completionSourceDigest, type CompletionAssessment, type CompletionMethod } from '../task-completion.js'
@@ -121,6 +123,7 @@ export function proposeCodingWorkflow(db: SqliteDatabase, identity: CodingIdenti
     value.definition = definition
     delete value.activeItemId; delete value.blocker
     if (scopeChanged) {
+      invalidateProtocol(value.protocol, 'Scope changed; explicitly rebind the bounded implementation unit')
       if (!value.pendingScopeChange) {
         value.scopeVersion++
         value.choice = { state: 'pending', scopeVersion: value.scopeVersion,
@@ -149,6 +152,7 @@ export function markCodingScopeChange(db: SqliteDatabase, identity: CodingIdenti
   const refs = [...new Set(evidenceRefs)]
   return mutateCodingWorkflow(db, identity, callId, value.revision, { requestDigest, evidenceRefs: refs }, current => {
     if (current.pendingScopeChange?.requestDigest === requestDigest) return
+    invalidateProtocol(current.protocol, 'Scope changed; explicitly rebind the bounded implementation unit')
     current.pendingScopeChange = { requestDigest, evidenceRefs: refs }
     current.scopeVersion++
     current.choice = { state: 'pending', scopeVersion: current.scopeVersion,
@@ -205,7 +209,7 @@ export function nextCodingWork(db: SqliteDatabase, identity: CodingIdentity) {
   if (terminal(status)) return { ...status, next: status.state }
   if (status.blocker?.criterionIds.length === 0) return { ...status, next: 'resolve_blocker' }
   const ready = status.items.find(item => item.state === 'ready' || item.state === 'running')
-  return { ...status, next: ready ? 'implement_and_verify_item' : status.items.every(item => item.state === 'satisfied') ? 'verify_final_goal' : 'resolve_blocker', item: ready }
+  return { ...status, next: ready ? 'implement_and_verify_item' : status.items.every(item => item.state === 'satisfied') ? 'verify_final_goal' : 'resolve_blocker', ...(ready ? { item: ready } : {}) }
 }
 export function reportCodingBlocker(db: SqliteDatabase, identity: CodingIdentity, callId: string, expectedRevision: number, raw: unknown): CodingWorkflow {
   const blocker = CodingBlockerSchema.parse(raw)
@@ -257,6 +261,49 @@ export function stopCodingWorkflow(db: SqliteDatabase, runId: string, state: 'ca
   if (!value || terminal(value)) return
   mutateCodingWorkflow(db, value, `stop:${state}:${value.revision}`, value.revision, { state }, current => { current.state = state; delete current.activeItemId })
   interruptCoding(runId)
+}
+/** Explicit task-resume only: retain the contract and historical evidence,
+ * but require new-generation checks and a fresh choice before further effects.
+ * The caller owns the task-state CAS transaction; this nested mutation rolls
+ * back with that transition if any later owner/source validation fails. */
+export function reopenTerminalCodingWorkflow(db: SqliteDatabase, identity: CodingIdentity,
+  operationId: string, options: { terminalOutcome?: boolean } = {}): CodingWorkflow | undefined {
+  return withImmediateTransaction(db, () => {
+    const value = readCodingWorkflow(db, identity.runId)
+    if (value) assertCodingIdentity(value, identity)
+    const enno = db.prepare(`SELECT e.workspace,e.orchestration_session_id AS orchestrationId FROM enno_contracts e
+      JOIN dsh_execution_selections s ON s.run_id=e.run_id WHERE e.run_id=? AND json_extract(s.state_json,'$.mode')='enno'`)
+      .get<{ workspace: string; orchestrationId: string }>(identity.runId)
+    let sourceReopened = false
+    if (enno) {
+      const reopen = completionVerifiers().reopenTask
+      if (!reopen) throw new KiokukoError('CONFLICT', 'The loaded Enno module cannot resume this task')
+      sourceReopened = reopen(db, { runId: identity.runId, ...enno }, { operationId,
+        repositoryRoot: identity.repositoryRoot, force: options.terminalOutcome === true || Boolean(value && terminal(value)) })
+    }
+    if (!value) return undefined // Enno may resume, but no second Goal is invented.
+    if (!terminal(value) && !options.terminalOutcome && !sourceReopened) return value
+    const projected = enno ? completionVerifiers().codingProjection?.(db, { runId: identity.runId, ...enno }) : undefined
+    return mutateCodingWorkflow(db, identity, `task-resume:${operationId}`, value.revision,
+      { action: 'explicit-task-resume' }, current => {
+        current.scopeVersion++
+        if (enno) {
+          if (projected) {
+            current.definition = projected.definition
+            current.ennoProjectionDigest = canonicalContentHash(projected.definition)
+          }
+        } else if (current.definition) {
+          current.definition.goal.revision++
+          for (const criterion of current.definition.criteria) criterion.revision++
+        }
+        current.choice = { state: 'pending', scopeVersion: current.scopeVersion,
+          questionId: `coding-lisp-${current.workflowId}-${current.scopeVersion}`, revision: current.choice.revision + 1 }
+        current.attempts = {}
+        delete current.activeItemId
+        delete current.blocker
+        current.state = current.definition && !current.pendingScopeChange ? 'awaiting_lisp_choice' : 'preparing'
+      }, true)
+  })
 }
 export function recordCodingAttempt(db: SqliteDatabase, identity: CodingIdentity, callId: string, criterionId: string,
   fingerprint: string, now: number, sourceDigest?: string): CodingWorkflow {

@@ -1,0 +1,71 @@
+{
+  "artifacts": {
+    "README.md": {
+      "bytes": 10748,
+      "sha256": "4b5d7c785121c865945f6379de31565c6aa9218f9d4333519ce3d450e85d0c55"
+    },
+    "bin/kiokuko-guardrail": {
+      "bytes": 384672,
+      "sha256": "c60cb16daa7a536d876017da01815fce3719bae16fc6cd42ea74df04f3e53af4"
+    },
+    "protocols/coding-routine.lisp": {
+      "bytes": 948,
+      "sha256": "82b56af81d12a8cab8352b0825c913f00f73708b2339a9b567cc6f4d4e52da49"
+    }
+  },
+  "build_inputs": {
+    "cargo_sha256": "e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14",
+    "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+    "command": [
+      "env",
+      "SOURCE_DATE_EPOCH=0",
+      "MACOSX_DEPLOYMENT_TARGET=13.0",
+      "LD_LIBRARY_PATH=RUST_TOOLCHAIN/lib",
+      "RUSTFLAGS=--remap-path-prefix=SOURCE=kiokuko-guardrail --remap-path-prefix=TEMP=build",
+      "LINKER=zig-0.17.0-cc-strip-target-aarch64-macos.13.0.0",
+      "cargo",
+      "build",
+      "--manifest-path",
+      "Cargo.toml",
+      "--locked",
+      "--offline",
+      "--release",
+      "--target",
+      "aarch64-apple-darwin"
+    ],
+    "rustc_sha256": "f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f",
+    "rustc_version": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+    "source_date_epoch": 0,
+    "target": "aarch64-apple-darwin"
+  },
+  "package": "kiokuko-guardrail",
+  "schema": 1,
+  "scope": "Declared source/compiler/build inputs and artifact identity. This is not a signature, sandbox, or a claim of deterministic model inference or identical binaries across target operating systems.",
+  "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
+  "sources": {
+    "BOOTSTRAP.md": "b9d0db4c38561d6173e2396bfca979743c66fe64dc15f8c10931d5ae02800a95",
+    "Cargo.lock": "16f51b3ffc20349a69b4b580ea59d2354c9d496911c7e530509492d9b46ecb3a",
+    "Cargo.toml": "1cc0b8df18413f925841e6acddfe14a49f7e8dd4236660eb9d822f1ccdcc9d4e",
+    "README.md": "4b5d7c785121c865945f6379de31565c6aa9218f9d4333519ce3d450e85d0c55",
+    "examples/coding-routine.lisp": "82b56af81d12a8cab8352b0825c913f00f73708b2339a9b567cc6f4d4e52da49",
+    "scripts/package.py": "159b8cdda58b422a60aee95554eb0febc3b520d7ef5d5a4bac1cdd046a514e16",
+    "scripts/test.py": "d8ed547d0943f8b23838b146c6e1d31ad9004c525868d19a2fffafef67e6b6c9",
+    "src/digest.rs": "a46aa8ac0ba3f8e29e268a495723b6d49a4741399bb595c34a3d021dc295c800",
+    "src/eval.rs": "7742caeeac426783647363242d93845369c018b00528312573f1cdc668c22ec3",
+    "src/host.rs": "de9f34ad6ce8246e6f80cbf3d4f56bb07ed8043b17232135755a5e3ee5602cf5",
+    "src/lib.rs": "2f591de0e7520a313da9668491da106d904bb19ef2384c717e87cd06bac665a3",
+    "src/main.rs": "16a3a42d8338ca20e66173648c0a407b24724eeb1a4b3710c8a3b90b5aade10f",
+    "src/protocol.rs": "d9009f5977707141f3547902a07f2f2c5455e4b9516b01a9ba4eb22a82af2a39",
+    "src/reader.rs": "7bc1ff7aece72fc44ac43d5a207a3c8f2fd009eae41cb4b4dadb4eb9436d15f3",
+    "tests/cli.rs": "22955ba315007b4a18409b31439345eb84ce0a62b88658cf440d513b10811357",
+    "tests/digest.rs": "63a3a1b4963ef03260cae4ff9bfeed3596a445dc8df74ecc91b5750d3a6fa28d",
+    "tests/edge_contract.rs": "4f9c7b068db44e9beceb811ceac4a5e8d6cf7cda51eee5a2449f29ab0fa6ade9",
+    "tests/evaluator.rs": "a09c811494615b01e19ccef78491b8bbfee07fede8dcbee59f384fe59e145401",
+    "tests/packaging.rs": "61ae1bfed0d4f31748ce2af58953387045f4231370d46cb809f26e93aea1e033",
+    "tests/protocol.rs": "8f6b7ad5842f5b596efe8da01bba84f39fcd8d6426fde6932cb2a5cbb44d589f",
+    "tests/reader.rs": "249092f56768a6511dbb15825be55f4cf0105269cb9dba1d6f8169ff66d44ab5",
+    "tests/robustness.rs": "464c26addcf5188128d2e6eedd97cccccdb82ada0bc94a0648b77c8043118ba9"
+  },
+  "target": "aarch64-apple-darwin",
+  "version": "0.1.0"
+}

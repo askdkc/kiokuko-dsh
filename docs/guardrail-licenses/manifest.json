@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "scope": "Preserved upstream notices for bundled Rust standard library and conservative musl/libunwind supplements; toolchain archive hashes are in crates/guardrail-release/release-provenance.json in the repository.",
+  "files": {
+    "COPYRIGHT-library.html": {
+      "sha256": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
+      "bytes": 1499465,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    },
+    "COPYRIGHT-Rust.txt": {
+      "sha256": "172020dbfd5b53a226dfde77616190a48dcff519b0bc0e6deb91a8450782c4af",
+      "bytes": 1571,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    },
+    "LICENSE-MIT": {
+      "sha256": "b71bd43a069ca0641a9ecfe585ca7b3c53b5cc1608f8b68321168698e28b5ea1",
+      "bytes": 1068,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    },
+    "LICENSE-APACHE": {
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "bytes": 9723,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    },
+    "musl-COPYRIGHT.txt": {
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+      "bytes": 6204,
+      "provenance": "Conservative supplemental upstream notice from official Zig 0.17.0 distribution; not evidence of exact Rust-linked library revision"
+    },
+    "libunwind-LICENSE.txt": {
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d",
+      "bytes": 16706,
+      "provenance": "Conservative supplemental upstream notice from official Zig 0.17.0 distribution; not evidence of exact Rust-linked library revision"
+    },
+    "MIT.txt": {
+      "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+      "bytes": 1078,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    },
+    "Apache-2.0.txt": {
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "bytes": 10280,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    },
+    "LLVM-exception.txt": {
+      "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+      "bytes": 919,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    },
+    "NCSA.txt": {
+      "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630",
+      "bytes": 1676,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    },
+    "Unicode-3.0.txt": {
+      "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443",
+      "bytes": 1995,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    },
+    "BSD-2-Clause.txt": {
+      "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+      "bytes": 1267,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    },
+    "ISC.txt": {
+      "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381",
+      "bytes": 730,
+      "provenance": "Official Rust 1.99.0 distribution notice"
+    }
+  }
+}

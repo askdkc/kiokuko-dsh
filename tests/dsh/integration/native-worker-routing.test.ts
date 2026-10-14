@@ -254,6 +254,14 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       JSON.stringify(parent.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/call' || event.type === 'tool/result').map((event: any) => event.data)))
     assert.equal(ended.length, started.length)
     assert.equal(new Set(started.map(item => item.id)).size, started.length)
+    await waitBounded((async()=>{
+      for(let attempt=0;attempt<300;attempt++){
+        const receipts=await adapter!.host.runtime!.withDatabase(db=>db.prepare("SELECT receipt_json FROM dsh_owned_operations WHERE operation_id LIKE 'native-child:%'").all<{receipt_json:string}>())
+        if(receipts?.length===started.length&&receipts.every(row=>JSON.parse(row.receipt_json).state==='completed'))return
+        await new Promise(resolve=>setTimeout(resolve,10))
+      }
+      throw new Error('Naturally settled native children did not save terminal receipts')
+    })(),'Naturally settled native children did not save terminal receipts')
     for (const child of started) {
       assert.ok(ended.some(item => item.runId === child.runId))
       assert.equal(child.header?.origin, 'subagent')

@@ -35,6 +35,9 @@ import { markCodingScopeChange, stopCodingWorkflow, synchronizeCodingWorkflow } 
 import { saveExecutionFrame, updateExecutionFrame } from '../execution-frame.js'
 import { requestIntentReferenceIds, requestIntentTaskType, rebindRequestIntentDecision, type RequestIntentContext, type RequestIntentDecision } from '../decisions/request-intent.js'
 import { assertMemoryOwner, createMemoryOwner, memoryOwnerKind, type MemoryOwnerBinding } from '../memory-owner.js'
+import { authorizeTaskLease, bindTaskRepository, captureTaskLease, readTaskSnapshot,
+  taskCanExecute, type TaskLease } from '../task-state.js'
+import { continueTaskIntake } from '../existing-task-intake.js'
 
 export interface CoreTaskInput {
   readonly requestId: string
@@ -50,6 +53,7 @@ export interface CoreTaskInput {
   readonly timeConstraint?: MemoryTimeConstraint
   readonly signal: AbortSignal
   readonly agent?: DshUserQuestionAgent
+  readonly validateCapabilities?: () => Promise<void>
 }
 export interface CoreTask {
   readonly requestId: string
@@ -66,16 +70,19 @@ export interface CoreTask {
   readonly memoryOwner?: MemoryOwnerBinding
   readonly requestIntent?: RequestIntentDecision
   readonly requestIntentContext?: RequestIntentContext
+  readonly authority?: TaskLease
 }
 
-type CoreTaskIdentity = Pick<CoreTask, 'requestId' | 'sessionId' | 'runId' | 'workspace'>
+type CoreTaskIdentity = Pick<CoreTask, 'requestId' | 'sessionId' | 'runId' | 'workspace' | 'authority'>
 type CoreTaskOutcome = (typeof TERMINAL_RUN_STATUSES)[number]
 
 /** Close the exact run and release its owner atomically, including pre-admission failures. */
 function finishCoreTask(db: SqliteDatabase, task: CoreTaskIdentity, outcome: CoreTaskOutcome): void {
   withImmediateTransaction(db, () => {
     const store = new LedgerStore(db), run = store.readRun(task.runId)
-    if (!run || run.workspace !== task.workspace || run.dshSessionId !== task.sessionId) throw new Error('Task completion identity mismatch')
+    if (!run || run.workspace !== task.workspace) throw new Error('Task completion identity mismatch')
+    if (task.authority) authorizeTaskLease(db, task.authority)
+    else if (run.dshSessionId !== task.sessionId) throw new Error('Task completion identity mismatch')
     const owner = readExecutionOwner(db, task.sessionId)
     if (owner && (owner.run_id !== task.runId || owner.start_id !== task.requestId || owner.workspace !== task.workspace || owner.mode !== 'normal')) throw new Error('Task completion owner mismatch')
     if (outcome === 'completed' && taskCompletionBlocksClose(assessTaskCompletion(db, task.runId))) throw new Error('Required coding Goal evidence is unresolved')
@@ -105,7 +112,7 @@ function recallView(db: SqliteDatabase, context: ScopedContextResult | null): Sc
 export class CoreTasks {
   constructor(private readonly runtime: DshCoreRuntime, private readonly answerer?: DshIntakeAnswerer, private readonly moduleIds: readonly string[] = [], private readonly decisions?: DecisionService,
     private readonly memoryRetrieval: MemoryRetrievalConfiguration = MemoryRetrievalConfig.parse({})) {}
-  /** Recover only the session's exact active coding owner after explicit human continuation. */
+  /** Reuse the exact SQLite task after a source-bound continuation, for every task category. */
   async resume(input: CoreTaskInput): Promise<CoreTask> {
     input.signal.throwIfAborted()
     const requestIntentContext = input.requestIntentContext
@@ -115,27 +122,41 @@ export class CoreTasks {
       throw new Error('The current request does not authorize continuation of the active Core Goal')
     }
     return this.runtime.withDatabase(async db => {
-      const owner = readExecutionOwner(db, input.sessionId)
-      if (!owner?.run_id || owner.mode !== 'normal') throw new Error('No resumable coding task owner')
-      const run = new LedgerStore(db).readRun(owner.run_id), coding = readCodingWorkflow(db, owner.run_id)
-      if (run?.status !== 'active' || !coding || coding.sessionId !== input.sessionId || coding.repositoryRoot !== realpathSync(input.cwd)
-        || ['completed', 'cancelled', 'superseded'].includes(coding.state)) throw new Error('Coding task is not resumable')
+      const project = await resolveProjectWorkspaceReadOnly(db, realpathSync(input.cwd), { allowDirectory: true })
+      if (!project) throw new Error('Task workspace is not registered')
+      const previousOwner = readExecutionOwner(db, input.sessionId)
+      const taskId = requestIntentContext.activeTask?.taskId ?? previousOwner?.run_id
+      if (!taskId) throw new Error('No source-bound task to resume')
+      const taskIdentity = { taskId, sessionId: input.sessionId, repositoryRoot: project.repositoryRoot }
+      const state = readTaskSnapshot(db, taskIdentity)
+      if (requestIntentContext.activeTask && (state.revision !== requestIntentContext.activeTask.revision
+        || state.generation !== requestIntentContext.activeTask.generation)) throw new Error('Task continuation revision is stale')
+      const run = new LedgerStore(db).readRun(taskId), coding = readCodingWorkflow(db, taskId)
+      if (!run || run.workspace !== project.workspace || coding && (coding.sessionId !== input.sessionId
+        || coding.repositoryRoot !== project.repositoryRoot)) throw new Error('Task continuation identity mismatch')
+      if (previousOwner && (previousOwner.run_id !== taskId || previousOwner.mode !== 'normal')) throw new Error('Task has another execution owner')
       assertCapabilityCatalogBinding(run.metadata, input.capabilities)
-      const link = readRunIntakeLink(db, { workspace: owner.workspace, runId: owner.run_id })
-      const intake = readAkinatorSession(db, { workspace: owner.workspace, sessionId: link.sessionId })
-      if (intake.status === 'active') throw new Error('Resumable coding task has unfinished intake')
-      if (intent.relation === 'scope_change') markCodingScopeChange(db,
-        { runId: owner.run_id, sessionId: input.sessionId, repositoryRoot: coding.repositoryRoot },
+      const { state: intakeState, link } = await continueTaskIntake(db, { ...taskIdentity, workspace: project.workspace,
+        expectedRevision: state.revision, expectedGeneration: state.generation, capabilities: input.capabilities,
+        signal: input.signal, answerer: this.answerer, agent: input.agent, validateCapabilities: input.validateCapabilities })
+      const intake = intakeState.session
+      const admitted = intakeState.status !== 'needs_answer' && taskCanExecute(readTaskSnapshot(db, taskIdentity))
+      const resolution = resolveCapabilities({ task: intake.task, profile: intake.profile, recommendedTags: link.recommendedTags,
+        capabilities: input.capabilities, memoryUse: 'none' })
+      if (hasBlockingRequiredCapability(resolution)) throw new Error('Resumed task lacks required capabilities')
+      if (admitted && !previousOwner) claimExecutionOwner(db, { sessionId: input.sessionId, workspace: project.workspace,
+        mode: 'normal', startId: typeof run.metadata.requestId === 'string' ? run.metadata.requestId : input.requestId, runId: taskId })
+      const owner = readExecutionOwner(db, input.sessionId)
+      if (admitted && intent.relation === 'scope_change' && coding) markCodingScopeChange(db,
+        { runId: taskId, sessionId: input.sessionId, repositoryRoot: coding.repositoryRoot },
         `request-intent:${input.sessionId}:${input.turn}:${intent.evidence.requestDigest}`,
         intent.evidence.requestDigest, requestIntentReferenceIds(requestIntentContext))
-      const resolution = resolveCapabilities({ task: coding.request, profile: intake.profile, recommendedTags: link.recommendedTags,
-        capabilities: input.capabilities, memoryUse: 'none' })
-      if (hasBlockingRequiredCapability(resolution)) throw new Error('Resumed coding task lacks required capabilities')
       const ownerKind = memoryOwnerKind(intent, intake.profile.taskType)
       const memoryOwner = input.agent ? createMemoryOwner(ownerKind, { agentId: input.agent.id, sessionId: input.sessionId,
-        turn: input.turn, requestDigest: canonicalContentHash(input.task), runId: owner.run_id }) : undefined
-      return Object.freeze({ requestId: owner.start_id, sessionId: input.sessionId, runId: owner.run_id, workspace: owner.workspace,
-        cwd: realpathSync(input.cwd), profile: intake.profile, admitted: true, memory: null, context: null, capabilities: input.capabilities,
+        turn: input.turn, requestDigest: canonicalContentHash(input.task), runId: taskId }) : undefined
+      return Object.freeze({ requestId: owner?.start_id ?? input.requestId, sessionId: input.sessionId, runId: taskId, workspace: project.workspace,
+        cwd: realpathSync(input.cwd), profile: intake.profile, admitted, memory: null, context: null, capabilities: input.capabilities,
+        ...(admitted ? { authority: captureTaskLease(db, taskIdentity) } : {}),
         ...(memoryOwner ? { memoryOwner } : {}), requestIntent: intent, requestIntentContext })
     })
   }
@@ -152,8 +173,8 @@ export class CoreTasks {
     }
     if (requestIntent?.action === 'answer') throw new KiokukoError('CONFLICT', 'request_intent_is_conversation')
     const unresolvedIntent = requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown'
-    if (unresolvedIntent && requestIntentContext?.activeGoal) throw new KiokukoError('CONFLICT', 'request_intent_unresolved')
-    if (requestIntentContext?.activeGoal && requestIntent === undefined) {
+    if (unresolvedIntent && (requestIntentContext?.activeGoal || requestIntentContext?.activeTask)) throw new KiokukoError('CONFLICT', 'request_intent_unresolved')
+    if ((requestIntentContext?.activeGoal || requestIntentContext?.activeTask) && requestIntent === undefined) {
       throw new KiokukoError('CONFLICT', 'request_intent_required_for_active_goal')
     }
     if (requestIntent?.relation === 'same_scope_continuation' || requestIntent?.relation === 'scope_change') {
@@ -181,15 +202,30 @@ export class CoreTasks {
           coverage: { run: 'unavailable', tool: 'unavailable', command: 'unavailable', file: 'unavailable', approval: 'unavailable' },
           capabilities: input.capabilities, metadata: { coreContractVersion: 1, requestId: input.requestId, repositoryRoot: project.repositoryRoot } } })
       const identity = { requestId: input.requestId, sessionId: input.sessionId, runId: opened.runId, workspace: project.workspace }
+      const taskIdentity = { taskId: opened.runId, sessionId: input.sessionId, repositoryRoot: project.repositoryRoot }
+      let preparation = bindTaskRepository(db, taskIdentity)
+      let authority: TaskLease | undefined
+      const assertPreparation = () => {
+        const current = readTaskSnapshot(db, taskIdentity)
+        if (current.revision !== preparation.revision || current.generation !== preparation.generation)
+          throw new Error('Task authority changed during preparation')
+        if (authority) authorizeTaskLease(db, authority)
+      }
       try {
         input.signal.throwIfAborted()
         let state = await getAkinatorStateService(db, { workspace: project.workspace, sessionId: opened.intakeSessionId })
         while (state.status === 'needs_answer' && state.question && this.answerer) {
           const question = state.question
           const value = await this.answerer.ask(question, input.signal, input.agent)
+          await input.validateCapabilities?.()
           input.signal.throwIfAborted()
-          intake.answerIntake({ runId: opened.runId, idempotencyKey: `core-answer:${canonicalContentHash({ runId: opened.runId, question: question.id, value })}`,
-            request: { apiVersion: '1', questionId: question.id, value, capabilities: input.capabilities } })
+          assertPreparation()
+          withImmediateTransaction(db, () => {
+            assertPreparation()
+            intake.answerIntake({ runId: opened.runId, idempotencyKey: `core-answer:${canonicalContentHash({ runId: opened.runId, question: question.id, value })}`,
+              request: { apiVersion: '1', questionId: question.id, value, capabilities: input.capabilities } })
+            preparation = readTaskSnapshot(db, taskIdentity)
+          })
           state = await getAkinatorStateService(db, { workspace: project.workspace, sessionId: opened.intakeSessionId })
         }
         const ownerKind = memoryOwnerKind(requestIntent, state.session.profile.taskType ?? undefined)
@@ -198,6 +234,7 @@ export class CoreTasks {
         const capabilities = resolveCapabilities({ task: input.task, profile: state.session.profile, recommendedTags: [], capabilities: input.capabilities, memoryUse: 'none' })
         const run = new LedgerStore(db).readRun(opened.runId)
         const admitted = state.status !== 'needs_answer' && run?.status === 'active' && !hasBlockingRequiredCapability(capabilities)
+        if (admitted) authority = captureTaskLease(db, taskIdentity)
         const admissionState = admitted ? readContextRunRetrievalState(db, opened.runId).stateHash : null
         const selectedSkills = admitted ? await selectInstalledSkills(this.decisions, input.requestId, input.task, input.capabilities, capabilities, input.signal) : []
         let memory: ScopedContextResult | null = null
@@ -207,6 +244,7 @@ export class CoreTasks {
             const memoryReuse = await createMemoryReuseRuntime(this.decisions, input.requestId, input.signal)
             const assertCurrent = () => {
               input.signal.throwIfAborted()
+              assertPreparation()
               if (readContextRunRetrievalState(db, opened.runId).stateHash !== admissionState) throw new Error('Core task changed during memory selection')
               const owner = readExecutionOwner(db, input.sessionId)
               if (owner?.run_id !== opened.runId || owner.start_id !== input.requestId || owner.mode !== 'normal') throw new Error('Core task memory ownership changed')
@@ -219,17 +257,25 @@ export class CoreTasks {
           }
         }
         input.signal.throwIfAborted()
+        assertPreparation()
         if(admitted){initializeTaskCompletion(db,identity.runId,'shadow');saveExecutionFrame(db,identity.runId,updateExecutionFrame(undefined,project.repositoryRoot,input.task))
           if(codingWorkRequested(input.task,requestIntent,state.session.profile.taskType))initializeCodingWorkflow(db,{...identity,repositoryRoot:project.repositoryRoot,task:input.task})}
         if (admitted && ownerKind === 'execution') bindMemoryApplication(db, { ...identity, repositoryRoot: project.repositoryRoot }, state.session.profile, memory,
           memoryRetrievalStatus(db, identity.workspace, memory, deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities).contextWithheld))
         return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted,
+          ...(authority ? { authority } : {}),
           memory: ownerKind === 'execution' ? recallView(db, memory) : null,
           context: ownerKind === 'execution' ? memory : null, capabilities: input.capabilities, selectedSkills,
           ...(memoryOwner ? { memoryOwner } : {}),
           ...(requestIntent ? { requestIntent, requestIntentContext: input.requestIntentContext } : {}) })
       } catch (error) {
-        try { finishCoreTask(db, identity, input.signal.aborted ? 'cancelled' : 'failed') }
+        try { withImmediateTransaction(db, () => {
+          // A stop, resume, or owner transfer revokes this preparation's cleanup too.
+          let current
+          try { current = readTaskSnapshot(db, taskIdentity) } catch { return }
+          if (current.revision !== preparation.revision || current.generation !== preparation.generation) return
+          finishCoreTask(db, { ...identity, ...(authority ? { authority } : {}) }, input.signal.aborted ? 'cancelled' : 'failed')
+        }) }
         catch (cleanup) { throw new AggregateError([error, cleanup], 'Task preparation and cleanup failed') }
         throw error
       }
@@ -246,6 +292,7 @@ export class CoreTasks {
       }
       const assertCurrent = () => {
         signal.throwIfAborted()
+        if (task.authority) authorizeTaskLease(db, task.authority)
         const owner = readExecutionOwner(db, task.sessionId), run = new LedgerStore(db).readRun(task.runId)
         if (owner?.run_id !== task.runId || owner.start_id !== task.requestId || owner.mode !== 'normal' || run?.status !== 'active') throw new Error('Task refresh identity mismatch')
         assertCapabilityCatalogBinding(run.metadata, task.capabilities)
@@ -269,13 +316,19 @@ export class CoreTasks {
     return this.runtime.withDatabase(async db => {
       const run = new LedgerStore(db).readRun(task.runId)
       const owner = readExecutionOwner(db, task.sessionId)
-      if (run?.workspace !== task.workspace || run.dshSessionId !== task.sessionId || owner?.run_id !== task.runId || owner.start_id !== task.requestId || owner.mode !== 'normal') throw new Error('Task checkpoint identity mismatch')
+      if (task.authority) authorizeTaskLease(db, task.authority)
+      if (run?.workspace !== task.workspace || (!task.authority && run.dshSessionId !== task.sessionId) || owner?.run_id !== task.runId || owner.start_id !== task.requestId || owner.mode !== 'normal') throw new Error('Task checkpoint identity mismatch')
       return checkpointDshMemory(db, { ...input, runId: task.runId, cwd: task.cwd } as ScopedCheckpointInput, signal, { allowDirectory: true })
     })
   }
   async finish(task: CoreTaskIdentity & { admitted: boolean }, outcome: CoreTaskOutcome): Promise<void> {
     if (!task.admitted && outcome === 'completed') throw new Error('Task is not admitted')
-    await this.runtime.withDatabase(db => { if(outcome==='completed')synchronizeCodingWorkflow(db,task.runId);else if(outcome==='cancelled')stopCodingWorkflow(db,task.runId,'cancelled');finishCoreTask(db, task, outcome) })
+    await this.runtime.withDatabase(db => withImmediateTransaction(db, () => {
+      if (task.authority) authorizeTaskLease(db, task.authority)
+      if(outcome==='completed')synchronizeCodingWorkflow(db,task.runId)
+      else if(outcome==='cancelled')stopCodingWorkflow(db,task.runId,'cancelled')
+      finishCoreTask(db, task, outcome)
+    }))
   }
 }
 

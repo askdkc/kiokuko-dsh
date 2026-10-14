@@ -1,3 +1,4 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -22,11 +23,10 @@ test('native DSH surface exposes hot tools only after task admission and preserv
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-hot-native-')))
   const workspace = join(base, 'workspace'); await mkdir(workspace)
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
   const ctx = new cordis.Context(), fibers: any[] = [], scopes: any[] = [], commands = new Map<string, any>()
   const agent: any = { id: 'hot-native-agent', session: { id: 'hot-native-session', header: { cwd: workspace } } }
+  workingLispTask(db, { sessionId: agent.session.id, agentId: agent.id, root: workspace })
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined
   try {
     fibers.push(await ctx.plugin(prompt.default, {}))

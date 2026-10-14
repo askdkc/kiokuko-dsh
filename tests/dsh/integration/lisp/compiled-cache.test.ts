@@ -1,3 +1,4 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -17,12 +18,11 @@ async function fixture(startupTimeoutMs = 60000) {
   await mkdir(root)
   await cp(fileURLToPath(new URL('../../../../lisp/', import.meta.url)), library, { recursive: true })
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db))
   const manager = new LispManager({ dataRoot, library, store,
     config: LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs }) })
   const owner = { sessionId: 'cache-session', agentId: 'cache-agent', root }
+  workingLispTask(db, owner)
   await manager.start()
   return { manager, owner, library, dataRoot, async close() { await manager.dispose(); db.close() } }
 }

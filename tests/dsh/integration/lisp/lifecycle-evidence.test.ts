@@ -1,3 +1,4 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -11,14 +12,13 @@ import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
 
 test('crash-state journal between file receipts and parent commit remains inspectable through restart, recovery and exact replay', {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL' : false, timeout: 90000,
-}, async () => {
+}, async t => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-lifecycle-'))), root = join(base, 'work')
   await mkdir(root); await writeFile(join(root, 'a.txt'), 'old-a'); await writeFile(join(root, 'b.txt'), 'old-b')
   const db = new NodeSqliteAdapter(join(base, 'live.sqlite3'), new DatabaseSync(join(base, 'live.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const owner = { sessionId: 'restart-session', agentId: 'restart-agent', root }, store = new LispStore(async fn => fn(db))
-  const crashPath = join(base, 'interrupted.sqlite3'), transition = store.transition.bind(store)
+  workingLispTask(db, owner)
+  const crashPath = join(base, 'interrupted.sqlite3'), transition = LispStore.prototype.transition
   let asks = 0, snapshotted = false, reopened: NodeSqliteAdapter | undefined
   const options: ManagerOptions = { store, dataRoot: join(base, 'data'), config: LispConfig.parse({ executionMode: 'protected', enabled: true, startupTimeoutMs: 60000 }),
     questions: { ask: async request => { asks++; return { answers: [{ id: request.questions[0].id, selected: [request.questions[0].intent!.approve] }] } } } }
@@ -26,15 +26,15 @@ test('crash-state journal between file receipts and parent commit remains inspec
   const request = { operationId: 'batch', code: '(kioku.files:propose-write "a.txt" "new-a") (kioku.files:propose-write "b.txt" "new-b")' }
   try {
     await manager.start(); await manager.enable(owner)
-    store.transition = async (...args) => {
+    t.mock.method(LispStore.prototype, 'transition', async function(this: LispStore, ...args: Parameters<typeof transition>) {
       if (args[1] === 'batch' && args[3] === 'SUCCEEDED') {
         assert.equal((await store.get(owner, 'batch'))!.state, 'RUNNING')
         // Capture a real SQLite image at the exact crash window, not a hand-made
         // result. Files and independent backup/receipt commits already exist.
         db.prepare('VACUUM INTO ?').run(crashPath); snapshotted = true
       }
-      return transition(...args)
-    }
+      return transition.apply(this, args)
+    })
     assert.equal((await manager.execute(owner, 'lisp_eval', request) as any).ok, true)
     assert.ok(snapshotted); assert.equal(asks, 1)
     const before = (await stat(join(root, 'a.txt'))).mtimeMs

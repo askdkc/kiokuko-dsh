@@ -7,10 +7,13 @@ import { executable } from './sandbox.js'
 import { fail } from './contracts.js'
 
 export interface PackageCommandResult { code: number; stdout: string; stderr: string }
-export type PackageCommand = (manager: 'npm' | 'pnpm', args: string[], directory: string, signal: AbortSignal) => Promise<PackageCommandResult>
+export type PackageCommand = (manager: 'npm' | 'pnpm', args: string[], directory: string, signal: AbortSignal, beforeEffect?: () => Promise<void>) => Promise<PackageCommandResult>
 
 /** Only the typed package broker calls this; arbitrary worker programs never receive network permission. */
-export const runPackageCommand: PackageCommand = async (manager, args, directory, signal) => {
+export const runPackageCommand: PackageCommand = async (manager, args, directory, signal, beforeEffect) => {
+  if (!beforeEffect) fail('TASK_REQUIRED', 'パッケージ処理には現在の有効なタスクが必要です。')
+  await beforeEffect()
+  signal.throwIfAborted()
   const binary = await executable(manager)
   if (!['/usr/', '/bin/', '/opt/homebrew/Cellar/', '/opt/homebrew/bin/', '/usr/local/Cellar/', '/usr/local/lib/'].some(root => binary.startsWith(root)))
     fail('PACKAGES_EXECUTABLE_SCOPE', 'Package managers must be installed in a trusted runtime directory.')
@@ -36,6 +39,8 @@ export const runPackageCommand: PackageCommand = async (manager, args, directory
 (allow file-read* file-write* (subpath ${literal(directory)}))
 (allow file-read* file-write* (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))`
     const path = join(directory, `package-policy-${randomUUID()}.sb`)
+    await beforeEffect()
+    signal.throwIfAborted()
     await writeFile(path, policy, { flag: 'wx', mode: 0o600 })
     command = '/usr/bin/sandbox-exec'; argv = ['-f', path, binary, ...args]
   } else if (process.platform === 'linux') {
@@ -46,6 +51,7 @@ export const runPackageCommand: PackageCommand = async (manager, args, directory
         .flatMap(path => ['--ro-bind-try', path, path]),
       '--proc', '/proc', '--dev', '/dev', '--bind', directory, directory, '--chdir', directory, '--', binary, ...args]
   } else return fail('UNSUPPORTED_OS', 'Protected package operations require macOS or Linux.')
+  await beforeEffect()
   signal.throwIfAborted()
   return new Promise((resolve, reject) => {
     execFile(process.execPath, [fileURLToPath(new URL('../../../lisp/supervisor.mjs', import.meta.url)),

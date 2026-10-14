@@ -12,7 +12,10 @@ import { LispWorker } from '../../../../src/dsh/lisp/worker.js'
 import { LispManager } from '../../../../src/dsh/lisp/manager.js'
 import { LispProposalBatch } from '../../../../src/dsh/lisp/proposal-batch.js'
 import { inspectSavedResult } from '../../../../src/dsh/lisp/inspection.js'
-import { createLispCiAdapter, describeVerifiers } from '../../../../src/dsh/lisp/ci.js'
+import { createLispCiAdapter as guardedCiAdapter, describeVerifiers } from '../../../../src/dsh/lisp/ci.js'
+
+// These approval/file fixtures explicitly provide task authority.
+const createLispCiAdapter = (...args: Parameters<typeof guardedCiAdapter>) => guardedCiAdapter(args[0], args[1], async () => {})
 import { confirm } from '../../../../src/dsh/lisp/approval.js'
 import type { DshUserQuestions } from '../../../../src/dsh/user-interaction.js'
 
@@ -304,7 +307,7 @@ test('startup quarantines incomplete legacy success without guessing an unlinked
 test('batch approval applies once, skips unchanged files and supports shared new parents', async t => {
   const f = await fixture(t); let asks = 0
   await writeFile(join(f.root, 'old.txt'), 'old'); await writeFile(join(f.root, 'same.txt'), 'same')
-  const batch = new LispProposalBatch({ store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false,
+  const batch = new LispProposalBatch({ authorizeEffect: async () => {},  store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false,
     questions: { ask: async request => { asks++; assert.match(request.questions[0].detail!, /-old\n\+new/); return allowed.ask(request) } } })
   const changes = await batch.apply(f.owner, 'eval', 'g', [
     { operation: 'write', path: 'old.txt', content: 'new' }, { operation: 'write', path: 'same.txt', content: 'same' },
@@ -320,7 +323,7 @@ test('duplicate targets, refusal and approval-time changes produce no writes', a
   for (const scenario of ['duplicate', 'deny', 'mutate'] as const) {
     const f = await fixture(t); let asks = 0
     await writeFile(join(f.root, 'a.txt'), 'old'); await writeFile(join(f.root, 'b.txt'), 'old')
-    const batch = new LispProposalBatch({ store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false,
+    const batch = new LispProposalBatch({ authorizeEffect: async () => {},  store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false,
       questions: { ask: async request => {
         asks++; if (scenario === 'mutate') await writeFile(join(f.root, 'b.txt'), 'external')
         return scenario === 'deny' ? { answers: [{ id: request.questions[0].id, selected: [request.questions[0].options![0]!.label] }] } : allowed.ask(request)
@@ -336,7 +339,7 @@ test('failure after a write retains APPLIED, UNKNOWN and unattempted outcomes', 
   const f = await fixture(t)
   const original = f.store.transition.bind(f.store); let applied = 0
   f.store.transition = async (...args) => { if (args[3] === 'APPLIED' && ++applied === 2) throw new Error('commit failed'); return original(...args) }
-  const batch = new LispProposalBatch({ store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false })
+  const batch = new LispProposalBatch({ authorizeEffect: async () => {},  store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false })
   const changes = await batch.apply(f.owner, 'eval', 'g', ['a', 'b', 'c'].map(path => ({ operation: 'write', path, content: 'new' })), new AbortController().signal)
   assert.deepEqual(changes.map(c => c.state), ['APPLIED', 'UNKNOWN', 'NOT_APPLIED'])
   await assert.rejects(readFile(join(f.root, 'c')), { code: 'ENOENT' })
@@ -355,7 +358,7 @@ test('cancellation between writes preserves completed work and stops the remaini
   const f = await fixture(t), controller = new AbortController()
   const transition = f.store.transition.bind(f.store)
   f.store.transition = async (...args) => { await transition(...args); if (args[3] === 'APPLIED') controller.abort() }
-  const batch = new LispProposalBatch({ store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false })
+  const batch = new LispProposalBatch({ authorizeEffect: async () => {},  store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false })
   const result = await batch.apply(f.owner, 'eval', 'g', ['a', 'b'].map(path => ({ operation: 'write', path, content: 'new' })), controller.signal)
   assert.deepEqual(result.map(c => c.state), ['APPLIED', 'NOT_APPLIED']); assert.equal(result[1]!.reason, 'cancelled')
   assert.equal(await readFile(join(f.root, 'a'), 'utf8'), 'new'); await assert.rejects(readFile(join(f.root, 'b')), { code: 'ENOENT' })
@@ -372,7 +375,7 @@ test('model status pagination never skips omitted records or truncates their ide
 test('approval is bound to copied proposal content and changing scripts invalidates verifier consent', async t => {
   const f = await fixture(t); await writeFile(join(f.root, 'a'), 'old')
   const request = { operation: 'write' as const, path: 'a', content: 'approved' }
-  const batch = new LispProposalBatch({ store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false,
+  const batch = new LispProposalBatch({ authorizeEffect: async () => {},  store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false,
     questions: { ask: async q => { request.content = 'unapproved'; return allowed.ask(q) } } })
   assert.equal((await batch.apply(f.owner, 'eval', 'g', [request], new AbortController().signal))[0]!.state, 'APPLIED')
   assert.equal(await readFile(join(f.root, 'a'), 'utf8'), 'approved')

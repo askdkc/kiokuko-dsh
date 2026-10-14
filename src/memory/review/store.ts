@@ -31,17 +31,19 @@ export function configureReview(db:SqliteDatabase,workspace:string,config:Review
 }
 export function reviewState(db:SqliteDatabase,runId:string):ReviewState|undefined {return db.prepare('SELECT * FROM memory_review_states WHERE run_id=?').get<ReviewState>(runId)}
 export function admitReview(db:SqliteDatabase,range:ReviewRange):ReviewState {
-  const run=db.prepare('SELECT workspace,dsh_session_id,status FROM ledger_runs WHERE run_id=?').get<{workspace:string;dsh_session_id:string;status:string}>(range.runId)
+  const run=db.prepare('SELECT workspace,COALESCE(task_owner_session_id,dsh_session_id) AS dsh_session_id,status FROM ledger_runs WHERE run_id=?').get<{workspace:string;dsh_session_id:string;status:string}>(range.runId)
   if(!run||run.workspace!==range.workspace||run.dsh_session_id!==range.sessionId||!['active','intake'].includes(run.status))throw new Error('owner_mismatch')
   db.prepare(`INSERT OR IGNORE INTO memory_review_states(run_id,workspace,session_id,source_generation,admitted_after_seq,scanned_through_seq,scheduled_through_seq,reviewed_through_seq)
     VALUES(?,?,?,?,?,?,?,?)`).run(range.runId,range.workspace,range.sessionId,range.sourceGeneration,range.startSeq-1,range.startSeq-1,range.startSeq-1,range.startSeq-1)
+  db.prepare(`UPDATE memory_review_states SET source_generation=?,admitted_after_seq=?,scanned_through_seq=?,scheduled_through_seq=?,reviewed_through_seq=?,reason=NULL
+    WHERE run_id=? AND workspace=? AND session_id=? AND reason='task_source_rotated'`).run(range.sourceGeneration,range.startSeq-1,range.startSeq-1,range.startSeq-1,range.startSeq-1,range.runId,range.workspace,range.sessionId)
   const state=reviewState(db,range.runId)!
   if(state.workspace!==range.workspace||state.session_id!==range.sessionId||state.source_generation!==range.sourceGeneration)throw new Error('source_generation_changed')
   return state
 }
 export function recordReviewTurns(db:SqliteDatabase,state:ReviewState,turns:CompletedReviewTurn[],scanned:number):void {
   const current=reviewState(db,state.run_id)!
-  if(current.scanned_through_seq!==state.scanned_through_seq)return
+  if(current.scanned_through_seq!==state.scanned_through_seq || current.session_id!==state.session_id || current.source_generation!==state.source_generation || current.admitted_after_seq!==state.admitted_after_seq)return
   for(const turn of turns) {
     if(turn.start<=state.admitted_after_seq)continue
     // A recovered input is not new even if grouped with a later native turn.
@@ -99,7 +101,8 @@ export function claimReview(db:SqliteDatabase,workspace:string,now:string):Revie
   for(const job of jobs){
     if(capturePolicy(db,workspace,job.session_id).mode!=='allowed'||job.settings_generation!==settings.generation){db.prepare("UPDATE memory_review_jobs SET state='cancelled',reason='policy_changed' WHERE id=?").run(job.id);continue}
     const state=reviewState(db,job.run_id)!
-    const owner=db.prepare('SELECT workspace,dsh_session_id,status FROM ledger_runs WHERE run_id=?').get<{workspace:string;dsh_session_id:string;status:string}>(job.run_id)
+    if(state.session_id!==job.session_id || state.source_generation!==job.source_generation || job.start_seq<=state.admitted_after_seq)continue
+    const owner=db.prepare('SELECT workspace,COALESCE(task_owner_session_id,dsh_session_id) AS dsh_session_id,status FROM ledger_runs WHERE run_id=?').get<{workspace:string;dsh_session_id:string;status:string}>(job.run_id)
     if(!owner||owner.workspace!==job.workspace||owner.dsh_session_id!==job.session_id||(!['active','intake'].includes(owner.status)&&job.origin!=='retry'))continue
     if(state.terminal_outcome&&job.origin!=='retry')continue
     if(db.prepare("SELECT 1 FROM dsh_memory_finalizations WHERE run_id=? AND status IN ('pending','processing')").get(job.run_id))continue
@@ -115,7 +118,7 @@ export function assertReviewClaim(db:SqliteDatabase,job:ReviewJob,now:string):vo
   assertCaptureAllowed(db,job.workspace,job.session_id,job.policy_revision)
   const settings=reviewSettings(db,job.workspace)
   if(!current||!['claimed','dispatched'].includes(current.state)||current.owner_nonce!==job.owner_nonce||current.attempt!==job.attempt||settings?.generation!==job.settings_generation||settings.config.mode==='off')throw new Error('stale_claim')
-  const owner=db.prepare('SELECT workspace,dsh_session_id,status FROM ledger_runs WHERE run_id=?').get<{workspace:string;dsh_session_id:string;status:string}>(job.run_id)
+  const owner=db.prepare('SELECT workspace,COALESCE(task_owner_session_id,dsh_session_id) AS dsh_session_id,status FROM ledger_runs WHERE run_id=?').get<{workspace:string;dsh_session_id:string;status:string}>(job.run_id)
   if(!owner||owner.workspace!==job.workspace||owner.dsh_session_id!==job.session_id||(!['active','intake'].includes(owner.status)&&job.origin!=='retry'))throw new Error('owner_changed')
   if(db.prepare("SELECT 1 FROM dsh_memory_finalizations WHERE run_id=? AND status IN ('pending','processing')").get(job.run_id))throw new Error('finalizer_owns_range')
   assertMemoryLease(db,job.run_id,job.owner_nonce!,now)
@@ -138,7 +141,7 @@ export function dispatchReview(db:SqliteDatabase,job:ReviewJob,now:string):boole
 }
 export function advanceReviewed(db:SqliteDatabase,runId:string):void {
   const state=reviewState(db,runId);if(!state)return
-  const jobs=db.prepare('SELECT * FROM memory_review_jobs WHERE run_id=? AND retry_parent_id IS NULL AND end_seq>? ORDER BY start_seq').all<ReviewJob>(runId,state.reviewed_through_seq)
+  const jobs=db.prepare('SELECT * FROM memory_review_jobs WHERE run_id=? AND session_id=? AND source_generation=? AND retry_parent_id IS NULL AND end_seq>? ORDER BY start_seq').all<ReviewJob>(runId,state.session_id,state.source_generation,state.reviewed_through_seq)
   let through=state.reviewed_through_seq
   for(const job of jobs){
     if(!job.resolved_by&&(job.state!=='completed'||db.prepare("SELECT 1 FROM memory_review_effects WHERE job_id=? AND disposition='held'").get(job.id)))break

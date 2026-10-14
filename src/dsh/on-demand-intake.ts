@@ -8,7 +8,8 @@ import { TASK_TYPES, type TaskType } from '../akinator/types.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import type { AkinatorTaskClassification } from './decisions/akinator-classification.js'
-import { bindMainModelRequestIntent, requestIntentReferenceIds, requestIntentTaskType, RequestIntentSubmissionSchema,
+import type { TaskSnapshot } from './task-state.js'
+import { createRequestIntentContext, unresolvedRequestIntent, validateMainModelRequestIntent, requestIntentReferenceIds, requestIntentTaskType, RequestIntentSubmissionSchema,
   type RequestIntentContext, type RequestIntentDecision, type RequestIntentInterpretation, type RequestIntentSubmission } from './decisions/request-intent.js'
 import { memoryOwnerKind, type MemoryOwnerIdentity, type MemoryOwnerKind } from './memory-owner.js'
 
@@ -16,6 +17,7 @@ export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
 export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. No execution task has been prepared yet. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, Goal, cancellation, memory-owner and execution ownership still apply. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(type => type !== 'chat')
+const NO_ACTIVE_GOAL_GUIDANCE = 'The current context has no active Goal. same_scope_continuation and scope_change require an active Goal. If the original request clearly specifies a self-contained task, use relation=new and the action it requests (verify for verification), with the exact current evidenceRefs. Otherwise clarify the intended target with the user. Preserve the original scope, constraints and native permissions.'
 
 const preparationFieldsSchema = z.object({
   taskType: z.enum(ACTION_TYPES).optional(),
@@ -125,12 +127,48 @@ export class OnDemandIntake {
   readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; requestPreparation?: boolean }>()
   readonly #disposers: (() => void)[] = []
   readonly #pending = new Set<Promise<unknown>>()
+  readonly #controlTools = new Map<string, Definition['execute']>()
+  readonly #controlExecutions = new WeakMap<object, { turn?: Turn; execute: Definition['execute']; digest: string; invoke?: Definition['execute']; args?: unknown }>()
   readonly #lifecycle = new AbortController()
   #tools?: NativeTools
   #startupSkillReader: Definition['execute'] | undefined
   readonly #skillReaders = new WeakMap<DemandAgent, Definition['execute'] | undefined>()
   #stopped = false
   constructor(private readonly host: Dependencies, private readonly options: { onlyWhenDeferred?: boolean } = {}) {}
+  /** Exact host-owned implementations, never a name-only execution bypass. */
+  registerControlTool(definition: Definition): () => void {
+    this.#controlTools.set(definition.name, definition.execute)
+    return () => { if (this.#controlTools.get(definition.name) === definition.execute) this.#controlTools.delete(definition.name) }
+  }
+  isControl(execution: Execution): boolean {
+    const proof = this.#controlExecutions.get(execution)
+    return !this.#stopped && !execution.signal.aborted && !!proof
+      && (!proof.turn || this.bound(execution) === proof.turn && !proof.turn.input.signal.aborted && !['closed', 'stale'].includes(proof.turn.status))
+      && this.definition(execution)?.execute === proof.execute && canonicalContentHash(execution.arguments) === proof.digest
+      && (proof.invoke ? [...this.#controlTools].some(([name, invoke]) => invoke === proof.invoke
+        && this.#tools?.get(name, execution.agent)?.execute === invoke) : this.#controlTools.get(execution.name) === proof.execute)
+  }
+  controlTask(execution: Execution): string | undefined {
+    return this.isControl(execution) ? this.#controlExecutions.get(execution)?.turn?.task : undefined
+  }
+  private controlCall(execution: Execution, actual: Definition): { execute: Definition['execute']; digest: string; invoke?: Definition['execute']; args?: unknown } | undefined {
+    if (this.#controlTools.get(execution.name) === actual.execute) return { execute: actual.execute, digest: canonicalContentHash(execution.arguments) }
+    if (execution.name !== 'run_code' || !execution.arguments || typeof execution.arguments !== 'object' || Array.isArray(execution.arguments)) return undefined
+    const value = execution.arguments as Record<string, unknown>
+    if (Object.keys(value).sort().join(',') !== 'code,description' || typeof value.code !== 'string' || value.code.length > 8192
+      || typeof value.description !== 'string' || !value.description.trim()) return undefined
+    const code = value.code.trim().replace(/;$/u, '')
+    for (const [name, invoke] of this.#controlTools) {
+      if (this.#tools?.get(name, execution.agent)?.execute !== invoke) continue
+      const prefix = `return await tools.${name}(`
+      if (!code.startsWith(prefix) || !code.endsWith(')')) continue
+      try {
+        const args: unknown = JSON.parse(code.slice(prefix.length, -1))
+        if (code === prefix + JSON.stringify(args) + ')') return { execute: actual.execute, digest: canonicalContentHash(execution.arguments), invoke, args }
+      } catch { /* Nonliteral programs keep ordinary execution admission. */ }
+    }
+    return undefined
+  }
   private watch<T>(promise: Promise<T>): Promise<T> {
     this.#pending.add(promise)
     void promise.then(() => this.#pending.delete(promise), () => this.#pending.delete(promise))
@@ -359,8 +397,18 @@ export class OnDemandIntake {
     if (!state.requestIntentContext || state.requestIntentContextDigest !== canonicalContentHash(state.requestIntentContext)) {
       throw new Error('Request interpretation context is stale')
     }
-    const bound = bindMainModelRequestIntent(submission, state.requestIntentContext)
-    if (!bound) throw new Error('Request interpretation references another request, stale revision, or unknown proposal')
+    const result = validateMainModelRequestIntent(submission, state.requestIntentContext)
+    if (!result.ok) {
+      switch (result.reason) {
+        case 'no_active_goal': throw new Error(`Request relation ${submission.relation} cannot be used without an active Goal. ${NO_ACTIVE_GOAL_GUIDANCE}`)
+        case 'missing_reference': throw new Error('Request interpretation is missing required current message or active Goal references. Use the exact current evidenceRefs from the supplied context.')
+        case 'unknown_reference': throw new Error('Request interpretation references another request, stale revision, or unknown proposal. Use only the exact current evidenceRefs from the supplied context.')
+        case 'unresolved_intent': throw new Error('Request relation or action is unresolved. Interpret the original request and current context; clarify with the user if its action or target remains unclear.')
+        case 'invalid_submission': throw new Error('Invalid request interpretation. Supply a relation, action and unique exact current evidenceRefs.')
+        case 'invalid_task_operation': throw new Error('The proposed task operation is not allowed for the current SQLite task state and revision. Use task_operation or /kioku-task with an allowed explicit operation; native permissions and required evidence remain unchanged.')
+      }
+    }
+    const bound = result.decision
     const prior = state.requestIntent
     if (prior?.source === 'decision-provider' && prior.relation !== 'unknown' && prior.action !== 'unknown') {
       if (prior.relation !== bound.relation || prior.action !== bound.action) {
@@ -397,11 +445,12 @@ export class OnDemandIntake {
     const intentText = context ? `\n\nCurrent request references and same-session work (host-bound, advisory only):\n${JSON.stringify({
       references: requestIntentReferenceIds(context),
       activeGoal: context.activeGoal ?? null,
+      activeTask: context.activeTask ?? null,
       proposals: context.proposals.map(({ id, revision, digest, text }) => ({ id, revision, digest, text })),
       decision: interpretation ? { relation: interpretation.relation, action: interpretation.action, source: interpretation.source,
         policyVersion: interpretation.policyVersion, evidence: interpretation.evidence, unresolvedReason: interpretation.unresolvedReason ?? null } : null,
     })}\nUse only these exact references in requestIntent.evidenceRefs. The original human message remains unchanged.` : ''
-    const text = ON_DEMAND_GUIDANCE + intentText
+    const text = ON_DEMAND_GUIDANCE + intentText + (context && !context.activeGoal && !context.activeTask ? `\n${NO_ACTIVE_GOAL_GUIDANCE}` : '')
     return [...messages, { id: randomUUID(), role: 'user', content: [{ type: 'text', text }],
       source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'snapshot', sections: [{ name: 'on-demand-intake', text }] } }]
   }
@@ -410,8 +459,24 @@ export class OnDemandIntake {
     return state && { task: state.task, taskType: state.taskType ?? state.intent.taskType ?? null, status: state.status, turn: state.input.turn,
       ...(state.requestIntent ? { requestIntent: structuredClone(state.requestIntent) } : {}), memoryOwner: state.memoryOwner }
   }
+  /** Refresh only authority facts after a committed control operation; retain the exact human request. */
+  taskStateChanged(task: TaskSnapshot): void {
+    const state = this.#turns.get(task.sessionId)
+    if (!state || ['closed', 'stale'].includes(state.status) || state.input.signal.aborted || !state.requestIntentContext) return
+    const previous = state.requestIntentContext.activeTask
+    if (previous?.taskId === task.taskId && previous.revision === task.revision && previous.generation === task.generation) return
+    const context = createRequestIntentContext({ ...state.requestIntentContext, activeTask: task,
+      ...(state.requestIntentContext.activeGoal?.runId === task.runId ? {} : { activeGoal: undefined }) })
+    if (!context) return
+    state.requestIntentContext = context
+    state.requestIntentContextDigest = canonicalContentHash(context)
+    state.requestIntent = unresolvedRequestIntent(context, 'task_state_changed')
+    state.status = 'answer'; state.existing = false; state.memoryOwner = 'none'
+    delete state.preparedIntentDigest
+  }
   /** A current host-validated control call, never arbitrary code or a name-based exemption. */
   preparationOnly(execution: Execution): boolean {
+    if (this.isControl(execution)) return true
     const state = this.bound(execution), proof = this.#executions.get(execution)
     if (this.#stopped || execution.signal.aborted || execution.parent !== undefined || !state || state.input.signal.aborted
       || !proof || proof.turn !== state || this.definition(execution)?.execute !== proof.execute
@@ -504,6 +569,15 @@ export class OnDemandIntake {
       }
       const actual = this.definition(execution)
       if (!actual || typeof actual.execute !== 'function') return denied('Unknown native tool definition')
+      const control = this.controlCall(execution, actual)
+      if (control) {
+        const turn = this.bound(execution)
+        if (execution.agent?.session && this.#turns.has(execution.agent.session.id) && !turn) return denied('Stale task control request')
+        if (turn) { try { this.assertCurrent(turn) } catch { return denied('Stale task control request') } }
+        this.#controlExecutions.set(execution, { ...control, ...(turn ? { turn } : {}) })
+        const decision = await next()
+        return decision?.kind === 'cancel' ? denied('Native tool policy cancelled this call') : decision
+      }
       const state = this.bound(execution)
       if (!state) {
         if (execution.agent?.session && this.#turns.has(execution.agent.session.id)) return denied('Stale on-demand native turn')
@@ -546,6 +620,15 @@ export class OnDemandIntake {
     }, { prepend: true }))
     this.#disposers.push(context.on('tools/execute', async (execution: Execution, next: () => Promise<unknown>) => {
       if (execution.agent && this.host.nativeChild?.(execution.agent)) return next()
+      const control = this.#controlExecutions.get(execution)
+      if (control) {
+        if (!this.isControl(execution)) throw new Error('Task control identity or arguments changed')
+        ;(execution as { signal: AbortSignal }).signal = AbortSignal.any([execution.signal, this.#lifecycle.signal, ...(control.turn ? [control.turn.input.signal] : [])])
+        if (!control.invoke) return next()
+        const result = await control.invoke(control.args, execution)
+        return { isError: false, value: { logs: ['Host task operation. No program was evaluated.'], result },
+          content: [{ type: 'text', text: JSON.stringify(result) }] }
+      }
       const proof = this.#executions.get(execution)
       if (!proof) return next() // Existing independently admitted runs keep their original path.
        const state = this.bound(execution)
@@ -580,6 +663,7 @@ export class OnDemandIntake {
     this.#disposers.push(tools.guard(execution => {
       if (this.#stopped || execution.signal.aborted) return 'On-demand intake is stopped or cancelled'
       if (execution.agent && this.host.nativeChild?.(execution.agent)) return undefined
+      if (this.isControl(execution)) return undefined
       const state = this.bound(execution), actual = this.definition(execution)
       if (!actual) return 'Unknown native tool definition'
       if (!state) {

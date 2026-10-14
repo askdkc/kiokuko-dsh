@@ -2,7 +2,7 @@ import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import type { SessionFormatCodec, SessionFormatEvent, SessionFormatMigrationContext } from '@deepseek-ai/dsh-session-format'
-import { releasedV0SessionFormatCodec, releasedV1SessionFormatCodec, releasedV2SessionFormatCodec } from './legacy-session-codecs.js'
+import { releasedV0SessionFormatCodec, releasedV1SessionFormatCodec, releasedV2SessionFormatCodec, releasedV3SessionFormatCodec } from './legacy-session-codecs.js'
 import { decodeSessionLog, parseJsonl } from '../../scripts/session-history-codec.mjs'
 import { cloneBoundaryJson } from '../serialization/boundary-json.js'
 import { canonicalJson } from '../serialization/validate.js'
@@ -21,6 +21,7 @@ const MAX_FILE_BYTES = 64 * 1024 * 1024
 const MAX_LOG_BYTES = 32 * 1024 * 1024
 const codecs: ReadonlyMap<number, SessionFormatCodec> = new Map<number, SessionFormatCodec>([
   [0, releasedV0SessionFormatCodec], [1, releasedV1SessionFormatCodec], [2, releasedV2SessionFormatCodec],
+  [3, releasedV3SessionFormatCodec],
 ])
 
 function integrity(message: string): KiokukoError { return new KiokukoError('INTEGRITY_ERROR', message) }
@@ -90,7 +91,7 @@ async function readHistoricalFile(path: string): Promise<Buffer> {
 }
 
 /**
- * Look up an authoritative pre-v3 stored log using the native store's identity
+ * Look up an authoritative historical log using the native store's identity
  * and revision checks. Call only for cold sessions. No migration, resume,
  * native writes, or fallback past an existing current generation is allowed.
  */
@@ -109,7 +110,7 @@ export async function readHistoricalDshSession(value: unknown, sessionId: string
   if (name !== `session.v${before.header.version}.jsonl` && name !== `session.v${before.header.version}.jsonl.zstd`) return undefined
   const suffix = name.endsWith('.zstd') ? '.jsonl.zstd' : '.jsonl'
   let selected: { path: string; version: number } | undefined
-  for (const version of [2, 1, 0]) {
+  for (let version = before.header.version - 1; version >= 0; version--) {
     const path = join(dirname(location.path), `session${version === 0 ? '' : `.v${version}`}${suffix}`)
     try {
       const status = await lstat(path)

@@ -103,7 +103,7 @@ for (const fault of ['none', 'cache', 'kick'] as const) test(`completed task rel
     assert.deepEqual({ ...db.prepare('SELECT status,source_end_seq FROM dsh_memory_finalizations WHERE run_id=?').get(item.runId) },
       { status: 'pending', source_end_seq: 4 })
     assert.equal(item.closed, true)
-    assert.deepEqual(observed, ['abort-review','cache','kick','retire','finish-review','clear-memory','clear-execution','clear-turn','release-run','clear-tools'])
+    assert.deepEqual(observed, ['abort-review','retire','finish-review','clear-memory','clear-execution','clear-turn','release-run','clear-tools','cache','kick'])
     await lifecycle.runLifecycle.closeTurn(close)
     assert.equal(observed.filter(event => event === 'kick').length, 1, 'terminal replay must not enqueue or kick another finalization')
     await lifecycle.runLifecycle.dispose()

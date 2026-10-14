@@ -1,4 +1,5 @@
 import type { NativeWorkerRouting } from '../native-worker-routing.js'
+import { isNativeSubagent } from '../native-subagent.js'
 import { MemoryRequestFence, MemorySnapshotStale } from '../memory-request-fence.js'
 import { assertMemoryOwner } from '../memory-owner.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
@@ -108,8 +109,7 @@ export function createRouting({
         const authority = await delegation.authorityFingerprint(agent)
         return { child: delegation.observationBinding(agent), childSessionId: agent.session?.id, model: childModel, authority }
       }
-      const header = (agent as unknown as CompactionAgent).session?.header
-      if (header?.parentSession || header?.origin === 'subagent' || header?.delegationDepth) return undefined
+      if (isNativeSubagent(agent)) return undefined
       const item = agent.session ? currentSession(agent.session.id) : undefined
       return item ? { runId: item.runId, sessionId: item.sessionId, selection: getSelection(item.runId) ?? null,
         taskEvidence: { currentRequest: item.task,
@@ -207,7 +207,7 @@ export function createRouting({
       if ((native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined)?.enabled(agent as DshUserQuestionAgent)) return { kind: 'native' }
       if (admitted && !role && !selectionBlocked.has(agent) && (!selection || selection.mode === 'normal' && selection.status === 'ready')
         && item.nativeAgent === agent && item.nativeSession === agent.session && item.turn === turn && !item.closed
-        && !(agent as ReviewAgent).session.header?.parentSession && (agent as ReviewAgent).session.header?.origin !== 'subagent' && !(agent as ReviewAgent).session.header?.delegationDepth) {
+        && !isNativeSubagent(agent)) {
         assertDshModelAdmitted(admitted)
         const pendingManual = manualModelChanges.get(item.sessionId)
         if (pendingManual) await pendingManual

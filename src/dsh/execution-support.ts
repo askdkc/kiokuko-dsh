@@ -13,6 +13,8 @@ import { executionFrameText, executionPathDenial, executionProposals, readExecut
 import { codingVerificationText } from './coding-workflow/service.js'
 import { explorationOperation, newExplorationState, observeExploration, recordObject, evidencePresentation, acquiredReadRange,
   type ExecutionEvidence, type ExplorationState } from './exploration.js'
+import { TASK_AUTHORITY, authorizeTaskLease, type TaskLease } from './task-state.js'
+import { captureExecutionTaskLease } from './task-authority-context.js'
 
 export const EXECUTION_STATUS_EVENT = 'kiokuko/execution-status'
 export interface ExecutionBinding {
@@ -21,6 +23,8 @@ export interface ExecutionBinding {
   nativeAgent?: object | undefined
   nativeSession?: object | undefined
   cwd: string
+  /** Canonical admitted repository identity; cwd remains the path-policy base. */
+  repositoryRoot?: string
   task: string
   turn: number
   humanInput?: string
@@ -45,6 +49,7 @@ interface SupportState {
   loaded: boolean
   serial: number
   confirmations: Map<number, string>
+  authority?: TaskLease | undefined
 }
 interface SupportContext {
   on(name: string, listener: (...args: any[]) => any, options?: { prepend?: boolean }): () => void
@@ -59,7 +64,8 @@ interface SupportContext {
 export class DshExecutionSupport {
   readonly #states = new Map<string, SupportState>()
   readonly #disposers: (() => void)[] = []
-  readonly #started = new WeakMap<object, { binding: ExecutionBinding; epoch: number; warnings: string[] }>()
+  readonly #started = new WeakMap<object, { binding: ExecutionBinding; epoch: number; warnings: string[]; authority?: TaskLease | undefined }>()
+  readonly #pendingAuthority = new Map<string, TaskLease>()
   #disposed = false
   readonly #config: ContinuityConfig
   constructor(private readonly runtime: Pick<DshRuntime, 'withDatabase'>,
@@ -97,6 +103,9 @@ export class DshExecutionSupport {
     try {
       const frame = await this.runtime.withDatabase(database => withImmediateTransaction(database, () => {
         if (this.#disposed || current.binding !== binding || current.serial !== serial) return undefined
+        try { current.authority = captureExecutionTaskLease(database, { taskId: binding.runId,
+          sessionId: binding.sessionId, repositoryRoot: binding.repositoryRoot ?? realpathSync(binding.cwd) }) }
+        catch { current.authority = undefined }
         const stored = readExecutionFrame(database, binding.runId)
         // Intake persists the first frame. An absent frame is unknown policy,
         // even if a resumed native turn happens to be numbered one.
@@ -118,7 +127,7 @@ export class DshExecutionSupport {
     }
     try {
       const verification = await this.runtime.withDatabase(db => codingVerificationText(db, { runId: binding.runId,
-        sessionId: binding.sessionId, repositoryRoot: binding.cwd }, binding.terminal))
+        sessionId: binding.sessionId, repositoryRoot: binding.repositoryRoot ?? binding.cwd }, binding.terminal))
       if (current.binding === binding && current.serial === serial && !this.#disposed) current.verification = verification
     } catch {
       if (current.binding === binding && current.serial === serial && !this.#disposed) current.verification = 'Coding verification evidence unavailable. Do not claim checks passed; recover the current workflow before relying on it.'
@@ -149,6 +158,9 @@ export class DshExecutionSupport {
         }
         // Event identity and a single transaction make replay and completion order irrelevant.
         for (const evidence of pending.sort((a, b) => a.id.localeCompare(b.id))) {
+          const authority = this.#pendingAuthority.get(evidence.id)
+          if (!authority) continue
+          try { authorizeTaskLease(database, authority) } catch { continue }
           const inserted = database.prepare('INSERT OR IGNORE INTO dsh_execution_evidence VALUES (?, ?, ?) RETURNING evidence_id')
             .get(binding.runId, evidence.id, JSON.stringify(evidence))
           if (inserted) {
@@ -167,6 +179,7 @@ export class DshExecutionSupport {
       const consumed = new Set(pending.map(item => item.id))
       current.pending = current.pending.filter(item => !consumed.has(item.id))
       for (const id of consumed) current.pendingIds.delete(id)
+      for (const id of consumed) this.#pendingAuthority.delete(id)
       current.loaded = true; current.degraded = false
     } catch {
       if (current.binding !== binding || this.#disposed) return
@@ -243,7 +256,10 @@ export class DshExecutionSupport {
     } catch { delete state.monitor.pauseKey; return false }
   }
   paused(sessionId: string): boolean { return this.#states.get(sessionId)?.monitor.paused ?? false }
-  clear(sessionId: string): void { this.#states.delete(sessionId) }
+  clear(sessionId: string): void {
+    for (const id of this.#states.get(sessionId)?.pendingIds ?? []) this.#pendingAuthority.delete(id)
+    this.#states.delete(sessionId)
+  }
 
   text(sessionId: string): string {
     const state = this.#states.get(sessionId)
@@ -315,6 +331,7 @@ export class DshExecutionSupport {
           && !state.binding.chat && !state.binding.terminal && !this.#started.has(execution)) {
           this.#started.set(execution, {
             binding: state.binding, epoch: state.monitor.humanEpoch, warnings: [...(state.monitor.presented ?? [])],
+            authority: execution[TASK_AUTHORITY] ?? state.authority,
           })
         }
       } catch { /* Observation never changes native policy. */ }
@@ -344,6 +361,7 @@ export class DshExecutionSupport {
         // The post-preparation guard supersedes the preliminary identity snapshot.
         this.#started.set(execution, {
           binding: state.binding, epoch: state.monitor.humanEpoch, warnings: [...(state.monitor.presented ?? [])],
+          authority: execution[TASK_AUTHORITY] ?? this.#started.get(execution)?.authority ?? state.authority,
         })
         const operation = explorationOperation(execution.name, execution.arguments, state.binding.cwd)
         if (!operation) return undefined
@@ -364,7 +382,9 @@ export class DshExecutionSupport {
         if (!operation || operation.kind === 'write' && !result.isError) return
         const id = canonicalContentHash({ runId: state.binding.runId, turn: state.binding.turn, callId: execution.callId })
         if (state.pendingIds.has(id)) return
+        if (!started.authority) return
         state.pendingIds.add(id)
+        this.#pendingAuthority.set(id, started.authority)
         const digest = canonicalContentHash(result.content)
         const resultKey = canonicalContentHash({ operation: operation.key, result: digest })
         const acquiredRange = acquiredReadRange(result.value)
@@ -437,10 +457,13 @@ export class DshExecutionSupport {
           if (!state.binding.terminal) state.monitor.presented = [...state.monitor.warned]
           const observed = state.evidence.map(item => ({ ...item }))
           const observedBinding = state.binding
-          void this.runtime.withDatabase(db => {
+          const authority = state.authority
+          void this.runtime.withDatabase(db => withImmediateTransaction(db, () => {
+            if (!authority) return
+            authorizeTaskLease(db, authority)
             for (const item of observed) db.prepare('UPDATE dsh_execution_evidence SET evidence_json = ? WHERE run_id = ? AND evidence_id = ?')
               .run(JSON.stringify(item), observedBinding.runId, item.id)
-          }).catch(() => { if (state.binding === observedBinding) for (const item of state.evidence) item.presentation = 'unknown' })
+          })).catch(() => { if (state.binding === observedBinding) for (const item of state.evidence) item.presentation = 'unknown' })
         }
       } catch { /* observational failure must not change the request */ }
       return next()
@@ -450,5 +473,6 @@ export class DshExecutionSupport {
     this.#disposed = true
     for (const dispose of this.#disposers.reverse()) { try { dispose() } catch { /* dispose remaining observers */ } }
     this.#states.clear()
+    this.#pendingAuthority.clear()
   }
 }

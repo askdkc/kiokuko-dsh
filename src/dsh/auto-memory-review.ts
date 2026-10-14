@@ -59,7 +59,7 @@ export class AutoMemoryReviewCoordinator {
     const admittedAfter=Math.max(binding.startSeq,binding.session.inheritedEventCount??0)-1
     const unchanged=(sourceGeneration:string)=>this.options.runtime.withDatabase(db=>{
       const state=reviewState(db,binding.runId),settings=reviewSettings(db,binding.workspace)
-      const run=db.prepare('SELECT workspace,dsh_session_id,status FROM ledger_runs WHERE run_id=?')
+      const run=db.prepare('SELECT workspace,COALESCE(task_owner_session_id,dsh_session_id) AS dsh_session_id,status FROM ledger_runs WHERE run_id=?')
         .get<{workspace:string;dsh_session_id:string;status:string}>(binding.runId)
       return state?.workspace===binding.workspace && state.session_id===binding.session.id
         && state.source_generation===sourceGeneration && state.admitted_after_seq===admittedAfter
@@ -102,7 +102,7 @@ export class AutoMemoryReviewCoordinator {
     const previous=this.#tails.get(binding.runId)??Promise.resolve()
     const operation=previous.catch(()=>undefined).then(()=>this.scan(binding,throughSeq,origin)).catch(async error=>{
       const reason=error instanceof Error&&['source_unavailable','input_too_large','capture_excluded','run_terminal','host_capability_missing','review_off'].includes(error.message)?error.message:'review_deferred'
-      await this.options.runtime.withDatabase(db=>db.prepare('UPDATE memory_review_states SET reason=? WHERE run_id=? AND reason IS NOT ?').run(reason,binding.runId,reason))
+      await this.options.runtime.withDatabase(db=>db.prepare(`UPDATE memory_review_states SET reason=? WHERE run_id=? AND session_id=? AND reason IS NOT ? AND reason IS NOT 'task_source_rotated'`).run(reason,binding.runId,binding.session.id,reason))
     }).finally(()=>{if(this.#tails.get(binding.runId)===operation)this.#tails.delete(binding.runId)})
     this.#tails.set(binding.runId,operation)
     void operation.catch(()=>undefined)
@@ -112,6 +112,7 @@ export class AutoMemoryReviewCoordinator {
     const {runtime,mirror}=this.options
     const state=await runtime.withDatabase(db=>{assertCaptureAllowed(db,binding.workspace,binding.session.id);return reviewState(db,binding.runId)})
     if(!state)return
+    if(state.workspace!==binding.workspace || state.session_id!==binding.session.id)throw new Error('owner_changed')
     if(state.terminal_outcome)throw new Error('run_terminal')
     const settings=await runtime.withDatabase(db=>reviewSettings(db,binding.workspace)!)
     if(settings.config.mode==='off')throw new Error('review_off')
@@ -140,8 +141,8 @@ export class AutoMemoryReviewCoordinator {
     }
     const range=await runtime.withDatabase(db=>{
       const current=reviewState(db,binding.runId)!
-      const pending=db.prepare('SELECT min(start_seq) AS start,max(end_seq) AS end,count(DISTINCT start_seq) AS n FROM memory_review_turns WHERE run_id=? AND end_seq>?')
-        .get<{start:number|null;end:number|null;n:number}>(binding.runId,current.scheduled_through_seq)!
+      const pending=db.prepare('SELECT min(start_seq) AS start,max(end_seq) AS end,count(DISTINCT start_seq) AS n FROM memory_review_turns WHERE run_id=? AND session_id=? AND source_generation=? AND end_seq>?')
+        .get<{start:number|null;end:number|null;n:number}>(binding.runId,current.session_id,current.source_generation,current.scheduled_through_seq)!
       const minimum=origin==='manual'?1:origin==='boundary'?settings.config.minimumTurns:settings.config.turnInterval
       if(pending.n<minimum||pending.start===null||pending.end===null||origin==='boundary'&&!settings.config.boundaryFlush)return
       return {workspace:binding.workspace,sessionId:binding.session.id,runId:binding.runId,sourceGeneration:state.source_generation,startSeq:pending.start,endSeq:pending.end}
@@ -161,7 +162,7 @@ export class AutoMemoryReviewCoordinator {
     const snapshot=await this.options.runtime.withDatabase(db=>memorySnapshots(db,range,evidence.map(e=>e.text).join('\n'),true))
     if(Buffer.byteLength(JSON.stringify({system:REVIEW_SYSTEM,range,evidence,...snapshot}))+1024>settings.config.maxInputBytes)blockedReason='input_too_large'
     if(blockedReason==='input_too_large'&&!parent){
-      const turns=await this.options.runtime.withDatabase(db=>db.prepare('SELECT DISTINCT start_seq,end_seq FROM memory_review_turns WHERE run_id=? AND start_seq>=? AND end_seq<=? ORDER BY start_seq').all<{start_seq:number;end_seq:number}>(range.runId,range.startSeq,range.endSeq))
+      const turns=await this.options.runtime.withDatabase(db=>db.prepare('SELECT DISTINCT start_seq,end_seq FROM memory_review_turns WHERE run_id=? AND session_id=? AND source_generation=? AND start_seq>=? AND end_seq<=? ORDER BY start_seq').all<{start_seq:number;end_seq:number}>(range.runId,range.sessionId,range.sourceGeneration,range.startSeq,range.endSeq))
       if(turns.length>1){
         const cut=Math.floor(turns.length/2)
         const first=await this.reserve({...range,endSeq:turns[cut-1]!.end_seq},origin,undefined,contextStartSeq)

@@ -1,3 +1,5 @@
+import { ProtocolRecipeSchema, PROTOCOL_CAPABILITIES } from './guardrail/contracts.js'
+import { enrollProtocol, invalidateProtocolBinding, protocolCompletionReady } from './guardrail/service.js'
 import { realpathSync, existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
@@ -23,8 +25,10 @@ const relativePath = z.string().min(1).max(512).refine(value => !path.isAbsolute
 export const CompletionMethodSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('native_command'), command: text, cwd: text,
     sourcePaths: z.array(relativePath).min(1).max(32), assertion: z.enum(['exit_zero', 'selected_tests_pass', 'output_matches', 'artifact_matches']),
+    protocol: ProtocolRecipeSchema.optional(),
     expectedOutput: text.optional(), artifactPath: relativePath.optional(), artifactSha256: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   }).strict().superRefine((value,ctx)=>{
+    if(value.protocol&&value.assertion!=='selected_tests_pass')ctx.addIssue({code:'custom',message:'Protocol recipes require selected tests'})
     if(value.assertion==='output_matches'&&!value.expectedOutput)ctx.addIssue({code:'custom',message:'Output assertion requires expectedOutput'})
     if(value.assertion==='artifact_matches'&&(!value.artifactPath||!value.artifactSha256))ctx.addIssue({code:'custom',message:'Artifact assertion requires path and SHA-256'})
   }),
@@ -45,7 +49,7 @@ export type CompletionAssessment = {
   required: number
   criteria: CriterionAssessment[]
   workflowReady?: boolean
-  coding?: { workflowId: string; state: string; scopeVersion: number; goalCriterionIds: string[]; itemCriterionIds: string[] }
+  coding?: { workflowId: string; state: string; scopeVersion: number; protocol?: {kind:'bounded-tdd-v1';phase:string;generation:number;capabilities:typeof PROTOCOL_CAPABILITIES}; goalCriterionIds: string[]; itemCriterionIds: string[] }
 }
 interface CompletionCriterion { id: string; description: string; revision: number; approval: 'explicit' | 'approved' }
 interface BindingRow extends SqliteRow { criterion_id: string; criterion_revision: number; method_json: string; method_digest: string; approved: number }
@@ -152,6 +156,8 @@ export function bindTaskCriterion(database: SqliteDatabase, input: {
           approved=excluded.approved,updated_at=excluded.updated_at`)
         .run(input.runId, criterion.id, criterion.revision, JSON.stringify(method), methodDigest, approved ? 1 : 0, new Date().toISOString())
     }
+    if (approved && method.kind === 'native_command' && method.protocol) enrollProtocol(database, {runId:input.runId,sessionId:coding!.sessionId,repositoryRoot:source.repositoryRoot}, {criterionId:input.criterionId,methodDigest,command:method.command,cwd:method.cwd,sourcePaths:method.sourcePaths,recipe:method.protocol})
+    else invalidateProtocolBinding(database,input.runId,input.criterionId,methodDigest)
     database.prepare('INSERT INTO dsh_completion_bind_ops(run_id,call_id,request_digest,response_json) VALUES(?,?,?,?)')
       .run(input.runId, input.callId, requestDigest, JSON.stringify(response))
   })
@@ -177,19 +183,27 @@ export function beginTaskCompletionExecution(database: SqliteDatabase, input: {
   if (source.enno || realpathSync(input.repositoryRoot) !== realpathSync(source.repositoryRoot)) return false
   const rows = database.prepare('SELECT * FROM dsh_completion_bindings WHERE run_id = ? AND approved = 1')
     .all<BindingRow>(input.runId)
-  const current = rows.find(row => {
+  const matching = rows.filter(row => {
     const method = CompletionMethodSchema.parse(JSON.parse(row.method_json))
     return method.kind === 'native_command' && executionCommand(method.command) === executionCommand(input.command)
       && realpathSync(path.resolve(source.repositoryRoot, method.cwd)) === realpathSync(input.cwd ?? input.repositoryRoot)
       && source.criteria.some(criterion => criterion.id === row.criterion_id && criterion.revision === row.criterion_revision)
   })
+  const coding=readCodingWorkflow(database,input.runId)
+  const assessment=coding?assessTaskCompletion(database,input.runId):undefined
+  const goalReady=coding?.definition?.items.every(item=>item.criterionIds.every(id=>assessment!.criteria.some(criterion=>criterion.criterionId===`coding:${coding.workflowId}:${id}`&&criterion.state==='satisfied')))??false
+  const isGoal=(row:BindingRow)=>coding?.definition?.goal.criterionIds.some(id=>row.criterion_id===`coding:${coding.workflowId}:${id}`)
+  // A protocol recipe changes the item method identity. Observe final Goal
+  // bindings separately, only after item evidence exists on the current source.
+  const current=coding?.protocol
+    ? goalReady
+      ? matching.find(row=>isGoal(row)&&assessment!.criteria.find(item=>item.criterionId===row.criterion_id)?.state!=='satisfied')??matching.find(isGoal)??matching[0]
+      : matching.find(row=>row.criterion_id===coding.protocol!.criterionId)??matching[0]
+    : matching[0]
   if (!current) return false
   const method = CompletionMethodSchema.parse(JSON.parse(current.method_json))
   if (method.kind !== 'native_command') return false
   const digest = completionSourceDigest(database,input.runId,source.repositoryRoot,method.sourcePaths)
-  const coding=readCodingWorkflow(database,input.runId)
-  const assessment=coding?assessTaskCompletion(database,input.runId):undefined
-  const goalReady=coding?.definition?.items.every(item=>item.criterionIds.every(id=>assessment!.criteria.some(criterion=>criterion.criterionId===`coding:${coding.workflowId}:${id}`&&criterion.state==='satisfied')))??false
   const codingInputs = coding?.definition ? coding.definition.items.flatMap(item => item.criterionIds.map(id => ({ id,
     evidenceRef: assessment!.criteria.find(criterion => criterion.criterionId === `coding:${coding.workflowId}:${id}`)?.evidenceRef ?? null }))) : null
   const existing = database.prepare('SELECT method_digest, source_digest, outcome FROM dsh_completion_executions WHERE run_id = ? AND call_id = ?')
@@ -298,7 +312,7 @@ export function assessTaskCompletion(database: SqliteDatabase, runId: string): C
         : execution.outcome === 'passed' && complete ? 'observed_command' : 'coverage_unknown',
       evidenceRef: execution.call_id }
   })
-  const workflowReady=!coding||Boolean(coding.definition&&['yes','no'].includes(coding.choice.state)&&!['cancelled','superseded','blocked'].includes(coding.state))
+  const workflowReady=!coding||Boolean(protocolCompletionReady(database,runId)&&coding.definition&&['yes','no'].includes(coding.choice.state)&&!['cancelled','superseded','blocked'].includes(coding.state))
   if (coding?.definition) {
     const find = (id: string) => assessments.find(item => item.criterionId === `coding:${coding.workflowId}:${id}`)!
     const visited = new Set<string>()
@@ -326,7 +340,7 @@ export function assessTaskCompletion(database: SqliteDatabase, runId: string): C
     }
   }
   return { mode: runMode(database, runId), verified: workflowReady&&assessments.length > 0 && assessments.every(item => item.state === 'satisfied'),
-    required: assessments.length, criteria: assessments, ...(coding?{workflowReady,coding:{workflowId:coding.workflowId,state:coding.state,scopeVersion:coding.scopeVersion,
+    required: assessments.length, criteria: assessments, ...(coding?{workflowReady,coding:{workflowId:coding.workflowId,state:coding.state,scopeVersion:coding.scopeVersion,...(coding.protocol?{protocol:{kind:coding.protocol.recipe.kind,phase:coding.protocol.phase,generation:coding.protocol.generation,capabilities:PROTOCOL_CAPABILITIES}}:{}),
       goalCriterionIds:(coding.definition?.goal.criterionIds??[]).map(id=>`coding:${coding.workflowId}:${id}`),itemCriterionIds:(coding.definition?.items??[]).flatMap(item=>item.criterionIds.map(id=>`coding:${coding.workflowId}:${id}`))}}:{}) }
 }
 

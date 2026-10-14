@@ -1,3 +1,4 @@
+import type { TaskLease } from './task-state.js'
 import { KiokukoError } from '../errors.js'
 import { dshTurnBoundarySeq, type DshSessionEventSource } from './session-memory-finalizer.js'
 
@@ -11,6 +12,7 @@ export interface DshNativeSession {
 type DshRunStatus = 'completed' | 'failed' | 'cancelled'
 
 export interface DshRunClose {
+  readonly authority?: TaskLease
   readonly runId: string
   readonly status: DshRunStatus
   readonly sourceEndSeq?: number
@@ -21,10 +23,15 @@ export interface DshRunLifecycleOptions {
 }
 
 export interface DshCloseIntent {
+  readonly authority?: TaskLease
   readonly runId: string
   readonly status: DshRunStatus
   readonly terminalTurn?: number
   readonly sourceEndSeq?: number
+}
+
+function closeKey(input: DshCloseIntent): string {
+  return input.authority ? `${input.runId}\u0000${input.authority.sessionId}\u0000${input.authority.generation}` : input.runId
 }
 
 function sameClose(left: DshCloseIntent, right: DshCloseIntent): boolean {
@@ -63,26 +70,27 @@ export class DshRunLifecycle {
   }
 
   async closeTurn(input: DshCloseIntent): Promise<void> {
-    const sealed = this.#sealedRuns.get(input.runId)
+    const key = closeKey(input)
+    const sealed = this.#sealedRuns.get(key)
     if (sealed !== undefined) {
       if (!sameClose(sealed, input)) throw new KiokukoError('CONFLICT', 'Run close status or log boundary is immutable')
       return
     }
-    const intent = this.#closeIntents.get(input.runId)
+    const intent = this.#closeIntents.get(key)
     if (intent !== undefined && !sameClose(intent, input)) {
       throw new KiokukoError('CONFLICT', 'Run close status or log boundary is immutable')
     }
-    const existing = this.#closeInFlight.get(input.runId)
+    const existing = this.#closeInFlight.get(key)
     if (existing !== undefined) return existing
     const close = intent ?? Object.freeze({ ...input })
-    this.#closeIntents.set(input.runId, close)
+    this.#closeIntents.set(key, close)
     const operation = Promise.resolve(this.#closeRun(close)).then(() => {
-      this.#sealedRuns.set(close.runId, close)
-      this.#closeIntents.delete(close.runId)
+      this.#sealedRuns.set(key, close)
+      this.#closeIntents.delete(key)
     }).finally(() => {
-      if (this.#closeInFlight.get(close.runId) === operation) this.#closeInFlight.delete(close.runId)
+      if (this.#closeInFlight.get(key) === operation) this.#closeInFlight.delete(key)
     })
-    this.#closeInFlight.set(close.runId, operation)
+    this.#closeInFlight.set(key, operation)
     return operation
   }
 

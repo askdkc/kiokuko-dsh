@@ -48,7 +48,8 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
       interpretedPreparation(mock, 'prepare-initial', 'new', mode === 'writing' ? 'change' : 'research', mode)),
     read('read-1'), read('read-2'), read('read-3'), read('read-4'),
     mock.textResponse('別のセッションの回答です。'),
-    ...mock.prepareWork([read('read-resumed')], mode, 'prepare-resume'), mock.textResponse('記録済みの根拠を使い、調査と文章作成を完了しました。'),
+    ...mock.prepareWork([read('read-resumed')], mode, 'prepare-resume',
+      interpretedPreparation(mock, 'prepare-resume', 'same_scope_continuation', mode === 'writing' ? 'change' : 'research', mode)), mock.textResponse('記録済みの根拠を使い、調査と文章作成を完了しました。'),
   ])
   ctx.llm.registerAdapter(['execution-mock'], model)
   let writes = 0; let reads = 0

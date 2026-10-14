@@ -15,6 +15,46 @@ The current runtime target is **DSH 0.2.1-alpha.2**. Older runtime records remai
 
 CI uses the canonical DSH fixture for native history, routing and packed Web lifecycle coverage. Historical source-repair CLI tests use the current catalog's historical codecs for v0/v3 fixtures. Local tests do not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
 
+## Task state and explicit operations
+
+`/kioku-task status` reads the current task from the existing Kiokuko ledger. All
+task categories use `ToDo`, `Working`, `Pending`, `Done`, and `Ignore`; an
+implementation task may additionally have a coding Goal. Research, writing,
+analysis, and conversation do not acquire a coding Goal merely to track state.
+
+```text
+/kioku-task create research Inspect this repository's startup behavior
+/kioku-task start
+/kioku-task wait
+/kioku-task resume
+/kioku-task complete --evidence <host-observed-reference>
+/kioku-task ignore --reason The requested investigation is no longer needed
+```
+
+Operations may name an existing task ID after the operation. `create` takes an
+existing task category and the exact requested work. `ignore` requires a reason.
+`complete` accepts repeated `--evidence` references to successful operations
+observed by the host in the current execution generation.
+Words such as “start”, “done”, or “ignore” inside ordinary messages, quoted text,
+code, or tool output do not perform these operations. The model's structured
+`task_operation` tool uses the same owner, repository, revision, and generation
+checks and retains native tool permissions.
+
+Only `Working` permits managed effects. A stop request stays `Working` with a
+pending-stop marker until the native agent, owned processes, child agents, and
+managed Lisp workers have stopped. `Done` requires current host-observed
+verification evidence. A failure or cancellation retains its actual outcome
+and becomes `Pending`; it is never treated as `Ignore`. Reopening terminal work
+requires an explicit resume and a new generation. Old results cannot complete
+or modify that new generation. Model changes transfer the same task to the
+verified primary continuation; CLI resume rereads its persisted state.
+
+Jev/Laya interpretations are advisory. If they are unavailable or abstain, the
+host records an unresolved decision and accepts a validated main-model
+interpretation or an explicit operation. The original request and authority
+checks remain in force. The CLI displays this SQLite snapshot and committed
+events; ordinary conversation text and native todo items are not state evidence.
+
 ## Model tool exposure
 
 `toolExposure.mode` defaults to `auto`. On verified OpenAI API routes, normal
@@ -49,6 +89,23 @@ Run the following from a DeepSeek Harness checkout:
 pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
+
+For the [dsh-cli](https://github.com/askdkc/dsh-cli) terminal UI, use its `dsh-cli` profile:
+
+```bash
+pnpm dsh plugin --profile dsh-cli add @askdkc/dsh-cli
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh
+pnpm dsh --profile dsh-cli
+```
+
+Skip the first command if the UI bundle is already installed. `web` and `dsh-cli` have separate package and bundle lists; installing Kiokuko into one does not enable it in the other. `add` installs and registers the bundle. Use `update` only after installation:
+
+```bash
+pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh --profile dsh-cli
+```
+
+The remaining examples use `web`; substitute `dsh-cli` for that profile. With a globally installed `dsh`, omit `pnpm`.
 
 For a direct GitHub install, run the following from a DeepSeek Harness checkout:
 
@@ -155,7 +212,7 @@ Use the affected profile in place of `web`. For GitHub or local installs, reinst
 
 The guarded bundle entry prints these next steps for dependency-import failures and Kiokuko activation failures, then preserves the original rejection. It cannot print before DSH resolves that entry or when DSH never activates it because a required service is unavailable; those errors remain DSH-owned. The public library imports are unchanged.
 
-Released v0/v1/v2 history readers are bundled privately into the npm artifact. Their DSH packages are build dependencies only, so installing Kiokuko does not hoist an older DSH LLM over the running host. This preserves the released readers rather than substituting the current host's history format. Other plugins may still install conflicting DSH packages; inspect their dependency paths if the same Typert error persists.
+Released v0/v1/v2/v3 history readers are bundled privately into the npm artifact. Their DSH packages are build dependencies only, so installing Kiokuko does not hoist an older DSH LLM over the running host. This preserves the released readers rather than substituting the current host's history format. Other plugins may still install conflicting DSH packages; inspect their dependency paths if the same Typert error persists.
 
 ## Remove
 
@@ -325,9 +382,9 @@ limit. The package is therefore not represented as a small, auto-approved
 plugin.
 
 The manifest declares MIT licensing, the canonical GitHub repository, Node.js
-`>=24.16.0`, DSH `0.2.1-alpha.2`, and the verified `web` profile. Other DSH
+`>=24.16.0`, DSH `0.2.1-alpha.2`, and the `web` and `dsh-cli` profiles. Other DSH
 releases and `headless` remain unverified until a matching disposable-profile
-run is recorded.
+run is recorded. The legacy `dsh-tui` profile declaration is retained for existing installations.
 
 Runtime effects are explicit:
 
@@ -529,19 +586,38 @@ them for cursor-backed finalization/export and records cache usage. Without a ds
 as `unsupported`; CI sets `KIOKUKO_REQUIRE_DSH_CLI=1` so absence is a failure
 rather than an unverified success.
 
-The current compatibility measurement is:
+The terminal profile has a separate acceptance runner. Supply a built DSH CLI,
+packed UI and Kiokuko tarballs, the installed `node-pty/package.json`, and a
+package manifest from which `@xterm/headless` resolves:
+
+```bash
+npm run test:cli-profile -- /path/to/dsh/bin.js /path/to/dsh-cli.tgz /path/to/kiokuko-dsh.tgz /path/to/node-pty/package.json /path/to/dsh-cli/package.json
+```
+
+It uses a temporary HOME and profile, checks registry `add` and `update --latest`,
+loads the supplied tarballs, and drives a real terminal through normal input,
+Esc cancellation, Lisp evaluation, shutdown, and JSONL resume. SBCL must already
+be installed for Lisp evaluation. It sends the first Kiokuko slash command as
+soon as the terminal accepts input, without waiting for plugin registration,
+and verifies that the command never reaches the model. The model provider is a
+scripted offline fixture: this checks host integration, not real-model behavior. Runtime package
+paths and versions are recorded with the result. Missing prerequisites and
+runtime errors fail the runner rather than count as successful acceptance.
+
+The compatibility coverage is:
 
 | Harness profile | Status |
 |---|---|
-| web | verified by the disposable rc.1 install/start/uninstall run |
+| web | disposable install/start/uninstall runner and native integration tests |
+| dsh-cli | isolated packed-profile install/update and interactive terminal runner |
 | headless | unknown; not declared as supported |
 | sdk | unsupported until a real Loader/SDK host is supplied |
 | acp | unsupported until a real Loader/ACP host is supplied |
 | sdk-minimal | unsupported until a real Loader/SDK host is supplied |
 
-The `web` status is evidence-based only after the disposable rc.1 run. An
-unavailable DeepSeek binary leaves a profile unverified; it is never converted
-into a passing runtime claim.
+Run the corresponding acceptance test against the intended DSH installation.
+An unavailable DeepSeek binary leaves a profile unverified; it is never
+converted into a passing runtime claim.
 
 ## DSH acceptance boundary
 
@@ -549,7 +625,8 @@ DSH acceptance is limited to the DSH surface and the directly relevant
 Kiokuko contracts listed by the DSH verifier set. There is no generic Kiokuko
 HTTP, TCP, or standalone Web product surface in this package. The only Web
 lifecycle checked here is the DeepSeek Harness `web` profile loading and
-unloading this plugin. An unavailable DeepSeek CLI is reported as
+unloading this plugin; terminal coverage uses the separate `dsh-cli` profile.
+An unavailable DeepSeek CLI is reported as
 `unsupported`, never as a successful install or runtime execution.
 
 ## AgenticReplay recording

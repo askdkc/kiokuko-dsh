@@ -25,14 +25,22 @@ Tool exposure defaults to `auto`: task type and current phase determine the Kiok
 
 ## Install and use
 
-Runtime compatibility target: **DSH 0.1.7-rc.2**. Native request paths, legacy session migration, and a packed Web lifecycle pass locally ([verification scope](docs/dsh-plugin.md#compatibility)).
+Runtime compatibility target: **DSH 0.2.1-alpha.2**, with the `web` and `dsh-cli` profiles. See the [verification scope](docs/dsh-plugin.md#compatibility).
 
 Requires Node.js **24.16.0+** and pnpm.
-Run these commands from the DSH source directory to install the published npm package and start:
+From the DSH source directory, install and start the Web profile:
 
 ```bash
 pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh web
+```
+
+Install and start the CLI profile:
+
+```bash
+pnpm dsh plugin --profile dsh-cli add @askdkc/dsh-cli
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh
+pnpm dsh --profile dsh-cli
 ```
 
 If you use a globally installed `dsh` CLI, omit `pnpm` from the commands.
@@ -43,11 +51,18 @@ Recordings keep `capture.content: redacted` by default. To minimize body storage
 
 ## Update
 
-Finish active tasks and stop DSH before updating. Update the npm-installed plugin:
+Stop DSH, then update and restart the Web profile:
 
 ```bash
 pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
+```
+
+Stop DSH, then update and restart the CLI profile:
+
+```bash
+pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh --profile dsh-cli
 ```
 
 To update a release published within the last 24 hours, disable pnpm 11's default
@@ -90,12 +105,13 @@ Install SBCL first:
 - Debian / Ubuntu: `sudo apt install sbcl`
 - Arch Linux: `sudo pacman -S sbcl`
 
-Add this to the `kiokuko-dsh` row in `~/.dsh/profiles/web/cordis.patch.yml`
+Add this to the `kiokuko-dsh` row in the selected profile’s
+`~/.dsh/profiles/<profile>/cordis.patch.yml` (`web` or `dsh-cli`)
 (keep other `config` values), then reload the plugin. Each implementation task
 shows its Goal, items and observable checks before asking whether to use Lisp.
 The choice belongs to that task and scope; a new task asks again.
 You can also enable it with `/kioku-lisp enable`.
-Check the loaded configuration with `dsh --profile web --dump-config`.
+Check it with `dsh --profile <profile> --dump-config`, using the same profile name.
 
 ```yaml
 - id: kiokuko-dsh
@@ -109,9 +125,6 @@ The default development mode does not require Bubblewrap. The explicit protected
 Choose “使う” to use Lisp, “使わない” to use ordinary tools, or “取消・作業を保持” to cancel while preserving prepared work. Closing the question leaves implementation pending. Lisp choice and normal/Enno selection are separate. A failed Lisp startup remains a recoverable blocker until the selected route works or you explicitly change it.
 Ordinary edits and tests run without further confirmation after that choice. Source/data deletion and existing durable user database mutation require a concrete review. Lisp and ordinary tools coexist. Completion requires current item evidence and a fresh final check through the user’s entry point. See [Goal-driven coding](docs/coding-workflow.md) and [owned execution, receipts and memory reuse](docs/owned-execution.md).
 See [setup, APIs, limits and recovery](docs/lisp.md).
-Persistent Lisp can optionally inspect parser-backed disk snapshots and read-only
-LSP results through `kioku.code`. The provider must advertise V1; published
-`dsh-lsp-server` v0.1.12 does not. See the [local provider prerequisite](patches/code-intelligence/README.md) and [API and budgets](docs/lisp.md#read-only-code-intelligence).
 
 ## Typed decisions (Jev / Laya / Nimble)
 
@@ -185,4 +198,14 @@ ObservationPack (`observationPack: { mode: auto }`) preserves large successful n
 
 Laya compaction separately defaults to `typedDecisions.laya-coreml.compaction.mode: off`. Explicit `shadow` evaluates without changing history; `auto` remains `experimental_not_qualified`. This switch preserves ObservationPack and native summaries. Akinator uses only the verified debug/research/writing range, and optional Skill selection uses up to four complete candidates with at most one model-selected addition. See [Laya settings and evaluation](docs/semantic-compaction.md#local-laya).
 
-For the optional V1 code provider, see [installation and verified platform status](docs/code-intelligence.md).
+## Optional code intelligence
+
+`kioku.code` uses `@askdkc/dsh-lsp-server` to read code structure and LSP results from Lisp.
+Install or update it in the same profile as `kiokuko-dsh`. For CLI, replace `web` with `dsh-cli`.
+
+```sh
+pnpm dsh plugin --profile web add @askdkc/dsh-lsp-server@latest
+pnpm dsh plugin --profile web update @askdkc/dsh-lsp-server --latest
+```
+
+See [setup, supported languages and limits](docs/code-intelligence.md).

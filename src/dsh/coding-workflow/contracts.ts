@@ -1,3 +1,4 @@
+import type { ProtocolState } from '../guardrail/contracts.js'
 import * as z from 'zod/v4'
 
 const text = z.string().trim().min(1).max(4096)
@@ -87,6 +88,7 @@ export interface CodingWorkflow extends CodingIdentity {
   choice: CodingChoice; retiredIds: string[]; activeItemId?: string; blocker?: CodingBlocker;
   attempts: Record<string, { fingerprint: string; count: number; retryAt: number; sourceDigest?: string }>;
   ennoProjectionDigest?: string;
+  protocol?: ProtocolState;
   pendingScopeChange?: { requestDigest: string; evidenceRefs: string[] }
 }
 export const CODING_WORKFLOW_SERVICE = 'kiokukoCodingWorkflow'

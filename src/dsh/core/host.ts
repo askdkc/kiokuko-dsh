@@ -1,3 +1,5 @@
+import { NativeTaskAuthority } from '../native-task-authority.js'
+import { readOwnedIdentity } from '../owned-read-owner.js'
 import { MemoryRequestFence, MemorySnapshotStale } from '../memory-request-fence.js'
 import { retainedEvents } from '../context-projection.js'
 import { readAkinatorSession, readRunIntakeLink } from '../../akinator/store.js'
@@ -7,6 +9,9 @@ import { DshAnswerContext } from '../answer-context.js'
 import { IntakeModeConfig } from '../intake-mode.js'
 import { isNativeSubagent } from '../native-subagent.js'
 import { OnDemandIntake, type DemandInput, type IntakeMode } from '../on-demand-intake.js'
+import { DshTaskWorkflow, TASK_STATE_EVENT, TASK_WORKFLOW_SERVICE } from '../task-state-host.js'
+import { mountTaskWorkflowSurface } from '../task-state-surface.js'
+import { findSessionTask, recordTaskUnresolved, readTaskSnapshot, clearTaskUnresolved, authorizeTaskLease, captureTaskLease, taskCanExecute } from '../task-state.js'
 import { readExecutionOwner } from '../orchestration/execution-owner.js'
 import { KiokukoError } from '../../errors.js'
 import { ObservationPackConfig } from '../observation-pack/policy.js'
@@ -27,7 +32,8 @@ import { nativeModelCatalog } from '../native-model-catalog.js'
 import { installDshModelRouting } from '../model-routing.js'
 import type { DshModelCatalog, ModelBinding } from '../model-configuration.js'
 import { attachmentTypesFromMessages, nativeContextTokens, projectModelBinding } from '../model-auto/policy.js'
-import { LISP_CODING_SERVICE } from '../lisp-service-key.js'
+import { LISP_CODING_SERVICE, LISP_ASSEMBLY_SERVICE } from '../lisp-service-key.js'
+import type { LispAssemblyService } from '../lisp/request-surface.js'
 import { SemanticCompactionConfig } from '../semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../../memory/reuse.js'
 import { MemoryRetrievalConfig } from '../../memory/retrieval-contracts.js'
@@ -68,7 +74,7 @@ import { resolveProjectWorkspaceReadOnly } from '../../memory/workspaces.js'
 import { readExecutionFrame } from '../execution-frame.js'
 import { findSecret } from '../../memory/secrets.js'
 import { classifyRequestIntent, createRequestIntentContext, rebindRequestIntentDecision, requestIntentMessageRefs,
-  requestIntentReferenceIds, requestIntentTaskType, type RequestIntentContext, type RequestIntentDecision } from '../decisions/request-intent.js'
+  requestIntentReferenceIds, requestIntentTaskType, requestIntentIsUnresolved, type RequestIntentContext, type RequestIntentDecision } from '../decisions/request-intent.js'
 import { assertMemoryOwner, createMemoryOwner } from '../memory-owner.js'
 import { executionClarification } from '../intake-clarification.js'
 
@@ -129,7 +135,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   const disposers: (() => void|Promise<void>)[] = [], beforeTask = new Set<(input: CoreTaskInput) => Promise<Partial<TaskProfile> | void>>()
   const disposalWork:Promise<void>[]=[]
   const active = new Map<string, { agent: NativeAgent; turn: number; task: CoreTask; taskText: string; attachmentTypes: readonly string[];
-    failed: boolean; checkpointed: boolean; contextDelivered: boolean; memoryRebuildAttempts: number; finishing?: Promise<void> }>()
+    failed: boolean; checkpointed: boolean; invalidated?: boolean; contextDelivered: boolean; memoryRebuildAttempts: number; finishing?: Promise<void> }>()
   const preparingTasks = new Map<string, Promise<CoreTask>>()
   const pending = new Set<Promise<unknown>>()
   const stopErrors: unknown[] = []
@@ -171,9 +177,10 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     const current = active.get(session.id)
     const facts = await runtime.withDatabase(async db => {
       const project = await resolveProjectWorkspaceReadOnly(db, root, { allowDirectory: true })
-      if (!project) return { activeGoal: undefined, proposals: [] as NonNullable<RequestIntentContext['proposals']> }
-      let runId = current?.agent === input.agent && current.task.admitted && !current.failed && !current.checkpointed
-        && current.task.workspace === project.workspace ? current.task.runId : undefined
+      if (!project) return { activeGoal: undefined, activeTask: undefined, proposals: [] as NonNullable<RequestIntentContext['proposals']> }
+      const activeTask = findSessionTask(db, { sessionId: session.id, repositoryRoot: project.repositoryRoot }, { includeLatestTerminal: true })
+      let runId = activeTask?.runId ?? (current?.agent === input.agent && current.task.admitted && !current.failed && !current.checkpointed
+        && current.task.workspace === project.workspace ? current.task.runId : undefined)
       if (!runId) {
         const owner = readExecutionOwner(db, session.id)
         const run = owner?.run_id ? new LedgerStore(db).readRun(owner.run_id) : undefined
@@ -181,7 +188,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           runId = run.runId
         }
       }
-      if (!runId) return { activeGoal: undefined, proposals: [] as NonNullable<RequestIntentContext['proposals']> }
+      if (!runId) return { activeGoal: undefined, activeTask, proposals: [] as NonNullable<RequestIntentContext['proposals']> }
       const workflow = readCodingWorkflow(db, runId)
       const definition = workflow && !['completed', 'cancelled', 'superseded'].includes(workflow.state) ? workflow.definition : undefined
       const activeGoal: RequestIntentContext['activeGoal'] = workflow && !['completed', 'cancelled', 'superseded'].includes(workflow.state) ? {
@@ -198,7 +205,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         .map(condition => ({ id: `condition-${canonicalContentHash([runId, frame!.revision, condition.field, condition.text, condition.planRevision])}`,
           revision: condition.planRevision ?? frame!.revision, digest: canonicalContentHash(condition),
           text: `${condition.field}: ${condition.text}`, field: condition.field }))
-      return { activeGoal, proposals }
+      return { activeGoal, activeTask, proposals }
     })
     const precedingAssistant = [...(session.snapshotEvents?.() ?? [])].reverse().find(event => event.type === 'assistant/message'
       && (coreEventTurn(event) ?? Number.MAX_SAFE_INTEGER) < input.turn)
@@ -217,12 +224,29 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           digest: canonicalContentHash(text), text }]
       }
     }
-    return createRequestIntentContext({ task, messageRefs, ...(facts.activeGoal ? { activeGoal: facts.activeGoal } : {}), proposals: proposals.slice(0, 8) })
+    return createRequestIntentContext({ task, messageRefs, ...(facts.activeGoal ? { activeGoal: facts.activeGoal } : {}), ...(facts.activeTask ? { activeTask: facts.activeTask } : {}), proposals: proposals.slice(0, 8) })
+  }
+  const persistRequestIntent = async (requestId: string, context: RequestIntentContext, decision: RequestIntentDecision | undefined) => {
+    if (!context.activeTask) return
+    const identity = context.activeTask, contextDigest = canonicalContentHash(context)
+    const snapshot = await runtime.withDatabase(db => {
+      if (requestIntentIsUnresolved(decision)) return recordTaskUnresolved(db, identity, {
+        operationId: `intent:${canonicalContentHash([requestId, contextDigest, decision?.unresolvedReason ?? 'request_intent_unresolved'])}`,
+        expectedRevision: identity.revision, requestId, contextDigest,
+        reason: decision?.unresolvedReason ?? 'request_intent_unresolved', evidence: requestIntentReferenceIds(context),
+      })
+      const current = readTaskSnapshot(db, identity)
+      return current.unresolved?.requestId === requestId && current.unresolved.contextDigest === contextDigest
+        ? clearTaskUnresolved(db, identity, { requestId, contextDigest, expectedRevision: identity.revision }) : undefined
+    })
+    if (snapshot) (ctx as any).emit(TASK_STATE_EVENT, snapshot)
   }
   const interpretRequestIntent = async (input: DemandInput, task: string) => {
     const context = await requestIntentContextFor(input, task)
     if (!context) return undefined
-    const decision = await classifyRequestIntent(decisions, dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), context, input.signal)
+    const requestId = dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn })
+    const decision = await classifyRequestIntent(decisions, requestId, context, input.signal)
+    await persistRequestIntent(requestId, context, decision)
     return decision ? { context, decision } : undefined
   }
   const demand = new OnDemandIntake({
@@ -232,6 +256,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     nativeChild: agent => agents?.get(agent.id) === agent && sessions?.get(agent.session?.id) === agent.session && isNativeSubagent(agent as any),
     validate: async input => {
       bind(input.agent as NativeAgent)
+      await discardStaleActive(input.agent as NativeAgent)
       await runtime.withDatabase(db => {
         for (const id of legacyModuleRequirements(db, input.agent.session!.id)) {
           if (!modules.ids().includes(id)) throw new Error(`Required module unavailable for persisted session: ${id}`)
@@ -267,26 +292,24 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       if (reason === 'completed' && (requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown')) return
       const retainsGoal = (requestIntent?.relation === 'same_scope_continuation' || requestIntent?.relation === 'scope_change')
         && requestIntent.action !== 'answer'
-        && requestIntent.evidence.runId === current.task.runId
+        && (requestIntent.evidence.runId === current.task.runId || requestIntent.evidence.taskId === current.task.runId)
       if (retainsGoal) return
       await finishSession(sessionId)
       if (active.get(sessionId) === current) throw new Error('Previous task has not reached its confirmed native boundary')
     },
     existing: async (input, requestIntent) => {
       const sessionId = input.agent.session!.id
-      const sameScope = requestIntent?.relation === 'same_scope_continuation'
-        && requestIntent.action !== 'answer' && requestIntent.action !== 'unknown'
-      if (!sameScope) return false
+      if (requestIntent?.relation !== 'same_scope_continuation' || ['answer', 'unknown'].includes(requestIntent.action)) return false
       return runtime.withDatabase(async db => {
         const project = await resolveProjectWorkspaceReadOnly(db, root, { allowDirectory: true })
         if (!project) return false
+        const task = findSessionTask(db, { sessionId, repositoryRoot: project.repositoryRoot })
+        if (!task || !taskCanExecute(task) || requestIntent.evidence.taskId !== task.taskId
+          || requestIntent.evidence.taskRevision !== task.revision || requestIntent.evidence.taskGeneration !== task.generation) return false
         const owner = readExecutionOwner(db, sessionId)
-        if (!owner?.run_id || owner.mode !== 'normal' || owner.workspace !== project.workspace) return false
-        const run = new LedgerStore(db).readRun(owner.run_id)
-        if (!run || run.status !== 'active' || run.dshSessionId !== sessionId) return false
-        if (requestIntent?.evidence.runId !== owner.run_id) return false
-        const workflow = readCodingWorkflow(db, owner.run_id)
-        return !!workflow && !['completed', 'cancelled', 'superseded'].includes(workflow.state)
+        if (owner && (owner.run_id !== task.runId || owner.mode !== 'normal' || owner.workspace !== project.workspace)) return false
+        captureTaskLease(db, task)
+        return true
       })
     },
     classify: (input, task) => classifyTaskForIntake(decisions, dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, undefined, input.signal),
@@ -299,12 +322,23 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       if (agents?.get(agent.id) !== agent || sessions?.get(agent.session?.id) !== agent.session) return false
       const current = active.get(agent.session?.id ?? '')
       return !!current && current.agent === agent && current.agent.session === agent.session && (turn === undefined || current.turn === turn)
-        && current.task.admitted && !current.failed && !current.checkpointed && !stopped
+        && current.task.admitted && !current.failed && !current.checkpointed && !current.invalidated && !stopped
     },
   }, { onlyWhenDeferred: config.intakeMode === 'eager' })
+  const taskWorkflow = new DshTaskWorkflow({ runtime, demand, agents, sessions, skills, tools,
+    lisp: () => get(LISP_ASSEMBLY_SERVICE) as LispAssemblyService | undefined,
+    checkpointSource: async agent => { bind(agent as NativeAgent); await sessions.flush(agent.session); bind(agent as NativeAgent) },
+    onCompleted: task => lifecycleMemory?.completed(task.taskId, 'completed', task.sessionId, task),
+    emit: task => { (ctx as any).emit(TASK_STATE_EVENT, task) } })
   const conversationSessions = new WeakSet<object>()
   function bind(agent: NativeAgent): void {
     if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session || realpathSync(agent.session.header.cwd) !== root) throw new Error('Native task identity mismatch')
+  }
+  async function discardStaleActive(agent: NativeAgent): Promise<void> {
+    const current = active.get(agent.session.id)
+    if (!current || current.agent !== agent || !current.task.authority) return
+    try { await runtime.withDatabase(db => authorizeTaskLease(db, current.task.authority!)) }
+    catch { current.invalidated = true; if (active.get(agent.session.id) === current) active.delete(agent.session.id) }
   }
   function track<T>(promise: Promise<T>): Promise<T> {
     pending.add(promise)
@@ -316,6 +350,8 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     if (!current) return
     if (current.finishing) return current.finishing
     bind(current.agent)
+    await discardStaleActive(current.agent)
+    if (active.get(sessionId) !== current) return
     const boundary = [...current.agent.session.snapshotEvents()].reverse().find(event => event.type === 'turn/end' && event.data?.turn === current.turn)
     const reason = boundary?.data?.reason?.kind
     if (!['completed', 'error', 'aborted', 'max-tokens', 'blocked'].includes(reason)) return
@@ -373,6 +409,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   async function prepareCoreTask(payload: PreStep, signal: AbortSignal, advisoryType?: TaskProfile['taskType'],
     suppliedIntent?: RequestIntentDecision, suppliedContext?: RequestIntentContext): Promise<CoreTask> {
     const key = `${payload.agent.session.id}\u0000${payload.turn}`
+    await discardStaleActive(payload.agent)
     const existing = active.get(payload.agent.session.id)
       const newText = humanTask(payload.messages)
     const steering=existing?.turn===payload.turn && newText.length>0 && newText!==existing.taskText
@@ -396,16 +433,17 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     } else if (!exactPreparedRequest && requestIntentContext) {
       requestIntent = await classifyRequestIntent(decisions, requestId, requestIntentContext, signal)
     }
+    if (requestIntentContext) await persistRequestIntent(requestId, requestIntentContext, requestIntent)
     const intentUnresolved = requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown'
     const legacyTaskTypeAllowed = advisoryType !== undefined && advisoryType !== 'chat'
-      && !requestIntentContext?.activeGoal && (requestIntentContext?.proposals.length ?? 0) === 0
+      && !requestIntentContext?.activeGoal && !requestIntentContext?.activeTask && (requestIntentContext?.proposals.length ?? 0) === 0
     if ((intentUnresolved && !legacyTaskTypeAllowed) || requestIntent?.action === 'answer') {
       throw new KiokukoError('CONFLICT', 'request_intent_unresolved')
     }
     const clarification = executionClarification(requestTask, requestIntent, requestIntentContext)
     if (clarification) throw new KiokukoError('VALIDATION_ERROR', clarification)
     if (intentUnresolved && legacyTaskTypeAllowed) requestIntent = undefined
-    if (requestIntentContext?.activeGoal && requestIntent === undefined) {
+    if ((requestIntentContext?.activeGoal || requestIntentContext?.activeTask) && requestIntent === undefined) {
       throw new KiokukoError('CONFLICT', 'request_intent_required_for_active_goal')
     }
     const resumesScope = requestIntent && (requestIntent.relation === 'same_scope_continuation' || requestIntent.relation === 'scope_change')
@@ -469,7 +507,18 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       if (!snapshot.complete) throw new Error('Native capability inventory is incomplete')
       const schemas = stableLispCapabilities(await tools.schemas(payload.agent), payload.agent)
       request = { ...request, capabilities: [...snapshot.skills.filter((skill: any) => skill.invocation?.modelInvocable !== false).map((skill: any) => ({ kind: 'skill' as const, name: skill.name, ...(skill.description ? { description: skill.description } : {}) })),
-        ...schemas.map((tool: any) => ({ kind: 'tool' as const, name: tool.name, ...(tool.description ? { description: tool.description } : {}) }))] }
+        ...schemas.map((tool: any) => ({ kind: 'tool' as const, name: tool.name, ...(tool.description ? { description: tool.description } : {}) }))],
+        validateCapabilities: async () => {
+          signal.throwIfAborted(); bind(payload.agent)
+          const latest = await skills.snapshot({ scope: payload.agent, cwd: root, signal })
+          if (!latest.complete) throw new Error('Native capability inventory is incomplete')
+          const latestSchemas = stableLispCapabilities(await tools.schemas(payload.agent), payload.agent)
+          const capabilities = [...latest.skills.filter((skill: any) => skill.invocation?.modelInvocable !== false)
+            .map((skill: any) => ({ kind: 'skill' as const, name: skill.name, ...(skill.description ? { description: skill.description } : {}) })),
+            ...latestSchemas.map((tool: any) => ({ kind: 'tool' as const, name: tool.name, ...(tool.description ? { description: tool.description } : {}) }))]
+          signal.throwIfAborted(); bind(payload.agent)
+          if (capabilityCatalogDigest(capabilities) !== capabilityCatalogDigest(request.capabilities)) throw new Error('Native capabilities changed during intake')
+        } }
       const resuming = !!resumesScope
       let task = resuming ? await tasks.resume(request) : await tasks.prepare(request)
       if (resuming && requestIntent?.relation === 'same_scope_continuation' && task.memoryOwner?.kind === 'execution') {
@@ -496,6 +545,10 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       active.set(task.sessionId, { agent: payload.agent, turn: payload.turn, task, taskText: request.task,
         attachmentTypes: attachmentTypesFromMessages(payload.messages), failed: false, checkpointed: false, contextDelivered: false, memoryRebuildAttempts: 0 })
       if (!task.admitted) return task
+      const authority = task.authority
+      if (!authority) throw new Error('Admitted core task has no repository authority')
+      const taskSnapshot = await runtime.withDatabase(db => authorizeTaskLease(db, authority))
+      ;(ctx as any).emit(TASK_STATE_EVENT, taskSnapshot)
       if (task.profile.taskType === 'chat') conversationSessions.add(payload.agent.session)
       else conversationSessions.delete(payload.agent.session)
       const owner = active.get(task.sessionId)!
@@ -503,7 +556,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       answerReview.bind({ runId: task.runId, workspace: task.workspace, requestId: task.requestId, task: text, catalogDigest: capabilityCatalogDigest(task.capabilities),
         turn: payload.turn, agent: reviewAgent,
         current: () => active.get(task.sessionId) === owner && agents?.get(payload.agent.id) === payload.agent && sessions?.get(task.sessionId) === payload.agent.session,
-        eligible: () => !stopped && owner.task.admitted && !owner.failed && !owner.checkpointed && !reviewAgent.session.header?.parentSession && reviewAgent.session.header?.origin !== 'subagent' && !reviewAgent.session.header?.delegationDepth,
+        eligible: () => !stopped && owner.task.admitted && !owner.failed && !owner.checkpointed && !isNativeSubagent(reviewAgent),
         settled: async () => { if (active.get(task.sessionId) === owner) await finishSession(task.sessionId) },
       })
       return task
@@ -549,6 +602,12 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   try {
     if (!skills?.registerProvider || !skills.snapshot || !tools?.schemas || !tools.guard || !tools.register || !sessions?.get || !sessions.flush || !agents?.get || !systemPrompt?.section) throw new Error('Core requires native Skill, prompt, tool, session and agent services')
     await runtime.start()
+    disposers.push(mountTaskWorkflowSurface(ctx, taskWorkflow, demand))
+    disposers.push((ctx.on as any)(TASK_STATE_EVENT, (snapshot: any) => {
+      const current = active.get(snapshot.sessionId)
+      if (current?.task.authority && current.task.runId === snapshot.taskId
+        && (current.task.authority.revision !== snapshot.revision || current.task.authority.generation !== snapshot.generation)) current.invalidated = true
+    }))
     lifecycleMemory = new DshLifecycleMemory(ctx as any, runtime, root)
     await decisions.initialize()
     const provider = configuredSkillProvider(modules.resources(), prompts)
@@ -565,12 +624,27 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     await modules.mount({ intakeMode: config.intakeMode, context: ctx, repositoryRoot: root, runtime, prompts, decisions, semanticCompaction, answerReviewConfig: config.answerReview, memoryIndexReasoningConfig: config.memoryIndexReasoning, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
       beforeTask(handler) { beforeTask.add(handler); return () => { beforeTask.delete(handler) } } })
     if (!claimed) {
-      const resolveOwned = (execution:any) => {
+      const resolveParentOwned = (execution:any) => {
         if(!execution.agent)return undefined
         bind(execution.agent)
         const current=active.get(execution.agent.session.id)
-        return current&&current.agent===execution.agent&&current.task.admitted&&!current.failed&&!current.checkpointed
-          ? {...current.task,repositoryRoot:root,generation:canonicalContentHash({run:current.task.runId,task:current.taskText}),agent:execution.agent}:undefined
+        return current&&current.agent===execution.agent&&current.task.admitted&&current.task.authority&&!current.failed&&!current.checkpointed
+          ? {...current.task,repositoryRoot:current.task.authority.repositoryRoot,generation:canonicalContentHash({run:current.task.runId,task:current.taskText}),agent:execution.agent}:undefined
+      }
+      const nativeTaskAuthority = new NativeTaskAuthority({runtime,repositoryRoot:root,backend:get('subagents'),agents,sessions,resolveParent:resolveParentOwned})
+      disposers.push(() => nativeTaskAuthority.dispose())
+      const resolveOwned = (execution:any) => nativeTaskAuthority.resolve(execution) ?? resolveParentOwned(execution)
+      const resolveOwnedRead = async (execution:any) => {
+        if (!execution.agent) return undefined
+        bind(execution.agent)
+        if (isNativeSubagent(execution.agent)) return nativeTaskAuthority.read(execution)
+        const current=resolveParentOwned(execution)
+        if(execution.name==='kioku_read'&&current)return current
+        return await runtime.withDatabase(async db => {
+          const project = await resolveProjectWorkspaceReadOnly(db, root, { allowDirectory: true })
+          return project ? readOwnedIdentity(db,execution.agent,project.repositoryRoot,execution.name==='kioku_result'?execution.arguments?.operationId:undefined) : undefined
+        })
+          ?? resolveParentOwned(execution)
       }
       disposers.push(mountTaskCompletion({tools,on:ctx.on.bind(ctx) as any},{runtime,resolve:resolveOwned,approve:async()=>true}))
       disposers.push(mountCodingWorkflow({tools,on:ctx.on.bind(ctx) as any},{runtime,
@@ -616,7 +690,8 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           return memory
         },
       }))
-      disposers.push(mountOwnedExecution({tools,on:ctx.on.bind(ctx) as any},{runtime,resolve:resolveOwned,
+      disposers.push(mountOwnedExecution({tools,on:ctx.on.bind(ctx) as any},{runtime,resolve:resolveOwned,resolveRead:resolveOwnedRead,
+        isTaskControl: execution => (get(TASK_WORKFLOW_SERVICE) as DshTaskWorkflow | undefined)?.isControl(execution) === true,
         planActive:agent=>get('planMode')?.get(agent)?.active===true,
         async confirm(identity,detail,signal){
           if(!questions)return false
@@ -658,7 +733,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           }
           if (mode === 'off') return undefined
           if (!owner || owner.agent !== agent || !owner.task.admitted || owner.failed || owner.checkpointed
-            || agent.session.header.parentSession || agent.session.header.origin === 'subagent' || agent.session.header.delegationDepth)
+            || isNativeSubagent(agent))
             return { kind: 'native' }
           if ((get(LISP_CODING_SERVICE) as { enabled(agent: unknown): boolean } | undefined)?.enabled(agent)) return { kind: 'native' }
           const pendingManual = manualChanges.get(agent.session.id)

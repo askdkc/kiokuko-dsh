@@ -1,3 +1,4 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -116,12 +117,11 @@ test('real DSH registry: session tools, nested/child/late-tool denial, unload fe
   const base = await realpath(await mkdtemp(join(tmpdir(), 'ls-'))), workspace = join(base, 'work')
   await mkdir(workspace)
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
   const ctx = new cordis.Context(), fibers: any[] = [], scopes: any[] = [], commands = new Map<string, any>()
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined, effects = 0, failRegistration = false
   const parent: any = { id: 'parent', session: { id: 'parent', header: { cwd: workspace } } }
+  workingLispTask(db, { sessionId: parent.session.id, agentId: parent.id, root: workspace })
   const child: any = { id: 'child', session: { id: 'child', header: { cwd: workspace, parentSession: 'parent' } } }
   const outsider: any = { id: 'outsider', session: { id: 'outsider', header: { cwd: workspace } } }
   const agentMap = new Map([parent, child, outsider].map(agent => [agent.id, agent]))

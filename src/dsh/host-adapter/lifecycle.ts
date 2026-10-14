@@ -1,3 +1,5 @@
+import type { SqliteDatabase } from '../../db/adapter.js'
+import { readTaskSnapshot, type TaskLease } from '../task-state.js'
 import type { DshCoreRuntime } from '../core-runtime.js'
 import type { NativeAgent, NativeSessions } from './native-events.js'
 import type { TurnRecord } from './turn-state.js'
@@ -52,6 +54,16 @@ interface LifecycleDependencies {
   readonly onRunClosed?: (runId: string, status: string, sessionId: string) => void
 }
 
+function currentCloseAuthority(database: SqliteDatabase, runId: string, authority?: TaskLease): boolean {
+  if (!authority) return database.prepare('SELECT task_managed FROM ledger_runs WHERE run_id=?').get<{ task_managed: number }>(runId)?.task_managed !== 1
+  if (authority.taskId !== runId) return false
+  try {
+    const current = readTaskSnapshot(database, authority)
+    return current.revision === authority.revision && current.generation === authority.generation && !current.pendingStop
+  } catch { return false }
+}
+function closeAuthority(item: TurnRecord): { authority?: TaskLease } { return item.authority ? { authority: item.authority } : {} }
+
 export function createLifecycle(deps: LifecycleDependencies) {
   const { runtime, sessions, sessionMirror, memoryFinalizer, autoReview, answerReview, ennoController,
     ennoMemory, executionSupport, gate, turnState, currentSession, currentForAgentEvent,
@@ -59,6 +71,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
     sessionEventSource } = deps
   const getSelection = deps.getSelection
   const completionReady = async (item: TurnRecord): Promise<boolean> => runtime.withDatabase(database => {
+    if (!currentCloseAuthority(database, item.runId, item.authority)) return false
     try {
       synchronizeCodingWorkflow(database,item.runId)
       const assessment = saveTaskCompletionReceipt(database, item.runId)
@@ -85,9 +98,9 @@ export function createLifecycle(deps: LifecycleDependencies) {
     if (selection && (selection.status !== 'ready' && item.prepared.intake.profile.taskType !== 'chat' || item.failed && selection.mode === 'normal')) return undefined
     const state = await runtime.withDatabase((database) => stateForRun(database, item))
     const coding = await runtime.withDatabase(db=>readCodingWorkflow(db,item.runId))
-    if(coding?.state==='cancelled'||coding?.state==='superseded')return {runId:item.runId,status:'cancelled',terminalTurn:item.turn}
-    if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
-    if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
+    if(coding?.state==='cancelled'||coding?.state==='superseded')return {...closeAuthority(item),runId:item.runId,status:'cancelled',terminalTurn:item.turn}
+    if (state.status === 'cancelled') return { ...closeAuthority(item), runId: item.runId, status: 'cancelled' }
+    if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { ...closeAuthority(item), runId: item.runId, status: 'failed', terminalTurn: item.turn }
     // A chat run spans the quiet time between user messages. Enno's
     // inapplicable `complete` means that no orchestration is required for this
     // turn; it does not mean that the persistent conversation has ended.
@@ -96,7 +109,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
       if (!await completionReady(item)) return undefined
       // A provider failure while wording the final response cannot undo
       // already verified completion. The durable host report covers it.
-      return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
+      return { ...closeAuthority(item), runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
     // Idle means the driver has no active work, not that Enno reached a
     // terminal state. Keep only genuinely resumable active states open.
@@ -120,30 +133,29 @@ export function createLifecycle(deps: LifecycleDependencies) {
     if (state.status === 'completed') {
       if (!await completionReady(item)) return undefined
       await deliverCompletionReport(nativeSession)
-      return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
+      return { ...closeAuthority(item), runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
-    if (item.failed) return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
-    if (state.status === 'cancelled') return { runId: item.runId, status: 'cancelled' }
-    if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { runId: item.runId, status: 'failed', terminalTurn: item.turn }
+    if (item.failed) return { ...closeAuthority(item), runId: item.runId, status: 'failed', terminalTurn: item.turn }
+    if (state.status === 'cancelled') return { ...closeAuthority(item), runId: item.runId, status: 'cancelled' }
+    if (state.status === 'blocked' || state.nextAction === 'report_blocker') return { ...closeAuthority(item), runId: item.runId, status: 'failed', terminalTurn: item.turn }
     if (item.prepared.intake.profile.taskType === 'chat' || state.nextAction === 'complete') {
       if (item.prepared.intake.profile.taskType !== 'chat' && !await completionReady(item)) return undefined
-      return { runId: item.runId, status: 'completed', terminalTurn: item.turn }
+      return { ...closeAuthority(item), runId: item.runId, status: 'completed', terminalTurn: item.turn }
     }
-    return { runId: item.runId, status: 'cancelled' }
+    return { ...closeAuthority(item), runId: item.runId, status: 'cancelled' }
   }
   const closeRun = async (input: DshRunClose): Promise<void> => {
-    if (input.status === 'cancelled') await runtime.withDatabase(db => stopCodingWorkflow(db, input.runId, 'cancelled'))
-    const completionBlocked = await runtime.withDatabase(db => {
-      try { return taskCompletionBlocksClose(saveTaskCompletionReceipt(db, input.runId)) }
-      catch { return db.prepare('SELECT mode FROM dsh_completion_runs WHERE run_id = ?').get<{ mode: string }>(input.runId)?.mode === 'enforce' }
-    })
-    if (input.status === 'completed' && completionBlocked) {
-      throw new KiokukoError('CONFLICT', 'Required task completion evidence is unresolved')
-    }
-    if (input.status === 'completed' && !await runtime.withDatabase(db => memoryApplicationStatus(db, input.runId).ready)) input = { ...input, status: 'failed' }
     let scheduled = false
     let scheduledSessionId: string | undefined
-    await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+    let committedAuthority: TaskLease | undefined
+    const committed = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+      if (!currentCloseAuthority(database, input.runId, input.authority)) return false
+      if (input.status === 'cancelled') stopCodingWorkflow(database, input.runId, 'cancelled')
+      let completionBlocked: boolean
+      try { completionBlocked = taskCompletionBlocksClose(saveTaskCompletionReceipt(database, input.runId)) }
+      catch { completionBlocked = database.prepare('SELECT mode FROM dsh_completion_runs WHERE run_id=?').get<{mode:string}>(input.runId)?.mode === 'enforce' }
+      if (input.status === 'completed' && completionBlocked) throw new KiokukoError('CONFLICT', 'Required task completion evidence is unresolved')
+      if (input.status === 'completed' && !memoryApplicationStatus(database, input.runId).ready) input = { ...input, status: 'failed' }
       const store = new LedgerStore(database)
       const before = store.readRun(input.runId)
       if (before === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Run close target does not exist')
@@ -152,10 +164,11 @@ export function createLifecycle(deps: LifecycleDependencies) {
       } else if (before.status !== input.status) {
         throw new KiokukoError('CONFLICT', 'Run close status is immutable')
       }
+      const sourceSessionId = input.authority?.sessionId ?? before.dshSessionId
       const failedExtractable = input.status === 'failed' && evolutionConfig.mode !== 'off' && input.sourceEndSeq !== undefined &&
-        database.prepare('SELECT 1 FROM dsh_run_log_boundaries WHERE run_id=? AND workspace=? AND dsh_session_id=?').get(before.runId, before.workspace, before.dshSessionId) !== undefined
-      if (input.status === 'failed' && !failedExtractable) database.prepare('INSERT OR IGNORE INTO memory_evolution_skips(run_id,workspace,reason) VALUES(?,?,?)')
-        .run(before.runId, before.workspace, evolutionConfig.mode === 'off' ? 'disabled' : 'missing_log_boundary')
+        database.prepare('SELECT 1 FROM dsh_run_log_boundaries WHERE run_id=? AND workspace=? AND dsh_session_id=?').get(before.runId, before.workspace, sourceSessionId) !== undefined
+      if (input.status === 'failed' && !failedExtractable) database.prepare('INSERT OR IGNORE INTO memory_evolution_skips(run_id,workspace,reason,source_epoch) VALUES(?,?,?,(SELECT COALESCE(MAX(source_epoch),0)+1 FROM dsh_task_source_history WHERE run_id=?))')
+        .run(before.runId, before.workspace, evolutionConfig.mode === 'off' ? 'disabled' : 'missing_log_boundary', before.runId)
       if (input.status === 'completed' || failedExtractable) {
         if (input.sourceEndSeq === undefined) {
           throw new KiokukoError('INTEGRITY_ERROR', 'Completed DSH run has no checkpointed log end')
@@ -163,19 +176,43 @@ export function createLifecycle(deps: LifecycleDependencies) {
         memoryFinalizer.scheduleInTransaction(database, {
           runId: before.runId,
           workspace: before.workspace,
-          dshSessionId: before.dshSessionId,
+          dshSessionId: sourceSessionId,
           sourceEndSeq: input.sourceEndSeq,
         })
         scheduled = true
-        scheduledSessionId = before.dshSessionId
+        scheduledSessionId = sourceSessionId
       }
       handoffReview(database,input.runId,input.status)
+      if (input.authority) {
+        const closed = readTaskSnapshot(database, input.authority)
+        committedAuthority = { ...input.authority, revision: closed.revision, generation: closed.generation }
+      }
+      return true
     }))
-    autoReview.worker.abort(input.runId)
-    const committedSessionId = turnState.allTurns().find(item => item.runId === input.runId)?.sessionId
-    if (committedSessionId) {
-      try { deps.onRunClosed?.(input.runId, input.status, committedSessionId) } catch { /* memory observation cannot veto the committed close */ }
-    }
+    if (!committed) return // An obsolete generation cannot finalize or retire its replacement.
+    const reviewFinishes: Promise<void>[] = []
+    // The DB callback may resume after another client reopened this same run.
+    // Run-wide caches must be retired atomically with a fresh generation check.
+    await runtime.withDatabase(database => {
+      if (!currentCloseAuthority(database, input.runId, committedAuthority)) return
+      autoReview.worker.abort(input.runId)
+      const items = turnState.allTurns().filter(candidate => candidate.runId === input.runId
+        && (!input.authority || candidate.authority?.sessionId === input.authority.sessionId && candidate.authority.generation === input.authority.generation))
+      const committedSessionId = items[0]?.sessionId
+      if (committedSessionId) try { deps.onRunClosed?.(input.runId, input.status, committedSessionId) } catch { /* optional memory observation */ }
+      for (const item of items) {
+        ennoController.retire({ ...(item.nativeAgent === undefined ? {} : { nativeAgent: item.nativeAgent }),
+          ...(item.nativeSession === undefined ? {} : { nativeSession: item.nativeSession }) })
+        if (item.nativeAgent) reviewFinishes.push(answerReview.finish(item.nativeAgent as ReviewAgent))
+        item.closed = true
+        ennoMemory.clear(item.runId)
+        executionSupport.clear(item.sessionId)
+        gate.clearTurn(item.sessionId, item.turn)
+      }
+      turnState.releaseRun(input.runId, input.authority)
+      clearToolRun(input.runId)
+    })
+    await Promise.all(reviewFinishes)
     if (scheduled) {
       if (scheduledSessionId === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Completed run has no DSH session identity')
       // The terminal run and pending memory job have already committed.
@@ -184,20 +221,6 @@ export function createLifecycle(deps: LifecycleDependencies) {
       try { await sessionMirror.markUnfinalized(scheduledSessionId) } catch { /* auxiliary cache is unavailable */ }
       try { memoryFinalizer.kick() } catch { /* pending job remains retryable */ }
     }
-    const items = turnState.allTurns().filter((candidate) => candidate.runId === input.runId)
-    for (const item of items) {
-      ennoController.retire({
-        ...(item.nativeAgent === undefined ? {} : { nativeAgent: item.nativeAgent }),
-        ...(item.nativeSession === undefined ? {} : { nativeSession: item.nativeSession }),
-      })
-      if (item.nativeAgent) await answerReview.finish(item.nativeAgent as ReviewAgent)
-      item.closed = true
-      ennoMemory.clear(item.runId)
-      executionSupport.clear(item.sessionId)
-      gate.clearTurn(item.sessionId, item.turn)
-    }
-    turnState.releaseRun(input.runId)
-    clearToolRun(input.runId)
   }
   const runLifecycle = new DshRunLifecycle({ closeRun })
   const failedBoundary = async (item: TurnRecord): Promise<{ sourceEndSeq?: number }> => {
@@ -211,8 +234,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
   const retireSupersededRun = async (item: TurnRecord, status: 'completed' | 'failed' | 'cancelled'): Promise<void> => {
     if (status === 'completed' && !await completionReady(item)) status = 'cancelled'
     if (status !== 'completed') {
-      if (status === 'cancelled') await runtime.withDatabase(db => stopCodingWorkflow(db, item.runId, 'superseded'))
-      await runLifecycle.closeTurn({ runId: item.runId, status, ...(status === 'failed' ? await failedBoundary(item) : {}) })
+      await runLifecycle.closeTurn({ ...closeAuthority(item), runId: item.runId, status, ...(status === 'failed' ? await failedBoundary(item) : {}) })
       return
     }
     if (item.nativeSession === undefined || sessions?.flush === undefined) {
@@ -221,7 +243,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
     await sessions.flush(item.nativeSession)
     await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession)
     await runLifecycle.closeTurn({
-      runId: item.runId,
+      ...closeAuthority(item), runId: item.runId,
       status,
       sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end'),
     })
@@ -263,7 +285,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
         await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession)
       }
       await runLifecycle.closeTurn({
-        runId: item.runId,
+        ...closeAuthority(item), runId: item.runId,
         status,
         ...(status !== 'completed' ? status === 'failed' ? await failedBoundary(item) : {} : {
           sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end'),

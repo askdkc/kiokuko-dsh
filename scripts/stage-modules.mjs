@@ -1,3 +1,4 @@
+import { resolveGuardrail } from './guardrail-artifacts.mjs'
 import { build } from 'esbuild'
 import assert from 'node:assert/strict'
 import { cp, mkdir, mkdtemp, readFile, readdir, writeFile, stat } from 'node:fs/promises'
@@ -67,6 +68,11 @@ export async function stageModules(output) {
   if ((await readdir(output)).length) throw new Error(`Staging requires an empty directory: ${output}`)
   const graphs = Object.fromEntries(await Promise.all(Object.entries(entries).map(async ([name, entry]) => [name, await graph(entry, name)])))
   for (const file of graphs.core.files) if (forbiddenCore(file)) throw new Error(`Core imports optional implementation: ${file}`)
+  // guardrail/manifest.json pins each copied precompiled target; this is read-only verification.
+  const guardrailIndex = JSON.parse(await readFile(join(root, 'guardrail/manifest.json'), 'utf8'))
+  for (const asset of Object.values(guardrailIndex.targets)) resolveGuardrail(root, { platform: asset.platform, arch: asset.arch })
+  const guardrailLicenses = (await walk(join(root, 'docs/guardrail-licenses'))).map(file => `docs/guardrail-licenses/${file}`)
+  const guardrailAssets = [...guardrailLicenses,...(await walk(join(root, 'guardrail'))).map(file => `guardrail/${file}`), 'scripts/guardrail-artifacts.mjs', 'scripts/guardrail-artifacts.d.mts', 'docs/guardrail.md']
   for (const file of sharedAssets) { await stat(join(root, file)); graphs.core.files.add(file) }
   // Identical optional host interfaces may be shared by the two add-ons, never by core.
   const shared = [...graphs.enno.files].filter(file => graphs.lisp.files.has(file) && !graphs.core.files.has(file))
@@ -82,7 +88,7 @@ export async function stageModules(output) {
     const directory = join(output, name)
     await mkdir(directory, { recursive: true })
     const files = [...graphs[name].files].filter(file => name === 'core' || !graphs.core.files.has(file))
-    const assetFiles = name === 'core' ? [...migrations, 'docs/coding-workflow.md', 'docs/memory-evidence.md', 'docs/index-reasoning.md', 'docs/answer-review.md', 'docs/evaluations/answer-review-2026-09-22-laya.json', 'docs/evaluations/answer-review-2026-09-22-jev.json', 'scripts/evaluate-answer-review.mjs', 'scripts/answer-review-evaluation.mjs', 'scripts/answer-review-evaluation.d.mts', 'docs/typed-decisions.md', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/semantic-compaction.md', 'docs/typesafe.md', 'PERMISSIONS.md'] : name === 'lisp' ? [...(await walk(join(root, 'lisp'))).map(file => `lisp/${file}`), 'docs/typesafe.md', 'docs/lisp.md', 'docs/lisp-hot-tools.md', 'scripts/smoke-typesafe.mjs', 'PERMISSIONS.md'] : []
+    const assetFiles = name === 'core' ? [...guardrailAssets, ...migrations, 'docs/coding-workflow.md', 'docs/memory-evidence.md', 'docs/index-reasoning.md', 'docs/answer-review.md', 'docs/evaluations/answer-review-2026-09-22-laya.json', 'docs/evaluations/answer-review-2026-09-22-jev.json', 'scripts/evaluate-answer-review.mjs', 'scripts/answer-review-evaluation.mjs', 'scripts/answer-review-evaluation.d.mts', 'docs/typed-decisions.md', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/semantic-compaction.md', 'docs/typesafe.md', 'PERMISSIONS.md'] : name === 'lisp' ? [...(await walk(join(root, 'lisp'))).map(file => `lisp/${file}`), 'docs/typesafe.md', 'docs/lisp.md', 'docs/lisp-hot-tools.md', 'scripts/smoke-typesafe.mjs', 'PERMISSIONS.md'] : []
     const declarations = [...graphs[name].declarations].filter(file => name === 'core' || !graphs.core.declarations.has(file))
     for (const file of [...files, ...declarations, ...assetFiles]) {
       await copyFile(join(root, file), join(directory, file))
@@ -104,7 +110,7 @@ export async function stageModules(output) {
     const dependencies = Object.fromEntries([...graphs[name].dependencies].filter(dep => manifest.dependencies[dep] && (name === 'core' || !graphs.core.dependencies.has(dep))).sort().map(dep => [dep, manifest.dependencies[dep]]))
     const peerDependencies = Object.fromEntries([...graphs[name].dependencies].filter(dep => manifest.peerDependencies[dep]).sort().map(dep => [dep, manifest.peerDependencies[dep]]))
     const packageJson = { name: manifest.name, version: manifest.version, private: true, type: 'module', license: manifest.license, engines: manifest.engines,
-      exports: { ...(name === 'core' ? {'./client':{types:'./dist/models-client.d.ts',default:'./dist/models-client.cjs'}} : {}), '.': { types: `./${entries[name].replace(/\.js$/, '.d.ts')}`, default: `./${entries[name]}` } }, ...(name === 'core' ? {dsh:{client:manifest.dsh.client}} : {}), files: ['dist/', 'skills/', 'scripts/', ...(name === 'core' ? ['migrations/', 'docs/', 'lisp/supervisor.mjs', 'PERMISSIONS.md'] : name === 'lisp' ? ['lisp/', 'docs/', 'PERMISSIONS.md'] : []), `module-${name}.json`, 'LICENSE', 'THIRD_PARTY_NOTICES.md'], dependencies, peerDependencies,
+      exports: { ...(name === 'core' ? {'./client':{types:'./dist/models-client.d.ts',default:'./dist/models-client.cjs'}} : {}), '.': { types: `./${entries[name].replace(/\.js$/, '.d.ts')}`, default: `./${entries[name]}` } }, ...(name === 'core' ? {guardrail:manifest.guardrail,dsh:{client:manifest.dsh.client,permissions:{readPaths:['Bundled Rust guardrail artifacts for explicitly enrolled units'],commands:['Bundled Rust guardrail check/validate and the owned Node test runner; no engine download or compilation'],failureBoundaries:['Invalid or unavailable host artifact blocks enrolled units; cross-built targets are not native-tested']}}} : {}), files: ['dist/', 'skills/', 'scripts/', ...(name === 'core' ? ['migrations/', 'docs/', 'guardrail/', 'lisp/supervisor.mjs', 'PERMISSIONS.md'] : name === 'lisp' ? ['lisp/', 'docs/', 'PERMISSIONS.md'] : []), `module-${name}.json`, 'LICENSE', 'THIRD_PARTY_NOTICES.md'], dependencies, peerDependencies,
       peerDependenciesMeta: Object.fromEntries(Object.entries(manifest.peerDependenciesMeta).filter(([dep]) => dep in peerDependencies)) }
     await writeFile(join(directory, 'package.json'), JSON.stringify(packageJson, null, 2) + '\n')
     for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) await copyFile(join(root, file), join(directory, file))

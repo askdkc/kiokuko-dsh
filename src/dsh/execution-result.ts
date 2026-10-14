@@ -4,7 +4,7 @@ import type { TapSummary } from './node-tap-summary.js'
 const observed = new WeakSet<object>()
 export interface HostProcessResult {
   isError: boolean
-  value: { exitCode: number | null; signal: string | null; timedOut: boolean; aborted: boolean; processStarted?: boolean; outputComplete?: boolean; summary?: TapSummary | undefined }
+  value: { exitCode: number | null; signal: string | null; timedOut: boolean; aborted: boolean; processStarted?: boolean; processStopped?: boolean; outputComplete?: boolean; summary?: TapSummary | undefined }
   content: { type: 'text'; text: string }[]
 }
 export function observeProcessResult(result: HostProcessResult): HostProcessResult { observed.add(result); return result }

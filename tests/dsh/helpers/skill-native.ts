@@ -20,6 +20,8 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
   let adapter: ReturnType<typeof subject.createDshHostAdapter> | undefined
   let plugin: { dispose(): Promise<unknown> } | undefined
+  let hostFiber: any
+  let adapterOptions: Parameters<typeof subject.createDshHostAdapter>[1] | undefined
   let off = () => {}, offQuestions: (() => void) | undefined
   const workspace = prompts ? join(dir, 'workspace') : dir
   const mountPlugin = async (nextMode: 'full'|'compiled') => {
@@ -66,13 +68,15 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   const responses: any[] = [], model = new mock.MockAdapter(responses)
   ctx.llm.registerAdapter(['mock'],model)
   if(explicit===true) {
-    adapter = subject.createDshHostAdapter(ctx,{databasePath:join(dir,'state.sqlite3'),repositoryRoot:workspace,agenticReplay:{enabled:false}, ...(prompts ? {
+    adapterOptions = {databasePath:join(dir,'state.sqlite3'),repositoryRoot:workspace,agenticReplay:{enabled:false}, ...(prompts ? {
       skillPrompts: prompts, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, typedDecisions: { mode: 'off' },
       // Auxiliary finalization must not consume evaluation scripts or provider
       // budgets. Foreground native model and tool dispatch remain unchanged.
       llm: { async *stream() { throw new Error('Auxiliary model generation is unavailable in isolated Skill evaluation') } },
-    } : {})})
-    fibers.push(await ctx.plugin({name:'explicit-skill-host',apply(c:any){return c.provide('kiokukoDsh',adapter!.host)}}))
+    } : {})}
+    adapter = subject.createDshHostAdapter(ctx,adapterOptions)
+    hostFiber = await ctx.plugin({name:'explicit-skill-host',apply(c:any){return c.provide('kiokukoDsh',adapter!.host)}})
+    fibers.push(hostFiber)
   }
   plugin = prompts
     ? await subject.mountDshComposition(ctx, adapter!.host, subject.Config.parse({ ...extra }).lisp, prompts)
@@ -90,6 +94,15 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   const turn=async(input='この内容を日本語で説明してください。')=>{agent.followup(llm.createUserMessage({content:[{type:'text',text:input}],source:{kind:'user'}}));await agent.whenIdle();assert.deepEqual(errors,[])}
   return {ctx,agent,model,responses,mock,turn,adapter,dir:workspace,llm,
     async reload(nextMode: 'full'|'compiled') { if (prompts) throw new Error('Snapshot fixtures cannot change representation'); await plugin!.dispose(); plugin=await mountPlugin(nextMode) },
+    async reloadHost(nextMode: 'full'|'compiled') {
+      if (explicit!==true || prompts || !adapterOptions) throw new Error('Full host reload requires the explicit native host fixture')
+      await plugin!.dispose(); plugin=undefined
+      await adapter!.dispose(); adapter=undefined
+      await hostFiber.dispose(); fibers.splice(fibers.indexOf(hostFiber),1)
+      adapter=subject.createDshHostAdapter(ctx,adapterOptions)
+      hostFiber=await ctx.plugin({name:'explicit-skill-host',apply(c:any){return c.provide('kiokukoDsh',adapter!.host)}})
+      fibers.push(hostFiber);plugin=await mountPlugin(nextMode)
+    },
     close }
   } catch (error) { await close(); throw error }
 }

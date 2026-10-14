@@ -1,3 +1,4 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -12,12 +13,10 @@ import type { DshUserQuestions } from '../../../../src/dsh/user-interaction.js'
 
 test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, replay, cancellation and recovery', {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires an OS sandbox and a working SBCL; not evidence when skipped' : false, timeout: 180000,
-}, async () => {
+}, async t => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'li-'))), root = join(base, 'workspace')
   await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db))
   let approval: 'allow' | 'deny' | 'skip' | 'throw' | 'mutate' | 'pending' = 'deny', questions = 0
   let answerLate: ((value: any) => void) | undefined, pendingQuestion: any
@@ -38,6 +37,7 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
   } }
   let manager = new LispManager(options)
   const owner = { sessionId: 'session', agentId: 'agent', root }
+  workingLispTask(db, owner)
   const evaluate = (operationId: string, code: string, extra = {}) => manager.execute(owner, 'lisp_eval', { operationId, code, ...extra }) as Promise<any>
   try {
     await manager.start(); assert.equal((await manager.enable(owner) as any).state, 'READY')
@@ -148,14 +148,14 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     const before = questions; assert.equal((await evaluate('approved', code)).replay, true); assert.equal(questions, before)
     // A filesystem receipt is not the completed parent operation. If the final
     // parent save fails, replay/recovery must preserve effects without success.
-    const saveResult = store.transition.bind(store)
+    const saveResult = LispStore.prototype.transition
     let lostFinalResult = false
-    store.transition = async (...args) => {
+    const finalResultMock = t.mock.method(LispStore.prototype, 'transition', async function(this: LispStore, ...args: Parameters<typeof saveResult>) {
       if (args[1] === 'lost-final-result' && Array.isArray((args[4] as any)?.changes) && !lostFinalResult) {
         lostFinalResult = true; throw new Error('fixture: final summary unavailable')
       }
-      return saveResult(...args)
-    }
+      return saveResult.apply(this, args)
+    })
     const newFile = '(kioku.files:propose-write "receipt.txt" "applied once")'
     const lostSummary = await evaluate('lost-final-result', newFile)
     assert.equal(lostSummary.ok, false)
@@ -167,7 +167,7 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     assert.equal(replayedSummary.replay, true); assert.equal(replayedSummary.result.ok, false)
     assert.equal(replayedSummary.result.changes[0].state, 'APPLIED')
     assert.equal(await readFile(join(root, 'receipt.txt'), 'utf8'), 'applied once')
-    store.transition = saveResult
+    finalResultMock.mock.restore()
     const restored = await manager.restore(owner, deleted.changes[0].id, new AbortController().signal) as any
     assert.equal(restored.state, 'APPLIED'); assert.equal(await readFile(join(root, 'delete.txt'), 'utf8'), 'preserve')
     await manager.recover(owner)
@@ -185,22 +185,23 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     assert.equal(cancelledProposal.changes[0].state, 'NOT_APPLIED')
     assert.equal(await readFile(join(root, 'delete.txt'), 'utf8'), 'preserve')
     approval = 'deny'; await manager.recover(owner)
-    const transition = store.transition.bind(store)
+    const transition = LispStore.prototype.transition
     let failedSave = false
-    store.transition = async (...args) => {
+    const resultMock = t.mock.method(LispStore.prototype, 'transition', async function(this: LispStore, ...args: Parameters<typeof transition>) {
       if (args[1] === 'lost-result' && args[3] === 'SUCCEEDED' && !failedSave) { failedSave = true; throw new Error('fixture: result storage unavailable') }
-      return transition(...args)
-    }
+      return transition.apply(this, args)
+    })
     assert.equal((await evaluate('lost-result', '(+ 20 22)')).ok, false)
     assert.equal((await manager.status(owner) as any).state, 'RECOVERY_REQUIRED')
     assert.equal((await store.get(owner, 'lost-result'))?.state, 'UNKNOWN')
     await manager.recover(owner)
     assert.equal((await evaluate('lost-result', '(+ 20 22)')).replay, true)
+    resultMock.mock.restore()
     let failedCommit = false
-    store.transition = async (...args) => {
+    const commitMock = t.mock.method(LispStore.prototype, 'transition', async function(this: LispStore, ...args: Parameters<typeof transition>) {
       if (args[3] === 'APPLIED' && !failedCommit) { failedCommit = true; throw new Error('fixture: apply commit unavailable') }
-      return transition(...args)
-    }
+      return transition.apply(this, args)
+    })
     approval = 'allow'
     assert.equal((await evaluate('lost-commit', code)).ok, false)
     await assert.rejects(readFile(join(root, 'delete.txt')), {code:'ENOENT'})
@@ -208,7 +209,7 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     assert.equal(reconciliation.code, 'RECONCILIATION_REQUIRED')
     const unknown = reconciliation.operations.find((o: any) => o.id.startsWith('proposal-'))
     assert.equal(unknown.state, 'UNKNOWN')
-    store.transition = transition
+    commitMock.mock.restore()
     await manager.abandon(owner, unknown.id)
     assert.equal((await manager.restore(owner, unknown.id, new AbortController().signal) as any).state, 'APPLIED')
     assert.equal(await readFile(join(root, 'delete.txt'), 'utf8'), 'preserve')

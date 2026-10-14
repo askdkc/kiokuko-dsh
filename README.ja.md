@@ -25,14 +25,22 @@ Tool exposure の既定値は `auto`。タスク種別と現在の phase に応�
 
 ## 導入と使い方
 
-実行環境の対応対象は **DSH 0.1.7-rc.2** です。ネイティブ要求経路、旧セッション履歴の移行、パッケージ化した Web の起動試験はローカルで通過しました（[検証範囲](docs/dsh-plugin.md#compatibility)）。
+実行環境の対応対象は **DSH 0.2.1-alpha.2** の `web` と `dsh-cli` プロファイルです。[検証範囲](docs/dsh-plugin.md#compatibility)を参照してください。
 
 Node.js **24.16.0 以上**と pnpm が必要です。
-DSH のソースディレクトリで、公開済み npm パッケージを導入して起動します。
+DSH のソースディレクトリで、Web版を初回導入して起動します。
 
 ```bash
 pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh web
+```
+
+CLI版を初回導入して起動します。
+
+```bash
+pnpm dsh plugin --profile dsh-cli add @askdkc/dsh-cli
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh
+pnpm dsh --profile dsh-cli
 ```
 
 グローバルにインストールした `dsh` CLI を使う場合は、各コマンドから `pnpm` を外してください。
@@ -43,11 +51,18 @@ GitHub・ローカルからの導入は [プラグインガイド](docs/dsh-plug
 
 ## 更新
 
-作業中のタスクを終えて DSH を停止してから更新します。npm 版の Kiokuko 本体の更新:
+DSH を停止してから、Web版を更新して再起動します。
 
 ```bash
 pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
+```
+
+DSH を停止してから、CLI版を更新して再起動します。
+
+```bash
+pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh --profile dsh-cli
 ```
 
 公開から24時間以内のバージョンへ更新する場合は、pnpm 11 の既定の
@@ -89,10 +104,10 @@ DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復
 - Debian / Ubuntu: `sudo apt install sbcl`
 - Arch Linux: `sudo pacman -S sbcl`
 
-`~/.dsh/profiles/web/cordis.patch.yml` の `kiokuko-dsh` 行に次を追加し（他の `config` 値は保持）、
+使用するプロファイルの `~/.dsh/profiles/<profile>/cordis.patch.yml`（`web` または `dsh-cli`）の `kiokuko-dsh` 行に次を追加し（他の `config` 値は保持）、
 プラグインを再読み込みすると、実装タスクごとに Goal・実装項目・観測可能な条件を示してから Lisp モードを使うか確認します。
 選択はそのタスクと範囲に保存し、新しいタスクでは再確認します。`/kioku-lisp enable` は明示的な手動切替です。
-読み込まれた設定は `dsh --profile web --dump-config` で確認できます。
+読み込まれた設定は、同じプロファイル名で `dsh --profile <profile> --dump-config` を実行して確認できます。
 
 ```yaml
 - id: kiokuko-dsh
@@ -106,7 +121,6 @@ DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復
 「使う」は Lisp、「使わない」は通常ツール、「取消・作業を保持」は準備内容を残して取消です。閉じる・未回答では実装を始めません。通常実行／役小角の選択は別に保持します。Lisp の起動失敗はブロッカーとして残し、復旧または明示的な経路変更後に再開します。
 選択後の通常の編集・テストには追加確認を求めません。ソース・実データの削除と既存の永続DB変更は対象を確認します。各項目の最新の証拠と、通常の利用入口からの最終確認が揃った場合だけ完了します。[Goal 駆動コーディング](docs/coding-workflow.md)と[独自実行、レシート、記憶の再利用](docs/owned-execution.md)を参照してください。
 [設定、API、停止・復旧方法](docs/lisp.md)を参照してください。
-永続 Lisp では、`kioku.code` からディスク上のコードの構造と読み取り専用の LSP 結果を取得できます。V1 service を提供する任意の provider が必要です。公開済みの `dsh-lsp-server` v0.1.12 は未対応なので、現時点では[ローカルの provider 修正](patches/code-intelligence/README.md)を使います。[API と上限](docs/lisp.md#read-only-code-intelligence)を確認してください。
 
 ## 型付き判定（Jev / Laya / Nimble）
 
@@ -180,4 +194,14 @@ ObservationPack（既定値 `observationPack: { mode: auto }`）は、大きな�
 
 Layaの圧縮には独立した設定があり、`typedDecisions.laya-coreml.compaction.mode: off` が既定です。明示的な `shadow` は履歴を変えずに評価し、`auto` は `experimental_not_qualified` として停止します。ObservationPackとnative summaryは既存設定を維持します。Akinatorは検証済みのdebug／research／writingだけを自動判定し、任意Skillは完全な説明を持つ最大4候補から最大1個を選びます。[Layaの設定と評価](docs/semantic-compaction.md#local-laya)を参照してください。
 
-任意の V1 code provider の導入手順と検証済みの構成は、[連携ガイド](docs/code-intelligence.md)を参照してください。
+## 任意のコード解析
+
+`kioku.code` は、`@askdkc/dsh-lsp-server` と連携して、Lisp からコード構造と読み取り専用の LSP 結果を取得します。
+導入・更新は `kiokuko-dsh` と同じプロファイルで行います。CLI版では `web` を `dsh-cli` に置き換えてください。
+
+```sh
+pnpm dsh plugin --profile web add @askdkc/dsh-lsp-server@latest
+pnpm dsh plugin --profile web update @askdkc/dsh-lsp-server --latest
+```
+
+[設定・対応言語・制限](docs/code-intelligence.md)を参照してください。

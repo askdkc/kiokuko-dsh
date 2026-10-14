@@ -8,7 +8,10 @@ import { DatabaseSync } from 'node:sqlite'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
 import { LispProposalBatch } from '../../../../src/dsh/lisp/proposal-batch.js'
-import { createLispCiAdapter } from '../../../../src/dsh/lisp/ci.js'
+import { createLispCiAdapter as guardedCiAdapter } from '../../../../src/dsh/lisp/ci.js'
+
+// These approval/file fixtures explicitly provide task authority.
+const createLispCiAdapter = (...args: Parameters<typeof guardedCiAdapter>) => guardedCiAdapter(args[0], args[1], async () => {})
 import { createLispPackageAdapter } from '../../../../src/dsh/lisp/packages.js'
 import type { ApprovalQuestions } from '../../../../src/dsh/lisp/approval.js'
 
@@ -25,7 +28,7 @@ test('one profile policy covers successive file, verifier and registry effects w
   const store = new LispStore(async fn => fn(db)); await store.enable(owner)
   await writeFile(join(root, 'a.txt'), 'before')
   await writeFile(join(root, 'package.json'), JSON.stringify({ scripts: { typecheck: 'tsc', 'test:packages': 'node test.js' } }))
-  const batch = new LispProposalBatch({ store, backupRoot: join(root, 'backups'), protectedRoots: () => [], stopped: () => false, questions })
+  const batch = new LispProposalBatch({ authorizeEffect: async () => {},  store, backupRoot: join(root, 'backups'), protectedRoots: () => [], stopped: () => false, questions })
   const changes = await batch.apply(owner, 'eval', 'generation', [{ operation: 'write', path: 'a.txt', content: 'after' }], signal)
   assert.equal(changes[0]!.state, 'APPLIED'); assert.equal(changes[0]!.approval, 'profile')
   assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'after')
@@ -45,7 +48,7 @@ test('one profile policy covers successive file, verifier and registry effects w
   assert.notEqual(stale[0]!.state,'APPLIED'); assert.equal(await readFile(join(root,'a.txt'),'utf8'),'concurrent edit')
   questions.approvalPolicy!.validate = () => {}
   await writeFile(join(root,'unusable-backup'),'not a directory')
-  const broken = new LispProposalBatch({store,backupRoot:join(root,'unusable-backup'),protectedRoots:()=>[],stopped:()=>false,questions})
+  const broken = new LispProposalBatch({ authorizeEffect: async () => {}, store,backupRoot:join(root,'unusable-backup'),protectedRoots:()=>[],stopped:()=>false,questions})
   const failed = await broken.apply(owner,'backup-failure','generation',[{operation:'write',path:'a.txt',content:'must not overwrite'}],signal)
   assert.notEqual(failed[0]!.state,'APPLIED'); assert.equal(await readFile(join(root,'a.txt'),'utf8'),'concurrent edit')
   assert.equal(asks,0)

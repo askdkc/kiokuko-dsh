@@ -1,3 +1,4 @@
+import { resolveGuardrail } from './guardrail-artifacts.mjs'
 import { completeVerification } from './verification-completion.mjs';
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -13,6 +14,33 @@ const cache = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-cache-'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
+  'guardrail/manifest.json',
+  'guardrail/protocols/coding-routine.lisp',
+  'guardrail/node-runner.mjs',
+  'scripts/guardrail-artifacts.mjs',
+  'scripts/guardrail-artifacts.d.mts',
+  'docs/guardrail.md',
+  'docs/guardrail-licenses/README.md',
+  'docs/guardrail-licenses/manifest.json',
+  'docs/guardrail-licenses/COPYRIGHT-library.html',
+  'guardrail/x86_64-unknown-linux-musl/kiokuko-guardrail',
+  'guardrail/x86_64-unknown-linux-musl/manifest.json',
+  'guardrail/aarch64-unknown-linux-musl/kiokuko-guardrail',
+  'guardrail/aarch64-unknown-linux-musl/manifest.json',
+  'guardrail/x86_64-apple-darwin/kiokuko-guardrail',
+  'guardrail/x86_64-apple-darwin/manifest.json',
+  'guardrail/aarch64-apple-darwin/kiokuko-guardrail',
+  'guardrail/aarch64-apple-darwin/manifest.json',
+
+  'migrations/040_task_state.sql',
+  'migrations/041_task_source_history.sql',
+  'migrations/042_evolution_source_epochs.sql',
+  'dist/dsh/task-state.js',
+  'dist/dsh/task-state-host.js',
+  'dist/dsh/task-state-surface.js',
+  'dist/dsh/task-source-history.js',
+  'dist/dsh/native-task-authority.js',
+  'dist/dsh/existing-task-intake.js',
   'dist/dsh/models/service.js',
   'dist/models-client.cjs',
   'dist/dsh/models/vendor/THIRD_PARTY_NOTICES.txt',
@@ -151,6 +179,7 @@ const requiredFiles = [
 ]
 const requiredDirectories = ['dist/', 'migrations/', 'skills/', 'docs/']
 const forbiddenPrefixes = [
+  'crates/',
   'lisp/vendor/cl-unicode/test/derived-properties',
   'lisp/vendor/cl-unicode/test/normalization-forms',
   'src/',
@@ -277,6 +306,11 @@ async function createAndSmokeTestTarball() {
   const tarball = process.env.KIOKUKO_VERIFY_TARBALL ?? join(packageOutput, filename)
   await exec('tar', ['-xzf', tarball, '-C', extractRoot])
   const extractedRoot = join(extractRoot, 'package')
+  // Resolve from the extracted package before dependencies can conceal missing runtime assets.
+  const guardrail = resolveGuardrail(extractedRoot)
+  const native = await exec(guardrail.binary, ['--version'], { cwd: extractRoot, env: { PATH: '', HOME: work }, timeout: 10_000 })
+  if (native.stdout.trim() !== `kiokuko-guardrail ${guardrail.version}`) throw new Error('Packed guardrail version mismatch')
+  await exec(guardrail.binary, ['validate', guardrail.protocol], { cwd: extractRoot, env: { PATH: '', HOME: work }, timeout: 10_000 })
   // Import the packed private readers before development dependencies can satisfy a leaked import.
   await exec(process.execPath, ['--input-type=module', '--eval',
     `await import(${JSON.stringify(join(extractedRoot, 'dist/dsh/legacy-session-codecs.js'))})`], {
@@ -483,6 +517,7 @@ try {
     importSmoke: 'passed',
     dshClientArtifact: 'passed',
     relativeClosure: 'passed',
+    bundledGuardrailNativeSmoke: 'passed',
   }, null, 2)}\n`)
 } catch (error) {
   if (typeof error?.stdout === 'string') process.stdout.write(error.stdout)

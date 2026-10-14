@@ -34,7 +34,7 @@ async function fixture(t: import('node:test').TestContext, choose: (batch: Decis
   await listeners.get('agent/request')!({},async()=>({provider:'ordinary',model:'chosen',reasoningEffort:'high',tools:[]}))
   t.after(async()=>{await coordinator.dispose();db.close()})
   const wait=async()=>{await new Promise(resolve=>setImmediate(resolve));for(let i=0;i<100 && (service.status() as any).answerReview.state==='evaluating';i++)await new Promise(resolve=>setTimeout(resolve,5));await new Promise(resolve=>setImmediate(resolve))}
-  return {coordinator,service,db,agent,source,sent,listeners,bind,wait,calls:()=>calls,settled:()=>settled,stop:()=>{live=false},ineligible:()=>{eligible=false},throwDispatch:()=>{dispatchThrows=true}}
+  return {coordinator,service,db,runtime,agent,source,sent,listeners,bind,wait,calls:()=>calls,settled:()=>settled,stop:()=>{live=false},ineligible:()=>{eligible=false},throwDispatch:()=>{dispatchThrows=true}}
 }
 function result(batch:DecisionBatch,choiceId:string):DecisionBatchResult{return{provider:'typesafe',requestedModel:'jev-latest',policyVersion:'fixture',answers:batch.questions.map(q=>choiceId==='abstain'?{id:q.id,status:'abstained',reason:'insufficient'}:{id:q.id,status:'selected',choiceId})}}
 
@@ -68,6 +68,23 @@ test('one finding dispatches once, binds original model, and cannot review corre
   await assert.rejects(f.coordinator.accept(f.agent,f.sent,3,'catalog'))
   assert.equal(f.calls(),1);assert.equal(f.db.prepare('SELECT status FROM dsh_answer_reviews').get()!.status,'consumed')
   assert.doesNotMatch(JSON.stringify(f.db.prepare('SELECT * FROM dsh_answer_reviews').all()),/All tests passed|FAIL: expected/)
+})
+
+test('a delayed old review finish cannot release a newly bound review on the same agent',async t=>{
+  const f=await fixture(t)
+  f.coordinator.hold(f.agent);await f.wait();await f.coordinator.accept(f.agent,f.sent,2,'catalog')
+  const original=f.runtime.withDatabase
+  let release!:()=>void
+  f.runtime.withDatabase=async fn=>{await new Promise<void>(resolve=>{release=resolve});return original(fn)}
+  const finishing=f.coordinator.finish(f.agent)
+  assert.ok(release)
+  f.runtime.withDatabase=original
+  f.db.prepare("INSERT INTO ledger_runs VALUES('next-run','project','session','active')").run()
+  f.coordinator.bind({runId:'next-run',workspace:'project',requestId:'next-request',task:'Review the new request.',catalogDigest:'catalog',turn:1,agent:f.agent,current:()=>true,eligible:()=>true,settled:async()=>{}})
+  await f.listeners.get('agent/request')!({},async()=>({provider:'ordinary',model:'chosen',tools:[]}))
+  release();await finishing
+  assert.equal(f.coordinator.hold(f.agent),true,'The replacement review remains eligible after old close settles')
+  await f.wait()
 })
 for(const choice of ['satisfied','not_applicable','abstain'])test(`no automatic continuation on ${choice}`,async t=>{
   const f=await fixture(t,async batch=>result(batch,choice));f.coordinator.hold(f.agent);await f.wait()

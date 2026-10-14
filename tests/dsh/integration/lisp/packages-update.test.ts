@@ -1,3 +1,4 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -20,9 +21,8 @@ for (const mode of ['apply', 'decline', 'stale'] as const) test(`protected publi
   await writeFile(join(root, 'package.json'), original)
   await writeFile(join(root, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}')
   const db = new NodeSqliteAdapter(join(base, 'state.sqlite3'), new DatabaseSync(join(base, 'state.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 'session', agentId: 'agent', root }
+  workingLispTask(db, owner)
   let commands = 0, approvals = 0
   const questions: DshUserQuestions = { ask: async request => {
     approvals++
@@ -34,7 +34,7 @@ for (const mode of ['apply', 'decline', 'stale'] as const) test(`protected publi
     commands++
     if (args[0] !== '--version') await writeFile(join(directory, 'package-lock.json'), '{"lockfileVersion":3,"packages":{"node_modules/sprintf-js":{"version":"1.1.3"}}}')
     return { code: 0, stdout: args[0] === '--version' ? '11.0.0' : '', stderr: '' }
-  })
+  }, async owner => { await manager.taskAuthority.authorizeEffect(owner) })
   const manager = new LispManager({ store, config: LispConfig.parse({ executionMode: 'protected', enabled: true, startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'), questions, packagesCall: adapter })
   t.after(async () => { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) })
   await manager.start(); await manager.enable(owner)

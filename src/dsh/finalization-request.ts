@@ -4,7 +4,7 @@ import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 
 export interface FinalizationRequestJob {
   readonly extractionVersion?: 1 | 2
-  readonly outcome?: 'completed' | 'failed'
+  readonly outcome?: 'completed' | 'failed' | 'cancelled' | 'interrupted'
   readonly runId: string
   readonly dshSessionId: string
   readonly sourceStartSeq: number
@@ -25,7 +25,7 @@ function finalizationPrompt(evidence: string, job: FinalizationRequestJob): stri
     ? 'No additional off-surface evidence was selected; use the conversation prefix.'
     : `<weighted-dsh-log-evidence>\n${evidence}\n</weighted-dsh-log-evidence>`
   return [
-    job.outcome === 'failed' ? 'The DSH task ended with status failed. Produce its durable Kiokuko Memory Capsule.' : 'The DSH task is complete. Produce its durable Kiokuko Memory Capsule.',
+    job.outcome && job.outcome !== 'completed' ? `The DSH source segment ended with status ${job.outcome}. Preserve that outcome without inferring task success. Produce its durable Kiokuko Memory Capsule.` : 'The DSH task is complete. Produce its durable Kiokuko Memory Capsule.',
     `The target run is exactly DSH event seq ${job.sourceStartSeq} through ${job.sourceEndSeq}, inclusive.`,
     'Use the conversation prefix only as context. Store only durable information established, changed, verified, or learned inside the target run.',
     'Use the weighted target-run evidence below as the authoritative extraction window. Never store facts solely because they appear in an earlier conversation prefix.',

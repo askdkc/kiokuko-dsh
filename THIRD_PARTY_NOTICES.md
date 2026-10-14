@@ -94,3 +94,7 @@ The selected MIT-licensed dsh-auth sources are vendored at
 [provenance and local changes](docs/dsh-auth-provenance.md) and the complete
 [upstream license](docs/dsh-auth-LICENSE.txt). Bundled AI SDK dependency licenses
 are shipped in `dist/dsh/models/vendor/THIRD_PARTY_NOTICES.txt`.
+
+# Bundled Rust protocol guardrail
+
+The `kiokuko-guardrail` engine source is included under `crates/guardrail` and uses the repository MIT license. Precompiled runtime artifacts contain Rust standard-library code. The unchanged official standard-library copyright bundle and license texts are preserved in [docs/guardrail-licenses](docs/guardrail-licenses/README.md), alongside clearly labeled conservative musl/libunwind notice supplements. Zig is a build tool only, not a bundled runtime dependency. See the repository's `crates/guardrail-release` for recorded compiler/component provenance and target-specific native verification status.

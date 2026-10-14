@@ -14,6 +14,7 @@ interface HotOptions {
   questions?: DshUserQuestions
   projectRoot(owner: LispOwner): Promise<string>
   authorize(owner: LispOwner): Promise<void>
+  authorizeEffect?(owner: LispOwner): Promise<void>
   run(owner: LispOwner, source: string, input: unknown, signal: AbortSignal, mode?: 'call' | 'compile'): Promise<ExecutionResult>
   input(owner: LispOwner, resultRef: string): Promise<unknown>
 }
@@ -65,6 +66,7 @@ export class HotToolRuntime {
     const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
     try {
       const scope = await this.scope(owner, combined)
+      if (tool !== 'lisp_hot_call') await this.authorizeEffect(owner)
       if (tool === 'lisp_hot_contract') return await this.contract(owner, scope, id, hash, raw, combined)
       if (tool === 'lisp_hot_install') return await this.install(owner, scope, id, hash, raw, combined)
       if (tool === 'lisp_hot_call') return await this.call(owner, scope, id, hash, raw, combined)
@@ -80,6 +82,11 @@ export class HotToolRuntime {
       }
       return problem
     } finally { this.#active.delete(controller) }
+  }
+
+  private async authorizeEffect(owner: LispOwner): Promise<void> {
+    if (!this.options.authorizeEffect) fail('TASK_REQUIRED', '共有関数の変更には現在の有効なタスクが必要です。')
+    await this.options.authorizeEffect(owner)
   }
 
   private async approve(owner: LispOwner, id: string, title: string, detail: string, signal: AbortSignal): Promise<void> {
@@ -107,6 +114,7 @@ export class HotToolRuntime {
       + '条件の変更には再承認が必要です。既存の稼働版は、新しい候補が検証に成功するまで維持します。\n\n'
       + `${fence}json\n${data}\n${fence}`, signal)
     await this.scope(owner, signal, scope)
+    await this.authorizeEffect(owner)
     return this.catalog.approve(owner, scope.epoch, scope.projectRoot, id, request)
   }
 
@@ -132,6 +140,7 @@ export class HotToolRuntime {
       await this.options.store.transition(owner, id, ['RUNNING'], 'RUNNING', { phase: 'checking', checked: index + 1, total: contract.properties.length })
     }
     await this.scope(owner, signal, scope)
+    await this.authorizeEffect(owner)
     return this.catalog.activate(owner, scope.epoch, scope.projectRoot, id, {
       name: request.name, contractRef: request.contractRef, expectedRevision: request.expectedRevision, bundle,
     })
@@ -172,6 +181,7 @@ export class HotToolRuntime {
     await this.approve(owner, id, `共有関数 ${request.name} を無効にしますか？`,
       `対象プロジェクト: ${scope.projectRoot}\n版: ${selected.revision}\n新しい呼び出しを停止します。実行中の呼び出しと保存済み結果は維持します。`, signal)
     await this.scope(owner, signal, scope)
+    await this.authorizeEffect(owner)
     return this.catalog.deactivate(owner, scope.epoch, scope.projectRoot, id, request)
   }
 }

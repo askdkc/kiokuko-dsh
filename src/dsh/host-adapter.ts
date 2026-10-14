@@ -1,3 +1,5 @@
+import { NativeTaskAuthority } from './native-task-authority.js'
+import { readOwnedIdentity } from './owned-read-owner.js'
 import type { RoutableAgent } from './model-routing.js'
 import { NativeWorkerRouting } from './native-worker-routing.js'
 import { validateHeadWorker } from './head-worker-configuration.js'
@@ -6,10 +8,14 @@ import { answerSkillContext, type AnswerSkillRegistry } from './answer-skills.js
 import { DshAnswerContext } from './answer-context.js'
 import { IntakeModeConfig } from './intake-mode.js'
 import { OnDemandIntake, type IntakeMode } from './on-demand-intake.js'
+import { LISP_ASSEMBLY_SERVICE } from './lisp-service-key.js'
+import type { LispAssemblyService } from './lisp/request-surface.js'
+import { DshTaskWorkflow, TASK_STATE_EVENT, TASK_WORKFLOW_SERVICE } from './task-state-host.js'
 import { mountOwnedExecution } from './owned-execution.js'
 import { mountPlanTransition } from './plan-transition.js'
 import { classifyTaskForIntake } from './decisions/workflows.js'
-import type { RequestIntentDecision } from './decisions/request-intent.js'
+import { requestIntentMessageRefs, type RequestIntentDecision } from './decisions/request-intent.js'
+import { authorizeTaskLease } from './task-state.js'
 import { dshTurnRequestId } from './intake-profile-resolver.js'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
 import { MemoryIndexReasoningConfig } from '../memory/index-reasoning/contracts.js'
@@ -570,26 +576,26 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if (process.env.KIOKUKO_INTENT_DEBUG === '1') console.error('confirmation resume candidates', candidates.length)
       return candidates.length === 1 && (current === undefined || current.runId === candidates[0]!.runId)
     }),
-    replay: async input => runtime.withDatabase(async db => {
+    replay: async input => runtime.withDatabase(db => {
       const sessionId = input.agent.session!.id
       if (detachedDemandSessions.has(sessionId)) return false
+      const current = currentSession(sessionId)
+      // Matching persisted text is a cold continuation, not a replay of a
+      // currently admitted native turn. Leave it on the interpretation path.
+      if (!current || current.turn !== input.turn || current.nativeAgent !== input.agent
+        || current.nativeSession !== input.agent.session || agents?.get(input.agent.id) !== input.agent
+        || sessions?.get(sessionId) !== input.agent.session || current.closed || current.failed
+        || !current.authority || current.prepared.run.status !== 'active'
+        || !['ready', 'exhausted'].includes(current.prepared.intake.status)
+        || current.prepared.nextAction !== 'proceed' || selections.get(current.runId)?.value.discussion) return false
       const human = input.messages.filter(isHumanMessage)
       if (!human.length) return false
       const task = textFromMessages(human)
-      const project = await resolveProjectWorkspaceReadOnly(db, answerCwd(input.agent), { allowDirectory: true })
-      if (!project) return false
-      const matches = db.prepare(`SELECT lr.run_id AS runId
-        FROM ledger_runs AS lr
-        LEFT JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
-        LEFT JOIN dsh_coding_workflows AS cw ON cw.run_id = lr.run_id
-        WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active' AND lr.title = ?
-          AND ((ec.repository_root = ? AND ec.status NOT IN ('completed', 'cancelled', 'blocked'))
-            OR (json_extract(cw.snapshot_json, '$.repositoryRoot') = ?
-              AND json_extract(cw.snapshot_json, '$.sessionId') = ?
-              AND json_extract(cw.snapshot_json, '$.state') NOT IN ('completed', 'cancelled', 'superseded')))
-        ORDER BY lr.created_at, lr.run_id LIMIT 2`)
-        .all<{ runId: string }>(project.workspace, sessionId, task, project.repositoryRoot, project.repositoryRoot, sessionId)
-      return matches.length === 1
+      const references = current.requestIntentContext?.messageRefs
+      if (current.task !== task || !references
+        || canonicalContentHash(requestIntentMessageRefs(human, task)) !== canonicalContentHash(references)) return false
+      try { authorizeTaskLease(db, current.authority) } catch { return false }
+      return true
     }),
     existing: async (input, requestIntent?: RequestIntentDecision) => runtime.withDatabase(async db => {
       if (detachedDemandSessions.has(input.agent.session!.id)) return false
@@ -632,6 +638,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         && !selections.get(current.runId)?.value.discussion
     },
   }, { onlyWhenDeferred: !conversationFirst }) : undefined
+  const taskWorkflow = demand && agents && sessions && skills?.snapshot && tools?.schemas
+    ? new DshTaskWorkflow({ runtime, demand, agents, sessions, skills: { snapshot: options => skills.snapshot!(options) },
+      tools: { schemas: agent => tools.schemas!(agent) }, lisp: () => native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined,
+      checkpointSource: async agent => { await sessions.flush?.(agent.session); await sessionMirror.checkpointAfterNativeFlush(agent.session as DshMirrorEventSession) },
+      kickFinalizer: () => memoryFinalizer.kick(), emit: task => { (ctx as any).emit(TASK_STATE_EVENT, task) } }) : undefined
   const demandEnd = demand ? onNativeEvent(ctx, 'session/event', (session, event) => {
     if (event.type === 'turn/end') demand.finish(session, (event.data as any)?.turn)
     if (event.type === 'request/context' && !currentSession(session.id)) {
@@ -842,9 +853,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     },
     async approve() { return true },
   }) : undefined
-  const ownedDisposer = tools ? mountOwnedExecution({tools:tools as any,on:(name,listener,options)=>onNativeServiceEvent(ctx,name,listener,options)}, {
-    runtime,
-    resolve(execution) {
+  const resolveParentOwned = (execution:any) => {
       const agent=execution.agent as NativeAgent|undefined,session=agent?.session
       if(!agent||!session||agents?.get(agent.id)!==agent||sessions?.get(session.id)!==session||isGenericNativeChild(agent))return undefined
       const child=delegation.observationBinding(agent)
@@ -853,6 +862,35 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       if(child&&delegation.toolDenial(agent,execution.name,execution.arguments))return undefined
       return {runId:item.runId,sessionId:session.id,workflowSessionId:item.sessionId,workspace:item.workspace,repositoryRoot:item.repositoryRoot,generation:executionBinding(item).generation,agent,
         requestIntent:item.requestIntent,requestIntentContext:item.requestIntentContext}
+  }
+  const nativeTaskAuthority = new NativeTaskAuthority({runtime,repositoryRoot:root,backend:native.get('subagents',false) as any,agents,sessions,resolveParent:resolveParentOwned})
+  const ownedDisposer = tools ? mountOwnedExecution({tools:tools as any,on:(name,listener,options)=>onNativeServiceEvent(ctx,name,listener,options)}, {
+    runtime,
+    isTaskControl: execution => (ctx.get(TASK_WORKFLOW_SERVICE, false) as DshTaskWorkflow | undefined)?.isControl(execution) === true,
+    resolve: execution => nativeTaskAuthority.resolve(execution) ?? resolveParentOwned(execution),
+    async resolveRead(execution) {
+      const agent = execution.agent as NativeAgent|undefined, session = agent?.session
+      if (!agent || !session || agents?.get(agent.id)!==agent || sessions?.get(session.id)!==session) return undefined
+      let cwd: string
+      try { if (typeof session.header?.cwd !== 'string') return undefined; cwd = realpathSync(session.header.cwd) } catch { return undefined }
+      // Child scopes retain their independent lineage checks. A primary session
+      // may have been admitted from a directory other than plugin startup cwd.
+      if (isGenericNativeChild(agent)) return cwd === root ? nativeTaskAuthority.read(execution) : undefined
+      if (delegation.isChild(agent)) return cwd === root ? resolveParentOwned(execution) : undefined
+      const current=resolveParentOwned(execution)
+      if(execution.name==='kioku_read'&&current) {
+        const item = currentSession(session.id)
+        if (!item?.authority || item.cwd !== cwd || item.repositoryRoot !== current.repositoryRoot) return undefined
+        const authority = item.authority
+        try { await runtime.withDatabase(db => authorizeTaskLease(db, authority)) } catch { return undefined }
+        if (currentSession(session.id) !== item || item.authority !== authority || item.closed
+          || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session) return undefined
+        return current
+      }
+      return await runtime.withDatabase(async db => {
+        const project = await resolveProjectWorkspaceReadOnly(db, cwd, { allowDirectory: true })
+        return project ? readOwnedIdentity(db,agent,project.repositoryRoot,execution.name==='kioku_result'?execution.arguments?.operationId:undefined) : undefined
+      }) ?? resolveParentOwned(execution)
     },
     planActive:agent=>(ctx.get('planMode',false) as any)?.get(agent)?.active===true,
     async confirm(identity,detail,signal) {
@@ -903,6 +941,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   executionSupport.mountPreExecution({ on: (name, listener, options) => onNativeServiceEvent(ctx, name, listener, options) })
   const host: DshCompositionHost = {
     ...(demand ? { onDemandIntake: demand } : {}),
+    ...(taskWorkflow ? { taskWorkflow } : {}),
     bypassNativeIntake: isGenericNativeChild,
     modelAuto: { coordinator: modelAuto, validSession: (agentId, sessionId) => {
       const currentAgent = agents?.get(agentId) as { session?: object } | undefined
@@ -979,6 +1018,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
       discussionGuardDisposer?.()
       childExecutionDisposer()
       routing.dispose()
+      nativeTaskAuthority.dispose()
       nativeWorkers.dispose()
       nativeWorkerToolDisposer()
       freezePairDisposer()

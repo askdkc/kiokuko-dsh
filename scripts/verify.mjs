@@ -29,7 +29,14 @@ const initial=sourceDigest(root),commit=gitHead(),results=[];let artifact, inter
 const interruption=()=>{interrupted=true;};process.on('SIGTERM',interruption);process.on('SIGINT',interruption);
 const require=createRequire(path.join(root,'package.json'));
 const npmrc=path.join(output,'empty.npmrc');writeFileSync(npmrc,'');
-const baseEnv={...process.env,...contract.environment,npm_config_cache:path.join(output,'npm-cache'),npm_config_userconfig:npmrc,NPM_CONFIG_USERCONFIG:npmrc};
+// Explicit verification color settings override inherited contradictory flags.
+// FORCE_COLOR wins if a declaration contains both, matching Node precedence.
+function declaredColorEnvironment(environment, declaration = {}) {
+  if (Object.hasOwn(declaration, 'FORCE_COLOR')) delete environment.NO_COLOR;
+  else if (Object.hasOwn(declaration, 'NO_COLOR')) delete environment.FORCE_COLOR;
+  return environment;
+}
+const baseEnv=declaredColorEnvironment({...process.env,...contract.environment,npm_config_cache:path.join(output,'npm-cache'),npm_config_userconfig:npmrc,NPM_CONFIG_USERCONFIG:npmrc},contract.environment);
 delete baseEnv.npm_config_allow_scripts;delete baseEnv.NPM_CONFIG_ALLOW_SCRIPTS;
 if(contract.native){const {nativeCiPlan}=await import('./run-ci-native.mjs');Object.assign(baseEnv,nativeCiPlan('unit',baseEnv).env);baseEnv.KIOKUKO_REQUIRE_LISP_RUNTIME='1';baseEnv.KIOKUKO_REQUIRE_DSH_CLI='1';const bin=path.join(baseEnv.KIOKUKO_DSH_PACKAGE_ROOT,'.bin');baseEnv.PATH=bin+path.delimiter+baseEnv.PATH;if(existsSync(path.join(bin,'dsh')))baseEnv.DSH_BIN=path.join(bin,'dsh');}
 baseEnv.KIOKUKO_REQUIRE_SQLITE_VEC_SMOKE='1';
@@ -105,7 +112,7 @@ for(const check of checks) {
   if(missingTests.length){record.status='prerequisite-missing';record.missingTestCapabilities=missingTests;continue;}
   const reportDir=path.join(output,check.id);mkdirSync(reportDir);
   const nonce=randomUUID(),completionFile=path.join(output,'receipts',check.id,'complete.json');mkdirSync(path.dirname(completionFile),{recursive:true});
-  const env={...baseEnv,KIOKUKO_VERIFY_CHECK_ID:check.id,KIOKUKO_VERIFY_NONCE:nonce,KIOKUKO_VERIFY_COMPLETION_FILE:completionFile,...check.env,KIOKUKO_VERIFY_REPORT_DIR:reportDir,KIOKUKO_HARNESS_REPORT:path.join(output,'harness.json'),KIOKUKO_DSH_EVIDENCE_PATH:path.join(output,'dsh-lifecycle.json')};
+  const env=declaredColorEnvironment({...baseEnv,KIOKUKO_VERIFY_CHECK_ID:check.id,KIOKUKO_VERIFY_NONCE:nonce,KIOKUKO_VERIFY_COMPLETION_FILE:completionFile,...check.env,KIOKUKO_VERIFY_REPORT_DIR:reportDir,KIOKUKO_HARNESS_REPORT:path.join(output,'harness.json'),KIOKUKO_DSH_EVIDENCE_PATH:path.join(output,'dsh-lifecycle.json')},check.env);
   console.log(`VERIFY ${check.id}`);
   const observed=await command(check.argv,env,check.id);
   const reports=readdirSync(reportDir).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(path.join(reportDir,f))));

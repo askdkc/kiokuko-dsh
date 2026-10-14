@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { assertProtocolRoute } from '../guardrail/service.js'
+import { isOwnedExecutionCall } from '../owned-execution.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
 import { mountApprovalPolicy } from './approval-settings.js'
 import type { ApprovalQuestions } from './approval.js'
@@ -28,6 +31,8 @@ import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './request-surfa
 import { mountLispHttp } from './http.js'
 import { createLispCiAdapter } from './ci.js'
 import { createLispPackageAdapter } from './packages.js'
+import { withTaskAuthority } from '../task-authority-context.js'
+import { TASK_AUTHORITY, type TaskLease } from '../task-state.js'
 import { createLispMemoryVerification } from './memory-verification.js'
 import { isSavedLispResultRead } from '../memory-application.js'
 import { attachmentInput, type LispAttachmentSession, type LispAttachmentStore } from './attachment-input.js'
@@ -40,8 +45,10 @@ interface Agent { id: string; status?: string; session: Session; ctx: { get(name
 interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; schemas(scope?: unknown): { name: string; description: string; parameters: unknown }[]; modeFor?(scope:unknown):string; presentAs(mode: 'native'): () => void; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
 interface ExecutionFence { protect(sessionId: string): void; release(sessionId: string): void }
 interface ExecutionFences { attach(request: { id: string; tools: readonly string[]; check(execution: any): string | undefined; beforeStep(agent: Agent): Promise<boolean> }): ExecutionFence }
-interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean; executionMode: 'development'|'protected' }
+interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean; executionMode: 'development'|'protected'; protocolBridge?: (execution: any) => boolean }
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
+const PROTOCOL_OWNED_TOOLS = ['kioku_read', 'kioku_write', 'kioku_edit', 'kioku_exec', 'kioku_result'] as const
+const PROTOCOL_OWNED_EFFECTS = new Set<string>(['kioku_write', 'kioku_edit', 'kioku_exec'])
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill', 'observation_read'] as const
 // Keep host-owned review, questions and Plan approval reachable while Lisp blocks native effects.
 // Pin its implementation just like reads; its own run/session checks still apply.
@@ -99,6 +106,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       fail('SESSION_MISMATCH', 'Lisp approval session identity changed.')
   })
   const development=config.executionMode==='development'
+  // Registry visibility is not permission: only this host-minted call scope may
+  // cross the protected fence, through the pinned real owned implementation.
+  type PinnedOwned = Readonly<{ definition: any; execute: unknown }>
+  const protocolBridgeScope = new AsyncLocalStorage<{ agent: Agent; name: string; callId: string; pinned: PinnedOwned }>()
+  const protocolDefinitions = new Map<string, PinnedOwned>()
   const ownerQuestions: ApprovalQuestions = { executionMode:config.executionMode, approvalPolicy, ask: request => {
     approvalPolicy.validate(request.agent!.id)
     return questions?.ask({ ...request, agent: agents.get(request.agent!.id)! }) ?? Promise.reject(new Error('Question UI unavailable'))
@@ -107,16 +119,21 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const store = new LispStore(fn => runtime.withDatabase(db => fn(db)))
   const typesafe = new HttpTypeSafeClient(typeSafeCredentials(ctx))
   let ownerForOwned:(binding:LispOwner)=>{signal:AbortSignal}
-  const ownedCall = async(owner:LispOwner,name:string,args:Record<string,unknown>,signal?:AbortSignal,callId?:string):Promise<any> => {
+  const ownedCall = async(owner:LispOwner,name:string,args:Record<string,unknown>,signal?:AbortSignal,callId?:string, taskLease?:TaskLease):Promise<any> => {
     const agent=agents.get(owner.agentId)
     if(!agent||agent.session.id!==owner.sessionId||sessions.get(owner.sessionId)!==agent.session||realpathSync(agent.session.header.cwd)!==owner.root)fail('SESSION_MISMATCH','Owned tool caller changed.')
     const binding=ownerForOwned(owner)
-    const result=await tools.execute({callId:callId??`lisp-owned-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-owned'),signal:signal?AbortSignal.any([binding.signal,signal]):binding.signal}) as any
+    const execute = () => tools.execute({callId:callId??`lisp-owned-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-owned'),signal:signal?AbortSignal.any([binding.signal,signal]):binding.signal,
+      ...(taskLease ? { [TASK_AUTHORITY]: taskLease } : {})})
+    const result=await (taskLease ? withTaskAuthority(taskLease, execute) : execute()) as any
     if(result.isError)fail('OWNED_EXECUTION_FAILED',JSON.stringify(result.content))
     return result.value
   }
-  const packageAdapter = createLispPackageAdapter(ownerQuestions)
-  const memoryVerification = createLispMemoryVerification(runtime)
+  const authorizeEffect = async (owner: LispOwner): Promise<void> => { await manager.taskAuthority.authorizeEffect(owner) }
+  const packageAdapter = createLispPackageAdapter(ownerQuestions, undefined, undefined, authorizeEffect)
+  const memoryVerification = createLispMemoryVerification(runtime, {
+    authorizePublication: (db, owner) => manager.taskAuthority.authorizeEffectPublication(db, owner),
+  })
   const manager = new LispManager({ store, config,
     codeSession: (binding, context) => {
       const agent = agents.get(binding.agentId)
@@ -148,12 +165,15 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       return result
     },
     ciCall: async (owner, request, signal, scratchRoot) => {
-      if(!development){await memoryVerification.beforeCall(owner,request);return createLispCiAdapter(ownerQuestions)(owner,request,signal,scratchRoot)}
+      // Fixed CI inventory/log reads do not claim a task execution lease.
+      // Sending them through kioku_exec would classify those reads as work.
+      if(!development || request.kind !== 'verify'){await memoryVerification.beforeCall(owner,request);return createLispCiAdapter(ownerQuestions, undefined, authorizeEffect)(owner,request,signal,scratchRoot)}
       const ciAdapter=createLispCiAdapter(ownerQuestions,async(file,args,options)=>{
         const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'"
-        const value=await ownedCall(owner,'kioku_exec',{command:[file,...args].map(quote).join(' '),cwd:options.cwd,timeoutMs:options.timeoutMs},options.signal)
+        const value=await ownedCall(owner,'kioku_exec',{command:[file,...args].map(quote).join(' '),cwd:options.cwd,timeoutMs:options.timeoutMs},options.signal,undefined,
+          request.kind === 'verify' ? await manager.taskAuthority.authorizeEffect(owner) : undefined)
         return {code:value.exitCode??1,stdout:value.output??'',stderr:'',receipt:value.receipt}
-      })
+      }, authorizeEffect)
       return ciAdapter(owner,request,signal,scratchRoot)
     },
     verifiedCall: memoryVerification.afterEval,
@@ -179,10 +199,31 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', '添付入力のセッションを確認できません。')
       return attachmentInput(agent.session, agent.ctx.get('attachments', false) as LispAttachmentStore | undefined, path, signal)
     },
-    toolCall: async (owner, name, args, signal,callId) => {
+    toolCall: async (owner, name, args, signal,callId,taskLease) => {
       const agent = agents.get(owner.agentId)
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', 'ホスト呼び出しの主体を確認できません。')
-      return development ? ownedCall(owner,name,args,signal,callId) : tools.execute({callId:`lisp-host-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-host-read'),signal:signal??new AbortController().signal})
+      if (development) return ownedCall(owner,name,args,signal,callId,taskLease)
+      if ((PROTOCOL_OWNED_TOOLS as readonly string[]).includes(name)) {
+        const effect = PROTOCOL_OWNED_EFFECTS.has(name)
+        if (effect && (!taskLease || !callId)) fail('TASK_REQUIRED', 'Protected owned effects require the original task lease and call identity.')
+        await runtime.withDatabase(db => {
+          const workflow = sessionCodingWorkflow(db, owner.sessionId)
+          if (!workflow?.protocol || workflow.repositoryRoot !== owner.root || taskLease && workflow.runId !== taskLease.taskId)
+            fail('PROTOCOL_ROUTE_REQUIRED', 'This protected owned bridge requires the exact enrolled task.')
+          // The owned service performs phase/file/command checks again at each
+          // effect boundary. Read/cancel receipts remain available after stop.
+          if (effect) assertProtocolRoute(db, taskLease!, name, true)
+        })
+        const pinned = protocolDefinitions.get(`${agent.id}:${name}`)
+        if (!pinned || tools.get(name, agent) !== pinned.definition || tools.get(name, agent)?.execute !== pinned.execute)
+          fail('PROTOCOL_ROUTE_REQUIRED', 'The pinned owned implementation is unavailable or changed.')
+        const id = callId ?? `lisp-owned-result-${randomUUID()}`
+        return protocolBridgeScope.run({ agent, name, callId: id, pinned },
+          () => ownedCall(owner, name, args, signal, id, taskLease))
+      }
+      const execute = () => tools.execute({callId:`lisp-host-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-host-read'),signal:signal??new AbortController().signal,
+        ...(taskLease ? { [TASK_AUTHORITY]: taskLease } : {})})
+      return taskLease ? withTaskAuthority(taskLease, execute) : execute()
     },
     // The independent Web/command surface displays failures. Do not inject a
     // synthetic user request: it could start intake or a fresh model turn.
@@ -213,6 +254,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (persistent.stopped || !persistent.controller) return persistent.executionMode==='development' ? 'Lisp は停止中です。通常ツールは利用できます。' : 'Lisp の保護が継続中です。プラグインを戻し /kioku-lisp status で確認してください。'
       if (!agent || agents.get(agent.id) !== agent || sessions.get(agent.session.id) !== agent.session) return 'Lisp のセッションを確認できません。'
       if (agent.session.id !== scope) return '保護中の子セッションでは任意ツールを実行できません。親セッションの Lisp を使用してください。'
+      if (persistent.protocolBridge?.(execution)) return undefined
       const registered = persistent.definitions.get(`${agent.id}:${execution.name}`)
       if (registered && tools.get(execution.name, agent)?.execute === (registered as { execute: unknown }).execute) return undefined
       return 'Lisp 保護中は Lisp ツールと DSH の読み取り・検索・スキル読み込み・質問・計画提出を使えます。変更は Lisp 経由で行い、削除・既存ファイルの置換には利用者の確認が必要です。'
@@ -241,6 +283,13 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   await manager.start()
   fence.executionMode=config.executionMode
   fence.sessions = manager.enabled; fence.controller = manager; fence.stopped = false
+  fence.protocolBridge = execution => {
+    const active = protocolBridgeScope.getStore()
+    return Boolean(active && active.agent === execution.agent && active.name === execution.name && active.callId === execution.callId
+      && protocolDefinitions.get(`${active.agent.id}:${active.name}`) === active.pinned
+      && tools.get(active.name, active.agent) === active.pinned.definition
+      && tools.get(active.name, active.agent)?.execute === active.pinned.execute && isOwnedExecutionCall(execution))
+  }
   const disposers: (() => void)[] = []
   if (semanticCompaction) for (const tool of ['lisp_eval', 'lisp_inspect']) disposers.push(semanticCompaction.registerProjector(tool, renderHistoryResult))
   try {
@@ -280,8 +329,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     for (const dispose of agentDisposers.get(agent.id)?.reverse() ?? []) dispose()
     agentDisposers.delete(agent.id); registeredAgents.delete(agent)
     for (const name of [...LISP_TOOLS, ...LISP_NATIVE_TOOLS]) fence!.definitions.delete(`${agent.id}:${name}`)
+    for (const name of PROTOCOL_OWNED_TOOLS) protocolDefinitions.delete(`${agent.id}:${name}`)
   }
-  disposers.push(() => { for (const dispose of runtimePrompts.values()) dispose(); runtimePrompts.clear(); boundAgents.clear(); for (const list of agentDisposers.values()) for (const dispose of list.reverse()) dispose(); agentDisposers.clear(); fence!.definitions.clear() })
+  disposers.push(() => { for (const dispose of runtimePrompts.values()) dispose(); runtimePrompts.clear(); boundAgents.clear(); for (const list of agentDisposers.values()) for (const dispose of list.reverse()) dispose(); agentDisposers.clear(); fence!.definitions.clear(); protocolDefinitions.clear() })
   const register = (agent: Agent) => {
     if (registeredAgents.has(agent)) return
     if (boundAgents.has(agent.id)) unregister(boundAgents.get(agent.id)!)
@@ -300,6 +350,10 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (definition) { fence!.definitions.set(`${agent.id}:${name}`, definition); nativeTools.push(name) }
     }
     if(!development) {
+      for (const name of PROTOCOL_OWNED_TOOLS) {
+        const definition = tools.get(name, agent)
+        if (definition) { protocolDefinitions.set(`${agent.id}:${name}`, Object.freeze({ definition, execute: definition.execute })); nativeTools.push(name) }
+      }
       let release = restrictInheritedTools(tools, scopedTools, agent, nativeTools)
       // Inventory binding must see installed definitions, independently of this
       // plugin's protected presentation. Lift only our mask synchronously, never
@@ -308,7 +362,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         release()
         try { return tools.schemas(agent) }
         finally { release = restrictInheritedTools(tools, scopedTools, agent,
-          nativeTools.filter(name => tools.get(name, agent) === fence!.definitions.get(`${agent.id}:${name}`))) }
+          nativeTools.filter(name => tools.get(name, agent) === (fence!.definitions.get(`${agent.id}:${name}`) ?? protocolDefinitions.get(`${agent.id}:${name}`)?.definition))) }
       })
       local.push(() => { inventoryReaders.delete(agent.id); release() })
     }
@@ -407,6 +461,36 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const requestSurface: LispAssemblyService = {
     capabilities: LISP_TOOLS.map(name => ({ name, description: description(name) })),
     inventory: candidate => inventoryReaders.get(candidate.id)?.() ?? tools.schemas(candidate),
+    async stopTask(candidate) {
+      const binding = owner(candidate)
+      if (!manager.enabled.has(binding.owner.sessionId)) return
+      await manager.disposeSession(binding.owner.sessionId)
+      const current = owner(candidate)
+      if (current.agent !== binding.agent || current.owner.root !== binding.owner.root)
+        fail('SESSION_MISMATCH', 'Lisp の停止中にセッションが変わりました。')
+    },
+    async taskJobsIdle(candidate) {
+      try {
+        const binding = owner(candidate), session = binding.agent.session
+        const idle = await manager.taskJobsIdle(binding.owner)
+        const current = owner(candidate)
+        return idle && !fence!.stopped && !binding.signal.aborted && current.agent === binding.agent
+          && current.agent.session === session && current.signal === binding.signal
+          && current.owner.sessionId === binding.owner.sessionId && current.owner.agentId === binding.owner.agentId
+          && current.owner.root === binding.owner.root
+      } catch { return false }
+    },
+    taskJobsIdleSync(candidate) {
+      try {
+        const binding = owner(candidate), session = binding.agent.session
+        const idle = manager.taskJobsIdle(binding.owner)
+        const current = owner(candidate)
+        return idle && !fence!.stopped && !binding.signal.aborted && current.agent === binding.agent
+          && current.agent.session === session && current.signal === binding.signal
+          && current.owner.sessionId === binding.owner.sessionId && current.owner.agentId === binding.owner.agentId
+          && current.owner.root === binding.owner.root
+      } catch { return false }
+    },
     async project(candidate, assembly) {
       const binding = owner(candidate)
       const workflow = await runtime.withDatabase(db => sessionCodingWorkflow(db, binding.owner.sessionId))

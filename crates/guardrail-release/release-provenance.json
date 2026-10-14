@@ -1,0 +1,328 @@
+{
+  "availability": {
+    "cross_runtime_semantic_decision_equal": true,
+    "linux": [
+      {
+        "archive": "archives/kiokuko-guardrail-0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+        "binary_bytes": 425048,
+        "binary_sha256": "cbc608e59c6f9b6233a954f3616113627ba542a404fd6173d976c6d085a32dc2",
+        "independent_builds_equal": true,
+        "native_smoke": "passed",
+        "package_sha256": "2fe6321f1aa10036131d92b979c27ad8055963d663b65ccaa3f26adea8b52eba",
+        "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
+        "static_no_pt_interp": false,
+        "target": "x86_64-unknown-linux-gnu"
+      },
+      {
+        "archive": "archives/kiokuko-guardrail-0.1.0-x86_64-unknown-linux-musl.tar.gz",
+        "binary_bytes": 516792,
+        "binary_sha256": "d262a712893945a1525dc9c8f19c806a44a832747879c1af8f6e33634b15636b",
+        "independent_builds_equal": true,
+        "native_smoke": "passed",
+        "package_sha256": "27273d1914e0c406425722973dec110da019c37ca6dd43afdff8f8c86013b868",
+        "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
+        "static_no_pt_interp": true,
+        "target": "x86_64-unknown-linux-musl"
+      },
+      {
+        "archive": "archives/kiokuko-guardrail-0.1.0-aarch64-unknown-linux-musl.tar.gz",
+        "binary_bytes": 445888,
+        "binary_sha256": "62b8f751d99e24c71d4223037221207ecd7877ddbf0ac3784e31df26c8af0beb",
+        "independent_builds_equal": true,
+        "native_smoke": "not run",
+        "package_sha256": "9db094881a6fb18c3457f46e1c285dffe223414c982b2b4f5071babe182c5c02",
+        "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
+        "static_no_pt_interp": true,
+        "status": "cross-built; not executed on ARM64 Linux",
+        "target": "aarch64-unknown-linux-musl"
+      }
+    ],
+    "macos": [
+      {
+        "archive": "archives/kiokuko-guardrail-0.1.0-aarch64-apple-darwin.tar.gz",
+        "binary_bytes": 384672,
+        "binary_sha256": "c60cb16daa7a536d876017da01815fce3719bae16fc6cd42ea74df04f3e53af4",
+        "imports": [
+          "/usr/lib/libSystem.B.dylib"
+        ],
+        "independent_builds_equal": true,
+        "interpreter": "/usr/lib/dyld",
+        "linker_ad_hoc_signature": true,
+        "minimum_os": "13.0.0",
+        "native_smoke": "not run",
+        "package_sha256": "9ba9b967e8eae733972ce01d5841ddb432f1c863dd5f86792527266ddeb73530",
+        "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
+        "status": "cross-built; not executed on macOS",
+        "target": "aarch64-apple-darwin"
+      },
+      {
+        "archive": "archives/kiokuko-guardrail-0.1.0-x86_64-apple-darwin.tar.gz",
+        "binary_bytes": 414856,
+        "binary_sha256": "673e9b26eda59ba18e217034c6502daa65a2ab10f22403685c4aaf42181631f0",
+        "imports": [
+          "/usr/lib/libSystem.B.dylib"
+        ],
+        "independent_builds_equal": true,
+        "interpreter": "/usr/lib/dyld",
+        "linker_ad_hoc_signature": false,
+        "minimum_os": "13.0.0",
+        "native_smoke": "not run",
+        "package_sha256": "fb3a2c767f2a077dbe86af44814b93ae9ef81722359423882c029db0f5afdcb3",
+        "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
+        "status": "cross-built; not executed on macOS",
+        "target": "x86_64-apple-darwin"
+      }
+    ],
+    "macos_ad_hoc_signature_checks": [
+      {
+        "native_execution": "not run",
+        "sha256": "c60cb16daa7a536d876017da01815fce3719bae16fc6cd42ea74df04f3e53af4",
+        "sha256_code_pages_verified": true,
+        "target": "aarch64-apple-darwin"
+      }
+    ],
+    "semantic_decision_comparison_targets": [
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl"
+    ],
+    "version": "0.1.0",
+    "windows": "out of requested scope"
+  },
+  "governed_verification_receipt_hashes": {
+    "rust-arm-cross-verification-v2": {
+      "journal.sexp": "cf03b474bfbe1739d3c4ce3888cc1363ca11b72bf001ade6d79705ff543faa74",
+      "run-1.log": "6bb45b6983350f6e28cb5c372bc29543b1005a29f5225c22d81688c8f934c9af"
+    },
+    "rust-final-tests-verification": {
+      "journal.sexp": "d85bea11c6627dfbd83a112f8ef51edb17f89d5c055265d369c254a6b6c112f5",
+      "run-1.log": "36051c291862a8931b3a90ffc4d22dc29599e20058f1c39394c4a46dfe7f19eb"
+    },
+    "rust-macos-cross-verification-v5": {
+      "journal.sexp": "6e6589f985766f1d3065d61290bffa301a98343ae2553a327dbe1e1e3acc2125",
+      "run-1.log": "f237a343d9966a34c28145a1c2d548661a9f609cb3954bf34e3330d9ff26142f"
+    },
+    "rust-release-verification-v3": {
+      "journal.sexp": "d872f202d2d33616143a932accf574c94f528a78a168bc8263fea5760a929448",
+      "run-1.log": "1fdab33512e26b643175e54245469ae7136e18dc9ff80ca52e2f8061e7f70703"
+    }
+  },
+  "official_toolchain_components": [
+    {
+      "sha256": "77171ba2a0345fdf2abc4fedda55d6de078dae7a68527c28be8c77dcc9604bd5",
+      "url": "https://static.rust-lang.org/dist/2026-10-01/rustc-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
+    },
+    {
+      "sha256": "3e58dff2d0b72196b5ea4e90536e174d400de88564a52694686b81e091169933",
+      "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
+    },
+    {
+      "sha256": "d7674918d28093097614cd9728b6ca60db9ea3038f640f0bd1e9a4188c7568ce",
+      "url": "https://static.rust-lang.org/dist/2026-10-01/cargo-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
+    },
+    {
+      "sha256": "b22c09ab9e258ec5571da170d88bd1624a4ea602e6d70d95720c5b47494cadce",
+      "url": "https://static.rust-lang.org/dist/2026-10-01/rustfmt-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
+    },
+    {
+      "sha256": "b106b0aa4565cc3525fd3161c69203a9e39044e6e6b4d618f261c3eeda14ad50",
+      "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-x86_64-unknown-linux-musl.tar.xz"
+    },
+    {
+      "sha256": "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026",
+      "url": "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
+    },
+    {
+      "sha256": "a7c6de8aa21e7c31163a7656295b321bb85f5dce55ed8ea95ac9ac561202bb5b",
+      "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-aarch64-apple-darwin.tar.xz"
+    },
+    {
+      "sha256": "18ee81961a73c3ae966ecb1e8f6096438c90aeefece8856201a6ecc17f5bc850",
+      "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-x86_64-apple-darwin.tar.xz"
+    },
+    {
+      "sha256": "ea8fd309578a09c9e12401621a470e6d6b1047f25933207fb8a39d66647d4561",
+      "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-aarch64-unknown-linux-musl.tar.xz"
+    }
+  ],
+  "package_manifests": {
+    "aarch64-apple-darwin": {
+      "build_inputs": {
+        "cargo_sha256": "e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14",
+        "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+        "command": [
+          "env",
+          "SOURCE_DATE_EPOCH=0",
+          "MACOSX_DEPLOYMENT_TARGET=13.0",
+          "LD_LIBRARY_PATH=RUST_TOOLCHAIN/lib",
+          "RUSTFLAGS=--remap-path-prefix=SOURCE=kiokuko-guardrail --remap-path-prefix=TEMP=build",
+          "LINKER=zig-0.17.0-cc-strip-target-aarch64-macos.13.0.0",
+          "cargo",
+          "build",
+          "--manifest-path",
+          "Cargo.toml",
+          "--locked",
+          "--offline",
+          "--release",
+          "--target",
+          "aarch64-apple-darwin"
+        ],
+        "rustc_sha256": "f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f",
+        "rustc_version": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+        "source_date_epoch": 0,
+        "target": "aarch64-apple-darwin"
+      },
+      "file": "kiokuko-guardrail-0.1.0-aarch64-apple-darwin.tar.gz.manifest.json",
+      "sha256": "4e5e9e56dbfc3de7d70a703da3ec69c2ec4600cc9b5ae728606fe1ea47e85440"
+    },
+    "aarch64-unknown-linux-musl": {
+      "build_inputs": {
+        "cargo_sha256": "e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14",
+        "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+        "command": [
+          "env",
+          "SOURCE_DATE_EPOCH=0",
+          "RUSTFLAGS=--remap-path-prefix=SOURCE=kiokuko-guardrail --remap-path-prefix=TEMP=build -C linker-flavor=ld.lld -C link-self-contained=yes",
+          "LINKER=rust-lld-LLD 23.1.1 (/checkout/src/llvm-project/llvm 1b9c0d5ff9bbe7634aead059efe6b11a7eeba145) (compatible with GNU linkers)",
+          "cargo",
+          "build",
+          "--manifest-path",
+          "Cargo.toml",
+          "--locked",
+          "--offline",
+          "--release",
+          "--target",
+          "aarch64-unknown-linux-musl"
+        ],
+        "rustc_sha256": "f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f",
+        "rustc_version": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+        "source_date_epoch": 0,
+        "target": "aarch64-unknown-linux-musl"
+      },
+      "file": "kiokuko-guardrail-0.1.0-aarch64-unknown-linux-musl.tar.gz.manifest.json",
+      "sha256": "2f1560bb9aa7b12ecba9000f0ae540598e433a06869138c861a68ecc26fd2787"
+    },
+    "x86_64-apple-darwin": {
+      "build_inputs": {
+        "cargo_sha256": "e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14",
+        "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+        "command": [
+          "env",
+          "SOURCE_DATE_EPOCH=0",
+          "MACOSX_DEPLOYMENT_TARGET=13.0",
+          "LD_LIBRARY_PATH=RUST_TOOLCHAIN/lib",
+          "RUSTFLAGS=--remap-path-prefix=SOURCE=kiokuko-guardrail --remap-path-prefix=TEMP=build",
+          "LINKER=zig-0.17.0-cc-strip-target-x86_64-macos.13.0.0",
+          "cargo",
+          "build",
+          "--manifest-path",
+          "Cargo.toml",
+          "--locked",
+          "--offline",
+          "--release",
+          "--target",
+          "x86_64-apple-darwin"
+        ],
+        "rustc_sha256": "f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f",
+        "rustc_version": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+        "source_date_epoch": 0,
+        "target": "x86_64-apple-darwin"
+      },
+      "file": "kiokuko-guardrail-0.1.0-x86_64-apple-darwin.tar.gz.manifest.json",
+      "sha256": "48e718f7c8d23cae7d11f11c722c85785f78ad53abff33eb7d25c6ddb01e9d66"
+    },
+    "x86_64-unknown-linux-gnu": {
+      "build_inputs": {
+        "cargo_sha256": "e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14",
+        "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+        "command": [
+          "env",
+          "SOURCE_DATE_EPOCH=0",
+          "RUSTFLAGS=--remap-path-prefix=SOURCE=kiokuko-guardrail --remap-path-prefix=TEMP=build",
+          "cargo",
+          "build",
+          "--manifest-path",
+          "Cargo.toml",
+          "--locked",
+          "--offline",
+          "--release",
+          "--target",
+          "x86_64-unknown-linux-gnu"
+        ],
+        "rustc_sha256": "f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f",
+        "rustc_version": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+        "source_date_epoch": 0,
+        "target": "x86_64-unknown-linux-gnu"
+      },
+      "file": "kiokuko-guardrail-0.1.0-x86_64-unknown-linux-gnu.tar.gz.manifest.json",
+      "sha256": "f5e845f6119a6280ff6181bd0f93edee81afc998366ef0c989ffd28be043b784"
+    },
+    "x86_64-unknown-linux-musl": {
+      "build_inputs": {
+        "cargo_sha256": "e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14",
+        "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+        "command": [
+          "env",
+          "SOURCE_DATE_EPOCH=0",
+          "RUSTFLAGS=--remap-path-prefix=SOURCE=kiokuko-guardrail --remap-path-prefix=TEMP=build",
+          "cargo",
+          "build",
+          "--manifest-path",
+          "Cargo.toml",
+          "--locked",
+          "--offline",
+          "--release",
+          "--target",
+          "x86_64-unknown-linux-musl"
+        ],
+        "rustc_sha256": "f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f",
+        "rustc_version": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+        "source_date_epoch": 0,
+        "target": "x86_64-unknown-linux-musl"
+      },
+      "file": "kiokuko-guardrail-0.1.0-x86_64-unknown-linux-musl.tar.gz.manifest.json",
+      "sha256": "00e2c0ebf29867ff87e5c6e47c25e4c65d8884f70a8ace85f63717932356197c"
+    }
+  },
+  "rust_distribution_manifest_sha256": "ce6dddc886364f8d786514771212cebe9b731ba82d6b859951c6b0ccc516b6a2",
+  "schema": 1,
+  "scope": "Frozen source identity and recorded local test/build evidence. All five targets were built twice with matching same-target bytes and repacked identically. Native CLI checks and cross-runtime semantic equality were executed only on Linux x86_64 GNU/musl. macOS and ARM64 Linux were cross-built and structurally checked, not natively executed. This is not a hermetic Guix derivation, a signature, notarization, or deterministic model/external-effect guarantee.",
+  "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
+  "toolchains": {
+    "linux_arm64_linker_binary_sha256": "4739514e3484915747c34b35007cd990235cc6b490b2d0525a61ac402ca16af9",
+    "linux_arm64_linker_version": "LLD 23.1.1 (/checkout/src/llvm-project/llvm 1b9c0d5ff9bbe7634aead059efe6b11a7eeba145) (compatible with GNU linkers)",
+    "linux_x64": {
+      "cc_binary_sha256": "a23ecab8ff08f09ad8c80602c2c5df7f49e09c25905cb8975902e101bf72635f",
+      "cc_version": "cc (Debian 14.2.0-19) 14.2.0",
+      "components": [
+        {
+          "sha256": "77171ba2a0345fdf2abc4fedda55d6de078dae7a68527c28be8c77dcc9604bd5",
+          "url": "https://static.rust-lang.org/dist/2026-10-01/rustc-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
+        },
+        {
+          "sha256": "3e58dff2d0b72196b5ea4e90536e174d400de88564a52694686b81e091169933",
+          "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
+        },
+        {
+          "sha256": "d7674918d28093097614cd9728b6ca60db9ea3038f640f0bd1e9a4188c7568ce",
+          "url": "https://static.rust-lang.org/dist/2026-10-01/cargo-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
+        },
+        {
+          "sha256": "b22c09ab9e258ec5571da170d88bd1624a4ea602e6d70d95720c5b47494cadce",
+          "url": "https://static.rust-lang.org/dist/2026-10-01/rustfmt-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
+        },
+        {
+          "sha256": "b106b0aa4565cc3525fd3161c69203a9e39044e6e6b4d618f261c3eeda14ad50",
+          "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-x86_64-unknown-linux-musl.tar.xz"
+        }
+      ],
+      "ld_binary_sha256": "d2766988b6a1b1d1518cdc09242e726d1f24e151e16410ada3092b11ffd9081b",
+      "ld_version": "GNU ld (GNU Binutils for Debian) 2.44",
+      "official_manifest_sha256": "ce6dddc886364f8d786514771212cebe9b731ba82d6b859951c6b0ccc516b6a2",
+      "scope": "Recorded cloud toolchain inputs. This is not a fully isolated Guix derivation or a cross-platform deterministic inference claim."
+    },
+    "macos_zig_binary_sha256": "7c61539af19fa4082c94848f1c2b57b89e76dc6cfd5bd4c57764c3caf8f82272",
+    "macos_zig_version": "0.17.0"
+  },
+  "imported_provenance_sha256": "5f65f08be0b1e7368502c567de77ba6767a96ee4be065b48cd428f7cfe433d16",
+  "local_path_normalization": "Archive locations are descriptive repository-relative names; original capture bytes are identified by imported_provenance_sha256."
+}

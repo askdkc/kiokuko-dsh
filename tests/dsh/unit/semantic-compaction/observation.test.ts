@@ -97,7 +97,7 @@ for(const mode of ['auto','off'] as const)test(`historical empty excerpt pack re
 })
 for (const kind of ['child', 'hidden', 'error', 'multi', 'interrupted', 'native-off', 'lisp_eval'] as const) test(`packing retains protected result: ${kind}`, async () => {
   const f = setup(kind === 'lisp_eval' ? kind : 'read')
-  if (kind === 'child') f.session.header.parentSession = 'parent'
+  if (kind === 'child') { f.session.header.parentSession = 'parent'; f.session.header.origin = 'subagent'; f.session.header.delegationDepth = 1 }
   if (kind === 'hidden') f.definitions.delete('observation_read')
   if (kind === 'error') f.original.data.message.content[0].isError = true
   if (kind === 'multi') f.original.data.message.content[0].content.push({ type: 'text', text: 'extra' })

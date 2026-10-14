@@ -15,7 +15,7 @@ const generationInputBytes = (input: string): number => Buffer.byteLength(input)
 
 interface Job extends Record<string, unknown> {
   id: string; workspace: string; trigger_run: string; input_json: string; input_digest: string;
-  model_json: string; algorithm: string; kind: 'positive' | 'avoidance'; attempts: number; claim_token: string;
+  source_epoch: number; model_json: string; algorithm: string; kind: 'positive' | 'avoidance'; attempts: number; claim_token: string;
   settings_generation: number
 }
 export interface EvolutionWorkerOptions {
@@ -28,7 +28,7 @@ export interface EvolutionWorkerOptions {
 export function buildEvolutionRequest(episodes: Episode[], kind: Job['kind'], model: EvolutionModel, config: EvolutionConfig): string | undefined {
   if (model.contextWindow === undefined) return undefined
   const input = canonicalJson({ algorithm: EVOLUTION_VERSION, kind, episodes: episodes.map(e => ({
-    runId: e.runId, sources: e.sources, draft: e.draft, observedSuccess: e.successful, observedProcedureSuccess: e.procedureSupported, failed: e.failed, corrective: e.corrective,
+    runId: e.runId, sourceEpoch: e.sourceEpoch ?? 1, sources: e.sources, draft: e.draft, observedSuccess: e.successful, observedProcedureSuccess: e.procedureSupported, failed: e.failed, corrective: e.corrective,
   })) })
   // One UTF-8 byte per token is a conservative upper bound for this bounded text;
   // never reuse the old finalizer's byte count as a measured token count.
@@ -139,12 +139,12 @@ export class EvolutionWorker {
         if (episodes.some(e => !episodeCurrent(db, e))) { reason = 'source_changed'; throw new Error(reason) }
         const day = this.#now().slice(0, 10)
         const count = db.prepare('SELECT COUNT(*) AS n FROM memory_evolution_calls WHERE workspace=? AND utc_day=?').get<{ n: number }>(job.workspace, day)!.n
-        if (count >= this.options.config.dailyCalls || db.prepare('SELECT 1 FROM memory_evolution_calls WHERE trigger_run=?').get(job.trigger_run)) {
+        if (count >= this.options.config.dailyCalls || db.prepare('SELECT 1 FROM memory_evolution_calls WHERE trigger_run=? AND source_epoch=?').get(job.trigger_run, job.source_epoch)) {
           reason = 'call_budget'; throw new Error(reason)
         }
         const id = randomUUID()
-        db.prepare(`INSERT INTO memory_evolution_calls(id,job_id,trigger_run,workspace,utc_day,input_bytes,outcome,created_at) VALUES(?,?,?,?,?,?,'unknown',?)`)
-          .run(id, job.id, job.trigger_run, job.workspace, day, generationInputBytes(request!), this.#now())
+        db.prepare(`INSERT INTO memory_evolution_calls(id,job_id,trigger_run,source_epoch,workspace,utc_day,input_bytes,outcome,created_at) VALUES(?,?,?,?,?,?,?,'unknown',?)`)
+          .run(id, job.id, job.trigger_run, job.source_epoch, job.workspace, day, generationInputBytes(request!), this.#now())
         return id
       }))
       const collect = async (): Promise<string> => {
@@ -153,7 +153,7 @@ export class EvolutionWorker {
         for await (const raw of this.options.llm!.stream({ provider: model.provider, model: model.model,
           ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
           maxTokens: this.options.config.maxOutputTokens, temperature: 0, signal: controller.signal,
-          purpose: 'compaction', sessionId: model.sessionId ?? episodes.find(e => e.runId === job.trigger_run)?.sessionId ?? episodes[0]!.sessionId,
+          purpose: 'compaction', sessionId: model.sessionId ?? episodes.find(e => e.runId === job.trigger_run && (e.sourceEpoch ?? 1) === job.source_epoch)?.sessionId ?? episodes[0]!.sessionId,
           system: EVOLUTION_SYSTEM_PROMPT,
           messages: [{ role: 'user', content: [{ type: 'text', text: request! }] }],
         })) {

@@ -17,7 +17,7 @@ import { EvolutionWorker } from '../memory/evolution/worker.js'
 import { AutoGlobalizationWorker } from '../memory/auto-globalization.js'
 import { DeepMemoryFinalizer } from '../deep-thinker/memory-finalizer.js'
 import { DeepStore } from '../deep-thinker/store.js'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { TransactionCommitUncertainError, withImmediateTransaction } from '../db/transaction.js'
 import { KiokukoError } from '../errors.js'
@@ -134,6 +134,9 @@ export interface DshMemoryCapsule {
 }
 
 interface FinalizationJob extends Record<string, unknown> {
+  readonly sourceEpoch: number
+  readonly archived?: boolean
+  readonly sourceGeneration?: string
   readonly evidenceContractVersion?: 3 | 4
   readonly memoryAdoptionVersion: 1 | 2
   readonly claimNonce: string
@@ -141,7 +144,7 @@ interface FinalizationJob extends Record<string, unknown> {
 
   readonly evidenceSelectionVersion: 1 | 2
   readonly extractionVersion: 1 | 2
-  readonly outcome: 'completed' | 'failed'
+  readonly outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted'
   readonly inputMode: FinalizationInputMode
   readonly runId: string
   readonly workspace: string
@@ -823,6 +826,51 @@ function repositoryId(database: SqliteDatabase, workspace: string): string {
   return row.repositoryId
 }
 
+function finalizationIdentity(job: FinalizationJob): string {
+  return job.sourceEpoch === 1 ? `finalizer:${job.runId}` : `finalizer:${job.runId}:source:${job.sourceEpoch}`
+}
+function storedFinalization(database: SqliteDatabase, job: FinalizationJob): Record<string, unknown> | undefined {
+  if (job.archived) {
+    const row=database.prepare('SELECT job_json FROM dsh_task_source_finalizations WHERE run_id=? AND source_epoch=?')
+      .get<{job_json:string}>(job.runId,job.sourceEpoch)
+    return row ? JSON.parse(row.job_json) as Record<string,unknown> : undefined
+  }
+  const row=database.prepare('SELECT * FROM dsh_memory_finalizations WHERE run_id=? AND source_epoch=?')
+    .get<Record<string,unknown>>(job.runId,job.sourceEpoch)
+  return row
+}
+function updateFinalization(database: SqliteDatabase, job: FinalizationJob, fields: Record<string, string | number | null>): void {
+  if(job.archived){
+    const row=storedFinalization(database,job)
+    if(row)database.prepare('UPDATE dsh_task_source_finalizations SET job_json=? WHERE run_id=? AND source_epoch=?')
+      .run(JSON.stringify({...row,...fields}),job.runId,job.sourceEpoch)
+  }else{
+    const keys=Object.keys(fields)
+    if(keys.some(key=>!/^[a-z_]+$/u.test(key)))throw new Error('invalid_finalization_field')
+    database.prepare(`UPDATE dsh_memory_finalizations SET ${keys.map(key=>`${key}=?`).join(',')} WHERE run_id=? AND source_epoch=?`)
+      .run(...Object.values(fields),job.runId,job.sourceEpoch)
+  }
+}
+function assertFinalizationLease(database: SqliteDatabase, job: FinalizationJob, now: string): void {
+  const current=storedFinalization(database,job)
+  if(!current || current.status!=='processing' || current.claim_nonce!==job.claimNonce || current.source_epoch!==job.sourceEpoch
+    || current.dsh_session_id!==job.dshSessionId || typeof current.lease_until!=='string' || current.lease_until<=now)
+    throw new KiokukoError('CONFLICT','DSH memory finalization source generation is no longer claimed')
+  if(!job.archived){
+    assertMemoryLease(database,job.runId,job.claimNonce,now)
+    const run=database.prepare('SELECT COALESCE(task_owner_session_id,dsh_session_id) AS owner FROM ledger_runs WHERE run_id=?').get<{owner:string}>(job.runId)
+    if(run?.owner!==job.dshSessionId)throw new KiokukoError('CONFLICT','DSH memory finalization source owner changed')
+  }
+}
+function archiveJob(row: Record<string,unknown>): FinalizationJob {
+  return {archived:true,runId:String(row.run_id),workspace:String(row.workspace),dshSessionId:String(row.dsh_session_id),
+    sourceEpoch:Number(row.source_epoch),sourceGeneration:String(row.source_generation),sourceStartSeq:Number(row.source_start_seq),sourceEndSeq:Number(row.source_end_seq),
+    attemptCount:Number(row.attempt_count),scheduledAt:String(row.scheduled_at),inputMode:row.input_mode as FinalizationInputMode,
+    extractionVersion:row.extraction_version as 1|2,evidenceSelectionVersion:row.evidence_selection_version as 1|2,
+    memoryAdoptionVersion:row.memory_adoption_version as 1|2,evidenceContractVersion:row.evidence_contract_version as 3|4,
+    outcome:row.outcome as FinalizationJob['outcome'],claimNonce:String(row.claim_nonce),leaseUntil:String(row.lease_until)}
+}
+
 export function bindDshRunLogStartInTransaction(
   database: SqliteDatabase,
   input: BindDshRunLogStartInput,
@@ -833,6 +881,9 @@ export function bindDshRunLogStartInTransaction(
   const sessionId = validateIdentity(input.dshSessionId, 'dshSessionId')
   const sourceStartSeq = validatedSequence(input.sourceStartSeq, 'sourceStartSeq')
   const sourceStartTurn = validatedTurn(input.sourceStartTurn, 'sourceStartTurn')
+  const preceding = database.prepare(`SELECT json_extract(job_json,'$.source_end_seq') AS sourceEndSeq FROM dsh_task_source_finalizations
+    WHERE run_id=? AND json_extract(job_json,'$.dsh_session_id')=? ORDER BY source_epoch DESC LIMIT 1`).get<{sourceEndSeq:number}>(runId,sessionId)
+  if (preceding && sourceStartSeq <= preceding.sourceEndSeq) throw new KiokukoError('CONFLICT','Resumed log source overlaps an earlier finalized source range')
   const existing = database.prepare(`
     SELECT workspace, dsh_session_id AS dshSessionId,
            source_start_seq AS sourceStartSeq, source_start_turn AS sourceStartTurn
@@ -962,6 +1013,15 @@ export class DshMemoryFinalizer {
          WHERE status IN ('processing', 'failed') AND COALESCE(last_error_code,'')<>'MEMORY_FORGOTTEN' AND attempt_count < ? AND capture_admission='ready' AND (claim_nonce IS NULL OR lease_until<=?)
       `).run(this.#now(), this.#maximumAttempts, this.#now())
     })
+    await this.#runtime.withDatabase(database => withImmediateTransaction(database,()=>{
+      for(const item of database.prepare('SELECT job_json FROM dsh_task_source_finalizations').all<{job_json:string}>()){
+        const row=JSON.parse(item.job_json) as Record<string,unknown>
+        if(['processing','failed'].includes(String(row.status)) && row.last_error_code!=='MEMORY_FORGOTTEN'
+          && Number(row.attempt_count)<this.#maximumAttempts && row.capture_admission==='ready'
+          && (!row.claim_nonce || String(row.lease_until)<=this.#now()))
+          updateFinalization(database,archiveJob(row),{status:'pending',claim_nonce:null,lease_until:null,updated_at:this.#now()})
+      }
+    }))
     await this.#runtime.withDatabase(database => configureEvolution(database, this.#evolutionConfig.mode))
     if (this.#closed) return
     this.#indexService = new IndexReasoningService(this.#runtime,this.#indexConfig,this.#llm)
@@ -989,9 +1049,13 @@ export class DshMemoryFinalizer {
     const workspace = validateIdentity(input.workspace, 'workspace')
     const sessionId = validateIdentity(input.dshSessionId, 'dshSessionId')
     const sourceEndSeq = validatedSequence(input.sourceEndSeq, 'sourceEndSeq')
-    const existing = database.prepare('SELECT status FROM dsh_memory_finalizations WHERE run_id = ?')
-      .get<{ status: string }>(runId)
-    if (existing !== undefined) return
+    const existing = database.prepare('SELECT status,workspace,dsh_session_id,source_end_seq FROM dsh_memory_finalizations WHERE run_id = ?')
+      .get<{ status: string; workspace:string; dsh_session_id:string; source_end_seq:number }>(runId)
+    if (existing !== undefined) {
+      if (existing.workspace !== workspace || existing.dsh_session_id !== sessionId || existing.source_end_seq !== sourceEndSeq)
+        throw new KiokukoError('CONFLICT', 'Finalization replay changed its source range')
+      return
+    }
     const boundary = database.prepare(`
       SELECT source_start_seq AS sourceStartSeq
         FROM dsh_run_log_boundaries
@@ -1004,9 +1068,9 @@ export class DshMemoryFinalizer {
       INSERT INTO dsh_memory_finalizations (
         run_id, workspace, dsh_session_id, source_start_seq, source_end_seq,
         status, attempt_count, input_mode, extraction_version, evidence_selection_version, memory_adoption_version, capture_admission, evidence_contract_version,
-        scheduled_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, 2, ?, ?, 4, ?, ?)
-    `).run(runId, workspace, sessionId, boundary.sourceStartSeq, sourceEndSeq, this.#inputMode, this.#evolutionConfig.mode === 'off' ? 1 : 2, 2, capturePolicy(database,workspace,sessionId).mode === 'allowed' ? 'ready' : capturePolicy(database,workspace,sessionId).mode, now, now)
+        scheduled_at, updated_at, source_epoch
+      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, 2, ?, ?, 4, ?, ?, (SELECT COALESCE(MAX(source_epoch),0)+1 FROM dsh_task_source_history WHERE run_id=?))
+    `).run(runId, workspace, sessionId, boundary.sourceStartSeq, sourceEndSeq, this.#inputMode, this.#evolutionConfig.mode === 'off' ? 1 : 2, 2, capturePolicy(database,workspace,sessionId).mode === 'allowed' ? 'ready' : capturePolicy(database,workspace,sessionId).mode, now, now, runId)
   }
 
   /** Schedule a background drain after the enclosing transaction commits. */
@@ -1049,17 +1113,34 @@ export class DshMemoryFinalizer {
            SET status = 'pending', updated_at = ?
          WHERE run_id = ? AND status = 'failed' AND COALESCE(last_error_code,'')<>'MEMORY_FORGOTTEN' AND attempt_count < ? AND capture_admission='ready' AND NOT EXISTS(SELECT 1 FROM memory_capture_exclusions x WHERE x.workspace=dsh_memory_finalizations.workspace AND x.native_session_id=dsh_memory_finalizations.dsh_session_id)
       `).run(this.#now(), checked, this.#maximumAttempts)
+      for (const item of database.prepare('SELECT job_json FROM dsh_task_source_finalizations WHERE run_id=?').all<{job_json:string}>(checked)) {
+        const row=JSON.parse(item.job_json) as Record<string,unknown>,job=archiveJob(row)
+        if(row.status==='failed' && row.last_error_code!=='MEMORY_FORGOTTEN' && job.attemptCount<this.#maximumAttempts
+          && row.capture_admission==='ready' && capturePolicy(database,job.workspace,job.dshSessionId).mode==='allowed')
+          updateFinalization(database,job,{status:'pending',updated_at:this.#now()})
+      }
     })
     this.kick()
   }
 
   async #claim(): Promise<FinalizationJob | undefined> {
     return this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+      // Old source segments are durable work, independent of the current task owner.
+      for(const item of database.prepare(`SELECT job_json FROM dsh_task_source_finalizations
+        WHERE json_extract(job_json,'$.status')='pending' ORDER BY run_id,source_epoch`).all<{job_json:string}>()){
+        const archived=JSON.parse(item.job_json) as Record<string,unknown>,job=archiveJob(archived)
+        if(job.attemptCount>=this.#maximumAttempts || archived.capture_admission!=='ready'
+          || capturePolicy(database,job.workspace,job.dshSessionId).mode!=='allowed')continue
+        const nonce=randomUUID(),until=new Date(Date.parse(this.#now())+this.#timeoutMs+30000).toISOString()
+        updateFinalization(database,job,{status:'processing',attempt_count:job.attemptCount+1,started_at:this.#now(),
+          claim_nonce:nonce,lease_until:until,last_error_code:null,last_error_message:null,updated_at:this.#now()})
+        return {...job,attemptCount:job.attemptCount+1,claimNonce:nonce,leaseUntil:until}
+      }
       const row = database.prepare(`
-        SELECT run_id AS runId, workspace, dsh_session_id AS dshSessionId,
+        SELECT run_id AS runId, workspace, dsh_session_id AS dshSessionId, source_epoch AS sourceEpoch,
                source_start_seq AS sourceStartSeq, source_end_seq AS sourceEndSeq,
                attempt_count AS attemptCount, scheduled_at AS scheduledAt, input_mode AS inputMode, extraction_version AS extractionVersion, evidence_selection_version AS evidenceSelectionVersion, memory_adoption_version AS memoryAdoptionVersion, evidence_contract_version AS evidenceContractVersion,
-               (SELECT status FROM ledger_runs r WHERE r.run_id=dsh_memory_finalizations.run_id) AS outcome
+               COALESCE(source_outcome,(SELECT status FROM ledger_runs r WHERE r.run_id=dsh_memory_finalizations.run_id)) AS outcome
           FROM dsh_memory_finalizations
          WHERE status = 'pending' AND attempt_count < ? AND capture_admission='ready' AND NOT EXISTS(SELECT 1 FROM memory_capture_exclusions x WHERE x.workspace=dsh_memory_finalizations.workspace AND x.native_session_id=dsh_memory_finalizations.dsh_session_id) AND NOT EXISTS(SELECT 1 FROM memory_review_states m WHERE m.run_id=dsh_memory_finalizations.run_id AND m.lease_nonce IS NOT NULL AND m.lease_until>?)
          ORDER BY scheduled_at, run_id
@@ -1069,7 +1150,7 @@ export class DshMemoryFinalizer {
       const now = this.#now()
       database.prepare(`INSERT OR IGNORE INTO memory_review_states(run_id,workspace,session_id,source_generation,admitted_after_seq,scanned_through_seq,scheduled_through_seq,reviewed_through_seq,terminal_outcome)
         VALUES(?,?,?,?,?,?,?,?,?)`).run(row.runId,row.workspace,row.dshSessionId,`legacy:${row.dshSessionId}`,row.sourceStartSeq-1,row.sourceStartSeq-1,row.sourceStartSeq-1,row.sourceStartSeq-1,row.outcome)
-      const nonce=acquireMemoryLease(database,row.runId,`finalizer:${row.runId}`,now,this.#timeoutMs+30000)
+      const nonce=acquireMemoryLease(database,row.runId,finalizationIdentity(row),now,this.#timeoutMs+30000)
       if(!nonce)return undefined
       const until=reviewState(database,row.runId)!.lease_until!
       database.prepare(`
@@ -1095,7 +1176,10 @@ export class DshMemoryFinalizer {
     if (this.#llm === undefined) throw new KiokukoError('SERVICE_UNAVAILABLE', 'DSH LLM service is unavailable for memory finalization')
     const { envelope } = prepared
     const base = buildFinalizationRequest(job, prepared, signal)
-    const execution=boundedOwnedEvidence(await this.#runtime.withDatabase(db=>ownedRunEvidence(db,job.runId,job.dshSessionId)))
+    const observed=await this.#runtime.withDatabase(db=>ownedRunEvidence(db,job.runId,job.dshSessionId))
+    const cited=new Set(reconciliation?.evidence.map(item=>item.id)??[])
+    const execution=boundedOwnedEvidence(observed.filter(receipt=>reconciliation ? cited.has(receipt.evidenceRef)
+      : prepared.evidence.includes(receipt.operationId)))
     const built=execution.items.length?{...base,request:{...base.request,messages:[...base.request.messages,{role:'user',content:[{type:'text',text:JSON.stringify({executionObservations:execution.items,omittedExecutionObservations:execution.omitted,policy:'Host observations describe execution and source-bound checks. They do not verify generalized lessons. Failed, unknown, stale or previous-generation results are not current success. Preserve conditions and source versions in candidate memories.'})}]}]}}:base
     let request = reconciliation ? { ...built.request, tools: [], system: `${built.request.system ?? ''}
 Override the legacy memory output format: return only schemaVersion 3 with memoryOperations and optional episode. Kinds: fact, decision, preference, lesson, reference. Use only the evidence IDs and existing entry IDs below. Operations: add(kind,title,body,evidenceIds), update(targetEntryId,expectedRevision,expectedContentHash,kind,title,body,evidenceIds), unchanged(targetEntryId,evidenceIds), defer(reason: ambiguous|conflict|insufficient_context,evidenceIds). Only editable candidates may be updated. Do not duplicate existing memories; preserve conditions and corrections. Assistant statements, quotes and recalled memory are not new evidence. Empty memoryOperations is valid.`,
@@ -1129,10 +1213,8 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
     let finish: Record<string, unknown> | undefined
     await this.#runtime.withDatabase(database=>withImmediateTransaction(database,()=>{
       assertCaptureAllowed(database,job.workspace,job.dshSessionId)
-      assertMemoryLease(database,job.runId,job.claimNonce,this.#now())
-      database.prepare("UPDATE dsh_memory_finalizations SET dispatched_at=? WHERE run_id=? AND claim_nonce=? AND status='processing' AND capture_admission='ready'").run(this.#now(),job.runId,job.claimNonce)
-      const changed=database.prepare('SELECT changes() AS n').get<{n:number}>()!.n
-      if(!changed)throw new Error('stale_finalizer_claim')
+      assertFinalizationLease(database,job,this.#now())
+      updateFinalization(database,job,{dispatched_at:this.#now()})
     }))
     for await (const value of abortableStream(this.#llm.stream(request),signal)) {
       const chunk = record(value)
@@ -1213,18 +1295,18 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
       if(job.memoryAdoptionVersion===2){
         const evidence=await this.#reviewEvidence(job)
         reconciliation=await this.#runtime.withDatabase(database=>{
-          const state=reviewState(database,job.runId)!
-          const range={workspace:job.workspace,sessionId:job.dshSessionId,runId:job.runId,sourceGeneration:state.source_generation,startSeq:job.sourceStartSeq,endSeq:job.sourceEndSeq}
+          const generation=job.archived ? job.sourceGeneration! : reviewState(database,job.runId)!.source_generation
+          const range={workspace:job.workspace,sessionId:job.dshSessionId,runId:job.runId,sourceGeneration:generation,startSeq:job.sourceStartSeq,endSeq:job.sourceEndSeq}
           return {range,evidence,...memorySnapshots(database,range,evidence.map(e=>e.text).join('\n'),job.evidenceContractVersion===4)}
         })
       }
       const extractEpisode = job.extractionVersion === 2 && await this.#runtime.withDatabase(database => evolutionSettings(database).mode !== 'off')
       const requestJob = extractEpisode ? job : { ...job, extractionVersion: 1 as const }
-      const bindingHash=canonicalContentHash({runId:job.runId,sessionId:job.dshSessionId,digest:prepared.digest,
+      const bindingHash=canonicalContentHash({runId:job.runId,sourceEpoch:job.sourceEpoch,sessionId:job.dshSessionId,digest:prepared.digest,
         evidence:reconciliation?reviewManifest(reconciliation.evidence):null,existing:reconciliation?.existing??null})
-      const staged=await this.#runtime.withDatabase(db=>db.prepare('SELECT staged_capsule_json,staged_binding_hash FROM dsh_memory_finalizations WHERE run_id=?').get<{staged_capsule_json:string|null;staged_binding_hash:string|null}>(job.runId))
+      const staged=await this.#runtime.withDatabase(db=>{assertFinalizationLease(db,job,this.#now());return storedFinalization(db,job)})
       let result:SummaryResult
-      if(staged?.staged_binding_hash===bindingHash&&staged.staged_capsule_json){
+      if(staged?.staged_binding_hash===bindingHash&&typeof staged.staged_capsule_json==='string'){
         const cached=JSON.parse(staged.staged_capsule_json)
         if(reconciliation){const parsed=(job.evidenceContractVersion===4?FinalizerResultV4:FinalizerResult).parse(JSON.parse(cached.capsuleJson));result={capsule:{schemaVersion:1,memories:[]},capsuleJson:cached.capsuleJson,memoryOperations:parsed.memoryOperations,...(parsed.episode===undefined?{}:{episode:parsed.episode}),usage:cached.usage,envelope:prepared.envelope}}
         else result={...parseCapsule(cached.capsuleJson),usage:cached.usage,envelope:prepared.envelope}
@@ -1232,9 +1314,8 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
         result=await finalizationObservationScope.run(true, () => this.#summarize(requestJob, prepared, controller.signal, attempt, reconciliation))
         if(findSecret(result.capsuleJson))throw new KiokukoError('VALIDATION_ERROR','Memory extraction contains secret-bearing material')
         await this.#runtime.withDatabase(db=>withImmediateTransaction(db,()=>{
-          assertCaptureAllowed(db,job.workspace,job.dshSessionId);assertMemoryLease(db,job.runId,job.claimNonce,this.#now())
-          db.prepare("UPDATE dsh_memory_finalizations SET staged_capsule_json=?,staged_binding_hash=? WHERE run_id=? AND claim_nonce=? AND status='processing'")
-            .run(JSON.stringify({capsuleJson:result.capsuleJson,usage:result.usage}),bindingHash,job.runId,job.claimNonce)
+          assertCaptureAllowed(db,job.workspace,job.dshSessionId);assertFinalizationLease(db,job,this.#now())
+          updateFinalization(db,job,{staged_capsule_json:JSON.stringify({capsuleJson:result.capsuleJson,usage:result.usage}),staged_binding_hash:bindingHash})
         }))
       }
       if (reconciliation) {
@@ -1250,12 +1331,8 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
       const now = this.#now()
       await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
         assertCaptureAllowed(database,job.workspace,job.dshSessionId)
-        assertMemoryLease(database,job.runId,job.claimNonce,this.#now())
+        assertFinalizationLease(database,job,this.#now())
         controller.signal.throwIfAborted()
-        const current = database.prepare('SELECT status,claim_nonce FROM dsh_memory_finalizations WHERE run_id = ?')
-          .get<{ status: string; claim_nonce:string }>(job.runId)
-        if (current?.status === 'completed') return
-        if (current?.status !== 'processing' || current.claim_nonce!==job.claimNonce) throw new KiokukoError('CONFLICT', 'DSH memory finalization job is no longer claimed')
         const sourceRepositoryId = repositoryId(database, job.workspace)
         const scope = buildStructuredScope({
           visibility: 'project', retrievalScope: 'project-only', repositoryId: sourceRepositoryId,
@@ -1269,7 +1346,7 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
           clientKind: 'dsh',
           timestamp: now,
         }
-        const adopted=reconciliation&&result.memoryOperations?adoptMemories(database,{id:`finalizer:${job.runId}`,range:reconciliation.range,evidence:reconciliation.evidence,existing:reconciliation.existing,operations:result.memoryOperations,observe:false,now,actor:'kiokuko-dsh-finalizer'}):undefined
+        const adopted=reconciliation&&result.memoryOperations?adoptMemories(database,{id:finalizationIdentity(job),range:reconciliation.range,evidence:reconciliation.evidence,existing:reconciliation.existing,operations:result.memoryOperations,observe:false,now,actor:'kiokuko-dsh-finalizer'}):undefined
         const saved: EntryRecord[] = adopted ? [...new Map(adopted.entries.map(e=>[e.id,e])).values()] : result.capsule.memories.map((memory) => recordEntryInTransaction(database, {
           workspace: job.workspace,
           kind: memory.kind,
@@ -1287,28 +1364,30 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
         }, { now }))
         const executionReceipts=ownedRunEvidence(database,job.runId,job.dshSessionId)
         for(const effect of database.prepare('SELECT entry_id,revision,operation_index FROM memory_review_effects WHERE job_id=? AND disposition IN (\'added\',\'updated\')')
-          .all<{entry_id:string;revision:number;operation_index:number}>(`finalizer:${job.runId}`)) {
+          .all<{entry_id:string;revision:number;operation_index:number}>(finalizationIdentity(job))) {
           const operation=result.memoryOperations?.[effect.operation_index]
           if(operation)linkOwnedMemoryEvidence(database,{id:effect.entry_id,revision:effect.revision},executionReceipts,operation.evidenceIds,{runId:job.runId,sessionId:job.dshSessionId,workspace:job.workspace})
         }
-        const link = database.prepare(`
-          INSERT INTO dsh_memory_finalization_entries (run_id, entry_id, ordinal, created_at)
-          VALUES (?, ?, ?, ?)
-        `)
-        saved.forEach((entry, ordinal) => link.run(job.runId, entry.id, ordinal, now))
+        if(job.archived){
+          const link=database.prepare('INSERT INTO dsh_task_source_entries(run_id,source_epoch,entry_id,ordinal,created_at) VALUES(?,?,?,?,?)')
+          saved.forEach((entry,ordinal)=>link.run(job.runId,job.sourceEpoch,entry.id,ordinal,now))
+        }else{
+          const link=database.prepare('INSERT INTO dsh_memory_finalization_entries(run_id,entry_id,ordinal,created_at) VALUES(?,?,?,?)')
+          saved.forEach((entry,ordinal)=>link.run(job.runId,entry.id,ordinal,now))
+        }
         if (episode && evolutionSettings(database).mode !== 'off') {
           database.exec('SAVEPOINT evolution_episode')
           try {
             const evidence = [...(prepared.episodeEvidence ?? [])]
             saveEpisode(database, {
-              runId: job.runId, workspace: job.workspace, sessionId: job.dshSessionId,
+              runId: job.runId, sourceEpoch: job.sourceEpoch, workspace: job.workspace, sessionId: job.dshSessionId,
               start: job.sourceStartSeq, end: job.sourceEndSeq, logDigest: prepared.digest, outcome: job.outcome,
               evidenceDigest: supportingEvidenceDigest(episode, evidence),
               signature: episodeSignature(job.workspace, episode), draft: episode, evidence: evidenceReferences(evidence),
               sources: saved.map(e => ({ entryId: e.id, revision: e.revision, hash: e.contentHash })),
               ...episodeSignals(episode, evidence),
             }, now, evidence)
-            scheduleEvolution(database, job.runId, { ...result.envelope, sessionId: job.dshSessionId }, now)
+            scheduleEvolution(database, job.runId, { ...result.envelope, sessionId: job.dshSessionId }, now, job.sourceEpoch)
             database.exec('RELEASE evolution_episode')
           } catch {
             database.exec('ROLLBACK TO evolution_episode')
@@ -1316,34 +1395,16 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
             episodeError = 'episode_persistence_rejected'
           }
         }
-        database.prepare("UPDATE memory_review_states SET handoff_status='finalizer_completed',lease_nonce=NULL,lease_until=NULL WHERE run_id=? AND lease_nonce=?").run(job.runId,job.claimNonce)
+        if(!job.archived)database.prepare("UPDATE memory_review_states SET handoff_status='finalizer_completed',lease_nonce=NULL,lease_until=NULL WHERE run_id=? AND lease_nonce=?").run(job.runId,job.claimNonce)
         if(reconciliation&&adopted?.held===0){
-          database.prepare('UPDATE memory_review_jobs SET resolved_by=? WHERE run_id=? AND start_seq>=? AND end_seq<=?').run(`finalizer:${job.runId}`,job.runId,job.sourceStartSeq,job.sourceEndSeq)
-          database.prepare('UPDATE memory_review_states SET reviewed_through_seq=max(reviewed_through_seq,?) WHERE run_id=?').run(job.sourceEndSeq,job.runId)
+          database.prepare('UPDATE memory_review_jobs SET resolved_by=? WHERE run_id=? AND session_id=? AND source_generation=? AND start_seq>=? AND end_seq<=?').run(finalizationIdentity(job),job.runId,job.dshSessionId,reconciliation.range.sourceGeneration,job.sourceStartSeq,job.sourceEndSeq)
+          if(!job.archived)database.prepare('UPDATE memory_review_states SET reviewed_through_seq=max(reviewed_through_seq,?) WHERE run_id=?').run(job.sourceEndSeq,job.runId)
         }
-        if (episodeError) database.prepare('UPDATE dsh_memory_finalizations SET episode_error=? WHERE run_id=?').run(episodeError, job.runId)
-        database.prepare(`
-          UPDATE dsh_memory_finalizations
-             SET status = 'completed', log_event_count = ?,
-                 log_digest = ?, capsule_hash = ?, capsule_bytes = ?, provider = ?, model = ?,
-                 input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?,
-                 completed_at = ?, updated_at = ?
-           WHERE run_id = ? AND status = 'processing'
-        `).run(
-          prepared.eventCount,
-          prepared.digest,
-          canonicalContentHash(JSON.parse(result.capsuleJson)),
-          Buffer.byteLength(result.capsuleJson, 'utf8'),
-          result.envelope.provider,
-          result.envelope.model,
-          result.usage.inputTokens ?? null,
-          result.usage.outputTokens ?? null,
-          result.usage.cacheReadTokens ?? null,
-          result.usage.cacheWriteTokens ?? null,
-          now,
-          now,
-          job.runId,
-        )
+        updateFinalization(database,job,{status:'completed',log_event_count:prepared.eventCount,log_digest:prepared.digest,
+          capsule_hash:canonicalContentHash(JSON.parse(result.capsuleJson)),capsule_bytes:Buffer.byteLength(result.capsuleJson,'utf8'),
+          provider:result.envelope.provider,model:result.envelope.model,input_tokens:result.usage.inputTokens??null,
+          output_tokens:result.usage.outputTokens??null,cache_read_tokens:result.usage.cacheReadTokens??null,
+          cache_write_tokens:result.usage.cacheWriteTokens??null,completed_at:now,updated_at:now,...(episodeError?{episode_error:episodeError}:{})})
       }))
       try { await this.admitIndex(job.workspace, job.dshSessionId, prepared.envelope) } catch { /* enrichment cannot veto committed finalization */ }
       completed = true
@@ -1358,15 +1419,15 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
       const failure = boundedError(error)
       try {
         await this.#runtime.withDatabase((database) => {
-          database.prepare(`
-            UPDATE dsh_memory_finalizations
-               SET status = 'failed', claim_nonce=NULL,lease_until=NULL, last_error_code = ?, last_error_message = ?, updated_at = ?
-             WHERE run_id = ? AND status = 'processing' AND claim_nonce=?
-          `).run(failure.code, failure.code, this.#now(), job.runId,job.claimNonce)
-          database.prepare("UPDATE memory_review_states SET handoff_status='finalizer_failed' WHERE run_id=? AND lease_nonce=?").run(job.runId,job.claimNonce)
-          database.prepare("UPDATE dsh_memory_finalizations SET input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_write_tokens=? WHERE run_id=? AND last_error_code='MEMORY_FORGOTTEN'")
-            .run(attempt.usage.inputTokens??null,attempt.usage.outputTokens??null,attempt.usage.cacheReadTokens??null,attempt.usage.cacheWriteTokens??null,job.runId)
-          releaseMemoryLease(database,job.runId,job.claimNonce)
+          const current=storedFinalization(database,job)
+          if(current?.status==='processing' && current.claim_nonce===job.claimNonce)
+            updateFinalization(database,job,{status:'failed',claim_nonce:null,lease_until:null,last_error_code:failure.code,last_error_message:failure.code,updated_at:this.#now()})
+          if(!job.archived){
+            database.prepare("UPDATE memory_review_states SET handoff_status='finalizer_failed' WHERE run_id=? AND lease_nonce=?").run(job.runId,job.claimNonce)
+            releaseMemoryLease(database,job.runId,job.claimNonce)
+          }
+          if(current?.last_error_code==='MEMORY_FORGOTTEN')updateFinalization(database,job,{input_tokens:attempt.usage.inputTokens??null,
+            output_tokens:attempt.usage.outputTokens??null,cache_read_tokens:attempt.usage.cacheReadTokens??null,cache_write_tokens:attempt.usage.cacheWriteTokens??null})
         })
       } catch (markError) {
         this.#lastDrainError = new AggregateError([error, markError], 'DSH memory finalization and failure recording both failed')

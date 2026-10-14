@@ -14,6 +14,16 @@ pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
+For the dsh-cli terminal UI, use the separate `dsh-cli` profile:
+
+```bash
+pnpm dsh plugin --profile dsh-cli add @askdkc/dsh-cli
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh
+pnpm dsh --profile dsh-cli
+```
+
+Skip the first command when the UI bundle is already installed. For later Kiokuko updates, use `pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest`, then restart that profile. The following Web examples use `web`; substitute `dsh-cli` when working with the terminal profile.
+
 To install directly from GitHub, run this from a DeepSeek Harness checkout:
 
 ```bash

@@ -12,6 +12,29 @@ the existing permission and approval boundaries still apply.
 
 The default is `lisp.executionMode: development`. Old `approvalMode` values remain readable. Set `executionMode: protected` explicitly to select the legacy worker/approval/fence behavior. See [owned execution and memory evidence](owned-execution.md).
 
+## Task state at execution boundaries
+
+Managed Lisp effects require the session's current `Working` task. The host pins
+the task ID, session, repository, revision and execution generation when an
+invocation starts. It checks that same identity again after approval, before
+effects, and inside successful journal/evidence writes. Waiting, stopping,
+ignoring or resuming a task invalidates old executions; resuming does not grant
+an older background job new authority. Failed, cancelled and interrupted runs
+retain their recorded outcomes and require explicit resume.
+
+| Lisp path | Task-state behavior |
+| --- | --- |
+| Saved reads, status, cancellation, observe/stage/compare, pure eval and function calls | Remain available without a Working task; any managed effect reached inside a call is checked separately. |
+| Proposals/apply/restore, CI verification, package updates, artifact publication, shared-function changes, reset/recover | Require a Working task at the actual effect boundary. An unavailable validator denies the effect. |
+| `run`, `start-job`, owned-tool RPC and compiled `run_code` dispatch | Carry the host-pinned identity through native dispatch; old generations cannot publish a success receipt. `start-job` may outlive the evaluation's cancellation signal, but cannot acquire a newer task lease. |
+| CI list and failed-log reads | Remain read-only and do not need task execution authority. |
+
+These checks cover the managed host adapters. Development mode runs Common Lisp
+with normal process permissions: arbitrary Common Lisp filesystem or process
+calls can bypass those adapters. Task state is not an OS sandbox, and enabling it
+does not change the user's permissions. Choose the existing protected mode when
+its filesystem/process isolation is required.
+
 ## Compose task tools
 
 Use the worker as a persistent programming environment. Before repeating primitive
@@ -383,12 +406,12 @@ The provider owns Tree-sitter, grammars, source snapshots, coordinates, and LSP
 processes. Kiokuko does not install them or fall back to generic LSP tools.
 Core alone has no code-intelligence runtime dependency.
 
-The published provider v0.1.12 does not supply V1. The local prerequisite is kept
-as a reproducible [upstream patch](../patches/code-intelligence/README.md). A
-future compatible provider should advertise V1 and the required capabilities;
-package version alone is insufficient. Absence, an old provider, missing grammar,
-and an unready language server return explicit outcomes. They do not block the
-ordinary Lisp APIs. Node must satisfy Kiokuko's `>=24.16.0` requirement.
+The released `@askdkc/dsh-lsp-server` v0.1.14 provides V1. Follow the
+[installation guide](code-intelligence.md); the local patch is only a historical
+test fixture. `kiokuko-dsh` checks the service contract and capabilities at runtime,
+not just the package version. Missing providers, grammars and unready language
+servers return explicit outcomes without blocking ordinary Lisp APIs.
+Node must satisfy `kiokuko-dsh`'s `>=24.16.0` requirement.
 
 Start with `(kioku.code:capabilities)`. Its response includes `status`, `reason`
 when relevant, `data.version`, `data.capabilities`, `data.languages`, distributed
@@ -459,9 +482,10 @@ reported independently from grammar and language-server readiness.
 
 Development verification is `npm run test:code-intelligence` after preparing the
 provider fixture. The source/native and packed paths are separate checks. The CI
-matrix runs normal development on macOS, Ubuntu 26.04, and Arch; the protected code-provider path
-is exercised on macOS; Linux protection remains a separate native-suite check. A configured job
-is not evidence that the remote job passed.
+matrix configures development checks on macOS, Ubuntu 26.04 and Arch, plus
+protected checks on macOS. Linux protected acceptance is separate. A configured
+job is not evidence that the current package passed; see the setup guide for
+verification limits.
 
 Clean installation and platform status: [code intelligence setup](code-intelligence.md).
 

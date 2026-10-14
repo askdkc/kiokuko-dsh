@@ -10,6 +10,9 @@ import { beginMemoryExecution, completeMemoryExecution, memoryApplicationReviewS
 import { autoGlobalizationStatus } from '../memory/auto-globalization.js'
 import { MemoryTimeConstraint } from '../memory/retrieval-contracts.js'
 import { isOwnedExecutionCall } from './owned-execution.js'
+import { authorizeTaskLease, type TaskLease, type TaskAuthorityExecution } from './task-state.js'
+import { captureExecutionTaskLease } from './task-authority-context.js'
+import { withImmediateTransaction } from '../db/transaction.js'
 
 const inputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('status') }).strict(),
@@ -28,7 +31,7 @@ const transportSchema = z.object({
 }).strict()
 export const MEMORY_APPLICATION_GUIDANCE = 'Use task_memory_review(action=status) once, then submit independent pending decisions with action=review_batch (up to 32); action=review remains available for one. Adoption and contradiction require relevant source paths. Adoption also needs an invariant, counterexample, method and command: a pre-bound command executed through Kiokuko owned shell/Lisp tools at the declared project cwd (including subdirectories), or an approved Enno verifier. Host receipts distinguish process completion from test coverage. For topic-based non-applicability, use paths:[]; supply paths when the judgment depends on current source. Refresh retains decisions when delivered entry revisions and mode stay unchanged; a revised entry or mode change starts a new review generation. New entries need decisions, and changed delivery invalidates execution proof. Only an observed final process result with the required test coverage on unchanged declared sources counts as proof. Use action=refresh for a concrete new error or target; it keeps the run. Missing proof cannot complete successfully. Unresolved decisions never block a tool call; they keep the run incomplete until resolved. Host-validated request preparation is control-only; it neither resolves memory decisions nor authorizes execution or edits. Judgments are model-reported.'
 
-interface NativeExecution { callId: string; rootCallId?: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
+interface NativeExecution extends TaskAuthorityExecution { callId: string; rootCallId?: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
 interface SurfaceContext {
   tools: { register(tool: any): () => void }
   commands?: { register(command: DshNativeCommandDefinition): () => void }
@@ -74,7 +77,7 @@ export function isSavedLispResultRead(execution: Pick<NativeExecution, 'name' | 
 
 /** Mount on the actual DSH pre-execute/result path; it never grants native permission. */
 export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHost): () => void {
-  const pending = new WeakMap<object, MemoryApplicationIdentity>()
+  const pending = new WeakMap<object, { identity: MemoryApplicationIdentity; lease: TaskLease }>()
   const disposers: (() => void)[] = []
   if (ctx.commands && host.session) disposers.push(ctx.commands.register({ name: 'kioku-memory-application',
     description: 'Show memory application and regression verification status for this native session.', input: { hint: 'status [--json]' },
@@ -161,21 +164,28 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
     // A child without its own admitted binding cannot borrow its parent's proof.
     const command = foregroundNativeCommand(execution, identity.repositoryRoot)
     const tracked = await host.runtime.withDatabase(db => {
+      // Empty memory applications remain observational and take no writer lock.
+      if (!memoryApplicationStatus(db,identity.runId).items?.length) return undefined
+      return withImmediateTransaction(db, () => {
       execution.signal.throwIfAborted()
       if (host.resolve(execution)?.runId !== identity.runId) throw new Error('Native task changed')
-      return beginMemoryExecution(db, identity, execution.callId, command)
-    }).catch(() => false)
-    if (tracked) pending.set(execution, identity)
+      const lease = captureExecutionTaskLease(db, {taskId:identity.runId,sessionId:identity.sessionId,repositoryRoot:identity.repositoryRoot}, execution)
+      return beginMemoryExecution(db, identity, execution.callId, command) ? lease : undefined
+      })
+    }).catch(() => undefined)
+    if (tracked) pending.set(execution, { identity: Object.freeze({...identity}), lease: tracked })
     return next()
   }, { prepend: true }))
   disposers.push(ctx.on('tools/result', (execution: NativeExecution, result: unknown) => {
-    const identity = pending.get(execution)
-    if (!identity) return
+    const tracked = pending.get(execution)
+    if (!tracked) return
+    const { identity, lease } = tracked
     pending.delete(execution)
-    return host.runtime.withDatabase(db => {
+    return host.runtime.withDatabase(db => withImmediateTransaction(db, () => {
       if (host.resolve(execution)?.runId !== identity.runId) return
+      authorizeTaskLease(db, lease)
       completeMemoryExecution(db, identity, execution.callId, result)
-    })
+    })).catch(() => { /* Stale completion cannot adopt evidence into a resumed task. */ })
   }))
   return () => { for (const dispose of disposers.reverse()) dispose() }
 }

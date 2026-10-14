@@ -1,3 +1,4 @@
+import { bindTaskRepository, transitionTask } from '../../../../src/dsh/task-state.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises'
@@ -39,10 +40,13 @@ test('real protected Lisp workspace CI becomes one completed application; scratc
     signal:new AbortController().signal})
   const identity = {runId:task.runId,workspace:task.workspace,sessionId:'session',repositoryRoot:root}
   const owner = {sessionId:'session',agentId:'agent',root}
-  const evidence = createLispMemoryVerification(runtime as any)
+  const taskIdentity = {taskId:task.runId,sessionId:owner.sessionId,repositoryRoot:root}
+  const admitted = bindTaskRepository(db, taskIdentity)
+  if (admitted.state === 'ToDo') transitionTask(db, taskIdentity, {operation:'start',operationId:'lisp-memory-start',expectedRevision:admitted.revision,reason:'Lisp proof fixture',evidence:[]})
+  const evidence = createLispMemoryVerification(runtime as any, { authorizePublication: (db, owner) => manager.taskAuthority.authorizeEffectPublication(db, owner) })
   const adapter = createLispCiAdapter({ask:async request => ({answers:[{
     id:request.questions[0]!.id,selected:[request.questions[0]!.options![1]!.label],
-  }]})})
+  }]})}, undefined, async owner => { await manager.taskAuthority.authorizeEffect(owner) })
   let mutateNextWorkspace = false
   const manager = new LispManager({store:new LispStore(async operation => operation(db)),
     config:LispConfig.parse({ executionMode: 'protected',enabled:true,startupTimeoutMs:60000}),dataRoot:join(base,'data'),

@@ -3,8 +3,9 @@ import { canonicalContentHash } from '../../serialization/validate.js'
 import type { TaskType } from '../../akinator/types.js'
 import { DecisionError, type DecisionBatch } from './contracts.js'
 import type { DecisionService } from './service.js'
+import { TaskSnapshotSchema, TASK_OPERATIONS, validateTaskOperation, type TaskOperation } from '../task-state.js'
 
-export const REQUEST_INTENT_POLICY_VERSION = 'request-intent-change-scope-v2'
+export const REQUEST_INTENT_POLICY_VERSION = 'request-intent-task-state-v3'
 export const MAX_REQUEST_INTENT_BYTES = 32 * 1024
 
 export const RequestRelationship = z.enum(['new', 'same_scope_continuation', 'scope_change', 'unknown'])
@@ -41,6 +42,8 @@ export const RequestIntentContextSchema = z.object({
   task: z.string().min(1).max(16_384),
   messageRefs: z.array(messageReference).min(1).max(16),
   activeGoal: activeGoal.optional(),
+  /** SQLite task identity and revision, independent of an implementation-only Goal. */
+  activeTask: TaskSnapshotSchema.optional(),
   proposals: z.array(proposalReference).max(8).default([]),
 }).strict().superRefine((value, context) => {
   if (new Set(value.messageRefs.map(item => item.id)).size !== value.messageRefs.length) {
@@ -74,10 +77,14 @@ export function createRequestIntentContext(input: {
   readonly task: string
   readonly messageRefs: RequestIntentContext['messageRefs']
   readonly activeGoal?: RequestIntentContext['activeGoal']
+  readonly activeTask?: RequestIntentContext['activeTask']
   readonly proposals?: RequestIntentContext['proposals']
 }): RequestIntentContext | undefined {
+  // Request-scoped diagnostics are not new task authority and must not invalidate their own retry context.
+  const { unresolved: _unresolved, ...activeTask } = input.activeTask ?? {}
   const parsed = RequestIntentContextSchema.safeParse({ task: input.task, messageRefs: input.messageRefs,
-    ...(input.activeGoal === undefined ? {} : { activeGoal: input.activeGoal }), proposals: input.proposals ?? [] })
+    ...(input.activeGoal === undefined ? {} : { activeGoal: input.activeGoal }),
+    ...(input.activeTask === undefined ? {} : { activeTask }), proposals: input.proposals ?? [] })
   return parsed.success ? parsed.data : undefined
 }
 
@@ -86,6 +93,8 @@ export const RequestIntentSubmissionSchema = z.object({
   action: RequestAction,
   /** Missing legacy values normalize to unknown and can never authorize a change. */
   changeScope: RequestChangeScope.optional(),
+  /** An advisory operation candidate, never execution authority or completion proof. */
+  taskOperation: z.enum(TASK_OPERATIONS).optional(),
   /** Exact opaque references supplied in the current host context. */
   evidenceRefs: z.array(safeId).min(1).max(32),
 }).strict().superRefine((value, context) => {
@@ -102,6 +111,9 @@ export interface RequestIntentEvidence {
   readonly workflowRevision?: number
   readonly goalRevision?: number
   readonly scopeRevision?: number
+  readonly taskId?: string
+  readonly taskRevision?: number
+  readonly taskGeneration?: number
   readonly proposalRefs: readonly { readonly id: string; readonly revision: number | null; readonly digest: string }[]
 }
 
@@ -114,6 +126,7 @@ export interface RequestIntentDecision {
   readonly evidence: RequestIntentEvidence
   readonly providerSent: boolean
   readonly unresolvedReason?: string
+  readonly taskOperation?: TaskOperation
 }
 
 export interface RequestIntentInterpretation {
@@ -151,6 +164,7 @@ export function buildRequestIntentBatch(raw: unknown): DecisionBatch | undefined
       currentUserMessage: parsed.data.task,
       currentMessageRefs: parsed.data.messageRefs,
       activeGoal: parsed.data.activeGoal ?? null,
+      activeTask: parsed.data.activeTask ?? null,
       referencedProposalCandidates: parsed.data.proposals,
       boundary: 'Use only this exact current request and the supplied active Goal/proposal candidates. Never use another chat, infer a free-text target, or grant execution permission.',
     },
@@ -158,6 +172,10 @@ export function buildRequestIntentBatch(raw: unknown): DecisionBatch | undefined
       { id: 'request-relation', instructions: 'Classify the relationship of the current user message to the supplied active Goal and proposals. Respect negation, quotation, actor, and omitted references. An exact continuation phrase is not required. If the intended reference or scope is not established, choose unknown.', choices: [...relationshipChoices], abstainId: 'unknown' },
       { id: 'request-action', instructions: 'Classify the action the user requests now, not a quoted example or an action they forbid. “See whether it works” is verify/research, not a file edit. Classification grants no permission. If the action is unclear, choose unknown.', choices: [...actionChoices], abstainId: 'unknown' },
       { id: 'request-change-scope', instructions: 'For action=change, classify the exact current requested artifact scope using only the current message and supplied Goal/proposal references. Code, tests, runtime behavior, or behavior configuration is implementation; a request that mixes implementation with documentation is implementation. Prose-only document edits are document. Do not infer scope from an advisory task label, wording style, or whether the message happens to say “write”. For other actions choose unknown.', choices: [...changeScopeChoices], abstainId: 'unknown' },
+      ...(parsed.data.activeTask ? [{ id: 'request-task-operation', instructions: 'Propose only a structured state operation clearly requested by the current human message for the exact SQLite task. Do not mutate state, fabricate completion or stop evidence, or infer approval from a keyword. Choose none when no state transition is requested; choose unknown when ambiguous. Terminal resume requires an explicit user operation.',
+        choices: [{ id: 'none', description: 'No task state operation is requested.' },
+          ...parsed.data.activeTask.allowedOps.map(operation => ({ id: operation, description: `Propose ${operation} for this exact task revision; host validation and evidence still apply.` })),
+          { id: 'unknown', description: 'The intended operation or target is uncertain.' }], abstainId: 'unknown' }] : []),
       ...parsed.data.proposals.map((proposal, index) => ({ id: `request-proposal-${index}`,
         instructions: `Does the current user instruction adopt or refer to proposal ${JSON.stringify(proposal.id)}? Interpret omitted Japanese subjects and references such as 全部, それ, 続けて against the supplied context. Quoted or forbidden actions are not approvals.`,
         choices: [{ id: 'selected', description: 'The current request refers to this proposal.' },
@@ -175,6 +193,7 @@ export function requestIntentReferenceIds(context: RequestIntentContext): string
     if (context.activeGoal.goalRevision !== undefined) refs.push(`goal:${canonicalContentHash([context.activeGoal.runId, context.activeGoal.goalRevision])}`)
     if (context.activeGoal.scopeRevision !== undefined) refs.push(`scope:${canonicalContentHash([context.activeGoal.runId, context.activeGoal.scopeRevision])}`)
   }
+  if (context.activeTask) refs.push(`task:${canonicalContentHash([context.activeTask.taskId, context.activeTask.revision, context.activeTask.generation])}`)
   refs.push(...context.proposals.map(item => `proposal:${canonicalContentHash([item.id, item.revision, item.digest])}`))
   return refs
 }
@@ -190,6 +209,8 @@ function evidenceFor(context: RequestIntentContext, selectedProposalIds: Readonl
       ...(active.goalRevision === undefined ? {} : { goalRevision: active.goalRevision }),
       ...(active.scopeRevision === undefined ? {} : { scopeRevision: active.scopeRevision }),
     } : {}),
+    ...(context.activeTask ? { taskId: context.activeTask.taskId, taskRevision: context.activeTask.revision,
+      taskGeneration: context.activeTask.generation } : {}),
     proposalRefs: context.proposals.filter(item => selectedProposalIds.has(item.id))
       .map(({ id, revision, digest }) => ({ id, revision, digest })),
   }
@@ -205,23 +226,41 @@ export function requestIntentIsUnresolved(value: RequestIntentDecision | undefin
     || value.action === 'change' && value.changeScope === 'unknown'
 }
 
-/** Validate a main-model interpretation against exact refs from this request and its active session only. */
-export function bindMainModelRequestIntent(raw: unknown, context: RequestIntentContext): RequestIntentDecision | undefined {
+export type RequestIntentBindingResult = { readonly ok: true; readonly decision: RequestIntentDecision }
+  | { readonly ok: false; readonly reason: 'invalid_submission' | 'unresolved_intent' | 'unknown_reference' | 'missing_reference' | 'no_active_goal' | 'invalid_task_operation' }
+
+/** Validate exact current-session evidence before checking whether its Goal supports the selected relation. */
+export function validateMainModelRequestIntent(raw: unknown, context: RequestIntentContext): RequestIntentBindingResult {
   const parsed = RequestIntentSubmissionSchema.safeParse(raw)
-  if (!parsed.success || parsed.data.relation === 'unknown' || parsed.data.action === 'unknown') return undefined
+  if (!parsed.success) return { ok: false, reason: 'invalid_submission' }
+  if (parsed.data.relation === 'unknown' || parsed.data.action === 'unknown') return { ok: false, reason: 'unresolved_intent' }
   const allowed = new Set(requestIntentReferenceIds(context))
-  if (parsed.data.evidenceRefs.some(reference => !allowed.has(reference))) return undefined
+  if (parsed.data.evidenceRefs.some(reference => !allowed.has(reference))) return { ok: false, reason: 'unknown_reference' }
   const requiredRefs = requestIntentReferenceIds(context).filter(reference =>
     reference.startsWith('message:') || reference.startsWith('run:') || reference.startsWith('workflow:')
-      || reference.startsWith('goal:') || reference.startsWith('scope:'))
-  if (!requiredRefs.every(reference => parsed.data.evidenceRefs.includes(reference))) return undefined
-  if (parsed.data.relation !== 'new' && !context.activeGoal) return undefined
+      || reference.startsWith('goal:') || reference.startsWith('scope:') || reference.startsWith('task:'))
+  if (!requiredRefs.every(reference => parsed.data.evidenceRefs.includes(reference))) return { ok: false, reason: 'missing_reference' }
+  if (parsed.data.relation !== 'new' && !context.activeGoal && !context.activeTask) return { ok: false, reason: 'no_active_goal' }
+  if (parsed.data.taskOperation) {
+    if (!context.activeTask) return { ok: false, reason: 'invalid_task_operation' }
+    try { validateTaskOperation(context.activeTask, { operation: parsed.data.taskOperation,
+      operationId: `intent:${canonicalContentHash(context)}`, expectedRevision: context.activeTask.revision,
+      expectedGeneration: context.activeTask.generation, reason: 'Advisory interpretation of the current human request', evidence: [], explicit: false }) }
+    catch { return { ok: false, reason: 'invalid_task_operation' } }
+  }
   const selectedProposalIds = new Set(context.proposals.filter(item => parsed.data.evidenceRefs
     .includes(`proposal:${canonicalContentHash([item.id, item.revision, item.digest])}`)).map(item => item.id))
   const changeScope = parsed.data.action === 'change' ? parsed.data.changeScope ?? 'unknown' : 'unknown'
-  return { relation: parsed.data.relation, action: parsed.data.action, changeScope,
+  return { ok: true, decision: { relation: parsed.data.relation, action: parsed.data.action, changeScope,
     source: 'main-model',
-    policyVersion: REQUEST_INTENT_POLICY_VERSION, evidence: evidenceFor(context, selectedProposalIds), providerSent: false }
+    policyVersion: REQUEST_INTENT_POLICY_VERSION, evidence: evidenceFor(context, selectedProposalIds), providerSent: false,
+    ...(parsed.data.taskOperation ? { taskOperation: parsed.data.taskOperation } : {}) } }
+}
+
+/** Validate a main-model interpretation against exact refs from this request and its active session only. */
+export function bindMainModelRequestIntent(raw: unknown, context: RequestIntentContext): RequestIntentDecision | undefined {
+  const result = validateMainModelRequestIntent(raw, context)
+  return result.ok ? result.decision : undefined
 }
 
 /** Rebind a prior decision to current host facts before it crosses admission. */
@@ -239,6 +278,9 @@ export function rebindRequestIntentDecision(raw: unknown, context: RequestIntent
     && context.messageRefs.every((item, index) => value.evidence.messageRefs[index]?.id === item.id
       && value.evidence.messageRefs[index]?.digest === item.digest)
   const active = context.activeGoal
+  const task = context.activeTask
+  if (value.evidence.taskId !== task?.taskId || value.evidence.taskRevision !== task?.revision
+    || value.evidence.taskGeneration !== task?.generation) return undefined
   if (!messagesMatch || (active ? value.evidence.runId !== active.runId
     || value.evidence.workflowRevision !== active.workflowRevision || value.evidence.goalRevision !== active.goalRevision
     || value.evidence.scopeRevision !== active.scopeRevision
@@ -249,6 +291,12 @@ export function rebindRequestIntentDecision(raw: unknown, context: RequestIntent
     const current = context.proposals.find(item => item.id === proposal.id && item.revision === proposal.revision && item.digest === proposal.digest)
     if (!current || !refs.includes(`proposal:${canonicalContentHash([proposal.id, proposal.revision, proposal.digest])}`)) return undefined
     selected.add(proposal.id)
+  }
+  if (value.relation !== 'unknown' && value.action !== 'unknown') {
+    const validated = validateMainModelRequestIntent({ relation: value.relation, action: value.action, changeScope: value.changeScope,
+      ...(value.taskOperation ? { taskOperation: value.taskOperation } : {}), evidenceRefs: refs.filter(reference => !reference.startsWith('proposal:')
+        || context.proposals.some(proposal => selected.has(proposal.id) && reference === `proposal:${canonicalContentHash([proposal.id, proposal.revision, proposal.digest])}`)) }, context)
+    if (!validated.ok) return undefined
   }
   return { ...value, evidence: evidenceFor(context, selected) }
 }
@@ -302,6 +350,19 @@ export async function classifyRequestIntent(service: DecisionService | undefined
     }
     const unresolved = relationValue === 'unknown' || actionValue === 'unknown' || actionValue === 'change' && changeScopeValue === 'unknown' || uncertainProposal
     if (uncertainProposal) return unresolvedRequestIntent(context, 'proposal_reference_uncertain', providerSent)
+    const taskOperationAnswer = outcome.result.answers.find(answer => answer.id === 'request-task-operation')
+    const taskOperation = taskOperationAnswer?.status === 'selected' && (TASK_OPERATIONS as readonly string[]).includes(taskOperationAnswer.choiceId)
+      ? taskOperationAnswer.choiceId as TaskOperation : undefined
+    if (context.activeTask && (!taskOperationAnswer || taskOperationAnswer.status !== 'selected' || taskOperationAnswer.choiceId === 'unknown'))
+      return unresolvedRequestIntent(context, 'task_operation_unresolved', providerSent)
+    if (!unresolved) {
+      const refs = requestIntentReferenceIds(context).filter(reference => !reference.startsWith('proposal:')
+        || context.proposals.some(proposal => selected.has(proposal.id) && reference === `proposal:${canonicalContentHash([proposal.id, proposal.revision, proposal.digest])}`))
+      const bound = validateMainModelRequestIntent({ relation: relationValue, action: actionValue, changeScope: changeScopeValue,
+        ...(taskOperation ? { taskOperation } : {}), evidenceRefs: refs }, context)
+      if (!bound.ok) return unresolvedRequestIntent(context, bound.reason, providerSent)
+      return { ...bound.decision, source: 'decision-provider', providerSent }
+    }
     return { relation: relationValue, action: actionValue, changeScope: changeScopeValue, source: unresolved ? 'unresolved' : 'decision-provider',
       policyVersion: REQUEST_INTENT_POLICY_VERSION, evidence: evidenceFor(context, selected), providerSent,
       ...(unresolved ? { unresolvedReason: 'provider_abstained_or_uncertain' } : {}) }

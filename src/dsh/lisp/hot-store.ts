@@ -86,6 +86,7 @@ export class HotToolStore {
   approve(owner: LispOwner, epoch: string, project: string, id: string, value: HotContract) {
     const contract = parseHotContract(value), payload = boundedJson(contract, 65536)
     return this.store.database(db => transaction(db, () => {
+      this.store.authorizePublication(db, owner)
       const operation = authority(db, owner, epoch, id, 'lisp_hot_contract', project)
       if (digest(operation.payload.request) !== digest(contract)) fail('STATE_CONFLICT', '確認画面の条件と保存対象が一致しません。')
       const old = head(db, project, contract.name)
@@ -104,6 +105,7 @@ export class HotToolStore {
     request: { name: string; contractRef: string; expectedRevision: number; bundle: Bundle }) {
     const bundle = parseHotBundle(request.bundle), payload = boundedJson(bundle, 1048576)
     return this.store.database(db => transaction(db, () => {
+      this.store.authorizePublication(db, owner)
       const operation = authority(db, owner, epoch, id, 'lisp_hot_install', project)
       if (operation.payload.name !== request.name || operation.payload.contractRef !== request.contractRef
         || operation.payload.expectedRevision !== request.expectedRevision || operation.payload.sourceDigest !== digest(bundle.source))
@@ -130,6 +132,7 @@ export class HotToolStore {
   }
   deactivate(owner: LispOwner, epoch: string, project: string, id: string, request: { name: string; expectedRevision: number }) {
     return this.store.database(db => transaction(db, () => {
+      this.store.authorizePublication(db, owner)
       const operation = authority(db, owner, epoch, id, 'lisp_hot_deactivate', project)
       if (operation.payload.name !== request.name || operation.payload.expectedRevision !== request.expectedRevision)
         fail('STATE_CONFLICT', '確認画面の対象と無効化対象が一致しません。')
@@ -148,6 +151,7 @@ export class HotToolStore {
     payload: { operationId: string; bundleRef: string; sourceRefs: string[] }, value: unknown, response: unknown): Promise<void> {
     const resultJson = boundedJson({ value }, 64 * 1024 * 1024), payloadJson = boundedJson(payload, 1024 * 1024)
     return this.store.database(db => transaction(db, () => {
+      this.store.authorizePublication(db, owner)
       const operation = authority(db, owner, epoch, id, 'lisp_hot_call', project)
       if (payload.operationId !== id || payload.bundleRef !== operation.payload.bundleRef) fail('STATE_CONFLICT', '呼び出し結果の版が一致しません。')
       const usage = db.prepare('SELECT COUNT(*) AS count FROM dsh_lisp_operations WHERE session_id=?').get<{ count: number }>(owner.sessionId)!

@@ -2,6 +2,7 @@ import { registerCompletionVerifiers } from '../dsh/completion-verifiers.js'
 import { completionSourceDigest } from '../dsh/task-completion.js'
 import { readCodingWorkflow } from '../dsh/coding-workflow/store.js'
 import { ennoCodingProjection } from './coding-workflow.js'
+import { executeIdempotentInTransaction } from '../dsh/intake-idempotency.js'
 import { readPlanDraft } from './plan-draft.js'
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -1093,7 +1094,49 @@ export function terminalizeLedgerRunInTransaction(database: SqliteDatabase, runI
   new LedgerStore(database).updateRunStatusInTransaction(runId, status);
 }
 
+/** Renew the authoritative Enno contract on explicit task resume. Prior
+ * definitions and results remain history; none are proof for the new revision. */
+export function reopenEnnoTaskInTransaction(database: SqliteDatabase, identity: EnnoIdentity,
+  input: { operationId: string; repositoryRoot: string; force: boolean }): boolean {
+  assertLedgerIdentity(database, identity, input.repositoryRoot)
+  const receipt = executeIdempotentInTransaction(database, {
+    scope: `enno-task-resume:${canonicalContentHash(identity.runId)}`, key: input.operationId,
+    request: { identity, ...input }, createdAt: new Date().toISOString(),
+  }, () => {
+    const current = readEnnoSnapshot(database, identity)
+    if (!input.force && !['completed', 'cancelled', 'blocked'].includes(current.status)) return { reopened: false }
+    const now = new Date().toISOString()
+    if (database.prepare("SELECT 1 FROM enno_operation_receipts WHERE run_id=? AND state='started' AND lease_expires_at>?").get(identity.runId, now)) {
+      throw new KiokukoError('CONFLICT', 'Wait for the active Enno operation to stop before resuming this task')
+    }
+    const previous = { contract: current.contract, ideal: current.ideal, meditation: current.meditation,
+      status: current.status, confirmationState: current.confirmationState, attempts: current.attempts,
+      mutationRevision: current.mutationRevision, routeEpoch: current.routeEpoch ?? 0, blocker: current.blocker }
+    const contract = { ...current.contract, revision: current.revision + 1 }
+    updateContractInTransaction(database, current, { contract,
+      status: current.ideal === null ? 'oduno_ideal' : 'zenki_planning',
+      confirmationState: 'revision_requested', attempts: 0, mutationRevision: current.mutationRevision + 1,
+      meditation: null, planDigest: canonicalContentHash(contract.workPlan) })
+    database.prepare('UPDATE enno_contracts SET route_epoch=route_epoch+1 WHERE run_id=?').run(identity.runId)
+    database.prepare("UPDATE enno_operation_receipts SET state='abandoned',failure_code='explicit_task_resume',finished_at=? WHERE run_id=? AND state='started'").run(now, identity.runId)
+    releaseExecutionLeaseInTransaction(database, identity.runId)
+    // Existing rows are keyed by contract revision; the old rows are retained.
+    replaceWorkUnitsInTransaction(database, identity.runId, contract.revision, contract.workPlan)
+    appendEnnoEventInTransaction(database, identity.runId, 'enno.replan_requested', 'enno-oduno', 'explicit_task_resume', {
+      fromContractRevision: current.revision, toContractRevision: contract.revision,
+      previousContractDigest: canonicalContentHash(previous),
+      historyScope: `enno-task-resume:${canonicalContentHash(identity.runId)}`,
+      operationId: input.operationId,
+    })
+    // The source's idempotency receipt archives complete prior definitions
+    // without the ledger event's preview/redaction or payload-size limits.
+    return { reopened: true, previous: previous as unknown as JsonValue, revision: contract.revision }
+  })
+  return (receipt as { reopened: boolean }).reopened
+}
+
 registerCompletionVerifiers({
+  reopenTask: reopenEnnoTaskInTransaction,
   codingProjection(database,identity) { return ennoCodingProjection(readEnnoSnapshot(database,identity)) },
   criteria(database,identity) {
     const snapshot=readEnnoSnapshot(database,identity)

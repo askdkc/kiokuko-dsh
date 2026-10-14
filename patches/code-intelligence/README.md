@@ -1,16 +1,14 @@
-# Local upstream prerequisite
+# Historical provider fixture
 
-`dsh-lsp-server` v0.1.12 does not export `CodeIntelligenceServiceV1` and has no
-Tree-sitter layer. `provider.patch` supplies that prerequisite in the provider's
-own repository. It retains the existing LSP APIs and adds a side-effect-free
-`./code-intelligence-contracts` export, scoped evaluation leases, bounded parser
-snapshots, and semantics against the same pinned source. No parser/server runtime
-is added to Kiokuko or its core package.
+This patch preserves the original V1 implementation against the exact
+`dsh-lsp-server` v0.1.12 base in `upstream.json`. Released
+[v0.1.14](https://github.com/askdkc/dsh-lsp-server/releases/tag/v0.1.14) provides
+`CodeIntelligenceServiceV1`; users should follow the [installation
+guide](../../docs/code-intelligence.md), not apply this patch to that release.
 
-The patch is based on the exact official source revision in `upstream.json`.
-That revision pins the reproducible test fixture; users should negotiate V1
-capabilities on a compatible released provider when one is available. The patch
-has not been pushed or published. It does not change an active CLI profile.
+The fixture supplies scoped evaluation leases, bounded parser snapshots and
+read-only semantics in the provider. It adds no parser/server runtime to `kiokuko-dsh`
+or its core package and does not change an active CLI profile.
 
 Prepare and test the disposable checkout under this repository:
 

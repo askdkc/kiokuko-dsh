@@ -90,7 +90,11 @@ export async function freezeChange(owner: LispOwner, request: ProposalInput, bac
   return { request, before, id: randomUUID(), backup: before.exists ? join(backupRoot, randomUUID()) : null }
 }
 /** Backups are independent copies. Never replay this function after an uncertain outcome. */
-export async function applyChange(owner: LispOwner, change: FrozenChange, protectedRoots: readonly string[], createdParents: CreatedParents = new Map()): Promise<void> {
+export async function applyChange(owner: LispOwner, change: FrozenChange, protectedRoots: readonly string[], createdParents: CreatedParents = new Map(), beforeEffect?: () => Promise<void>): Promise<void> {
+  const authorize = async () => {
+    if (!beforeEffect) fail('TASK_REQUIRED', '変更の適用には現在の有効なタスクが必要です。')
+    await beforeEffect()
+  }
   // Only directories created by an earlier change in this exact batch may advance
   // a missing-parent snapshot. Existing directories and external races still fail.
   let expected = change.before
@@ -111,13 +115,16 @@ export async function applyChange(owner: LispOwner, change: FrozenChange, protec
   }
   if (!sameFile(expected, await snapshot(owner.root, change.request.path, protectedRoots))) fail('TARGET_CHANGED', '承認後に対象が変わりました。変更案を作り直してください。')
   if (change.backup) {
-    await durableWrite(change.backup, await checkedBytes(change.before))
+    const bytes = await checkedBytes(change.before)
+    await authorize()
+    await durableWrite(change.backup, bytes)
     await syncDirectory(dirname(change.backup))
   }
   let before = await snapshot(owner.root, change.request.path, protectedRoots)
   if (!sameFile(expected, before)) fail('TARGET_CHANGED', '保存後に対象が変わりました。処理を停止しました。')
   if (before.missingParents) {
     for (const parent of before.missingParents) {
+      await authorize()
       await mkdir(parent, { mode: 0o700 }) // exclusive: an intervening entry is a conflict, never followed
       const created = await lstat(parent)
       if (!created.isDirectory() || created.isSymbolicLink()) fail('TARGET_CHANGED', '作成した親ディレクトリが変わりました。')
@@ -127,11 +134,17 @@ export async function applyChange(owner: LispOwner, change: FrozenChange, protec
     before = await snapshot(owner.root, change.request.path, protectedRoots)
     if (before.exists || before.missingParents) fail('TARGET_CHANGED', '出力先が作成中に変わりました。処理を停止しました。')
   }
-  if (change.request.operation === 'delete') await unlink(before.path)
+  if (change.request.operation === 'delete') {
+    await authorize()
+    await unlink(before.path)
+  }
   else {
     const temporary = join(before.parent, `.${basename(before.path)}.kioku-${change.id}`)
-    await durableWrite(temporary, change.restoration ? await restoreBytes(change.restoration) : change.request.content, before.mode ?? 0o600)
+    const content = change.restoration ? await restoreBytes(change.restoration) : change.request.content
+    await authorize()
+    await durableWrite(temporary, content, before.mode ?? 0o600)
     if (!sameFile(before, await snapshot(owner.root, change.request.path, protectedRoots))) fail('TARGET_CHANGED', `対象が変わりました。出力は ${temporary} に残っています。`)
+    await authorize()
     await rename(temporary, before.path)
   }
   await syncDirectory(before.parent)

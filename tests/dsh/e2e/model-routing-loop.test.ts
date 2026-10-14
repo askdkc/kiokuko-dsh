@@ -419,7 +419,7 @@ test('native code normal execution: cancel, plugin reload, original input recove
     capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 },
     evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'cancel-reload-fixture',
       answers: batch.questions.map(question => {
-        const choiceId = ({ 'task-type': 'debug', 'request-action': 'change', 'request-change-scope': 'implementation',
+        const choiceId = ({ 'task-type': 'debug', 'request-action': 'change', 'request-change-scope': 'implementation', 'request-task-operation': 'none',
           'request-relation': (batch.state as { currentUserMessage?: string }).currentUserMessage === '続けてください。' ? 'same_scope_continuation' : 'new' } as Record<string, string>)[question.id] ?? (question.id.startsWith('request-proposal-') ? 'not_selected' : undefined)
         return choiceId ? { id: question.id, status: 'selected' as const, choiceId }
           : { id: question.id, status: 'abstained' as const, reason: 'insufficient' as const }

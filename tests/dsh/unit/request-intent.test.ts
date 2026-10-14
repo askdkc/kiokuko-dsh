@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { bindMainModelRequestIntent, buildRequestIntentBatch, classifyRequestIntent, createRequestIntentContext,
-  rebindRequestIntentDecision, requestIntentMessageRefs, requestIntentReferenceIds, requestIntentTaskType } from '../../../src/dsh/decisions/request-intent.js'
+  rebindRequestIntentDecision, requestIntentMessageRefs, requestIntentReferenceIds, requestIntentTaskType,
+  validateMainModelRequestIntent } from '../../../src/dsh/decisions/request-intent.js'
 import { executionClarification } from '../../../src/dsh/intake-clarification.js'
 
 const task = 'A/B/C をまとめて入れて。前の案で続けて。'
@@ -58,4 +59,61 @@ test('referential repairs need a current resolved Goal or selected proposal, not
     assert.ok(executionClarification(task, { ...decision, evidence: { ...decision.evidence, requestDigest: 'b'.repeat(64) } }, current))
     assert.ok(executionClarification(task, decision, { ...current, task: 'a different request' }))
   }
+})
+
+test('binding diagnostics distinguish absent Goal from invalid evidence without relaxing either check', () => {
+  const current = createRequestIntentContext({ task, messageRefs: context.messageRefs, proposals: context.proposals })!
+  const refs = requestIntentReferenceIds(current)
+  for (const relation of ['same_scope_continuation', 'scope_change'] as const) {
+    const submission = { relation, action: 'verify', evidenceRefs: refs }
+    assert.deepEqual(validateMainModelRequestIntent(submission, current), { ok: false, reason: 'no_active_goal' })
+    assert.equal(bindMainModelRequestIntent(submission, current), undefined)
+    assert.deepEqual(validateMainModelRequestIntent({ ...submission, evidenceRefs: [...refs, 'foreign'] }, current),
+      { ok: false, reason: 'unknown_reference' }, 'untrusted evidence is rejected before relation validation')
+    assert.deepEqual(validateMainModelRequestIntent({ ...submission, evidenceRefs: refs.slice(1) }, current),
+      { ok: false, reason: 'missing_reference' })
+  }
+  for (const action of ['research', 'verify'] as const) {
+    const submission = { relation: 'new', action, evidenceRefs: refs }
+    const result = validateMainModelRequestIntent(submission, current)
+    assert.equal(result.ok, true)
+    if (result.ok) assert.deepEqual(result.decision, bindMainModelRequestIntent(submission, current))
+  }
+  const stale = { ...current, proposals: current.proposals.map(proposal => ({ ...proposal, revision: 3 })) }
+  assert.deepEqual(validateMainModelRequestIntent({ relation: 'new', action: 'verify', evidenceRefs: refs }, stale),
+    { ok: false, reason: 'unknown_reference' })
+  assert.deepEqual(validateMainModelRequestIntent({ relation: 'new', action: 'verify', evidenceRefs: [] }, current),
+    { ok: false, reason: 'invalid_submission' })
+  assert.deepEqual(validateMainModelRequestIntent({ relation: 'unknown', action: 'verify', evidenceRefs: refs }, current),
+    { ok: false, reason: 'unresolved_intent' })
+})
+
+test('task operation candidates share state validation across provider, main model and rebind without mutating the snapshot', async () => {
+  const activeTask = { taskId: 'task-run', runId: 'task-run', sessionId: 'session', sourceSessionId: 'session', repositoryRoot: '/repo',
+    type: 'research' as const, state: 'Pending' as const, revision: 4, generation: 7, runStatus: 'active' as const,
+    reason: 'Waiting for information', evidence: [], allowedOps: ['resume', 'ignore'] as const, request: 'Inspect the repository', resumedFromTerminal: false }
+  const snapshot = { ...activeTask, allowedOps: [...activeTask.allowedOps] }
+  const task = 'Continue the current inspection.'
+  const current = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([], task), activeTask: snapshot })!
+  const original = structuredClone(current)
+  const submit = (taskOperation: string) => ({ relation: 'same_scope_continuation', action: 'verify', taskOperation, evidenceRefs: requestIntentReferenceIds(current) })
+  const valid = validateMainModelRequestIntent(submit('resume'), current)
+  assert.equal(valid.ok, true)
+  if (!valid.ok) return
+  assert.equal(valid.decision.taskOperation, 'resume')
+  assert.equal(rebindRequestIntentDecision(valid.decision, current)?.taskOperation, 'resume')
+  assert.equal(rebindRequestIntentDecision(valid.decision, { ...current, activeTask: { ...snapshot, revision: 5 } }), undefined)
+  for (const operation of ['start', 'complete']) assert.deepEqual(validateMainModelRequestIntent(submit(operation), current), { ok: false, reason: 'invalid_task_operation' })
+  const terminal = { ...current, activeTask: { ...snapshot, state: 'Done' as const } }
+  assert.deepEqual(validateMainModelRequestIntent({ ...submit('resume'), evidenceRefs: requestIntentReferenceIds(terminal) }, terminal), { ok: false, reason: 'invalid_task_operation' })
+  const service = (choice: string): any => ({ bind: async () => ({ mode: 'on' }), evaluate: async (_id: string, input: any) => ({ status: 'completed', result: {
+    answers: input.questions.map((q: any) => ({ id: q.id, status: 'selected', choiceId: q.id === 'request-relation' ? 'same_scope_continuation'
+      : q.id === 'request-action' ? 'verify' : q.id === 'request-task-operation' ? choice : 'unknown' })) } }) })
+  assert.equal((await classifyRequestIntent(service('resume'), 'provider-resume', current, new AbortController().signal))?.taskOperation, 'resume')
+  assert.equal((await classifyRequestIntent(service('complete'), 'provider-forged-complete', current, new AbortController().signal))?.unresolvedReason, 'invalid_task_operation')
+  assert.equal((await classifyRequestIntent(service('unknown'), 'provider-abstain', current, new AbortController().signal))?.unresolvedReason, 'task_operation_unresolved')
+  assert.deepEqual(current, original, 'Interpretation only proposes an operation; it cannot change state')
+  const withDiagnostic = createRequestIntentContext({ task, messageRefs: current.messageRefs, activeTask: { ...snapshot,
+    unresolved: { requestId: 'request', contextDigest: 'a'.repeat(64), revision: 4, reason: 'DECISION_AUTH', evidence: [] } } })!
+  assert.deepEqual(withDiagnostic, current, 'Saving the unresolved reason does not make its own retry context stale')
 })

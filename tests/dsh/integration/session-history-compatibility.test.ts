@@ -20,6 +20,11 @@ import { LedgerStore } from '../../../src/ledger/store.js'
 import { withImmediateTransaction } from '../../../src/db/transaction.js'
 import { realpathSync } from 'node:fs'
 import { decodeSessionLog, encodeSessionLog, parseJsonl } from '../../../scripts/session-history-codec.mjs'
+import { createSessionAccess } from '../../../src/dsh/host-adapter/session-access.js'
+import { DshSessionLogMirror } from '../../../src/dsh/session-log-mirror.js'
+import { openConnection } from '../../../src/db/connection.js'
+import { migrateDatabase } from '../../../src/db/migrate.js'
+import type { DshDatabaseOperation } from '../../../src/dsh/runtime.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
@@ -514,13 +519,15 @@ for (const version of [0, 1, 2] as const) test(`historical v${version} lookup re
   } finally { await f.close() }
 })
 
-test('historical lookup selects the newest stored generation and never falls back from its damaged body', options, async () => {
+for (const version of [2, 3] as const) test(`historical lookup selects v${version} over older generations and never falls back from its damaged body`, {
+  ...options, skip: version < currentVersion ? options.skip : 'requires a newer native generation',
+}, async () => {
   const f = await fixture()
   try {
     const old = await f.legacy('multiple-generations', [{ type: 'kiokuko/completion-report', seq: 0, time: 1, data: { text: 'v0' } }])
-    const newerPath = old.currentPath.replace(`.v${currentVersion}.`, '.v2.')
-    const physical = { type: 'session', ...old.header, version: 2 }
-    const event = { type: 'kiokuko/completion-report', seq: 0, time: 2, data: { text: 'v2' } }
+    const newerPath = old.currentPath.replace(`.v${currentVersion}.`, `.v${version}.`)
+    const physical = { type: 'session', ...old.header, version }
+    const event = { type: 'session/title', seq: 0, time: 2, data: { title: `v${version}`, messageSeqs: [], source: { kind: 'user' } } }
     await writeFile(newerPath, f.encode(Buffer.from([physical, event].map(row => JSON.stringify(row)).join('\n') + '\n')))
     assert.deepEqual(JSON.parse(JSON.stringify((await readHistoricalDshSession(f.backend, old.id))?.events)), [event])
     await writeFile(newerPath, f.encode(Buffer.from([physical, { ...event, seq: 99 }].map(row => JSON.stringify(row)).join('\n') + '\n')))
@@ -529,6 +536,69 @@ test('historical lookup selects the newest stored generation and never falls bac
     await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
   } finally { await f.close() }
 })
+
+for (const compression of ['zstd', 'none'] as const) for (const retainedV2 of [false, true]) {
+  for (const route of ['readSession', 'streamSession', 'export'] as const) test(`cold v3 ${route} preserves native history with ${retainedV2 ? 'retained v2' : 'no older generation'} (${compression})`, {
+    ...options, skip: currentVersion === 4 ? options.skip : 'requires DSH v4',
+  }, async () => {
+    const f = await fixture(compression)
+    const core = openConnection(join(f.root, 'core.sqlite3'))
+    migrateDatabase(core, join(process.cwd(), 'migrations'))
+    const mirror = new DshSessionLogMirror({
+      runtime: { withDatabase: async <T>(operation: DshDatabaseOperation<T>) => operation(core, undefined as never) },
+      databasePath: join(f.root, 'mirror.sqlite3'),
+    })
+    try {
+      const events = [
+        { type: 'session/title', seq: 0, time: 1, data: { title: 'Authoritative v3', messageSeqs: [], source: { kind: 'user' } } },
+        { type: 'session/end-seed', seq: 1, time: 2, data: { inherited: true } },
+        { type: 'turn/start', seq: 2, time: 3, data: { turn: 1 } },
+        { type: 'turn/end', seq: 3, time: 4, data: { turn: 1, reason: { kind: 'completed' } } },
+      ]
+      const old = await f.legacy('cold-v3', events, 3)
+      const physical = { type: 'session', ...old.header, version: 3, isSeeded: true }
+      const original = f.encode(Buffer.from([physical, ...events].map(row => JSON.stringify(row)).join('\n') + '\n'))
+      await writeFile(old.path, original)
+      const olderPath = old.path.replace('.v3.', '.v2.')
+      const older = f.encode(Buffer.from([{ ...physical, version: 2 }, ...events.slice(0, 2)].map(row => JSON.stringify(row)).join('\n') + '\n'))
+      if (retainedV2) await writeFile(olderPath, older)
+      const before = await f.backend.stat(old.id)
+      const native = await restored(f.backend, old.id)
+      assert.deepEqual(native.state.events, events, 'native authority selects the complete v3 history')
+      assert.equal(native.inherited, 1)
+      let nativeReads = 0
+      const sessionAccess = createSessionAccess({
+        native: f.ctx, sessions: { get: () => undefined }, sessionMirror: mirror,
+        sessionQuery: { async readSession() { nativeReads++; throw new Error('cold lookup must retain physical source coordinates') } },
+      })
+      let actual: readonly unknown[]
+      if (route === 'export') {
+        const result = await sessionAccess.sessionExport.open(old.id)
+        assert.equal(result.status, 200)
+        const parts: Buffer[] = []
+        for await (const part of result.body) parts.push(Buffer.from(part))
+        const archive = Buffer.concat(parts)
+        const start = 30 + archive.readUInt16LE(26)
+        const end = archive.indexOf(Buffer.from([0x50, 0x4b, 0x07, 0x08]), start)
+        assert.ok(end > start)
+        actual = archive.subarray(start, end).toString('utf8').trimEnd().split('\n').map(line => JSON.parse(line))
+      } else {
+        const snapshot = await sessionAccess.finalizationQuery[route]!(old.id)
+        assert.equal(snapshot.session.id, old.id)
+        assert.equal(snapshot.inheritedEventCount, 1)
+        const collected: unknown[] = []
+        for await (const event of snapshot.events) collected.push(event)
+        actual = collected
+      }
+      assert.deepEqual(JSON.parse(JSON.stringify(actual)), events, 'import keeps every source event and its original sequence')
+      assert.equal(nativeReads, 0)
+      assert.deepEqual(await f.backend.stat(old.id), before, 'native identity and revision remain unchanged')
+      assert.deepEqual(await readFile(old.path), original)
+      if (retainedV2) assert.deepEqual(await readFile(olderPath), older)
+      await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
+    } finally { await mirror.close(); core.close(); await f.close() }
+  })
+}
 
 for (const limit of ['file', 'expanded'] as const) test(`historical lookup reports the ${limit} size limit as 413 before caching`, options, async () => {
   const f = await fixture()

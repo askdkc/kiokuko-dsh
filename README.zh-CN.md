@@ -19,14 +19,22 @@ ObservationPack 默认保持 `observationPack: { mode: auto }`。若完整行摘
 
 ## 安装与使用
 
-运行时兼容目标为 **DSH 0.1.7-rc.2**。原生请求路径、旧会话历史迁移和打包后的 Web 启动检查均已在本地通过（[验证范围](docs/dsh-plugin.md#compatibility)）。
+运行时兼容目标为 **DSH 0.2.1-alpha.2** 的 `web` 和 `dsh-cli` profile。请参阅[验证范围](docs/dsh-plugin.md#compatibility)。
 
 需要 Node.js **24.16.0 以上**和 pnpm。
-在 DSH 源码目录中运行以下命令，安装已发布的 npm 包并启动：
+在 DSH 源码目录中首次安装并启动 Web 版：
 
 ```bash
 pnpm dsh plugin --profile web add kiokuko-dsh
 pnpm dsh web
+```
+
+首次安装并启动 CLI 版：
+
+```bash
+pnpm dsh plugin --profile dsh-cli add @askdkc/dsh-cli
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh
+pnpm dsh --profile dsh-cli
 ```
 
 如果使用全局安装的 `dsh` CLI，请省略各命令中的 `pnpm`。
@@ -44,11 +52,18 @@ AgenticReplay 的功能配置会自动安装，**无需手动设置**。每次�
 
 ## 更新
 
-先完成正在执行的任务并停止 DSH。更新通过 npm 安装的 Kiokuko：
+停止 DSH 后，更新并重启 Web 版：
 
 ```bash
 pnpm dsh plugin --profile web update kiokuko-dsh --latest
 pnpm dsh web
+```
+
+停止 DSH 后，更新并重启 CLI 版：
+
+```bash
+pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh --profile dsh-cli
 ```
 
 要更新到发布不足24小时的版本，请关闭 pnpm 11 默认的
@@ -79,3 +94,15 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 DSH 更新后若无法加载 Kiokuko，请参阅[启动恢复步骤](docs/dsh-plugin.md#startup-failure-after-a-dsh-update)，按对应 profile 更新或重新安装。请保留会话日志和 Kiokuko 数据库；重新安装不一定能解决 API 兼容性问题。
 
 [文档](docs/README.md) · [权限](PERMISSIONS.md) · [MIT 许可证](LICENSE)
+
+## 可选代码分析
+
+`kioku.code` 通过 `@askdkc/dsh-lsp-server`，在 Lisp 中读取代码结构和只读 LSP 结果。
+请在 `kiokuko-dsh` 所用的同一 profile 中安装或更新。CLI 版请将 `web` 替换为 `dsh-cli`。
+
+```sh
+pnpm dsh plugin --profile web add @askdkc/dsh-lsp-server@latest
+pnpm dsh plugin --profile web update @askdkc/dsh-lsp-server --latest
+```
+
+详见[设置、支持的语言和限制](docs/code-intelligence.md)。

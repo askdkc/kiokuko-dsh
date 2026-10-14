@@ -1,3 +1,4 @@
+import { isNativeSubagent } from '../native-subagent.js'
 import type { z } from 'zod'
 import { ObservationPack } from '../observation-pack/service.js'
 import { ObservationPackConfig, packedSource, packedMessage } from '../observation-pack/policy.js'
@@ -144,7 +145,7 @@ export class SemanticCompactionCoordinator {
       if (binding === undefined) throw new CompactionFallback('unbound_agent')
       return binding
     }
-    if (session.header.parentSession || session.header.origin === 'subagent' || session.header.delegationDepth) throw new CompactionFallback('unbound_child')
+    if (isNativeSubagent({ session })) throw new CompactionFallback('unbound_child')
     return { sessionId: session.id, agentId: agent.id }
   }
 

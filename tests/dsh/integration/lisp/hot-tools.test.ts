@@ -1,3 +1,5 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
+import { migrateDatabase } from '../../../../src/db/migrate.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -20,8 +22,7 @@ async function fixture(auto = false) {
   const root = join(base, 'workspace')
   await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'state.sqlite3'), new DatabaseSync(join(base, 'state.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
+  migrateDatabase(db)
   const store = new LispStore(async fn => fn(db))
   let approvals = 0, forgeApproval = false, holdApproval = false
   const questions: DshUserQuestions & {approvalPolicy?: import('../../../../src/dsh/lisp/approval.js').LispApprovalPolicy} = { ...(auto ? {approvalPolicy: {mode: () => 'auto' as const, writable: () => false, validate: () => {}, set: async () => {}}} : {}), ask: async request => {
@@ -39,13 +40,14 @@ async function fixture(auto = false) {
   }
   let manager = new LispManager(options)
   await manager.start()
-  return { base, root, get manager() { return manager }, store, get approvalsCount() { return approvals }, set forgeApproval(value: boolean) { forgeApproval = value }, set holdApproval(value: boolean) { holdApproval = value }, restart: async () => { await manager.dispose(); manager = new LispManager(options); await manager.start() }, close: async () => { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) } }
+  return { base, root, working: (owner: Parameters<typeof workingLispTask>[1]) => workingLispTask(db, owner), get manager() { return manager }, store, get approvalsCount() { return approvals }, set forgeApproval(value: boolean) { forgeApproval = value }, set holdApproval(value: boolean) { holdApproval = value }, restart: async () => { await manager.dispose(); manager = new LispManager(options); await manager.start() }, close: async () => { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) } }
 }
 
 for (const auto of [false, true]) test(`hot task tools (${auto ? 'auto' : 'ask'}): contract, shared code, replay and deactivation`, native, async () => {
   const f = await fixture(auto)
   const ownerA = { sessionId: 'session-a', agentId: 'agent-a', root: f.root }
   const ownerB = { sessionId: 'session-b', agentId: 'agent-b', root: f.root }
+  f.working(ownerA); f.working(ownerB)
   try {
     assert.deepEqual(await f.manager.enableTask(ownerA), { ok: true, state: 'TASK_READY' })
     assert.deepEqual(await f.manager.enableTask(ownerB), { ok: true, state: 'TASK_READY' })
@@ -105,6 +107,7 @@ for (const auto of [false, true]) test(`hot task tools (${auto ? 'auto' : 'ask'}
 test('hot task tools: stale contract, forged approval, dependency snapshot and root fence fail closed', native, async () => {
   const f = await fixture()
   const owner = { sessionId: 'session', agentId: 'agent', root: f.root }
+  f.working(owner)
   const otherRoot = join(f.base, 'other-workspace'); await mkdir(otherRoot)
   const other = { sessionId: 'other-session', agentId: 'other-agent', root: otherRoot }
   try {
@@ -143,6 +146,7 @@ test('hot task tools: stale contract, forged approval, dependency snapshot and r
 for (const mode of ['task', 'persistent'] as const) test(`hot tools: ${mode} cancellation during approval leaves no active contract`, native, async () => {
   const f = await fixture()
   const owner = { sessionId: 'cancel-session', agentId: 'cancel-agent', root: f.root }
+  f.working(owner)
   try {
     if (mode === 'task') await f.manager.enableTask(owner)
     else await f.manager.enable(owner)

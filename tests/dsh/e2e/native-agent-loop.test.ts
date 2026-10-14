@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
+import { bindTaskRepository } from '../../../src/dsh/task-state.js'
 import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { createDshCapabilityCatalog } from '../../../src/dsh/capability-catalog.js'
@@ -165,7 +166,9 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       : mock.textResponse(finalMode === 'empty' ? '' : `Completed ${suffix}: implementation and verification succeeded; no deletion candidates remain.`),
   ]
   const secondFlow = flowResponses('two')
-  const adapterScript = new mock.MockAdapter(finalMode === 'stall'
+  const adapterScript = new mock.MockAdapter([
+    interpretedPreparation(mock, 'prepare-cold-existing', 'same_scope_continuation', 'change', 'build'),
+    ...(finalMode === 'stall'
     ? [...Array.from({ length: 4 }, () => mock.textResponse('I have not submitted the required phase.')),
       interpretedPreparation(mock, 'prepare-stalled-resume', 'same_scope_continuation', 'change', 'build'),
       ...Array.from({ length: 4 }, () => mock.textResponse('I have not submitted the required phase.'))] : [
@@ -183,7 +186,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
      ...secondFlow.slice(6),
     mock.textResponse('Yes. The requested implementation and verification are complete.'),
     mock.textResponse('fix(dsh): keep long Enno sessions recoverable'),
-  ])
+  ])])
   const ctx = new cordis.Context()
   await ctx.plugin(llm.default)
   await ctx.plugin(session.default)
@@ -354,6 +357,15 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         signal,
       })
       seededRunId = seeded.run.runId
+      // This seed stands in for a fully admitted host run, including the
+      // authoritative binding normally written by admission.bindAndRecord.
+      const authority = bindTaskRepository(seedDatabase, { taskId: seededRunId,
+        sessionId: liveAgent.session.id, repositoryRoot: seeded.project.repositoryRoot })
+      assert.equal(authority.taskId, seededRunId)
+      assert.equal(authority.sessionId, liveAgent.session.id)
+      assert.equal(authority.repositoryRoot, realpathSync(fixtureRoot))
+      assert.equal(authority.state, 'Working')
+      assert.equal(authority.runStatus, 'active')
       // Model a fully persisted Enno run as it would exist after the user has
       // selected its route; resume must not start with an ambiguous selection.
       initializeExecutionSelection(seedDatabase, seeded.run.runId)
@@ -409,12 +421,12 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       const waiting = async (questions: number) => recoveryQuestions === questions && adapter.host.runtime!.withDatabase(db =>
         !!db.prepare("SELECT job_id FROM dsh_boundary_jobs WHERE status = 'waiting_user'").get())
       await completeTurn('@PLAN.md を実装', () => waiting(1))
-      assert.equal(adapterScript.requests.length, 4, 'initial request plus three automatic deliveries')
+      assert.equal(adapterScript.requests.length, 5, 'explicit cold preparation, initial phase request and three automatic deliveries')
       adapter.host.boundaryWorker!.kick(liveAgent.session.id, liveAgent)
       await adapter.host.boundaryWorker!.whenIdle()
       assert.equal(recoveryQuestions, 1, 'empty answer must not automatically repeat the question')
       await completeTurn('現在の指示に従って処理を再開してください。', () => waiting(2))
-      assert.equal(adapterScript.requests.length, 9, 'real human input opens exactly one new bounded generation')
+      assert.equal(adapterScript.requests.length, 10, 'real human input opens exactly one new bounded generation')
       return
     }
     if (finalMode === 'pause') {
@@ -548,7 +560,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     } else assert.ok(longAssistantMessage.sourceEventSeqs?.length > 2_048, 'legacy logs exercise the former bridge source-reference limit')
     const resultCallId = (event: any) => event.data.message.toolCallId ?? event.data.message.content[0]?.toolCallId
     const resultContent = (event: any) => event.data.message.role === 'tool' ? event.data.message.content : event.data.message.content[0].content
-    assert.deepEqual(results.map((event: any) => event.data.message.isError ?? event.data.message.content[0]?.isError), Array(19).fill(false),
+    assert.deepEqual(results.map((event: any) => event.data.message.isError ?? event.data.message.content[0]?.isError), Array(20).fill(false),
       'both user-authored continuations are prepared before host-directed tools; ' + JSON.stringify({ toolEvents, turnEnds }))
     const delegation = results.find((event: any) => resultCallId(event) === 'delegate-two')
     const delegated = JSON.parse(resultContent(delegation)[0].text)

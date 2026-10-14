@@ -1,11 +1,15 @@
+import { ProtocolRecipeSchema } from './guardrail/contracts.js'
 import * as z from 'zod/v4'
 import type { DshCoreRuntime } from './core-runtime.js'
 import { KiokukoError } from '../errors.js'
 import { foregroundNativeCommand } from './memory-application.js'
 import { assessTaskCompletion, beginTaskCompletionExecution, bindTaskCriterion, CompletionMethodSchema,
   finishTaskCompletionExecution, readTaskCriterionBindingReplay, saveTaskCompletionReceipt } from './task-completion.js'
+import { authorizeTaskLease, type TaskLease, type TaskAuthorityExecution } from './task-state.js'
+import { captureExecutionTaskLease } from './task-authority-context.js'
+import { withImmediateTransaction } from '../db/transaction.js'
 
-interface NativeExecution { callId: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
+interface NativeExecution extends TaskAuthorityExecution { callId: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
 interface Context {
   tools: { register(tool: any): () => void }
   on(name: string, listener: (...args: any[]) => unknown, options?: { prepend: boolean }): () => void
@@ -23,12 +27,13 @@ const input = z.discriminatedUnion('action', [
 const transport = z.object({ action: z.enum(['status', 'bind']), criterionId: z.string().optional(),
   method: z.object({ kind: z.enum(['native_command', 'enno_verifier']), command: z.string().optional(),
     cwd: z.string().optional(), sourcePaths: z.array(z.string()).optional(), verifierId: z.string().optional(), workUnitId: z.string().optional(),
+    protocol: ProtocolRecipeSchema.optional(),
     assertion: z.enum(['exit_zero', 'selected_tests_pass','output_matches','artifact_matches']).optional(),expectedOutput:z.string().optional(),artifactPath:z.string().optional(),artifactSha256:z.string().optional() }).strict().optional(),
 }).strict()
 
 /** A model proposes a check; the host owns identity, approval, observation and verdict. */
 export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => void {
-  const pending = new WeakMap<object, { runId: string; callId: string; agent: object; sessionId: string }>()
+  const pending = new WeakMap<object, { runId: string; callId: string; agent: object; sessionId: string; lease: TaskLease }>()
   const disposers: (() => void)[] = []
   disposers.push(ctx.tools.register({ name: 'task_completion', modelFacing: true,
     description: 'Inspect task completion criteria or propose one exact check before running it. Bind never runs a command or marks a criterion successful. The host checks approval and actual evidence.',
@@ -61,10 +66,16 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
     const command = foregroundNativeCommand(execution, identity.repositoryRoot)
     if (command !== null) {
       try {
-        const tracked = await host.runtime.withDatabase(db => beginTaskCompletionExecution(db, {
-          runId: identity.runId, callId: execution.callId, command, repositoryRoot: identity.repositoryRoot }))
+        const lease = await host.runtime.withDatabase(db => captureExecutionTaskLease(db, {
+          taskId: identity.runId, sessionId: identity.sessionId, repositoryRoot: identity.repositoryRoot,
+        }, execution))
+        const tracked = await host.runtime.withDatabase(db => withImmediateTransaction(db, () => {
+          authorizeTaskLease(db, lease)
+          return beginTaskCompletionExecution(db, {
+            runId: identity.runId, callId: execution.callId, command, repositoryRoot: identity.repositoryRoot })
+        }))
         if (tracked) pending.set(execution, { runId: identity.runId, callId: execution.callId, agent: identity.agent,
-          sessionId: identity.sessionId })
+          sessionId: identity.sessionId, lease })
       } catch { /* Missing optional proof cannot authorize completion or veto a native tool. */ }
     }
     return next()
@@ -76,10 +87,11 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
     const identity = host.resolve(execution)
     if (!identity || identity.runId !== tracked.runId || identity.sessionId !== tracked.sessionId
       || identity.agent !== tracked.agent) return
-    return host.runtime.withDatabase(db => {
+    return host.runtime.withDatabase(db => withImmediateTransaction(db, () => {
+      authorizeTaskLease(db, tracked.lease)
       finishTaskCompletionExecution(db, { runId: tracked.runId, callId: tracked.callId, result })
       saveTaskCompletionReceipt(db, tracked.runId)
-    }).catch(() => { /* Missing proof remains unknown. */ })
+    })).catch(() => { /* Stale or missing proof remains unknown. */ })
   }))
   return () => { for (const dispose of disposers.reverse()) dispose() }
 }

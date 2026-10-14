@@ -74,6 +74,9 @@ importers:
       '@deepseek-ai/dsh-session-format-v1-to-v2':
         specifier: 0.2.1-alpha.2
         version: 0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)
+      '@deepseek-ai/dsh-session-format-v2-to-v3':
+        specifier: 0.2.1-alpha.2
+        version: 0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)
       '@huggingface/hub':
         specifier: 2.16.1
         version: 2.16.1
@@ -344,6 +347,11 @@ packages:
 
   '@deepseek-ai/dsh-session-format-v1-to-v2@0.2.1-alpha.2':
     resolution: {integrity: sha512-cSpRjg0L7QStx0ILECVmUfZuchHqNQ9+nxkxWHKw8N5bk6JUlebUGhM/W3uKPuc3r6p5OZzEaei1Nt9axfagsg==}
+    peerDependencies:
+      '@deepseek-ai/cordis': ~4.0.5-alpha.1
+
+  '@deepseek-ai/dsh-session-format-v2-to-v3@0.2.1-alpha.2':
+    resolution: {integrity: sha512-ifjl3JexBNKas222fKIrIZfZ1UAEVLGcwbYHPPtSdUzx1kigAOIHcgYrp9EPY7KK23Y9tek9GRltGiZrgr5Xew==}
     peerDependencies:
       '@deepseek-ai/cordis': ~4.0.5-alpha.1
 
@@ -1602,6 +1610,13 @@ snapshots:
       '@deepseek-ai/dsh-session-format': 0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)
       '@deepseek-ai/dsh-session-format-v0-to-v1': 0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)
       '@deepseek-ai/dsh-util-values': 0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)
+
+  '@deepseek-ai/dsh-session-format-v2-to-v3@0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)':
+    dependencies:
+      '@deepseek-ai/cordis': 4.0.5-alpha.1
+      '@deepseek-ai/dsh-session-format': 0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)
+      '@deepseek-ai/dsh-session-format-v0-to-v1': 0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)
+      '@deepseek-ai/dsh-session-format-v1-to-v2': 0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)
 
   '@deepseek-ai/dsh-session-format@0.2.1-alpha.2(@deepseek-ai/cordis@4.0.5-alpha.1)':
     dependencies:

@@ -21,6 +21,17 @@ test('one handler, native overhead gate, durable source references and continuat
   f.coordinator.stop(); await f.coordinator.drain(); assert.equal(f.handlers.length, 0)
 })
 
+test('a main conversation branch remains eligible for semantic compaction', async () => {
+  const f = fixture()
+  f.session.header.parentSession = 'previous-main-session'
+  try {
+    await f.step()
+    assert.equal(status(f).outcome, 'shortened')
+    assert.equal(f.next(), 1)
+    assert.ok(f.events.some(event => event.type === 'compaction/prune'))
+  } finally { f.coordinator.stop(); await f.coordinator.drain() }
+})
+
 for (const mode of ['off', 'missing', 'native-off', 'low', 'overhead', 'pending-overhead', 'override', 'unbound-child', 'pruned']) test(`skip/fallback leaves semantic history untouched: ${mode}`, async () => {
   const f = fixture({ mode: mode === 'off' ? 'off' : 'auto', configured: mode !== 'missing', overhead: mode === 'overhead' ? 20000 : 100 })
   if (mode === 'native-off') f.services.compaction.config.auto = false

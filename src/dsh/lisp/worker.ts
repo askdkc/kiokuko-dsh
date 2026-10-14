@@ -28,20 +28,26 @@ export class LispWorker {
   #ready: (() => void) | undefined
   #startupReject: ((e: unknown) => void) | undefined
   #rpcActive = false
+  #jobLaunches = 0
   #stdout: Buffer[] = []
   #stderr: Buffer[] = []
   constructor(readonly layout: SandboxLayout, readonly config: LispConfiguration,
     readonly hostCall?: (method: string, args: unknown, context: LispRpcContext) => Promise<unknown>,
-    readonly rpcAllowed: (method: string) => boolean = () => true) {}
+    readonly rpcAllowed: (method: string) => boolean = () => true,
+    readonly beforeJob?: () => Promise<void>) {}
   get busy(): boolean { return this.#pending !== undefined }
   get healthy(): boolean { return !this.#closed && !this.#fatal && this.#child !== undefined }
   get hasRunningJobs(): boolean { return [...this.jobs.values()].some(job => !job.settled) }
+  get jobsIdle(): boolean { return this.#jobLaunches === 0 && !this.hasRunningJobs }
   get stopped(): boolean { return (!this.#child || this.#stopped) && !this.hasRunningJobs }
   output(): unknown { return { stdout: Buffer.concat(this.#stdout).toString('utf8'), stderr: Buffer.concat(this.#stderr).toString('utf8'), bytes: this.#bytes, truncated: this.#bytes > this.config.maxOutputBytes } }
   jobStatus(): unknown[] { return [...this.jobs].map(([id, job]) => ({ id, state: job.error ? 'FAILED' : job.result ? 'FINISHED' : 'RUNNING', code: job.result?.code ?? null, error: job.error ?? null })) }
   get supervisorPid(): number | null { return this.#child?.pid ?? null }
   async start(): Promise<void> {
+    if (this.#closed || this.#fatal) throw this.#fatal ?? new LispError('CANCELLED', 'Lisp の起動を取り消しました。')
     const launch = await sandboxLaunch(this.layout, this.config.sbclPath, ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(this.layout.library, 'bootstrap.lisp')], this.generation, true)
+    // stop() can run while executable/sandbox preparation is awaiting I/O.
+    if (this.#closed || this.#fatal) throw this.#fatal ?? new LispError('CANCELLED', 'Lisp の起動を取り消しました。')
     const ready = new Promise<void>((resolve, reject) => { this.#ready = resolve; this.#startupReject = reject })
     const child = this.#child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: true })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] })
     this.#exit = new Promise(resolve => {
@@ -137,8 +143,10 @@ export class LispWorker {
         const input = Program.parse(rpc.arguments)
         if ([...this.jobs.values()].filter(j => !j.result && !j.error).length >= 4 || this.jobs.size >= 100) throw new Error('JOB_LIMIT')
         const id = randomUUID()
-        const job = await this.launchJob(input)
-        this.jobs.set(id, job)
+        this.#jobLaunches++
+        let job: Job
+        try { job = await this.launchJob(input); this.jobs.set(id, job) }
+        finally { this.#jobLaunches-- }
         if (rpc.method === 'run') { await job.done; if (job.error) throw new Error(job.error); value = job.result }
         else value = id
       } else {
@@ -157,8 +165,13 @@ export class LispWorker {
     }
   }
   private async launchJob(input: z.infer<typeof Program>): Promise<Job> {
+    const pending = this.#pending
+    if (!this.beforeJob) throw new LispError('TASK_REQUIRED', 'プロセス実行には現在の有効なタスクが必要です。')
+    await this.beforeJob()
     const launch = await sandboxLaunch(this.layout, input.program, input.argv, this.generation, false, input.directory)
-    if (this.#closed || this.#fatal || !this.#pending) throw new Error('Worker stopped before job launch')
+    // Resolving the executable and preparing its sandbox can outlive the task.
+    await this.beforeJob()
+    if (this.#closed || this.#fatal || !pending || this.#pending !== pending || pending.abort.signal.aborted) throw new Error('Worker stopped before job launch')
     const child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: false })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] })
     const job: Job = { child, done: Promise.resolve() }
     let bytes = 0, stdout = '', stderr = ''

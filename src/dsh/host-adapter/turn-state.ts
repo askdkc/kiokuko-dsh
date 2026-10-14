@@ -1,3 +1,4 @@
+import type { TaskLease } from '../task-state.js'
 import { dshPonytailOwnerKey, type DshPonytailModes } from '../commands.js'
 import type { DshIntakeGateResult, DshPreStepEvent } from '../intake-gate.js'
 import type { DshToolPolicy, DshToolPolicyState } from '../tool-policy.js'
@@ -12,6 +13,7 @@ import type { MemoryOwnerKind } from '../memory-owner.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 
 export interface TurnRecord {
+  authority?: TaskLease
   readonly agentId: string
   readonly sessionId: string
   readonly runId: string
@@ -86,7 +88,7 @@ export function createTurnState(
   }
   const identityKey = (agentId: string, sessionId: string): string => dshPonytailOwnerKey(agentId, sessionId)
   const turnKey = (agentId: string, sessionId: string, turn: number): string => `${identityKey(agentId, sessionId)}\u0000${turn}`
-  const record = (event: DshPreStepEvent, result: DshIntakeGateResult, generation: number): void => {
+  const record = (event: DshPreStepEvent, result: DshIntakeGateResult, generation: number, authority?: TaskLease): void => {
     const run = result.prepared.run.runId
     const latest = latestBySession.get(event.sessionId)
     if (latest !== undefined && (latest.nativeAgent !== event.nativeAgent || latest.nativeSession !== event.nativeSession)) {
@@ -103,7 +105,9 @@ export function createTurnState(
     const previousRevision = previous?.prepared.ennoOduno.contractRevision ?? 0
     if (previous !== undefined && (incomingRevision < previousRevision
       || incomingRevision === previousRevision && generation <= previous.prepareGeneration)) return
-    const item: TurnRecord = previous ?? {
+    const sameAuthority = previous?.authority?.sessionId === authority?.sessionId && previous?.authority?.revision === authority?.revision
+      && previous?.authority?.generation === authority?.generation
+    const item: TurnRecord = previous ? sameAuthority ? previous : { ...previous } : {
       agentId: event.agent.id,
       sessionId: event.sessionId,
       runId: run,
@@ -126,6 +130,7 @@ export function createTurnState(
       failed: false,
       closed: false,
     }
+    if (authority) item.authority = Object.freeze({ ...authority }); else delete item.authority
     if (event.nativeAgent !== undefined) item.nativeAgent = event.nativeAgent
     if (event.nativeSession !== undefined) item.nativeSession = event.nativeSession
     item.turn = event.turn
@@ -206,7 +211,7 @@ export function createTurnState(
   const allTurns = (): readonly TurnRecord[] => [...turns.values()]
   const executionBinding = (item: TurnRecord): ExecutionBinding => ({
     runId: item.runId, sessionId: item.sessionId, nativeAgent: item.nativeAgent, nativeSession: item.nativeSession,
-    cwd: item.cwd, task: item.task, turn: item.turn,
+    cwd: item.cwd, repositoryRoot: item.repositoryRoot, task: item.task, turn: item.turn,
     ennoState: item.prepared.ennoOduno,
     chat: item.prepared.intake.profile.taskType === 'chat' || !!getSelection(item.runId)?.value.discussion,
     terminal: item.closed || ['complete', 'report_blocker'].includes(item.prepared.ennoOduno.nextAction)
@@ -216,8 +221,8 @@ export function createTurnState(
       lease: states.get(item.runId)?.leaseToken ?? null }),
   })
   const sessionIds = (): readonly string[] => [...latestBySession.keys()]
-  const releaseRun = (runId: string): void => {
-    const items = [...turns.values()].filter(item => item.runId === runId)
+  const releaseRun = (runId: string, authority?: TaskLease): void => {
+    const items = [...turns.values()].filter(item => item.runId === runId && (!authority || item.authority?.sessionId === authority.sessionId && item.authority.generation === authority.generation))
     for (const item of items) {
       const modeKey = identityKey(item.agentId, item.sessionId)
       const modeRequest = `dsh:${item.agentId}:${item.sessionId}:${item.turn}`
@@ -231,8 +236,10 @@ export function createTurnState(
     for (const sessionId of new Set(items.map(item => item.sessionId))) {
       if (![...turns.values()].some(item => item.sessionId === sessionId && !item.closed)) policy.clearSession(sessionId)
     }
-    if (![...turns.values()].some(item => item.runId === runId)) states.delete(runId)
-    resumedLeases.delete(runId)
+    if (![...turns.values()].some(item => item.runId === runId)) {
+      states.delete(runId)
+      resumedLeases.delete(runId)
+    }
   }
   const clear = (): void => {
     turns.clear()

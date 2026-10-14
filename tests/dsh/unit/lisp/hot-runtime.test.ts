@@ -16,7 +16,7 @@ async function fixture() {
     db.exec(readFileSync(new URL(`../../../../migrations/${migration}`, import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)); await store.enable(owner)
   const controls = { before: async (_source: string, _mode?: string) => {}, calls: 0 }
-  const runtime = new HotToolRuntime({ store, projectRoot: async () => owner.root, authorize: async () => {},
+  const runtime = new HotToolRuntime({ store, projectRoot: async () => owner.root, authorize: async () => {}, authorizeEffect: async () => {},
     questions: { ask: async request => ({ answers: [{ id: request.questions[0]!.id, selected: ['承認する'] }] }) },
     input: async () => { throw new Error('unexpected inputRef') },
     // Unit seam only: protected execution is covered by the native integration suite.

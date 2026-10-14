@@ -51,6 +51,19 @@ async function fixture() {
     async close() { support.dispose(); db.close(); await rm(root, { recursive: true, force: true }) } }
 }
 
+test('queued exploration evidence cannot commit after its task authority generation changes', async () => {
+  const f = await fixture()
+  try {
+    assert.equal(f.read('before-stop'), undefined)
+    f.db.prepare('UPDATE ledger_runs SET task_revision=task_revision+1,task_generation=task_generation+1 WHERE run_id=?').run(f.binding.runId)
+    await f.assemble()
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_execution_evidence WHERE run_id=?').get<{n:number}>(f.binding.runId)!.n,0)
+    assert.equal(f.read('after-resume'),undefined)
+    await f.assemble()
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_execution_evidence WHERE run_id=?').get<{n:number}>(f.binding.runId)!.n,1)
+  } finally {await f.close()}
+})
+
 test('only explicit unquoted labels grant scope; proposals cannot widen it, including symlink creation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-frame-'))
   try {

@@ -17,6 +17,7 @@ const pack=async(directory,label)=>{
  await run('npm',['pack','--ignore-scripts','--pack-destination',destination],directory)
  const archives=(await readdir(destination)).filter(file=>file.endsWith('.tgz'));assert.equal(archives.length,1);return join(destination,archives[0])
 }
+const expectedPackageVersion=JSON.parse(await readFile(join(root,'package.json'),'utf8')).version
 const provider=await pack(join(base,'dsh-lsp-server'),'provider'),suite=await pack(root,'suite')
 // Pin the physically installed, canonical host ecosystem, including its peer-only services.
 const hostDependencies={}
@@ -32,5 +33,5 @@ await writeFile(join(profile,'package.json'),JSON.stringify({private:true,type:'
  dsh:{profile:{bundles:['@askdkc/dsh-lsp-server','kiokuko-dsh']}},
 },null,2)+'\n')
 await run('npm',['install','--ignore-scripts','--legacy-peer-deps'],profile)
-for(const [name,version] of [['@deepseek-ai/dsh','0.2.1-alpha.2'],['@askdkc/dsh-cli','0.14.4'],['kiokuko-dsh','0.2.1']])assert.equal(JSON.parse(await readFile(join(profile,'node_modules',name,'package.json'),'utf8')).version,version)
+for(const [name,version] of [['@deepseek-ai/dsh','0.2.1-alpha.2'],['@askdkc/dsh-cli','0.14.4'],['kiokuko-dsh',expectedPackageVersion]])assert.equal(JSON.parse(await readFile(join(profile,'node_modules',name,'package.json'),'utf8')).version,version)
 console.log('Installed packed provider and Kiokuko in the isolated CLI 0.14.4 profile fixture.')

@@ -1,0 +1,22 @@
+{
+  "cargo_sha256": "e951141cc55a6cd7b9876d187bd30a3720e6086b99413af95e3b8de1cdd72f14",
+  "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+  "command": [
+    "env",
+    "SOURCE_DATE_EPOCH=0",
+    "RUSTFLAGS=--remap-path-prefix=SOURCE=kiokuko-guardrail --remap-path-prefix=TEMP=build",
+    "cargo",
+    "build",
+    "--manifest-path",
+    "Cargo.toml",
+    "--locked",
+    "--offline",
+    "--release",
+    "--target",
+    "x86_64-unknown-linux-musl"
+  ],
+  "rustc_sha256": "f3834d26669b03f6855fa54bd2381443123e860167bc0c7a8dd137e5cf6e5e4f",
+  "rustc_version": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+  "source_date_epoch": 0,
+  "target": "x86_64-unknown-linux-musl"
+}

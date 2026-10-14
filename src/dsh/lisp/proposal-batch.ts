@@ -30,12 +30,18 @@ export class LispProposalBatch {
   readonly #targets = new Set<string>()
   #backupReserved = 0
   constructor(readonly options: { store: LispStore; backupRoot: string; protectedRoots: () => string[]; questions?: DshUserQuestions; stopped: () => boolean;
+    authorizeEffect?: (owner: LispOwner) => Promise<void>;
     execute?: (owner:LispOwner,name:string,args:Record<string,unknown>,signal:AbortSignal,callId:string)=>Promise<any> }) {}
 
   async apply(owner: LispOwner, evalId: string, generation: string, requests: readonly ProposalInput[], signal: AbortSignal,
     restoration?: FrozenChange['restoration'], expected?: { readSet: FileSnapshot[]; targets: Record<string, FileSnapshot> }): Promise<ChangeOutcome[]> {
     requests = requests.map(request => ({ ...request }))
     if (!requests.length) return []
+    const beforeEffect = async () => {
+      if (!this.options.authorizeEffect) fail('TASK_REQUIRED', '変更の適用には現在の有効なタスクが必要です。')
+      await this.options.authorizeEffect(owner)
+      if (signal.aborted || this.options.stopped()) fail('CANCELLED', '残りの変更を取り消しました。')
+    }
     if(this.options.execute){
       const outcomes:ChangeOutcome[]=[]
       if(expected)for(const before of expected.readSet){
@@ -44,14 +50,18 @@ export class LispProposalBatch {
       }
       for(const [index,request] of requests.entries()){
         if(signal.aborted||this.options.stopped())break
+        let attempted = false
         try{
           const before=expected?.targets[request.path]
+          const content = request.operation === 'write' ? restoration ? (await restoreBytes(restoration)).toString('utf8') : request.content : undefined
+          await beforeEffect()
+          attempted = true
           const result=await this.options.execute(owner,request.operation==='delete'?'kioku_remove':'kioku_write',
-            {path:request.path,...(request.operation==='write'?{content:restoration?(await restoreBytes(restoration)).toString('utf8'):request.content}:{}),...(before?{expectedHash:before.hash??null}:{})},signal,`lisp-proposal:${evalId}:${index}`)
+            {path:request.path,...(request.operation==='write'?{content}:{}),...(before?{expectedHash:before.hash??null}:{})},signal,`lisp-proposal:${evalId}:${index}`)
           const state=result.applied?'APPLIED':result.receipt?.state==='unknown'?'UNKNOWN':'NOT_APPLIED'
           outcomes.push({id:`${evalId}:${index}`,path:request.path,state,...(result.receipt?.error?{message:result.receipt.error}:{})})
           if(state!=='APPLIED')break
-        }catch(error){outcomes.push({id:`${evalId}:${index}`,path:request.path,state:'UNKNOWN',message:failure(error).message});break}
+        }catch(error){const problem=failure(error);outcomes.push({id:`${evalId}:${index}`,path:request.path,state:attempted?'UNKNOWN':'NOT_APPLIED',code:problem.code,message:problem.message});break}
       }
       for(const [index,request] of requests.entries())if(!outcomes.some(outcome=>outcome.path===request.path))outcomes.push({id:`${evalId}:${index}`,path:request.path,state:'NOT_APPLIED',reason:'batch_stopped'})
       return outcomes
@@ -67,6 +77,7 @@ export class LispProposalBatch {
     }
     try {
       if (new Set(requests.map(r => r.path)).size !== requests.length) throw new LispError('DUPLICATE_TARGET', '同じ評価内の変更対象は一意にしてください。', '重複した変更案を一つにまとめてください。')
+      await beforeEffect()
       await mkdir(backupRoot, { recursive: true, mode: 0o700 })
       const pending = await store.pendingTargets()
       for (const request of requests) {
@@ -126,8 +137,9 @@ export class LispProposalBatch {
       const createdParents: CreatedParents = new Map()
       for (const c of active) {
         if (signal.aborted || this.options.stopped()) throw new LispError('CANCELLED', '残りの変更を取り消しました。', '適用済みの変更は結果一覧で確認できます。')
+        await beforeEffect()
         await store.transition(owner, id(c), [reserved.get(id(c))!], 'APPLYING', { evalId }); reserved.set(id(c), 'APPLYING')
-        await applyChange(owner, c, roots, createdParents)
+        await applyChange(owner, c, roots, createdParents, beforeEffect)
         await record(c, { id: id(c), path: c.request.path, state: 'APPLIED', backup: c.backup, ...(approvalSource ? { approval: approvalSource } : {}) })
       }
       return outcomes

@@ -1,3 +1,5 @@
+import { workingLispTask } from '../../helpers/lisp-task.js'
+import { migrateDatabase } from '../../../../src/db/migrate.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -5,10 +7,11 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
-import { LispConfig, type LispOwner } from '../../../../src/dsh/lisp/contracts.js'
+import { LispConfig, LispError, type LispOwner } from '../../../../src/dsh/lisp/contracts.js'
 import { LispManager } from '../../../../src/dsh/lisp/manager.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
 import { LispWorker } from '../../../../src/dsh/lisp/worker.js'
+import { findSessionTask, requestTaskStop } from '../../../../src/dsh/task-state.js'
 import type { DshUserQuestions } from '../../../../src/dsh/user-interaction.js'
 
 const native = { skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL' : false, timeout: 90000 }
@@ -16,13 +19,14 @@ async function fixture(idleTimeoutMs = 300000, questions?: DshUserQuestions) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-idle-'))), root = join(base, 'work')
   await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
+  migrateDatabase(db)
   const store = new LispStore(async fn => fn(db))
   const manager = new LispManager({ store, dataRoot: join(base, 'data'), ...(questions ? { questions } : {}),
     config: LispConfig.parse({ executionMode: 'protected', enabled: true, maxWorkers: 1, idleTimeoutMs, startupTimeoutMs: 60000, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl' }) })
   await manager.start()
-  const owner = (id: string): LispOwner => ({ sessionId: id, agentId: id, root })
+  const owner = (id: string): LispOwner => {
+    const binding = { sessionId: id, agentId: id, root }; workingLispTask(db, binding); return binding
+  }
   return { manager, store, root, owner, async close() { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) } }
 }
 async function until(check: () => Promise<boolean>) {
@@ -86,12 +90,17 @@ test('evaluation, approval, background jobs and uncertain journal entries are ne
     await f.manager.enable(first)
     const evaluation = f.manager.execute(first, 'lisp_eval', { operationId: 'slow', code: '(sleep 0.3) 42' })
     await until(async () => (await status(f.manager, first)).state === 'EVALUATING')
+    assert.equal(f.manager.taskJobsIdle(first), true, 'pure evaluation is not a background job')
     await assert.rejects(f.manager.enable(second), { code: 'WORKER_LIMIT' })
     assert.equal((await evaluation as any).ok, true)
     const job = await f.manager.execute(first, 'lisp_eval', { operationId: 'job', code: '(kioku.process:start-job "python3" (list "-I" "-c" "import time; time.sleep(1)") :timeout-ms 5000)' }) as any
     assert.equal(job.ok, true)
+    assert.equal(f.manager.taskJobsIdle(first), false, 'the protected process prevents completion')
+    assert.equal(f.manager.taskJobsIdle({ ...first, agentId: 'another-agent' }), false, 'all agents in the task session share the job observation')
+    assert.equal(f.manager.taskJobsIdle(second), true, 'another session is independent')
     await assert.rejects(f.manager.enable(second), { code: 'WORKER_LIMIT' })
     await until(async () => (await status(f.manager, first)).jobs.every((j: any) => j.state !== 'RUNNING'))
+    assert.equal(f.manager.taskJobsIdle(first), true)
     await f.store.reserve(first, 'uncertain', 'proposal', 'digest', 'generation', {})
     await f.store.transition(first, 'uncertain', ['RUNNING'], 'UNKNOWN', {})
     await assert.rejects(f.manager.enable(second), { code: 'WORKER_LIMIT' })
@@ -129,10 +138,46 @@ test('an unhealthy worker still occupies its slot until termination is confirmed
     // Model a broken connection while the supervised process is still alive.
     t.mock.getter(LispWorker.prototype, 'healthy', () => false)
     assert.equal((await status(f.manager, first)).state, 'RECOVERY_REQUIRED')
+    assert.equal(f.manager.taskJobsIdle(first), false, 'a broken live supervisor is not confirmed idle')
     await assert.rejects(f.manager.enable(second), { code: 'WORKER_LIMIT' })
+    t.mock.method(LispWorker.prototype, 'stop', async () => { throw new LispError('STOP_UNCONFIRMED', 'fixture stop unconfirmed') })
+    assert.equal((await f.manager.execute(first, 'lisp_cancel', {}) as any).code, 'STOP_UNCONFIRMED')
+    assert.equal(f.manager.taskJobsIdle(first), false, 'unconfirmed termination cannot be completion evidence')
     t.mock.restoreAll()
-    assert.equal((await f.manager.prepare(first) as any).state, 'RECOVERY_REQUIRED')
+    assert.equal((await f.manager.prepare(first) as any).state, 'STOP_UNCONFIRMED')
     await f.manager.execute(first, 'lisp_cancel', {})
+    assert.equal(f.manager.taskJobsIdle(first), true, 'confirmed cancellation drains local jobs')
     assert.equal((await f.manager.prepare(second) as any).state, 'READY')
   } finally { t.mock.restoreAll(); await f.close() }
+})
+
+test('task-stop disposal drains a real protected background job after its execution lease is revoked', native, async t => {
+  const f = await fixture(), owner = f.owner('task-stop')
+  const start = LispWorker.prototype.start
+  let worker: LispWorker | undefined
+  t.mock.method(LispWorker.prototype, 'start', async function(this: LispWorker) { worker = this; return start.call(this) })
+  try {
+    await f.manager.enable(owner)
+    const result = await f.manager.execute(owner, 'lisp_eval', { operationId: 'background',
+      code: '(kioku.process:start-job "python3" (list "-I" "-c" "import time; time.sleep(30)"))' }) as any
+    assert.equal(result.ok, true, JSON.stringify(result))
+    assert.ok(worker?.hasRunningJobs)
+    assert.equal(f.manager.taskJobsIdle(owner), false)
+    const jobs = [...worker.jobs.values()]
+    assert.equal(jobs.length, 1)
+    const supervisorPid = jobs[0]!.child.pid!
+    process.kill(supervisorPid, 0)
+    await f.store.database(db => {
+      const task = findSessionTask(db, { sessionId: owner.sessionId, repositoryRoot: owner.root })!
+      requestTaskStop(db, task, { operation: 'wait', operationId: 'stop-request', expectedRevision: task.revision,
+        reason: 'Stop the real protected background job' })
+    })
+    await f.manager.disposeSession(owner.sessionId)
+    assert.equal(worker.stopped, true)
+    assert.equal(worker.hasRunningJobs, false)
+    assert.equal(f.manager.taskJobsIdle(owner), true)
+    assert.ok(jobs.every(job => job.settled), 'all supervised background receipts must settle before disposal returns')
+    assert.throws(() => process.kill(supervisorPid, 0), { code: 'ESRCH' })
+    assert.equal((await status(f.manager, owner)).state, 'SUSPENDED')
+  } finally { await f.close() }
 })

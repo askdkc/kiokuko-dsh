@@ -23,11 +23,36 @@ function adverseFeedback(db: SqliteDatabase, id: string, revision: number): bool
     ON d.delivery_id=f.delivery_id AND d.entry_id=f.entry_id
     WHERE f.entry_id=? AND d.entry_revision=? AND f.verdict IN ('stale','conflicting') LIMIT 1`).get(id, revision)
 }
+export function episodeSourceEpoch(episode: Pick<Episode, 'sourceEpoch'>): number {
+  const epoch = episode.sourceEpoch ?? 1
+  if (!Number.isSafeInteger(epoch) || epoch < 1) throw new Error('episode_source_epoch_invalid')
+  return epoch
+}
+const episodeDigest = (episode: Episode) => digest({ ...episode, sourceEpoch: episodeSourceEpoch(episode) })
+
+/** The current ledger outcome belongs only to the current source. Archived
+ * sources retain their own owner, range and outcome after resume or handoff. */
+function episodeSource(db: SqliteDatabase, episode: Episode): { archived: boolean } | undefined {
+  const epoch = episodeSourceEpoch(episode)
+  const current = db.prepare(`SELECT f.source_epoch,f.workspace,f.dsh_session_id,f.source_start_seq,f.source_end_seq,COALESCE(f.source_outcome,r.status) AS outcome,
+    COALESCE(r.task_owner_session_id,r.dsh_session_id) AS owner FROM dsh_memory_finalizations f JOIN ledger_runs r ON r.run_id=f.run_id
+    WHERE f.run_id=? AND f.source_epoch=?`).get<Record<string, unknown>>(episode.runId, epoch)
+  let source = current, archived = false
+  if (!source) {
+    const row = db.prepare('SELECT job_json FROM dsh_task_source_finalizations WHERE run_id=? AND source_epoch=?')
+      .get<{ job_json: string }>(episode.runId, epoch)
+    if (row) { source = JSON.parse(row.job_json) as Record<string, unknown>; archived = true }
+  }
+  if (!source || source.source_epoch !== epoch || source.workspace !== episode.workspace || source.dsh_session_id !== episode.sessionId
+    || source.source_start_seq !== episode.start || source.source_end_seq !== episode.end || source.outcome !== episode.outcome
+    || !archived && source.owner !== episode.sessionId) return undefined
+  return { archived }
+}
 export function episodeCurrent(db: SqliteDatabase, episode: Episode): boolean {
   if(capturePolicy(db,episode.workspace,episode.sessionId).mode!=='allowed')return false
-  const row = db.prepare(`SELECT e.episode_json,e.overview_entry_id, r.status, r.workspace FROM memory_episodes e
-    JOIN ledger_runs r ON r.run_id=e.run_id WHERE e.run_id=?`).get<{ episode_json: string; overview_entry_id: string | null; status: string; workspace: string }>(episode.runId)
-  if (!row || row.workspace !== episode.workspace || row.status !== episode.outcome || digest(JSON.parse(row.episode_json)) !== digest(episode)) return false
+  const row = db.prepare('SELECT episode_json,overview_entry_id,workspace FROM memory_episodes WHERE run_id=? AND source_epoch=?')
+    .get<{ episode_json: string; overview_entry_id: string | null; workspace: string }>(episode.runId, episodeSourceEpoch(episode))
+  if (!row || row.workspace !== episode.workspace || !episodeSource(db, episode) || episodeDigest(JSON.parse(row.episode_json) as Episode) !== episodeDigest(episode)) return false
   const overview = db.prepare('SELECT status,current_revision FROM entries WHERE id=?').get<{status:string;current_revision:number}>(row.overview_entry_id)
   if (!overview || overview.status === 'superseded' || overview.current_revision !== 1 || adverseFeedback(db, row.overview_entry_id!, 1)) return false
   return episode.sources.every(source => {
@@ -94,22 +119,18 @@ function recordDerived(db: SqliteDatabase, input: {
   } else entry = recordEntryInTransaction(db, { ...data, status: 'candidate', trustLevel: 'untrusted', confidence: 0.5 }, { now: input.now })
   db.prepare(`INSERT INTO memory_derivations(entry_id,revision,workspace,signature,kind,algorithm,manifest_json,input_digest,state)
     VALUES(?,?,?,?,?,?,?,?,'ready')`).run(entry.id, entry.revision, entry.workspace, signature, input.kind, algorithm, manifest, inputDigest)
-  for (const e of input.episodes) db.prepare('INSERT OR IGNORE INTO memory_episode_entries(run_id,entry_id) VALUES(?,?)').run(e.runId, entry.id)
+  for (const e of input.episodes) db.prepare('INSERT OR IGNORE INTO memory_episode_entries(run_id,source_epoch,entry_id) VALUES(?,?,?)').run(e.runId, episodeSourceEpoch(e), entry.id)
   return entry
 }
 
 /** Caller owns the finalization transaction; an optional episode failure rolls back to its savepoint. */
 export function saveEpisode(db: SqliteDatabase, episode: Episode, now: string, nativeEvidence?: readonly EpisodeEvidence[]): void {
-  const run = db.prepare('SELECT workspace,dsh_session_id AS session,status FROM ledger_runs WHERE run_id=?')
-    .get<{ workspace: string; session: string; status: string }>(episode.runId)
-  const source = db.prepare('SELECT source_start_seq AS start,source_end_seq AS end FROM dsh_memory_finalizations WHERE run_id=?')
-    .get<{ start: number; end: number }>(episode.runId)
-  if (!run || run.workspace !== episode.workspace || run.session !== episode.sessionId || run.status !== episode.outcome ||
-    !source || source.start !== episode.start || source.end !== episode.end) throw new Error('episode_identity_mismatch')
+  const epoch = episodeSourceEpoch(episode), source = episodeSource(db, episode)
+  if (!source) throw new Error('episode_identity_mismatch')
   if (evolutionSettings(db).mode === 'off') return
-  const prior = db.prepare('SELECT episode_json FROM memory_episodes WHERE run_id=?').get<{ episode_json: string }>(episode.runId)
+  const prior = db.prepare('SELECT episode_json FROM memory_episodes WHERE run_id=? AND source_epoch=?').get<{ episode_json: string }>(episode.runId, epoch)
   if (prior) {
-    if (digest(JSON.parse(prior.episode_json)) !== digest(episode)) throw new Error('episode_replay_conflict')
+    if (episodeDigest(JSON.parse(prior.episode_json) as Episode) !== episodeDigest(episode)) throw new Error('episode_replay_conflict')
     return
   }
   if (!nativeEvidence) throw new Error('episode_native_evidence_required')
@@ -123,40 +144,49 @@ export function saveEpisode(db: SqliteDatabase, episode: Episode, now: string, n
     episode.signature !== episodeSignature(episode.workspace, episode.draft) ||
     episode.evidenceDigest !== supportingEvidenceDigest(episode.draft, nativeEvidence) ||
     digest(episodeSignals(episode.draft, nativeEvidence)) !== digest({ successful: episode.successful, procedureSupported: episode.procedureSupported, failed: episode.failed, corrective: episode.corrective, alternativeObserved: episode.alternativeObserved, recovered: episode.recovered })) throw new Error('episode_evidence_mismatch')
-  for (const source of episode.sources) {
-    const entry = readEntry(db, { workspace: episode.workspace, entryId: source.entryId })
-    if (entry.workspace !== episode.workspace || entry.revision !== source.revision || entry.contentHash !== source.hash || entry.provenance.type === 'memory-evolution' || !db.prepare('SELECT 1 FROM dsh_memory_finalization_entries WHERE run_id=? AND entry_id=?').get(episode.runId, source.entryId)) throw new Error('episode_source_mismatch')
+  for (const reference of episode.sources) {
+    const entry = readEntry(db, { workspace: episode.workspace, entryId: reference.entryId })
+    const linked = source.archived
+      ? db.prepare('SELECT 1 FROM dsh_task_source_entries WHERE run_id=? AND source_epoch=? AND entry_id=?').get(episode.runId, epoch, reference.entryId)
+      : db.prepare('SELECT 1 FROM dsh_memory_finalization_entries WHERE run_id=? AND entry_id=?').get(episode.runId, reference.entryId)
+    if (entry.workspace !== episode.workspace || entry.revision !== reference.revision || entry.contentHash !== reference.hash || entry.provenance.type === 'memory-evolution' || !linked) throw new Error('episode_source_mismatch')
   }
-  db.prepare('INSERT INTO memory_episodes(run_id,workspace,signature,evidence_digest,episode_json,created_at) VALUES(?,?,?,?,?,?)')
-    .run(episode.runId, episode.workspace, episode.signature, episode.evidenceDigest, canonicalJson(episode), now)
-  for (const source of episode.sources) db.prepare('INSERT INTO memory_episode_entries(run_id,entry_id) VALUES(?,?)').run(episode.runId, source.entryId)
+  db.prepare('INSERT INTO memory_episodes(run_id,source_epoch,workspace,signature,evidence_digest,episode_json,created_at) VALUES(?,?,?,?,?,?,?)')
+    .run(episode.runId, epoch, episode.workspace, episode.signature, episode.evidenceDigest, canonicalJson(episode), now)
+  for (const reference of episode.sources) db.prepare('INSERT INTO memory_episode_entries(run_id,source_epoch,entry_id) VALUES(?,?,?)').run(episode.runId, epoch, reference.entryId)
   const overview = recordDerived(db, { episodes: [episode], kind: 'episode', title: episode.draft.goal, now,
-    body: `未検証の経験候補 / Unverified episode\nGoal: ${episode.draft.goal}\nApplicability: ${episode.draft.applicability}\nProcedure: ${episode.draft.procedure}\nObserved: ${episode.draft.events.map(e => e.description).join('\n')}\nRun outcome: ${episode.outcome}\nVerification: ${episode.successful ? 'observed passing result' : 'not established'}\nUnresolved: ${episode.draft.unresolved.join('; ')}\nEvidence: native seq ${episode.start}-${episode.end}` })
-  db.prepare('UPDATE memory_episodes SET overview_entry_id=? WHERE run_id=?').run(overview.id, episode.runId)
+    body: `未検証の経験候補 / Unverified episode\nGoal: ${episode.draft.goal}\nApplicability: ${episode.draft.applicability}\nProcedure: ${episode.draft.procedure}\nObserved: ${episode.draft.events.map(e => e.description).join('\n')}\nRun outcome: ${episode.outcome}\nVerification: ${episode.successful ? 'observed passing result' : 'not established'}\nUnresolved: ${episode.draft.unresolved.join('; ')}\nSource: ${episode.runId} epoch ${epoch}\nEvidence: native seq ${episode.start}-${episode.end}` })
+  db.prepare('UPDATE memory_episodes SET overview_entry_id=? WHERE run_id=? AND source_epoch=?').run(overview.id, episode.runId, epoch)
 }
 
 export interface EvolutionModel { sessionId?: string; provider: string; model: string; contextWindow?: number; reasoningEffort?: string }
-export function scheduleEvolution(db: SqliteDatabase, runId: string, model: EvolutionModel, now: string): void {
-  const current = db.prepare('SELECT episode_json FROM memory_episodes WHERE run_id=?').get<{ episode_json: string }>(runId)
+export function scheduleEvolution(db: SqliteDatabase, runId: string, model: EvolutionModel, now: string, sourceEpoch = 1): void {
+  const current = db.prepare('SELECT episode_json FROM memory_episodes WHERE run_id=? AND source_epoch=?').get<{ episode_json: string }>(runId, sourceEpoch)
   if (!current || evolutionSettings(db).mode === 'off') return
   const trigger = JSON.parse(current.episode_json) as Episode
-  if (db.prepare('SELECT 1 FROM memory_evolution_jobs WHERE trigger_run=?').get(runId)) return
-  const recent = independentEpisodes(db.prepare(`SELECT episode_json FROM memory_episodes WHERE workspace=? AND signature=? ORDER BY created_at DESC LIMIT 120`)
+  if (db.prepare('SELECT 1 FROM memory_evolution_jobs WHERE trigger_run=? AND source_epoch=?').get(runId, sourceEpoch)) return
+  const recent = independentEpisodes(db.prepare(`SELECT episode_json FROM memory_episodes WHERE workspace=? AND signature=? ORDER BY created_at DESC,source_epoch DESC,run_id LIMIT 120`)
     .all<{ episode_json: string }>(trigger.workspace, trigger.signature).map(row => JSON.parse(row.episode_json) as Episode).filter(e => episodeCurrent(db, e)))
-  const skip = (reason: string) => db.prepare('INSERT INTO memory_evolution_skips(run_id,workspace,reason) VALUES(?,?,?) ON CONFLICT(run_id) DO UPDATE SET reason=excluded.reason').run(runId, trigger.workspace, reason)
+  const skip = (reason: string) => db.prepare('INSERT INTO memory_evolution_skips(run_id,source_epoch,workspace,reason) VALUES(?,?,?,?) ON CONFLICT(run_id,source_epoch) DO UPDATE SET reason=excluded.reason').run(runId, sourceEpoch, trigger.workspace, reason)
   for (const kind of ['avoidance', 'positive'] as const) {
     const signature = referencePromotionSignature(trigger, kind)
     const episodes = recent.filter(episode => referencePromotionSignature(episode, kind) === signature
       && (kind === 'avoidance' ? eligibleAvoidance(episode) : !eligibleAvoidance(episode)))
     if (inductionKind(episodes) !== kind) continue
-    const previous = db.prepare(`SELECT seen_json FROM memory_evolution_jobs WHERE workspace=? AND signature=? AND kind=? AND algorithm=?`)
-      .all<{ seen_json: string }>(trigger.workspace, signature, kind, REFERENCE_PROMOTION_VERSION)
+    const previous = db.prepare(`SELECT seen_json,input_json FROM memory_evolution_jobs WHERE workspace=? AND signature=? AND kind=? AND algorithm=?`)
+      .all<{ seen_json: string; input_json: string }>(trigger.workspace, signature, kind, REFERENCE_PROMOTION_VERSION)
     const seen = new Set(previous.flatMap(row => JSON.parse(row.seen_json) as string[]))
-    if (previous.length && episodes.filter(e => !seen.has(e.evidenceDigest)).length < 3) {
+    const seenRuns = new Set(previous.flatMap(row => (JSON.parse(row.input_json) as Episode[]).map(e => e.runId)))
+    // A resumed task may have new evidence without becoming a new independent
+    // source. Legacy jobs retain hashes in seen_json and identities in manifests.
+    if (seen.size) for (const row of db.prepare('SELECT DISTINCT run_id FROM memory_episodes WHERE workspace=? AND evidence_digest IN (SELECT value FROM json_each(?))')
+      .all<{ run_id: string }>(trigger.workspace, canonicalJson([...seen]))) seenRuns.add(row.run_id)
+    const previouslySeen = (e: Episode) => seen.has(e.evidenceDigest) || seenRuns.has(e.runId)
+    if (previous.length && episodes.filter(e => !previouslySeen(e)).length < 3) {
       skip('waiting_for_three_new_episodes'); return
     }
     // Reserve the required support, then include new observations without exceeding six.
-    const ordered = [...episodes].sort((a,b) => Number(seen.has(a.evidenceDigest)) - Number(seen.has(b.evidenceDigest))
+    const ordered = [...episodes].sort((a,b) => Number(previouslySeen(a)) - Number(previouslySeen(b))
       || (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
     const support = kind === 'positive' ? ordered.filter(e => e.successful && e.procedureSupported).slice(0,2)
       : ordered.filter(e => eligibleAvoidance(e)).slice(0,2)
@@ -165,9 +195,9 @@ export function scheduleEvolution(db: SqliteDatabase, runId: string, model: Evol
       skip('conflicting_procedures'); return
     }
     const inputDigest = digest({ version: REFERENCE_PROMOTION_VERSION, kind, episodes: selected })
-    db.prepare('DELETE FROM memory_evolution_skips WHERE run_id=?').run(runId)
-    db.prepare(`INSERT OR IGNORE INTO memory_evolution_jobs(id,workspace,trigger_run,signature,kind,input_json,seen_json,input_digest,model_json,algorithm,state,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(inputDigest, trigger.workspace, runId, signature, kind, canonicalJson(selected), canonicalJson(episodes.map(e => e.evidenceDigest)), inputDigest,
+    db.prepare('DELETE FROM memory_evolution_skips WHERE run_id=? AND source_epoch=?').run(runId, sourceEpoch)
+    db.prepare(`INSERT OR IGNORE INTO memory_evolution_jobs(id,workspace,trigger_run,source_epoch,signature,kind,input_json,seen_json,input_digest,model_json,algorithm,state,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(inputDigest, trigger.workspace, runId, sourceEpoch, signature, kind, canonicalJson(selected), canonicalJson(episodes.map(e => e.evidenceDigest)), inputDigest,
         canonicalJson({ provider: model.provider, model: model.model, sessionId: trigger.sessionId, ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }), ...(model.reasoningEffort === undefined ? {} : { reasoningEffort: model.reasoningEffort }) }), REFERENCE_PROMOTION_VERSION, now, now)
     return
   }
@@ -208,7 +238,8 @@ export function saveLesson(db: SqliteDatabase, episodes: Episode[], kind: 'posit
 export function diversifyEpisodes<T extends { entryId: string; selectionReasons: string[] }>(db: SqliteDatabase, items: T[], packedIds?: ReadonlySet<string>): T[] {
   if (!evolutionInstalled(db) || evolutionSettings(db).mode !== 'active') return items
   const membership = new Map(items.map(item => [item.entryId,
-    db.prepare('SELECT run_id AS id FROM memory_episode_entries WHERE entry_id=?').all<{ id: string }>(item.entryId)]))
+    db.prepare('SELECT run_id,source_epoch FROM memory_episode_entries WHERE entry_id=?').all<{ run_id: string; source_epoch: number }>(item.entryId)
+      .map(source => ({ id: JSON.stringify([source.run_id, source.source_epoch]) }))]))
   const derived = new Map(items.map(item => [item.entryId,
     db.prepare(`SELECT d.kind,d.algorithm FROM memory_derivations d JOIN entries e ON e.id=d.entry_id AND e.current_revision=d.revision
       WHERE d.entry_id=?`).get<{ kind: string; algorithm: string }>(item.entryId)]))
@@ -246,5 +277,9 @@ export function evolutionStatus(db: SqliteDatabase, workspace: string): Record<s
     episodes: db.prepare('SELECT COUNT(*) AS count FROM memory_episodes WHERE workspace=?').get(workspace),
     calls: db.prepare('SELECT COUNT(*) AS count,SUM(input_tokens) AS inputTokens,SUM(output_tokens) AS outputTokens,SUM(duration_ms) AS durationMs FROM memory_evolution_calls WHERE workspace=?').get(workspace),
     skips: db.prepare('SELECT reason,COUNT(*) AS count FROM memory_evolution_skips WHERE workspace=? GROUP BY reason').all(workspace),
-    extraction: db.prepare('SELECT episode_error AS reason,COUNT(*) AS count FROM dsh_memory_finalizations WHERE workspace=? AND episode_error IS NOT NULL GROUP BY episode_error').all(workspace) }
+    extraction: db.prepare(`SELECT reason,COUNT(*) AS count FROM (
+      SELECT episode_error AS reason FROM dsh_memory_finalizations WHERE workspace=? AND episode_error IS NOT NULL
+      UNION ALL SELECT json_extract(job_json,'$.episode_error') AS reason FROM dsh_task_source_finalizations
+      WHERE json_extract(job_json,'$.workspace')=? AND json_extract(job_json,'$.episode_error') IS NOT NULL
+    ) GROUP BY reason`).all(workspace, workspace) }
 }

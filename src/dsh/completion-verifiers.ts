@@ -8,6 +8,8 @@ interface CompletionVerifiers {
   results(db:SqliteDatabase,identity:Identity,root:string,workUnitId?:string):readonly {verifierId:string;status:string;tapSummary?:TapSummary;explicitCases?:boolean;receiptId?:string}[]|null|undefined
   codingProjection?(db:SqliteDatabase,identity:Identity): { definition:CodingDefinition; approved:boolean; completed:boolean;
     bindings:readonly { criterionId:string; verifierId:string; workUnitId?:string }[] } | undefined
+  /** Explicit task resume: the optional source owns contract/evidence renewal. */
+  reopenTask?(db:SqliteDatabase,identity:Identity,input:{operationId:string;repositoryRoot:string;force:boolean}):boolean
 }
 let readers:CompletionVerifiers|undefined
 /** The optional Enno module supplies its own readers; core never imports that module. */

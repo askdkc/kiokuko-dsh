@@ -46,6 +46,8 @@ class FixtureModel extends llm.LlmAdapter {
   }
 }
 const directory = realpathSync(await mkdtemp(join(tmpdir(), 'module-native-')))
+// A governed TMPDIR can sit inside another repository. Own the fixture root.
+await exec('git', ['init', '--quiet', directory], { timeout: 15_000 })
 await mkdir(join(directory, 'home'))
 process.env.HOME = join(directory, 'home')
 process.env.KIOKUKO_DATA_DIR = join(directory, 'data')

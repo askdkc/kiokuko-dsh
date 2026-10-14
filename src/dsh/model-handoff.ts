@@ -1,3 +1,4 @@
+import { isNativeSubagent } from './native-subagent.js'
 import { realpathSync } from 'node:fs'
 import { z } from 'zod'
 import { canonicalContentHash } from '../serialization/validate.js'
@@ -189,7 +190,7 @@ export class ModelHandoff {
   private report(outcome: Outcome): void { this.last = outcome; this.decisions.reportModelHandoff(this.reportable()) }
   private async prepare(agent: Agent, parent: AbortSignal): Promise<void> {
     const session = agent.session, selected = pendingSelection(session)
-    if (!selected || this.config.mode === 'off' || session.header?.parentSession || session.header?.origin === 'subagent' || session.header?.delegationDepth) return
+    if (!selected || this.config.mode === 'off' || isNativeSubagent({ session })) return
     try { if (realpathSync(session.header.cwd) !== this.root || this.host.get('agents', false)?.get(agent.id) !== agent || this.host.get('sessions', false)?.get(session.id) !== session) return } catch { return }
     // The native summary and checkpoint are the durable receipt. Both survive reload.
     if (handoffReceipt(session)?.selectionSeq === selected.seq) return

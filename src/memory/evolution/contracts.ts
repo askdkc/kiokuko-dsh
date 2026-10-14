@@ -59,6 +59,8 @@ export type EpisodeEvidenceRef = Omit<EpisodeEvidence, 'text'> & { contentHash: 
 export const evidenceReferences = (evidence: readonly EpisodeEvidence[]): EpisodeEvidenceRef[] => evidence.map(({ text, ...ref }) => ({ ...ref, contentHash: digest(normalize(text)) }))
 export interface Episode {
   runId: string
+  /** Omitted by immutable legacy manifests; omission always means source epoch 1. */
+  sourceEpoch?: number
   workspace: string
   sessionId: string
   start: number
@@ -66,7 +68,7 @@ export interface Episode {
   logDigest: string
   evidenceDigest: string
   signature: string
-  outcome: 'completed' | 'failed'
+  outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted'
   draft: EpisodeDraft
   evidence: EpisodeEvidenceRef[]
   sources: Array<{ entryId: string; revision: number; hash: string }>
@@ -145,7 +147,7 @@ export function episodeSignature(workspace: string, draft: EpisodeDraft): string
 /** Replays and overlapping ranges never become independent support. */
 export function independentEpisodes(input: readonly Episode[]): Episode[] {
   const selected: Episode[] = []
-  for (const e of [...input].sort((a, b) => a.runId.localeCompare(b.runId))) {
+  for (const e of [...input].sort((a, b) => a.runId.localeCompare(b.runId) || (b.sourceEpoch ?? 1) - (a.sourceEpoch ?? 1))) {
     if (selected.some(p => p.runId === e.runId || p.evidenceDigest === e.evidenceDigest ||
       p.sessionId === e.sessionId && p.start <= e.end && e.start <= p.end)) continue
     selected.push(e)

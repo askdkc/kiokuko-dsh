@@ -1,3 +1,4 @@
+import { isNativeSubagent } from './native-subagent.js'
 import {contextMeta} from '../memory/lifecycle-cache.js'
 import {canonicalContentHash} from '../serialization/validate.js'
 import {DshAgenticReplayReadService} from './agenticreplay-read-service.js'
@@ -12,6 +13,7 @@ import {withOptionalMemoryAccess,withOptionalMemoryTransaction} from '../memory/
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
 import { redactDshSourceText } from '../context/memory-projection.js'
 import { assessTaskCompletion } from './task-completion.js'
+import { readTaskSnapshot } from './task-state.js'
 import type { DshCoreRuntime } from './core-runtime.js'
 import type { DshPreStepDecision } from './intake-gate.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
@@ -69,7 +71,7 @@ export class DshLifecycleMemory {
   async periodic():Promise<void>{if(this.stopped||this.periodicRunning)return;this.periodicRunning=true
     try{await this.improve({cwd:this.root})}finally{this.periodicRunning=false}}
   private owned(agent:Agent):boolean{
-    try{return !!agent.session?.header?.cwd&&!agent.session.header.parentSession&&agent.session.header.origin!=='subagent'&&!agent.session.header.delegationDepth
+    try{return !!agent.session?.header?.cwd&&!isNativeSubagent(agent)
       &&realpathSync(agent.session.header.cwd)===this.root&&this.host.get('agents',false)?.get(agent.id)===agent&&this.host.get('sessions',false)?.get(agent.session.id)===agent.session}catch{return false}
   }
   private attach(agent:Agent):void{
@@ -219,16 +221,21 @@ export class DshLifecycleMemory {
     state.eventIds.push(`${state.agent.session.id}:${call.seq}`);if(state.eventIds.length>31)state.eventIds.shift()
   }
   /** Called only after the host committed the exact run's terminal state. */
-  completed(runId:string,status:string,sessionId:string):void{
+  completed(runId:string,status:string,sessionId:string,task?:{revision:number;generation:number;repositoryRoot:string}):void{
     const state=this.states.get(sessionId);if(!state||!this.owned(state.agent)||this.stopped||state.captureBlocked)return
     const value=this.value(state,{type:'completion',seq:state.lastSeq,data:{}},'completion',`Task ${status}. ${state.publicReply}`,runId)
-    value.eventId=`dsh:completion:${runId}`
+    value.eventId=`dsh:completion:${runId}${task?`:generation:${task.generation}`:''}`
     value.tags=[...(value.tags??[]),`status:${status}`].slice(0,16)
-    state.completed={messageId:state.publicReplyId,runId,actions:state.actions.map(action=>({...action})),eventIds:[...state.eventIds]}
-    state.actions=[];state.eventIds=[]
+    const completed={messageId:state.publicReplyId,runId,actions:state.actions.map(action=>({...action})),eventIds:[...state.eventIds]}
     const operation=this.runtime.withDatabase(db=>withOptionalMemoryAccess(db,()=>{
       const run=db.prepare('SELECT workspace,dsh_session_id,status FROM ledger_runs WHERE run_id=?').get<{workspace:string;dsh_session_id:string;status:string}>(runId)
-      if(!run||run.dsh_session_id!==sessionId||run.status!==status)return
+      if(!run)return
+      if(task){
+        const current=readTaskSnapshot(db,{taskId:runId,sessionId,repositoryRoot:task.repositoryRoot})
+        if(status!=='completed'||current.state!=='Done'||current.revision!==task.revision||current.generation!==task.generation)return
+      }else if(run.dsh_session_id!==sessionId||run.status!==status)return
+      if(!this.owned(state.agent)||this.stopped)return
+      state.completed=completed;state.actions=[];state.eventIds=[]
       const traces=db.prepare(`SELECT t.agenticreplay_run_id FROM dsh_agenticreplay_trace_run_links l JOIN dsh_agenticreplay_traces t USING(agenticreplay_run_id) WHERE l.kiokuko_run_id=? AND t.dsh_session_id=? AND t.session_cwd=? AND t.workspace_key=? LIMIT 4`).all<{agenticreplay_run_id:string}>(runId,sessionId,this.root,workspaceKey(this.root))
       value.source.eventIds=[...value.source.eventIds,...traces.map(trace=>`agenticreplay:${trace.agenticreplay_run_id}`)].slice(-32)
       let verified=false;try{const assessment=assessTaskCompletion(db,runId);verified=status==='completed'&&assessment.criteria.length>0&&assessment.verified}catch{/* no proof remains unknown */}

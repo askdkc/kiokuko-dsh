@@ -11,7 +11,7 @@ export function claimExecutionOwner(db: SqliteDatabase, input: { sessionId: stri
   if (previous && (previous.workspace !== input.workspace || previous.start_id !== input.startId || previous.run_id !== null && previous.run_id !== input.runId)) {
     throw new KiokukoError('CONFLICT', 'このSessionには実行中・停止中の別のタスクがあります。完了または取消し後に開始してください。')
   }
-  const other = db.prepare("SELECT run_id FROM ledger_runs WHERE dsh_session_id=? AND status IN ('intake','active') AND run_id<>? LIMIT 1").get(input.sessionId, input.runId ?? '')
+  const other = db.prepare("SELECT run_id FROM ledger_runs WHERE COALESCE(task_owner_session_id,dsh_session_id)=? AND task_state NOT IN ('Done','Ignore') AND (status IN ('intake','active') OR task_pending_stop_json IS NOT NULL) AND run_id<>? LIMIT 1").get(input.sessionId, input.runId ?? '')
   if (other) throw new KiokukoError('CONFLICT', 'このSessionには未完了のタスクがあります。先に状態を確認してください。')
   db.prepare(`INSERT INTO dsh_execution_owners(dsh_session_id,workspace,mode,start_id,run_id) VALUES(?,?,?,?,?)
     ON CONFLICT(dsh_session_id) DO UPDATE SET run_id=excluded.run_id, mode=excluded.mode`)

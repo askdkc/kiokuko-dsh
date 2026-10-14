@@ -268,7 +268,7 @@ export class AnswerReviewCoordinator {
       await this.close(entry, 'reconsidered')
       this.last = { ...this.last, state: 'finished', reason: 'reconsidered' }; this.report()
     }
-    this.release(agent)
+    if (this.entries.get(agent.session.id) === entry) this.release(agent)
   }
   /** Resume only finalization from a committed boundary, never inference or delivery. */
   async recover(agent: ReviewAgent, finish: (row: Recovery) => Promise<void>): Promise<void> {
