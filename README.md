@@ -74,6 +74,7 @@ then update:
 pnpm config set --location=global --json minimumReleaseAge 0
 pnpm config get minimumReleaseAge
 pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
 ```
 
 This setting persists globally and disables the release-age check for future pnpm

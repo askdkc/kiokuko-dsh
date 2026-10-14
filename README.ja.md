@@ -74,6 +74,7 @@ pnpm dsh --profile dsh-cli
 pnpm config set --location=global --json minimumReleaseAge 0
 pnpm config get minimumReleaseAge
 pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
 ```
 
 この設定はグローバルに保存され、以後の pnpm のインストール・更新でも公開後の
