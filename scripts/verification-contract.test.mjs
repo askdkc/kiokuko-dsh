@@ -9,6 +9,17 @@ import { verificationPlan, validateNodeResult, evidenceCurrent } from './verific
 const check={id:'suite',argv:['node','test.mjs'],profiles:['main'],expected:'required assertions',dependsOn:[]};
 const contract={package:'fixture',profiles:['full','main'],checks:[check]};
 const result=(names=['required'])=>({schema:'verification-node-v1',complete:true,summaryCount:1,counts:{tests:names.length,passed:names.length,failed:0,cancelled:0,skipped:0,todo:0},tests:names.map(name=>({id:name,name,file:'test.mjs',type:'test:pass',skipped:false,todo:false})),suites:[]});
+test('the DSH runtime fixture lockfile is portable to a clean checkout',()=>{
+ const fixture=new URL('../tests/fixtures/dsh-runtime/',import.meta.url);
+ const manifest=JSON.parse(readFileSync(new URL('package.json',fixture)));
+ const lock=JSON.parse(readFileSync(new URL('package-lock.json',fixture)));
+ assert.deepEqual(lock.packages[''].dependencies,manifest.dependencies);
+ assert.equal(lock.packages['node_modules/@deepseek-ai/dsh']?.version,manifest.dependencies['@deepseek-ai/dsh']);
+ for(const [name,entry] of Object.entries(lock.packages))if(name){
+  assert.match(name,/^node_modules\//u,`fixture lockfile contains an external package path: ${name}`);
+  assert.notEqual(entry.link,true,`fixture lockfile contains an external dependency link: ${name}`);
+ }
+});
 test('the same profile has an identical plan locally and in CI',()=>{
  const local=verificationPlan(contract,'main','darwin');process.env.CI='true';try{assert.deepEqual(verificationPlan(contract,'main','darwin'),local);}finally{delete process.env.CI;}
  assert.equal(local.completeScope,false);assert.equal(verificationPlan(contract,'full','darwin').completeScope,true);

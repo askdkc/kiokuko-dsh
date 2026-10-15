@@ -12,9 +12,15 @@ const manifest = JSON.parse(await import('node:fs/promises').then(({ readFile })
 const version = manifest.dependencies['@deepseek-ai/dsh']
 test('npm and pnpm resolve the canonical DSH release without a legacy package graph', async () => {
   const root = JSON.parse(await readFile('package.json', 'utf8'))
-  assert.equal(root.dsh.compatibility.dsh, '>=0.2.1-alpha.2 <0.3.0-0')
-  assert.ok(satisfies(version, root.dsh.compatibility.dsh, { includePrerelease: true }))
-  assert.deepEqual(root.dsh.compatibility.dshReleases, { '0.2.1-alpha.2': 'compatible', '0.2.1-alpha.3': 'compatible' })
+  const range = root.dsh.compatibility.dsh
+  assert.ok(satisfies(version, range, { includePrerelease: true }))
+  assert.ok(satisfies('0.3.0', range), 'a future release label must not fail without a known incompatibility')
+  const tested = Object.entries(root.dsh.compatibility.dshReleases).filter(([, result]) => result === 'compatible').map(([release]) => release)
+  assert.ok(tested.includes(version), 'the installed fixture must be reported as tested')
+  assert.ok(tested.every(release => satisfies(release, range, { includePrerelease: true })))
+  for (const name of ['@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-attachment', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-llm-pi-ai']) {
+    assert.equal(root.peerDependencies[name], range, name)
+  }
   for (const [name, selected] of Object.entries(root.devDependencies)) {
     if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(selected, version, name)
   }
