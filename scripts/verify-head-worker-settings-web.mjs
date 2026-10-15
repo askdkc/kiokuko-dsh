@@ -1,3 +1,4 @@
+import { webTestPort } from './test-web-port.mjs';
 // Real packed DSH Web settings, isolated profile and local-only model catalogs.
 // No paid generation or real credentials: this acceptance verifies selection state only.
 import assert from 'node:assert/strict';
@@ -27,7 +28,7 @@ try {
   const fixture=join(base,'fixture.mjs');
   await writeFile(fixture,`export const name='pair-settings-fixture';export const inject=['workspaceRegistry','llm'];export async function apply(ctx){const providers=ctx.llm.listProviders.bind(ctx.llm);ctx.llm.listProviders=()=>providers().filter(provider=>provider.id.startsWith('kiokuko-fixture-'));await ctx.workspaceRegistry.create(${JSON.stringify(project)},'Pair settings acceptance');}`);
   await writeFile(join(env.DSH_HOME,'profiles/web/cordis.patch.yml'),`- id: session-title-llm\n  disabled: true\n- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n    memoryReview: {mode: off}\n    memoryEvolution: {mode: off}\n    memoryIndexReasoning: {mode: off}\n    autoGlobalization: {enabled: false}\n- insert:\n    - id: pair-settings-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry]\n`);
-  const boot=async()=>{logs='';host=spawn(dsh,['--profile','web','--no-open','--port','0'],{cwd:project,env,stdio:['ignore','pipe','pipe']});for(const stream of [host.stdout,host.stderr])stream.on('data',chunk=>{logs+=chunk;});return poll(()=>logs.match(/https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/)?.[0]);};
+  const boot=async()=>{logs='';host=spawn(dsh,['--profile','web','--no-open','--port',webTestPort()],{cwd:project,env,stdio:['ignore','pipe','pipe']});for(const stream of [host.stdout,host.stderr])stream.on('data',chunk=>{logs+=chunk;});return poll(()=>logs.match(/https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/)?.[0]);};
   let url=await boot();
   browser=await chromium.launch({headless:true,env:{...env,XDG_CONFIG_HOME:join(base,'browser-config')},...(process.env.PLAYWRIGHT_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH}:{})});
   page=await browser.newPage({viewport:{width:1280,height:1100}});

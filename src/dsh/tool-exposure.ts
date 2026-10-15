@@ -1,11 +1,9 @@
-import { z } from 'zod'
+import { ToolExposureConfig } from './tool-exposure-config.js'
+export { ToolExposureConfig }
 import { DSH_LEAN_DESCRIPTION_OPERATIONS, DSH_MODEL_FACING_OPERATIONS, leanDshToolDescription } from './tools.js'
 import { hasKnownDshToolPolicyState, operationStateDenyCode, type DshToolPolicyState } from './tool-policy.js'
 import { TASK_TYPES, type TaskType } from '../akinator/types.js'
 import type { ModelRoute } from './model-configuration.js'
-
-export const ToolExposureConfig = z.object({ mode: z.enum(['auto', 'full', 'phase', 'lean']).default('auto') }).strict()
-export type ToolExposureConfig = z.infer<typeof ToolExposureConfig>
 
 export type ResolvedToolExposureMode = 'full' | 'phase' | 'lean' | 'minimal'
 export interface ToolExposureDecision {

@@ -56,7 +56,7 @@ for (const route of ['ollama', 'head-worker'] as const) test(`${route}: delegati
     const runtime = { withDatabase: async <T>(fn: DshDatabaseOperation<T>): Promise<T> => fn(db, undefined as never) }
     const delegation = new DshEnnoDelegation(runtime, { startActivation: async ({ provider, request }) => {
       starts++; assert.equal(provider, 'spawn'); assert.deepEqual(request.agentOptions, model); assert.equal(request.maxDepth, 1)
-      assert.deepEqual(request.toolFilter.allow, ['read', 'write'])
+      assert.ok(request.toolFilter);assert.deepEqual(request.toolFilter.allow, ['read', 'write'])
       delegation.created(child); await delegation.restoreOrPersist(child); started.resolve()
       return { childId: 'child', result: finished.promise, dispose: async () => {} }
     } })

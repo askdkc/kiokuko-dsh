@@ -12,30 +12,43 @@ const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'te
 const available = existsSync(join(packages, '@deepseek-ai/dsh-agent-loop/lib/index.js'));
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !available)
     throw new Error('Pinned DSH runtime required');
-test('bridge explanation and complete citations reach the actual native DSH model request', { skip: !available, timeout: 60000 }, async () => {
+test('historical bridge citations remain readable through the native command without automatic request injection', { skip: !available, timeout: 60000 }, async () => {
     const previous = process.env.KIOKUKO_DSH_PACKAGE_ROOT;
     process.env.KIOKUKO_DSH_PACKAGE_ROOT = packages;
     const f = await deepNativeFixture(mock => Array.from({ length: 4 }, () => (request: any) => mock.textResponse(request.purpose === 'compaction' ? JSON.stringify({schemaVersion:request.system.includes('Use schemaVersion 4')?4:3,memoryOperations:[]}) : 'Driver explanation.')), { questions: async (request) => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: [q.id === 'taskType' ? 'chat' : q.options?.[0]?.value ?? q.options?.[0]?.label ?? 'chat'] })) }) });
-    let original: EntryRecord;
+    let original: EntryRecord, bridgeId: string;
     try {
         await f.adapter.host.runtime!.withDatabase(db => withImmediateTransaction(db, () => {
             configureIndex(db, 'deep-cases', 'active');
             const a = recordEntry(db, { workspace: 'deep-cases', kind: 'fact', title: 'Widget driver', body: 'Widget uses SQLite in fixture-v1.', scope: { visibility: 'project' }, createdBy: 'fixture' });
             original = a;
             const b = recordEntry(db, { workspace: 'deep-cases', kind: 'fact', title: 'SQLite constraint', body: 'SQLite uses a write lock in fixture-v1.', scope: { visibility: 'project' }, createdBy: 'fixture' });
-            saveIndexFact(db, 'deep-cases', { role: 'bridge', text: 'Widget writes use the SQLite write lock in fixture-v1.', applicability: 'fixture-v1 only', entities: [{ type: 'package', value: 'SQLite' }], sources: [a, b].map(e => ({ entryId: e.id, revision: e.revision, contentHash: e.contentHash, supportingText: e.body })) });
+            bridgeId = saveIndexFact(db, 'deep-cases', { role: 'bridge', text: 'Widget writes use the SQLite write lock in fixture-v1.', applicability: 'fixture-v1 only', entities: [{ type: 'package', value: 'SQLite' }], sources: [a, b].map(e => ({ entryId: e.id, revision: e.revision, contentHash: e.contentHash, supportingText: e.body })) }).id;
         }));
         f.parent.followup(f.llm.createUserMessage({ content: [{ type: 'text', text: '通常実行で、Widget SQLite write lock in fixture-v1 の関係を説明してください。' }], source: { kind: 'user' } }));
         await f.parent.whenIdle();
         assert.equal(f.provider.requests.length, 1);
         const text = JSON.stringify(f.provider.requests[0].messages);
-        const state = await f.adapter.host.runtime!.withDatabase(db => ({ runs: db.prepare('SELECT workspace,status FROM ledger_runs').all(), deliveries: db.prepare('SELECT policy_version FROM context_deliveries').all(), facts: db.prepare('SELECT workspace,role,state FROM memory_index_facts').all() }));
-        assert.ok(text.includes('Widget writes use the SQLite write lock in fixture-v1'), JSON.stringify(state));
-        assert.match(text, /fixture-v1 only/);
-        assert.match(text, /Source 1:/);
-        assert.match(text, /Source 2:/);
-        assert.match(text, /未検証/);
+        assert.ok(!text.includes('Widget writes use the SQLite write lock in fixture-v1'));
+        const explainedExecution = await f.command(`/kioku-memory explain ${bridgeId!} --json`);
+        assert.ok(explainedExecution, 'the native command must resolve');
+        const explained = explainedExecution.result;
+        assert.equal(explained.kind, 'success', JSON.stringify(explained));
+        const detail = JSON.parse(explained.text);
+        assert.match(detail.body, /Widget writes use the SQLite write lock in fixture-v1/);
+        assert.equal(detail.derivation.manifest.applicability, 'fixture-v1 only');
+        assert.equal(detail.lineage.sources.length, 2);
+        assert.equal(detail.derivation.manifest.sources.length, 2);
+        assert.ok(detail.derivation.manifest.sources.every((source: any) => source.supportingText.includes('fixture-v1')));
+        assert.equal(detail.trust, 'untrusted');assert.equal(detail.semanticVerification, 'not_proven');assert.equal(detail.eligible, true);
+        assert.equal(await f.adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n), 0);
         await f.adapter.host.runtime!.withDatabase(db => updateCandidateEntry(db, { workspace: 'deep-cases', entryId: original.id, expectedRevision: original.revision, kind: original.kind, title: original.title, body: 'Widget now uses another driver in fixture-v2.', scope: original.scope }));
+        const staleExecution = await f.command(`/kioku-memory explain ${bridgeId!} --json`);
+        assert.ok(staleExecution, 'the native command must resolve after source correction');
+        const stale = staleExecution.result;
+        assert.equal(stale.kind, 'success', JSON.stringify(stale));
+        assert.equal(JSON.parse(stale.text).eligible, false);
+        assert.equal(JSON.parse(stale.text).reason, 'index_sources_or_settings_ineligible');
         f.parent.followup(f.llm.createUserMessage({ content: [{ type: 'text', text: '通常実行で、更新後の Widget driver in fixture-v2 を説明してください。' }], source: { kind: 'user' } }));
         await f.parent.whenIdle();
         const updatedRequests = f.provider.requests.slice(1).filter(request => request.purpose !== 'compaction');
@@ -52,7 +65,9 @@ test('bridge explanation and complete citations reach the actual native DSH mode
     }
 });
 
-test('default active native admission automatically builds a bridge for a later ordinary request', { skip: !available, timeout: 60000 }, async () => {
+// Positive post-task native approval is covered by replay-memory-review.test.ts
+// and replay-unowned-native-review.test.ts. Historical bridge retrieval above remains supported.
+test('ordinary native requests do not automatically derive a bridge or persist memory proposals', { skip: !available, timeout: 60000 }, async () => {
     const previous = process.env.KIOKUKO_DSH_PACKAGE_ROOT;
     process.env.KIOKUKO_DSH_PACKAGE_ROOT = packages;
     let generationCalls = 0;
@@ -82,17 +97,17 @@ test('default active native admission automatically builds a bridge for a later 
         ask();
         await f.parent.whenIdle();
         await f.adapter.host.memoryFinalizer!.whenIdle();
-        assert.equal(generationCalls, 3);
-        assert.equal(await f.adapter.host.runtime!.withDatabase(db => db.prepare("SELECT count(*) AS n FROM memory_index_facts WHERE role='bridge'").get()?.n), 1);
+        assert.equal(generationCalls, 0);
+        assert.equal(await f.adapter.host.runtime!.withDatabase(db => db.prepare("SELECT count(*) AS n FROM memory_index_facts WHERE role='bridge'").get()?.n), 0);
         ask();
         await f.parent.whenIdle();
         const normal = f.provider.requests.filter(request => request.purpose !== 'compaction');
         assert.equal(normal.length, 2);
         const input = JSON.stringify(normal[1].messages);
-        assert.ok(input.includes(explain));
-        assert.match(input, /Source 1:/);
-        assert.match(input, /Source 2:/);
-        assert.equal(generationCalls, 3);
+        assert.ok(!input.includes(explain));
+        assert.equal(await f.adapter.host.runtime!.withDatabase(db => db.prepare("SELECT count(*) AS n FROM dsh_memory_finalizations").get()?.n), 0);
+        assert.equal(await f.adapter.host.runtime!.withDatabase(db => db.prepare("SELECT count(*) AS n FROM memory_index_jobs").get()?.n), 0);
+        assert.equal(generationCalls, 0);
     } finally {
         await f.close();
         if (previous === undefined) delete process.env.KIOKUKO_DSH_PACKAGE_ROOT;

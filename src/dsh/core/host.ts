@@ -1,3 +1,4 @@
+import { nativeExecutionOwnership } from '../native-execution-ownership.js'
 import { NativeTaskAuthority } from '../native-task-authority.js'
 import { readOwnedIdentity } from '../owned-read-owner.js'
 import { MemoryRequestFence, MemorySnapshotStale } from '../memory-request-fence.js'
@@ -253,6 +254,23 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     answerContext: new DshAnswerContext(runtime, { root, projectOnly: true, memoryRetrieval: config.memoryRetrieval,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills, prompts, decisions, cwd: root }),
     }),
+    nativeOwnership: async input => {
+      const agent = input.agent as NativeAgent
+      bind(agent)
+      const session = agent.session
+      if (!session?.header) throw new Error('Native ownership requires the current session header')
+      const header = session.header as { parentSession?: unknown; isSeeded?: unknown }
+      if (header.parentSession || header.isSeeded) return 'owned'
+      const jobs = get('jobs') as { list(sessionId: string): Array<{ status: string }> } | undefined
+      if (jobs && jobs.list(session.id).some(job => !['completed', 'killed', 'failed'].includes(job.status))) return 'owned'
+      const current = active.get(session.id)
+      const ownership = await runtime.withDatabase(db => nativeExecutionOwnership(db, session.id, current?.task.runId))
+      input.signal.throwIfAborted()
+      // Retire only the exact completed in-memory projection proven above.
+      // Durable history remains intact; no memory lookup or save is involved.
+      if (ownership === 'unowned' && current && active.get(session.id) === current) active.delete(session.id)
+      return ownership
+    },
     nativeChild: agent => agents?.get(agent.id) === agent && sessions?.get(agent.session?.id) === agent.session && isNativeSubagent(agent as any),
     validate: async input => {
       bind(input.agent as NativeAgent)
@@ -602,13 +620,13 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
   try {
     if (!skills?.registerProvider || !skills.snapshot || !tools?.schemas || !tools.guard || !tools.register || !sessions?.get || !sessions.flush || !agents?.get || !systemPrompt?.section) throw new Error('Core requires native Skill, prompt, tool, session and agent services')
     await runtime.start()
-    disposers.push(mountTaskWorkflowSurface(ctx, taskWorkflow, demand))
     disposers.push((ctx.on as any)(TASK_STATE_EVENT, (snapshot: any) => {
       const current = active.get(snapshot.sessionId)
       if (current?.task.authority && current.task.runId === snapshot.taskId
         && (current.task.authority.revision !== snapshot.revision || current.task.authority.generation !== snapshot.generation)) current.invalidated = true
     }))
     lifecycleMemory = new DshLifecycleMemory(ctx as any, runtime, root)
+    lifecycleMemory.connectIntake(demand)
     await decisions.initialize()
     const provider = configuredSkillProvider(modules.resources(), prompts)
     disposers.push(() => provider.dispose())
@@ -624,6 +642,8 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     await modules.mount({ intakeMode: config.intakeMode, context: ctx, repositoryRoot: root, runtime, prompts, decisions, semanticCompaction, answerReviewConfig: config.answerReview, memoryIndexReasoningConfig: config.memoryIndexReasoning, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
       beforeTask(handler) { beforeTask.add(handler); return () => { beforeTask.delete(handler) } } })
     if (!claimed) {
+      // The native-ingress owner also owns its task-control surface and intake proofs.
+      disposers.push(mountTaskWorkflowSurface(ctx, taskWorkflow, demand))
       const resolveParentOwned = (execution:any) => {
         if(!execution.agent)return undefined
         bind(execution.agent)
@@ -691,6 +711,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         },
       }))
       disposers.push(mountOwnedExecution({tools,on:ctx.on.bind(ctx) as any},{runtime,resolve:resolveOwned,resolveRead:resolveOwnedRead,
+        unownedNative: execution => demand?.unownedNative(execution as any) === true,
         isTaskControl: execution => (get(TASK_WORKFLOW_SERVICE) as DshTaskWorkflow | undefined)?.isControl(execution) === true,
         planActive:agent=>get('planMode')?.get(agent)?.active===true,
         async confirm(identity,detail,signal){
@@ -905,14 +926,13 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         return undefined
       }))
       const argumentsSchema = z.object({ outcome: z.enum(['completed', 'failed', 'cancelled']), memories: z.array(z.unknown()).max(100).optional(), evidence: z.unknown().optional() }).strict()
-      disposers.push(tools.register({ name: 'memory_checkpoint', description: 'Save durable project memory for this admitted request.', modelFacing: true, output: { schema: {}, render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] }, parameters: JSON.parse(JSON.stringify(z.toJSONSchema(argumentsSchema))),
+      disposers.push(tools.register({ name: 'memory_checkpoint', description: 'Memory saving requires post-task human review. This legacy tool does not save memories.', modelFacing: true, output: { schema: {}, render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] }, parameters: JSON.parse(JSON.stringify(z.toJSONSchema(argumentsSchema))),
         execute: (args: unknown, execution: { name: string; agent: NativeAgent; signal: AbortSignal }) => track((async () => {
           if (stopped) throw new Error('Core is stopped')
           bind(execution.agent)
           const current = active.get(execution.agent.session.id)
           if (!current || current.agent !== execution.agent || current.checkpointed || execution.name !== 'memory_checkpoint') throw new Error('No open bound task for memory checkpoint')
           const result = await tasks.checkpoint(current.task, argumentsSchema.parse(args), execution.signal)
-          current.checkpointed = true
           return result
         })()) }))
     }

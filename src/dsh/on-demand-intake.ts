@@ -9,15 +9,15 @@ import { canonicalContentHash } from '../serialization/validate.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import type { AkinatorTaskClassification } from './decisions/akinator-classification.js'
 import type { TaskSnapshot } from './task-state.js'
-import { createRequestIntentContext, unresolvedRequestIntent, validateMainModelRequestIntent, requestIntentReferenceIds, requestIntentTaskType, RequestIntentSubmissionSchema,
+import { createRequestIntentContext, unresolvedRequestIntent, validateMainModelRequestIntent, requestIntentReferenceIds, requestIntentMessageRefs, requestIntentTaskType, RequestIntentSubmissionSchema,
   type RequestIntentContext, type RequestIntentDecision, type RequestIntentInterpretation, type RequestIntentSubmission } from './decisions/request-intent.js'
 import { memoryOwnerKind, type MemoryOwnerIdentity, type MemoryOwnerKind } from './memory-owner.js'
 
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
-export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. No execution task has been prepared yet. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, Goal, cancellation, memory-owner and execution ownership still apply. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
+export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. Ordinary native Bash needs no memory, Goal or prepare_requested_work round trip when the host confirms there is no owned task; native permissions and human Stop remain authoritative. Owned or explicitly enrolled work retains its authority checks. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, Goal, cancellation, memory-owner and execution ownership still apply. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(type => type !== 'chat')
-const NO_ACTIVE_GOAL_GUIDANCE = 'The current context has no active Goal. same_scope_continuation and scope_change require an active Goal. If the original request clearly specifies a self-contained task, use relation=new and the action it requests (verify for verification), with the exact current evidenceRefs. Otherwise clarify the intended target with the user. Preserve the original scope, constraints and native permissions.'
+const NO_ACTIVE_GOAL_GUIDANCE = 'The current context has no active Goal. same_scope_continuation may refer to the exact current-session conversation without a formal Goal; it grants no execution permission. scope_change requires an active Goal or task. If the original request clearly specifies a self-contained task, use relation=new and the action it requests (verify for verification), with the exact current evidenceRefs. Otherwise clarify the intended target with the user. Preserve the original scope, constraints and native permissions.'
 
 const preparationFieldsSchema = z.object({
   taskType: z.enum(ACTION_TYPES).optional(),
@@ -42,6 +42,8 @@ interface Dependencies {
   readonly answerContext?: DshAnswerContext | undefined
   readonly nativeChild?: (agent: DemandAgent) => boolean
   readonly validate: (input: DemandInput) => Promise<void>
+  /** Positive host authority lookup; unavailable storage must reject, never mean absent. */
+  readonly nativeOwnership?: (input: DemandInput) => Promise<'unowned' | 'owned'>
   /** Exact idempotent request replay; never accepts a new turn as continuation. */
   readonly replay?: (input: DemandInput) => Promise<boolean>
   /** Finalize or preserve the prior native turn only after its matching boundary is observed. */
@@ -73,6 +75,9 @@ interface Turn {
   captureError?: unknown
   preparation?: Promise<void>
   selectionPending?: boolean
+  nativeUnowned?: boolean
+  /** Only project context actually produced for this exact captured turn. */
+  answerContextReady?: boolean
   readonly preparationCalls: Set<string>
   readonly controller: AbortController
 }
@@ -102,6 +107,7 @@ function automaticPreparationType(intent: AkinatorTaskClassification, requestInt
   if (intent.taskType && intent.taskType !== 'chat') return intent.taskType
   return ['read', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name) ? 'research' : undefined
 }
+const UNOWNED_NATIVE_TOOLS = new Set(['bash', 'read', 'glob', 'grep', 'web_search', 'web_fetch', 'skill'])
 function denied(reason: string): { kind: 'deny'; reason: string } { return { kind: 'deny', reason } }
 /** A protocol carrier, not JavaScript evaluation. Only this exact JSON-literal call is recognized. */
 export function preparationCarrier(value: unknown): PreparationRequest | undefined {
@@ -124,7 +130,7 @@ export function preparationCarrier(value: unknown): PreparationRequest | undefin
 /** Conversation entry and execution intake are distinct; neither this mode nor a type hint grants native permission. */
 export class OnDemandIntake {
   readonly #turns = new Map<string, Turn>()
-  readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; requestPreparation?: boolean }>()
+  readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; requestPreparation?: boolean; nativeUnownedDigest?: string }>()
   readonly #disposers: (() => void)[] = []
   readonly #pending = new Set<Promise<unknown>>()
   readonly #controlTools = new Map<string, Definition['execute']>()
@@ -247,6 +253,20 @@ export class OnDemandIntake {
       if (!this.#skillReaders.has(input.agent)) this.#skillReaders.set(input.agent,
         this.#startupSkillReader ?? this.#tools?.get('skill', input.agent)?.execute)
       if (!humanMessages(input.messages).length) throw new Error('Original human input is required before on-demand intake')
+      // Native authority is independent of optional memory, Skills and model
+      // classification. Never manufacture an owned task merely to run Bash.
+      if (!this.options.onlyWhenDeferred && await this.host.nativeOwnership?.(state.input) === 'unowned') {
+        this.assertCurrent(state)
+        state.nativeUnowned = true
+        const context = createRequestIntentContext({ task: state.task, messageRefs: requestIntentMessageRefs(state.input.messages, state.task) })
+        if (context) {
+          state.requestIntentContext = context
+          state.requestIntentContextDigest = canonicalContentHash(context)
+          state.requestIntent = unresolvedRequestIntent(context, 'native_unowned_request')
+        }
+        state.status = 'answer'
+        return true
+      }
       try { state.intent = await this.host.classify(input, state.task) }
       catch { input.signal.throwIfAborted(); state.intent = { deferInference: true } }
       try {
@@ -315,6 +335,7 @@ export class OnDemandIntake {
       // Provisional intent cannot select a different run's memory validator.
       state.memoryOwner = 'conversation'
       await this.host.answerContext?.prepare(state.input, state.task, state.intent.taskType ?? null, state.memoryOwner)
+      state.answerContextReady = this.host.answerContext !== undefined
       this.assertCurrent(state)
       state.status = 'answer'
       return true
@@ -366,6 +387,7 @@ export class OnDemandIntake {
       return
     }
     if (state.preparation) { await state.preparation; this.assertCurrent(state); return }
+    state.nativeUnowned = false
     state.status = 'preparing'; state.taskType = taskType
     const operation = (async () => {
       // Retain exact original messages. The only caller-supplied input is an advisory task type.
@@ -386,7 +408,13 @@ export class OnDemandIntake {
         // A declined selection preserves this request for a conversational acknowledgement.
         // It is not admission: preparation remains consumed and tools still need a ready host.
         state.selectionPending = error instanceof ExecutionSelectionPending && !state.input.signal.aborted && !signal.aborted
-        state.status = state.selectionPending ? 'answer' : 'stale'
+        // Preparation failure is not a change of human authority. Keep the
+        // captured request retryable, but never revive Stop/cancellation. A
+        // new call must pass host admission and native permission checks again.
+        state.status = state.input.signal.aborted || signal.aborted || this.#stopped ? 'stale' : 'answer'
+        delete state.preparedIntentDigest
+        delete state.taskType
+        state.memoryOwner = 'none'
       }
       throw error
     }
@@ -423,19 +451,19 @@ export class OnDemandIntake {
     // Native pre-step may augment its payload while downstream hooks run.
     // Project the immutable human batch captured before that waterfall.
     if (state?.input.turn === input.turn && state.input.agent !== input.agent) throw new Error('Answer projection native agent changed')
-    const projected = state?.input.turn === input.turn && !state.confirmationResume && this.host.answerContext
+    const projected = state?.input.turn === input.turn && !state.nativeUnowned && state.answerContextReady && !state.confirmationResume && this.host.answerContext
       ? await this.host.answerContext.project(state.input, messages, this.ownerIdentity(state)) : messages
     return this.guidance(projected, state?.input.turn === input.turn ? state : undefined)
   }
   async beforeRequest(agent: DemandAgent): Promise<void> {
     const state = agent.session && this.#turns.get(agent.session.id)
-    if (state && state.input.agent === agent && state.status === 'answer' && this.pending(agent)) {
+    if (state && !state.nativeUnowned && state.answerContextReady && state.input.agent === agent && state.status === 'answer' && this.pending(agent)) {
       await this.host.answerContext?.beforeRequest(state.input, this.ownerIdentity(state))
     }
   }
   async fence(agent: DemandAgent, request: { sessionId?: string; purpose?: string; messages?: readonly unknown[] }): Promise<void> {
     const state = agent.session && this.#turns.get(agent.session.id)
-    if (state && state.input.agent === agent && state.status === 'answer' && this.pending(agent)) {
+    if (state && !state.nativeUnowned && state.answerContextReady && state.input.agent === agent && state.status === 'answer' && this.pending(agent)) {
       await this.host.answerContext?.fence(state.input, request, this.ownerIdentity(state))
     }
   }
@@ -463,6 +491,7 @@ export class OnDemandIntake {
   taskStateChanged(task: TaskSnapshot): void {
     const state = this.#turns.get(task.sessionId)
     if (!state || ['closed', 'stale'].includes(state.status) || state.input.signal.aborted || !state.requestIntentContext) return
+    state.nativeUnowned = false
     const previous = state.requestIntentContext.activeTask
     if (previous?.taskId === task.taskId && previous.revision === task.revision && previous.generation === task.generation) return
     const context = createRequestIntentContext({ ...state.requestIntentContext, activeTask: task,
@@ -475,6 +504,14 @@ export class OnDemandIntake {
     delete state.preparedIntentDigest
   }
   /** A current host-validated control call, never arbitrary code or a name-based exemption. */
+  /** Exact registered native-tool proof, never a model flag or a generic task-control bypass. */
+  unownedNative(execution: Execution): boolean {
+    const state = this.bound(execution), proof = this.#executions.get(execution)
+    return !this.#stopped && !execution.signal.aborted && UNOWNED_NATIVE_TOOLS.has(execution.name) && execution.parent === undefined
+      && !!state && state.nativeUnowned === true && state.status === 'answer' && !state.input.signal.aborted
+      && !!proof && proof.turn === state && proof.execute === this.definition(execution)?.execute
+      && proof.nativeUnownedDigest === canonicalContentHash(execution.arguments)
+  }
   preparationOnly(execution: Execution): boolean {
     if (this.isControl(execution)) return true
     const state = this.bound(execution), proof = this.#executions.get(execution)
@@ -589,6 +626,17 @@ export class OnDemandIntake {
       try {
         this.assertCurrent(state)
         if (state.confirmationResume && execution.name !== TASK_PREPARE_TOOL && this.host.ready(state.input.agent, state.input.turn)) this.acknowledgeExisting(state)
+        if (state.nativeUnowned && UNOWNED_NATIVE_TOOLS.has(execution.name) && execution.parent === undefined) {
+          if (await this.host.nativeOwnership?.(state.input) !== 'unowned') {
+            state.nativeUnowned = false
+            return denied('Native execution acquired a Kiokuko owner; its current authority is required')
+          }
+          this.assertCurrent(state)
+          if (this.definition(execution)?.execute !== actual.execute) return denied('Native tool definition changed')
+          this.#executions.set(execution, { turn: state, execute: actual.execute, nativeUnownedDigest: canonicalContentHash(execution.arguments) })
+          const decision = await next()
+          return decision?.kind === 'cancel' ? denied('Native tool policy cancelled this call') : decision
+        }
         const skillReader = this.#skillReaders.get(state.input.agent)
         const skillRead = execution.name === 'skill' && skillReader !== undefined && actual.execute === skillReader && state.status === 'answer'
         const carrier = execution.name === 'run_code' ? preparationCarrier(execution.arguments) : undefined
@@ -635,6 +683,14 @@ export class OnDemandIntake {
        if (!state || proof.turn !== state || this.definition(execution)?.execute !== proof.execute) throw new Error('On-demand dispatch identity changed')
        this.assertCurrent(state)
        ;(execution as { signal: AbortSignal }).signal = AbortSignal.any([execution.signal, state.input.signal, this.#lifecycle.signal])
+       if (proof.nativeUnownedDigest !== undefined) {
+         if (!this.unownedNative(execution) || await this.host.nativeOwnership?.(state.input) !== 'unowned') {
+           state.nativeUnowned = false
+           throw new Error('Native unowned authority changed or became unavailable')
+         }
+         this.assertCurrent(state)
+         return next()
+       }
        if (!proof.carrier) return next()
         const carrier = preparationCarrier(execution.arguments)
         if (!(state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) || state.preparationCalls.has(execution.callId)
@@ -673,6 +729,7 @@ export class OnDemandIntake {
       }
       const proof = this.#executions.get(execution)
       if (!proof || proof.turn !== state || proof.execute !== actual.execute || ['closed', 'stale', 'capturing'].includes(state.status)) return 'Tool execution has no current on-demand preparation'
+      if (proof.nativeUnownedDigest !== undefined) return this.unownedNative(execution) ? undefined : 'Native unowned execution proof changed'
        if (proof.carrier) return (state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn))
          && canonicalContentHash(preparationCarrier(execution.arguments) ?? null) === proof.carrierDigest ? undefined : 'Preparation carrier is not current'
       if (proof.skillRead) return state.status === 'answer' && actual.execute === this.#skillReaders.get(state.input.agent) ? undefined : 'Conversational Skill read is not current'

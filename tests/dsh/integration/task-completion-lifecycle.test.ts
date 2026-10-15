@@ -59,7 +59,7 @@ test('normal enforce keeps the run open until every approved condition has fresh
   } finally { db.close(); await rm(base, { recursive: true, force: true }) }
 })
 
-for (const fault of ['none', 'cache', 'kick'] as const) test(`completed task releases its owner with pending memory ${fault === 'none' ? 'without failure' : `after ${fault} failure`}`, async () => {
+for (const fault of ['none', 'cache', 'kick'] as const) test(`completed task releases its owner without coupling to optional memory ${fault === 'none' ? 'without failure' : `after ${fault} failure`}`, async () => {
   const base = await mkdtemp(join(tmpdir(), 'kiokuko-memory-close-'))
   const root = join(base, 'repo')
   await mkdir(root)
@@ -100,12 +100,11 @@ for (const fault of ['none', 'cache', 'kick'] as const) test(`completed task rel
     const close = { runId: item.runId, status: 'completed' as const, sourceEndSeq: 4, terminalTurn: 1 }
     await lifecycle.runLifecycle.closeTurn(close)
     assert.equal(db.prepare('SELECT status FROM ledger_runs WHERE run_id=?').get<{status: string}>(item.runId)?.status, 'completed')
-    assert.deepEqual({ ...db.prepare('SELECT status,source_end_seq FROM dsh_memory_finalizations WHERE run_id=?').get(item.runId) },
-      { status: 'pending', source_end_seq: 4 })
+    assert.equal(db.prepare('SELECT status,source_end_seq FROM dsh_memory_finalizations WHERE run_id=?').get(item.runId), undefined)
     assert.equal(item.closed, true)
-    assert.deepEqual(observed, ['abort-review','retire','finish-review','clear-memory','clear-execution','clear-turn','release-run','clear-tools','cache','kick'])
+    assert.deepEqual(observed, ['abort-review','retire','finish-review','clear-memory','clear-execution','clear-turn','release-run','clear-tools'])
     await lifecycle.runLifecycle.closeTurn(close)
-    assert.equal(observed.filter(event => event === 'kick').length, 1, 'terminal replay must not enqueue or kick another finalization')
+    assert.equal(observed.filter(event => event === 'kick' || event === 'cache').length, 0, 'completion and terminal replay cannot invoke optional memory writes')
     await lifecycle.runLifecycle.dispose()
   } finally { db.close(); await rm(base, { recursive: true, force: true }) }
 })

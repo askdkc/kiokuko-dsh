@@ -11,7 +11,7 @@ import { openConnection } from '../../../src/db/connection.js'
 import type { SqliteDatabase } from '../../../src/db/adapter.js'
 import { migrateDatabase } from '../../../src/db/migrate.js'
 import { withImmediateTransaction } from '../../../src/db/transaction.js'
-import { DshMemoryFinalizer, type DshSessionLogSnapshot } from '../../../src/dsh/session-memory-finalizer.js'
+import { DshMemoryFinalizer, reduceDshFinalizationLog, bindDshRunLogStartInTransaction, type DshSessionLogSnapshot } from '../../../src/dsh/session-memory-finalizer.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { LedgerStore } from '../../../src/ledger/store.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
@@ -124,221 +124,89 @@ test('new DSH run creation and its turn-start boundary commit atomically', async
       dshLogStart: { sourceStartSeq: 12, sourceStartTurn: 2 },
       skillDiscoveryMode: 'off',
     })
-    const boundary = f.database.prepare(`
-      SELECT source_start_seq AS sourceStartSeq, source_start_turn AS sourceStartTurn
-        FROM dsh_run_log_boundaries WHERE run_id = ?
-    `).get<{ sourceStartSeq: number; sourceStartTurn: number }>(prepared.run.runId)
-    assert.equal(boundary?.sourceStartSeq, 12)
-    assert.equal(boundary?.sourceStartTurn, 2)
+    const metadata=JSON.parse(f.database.prepare('SELECT metadata_json FROM ledger_runs WHERE run_id=?').get<{metadata_json:string}>(prepared.run.runId)!.metadata_json)
+    assert.deepEqual(metadata.nativeSourceStart,{sessionId:'atomic-session',seq:12,turn:2})
+    assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM dsh_run_log_boundaries').get<{n:number}>()!.n,0,'Native raw provenance adds no optional memory job boundary')
   } finally {
     await f.cleanup()
   }
 })
 
-test('legacy reserved completed run finalizes once from an archived DSH log and stores a self-contained bounded capsule', async () => {
-  const f = await fixture()
-  const calls: Array<Record<string, unknown>> = []
-  let reads = 0
-  const finalizer = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}),
-    runtime: runtime(f.database),
-    sessionQuery: { async readSession(sessionId) { reads += 1; assert.equal(sessionId, 'archived-dsh-session'); return snapshot() } },
-    llm: { async * stream(options) {
-      calls.push(options as Record<string, unknown>)
-      yield { type: 'text-delta', index: 0, text: JSON.stringify({
-        schemaVersion: 1,
-        memories: [{ kind: 'decision', title: 'Use the DSH log as source of truth', body: 'Finalize memory only after DSH completes and persists its canonical log.', summary: 'Post-completion DSH-log finalization.', confidence: 0.98, tags: ['architecture'] }],
-      }) }
-      yield { type: 'usage', usage: { inputTokens: 900, outputTokens: 80, cacheReadTokens: 800, cacheWriteTokens: 20 } }
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    } },
-    now: () => '2026-09-04T00:00:00.000Z',
+/** Historical jobs are evidence, never approval to restart a derived-memory writer. */
+function reserveHistoricalJob(db:SqliteDatabase,mode='prefix_reuse') {
+  withImmediateTransaction(db,()=>{
+    bindDshRunLogStartInTransaction(db,{runId:'run-finalizer',workspace:'workspace-finalizer',dshSessionId:'archived-dsh-session',sourceStartSeq:0,sourceStartTurn:1},new Date().toISOString())
+    new LedgerStore(db).updateRunStatusInTransaction('run-finalizer','completed')
+    scheduleLegacyFinalizer(db,{runId:'run-finalizer',workspace:'workspace-finalizer',dshSessionId:'archived-dsh-session',sourceEndSeq:8},mode)
   })
-  try {
-    await finalizer.start()
-    await finalizer.bindRunStart({ runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceStartSeq: 0, sourceStartTurn: 1 })
-    withImmediateTransaction(f.database, () => {
-      new LedgerStore(f.database).updateRunStatusInTransaction('run-finalizer', 'completed')
-      scheduleLegacyFinalizer(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 })
-    })
-    finalizer.kick()
-    await finalizer.whenIdle()
-
-    const job = f.database.prepare(`
-      SELECT status, source_start_seq AS sourceStartSeq, source_end_seq AS sourceEndSeq,
-             log_event_count AS logEventCount,
-             capsule_bytes AS capsuleBytes, cache_read_tokens AS cacheReadTokens
-        FROM dsh_memory_finalizations WHERE run_id = ?
-    `).get<{ status: string; sourceStartSeq: number; sourceEndSeq: number; logEventCount: number; capsuleBytes: number; cacheReadTokens: number }>('run-finalizer')
-    assert.equal(job?.status, 'completed')
-    assert.equal(job?.sourceStartSeq, 0)
-    assert.equal(job?.sourceEndSeq, 8)
-    assert.equal(job?.logEventCount, 9)
-    assert.equal(job?.cacheReadTokens, 800)
-    assert.ok(job!.capsuleBytes <= 65_536)
-    assert.equal(reads, 1)
-    assert.equal(calls.length, 1)
-    const request = calls[0]!
-    assert.equal(request.provider, 'test-provider')
-    assert.equal(request.model, 'test-model')
-    assert.equal(request.system, 'system-prefix')
-    assert.equal((request.tools as unknown[]).length, 1)
-    const messages = request.messages as Array<Record<string, unknown>>
-    assert.equal(messages[0]?.id, 'user-1')
-    assert.equal(messages[1]?.id, 'tool-result-1')
-    assert.equal(messages[2]?.id, 'assistant-1')
-    assert.match(JSON.stringify(messages.at(-1)), /weighted-dsh-log-evidence/u)
-    assert.doesNotMatch(JSON.stringify(messages), /FUTURE RUN MUST NOT LEAK/u)
-    assert.throws(() => f.database.prepare(`
-      UPDATE dsh_run_log_boundaries SET source_start_seq = 1 WHERE run_id = ?
-    `).run('run-finalizer'), /scheduled log boundary is immutable/u)
-    assert.throws(() => f.database.prepare(`
-      UPDATE dsh_memory_finalizations SET source_end_seq = 11 WHERE run_id = ?
-    `).run('run-finalizer'), /source range is immutable/u)
-
-    const entry = f.database.prepare(`
-      SELECT revision.title, revision.body, revision.provenance_json AS provenance
-        FROM dsh_memory_finalization_entries AS link
-        JOIN entries AS entry ON entry.id = link.entry_id
-        JOIN entry_revisions AS revision ON revision.entry_id = entry.id AND revision.revision = entry.current_revision
-       WHERE link.run_id = ?
-    `).get<{ title: string; body: string; provenance: string }>('run-finalizer')
-    assert.equal(entry?.title, 'Use the DSH log as source of truth')
-    assert.match(entry?.body ?? '', /after DSH completes/u)
-    assert.match(entry?.provenance ?? '', /archived-dsh-session/u)
-    assert.equal(new LedgerStore(f.database).readEvents('run-finalizer').some((event) => event.event_type === 'source.event'), false)
-
-    // Repeated scheduling is idempotent and never re-reads the archived log.
-    withImmediateTransaction(f.database, () => scheduleLegacyFinalizer(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 }))
-    finalizer.kick()
-    await finalizer.whenIdle()
-    assert.equal(reads, 1)
-  } finally {
-    await finalizer.dispose()
-    await f.cleanup()
-  }
-})
-
-test('summary failure is contained, leaves the DSH run completed, and can be retried', async () => {
-  const f = await fixture()
-  let fail = true
-  const finalizer = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}),
-    runtime: runtime(f.database),
-    sessionQuery: { async readSession() { return snapshot() } },
-    llm: { async * stream() {
-      if (fail) {
-        yield { type: 'finish', reason: { kind: 'error', failure: { message: 'provider failed', code: 'SERVER' } } }
-        return
-      }
-      yield { type: 'text-delta', index: 0, text: '{"schemaVersion":1,"memories":[]}' }
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    } },
-  })
-  try {
-    await finalizer.bindRunStart({ runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceStartSeq: 0, sourceStartTurn: 1 })
-    withImmediateTransaction(f.database, () => {
-      new LedgerStore(f.database).updateRunStatusInTransaction('run-finalizer', 'completed')
-      scheduleLegacyFinalizer(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 })
-    })
-    finalizer.kick()
-    await finalizer.whenIdle()
-    assert.equal(new LedgerStore(f.database).readRun('run-finalizer')?.status, 'completed')
-    assert.equal(f.database.prepare('SELECT status FROM dsh_memory_finalizations WHERE run_id = ?').get<{ status: string }>('run-finalizer')?.status, 'failed')
-
-    fail = false
-    await finalizer.retryFailed('run-finalizer')
-    await finalizer.whenIdle()
-    assert.equal(f.database.prepare('SELECT status FROM dsh_memory_finalizations WHERE run_id = ?').get<{ status: string }>('run-finalizer')?.status, 'completed')
-  } finally {
-    await finalizer.dispose()
-    await f.cleanup()
-  }
-})
-
-for (const failure of ['capsule', 'finish', 'throw', 'limit', 'storage', 'abort'] as const) {
-test(`finalizer observes consumed usage after ${failure} failure without changing native completion`, async () => {
-  const f = await fixture()
-  const observations: EfficiencyObservation[] = []
-  let entered!: () => void
-  const streaming = new Promise<void>(resolve => { entered = resolve })
-  const observer = new DshEfficiencyObserver()
-  const finalizer = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}), runtime: runtime(f.database), inputMode: 'bounded_evidence',
-    sessionQuery: { async readSession() { return snapshot() } },
-    onObservation: observation => { observations.push(observation); throw new Error('telemetry sink failed') },
-    llm: { stream: options => observer.stream(options, { sessionId: 'archived-dsh-session', task: 'auxiliary' }, async function* () {
-      yield { type: 'usage', usage: { inputTokens: 5, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 0 } }
-      yield { type: 'usage', usage: { inputTokens: 5, outputTokens: 9, cacheReadTokens: 3, cacheWriteTokens: 0, reasoningTokens: 2 } }
-      entered()
-      if (failure === 'abort') await new Promise<void>(resolve => options.signal!.addEventListener('abort', () => resolve(), { once: true }))
-      if (failure === 'throw' || failure === 'abort') throw new Error('stream failed')
-      yield { type: 'text-delta', text: failure === 'capsule' ? 'not json' : failure === 'limit' ? 'x'.repeat(FINALIZATION_STREAM_MAX_BYTES + 1) : '{"schemaVersion":1,"memories":[]}' }
-      if (failure !== 'finish') yield { type: 'finish', reason: { kind: 'stop' } }
-    }) },
-  })
-  try {
-    await finalizer.bindRunStart({ runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceStartSeq: 0, sourceStartTurn: 1 })
-    withImmediateTransaction(f.database, () => {
-      new LedgerStore(f.database).updateRunStatusInTransaction('run-finalizer', 'completed')
-      scheduleLegacyFinalizer(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 })
-    })
-    if (failure === 'storage') f.database.exec(`CREATE TRIGGER reject_finalization_completion BEFORE UPDATE OF status ON dsh_memory_finalizations WHEN NEW.status = 'completed' BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END;`)
-    finalizer.kick()
-    if (failure === 'abort') { await streaming; await finalizer.dispose() }
-    await finalizer.whenIdle()
-    assert.equal(new LedgerStore(f.database).readRun('run-finalizer')!.status, 'completed')
-    assert.equal(f.database.prepare('SELECT status FROM dsh_memory_finalizations').get<{ status: string }>()!.status, 'failed')
-    assert.equal(observations.length, 1)
-    assert.equal(observations[0]!.usage.outputTokens, 9)
-    assert.equal(observations[0]!.usage.logicalInputTokens, 8)
-    assert.equal(observations[0]!.usage.reasoningTokens, 2)
-    assert.equal(observations[0]!.status, failure === 'abort' ? 'cancelled' : 'failed')
-    assert.equal(observer.snapshot().observations.length, 0, 'owned auxiliary usage is not observed twice')
-    assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM dsh_memory_finalization_entries').get<{ n: number }>()!.n, 0)
-  } finally { await finalizer.dispose(); await f.cleanup() }
-})
+}
+function assertNoDerived(db:SqliteDatabase) {
+  for(const table of ['entries','dsh_memory_finalization_entries','memory_episodes'])assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get<{n:number}>()!.n,0,table)
+  assert.equal(new LedgerStore(db).readRun('run-finalizer')!.status,'completed')
+}
+async function reduce(mode:'prefix_reuse'|'bounded_evidence') {
+  async function* events(){yield* snapshot().events}
+  return await reduceDshFinalizationLog(events(),0,8,mode)
 }
 
-test('bounded finalization keeps latest surface evidence and its persisted mode across reload and retry', async () => {
-  const f = await fixture()
-  const observations: EfficiencyObservation[] = []
-  const calls: any[] = []
-  let fail = true
-  const common = { runtime: runtime(f.database), sessionQuery: { async readSession() { return snapshot() } },
-    onObservation: (observation: EfficiencyObservation) => { observations.push(observation) },
-    llm: { async *stream(options: any) {
-      calls.push(options)
-      yield { type: 'usage', usage: { inputTokens: 5, outputTokens: 9, cacheReadTokens: 0, cacheWriteTokens: 0 } }
-      yield { type: 'text-delta', text: fail ? 'not json' : JSON.stringify({ schemaVersion: 1, memories: [{
-        kind: 'fact', title: 'Verified result', body: 'Implemented and verified.', summary: null, confidence: 0.8, tags: [],
-      }] }) }
-      yield { type: 'finish', reason: { kind: 'stop' } }
-    } } }
-  const first = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}), ...common, inputMode: 'bounded_evidence' })
-  const second = new DshMemoryFinalizer({ memoryIndexReasoning: MemoryIndexReasoningConfig.parse({mode:"off"}), ...common, inputMode: 'prefix_reuse' })
-  try {
-    await first.start()
-    await first.bindRunStart({ runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceStartSeq: 0, sourceStartTurn: 1 })
-    withImmediateTransaction(f.database, () => {
-      new LedgerStore(f.database).updateRunStatusInTransaction('run-finalizer', 'completed')
-      scheduleLegacyFinalizer(f.database, { runId: 'run-finalizer', workspace: 'workspace-finalizer', dshSessionId: 'archived-dsh-session', sourceEndSeq: 8 }, 'bounded_evidence')
-    })
-    first.kick(); await first.whenIdle(); await first.dispose()
-    assert.throws(() => first.configure('prefix_reuse'), /already bound/u)
-    assert.throws(() => f.database.prepare("UPDATE dsh_memory_finalizations SET input_mode = 'prefix_reuse'").run(), /immutable/u)
-    fail = false
-    await second.start(); await second.whenIdle()
-    assert.equal(calls.length, 2)
-    assert.deepEqual(calls[0].messages, calls[1].messages)
-    for (const call of calls) {
-      assert.equal(call.tools, undefined)
-      assert.notEqual(call.system, 'system-prefix')
-      const text = JSON.stringify(call.messages)
-      assert.match(text, /Implement the durable design/u)
-      assert.match(text, /Implemented and verified/u)
-      assert.doesNotMatch(text, /FUTURE RUN MUST NOT LEAK/u)
-      assert.ok(Buffer.byteLength(text) < 10_000)
-    }
-    assert.deepEqual(observations.map(item => [item.attempt, item.inputMode, item.status]), [[1, 'bounded_evidence', 'failed'], [2, 'bounded_evidence', 'completed']])
-    assert.equal(f.database.prepare('SELECT status FROM dsh_memory_finalizations').get<{ status: string }>()!.status, 'completed')
-    assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM dsh_memory_finalization_entries').get<{ n: number }>()!.n, 1)
-  } finally { await first.dispose(); await second.dispose(); await f.cleanup() }
+test('archived source remains bounded and source-linked while a historical job cannot auto-save',async()=>{
+ const f=await fixture();let reads=0,calls=0
+ const finalizer=new DshMemoryFinalizer({runtime:runtime(f.database),sessionQuery:{async readSession(){reads++;return snapshot()}},llm:{async *stream(){calls++;throw new Error('An unapproved job must not dispatch')}}})
+ try{
+  reserveHistoricalJob(f.database);const prior={...f.database.prepare('SELECT * FROM dsh_memory_finalizations').get()}
+  await finalizer.start();finalizer.kick();await finalizer.whenIdle()
+  assert.deepEqual({...f.database.prepare('SELECT * FROM dsh_memory_finalizations').get()},prior);assert.equal(reads,0);assert.equal(calls,0);assertNoDerived(f.database)
+  const selected=await reduce('prefix_reuse'),body=JSON.stringify(selected.messages)
+  assert.equal(selected.eventCount,9);assert.equal(selected.envelope.provider,'test-provider');assert.equal(selected.envelope.model,'test-model')
+  assert.match(body,/Implement the durable design/);assert.match(body,/Implemented and verified/);assert.doesNotMatch(body,/FUTURE RUN MUST NOT LEAK/)
+  assert.throws(()=>f.database.prepare('UPDATE dsh_memory_finalizations SET source_end_seq=11').run(),/immutable/)
+  finalizer.kick();await finalizer.whenIdle();assert.equal(reads,0);assertNoDerived(f.database)
+ }finally{await finalizer.dispose();await f.cleanup()}
+})
+
+test('historical failed jobs stay unchanged through retry and host reload without altering native completion',async()=>{
+ const f=await fixture();let calls=0
+ const make=()=>new DshMemoryFinalizer({runtime:runtime(f.database),llm:{async *stream(){calls++;throw new Error('No automatic retry')}}})
+ let finalizer=make()
+ try{
+  reserveHistoricalJob(f.database)
+  f.database.prepare("UPDATE dsh_memory_finalizations SET status='failed',last_error_message='Historical provider failure',attempt_count=1").run()
+  const prior={...f.database.prepare('SELECT * FROM dsh_memory_finalizations').get()}
+  await finalizer.start();await finalizer.retryFailed('run-finalizer');finalizer.kick();await finalizer.whenIdle();await finalizer.dispose()
+  finalizer=make();await finalizer.start();await finalizer.whenIdle()
+  assert.deepEqual({...f.database.prepare('SELECT * FROM dsh_memory_finalizations').get()},prior);assert.equal(calls,0);assertNoDerived(f.database)
+ }finally{await finalizer.dispose();await f.cleanup()}
+})
+
+for(const failure of ['capsule','finish','throw','limit','storage','abort'] as const)test(`retired automatic finalizer does not enter ${failure} failure or block native completion`,async()=>{
+ const f=await fixture();let calls=0,reads=0,observations=0
+ const finalizer=new DshMemoryFinalizer({runtime:runtime(f.database),sessionQuery:{async readSession(){reads++;return snapshot()}},
+  onObservation:()=>{observations++;throw new Error('telemetry sink failed')},llm:{async *stream(options){
+    calls++;if(failure==='abort')await new Promise<void>(resolve=>options.signal!.addEventListener('abort',()=>resolve(),{once:true}))
+    if(failure==='throw')throw new Error('stream failed')
+    yield {type:'text-delta',text:failure==='capsule'?'not json':failure==='limit'?'x'.repeat(FINALIZATION_STREAM_MAX_BYTES+1):'{"schemaVersion":1,"memories":[]}'}
+    if(failure!=='finish')yield {type:'finish',reason:{kind:'stop'}}
+  }}})
+ try{
+  reserveHistoricalJob(f.database,'bounded_evidence');const prior={...f.database.prepare('SELECT * FROM dsh_memory_finalizations').get()}
+  if(failure==='storage')f.database.exec("CREATE TRIGGER reject_finalization_completion BEFORE UPDATE OF status ON dsh_memory_finalizations WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT,'fixture storage failure'); END;")
+  await finalizer.start();finalizer.kick();await finalizer.whenIdle();await finalizer.dispose()
+  assert.equal(calls,0);assert.equal(reads,0);assert.equal(observations,0)
+  assert.deepEqual({...f.database.prepare('SELECT * FROM dsh_memory_finalizations').get()},prior);assertNoDerived(f.database)
+ }finally{await finalizer.dispose();await f.cleanup()}
+})
+
+test('bounded evidence is reproducible across reload while historical input mode and job remain immutable',async()=>{
+ const f=await fixture();let calls=0
+ const make=(inputMode:'prefix_reuse'|'bounded_evidence')=>new DshMemoryFinalizer({runtime:runtime(f.database),inputMode,llm:{async *stream(){calls++;throw new Error('No approval')}}})
+ const first=make('bounded_evidence'),second=make('prefix_reuse')
+ try{
+  reserveHistoricalJob(f.database,'bounded_evidence');const prior={...f.database.prepare('SELECT * FROM dsh_memory_finalizations').get()}
+  await first.start();first.kick();await first.whenIdle();await first.dispose();await second.start();await second.whenIdle()
+  assert.equal(calls,0);assert.deepEqual({...f.database.prepare('SELECT * FROM dsh_memory_finalizations').get()},prior)
+  assert.throws(()=>f.database.prepare("UPDATE dsh_memory_finalizations SET input_mode='prefix_reuse'").run(),/immutable/)
+  const a=await reduce('bounded_evidence'),b=await reduce('bounded_evidence');assert.deepEqual(a,b)
+  const body=a.boundedEvidence!;assert.ok(body);assert.match(body,/Implement the durable design/);assert.match(body,/Implemented and verified/);assert.doesNotMatch(body,/FUTURE RUN MUST NOT LEAK/)
+  assert.ok(Buffer.byteLength(body)<10_000);assert.equal(a.envelope.tools?.length,1);assertNoDerived(f.database)
+ }finally{await first.dispose();await second.dispose();await f.cleanup()}
 })

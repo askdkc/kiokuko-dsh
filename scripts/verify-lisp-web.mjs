@@ -1,3 +1,4 @@
+import { webTestPort } from './test-web-port.mjs';
 // Disposable installed-package Web fixture. No provider credentials or user profile.
 import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises'
 import { spawn, execFile } from 'node:child_process'
@@ -43,6 +44,6 @@ await writeFile(patch, `- id: kiokuko-dsh
 const version = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8')).version
 console.log(`Installed kiokuko-dsh ${version}. Evidence directory: ${base}`)
 console.log('In Web: /kioku-lisp enable; /lisp-fixture delete (deny, then allow); /lisp-fixture timeout; use recovery control. No API key is required. Ctrl+C stops this test host; evidence/backups remain.')
-const child = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', '0'], { env, cwd: project, stdio: 'inherit' })
+const child = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', webTestPort()], { env, cwd: project, stdio: 'inherit' })
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal))
 child.on('exit', code => { process.exitCode = code ?? 1 })

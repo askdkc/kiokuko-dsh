@@ -1,3 +1,4 @@
+import { extractDshReplayMemory, type ReplayEvidenceLimits } from './replay-memory-extract.js'
 import { loadAgenticReplayLibrary, type ViewerLibrary } from './agenticreplay-libraries.js'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { rename, rm, open } from 'node:fs/promises'
@@ -74,6 +75,18 @@ export class DshAgenticReplayReadService {
       name: typeof event.attrs?.name === 'string' ? event.attrs.name : 'unknown',
       outcome: event.attrs?.is_error === true ? 'failed' as const : 'unknown' as const,
     }))
+  }
+  /** Optional memory may summarize an incomplete trace, but never label it verified. */
+  async memoryEvidence(binding: DshAgenticReplayBinding, id: string, source: { workspace: string; taskId: string; nativeCalls?: readonly {callId:string;sessionSeq:number}[]; request?: { text: string; evidenceRefs: string[] } }, limits: ReplayEvidenceLimits = {}) {
+    if (!AGENTICREPLAY_RUN_ID.test(id)) throw new AgenticReplayError('trace_not_found')
+    const row = await this.withIndex(store => store.get(binding.sessionId, workspaceKey(binding.workspaceRoot), id))
+    if (!row || row.store_root !== binding.storeRoot || row.session_cwd !== binding.sessionCwd) throw new AgenticReplayError('trace_not_found')
+    const directory = await checkedRunDir(row.store_root, id)
+    const result = await extractDshReplayMemory({ directory, runId: id, sessionId: binding.sessionId, ...source }, limits)
+    if (row.state !== 'completed' || row.missing_event_count > 0 || row.unresolved_call_count > 0) {
+      const trace = result.source.traces[0]!; trace.complete = false; trace.gaps.push(`recorder state ${row.state}; missing events ${row.missing_event_count}; unresolved calls ${row.unresolved_call_count}`)
+    }
+    return result
   }
   async export(binding: DshAgenticReplayBinding, id: string): Promise<string> {
     const { dir, row } = await this.#authorized(binding, id)

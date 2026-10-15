@@ -18,7 +18,9 @@ async function copySource(destination) {
     filter(source) {
       const rel = relative(root, source)
       if (!rel) return true
-      const first = rel.split('/')[0]
+      const parts = rel.split(/[\\/]/u)
+      if (parts.includes('node_modules')) return false
+      const first = parts[0]
       return !['.git', 'node_modules', 'dist', '.kiokuko-dev', '.codex', '.agents', '.claude', '.opencode'].includes(first)
     },
   })
@@ -54,7 +56,7 @@ async function buildOnce(index) {
   const npmEnvironment = { ...process.env, npm_config_cache: cache, npm_config_userconfig: userConfig, NPM_CONFIG_USERCONFIG: userConfig }
   delete npmEnvironment.npm_config_allow_scripts
   delete npmEnvironment.NPM_CONFIG_ALLOW_SCRIPTS
-  await exec('npm', ['ci', '--ignore-scripts'], {
+  await exec('npm', ['ci', '--ignore-scripts', '--include=optional'], {
     cwd: checkout,
     env: npmEnvironment,
     maxBuffer: 16 * 1024 * 1024,

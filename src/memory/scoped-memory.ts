@@ -683,5 +683,5 @@ export function checkpointDshMemory(
   signal?: AbortSignal,
   host: { allowDirectory?: boolean } = {},
 ): Promise<ScopedCheckpointResult> {
-  return checkpointScopedMemoryInternal(database, input, signal, host);
+  return Promise.resolve({ project: null, entries: [], recorded: false, workMayContinue: true, reason: 'post_task_memory_review_required' } as ScopedCheckpointResult);
 }

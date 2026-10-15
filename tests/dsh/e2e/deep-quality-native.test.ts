@@ -7,6 +7,7 @@ import { deferred } from '../helpers/deep-fixture.js'
 import { qualityResponse } from '../helpers/deep-quality-fixture.js'
 import { mountDeepReportSurface } from '../../../src/deep-thinker/report-surface.js'
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !process.env.KIOKUKO_DSH_PACKAGE_ROOT) throw new Error('Quality native coverage requires the pinned DSH package runtime')
+// Exact approval persistence is covered by integration/replay-memory-review.test.ts.
 const native={skip:process.env.KIOKUKO_DSH_PACKAGE_ROOT?false:'requires the pinned DSH package runtime',timeout:45000}
 function inputFor(request:any):any {
   for(const message of request.messages??[]) for(const part of typeof message.content==='string'?[{text:message.content}]:message.content??[]) {
@@ -16,11 +17,11 @@ function inputFor(request:any):any {
   }
   throw new Error('Missing native quality job input')
 }
-test('quality uses the native command, explicit alternative model, reservations, read-only tools and finalizer',native,async()=>{
+test('quality uses native command, alternative model, reservations and read-only tools without automatic memory finalization',native,async()=>{
   const phases:string[]=[],models:string[]=[],sessions:string[]=[]
   const steps=['推論:','品質重視（実験）','別案のモデル:','mock / Alternative','保存']
-  const f=await deepNativeFixture(mock=>Array.from({length:8},()=> (request:any)=>{
-    if(request.purpose==='compaction') return mock.textResponse(JSON.stringify({schemaVersion:1,memories:[]}))
+  const f=await deepNativeFixture(mock=>Array.from({length:7},()=> (request:any)=>{
+    assert.notEqual(request.purpose, 'compaction', 'quality completion must not dispatch a memory extractor')
     const input=inputFor(request);phases.push(input.phase);models.push(request.model);sessions.push(request.sessionId)
     assert.equal(request.tools.some((t:any)=>/shell|bash|spawn|write|memory/.test(t.name)),false)
     if(input.phase==='draft-b'){assert.deepEqual(input.candidates,[]);assert.equal(request.model,'alternative')}
@@ -37,11 +38,12 @@ test('quality uses the native command, explicit alternative model, reservations,
     const state=await f.deep.store.read(intent.runId),root=state.nodes[0]!
     assert.equal(state.phase,'answered',JSON.stringify(state));assert.equal(root.receipt?.verifierVersion,2)
     assert.deepEqual(phases,['plan','plan-review','draft-a','draft-b','compare','repair','final-review'])
-    assert.equal(new Set(sessions).size,7);assert.equal(models[3],'alternative');assert.equal(state.usage.requests,8)
+    assert.equal(new Set(sessions).size,7);assert.equal(models[3],'alternative');assert.equal(state.usage.requests,7)
     const reservations=await f.deep.store.database(db=>db.prepare('SELECT status FROM dsh_deep_budget_reservations WHERE run_id=?').all<{status:string}>(state.runId))
-    assert.equal(reservations.length,8);assert.ok(reservations.every(r=>r.status==='settled'))
+    assert.equal(reservations.length,7);assert.ok(reservations.every(r=>r.status==='settled'))
     const finalization=await f.deep.store.database(db=>db.prepare('SELECT status,error FROM dsh_deep_finalizations WHERE run_id=?').get<{status:string;error:string|null}>(state.runId))
-    assert.equal(finalization?.status,'completed',finalization?.error??'')
+    assert.equal(finalization,undefined,'completed quality creates no automatic memory job')
+    assert.equal(await f.deep.store.database(db=>db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n),0)
     const report = (await f.deep.reports.snapshot(f.parent.session.id)).find(r => r.id === `deep-report:${intent.runId}`)!
     for (const expected of ['採用:', '検証項目:', '候補間の評価:', '[未選択]', '矛盾あり', '解消と評価:']) assert.ok(report.text.includes(expected), expected)
     const requestsBeforeRead = f.provider.requests.length
@@ -51,7 +53,7 @@ test('quality uses the native command, explicit alternative model, reservations,
     connectionFiber = await f.ctx.plugin({ name: 'quality-report-connection', apply(ctx: any) { new connection.HostConnectionService(ctx, [], { isAuthenticated: () => true }) } })
     unmount = mountDeepReportSurface(f.ctx, f.deep)
     const transport = f.ctx.connection.createSharedFetchHandler('/api')
-    const response = await transport.fetch(new Request(`http://localhost/api/kiokuko.deep?sessionId=${f.parent.session.id}`))
+    const response = await transport.fetch(new Request(`http://localhost/api/kiokuko.deep?sessionId=${f.parent.session.id}`), {principal:{kind:'owner'}})
     assert.equal(response.status, 200)
     const { items } = await response.json() as { items: { id: string; text: string }[] }
     assert.equal(items.find(item => item.id === report.id)?.text, report.text)
@@ -64,7 +66,7 @@ test('quality status shows only its current run while Web history retains older 
   const steps = ['推論:', '品質重視（実験）', '別案のモデル:', '設定済みの役割からコピー', '保存']
   const firstProblem = 'First bounded quality problem', secondProblem = 'Second bounded quality problem'
   const f = await deepNativeFixture(mock => Array.from({ length: 12 }, () => async (request: any) => {
-    if (request.purpose === 'compaction') return mock.textResponse(JSON.stringify({ schemaVersion: 1, memories: [] }))
+    assert.notEqual(request.purpose, 'compaction', 'quality history does not authorize memory extraction')
     const input = inputFor(request)
     if (input.originalProblem === secondProblem && input.phase === 'plan') { started.resolve(); await release.promise }
     return mock.textResponse(JSON.stringify(qualityResponse(input)))

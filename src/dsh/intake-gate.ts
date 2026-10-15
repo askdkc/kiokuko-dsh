@@ -162,7 +162,7 @@ export class DshIntakeGate {
       ...(event.evidence === undefined ? {} : { evidence: event.evidence }),
       requestIntent: event.requestIntent ?? null,
       requestIntentContextDigest: event.requestIntentContext ? canonicalContentHash(event.requestIntentContext) : null,
-      memoryOwner: ownerKind,
+      memoryOwner: 'none',
       ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
       catalogDigest: event.capabilities.digest,
     })
@@ -195,7 +195,7 @@ export class DshIntakeGate {
       const classification = await classifyTaskForIntake(this.decisions, requestId, grounded.task,
         event.profileHints?.taskType ?? intentType, event.signal)
       const deferTaskTypeInference = !event.profileHints?.taskType && (event.deferTaskTypeInference || classification.deferInference)
-      const memoryReuse = await createMemoryReuseRuntime(this.decisions, requestId, event.signal)
+      const memoryReuse = undefined // Optional replay lookup is detached from admission.
       const bindMemoryOwner = (value: PreparedAgentTask): PreparedAgentTask => ({ ...value,
         memoryOwner: createMemoryOwner(ownerKind, { agentId: event.agent.id, sessionId: event.sessionId, turn: event.turn,
           requestDigest: canonicalContentHash(event.task), runId: value.run.runId }) })
@@ -209,7 +209,7 @@ export class DshIntakeGate {
         cwd: grounded.cwd,
         profileHints: { ...grounded.profileHints, ...(classification.taskType ? { taskType: classification.taskType } : deferTaskTypeInference ? { taskType: null } : {}) },
         deferTaskTypeInference,
-        memoryOwner: ownerKind,
+        memoryOwner: 'none',
         capabilities: [...event.capabilities.skills, ...event.capabilities.tools],
         dshSessionId: event.sessionId,
         ...(event.sourceStartSeq === undefined ? {} : {
@@ -218,7 +218,7 @@ export class DshIntakeGate {
         ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
         memoryRetrieval: this.memoryRetrieval,
         signal: event.signal,
-      }, { akinatorMemory: this.akinatorMemory })))
+      }, { akinatorMemory: {...this.akinatorMemory, mode: 'off'} })))
       await this.decisions?.alias(`run:${prepared.run.runId}`, requestId)
       while (prepared.intake.status === 'needs_answer') {
         if (event.signal.aborted) break
@@ -248,7 +248,7 @@ export class DshIntakeGate {
           memoryReuse, sessionId: prepared.intake.sessionId,
           runId: prepared.run.runId,
           dshSessionId: event.sessionId,
-          memoryOwner: ownerKind,
+          memoryOwner: 'none',
           questionId: prepared.intake.question!.id,
           value,
           cwd: grounded.cwd,
@@ -256,7 +256,7 @@ export class DshIntakeGate {
           ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
           memoryRetrieval: this.memoryRetrieval,
           signal: event.signal,
-        }, { akinatorMemory: this.akinatorMemory })))
+        }, { akinatorMemory: {...this.akinatorMemory, mode: 'off'} })))
       }
       if (prepared.nextAction === 'proceed') prepared.selectedSkills = await selectInstalledSkills(this.decisions, requestId, grounded.task, [...event.capabilities.skills, ...event.capabilities.tools], prepared.capabilities, event.signal)
       const result = prepared.nextAction !== 'proceed'

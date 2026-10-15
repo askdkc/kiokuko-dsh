@@ -1,3 +1,4 @@
+import { satisfies } from 'semver'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
@@ -11,8 +12,9 @@ const manifest = JSON.parse(await import('node:fs/promises').then(({ readFile })
 const version = manifest.dependencies['@deepseek-ai/dsh']
 test('npm and pnpm resolve the canonical DSH release without a legacy package graph', async () => {
   const root = JSON.parse(await readFile('package.json', 'utf8'))
-  assert.equal(root.dsh.compatibility.dsh, version)
-  assert.deepEqual(root.dsh.compatibility.dshReleases, { [version]: 'compatible' })
+  assert.equal(root.dsh.compatibility.dsh, '>=0.2.1-alpha.2 <0.3.0-0')
+  assert.ok(satisfies(version, root.dsh.compatibility.dsh, { includePrerelease: true }))
+  assert.deepEqual(root.dsh.compatibility.dshReleases, { '0.2.1-alpha.2': 'compatible', '0.2.1-alpha.3': 'compatible' })
   for (const [name, selected] of Object.entries(root.devDependencies)) {
     if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(selected, version, name)
   }

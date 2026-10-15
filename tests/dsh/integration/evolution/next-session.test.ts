@@ -7,7 +7,7 @@ import { fixture, seed, NOW } from './fixture.js'
 import { openConnection } from '../../../../src/db/connection.js'
 import { withImmediateTransaction } from '../../../../src/db/transaction.js'
 import { resolveProjectWorkspace } from '../../../../src/memory/workspaces.js'
-import { configureEvolution, evolutionSettings, scheduleEvolution } from '../../../../src/memory/evolution/store.js'
+import { configureEvolution, evolutionSettings, scheduleEvolution, saveReferenceLesson } from '../../../../src/memory/evolution/store.js'
 import { MemoryEvolutionConfig } from '../../../../src/memory/evolution/contracts.js'
 import { DshMemoryFinalizer, type DshLlm } from '../../../../src/dsh/session-memory-finalizer.js'
 import { prepareAgentTask } from '../../../../src/dsh/task-intake.js'
@@ -16,7 +16,7 @@ import { readEntry, updateCandidateEntry } from '../../../../src/memory/entries.
 import { assertMemoryProjection, projectMemoryEntry } from '../../../../src/context/memory-projection.js'
 import type { DshRuntime } from '../../../../src/dsh/runtime.js'
 
-test('default host startup reuses an observed lesson in a new session after reopening the database', async () => {
+test('historical observed lessons survive reopen without automatic startup writes and retain retrieval invalidation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'evolution-next-session-'))
   await mkdir(join(root, '.git'))
   const databasePath = join(root, 'memory.sqlite3')
@@ -38,25 +38,30 @@ test('default host startup reuses an observed lesson in a new session after reop
       }) }
       yield { type: 'finish', reason: { kind: 'stop' } }
     } }
-    // Produce a candidate using the public observe configuration, then close the host.
+    // Seed an already stored historical lesson explicitly. New reviewed saves are covered by
+    // ../replay-memory-review.test.ts; startup must never create this candidate.
+    configureEvolution(db, 'observe')
+    const historical = withImmediateTransaction(db, () => saveReferenceLesson(db, episodes, 'positive', NOW))
     host = new DshMemoryFinalizer({ runtime, llm, memoryEvolution: MemoryEvolutionConfig.parse({ mode: 'observe' }), now: () => NOW })
     withImmediateTransaction(db, () => scheduleEvolution(db, 'prior-c', { provider: 'original', model: 'original', contextWindow: 100000 }, NOW))
     await host.start()
     await host.whenIdle()
-    const lessonId = db.prepare("SELECT entry_id AS id FROM memory_derivations WHERE kind='positive'").get<{ id: string }>()!.id
+    const lessonId = historical.id
+    assert.equal(db.prepare("SELECT state FROM memory_evolution_jobs").get()?.state, 'pending')
     assert.equal(calls, 0, 'Reference promotion is deterministic and must not call the model')
     assert.equal(evolutionSettings(db).mode, 'observe')
     await host.dispose()
     db.close()
 
-    // Startup with default public config repairs the former forced-observe state.
+    // Default startup preserves saved configuration and existing lessons.
     db = openConnection(databasePath)
     host = new DshMemoryFinalizer({ runtime, llm, now: () => NOW })
     const generation = evolutionSettings(db).generation
     await host.start()
     await host.whenIdle()
-    assert.equal(evolutionSettings(db).mode, 'active')
-    assert.equal(evolutionSettings(db).generation, generation + 1)
+    assert.equal(evolutionSettings(db).mode, 'observe')
+    assert.equal(evolutionSettings(db).generation, generation)
+    configureEvolution(db, 'active') // An explicit fixture choice, not a startup side effect.
     assert.equal(calls, 0, 'Startup and retrieval must not call the lesson-generation model')
 
     const task = 'Diagnose SQLITE_BUSY in sqlite migration 3.46 using prior observations.'

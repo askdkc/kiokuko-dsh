@@ -1,3 +1,4 @@
+import { webTestPort } from './test-web-port.mjs';
 // Disposable installed-package Web fixture. No user profile or provider credentials.
 import { execFile } from 'node:child_process'
 import { rmSync } from 'node:fs'
@@ -43,6 +44,6 @@ const version = JSON.parse(await readFile(join(repository, 'package.json'), 'utf
 console.log(`Installed kiokuko-dsh ${version} from ${archive}`)
 console.log(`Disposable profile: ${base}`)
 console.log('Open the Web URL below; use Start > Diff レビュー, then 差分を取得. Ctrl+C stops this fixture.')
-const child = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', '0'], { env, cwd: project, stdio: 'inherit' })
+const child = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', webTestPort()], { env, cwd: project, stdio: 'inherit' })
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal))
 child.on('exit', code => { process.exitCode = code ?? 1 })

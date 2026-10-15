@@ -468,8 +468,11 @@ try {
   if (metadata?.version === undefined) throw new Error('packed package has no version')
   const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
   const compatibility = packageManifest.dsh?.compatibility
-  if (typeof compatibility?.dsh !== 'string' || compatibility.dshReleases?.[compatibility.dsh] !== 'compatible') {
-    throw new Error('DSH compatibility target must have a matching compatible release entry')
+  const testedReleases = Object.entries(compatibility?.dshReleases ?? {})
+    .filter(([, status]) => status === 'compatible').map(([version]) => version)
+  if (typeof compatibility?.dsh !== 'string' || !validRange(compatibility.dsh)
+    || testedReleases.length === 0 || !testedReleases.every(version => satisfies(version, compatibility.dsh, { includePrerelease: true }))) {
+    throw new Error('DSH compatibility range must admit every explicitly tested compatible release')
   }
   if (packageManifest.bin !== undefined) throw new Error('generic CLI binary must not be public')
   if (paths.has('dist/cli.js')) throw new Error('generic CLI output must not be published')

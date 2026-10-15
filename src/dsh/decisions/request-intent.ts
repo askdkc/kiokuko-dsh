@@ -136,7 +136,7 @@ export interface RequestIntentInterpretation {
 
 const relationshipChoices = [
   { id: 'new', description: 'A new task, not a continuation or revision of the active Goal or listed proposals.' },
-  { id: 'same_scope_continuation', description: 'Continue, inspect, verify, or finish the active Goal without changing its target, exclusions, or requirements.' },
+  { id: 'same_scope_continuation', description: 'Continue, inspect, verify, or finish the current source-bound conversation or active task without changing its target, exclusions, or requirements. A formal Goal is optional.' },
   { id: 'scope_change', description: 'Change the active Goal, target, exclusions, requirements, or adopt proposals that expand or alter its scope.' },
   { id: 'unknown', description: 'The current message does not establish its relationship to the active Goal or proposals.' },
 ] as const
@@ -240,7 +240,7 @@ export function validateMainModelRequestIntent(raw: unknown, context: RequestInt
     reference.startsWith('message:') || reference.startsWith('run:') || reference.startsWith('workflow:')
       || reference.startsWith('goal:') || reference.startsWith('scope:') || reference.startsWith('task:'))
   if (!requiredRefs.every(reference => parsed.data.evidenceRefs.includes(reference))) return { ok: false, reason: 'missing_reference' }
-  if (parsed.data.relation !== 'new' && !context.activeGoal && !context.activeTask) return { ok: false, reason: 'no_active_goal' }
+  if (parsed.data.relation === 'scope_change' && !context.activeGoal && !context.activeTask) return { ok: false, reason: 'no_active_goal' }
   if (parsed.data.taskOperation) {
     if (!context.activeTask) return { ok: false, reason: 'invalid_task_operation' }
     try { validateTaskOperation(context.activeTask, { operation: parsed.data.taskOperation,

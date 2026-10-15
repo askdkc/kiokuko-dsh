@@ -89,16 +89,16 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
           const statusResult = messageResult('status')
           if (statusResult.isError) throw new Error(`status subdispatch failed: ${JSON.stringify(statusResult)}`)
           row.status = JSON.parse(statusResult.text)
-          assert.equal(row.status.pending[0]?.problem, 'decision_missing')
+          assert.equal(row.status.supported,false);assert.equal(row.status.ready,true);assert.deepEqual(row.status.pending,[])
           response = mock.toolCallResponse('premature', 'run_code', { description: 'Attempt arbitrary program before memory review', code: 'return "MUST_NOT_RUN"' })
         } else if (step === 4) {
           row.premature = messageResult('premature'); assert.equal(row.premature.isError, false)
           assert.ok(row.premature.text.includes('MUST_NOT_RUN'), 'an unresolved decision must never block the program')
           assert.equal(row.runtimePrograms.length, 2, 'the program runs while the decision is unresolved, after the SDK review status call')
           assert.deepEqual(names, ['run_code'])
-          const item = row.status.pending[0]
+          const item={entryId:row.memory.id,revision:row.memory.revision}
           response = mock.toolCallResponse('review', 'run_code', { description: 'Submit the pending memory review', code: `return await tools.task_memory_review({ action: "review", review: ${JSON.stringify({
-            generation: row.status.generation, entryId: item.entryId, entryRevision: item.revision, expectedRevision: 0,
+            generation: 1, entryId: item.entryId, entryRevision: item.revision, expectedRevision: 0,
             decision: 'not_applicable', paths: [], basis: 'The stored production-migration lesson does not apply to this fixed isolated protocol fixture.',
           })} })` })
         } else if (step === 5) {
@@ -136,7 +136,8 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
     assert.equal(row.questions.length, hostMode === 'core' ? 0 : 1)
     const final = openConnection(databasePath)
     try { row.bindings = final.prepare('SELECT mode,required_json FROM task_memory_bindings').all(); row.reviews = final.prepare('SELECT review_json FROM task_memory_reviews').all() } finally { final.close() }
-    assert.equal(row.reviews.length, 1)
+    assert.equal(row.reviews.length,0,'Retired SDK review cannot write memory approval or application rows')
+    assert.equal(row.bindings.length,0)
     if (hostMode === 'full') assert.equal(new Set(row.prepareInputs.map((input: any) => input.capabilities.digest)).size, 1, 'host-owned review presentation must not change bound catalog identity')
     row.passed = true
   } finally {
@@ -148,6 +149,6 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
   }
 }
 
-for (const hostMode of ['core', 'full'] as const) test(`native ${hostMode}: pending memory never blocks prepared PTC work and SDK review completes the obligation`, {
+for (const hostMode of ['core', 'full'] as const) test(`native ${hostMode}: historical memory never blocks prepared PTC work and retired SDK review saves nothing`, {
   skip: available ? false : 'requires explicit pinned DSH native package root', timeout: 120_000,
 }, () => runPendingMemory(hostMode))

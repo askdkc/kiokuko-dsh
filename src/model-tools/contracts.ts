@@ -8,20 +8,8 @@ import {
   planSubmissionSchema,
   workReportSchema,
 } from '../enno-oduno/schemas.js';
-
-export const MODEL_TOOL_OPERATION_NAMES = [
-  'enno_plan_review',
-  'enno_plan_submit',
-  'enno_ideal_submit',
-  'enno_work_report',
-  'enno_delegate',
-  'enno_finish',
-  'enno_meditation_submit',
-  'curator_check',
-  'memory_checkpoint',
-] as const;
-
-export type ModelToolOperationName = (typeof MODEL_TOOL_OPERATION_NAMES)[number];
+import { type ModelToolOperationName } from './names.js';
+export { MODEL_TOOL_OPERATION_NAMES, type ModelToolOperationName } from './names.js';
 
 export type ModelToolOwner = 'kiokuko-core';
 export type ModelToolExposure = 'model-facing';

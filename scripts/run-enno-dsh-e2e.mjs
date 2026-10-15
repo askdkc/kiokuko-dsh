@@ -1,3 +1,4 @@
+import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { execFile, spawn } from 'node:child_process'
@@ -13,7 +14,8 @@ const root = resolve(import.meta.dirname, '..')
 const dsh = process.env.DSH_BIN ?? 'dsh'
 const profile = 'web'
 const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? packageManifest.dsh.compatibility.dsh
+const fixtureManifest = JSON.parse(await readFile(join(root, 'tests/fixtures/dsh-runtime/package.json'), 'utf8'))
+const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? fixtureManifest.dependencies['@deepseek-ai/dsh']
 const requireDshCli = process.env.KIOKUKO_REQUIRE_DSH_CLI === '1'
 const cliOnly = process.env.KIOKUKO_DSH_CLI_ONLY === '1'
 if (cliOnly && !requireDshCli) throw new Error('CLI-only lifecycle verification requires KIOKUKO_REQUIRE_DSH_CLI=1')
@@ -162,7 +164,7 @@ async function runCordisComposition() {
 }
 
 function startWebProfile(env) {
-  const child = spawn(dsh, ['--profile', profile, '--patch', env.KIOKUKO_AGENTICREPLAY_E2E_PATCH, '--no-open', '--port', '0'], {
+  const child = spawn(dsh, ['--profile', profile, '--patch', env.KIOKUKO_AGENTICREPLAY_E2E_PATCH, '--no-open', '--port', webTestPort()], {
     cwd: env.KIOKUKO_E2E_WORKSPACE,
     env,
     shell: false,

@@ -1,3 +1,6 @@
+import { approvedOwnedMemory } from '../helpers/approved-owned-memory.js'
+import { bindHistoricalMemory } from '../helpers/historical-memory.js'
+import { resolveProjectWorkspace } from '../../../src/memory/workspaces.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {mkdtemp,mkdir,writeFile,readFile,rm,realpath} from 'node:fs/promises'
@@ -23,51 +26,7 @@ import {memoryApplicationStatus,recordMemoryApplicationReview} from '../../../sr
 const ownedPackageRoot=process.env.KIOKUKO_OWNED_PACKAGE_ROOT
 const OwnedExecutionService:typeof SourceOwnedExecutionService=ownedPackageRoot?(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/owned-execution.js')).href)).OwnedExecutionService:SourceOwnedExecutionService
 
-async function finalize(f:Awaited<ReturnType<typeof fixture>>,result:any,failStorage=false){
-  const events:DshLogEvent[]=[
-    {seq:1,time:1,type:'turn/start',data:{turn:1}},
-    {seq:2,time:2,type:'user/message',surfaceOp:'append',data:{role:'user',source:{kind:'user'},content:[{type:'text',text:'Parser: edit and verify selected tests.'}]}},
-    {seq:3,time:3,type:'request/header',data:{header:{config:{provider:'fixture',model:'fixture'}}}},
-    {seq:4,time:4,type:'request/context',data:{contextWindow:100000}},
-    {seq:5,time:5,type:'tool/call',data:{callId:result.receipt.operationId,name:'kioku_exec',arguments:{command:result.receipt.command}}},
-    {seq:6,time:6,type:'tool/result',data:{...result,message:{role:'user',source:{kind:'tool',callId:result.receipt.operationId},content:[{type:'text',text:JSON.stringify(result)}]}}},
-    {seq:7,time:7,type:'turn/end',data:{turn:1,reason:{kind:'completed'}}},
-  ]
-  let calls=0
-  const createFinalizer=()=>new DshMemoryFinalizer({runtime:{withDatabase:async(fn:any)=>fn(f.db)} as any,autoGlobalizationEnabled:false,
-    memoryEvolution:MemoryEvolutionConfig.parse({mode:'off'}),
-    sessionQuery:{async readSession(){return {session:{id:f.identity.sessionId},inheritedEventCount:0,events}}},
-    llm:{async *stream(request){
-      assert.match(JSON.stringify(request.messages),/executionObservations/)
-      const reconciliation=JSON.parse((request.messages.at(-1) as any).content[0].text).reconciliation
-      const evidence=reconciliation.evidence.find((item:any)=>item.id===result.receipt.evidenceRef)
-      assert.ok(evidence)
-      calls++
-      const body='Parser: the selected source-bound check passed in this run; changed sources require a new check.'
-      yield {type:'text-delta',text:JSON.stringify({schemaVersion:4,memoryOperations:[{action:'add',kind:'lesson',title:'Parser verification condition',body,evidenceIds:[evidence.id],claims:[{id:'check',text:body,evidence:[{evidenceId:evidence.id,supportingText:'"verification":"passed"'}]}]}]})}
-      yield {type:'finish',reason:{kind:'stop'}}
-    }}})
-  let finalizer=createFinalizer()
-  try{
-    await finalizer.start()
-    f.db.prepare('INSERT INTO dsh_run_log_boundaries VALUES(?,?,?,1,1,?,?)').run(f.identity.runId,f.identity.workspace,f.identity.sessionId,new Date().toISOString(),new Date().toISOString())
-    f.db.prepare("UPDATE ledger_runs SET status='completed' WHERE run_id=?").run(f.identity.runId)
-    finalizer.scheduleInTransaction(f.db,{runId:f.identity.runId,workspace:f.identity.workspace,dshSessionId:f.identity.sessionId,sourceEndSeq:7})
-    if(failStorage)f.db.exec("CREATE TRIGGER owned_save_failure BEFORE INSERT ON memory_execution_links BEGIN SELECT RAISE(ABORT,'injected memory persistence failure'); END")
-    finalizer.kick();await finalizer.whenIdle()
-    if(failStorage){
-      assert.equal(f.db.prepare('SELECT status FROM dsh_memory_finalizations').get<any>().status,'failed')
-      assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM entries').get<any>().n,0,'failed adoption transaction has no partial candidate')
-      assert.ok(f.db.prepare('SELECT staged_capsule_json FROM dsh_memory_finalizations').get<any>().staged_capsule_json)
-      f.db.exec('DROP TRIGGER owned_save_failure')
-      await finalizer.dispose();await f.restart();finalizer=createFinalizer();await finalizer.start();await finalizer.whenIdle()
-    }
-    const status=f.db.prepare('SELECT status,last_error_message FROM dsh_memory_finalizations').get<any>()
-    assert.equal(status.status,'completed',JSON.stringify(status))
-    finalizer.kick();await finalizer.whenIdle();assert.equal(calls,1)
-    return readEntry(f.db,{workspace:f.identity.workspace,entryId:f.db.prepare('SELECT entry_id FROM dsh_memory_finalization_entries WHERE run_id=?').get<any>(f.identity.runId).entry_id})
-  }finally{await finalizer.dispose()}
-}
+const finalize=approvedOwnedMemory
 
 async function fixture(){
   const root=await realpath(await mkdtemp(join(tmpdir(),'kioku-owned-')))
@@ -109,7 +68,9 @@ test('edit -> real test -> durable evidence -> candidate memory -> restart -> re
       profileHints:{taskType:'build',target:'Parser src/check.test.mjs',expected:'Verify changed Parser tests',constraints:'Preserve source-bound verification'},
       capabilities:['kiokuko-soul','memory-reasoning'].map(name=>({kind:'skill' as const,name})),signal:new AbortController().signal})
     assert.equal(next.admitted,true)
-    assert.ok(JSON.stringify(next.memory).includes(entry.id),'a new admitted request retrieves the stored candidate')
+    assert.equal(next.memory,null,'native preparation has no memory prerequisite')
+    const context=await bindHistoricalMemory(f.db,next,(await resolveProjectWorkspace(f.db,f.root))!,f.root)
+    assert.ok(JSON.stringify(context).includes(entry.id),'explicit historical retrieval retains the approved memory')
     const nextIdentity={runId:next.runId,sessionId:next.sessionId,workspace:next.workspace,repositoryRoot:f.root}
     const status=memoryApplicationStatus(f.db,next.runId)
     recordMemoryApplicationReview(f.db,nextIdentity,'next-adoption',{generation:status.generation,entryId:entry.id,entryRevision:entry.revision,expectedRevision:0,decision:'adopted',

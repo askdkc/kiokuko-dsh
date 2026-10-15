@@ -1,6 +1,6 @@
 import type { DshSpawnBackend } from '../dsh/enno-delegation.js'
 import type { RoutableAgent } from '../dsh/model-routing.js'
-import { ManagedAgentExecutor } from '../dsh/orchestration/managed-agent-executor.js'
+import { ManagedAgentExecutor, spawnRestrictionMode } from '../dsh/orchestration/managed-agent-executor.js'
 import { readExecutionOwner } from '../dsh/orchestration/execution-owner.js'
 import { normalizeDshUsage } from '../dsh/efficiency.js'
 import { DeepStore, assertDeepAuthority, readDeepState, type DeepAuthority } from './store.js'
@@ -57,8 +57,7 @@ export class DeepNativeExecutor implements DeepExecution {
     return parent?.session ? { agent: parent, session: parent.session } : undefined
   }
   capabilityProblem(agent: DeepNativeAgent): string | undefined {
-    const spawn = (this.backend as DshSpawnBackend & { getProvider?: (name: string) => { capabilities: Record<string, boolean> } | undefined } | undefined)?.getProvider?.('spawn')
-    if (!spawn || !['agentOptions', 'toolFilter', 'depthLimit'].every(key => spawn.capabilities[key])) return 'Deep requires a native spawn backend advertising agentOptions, toolFilter and depthLimit.'
+    if (!this.backend?.getProvider?.('spawn') || !spawnRestrictionMode(this.backend,agent)) return 'Deep requires native spawn model/depth capabilities and an enforceable tool restriction.'
     if (!agent.ctx || !agent.session || !agent.followup) return 'Deep requires the exact native Agent, Session and followup capability.'
     return undefined
   }

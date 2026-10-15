@@ -1,3 +1,4 @@
+import { purgeReplayMemoryForEntryInTransaction } from './replay-store.js'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 import { canonicalEntryRevisionContentHash, type EntryKind, type JsonObject } from '../serialization/validate.js'
@@ -67,6 +68,7 @@ function eraseEntry(db: SqliteDatabase, id: string, retirement: Retirement, now:
     db.prepare("UPDATE entry_revisions SET title='[forgotten]',body='[forgotten]',summary=NULL,scope_json='{}',provenance_json=?,content_hash=? WHERE entry_id=? AND revision=?")
       .run(JSON.stringify(provenance), hash, id, revision.revision)
   }
+  purgeReplayMemoryForEntryInTransaction(db,id)
   // Identity shells retain foreign keys and payload-free audit/usage records.
   db.prepare("UPDATE entries SET status='superseded',superseded_by=id,trust_level='untrusted',verified_at=NULL WHERE id=?").run(id)
   for (const table of ['memory_revision_evidence', 'entry_revision_tags', 'entry_search_documents', 'entry_search_signals', 'entry_embeddings', 'embedding_jobs', 'memory_index_sources', 'memory_index_facts', 'memory_derivations']) db.prepare(`DELETE FROM ${table} WHERE entry_id=?`).run(id)

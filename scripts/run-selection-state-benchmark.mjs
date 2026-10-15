@@ -1,3 +1,4 @@
+import { initializeEvaluationRepository } from './evaluation-git-fixture.mjs'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -18,7 +19,7 @@ const root = await mkdtemp(join(tmpdir(), 'selection-state-benchmark-'))
 const results = []
 try {
   for (const size of [20,1000]) {
-    const location = join(root,String(size)); await mkdir(join(location,'.git'),{recursive:true})
+    const location = join(root,String(size)); await mkdir(location,{recursive:true}); initializeEvaluationRepository(location)
     const db = openConnection(join(location,'state.sqlite3')); migrateDatabase(db)
     try {
       const project = await resolveProjectWorkspace(db,location)

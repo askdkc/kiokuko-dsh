@@ -423,13 +423,7 @@ function buildPreparedTaskBase(
     ? memoryUseOverride ?? deriveMemoryUseSignal(scopedContext)
     : 'none';
   const contextItemCount = scopedContext?.items.length ?? null;
-  const deliveryObservation = context.status === 'ready'
-    && (contextItemCount === null || contextItemCount === 0)
-    ? {
-      contextItemCount,
-      storedEntryCount: retrievableWorkspaceEntryCount(database, project.workspace),
-    }
-    : undefined;
+  const deliveryObservation = undefined // Optional memory statistics are not an admission prerequisite.
   const capabilityResolution = resolveCapabilities({
     task: context.session.task,
     profile: context.session.profile,
@@ -934,13 +928,10 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
         writeExecutionSelection(transactionDatabase, runId, 0, { mode: 'deep-thinker', status: 'ready', deepConfiguration: input.deepSelection.configuration });
       }
       if (input.dshLogStart === undefined) return;
-      bindDshRunLogStartInTransaction(transactionDatabase, {
-        runId,
-        workspace,
-        dshSessionId,
-        sourceStartSeq: input.dshLogStart!.sourceStartSeq,
-        sourceStartTurn: input.dshLogStart!.sourceStartTurn,
-      }, now);
+      if(!Number.isSafeInteger(input.dshLogStart.sourceStartSeq)||input.dshLogStart.sourceStartSeq<0)throw new KiokukoError('INTEGRITY_ERROR','Invalid sourceStartSeq');
+      if(!Number.isSafeInteger(input.dshLogStart.sourceStartTurn)||input.dshLogStart.sourceStartTurn<1)throw new KiokukoError('INTEGRITY_ERROR','Invalid sourceStartTurn');
+      transactionDatabase.prepare("UPDATE ledger_runs SET metadata_json=json_set(metadata_json,'$.nativeSourceStart',json(?)) WHERE run_id=?")
+        .run(JSON.stringify({sessionId:dshSessionId,seq:input.dshLogStart.sourceStartSeq,turn:input.dshLogStart.sourceStartTurn}),runId);
     },
   });
   const opened = intakeService.openRun({

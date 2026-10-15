@@ -340,7 +340,7 @@ export function createRouting({
                   if (projection.reason === 'projected') assembly = Object.assign({}, assembly, {
                     tools: projection.tools,
                     ...(effectiveMode === 'minimal' ? { sections: assembly.sections.map(section => section.name === 'kiokuko:soul'
-                      ? { ...section, text: `${section.text}\nFor this admitted task, Kiokuko model tools are intentionally omitted. Do not request curator_check, memory_checkpoint or Enno tool calls. The host owns task completion and memory finalization; use the available native tools as needed.` }
+                      ? { ...section, text: `${section.text}\nFor this admitted task, Kiokuko model tools are intentionally omitted. Do not request curator_check, memory_checkpoint or Enno tool calls. The host owns task completion; use the available native tools as needed. Memory is optional and may be organized only after the task ends, then saved only after the user approves the exact shown revision.` }
                       : section) } : {}),
                   })
                   if (effectiveMode === 'lean' || effectiveMode === 'minimal') reportToolExposureProjection(effectiveMode, `${decisionReason}:${prepared.intake.profile.taskType}:${projection.reason}`, projection.metrics)

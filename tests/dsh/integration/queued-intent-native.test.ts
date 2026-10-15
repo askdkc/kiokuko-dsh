@@ -40,16 +40,18 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop', 'dsh-skill', 'dsh-commands',
     ].map(load))
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'queued-intake-'))), databasePath = join(root, 'state.sqlite3')
-    const ctx = new cordis.Context(), fibers: any[] = [], errors: string[] = [], asked: string[] = [], classified: unknown[] = []
+    const ctx = new cordis.Context(), fibers: any[] = [], errors: string[] = [], asked: string[] = [], classified: unknown[] = [], intentQuestionSets: string[][] = []
     let adapter: ReturnType<typeof createDshHostAdapter> | undefined, composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
     let core: Awaited<ReturnType<typeof mountCore>> | undefined, handle: any, probes = 0
     const configuration = TypedDecisionsConfig.parse(host.startsWith('full-laya')
       ? { provider: 'laya-coreml', 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } } : { provider: 'typesafe' })
     const decisions = new DecisionService(configuration, config => ({ capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 }, async evaluate(batch) {
       if (batch.purpose === 'akinator' || batch.purpose === 'request-intent') classified.push(batch.state)
+      if (batch.purpose === 'request-intent') intentQuestionSets.push(batch.questions.map(question => question.id))
       if (host === 'full-laya-unavailable') throw new DecisionError('UNAVAILABLE')
-      return { provider: config.provider, requestedModel: config.provider === 'laya-coreml' ? 'laya-rl-agent' : config.typesafe.model, policyVersion: 'queued-fixture', answers: batch.questions.map(q => (['task-type', 'request-relation', 'request-action', 'request-change-scope'].includes(q.id) || q.id.startsWith('request-proposal-')) && host !== 'full-laya-abstain'
-        ? { id: q.id, status: 'selected' as const, choiceId: ({ 'task-type': 'debug', 'request-relation': (batch.state as { currentUserMessage?: string }).currentUserMessage === instructions[1] ? 'same_scope_continuation' : 'new', 'request-action': 'change', 'request-change-scope': 'implementation' } as Record<string, string>)[q.id] ?? 'not_selected' } : { id: q.id, status: 'abstained' as const, reason: 'insufficient' as const }) }
+      // Queued follow-up requests keep the active task without requesting a state transition.
+      return { provider: config.provider, requestedModel: config.provider === 'laya-coreml' ? 'laya-rl-agent' : config.typesafe.model, policyVersion: 'queued-fixture', answers: batch.questions.map(q => (['task-type', 'request-relation', 'request-action', 'request-change-scope', 'request-task-operation'].includes(q.id) || q.id.startsWith('request-proposal-')) && host !== 'full-laya-abstain'
+        ? { id: q.id, status: 'selected' as const, choiceId: ({ 'task-type': 'debug', 'request-relation': (batch.state as { currentUserMessage?: string }).currentUserMessage === instructions[1] ? 'same_scope_continuation' : 'new', 'request-action': 'change', 'request-change-scope': 'implementation', 'request-task-operation': 'none' } as Record<string, string>)[q.id] ?? 'not_selected' } : { id: q.id, status: 'abstained' as const, reason: 'insufficient' as const }) }
     } }))
     try {
       for (const plugin of [llm, session, projection, prompt, tools, agents, skills, commands]) {
@@ -88,6 +90,8 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
         for (const text of instructions) assert.ok(provider.requests.some(request => JSON.stringify(request.messages).includes(text)), 'every original queued request reaches the native model')
         assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_lisp_sessions WHERE enabled=1').get()?.n, 0)
       } finally { db.close() }
+      if (host === 'full-laya' || host === 'full-jev') assert.ok(intentQuestionSets.some(ids => ids.includes('request-task-operation')),
+        'the second queued request exercises the active-task operation decision')
       if (host !== 'core-off') for (const text of instructions) assert.ok(classified.some(state => JSON.stringify(state).includes(text)), JSON.stringify(classified))
     } finally {
       await composition?.dispose(); await adapter?.dispose(); await core?.dispose(); await handle?.dispose()

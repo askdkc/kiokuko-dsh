@@ -45,12 +45,7 @@ export class EvolutionWorker {
   readonly #now: () => string
   constructor(readonly options: EvolutionWorkerOptions) { this.#now = options.now ?? (() => new Date().toISOString()) }
   kick(): void {
-    if (this.#closed) return
-    if (this.#drain) { this.#rerun = true; return }
-    this.#drain = this.#run().catch(() => { /* durable jobs remain recoverable; never veto host */ }).finally(() => {
-      this.#drain = undefined
-      if (this.#rerun && !this.#closed) { this.#rerun = false; this.kick() }
-    })
+    return; // Automatic lesson generation is replaced by user-reviewed replay proposals.
   }
   async whenIdle(): Promise<void> { while (this.#drain) await this.#drain }
   async dispose(): Promise<void> { this.#closed = true; this.#abort?.abort(); await this.whenIdle() }

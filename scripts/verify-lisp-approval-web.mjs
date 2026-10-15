@@ -1,3 +1,5 @@
+import { declineOptionalMemoryOffers } from './lib/web-test-navigation.mjs';
+import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Packed Kiokuko, real native Plan tools and Web approval UI; disposable profile and scripted local model.
 import assert from 'node:assert/strict'
@@ -80,13 +82,14 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   await writeFile(patch, `- id: session-title-llm\n  disabled: true\n- id: agent-default-model\n  config: {provider: approval-fixture, model: mock}\n- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n    memoryReview: {mode: off}\n    memoryEvolution: {mode: off}\n    memoryIndexReasoning: {mode: off}\n    lisp: {enabled: true, executionMode: protected}\n- insert:\n    - id: lisp-approval-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, tools, agents, sessionProjections, llm]\n`)
   const boot = async () => {
     logs = ''
-    host = spawn(dsh, ['--profile', 'web', '--no-open', '--port', '0'], { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    host = spawn(dsh, ['--profile', 'web', '--no-open', '--port', webTestPort()], { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] })
     for (const stream of [host.stdout, host.stderr]) stream.on('data', c => { logs += c })
     return await poll(() => logs.match(/https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/)?.[0])
   }
   const url = await boot()
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) })
   page = await browser.newPage()
+  await declineOptionalMemoryOffers(page)
   await page.goto(url)
   const welcome = page.getByRole('button', { name: 'Continue', exact: true })
   const credentials = page.getByRole('dialog', { name: 'Add an API key to get started', exact: true })

@@ -15,16 +15,16 @@ import { z } from 'zod'
 import { AnswerReviewConfig } from './answer-review/contracts.js'
 import { SkillPromptsConfig } from './skill-prompt-contracts.js'
 export { SkillPromptsConfig }
-import { LispConfig } from './lisp/contracts.js'
+import { LispConfig } from './lisp-config.js'
 export { LispConfig }
 import { ContinuityConfig } from '../context/continuity-view.js'
 export { ContinuityConfig }
 import { ModelRouteSchema } from './model-configuration.js'
 import { ModelAutoConfig } from './model-auto/contracts.js'
-import { ToolExposureConfig } from './tool-exposure.js'
+import { ToolExposureConfig } from './tool-exposure-config.js'
 import { CompletionConfig } from './task-completion.js'
 export { CompletionConfig }
-import { DeepThinkerConfigSchema } from '../deep-thinker/core/contracts.js'
+import { DeepThinkerConfigSchema } from '../deep-planning-config.js'
 import { MemoryRetrievalConfig } from '../memory/retrieval-contracts.js'
 
 const limit = (value: number) => z.number().int().positive().max(Number.MAX_SAFE_INTEGER).default(value)

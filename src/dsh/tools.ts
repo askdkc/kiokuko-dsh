@@ -1,5 +1,5 @@
 import { canonicalContentHash } from '../serialization/validate.js'
-import { MODEL_TOOL_OPERATION_NAMES, type ModelToolOperationName } from '../model-tools/contracts.js'
+import { MODEL_TOOL_OPERATION_NAMES, type ModelToolOperationName } from '../model-tools/names.js'
 import { modelFacingInputSchema, modelFacingTransportSchema, modelToolContract, type JsonSchema } from '../model-tools/registry.js'
 import { KiokukoError } from '../errors.js'
 
@@ -23,7 +23,6 @@ export const DSH_LEAN_DESCRIPTION_OPERATIONS = [
   'enno_finish',
   'enno_meditation_submit',
   'curator_check',
-  'memory_checkpoint',
 ] as const satisfies readonly ModelToolOperationName[]
 
 export type DshModelFacingOperation = (typeof DSH_MODEL_FACING_OPERATIONS)[number]
@@ -217,6 +216,7 @@ export function bindDshToolInvocation(
 }
 
 function descriptionFor(operation: ModelToolOperationName): string {
+  if (operation === 'memory_checkpoint') return 'This legacy compatibility tool does not save memories or complete tasks. Memory organization is optional after task completion; only native user approval of the exact preview permits saving. Use memory_context for optional lookup.'
   if (operation === 'enno_plan_review') return 'Review the complete candidate plan before submission. The host selects the configured typed provider or exact check model. No execution is approved. Read findings, supply dispositions, then enno_plan_submit the identical reviewed candidate; changed drafts require review again. Ordinary review failure is recoverable.'
   if (operation === 'enno_delegate') return 'Delegate a bounded part of the CURRENT approved WorkUnit to a native DSH spawn child. Supply instruction only. The host chooses the approved worker model and scope. No grandchildren. Review the returned evidence, run focused verification, then submit enno_work_report yourself. Child completion does not accept the WorkUnit.'
   return `Use native JSON types; never encode an object or array as a JSON string. The host supplies identity, routing, lease and idempotency. Returns TurnOutcome: applied.value is the business response; applied.handoff is next-turn state. Predictable rejections return retry or clarify, not transport errors. Business payload: ${JSON.stringify(modelFacingInputSchema(operation))}`

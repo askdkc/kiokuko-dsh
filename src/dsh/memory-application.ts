@@ -29,7 +29,7 @@ const transportSchema = z.object({
   query: z.string().trim().min(1).max(4000).optional(),
   timeConstraint: MemoryTimeConstraint.optional(),
 }).strict()
-export const MEMORY_APPLICATION_GUIDANCE = 'Use task_memory_review(action=status) once, then submit independent pending decisions with action=review_batch (up to 32); action=review remains available for one. Adoption and contradiction require relevant source paths. Adoption also needs an invariant, counterexample, method and command: a pre-bound command executed through Kiokuko owned shell/Lisp tools at the declared project cwd (including subdirectories), or an approved Enno verifier. Host receipts distinguish process completion from test coverage. For topic-based non-applicability, use paths:[]; supply paths when the judgment depends on current source. Refresh retains decisions when delivered entry revisions and mode stay unchanged; a revised entry or mode change starts a new review generation. New entries need decisions, and changed delivery invalidates execution proof. Only an observed final process result with the required test coverage on unchanged declared sources counts as proof. Use action=refresh for a concrete new error or target; it keeps the run. Missing proof cannot complete successfully. Unresolved decisions never block a tool call; they keep the run incomplete until resolved. Host-validated request preparation is control-only; it neither resolves memory decisions nor authorizes execution or edits. Judgments are model-reported.'
+export const MEMORY_APPLICATION_GUIDANCE = 'Memory references and past application status are optional advisory data. Missing, stale or failed memory evidence never blocks tools or task completion. Native permissions, explicit Stop and actual task verification remain authoritative. New memory saving happens only after task completion, permission to organize, and approval of the exact shown revision.'
 
 interface NativeExecution extends TaskAuthorityExecution { callId: string; rootCallId?: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
 interface SurfaceContext {
@@ -89,7 +89,7 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
       const status = await host.runtime.withDatabase(db => {
         const row = db.prepare('SELECT run_id FROM task_memory_bindings WHERE session_id=? AND repository_root=? ORDER BY rowid DESC LIMIT 1')
           .get<{run_id:string}>(session.sessionId, session.repositoryRoot)
-        const application = row ? memoryApplicationStatus(db, row.run_id) : { supported: false as const, ready: false, verification: 'unobserved' as const }
+        const application = row ? memoryApplicationStatus(db, row.run_id) : { supported: false as const, ready: true, workMayContinue: true as const, verification: 'unobserved' as const }
         const globalization = application.supported && 'items' in application
           ? application.items.map(item => ({ entryId: item.entryId, revision: item.revision,
             ...autoGlobalizationStatus(db, item.entryId, item.revision) })) : []
@@ -133,8 +133,10 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
         invocation.signal.throwIfAborted()
         const value=await host.runtime.withDatabase(db=>{
           const binding=db.prepare('SELECT workspace,run_id FROM task_memory_bindings WHERE session_id=? AND repository_root=? ORDER BY rowid DESC LIMIT 1').get<{workspace:string;run_id:string}>(session.sessionId,session.repositoryRoot)
-          if(!binding)throw new Error('No admitted workspace for this session')
-          return args[0]==='forget' ? forgetMemory(db,{workspace:binding.workspace,entryId:args[1]!,expectedRevision:revision!,operationId:`forget:${session.sessionId}:${invocation.commandId??args[1]+':'+revision}`}) : explainMemory(db,{workspace:binding.workspace,entryId:args[1]!,revision,runId:binding.run_id})
+          const project=db.prepare('SELECT workspace FROM repository_locations JOIN repositories USING(repository_id) WHERE canonical_root=?').get<{workspace:string}>(session.repositoryRoot)
+          const workspace=binding?.workspace??project?.workspace
+          if(!workspace)throw new Error('Current native project is unavailable')
+          return args[0]==='forget' ? forgetMemory(db,{workspace,entryId:args[1]!,expectedRevision:revision!,operationId:`forget:${session.sessionId}:${invocation.commandId??args[1]+':'+revision}`}) : explainMemory(db,{workspace,entryId:args[1]!,revision,...(binding?{runId:binding.run_id}:{})})
         })
         return {kind:'success',text:args.includes('--json') ? JSON.stringify(value,null,2) : args[0]==='forget' ? `記憶 ${args[1]} と依存する記憶を忘却しました。native会話ログ、外部への送信済み情報、バックアップは対象外です。` : renderMemoryExplanation(value as ReturnType<typeof explainMemory>)}
       }catch(error){return {kind:'error',text:error instanceof Error?error.message:'Memory inspection failed'}}
@@ -149,12 +151,10 @@ export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHos
       if (!identity || execution.parent !== undefined && !isPtcSubcall(execution) || execution.name !== 'task_memory_review') throw new Error('No active native task for memory application')
       execution.signal.throwIfAborted()
       const input = inputSchema.parse(args)
-      if (input.action === 'refresh') return host.refresh(execution, input.query, input.timeConstraint)
+      if (input.action !== 'status') return { recorded: false, workMayContinue: true, reason: 'post_task_memory_review_required' }
       return host.runtime.withDatabase(db => {
         execution.signal.throwIfAborted()
         if (host.resolve(execution)?.runId !== identity.runId) throw new Error('Native task changed')
-        if (input.action === 'review') recordMemoryApplicationReview(db, identity, execution.callId, input.review)
-        if (input.action === 'review_batch') return recordMemoryApplicationReviewBatch(db, identity, execution.callId, input.reviews)
         return memoryApplicationStatus(db, identity.runId)
       })
     } }))

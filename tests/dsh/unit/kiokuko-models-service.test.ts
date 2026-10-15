@@ -835,3 +835,41 @@ test('plugin shutdown aborts and drains an active provider stream before releasi
     await assert.rejects(collect(f.adapter().stream({provider:c.id,model:model.id,messages:[]})));
   }finally{await f.close();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()))}
 })
+
+
+test("model wrapper delegates alpha.3 image budgets and preserves the alpha.2 fallback", async () => {
+  const f = await fixture();
+  try {
+    const value = connection("http://127.0.0.1:41001", "ollama", "kiokuko-images");
+    await f.service.save(value, 0);
+    const adapter = f.adapter() as LlmAdapter & { imageRequestTarget: (id:string, model:string, image:any) => unknown; routes: Map<string, any> };
+    const route = adapter.routes.get(value.id);
+    const image = { width:2048, height:1024, bytes:900000, id:'fixture-image', mediaType:'image/png' };
+    const target = {width:512, height:256, maxBytes:120000};
+    const calls:unknown[]=[];
+    route.adapter.imageRequestTarget = (provider:string, model:string, received:unknown) => {
+      calls.push([provider, model, received]); return target;
+    };
+    assert.strictEqual(adapter.imageRequestTarget(value.id, 'fixture', image), target);
+    assert.deepEqual(calls, [[route.underlying, 'fixture', image]]);
+    delete route.adapter.imageRequestTarget;
+    // alpha.2 has no prototype capability; this models its older shape explicitly.
+    const prior = route.adapter.imageRequestTarget;
+    route.adapter.imageRequestTarget = undefined;
+    assert.deepEqual(adapter.imageRequestTarget(value.id, 'fixture', image), {width:2048,height:1024,maxBytes:900000});
+    route.adapter.imageRequestTarget = prior;
+  } finally { await f.close(); }
+});
+
+test("model listing with no credential stays empty and a stored key enables the same route", async () => {
+  const f = await fixture();
+  try {
+    const value = connection("http://127.0.0.1:41002", "custom", "kiokuko-key-state");
+    await f.service.save(value, 0);
+    assert.deepEqual(await f.service.models(value.id), []);
+    await f.store.modify(credentialKey(value), async () => ({type:'api_key',key:'fixture-key'}));
+    const models = await f.service.models(value.id);
+    assert.ok(models.some(m => m.id === model.id && m.provider === value.id));
+    assert.doesNotMatch(JSON.stringify(await f.service.list()), /fixture-key/);
+  } finally { await f.close(); }
+});

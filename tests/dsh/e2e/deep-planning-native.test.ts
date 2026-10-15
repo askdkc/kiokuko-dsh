@@ -20,6 +20,8 @@ import { mountDshSessionExportSurface } from '../../../src/dsh/session-log-surfa
 import { loadJapaneseOutputSkill } from '../../../src/dsh/japanese-output-skill.js'
 import { estimateRequestTokens } from '../../../src/deep-thinker/core/budget.js'
 
+// Positive post-task organization and exact human approval are covered by
+// integration/replay-memory-review.test.ts; Deep completion never extracts memory automatically.
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packages) throw new Error('Deep native coverage requires KIOKUKO_DSH_PACKAGE_ROOT with the pinned published runtime')
 const modulePath = (name: string) => pathToFileURL(join(packages!, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href
@@ -43,7 +45,6 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
   ]
   const provider = new mock.MockAdapter([
     ...responses.map(response => (request: any) => { requests.push(request); assert.notEqual(request.sessionId, 'deep-parent'); assert.equal(request.maxTokens, 4096); return mock.textResponse(JSON.stringify(response)) }),
-    (request: any) => { requests.push(request); assert.equal(request.sessionId, 'deep-parent'); assert.equal(request.purpose, 'compaction'); return mock.textResponse(JSON.stringify({ schemaVersion: 1, memories: [{ kind: 'fact', title: 'Read-only planning', body: 'The proposed analysis stage is read-only.', summary: null, confidence: 0.7, tags: [] }] })) },
   ])
   provider.listModels = async (id: string) => [{ provider: id, id: 'mock', name: 'Mock' }]
   const ctx = new cordis.Context()
@@ -70,10 +71,12 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
     const state = await adapter.host.deepPlanning!.store.read(intent.runId)
     assert.equal(state.phase, 'answered', JSON.stringify(state))
     assert.equal(state.task, task)
-    assert.equal(requests.length, 4)
-    assert.equal(state.usage.requests, 4)
+    assert.equal(requests.length, 3)
+    assert.equal(state.usage.requests, 3)
+    assert.ok(requests.every(request => request.purpose !== 'compaction'), 'completed planning must not dispatch a memory extractor')
     const finalization = await adapter.host.deepPlanning!.store.database(db => db.prepare('SELECT status,error FROM dsh_deep_finalizations WHERE run_id=?').get<{status:string;error:string|null}>(intent.runId!))
-    assert.equal(finalization?.status, 'completed', finalization?.error ?? '')
+    assert.equal(finalization, undefined, 'no automatic Deep memory job is created')
+    assert.equal(await adapter.host.deepPlanning!.store.database(db => db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n), 0)
     assert.equal(parent.session.snapshotEvents().filter((e: any) => e.type === 'llm/request').length, 0)
     assert.ok((await adapter.host.deepPlanning!.reports.snapshot(parent.session.id)).some(e => e.kind === 'report' && e.text.includes('read-only analysis stage')))
     assert.equal(await adapter.host.deepPlanning!.store.database(db => db.prepare('SELECT count(*) AS count FROM enno_contracts').get<{count:number}>()!.count), 0)
@@ -105,7 +108,7 @@ for (const [providerId, modelId] of [['openrouter', 'deepseek/deepseek-v4.1-flas
       f.mock.textResponse('{"kind":"leaf","reason":"bounded"}'),
       f.mock.textResponse('{"kind":"candidate","answer":"Use the configured provider.","evidence":[],"assumptions":[],"unresolved":[]}'),
       f.mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),
-      f.mock.textResponse('{"schemaVersion":1,"memories":[]}'),
+
     ], [modelId!])
     const unregister = f.ctx.llm.registerAdapter([providerId], selected)
     try {
@@ -124,7 +127,9 @@ for (const [providerId, modelId] of [['openrouter', 'deepseek/deepseek-v4.1-flas
       const state = await f.deep.store.read(intent!.runId!)
       assert.equal(state.phase, 'answered', state.reason ?? '')
       assert.deepEqual(state.configuration.roles, saved.roles)
-      assert.equal(selected.requests.length, 4)
+      assert.equal(selected.requests.length, 3)
+      assert.equal(await f.deep.store.database(db => db.prepare('SELECT COUNT(*) AS n FROM dsh_deep_finalizations').get()?.n), 0)
+      assert.equal(await f.deep.store.database(db => db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n), 0)
       for (const request of selected.requests) {
         assert.equal(request.provider, providerId); assert.equal(request.model, modelId)
       }
@@ -138,7 +143,7 @@ test('Deep native: Japanese Skill reaches all OSS workers without tool access an
     mock.textResponse('{"kind":"leaf","reason":"一つの質問"}'),
     mock.textResponse('{"kind":"candidate","answer":"設定を確認してください。","evidence":[],"assumptions":[],"unresolved":[]}'),
     mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"質問に回答している","evidence":[]}'),
-    mock.textResponse('{"schemaVersion":1,"memories":[]}'),
+
   ])
   f.parent.options.model='qwen3-coder'
   f.provider.listModels=async(provider:string)=>[{provider,id:'qwen3-coder',name:'Qwen'}]
@@ -192,7 +197,8 @@ test('Deep native: authenticated report transport is Session-bound and leaves na
     // constructs an invalid GET-with-body before dispatching either route.
     assert.equal(transport.requestBodyMode({method:'GET',url:new URL(url)}),'buffered')
     assert.equal(transport.requestBodyMode({method:'GET',url:new URL('http://localhost/api/session.export')}),'buffered')
-    const response = await transport.fetch(new Request(url))
+    if(transport.fetch.length>=2)assert.equal((await transport.fetch(new Request(url),{principal:{kind:'remote'}})).status,403,'alpha.3 native bridge rejects a non-owner principal')
+    const response = await transport.fetch(new Request(url), {principal:{kind:'owner'}})
     assert.equal(response.status,200)
     assert.equal((await deepReportResponse(fixture.deep,new Request(url,{headers:{'if-none-match':response.headers.get('etag')!}}))).status,304)
     const {items} = await response.json() as {items:{id:string;kind:string;delivered:boolean}[]}
@@ -254,7 +260,7 @@ test('Deep native: allowlisted read creates a citable artifact; provider receive
     (request:any)=>{assert.deepEqual(request.tools.map((t:any)=>t.name).sort(),['deep_list_files','deep_read_file','deep_search_files']);return mock.toolCallResponse('read-proof','deep_read_file',{path:'source.txt'})},
     ()=>{const db=openConnection(dbPath);try{const artifact=JSON.parse(db.prepare('SELECT state_json FROM dsh_deep_artifacts').get<{state_json:string}>()!.state_json);return mock.textResponse(JSON.stringify({kind:'candidate',answer:'The source says verified text.',evidence:[{artifactId:artifact.id,quote:'verified text'}],assumptions:[],unresolved:[]}))}finally{db.close()}},
     mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"Source matches the claim","evidence":[]}'),
-    mock.textResponse('{"schemaVersion":1,"memories":[]}'),
+
   ])
   try {
     await writeFile(join(fixture.root,'source.txt'),'verified text\n')
@@ -265,7 +271,7 @@ test('Deep native: allowlisted read creates a citable artifact; provider receive
   } finally {await fixture.close()}
 })
 test('Deep native: cancelling an armed reservation restores the next ordinary input', nativeOptions, async () => {
-  const fixture=await deepNativeFixture(mock=>[mock.textResponse('Hello.'),mock.textResponse('{"schemaVersion":1,"memories":[]}')])
+  const fixture=await deepNativeFixture(mock=>[mock.textResponse('Hello.'),])
   try {
     await fixture.command('/deep-planning');await fixture.command('/deep-planning --status')
     assert.equal((await fixture.deep.store.intent(fixture.parent.session.id))?.status,'armed')
@@ -279,7 +285,7 @@ test('Deep native: cancelling an armed reservation restores the next ordinary in
 
 test('Deep native: completed Deep returns the next input to ordinary routing with bounded report context', nativeOptions, async()=>{
   const f=await deepNativeFixture(mock=>[
-    mock.textResponse('{"kind":"leaf","reason":"bounded"}'),mock.textResponse('{"kind":"candidate","answer":"Distinct saved plan","evidence":[],"assumptions":[],"unresolved":[]}'),mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),mock.textResponse('{"schemaVersion":1,"memories":[]}'),mock.textResponse('Hello.'),mock.textResponse('{"schemaVersion":1,"memories":[]}')])
+    mock.textResponse('{"kind":"leaf","reason":"bounded"}'),mock.textResponse('{"kind":"candidate","answer":"Distinct saved plan","evidence":[],"assumptions":[],"unresolved":[]}'),mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),mock.textResponse('Hello.'),])
   try {
     const errors: string[] = []
     f.ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
@@ -347,7 +353,7 @@ test('Deep native: new input pauses work, applies a fresh requirement revision, 
     mock.textResponse('{"kind":"leaf","reason":"revised bounded problem"}'),
     mock.textResponse('{"kind":"candidate","answer":"Plan with added constraint","evidence":[],"assumptions":[],"unresolved":[]}'),
     ()=>{const db=openConnection(dbPath);try{const state=JSON.parse(db.prepare('SELECT state_json FROM dsh_deep_nodes').get<{state_json:string}>()!.state_json);return mock.textResponse(JSON.stringify({kind:'supported',requirementIds:state.requirementIds,reason:'New constraint covered',evidence:[]}))}finally{db.close()}},
-    mock.textResponse('{"schemaVersion":1,"memories":[]}'),
+
   ],{questions:async request=>{const q=request.questions[0];questions.push(q.id);return {answers:[{id:q.id,selected:[q.id==='deep-pending-input'?'制約として追加':'費用発生の可能性を確認して再試行']}]}}})
   try{
     await f.command('/deep-planning Design the first plan');await entered.promise
@@ -367,7 +373,7 @@ test('Deep native: unavailable models pause without silently choosing another mo
 })
 test('Deep native: child recordings inherit only the exact parent choice and link to the Deep run',nativeOptions,async()=>{
   let asked=0
-  const f=await deepNativeFixture(mock=>[mock.textResponse('{"kind":"leaf","reason":"bounded"}'),mock.textResponse('{"kind":"candidate","answer":"A recorded plan","evidence":[],"assumptions":[],"unresolved":[]}'),mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),mock.textResponse('{"schemaVersion":1,"memories":[]}')],{agenticReplay:true,questions:async()=>{asked++;throw new Error('Children must not ask')}})
+  const f=await deepNativeFixture(mock=>[mock.textResponse('{"kind":"leaf","reason":"bounded"}'),mock.textResponse('{"kind":"candidate","answer":"A recorded plan","evidence":[],"assumptions":[],"unresolved":[]}'),mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),],{agenticReplay:true,questions:async()=>{asked++;throw new Error('Children must not ask')}})
   try{
     const recording=await f.command('/kioku-agenticreplay start');assert.equal(recording.result.kind,'success',JSON.stringify(recording))
     await f.command('/deep-planning Create a recorded plan');const intent=await f.complete()

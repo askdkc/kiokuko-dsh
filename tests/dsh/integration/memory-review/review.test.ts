@@ -1,66 +1,17 @@
-import { scheduleLegacyFinalizer } from '../../helpers/legacy-finalizer.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fixture, createRun, NOW } from '../evolution/fixture.js'
 import { DshSessionLogMirror } from '../../../../src/dsh/session-log-mirror.js'
 import { AutoMemoryReviewCoordinator } from '../../../../src/dsh/auto-memory-review.js'
 import { MemoryReviewConfig } from '../../../../src/memory/review/contracts.js'
-import { configureReview, reviewSettings, handoffReview } from '../../../../src/memory/review/store.js'
+import { configureReview, reviewSettings } from '../../../../src/memory/review/store.js'
 import { withImmediateTransaction } from '../../../../src/db/transaction.js'
 import { DshMemoryFinalizer, type DshLogEvent, type DshLlm } from '../../../../src/dsh/session-memory-finalizer.js'
-import { readEntry, updateCandidateEntryInTransaction } from '../../../../src/memory/entries.js'
-import { excludeCapture } from '../../../../src/memory/capture-policy.js'
-import { forgetMemory } from '../../../../src/memory/forget.js'
-import { recordEntry } from '../../../../src/memory/entries.js'
+import { capturePolicy } from '../../../../src/memory/capture-policy.js'
 
-test('forget during review cancels the claim, erases snapshots and retains late usage',async()=>{
- let sent!:()=>void,release!:()=>void
- const dispatched=new Promise<void>(r=>{sent=r}),response=new Promise<void>(r=>{release=r})
- const f=await setup({llm:{async *stream(request){sent();await response
-   const e=JSON.parse((request.messages[0] as any).content[0].text).evidence[0]
-   yield {type:'text-delta',text:JSON.stringify({schemaVersion:2,proposals:[{action:'add',kind:'preference',title:'Language',body:e.text,evidenceIds:[e.id],claims:[{id:'language',text:e.text,evidence:[{evidenceId:e.id,supportingText:e.text}]}]}]})}
-   yield {type:'finish',reason:{kind:'stop'},usage:{inputTokens:123,outputTokens:45}}
- }}})
- try{
-   const root=recordEntry(f.db,{workspace:'project:test',kind:'preference',title:'回答',body:'このプロジェクトの回答は日本語を使う。',scope:{visibility:'project'}})
-   for(let i=0;i<7;i++)await f.add()
-   const pending=f.add();await dispatched
-   forgetMemory(f.db,{workspace:root.workspace,entryId:root.id,expectedRevision:1,operationId:'review-forget'})
-   release();await pending
-   const job=f.db.prepare('SELECT state,reason,input_json,result_json,usage_json FROM memory_review_jobs').get()!
-   assert.equal(job.state,'cancelled');assert.equal(job.reason,'memory_forgotten');assert.equal(job.input_json,'{}');assert.equal(job.result_json,null)
-   assert.equal(JSON.parse(String(job.usage_json)).inputTokens,123)
-   assert.equal(f.db.prepare("SELECT count(*) AS n FROM entries WHERE status<>'superseded'").get()?.n,0)
-   await assert.rejects(f.coordinator.retry(root.workspace,String(f.db.prepare('SELECT id FROM memory_review_jobs').get()?.id)))
- }finally{release?.();await f.close()}
-})
-
-test('forget during Finalizer rejects its late result and restart does not dispatch again',async()=>{
- const f=await setup();let finalizer:DshMemoryFinalizer|undefined,second:DshMemoryFinalizer|undefined
- let sent!:()=>void,release!:()=>void,calls=0
- const dispatched=new Promise<void>(r=>{sent=r}),response=new Promise<void>(r=>{release=r})
- const llm:DshLlm={async *stream(request){calls++;sent();await response
-   const e=JSON.parse((request.messages.at(-1) as any).content[0].text).reconciliation.evidence.find((e:any)=>e.eligibleForNewMemory)
-   yield {type:'text-delta',text:JSON.stringify({schemaVersion:4,memoryOperations:[{action:'add',kind:'fact',title:'late',body:e.text,evidenceIds:[e.id],claims:[{id:'late',text:e.text,evidence:[{evidenceId:e.id,supportingText:e.text}]}]}]})}
-   yield {type:'usage',usage:{inputTokens:234,outputTokens:56}}
-   yield {type:'finish',reason:{kind:'stop'}}
- }}
- try{
-   for(let i=0;i<8;i++)await f.add()
-   const root=readEntry(f.db,{workspace:'project:test',entryId:String(f.db.prepare('SELECT id FROM entries').get()?.id)})
-   finalizer=new DshMemoryFinalizer({runtime:f.runtime,sessionQuery:f.mirror,now:()=>NOW,llm})
-   withImmediateTransaction(f.db,()=>{f.db.prepare("UPDATE ledger_runs SET status='completed'").run();finalizer!.scheduleInTransaction(f.db,{runId:'review',workspace:root.workspace,dshSessionId:f.session.id,sourceEndSeq:f.events.length-1});handoffReview(f.db,'review','completed')})
-   await finalizer.start();finalizer.kick();await dispatched
-   forgetMemory(f.db,{workspace:root.workspace,entryId:root.id,expectedRevision:1,operationId:'finalizer-forget'})
-   release();await finalizer.whenIdle();await finalizer.dispose()
-   const job=f.db.prepare('SELECT status,last_error_code,input_tokens FROM dsh_memory_finalizations').get()!
-   assert.equal(job.status,'failed');assert.equal(job.last_error_code,'MEMORY_FORGOTTEN');assert.equal(job.input_tokens,234)
-   assert.equal(f.db.prepare("SELECT count(*) AS n FROM entries WHERE status<>'superseded'").get()?.n,0)
-   second=new DshMemoryFinalizer({runtime:f.runtime,sessionQuery:f.mirror,now:()=>NOW,llm});await second.start();second.kick();await second.whenIdle()
-   assert.equal(calls,1)
- }finally{release?.();await second?.dispose();await finalizer?.dispose();await f.close()}
-})
-
+// The former turn-count/finalizer writers are retired. Positive extraction,
+// exact preview approval, revision and decline coverage lives in
+// ../replay-memory-review.test.ts and ../replay-unowned-native-review.test.ts.
 async function setup(options: {mode?:'active'|'observe'|'off'; llm?:DshLlm; timeoutMs?:number;dailyCalls?:number}={}) {
   const f=fixture();createRun(f.db,'review')
   const events:DshLogEvent[]=[{type:'session/start',seq:0,time:0,data:{}}]
@@ -88,205 +39,106 @@ async function setup(options: {mode?:'active'|'observe'|'off'; llm?:DshLlm; time
   }
   return {...f,events,session,mirror,coordinator,binding,add,calls:()=>calls,flushed:()=>flushed,flushCount:()=>flushCount,llm,config,async close(){await coordinator.dispose();await mirror.close();f.db.close()}}
 }
-test('unchanged review binding and classified range avoid repeat writes and flush',async()=>{
-  const f=await setup()
-  try{
-    const writes=f.db.prepare('SELECT total_changes() AS n').get<{n:number}>()!.n
-    await f.coordinator.bind(f.binding)
-    assert.equal(f.db.prepare('SELECT total_changes() AS n').get<{n:number}>()!.n,writes)
-    for(let i=0;i<3;i++)await f.add()
-    const flushes=f.flushCount()
-    await f.coordinator.scan(f.binding,f.events.length-1,'boundary')
-    assert.equal(f.flushCount(),flushes,'classified prefix needs no second native flush')
-    assert.equal(f.calls(),0,'boundary still evaluates the unscheduled-turn threshold')
-  }finally{await f.close()}
-})
-test('T01/T02/T03: eight human turns save without closing the run; internal turns do not count; duplicate hints do not resend',async()=>{
-  const f=await setup()
-  try{
-    for(let i=0;i<8;i++)await f.add(false)
-    for(let i=0;i<7;i++)await f.add()
-    assert.equal(f.calls(),0)
-    const end=await f.add();assert.equal(f.calls(),1)
-    assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,1)
-    assert.equal(f.db.prepare('SELECT status FROM ledger_runs').get()?.status,'active')
-    assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_memory_finalizations').get()?.n,0)
-    f.coordinator.notify(f.binding,end);await f.coordinator.whenIdle();assert.equal(f.calls(),1)
-    assert.equal(f.db.prepare('SELECT reviewed_through_seq FROM memory_review_states').get()?.reviewed_through_seq,end)
-    const entry=f.db.prepare('SELECT id FROM entries').get<{id:string}>()!
-    assert.equal(readEntry(f.db,{workspace:'project:test',entryId:entry.id}).trustLevel,'user_asserted')
-  }finally{await f.close()}
-})
-test('T09: restart after three turns retains the admission and turn count',async()=>{
-  const f=await setup();let second:AutoMemoryReviewCoordinator|undefined
-  try{
-    for(let i=0;i<3;i++)await f.add()
-    await f.coordinator.dispose()
-    second=new AutoMemoryReviewCoordinator({runtime:f.runtime,mirror:f.mirror,llm:f.llm,config:f.config,now:()=>NOW,flush:async()=>true})
-    await second.bind({...f.binding,startSeq:f.events.length})
-    // Append with the stopped coordinator, then recover from one native end hint.
-    for(let i=0;i<5;i++)await f.add()
-    second.notify(f.binding,f.events.length-1);await second.whenIdle()
-    assert.equal(f.calls(),1)
-  }finally{await second?.dispose();await f.close()}
-})
-test('T30/T36: persisted capture exclusion blocks review and legacy finalizer dispatch',async()=>{
-  const f=await setup()
-  try{
-    await f.coordinator.exclude('project:test',f.session.id)
-    for(let i=0;i<8;i++)await f.add()
-    assert.equal(f.calls(),0)
-    const finalizer=new DshMemoryFinalizer({runtime:f.runtime,llm:f.llm,sessionQuery:f.mirror,now:()=>NOW})
-    withImmediateTransaction(f.db,()=>{f.db.prepare("UPDATE ledger_runs SET status='completed'").run();finalizer.scheduleInTransaction(f.db,{runId:'review',workspace:'project:test',dshSessionId:f.session.id,sourceEndSeq:f.events.length-1})})
-    await finalizer.start();await finalizer.whenIdle();await finalizer.dispose()
-    assert.equal(f.calls(),0)
-    assert.equal(f.db.prepare('SELECT capture_admission FROM dsh_memory_finalizations').get()?.capture_admission,'excluded')
-  }finally{await f.close()}
-})
-test('T16: a stale host cannot overwrite a newer persisted configuration on startup',async()=>{
-  const f=await setup()
-  try{
-    const initial=reviewSettings(f.db,'project:test')!
-    withImmediateTransaction(f.db,()=>configureReview(f.db,'project:test',MemoryReviewConfig.parse({mode:'off'}),NOW,initial.generation))
-    await f.coordinator.bind(f.binding)
-    assert.equal(reviewSettings(f.db,'project:test')!.config.mode,'off')
-    await assert.rejects(f.coordinator.configure(MemoryReviewConfig.parse({mode:'active'})),/generation_conflict/)
-  }finally{await f.close()}
-})
-test('T18/T33: timeout ignores an uncooperative stream; explicit retry has one child identity',async()=>{
-  let calls=0
-  const f=await setup({timeoutMs:10,llm:{async *stream(){calls++;await new Promise(()=>{});yield {}}}})
-  try{
-    for(let i=0;i<8;i++)await f.add()
-    const job=f.db.prepare('SELECT id,state,reason FROM memory_review_jobs').get<{id:string;state:string;reason:string}>()!
-    assert.equal(job.state,'held');assert.equal(job.reason,'timeout');assert.equal(calls,1)
-    const first=await f.coordinator.retry('project:test',job.id)
-    const second=await f.coordinator.retry('project:test',job.id)
-    assert.equal(first.id,second.id)
-    await f.coordinator.whenIdle();assert.equal(calls,2)
-  }finally{await f.close()}
-})
-test('T03: empty review completes its range without creating an entry',async()=>{
-  const f=await setup({llm:{async *stream(){yield {type:'text-delta',text:'{"schemaVersion":2,"proposals":[]}'};yield {type:'finish',reason:{kind:'stop'}}}}})
-  try{for(let i=0;i<8;i++)await f.add();assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,0);assert.equal(f.db.prepare('SELECT state FROM memory_review_jobs').get()?.state,'completed')}finally{await f.close()}
-})
-test('observe pays for a review but changes no entries; off makes no calls',async()=>{
-  for(const mode of ['observe','off'] as const){const f=await setup({mode});try{for(let i=0;i<8;i++)await f.add();assert.equal(f.calls(),mode==='observe'?1:0);assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,0)}finally{await f.close()}}
-})
-test('T15/T38: v4 Finalizer reconciles review entries and accepts lesson/reference with Evolution off',async()=>{
-  const f=await setup();let finalizer:DshMemoryFinalizer|undefined
-  try{
-    for(let i=0;i<8;i++)await f.add()
-    finalizer=new DshMemoryFinalizer({runtime:f.runtime,sessionQuery:f.mirror,now:()=>NOW,memoryEvolution:{mode:'off',dailyCalls:12,maxInputBytes:32768,maxOutputTokens:2048,timeoutMs:30000},llm:{async *stream(request){
-      const r=JSON.parse((request.messages.at(-1) as {content:{text:string}[]}).content[0]!.text).reconciliation
-      yield {type:'text-delta',text:JSON.stringify({schemaVersion:4,memoryOperations:[{action:'unchanged',targetEntryId:r.existing[0].entryId,evidenceIds:[r.evidence[0].id]},...(['lesson','reference'] as const).map(kind=>({action:'add',kind,title:kind,body:`Project ${kind} based on direct evidence`,evidenceIds:[r.evidence[0].id],claims:[{id:kind,text:`Project ${kind} based on direct evidence`,evidence:[{evidenceId:r.evidence[0].id,supportingText:r.evidence[0].text}]}]}))]})}
-      yield {type:'finish',reason:{kind:'stop'}}
-    }}})
-    withImmediateTransaction(f.db,()=>{f.db.prepare("UPDATE ledger_runs SET status='completed'").run();finalizer!.scheduleInTransaction(f.db,{runId:'review',workspace:'project:test',dshSessionId:f.session.id,sourceEndSeq:f.events.length-1});handoffReview(f.db,'review','completed')})
-    await finalizer.start();await finalizer.whenIdle()
-    const state=f.db.prepare('SELECT status,last_error_code FROM dsh_memory_finalizations').get()
-    assert.equal(state?.status,'completed',JSON.stringify(state))
-    assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,3)
-    assert.equal(f.db.prepare('SELECT count(*) AS n FROM memory_episodes').get()?.n,0)
-  }finally{await finalizer?.dispose();await f.close()}
-})
 
-test('boundary flush waits for four complete turns and never closes the run',async()=>{
- const f=await setup()
+const counts=(db:ReturnType<typeof fixture>['db'])=>Object.fromEntries(
+  ['entries','memory_review_states','memory_review_turns','memory_review_jobs','memory_review_effects','dsh_memory_finalizations','memory_episodes']
+    .map(table=>[table,db.prepare(`SELECT count(*) AS n FROM ${table}`).get()!.n]))
+for(const mode of ['active','observe','off'] as const)test(`legacy ${mode} mode never extracts or saves at periodic, manual or boundary turns`,async()=>{
+ const f=await setup({mode})
+ try{
+  const before=counts(f.db),writes=f.db.prepare('SELECT total_changes() AS n').get()!.n
+  await f.coordinator.start('project:test');await f.coordinator.bind(f.binding)
+  for(let i=0;i<8;i++)await f.add(false)
+  for(let i=0;i<16;i++)await f.add()
+  for(const origin of ['periodic','manual','boundary'] as const){
+   assert.equal(await f.coordinator.scan(f.binding,f.events.length-1,origin),undefined)
+   f.coordinator.notify(f.binding,f.events.length-1,origin==='manual'?'periodic':origin)
+  }
+  await f.coordinator.whenIdle()
+  assert.equal(f.calls(),0);assert.equal(f.flushCount(),0)
+  assert.deepEqual(counts(f.db),before)
+  assert.equal(f.db.prepare('SELECT total_changes() AS n').get()!.n,writes)
+  assert.equal(f.db.prepare('SELECT status FROM ledger_runs').get()?.status,'active')
+ }finally{await f.close()}
+})
+test('restart does not turn recorded human history into an automatic admission or pending draft',async()=>{
+ const f=await setup();let second:AutoMemoryReviewCoordinator|undefined
  try{
   for(let i=0;i<3;i++)await f.add()
-  await f.coordinator.scan(f.binding,f.events.length-1,'boundary');await f.coordinator.whenIdle();assert.equal(f.calls(),0)
-  await f.add();await f.coordinator.scan(f.binding,f.events.length-1,'boundary');await f.coordinator.whenIdle()
-  assert.equal(f.calls(),1);assert.equal(f.db.prepare('SELECT status FROM ledger_runs').get()?.status,'active')
- }finally{await f.close()}
-})
-test('an uncooperative in-flight review is aborted after exclusion and cannot save a late result',async()=>{
- let sent!:()=>void;const dispatched=new Promise<void>(r=>{sent=r});let signal:AbortSignal|undefined
- const f=await setup({llm:{async *stream(request){signal=request.signal;sent();await new Promise(()=>{});yield {}}}})
- try{
-  for(let i=0;i<7;i++)await f.add()
-  const pending=f.add();await dispatched
-  await f.coordinator.exclude('project:test',f.session.id);await pending
-  assert.equal(signal?.aborted,true);assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,0)
-  assert.equal(f.db.prepare('SELECT reason FROM memory_review_jobs').get()?.reason,'capture_excluded')
-  const id=f.db.prepare('SELECT id FROM memory_review_jobs').get<{id:string}>()!.id
-  await assert.rejects(f.coordinator.retry('project:test',id),/capture_excluded/)
- }finally{await f.close()}
-})
-test('terminal handoff fences an in-flight review even when the provider ignores abort',async()=>{
- let sent!:()=>void,finish!:()=>void;const dispatched=new Promise<void>(r=>{sent=r}),response=new Promise<void>(r=>{finish=r})
- const f=await setup({llm:{async *stream(request){const p=JSON.parse((request.messages[0] as {content:{text:string}[]}).content[0]!.text);sent();await response
-  yield {type:'text-delta',text:JSON.stringify({schemaVersion:2,proposals:[{action:'add',kind:'fact',title:'Late',body:'Late result',evidenceIds:[p.evidence[0].id]}]})};yield {type:'finish',reason:{kind:'stop'}}
- }}})
- try{
-  for(let i=0;i<7;i++)await f.add()
-  const pending=f.add();await dispatched
-  withImmediateTransaction(f.db,()=>{f.db.prepare("UPDATE ledger_runs SET status='cancelled'").run();handoffReview(f.db,'review','cancelled')})
-  finish();await pending
+  await f.coordinator.dispose()
+  second=new AutoMemoryReviewCoordinator({runtime:f.runtime,mirror:f.mirror,llm:f.llm,config:f.config,now:()=>NOW,flush:async()=>true})
+  await second.start('project:test');await second.bind({...f.binding,startSeq:f.events.length})
+  for(let i=0;i<5;i++)await f.add()
+  second.notify(f.binding,f.events.length-1);await second.whenIdle()
+  assert.equal(f.calls(),0)
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM memory_review_states').get()?.n,0)
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM memory_review_jobs').get()?.n,0)
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,0)
-  assert.equal(f.db.prepare('SELECT handoff_status FROM memory_review_states').get()?.handoff_status,'no_consumer')
-  assert.equal(f.db.prepare('SELECT reason FROM memory_review_jobs').get()?.reason,'run_cancelled')
- }finally{finish();await f.close()}
+ }finally{await second?.dispose();await f.close()}
 })
-test('cold off configuration disables saved active settings; explicit mode change can re-enable',async()=>{
- const f=await setup();const second=new AutoMemoryReviewCoordinator({runtime:f.runtime,mirror:f.mirror,llm:f.llm,config:MemoryReviewConfig.parse({mode:'off'}),now:()=>NOW,flush:async()=>true})
+test('manual reserve and retries cannot bypass the post-task native review question',async()=>{
+ const f=await setup()
  try{
-  await second.start('project:test');assert.equal(reviewSettings(f.db,'project:test')!.config.mode,'off')
-  await f.coordinator.bind(f.binding);assert.equal(reviewSettings(f.db,'project:test')!.config.mode,'off')
-  await second.setMode('project:test','active');assert.equal(reviewSettings(f.db,'project:test')!.config.mode,'active')
- }finally{await second.dispose();await f.close()}
+  const before=counts(f.db)
+  const range={workspace:'project:test',runId:'review',sessionId:f.session.id,sourceGeneration:'generation',startSeq:1,endSeq:8}
+  await assert.rejects(f.coordinator.reserve(range,'manual'),/post_task_memory_review_required/)
+  for(const id of ['old-held-job','unknown-job'])await assert.rejects(f.coordinator.retry('project:test',id),/post_task_memory_review_required/)
+  assert.equal(f.calls(),0);assert.deepEqual(counts(f.db),before)
+ }finally{await f.close()}
 })
-test('v3 Finalizer rejects evidence that changes after dispatch',async()=>{
+test('persisted capture exclusion remains authoritative while retired writers stay inactive',async()=>{
+ const f=await setup()
+ try{
+  await f.coordinator.exclude('project:test',f.session.id)
+  for(let i=0;i<8;i++)await f.add()
+  assert.equal(capturePolicy(f.db,'project:test',f.session.id).mode,'excluded')
+  const finalizer=new DshMemoryFinalizer({runtime:f.runtime,llm:f.llm,sessionQuery:f.mirror,now:()=>NOW})
+  try{
+   withImmediateTransaction(f.db,()=>{f.db.prepare("UPDATE ledger_runs SET status='completed'").run();finalizer.scheduleInTransaction(f.db,{runId:'review',workspace:'project:test',dshSessionId:f.session.id,sourceEndSeq:f.events.length-1})})
+   await finalizer.start();finalizer.kick();await finalizer.whenIdle()
+   assert.equal(f.calls(),0);assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_memory_finalizations').get()?.n,0)
+   assert.equal(f.db.prepare('SELECT status FROM ledger_runs').get()?.status,'completed')
+  }finally{await finalizer.dispose()}
+ }finally{await f.close()}
+})
+test('explicit configuration retains generation fencing but cannot enable automatic writes',async()=>{
+ const f=await setup()
+ try{
+  assert.equal(reviewSettings(f.db,'project:test'),undefined,'startup no longer persists memory configuration')
+  await f.coordinator.setMode('project:test','active')
+  const initial=reviewSettings(f.db,'project:test')!
+  withImmediateTransaction(f.db,()=>configureReview(f.db,'project:test',MemoryReviewConfig.parse({mode:'off'}),NOW,initial.generation))
+  await f.coordinator.bind(f.binding);await f.coordinator.start('project:test')
+  assert.equal(reviewSettings(f.db,'project:test')!.config.mode,'off')
+  await assert.rejects(f.coordinator.configure(MemoryReviewConfig.parse({mode:'active'})),/generation_conflict/)
+  for(let i=0;i<8;i++)await f.add()
+  assert.equal(f.calls(),0);assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,0)
+ }finally{await f.close()}
+})
+for(const extraction of [1,2])for(const adoption of [1,2])test(`historical extraction ${extraction}/adoption ${adoption} jobs remain inert on restart and lease expiry`,async()=>{
  const f=await setup();let finalizer:DshMemoryFinalizer|undefined
  try{
-  for(let i=0;i<2;i++)await f.add()
-  finalizer=new DshMemoryFinalizer({runtime:f.runtime,now:()=>NOW,sessionQuery:{async readSession(){return {session:{id:f.session.id},inheritedEventCount:0,events:structuredClone(f.events)}}},llm:{async *stream(){
-   const index=f.events.findIndex(e=>e.type==='user/message');f.events[index]={...f.events[index]!,data:{id:'changed',source:{kind:'user'},content:'Changed evidence'}}
-   yield {type:'text-delta',text:'{"schemaVersion":4,"memoryOperations":[]}'};yield {type:'finish',reason:{kind:'stop'}}
-  }}})
-  withImmediateTransaction(f.db,()=>{f.db.prepare("UPDATE ledger_runs SET status='completed'").run();finalizer!.scheduleInTransaction(f.db,{runId:'review',workspace:'project:test',dshSessionId:f.session.id,sourceEndSeq:f.events.length-1});handoffReview(f.db,'review','completed')})
-  await finalizer.start();await finalizer.whenIdle()
-  assert.equal(f.db.prepare('SELECT status FROM dsh_memory_finalizations').get()?.status,'failed')
-  assert.equal(f.db.prepare('SELECT reviewed_through_seq FROM memory_review_states').get()?.reviewed_through_seq,0)
+  await f.add()
+  f.db.prepare("UPDATE ledger_runs SET status='completed'").run()
+  f.db.prepare(`INSERT INTO dsh_memory_finalizations(run_id,workspace,dsh_session_id,source_start_seq,source_end_seq,status,attempt_count,input_mode,scheduled_at,updated_at,extraction_version,memory_adoption_version,claim_nonce,lease_until)
+    VALUES('review','project:test',?,1,?,'processing',1,'prefix_reuse',?,?,?,?, 'historical-claim',?)`).run(f.session.id,f.events.length-1,NOW,NOW,extraction,adoption,NOW)
+  const before=f.db.prepare('SELECT * FROM dsh_memory_finalizations').get()
+  for(const now of [NOW,new Date(Date.parse(NOW)+400000).toISOString()]){
+   finalizer=new DshMemoryFinalizer({runtime:f.runtime,sessionQuery:f.mirror,now:()=>now,llm:f.llm})
+   await finalizer.start();finalizer.kick();await finalizer.whenIdle();await finalizer.dispose()
+   assert.equal(f.calls(),0);assert.deepEqual(f.db.prepare('SELECT * FROM dsh_memory_finalizations').get(),before)
+   assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,0)
+  }
  }finally{await finalizer?.dispose();await f.close()}
 })
-
-test('legacy v1/v2 Finalizers honor exclusion before dispatch and abort already dispatched extraction',async()=>{
- for(const evolution of ['off','active'] as const)for(const phase of ['before','after'] as const){
-  const f=await setup();let finalizer:DshMemoryFinalizer|undefined,calls=0,sent!:()=>void,signal:AbortSignal|undefined
-  const dispatched=new Promise<void>(r=>{sent=r})
-  try{
-   await f.add();await f.coordinator.dispose()
-   f.db.prepare('DELETE FROM memory_review_turns').run();f.db.prepare('DELETE FROM memory_review_states').run()
-   finalizer=new DshMemoryFinalizer({runtime:f.runtime,sessionQuery:f.mirror,now:()=>NOW,memoryEvolution:{mode:evolution,dailyCalls:12,maxInputBytes:32768,maxOutputTokens:2048,timeoutMs:30000},llm:{async *stream(request){calls++;signal=request.signal;sent();await new Promise(()=>{});yield {}}}})
-   withImmediateTransaction(f.db,()=>{f.db.prepare("UPDATE ledger_runs SET status='completed'").run();scheduleLegacyFinalizer(f.db,{runId:'review',workspace:'project:test',dshSessionId:f.session.id,sourceEndSeq:f.events.length-1})})
-   assert.equal(f.db.prepare('SELECT memory_adoption_version FROM dsh_memory_finalizations').get()?.memory_adoption_version,1)
-   if(phase==='before')await f.coordinator.exclude('project:test',f.session.id)
-   await finalizer.start();if(phase==='after'){await dispatched;await f.coordinator.exclude('project:test',f.session.id)}
-   await finalizer.whenIdle();assert.equal(calls,phase==='after'?1:0)
-   if(phase==='after')assert.equal(signal?.aborted,true)
-   assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,0)
-  }finally{await finalizer?.dispose();await f.close()}
- }
-})
-
-test('a second Finalizer preserves a live lease, recovers expiry, and rejects the first late commit',async()=>{
- const f=await setup();let a:DshMemoryFinalizer|undefined,b:DshMemoryFinalizer|undefined,finish!:()=>void,sent!:()=>void,calls=0,now=NOW
- const dispatched=new Promise<void>(r=>{sent=r}),response=new Promise<void>(r=>{finish=r})
+test('ordinary task binding remains independent of unavailable optional memory',async()=>{
+ let storageCalls=0,modelCalls=0
+ const runtime={withDatabase:async()=>{storageCalls++;throw new Error('memory unavailable')}}
+ const coordinator=new AutoMemoryReviewCoordinator({runtime:runtime as any,mirror:{} as any,llm:{async *stream(){modelCalls++;yield {type:'finish',reason:{kind:'stop'}}}}})
  try{
-  await f.add()
-  a=new DshMemoryFinalizer({runtime:f.runtime,sessionQuery:f.mirror,now:()=>now,llm:{async *stream(){calls++;sent();await response;yield {type:'text-delta',text:'{"schemaVersion":4,"memoryOperations":[]}'};yield {type:'finish',reason:{kind:'stop'}}}}})
-  withImmediateTransaction(f.db,()=>{f.db.prepare("UPDATE ledger_runs SET status='completed'").run();a!.scheduleInTransaction(f.db,{runId:'review',workspace:'project:test',dshSessionId:f.session.id,sourceEndSeq:f.events.length-1});handoffReview(f.db,'review','completed')})
-  await a.start();await dispatched
-  b=new DshMemoryFinalizer({runtime:f.runtime,sessionQuery:f.mirror,now:()=>now,llm:{async *stream(){calls++;yield {type:'text-delta',text:'{"schemaVersion":4,"memoryOperations":[]}'};yield {type:'finish',reason:{kind:'stop'}}}}})
-  await b.start();await b.whenIdle();assert.equal(calls,1)
-  now=new Date(Date.parse(NOW)+400000).toISOString()
-  await b.dispose()
-  b=new DshMemoryFinalizer({runtime:f.runtime,sessionQuery:f.mirror,now:()=>now,llm:{async *stream(){calls++;yield {type:'text-delta',text:'{"schemaVersion":4,"memoryOperations":[]}'};yield {type:'finish',reason:{kind:'stop'}}}}})
-  await b.start();await b.whenIdle();assert.equal(calls,2)
-  finish();await a.whenIdle()
-  const job=f.db.prepare('SELECT status,attempt_count FROM dsh_memory_finalizations').get()!
-  assert.equal(job.status,'completed');assert.equal(job.attempt_count,2)
-  assert.equal(f.db.prepare('SELECT handoff_status FROM memory_review_states').get()?.handoff_status,'finalizer_completed')
- }finally{finish();await a?.dispose();await b?.dispose();await f.close()}
+  const binding={workspace:'project:test',runId:'task',session:{id:'native-session'},startSeq:0}
+  await coordinator.start(binding.workspace);await coordinator.bind(binding);coordinator.notify(binding,40)
+  assert.equal(await coordinator.scan(binding,40,'manual'),undefined)
+  await coordinator.whenIdle();assert.equal(storageCalls,0);assert.equal(modelCalls,0)
+ }finally{await coordinator.dispose()}
 })

@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import { mountCore } from '../../../src/dsh/core/index.js'
 import { openConnection } from '../../../src/db/connection.js'
+import { reviewCompletedReplay, type ReplayMemoryProposal } from '../../../src/memory/replay-review.js'
+import { createApprovedReplayMemoryStore } from '../../../src/memory/replay-store.js'
 import { recordEntry } from '../../../src/memory/entries.js'
 import { configuredSkillProvider, configuredSkillPrompts } from '../../../src/dsh/core/skills.js'
 import type { DshModule } from '../../../src/dsh/core/modules.js'
@@ -118,7 +120,7 @@ const requireIntakeChoice: DshModule<CoreModuleHost> = {
   async mount({ host, defer }) { defer(host.beforeTask(async () => ({ taskType: null }))); return { stopIngress() {}, async drain() {}, async dispose() {} } },
 }
 
-test('mounted core gates actionable memory and exposes a session-bound diagnostic after interrupted completion', async () => {
+test('mounted core keeps memory advisory and exposes a session-bound diagnostic after interrupted completion', async () => {
   const f = await fixture({ask: async r => ({answers:r.questions.map((q:any)=>({id:q.id,selected:['使わない']}))})}), commands: any[] = []
   f.services.commands = { register(command: any) { commands.push(command); return () => commands.splice(commands.indexOf(command), 1) } }
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
@@ -139,17 +141,16 @@ test('mounted core gates actionable memory and exposes a session-bound diagnosti
     assert.equal(mutated, true, 'an unresolved decision never rejects the call')
     const tool = f.tools.find(tool => tool.name === 'task_memory_review')
     const status = await tool.execute({ action: 'status' }, { ...execution, name: 'task_memory_review' })
-    assert.equal(status.ready, false)
-    assert.equal(status.pending[0].problem, 'decision_missing')
+    assert.equal(status.supported,false);assert.equal(status.ready,true);assert.deepEqual(status.pending,[])
     await assert.rejects(tool.execute({ action: 'status' }, { ...execution, name: 'task_memory_review', agent: { ...f.agent } }), /identity/)
     await f.event({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
     await f.listeners.get('agent/idle')!({ agent: f.agent })
     const command = commands.find(command => command.name === 'kioku-memory-application')
     const result = await command.handler({ agent: f.agent, rawInput: 'status --json', signal: execution.signal })
     const diagnostic = JSON.parse(result.text)
-    assert.equal(diagnostic.integration, 'native_active'); assert.equal(diagnostic.ready, false)
+    assert.equal(diagnostic.integration, 'native_active'); assert.equal(diagnostic.ready, true);assert.equal(diagnostic.workMayContinue,true)
     assert.equal(diagnostic.verification, 'unobserved')
-    assert.equal('body' in diagnostic.pending[0], false)
+    assert.ok(!JSON.stringify(diagnostic).includes('code migration expectations must include'))
     const stored = openConnection(join(f.root, 'memory.sqlite3'))
     assert.equal(stored.prepare('SELECT status FROM ledger_runs').get()?.status, 'active')
     stored.close()
@@ -168,7 +169,17 @@ test('core native path handles conversation, research, writing and project memor
     assert.equal(skills.includes('kiokuko-lisp'), false)
     const db = openConnection(join(f.root, 'memory.sqlite3'))
     const workspace = db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{ workspace: string }>()!.workspace
-    await recordEntry(db, { workspace, kind: 'fact', title: '文章作成の表記', body: '文章作成では見出しを短くする。', status: 'verified', provenance: { type: 'user', reference: 'fixture' } })
+    // A trusted test human approves an explicit source fixture; no model tool grants approval.
+    const proposal:ReplayMemoryProposal={schemaVersion:1,proposalId:'fixture',revision:1,
+      source:{workspace,taskId:'previous-writing-task',sessionId:'previous-session',traces:[]},
+      request:{text:'文章作成の表記',evidenceRefs:['fixture:human-writing-preference']},languages:[],attempts:[],
+      findings:[{kind:'key_point',text:'文章作成では見出しを短くする。',basis:'user_corrected',evidenceRefs:['fixture:human-writing-preference']}],
+      tags:['文章作成'],keywords:['文章作成','見出し']}
+    const questions:string[]=[]
+    const saved=await reviewCompletedReplay({completed:true,taskId:proposal.source.taskId,sessionId:proposal.source.sessionId,workspace,
+      extract:async()=>proposal,ask:async question=>{questions.push(question.text);return {questionId:question.id,choice:question.phase==='organize'?'organize':'approve'}},
+      save:async (shown,key)=>{assert.ok(questions[1]!.includes(JSON.stringify(shown,null,2)));createApprovedReplayMemoryStore(db,workspace).save(shown,key)}})
+    assert.equal(saved.status,'saved');assert.equal(questions.length,2)
     db.close()
     for (const [index, task] of ['こんにちは', 'この資料を調査してください', '文章作成の表記を説明してください'].entries()) {
       const messages = [{ role: 'user', content: [{ type: 'text', text: task }], source: { kind: 'user' } }]
@@ -179,7 +190,7 @@ test('core native path handles conversation, research, writing and project memor
       assert.equal(output.messages[0], messages[0], 'native message and attachments remain owned by DSH')
       assert.ok(output.messages.slice(1).some((message: any) => message.source?.kind === 'plugin:kiokuko-dsh'))
       assert.ok(output.messages.every((message: any) => message.source?.kind !== 'plugin'))
-      if (index === 2) assert.match(JSON.stringify(output.messages), /見出しを短くする/)
+      if(index===2){const memory=await f.execute('memory_context',{cwd:f.root,query:'文章作成'});assert.equal(memory.replay.length,1);assert.match(JSON.stringify(memory),/見出しを短くする/)}
       await f.event({ type: 'turn/end', data: { turn: index + 1, reason: { kind: 'completed' } } })
       await f.listeners.get('agent/idle')!({ agent: f.agent })
     }
@@ -201,7 +212,7 @@ test('mounted core answers a first factual question through Laya without executi
     return layaV1Reply(request, (id, choices) => id === 'task-type' ? 'chat' : choices.includes('none') ? 'none' : 'no')
   })
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
-    typedDecisions: { provider: 'laya-coreml', 'laya-coreml': { socketPath: socket.path, protocol: 'v1', model: 'laya-rl-agent' } } })
+    intakeMode:'eager',typedDecisions: { provider: 'laya-coreml', 'laya-coreml': { socketPath: socket.path, protocol: 'v1', model: 'laya-rl-agent' } } })
   try {
     const task = '富士山って日本で一番高い山？'
     const messages = [{ role: 'user', content: [{ type: 'text', text: task }], source: { kind: 'user' } }]
@@ -292,12 +303,12 @@ test('core PTC mode exposes memory review only after requested work is prepared'
     const reviewTool = f.tools.find((tool: any) => tool.name === 'task_memory_review')
     const reviewExecution = { agent: f.agent, name: 'task_memory_review', callId: 'review-status', signal: new AbortController().signal }
     const status = await reviewTool.execute({ action: 'status' }, reviewExecution)
-    assert.equal(status.pending[0]?.problem, 'decision_missing')
+    assert.equal(status.supported,false);assert.equal(status.ready,true);assert.deepEqual(status.pending,[])
     const premature = await f.execute('run_code', { description: 'Attempt work before review', code: 'return "runs while unresolved"' })
     assert.deepEqual(premature, { ran: true }, 'the program runs while the decision is unresolved')
     assert.equal(programs, 1, 'the program runs while the decision is unresolved')
-    await reviewTool.execute({ action: 'review', review: { generation: status.generation, entryId: status.pending[0].entryId,
-      entryRevision: status.pending[0].revision, expectedRevision: 0, decision: 'not_applicable', paths: [],
+    await reviewTool.execute({ action: 'review', review: { generation: 1, entryId: 'fixture-legacy-entry',
+      entryRevision: 1, expectedRevision: 0, decision: 'not_applicable', paths: [],
       basis: 'This stored lesson does not apply to the isolated fixture task.' } }, { ...reviewExecution, callId: 'review-apply' })
     const afterReview = await reviewTool.execute({ action: 'status' }, { ...reviewExecution, callId: 'review-status-after' })
     assert.equal(afterReview.pending.length, 0, JSON.stringify(afterReview.pending))
@@ -356,7 +367,7 @@ test('persisted protected sessions cannot become native work when the required m
   } finally { await handle.dispose(); await f.cleanup() }
 })
 
-test('memory checkpoint uses exact native identity, persists candidate memory outside Git and rejects replay', async () => {
+test('legacy memory checkpoint checks native identity but never saves without post-task human approval', async () => {
   const f = await fixture()
   const databasePath = join(f.root, 'memory.sqlite3')
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
@@ -370,12 +381,11 @@ test('memory checkpoint uses exact native identity, persists candidate memory ou
     await assert.rejects(tool.execute({ ...args, runId: 'forged' }, execution))
     await assert.rejects(tool.execute(args, { ...execution, agent: { ...f.agent } }), /identity/)
     const result = await tool.execute(args, execution)
-    assert.equal(result.entries.length, 1)
-    await assert.rejects(tool.execute(args, execution), /No open bound task/)
+    assert.equal(result.recorded,false);assert.equal(result.workMayContinue,true)
+    assert.equal((await tool.execute(args,execution)).recorded,false)
     const db = openConnection(databasePath)
-    const row = db.prepare('SELECT status FROM entries WHERE id=?').get(result.entries[0].id)
-    assert.equal(row?.status, 'candidate')
-    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM ledger_runs WHERE status='completed'").get()?.count, 1)
+    assert.equal(db.prepare('SELECT count(*) n FROM entries').get()?.n,0)
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM ledger_runs WHERE status='active'").get()?.count, 1)
     db.close()
   } finally { await handle.dispose(); await f.cleanup() }
 })
@@ -394,10 +404,10 @@ test('reload resumes the exact ordinary request and a completed checkpoint canno
     await f.tools.find(tool => tool.name === 'memory_checkpoint').execute({ outcome: 'completed', memories: [{ kind: 'fact', title: 'One saved fact', body: 'This exact request is saved once.' }] }, { name: 'memory_checkpoint', agent: f.agent, signal: new AbortController().signal })
     await handle.dispose(); handle = await mountCore(f.ctx, config)
     assert.equal((await prepare()).kind, 'enter')
-    await assert.rejects(f.prepare('research'), /not admit|not open|terminal|complete|request_intent_unresolved/i)
+    await assert.rejects(f.prepare('research'), /not admit|not open|terminal|complete|request_intent_unresolved|Clarify whether this request/i)
     const db = openConnection(databasePath)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, 1)
-    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n, 1)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n, 0)
     db.close()
   } finally { await handle.dispose(); await f.cleanup() }
 })
@@ -663,7 +673,7 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
       return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
     })) })
   }
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), typedDecisions: { provider, nimble: { endpoint: 'http://127.0.0.1:8000/v1/systemone', model: 'fixture-model' } } })
+  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), intakeMode:'eager',typedDecisions: { provider, nimble: { endpoint: 'http://127.0.0.1:8000/v1/systemone', model: 'fixture-model' } } })
   try {
     const messages = [{ role: 'user', content: '文章を読みやすく修正して' }]
     const output = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
@@ -699,7 +709,7 @@ test('core Score selection reaches model context through native pre-step', async
     })) })
   }
   const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
-    typedDecisions: { provider: 'typesafe', skillSelection: { mode: 'score', minScore: 2, minConfidence: .8 } } })
+    intakeMode:'eager',typedDecisions: { provider: 'typesafe', skillSelection: { mode: 'score', minScore: 2, minConfidence: .8 } } })
   try {
     const messages = [{ role: 'user', content: '文章を読みやすく修正して' }]
     const output = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
@@ -750,4 +760,19 @@ test('ordinary conversation turns stay intake-free until new explicit work is pr
       assert.equal(JSON.parse(profiles[0].profile_json).taskType, 'research', 'new explicit work is not pinned to chat')
     } finally { db.close() }
   } finally { await handle.dispose(); await f.cleanup() }
+})
+
+
+test('default optional memory lookup needs no task and a same-name replacement inherits no authority',async()=>{
+ const f=await fixture(),handle=await mountCore(f.ctx,{repositoryRoot:f.root,databasePath:join(f.root,'memory.sqlite3')})
+ try{
+  const messages=[{role:'user',content:'Find approved Parser experience.'}]
+  await f.listeners.get('agent/pre-step')!({agent:f.agent,messages,turn:1,step:0,signal:new AbortController().signal},async()=>({kind:'enter',messages}))
+  const result=await f.execute('memory_context',{cwd:f.root,query:'Parser'});assert.equal(result.workMayContinue,true)
+  assert.deepEqual((await f.execute('memory_context',{cwd:'/',query:'Parser'})).replay,[])
+  const definition=f.tools.find(tool=>tool.name==='memory_context'),original=definition.execute;let effects=0
+  definition.execute=()=>{effects++;return {forged:true}}
+  try{await assert.rejects(f.execute('memory_context',{cwd:f.root,query:'Parser'}));assert.equal(effects,0)}finally{definition.execute=original}
+  const db=openConnection(join(f.root,'memory.sqlite3'));try{assert.equal(db.prepare('SELECT count(*) n FROM ledger_runs').get()?.n,0)}finally{db.close()}
+ }finally{await handle.dispose();await f.cleanup()}
 })

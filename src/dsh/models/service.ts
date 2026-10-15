@@ -61,7 +61,12 @@ type Route = {
 const DEFAULT_CONTEXT_WINDOW = 262_144,
   DEFAULT_MAX_TOKENS = 32_768;
 /** A stable registered adapter; each prepared call retains its own generation. */
-class ModelsAdapter extends LlmAdapter {
+// alpha.3 adds this concrete capability; alpha.2 never calls it. Keep the
+// wrapper's public capability explicit and preserve the older runtime fallback.
+type ImageProjection = { imageRequestTarget(provider: string, model: string,
+  image: import('@deepseek-ai/dsh-attachment').ImageAttachmentRef): import('@deepseek-ai/dsh-attachment').ImageRequestTarget };
+const ProjectionAwareAdapter = LlmAdapter as abstract new () => LlmAdapter & ImageProjection;
+class ModelsAdapter extends ProjectionAwareAdapter {
   routes = new Map<string, Route>();
   private readonly active = new Set<Promise<void>>();
   private readonly requests = new WeakMap<
@@ -103,6 +108,18 @@ class ModelsAdapter extends LlmAdapter {
   override providerRetryPolicy(id: string) {
     const r = this.route(id);
     return r.adapter.providerRetryPolicy(r.underlying);
+  }
+  override imageRequestTarget(id: string, model: string,
+    image: import('@deepseek-ai/dsh-attachment').ImageAttachmentRef) {
+    const r = this.route(id);
+    const adapter = r.adapter as LlmAdapter & Partial<ImageProjection>;
+    return typeof adapter.imageRequestTarget === 'function'
+      ? adapter.imageRequestTarget(r.underlying, model, image)
+      : { width: image.width, height: image.height, maxBytes: image.bytes };
+  }
+  override imageRequestPricing(id: string, model: string) {
+    const r = this.route(id);
+    return r.adapter.imageRequestPricing(r.underlying, model);
   }
   override async listModels(id: string) {
     const r = this.route(id);

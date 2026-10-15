@@ -22,10 +22,7 @@ export class MemoryReviewWorker {
   readonly now:()=>string
   constructor(readonly options:ReviewWorkerOptions){this.now=options.now??(()=>new Date().toISOString())}
   kick(workspace:string):void {
-    if(this.#closed)return
-    this.#workspaces.add(workspace)
-    if(this.#drain)return
-    this.#drain=this.#run().catch(()=>{/* Persistent claims recover on the next activity. */}).finally(()=>{this.#drain=undefined;const next=this.#workspaces.values().next().value;if(next&&!this.#closed)this.kick(next)})
+    return; // Only approved replay proposals may create new durable memories.
   }
   async whenIdle():Promise<void>{while(this.#drain)await this.#drain}
   async dispose():Promise<void>{this.#closed=true;this.#abort?.abort();await this.whenIdle()}

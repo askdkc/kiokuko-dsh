@@ -16,10 +16,10 @@ if (round === 3) Date.now = () => realNow() + 120_000
 if (kind === 'deep') {
   const f = await deepNativeFixture(mock => {
     const script = deepRoundScript(mock, round)
-    if (round === 2) script[3] = async function* () {
-      const job = await f.deep.store.database(db => db.prepare("SELECT run_id,reservation_id FROM dsh_deep_finalizations WHERE status='processing'").get<{run_id:string;reservation_id:string|null}>())
-      assert.ok(job?.reservation_id, 'dispatch must have a durable reservation')
-      process.send?.({ kind: 'dispatched', runId: job.run_id })
+    if (round === 2) script[2] = async function* () {
+      const attempt = await f.deep.store.database(db => db.prepare("SELECT a.run_id,a.attempt_id,r.reservation_id FROM dsh_deep_attempts a JOIN dsh_deep_budget_reservations r USING(attempt_id) WHERE a.status='started' AND r.status='reserved' AND r.kind='agent' ORDER BY r.created_at DESC LIMIT 1").get<{run_id:string;attempt_id:string;reservation_id:string}>())
+      assert.ok(attempt?.reservation_id, 'native model dispatch must have a durable reservation')
+      process.send?.({ kind: 'dispatched', runId: attempt.run_id, jobId: attempt.attempt_id })
       await new Promise(() => {})
     }
     return script

@@ -1,3 +1,4 @@
+import { bindHistoricalMemory } from '../../helpers/historical-memory.js'
 import { bindTaskRepository, transitionTask } from '../../../../src/dsh/task-state.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -16,7 +17,7 @@ import { LispManager } from '../../../../src/dsh/lisp/manager.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
 import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
 
-test('real protected Lisp workspace CI becomes one completed application; scratch, forged JSON and replay do not', {
+test('historical protected Lisp CI retains exact proof without automatic globalization', {
   skip:process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL; a skipped run is not Lisp proof' : false,
   timeout:180000,
 }, async () => {
@@ -38,6 +39,7 @@ test('real protected Lisp workspace CI becomes one completed application; scratc
     capabilities:['kiokuko-soul','memory-reasoning'].map(name => ({kind:'skill' as const,name})),
     profileHints:{taskType:'build',target:'migration check',expected:'Verify the current check',constraints:'Keep the test passing'},
     signal:new AbortController().signal})
+  await bindHistoricalMemory(db, task, project, root)
   const identity = {runId:task.runId,workspace:task.workspace,sessionId:'session',repositoryRoot:root}
   const owner = {sessionId:'session',agentId:'agent',root}
   const taskIdentity = {taskId:task.runId,sessionId:owner.sessionId,repositoryRoot:root}
@@ -97,6 +99,6 @@ test('real protected Lisp workspace CI becomes one completed application; scratc
       .get<{n:number}>(task.runId,'passed')?.n,1)
     await tasks.finish(task,'completed')
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM auto_global_application_receipts WHERE entry_id=?')
-      .get<{n:number}>(memory.id)?.n,1)
+      .get<{n:number}>(memory.id)?.n,0, 'successful work cannot automatically globalize memory')
   } finally { await manager.dispose(); db.close(); await rm(base,{recursive:true,force:true}) }
 })

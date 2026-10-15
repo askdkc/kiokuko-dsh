@@ -109,7 +109,7 @@ export function usageAttrs(value: unknown): Record<string, unknown> {
 
 
 /** Classify only the native result envelope; JSON/text returned as domain data is not an error signal. */
-export function toolResultOutcome(value: Record<string, any>): Record<string, unknown> {
+export function toolResultOutcome(value: Record<string, any>, toolName?: string): Record<string, unknown> {
   const error = record(value.error)
   const structured = Object.keys(error).length > 0
   const process = record(value.value)
@@ -117,7 +117,12 @@ export function toolResultOutcome(value: Record<string, any>): Record<string, un
     || typeof process.signal === 'string' && process.signal.length > 0
     || Number.isSafeInteger(process.exitCode) && process.exitCode !== 0
   const failed = value.isError === true || structured || processFailed
+  const processResult = Object.fromEntries(Object.entries(process).filter(([key, item]) =>
+    key === 'exitCode' ? item === null || Number.isSafeInteger(item)
+      : key === 'signal' ? item === null || typeof item === 'string'
+        : ['timedOut', 'aborted', 'processStarted', 'processStopped', 'outputComplete'].includes(key) && typeof item === 'boolean'))
   return { is_error: failed, native_is_error: value.isError,
+    ...(Object.keys(processResult).length && ['bash','kioku_exec'].includes(toolName ?? '') ? { process_result: processResult } : {}),
     ...(structured ? { error_source: 'native_error_envelope' } : processFailed ? { error_source: 'native_process_result' } : {}),
     ...(failed && value.isError === false ? { error_flag_conflict: true } : {}) }
 }

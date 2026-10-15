@@ -15,7 +15,9 @@ import { mountCore } from '../../../src/dsh/core/index.js'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { forgetMemory } from '../../../src/memory/forget.js'
-import { recordEntry } from '../../../src/memory/entries.js'
+import { reviewCompletedReplay, type ReplayMemoryProposal } from '../../../src/memory/replay-review.js'
+import { createApprovedReplayMemoryStore } from '../../../src/memory/replay-store.js'
+import { recordEntry,recordEntryInTransaction } from '../../../src/memory/entries.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { lispModule } from '../../../src/dsh/modules/lisp.js'
 import { LispConfig } from '../../../src/dsh/lisp/contracts.js'
@@ -128,7 +130,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       parameters: { value: { type: 'string', required: true } }, output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
       async execute(args: any, execution: any) {
         bodies.push({ callId: execution.callId, name: execution.name, arguments: structuredClone(args), sameAgent: execution.agent === handle.agent, sameSession: execution.agent.session === handle.agent.session, state: databaseState() })
-        assert.ok(bodies.at(-1).state.runs.some((run: any) => run.status === 'active'))
+        if(name==='web_search'||name==='web_fetch')assert.equal(bodies.at(-1).state.runs.length,0);else assert.ok(bodies.at(-1).state.runs.some((run: any) => run.status === 'active'))
         if (name === 'fixture_write') { const previous = await readFile(join(root, 'src', 'verified-fixture.txt'), 'utf8').catch(() => null); await writeFile(join(root, 'src', 'verified-fixture.txt'), args.value); writes.push({ path: 'src/verified-fixture.txt', previous, content: await readFile(join(root, 'src', 'verified-fixture.txt'), 'utf8') }) }
         return args.value
       } }))
@@ -240,7 +242,13 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       try {
         const workspace = db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{ workspace: string }>()!.workspace
         const body = 'NATIVEMEMORYでは回答に日本語を使う。'
-        const entry = recordEntry(db, { workspace, kind: 'preference', title: 'NATIVEMEMORYの回答設定', body, scope: { visibility: 'project' } })
+        let entry!:ReturnType<typeof recordEntryInTransaction>
+        const proposal:ReplayMemoryProposal={schemaVersion:1,proposalId:'fixture',revision:1,source:{workspace,taskId:'previous-native-preference',sessionId:'previous-session',traces:[]},
+          request:{text:'NATIVEMEMORYの回答設定',evidenceRefs:['fixture:human-preference']},languages:[],attempts:[],findings:[{kind:'key_point',text:body,basis:'user_corrected',evidenceRefs:['fixture:human-preference']}],tags:['NATIVEMEMORY'],keywords:['NATIVEMEMORY']}
+        let preview='';const review=await reviewCompletedReplay({completed:true,taskId:proposal.source.taskId,sessionId:proposal.source.sessionId,workspace,extract:async()=>proposal,
+          ask:async question=>{if(question.phase==='review')preview=question.text;return {questionId:question.id,choice:question.phase==='organize'?'organize':'approve'}},
+          save:async(shown,key)=>{assert.ok(preview.includes(JSON.stringify(shown,null,2)));createApprovedReplayMemoryStore(db,workspace,value=>entry=recordEntryInTransaction(db,{workspace,kind:'reference',title:'NATIVEMEMORYの回答設定',body:JSON.stringify(value),scope:{visibility:'project'},provenance:{type:'user_approved_replay',reference:key},trustLevel:'untrusted'})).save(shown,key)}})
+        assert.equal(review.status,'saved')
         answerMemory = { workspace, entryId: entry.id, body }
       } finally { db.close() }
     }
@@ -329,15 +337,16 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       const shouldExecute = scenario === 'auto-web' || scenario === 'prepared' || scenario === 'native-allow-once' || scenario === 'build-write' || scenario === 'writing-write' || scenario === 'debug-write' || scenario === 'multi-tool' || scenario === 'direct-advisory' || scenario === 'uncertain-recovery' || scenario === 'restart' || scenario === 'memory-pending' || scenario === 'memory-direct'
       const expectedBodies = scenario === 'multi-tool' || scenario === 'auto-web' ? 2 : shouldExecute ? 1 : 0
       assert.equal(bodies.length, expectedBodies, JSON.stringify(row))
+      if(scenario==='auto-web'){assert.equal(state.intakes.length,0);assert.equal(state.runs.length,0)}else{
       assert.equal(state.intakes.length, 1, 'one exact original request must own intake')
       assert.equal((state.intakes[0] as any).task_text, task, 'multi-intent and negation must remain byte-for-byte intact')
-      assert.equal((state.runs[0] as any).title, task)
+      assert.equal((state.runs[0] as any).title, task)}
       if (scenario === 'native-allow-once' || scenario === 'native-reject') {
         assert.equal(approvals.filter((event: any) => event.type === 'approval/asked').length, 1)
         assert.equal(approvals.find((event: any) => event.type === 'approval/decided')?.data.outcome, scenario === 'native-allow-once' ? 'allowed-once' : 'rejected')
       }
       if (scenario === 'memory-pending' || scenario === 'memory-direct') {
-        assert.ok(state.memoryBindings?.some((binding: any) => JSON.parse(binding.required_json).length > 0), 'real recalled memory must create an unresolved application obligation')
+        assert.equal(state.memoryBindings?.length,0,'Historical candidates do not create automatic memory obligations for native work')
         assert.ok(!JSON.stringify(toolResults).includes('resolve memory decisions'), 'an unresolved decision must never surface as a tool error')
         assert.equal(bodies.length, 1, 'the prepared tool body runs while the decision is unresolved')
       }
@@ -347,7 +356,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
         assert.ok(toolResults.every((result: any) => !result.isError))
         assert.deepEqual(bodies.map(body => [body.name, body.callId, body.sameAgent, body.sameSession]), [['web_search', 'search-first', true, true], ['web_fetch', 'fetch-next', true, true]])
         assert.deepEqual(bodies.map(body => body.arguments), [{ value: 'VMware Tools critical CVE' }, { value: 'https://example.com/advisory' }])
-        assert.equal(bodies[0].state.runs[0].run_id, bodies[1].state.runs[0].run_id)
+        assert.equal(bodies[0].state.runs.length,0);assert.equal(bodies[1].state.runs.length,0)
       }
       if (scenario === 'direct-advisory') { assert.equal(requests.length, 2); assert.ok(!dispatches.some(call => call.name === TASK_PREPARE_TOOL)); assert.equal(questions.length, 0) }
       if (scenario === 'uncertain-recovery') { assert.equal(requests.length, 4); assert.ok(JSON.stringify(toolResults[0]).includes('Error')); assert.equal(bodies[0]?.callId, 'probe-native') }
@@ -395,7 +404,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
 for (const profile of ['dsh-cli', 'dsh-tui'] as const) test(`public TUI ${profile}: coding choice works without Web services`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative('public', 'build-write', 'srcに検証用ファイルを実装して。', 'build', 'native', true, profile))
 test('default public host: native session workspace can differ from startup cwd', { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative('public', 'text', 'SESSION_WORKSPACE_PROBE'))
 if (process.env.PR72_MATRIX_ONLY !== '1') for (const mode of ['core', 'full'] as const) {
-  test(`default native ${mode}: ordinary answer recalls memory and revalidates after forgetting without an execution run`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'answer-memory', 'NATIVEMEMORYの回答設定を説明して'))
+  test(`default native ${mode}: ordinary answer recalls explicitly approved memory and revalidates after forgetting without an execution run`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'answer-memory', 'NATIVEMEMORYの回答設定を説明して'))
   test(`default native ${mode}: screenshot question answers without intake configuration`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'text', '富士山って日本で一番高い山?'))
   test(`default native ${mode}: requested chat draft remains text-only without intake configuration`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'text', '歓迎会のお知らせ文をここに書いて。送信はしないで。'))
   test(`default native ${mode}: ordinary Japanese question answers without purpose UI`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'text', 'レビュー依頼からマージまでどれくらいかかる？'))
@@ -412,7 +421,7 @@ if (process.env.PR72_MATRIX_ONLY !== '1') for (const mode of ['core', 'full'] as
   test(`default native ${mode}: same-id impostor cannot consume native scope`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'scope-spoof', '対象はまだ決めていない。'))
   test(`default native ${mode}: replaced native definition cannot consume an admitted call`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'definition-rebound', 'srcを調べて結果を説明して。'))
   test(`default native ${mode}: unbound destructive reference cannot be laundered through research preparation`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'unknown-action', 'それを消してくれる？'))
-  test(`default native ${mode}: recalled unresolved memory never blocks the first prepared tool`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'memory-pending', 'Fix the failing test in parser.test.ts', 'debug'))
+  test(`default native ${mode}: historical memory never creates an obligation or blocks the first prepared tool`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'memory-pending', 'Fix the failing test in parser.test.ts', 'debug'))
   test(`default native ${mode}: host and session reload cannot reuse prior tool authority`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'restart', 'srcを調べて結果を説明して。'))
   test(`default native ${mode}: global PTC preparation carrier leaves PTC surface unchanged`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'prepared', '変更しないで。srcを調べて結果を説明して。', 'research', 'ptc'))
   test(`default native ${mode}: scoped PTC admits only the canonical preparation carrier`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'prepared', '変更しないで。srcを調べて結果を説明して。', 'research', 'ptc-scoped'))

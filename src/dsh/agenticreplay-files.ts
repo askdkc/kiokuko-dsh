@@ -12,13 +12,23 @@ export async function readAgenticReplayManifest(dir: string, runId: string): Pro
   if (value.run_id !== runId) throw new AgenticReplayError('manifest_mismatch')
   return value
 }
+export async function resolveAgenticReplayEventsFile(dir: string): Promise<string> {
+  const candidates: string[] = []
+  for (const name of ['events.jsonl', 'event.jsonl']) {
+    const file = join(dir, name)
+    try { await checkPrivatePath(file, false); candidates.push(file) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  }
+  if (candidates.length !== 1) throw new AgenticReplayError('event_file_ambiguous_or_missing')
+  return candidates[0]!
+}
 /** Offset reader: at most one page of JSONL, never reads/skips the prefix. */
 export async function readAgenticReplayPage(dir: string, offset: number, previousSeq: number, maxEvents: number, maxBytes: number,
   validatedBlobs = new Map<string, number>()) {
   const schema = await loadAgenticReplayLibrary('schema')
   const assertEvent: (value: unknown) => asserts value is TraceEvent = schema.assertEvent
   const isBlobRef = schema.isBlobRef
-  const handle = await openPrivateFile(join(dir, 'events.jsonl'))
+  const handle = await openPrivateFile(await resolveAgenticReplayEventsFile(dir))
   try {
     const stat = await handle.stat()
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > stat.size || !Number.isSafeInteger(previousSeq)
@@ -101,7 +111,7 @@ export async function agenticReplayDiskBytes(dir: string, maxBytes: number): Pro
   return total
 }
 export async function scanAgenticReplayTrace(dir: string, runId: string, maxInputBytes: number, maxEvents: number) {
-  const file = await checkPrivatePath(join(dir, 'events.jsonl'), false)
+  const file = await checkPrivatePath(await resolveAgenticReplayEventsFile(dir), false)
   if (file.size > maxInputBytes) throw new AgenticReplayError('export_input_limit')
   const manifest = await readAgenticReplayManifest(dir, runId)
   if (!manifest.ended_at || !manifest.counts || !manifest.integrity) throw new AgenticReplayError('trace_not_completed')

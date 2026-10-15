@@ -17,15 +17,15 @@ const packageRoot = process.env.KIOKUKO_TEST_PLUGIN_PACKAGE_ROOT
 const full = packageRoot ? await import(pathToFileURL(join(packageRoot, 'dist/dsh/index.js')).href) : sourceFull
 const core = packageRoot ? await import(pathToFileURL(join(packageRoot, 'dist/dsh/core/index.js')).href) : sourceCore
 
-for (const mode of ['full', 'core'] as const) for (const outcome of ['read', 'native-denial', 'unclear-target'] as const) {
-  test(`on-demand file ${mode}: first read ${outcome} uses original admission and native policy`, { timeout: 30_000 }, async () => withIsolatedSkillHome(async () => {
+for (const mode of ['full', 'core'] as const) for (const outcome of ['read', 'native-denial', 'unclear-target', 'stop'] as const) {
+  test(`on-demand file ${mode}: first read ${outcome} uses native authority without memory admission`, { timeout: 30_000 }, async () => withIsolatedSkillHome(async () => {
     const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
     const [cordis, llm, sessions, projection, prompt, tools, agents, skills, loop, fs, directory, policy, files] = await Promise.all([
       'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-skill',
       'dsh-agent-loop', 'dsh-fs-local', 'dsh-working-directory', 'dsh-fs-observation-policy', 'dsh-tool-fs',
     ].map(load))
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'on-demand-file-'))), ctx = new cordis.Context()
-    const fibers: any[] = [], errors: unknown[] = []
+    const fibers: any[] = [], errors: unknown[] = []; let stopped = false
     let handle: any, mounted: any, adapter: any
     const marker = 'REAL_PLAN_CONTENT_7e62'
     const task = outcome === 'unclear-target' ? 'Do it.' : 'PLAN.md を読んで要点を説明して。ファイルは変更しないで。'
@@ -38,6 +38,7 @@ for (const mode of ['full', 'core'] as const) for (const outcome of ['read', 'na
       fibers.push(await ctx.plugin(loop.default, { agents: [] }))
       ctx.on('agent/error', (event: any) => errors.push(String(event.error)))
       if (outcome === 'native-denial') ctx.tools.guard((execution: any) => execution.name === 'read' ? 'native file denial' : undefined)
+      if (outcome === 'stop') ctx.tools.guard((execution:any)=>{if(execution.name!=='read')return;stopped=true;handle.agent.cancel({kind:'user'},{keepInbox:true});return 'NATIVE_USER_STOP'})
       const mock = nativeMock(llm), model = new mock.MockAdapter([
         mock.toolCallResponse('read-plan-first', 'read', { file_path: 'PLAN.md' }), mock.textResponse('SCRIPTED_FINAL'),
       ])
@@ -51,16 +52,17 @@ for (const mode of ['full', 'core'] as const) for (const outcome of ['read', 'na
       await handle.agent.whenIdle()
       assert.deepEqual(errors, [])
       const results = handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result')
-      assert.equal(results.length, 1, 'the model must not need an extra preparation call')
-      assert.equal(results[0].data.message.isError, outcome !== 'read', JSON.stringify(results))
-      assert.equal(JSON.stringify(model.requests.at(-1).messages).includes(marker), outcome === 'read', 'only an admitted native read may deliver file bytes')
+      if(outcome==='stop'){assert.equal(stopped,true);assert.ok(results.length<=1);assert.ok(results.every((event:any)=>event.data.message.isError));assert.equal(model.requests.length,1)}
+      else {assert.equal(results.length, 1, 'the model must not need an extra preparation call');assert.equal(results[0].data.message.isError, outcome === 'native-denial', JSON.stringify(results))}
+      assert.equal(JSON.stringify(model.requests.at(-1).messages).includes(marker), outcome === 'read' || outcome === 'unclear-target', 'only a permitted native read may deliver file bytes')
       if (outcome === 'read') assert.ok(!JSON.stringify(results).includes('Before tool-backed work'))
       if (outcome === 'native-denial') assert.ok(JSON.stringify(results).includes('native file denial'))
-      if (outcome === 'unclear-target') assert.ok(JSON.stringify(results).includes('does not identify the action target'))
+      if (outcome === 'unclear-target') assert.equal(results[0].data.message.isError,false,'read-only evidence gathering does not grant authority to change an unclear target')
       const db = openConnection(config.databasePath)
       try {
         const intakes = db.prepare('SELECT task_text FROM akinator_sessions').all()
-        assert.equal(intakes.length, outcome === 'unclear-target' ? 0 : 1)
+        assert.equal(intakes.length, 0, 'ordinary native reads never enroll memory or a Goal')
+        assert.ok(JSON.stringify(model.requests[0].messages).includes(task), 'the original request and negation remain unchanged')
         if (intakes.length) assert.equal(intakes[0]?.task_text, task, 'the tool must not replace the original request or its negation')
       } finally { db.close() }
     } finally {

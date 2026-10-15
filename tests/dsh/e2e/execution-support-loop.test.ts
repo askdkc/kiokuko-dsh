@@ -54,6 +54,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
   ctx.llm.registerAdapter(['execution-mock'], model)
   let writes = 0; let reads = 0
   const questions: { id: string; agentId: string | undefined }[] = []
+  const memoryQuestions: { id: string; agentId: string | undefined }[] = []
   const fsFiber = ctx.plugin(fsTools); fibers.push(fsFiber); await fsFiber
   const observeTools = ctx.on('tools/execute', (execution: any, next: () => unknown) => {
     if (execution.name === 'read') reads++
@@ -62,10 +63,17 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
   })
   const questionFiber = ctx.plugin({ name: 'execution-test-questions', apply(context: any) {
     return context.provide('userQuestions', { async ask(request: DshUserQuestionRequest) {
-      return { answers: request.questions.map(q => {
+      return { answers: await Promise.all(request.questions.map(async q => {
+        if (q.options?.some(option => option.label === '整理して確認する')) {
+          assert.deepEqual(q.options.map(option => option.label), ['整理して確認する', '今回は保存しない'])
+          assert.equal(request.agent?.id, 'execution-session')
+          assert.ok(await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT 1 FROM ledger_runs WHERE dsh_session_id='execution-session' AND status='completed'").get()), 'memory organization is offered only after native completion')
+          memoryQuestions.push({ id: q.id, agentId: request.agent?.id })
+          return { id: q.id, selected: ['今回は保存しない'] }
+        }
         questions.push({ id: q.id, agentId: request.agent?.id })
         return { id: q.id, selected: [q.id === 'kioku-agenticreplay-recording' ? '記録しない' : mode] }
-      }) }
+      })) }
     } })
   } }); await questionFiber
   const options = { repositoryRoot: root, databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
@@ -138,8 +146,12 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     assert.equal((await notices()).length, 1)
     assert.equal(model.requests.length, 12)
     assert.match(JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'assistant/message').at(-1)), /完了しました/)
+    const reviewDeadline = Date.now() + 2000
+    while (!memoryQuestions.length && Date.now() < reviewDeadline) await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(memoryQuestions.length, 1, 'completed work offers a separate optional memory review')
     assert.deepEqual(questions, expectedQuestions,
-      'reload preserves the recording choice and grounded research/writing adds no clarification or approval')
+      'reload preserves the recording choice without task clarification or execution approval')
+    assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM entries').get()?.n), 0, 'declining organization saves no memory')
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM dsh_turn_receipts').get<{ n: number }>()!.n), 0,
       'pause never fabricates Enno receipts or turn seals')
   } finally {

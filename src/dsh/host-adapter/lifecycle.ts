@@ -17,11 +17,9 @@ import type { DshIntakeGate } from '../intake-gate.js'
 import type { StoredExecutionSelection } from '../execution-selection.js'
 import type { EnnoOdunoState } from '../../enno-oduno/types.js'
 import type { MemoryEvolutionConfig } from '../../memory/evolution/contracts.js'
-import { memoryApplicationStatus } from '../../memory/application.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
 import { LedgerStore } from '../../ledger/store.js'
 import { terminalizeLedgerRunInTransaction } from '../../enno-oduno/store.js'
-import { handoffReview } from '../../memory/review/store.js'
 import { KiokukoError } from '../../errors.js'
 import { saveTaskCompletionReceipt, taskCompletionBlocksClose } from '../task-completion.js'
 import { readCodingWorkflow } from '../coding-workflow/store.js'
@@ -65,9 +63,9 @@ function currentCloseAuthority(database: SqliteDatabase, runId: string, authorit
 function closeAuthority(item: TurnRecord): { authority?: TaskLease } { return item.authority ? { authority: item.authority } : {} }
 
 export function createLifecycle(deps: LifecycleDependencies) {
-  const { runtime, sessions, sessionMirror, memoryFinalizer, autoReview, answerReview, ennoController,
+  const { runtime, sessions, sessionMirror, autoReview, answerReview, ennoController,
     ennoMemory, executionSupport, gate, turnState, currentSession, currentForAgentEvent,
-    stateForRun, deliverCompletionReport, reviewBinding, evolutionConfig, clearToolRun,
+    stateForRun, deliverCompletionReport, reviewBinding, clearToolRun,
     sessionEventSource } = deps
   const getSelection = deps.getSelection
   const completionReady = async (item: TurnRecord): Promise<boolean> => runtime.withDatabase(database => {
@@ -145,8 +143,6 @@ export function createLifecycle(deps: LifecycleDependencies) {
     return { ...closeAuthority(item), runId: item.runId, status: 'cancelled' }
   }
   const closeRun = async (input: DshRunClose): Promise<void> => {
-    let scheduled = false
-    let scheduledSessionId: string | undefined
     let committedAuthority: TaskLease | undefined
     const committed = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
       if (!currentCloseAuthority(database, input.runId, input.authority)) return false
@@ -155,7 +151,6 @@ export function createLifecycle(deps: LifecycleDependencies) {
       try { completionBlocked = taskCompletionBlocksClose(saveTaskCompletionReceipt(database, input.runId)) }
       catch { completionBlocked = database.prepare('SELECT mode FROM dsh_completion_runs WHERE run_id=?').get<{mode:string}>(input.runId)?.mode === 'enforce' }
       if (input.status === 'completed' && completionBlocked) throw new KiokukoError('CONFLICT', 'Required task completion evidence is unresolved')
-      if (input.status === 'completed' && !memoryApplicationStatus(database, input.runId).ready) input = { ...input, status: 'failed' }
       const store = new LedgerStore(database)
       const before = store.readRun(input.runId)
       if (before === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Run close target does not exist')
@@ -164,25 +159,8 @@ export function createLifecycle(deps: LifecycleDependencies) {
       } else if (before.status !== input.status) {
         throw new KiokukoError('CONFLICT', 'Run close status is immutable')
       }
-      const sourceSessionId = input.authority?.sessionId ?? before.dshSessionId
-      const failedExtractable = input.status === 'failed' && evolutionConfig.mode !== 'off' && input.sourceEndSeq !== undefined &&
-        database.prepare('SELECT 1 FROM dsh_run_log_boundaries WHERE run_id=? AND workspace=? AND dsh_session_id=?').get(before.runId, before.workspace, sourceSessionId) !== undefined
-      if (input.status === 'failed' && !failedExtractable) database.prepare('INSERT OR IGNORE INTO memory_evolution_skips(run_id,workspace,reason,source_epoch) VALUES(?,?,?,(SELECT COALESCE(MAX(source_epoch),0)+1 FROM dsh_task_source_history WHERE run_id=?))')
-        .run(before.runId, before.workspace, evolutionConfig.mode === 'off' ? 'disabled' : 'missing_log_boundary', before.runId)
-      if (input.status === 'completed' || failedExtractable) {
-        if (input.sourceEndSeq === undefined) {
-          throw new KiokukoError('INTEGRITY_ERROR', 'Completed DSH run has no checkpointed log end')
-        }
-        memoryFinalizer.scheduleInTransaction(database, {
-          runId: before.runId,
-          workspace: before.workspace,
-          dshSessionId: sourceSessionId,
-          sourceEndSeq: input.sourceEndSeq,
-        })
-        scheduled = true
-        scheduledSessionId = sourceSessionId
-      }
-      handoffReview(database,input.runId,input.status)
+      // Native completion and authority have been checked independently.
+      // A missing optional memory range cannot change the observed task outcome.
       if (input.authority) {
         const closed = readTaskSnapshot(database, input.authority)
         committedAuthority = { ...input.authority, revision: closed.revision, generation: closed.generation }
@@ -195,7 +173,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
     // Run-wide caches must be retired atomically with a fresh generation check.
     await runtime.withDatabase(database => {
       if (!currentCloseAuthority(database, input.runId, committedAuthority)) return
-      autoReview.worker.abort(input.runId)
+      try { autoReview.worker.abort(input.runId) } catch { /* Optional memory cleanup cannot retain a task owner. */ }
       const items = turnState.allTurns().filter(candidate => candidate.runId === input.runId
         && (!input.authority || candidate.authority?.sessionId === input.authority.sessionId && candidate.authority.generation === input.authority.generation))
       const committedSessionId = items[0]?.sessionId
@@ -205,7 +183,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
           ...(item.nativeSession === undefined ? {} : { nativeSession: item.nativeSession }) })
         if (item.nativeAgent) reviewFinishes.push(answerReview.finish(item.nativeAgent as ReviewAgent))
         item.closed = true
-        ennoMemory.clear(item.runId)
+        try { ennoMemory.clear(item.runId) } catch { /* Optional memory cleanup cannot retain a task owner. */ }
         executionSupport.clear(item.sessionId)
         gate.clearTurn(item.sessionId, item.turn)
       }
@@ -213,22 +191,19 @@ export function createLifecycle(deps: LifecycleDependencies) {
       clearToolRun(input.runId)
     })
     await Promise.all(reviewFinishes)
-    if (scheduled) {
-      if (scheduledSessionId === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Completed run has no DSH session identity')
-      // The terminal run and pending memory job have already committed.
-      // Cache retention and worker notification cannot prevent owner release;
-      // a later startup can retry the durable pending job.
-      try { await sessionMirror.markUnfinalized(scheduledSessionId) } catch { /* auxiliary cache is unavailable */ }
-      try { memoryFinalizer.kick() } catch { /* pending job remains retryable */ }
-    }
+
   }
   const runLifecycle = new DshRunLifecycle({ closeRun })
+  const optionalSourceBoundary = (item: TurnRecord): { sourceEndSeq?: number } => {
+    try { return { sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end') } }
+    catch { return {} /* Incomplete source evidence stays unavailable to memory. */ }
+  }
   const failedBoundary = async (item: TurnRecord): Promise<{ sourceEndSeq?: number }> => {
     try {
       if (item.nativeSession === undefined || sessions?.flush === undefined) return {}
       await sessions.flush(item.nativeSession)
-      await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession)
-      return { sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end') }
+      try { await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession) } catch { /* Optional mirror cannot veto native task closure. */ }
+      return optionalSourceBoundary(item)
     } catch { return {} }
   }
   const retireSupersededRun = async (item: TurnRecord, status: 'completed' | 'failed' | 'cancelled'): Promise<void> => {
@@ -241,11 +216,11 @@ export function createLifecycle(deps: LifecycleDependencies) {
       throw new KiokukoError('CONFLICT', 'Completed DSH run requires its exact native session checkpoint')
     }
     await sessions.flush(item.nativeSession)
-    await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession)
+    try { await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession) } catch { /* Optional mirror cannot veto native task closure. */ }
     await runLifecycle.closeTurn({
       ...closeAuthority(item), runId: item.runId,
       status,
-      sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end'),
+      ...optionalSourceBoundary(item),
     })
   }
 
@@ -282,13 +257,13 @@ export function createLifecycle(deps: LifecycleDependencies) {
           throw new KiokukoError('CONFLICT', 'Completed DSH run requires its exact native session checkpoint')
         }
         await sessions.flush(item.nativeSession)
-        await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession)
+        try { await sessionMirror.checkpointAfterNativeFlush(item.nativeSession as DshMirrorEventSession) } catch { /* Optional mirror cannot veto native task closure. */ }
       }
       await runLifecycle.closeTurn({
         ...closeAuthority(item), runId: item.runId,
         status,
         ...(status !== 'completed' ? status === 'failed' ? await failedBoundary(item) : {} : {
-          sourceEndSeq: dshTurnBoundarySeq(sessionEventSource(item.nativeSession), item.turn, 'end'),
+          ...optionalSourceBoundary(item),
         }),
       })
     } catch (error) { failures.push(error) }

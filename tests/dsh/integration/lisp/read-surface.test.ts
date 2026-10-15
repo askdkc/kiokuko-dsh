@@ -1,3 +1,4 @@
+import { bindHistoricalMemory } from '../../helpers/historical-memory.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -15,7 +16,7 @@ import { resolveProjectWorkspace } from '../../../../src/memory/workspaces.js'
 import { recordEntry } from '../../../../src/memory/entries.js'
 import { CoreTasks } from '../../../../src/dsh/core/tasks.js'
 import { mountMemoryApplication } from '../../../../src/dsh/memory-application.js'
-import { memoryApplicationStatus } from '../../../../src/memory/application.js'
+import { recordMemoryApplicationReview, memoryApplicationStatus } from '../../../../src/memory/application.js'
 import { LISP_ASSEMBLY_SERVICE } from '../../../../src/dsh/lisp/request-surface.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
 
@@ -42,6 +43,7 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     profileHints: { taskType: 'review', target: 'code migration expectations', expected: 'Review current code', constraints: 'Read-only' },
     signal: new AbortController().signal })
   const identity = { runId: task.runId, workspace: task.workspace, sessionId: task.sessionId, repositoryRoot: base }
+  await bindHistoricalMemory(db, task, project, base)
   const status = () => memoryApplicationStatus(db, task.runId)
   const ctx = new cordis.Context(), fibers: any[] = [], scopes: any[] = [], commands = new Map<string, any>()
   const parent: any = { id: 'parent', session: { id: 'parent', header: { cwd: base } } }
@@ -158,8 +160,15 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
         expectedRevision: item.reviewRevision, decision: 'not_applicable', paths: ['PLAN.md'],
         basis: 'PLAN.md contains only a fixed fixture; this task does not review migration code.' } })
       assert.equal(reviewed.isError, false, JSON.stringify(reviewed))
+      assert.equal(reviewed.value.recorded, false, 'the retired model-facing review cannot write memory')
+      assert.equal(status().ready, false, 'ordinary model review does not resolve the historical binding')
+      // Seed the historical decision explicitly to exercise downstream native read/Stop fences.
+      recordMemoryApplicationReview(db, identity, 'review', {
+        generation: unresolved.value.generation, entryId: item.entryId, entryRevision: item.revision,
+        expectedRevision: item.reviewRevision, decision: 'not_applicable', paths: ['PLAN.md'],
+        basis: 'PLAN.md contains only a fixed fixture; this task does not review migration code.' })
     }
-    assert.equal(status().ready, true, 'the real review tool resolves the pending decision')
+    assert.equal(status().ready, true, JSON.stringify(status()))
     let evaluations = 0
     t.mock.method(surface.manager, 'execute', async () => { evaluations++; return { ok: true, state: 'SUCCEEDED', value: 3 } })
     const evaluated = await call('lisp_eval', { operationId: 'reviewed', code: '(+ 1 2)' })

@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp,mkdir,rm } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -8,9 +9,10 @@ import { createDshHostAdapter } from '../../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../../src/dsh/composition.js'
 import { nativeMock } from '../../helpers/native-mock.js'
 import { interpretedPreparation, toolValue } from '../../helpers/coding-script.js'
+import { approveFixtureMemory } from '../../helpers/approved-fixture-memory.js'
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT
 
-for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const mode of ['off','observe','active'] as const)test(`${intakeMode==='legacy-owner'?'legacy-owner native T01/T06/T11/T39: open chat saves and retrieves on the next request':`${intakeMode} native: ordinary answers do not open a review execution`} with ennoMemory=${mode}`, {skip:!packages,timeout:30000},async()=>{
+for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const mode of ['off','observe','active'] as const)test(`${intakeMode==='legacy-owner'?'legacy-owner native T01/T06/T11/T39: open chat stays unsaved until explicit approval, then retrieves and forgets':`${intakeMode} native: ordinary answers do not open a review execution`} with ennoMemory=${mode}`, {skip:!packages,timeout:30000},async()=>{
   const modules=await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','commands'].map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
   const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,skills,commands]=modules
   const root=await mkdtemp(join(tmpdir(),'native-memory-review-'));await mkdir(join(root,'.git'))
@@ -85,12 +87,18 @@ for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const 
       assert.deepEqual(errors,[])
       return
     }
-    await wait(async()=>await adapter!.host.runtime!.withDatabase(db=>db.prepare("SELECT count(*) AS n FROM memory_review_jobs WHERE state='completed'").get()?.n===1))
-    assert.equal(reviewCalls,1)
+    assert.equal(reviewCalls,0,'historical chat ownership cannot start an automatic review model call')
     const runId=adapter.host.resolveSessionRunId!(agent.session)!
     assert.equal(await adapter.host.resolveIdleClose!(agent.id,agent.session.id,agent.session,agent),undefined)
-    const saved=await adapter.host.runtime!.withDatabase(db=>db.prepare('SELECT id FROM entries').get<{id:string}>())
-    assert.ok(saved)
+    const beforeApproval=await adapter.host.runtime!.withDatabase(db=>({entries:db.prepare('SELECT count(*) AS n FROM entries').get<{n:number}>()!.n,
+      jobs:db.prepare('SELECT count(*) AS n FROM memory_review_jobs').get<{n:number}>()!.n}))
+    assert.deepEqual(beforeApproval,{entries:0,jobs:0},'eight normal turns and a legacy owner still save nothing without permission')
+    const saved=await adapter.host.runtime!.withDatabase(async db=>{
+      const workspace=db.prepare('SELECT r.workspace FROM repositories r JOIN repository_locations l USING(repository_id) WHERE l.canonical_root=?').get<{workspace:string}>(realpathSync(root))!.workspace
+      return await approveFixtureMemory(db,workspace,'EMBERLANGプロジェクトの応答言語設定は日本語。',['EMBERLANG','日本語'])
+    })
+    const approvedLookup=await ctx.tools.get('memory_context').execute({cwd:root,query:'EMBERLANG の回答言語は？'})
+    assert.ok(JSON.stringify(approvedLookup.replay).includes('EMBERLANGプロジェクトの応答言語設定は日本語'),JSON.stringify({savedWorkspace:saved.workspace,approvedLookup,agentOwned:ctx.agents.get(agent.id)===agent,sessionOwned:ctx.sessions.get(agent.session.id)===agent.session}))
     agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'EMBERLANG の回答言語は？'}]}))
     await wait(()=>agent.status==='idle'&&mainCalls===9)
     assert.equal(adapter.host.resolveSessionRunId!(agent.session),runId)
@@ -99,9 +107,10 @@ for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const 
     const delivered=await adapter.host.runtime!.withDatabase(db=>db.prepare('SELECT count(*) AS n FROM context_delivery_entries WHERE entry_id=?').get<{n:number}>(saved.id)!.n)
     assert.equal(delivered,0,'conversational retrieval must not create execution delivery receipts')
     const memorySnapshots=final.messages.filter((message:any)=>message.source?.form==='snapshot')
-      .flatMap((message:any)=>message.source.sections??[]).filter((section:any)=>section.name===`memory:memory:${saved.id}`)
-    assert.ok(memorySnapshots.length>0,'new memory must be selected into a source-bound snapshot, not merely echoed from native chat history')
+      .flatMap((message:any)=>message.source.sections??[]).filter((section:any)=>section.name==='memory:approved-replay')
+    assert.ok(memorySnapshots.length>0,'only the explicitly approved replay may enter a source-bound snapshot')
     assert.match(JSON.stringify(memorySnapshots),/EMBERLANGプロジェクトの応答言語設定は日本語/)
+    await ctx.sessions.flush(agent.session)
     assert.ok(persisted.length>0)
     // Explaining stored evidence is independently requested tool-backed work.
     // Exclude further capture before preparing it; the saved memory remains usable.
@@ -112,7 +121,8 @@ for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const 
     inspector.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'保存した根拠を確認して。'}]}))
     await wait(()=>inspector.status==='idle'&&mainCalls===10)
     const explained=await ctx.commands.execute(inspector, `/kioku-memory explain ${saved.id} --json`, [], new AbortController().signal)
-    assert.equal(explained.result.kind,'success',explained.result.text);assert.equal(JSON.parse(explained.result.text).evidenceStatus,'source_attached')
+    assert.equal(explained.result.kind,'success',explained.result.text);assert.equal(JSON.parse(explained.result.text).evidenceStatus,'details_unavailable',
+      'the test-human preference must not claim an execution trace')
     const forgotten=await ctx.commands.execute(inspector, `/kioku-memory forget ${saved.id} --revision 1 --json`, [], new AbortController().signal)
     assert.equal(forgotten.result.kind,'success',forgotten.result.text)
     agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'EMBERLANG の回答言語は？'}]}))
@@ -123,7 +133,7 @@ for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const 
     assert.equal(await adapter.host.runtime!.withDatabase(db=>db.prepare('SELECT count(*) AS n FROM memory_explain_receipts WHERE entry_id=?').get<{n:number}>(saved.id)!.n),1)
     const command=await adapter.host.memoryReview!.command(agent.session,'exclude session')
     assert.equal(command.state,'excluded')
-    assert.equal(reviewCalls,1)
+    assert.equal(reviewCalls,0)
     const held=await ctx.agentLoop.create(session.SessionId('native-held'),{provider:'review-native',model:'fixed'},{cwd:root,delegationDepth:0})
     held.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'Please do not remember this example.'}]}))
     await wait(()=>held.status==='idle'&&mainCalls===12)

@@ -64,7 +64,7 @@ test('referential repairs need a current resolved Goal or selected proposal, not
 test('binding diagnostics distinguish absent Goal from invalid evidence without relaxing either check', () => {
   const current = createRequestIntentContext({ task, messageRefs: context.messageRefs, proposals: context.proposals })!
   const refs = requestIntentReferenceIds(current)
-  for (const relation of ['same_scope_continuation', 'scope_change'] as const) {
+  for (const relation of ['scope_change'] as const) {
     const submission = { relation, action: 'verify', evidenceRefs: refs }
     assert.deepEqual(validateMainModelRequestIntent(submission, current), { ok: false, reason: 'no_active_goal' })
     assert.equal(bindMainModelRequestIntent(submission, current), undefined)
@@ -73,8 +73,8 @@ test('binding diagnostics distinguish absent Goal from invalid evidence without 
     assert.deepEqual(validateMainModelRequestIntent({ ...submission, evidenceRefs: refs.slice(1) }, current),
       { ok: false, reason: 'missing_reference' })
   }
-  for (const action of ['research', 'verify'] as const) {
-    const submission = { relation: 'new', action, evidenceRefs: refs }
+  for (const relation of ['new', 'same_scope_continuation'] as const) for (const action of ['research', 'verify'] as const) {
+    const submission = { relation, action, evidenceRefs: refs }
     const result = validateMainModelRequestIntent(submission, current)
     assert.equal(result.ok, true)
     if (result.ok) assert.deepEqual(result.decision, bindMainModelRequestIntent(submission, current))

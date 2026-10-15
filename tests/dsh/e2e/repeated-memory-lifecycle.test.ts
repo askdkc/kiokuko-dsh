@@ -55,22 +55,25 @@ if (!process.env.KIOKUKO_REPEATED_SCENARIO || process.env.KIOKUKO_REPEATED_SCENA
       })
       const dbPath = kind === 'deep' ? join(root,'.git','deep-state','state.sqlite3') : join(root,'.git','state.sqlite3')
       const before = openConnection(dbPath)
+      let interruptedAttemptCount = 0
       try {
-        const state = kind === 'deep' ? before.prepare('SELECT status FROM dsh_deep_finalizations WHERE run_id=?').get<{status:string}>(dispatched.runId)?.status
+        const state = kind === 'deep' ? before.prepare('SELECT status FROM dsh_deep_attempts WHERE attempt_id=?').get<{status:string}>(dispatched.jobId!)?.status
           : before.prepare('SELECT state AS status FROM memory_evolution_jobs WHERE id=?').get<{status:string}>(dispatched.jobId!)?.status
-        assert.equal(state, 'processing', 'kill occurs strictly after dispatch and before result adoption')
+        assert.equal(state, kind === 'deep' ? 'started' : 'processing', 'kill occurs strictly after dispatch and before result adoption')
+        if (kind === 'deep') interruptedAttemptCount = before.prepare('SELECT count(*) AS n FROM dsh_deep_attempts WHERE run_id=?').get<{n:number}>(dispatched.runId)!.n
       } finally { before.close() }
       await promisify(execFile)(process.execPath, args(3), { env, timeout: 60000, maxBuffer: 1024 * 1024 })
       recordRepeatedStage(JSON.parse(await readFile(join(root,'.git','interruption-1.json'),'utf8')))
-      recordRepeatedStage({ round: 2, stage: 'durable-dispatch-before-kill', actual: 'processing', expected: 'processing', runId: dispatched.runId })
+      recordRepeatedStage({ round: 2, stage: 'durable-dispatch-before-kill', actual: kind === 'deep' ? 'started' : 'processing', expected: kind === 'deep' ? 'started' : 'processing', runId: dispatched.runId })
       recordRepeatedStage(JSON.parse(await readFile(join(root,'.git','interruption-3.json'),'utf8')))
       const db = openConnection(dbPath)
       try {
         if (kind === 'deep') {
-          const job = db.prepare('SELECT status,error FROM dsh_deep_finalizations WHERE run_id=?').get<{status:string;error:string}>(dispatched.runId)!
-          recordRepeatedStage({ round: 2, stage: 'restart-recovery', actual: job.status, expected: 'uncertain', automaticResends: 0 })
-          assert.equal(job.status,'uncertain'); assert.match(job.error,/no automatic resend/u)
-          assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_deep_finalizations').get<{n:number}>()!.n,3)
+          const attempts = db.prepare('SELECT status FROM dsh_deep_attempts WHERE attempt_id=?').get<{status:string}>(dispatched.jobId!)!
+          recordRepeatedStage({ round: 2, stage: 'restart-recovery', actual: attempts.status, expected: 'started-without-resend', automaticResends: 0 })
+          assert.equal(attempts.status,'started','the interrupted model result was never falsely marked complete')
+          assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_deep_attempts WHERE run_id=?').get<{n:number}>(dispatched.runId)!.n,interruptedAttemptCount,'restart must not resend the interrupted native model request')
+          assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_deep_finalizations').get<{n:number}>()!.n,0)
           assert.equal(db.prepare('SELECT count(*) AS n FROM memory_episodes').get<{n:number}>()!.n,0)
         } else {
           const job = db.prepare('SELECT state,reason,claim_token,lease_until FROM memory_evolution_jobs WHERE id=?').get<{state:string;reason:string;claim_token:string|null;lease_until:string|null}>(dispatched.jobId!)!
@@ -103,7 +106,7 @@ for (const scenario of ['same-session','restart'] as const) {
         }
       }
       assert.equal(new Set(reports.map(report => report.runId)).size, 3)
-      assert.equal(new Set(reports.map(report => report.memory)).size, 3)
+      assert.ok(reports.every(report => report.memory === 'not-approved'), 'read-only Deep tasks cannot create memory automatically')
     } finally { await f?.close(); await rm(root, { recursive: true, force: true }) }
   })
 }
@@ -129,15 +132,14 @@ for (const route of ['normal', 'enno'] as const) for (const mode of ['prefix_reu
         for (const prior of rounds.slice(0, -1)) if (prior.session === rounds.at(-1)!.session) assert.ok(prior.end < rounds.at(-1)!.start, 'log ranges overlap in one session')
       }
       assert.equal(rounds[2]!.episodes, 3)
-      assert.equal(rounds[2]!.lessons, 1)
-      assert.equal(rounds[3]!.finalizations, 4)
+      assert.equal(rounds[2]!.lessons, 3, 'each of three separately approved runs is retained')
+      assert.equal(rounds[3]!.finalizations, 3, 'the read-only probe declines another save')
       assert.equal(rounds[3]!.planReviewCalls, route === 'enno' ? 3 : 0)
-      assert.equal(rounds[3]!.auxiliaryCalls, 1 + rounds[3]!.planReviewCalls, 'read-only retrieval adds no calls beyond required plan review and finalization')
+      assert.equal(rounds[3]!.auxiliaryCalls, rounds[3]!.planReviewCalls, 'read-only retrieval adds no memory extraction call')
       if (host) {
-        const derivedIds = await host.database(db => db.prepare('SELECT DISTINCT entry_id FROM memory_derivations').all<{entry_id:string}>().map(row => row.entry_id))
         for (const [index, setting] of ['observe', 'off'].entries()) {
           await host.database(db => configureEvolution(db, setting as 'observe' | 'off'))
-          await host.round(5 + index, scenario === 'same-session' ? 'repeated-session' : `negative-${setting}`, true, false, { forbiddenIds: derivedIds })
+          await host.round(5 + index, scenario === 'same-session' ? 'repeated-session' : `negative-${setting}`, true, false)
         }
       }
     } finally {
@@ -156,18 +158,18 @@ for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scen
     try {
       await prepareRepeatedWorkspace(root); host = await repeatedNativeHost(root, mode, 'normal')
       let offset = 0
-      let forbiddenIds: string[] = []
+      let correctedIds: string[] = []
       if (scenario === 'correction') {
         for (let n = 1; n <= 3; n++) await host.round(n, 'correction-prelude', false, false)
         offset = 3
-        forbiddenIds = await host.database(db => db.prepare("SELECT entry_id FROM memory_derivations WHERE kind='positive'").all<{entry_id:string}>().map(row => row.entry_id))
-        assert.equal(forbiddenIds.length, 1, 'correction prelude must generate its lesson through native execution')
+        correctedIds = await host.database(db => db.prepare('SELECT entry_id FROM replay_memory_entries ORDER BY rowid LIMIT 1').all<{entry_id:string}>().map(row => row.entry_id))
+        assert.equal(correctedIds.length, 1, 'correction prelude must have an explicitly approved source to revise')
         await host.round(4, 'correction-probe', true, true)
         offset = 4
       }
       const rounds: RoundReport[] = []
       const reviseSource = () => host!.database(db => {
-        const source = db.prepare('SELECT entry_id FROM dsh_memory_finalization_entries ORDER BY rowid LIMIT 1').get<{entry_id:string}>()!
+        const source = db.prepare('SELECT entry_id FROM replay_memory_entries ORDER BY rowid LIMIT 1').get<{entry_id:string}>()!
         const entry = readEntry(db, { workspace: 'repeated-memory', entryId: source.entry_id })
         updateCandidateEntry(db, { workspace: entry.workspace, entryId: entry.id, expectedRevision: entry.revision, kind: entry.kind, title: entry.title,
           body: 'The prior source was corrected: this procedure is inapplicable.', summary: null, scope: entry.scope, provenance: entry.provenance, tags: entry.tags })
@@ -176,12 +178,12 @@ for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scen
         if (n === 2 && scenario === 'correction') await reviseSource()
         rounds.push(await host.round(offset + n, 'fault-session', false, false, {
           saveFailure: n === 2 && scenario === 'save-failure', duplicateCompletion: n === 2 && scenario === 'duplicate-completion',
-          ...(n >= 2 && scenario === 'correction' ? { forbiddenIds } : {}),
+          ...(n >= 2 && scenario === 'correction' ? { correctedIds } : {}),
         }))
       }
       assert.equal(new Set(rounds.map(round => round.runId)).size, 3)
       for (let n = 1; n < rounds.length; n++) assert.ok(rounds[n - 1]!.end < rounds[n]!.start)
-      if (scenario === 'correction') await host.round(offset + 4, 'fault-session', true, false, { forbiddenIds })
+      if (scenario === 'correction') await host.round(offset + 4, 'fault-session', true, false, { correctedIds })
       if (scenario === 'duplicate-completion' || scenario === 'save-failure') await host.round(4, 'fault-session', true, true)
     } finally { await host?.close(); await rm(root, { recursive: true, force: true }) }
   })
@@ -214,7 +216,7 @@ for (const mode of ['prefix_reuse','bounded_evidence'] as const) {
       const rounds = []
       for (let round = 1; round <= 4; round++) rounds.push(await host.round(round, 'upgraded-session', round === 4))
       assert.equal(new Set(rounds.map(round => round.runId)).size, 4)
-      assert.equal(rounds[2]!.episodes, 3); assert.equal(rounds[2]!.lessons, 1)
+      assert.equal(rounds[2]!.episodes, 3); assert.equal(rounds[2]!.lessons, 3)
       assert.equal(await host.database(db => db.prepare('SELECT policy_version FROM context_deliveries WHERE delivery_id=?').get<{policy_version:string}>(deliveryId)!.policy_version), 'context-ranking-v6')
     } finally { await host?.close(); await rm(root, { recursive: true, force: true }) }
   })

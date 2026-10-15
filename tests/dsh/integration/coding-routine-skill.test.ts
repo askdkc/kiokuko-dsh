@@ -14,11 +14,11 @@ test('always-delivered SOUL guides document verification and successive file edi
   const soul = sources.find(source => source.name === 'kiokuko-soul' && source.relativePath === 'SKILL.md')!
   const compiled = compileSkillBundle(sources).resources.find(resource => resource.id === 'kiokuko-soul/SKILL.md')!
   for (const content of [soul.content, compiled.content]) {
-    assert.match(content, /Before diagnostics.*supported.*file/iu)
-    assert.match(content, /Markdown.*document.*read.*structure.*requirements.*whitespace/iu)
-    assert.match(content, /After a successful.*edit.*write.*re-read.*before.*next mutation/iu)
-    assert.match(content, /stale.*re-read.*reconcile.*never.*overwrite/iu)
-    assert.match(content, /unavailable.*unverified.*not.*clean/iu)
+    assert.match(content, /supported file types before diagnostics/iu)
+    assert.match(content, /manually check Markdown.*documents.*structure.*requirements.*whitespace/iu)
+    assert.match(content, /After each successful.*edit.*write.*re-read.*before.*next mutation/iu)
+    assert.match(content, /re-read.*reconcile stale.*never force overwrite/iu)
+    assert.match(content, /Unavailable diagnostics stay unverified/iu)
   }
   const messages = await buildDshMessageSources({ task: 'Revise PLAN.md.', intakeStatus: 'ready', nextAction: 'proceed', context: null,
     memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false } })

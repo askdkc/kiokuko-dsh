@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, realpath, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -99,7 +99,7 @@ function runNodeTests(testFiles, testTempRoot) {
 async function run() {
   const targets = process.argv.length > 2 ? process.argv.slice(2) : ['tests'];
   const testFiles = await collectTestFiles(targets);
-  const testTempRoot = await mkdtemp(path.join(tmpdir(), 'kiokuko-test-run-'));
+  const testTempRoot = await realpath(await mkdtemp(path.join(tmpdir(), 'kiokuko-test-run-')));
 
   try {
     return await runNodeTests(testFiles, testTempRoot);

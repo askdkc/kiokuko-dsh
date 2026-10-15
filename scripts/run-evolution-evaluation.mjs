@@ -1,3 +1,4 @@
+import { initializeEvaluationRepository } from './evaluation-git-fixture.mjs'
 // Real-model evaluation. No label-derived vectors and no network calls without an explicit config.
 import assert from 'node:assert/strict'
 import { readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
@@ -68,7 +69,7 @@ assert.ok(Number.isSafeInteger(config.embedding.dimensions)&&config.embedding.di
 const output=path.resolve(option('--output')??'evolution-evaluation-results')
 await mkdir(output,{recursive:true})
 const root=await mkdtemp(path.join(tmpdir(),'kiokuko-evolution-evaluation-'))
-await mkdir(path.join(root,'.git'))
+initializeEvaluationRepository(root)
 const counters={llmCalls:0,embeddingCalls:0,inputTokens:0,outputTokens:0,reportedUsageCalls:0,llmDurationMs:0,embeddingDurationMs:0}
 async function post(model,route,body,signal) {
   const key=model.apiKeyEnv?process.env[model.apiKeyEnv]:undefined
@@ -239,7 +240,7 @@ try {
   const base=metrics.find(m=>m.condition==='baseline'&&m.split==='heldout'),full=metrics.find(m=>m.condition==='full'&&m.split==='heldout')
   const reduction=base.duplicateChars===0?null:1-full.duplicateChars/base.duplicateChars
   const gates={hitRateAt5:full.hitRateAt5-base.hitRateAt5>=0.05,exact:full.exactRegressions===0,duplicateChars:reduction!==null&&reduction>=0.3,scope:metrics.every(m=>m.scopeLeaks===0),stale:staleInjections===0,semanticSafetyReviewed}
-  const report={status:'measured',fixture:manifest,models:{llm:{model:config.llm.model,revision:config.llm.revision},embedding:{model:config.embedding.model,revision:config.embedding.revision}},settings:{characterBudget:8000,distanceCeiling:config.distanceCeiling??0.5,maxDailyExtraCalls:8},metrics,counters,duplicateCharacterReduction:reduction,staleInjections,artifactHash,gates,eligibleForActive:Object.values(gates).every(Boolean),evolution:evolutionBeforeInvalidation,notes:['Candidate text requires human review; a valid reference does not prove entailment.','The production UTC-day call cap is retained, including failed calls.','Model revision is operator-attested; the provider response model is checked exactly.']}
+  const report={status:'measured',fixture:manifest,models:{llm:{model:config.llm.model,revision:config.llm.revision},embedding:{model:config.embedding.model,revision:config.embedding.revision}},settings:{characterBudget:8000,distanceCeiling:config.distanceCeiling??0.5,maxDailyExtraCalls:8},metrics,counters,duplicateCharacterReduction:reduction,staleInjections,artifactHash,gates,eligibleForActive:Object.values(gates).every(Boolean),evolution:evolutionBeforeInvalidation,notes:['Automatic finalization is retired; zero extraction calls do not measure human-approved replay organization.','Candidate text requires human review; a valid reference does not prove entailment.','The production UTC-day call cap is retained, including failed calls.','Model revision is operator-attested; the provider response model is checked exactly.']}
   Object.assign(report,{reportVersion:REPORT_VERSION,commit:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),nodeVersion:process.version,dshVersion:process.env.KIOKUKO_EXPECTED_DSH_VERSION??'unmeasured',queryResults,pairedTaskQuality:{status:'unmeasured',reason:'Retrieval is measured here. Run test:evaluation:evolution:tasks with the same pinned LLM config to measure four-repeat task outcomes.'},skipped:0})
   await writeFile(path.join(output,'report.json'),JSON.stringify(report,null,2)+'\n')
   process.stdout.write(JSON.stringify(report,null,2)+'\n')

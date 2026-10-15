@@ -1,6 +1,6 @@
 import { readEntry } from '../../memory/entries.js'
 import { assertCapabilityCatalogBinding } from '../../akinator/capability-binding.js'
-import { bindMemoryApplication, memoryApplicationStatus, memoryRetrievalStatus } from '../../memory/application.js'
+import { bindMemoryApplication, memoryRetrievalStatus } from '../../memory/application.js'
 import { queryScopedContextGated, type ScopedContextResult } from '../../context/scoped-broker.js'
 import type { DecisionService } from '../decisions/service.js'
 import { createMemoryReuseRuntime } from '../memory-reuse.js'
@@ -76,18 +76,40 @@ export interface CoreTask {
 type CoreTaskIdentity = Pick<CoreTask, 'requestId' | 'sessionId' | 'runId' | 'workspace' | 'authority'>
 type CoreTaskOutcome = (typeof TERMINAL_RUN_STATUSES)[number]
 
+/** Bind the caller, lease and durable request before any operation can have effects. */
+function assertCoreTaskIdentity(db: SqliteDatabase, task: CoreTaskIdentity, operation: string) {
+  const run = new LedgerStore(db).readRun(task.runId)
+  if (!run || run.workspace !== task.workspace || run.metadata.requestId !== task.requestId
+    || typeof run.metadata.repositoryRoot !== 'string') throw new Error(`Task ${operation} identity mismatch`)
+  if (task.authority && (task.authority.taskId !== task.runId || task.authority.sessionId !== task.sessionId
+    || task.authority.repositoryRoot !== run.metadata.repositoryRoot)) throw new Error(`Task ${operation} identity mismatch`)
+  const snapshot = readTaskSnapshot(db, { taskId: task.runId, sessionId: task.sessionId,
+    repositoryRoot: run.metadata.repositoryRoot })
+  const owner = readExecutionOwner(db, task.sessionId)
+  if (owner && (owner.run_id !== task.runId || owner.start_id !== task.requestId || owner.workspace !== task.workspace
+    || owner.mode !== 'normal')) throw new Error(`Task ${operation} owner mismatch`)
+  return { run, snapshot, owner }
+}
+
 /** Close the exact run and release its owner atomically, including pre-admission failures. */
 function finishCoreTask(db: SqliteDatabase, task: CoreTaskIdentity, outcome: CoreTaskOutcome): void {
   withImmediateTransaction(db, () => {
-    const store = new LedgerStore(db), run = store.readRun(task.runId)
-    if (!run || run.workspace !== task.workspace) throw new Error('Task completion identity mismatch')
+    const { run, snapshot, owner } = assertCoreTaskIdentity(db, task, 'completion')
+    if (TERMINAL_RUN_STATUSES.some(status => status === run.status)) {
+      // A run outcome revokes its execution lease once. A resume or another task
+      // operation revokes this read-only retry too; never touch coding state here.
+      if (task.authority && (snapshot.revision !== task.authority.revision + 1
+        || snapshot.generation !== task.authority.generation + 1))
+        throw new KiokukoError('CONFLICT', 'Task execution authority is stale or stopped')
+      return
+    }
     if (task.authority) authorizeTaskLease(db, task.authority)
-    else if (run.dshSessionId !== task.sessionId) throw new Error('Task completion identity mismatch')
-    const owner = readExecutionOwner(db, task.sessionId)
-    if (owner && (owner.run_id !== task.runId || owner.start_id !== task.requestId || owner.workspace !== task.workspace || owner.mode !== 'normal')) throw new Error('Task completion owner mismatch')
+    if (!owner) throw new Error('Task completion owner mismatch')
+    if (outcome === 'completed') synchronizeCodingWorkflow(db, task.runId)
+    else if (outcome === 'cancelled') stopCodingWorkflow(db, task.runId, 'cancelled')
     if (outcome === 'completed' && taskCompletionBlocksClose(assessTaskCompletion(db, task.runId))) throw new Error('Required coding Goal evidence is unresolved')
-    if (run.status === 'active' || run.status === 'intake' && outcome !== 'completed') store.updateRunStatusInTransaction(task.runId, outcome === 'completed' && !memoryApplicationStatus(db, task.runId).ready ? 'interrupted' : outcome)
-    else if (!TERMINAL_RUN_STATUSES.some(status => status === run.status)) throw new Error('Task is not ready for completion')
+    if (run.status === 'active' || run.status === 'intake' && outcome !== 'completed') new LedgerStore(db).updateRunStatusInTransaction(task.runId, outcome)
+    else throw new Error('Task is not ready for completion')
     db.prepare("DELETE FROM dsh_execution_owners WHERE dsh_session_id=? AND run_id=? AND start_id=? AND workspace=? AND mode='normal'").run(task.sessionId, task.runId, task.requestId, task.workspace)
   })
 }
@@ -177,7 +199,8 @@ export class CoreTasks {
     if ((requestIntentContext?.activeGoal || requestIntentContext?.activeTask) && requestIntent === undefined) {
       throw new KiokukoError('CONFLICT', 'request_intent_required_for_active_goal')
     }
-    if (requestIntent?.relation === 'same_scope_continuation' || requestIntent?.relation === 'scope_change') {
+    if ((requestIntent?.relation === 'same_scope_continuation' || requestIntent?.relation === 'scope_change')
+      && (requestIntentContext?.activeGoal || requestIntentContext?.activeTask)) {
       return this.resume({ ...input, requestIntent })
     }
     const intentType = requestIntent && !unresolvedIntent
@@ -235,33 +258,13 @@ export class CoreTasks {
         const run = new LedgerStore(db).readRun(opened.runId)
         const admitted = state.status !== 'needs_answer' && run?.status === 'active' && !hasBlockingRequiredCapability(capabilities)
         if (admitted) authority = captureTaskLease(db, taskIdentity)
-        const admissionState = admitted ? readContextRunRetrievalState(db, opened.runId).stateHash : null
         const selectedSkills = admitted ? await selectInstalledSkills(this.decisions, input.requestId, input.task, input.capabilities, capabilities, input.signal) : []
-        let memory: ScopedContextResult | null = null
-        if (admitted && ownerKind === 'execution') {
-          const policy = deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities)
-          if (!policy.contextWithheld) {
-            const memoryReuse = await createMemoryReuseRuntime(this.decisions, input.requestId, input.signal)
-            const assertCurrent = () => {
-              input.signal.throwIfAborted()
-              assertPreparation()
-              if (readContextRunRetrievalState(db, opened.runId).stateHash !== admissionState) throw new Error('Core task changed during memory selection')
-              const owner = readExecutionOwner(db, input.sessionId)
-              if (owner?.run_id !== opened.runId || owner.start_id !== input.requestId || owner.mode !== 'normal') throw new Error('Core task memory ownership changed')
-            }
-            assertCurrent()
-            memory = (await queryScopedContextGated(db, { project, projectOnly: true, task: input.task, taskProfile: state.session.profile,
-              runId: opened.runId, limit: 5, characterBudget: 4000 }, () => ({ persist: true, value: null, assertBeforePersist: assertCurrent }),
-              retrievalRuntimeForRequest(this.memoryRetrieval, input.task, retrievalAnchorTimeMs, input.timeConstraint),
-              { beforeCommit: async () => { assertCurrent() }, ...(memoryReuse ? { memoryReuse: { runtime: memoryReuse, authorize: () => { assertCurrent(); return true } } } : {}) })).context
-          }
-        }
+        const memory: ScopedContextResult | null = null // Optional lookup runs after native admission.
         input.signal.throwIfAborted()
         assertPreparation()
         if(admitted){initializeTaskCompletion(db,identity.runId,'shadow');saveExecutionFrame(db,identity.runId,updateExecutionFrame(undefined,project.repositoryRoot,input.task))
           if(codingWorkRequested(input.task,requestIntent,state.session.profile.taskType))initializeCodingWorkflow(db,{...identity,repositoryRoot:project.repositoryRoot,task:input.task})}
-        if (admitted && ownerKind === 'execution') bindMemoryApplication(db, { ...identity, repositoryRoot: project.repositoryRoot }, state.session.profile, memory,
-          memoryRetrievalStatus(db, identity.workspace, memory, deriveMemoryPolicy(state.session.profile, 'actionable', input.capabilities).contextWithheld))
+
         return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted,
           ...(authority ? { authority } : {}),
           memory: ownerKind === 'execution' ? recallView(db, memory) : null,
@@ -282,53 +285,23 @@ export class CoreTasks {
     })
   }
   async refresh(task: CoreTask, query: string, signal: AbortSignal, validateCapabilities?: () => Promise<void>, timeConstraint?: MemoryTimeConstraint): Promise<Pick<CoreTask, 'memory' | 'context'>> {
-    const retrievalAnchorTimeMs = Date.now()
-    return this.runtime.withDatabase(async db => {
-      signal.throwIfAborted()
-      if (task.memoryOwner) {
-        assertMemoryOwner(task.memoryOwner, { agentId: task.memoryOwner.agentId, sessionId: task.sessionId,
-          turn: task.memoryOwner.turn, requestDigest: task.memoryOwner.requestDigest, runId: task.runId }, task.memoryOwner.kind)
-        if (task.memoryOwner.kind !== 'execution') return { memory: null, context: null }
-      }
-      const assertCurrent = () => {
-        signal.throwIfAborted()
-        if (task.authority) authorizeTaskLease(db, task.authority)
-        const owner = readExecutionOwner(db, task.sessionId), run = new LedgerStore(db).readRun(task.runId)
-        if (owner?.run_id !== task.runId || owner.start_id !== task.requestId || owner.mode !== 'normal' || run?.status !== 'active') throw new Error('Task refresh identity mismatch')
-        assertCapabilityCatalogBinding(run.metadata, task.capabilities)
-      }
-      assertCurrent()
-      const project = await resolveProjectWorkspaceReadOnly(db, task.cwd, { allowDirectory: true })
-      if (!project || project.workspace !== task.workspace) throw new Error('Task refresh repository changed')
-      const policy = deriveMemoryPolicy(task.profile, 'actionable', task.capabilities)
-      const result = await queryScopedContextGated(db, { project, projectOnly: true, task: query, taskProfile: task.profile, runId: task.runId, limit: 5, characterBudget: 4000 },
-        () => ({ persist: !policy.contextWithheld, value: null, assertBeforePersist: assertCurrent }),
-        retrievalRuntimeForRequest(this.memoryRetrieval, query, retrievalAnchorTimeMs, timeConstraint),
-        { ...(validateCapabilities ? { beforeCommit: validateCapabilities } : {}) })
-      assertCurrent()
-      bindMemoryApplication(db, { ...task, repositoryRoot: project.repositoryRoot }, task.profile, result.context,
-        memoryRetrievalStatus(db, task.workspace, result.context, policy.contextWithheld))
-      return { context: result.context, memory: recallView(db, result.context) }
-    })
+    signal.throwIfAborted()
+    await validateCapabilities?.()
+    return this.runtime.withDatabase(db=>{assertCoreTaskIdentity(db,task,'refresh');if(task.authority)authorizeTaskLease(db,task.authority);return {memory:null,context:null}})
   }
+
   async checkpoint(task: CoreTask, input: { memories?: unknown; evidence?: unknown; outcome: string }, signal: AbortSignal): Promise<unknown> {
     if (!task.admitted) throw new Error('Task is not admitted')
     return this.runtime.withDatabase(async db => {
-      const run = new LedgerStore(db).readRun(task.runId)
-      const owner = readExecutionOwner(db, task.sessionId)
+      const { owner } = assertCoreTaskIdentity(db, task, 'checkpoint')
       if (task.authority) authorizeTaskLease(db, task.authority)
-      if (run?.workspace !== task.workspace || (!task.authority && run.dshSessionId !== task.sessionId) || owner?.run_id !== task.runId || owner.start_id !== task.requestId || owner.mode !== 'normal') throw new Error('Task checkpoint identity mismatch')
+      if (!owner) throw new Error('Task checkpoint identity mismatch')
       return checkpointDshMemory(db, { ...input, runId: task.runId, cwd: task.cwd } as ScopedCheckpointInput, signal, { allowDirectory: true })
     })
   }
   async finish(task: CoreTaskIdentity & { admitted: boolean }, outcome: CoreTaskOutcome): Promise<void> {
     if (!task.admitted && outcome === 'completed') throw new Error('Task is not admitted')
-    await this.runtime.withDatabase(db => withImmediateTransaction(db, () => {
-      if (task.authority) authorizeTaskLease(db, task.authority)
-      if(outcome==='completed')synchronizeCodingWorkflow(db,task.runId)
-      else if(outcome==='cancelled')stopCodingWorkflow(db,task.runId,'cancelled')
-      finishCoreTask(db, task, outcome)
-    }))
+    await this.runtime.withDatabase(db => finishCoreTask(db, task, outcome))
   }
 }
 

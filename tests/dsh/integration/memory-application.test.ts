@@ -7,48 +7,52 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { openConnection } from '../../../src/db/connection.js'
 import { migrateDatabase } from '../../../src/db/migrate.js'
-import { resolveProjectWorkspace } from '../../../src/memory/workspaces.js'
+import { ensureGlobalWorkspace, resolveProjectWorkspace } from '../../../src/memory/workspaces.js'
 import { recordEntry, updateCandidateEntry } from '../../../src/memory/entries.js'
 import { CoreTasks } from '../../../src/dsh/core/tasks.js'
 import { LedgerStore } from '../../../src/ledger/store.js'
 import { createRequestIntentContext, bindMainModelRequestIntent, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 import { mountMemoryApplication } from '../../../src/dsh/memory-application.js'
 import { runMemoryAwareVerifiers } from '../../../src/enno-oduno/memory-verification.js'
-import { memoryApplicationStatus, recordMemoryApplicationReview, beginMemoryExecution, completeMemoryExecution, bindMemoryApplication, applicationSourceDigest } from '../../../src/memory/application.js'
-import { AutoGlobalizationWorker, autoGlobalizationStatus, autoGlobalApplicable } from '../../../src/memory/auto-globalization.js'
+import { memoryApplicationStatus, recordMemoryApplicationReview, recordMemoryApplicationReviewBatch, recordCompletedMemoryApplicationsInTransaction, beginMemoryExecution, completeMemoryExecution, bindMemoryApplication, applicationSourceDigest } from '../../../src/memory/application.js'
+import { AutoGlobalizationWorker, autoGlobalizationStatus, processNextAutoGlobalizationInTransaction } from '../../../src/memory/auto-globalization.js'
 import { readEntry } from '../../../src/memory/entries.js'
-import { recordContextFeedback } from '../../../src/context/feedback.js'
 import { queryScopedContextGated } from '../../../src/context/scoped-broker.js'
 import { forgetMemory } from '../../../src/memory/forget.js'
 import { explainMemory } from '../../../src/memory/explain.js'
 
-test('forget retracts a real automatic Global and invalidates application proof while retaining accounting',async()=>{
- const f=await fixture('build',true),worker=new AutoGlobalizationWorker(f.runtime as any,true)
- try{
-   for(let n=1;n<=3;n++){
-     const task=n===1?f.task:await f.tasks.prepare({requestId:`forget-proof-${n}`,sessionId:'session',turn:n,task:'migration expectations code',cwd:f.root,capabilities,
-       profileHints:{taskType:'build',target:'migration code tests',expected:'Handle the next migration',constraints:'Preserve past schemas'},signal:new AbortController().signal})
-     const identity={runId:task.runId,workspace:task.workspace,sessionId:task.sessionId,repositoryRoot:f.root}
-     const status=memoryApplicationStatus(f.db,task.runId);assert.equal(status.supported,true)
-     recordMemoryApplicationReview(f.db,identity,`forget-review-${n}`,{...f.review(),generation:status.generation})
-     beginMemoryExecution(f.db,identity,`forget-test-${n}`,'node check.mjs')
-     const result=spawnSync(process.execPath,['check.mjs'],{cwd:f.root,encoding:'utf8'});assert.equal(result.status,0)
-     completeMemoryExecution(f.db,identity,`forget-test-${n}`,{value:{exitCode:0}})
-     await f.tasks.finish(task,'completed');worker.kick();await worker.whenIdle()
-   }
-   const globalId=String(f.db.prepare('SELECT global_entry_id FROM auto_global_projections WHERE entry_id=?').get(f.memory.id)?.global_entry_id)
-   assert.equal(readEntry(f.db,{workspace:'global',entryId:globalId}).status,'verified')
-   assert.equal(explainMemory(f.db,{workspace:'global',entryId:globalId}).derivation?.kind,'global')
-   const count=f.db.prepare('SELECT count(*) AS n FROM auto_global_application_receipts WHERE entry_id=?').get(f.memory.id)?.n
-   assert.equal(forgetMemory(f.db,{workspace:f.memory.workspace,entryId:f.memory.id,expectedRevision:1,operationId:'auto-global-forget'}).count,2)
-   assert.throws(()=>readEntry(f.db,{workspace:'global',entryId:globalId}))
-   worker.kick();await worker.whenIdle();f.reopen();worker.kick();await worker.whenIdle()
-   assert.equal(f.db.prepare('SELECT count(*) AS n FROM auto_global_application_receipts WHERE entry_id=?').get(f.memory.id)?.n,count)
-   assert.equal(f.db.prepare("SELECT count(*) AS n FROM task_memory_executions WHERE outcome='passed'").get()?.n,0)
-   assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_reviews WHERE entry_id=?').get(f.memory.id)?.n,0)
-   assert.equal(f.db.prepare('SELECT count(*) AS n FROM context_delivery_entries WHERE entry_id IN (?,?)').get(f.memory.id,globalId)?.n,0)
-   assert.deepEqual(f.db.prepare('PRAGMA foreign_key_check').all(),[])
- }finally{await worker.dispose();await f.close()}
+test('forget retracts an explicitly seeded historical Global and invalidates proof while retaining accounting', async () => {
+  const f = await fixture()
+  const worker = new AutoGlobalizationWorker(f.runtime as any, true)
+  try {
+    recordMemoryApplicationReview(f.db, f.identity, 'historical-review', f.review())
+    beginMemoryExecution(f.db, f.identity, 'historical-test', 'node check.mjs')
+    const result = spawnSync(process.execPath, ['check.mjs'], { cwd: f.root, encoding: 'utf8' })
+    assert.equal(result.status, 0)
+    completeMemoryExecution(f.db, f.identity, 'historical-test', { value: { exitCode: 0 } })
+    await f.tasks.finish(f.task, 'completed')
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM auto_global_application_receipts').get()?.n, 0,
+      'native completion must not create automatic memory accounting')
+    // Reconstruct retained pre-migration accounting explicitly. This is not a native save path.
+    const completedAt = f.db.prepare('SELECT ended_at FROM ledger_runs WHERE run_id=?').get<{ended_at: string}>(f.task.runId)!.ended_at
+    recordCompletedMemoryApplicationsInTransaction(f.db, f.task.runId, completedAt)
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM auto_global_application_receipts').get()?.n, 1)
+    ensureGlobalWorkspace(f.db)
+    const global = recordEntry(f.db, { workspace: 'global', kind: f.memory.kind, title: f.memory.title,
+      body: f.memory.body, scope: { visibility: 'global' }, createdBy: 'historical-fixture',
+      provenance: { type: 'curator_globalize', reference: `${f.memory.id}@1#historical-fixture`, sourceWorkspace: f.memory.workspace } })
+    assert.equal(explainMemory(f.db, { workspace: 'global', entryId: global.id }).derivation?.kind, 'global')
+    const accounting = f.db.prepare('SELECT * FROM auto_global_application_receipts').all()
+    assert.equal(forgetMemory(f.db, { workspace: f.memory.workspace, entryId: f.memory.id,
+      expectedRevision: 1, operationId: 'historical-global-forget' }).count, 2)
+    assert.throws(() => readEntry(f.db, { workspace: 'global', entryId: global.id }))
+    worker.kick(); await worker.whenIdle(); f.reopen(); worker.kick(); await worker.whenIdle()
+    assert.deepEqual(f.db.prepare('SELECT * FROM auto_global_application_receipts').all(), accounting)
+    assert.equal(f.db.prepare("SELECT count(*) AS n FROM task_memory_executions WHERE outcome='passed'").get()?.n, 0)
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_reviews WHERE entry_id=?').get(f.memory.id)?.n, 0)
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM context_delivery_entries WHERE entry_id IN (?,?)').get(f.memory.id, global.id)?.n, 0)
+    assert.deepEqual(f.db.prepare('PRAGMA foreign_key_check').all(), [])
+  } finally { await worker.dispose(); await f.close() }
 })
 
 const capabilities = ['kiokuko-soul', 'memory-reasoning'].map(name => ({ kind: 'skill' as const, name }))
@@ -85,30 +89,112 @@ test('empty application has no write transaction or result observer after five e
     } finally { dispose() }
   } finally { await f.close() }
 })
-async function fixture(taskType: 'build' | 'review' = 'build', automatic = false) {
+test('native admission, public review actions, and checkpoint stay memory-write-free through completion and restart', async () => {
+  const f = await fixture('build', false), listeners = new Map<string, any>(), tools: any[] = [], agent = {}
+  let refreshes = 0, effects = 0
+  const dispose = mountMemoryApplication({ tools: { register(tool) { tools.push(tool); return () => {} } },
+    on(name, handler) { listeners.set(name, handler); return () => listeners.delete(name) } }, {
+    runtime: f.runtime as any, resolve: execution => execution.agent === agent ? f.identity : undefined,
+    refresh: async () => { refreshes++ },
+  })
+  const snapshot = () => Object.fromEntries(['entries', 'entry_revisions', 'context_deliveries',
+    'task_memory_bindings', 'task_memory_reviews', 'task_memory_executions', 'auto_global_application_receipts',
+    'auto_global_projections'].map(table => [table, f.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]))
+  try {
+    assert.equal(f.task.admitted, true)
+    assert.equal(f.task.memory, null)
+    assert.equal(f.task.context, null)
+    assert.equal(f.status().supported, false)
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_bindings').get()?.n, 0)
+    const before = snapshot(), reviewTool = tools.find(tool => tool.name === 'task_memory_review')
+    const execute = (callId: string, name: string, args: unknown = {}) => ({ callId, name, arguments: args,
+      agent, signal: new AbortController().signal })
+    for (const [index, input] of [
+      { action: 'review', review: f.review() },
+      { action: 'review_batch', reviews: [f.review(), { ...f.review(), entryRevision: 99 }] },
+      { action: 'refresh', query: 'migration expectations code' },
+    ].entries()) {
+      assert.deepEqual(await reviewTool.execute(input, execute(`review-${index}`, 'task_memory_review')), {
+        recorded: false, workMayContinue: true, reason: 'post_task_memory_review_required',
+      })
+      assert.deepEqual(snapshot(), before)
+    }
+    assert.equal(refreshes, 0, 'the public refresh action cannot call the former retrieval writer')
+    assert.deepEqual(await f.tasks.refresh(f.task, 'migration expectations', new AbortController().signal), { memory: null, context: null })
+    assert.deepEqual(await f.tasks.checkpoint(f.task, { outcome: 'completed', memories: [{ kind: 'lesson',
+      title: 'Model-only memory', body: 'Do not persist this unapproved claim.' }] }, new AbortController().signal), {
+      project: null, entries: [], recorded: false, workMayContinue: true, reason: 'post_task_memory_review_required',
+    })
+    const call = execute('ordinary-bash', 'Bash', { command: 'node check.mjs' })
+    await listeners.get('tools/pre-execute')(call, async () => { effects++ })
+    const result = spawnSync(process.execPath, ['check.mjs'], { cwd: f.root, encoding: 'utf8' })
+    assert.equal(result.status, 0)
+    await listeners.get('tools/result')(call, { value: { exitCode: 0 } })
+    assert.equal(effects, 1)
+    assert.deepEqual(snapshot(), before)
+    await f.tasks.finish(f.task, 'completed')
+    f.reopen()
+    assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'completed')
+    assert.deepEqual(snapshot(), before)
+  } finally { dispose(); await f.close() }
+})
+
+test('memory observer outage cannot reject native effects or completion', async () => {
+  const f = await fixture(), listeners = new Map<string, any>()
+  const dispose = mountMemoryApplication({ tools: { register: () => () => {} },
+    on(name, handler) { listeners.set(name, handler); return () => listeners.delete(name) } }, {
+    runtime: { withDatabase: async () => { throw new Error('memory observer unavailable') } } as any,
+    resolve: () => f.identity, refresh: async () => undefined,
+  })
+  try {
+    let effects = 0
+    const call = { callId: 'outage-bash', name: 'Bash', arguments: { command: 'node check.mjs' }, signal: new AbortController().signal }
+    await listeners.get('tools/pre-execute')(call, async () => { effects++ })
+    await listeners.get('tools/result')(call, { value: { exitCode: 0 } })
+    assert.equal(effects, 1)
+    assert.equal(f.status().ready, false)
+    await f.tasks.finish(f.task, 'completed')
+    assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'completed')
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_executions').get()?.n, 0)
+  } finally { dispose(); await f.close() }
+})
+
+async function fixture(taskType: 'build' | 'review' = 'build', historicalBinding = true) {
   const directory = await mkdtemp(join(tmpdir(), 'memory-application-')), root = realpathSync(join(directory))
   await mkdir(join(root, '.git')); await mkdir(join(root, 'migrations'))
   await writeFile(join(root, 'migrations', '001.sql'), 'SELECT 1;')
-  if (automatic) await writeFile(join(root, 'package.json'), '{"name":"memory-fixture","private":true}')
+  await writeFile(join(root, 'package.json'), '{"name":"memory-fixture","private":true}')
   await writeFile(join(root, 'check.mjs'), 'import assert from "node:assert/strict"; import { readdirSync } from "node:fs"; assert.deepEqual(readdirSync("migrations"), ["001.sql"]);')
   let db = openConnection(join(root, 'state.sqlite3')); migrateDatabase(db)
   const project = (await resolveProjectWorkspace(db, root))!
-  const memory = recordEntry(db, { workspace: project.workspace, kind: 'lesson', title: 'migration expectations', body: 'Derive current migration expectations from the bundled migrations, including the next migration. Fixed historical schema fixtures may use fixed versions.', createdBy: 'fixture', scope: { visibility: 'project', ...(automatic ? { applicability: { languages: ['JavaScript'] } } : {}) } })
+  const memory = recordEntry(db, { workspace: project.workspace, kind: 'lesson', title: 'migration expectations', body: 'Derive current migration expectations from the bundled migrations, including the next migration. Fixed historical schema fixtures may use fixed versions.', createdBy: 'fixture', scope: { visibility: 'project', applicability: { languages: ['JavaScript'] } } })
   const runtime = { withDatabase: async (fn: any) => fn(db) }
   const tasks = new CoreTasks(runtime as any)
   const task = await tasks.prepare({ requestId: 'request', sessionId: 'session', turn: 1, task: 'migration expectations code', cwd: root, capabilities,
     profileHints: { taskType, target: 'migration code tests', expected: 'Handle the next migration', constraints: 'Preserve past schemas' }, signal: new AbortController().signal })
   const identity = { runId: task.runId, workspace: task.workspace, sessionId: task.sessionId, repositoryRoot: root }
+  // Native preparation no longer binds memory. Legacy proof tests own their historical
+  // delivery/binding fixture, so they cannot accidentally reintroduce admission coupling.
+  const bindHistorical = async (query = 'migration expectations code', selected = task) => {
+    const result = await queryScopedContextGated(db, { project, projectOnly: true, task: query,
+      taskProfile: selected.profile, runId: selected.runId, limit: 5, characterBudget: 4000 },
+    () => ({ persist: true, value: null }))
+    assert.ok(result.context)
+    bindMemoryApplication(db, { runId: selected.runId, workspace: selected.workspace,
+      sessionId: selected.sessionId, repositoryRoot: root }, selected.profile, result.context)
+    return result.context
+  }
+  if (historicalBinding) await bindHistorical()
   const status = () => memoryApplicationStatus(db, task.runId)
   const review = (decision: 'adopted' | 'not_applicable' | 'contradicted' = 'adopted') => ({ generation: status().supported ? (status() as any).generation : 1,
     entryId: memory.id, entryRevision: memory.revision, expectedRevision: 0, decision, basis: 'check.mjs currently enumerates migration names.', paths: ['check.mjs', 'migrations'],
     invariant: 'Current expectations follow every bundled migration.', counterexample: 'Adding a second migration breaks a fixed list.', method: 'Add the next migration to this isolated fixture and execute check.mjs.', command: 'node check.mjs' })
-  return { root, tasks, task, runtime, identity, memory, status, review, get db() { return db },
+  return { root, tasks, task, runtime, identity, memory, status, review, bindHistorical, get db() { return db },
     reopen() { db.close(); db = openConnection(join(root, 'state.sqlite3')) },
     async close() { db.close(); await rm(directory, { recursive: true, force: true }) } }
 }
 
-test('native path blocks missing decisions, observes failing next-migration regression, then accepts dynamic expectations and survives restart', async () => {
+test('native execution observes historical regression proof without turning public review into a memory writer', async () => {
   const f = await fixture(), listeners = new Map<string, any>(), tools: any[] = []
   const agent = { session: {} }, host = { ...f.runtime }
   const dispose = mountMemoryApplication({ tools: { register(tool) { tools.push(tool); return () => {} } }, on(name, handler) { listeners.set(name, handler); return () => listeners.delete(name) } }, {
@@ -144,8 +230,11 @@ test('native path blocks missing decisions, observes failing next-migration regr
       await listeners.get('tools/result')(unresolved, { value: {} })
     }
     assert.equal(effects, 6, 'an unresolved decision never rejects the call')
-    assert.equal(f.status().ready, false, 'an unresolved decision still blocks completion')
-    await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review', review: f.review() }, execution('review', 'task_memory_review'))
+    assert.equal(f.status().ready, false, 'historical memory remains unresolved advisory data')
+    const declined = await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review', review: f.review() }, execution('review', 'task_memory_review'))
+    assert.deepEqual(declined, { recorded: false, workMayContinue: true, reason: 'post_task_memory_review_required' })
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_reviews').get()?.n, 0)
+    recordMemoryApplicationReview(f.db, f.identity, 'historical-review', f.review())
     await writeFile(join(f.root, 'migrations', '002.sql'), 'SELECT 2;')
     const run = async (callId: string) => {
       const call = execution(callId)
@@ -156,7 +245,7 @@ test('native path blocks missing decisions, observes failing next-migration regr
     }
     assert.equal(await run('broken'), 1)
     assert.equal(f.status().ready, false)
-    assert.throws(() => new LedgerStore(f.db).updateRunStatus(f.task.runId, 'completed'), /incomplete/)
+    assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'active')
     await writeFile(join(f.root, 'check.mjs'), 'import assert from "node:assert/strict"; import { readdirSync } from "node:fs"; const versions = readdirSync("migrations").map(f => Number(f.slice(0,3))); assert.deepEqual(versions, Array.from({length: versions.length}, (_,i) => i+1));')
     assert.equal(await run('fixed'), 0)
     assert.equal(f.status().ready, true)
@@ -168,7 +257,7 @@ test('native path blocks missing decisions, observes failing next-migration regr
   } finally { dispose(); await f.close() }
 })
 
-test('PTC transport and nested effects run before direct review, which then supplies the decision', async () => {
+test('PTC transport and nested effects continue while public review leaves historical memory unresolved', async () => {
   const f = await fixture(), listeners = new Map<string, any>(), tools: any[] = []
   const agent = { session: {} }
   const dispose = mountMemoryApplication({ tools: { register(tool) { tools.push(tool); return () => {} } },
@@ -181,12 +270,12 @@ test('PTC transport and nested effects run before direct review, which then supp
   try {
     let transportRuns = 0, effects = 0
     const parent = Symbol('ptc-parent')
-    // An unresolved decision no longer rejects the call; it keeps the run incomplete.
+    // Unresolved historical memory is advisory and never rejects native work.
     const root = execution('ptc-root', 'run_code')
     await listeners.get('tools/pre-execute')(root, async () => { transportRuns++ })
     await listeners.get('tools/result')(root, { value: { logs: [], result: null } })
     assert.equal(transportRuns, 1, 'the transport call runs while decisions are unresolved')
-    assert.equal(f.status().ready, false, 'an unresolved decision still blocks completion')
+    assert.equal(f.status().ready, false, 'historical memory remains unresolved advisory data')
     const statusCall = execution('direct-status', 'task_memory_review')
     const status = await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'status' }, statusCall)
     assert.equal(status.pending[0]?.problem, 'decision_missing')
@@ -195,41 +284,49 @@ test('PTC transport and nested effects run before direct review, which then supp
     await listeners.get('tools/pre-execute')(nested, async () => { effects++ })
     await listeners.get('tools/result')(nested, { value: {} })
     assert.equal(effects, 1, 'nested effects are tracked while decisions are unresolved')
-    await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review', review: f.review('not_applicable') }, execution('direct-review', 'task_memory_review'))
-    assert.equal(f.status().ready, true)
-    assert.equal((await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'status' }, execution('ptc-root:ptc:3', 'task_memory_review', parent))).ready, true)
+    const review = await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review', review: f.review('not_applicable') }, execution('direct-review', 'task_memory_review'))
+    assert.deepEqual(review, { recorded: false, workMayContinue: true, reason: 'post_task_memory_review_required' })
+    assert.equal(f.status().ready, false)
+    assert.equal((await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'status' }, execution('ptc-root:ptc:3', 'task_memory_review', parent))).ready, false)
     await listeners.get('tools/pre-execute')(execution('ptc-root:ptc:4', 'bash', parent), async () => { effects++ })
     assert.equal(effects, 2)
+    await f.tasks.finish(f.task, 'completed')
+    assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'completed')
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_reviews').get()?.n, 0)
   } finally { dispose(); await f.close() }
 })
 
-test('pending memory review keeps the native PTC transport and uses SDK subdispatch', {
-  skip: !process.env.KIOKUKO_DSH_PACKAGE_ROOT && 'requires pinned native DSH',
-}, async () => {
-  const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT!
+test('advisory memory status keeps the native PTC transport and uses SDK subdispatch', async () => {
+  const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
   const { pathToFileURL } = await import('node:url')
   const [cordis, prompt, toolModule, scope] = await Promise.all(
     ['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope']
       .map(name => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)))
   const f = await fixture()
   const ctx = new cordis.Context(), fibers: any[] = []
-  let scoped: any
+  let scoped: any, unmount: (() => void) | undefined
   const releaseRuntime = ctx.provide('ptcRuntime', { language: 'typescript' })
   try {
     fibers.push(await ctx.plugin(prompt.default, {}), await ctx.plugin(toolModule.default, { mode: 'ptc' }))
     const session = { id: 'session' }, agent: any = { id: 'ordinary-agent', session }
     scoped = scope.createScope(ctx, agent); agent.ctx = scoped.ctx
     const tools = scoped.ctx.get('tools')
-    tools.register(toolModule.defineTool({ name: 'task_memory_review', description: 'Review memory', parameters: {},
-      output: { schema: { type: 'json' }, render: () => [] }, execute: async () => ({}) }))
+    // Match the production host projection; scoped Cordis contexts require
+    // injection before reading an optional service such as commands.
+    unmount = mountMemoryApplication({ tools, on: scoped.ctx.on.bind(scoped.ctx) }, { runtime: f.runtime as any,
+      resolve: execution => execution.agent === agent ? f.identity : undefined, refresh: async () => undefined })
     assert.equal(tools.modeFor(agent), 'ptc')
     assert.deepEqual(tools.wireSchemas(agent).schemas.map((schema: any) => schema.name), ['run_code'])
     assert.equal(tools.modeFor(agent), 'ptc')
     const review = tools.get('task_memory_review', agent)
     assert.ok(review, 'pending review remains available to the run_code SDK')
-    const result = await review.execute({ action: 'status' }, { agent, name: 'task_memory_review', callId: 'review-status', parent: { callId: 'run' }, rootCallId: 'run', signal: new AbortController().signal })
-    assert.deepEqual(result, {})
+    const result = await review.execute({ action: 'status' }, { agent, name: 'task_memory_review', callId: 'run:ptc:1', parent: { callId: 'run' }, rootCallId: 'run', signal: new AbortController().signal })
+    assert.equal(result.ready, false)
+    assert.equal(result.pending[0]?.problem, 'decision_missing')
+    await f.tasks.finish(f.task, 'completed')
+    assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'completed')
   } finally {
+    unmount?.()
     await scoped?.dispose()
     for (const fiber of fibers.reverse()) await fiber.dispose()
     releaseRuntime()
@@ -237,158 +334,61 @@ test('pending memory review keeps the native PTC transport and uses SDK subdispa
   }
 })
 
-test('three completed native and Enno applications create one source-verified Global and a fourth remains idempotent', async () => {
-  const f = await fixture('build', true)
-  const worker = new AutoGlobalizationWorker(f.runtime as any, true)
-  const concurrentWorker = new AutoGlobalizationWorker(f.runtime as any, true)
-  const disabledWorker = new AutoGlobalizationWorker(f.runtime as any, false)
+test('completed native and Enno applications never automatically globalize, even with retained historical receipts', async () => {
+  const f = await fixture()
+  const workers = [true, true, false].map(enabled => new AutoGlobalizationWorker(f.runtime as any, enabled))
   try {
     for (let number = 1; number <= 4; number++) {
-      const task = number === 1 ? f.task : await f.tasks.prepare({
-        requestId: `request-${number}`, sessionId: 'session', turn: number,
-        task: 'migration expectations code', cwd: f.root, capabilities,
+      const task = number === 1 ? f.task : await f.tasks.prepare({ requestId: `request-${number}`,
+        sessionId: 'session', turn: number, task: 'migration expectations code', cwd: f.root, capabilities,
         profileHints: { taskType: 'build', target: 'migration code tests', expected: 'Handle the next migration', constraints: 'Preserve past schemas' },
-        signal: new AbortController().signal,
-      })
+        signal: new AbortController().signal })
+      if (number !== 1) await f.bindHistorical('migration expectations code', task)
       const identity = { runId: task.runId, workspace: task.workspace, sessionId: task.sessionId, repositoryRoot: f.root }
       const status = memoryApplicationStatus(f.db, task.runId)
-      assert.equal(status.supported, true)
+      assert.ok(status.supported)
       assert.equal(status.items.length, 1)
-      const review = { generation: status.generation, entryId: f.memory.id, entryRevision: f.memory.revision,
-        expectedRevision: 0, decision: 'adopted' as const, basis: 'Current migration fixture is checked.',
-        paths: ['check.mjs', 'migrations'], invariant: 'Migration expectations follow bundled files.',
-        counterexample: 'A fixed list misses new migration files.', method: 'Run the repository check.',
-        command: number === 2 ? `${process.execPath} check.mjs` : 'node check.mjs' }
-      recordMemoryApplicationReview(f.db, identity, `review-${number}`, review)
+      recordMemoryApplicationReview(f.db, identity, `review-${number}`, { ...f.review(), generation: status.generation,
+        command: number === 2 ? `${process.execPath} check.mjs` : 'node check.mjs' })
       if (number === 2) {
-        const spec = { id:'regression', kind:'test' as const, executable:process.execPath,
-          args:['check.mjs'], cwd:'.', timeoutMs:5000 }
-        assert.equal((await runMemoryAwareVerifiers(f.db, task.runId, [spec], f.root, {descendantSettleMs:0}))[0]?.status, 'passed')
+        const spec = { id: 'regression', kind: 'test' as const, executable: process.execPath,
+          args: ['check.mjs'], cwd: '.', timeoutMs: 5000 }
+        assert.equal((await runMemoryAwareVerifiers(f.db, task.runId, [spec], f.root, { descendantSettleMs: 0 }))[0]?.status, 'passed')
       } else {
         beginMemoryExecution(f.db, identity, `verify-${number}`, 'node check.mjs')
         const result = spawnSync(process.execPath, ['check.mjs'], { cwd: f.root, encoding: 'utf8' })
         assert.equal(result.status, 0)
-        completeMemoryExecution(f.db, identity, `verify-${number}`, { value: { exitCode: result.status } })
+        completeMemoryExecution(f.db, identity, `verify-${number}`, { value: { exitCode: 0 } })
       }
+      assert.equal(memoryApplicationStatus(f.db, task.runId).ready, true)
       await f.tasks.finish(task, 'completed')
-      if (number === 1) {
-        const before = f.db.prepare('SELECT completed_at,receipt_digest FROM auto_global_application_receipts WHERE entry_id=? AND run_id=?')
-          .get<{completed_at:string;receipt_digest:string}>(f.memory.id,task.runId)
-        new LedgerStore(f.db).updateRunStatus(task.runId,'completed','2099-01-01T00:00:00.000Z')
-        assert.deepEqual(f.db.prepare('SELECT completed_at,receipt_digest FROM auto_global_application_receipts WHERE entry_id=? AND run_id=?')
-          .get(f.memory.id,task.runId),before,'repeated completion cannot rewrite immutable proof')
-      }
-      if (number === 3) {
-        f.db.exec("CREATE TRIGGER abort_auto_mapping BEFORE INSERT ON auto_global_projections BEGIN SELECT RAISE(ABORT,'injected projection failure'); END")
-        worker.kick()
-        await assert.rejects(worker.whenIdle(), /injected projection failure/)
-        assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM entries WHERE workspace='global'")
-          .get<{count:number}>()!.count,0,'projection failure rolls back the generated entry')
-        assert.equal(f.db.prepare('SELECT state FROM auto_global_queue WHERE entry_id=? AND entry_revision=?')
-          .get<{state:string}>(f.memory.id,f.memory.revision)?.state,'pending')
-        f.db.exec('DROP TRIGGER abort_auto_mapping')
-      }
-      worker.kick()
-      if (number === 3) concurrentWorker.kick()
-      await Promise.all([worker.whenIdle(),concurrentWorker.whenIdle()])
-      const auto = autoGlobalizationStatus(f.db, f.memory.id, f.memory.revision)
-      assert.equal('successfulRuns' in auto && auto.successfulRuns, number)
-      const projections = f.db.prepare('SELECT global_entry_id FROM auto_global_projections WHERE entry_id=?').all<{global_entry_id:string}>(f.memory.id)
-      assert.equal(projections.length, number < 3 ? 0 : 1)
-      if (number >= 3) {
-        const global = readEntry(f.db, { workspace: 'global', entryId: projections[0]!.global_entry_id })
-        assert.equal(global.trustLevel, 'source_verified')
-        assert.equal(global.provenance.type, 'auto_curator_globalize')
-        assert.equal(autoGlobalApplicable(f.db, global, JSON.parse(f.db.prepare('SELECT fingerprint_json FROM task_memory_bindings WHERE run_id=?').get<{fingerprint_json:string}>(task.runId)!.fingerprint_json)), true)
-      }
+      assert.equal(f.db.prepare('SELECT count(*) AS n FROM auto_global_application_receipts WHERE run_id=?').get(task.runId)?.n, 0,
+        'ordinary completion cannot create an automatic application receipt')
+      // Explicit reconstruction exercises a database containing older valid receipts.
+      const completedAt = f.db.prepare('SELECT ended_at FROM ledger_runs WHERE run_id=?').get<{ended_at: string}>(task.runId)!.ended_at
+      recordCompletedMemoryApplicationsInTransaction(f.db, task.runId, completedAt)
+      assert.equal(autoGlobalizationStatus(f.db, f.memory.id, 1).successfulRuns, number)
     }
-    const projectionId = f.db.prepare('SELECT global_entry_id FROM auto_global_projections WHERE entry_id=?')
-      .get<{global_entry_id:string}>(f.memory.id)!.global_entry_id
-    const global = readEntry(f.db, { workspace: 'global', entryId: projectionId })
-    const accepted = JSON.parse(f.db.prepare('SELECT fingerprint_json FROM task_memory_bindings WHERE run_id=?')
-      .get<{fingerprint_json:string}>(f.task.runId)!.fingerprint_json)
-    assert.equal(autoGlobalApplicable(f.db, global, {...accepted, languages:['Python']}), false, JSON.stringify({source:f.memory.scope, global:global.scope}))
-    assert.equal(autoGlobalApplicable(f.db, global), false)
-    const nextRoot = realpathSync(await mkdtemp(join(tmpdir(),'auto-global-next-')))
-    try {
-      await mkdir(join(nextRoot,'.git'))
-      await writeFile(join(nextRoot,'package.json'),'{"name":"other-javascript-project","private":true}')
-      await resolveProjectWorkspace(f.db,nextRoot)
-      const next = await f.tasks.prepare({requestId:'other-project-request',sessionId:'other-session',turn:1,
-        task:'migration expectations code',cwd:nextRoot,capabilities,
-        profileHints:{taskType:'build',target:'migration code tests',expected:'Handle migration expectations',constraints:'Preserve tests'},
-        signal:new AbortController().signal})
-      const preview = await queryScopedContextGated(f.db,{project:next.context!.project!,
-        task:'migration expectations code',taskProfile:next.profile,runId:next.runId,
-        limit:5,characterBudget:4000},candidate => ({persist:false,value:candidate}))
-      assert.equal((preview.value as NonNullable<typeof next.context>).items.some(item => item.entryId === global.id),true,
-        'the normal DSH scoped selection can deliver the generated Global to a matching next request')
-      await f.tasks.finish(next,'interrupted')
-    } finally { await rm(nextRoot,{recursive:true,force:true}) }
-    updateCandidateEntry(f.db, { workspace:f.memory.workspace, entryId:f.memory.id, expectedRevision:1,
-      kind:f.memory.kind, title:f.memory.title, body:`${f.memory.body} Revised.`,
-      scope:f.memory.scope, actor:'fixture' })
-    assert.equal(autoGlobalApplicable(f.db, global, accepted), false, 'stale selections are blocked before worker runs')
-    worker.kick(); await worker.whenIdle()
-    assert.equal(f.db.prepare('SELECT state FROM auto_global_projections WHERE global_entry_id=?')
-      .get<{state:string}>(projectionId)?.state, 'quarantined')
-    let latestDelivery = ''
-    let latestRun = ''
-    for (let number = 5; number <= 7; number++) {
-      const task = await f.tasks.prepare({requestId:`request-${number}`,sessionId:'session',turn:number,
-        task:'migration expectations code',cwd:f.root,capabilities,
-        profileHints:{taskType:'build',target:'migration code tests',expected:'Handle the next migration',constraints:'Preserve past schemas'},
-        signal:new AbortController().signal})
-      const status = memoryApplicationStatus(f.db,task.runId)
-      assert.equal(status.supported,true); assert.equal(status.items.length,1)
-      assert.equal(status.items[0]?.revision,2)
-      assert.ok(status.deliveryId)
-      latestDelivery = status.deliveryId; latestRun = task.runId
-      const identity = {runId:task.runId,workspace:task.workspace,sessionId:task.sessionId,repositoryRoot:f.root}
-      recordMemoryApplicationReview(f.db,identity,`review-${number}`,{generation:status.generation,
-        entryId:f.memory.id,entryRevision:2,expectedRevision:0,decision:'adopted',
-        basis:'Current migration fixture is checked.',paths:['check.mjs','migrations'],
-        invariant:'Migration expectations follow bundled files.',counterexample:'A fixed list misses new files.',
-        method:'Run the repository check.',command:'node check.mjs'})
-      beginMemoryExecution(f.db,identity,`verify-${number}`,'node check.mjs')
-      const result = spawnSync(process.execPath,['check.mjs'],{cwd:f.root,encoding:'utf8'})
-      assert.equal(result.status,0)
-      completeMemoryExecution(f.db,identity,`verify-${number}`,{value:{exitCode:0}})
-      await f.tasks.finish(task,'completed'); disabledWorker.kick(); await disabledWorker.whenIdle()
-      const newProjection = f.db.prepare('SELECT global_entry_id FROM auto_global_projections WHERE entry_id=? AND entry_revision=2')
-        .get<{global_entry_id:string}>(f.memory.id)
-      assert.equal(!!newProjection,false,'disabled configuration cannot create a projection')
-    }
-    assert.equal(autoGlobalizationStatus(f.db,f.memory.id,2).successfulRuns,3)
-    worker.kick(); await worker.whenIdle()
-    const replacementId = f.db.prepare('SELECT global_entry_id FROM auto_global_projections WHERE entry_id=? AND entry_revision=2')
-      .get<{global_entry_id:string}>(f.memory.id)!.global_entry_id
-    assert.equal(f.db.prepare('SELECT state FROM auto_global_projections WHERE global_entry_id=?')
-      .get<{state:string}>(projectionId)?.state,'replaced')
-    const replacement = readEntry(f.db,{workspace:'global',entryId:replacementId})
-    assert.equal(autoGlobalApplicable(f.db,replacement,accepted),true)
-    let command: any
-    const unmount = mountMemoryApplication({tools:{register:() => () => {}},on:() => () => {},
-      commands:{register:(definition:any) => {if(definition.name==='kioku-memory-application')command=definition; return () => {}}}} as any,
-    {runtime:f.runtime as any,resolve:() => undefined,
-      session:() => ({sessionId:'session',repositoryRoot:f.root}),refresh:async () => undefined})
-    try {
-      const reported = await command.handler({rawInput:'status --json',agent:{},signal:new AbortController().signal})
-      const status = JSON.parse(reported.text)
-      assert.equal(status.globalization[0].successfulRuns,3)
-      assert.equal(status.globalization[0].globalEntryId,replacementId)
-    } finally { unmount() }
-    recordContextFeedback(f.db,{workspace:f.memory.workspace,feedbackId:'negative-auto-global',
-      deliveryId:latestDelivery,entryId:f.memory.id,entryRevision:2,runId:latestRun,
-      verdict:'conflicting',actor:'fixture',idempotencyKey:'negative-auto-global',createdAt:new Date().toISOString()})
-    assert.equal(autoGlobalApplicable(f.db,replacement,accepted),false,'negative feedback blocks stale selections immediately')
-    worker.kick(); await worker.whenIdle()
-    assert.equal(f.db.prepare('SELECT state FROM auto_global_projections WHERE global_entry_id=?')
-      .get<{state:string}>(replacementId)?.state,'quarantined')
-  } finally { await disabledWorker.dispose(); await concurrentWorker.dispose(); await worker.dispose(); await f.close() }
+    const before = { entries: f.db.prepare('SELECT * FROM entries ORDER BY id').all(),
+      queue: f.db.prepare('SELECT * FROM auto_global_queue ORDER BY entry_id,entry_revision').all(),
+      receipts: f.db.prepare('SELECT * FROM auto_global_application_receipts ORDER BY run_id').all() }
+    assert.equal(processNextAutoGlobalizationInTransaction(f.db, true), false)
+    for (const worker of workers) worker.kick()
+    await Promise.all(workers.map(worker => worker.whenIdle()))
+    f.reopen()
+    for (const worker of workers) worker.kick()
+    await Promise.all(workers.map(worker => worker.whenIdle()))
+    assert.deepEqual(f.db.prepare('SELECT * FROM entries ORDER BY id').all(), before.entries)
+    assert.deepEqual(f.db.prepare('SELECT * FROM auto_global_queue ORDER BY entry_id,entry_revision').all(), before.queue)
+    assert.deepEqual(f.db.prepare('SELECT * FROM auto_global_application_receipts ORDER BY run_id').all(), before.receipts)
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM auto_global_projections').get()?.n, 0)
+    assert.equal(f.db.prepare("SELECT count(*) AS n FROM entries WHERE workspace='global'").get()?.n, 0)
+    // The supported positive save path is the actual native two-question approval
+    // flow in writer-boundary-native-audit.test.ts and replay-memory-review.test.ts.
+  } finally { for (const worker of workers) await worker.dispose(); await f.close() }
 })
 
-test('model reports, skip, unknown, failure, background and stale files never satisfy observed verification', async () => {
+test('model reports and stale or failed historical proof cannot become verification or veto native completion', async () => {
   const f = await fixture()
   try {
     recordMemoryApplicationReview(f.db, f.identity, 'review', f.review())
@@ -405,14 +405,15 @@ test('model reports, skip, unknown, failure, background and stale files never sa
     assert.equal(f.status().ready, true)
     await writeFile(join(f.root, 'check.mjs'), 'throw Error("changed")')
     assert.equal(f.status().ready, false)
-    await assert.rejects(f.tasks.checkpoint(f.task, { outcome: 'completed', evidence: { commands: [{ executable: 'node', outcome: 'passed', exitCode: 0 }] } }, new AbortController().signal), /incomplete/)
-    assert.equal(f.db.prepare('SELECT count(*) AS n FROM ledger_evidence WHERE run_id=?').get(f.task.runId)?.n, 0, 'rejected checkpoint rolls back model evidence')
+    const checkpoint = await f.tasks.checkpoint(f.task, { outcome: 'completed', evidence: { commands: [{ executable: 'node', outcome: 'passed', exitCode: 0 }] } }, new AbortController().signal)
+    assert.deepEqual(checkpoint, { project: null, entries: [], recorded: false, workMayContinue: true, reason: 'post_task_memory_review_required' })
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM ledger_evidence WHERE run_id=?').get(f.task.runId)?.n, 0, 'a public checkpoint cannot persist model evidence')
     await f.tasks.finish(f.task, 'completed')
-    assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'interrupted', 'native completion stops without an automatic continuation')
+    assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'completed', 'stale historical memory cannot rewrite native success')
   } finally { await f.close() }
 })
 
-test('reviews bind revisions, reject conflicting retry and foreign identities, and refresh retains unchanged decisions', async () => {
+test('historical reviews bind revisions and identities while explicit rebinding retains unchanged decisions', async () => {
   const f = await fixture()
   try {
     const review = f.review('not_applicable')
@@ -425,7 +426,7 @@ test('reviews bind revisions, reject conflicting retry and foreign identities, a
     const initial = f.status()
     assert.ok(initial.supported)
     const generation = initial.generation
-    await f.tasks.refresh(f.task, 'unrelated-query-that-matches-nothing', new AbortController().signal)
+    await f.bindHistorical('unrelated-query-that-matches-nothing')
     const refreshed = f.status()
     assert.ok(refreshed.supported)
     assert.equal(refreshed.generation, generation)
@@ -434,7 +435,7 @@ test('reviews bind revisions, reject conflicting retry and foreign identities, a
     assert.throws(() => recordMemoryApplicationReview(f.db, f.identity, 'stale', review), /revision changed/)
     updateCandidateEntry(f.db, { workspace: f.task.workspace, entryId: f.memory.id, expectedRevision: 1, kind: f.memory.kind, title: f.memory.title, body: 'migration expectations updated', actor: 'fixture' })
     assert.equal(f.status().ready, false)
-    await f.tasks.refresh(f.task, 'migration expectations updated', new AbortController().signal)
+    await f.bindHistorical('migration expectations updated')
     const revised = f.status()
     assert.ok(revised.supported)
     assert.equal(revised.generation, generation + 1)
@@ -444,7 +445,7 @@ test('reviews bind revisions, reject conflicting retry and foreign identities, a
   } finally { await f.close() }
 })
 
-test('refresh reviews only new entries while invalidating prior execution proof', async () => {
+test('explicit historical rebinding adds only new decisions and invalidates prior execution proof', async () => {
   const f = await fixture()
   try {
     recordMemoryApplicationReview(f.db, f.identity, 'original-review', f.review())
@@ -456,17 +457,17 @@ test('refresh reviews only new entries while invalidating prior execution proof'
     const generation = initial.generation
     const added = recordEntry(f.db, { workspace: f.task.workspace, kind: 'lesson', title: 'batching signal',
       body: 'The batching signal requires an independent current-source decision.', createdBy: 'fixture', scope: { visibility: 'project' } })
-    await f.tasks.refresh(f.task, 'batching signal', new AbortController().signal)
+    await f.bindHistorical('batching signal')
     const refreshed = f.status()
     assert.ok(refreshed.supported)
     assert.equal(refreshed.generation, generation)
     assert.equal(refreshed.items.find(item => item.entryId === f.memory.id)?.decision, 'adopted')
     assert.equal(refreshed.items.find(item => item.entryId === f.memory.id)?.problem, 'verification_missing_failed_or_stale')
     assert.equal(refreshed.items.find(item => item.entryId === added.id)?.problem, 'decision_missing')
-    // An unresolved decision never rejects the call; it must still keep the run incomplete.
+    // Low-level accounting still marks historical proof incomplete without blocking work.
     beginMemoryExecution(f.db, f.identity, 'unresolved-effect', null)
     completeMemoryExecution(f.db, f.identity, 'unresolved-effect', { value: {} })
-    assert.equal(f.status().ready, false, 'an unresolved decision still blocks completion')
+    assert.equal(f.status().ready, false, 'historical memory remains unresolved advisory data')
     recordMemoryApplicationReview(f.db, f.identity, 'added-review', { generation, entryId: added.id,
       entryRevision: added.revision, expectedRevision: 0, decision: 'not_applicable',
       basis: 'The batching signal is unrelated to migration checks.', paths: [] })
@@ -497,36 +498,34 @@ test('topic-based non-applicability survives unrelated edits while source-backed
   } finally { await f.close() }
 })
 
-test('native batch reviews multiple memories atomically with exact replay', async () => {
-  const f = await fixture(), tools: any[] = [], agent = {}
-  const dispose = mountMemoryApplication({ tools: { register(tool) { tools.push(tool); return () => {} } }, on() { return () => {} } }, {
-    runtime: f.runtime as any, resolve: execution => execution.agent === agent ? f.identity : undefined,
-    refresh: async () => undefined,
-  })
+test('historical batch review storage stays atomic and exact-replay bound', async () => {
+  const f = await fixture()
   try {
     const added = recordEntry(f.db, { workspace: f.task.workspace, kind: 'lesson', title: 'batch review',
       body: 'A distinct lesson for an independent review.', createdBy: 'fixture', scope: { visibility: 'project' } })
-    await f.tasks.refresh(f.task, 'batch review', new AbortController().signal)
+    await f.bindHistorical('batch review')
     const status = f.status()
     assert.ok(status.supported)
     assert.equal(status.items.length, 2)
     const original = { ...f.review('not_applicable'), generation: status.generation, paths: [] }
     const second = { generation: status.generation, entryId: added.id, entryRevision: added.revision,
       expectedRevision: 0, decision: 'not_applicable', basis: 'The second lesson is unrelated.', paths: [] }
-    const execution = (callId: string) => ({ callId, name: 'task_memory_review', agent, signal: new AbortController().signal })
-    await assert.rejects(tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review_batch', reviews: [original, { ...second, entryRevision: 99 }] }, execution('bad')))
+    assert.throws(() => recordMemoryApplicationReviewBatch(f.db, f.identity, 'bad', [original, { ...second, entryRevision: 99 }]))
     const afterRejection = f.status()
     assert.ok(afterRejection.supported)
     assert.equal(afterRejection.items.every(item => item.decision === null), true, 'invalid batch must write no decisions')
-    const result = await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review_batch', reviews: [original, second] }, execution('batch'))
-    assert.equal(result.ready, true)
-    assert.equal(result.items.length, 2)
-    assert.equal((await tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review_batch', reviews: [original, second] }, execution('batch'))).ready, true)
-    await assert.rejects(tools.find(tool => tool.name === 'task_memory_review').execute({ action: 'review_batch', reviews: [{ ...original, basis: 'changed' }, second] }, execution('batch')), /different input/)
-  } finally { dispose(); await f.close() }
+    const result = recordMemoryApplicationReviewBatch(f.db, f.identity, 'batch', [original, second])
+    const saved = f.status()
+    assert.ok(saved.supported)
+    assert.deepEqual(result, saved)
+    assert.equal(saved.ready, true)
+    assert.equal(saved.items.length, 2)
+    assert.deepEqual(recordMemoryApplicationReviewBatch(f.db, f.identity, 'batch', [original, second]), saved)
+    assert.throws(() => recordMemoryApplicationReviewBatch(f.db, f.identity, 'batch', [{ ...original, basis: 'changed' }, second]), /different input/)
+  } finally { await f.close() }
 })
 
-test('superseding an ordinary reviewed memory allows the effect but blocks re-review and completion without a revision change', async () => {
+test('superseded historical memory invalidates proof and re-review without vetoing native completion', async () => {
   const f = await fixture()
   try {
     recordMemoryApplicationReview(f.db, f.identity, 'review', f.review('not_applicable'))
@@ -538,9 +537,10 @@ test('superseding an ordinary reviewed memory allows the effect but blocks re-re
     assert.equal(f.status().pending[0]?.problem, 'entry_changed')
     beginMemoryExecution(f.db, f.identity, 'edit', null)
     completeMemoryExecution(f.db, f.identity, 'edit', { value: {} })
-    assert.equal(f.status().ready, false, 'the effect runs, but the run stays incomplete')
+    assert.equal(f.status().ready, false, 'the effect runs while historical proof remains invalid')
     assert.throws(() => recordMemoryApplicationReview(f.db, f.identity, 'retry', { ...f.review('not_applicable'), expectedRevision: 1 }), /Memory entry changed/)
-    assert.throws(() => new LedgerStore(f.db).updateRunStatus(f.task.runId, 'completed'), /incomplete/)
+    new LedgerStore(f.db).updateRunStatus(f.task.runId, 'completed')
+    assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'completed')
   } finally { await f.close() }
 })
 
@@ -652,11 +652,11 @@ for (const kind of ['direct', 'carrier', 'resumed'] as const) test(`host-only ${
     assert.equal(preparations, kind === 'resumed' ? 0 : 1)
     assert.equal(f.status().ready, false, 'preparation must not resolve or bypass memory decisions')
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_executions WHERE run_id=?').get(f.task.runId)?.n, 0, 'control preparation must not create an execution receipt')
-    // The unresolved binding no longer rejects the call; it keeps the run incomplete.
+    // The historical binding cannot reject native effects or completion.
     const effectResult = await call('effect_probe', {})
     assert.equal(effectResult.isError, false, JSON.stringify(effectResult))
     assert.equal(effects, 1)
-    assert.equal(f.status().ready, false, 'an unresolved decision still blocks completion')
+    assert.equal(f.status().ready, false, 'historical memory remains unresolved advisory data')
     assert.equal((await invoke(name, args, { agent: { ...agent } })).isError, true, 'copied identity cannot borrow preparation proof')
     const statusResult = await call('task_memory_review', { action: 'status' })
     const status = kind === 'carrier' ? statusResult.value.result : statusResult.value
@@ -664,6 +664,9 @@ for (const kind of ['direct', 'carrier', 'resumed'] as const) test(`host-only ${
     assert.equal((await call('task_memory_review', { action: 'review', review: f.review('not_applicable') })).isError, false)
     assert.equal((await call('effect_probe', {})).isError, false)
     assert.equal(effects, 2)
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_reviews').get()?.n, 0, 'native review is not a memory writer')
+    await f.tasks.finish(f.task, 'completed')
+    assert.equal(new LedgerStore(f.db).readRun(f.task.runId)?.status, 'completed')
   } finally { await intake.dispose(); disposeMemory(); releaseEffect(); for (const mounted of fibers.reverse()) await mounted.dispose(); await f.close() }
 })
 

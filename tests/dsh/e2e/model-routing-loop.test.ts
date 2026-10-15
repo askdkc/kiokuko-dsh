@@ -346,7 +346,7 @@ test('native README document execution: reload, write, verification and next tas
   const h = await harness()
   await writeFile(join(h.root, 'README.md'), 'before\n')
   let writes = 0
-  const questions: string[] = []
+  const questions: string[] = [], memoryQuestions: string[] = []
   const edit = h.ctx.tools.register({ name: 'edit_readme', description: 'Apply the requested README correction.', parameters: { type: 'object', properties: {} },
     output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
     execute: async () => { writes++; await writeFile(join(h.root, 'README.md'), 'after\n'); assert.equal(await readFile(join(h.root, 'README.md'), 'utf8'), 'after\n'); return 'README edit verified' },
@@ -361,24 +361,42 @@ test('native README document execution: reload, write, verification and next tas
   ])
   h.ctx.llm.registerAdapter(['ordinary'], model)
   const questionHost = h.ctx.plugin({ name: 'document-test-ui', apply(ctx: any) { return ctx.provide('userQuestions', { ask: async (request: any) => {
-    questions.push(...request.questions.map((question: any) => question.id)); return { answers: [] }
+    const answers = []
+    for (const question of request.questions) {
+      if (question.options?.some((option: any) => option.label === '整理して確認する')) {
+        assert.deepEqual(question.options.map((option: any) => option.label), ['整理して確認する', '今回は保存しない'])
+        assert.equal(request.agent?.session.id, 'document-session')
+        assert.ok(await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT 1 FROM ledger_runs WHERE dsh_session_id='document-session' AND status='completed'").get()))
+        memoryQuestions.push(question.id)
+        answers.push({ id: question.id, selected: ['今回は保存しない'] })
+      } else questions.push(question.id)
+    }
+    return { answers }
   } }) } }); await questionHost
   const options = { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'),
     llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } }
   let adapter = createDshHostAdapter(h.ctx, options)
   let composition = await mountDshComposition(h.ctx, adapter.host)
   const agent = await h.ctx.agentLoop.create(h.session.SessionId('document-session'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+  const memoryOffered = async (count: number) => {
+    const deadline = Date.now() + 2000
+    while (memoryQuestions.length < count && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(memoryQuestions.length, count)
+  }
   try {
     await turn(h, agent, 'README.mdを修正してください。')
     assert.equal(writes, 1)
     assert.equal(model.requests.length, 3)
     assert.match(JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'assistant/message').at(-1)), /検証しました/)
+    await memoryOffered(1)
     await composition.dispose(); await adapter.dispose()
     adapter = createDshHostAdapter(h.ctx, options); composition = await mountDshComposition(h.ctx, adapter.host)
     await turn(h, agent, 'README.mdの追記も実装してください。')
     assert.equal(writes, 2)
     assert.equal(model.requests.length, 6)
+    await memoryOffered(2)
     assert.deepEqual(questions, [], 'document editing does not require a coding or execution-mode choice')
+    assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM entries').get()?.n), 0, 'declined post-task review creates no memory')
     assert.equal(await readFile(join(h.root, 'README.md'), 'utf8'), 'after\n')
     const counts = await adapter.host.runtime!.withDatabase(db => ['enno_contracts', 'dsh_turn_receipts', 'dsh_continuation_outbox', 'dsh_coding_workflows'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
     assert.deepEqual(counts, [0, 0, 0, 0])

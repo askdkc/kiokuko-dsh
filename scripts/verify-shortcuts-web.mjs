@@ -1,3 +1,4 @@
+import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Real DSH Web + packed Kiokuko + scripted local seeding and questions, in a disposable profile.
 import assert from 'node:assert/strict'
@@ -69,7 +70,7 @@ export async function apply(ctx) {
 }`)
   await writeFile(patch, `- id: session-title-llm\n  disabled: true\n- id: agent-default-model\n  config: {provider: shortcut-fixture, model: mock}\n- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n- insert:\n    - id: shortcut-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, userQuestions, sessionProjections, agents, llm, sessions]\n`)
   }
-  child = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', '0'], { env, cwd: project, stdio: ['ignore', 'pipe', 'pipe'] })
+  child = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', webTestPort()], { env, cwd: project, stdio: ['ignore', 'pipe', 'pipe'] })
   for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { logs += chunk.toString() })
   const url = await poll(async () => logs.match(/https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/)?.[0], 90_000)
   console.log(`Running ${new URL(url).origin} (${base})`)

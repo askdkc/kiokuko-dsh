@@ -376,12 +376,15 @@ export class DshAgenticReplayRecorder {
         const projected = this.config.capture.content === 'metadata' ? undefined
           : boundedAgenticReplayPayload(argumentValue, Math.max(1, this.config.maxQueuedBytesPerTrace - 2048), 'dsh.tool.arguments.v1')
         const name = label(exec.name), callId = label(exec.callId), rootCallId = label(exec.rootCallId)
+        const session = record(exec.agent?.session)
+        const last = typeof session.eventAt === 'function' && Number.isSafeInteger(session.seq) ? record(session.eventAt(session.seq - 1)) : {}
+        const nativeCallSeq = last.type === 'tool/call' && record(last.data).callId === exec.callId ? last.seq : undefined
         if (!this.#reserve(trace, 512)) return
         const id = randomBytes(12).toString('hex')
         const parent = exec.parent === undefined ? undefined : this.#attempts.get(exec.parent)
         const omitted = projected?.omitted === true
         const ref = this.#enqueue(trace, { type: 'tool.call', actor: 'harness', attrs: { name, callId,
-          rootCallId, attemptId: id, startObserved, ...(omitted ? { content_omitted: true, omission_reason: projected.omissionReason ?? 'payload_limit' } : {}),
+          rootCallId, attemptId: id, startObserved, ...(binding.kiokukoRunId ? { taskId: binding.kiokukoRunId } : {}), ...(nativeCallSeq === undefined ? {} : { nativeCallSeq }), ...(omitted ? { content_omitted: true, omission_reason: projected.omissionReason ?? 'payload_limit' } : {}),
           ...(parent && parent.trace === trace ? { parentAttemptId: parent.id } : {}) },
           ...(this.config.capture.content === 'metadata' ? {} : { payload: projected!.payload }) }, undefined,
           { phase: 'tool_call_append', eventType: 'tool.call', callId: exec.callId })
@@ -435,7 +438,7 @@ export class DshAgenticReplayRecorder {
         projected = { payload: { format: 'dsh.tool.result.v1', content_omitted: true, omission_reason: 'payload_limit' },
           omitted: true, omissionReason: 'payload_limit' }
       }
-      this.#enqueue(trace, { type: 'tool.result', actor: 'tool', attrs: { name: label(exec.name), attemptId: id, ...toolResultOutcome(r),
+      this.#enqueue(trace, { type: 'tool.result', actor: 'tool', attrs: { name: label(exec.name), attemptId: id, ...toolResultOutcome(r,exec.name),
         ...(projected.omitted ? { content_omitted: true, omission_reason: projected.omissionReason ?? 'payload_limit' } : {}) },
         payload: projected.payload }, ref, { phase: 'tool_result_append', eventType: 'tool.result', callId: exec.callId })
       if (projected.omitted) this.#recordOmission(trace, 'tool.result', id, projected.omissionReason ?? 'payload_limit', ref)

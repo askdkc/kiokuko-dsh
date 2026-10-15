@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtemp, realpath, mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
+import { migrateDatabase } from '../../../../src/db/migrate.js'
+import { workingLispTask } from '../../helpers/lisp-task.js'
 import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
 import { LispManager } from '../../../../src/dsh/lisp/manager.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
@@ -20,8 +22,7 @@ for (const provider of ['typesafe', 'nimble', 'laya-coreml', 'laya-v1'] as const
 }, async () => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'neutral-lisp-'))), root = join(base, 'work'); await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'db'), new DatabaseSync(join(base, 'db')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
+  migrateDatabase(db)
   const owner = { sessionId: 'session', agentId: 'agent', root }, config = provider === 'laya-v1' ? TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } }) : provider === 'laya-coreml' ? layaConfig() : TypedDecisionsConfig.parse({ provider, nimble: { endpoint: 'http://localhost:8000/v1/systemone', model: 'fixture-model' } })
   let mode = 'selected', calls = 0, began!: () => void, late!: (response: Response) => void, requestSignal: AbortSignal | undefined
   const request: typeof fetch = async (_url, options) => {
@@ -63,7 +64,7 @@ for (const provider of ['typesafe', 'nimble', 'laya-coreml', 'laya-v1'] as const
     mode = 'hang'; const started = new Promise<void>(resolve => { began = resolve }), controller = new AbortController()
     const pending = evaluate('cancelled', relevance, controller.signal); await started; controller.abort()
     assert.equal((await pending).ok, false); assert.equal(requestSignal!.aborted, true)
-    late(Response.json({})); await manager.recover(owner)
+    late(Response.json({})); workingLispTask(db, owner); await manager.recover(owner)
     assert.equal((await evaluate('ordinary', '(+ 1 2)')).value.json, 3)
   } finally { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) }
 })

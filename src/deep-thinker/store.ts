@@ -187,7 +187,7 @@ export class DeepStore {
     this.saveIntentInTransaction(db, { ...IntentSchema.parse(JSON.parse(row.state_json)), status: phase === 'cancelled' ? 'cancelled' : 'completed' })
     this.enqueue(db, { id: `deep-report:${state.runId}`, startId: state.startId, runId: state.runId, sessionId: state.sessionId, kind: 'report', payload: report })
     this.enqueue(db, { id: `deep-terminal:${state.runId}`, startId: state.startId, runId: state.runId, sessionId: state.sessionId, kind: 'status', payload: {text: `Deep: ${phase === 'answered' ? '完了' : phase === 'partial' ? '部分回答' : phase === 'cancelled' ? '取消済み' : '停止'}${reason ? ` — ${reason}` : ''}`} })
-    db.prepare("INSERT OR IGNORE INTO dsh_deep_finalizations(run_id,source_json,status) VALUES(?,?,'pending')").run(state.runId, JSON.stringify({ kind: 'deep-report', report, configuration: state.configuration, workspace: state.workspace, sessionId: state.sessionId,
-      accepted: state.nodes.filter(n => n.status === 'accepted' && n.receipt).map(n => ({ nodeId: n.id, revision: n.revision, candidate: n.candidate, receipt: n.receipt })) }))
+    // No duplicate durable memory source or pending draft before user review.
+
   }
 }

@@ -5,18 +5,30 @@ import { canonicalContentHash } from '../../../src/serialization/validate.js'
 import { withImmediateTransaction } from '../../../src/db/transaction.js'
 import { adoptMemories } from '../../../src/memory/review/adoption.js'
 import { explainMemory } from '../../../src/memory/explain.js'
+import { citationManifest, saveCitationManifest } from '../../../src/memory/review/citations.js'
+import { assertEvidenceNotForgotten } from '../../../src/memory/forgotten.js'
 import { ReviewResultV2 } from '../../../src/memory/review/contracts.js'
 
 const text='今回だけPythonを使う。実験は未実施で、前回は失敗した。'
+const range={workspace:'project:test',sessionId:'session-evidence',runId:'evidence',sourceGeneration:'generation',startSeq:1,endSeq:4}
 function source() { const role='user_assertion' as const,sourceSeqs=[3]; return {id:'e:3',role,sourceSeqs,text,normalizedSourceHash:canonicalContentHash({role,sourceSeqs,text}),eligibleForNewMemory:true} }
 function operation(quote=text) {return ReviewResultV2.parse({schemaVersion:2,proposals:[{action:'add',kind:'decision',title:'実験',body:text,evidenceIds:['e:3'],claims:[{id:'experiment',text,evidence:[{evidenceId:'e:3',supportingText:quote}]}]}]}).proposals[0]!}
-function adopt(quote=text,eligible=true) {
+function historicalFixture(quote=text,eligible=true) {
  const f=fixture();createRun(f.db,'evidence')
- const result=withImmediateTransaction(f.db,()=>adoptMemories(f.db,{id:'job',range:{workspace:'project:test',sessionId:'session-evidence',runId:'evidence',sourceGeneration:'generation',startSeq:1,endSeq:4},evidence:[{...source(),eligibleForNewMemory:eligible}],existing:[],operations:[operation(quote)],observe:false,now:NOW}))
+ const result=applyHistorical(f.db,'job',[operation(quote)],[{...source(),eligibleForNewMemory:eligible}])
  return {...f,result}
 }
+test('retired public adoption cannot save even valid cited evidence',()=>{
+ const f=fixture();createRun(f.db,'evidence')
+ try{
+  const result=withImmediateTransaction(f.db,()=>adoptMemories(f.db,{id:'retired-public',range,evidence:[source()],existing:[],operations:[operation()],observe:false,now:NOW}))
+  assert.equal(result.added,0);assert.equal(result.held,1)
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,0)
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM memory_revision_evidence').get()?.n,0)
+ }finally{f.db.close()}
+})
 test('cited memory preserves conditions and exposes source identity without proving truth',()=>{
- const f=adopt();try {
+ const f=historicalFixture();try {
   assert.equal(f.result.added,1)
   const e=f.result.entries[0]!,view=explainMemory(f.db,{workspace:e.workspace,entryId:e.id})
   assert.equal(view.body,text);assert.equal(view.evidenceStatus,'source_attached');assert.equal(view.claims[0]!.sources[0]!.supportingText,text)
@@ -25,7 +37,7 @@ test('cited memory preserves conditions and exposes source identity without prov
  }finally{f.db.close()}
 })
 test('altered excerpts and context-only evidence hold the operation without saving a body',()=>{
- for(const [quote,eligible] of [['always use Python',true],[text,false]] as const){const f=adopt(quote,eligible);try {
+ for(const [quote,eligible] of [['always use Python',true],[text,false]] as const){const f=historicalFixture(quote,eligible);try {
   assert.equal(f.result.held,1);assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,0)
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM memory_revision_evidence').get()?.n,0)
  }finally{f.db.close()}}
@@ -34,7 +46,7 @@ test('altered excerpts and context-only evidence hold the operation without savi
 import { forgetMemory } from '../../../src/memory/forget.js'
 import { searchEntries } from '../../../src/memory/retrieval.js'
 test('forget erases excerpts and bodies, fences source replay and supports exact retry',()=>{
- const f=adopt();try {
+ const f=historicalFixture();try {
   const e=f.result.entries[0]!,input={workspace:e.workspace,entryId:e.id,expectedRevision:e.revision,operationId:'forget-1'}
   assert.throws(()=>forgetMemory(f.db,{...input,expectedRevision:2}))
   const result=forgetMemory(f.db,input)
@@ -45,11 +57,11 @@ test('forget erases excerpts and bodies, fences source replay and supports exact
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM memory_revision_evidence').get()?.n,0)
   const replay=withImmediateTransaction(f.db,()=>adoptMemories(f.db,{id:'later-job',range:{workspace:e.workspace,sessionId:'session-evidence',runId:'evidence',sourceGeneration:'generation',startSeq:1,endSeq:4},evidence:[source()],existing:[],operations:[operation()],observe:false,now:NOW}))
   assert.equal(replay.held,1);assert.equal(replay.added,0)
+  assert.equal(applyHistorical(f.db,'historical-replay',[operation()]).held,1)
  }finally{f.db.close()}
 })
 
-import { readEntry, recordEntry } from '../../../src/memory/entries.js'
-import { memorySnapshots } from '../../../src/memory/review/adoption.js'
+import { readEntry, recordEntry, recordEntryInTransaction, updateCandidateEntryInTransaction } from '../../../src/memory/entries.js'
 import { configureIndex, reserveIndexJob, saveIndexFact } from '../../../src/memory/index-reasoning/store.js'
 import { IndexReasoningWorker } from '../../../src/memory/index-reasoning/worker.js'
 import { MemoryIndexReasoningConfig } from '../../../src/memory/index-reasoning/contracts.js'
@@ -66,24 +78,49 @@ import { hybridSearch } from '../../../src/memory/hybrid-retrieval.js'
 test('restart and a different run/generation cannot replay the source, but independent speech is allowed',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'memory-forget-restart-')),path=join(dir,'state.sqlite3')
  const first=fixture(path);createRun(first.db,'evidence')
- const root=apply(first.db,'original',[operation()]).entries[0]!
+ const root=applyHistorical(first.db,'original',[operation()]).entries[0]!
  const receipt=retire(first.db,root);first.db.close()
  const next=fixture(path)
  try{
    createRun(next.db,'different-run')
    assert.deepEqual(forgetMemory(next.db,{workspace:root.workspace,entryId:root.id,expectedRevision:1,operationId:'restart-retry'}),receipt)
-   assert.equal(apply(next.db,'backfill',[operation()],[source()],{runId:'different-run',sourceGeneration:'new-generation'}).held,1)
+   assert.equal(applyHistorical(next.db,'backfill',[operation()],[source()],{runId:'different-run',sourceGeneration:'new-generation'}).held,1)
    const backend={id:'stale',search(){return [{entryId:root.id,distance:0}]}}
    assert.equal(hybridSearch(next.db,{workspace:root.workspace,query:'Python',limit:10,includeSuperseded:true},{semantic:{backend,query:{profileId:'fixture',dimensions:2,vector:new Float32Array([1,0]),vectorHash:'hash',backendId:'stale',distanceCeiling:0.9}}}).length,0)
-   assert.equal(apply(next.db,'new-speech',[operation()],[source()],{runId:'different-run',sessionId:'independent-session',sourceGeneration:'independent-generation'}).added,1)
+   assert.equal(applyHistorical(next.db,'new-speech',[operation()],[source()],{runId:'different-run',sessionId:'independent-session',sourceGeneration:'independent-generation'}).added,1)
    assert.deepEqual(next.db.prepare('PRAGMA foreign_key_check').all(),[])
  }finally{next.db.close();await rm(dir,{recursive:true,force:true})}
 })
 
-const range={workspace:'project:test',sessionId:'session-evidence',runId:'evidence',sourceGeneration:'generation',startSeq:1,endSeq:4}
-function apply(db: ReturnType<typeof fixture>['db'], id: string, operations: unknown[], evidence=[source()], changes={}) {
-  return withImmediateTransaction(db,()=>adoptMemories(db,{id,range:{...range,...changes},evidence,existing:memorySnapshots(db,{...range,...changes},'実験').existing,
-    operations:operations as Parameters<typeof adoptMemories>[1]['operations'],observe:false,now:NOW}))
+// Explicit pre-migration evidence fixture. Public adoptMemories is retired;
+// these tests target the retained citation/revision/erasure primitives directly.
+function applyHistorical(db: ReturnType<typeof fixture>['db'], id: string, operations: unknown[], evidence=[source()], changes={}) {
+  const selectedRange={...range,...changes}
+  const result: {added:number;updated:number;unchanged:number;held:number;entries:ReturnType<typeof recordEntry>[]}={added:0,updated:0,unchanged:0,held:0,entries:[]}
+  for(const raw of operations){
+    try{
+      const operation=ReviewResultV2.parse({schemaVersion:2,proposals:[raw]}).proposals[0]!
+      if(operation.action!=='add'&&operation.action!=='update')throw Error('fixture supports historical add/update only')
+      const entry=withImmediateTransaction(db,()=>{
+        assertEvidenceNotForgotten(db,selectedRange.workspace,selectedRange.sessionId,selectedRange.sourceGeneration,evidence.map(e=>e.normalizedSourceHash))
+        const manifest=citationManifest(db,selectedRange,evidence,operation)
+        if(!manifest)throw Error('historical fixture requires source claims')
+        const fields={workspace:selectedRange.workspace,kind:operation.kind,title:operation.title,body:operation.body,
+          scope:{visibility:'project'},createdBy:'historical-evidence-fixture',
+          provenance:{type:'historical-memory-review',reference:`${selectedRange.sessionId}:${selectedRange.sourceGeneration}:${id}`,runId:selectedRange.runId}}
+        let entry:ReturnType<typeof recordEntry>
+        if(operation.action==='update'){
+          const previous=readEntry(db,{workspace:selectedRange.workspace,entryId:operation.targetEntryId})
+          if(previous.contentHash!==operation.expectedContentHash)throw Error('historical content changed')
+          entry=updateCandidateEntryInTransaction(db,{...fields,entryId:operation.targetEntryId,expectedRevision:operation.expectedRevision})
+        }else entry=recordEntryInTransaction(db,fields,{now:NOW})
+        saveCitationManifest(db,entry,manifest)
+        return entry
+      })
+      result.entries.push(entry);if(operation.action==='add')result.added++;else result.updated++
+    }catch{result.held++}
+  }
+  return result
 }
 function retire(db: ReturnType<typeof fixture>['db'], entry: {id:string;workspace:string;revision:number}) {
   return forgetMemory(db,{workspace:entry.workspace,entryId:entry.id,expectedRevision:entry.revision,operationId:`forget-${entry.id}`})
@@ -92,12 +129,12 @@ test('multiple claims retain their own original sources when only one claim is c
   const f=fixture();createRun(f.db,'evidence')
   try {
     const a='今回だけPythonを使う。', b='実験は未実施で、前回は失敗した。'
-    const first=apply(f.db,'multi',[{...operation(),body:`${a}\n\n${b}`,claims:[{id:'language',text:a,evidence:[{evidenceId:'e:3',supportingText:a}]},{id:'experiment',text:b,evidence:[{evidenceId:'e:3',supportingText:b}]}]}]).entries[0]!
+    const first=applyHistorical(f.db,'multi',[{...operation(),body:`${a}\n\n${b}`,claims:[{id:'language',text:a,evidence:[{evidenceId:'e:3',supportingText:a}]},{id:'experiment',text:b,evidence:[{evidenceId:'e:3',supportingText:b}]}]}]).entries[0]!
     const c='実験を実施したが、今回も失敗した。'
     const newer={...source(),id:'e:8',text:c,sourceSeqs:[8],normalizedSourceHash:canonicalContentHash({role:'user_assertion',sourceSeqs:[8],text:c})}
     const update={action:'update',targetEntryId:first.id,expectedRevision:1,expectedContentHash:first.contentHash,kind:first.kind,title:first.title,body:`${a}\n\n${c}`,evidenceIds:['e:8'],
       claims:[{id:'language',text:a,evidence:[],inherits:{revision:1,claimId:'language'}},{id:'experiment',text:c,evidence:[{evidenceId:'e:8',supportingText:c}],supersedes:{revision:1,claimId:'experiment'}}]}
-    const changed=apply(f.db,'correct',[update],[newer],{sessionId:'session-new',startSeq:5,endSeq:9})
+    const changed=applyHistorical(f.db,'correct',[update],[newer],{sessionId:'session-new',startSeq:5,endSeq:9})
     assert.equal(changed.updated,1)
     const view=explainMemory(f.db,{workspace:first.workspace,entryId:first.id})
     assert.equal(view.revision,2);assert.equal(view.claims[0]!.sources[0]!.sessionId,'session-evidence')
@@ -106,7 +143,7 @@ test('multiple claims retain their own original sources when only one claim is c
     assert.equal(view.history[0]!.claims[1]!.text,b)
     assert.equal(explainMemory(f.db,{workspace:first.workspace,entryId:first.id,revision:1}).body,`${a}\n\n${b}`)
     const bad={...update,expectedRevision:2,expectedContentHash:changed.entries[0]!.contentHash,claims:[{id:'changed',text:c,evidence:[{evidenceId:'e:8',supportingText:c}],supersedes:{revision:2,claimId:'missing'}}],body:c}
-    assert.equal(apply(f.db,'ambiguous',[bad],[newer]).held,1)
+    assert.equal(applyHistorical(f.db,'ambiguous',[bad],[newer]).held,1)
   }finally{f.db.close()}
 })
 test('invalid IDs, changed hashes and secret excerpts cannot create evidence-backed memories',()=>{
@@ -120,7 +157,7 @@ test('invalid IDs, changed hashes and secret excerpts cannot create evidence-bac
         e.text='Authorization: Bearer fixturetokenabcdefghijklmnop';e.normalizedSourceHash=canonicalContentHash({role:e.role,sourceSeqs:e.sourceSeqs,text:e.text})
         if(op.action==='add'){op.body=e.text;op.claims= [{id:'secret',text:e.text,evidence:[{evidenceId:e.id,supportingText:e.text}]}]}
       }
-      assert.equal(apply(f.db,failure,[op],[e]).held,1)
+      assert.equal(applyHistorical(f.db,failure,[op],[e]).held,1)
       assert.equal(f.db.prepare('SELECT count(*) AS n FROM entries').get()?.n,0)
     }finally{f.db.close()}
   }
@@ -129,12 +166,12 @@ test('a failed evidence write rolls back the body and its search/embedding queue
   const f=fixture();createRun(f.db,'evidence')
   try {
     f.db.exec("CREATE TRIGGER reject_evidence BEFORE INSERT ON memory_revision_evidence BEGIN SELECT RAISE(ABORT,'fixture evidence write failure'); END")
-    assert.equal(apply(f.db,'broken',[operation()]).held,1)
+    assert.equal(applyHistorical(f.db,'broken',[operation()]).held,1)
     for(const table of ['entries','entry_revisions','memory_index_sources','embedding_jobs','entry_search_documents'])assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get()?.n,0,table)
   }finally{f.db.close()}
 })
 test('a bridge with two roots is erased as a whole and a retained request cannot inject it',()=>{
-  const f=adopt();try {
+  const f=historicalFixture();try {
     configureIndex(f.db,range.workspace,'active')
     const root=f.result.entries[0]!,other=recordEntry(f.db,{workspace:root.workspace,kind:'fact',title:'Python runtime',body:'Python supports this experiment.',scope:{visibility:'project'}})
     const fact=withImmediateTransaction(f.db,()=>saveIndexFact(f.db,root.workspace,{role:'bridge',text:'Python experiment evidence.',entities:[{type:'package',value:'Python'}],applicability:'今回だけ',
@@ -151,23 +188,30 @@ test('a bridge with two roots is erased as a whole and a retained request cannot
     assert.throws(()=>withImmediateTransaction(f.db,()=>saveIndexFact(f.db,root.workspace,{role:'atomic',text:root.body,entities:[{type:'package',value:'Python'}],applicability:null,sources:[{entryId:root.id,revision:1,contentHash:root.contentHash,supportingText:root.body}]})))
   }finally{f.db.close()}
 })
-test('forget fences a dispatched index worker, scrubs its snapshots and retains its usage ledger',async()=>{
-  const f=adopt();let worker:IndexReasoningWorker|undefined
-  let sent!:()=>void,release!:()=>void
-  const dispatched=new Promise<void>(r=>{sent=r}),response=new Promise<void>(r=>{release=r})
+test('forget fences a retained historical index claim without redispatch and preserves usage accounting',async()=>{
+  const f=historicalFixture();let worker:IndexReasoningWorker|undefined,calls=0
   try {
     const root=f.result.entries[0]!
     configureIndex(f.db,root.workspace,'active')
     reserveIndexJob(f.db,root.workspace,{provider:'fixture',model:'fixed',contextWindow:131072,sessionId:'index-session'})
-    worker=new IndexReasoningWorker({runtime:f.runtime,config:MemoryIndexReasoningConfig.parse({timeoutMs:3000}),llm:{async *stream(){sent();await response;yield {type:'text-delta',text:'[]'};yield {type:'finish',reason:{kind:'stop'}}}}})
-    worker.kick();await dispatched
-    retire(f.db,root);release();await worker.whenIdle()
-    const row=f.db.prepare('SELECT state,input_json,drafts_json,peers_json FROM memory_index_jobs').get()
-    assert.equal(row?.state,'held');assert.equal(row?.input_json,'{}');assert.equal(row?.drafts_json,'[]');assert.equal(row?.peers_json,'[]')
+    const job=f.db.prepare('SELECT id FROM memory_index_jobs').get<{id:string}>()!
+    assert.ok(job)
+    f.db.prepare("UPDATE memory_index_jobs SET state='processing',claim_token='historical-claim',attempts=1,lease_until=? WHERE id=?").run('2099-01-01T00:00:00.000Z',job.id)
+    f.db.prepare("INSERT INTO memory_index_calls(id,job_id,stage,workspace,utc_day,outcome) VALUES('historical-call',?,0,?,?,'uncertain')").run(job.id,root.workspace,NOW.slice(0,10))
+    const accounting=f.db.prepare('SELECT * FROM memory_index_calls').all()
+    worker=new IndexReasoningWorker({runtime:f.runtime,config:MemoryIndexReasoningConfig.parse({timeoutMs:3000}),llm:{async *stream(){calls++;yield {type:'text-delta',text:'[]'}}}})
+    worker.kick();await worker.whenIdle();assert.equal(calls,0)
+    retire(f.db,root);worker.kick();await worker.whenIdle()
+    const row=f.db.prepare('SELECT state,input_json,drafts_json,peers_json,claim_token FROM memory_index_jobs').get()
+    assert.equal(row?.state,'held');assert.equal(row?.input_json,'{}');assert.equal(row?.drafts_json,'[]');assert.equal(row?.peers_json,'[]');assert.equal(row?.claim_token,null)
+    f.db.prepare("UPDATE memory_index_jobs SET state='completed' WHERE id=? AND claim_token='historical-claim'").run(job.id)
+    assert.equal(f.db.prepare('SELECT changes() AS n').get()?.n,0)
+    assert.equal(f.db.prepare('SELECT state FROM memory_index_jobs WHERE id=?').get(job.id)?.state,'held')
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM memory_index_facts').get()?.n,0)
-    assert.equal(f.db.prepare('SELECT count(*) AS n FROM memory_index_calls').get()?.n,1)
+    assert.deepEqual(f.db.prepare('SELECT * FROM memory_index_calls').all(),accounting)
+    assert.equal(calls,0)
     assert.throws(()=>f.db.prepare("UPDATE memory_index_jobs SET input_json='[]'").run(),/immutable/)
-  }finally{release?.();await worker?.dispose();f.db.close()}
+  }finally{await worker?.dispose();f.db.close()}
 })
 test('forget removes transitive Evolution manifests and pending induction snapshots',()=>{
   const f=fixture()
@@ -187,7 +231,7 @@ test('forget removes transitive Evolution manifests and pending induction snapsh
   }finally{f.db.close()}
 })
 test('known manual Global projection is erased and source-linked legacy capture cannot resurrect it',()=>{
-  const f=adopt();try {
+  const f=historicalFixture();try {
     const root=f.result.entries[0]!
     ensureGlobalWorkspace(f.db,NOW)
     const global=recordEntry(f.db,{workspace:'global',kind:'decision',title:'Projected condition',body:root.body,scope:{visibility:'global',retrievalScope:'global'},provenance:{type:'curator_globalize',reference:`${root.id}@1#fixture`,sourceWorkspace:root.workspace}})
@@ -196,4 +240,19 @@ test('known manual Global projection is erased and source-linked legacy capture 
     assert.throws(()=>recordEntry(f.db,{workspace:root.workspace,kind:root.kind,title:root.title,body:root.body,provenance:root.provenance}))
     assert.throws(()=>f.db.prepare('DELETE FROM memory_forget_tombstones').run(),/permanent/)
   }finally{f.db.close()}
+})
+
+
+test('explicit memory inspection works without retired task delivery and preserves workspace isolation',()=>{
+ const f=fixture();createRun(f.db,'explicit-inspection')
+ try {
+  const own=recordEntry(f.db,{workspace:'project:test',kind:'fact',title:'Own observed fact',body:'Source remains scoped.',createdBy:'fixture'})
+  createRun(f.db,'foreign-inspection','project:foreign')
+  const foreign=recordEntry(f.db,{workspace:'project:foreign',kind:'fact',title:'Foreign',body:'PRIVATE_FOREIGN',createdBy:'fixture'})
+  assert.equal(explainMemory(f.db,{workspace:'project:test',entryId:own.id,runId:'explicit-inspection'}).entryId,own.id)
+  assert.throws(()=>explainMemory(f.db,{workspace:'project:test',entryId:foreign.id,runId:'explicit-inspection'}))
+  assert.throws(()=>explainMemory(f.db,{workspace:'project:test',entryId:own.id,runId:'foreign-inspection'}),/binding unavailable/)
+  assert.throws(()=>explainMemory(f.db,{workspace:'project:test',entryId:own.id,runId:'nonexistent'}),/binding unavailable/)
+  assert.equal(f.db.prepare('SELECT count(*) n FROM task_memory_bindings').get<any>()!.n,0)
+ } finally{f.db.close()}
 })

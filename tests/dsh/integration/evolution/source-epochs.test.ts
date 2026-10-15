@@ -8,18 +8,35 @@ import { forgetMemory } from '../../../../src/memory/forget.js'
 import { configureEvolution, episodeCurrent, evolutionEntryState, saveEpisode, scheduleEvolution } from '../../../../src/memory/evolution/store.js'
 import { digest, evidenceReferences, episodeSignals, supportingEvidenceDigest, independentEpisodes, EVOLUTION_VERSION, MemoryEvolutionConfig, type Episode } from '../../../../src/memory/evolution/contracts.js'
 import { EvolutionWorker } from '../../../../src/memory/evolution/worker.js'
+// Positive exact-preview approval coverage: ../replay-memory-review.test.ts.
 import { canonicalJson } from '../../../../src/serialization/validate.js'
 
-function rotate(f: ReturnType<typeof fixture>, episode: Episode, nextSessionId: string) {
-  const run = f.db.prepare('SELECT task_revision,task_generation FROM ledger_runs WHERE run_id=?').get<{task_revision:number;task_generation:number}>(episode.runId)!
-  withImmediateTransaction(f.db, () => rotateTaskSourceInTransaction(f.db, { runId: episode.runId, sessionId: episode.sessionId, nextSessionId,
-    expectedRevision: run.task_revision, expectedGeneration: run.task_generation, operationId: `rotate-${episode.sourceEpoch ?? 1}`, reason: 'Explicit task continuation' }, NOW))
-  f.db.prepare("UPDATE ledger_runs SET status='active',task_owner_session_id=? WHERE run_id=?").run(nextSessionId, episode.runId)
+/** Explicitly seed an archive from the former schema. Native source rotation no
+ * longer creates memory history or moves optional finalization jobs. */
+function historicalRotation(f: ReturnType<typeof fixture>, episode: Episode, nextSessionId: string) {
+  const run = f.db.prepare('SELECT * FROM ledger_runs WHERE run_id=?').get<Record<string,unknown>>(episode.runId)!
+  const boundary = f.db.prepare('SELECT * FROM dsh_run_log_boundaries WHERE run_id=?').get<Record<string,unknown>>(episode.runId)!
+  const job = f.db.prepare('SELECT * FROM dsh_memory_finalizations WHERE run_id=?').get<Record<string,unknown>>(episode.runId)!
+  const epoch = episode.sourceEpoch ?? 1
+  assert.equal(job.source_epoch, epoch)
+  withImmediateTransaction(f.db, () => {
+    f.db.prepare(`INSERT INTO dsh_task_source_history(run_id,source_epoch,source_session_id,original_session_id,task_generation,
+      next_owner_session_id,operation_id,reason,boundary_json,finalization_json,review_state_json,archived_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?)`).run(episode.runId,epoch,episode.sessionId,String(run.dsh_session_id),Number(run.task_generation),
+        nextSessionId,`historical-rotate-${epoch}`,'Historical fixture',JSON.stringify(boundary),JSON.stringify(job),NOW)
+    f.db.prepare(`INSERT INTO dsh_task_source_entries(run_id,source_epoch,entry_id,ordinal,created_at)
+      SELECT run_id,?,entry_id,ordinal,created_at FROM dsh_memory_finalization_entries WHERE run_id=?`).run(epoch,episode.runId)
+    f.db.prepare('INSERT INTO dsh_task_source_finalizations(run_id,source_epoch,job_json) VALUES(?,?,?)')
+      .run(episode.runId,epoch,JSON.stringify({...job,outcome:episode.outcome,source_generation:`legacy:${episode.sessionId}`}))
+    f.db.prepare('DELETE FROM dsh_memory_finalizations WHERE run_id=?').run(episode.runId)
+    f.db.prepare('DELETE FROM dsh_run_log_boundaries WHERE run_id=?').run(episode.runId)
+    f.db.prepare("UPDATE ledger_runs SET status='active',task_owner_session_id=? WHERE run_id=?").run(nextSessionId,episode.runId)
+  })
 }
 
 function nextSource(f: ReturnType<typeof fixture>, old: Episode, outcome: 'completed' | 'failed' = 'completed'): Episode {
   const epoch = (old.sourceEpoch ?? 1) + 1, sessionId = `session-${old.runId}-epoch-${epoch}`
-  rotate(f, old, sessionId)
+  historicalRotation(f, old, sessionId)
   f.db.prepare('INSERT INTO dsh_run_log_boundaries(run_id,workspace,dsh_session_id,source_start_seq,source_start_turn,created_at,updated_at) VALUES(?,?,?,1,1,?,?)')
     .run(old.runId, old.workspace, sessionId, NOW, NOW)
   f.db.prepare('UPDATE ledger_runs SET status=? WHERE run_id=?').run(outcome, old.runId)
@@ -35,7 +52,7 @@ function nextSource(f: ReturnType<typeof fixture>, old: Episode, outcome: 'compl
   return episode
 }
 
-test('resume and model-switch sources coexist without rewriting old episodes or their manifests', () => {
+test('historical resumed sources coexist without rewriting old episodes or their manifests', () => {
   const f = fixture()
   try {
     configureEvolution(f.db, 'active')
@@ -52,7 +69,7 @@ test('resume and model-switch sources coexist without rewriting old episodes or 
     assert.throws(() => withImmediateTransaction(f.db, () => saveEpisode(f.db, { ...second, logDigest: 'changed' }, NOW)), /replay_conflict/)
     for (const changed of [{ ...second, sourceEpoch: 3 }, { ...second, sessionId: first.sessionId }, { ...second, outcome: 'completed' as const }, { ...second, end: 6 }])
       assert.throws(() => withImmediateTransaction(f.db, () => saveEpisode(f.db, changed, NOW)), /identity_mismatch/)
-    rotate(f, second, 'session-third-model')
+    historicalRotation(f, second, 'session-third-model')
     assert.equal(episodeCurrent(f.db, first), true); assert.equal(episodeCurrent(f.db, second), true)
     assert.equal(independentEpisodes([first, second]).length, 1, 'a task resume never manufactures independent support')
     assert.equal(independentEpisodes([first, second])[0]!.sourceEpoch, 2, 'latest source wins deterministically within a logical task')
@@ -60,7 +77,7 @@ test('resume and model-switch sources coexist without rewriting old episodes or 
   } finally { f.db.close() }
 })
 
-test('each source epoch can schedule and finish evolution while old pending jobs retain their original evidence', async () => {
+test('historical source epoch jobs retain original evidence without automatic promotion', async () => {
   const f = fixture(), worker = new EvolutionWorker({ runtime: f.runtime, config: MemoryEvolutionConfig.parse({}), now: () => NOW })
   try {
     const first = seed(f.db, 'a'); seed(f.db, 'b'); seed(f.db, 'c')
@@ -75,8 +92,10 @@ test('each source epoch can schedule and finish evolution while old pending jobs
     seed(f.db, 'f')
     withImmediateTransaction(f.db, () => scheduleEvolution(f.db, second.runId, { provider: 'next', model: 'new-model' }, NOW, 2))
     assert.deepEqual(f.db.prepare('SELECT source_epoch FROM memory_evolution_jobs WHERE trigger_run=? ORDER BY source_epoch').all<{source_epoch:number}>(first.runId).map(row => row.source_epoch), [1, 2])
+    const before = f.db.prepare('SELECT * FROM memory_evolution_jobs ORDER BY source_epoch').all()
     worker.kick(); await worker.whenIdle()
-    assert.deepEqual(f.db.prepare('SELECT state FROM memory_evolution_jobs WHERE trigger_run=? ORDER BY source_epoch').all<{state:string}>(first.runId).map(row => row.state), ['completed', 'completed'])
+    assert.deepEqual(f.db.prepare('SELECT * FROM memory_evolution_jobs ORDER BY source_epoch').all(), before)
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM memory_derivations WHERE kind='positive'").get()?.n, 0)
     assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM memory_evolution_calls').get<{n:number}>()!.n, 0, 'v2 deterministic evolution does not invent LLM calls')
   } finally { await worker.dispose(); f.db.close() }
 })
@@ -100,7 +119,7 @@ test('forget retires only referencing episode payloads and revokes archived fina
   } finally { f.db.close() }
 })
 
-test('legacy model dispatch is once per source epoch and shares one daily budget across epochs', async () => {
+test('historical source epoch budgets never authorize automatic model dispatch', async () => {
   for (const dailyCalls of [1, 2]) {
     const f = fixture(), sessions: string[] = []
     const first = seed(f.db, `legacy-${dailyCalls}`), b = seed(f.db, 'legacy-b'), c = seed(f.db, 'legacy-c')
@@ -117,12 +136,30 @@ test('legacy model dispatch is once per source epoch and shares one daily budget
     try {
       worker.kick(); await worker.whenIdle(); worker.kick(); await worker.whenIdle()
       const calls = f.db.prepare('SELECT source_epoch FROM memory_evolution_calls WHERE trigger_run=? ORDER BY source_epoch').all<{source_epoch:number}>(first.runId)
-      assert.equal(calls.length, dailyCalls); assert.equal(sessions.length, dailyCalls)
-      assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM memory_evolution_jobs WHERE reason='call_budget'").get<{n:number}>()!.n, 2 - dailyCalls)
-      if (dailyCalls === 2) {
-        assert.deepEqual(calls.map(call => call.source_epoch), [1, 2])
-        assert.deepEqual(sessions.sort(), [first.sessionId, second.sessionId].sort(), 'fallback model session belongs to its source epoch')
-      }
+      assert.equal(calls.length, 0); assert.equal(sessions.length, 0)
+      assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM memory_evolution_jobs WHERE state='pending'").get()?.n, 2)
+      assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM memory_derivations WHERE kind='positive'").get()?.n, 0)
     } finally { await worker.dispose(); f.db.close() }
   }
+})
+
+
+test('current native source rotation preserves raw provenance without moving optional memory jobs',()=>{
+ const f=fixture()
+ try{
+  const episode=seed(f.db,'current-rotation')
+  const before={job:f.db.prepare('SELECT * FROM dsh_memory_finalizations').all(),entries:f.db.prepare('SELECT * FROM dsh_memory_finalization_entries').all(),episodes:f.db.prepare('SELECT * FROM memory_episodes').all()}
+  const run=f.db.prepare('SELECT task_revision,task_generation FROM ledger_runs WHERE run_id=?').get<{task_revision:number;task_generation:number}>(episode.runId)!
+  const input={runId:episode.runId,sessionId:episode.sessionId,nextSessionId:'next-native-owner',expectedRevision:run.task_revision,expectedGeneration:run.task_generation,operationId:'native-rotation',reason:'Explicit continuation',sourceEndSeq:5}
+  assert.throws(()=>withImmediateTransaction(f.db,()=>rotateTaskSourceInTransaction(f.db,{...input,sessionId:'foreign-owner'},NOW)),/current owner/)
+  withImmediateTransaction(f.db,()=>rotateTaskSourceInTransaction(f.db,input,NOW))
+  assert.deepEqual(f.db.prepare('SELECT * FROM dsh_memory_finalizations').all(),before.job)
+  assert.deepEqual(f.db.prepare('SELECT * FROM dsh_memory_finalization_entries').all(),before.entries)
+  assert.deepEqual(f.db.prepare('SELECT * FROM memory_episodes').all(),before.episodes)
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM dsh_task_source_finalizations').get()?.n,0)
+  const history=f.db.prepare('SELECT boundary_json,finalization_json,review_state_json FROM dsh_task_source_history').get<{boundary_json:string;finalization_json:null;review_state_json:null}>()!
+  assert.equal(JSON.parse(history.boundary_json).source_end_seq,5)
+  assert.equal(history.finalization_json,null);assert.equal(history.review_state_json,null)
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM dsh_run_log_boundaries').get()?.n,0)
+ }finally{f.db.close()}
 })

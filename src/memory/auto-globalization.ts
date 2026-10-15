@@ -199,68 +199,8 @@ function updateQueue(db: SqliteDatabase, entryId: string, revision: number, deci
 
 /** Caller owns BEGIN IMMEDIATE; this operation contains no network or model calls. */
 export function processNextAutoGlobalizationInTransaction(db: SqliteDatabase, enabled: boolean, now = new Date().toISOString()): boolean {
-  if (!autoGlobalizationInstalled(db)) return false;
-  const job = db.prepare("SELECT entry_id,entry_revision FROM auto_global_queue WHERE state='pending' ORDER BY updated_at,entry_id LIMIT 1")
-    .get<{entry_id:string;entry_revision:number}>();
-  if (!job) return false;
-  const existing = db.prepare(`SELECT * FROM auto_global_projections WHERE entry_id=? AND entry_revision=? AND algorithm=?`)
-    .get<ProjectionRow>(job.entry_id, job.entry_revision, AUTO_GLOBAL_ALGORITHM);
-  if (existing) {
-    if (existing.state === 'active') {
-      let active = false;
-      try { active = autoGlobalProjectionActive(db, readEntry(db, { workspace: GLOBAL_WORKSPACE, entryId: existing.global_entry_id })); }
-      catch { /* A missing or invalid generated entry cannot stay active. */ }
-      if (!active) db.prepare(`UPDATE auto_global_projections SET state='quarantined',reason='source_or_proof_invalid',updated_at=?
-        WHERE entry_id=? AND entry_revision=? AND algorithm=? AND state='active'`)
-        .run(now, job.entry_id, job.entry_revision, AUTO_GLOBAL_ALGORITHM);
-    }
-    updateQueue(db, job.entry_id, job.entry_revision, {kind:'eligible',reason:'projection_checked',supportRunIds:[]}, now);
-    return true;
+    return false;
   }
-  const sourceWorkspace = db.prepare('SELECT workspace FROM entries WHERE id=?').get<{workspace:string}>(job.entry_id)?.workspace;
-  if (!sourceWorkspace) {
-    updateQueue(db, job.entry_id, job.entry_revision, {kind:'blocked',reason:'source_missing',supportRunIds:[]}, now);
-    return true;
-  }
-  const source = readEntry(db, { workspace: sourceWorkspace, entryId: job.entry_id });
-  if (source.revision !== job.entry_revision) {
-    updateQueue(db, job.entry_id, job.entry_revision, {kind:'blocked',reason:'source_revision_changed',supportRunIds:[]}, now);
-    return true;
-  }
-  const decision = candidateDecision(db, source);
-  if (decision.kind !== 'eligible' || !enabled) {
-    updateQueue(db, source.id, source.revision, enabled ? decision : {kind:'blocked',reason:'disabled',supportRunIds:[]}, now);
-    return true;
-  }
-  const manuallyGlobalized = db.prepare(`SELECT 1 FROM entries e JOIN entry_revisions r ON r.entry_id=e.id AND r.revision=e.current_revision
-    WHERE e.workspace=? AND e.status<>'superseded' AND json_valid(r.provenance_json)=1
-      AND json_extract(r.provenance_json,'$.type')='curator_globalize'
-      AND json_extract(r.provenance_json,'$.reference')=? LIMIT 1`).get(
-      GLOBAL_WORKSPACE, `${source.id}@${source.revision}#${CURATOR_DRAFT_VERSION}`);
-  if (manuallyGlobalized) {
-    updateQueue(db, source.id, source.revision, {kind:'blocked',reason:'manual_projection_exists',supportRunIds:[]}, now);
-    return true;
-  }
-  const projection = autoCuratorProjection(source);
-  ensureGlobalWorkspace(db, now);
-  const provenance: JsonObject = { type:'auto_curator_globalize', reference:`${source.id}@${source.revision}#${AUTO_GLOBAL_ALGORITHM}`,
-    sourceWorkspace:source.workspace, sourceRepositoryId: db.prepare('SELECT repository_id FROM repositories WHERE workspace=?')
-      .get<{repository_id:string}>(source.workspace)?.repository_id ?? '',
-    sourceRevision:source.revision, sourceContentHash:source.contentHash, evidenceDigest:decision.evidenceDigest!,
-    supportRunIds:decision.supportRunIds, algorithmVersion:AUTO_GLOBAL_ALGORITHM,
-    clientKind:'kiokuko-auto-curator', timestamp:now };
-  const global = recordEntryInTransaction(db, { workspace:GLOBAL_WORKSPACE, kind:source.kind, status:'verified',
-    title:projection.draft.title, body:projection.draft.body, summary:projection.draft.summary,
-    scope:projection.scope, provenance, trustLevel:'source_verified', confidence:Math.min(source.confidence,0.8),
-    tags:projection.tags, createdBy:'kiokuko-auto-curator', actor:'kiokuko-auto-curator' }, {now});
-  db.prepare(`INSERT INTO auto_global_projections(entry_id,entry_revision,algorithm,global_entry_id,source_content_hash,evidence_digest,state,reason,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,'active',NULL,?,?)`).run(source.id,source.revision,AUTO_GLOBAL_ALGORITHM,global.id,source.contentHash,decision.evidenceDigest!,now,now);
-  db.prepare(`UPDATE auto_global_projections SET state='replaced',reason='new_revision_projected',updated_at=?
-    WHERE entry_id=? AND entry_revision<? AND algorithm=? AND state IN ('active','quarantined')`)
-    .run(now,source.id,source.revision,AUTO_GLOBAL_ALGORITHM);
-  updateQueue(db, source.id, source.revision, decision, now);
-  return true;
-}
 
 export function autoGlobalizationStatus(db: SqliteDatabase, entryId: string, revision: number) {
   if (!autoGlobalizationInstalled(db)) return { supported:false as const };
@@ -283,13 +223,7 @@ export class AutoGlobalizationWorker {
   #rerunRequested = false;
   constructor(readonly runtime: { withDatabase<T>(operation:(db:SqliteDatabase)=>T):Promise<T> }, readonly enabled: boolean) {}
   kick(): void {
-    if (this.#closed) return;
-    if (this.#drain) { this.#rerunRequested = true; return; }
-    this.#drain = this.#run().finally(() => {
-      this.#drain = undefined;
-      if (this.#rerunRequested && !this.#closed) { this.#rerunRequested = false; this.kick(); }
-    });
-    void this.#drain.catch(() => { /* pending row remains for a later kick or startup */ });
+    return; // Global projection changes also require approval of their shown content.
   }
   async #run(): Promise<void> {
     if (this.enabled) await this.runtime.withDatabase(db => withImmediateTransaction(db, () => {

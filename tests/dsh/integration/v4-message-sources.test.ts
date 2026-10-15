@@ -4,7 +4,7 @@ import test from 'node:test'
 import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { deepFixture } from '../helpers/deep-fixture.js'
+import { historicalDeepFixture as deepFixture } from '../helpers/historical-deep-fixture.js'
 import { migrateDatabase } from '../../../src/db/migrate.js'
 
 test('V4 upgrade normalizes only unsent Deep inputs and preserves uncertain delivery', async () => {

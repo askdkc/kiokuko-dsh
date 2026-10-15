@@ -58,13 +58,13 @@ for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) for 
       const task = web ? 'vmware toolsの最新の脆弱性でクリティカルレベルのものある？' : 'Why is the sky blue?'
       handle.agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
       await handle.agent.whenIdle()
-      assert.deepEqual(errors, []); assert.equal(questions, 0); assert.ok(providerCalls > 0)
-      assert.ok(observations.some(observation => observation.purpose === 'akinator' && observation.fallbackReason === (fault === 'NONE' ? null : `DECISION_${fault}`)))
+      assert.deepEqual(errors, []); assert.equal(questions, 0); assert.equal(providerCalls, 0, 'an optional classifier is never consulted for unowned native work')
+      assert.equal(observations.some(observation => observation.purpose === 'akinator'), false)
       assert.equal(provider.requests.length, web ? 2 : 1); assert.equal(webBodies, web ? 1 : 0)
       if (web) assert.ok(!handle.agent.session.snapshotEvents().some((event: any) => event.type === 'tool/result' && event.data.message.isError))
       assert.ok(handle.agent.session.snapshotEvents().some((event: any) => event.type === 'assistant/message' && JSON.stringify(event.data).includes('SCRIPTED_ORDINARY_ANSWER')))
       const db = openConnection(databasePath)
-      try { assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, web ? 1 : 0); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM akinator_sessions').get()?.n, web ? 1 : 0) } finally { db.close() }
+      try { assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, 0); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM akinator_sessions').get()?.n, 0) } finally { db.close() }
     } finally {
       await handle?.dispose(); await composition?.dispose(); await adapter?.dispose()
       for (const fiber of fibers.reverse()) await fiber.dispose()

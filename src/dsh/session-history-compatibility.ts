@@ -75,7 +75,20 @@ function refusalPath(error: unknown): string | undefined {
 async function validateCandidate(backend: Persistence, header: Header, candidate: Buffer, compression: string, version: 0 | 3 | 4, signal?: AbortSignal): Promise<Buffer> {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-history-validation-'))
   const scope = new Context()
-  const implementation = Object.getPrototypeOf(backend).constructor
+  let implementation = Object.getPrototypeOf(backend).constructor
+  // alpha.3 owns backend tracking in the public provider plugin. Reuse that
+  // registered entrypoint in isolation instead of constructing its private
+  // service class without the tracker. alpha.2's two-argument class remains valid.
+  if (implementation.length > 2) {
+    const registry = (backend as unknown as { ctx?: Context }).ctx?.registry
+    const providers = registry ? [...registry.values()].filter(runtime =>
+      runtime.name === 'session-persistence-jsonl' && [...runtime.fibers].some(fiber =>
+        (() => { const service = fiber.ctx.get('sessionPersistence', false) as object | undefined;
+          return service !== undefined && Object.getPrototypeOf(service).constructor === implementation })())) : []
+    if (providers.length !== 1) throw new Error('The native persistence provider entrypoint is unavailable for isolated validation')
+    const provider = providers[0]!
+    implementation = { name: provider.name, Config: provider.Config, apply: provider.callback }
+  }
   let fiber: ReturnType<Context['plugin']> | undefined
   try {
     signal?.throwIfAborted()

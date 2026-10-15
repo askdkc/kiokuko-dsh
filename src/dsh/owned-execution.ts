@@ -51,6 +51,7 @@ export interface OwnedHost {
   planActive?(agent: any): boolean
   confirm?(identity: ExecutionIdentity, detail: string, signal: AbortSignal): Promise<boolean>
   isTaskControl?(execution: NativeExecution): boolean
+  unownedNative?(execution: NativeExecution): boolean
 }
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex')
 const within = (root: string, target: string) => { const relative = path.relative(root, target); return relative === '' || !relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative) }
@@ -528,11 +529,12 @@ export function mountOwnedExecution(ctx:{tools:{register(tool:any):()=>void;get?
     if (effect && host.resolve(execution)) await service.captureAuthority(execution)
     const decision = await next()
     if ((decision as {kind?:unknown}|null)?.kind === 'deny') return decision
-    if (effect && host.isTaskControl?.(execution) !== true) await service.captureAuthority(execution)
+    if (effect && host.isTaskControl?.(execution) !== true && host.unownedNative?.(execution) !== true) await service.captureAuthority(execution)
     return decision
   },{prepend:true}))
   if (ctx.on) disposers.push(ctx.on('tools/execute',async(execution:NativeExecution,next:()=>Promise<unknown>)=>{
     if (host.isTaskControl?.(execution) === true) return next()
+    if (execution.name === 'bash' && host.unownedNative?.(execution) === true) return withNoTaskAuthority(next)
     if (execution.name === 'run_code') return service.composite(execution,next)
     if (!taskEffectTool(execution.name, execution.arguments)) return next()
     const lease = await service.captureAuthority(execution)

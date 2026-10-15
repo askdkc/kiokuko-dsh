@@ -36,31 +36,8 @@ export interface MemoryContext {schemaVersion:1;workspace:string;cautions:Routin
 
 /** Producer assertions stay assertions. Only a host-bound check can set hostVerified. */
 export function observeMemory(db:SqliteDatabase,workspace:string,input:unknown,version:ObservationVersion={}) {
-  let accepted=false
-  try {
-    const parsed=MemoryObservation.parse(input)
-    if(!parsed.summary&&!parsed.source.tombstone&&!version.tombstone)throw new Error('summary_required')
-    const value:Observation={...parsed,summary:parsed.summary??'Observation withdrawn.'}
-    if(findSecretInValue(value))throw new Error('secret_detected')
-    if(withOptionalMemoryAccess(db,()=>capturePolicy(db,workspace,value.sessionId)).mode!=='allowed')throw new Error('capture_excluded')
-    const sourceKey=identity.parse(version.sourceKey??value.eventId),revision=z.number().int().nonnegative().parse(version.revision??value.source.revision)
-    const tombstone=version.tombstone===true||value.source.tombstone,hostVerified=version.hostVerified===true&&value.verification==='passed'
-    value.source.revision=revision;value.source.tombstone=tombstone
-    accepted=true
-    const json=JSON.stringify(value),hash=canonicalContentHash({value,sourceKey,revision,tombstone,hostVerified})
-    return withOptionalMemoryTransaction(db,()=>{
-      if(capturePolicy(db,workspace,value.sessionId).mode!=='allowed')throw new Error('capture_excluded')
-      const current=db.prepare('SELECT MAX(source_revision) AS revision FROM dsh_memory_observations WHERE workspace=? AND producer=? AND source_key=?').get<{revision:number|null}>(workspace,value.source.producer,sourceKey)
-      if(current?.revision!==null&&current?.revision!==undefined&&revision<current.revision)throw new Error('stale_revision')
-      const old=db.prepare('SELECT content_hash FROM dsh_memory_observations WHERE workspace=? AND producer=? AND ((event_id=? AND source_revision=?) OR (source_key=? AND source_revision=?))')
-        .all<{content_hash:string}>(workspace,value.source.producer,value.eventId,revision,sourceKey,revision)
-      if(old.length){if(old.some(row=>row.content_hash!==hash))throw new Error('source_conflict');return {accepted:true,recorded:true,duplicate:true,workMayContinue:true as const,diagnostics:[]}}
-      db.prepare('INSERT INTO dsh_memory_observations VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(workspace,value.source.producer,value.eventId,value.sessionId,sourceKey,revision,
-        Number(tombstone),Number(hostVerified),json,hash,new Date().toISOString())
-      return {accepted:true,recorded:true,duplicate:false,workMayContinue:true as const,diagnostics:[]}
-    })
-  } catch(error){const message=error instanceof Error?error.message:'memory_unavailable';return {accepted:accepted&&!['source_conflict','capture_excluded','stale_revision'].includes(message),recorded:false,duplicate:false,workMayContinue:true as const,diagnostics:[message.slice(0,160)]}}
-}
+    return { accepted: false, recorded: false, duplicate: false, workMayContinue: true as const, diagnostics: ['post_task_memory_review_required'] };
+  }
 
 function latest(db:SqliteDatabase,workspace:string):Saved[] {
   const rows=db.prepare(`SELECT o.* FROM dsh_memory_observations o WHERE o.workspace=? AND NOT EXISTS
@@ -111,30 +88,8 @@ function derive(rows:Saved[]):RoutineCandidate[] {
 }
 /** Deterministic bounded extraction, including untrusted portable Global candidates. */
 export function improveMemory(db:SqliteDatabase,workspace:string,limit=32){
-  const batchLimit=Math.max(1,Math.min(128,limit))
-  const state=()=>db.prepare('SELECT source_revision,processed_revision,processed_limit FROM dsh_memory_processing_state WHERE workspace=?')
-    .get<{source_revision:number;processed_revision:number;processed_limit:number}>(workspace)??{source_revision:0,processed_revision:-1,processed_limit:0}
-  const clean=(head:ReturnType<typeof state>)=>head.processed_revision===head.source_revision&&head.processed_limit>=batchLimit
-  const skipped=()=>({accepted:true,recorded:true,workMayContinue:true as const,changed:0,skipped:true,diagnostics:[]})
-  try{if(withOptionalMemoryAccess(db,()=>clean(state())))return skipped()
-    return withOptionalMemoryTransaction(db,()=>{
-    const head=state();if(clean(head))return skipped()
-    const current=latest(db,workspace),candidates=derive(current).slice(0,batchLimit),seen=new Set(candidates.map(c=>c.id))
-    const old=db.prepare(`SELECT r.* FROM dsh_memory_routine_revisions r WHERE r.workspace=? AND NOT EXISTS
-      (SELECT 1 FROM dsh_memory_routine_revisions n WHERE n.workspace=r.workspace AND n.candidate_id=r.candidate_id AND n.revision>r.revision) ORDER BY r.created_at DESC LIMIT 256`)
-      .all<{candidate_id:string;revision:number;candidate_json:string;content_hash:string}>(workspace)
-    for(const row of old){if(!seen.has(row.candidate_id)&&!sourceCurrent((JSON.parse(row.candidate_json) as RoutineCandidate).sources,current))candidates.push({...JSON.parse(row.candidate_json),active:false,sources:[]})}
-    let changed=0
-    for(const candidate of candidates){const hash=canonicalContentHash(candidate),before=old.find(row=>row.candidate_id===candidate.id);if(before?.content_hash===hash)continue
-      db.prepare('INSERT INTO dsh_memory_routine_revisions VALUES(?,?,?,?,?,?)').run(workspace,candidate.id,(before?.revision??0)+1,JSON.stringify(candidate),hash,new Date().toISOString());changed++}
-    projectGlobalPrinciples(db,workspace,candidates)
-    // Only successful extraction + Global projection commit the watermark.
-    db.prepare(`INSERT INTO dsh_memory_processing_state(workspace,processed_revision,processed_limit) VALUES(?,?,?)
-      ON CONFLICT(workspace) DO UPDATE SET processed_revision=excluded.processed_revision,processed_limit=excluded.processed_limit`)
-      .run(workspace,head.source_revision,batchLimit)
-    return {accepted:true,recorded:true,workMayContinue:true as const,changed,skipped:false,diagnostics:[]}
-  })}catch{return {accepted:false,recorded:false,workMayContinue:true as const,changed:0,skipped:false,diagnostics:['memory_unavailable']}}
-}
+    return {accepted:false,recorded:false,workMayContinue:true as const,changed:0,skipped:true,diagnostics:['post_task_memory_review_required']};
+  }
 
 export function memoryContext(db:SqliteDatabase,workspace:string,input:{query?:string|undefined;tags?:readonly string[]|undefined;sessionId?:string|undefined;limit?:number|undefined}={}):MemoryContext {
   const empty:MemoryContext={schemaVersion:1,workspace,cautions:[],successfulProcedures:[],recentHistory:[],continuation:[],sourceRefs:[],workMayContinue:true,diagnostics:[],available:true,entries:[],globalPrinciples:[],handoff:null,warnings:[]}

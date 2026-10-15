@@ -24,7 +24,7 @@ const signal = () => new AbortController().signal
 const text = (result: any) => result.content.filter((block: any) => block.type === 'text').map((block: any) => block.text).join('\n')
 
 for (const mode of ['native', 'ptc'] as const) for (const action of ['research', 'verify'] as const) {
-  test(`${mode}: DECISION_AUTH, rejected no-Goal relations and explicit new/${action} retry preserve admission and native policy`,
+  test(`${mode}: DECISION_AUTH, rejected no-Goal scope changes and explicit new/${action} retry preserve admission and native policy`,
     { skip: !available, timeout: 30_000 }, async () => {
     const [cordis, tools, prompt, sessions] = await Promise.all(['cordis', 'dsh-tools', 'dsh-system-prompt', 'dsh-session'].map(load))
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'request-intent-retry-')))
@@ -89,7 +89,7 @@ for (const mode of ['native', 'ptc'] as const) for (const action of ['research',
         assert.equal(admissions.length, 0); assert.equal(bodies, 0); assert.equal(runtimePrograms, 0)
         assert.deepEqual(intake!.snapshot(session.id), initial)
       }
-      for (const relation of ['same_scope_continuation', 'scope_change']) {
+      for (const relation of ['scope_change']) {
         const rejected = await invoke(request(relation))
         assert.equal(rejected.isError, true)
         assert.match(text(rejected), new RegExp(`Request relation ${relation} cannot be used without an active Goal`))

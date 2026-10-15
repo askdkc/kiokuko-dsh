@@ -17,6 +17,7 @@ import { mockModelRoutes, modelSelectionAnswer, openaiModels } from './model-sel
 import type { FinalizationInputMode } from '../../../src/dsh/efficiency.js'
 import type { DshMemoryFinalizer } from '../../../src/dsh/session-memory-finalizer.js'
 import { readContextDelivery } from '../../../src/context/delivery.js'
+import { readEntry } from '../../../src/memory/entries.js'
 import { reportEnnoWork } from '../../../src/enno-oduno/service.js'
 
 export const PROCEDURE = 'validate schema before migrating'
@@ -25,7 +26,7 @@ export const BOUNDARY = 'Do not apply to production or fixture-v2'
 export const UNRESOLVED = 'Concurrent writers remain untested'
 export const VERIFICATION = 'The fixture schema and row checksum were verified'
 export type RepeatedRoute = 'normal' | 'enno'
-export interface RoundFault { saveFailure?: boolean; duplicateCompletion?: boolean; forbiddenIds?: readonly string[]; staleAuthority?: 'revision' | 'lease' }
+export interface RoundFault { saveFailure?: boolean; duplicateCompletion?: boolean; correctedIds?: readonly string[]; staleAuthority?: 'revision' | 'lease' }
 export interface RoundReport { round: number; runId: string; session: string; start: number; end: number; mainCalls: number; auxiliaryCalls: number; planReviewCalls: number; toolExecutions: number; suppliedIds: string[]; finalizations: number; episodes: number; lessons: number; stages: string[] }
 export const fixtureData = ['account rows: Ada, Ken; schema accounts(email)', 'inventory rows: bolt, nut, washer; schema parts(sku, quantity)', 'audit rows: created, revised, reviewed, approved; schema events(actor, action, time)']
 const applicationPaths = fixtureData.map((_, index) => `fixtures/${index}.txt`)
@@ -67,7 +68,8 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   ctx.on('agent/error', (event: any) => { nativeErrors.push(String(event.error?.stack ?? event.error ?? 'native agent failed')) })
   const mock = nativeMock(llm), provider = new mock.MockAdapter(script, ['mock', ...openaiModels])
   provider.resolveModel = async (provider: string, model: string) => ({ provider, id: model, name: model, context: { contextWindow: 100000 } })
-  let auxiliaryCalls = 0, planReviewCalls = 0, toolExecutions = 0, activeRound = 0
+  let auxiliaryCalls = 0, planReviewCalls = 0, toolExecutions = 0, activeRound = 0, activeReadonly = false
+  const memoryQuestions: {round:number;phase:'organize'|'review';proposal?:any}[] = []
   let auxiliaryHook: ((request: any) => Promise<void>) | undefined
   let activeFault: RoundFault = {}, activeSession = ''
   for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined))
@@ -119,6 +121,12 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   fibers.push(await ctx.plugin({ name: 'repeated-memory-questions', apply(context: any) {
     return context.provide('userQuestions', { async ask(request: any) {
       return { answers: request.questions.map((question: any) => {
+        if (/整理してよい|保存する記憶はこの内容でよい/u.test(question.question)) {
+          const phase = question.question.includes('整理してよい') ? 'organize' : 'review'
+          const proposal = phase === 'review' ? JSON.parse(question.detail.slice(question.detail.indexOf('\n{') + 1,question.detail.lastIndexOf('\nApprove,'))) : undefined
+          memoryQuestions.push({round:activeRound,phase,proposal})
+          return { id:question.id,selected:[activeReadonly ? '今回は保存しない' : phase === 'organize' ? '整理して確認する' : 'この内容を保存する'] }
+        }
         if (/^(boundary-|loop-|effect-)/u.test(question.id)) throw new Error(`Unexpected workflow hold: ${question.id}: ${question.detail}`)
         const selected = question.id.startsWith('coding-lisp-') ? '使わない' : question.id === 'kioku-agenticreplay-recording' ? '記録しない' : question.id === 'kiokuko-plan-confirmation' ? 'approve'
           : modelSelectionAnswer(question) ?? 'debug'
@@ -128,7 +136,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   } }))
   const adapter = createDshHostAdapter(ctx, { repositoryRoot: root, databasePath: join(root, '.git', 'state.sqlite3'),
     ...options,
-    modelRoutes: mockModelRoutes, agenticReplay: { enabled: false }, efficiency: { observe: true }, finalization: { inputMode },
+    modelRoutes: mockModelRoutes, agenticReplay: { enabled: true, askOnStart: false }, efficiency: { observe: true }, finalization: { inputMode },
     advisory: { verifyReadOnly: () => true, execute: async call => ({ slotId: call.slotId, outcome: 'completed', summary: 'Reviewed the immutable fixture contract.', recommendations: [], risks: [], evidence: [] }) },
     llm: { async *stream(request) {
       if (/^(Extract up to|Return JSON array|Check each supplied)/.test(request.system ?? '')) {
@@ -179,12 +187,14 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   const composition = await mountDshComposition(ctx, adapter.host)
   const liveAgents = new Map<string, any>()
   const database = <T>(operation: (db: import('../../../src/db/adapter.js').SqliteDatabase) => T) => adapter.host.runtime!.withDatabase(operation)
+  const countApproved = (db: import('../../../src/db/adapter.js').SqliteDatabase) => db.prepare("SELECT 1 FROM sqlite_master WHERE name='replay_memories'").get()
+    ? db.prepare('SELECT count(*) AS n FROM replay_memories').get<{n:number}>()!.n : 0
 
   // Scripted agents must use the same native disposition protocol as real agents.
   // Inspect the tool result delivered to the model, never write review rows directly.
   let applicationCall = 0
   const withMemoryReview = (step: any, readonly: boolean, verifyNow: boolean): any => {
-    let resultId = '', verified = false, reviews = 0
+    let resultId = '', verified = false
     const call = (name: string, args: object) => mock.toolCallResponse(resultId = `application-${activeRound}-${++applicationCall}`, name, args)
     const start = () => { script.unshift(inspect); return call('task_memory_review', { action: 'status' }) }
     const inspect = (request: any): any => {
@@ -194,21 +204,10 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
         .at(-1)
       assert.ok(result && !result.isError, `Native memory review failed: ${JSON.stringify(result)}`)
       const status = JSON.parse(result.content.find((block: any) => block.type === 'text').text)
-      assert.equal(status.supported, true, `The current request must own execution memory: ${JSON.stringify(status)}`)
-      const unresolved = status.items.find((item: any) => item.problem && item.problem !== 'verification_missing_failed_or_stale')
-      if (unresolved) {
-        assert.ok(++reviews <= 128, 'memory disposition did not converge')
-        script.unshift(inspect)
-        return call('task_memory_review', { action: 'review', review: {
-          generation: status.generation, entryId: unresolved.entryId, entryRevision: unresolved.revision, expectedRevision: unresolved.reviewRevision,
-          decision: readonly ? 'not_applicable' : 'adopted', paths: [...applicationPaths, 'fixtures/verify.mjs'],
-          basis: readonly ? 'This request only inspects stored observations; no migration procedure is executed.' : 'The current fixture schema and rows are defined by the three fixture source files.',
-          ...(readonly ? {} : { invariant: 'Each fixture retains its expected schema and row contents.', counterexample: 'Changing a fixture schema or row must fail verification.',
-            method: 'Execute the fixture verifier against all current source files.', command: applicationCommand }),
-        } })
-      }
-      if (!status.ready && verifyNow) {
-        assert.equal(verified, false, `Native verification did not satisfy the obligation: ${JSON.stringify(status)}`)
+      assert.equal(status.supported, false, `Legacy execution-memory review must be informational: ${JSON.stringify(status)}`)
+      assert.equal(status.ready, true, `The optional review must not hold normal execution: ${JSON.stringify(status)}`)
+      assert.deepEqual(status.pending, [], 'No automatic memory disposition may be pending')
+      if (verifyNow && !verified) {
         verified = true
         script.unshift(start)
         return call('bash', { command: applicationCommand })
@@ -219,14 +218,15 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   }
 
   const executeRound = async (number: number, sessionId: string, readonly = false, expectLesson = number === 4, fault: RoundFault = {}): Promise<RoundReport> => {
-    activeRound = number
+    activeRound = number; activeReadonly = readonly
     activeFault = fault; activeSession = sessionId
     let agent = liveAgents.get(sessionId)
     if (!agent) { agent = await ctx.agentLoop.create(session.SessionId(sessionId), { provider: 'mock', model: 'mock' }, { cwd: root }); liveAgents.set(sessionId, agent) }
     const beforeMain = provider.requests.length, beforeAux = auxiliaryCalls, beforeReview = planReviewCalls, beforeTools = toolExecutions
     const prior = await database(db => db.prepare('SELECT run_id FROM ledger_runs').all<{run_id:string}>())
-    if (fault.saveFailure) await database(db => db.exec(`CREATE TEMP TRIGGER repeated_fail_before_commit BEFORE UPDATE OF status ON dsh_memory_finalizations
-      WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'injected memory commit failure'); END;`))
+    const beforeApproved = await database(countApproved)
+    if (fault.saveFailure) await database(db => db.exec(`CREATE TEMP TRIGGER repeated_fail_before_commit BEFORE INSERT ON replay_memories
+      BEGIN SELECT RAISE(ABORT, 'injected approved memory commit failure'); END;`))
     const response = `Completed fixture lifecycle ${number}.`
     const task = `${route === 'normal' ? '通常実行で' : '役小角を使って'}、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測の適用範囲を検証' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`
     // Each round is a new request, including the read-only observation probe.
@@ -249,65 +249,62 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     await deadline(ctx.sessions.flush(agent.session), 'native log flush')
     await adapter.host.checkpointSessionMirror!(agent.session)
     const close = await adapter.host.resolveSessionClose!(agent.session.id, agent.session)
-    if (close) await adapter.host.lifecycle!.closeTurn({ ...close, sourceEndSeq: agent.session.snapshotEvents().findLast((event: any) => event.type === 'turn/end').seq })
-    await deadline(adapter.host.memoryFinalizer!.whenIdle(), 'memory and evolution workers')
+    const sourceEndSeq = agent.session.snapshotEvents().findLast((event: any) => event.type === 'turn/end').seq
+    if (close) await adapter.host.lifecycle!.closeTurn({ ...close, sourceEndSeq })
+    if (!readonly && !fault.saveFailure) await waitFor(async () => await database(countApproved) === beforeApproved + 1, 'explicitly approved replay memory')
     if (fault.saveFailure) {
-      const failed = await database(db => {
-        const row = db.prepare("SELECT run_id,attempt_count FROM dsh_memory_finalizations WHERE status='failed'").get<{run_id:string;attempt_count:number}>()
-        assert.ok(row, 'the injected pre-commit failure must be observed'); assert.equal(row.attempt_count, 1)
-        assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_memory_finalization_entries WHERE run_id=?').get<{n:number}>(row.run_id)!.n, 0)
-        assert.equal(db.prepare('SELECT count(*) AS n FROM memory_episodes WHERE run_id=?').get<{n:number}>(row.run_id)!.n, 0)
-        assert.equal(db.prepare("SELECT count(*) AS n FROM entry_revisions WHERE json_extract(provenance_json,'$.runId')=?").get<{n:number}>(row.run_id)!.n, 0)
+      await waitFor(async () => {
+        const result = await ctx.tools.get('memory_review_status').execute({})
+        return result.statuses.some((item:any) => item.status === 'unavailable')
+      }, 'injected approved save failure')
+      await database(db => {
+        assert.equal(countApproved(db), beforeApproved, 'failed atomic save leaves no partial approved memory')
         db.exec('DROP TRIGGER repeated_fail_before_commit')
-        return row.run_id
       })
-      await (adapter.host.memoryFinalizer as DshMemoryFinalizer).retryFailed(failed)
-      await deadline(adapter.host.memoryFinalizer!.whenIdle(), 'explicit finalization retry')
-      assert.equal(auxiliaryCalls - beforeAux - (planReviewCalls - beforeReview), 1, 'storage-only retry reuses the staged extraction without another model call')
     }
     const state = await database(db => {
       const runs = db.prepare('SELECT run_id,status,dsh_session_id FROM ledger_runs').all<{run_id:string;status:string;dsh_session_id:string}>().filter(run => !prior.some(old => old.run_id === run.run_id))
       assert.equal(runs.length, 1, 'one logical request must create exactly one run')
       const run = runs[0]!
       assert.equal(run.status, 'completed', JSON.stringify({number,run,results:agent.session.snapshotEvents().filter((event:any)=>event.type==='tool/result').slice(-8).map((event:any)=>event.data)})); assert.equal(run.dsh_session_id, sessionId)
-      const job = db.prepare('SELECT * FROM dsh_memory_finalizations WHERE run_id=?').get<any>(run.run_id)
-      assert.equal(job?.status, 'completed', JSON.stringify(job))
-      assert.equal(job.episode_error, null, JSON.stringify(job))
-      assert.equal(job.input_mode, inputMode); assert.equal(job.evidence_selection_version, 2)
-      assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_memory_finalization_entries WHERE run_id=?').get<{n:number}>(run.run_id)!.n, 1)
-      assert.equal(db.prepare("SELECT count(*) AS n FROM dsh_memory_finalizations WHERE status IN ('pending','processing')").get<{n:number}>()!.n, 0)
-      assert.equal(db.prepare("SELECT count(*) AS n FROM memory_evolution_jobs WHERE state IN ('pending','processing')").get<{n:number}>()!.n, 0)
-      const episodes = db.prepare('SELECT episode_json FROM memory_episodes').all<{episode_json:string}>()
-      const lessons = db.prepare("SELECT entry_id FROM memory_derivations WHERE kind='positive'").all<{entry_id:string}>()
-      if (!readonly) assert.ok(episodes.some(row => JSON.parse(row.episode_json).runId === run.run_id), 'native execution must create its episode')
-      return { run, job, episodes, lessons, finalizations: db.prepare('SELECT count(*) AS n FROM dsh_memory_finalizations').get<{n:number}>()!.n }
+      const sourceStartSeq = agent.session.snapshotEvents().findLast((event:any) => event.type === 'turn/start')?.seq
+      assert.ok(Number.isSafeInteger(sourceStartSeq), 'the native session retains the request start')
+      const automatic = db.prepare('SELECT count(*) AS n FROM dsh_memory_finalizations WHERE run_id=?').get<{n:number}>(run.run_id)!.n
+      assert.equal(automatic, 0, 'completion must not queue an automatic memory finalization')
+      const saved = countApproved(db) ? db.prepare('SELECT proposal_json FROM replay_memories WHERE task_id=?').all<{proposal_json:string}>(run.run_id) : []
+      assert.equal(saved.length, readonly || fault.saveFailure ? 0 : 1, 'only approved native replay may be saved')
+      if (saved.length) {
+        const proposal = JSON.parse(saved[0]!.proposal_json)
+        if (route === 'normal') assert.ok(proposal.attempts.some((attempt:any) => attempt.command === applicationCommand && attempt.outcome === 'succeeded'), 'approved memory must contain the actual successful fixture verifier')
+        else assert.ok(proposal.attempts.length > 0 && !proposal.attempts.some((attempt:any) => attempt.command === applicationCommand && attempt.outcome === 'succeeded'), 'Enno review must not invent a Bash verifier receipt')
+        assert.ok(memoryQuestions.some(question => question.round === number && question.phase === 'review' && JSON.stringify(question.proposal) === saved[0]!.proposal_json), 'the saved proposal must equal the displayed revision')
+      }
+      assert.equal(db.prepare('SELECT count(*) AS n FROM memory_episodes').get<{n:number}>()!.n, 0, 'execution cannot generate a lesson without post-task approval')
+      const approved = countApproved(db) ? db.prepare('SELECT entry_id FROM replay_memory_entries ORDER BY rowid').all<{entry_id:string}>() : []
+      return { run, job: { source_start_seq: sourceStartSeq, source_end_seq: sourceEndSeq }, episodes: approved, lessons: approved, finalizations: approved.length }
     })
     const requests = provider.requests.slice(beforeMain)
     assert.equal(planReviewCalls - beforeReview, route === 'enno' ? 3 : 0, 'each Enno plan must complete all three check-model review slots')
-    // Old disposition calls retain entry IDs as native audit history, not fresh
-    // memory delivery. Keep checking all other content and this round's status.
-    const currentMemoryRequests = JSON.stringify(requests, (_key, value) => {
-      const id = value?.type === 'tool-call' ? value.id : value?.type === 'tool-result' || value?.role === 'tool' ? value.toolCallId : undefined
-      return typeof id === 'string' && id.startsWith('application-') && !id.startsWith(`application-${number}-`) ? undefined : value
-    })
-    for (const id of fault.forbiddenIds ?? []) assert.ok(!currentMemoryRequests.includes(id), 'invalidated or disabled derived memory reached a current native model request')
+    for (const id of fault.correctedIds ?? []) {
+      const current=await database(db=>readEntry(db,{workspace:'repeated-memory',entryId:id}))
+      const snapshots=requests.flatMap(request=>request.messages).filter((message:any)=>message.source?.sections?.some((section:any)=>section.name===`memory:memory:${id}`))
+      for(const snapshot of snapshots)assert.ok(snapshot.source.sections.some((section:any)=>section.name===`memory:memory:${id}`&&section.text.includes(current.body)), 'a corrected entry must never expose its previous revision to a new model request')
+    }
     if (fault.duplicateCompletion) {
       const calls = auxiliaryCalls
       await adapter.host.lifecycle!.closeTurn({ runId: state.run.run_id, status: 'completed', sourceEndSeq: state.job.source_end_seq })
-      await deadline(adapter.host.memoryFinalizer!.whenIdle(), 'duplicate completion settlement')
       assert.equal(auxiliaryCalls, calls, 'duplicate completion must not dispatch an extraction')
-      assert.equal(await database(db => db.prepare('SELECT count(*) AS n FROM dsh_memory_finalizations').get<{n:number}>()!.n), state.finalizations)
+      assert.equal(await database(countApproved), state.finalizations)
     }
     const suppliedIds = new Set<string>()
     for (const request of requests) for (const message of request.messages) {
-      for (const section of message.source?.sections ?? []) if (section.name.startsWith('memory:memory:')) suppliedIds.add(section.name.slice('memory:memory:'.length))
+      for (const section of message.source?.sections ?? []) if (section.name === 'memory:approved-replay') suppliedIds.add(section.name)
     }
     if (expectLesson) {
-      assert.ok(state.lessons.length > 0, `three independent native observations must generate a positive lesson: ${JSON.stringify(await database(db=>({jobs:db.prepare('SELECT state,reason,model_json FROM memory_evolution_jobs').all(),skips:db.prepare('SELECT reason FROM memory_evolution_skips').all(),signals:state.episodes.map(row=>{const e=JSON.parse(row.episode_json);return {signature:e.signature,digest:e.evidenceDigest,successful:e.successful,procedureSupported:e.procedureSupported}})})))}`)
+      assert.ok(state.lessons.length > 0, 'earlier explicitly approved executions must be searchable')
       const requestText = JSON.stringify(requests)
-      for (const text of [PROCEDURE, APPLICABILITY, BOUNDARY, UNRESOLVED, VERIFICATION]) assert.ok(requestText.includes(text), `native request lost ${text}`)
-      assert.match(requestText, /Unverified|未検証/u)
-      assert.ok(state.lessons.some(lesson => requestText.includes(lesson.entry_id)), 'the actual native model request must contain the lesson source')
+      for (const text of [APPLICABILITY, BOUNDARY]) assert.ok(requestText.includes(text), `native request lost ${text}`)
+      assert.ok(requestText.includes('memory:approved-replay'), 'the actual native model request must receive approved replay context')
     }
     // Receipts are checked against the actual message text, never synthetic byte estimates.
     await database(db => {
@@ -326,7 +323,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     const report = { round: number, runId: state.run.run_id, session: sessionId, start: state.job.source_start_seq, end: state.job.source_end_seq,
       mainCalls: requests.length, auxiliaryCalls: auxiliaryCalls - beforeAux, planReviewCalls: planReviewCalls - beforeReview, toolExecutions: toolExecutions - beforeTools,
       suppliedIds: [...suppliedIds], finalizations: state.finalizations, episodes: state.episodes.length, lessons: state.lessons.length,
-      stages: ['admission', 'native-execution', 'final-response', 'log-flush', 'memory-finalization', 'episode/evolution', 'durable-state', 'model-request'] }
+      stages: ['admission', 'native-execution', 'final-response', 'log-flush', 'human-review', 'approved-replay', 'durable-state', 'model-request'] }
     recordRepeatedStage(report)
     return report
   }

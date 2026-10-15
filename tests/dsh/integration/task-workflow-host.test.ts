@@ -395,11 +395,10 @@ for (const type of ['research', 'writing'] as const) test(`${type}: explicit com
   } finally { await owned?.close(); await f.cleanup() }
 })
 
-for (const operation of ['wait', 'ignore'] as const) test(`${operation}: confirmed native stop saves its final source range without changing the run outcome`, async () => {
+for (const operation of ['wait', 'ignore'] as const) test(`${operation}: confirmed native stop checkpoints its source without automatic memory jobs`, async () => {
   const f = await fixture()
-  let kicked!: () => void
-  const kickedPromise = new Promise<void>(resolve => { kicked = resolve })
-  const service = new DshTaskWorkflow({ ...f.options, checkpointSource: async () => { f.agent.session.seq = 13 }, kickFinalizer: kicked })
+  let kicked = 0
+  const service = new DshTaskWorkflow({ ...f.options, checkpointSource: async () => { f.agent.session.seq = 13 }, kickFinalizer: () => { kicked++ } })
   try {
     await service.operate(f.agent, { operation: 'create', taskType: 'research', request: 'Inspect local source.' }, signal())
     const task = await service.operate(f.agent, { operation: 'start' }, signal())
@@ -411,11 +410,12 @@ for (const operation of ['wait', 'ignore'] as const) test(`${operation}: confirm
     })
     const event = f.until(value => value.state === (operation === 'wait' ? 'Pending' : 'Ignore'))
     await service.operate(f.agent, { operation, reason: 'The user explicitly stopped this task.' }, signal())
-    const stopped = await event; await kickedPromise
+    const stopped = await event
     assert.equal(stopped.runStatus, 'active')
     await f.runtime.withDatabase(db => {
       const job = db.prepare('SELECT * FROM dsh_memory_finalizations WHERE run_id=?').get<any>(task.runId)!
-      assert.equal(job.source_end_seq, 12); assert.equal(job.source_outcome, 'interrupted'); assert.equal(job.status, 'pending')
+      assert.equal(job, undefined); assert.equal(f.agent.session.seq, 13); assert.equal(kicked, 0)
+      assert.equal(db.prepare('SELECT source_start_seq FROM dsh_run_log_boundaries WHERE run_id=?').get<any>(task.runId)!.source_start_seq, 2)
     })
   } finally { service.dispose(); await f.cleanup() }
 })
@@ -449,12 +449,12 @@ for (const resumeBeforeIdle of [false, true]) test(`Done source waits for final 
     if (resumeBeforeIdle) await service.operate(f.agent, { operation: 'resume', expected: done }, signal())
     f.agent.status = 'idle'; release(); await checkedPromise
     // Let the database continuation complete; no model/provider timing is involved.
-    for (let i = 0; i < 20 && !kicked && !resumeBeforeIdle; i++) await new Promise(resolve => setImmediate(resolve))
+    for (let i = 0; i < 20 && !completed && !resumeBeforeIdle; i++) await new Promise(resolve => setImmediate(resolve))
     await new Promise(resolve => setImmediate(resolve))
     await f.runtime.withDatabase(db => {
       const job = db.prepare('SELECT * FROM dsh_memory_finalizations WHERE run_id=?').get<any>(task.runId)
       if (resumeBeforeIdle) { assert.equal(job, undefined); assert.equal(completed, 0); assert.equal(kicked, 0) }
-      else { assert.equal(job.source_end_seq, 20); assert.equal(job.source_outcome, 'completed'); assert.equal(completed, 1); assert.equal(kicked, 1) }
+      else { assert.equal(job, undefined); assert.equal(f.agent.session.seq, 21); assert.equal(completed, 1); assert.equal(kicked, 0) }
     })
   } finally { release?.(); service.dispose(); await owned?.close(); await f.cleanup() }
 })

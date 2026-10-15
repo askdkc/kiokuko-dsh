@@ -671,12 +671,50 @@ test('declining execution selection keeps acknowledgement available without admi
   assert.equal(attempts, 1)
 })
 
-test('unexpected preparation failure remains stale instead of reopening conversational admission', async t => {
-  const f = await fixture(t, { prepare: async () => { throw new Error('Admission state was superseded') } })
+test('recoverable preparation failure preserves the request but retry must reacquire exact native admission', async t => {
+  let attempts = 0, admitted = false
+  const f = await fixture(t, { ready: () => admitted, prepare: async () => {
+    attempts++
+    if (attempts === 1) throw new Error('Optional preparation temporarily unavailable')
+    admitted = true
+    return true
+  } })
   await f.capture()
   assert.equal((await f.prepare()).isError, true)
-  assert.equal(f.intake.snapshot(f.session.id)?.status, 'stale')
-  await assert.rejects(f.capture(), /stale/)
-  assert.equal((await f.execute()).isError, true)
+  assert.equal(f.intake.snapshot(f.session.id)?.status, 'answer')
+  assert.equal(await f.capture(), true, 'a recoverable error does not retire the human request')
+  assert.equal((await f.execute()).isError, true, 'failure does not grant execution')
   assert.equal(f.bodies(), 0)
+  assert.equal((await f.prepare()).isError, false, 'a fresh call can reattempt host admission')
+  assert.equal(attempts, 2)
+  assert.equal((await f.execute('review_probe', {}, { agent: { ...f.agent } })).isError, true)
+  const deny = f.ctx.tools.guard(() => 'native denial after retry')
+  try { assert.equal((await f.execute()).isError, true); assert.equal(f.bodies(), 0) } finally { deny() }
+  assert.equal((await f.execute()).isError, false)
+  assert.equal(f.bodies(), 1)
+  f.events.push(event('turn/start', 2))
+  assert.equal((await f.execute()).isError, true, 'retried admission cannot authorize a newer turn')
+  assert.equal(f.bodies(), 1)
+})
+
+
+for (const name of ['read','glob','grep','web_search','web_fetch'] as const) test(`unowned native ${name} needs no optional classifier but keeps native denial and current ownership`, async t => {
+ let owner:'unowned'|'owned'='unowned', bodies=0
+ const f=await fixture(t,{nativeOwnership:async()=>owner,classify:async()=>{throw new Error('optional classifier unavailable')}})
+ const release=f.ctx.tools.register({name,parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>{bodies++;return 'native evidence'}})
+ t.after(release)
+ await f.capture()
+ assert.equal((await f.execute(name)).isError,false);assert.equal(bodies,1);assert.equal(f.admissions.length,0)
+ const deny=f.ctx.tools.guard((execution:any)=>execution.name===name?'NATIVE_TEST_DENIED':undefined)
+ assert.match(JSON.stringify(await f.execute(name)),/NATIVE_TEST_DENIED/);assert.equal(bodies,1);deny()
+ owner='owned';assert.equal((await f.execute(name)).isError,true);assert.equal(bodies,1)
+})
+for (const change of ['arguments','stop','owner'] as const) test(`unowned native read rejects a ${change} change after native pre-execute`,async t=>{
+ let owner:'unowned'|'owned'='unowned',bodies=0
+ const f=await fixture(t,{nativeOwnership:async()=>owner})
+ const release=f.ctx.tools.register({name:'read',parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>{bodies++;return 'private evidence'}})
+ t.after(release);await f.capture()
+ const mutate=f.ctx.tools.guard((execution:any)=>{if(execution.name==='read'){if(change==='stop')f.intake.stop();else if(change==='owner')owner='owned';else execution.arguments.changed=true}return undefined})
+ t.after(mutate)
+ assert.equal((await f.execute('read',{})).isError,true);assert.equal(bodies,0)
 })

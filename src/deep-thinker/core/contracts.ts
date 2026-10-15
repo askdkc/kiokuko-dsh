@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { DeepBudgetSchema } from '../../deep-planning-config.js'
+export { DeepBudgetSchema, DeepThinkerConfigSchema, type DeepBudget } from '../../deep-planning-config.js'
 
 export const DEEP_PROTOCOL_VERSION = 1 as const
 export const DEEP_ROLES = ['planner', 'solver', 'critic', 'synthesizer'] as const
@@ -8,19 +10,6 @@ const text = z.string().min(1).max(32_768)
 const strings = z.array(text).max(64)
 export const DeepModelSchema = z.object({ provider: id, model: id, reasoningEffort: id.optional() }).strict()
 export type DeepModel = z.infer<typeof DeepModelSchema>
-export const DeepBudgetSchema = z.object({
-  maxConcurrentAgents: z.number().int().min(1).max(8).default(3),
-  maxDepth: z.number().int().min(0).max(8).default(4),
-  maxNodes: z.number().int().min(1).max(128).default(32),
-  maxChildrenPerNode: z.number().int().min(1).max(8).default(3),
-  maxReplansPerNode: z.number().int().min(0).max(4).default(2),
-  maxAgentJobs: z.number().int().min(0).max(256).default(48),
-  maxModelRequests: z.number().int().min(0).max(512).default(80),
-  maxTotalTokens: z.number().int().min(0).max(2_000_000).default(120_000),
-  maxOutputTokensPerRequest: z.number().int().min(1).max(32_768).default(4_096),
-  maxActiveSeconds: z.number().int().min(1).max(7_200).default(600),
-}).strict()
-export type DeepBudget = z.infer<typeof DeepBudgetSchema>
 export const DeepRouteSchema = z.object({ provider: id, family: z.enum(['openai', 'deepseek', 'opencode-go', 'opencode-zen', 'openrouter', 'orcarouter', 'ollama', 'other']).refine((value): boolean=>value!=='orcarouter','OrcaRouter requires model reselection'),
   connection: z.enum(['api', 'codex', 'local']), protocol: z.enum(['responses', 'chat-completions', 'messages', 'unknown']) }).strict()
 export const DeepConfigurationSchema = z.object({
@@ -34,12 +23,6 @@ export const DeepConfigurationSchema = z.object({
 export const LegacyDeepRouteSchema = DeepRouteSchema.extend({family:z.enum(['openai','deepseek','opencode-go','opencode-zen','openrouter','orcarouter','ollama','other'])})
 export const LegacyDeepConfigurationSchema = DeepConfigurationSchema.extend({routeBindings:z.array(LegacyDeepRouteSchema).max(128).default([])})
 export type DeepConfiguration = z.infer<typeof LegacyDeepConfigurationSchema>
-export const DeepThinkerConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  maxConcurrentAgentsTotal: z.number().int().min(1).max(32).default(6),
-  budget: DeepBudgetSchema.prefault({}),
-}).strict()
-
 export const EvidenceRefSchema = z.object({ artifactId: id, quote: z.string().min(1).max(4_096).optional() }).strict()
 export const CandidateSchema = z.object({
   kind: z.literal('candidate'), answer: text,

@@ -159,6 +159,8 @@ test('guardrail shipping contract verifies bundled bytes and fails closed before
     assert.deepEqual(output.verifiedTargets, Object.keys(manifest.targets))
     assert.deepEqual(output.unavailableTargets, manifest.unavailableTargets)
     assert.equal(output.nativeExecutionClaim, false)
+    const quiet = spawnSync(process.execPath, [join(root, 'scripts/guardrail-artifacts.mjs'), '--verify-bundled', '--quiet'], { encoding: 'utf8', timeout: 5_000, env: { PATH: '', HOME: tmpdir() } })
+    assert.equal(quiet.status, 0, quiet.stderr); assert.equal(quiet.stdout, '')
   })
   await t.test('isolated package consumer invokes precompiled engine twice without Cargo, SBCL or PATH fallback', () => {
     if (process.platform !== 'linux' || process.arch !== 'x64') { t.diagnostic('Native execution is unavailable on this test host; branch coverage is not a native claim.'); return }
@@ -236,8 +238,10 @@ test('bundle verification rejects a pinned manifest with no actual bundled targe
     const metadata = readJson(join(root, 'package.json'))
     metadata.guardrail.manifestSha256 = sha(readFileSync(indexPath))
     writeFileSync(join(directory, 'package.json'), JSON.stringify(metadata))
-    const checked = spawnSync(process.execPath, [join(directory, 'scripts/guardrail-artifacts.mjs'), '--verify-bundled'], { encoding: 'utf8', timeout: 2_000 })
-    assert.equal(checked.status, 1, 'an empty but repinned manifest must not pass bundled artifact verification')
-    assert.match(checked.stderr, /no bundled targets/i)
+    for (const flags of [[], ['--quiet']]) {
+      const checked = spawnSync(process.execPath, [join(directory, 'scripts/guardrail-artifacts.mjs'), '--verify-bundled', ...flags], { encoding: 'utf8', timeout: 2_000 })
+      assert.equal(checked.status, 1, 'an empty but repinned manifest must not pass bundled artifact verification')
+      assert.match(checked.stderr, /no bundled targets/i)
+    }
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })

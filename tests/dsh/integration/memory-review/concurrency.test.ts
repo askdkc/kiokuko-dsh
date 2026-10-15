@@ -20,15 +20,17 @@ async function seed(db:ReturnType<typeof fixture>['db'],runId:string){
   return reserveReview(db,range,{evidence:reviewManifest(evidence),existing:[],lookupIncomplete:false,model:{provider:'fixture',model:'fixed',contextWindow:100000}},'manual',NOW)
  })
 }
-test('T13: two processes sharing SQLite start the same job/provider exactly once',async()=>{
+test('T13: two processes sharing SQLite cannot resume an unapproved historical review job',async()=>{
  const root=await mkdtemp(join(tmpdir(),'review-processes-')),path=join(root,'state.sqlite3'),f=fixture(path)
  try{
   await seed(f.db,'concurrent')
+  const prior={...f.db.prepare('SELECT * FROM memory_review_jobs').get()}
   const source=join(root,'source.json'),calls=join(root,'calls.txt');await writeFile(source,JSON.stringify(events));await writeFile(calls,'')
   const run=()=>promisify(execFile)(process.execPath,['--import','tsx','tests/dsh/integration/memory-review/worker-process.ts',path,source,calls])
   await Promise.all([run(),run()])
-  assert.equal((await readFile(calls,'utf8')).trim(),'provider reached')
-  assert.equal(f.db.prepare('SELECT state FROM memory_review_jobs').get()?.state,'completed')
+  assert.equal((await readFile(calls,'utf8')).trim(),'')
+  assert.deepEqual({...f.db.prepare('SELECT * FROM memory_review_jobs').get()},prior)
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM entries').get<any>()!.n,0)
  }finally{f.db.close();await rm(root,{recursive:true,force:true})}
 })
 test('T12/T17: sent claims expire to held; budget-deferred work becomes claimable on the next UTC day',async()=>{

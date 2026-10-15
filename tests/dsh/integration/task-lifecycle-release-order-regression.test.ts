@@ -10,8 +10,7 @@ import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { createLifecycle } from '../../../src/dsh/host-adapter/lifecycle.js'
 import { DshMemoryFinalizer } from '../../../src/dsh/session-memory-finalizer.js'
 import { authorizeTaskLease, bindTaskRepository, captureTaskLease, readTaskSnapshot, transitionTask, type TaskLease } from '../../../src/dsh/task-state.js'
-// Preserve the three original failing assertions in the same immutable command.
-import './task-completion-lifecycle.test.js'
+// The original task-completion assertions run as their own file in the official integration suite.
 
 function deferred() {
   let resolve!: () => void
@@ -19,7 +18,7 @@ function deferred() {
   return { promise, resolve }
 }
 
-for (const cacheFault of [false, true]) test(`deferred cache ${cacheFault ? 'failure' : 'success'} cannot retire a resumed owner`, { timeout: 15_000 }, async () => {
+for (const cacheFault of [false, true]) test(`deferred cache ${cacheFault ? 'failure' : 'success'} is never invoked and cannot retire a resumed owner`, { timeout: 15_000 }, async () => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'task-close-resume-')))
   const root = join(base, 'repo')
   await mkdir(root)
@@ -73,13 +72,14 @@ for (const cacheFault of [false, true]) test(`deferred cache ${cacheFault ? 'fai
       clearToolRun: () => { effects.push('clear-tools'); currentWork.abort() }, sessionEventSource: () => ({} as any) })
     const close = { runId: identity.taskId, status: 'completed' as const, authority, sourceEndSeq: 4, terminalTurn: 1 }
     closing = lifecycle.runLifecycle.closeTurn(close)
-    await entered.promise
+    await closing
+    assert.equal(effects.includes('cache-enter'),false,'Native completion never invokes optional memory cache finalization')
     // The cache is deliberately unresolved here; retirement must already be complete.
     assert.equal(item.closed, true)
     assert.equal(turns.length, 0)
     assert.equal(oldWork.signal.aborted, true)
-    assert.ok(effects.indexOf('release-run') < effects.indexOf('cache-enter'))
-    assert.equal(db.prepare('SELECT status FROM dsh_memory_finalizations WHERE run_id=?').get(identity.taskId)?.status, 'pending')
+    assert.ok(effects.indexOf('release-run') >= 0)
+    assert.equal(db.prepare('SELECT status FROM dsh_memory_finalizations WHERE run_id=?').get(identity.taskId)?.status, undefined)
     const terminal = readTaskSnapshot(db, identity)
     assert.equal(terminal.runStatus, 'completed')
     const resumed = transitionTask(db, identity, { operation: 'resume', operationId: 'explicit-reopen',
@@ -96,13 +96,11 @@ for (const cacheFault of [false, true]) test(`deferred cache ${cacheFault ? 'fai
     assert.equal(next.closed, false); assert.deepEqual(turns, [next])
     assert.deepEqual(authorizeTaskLease(db, nextAuthority), resumed)
     assert.equal(effects.filter(event => !event.startsWith('cache') && event !== 'kick').length, cleanupAtResume)
-    assert.equal(effects.filter(event => event === 'kick').length, 1)
-    const archived = db.prepare('SELECT source_epoch,job_json FROM dsh_task_source_finalizations WHERE run_id=?').get<{source_epoch:number;job_json:string}>(identity.taskId)!
-    assert.equal(archived.source_epoch, 1)
-    assert.equal(JSON.parse(archived.job_json).dsh_session_id, identity.sessionId)
-    assert.equal(JSON.parse(archived.job_json).source_end_seq, 4)
-    assert.equal(JSON.parse(archived.job_json).status, 'pending')
-    assert.equal(db.prepare('SELECT 1 FROM dsh_memory_finalizations WHERE run_id=?').get(identity.taskId), undefined)
+    assert.equal(effects.filter(event => event === 'kick').length, 0)
+    const archived=db.prepare('SELECT source_session_id,boundary_json,finalization_json FROM dsh_task_source_history WHERE run_id=?').get<any>(identity.taskId)!
+    assert.equal(archived.source_session_id,identity.sessionId);assert.equal(archived.boundary_json,null);assert.equal(archived.finalization_json,null)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_task_source_finalizations').get<any>()!.n,0)
+    assert.equal(db.prepare('SELECT 1 FROM dsh_memory_finalizations WHERE run_id=?').get(identity.taskId),undefined)
     const settledEffects = [...effects]
     await lifecycle.runLifecycle.closeTurn(close)
     assert.deepEqual(effects, settledEffects, 'terminal replay must have no new effects')

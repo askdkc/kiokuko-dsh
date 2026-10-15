@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
+import { bindTaskRepository, readTaskSnapshot } from '../../../src/dsh/task-state.js'
+import { bindMainModelRequestIntent, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
@@ -188,7 +190,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       'curator_check', 'enno_delegate', 'enno_finish', 'enno_ideal_submit',
       'enno_meditation_submit', 'enno_plan_review', 'enno_plan_submit', 'enno_work_report',
       'kioku_edit', 'kioku_exec', 'kioku_read', 'kioku_remove', 'kioku_result', 'kioku_write',
-      'memory_checkpoint', 'memory_context', 'memory_explain', 'memory_improve', 'memory_observe',
+      'memory_checkpoint', 'memory_context', 'memory_explain', 'memory_improve', 'memory_observe', 'memory_review_status',
       'task_completion', 'task_memory_review',
     ].sort(), 'the native adapter must expose the exact public operation contract')
     assert.ok(registered.every((definition: any) => definition.modelFacing === true))
@@ -432,7 +434,8 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       blocked.close()
     }
     const blockedClose = await adapter.host.resolveIdleClose!('fallback-agent', fallbackSession.id, fallbackSession, fallbackAgent)
-    assert.deepEqual(blockedClose, { runId: fallbackRun, status: 'failed', terminalTurn: 1 })
+    assert.deepEqual(blockedClose, { runId: fallbackRun, status: 'failed', terminalTurn: 1,authority:blockedClose!.authority })
+    assert.equal(blockedClose!.authority!.taskId,fallbackRun);assert.equal(blockedClose!.authority!.sessionId,fallbackSession.id);assert.equal(blockedClose!.authority!.repositoryRoot,realpathSync(f.root));assert.ok(blockedClose!.authority!.generation>0)
     const questionsBeforeRecovery = questionIds.length
     const recoveredEvent = await adapter.host.mapPreStep!({
       agent: fallbackAgent,
@@ -451,7 +454,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal((await adapter.host.intakeGate!.prepare(recoveredNextStep)).prepared.run.runId, recoveredRun)
     assert.equal(questionIds.length, questionsBeforeRecovery)
     const recoveredClose = await adapter.host.resolveSessionClose!(fallbackSession.id, fallbackSession)
-    assert.deepEqual(recoveredClose, { runId: recoveredRun, status: 'cancelled' })
+    assert.deepEqual(recoveredClose, { runId: recoveredRun, status: 'cancelled',authority:recoveredClose!.authority });assert.equal(recoveredClose!.authority!.taskId,recoveredRun);assert.equal(recoveredClose!.authority!.sessionId,fallbackSession.id)
     await adapter.host.lifecycle!.closeTurn(recoveredClose!)
     const discussionSession = createNativeSession('selection-discussion-session')
     const discussionAgent = { id: 'selection-discussion-agent', session: discussionSession }
@@ -512,9 +515,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     try {
       const prepared = await prepareAgentTask(coldDiscussionDb, { requestId: 'cold-discussion-request', task: 'Fix this', cwd: f.root,
         profileHints: { taskType: 'debug', target: 'src/index.ts', expected: 'Tests pass' },
-        capabilities: event.capabilities.skills, dshSessionId: coldDiscussionSession.id, executionSelection: true, skillDiscoveryMode: 'off',
+        capabilities: [...event.capabilities.skills, ...event.capabilities.tools], dshSessionId: coldDiscussionSession.id, executionSelection: true, skillDiscoveryMode: 'off',
       })
       coldDiscussionRun = prepared.run.runId
+      bindTaskRepository(coldDiscussionDb, { taskId: coldDiscussionRun, sessionId: coldDiscussionSession.id, repositoryRoot: realpathSync(f.root) })
       const saved = readExecutionSelection(coldDiscussionDb, coldDiscussionRun)!
       writeExecutionSelection(coldDiscussionDb, coldDiscussionRun, saved.revision, { ...saved.value,
         discussion: { questionId: 'enno-execution-mode', text: 'ただのチャット', turn: 1 },
@@ -525,7 +529,14 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     const coldDiscussionEvent = await adapter.host.mapPreStep!({ agent: coldDiscussionAgent, turn: 2, step: 1, signal: event.signal,
       messages: [{ role: 'user', content: [{ type: 'text', text: '続けて' }], source: { kind: 'user' } }],
     })
-    const coldDiscussionDecision = await adapter.host.intakeGate!.preStep(coldDiscussionEvent, async () => ({ kind: 'enter', messages: [] }))
+    assert.ok(coldDiscussionEvent.requestIntentContext?.activeTask, 'the cold resume must locate the exact persisted task')
+    assert.equal(coldDiscussionEvent.requestIntent?.relation, 'unknown', 'disabled decision service cannot silently authorize a continuation')
+    const boundContinuation = bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'change', changeScope: 'implementation',
+      evidenceRefs: requestIntentReferenceIds(coldDiscussionEvent.requestIntentContext) }, coldDiscussionEvent.requestIntentContext)
+    assert.ok(boundContinuation, 'the main-model continuation must bind current task and message evidence')
+    const coldPrepared = await adapter.host.intakeGate!.prepare({ ...coldDiscussionEvent, requestIntent: boundContinuation })
+    assert.equal(coldPrepared.prepared.run.runId, coldDiscussionRun)
+    const coldDiscussionDecision = await adapter.host.intakeGate!.preStep({ ...coldDiscussionEvent, requestIntent: boundContinuation }, async () => ({ kind: 'enter', messages: [] }))
     assert.equal(coldDiscussionDecision.kind, 'enter')
     assert.equal(adapter.host.resolveSessionRunId!(coldDiscussionSession), coldDiscussionRun)
     assert.equal(selectionQuestions.length, selectionsBeforeColdDiscussion)
@@ -656,7 +667,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       afterPivot.close()
     }
     const pivotClose = await adapter.host.resolveSessionClose!(chatSession.id, chatSession)
-    assert.deepEqual(pivotClose, { runId: pivotRun, status: 'cancelled' })
+    assert.deepEqual(pivotClose, { runId: pivotRun, status: 'cancelled', authority: pivotClose?.authority })
+    assert.equal(pivotClose?.authority?.taskId, pivotRun)
+    assert.equal(pivotClose?.authority?.sessionId, chatSession.id)
+    assert.equal(pivotClose?.authority?.repositoryRoot, realpathSync(f.root))
     await adapter.host.lifecycle!.closeTurn(pivotClose!)
     assert.equal(await adapter.host.resolveIdleClose!('chat-agent', chatSession.id, chatSession, chatAgent), undefined)
     soulModelInvocable = false
@@ -686,15 +700,23 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       afterWritingPivot.close()
     }
     const writingClose = await adapter.host.resolveIdleClose!('native-agent', 'native-session', event.nativeSession, event.nativeAgent)
-    assert.deepEqual(writingClose, { runId: writingRun, status: 'completed', terminalTurn: 5 })
+    assert.deepEqual(writingClose, { runId: writingRun, status: 'completed', terminalTurn: 5, authority: writingClose?.authority })
+    assert.equal(writingClose?.authority?.taskId, writingRun)
+    assert.equal(writingClose?.authority?.sessionId, primarySession.id)
+    assert.equal(writingClose?.authority?.repositoryRoot, realpathSync(f.root))
+    const writingAuthority = writingClose?.authority
+    assert.ok(writingAuthority)
     await adapter.host.lifecycle!.closeTurn({
       ...writingClose!,
+      authority: writingAuthority,
       sourceEndSeq: dshTurnBoundarySeq(primarySession, writingClose!.terminalTurn!, 'end'),
     })
     await adapter.host.memoryFinalizer!.whenIdle()
     const finalizedWriting = openConnection(f.databasePath)
     try {
-      assert.equal(finalizedWriting.prepare('SELECT status FROM dsh_memory_finalizations WHERE run_id = ?').get<{ status: string }>(writingRun)?.status, 'completed')
+      assert.equal(finalizedWriting.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(writingRun)?.status, 'completed')
+      assert.equal(finalizedWriting.prepare('SELECT COUNT(*) AS n FROM dsh_memory_finalizations WHERE run_id = ?').get<{ n: number }>(writingRun)?.n, 0,
+        'native completion does not start an unapproved memory finalizer')
     } finally {
       finalizedWriting.close()
     }
@@ -713,6 +735,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
         skillDiscoveryMode: 'off',
       })
       coldRun = prepared.run.runId
+      bindTaskRepository(seeded, { taskId: coldRun, sessionId: coldSession.id, repositoryRoot: realpathSync(f.root) })
     } finally {
       seeded.close()
     }
@@ -723,12 +746,15 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       turn: 1, step: 1, signal: event.signal,
     })
     assert.equal((await adapter.host.intakeGate!.preStep(coldWritingEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
-    const coldWritingRun = adapter.host.resolveSessionRunId!(coldSession)!
-    assert.notEqual(coldWritingRun, coldRun)
+    const coldWritingRun = adapter.host.resolveSessionRunId!(coldSession)
+    assert.equal(coldWritingRun, undefined, 'an unresolved side question cannot borrow the cold task or mint execution authority')
     const afterColdPivot = openConnection(f.databasePath)
     try {
-      assert.equal(afterColdPivot.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(coldRun)?.status, 'cancelled')
-      assert.equal(afterColdPivot.prepare('SELECT COUNT(*) AS count FROM enno_contracts WHERE run_id = ?').get<{ count: number }>(coldWritingRun)?.count, 0)
+      assert.equal(afterColdPivot.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(coldRun)?.status, 'active',
+        'a new chat request must not silently Stop the still-owned cold task')
+      const preserved = readTaskSnapshot(afterColdPivot, { taskId: coldRun, sessionId: coldSession.id, repositoryRoot: realpathSync(f.root) })
+      assert.equal(preserved.state, 'Working')
+      assert.equal(preserved.taskId, coldRun)
     } finally {
       afterColdPivot.close()
     }

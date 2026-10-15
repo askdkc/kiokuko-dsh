@@ -1,3 +1,4 @@
+import { bindHistoricalMemory } from '../../helpers/historical-memory.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises'
@@ -30,6 +31,7 @@ for (const mode of ['missing', 'revoked', 'working'] as const) test(`Lisp CI pro
       capabilities: ['kiokuko-soul', 'memory-reasoning'].map(name => ({ kind: 'skill' as const, name })),
       profileHints: { taskType: 'build', target: 'check.mjs', expected: 'Verify source', constraints: 'Keep the check passing' },
       signal: new AbortController().signal })
+    await bindHistoricalMemory(db, task, project, root)
     const owner = { sessionId: 'session', agentId: 'agent', root }
     const taskIdentity = { taskId: task.runId, sessionId: owner.sessionId, repositoryRoot: root }
     const admitted = bindTaskRepository(db, taskIdentity)

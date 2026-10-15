@@ -63,10 +63,11 @@ export async function upgradeRepeatedWorkspace(root: string, mode: FinalizationI
     assert.equal(historical.charCount, delivery!.charCount); assert.equal(historical.deliveryId, delivery!.deliveryId)
     await finalizer.start(); await deadline(finalizer.whenIdle(), 'upgraded legacy pending job')
     const job = current.prepare('SELECT status,input_mode,evidence_selection_version,last_error_message FROM dsh_memory_finalizations').get<any>()
-    assert.equal(job.status,'completed',job.last_error_message); assert.equal(job.input_mode,mode); assert.equal(job.evidence_selection_version,1)
+    assert.equal(job.status,'pending','unapproved historical extraction must not run on startup'); assert.equal(job.input_mode,mode); assert.equal(job.evidence_selection_version,1)
     assert.throws(() => current.prepare('UPDATE dsh_memory_finalizations SET evidence_selection_version=2').run(), /immutable/u)
     assert.equal(current.prepare('SELECT count(*) AS n FROM memory_episodes').get<{n:number}>()!.n,0)
-    recordRepeatedStage({ stage: 'legacy-upgrade', expected: { policy: 'context-ranking-v6', selectionVersion: 1, inputMode: mode }, actual: { policy: historical.policyVersion, selectionVersion: job.evidence_selection_version, inputMode: job.input_mode, job: job.status }, migration: 14 })
+    assert.equal(current.prepare('SELECT count(*) AS n FROM dsh_memory_finalization_entries').get<{n:number}>()!.n,0)
+    recordRepeatedStage({ stage: 'legacy-upgrade', expected: { policy: 'context-ranking-v6', selectionVersion: 1, inputMode: mode, job: 'pending' }, actual: { policy: historical.policyVersion, selectionVersion: job.evidence_selection_version, inputMode: job.input_mode, job: job.status }, migration: 14 })
     return delivery!.deliveryId
   } finally { await finalizer.dispose(); current.close() }
 }

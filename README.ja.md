@@ -4,7 +4,7 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) に、記憶・計画・検証・動作記録を追加するプラグインです。
 
-自動メモリレビューは、人間の入力を処理した8ターンごとに、開いたままの会話から有用な記憶候補を保存・更新します。標準で有効で、会話のモデルを使用します。状態は `/kioku-memory-review status`、会話の保存除外は `/kioku-memory-review exclude session` で操作できます。[設定・費用・復旧方法](docs/auto-memory-review.md)。
+記憶は任意です。作業終了後に整理の許可を聞き、保存案を提示して、その内容への明示的な承認後だけ保存します。従来の自動保存は停止しています。[確認・検索・忘却の仕様](docs/replay-memory-review.md)。
 
 保存した記憶の根拠と訂正履歴は `/kioku-memory explain ENTRY_ID`、明示的な忘却は `/kioku-memory forget ENTRY_ID --revision N` で確認・操作できます。[根拠・説明・忘却の仕様](docs/memory-evidence.md)。
 
@@ -15,8 +15,8 @@
 - **Deep Planning** — 四つの役割で読み取り専用の調査・計画を行います。[使い方](docs/deep-planning.md)
 - **DSHのSubagent** — 標準presetで `subagent` と `subagent_fork` を使えます。通常の子agentではKiokukoの実行方式を再選択しません。[設定](docs/dsh-plugin.md#subagents)
 - **Continuity** — 既定では無効です。`continuity.mode: active` にすると、最近の実行記録を短くまとめてモデルへ渡します。[設定方法](docs/continuity.ja.md)
-- **事前推論索引** — 出典付きatomic・bridge候補を事前生成し、検索時に本文を渡します。既定で有効、workspaceごとUTC日次8呼び出しまで。[設定・費用・停止・評価](docs/index-reasoning.md)
-- **記憶学習** — 完了した作業から再利用できる episode・教訓候補を作ります。[設定](docs/memory-evolution.md)
+
+
 - **AgenticReplay** — モデル・ツールの動作を記録し、HTML に出力できます。[設定とコマンド](docs/agenticreplay-recording.md)
 - **Diff レビュー** — DSH の右ペインで、選択した差分と Kiokuko の文脈を根拠付きで確認できます。分析は明示操作です。[使い方と制限](docs/diff-review.ja.md)
 - **日本語出力** — 対応モデルへ自然な日本語を書く同梱 Skill を渡します。[詳細](docs/japanese-output.md)

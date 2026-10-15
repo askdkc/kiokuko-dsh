@@ -1,3 +1,4 @@
+import { createMemoryReuseRuntime } from '../../../src/dsh/memory-reuse.js'
 import { CURRENT_MIGRATION_VERSIONS } from '../../fixtures/current-migrations.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -172,7 +173,7 @@ test('migration 22 preserves historical deliveries and omissions with their immu
   } finally { await f.cleanup(); await rm(directory, { recursive: true, force: true }) }
 })
 
-test('native CoreTasks delivers semantic selection without any embedding service', async () => {
+test('native CoreTasks admits work without semantic selection; explicit historical lookup keeps semantic omissions', async () => {
   const f = await setup()
   try {
     let probes = 0, evaluations = 0
@@ -185,9 +186,12 @@ test('native CoreTasks delivers semantic selection without any embedding service
     const decisions = new DecisionService(TypedDecisionsConfig.parse({}), () => provider, databaseDecisionStore(f.runtime))
     const tasks = new CoreTasks(f.runtime as any, undefined, [], decisions)
     const prepared = await tasks.prepare({ requestId: 'native-core', sessionId: 'core', turn: 1, task: 'SQLITE_BUSY', cwd: f.root, capabilities, profileHints: profile, signal: new AbortController().signal })
-    assert.equal(prepared.admitted, true); assert.equal(probes, 1); assert.equal(evaluations, 1)
-    assert.equal(prepared.memory?.project?.memory.items.length, 0)
-    assert.equal(prepared.memory?.combined?.items.length, 0, 'Rejected memory must not survive in the combined context')
+    assert.equal(prepared.admitted,true);assert.equal(probes,0);assert.equal(evaluations,0);assert.equal(prepared.memory,null)
+    const memoryReuse=await createMemoryReuseRuntime(decisions,'explicit-core-lookup',new AbortController().signal)
+    assert.ok(memoryReuse)
+    const explicit=(await queryScopedContextGated(f.db,{...f.query,runId:prepared.runId},value=>({persist:true,value}),{}, {memoryReuse:{runtime:memoryReuse,authorize:()=>true}})).context!
+    assert.equal(probes,1);assert.equal(evaluations,1);assert.equal(explicit.items.length,0,'Rejected memory must not survive explicit lookup')
+    assert.ok(explicit.omissions?.some(item=>item.reason==='semantic_not_applicable'))
     await tasks.finish(prepared, 'completed')
   } finally { await f.cleanup() }
 })

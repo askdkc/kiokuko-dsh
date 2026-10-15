@@ -108,6 +108,7 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
   }
   const records=async()=>(await readFile(receipts,'utf8').catch(()=>'' )).trim().split('\n').filter(Boolean).map(JSON.parse)
   const command=async(mode)=>{const editor=conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first();const send=page.getByRole('button',{name:'Send message',exact:true});await poll(async()=>{await editor.fill('/coding-fixture '+mode);return send.isEnabled()});await send.click()}
+  const expectRecoveredGoal=async()=>{const mode=page.getByText('この作業をどう実行しますか？',{exact:true}),goal=page.locator('[data-coding-goal]');await mode.or(goal).first().waitFor();assert.equal(await mode.isVisible(),false,'existing pending coding Goal must not request a new execution mode')}
   await newSession();await command('seed');await poll(async()=>(await records()).find(r=>r.mode==='seed'))
   await page.setViewportSize({width:390,height:844});await command('complete')
   const goal=page.locator('[data-coding-goal]')
@@ -120,11 +121,13 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
   await newSession();await command('pending');await goal.waitFor()
   await page.getByRole('button',{name:'質問を閉じる',exact:true}).click()
   const pending=await poll(async()=>(await records()).find(r=>r.mode==='pending'))
+  const pendingSessionId=await conversation.getAttribute('data-conversation-session')
   assert.equal(pending.result.choice.state,'pending');assert.equal(pending.result.state,'awaiting_lisp_choice')
   const oldPort = new URL(url).port
   host.kill('SIGTERM');await new Promise(resolve=>host.once('exit',resolve))
-  await page.goto(await launch(oldPort));await poll(async()=>await conversation.getAttribute('data-conversation-session')&&await conversation.getAttribute('data-content-phase')!=='settling')
-  await command('resume');await goal.waitFor()
+  await page.goto(await launch(oldPort));await poll(async()=>await conversation.getAttribute('data-conversation-session')&&await conversation.getAttribute('data-content-phase')==='active')
+  assert.equal(await conversation.getAttribute('data-conversation-session'),pendingSessionId,'browser reopens the pending native session after restart')
+  await command('resume');await expectRecoveredGoal();await goal.waitFor()
   await page.keyboard.press('2');await page.keyboard.press('Enter')
   const resumed=await poll(async()=>(await records()).find(r=>r.mode==='resume'))
   assert.equal(resumed.result.workflowId,pending.result.workflowId,'reconnect resumes the same durable task')

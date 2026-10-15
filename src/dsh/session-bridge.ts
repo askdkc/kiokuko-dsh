@@ -40,18 +40,12 @@ function sameClose(left: DshCloseIntent, right: DshCloseIntent): boolean {
 }
 
 function checkpointedClose(close: DshCloseIntent, session: DshNativeSession): DshCloseIntent {
-  if (close.status === 'failed') {
-    if (close.terminalTurn === undefined || typeof session.snapshotEvents !== 'function') return close
-    try { return { ...close, sourceEndSeq: dshTurnBoundarySeq(session as DshSessionEventSource, close.terminalTurn, 'end') } } catch { return close }
-  }
-  if (close.status !== 'completed') return close
-  if (close.terminalTurn === undefined) {
-    throw new KiokukoError('INTEGRITY_ERROR', 'Completed DSH close has no terminal turn boundary')
-  }
-  if (typeof session.snapshotEvents !== 'function') {
-    throw new KiokukoError('INTEGRITY_ERROR', 'Completed DSH close has no exact native event source')
-  }
-  return { ...close, sourceEndSeq: dshTurnBoundarySeq(session as DshSessionEventSource, close.terminalTurn, 'end') }
+  // The caller has flushed the exact native session and authorized the close.
+  // An unavailable range withholds memory evidence, never task completion.
+  if (close.status !== 'completed' && close.status !== 'failed') return close
+  if (close.terminalTurn === undefined || typeof session.snapshotEvents !== 'function') return close
+  try { return { ...close, sourceEndSeq: dshTurnBoundarySeq(session as DshSessionEventSource, close.terminalTurn, 'end') } }
+  catch { return close }
 }
 
 /**

@@ -1,18 +1,8 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { HostServiceError } from '../service-error.js'
+export { LispConfig, type LispConfiguration } from '../lisp-config.js'
 
-export const LispConfig = z.object({
-  executionMode: z.enum(['development','protected']).default('development'),
-  approvalMode: z.enum(['ask', 'auto']).default('ask'),
-  enabled: z.boolean().default(false), sbclPath: z.string().min(1).default('sbcl'),
-  timeoutMs: z.number().int().min(100).max(600_000).default(120_000),
-  startupTimeoutMs: z.number().int().min(100).max(60_000).default(30_000),
-  maxWorkers: z.number().int().min(1).max(32).default(4),
-  idleTimeoutMs: z.number().int().min(1000).max(3_600_000).default(300_000),
-  maxOutputBytes: z.number().int().min(1024).max(8_388_608).default(8_388_608),
-}).strict()
-export type LispConfiguration = z.infer<typeof LispConfig>
 export const LISP_TOOLS = ['lisp_eval', 'lisp_define', 'lisp_call', 'lisp_observe', 'lisp_stage', 'lisp_verify', 'lisp_apply', 'lisp_compare', 'lisp_describe', 'lisp_inspect', 'lisp_status', 'lisp_cancel', 'lisp_reset',
   'lisp_hot_contract', 'lisp_hot_install', 'lisp_hot_call', 'lisp_hot_status', 'lisp_hot_deactivate'] as const
 export type LispTool = typeof LISP_TOOLS[number]

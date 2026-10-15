@@ -29,8 +29,11 @@ export function executionRequestAction(decision: RequestIntentDecision | undefin
   if (!intent || intent.relation === 'unknown' || intent.action === 'unknown'
     || intent.action === 'change' && intent.changeScope === 'unknown')
     throw new Error('A current source-bound request interpretation is required before execution.')
-  if (intent.action === 'answer' || intent.action === 'research'
-    || intent.action === 'verify' && effect !== 'process')
+  // A process is an execution mechanism, not proof of an artifact change.
+  // Research may use curl, Git, or a local probe; native permissions still
+  // decide whether that exact command is permitted. Direct edits stay denied.
+  if (intent.action === 'answer'
+    || (intent.action === 'research' || intent.action === 'verify') && effect !== 'process')
     throw new Error('This request authorizes inspection or verification, not artifact changes. Native permissions remain in force.')
   return intent.action
 }

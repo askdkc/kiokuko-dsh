@@ -81,14 +81,15 @@ test('report delivery survives disconnect and acknowledges the exact Session and
     assert.equal(events.length,0)
   }finally{await scheduler.dispose();await f.close()}
 })
-test('expired Deep memory claims become uncertain without an automatic model resend',async()=>{
+test('expired historical Deep memory claims remain unchanged without an automatic model resend',async()=>{
   const f=await deepFixture({maxTotalTokens:0}), scheduler=new DeepScheduler(f.store,{execute:async()=>undefined},async()=>{})
   try {
     await scheduler.start(f.state.runId);await scheduler.idle(f.state.runId)
-    await f.store.database(db=>db.prepare("UPDATE dsh_deep_finalizations SET status='processing',process_id='crashed',lease_until=999").run())
+    await f.store.database(db=>{assert.equal(db.prepare('SELECT 1 FROM dsh_deep_finalizations').get(),undefined);db.prepare("INSERT INTO dsh_deep_finalizations(run_id,source_json,status,process_id,lease_until) VALUES(?,'{}','processing','crashed',999)").run(f.state.runId)})
     const finalizer=new DeepMemoryFinalizer(f.store,{stream:()=>{throw new Error('must not resend')}})
     assert.equal(await finalizer.processNext(),false)
-    assert.equal(await f.store.database(db=>db.prepare('SELECT status FROM dsh_deep_finalizations').get<{status:string}>()!.status),'uncertain')
+    assert.equal(await f.store.database(db=>db.prepare('SELECT status FROM dsh_deep_finalizations').get<{status:string}>()!.status),'processing')
+    assert.equal(await f.store.database(db=>db.prepare('SELECT COUNT(*) AS n FROM entries').get<any>()!.n),0)
   }finally{await scheduler.dispose();await f.close()}
 })
 test('numeric custom budget input is literal and non-cooperative streams can be aborted',async()=>{

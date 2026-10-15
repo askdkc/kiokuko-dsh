@@ -1,4 +1,4 @@
-import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs'
+import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -121,15 +121,16 @@ export function resolveGuardrail(root, options = {}) {
   return { binary: join(root, entry.binary), protocol: join(root, index.protocol.path), engineDigest: digest(binary), protocolFileDigest: digest(protocol), manifestDigest, version: index.version, target }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-    if (process.argv.length !== 3 || !['--verify-bundled', '--check-host'].includes(process.argv[2])) fail('usage: guardrail-artifacts.mjs --verify-bundled|--check-host')
+    const quiet = process.argv[3] === '--quiet'
+    if ((process.argv.length !== 3 && !(process.argv.length === 4 && quiet && process.argv[2] === '--verify-bundled')) || !['--verify-bundled', '--check-host'].includes(process.argv[2])) fail('usage: guardrail-artifacts.mjs --verify-bundled [--quiet]|--check-host')
     if (process.argv[2] === '--check-host') console.log(JSON.stringify(resolveGuardrail(root)))
     else {
       const { index } = indexAt(root)
       for (const entry of Object.values(index.targets)) resolveGuardrail(root, { platform: entry.platform, arch: entry.arch })
-      console.log(JSON.stringify({ verifiedTargets: Object.keys(index.targets), unavailableTargets: index.unavailableTargets, nativeExecutionClaim: false, verification: Object.fromEntries(Object.entries(index.targets).map(([target, entry]) => [target, entry.verification])) }))
+      if (!quiet) console.log(JSON.stringify({ verifiedTargets: Object.keys(index.targets), unavailableTargets: index.unavailableTargets, nativeExecutionClaim: false, verification: Object.fromEntries(Object.entries(index.targets).map(([target, entry]) => [target, entry.verification])) }))
     }
   } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1 }
 }

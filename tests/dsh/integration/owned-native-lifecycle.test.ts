@@ -1,3 +1,4 @@
+import { approvedOwnedMemory } from '../helpers/approved-owned-memory.js'
 import {codingPrelude,interpretedPreparation,toolValue} from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -22,7 +23,7 @@ test('isolated native profile: repair -> real test -> receipt -> candidate -> re
     memoryIndexReasoning:{mode:'off'},answerReview:{mode:'off'},semanticCompaction:{mode:'off'},modelAutoMode:{mode:'off'},toolExposure:{mode:'full'},
   }})
   let db:ReturnType<typeof openConnection>|undefined
-  let summaries=0
+  let summaries=0, observed:any, freshObserved:any
   const foreground=f.model.stream.bind(f.model)
   f.model.stream=async function*(request:any){
     if(request.purpose==='compaction'){
@@ -56,38 +57,30 @@ test('isolated native profile: repair -> real test -> receipt -> candidate -> re
       (request:any)=>f.mock.toolCallResponse('bind-final','task_completion',{action:'bind',criterionId:`coding:${toolValue(request,'repair-goal-propose').workflowId}:user-entry`,method:{kind:'native_command',command,cwd:'.',sourcePaths:['src/parser.test.mjs'],assertion:'selected_tests_pass'}}),
       f.mock.toolCallResponse('verify','kioku_exec',{command}),
       f.mock.toolCallResponse('verify-final','kioku_exec',{command}),
-      (request:any)=>{assert.equal(result(request,'verify').receipt.verification,'passed');return f.mock.textResponse('修正と実プロセスのテストが成功しました。')},
+      (request:any)=>{assert.equal(result(request,'verify').receipt.verification,'passed');observed=result(request,'verify-final');return f.mock.textResponse('修正と実プロセスのテストが成功しました。')},
     )
     await f.turn('Implement the Native parser correction in src/parser.test.mjs. 通常実行で。\n完了条件:\n- selected tests pass')
     db=openConnection(join(f.dir,'kiokuko-dsh.sqlite3'))
-    for(let n=0;n<200;n++){
-      if(db.prepare("SELECT 1 FROM dsh_memory_finalizations WHERE status='completed'").get())break
-      await new Promise(resolve=>setTimeout(resolve,25))
-    }
-    assert.equal(db.prepare('SELECT status,last_error_message FROM dsh_memory_finalizations').get<any>()?.status,'completed')
-    const row=db.prepare('SELECT id,workspace FROM entries').get<any>()!
-    const entry=readEntry(db,{workspace:row.workspace,entryId:row.id})
-    assert.ok(entry);assert.equal(entry.status,'candidate');assert.equal(summaries,1)
+    const identity={runId:observed.receipt.runId,sessionId:observed.receipt.sessionId,workspace:db.prepare('SELECT workspace FROM ledger_runs WHERE run_id=?').get<any>(observed.receipt.runId)!.workspace}
+    assert.equal(db.prepare('SELECT count(*) n FROM entries').get<any>()!.n,0,'completed native work cannot save before human review')
+    const entry=await approvedOwnedMemory({root:f.dir,get db(){return db!},identity},observed)
+    assert.equal(entry.status,'candidate');assert.equal(summaries,0,'retired auxiliary finalization is never invoked')
     assert.equal(db.prepare('SELECT count(*) AS n FROM memory_execution_links').get<any>()!.n,1)
     const old=memoryExecutionEvidence(db,entry.id,entry.revision)[0]!
     assert.equal(old.currentTaskVerification,false)
     await f.reload('compiled')
     f.responses.push(
       interpretedPreparation(f.mock,'prepare-verification','new','verify','debug'),
-      f.mock.toolCallResponse('application','task_memory_review',{action:'status'}),
-      (request:any)=>{
-        assert.ok(JSON.stringify(request.messages).includes(entry.id),'next request receives the saved candidate')
-        const status=result(request,'application');assert.equal(status.ready,false)
-        const item=status.items.find((item:any)=>item.entryId===entry.id);assert.ok(item)
-        return f.mock.toolCallResponse('adopt','task_memory_review',{action:'review',review:{generation:status.generation,entryId:entry.id,entryRevision:entry.revision,expectedRevision:item.reviewRevision,decision:'adopted',basis:'The parser test currently checks the corrected result; the earlier receipt belongs to a previous run.',paths:['src/parser.test.mjs'],invariant:'Current parser sources require fresh verification.',counterexample:'Old receipt success is insufficient for this request.',method:'Execute the selected Node tests in this run.',command,cwd:'.'}})
-      },
-      (request:any)=>{assert.equal(result(request,'adopt').ready,false);return f.mock.toolCallResponse('fresh','kioku_exec',{command})},
-      (request:any)=>{const fresh=result(request,'fresh');assert.equal(fresh.exitCode,0);assert.ok(fresh.receipt.summary,JSON.stringify(fresh));return f.mock.toolCallResponse('fresh-status','task_memory_review',{action:'status'})},
-      (request:any)=>{const status=result(request,'fresh-status');assert.equal(status.ready,true,JSON.stringify({status,executions:db!.prepare("SELECT * FROM task_memory_executions").all()}));assert.equal(status.verification,'client_observed');return f.mock.textResponse('保存済みの条件を現在のソースで再検証しました。')},
+      f.mock.toolCallResponse('saved-reference','memory_context',{cwd:f.dir,query:'Parser verification condition'}),
+      (request:any)=>{const context=result(request,'saved-reference');assert.equal(context.replay.length,1);assert.equal(context.replay[0].source.taskId,old.runId);return f.mock.toolCallResponse('fresh-bind-status','task_completion',{action:'status'})},
+      (request:any)=>f.mock.toolCallResponse('fresh-bind-first','task_completion',{action:'bind',criterionId:result(request,'fresh-bind-status').criteria[0].criterionId,method:{kind:'native_command',command,cwd:'.',sourcePaths:['src/parser.test.mjs'],assertion:'selected_tests_pass'}}),
+      f.mock.toolCallResponse('fresh','kioku_exec',{command}),
+      (request:any)=>{freshObserved=result(request,'fresh');assert.equal(freshObserved.exitCode,0);assert.equal(freshObserved.receipt.verification,'passed');assert.notEqual(freshObserved.receipt.runId,old.runId);assert.ok(freshObserved.receipt.summary);return f.mock.textResponse('承認済みの参照を読み、現在のソースを新しい実プロセスで検証しました。')},
     )
-    await f.turn('Verify Native parser verification in src/parser.test.mjs again. 通常実行で。')
+    await f.turn('Verify Native parser verification in src/parser.test.mjs again. 通常実行で。\n完了条件:\n- selected tests pass')
     assert.equal(await readFile(join(f.dir,'src/parser.test.mjs'),'utf8'),"import test from 'node:test';import assert from 'node:assert/strict';test('Native parser',()=>assert.equal(1+1,2));\n")
-    const runs=db.prepare('SELECT DISTINCT run_id FROM task_memory_executions WHERE outcome=\'passed\'').all<any>()
-    assert.ok(runs.some(row=>row.run_id!==old.runId),'application observes a new run, not old evidence')
+    assert.ok(freshObserved.receipt.processStarted);assert.ok(freshObserved.receipt.processStopped)
+    assert.ok(memoryExecutionEvidence(db,entry.id,entry.revision).every(item=>item.runId===old.runId),'fresh execution does not silently rewrite or adopt the approved historical source')
+
   }finally{db?.close();await f.close()}
 })

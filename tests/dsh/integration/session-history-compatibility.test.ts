@@ -58,9 +58,10 @@ function rows() {
 }
 
 async function fixture(compression: 'zstd' | 'none' = 'zstd') {
-  const [cordis, { default: jsonl }, session] = await Promise.all(['cordis', 'dsh-session-persistence-jsonl', 'dsh-session'].map(name => import(pathToFileURL(modulePath(name)).href)))
+  const [cordis, jsonlModule, session] = await Promise.all(['cordis', 'dsh-session-persistence-jsonl', 'dsh-session'].map(name => import(pathToFileURL(modulePath(name)).href)))
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-legacy-history-'))
   const ctx = new cordis.Context()
+  const jsonl = jsonlModule.default ?? jsonlModule
   const fiber = ctx.plugin(jsonl, { root: join(root, 'history'), compression })
   await fiber
   const backend = ctx.sessionPersistence
@@ -173,8 +174,8 @@ test('native Enno cancellation persists a hook cause and reopens without repair'
     const [llm, projection, prompt, tools, agents, loop] = await Promise.all(names.map(name => import(pathToFileURL(
       sourceRoot ? join(sourceRoot, sourceModules[name]!, 'lib/index.js') : modulePath(name),
     ).href)))
-    for (const [plugin, config] of [[llm!.default, undefined], [f.session.default, undefined], [projection!.default, undefined],
-      [prompt!.default, { persona: '' }], [tools!.default, undefined], [agents!.default, undefined], [loop!.default, { agents: [] }]] as const) {
+    for (const [plugin, config] of [[(llm!.default ?? llm!), undefined], [(f.session.default ?? f.session), undefined], [(projection!.default ?? projection!), undefined],
+      [(prompt!.default ?? prompt!), { persona: '' }], [(tools!.default ?? tools!), undefined], [(agents!.default ?? agents!), undefined], [(loop!.default ?? loop!), { agents: [] }]] as const) {
       const fiber = f.ctx.plugin(plugin, config)
       await fiber
       f.disposers.push(() => fiber.dispose())
@@ -322,7 +323,7 @@ for (const version of [0, 1, 2] as const) for (const customEvents of [false, tru
   const f = await fixture()
   try {
     const query = await import(pathToFileURL(modulePath('dsh-session-query')).href)
-    for (const plugin of [f.session.default, query.default]) {
+    for (const plugin of [(f.session.default ?? f.session), (query.default ?? query)]) {
       const fiber = f.ctx.plugin(plugin)
       await fiber
       f.disposers.push(() => fiber.dispose())
@@ -362,7 +363,7 @@ for (const compression of ['zstd', 'none'] as const) for (const version of [0, 1
   const f = await fixture(compression)
   try {
     execFileSync('git', ['init', '-q', f.root])
-    const sessions = f.ctx.plugin(f.session.default)
+    const sessions = f.ctx.plugin((f.session.default ?? f.session))
     await sessions
     f.disposers.push(() => sessions.dispose())
     const events: any[] = rows().slice(1).map((event, seq) => ({ ...event, seq }))
@@ -432,7 +433,7 @@ for (const compression of ['zstd', 'none'] as const) for (const version of [0, 1
   const f = await fixture(compression)
   try {
     execFileSync('git', ['init', '-q', f.root])
-    const sessions = f.ctx.plugin(f.session.default)
+    const sessions = f.ctx.plugin((f.session.default ?? f.session))
     await sessions
     f.disposers.push(() => sessions.dispose())
     const old = await f.legacy(`reopen-v${version}`, [
@@ -613,11 +614,11 @@ for (const limit of ['file', 'expanded'] as const) test(`historical lookup repor
   } finally { await f.close() }
 })
 
-for (const version of [0, 1, 2] as const) test(`host finalization extracts memory from a cold v${version} log with its original source range`, options, async () => {
+for (const version of [0, 1, 2] as const) test(`cold v${version} history retains source coordinates without automatic finalization`, options, async () => {
   const f = await fixture()
   try {
     execFileSync('git', ['init', '-q', f.root])
-    const sessions = f.ctx.plugin(f.session.default)
+    const sessions = f.ctx.plugin((f.session.default ?? f.session))
     await sessions
     f.disposers.push(() => sessions.dispose())
     const message = (id: string, text: string) => ({ id, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -657,6 +658,7 @@ for (const version of [0, 1, 2] as const) test(`host finalization extracts memor
       return binding.workspace
     })
     await finalizer.bindRunStart({ runId: 'lookup-run', workspace, dshSessionId: old.id, sourceStartSeq: 0, sourceStartTurn: 1 })
+    await runtime.withDatabase(database => database.prepare('INSERT INTO dsh_run_log_boundaries VALUES(?,?,?,0,1,?,?)').run('lookup-run',workspace,old.id,'2026-10-15T00:00:00Z','2026-10-15T00:00:00Z'))
     await runtime.withDatabase(database => withImmediateTransaction(database, () => {
       new LedgerStore(database).updateRunStatusInTransaction('lookup-run', 'completed')
       scheduleLegacyFinalizer(database, { runId: 'lookup-run', workspace, dshSessionId: old.id, sourceEndSeq: 5 })
@@ -669,13 +671,16 @@ for (const version of [0, 1, 2] as const) test(`host finalization extracts memor
       job: database.prepare('SELECT * FROM dsh_memory_finalizations WHERE run_id = ?').get('lookup-run'),
       memory: database.prepare('SELECT provenance_json FROM entry_revisions WHERE title = ?').get<{ provenance_json: string }>('Historical coordinates'),
     }))
-    assert.equal(evidence.job?.status, 'completed', JSON.stringify(evidence.job))
-    assert.equal(evidence.job?.attempt_count, version === 0 ? 2 : 1)
-    assert.equal(calls.length, 1)
-    assert.ok(calls[0]!.includes('Preserve historical lookup coordinates.'))
-    assert.ok(calls[0]!.includes('Historical lookup verified.'))
-    assert.ok(!calls[0]!.includes('FUTURE TURN MUST NOT LEAK'))
-    assert.ok(JSON.parse(evidence.memory!.provenance_json).reference.startsWith(`dsh-session:${old.id}?seq=0-5#sha256:`))
+    assert.equal(evidence.job?.status, version === 0 ? 'failed' : 'pending', JSON.stringify(evidence.job))
+    assert.equal(evidence.job?.attempt_count, version === 0 ? 1 : 0)
+    assert.equal(calls.length, 0, 'startup cannot extract or save before native human review')
+    assert.equal(evidence.memory, undefined)
+    const historical = await readHistoricalDshSession(f.backend, old.id)
+    assert.ok(historical)
+    const sourceEvents = JSON.stringify(historical)
+    assert.ok(sourceEvents.includes('Preserve historical lookup coordinates.'))
+    assert.ok(sourceEvents.includes('Historical lookup verified.'))
+    assert.equal(evidence.job?.source_start_seq, 0); assert.equal(evidence.job?.source_end_seq, 5)
     assert.deepEqual(await readFile(old.path), old.original)
     await assert.rejects(access(old.currentPath), { code: 'ENOENT' })
   } finally { await f.close() }
@@ -779,7 +784,7 @@ test('normal plugin loading restores the session query used by the chat page', o
   const f = await fixture()
   try {
     const query = await import(pathToFileURL(modulePath('dsh-session-query')).href)
-    for (const plugin of [f.session.default, query.default]) {
+    for (const plugin of [(f.session.default ?? f.session), (query.default ?? query)]) {
       const fiber = f.ctx.plugin(plugin)
       await fiber
       f.disposers.push(() => fiber.dispose())
@@ -1093,7 +1098,7 @@ test('abort before replacement leaves original bytes and releases the native lea
   try {
     await f.mount()
     const old = await f.old('legacy-aborted'), controller = new AbortController()
-    const prototype = f.jsonl.prototype, originalRead = prototype.readStoredLog
+    const prototype = Object.getPrototypeOf(f.backend), originalRead = prototype.readStoredLog
     prototype.readStoredLog = async function (...args: any[]) {
       const value = await originalRead.apply(this, args)
       if (args[0] !== old.path) controller.abort(new Error('test cancellation after candidate validation'))

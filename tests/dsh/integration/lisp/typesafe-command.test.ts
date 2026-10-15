@@ -61,13 +61,20 @@ test('native DSH commands and credential provider: precedence, replacement, clea
     cleanup.push(await inherited.plugin(credentials.default, { path: readonlyPath, watch: false }))
     remove = mountTypeSafeCommand(inherited.commands, typeSafeCredentials(inherited))
     agent.session.append = (type: string, data: unknown) => readonlyEvents.push({ type, data })
+    // alpha.3 intentionally gives the managed store precedence over process fallback.
+    const nativeVersion = JSON.parse(await readFile(join(packages!, '@deepseek-ai/dsh-credentials-local/package.json'), 'utf8')).version
+    const managedOverride = nativeVersion !== '0.2.1-alpha.2'
     for (const input of ['other-key', 'clear']) {
       const result = await inherited.commands.execute(agent, `/kioku-typesafe-key ${input}`, [], new AbortController().signal)
-      assert.match(result.result.text, /TYPESAFE_READ_ONLY/)
+      if (managedOverride) {
+        assert.equal(result.result.kind, 'success', result.result.text)
+        assert.equal((await inherited.credentials.resolve('TYPESAFE_API_KEY')).value, input === 'clear' ? secret : input)
+      } else assert.match(result.result.text, /TYPESAFE_READ_ONLY/)
     }
     const result = await inherited.commands.execute(agent, '/kioku-typesafe-key status', [], new AbortController().signal)
-    assert.match(result.result.text, /env.*read-only/)
+    assert.match(result.result.text, managedOverride ? /env.*writable/ : /env.*read-only/)
     assert.ok(!JSON.stringify(readonlyEvents).includes(secret))
-    await assert.rejects(readFile(readonlyPath), { code: 'ENOENT' })
+    if (managedOverride) assert.ok(!(await readFile(readonlyPath, 'utf8')).includes(secret))
+    else await assert.rejects(readFile(readonlyPath), { code: 'ENOENT' })
   } finally { remove?.(); for (const fiber of cleanup.reverse()) await fiber.dispose(); await rm(join(readonlyPath, '..'), { recursive: true, force: true }) }
 })

@@ -50,7 +50,8 @@ test(`real DSH continuity ${continuity}: final requests after compaction and sam
       'research', 'prepare-initial', interpretedPreparation(mock, 'prepare-initial', 'new', 'research', 'research')),
     read('read-1'), read('read-2'), read('read-3'), read('read-4'),
     mock.textResponse('別のセッションの回答です。'),
-    ...mock.prepareWork([read('read-resumed')], 'research', 'prepare-resume'), mock.textResponse('記録済みの根拠を使い、調査と文章作成を完了しました。'),
+    ...mock.prepareWork([read('read-resumed')], 'research', 'prepare-resume',
+      interpretedPreparation(mock, 'prepare-resume', 'same_scope_continuation', 'research', 'research')), mock.textResponse('記録済みの根拠を使い、調査と文章作成を完了しました。'),
   ])
   ctx.llm.registerAdapter(['execution-mock'], model)
   let writes = 0; let reads = 0
@@ -64,6 +65,7 @@ test(`real DSH continuity ${continuity}: final requests after compaction and sam
   const questionFiber = ctx.plugin({ name: 'execution-test-questions', apply(context: any) {
     return context.provide('userQuestions', { async ask(request: DshUserQuestionRequest) {
       return { answers: request.questions.map(q => {
+        if(q.options?.some((o:any)=>o.label==='今回は保存しない'))return {id:q.id,selected:['今回は保存しない']}
         questions.push({ id: q.id, agentId: request.agent?.id })
         return { id: q.id, selected: [q.id === 'kioku-agenticreplay-recording' ? '記録しない' : mode] }
       }) }
@@ -135,6 +137,11 @@ test(`real DSH continuity ${continuity}: final requests after compaction and sam
     await settle(agent, '記録した根拠を使って続行してください。', () => adapter.host.runtime!.withDatabase(db =>
       db.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(running.id)?.status === 'completed'))
     assert.equal(reads, 5, 'only the explicitly resumed read ran')
+    const resumedRuns = await adapter.host.runtime!.withDatabase(db => db.prepare(
+      'SELECT run_id AS id, status, task_unresolved_json AS unresolved FROM ledger_runs WHERE dsh_session_id = ?'
+    ).all<{ id: string; status: string; unresolved: string | null }>('execution-session'))
+    assert.deepEqual(resumedRuns.map(({ id, status, unresolved }) => ({ id, status, unresolved })), [{ id: running.id, status: 'completed', unresolved: null }],
+      'source-bound preparation resumes the exact persisted task and clears only its resolved continuation')
     const lastRequest = JSON.stringify(model.requests.at(-1))
     assert.match(lastRequest, /根拠|acquisition/)
     if (continuity === 'active') {

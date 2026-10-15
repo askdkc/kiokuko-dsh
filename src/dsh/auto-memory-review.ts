@@ -24,14 +24,7 @@ export class AutoMemoryReviewCoordinator {
     this.worker=new MemoryReviewWorker({runtime:options.runtime,source:options.mirror,...(options.llm?{llm:options.llm}:{}),now:this.now,...(options.onChanged?{onChanged:options.onChanged}:{})})
   }
   async start(workspace:string):Promise<void>{
-    await this.options.runtime.withDatabase(db=>withImmediateTransaction(db,()=>{
-      configureReview(db,workspace,this.#config,this.now())
-      const current=reviewSettings(db,workspace)!
-      // A cold host may disable capture, but cannot silently re-enable a newer setting.
-      if(this.#config.mode==='off'&&current.config.mode!=='off')configureReview(db,workspace,this.#config,this.now(),current.generation)
-      this.#generations.set(workspace,reviewSettings(db,workspace)!.generation)
-    }))
-    this.worker.kick(workspace)
+    return; // Post-task review replaces background admission and model extraction.
   }
   async setMode(workspace:string,mode:ReviewConfig['mode']):Promise<void>{
     await this.options.runtime.withDatabase(db=>withImmediateTransaction(db,()=>{
@@ -54,42 +47,7 @@ export class AutoMemoryReviewCoordinator {
     this.#config=next;this.worker.abort()
   }
   async bind(binding:ReviewBinding):Promise<void>{
-    if(this.#closed||binding.session.header?.origin==='subagent')return
-    // Only the exact native indexed API qualifies; no full-history snapshot fallback.
-    const admittedAfter=Math.max(binding.startSeq,binding.session.inheritedEventCount??0)-1
-    const unchanged=(sourceGeneration:string)=>this.options.runtime.withDatabase(db=>{
-      const state=reviewState(db,binding.runId),settings=reviewSettings(db,binding.workspace)
-      const run=db.prepare('SELECT workspace,COALESCE(task_owner_session_id,dsh_session_id) AS dsh_session_id,status FROM ledger_runs WHERE run_id=?')
-        .get<{workspace:string;dsh_session_id:string;status:string}>(binding.runId)
-      return state?.workspace===binding.workspace && state.session_id===binding.session.id
-        && state.source_generation===sourceGeneration && state.admitted_after_seq===admittedAfter
-        && run?.workspace===binding.workspace && run.dsh_session_id===binding.session.id
-        && ['active','intake'].includes(run.status) && settings?.generation===this.#generations.get(binding.workspace)
-        && settings!==undefined && canonicalContentHash(settings.config)===canonicalContentHash(this.#config)
-        && capturePolicy(db,binding.workspace,binding.session.id).mode==='allowed'
-    })
-    const first=binding.session.eventAt?.(0)
-    // A repeated bind must not rewrite the first mirrored event merely to rediscover its identity.
-    if(first && await this.options.mirror.matchesEvent(binding.session.id,first).catch(()=>false)) {
-      const previousGeneration=await this.options.mirror.sourceGeneration(binding.session.id).catch(()=>undefined)
-      if(previousGeneration && await unchanged(previousGeneration)){this.worker.kick(binding.workspace);return}
-    }
-    if(first)await this.options.mirror.observe(binding.session.id,first)
-    const sourceGeneration=await this.options.mirror.sourceGeneration(binding.session.id)
-    await this.options.runtime.withDatabase(db=>withImmediateTransaction(db,()=>{
-      configureReview(db,binding.workspace,this.#config,this.now())
-      if(!this.#generations.has(binding.workspace))this.#generations.set(binding.workspace,reviewSettings(db,binding.workspace)!.generation)
-      const parent=binding.session.header?.parentSession
-      if(parent){
-        const policy=capturePolicy(db,binding.workspace,parent)
-        if(policy.mode!=='allowed')excludeCapture(db,binding.workspace,binding.session.id,policy.mode,'capture_lineage_excluded',this.now())
-        else if(!db.prepare('SELECT 1 FROM ledger_runs WHERE workspace=? AND dsh_session_id=?').get(binding.workspace,parent))excludeCapture(db,binding.workspace,binding.session.id,'held','capture_lineage_unknown',this.now())
-      }else if(binding.session.header?.isSeeded||Number(binding.session.inheritedEventCount)>0)excludeCapture(db,binding.workspace,binding.session.id,'held','capture_lineage_unknown',this.now())
-      admitReview(db,{workspace:binding.workspace,sessionId:binding.session.id,runId:binding.runId,sourceGeneration,startSeq:Math.max(binding.startSeq,binding.session.inheritedEventCount??0),endSeq:binding.startSeq})
-    }))
-    const policy=await this.options.runtime.withDatabase(db=>capturePolicy(db,binding.workspace,binding.session.id))
-    if(policy.mode!=='allowed')await this.options.onCapturePolicy?.(binding.session.id,policy.mode).catch(()=>undefined)
-    this.worker.kick(binding.workspace)
+    return; // No memory bookkeeping prerequisite for ordinary tasks.
   }
   async acceptInput(workspace:string,sessionId:string,text:string):Promise<void>{
     const refusal=captureRefusal(text);if(!refusal)return
@@ -98,106 +56,16 @@ export class AutoMemoryReviewCoordinator {
     await this.options.onCapturePolicy?.(sessionId,refusal.mode).catch(()=>undefined)
   }
   notify(binding:ReviewBinding,throughSeq:number,origin:'periodic'|'boundary'='periodic'):void {
-    if(this.#closed)return
-    const previous=this.#tails.get(binding.runId)??Promise.resolve()
-    const operation=previous.catch(()=>undefined).then(()=>this.scan(binding,throughSeq,origin)).catch(async error=>{
-      const reason=error instanceof Error&&['source_unavailable','input_too_large','capture_excluded','run_terminal','host_capability_missing','review_off'].includes(error.message)?error.message:'review_deferred'
-      await this.options.runtime.withDatabase(db=>db.prepare(`UPDATE memory_review_states SET reason=? WHERE run_id=? AND session_id=? AND reason IS NOT ? AND reason IS NOT 'task_source_rotated'`).run(reason,binding.runId,binding.session.id,reason))
-    }).finally(()=>{if(this.#tails.get(binding.runId)===operation)this.#tails.delete(binding.runId)})
-    this.#tails.set(binding.runId,operation)
-    void operation.catch(()=>undefined)
+    return; // No automatic pre-approval extraction or durable proposal.
   }
   async scan(binding:ReviewBinding,throughSeq:number,origin:'periodic'|'manual'|'boundary'='periodic'):Promise<ReviewJob|undefined>{
-    if(this.#closed)return
-    const {runtime,mirror}=this.options
-    const state=await runtime.withDatabase(db=>{assertCaptureAllowed(db,binding.workspace,binding.session.id);return reviewState(db,binding.runId)})
-    if(!state)return
-    if(state.workspace!==binding.workspace || state.session_id!==binding.session.id)throw new Error('owner_changed')
-    if(state.terminal_outcome)throw new Error('run_terminal')
-    const settings=await runtime.withDatabase(db=>reviewSettings(db,binding.workspace)!)
-    if(settings.config.mode==='off')throw new Error('review_off')
-    const checkpoint=await mirror.checkpoint(binding.session.id)
-    const boundaryEvent=binding.session.eventAt?.(throughSeq)
-    const alreadyClassified = throughSeq<=state.scanned_through_seq && checkpoint.nativeDurableThrough>=throughSeq
-      && checkpoint.confirmedThrough>=throughSeq && !checkpoint.error && checkpoint.health==='healthy'
-      && boundaryEvent!==undefined && await mirror.matchesEvent(binding.session.id,boundaryEvent)
-      && await mirror.sourceGeneration(binding.session.id)===state.source_generation
-    if(!alreadyClassified){
-      if(!this.options.flush||!binding.session.eventAt)throw new Error('host_capability_missing')
-      if(await this.options.flush(binding.session)===false)throw new Error('host_capability_missing')
-      if(this.#closed)return
-      // Catch missed notifications from the exact indexed native range, never snapshot the prefix.
-      for(let seq=Math.max(state.scanned_through_seq+1,checkpoint.mirroredThrough+1);seq<=throughSeq;seq++){
-        const event=binding.session.eventAt(seq);if(!event)throw new Error('source_unavailable')
-        await mirror.observe(binding.session.id,event)
-      }
-      const confirmed=await mirror.checkpointThroughAfterNativeFlush(binding.session,throughSeq,Math.min(throughSeq,state.scanned_through_seq+1))
-      if((confirmed.rangeConfirmedThrough??-1)<throughSeq||confirmed.error)throw new Error('source_unavailable')
-      if(await mirror.sourceGeneration(binding.session.id)!==state.source_generation)throw new Error('source_unavailable')
-      if(throughSeq>state.scanned_through_seq){
-        const classified=await completedReviewTurns(mirror.streamRange(binding.session.id,state.scanned_through_seq+1,throughSeq))
-        await runtime.withDatabase(db=>withImmediateTransaction(db,()=>recordReviewTurns(db,state,classified.turns,classified.scanned)))
-      }
-    }
-    const range=await runtime.withDatabase(db=>{
-      const current=reviewState(db,binding.runId)!
-      const pending=db.prepare('SELECT min(start_seq) AS start,max(end_seq) AS end,count(DISTINCT start_seq) AS n FROM memory_review_turns WHERE run_id=? AND session_id=? AND source_generation=? AND end_seq>?')
-        .get<{start:number|null;end:number|null;n:number}>(binding.runId,current.session_id,current.source_generation,current.scheduled_through_seq)!
-      const minimum=origin==='manual'?1:origin==='boundary'?settings.config.minimumTurns:settings.config.turnInterval
-      if(pending.n<minimum||pending.start===null||pending.end===null||origin==='boundary'&&!settings.config.boundaryFlush)return
-      return {workspace:binding.workspace,sessionId:binding.session.id,runId:binding.runId,sourceGeneration:state.source_generation,startSeq:pending.start,endSeq:pending.end}
-    })
-    if(!range){this.worker.kick(binding.workspace);return}
-    const job=await this.reserve(range,origin)
-    this.worker.kick(binding.workspace);return job
+    return; // Organization requires the native post-task permission question.
   }
   async reserve(range:ReviewRange,origin:ReviewJob['origin'],parent?:ReviewJob,contextStartSeq?:number):Promise<ReviewJob>{
-    if(this.#closed)throw new Error('shutdown')
-    const settings=await this.options.runtime.withDatabase(db=>{assertCaptureAllowed(db,range.workspace,range.sessionId);return reviewSettings(db,range.workspace)!})
-    let evidence:ReviewEvidence[]=[],blockedReason:string|undefined
-    contextStartSeq??=parent?(JSON.parse(parent.input_json) as {contextStartSeq?:number}).contextStartSeq:undefined
-    try{evidence=await reviewEvidenceWithContext(this.options.mirror,range,settings.config.maxInputBytes,contextStartSeq)}
-    catch(error){if(error instanceof Error&&['input_too_large','secret_detected','insufficient_context'].includes(error.message))blockedReason=error.message;else throw error}
-    // Include the complete request envelope before deciding a turn-boundary split.
-    const snapshot=await this.options.runtime.withDatabase(db=>memorySnapshots(db,range,evidence.map(e=>e.text).join('\n'),true))
-    if(Buffer.byteLength(JSON.stringify({system:REVIEW_SYSTEM,range,evidence,...snapshot}))+1024>settings.config.maxInputBytes)blockedReason='input_too_large'
-    if(blockedReason==='input_too_large'&&!parent){
-      const turns=await this.options.runtime.withDatabase(db=>db.prepare('SELECT DISTINCT start_seq,end_seq FROM memory_review_turns WHERE run_id=? AND session_id=? AND source_generation=? AND start_seq>=? AND end_seq<=? ORDER BY start_seq').all<{start_seq:number;end_seq:number}>(range.runId,range.sessionId,range.sourceGeneration,range.startSeq,range.endSeq))
-      if(turns.length>1){
-        const cut=Math.floor(turns.length/2)
-        const first=await this.reserve({...range,endSeq:turns[cut-1]!.end_seq},origin,undefined,contextStartSeq)
-        // Later chunks must see candidates adopted from earlier chunks. Never
-        // freeze all snapshots before the first correction has been evaluated.
-        this.worker.kick(range.workspace);await this.worker.whenIdle()
-        await this.reserve({...range,startSeq:turns[cut]!.start_seq},origin,undefined,contextStartSeq??range.startSeq)
-        return first
-      }
-    }
-    const header=await this.options.mirror.latestEvent(range.sessionId,'request/header',range.endSeq)
-    const context=await this.options.mirror.latestEvent(range.sessionId,'request/context',range.endSeq)
-    const model=parent?(JSON.parse(parent.input_json) as {model:NonNullable<ReturnType<typeof reviewModel>>}).model:reviewModel(header,context)
-    if(!model)throw new Error('model_unavailable')
-    return this.options.runtime.withDatabase(db=>withImmediateTransaction(db,()=>{
-      return reserveReview(db,range,{evidence:reviewManifest(evidence),...snapshot,model,...(contextStartSeq===undefined?{}:{contextStartSeq}),...(blockedReason?{blockedReason}:{})},origin,this.now(),parent)
-    }))
+    throw new Error('post_task_memory_review_required');
   }
   async retry(workspace:string,id:string):Promise<ReviewJob>{
-    const parent=await this.options.runtime.withDatabase(db=>{
-      const row=db.prepare('SELECT * FROM memory_review_jobs WHERE id=? AND workspace=?').get<ReviewJob>(id,workspace)
-      if(!row)throw new Error('job_not_found')
-      assertCaptureAllowed(db,workspace,row.session_id)
-      if(reviewSettings(db,workspace)?.config.mode==='off')throw new Error('review_off')
-      return row
-    })
-    const existing=await this.options.runtime.withDatabase(db=>db.prepare('SELECT * FROM memory_review_jobs WHERE retry_parent_id=?').get<ReviewJob>(parent.id))
-    if(existing)return existing
-    try {
-      if(await this.options.mirror.sourceGeneration(parent.session_id)!==parent.source_generation)throw new Error('source_unavailable')
-      const job=await this.reserve(jobRange(parent),'retry',parent);this.worker.kick(workspace);return job
-    } catch(error) {
-      if(error instanceof Error&&error.message==='source_unavailable')await this.options.runtime.withDatabase(db=>db.prepare("UPDATE memory_review_jobs SET reason='source_unavailable' WHERE id=? AND resolved_by IS NULL").run(parent.id))
-      throw error
-    }
+    throw new Error('post_task_memory_review_required');
   }
   async status(workspace:string,sessionId:string):Promise<Record<string,unknown>>{
     return this.options.runtime.withDatabase(db=>{

@@ -45,22 +45,8 @@ export class IndexReasoningWorker {
         this.#unwatch = watchIndexQueue(() => this.kick());
     }
     kick(): void {
-        if (this.#closed)
-            return;
-        if (this.#drain) {
-            this.#again = true;
-            return;
-        }
-        this.#drain = hostTail.then(() => this.run()).catch(() => {
-        }).finally(() => {
-            this.#drain = undefined;
-            if (this.#again) {
-                this.#again = false;
-                this.kick();
-            }
-        });
-        hostTail = this.#drain;
-    }
+    return; // Do not persist derived reasoning before review.
+  }
     async whenIdle(): Promise<void> {
         while (this.#drain)
             await this.#drain;

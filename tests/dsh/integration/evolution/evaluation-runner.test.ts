@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 
-test('the four-condition evaluation runs end to end; a contract mock never passes quality admission', async () => {
+test('the four-condition evaluation reports retired automatic extraction and cannot pass quality admission', async () => {
   const root=await mkdtemp(path.join(tmpdir(),'evolution-evaluator-'))
   const baseUrl='http://127.0.0.1:1/v1'
   await writeFile(path.join(root,'mock.mjs'), `
@@ -38,7 +38,9 @@ test('the four-condition evaluation runs end to end; a contract mock never passe
     const report=JSON.parse(await readFile(path.join(root,'report.json'),'utf8'))
     assert.equal(report.eligibleForActive,false);assert.equal(report.gates.semanticSafetyReviewed,false)
     assert.equal(report.metrics.length,8);assert.equal(report.fixture.queries,120)
-    assert.ok(report.counters.llmCalls>=90);assert.ok(report.counters.embeddingCalls>0)
+    assert.equal(report.counters.llmCalls,0,'retired automatic finalization must not invoke the extraction model')
+    assert.equal(report.counters.embeddingCalls,120,'the fixture still measures the actual query path')
+    assert.ok(report.notes.some((note:string)=>note.includes('Automatic finalization is retired')))
     assert.equal(report.metrics.find((m:any)=>m.condition==='full'&&m.split==='heldout').queries,80)
   } finally {await rm(root,{recursive:true,force:true})}
 })

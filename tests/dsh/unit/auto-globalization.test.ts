@@ -22,3 +22,17 @@ test('automatic Global policy counts independent roots and repository identities
   assert.equal(decideAutoGlobalization({receipts:[...first, proof('c','c','repo-b')] as any,
     adverse:true, portable:true, hasApplicability:false, applicabilityMatches:[true,true,true]}).kind, 'blocked')
 })
+
+// Eligibility remains a read policy, never permission to write. The actual
+// approved save path is covered by integration/replay-memory-review.test.ts.
+test('eligible historical globalization never resumes an automatic writer', async () => {
+  const { AutoGlobalizationWorker, processNextAutoGlobalizationInTransaction } = await import('../../../src/memory/auto-globalization.js')
+  let databaseCalls = 0
+  const runtime = { withDatabase: async <T>(_operation: unknown): Promise<T> => { databaseCalls++; throw new Error('memory unavailable') } }
+  for (const enabled of [false, true]) {
+    const worker = new AutoGlobalizationWorker(runtime, enabled)
+    worker.kick();worker.kick();await worker.whenIdle();await worker.dispose()
+    assert.equal(databaseCalls, 0, 'automatic globalization may not even acquire optional storage')
+    assert.equal(processNextAutoGlobalizationInTransaction(undefined as never, enabled), false)
+  }
+})

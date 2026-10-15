@@ -65,8 +65,9 @@ export function explainMemory(db: SqliteDatabase, input: { workspace: string; en
   let retrieval: {selection_reason_json: string; rank: number} | undefined
   if (input.runId) {
     const binding = db.prepare('SELECT delivery_id FROM task_memory_bindings WHERE run_id=? AND workspace=?').get<{delivery_id: string | null}>(input.runId, workspace)
-    if (!binding) throw new KiokukoError('NOT_FOUND', 'Memory request binding unavailable')
-    if (binding.delivery_id) {
+    if (!binding && !db.prepare('SELECT 1 FROM ledger_runs WHERE run_id=? AND workspace=?').get(input.runId, workspace))
+      throw new KiokukoError('NOT_FOUND', 'Memory request binding unavailable')
+    if (binding?.delivery_id) {
       const delivered = db.prepare('SELECT e.workspace,d.selection_reason_json,d.rank FROM context_delivery_entries d JOIN entries e ON e.id=d.entry_id WHERE d.delivery_id=? AND d.entry_id=?')
         .get<{workspace: string; selection_reason_json: string; rank: number}>(binding.delivery_id, input.entryId)
       if (delivered) { workspace = delivered.workspace; retrieval = delivered }

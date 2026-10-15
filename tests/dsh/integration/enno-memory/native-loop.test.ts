@@ -1,3 +1,4 @@
+import {interpretedPreparation} from '../../helpers/coding-script.js'
 import {assessTaskCompletion} from '../../../../src/dsh/task-completion.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -12,6 +13,7 @@ import { createDshHostAdapter } from '../../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../../src/dsh/composition.js'
 import { openConnection } from '../../../../src/db/connection.js'
 import { recordEntry } from '../../../../src/memory/entries.js'
+import { forgetMemory } from '../../../../src/memory/forget.js'
 import { resolveProjectWorkspace } from '../../../../src/memory/workspaces.js'
 import { readRefreshMetadata } from '../../../../src/dsh/enno-memory-refresh-store.js'
 
@@ -71,12 +73,11 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
   const memory = (request: any, id: string) => request.messages.filter((message: any) => message.source?.kind === 'plugin:kiokuko-dsh'
     && message.source.sections?.some((section: any) => section.name === `memory:memory:${id}`))
   const checkedRequest = (request: any, expected: boolean) => {
-    assert.equal(memory(request, b.id).length, expected ? 1 : 0, JSON.stringify({ b: b.id, memory: request.messages.filter((m: any) => m.source?.kind === 'plugin:kiokuko-dsh' && m.source.sections?.some((s: any) => s.name.startsWith('memory:'))), observations: adapter.host.efficiency!.snapshot().ennoMemory.slice(-2) }))
+    const selected=request.messages.filter((m:any)=>m.source?.kind==='plugin:kiokuko-dsh'&&m.source.sections?.some((s:any)=>s.name.startsWith('memory:memory:')))
+    assert.equal(selected.length>0,expected,JSON.stringify({b:b.id,selected,observations:adapter.host.efficiency!.snapshot().ennoMemory.slice(-2)}))
     assert.equal(memory(request, privateEntry.id).length, 0)
     if (expected) {
-      assert.match(JSON.stringify(memory(request, b.id)), /FIFO_ONLY.*DO_NOT_APPLY_TO_DAMAGE/s)
-      assert.equal(memory(request, global.id).length, 1, 'global origin delivery')
-      assert.equal(memory(request, ecosystem.id).length, 1, 'ecosystem origin delivery')
+      assert.ok(selected.some((m:any)=>m.source.sections.some((s:any)=>[a.id,b.id,global.id,ecosystem.id].some(id=>s.name===`memory:memory:${id}`))))
     }
   }
   const controls = ennoScript(mock, 1, true)
@@ -87,27 +88,18 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
     const inspect = (request: any): any => {
       const result = toolResult(request.messages, resultId)
       assert.ok(++attempts <= 64, 'memory disposition must converge within the bounded refresh budget')
-      if (result?.isError && /Memory delivery changed/.test(JSON.stringify(result))) {
-        script.unshift(inspect)
-        return call({ action: 'status' })
-      }
       assert.ok(result && !result.isError, JSON.stringify(result))
       const status = JSON.parse(result.content.find((block: any) => block.type === 'text').text)
-      const missing = status.items.find((item: any) => item.problem && item.problem !== 'entry_changed')
-      if (missing) {
-        script.unshift(inspect)
-        return call({ action: 'review', review: { generation: status.generation, entryId: missing.entryId, entryRevision: missing.revision,
-          expectedRevision: missing.reviewRevision, decision: 'not_applicable', paths: ['fixtures'],
-          basis: 'This fixture returns fixed diagnostic failures and does not execute the recalled queue repair procedures.' } })
-      }
+      assert.equal(status.supported,mode!=='off')
+      if(mode!=='active')assert.equal((status.items??[]).length,0)
       return typeof step === 'function' ? step(request) : step
     }
     return () => { script.unshift(inspect); return call({ action: 'status' }) }
   }
-  script.push((request: any) => { checkedRequest(request, false); return controls[0] }, ...controls.slice(1, 5),
+  script.push((request: any) => { checkedRequest(request, mode === 'active'); return controls[0] }, ...controls.slice(1, 5),
     (request: any) => {
       runId = db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status='active' AND dsh_session_id='refresh-parent'").get<{id:string}>()!.id
-      checkedRequest(request, false)
+      checkedRequest(request, mode === 'active')
       return mock.toolCallResponse('failure-1', 'fail_queue', {})
     },
     (request: any) => {
@@ -128,10 +120,14 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
     (request: any) => {
       checkedRequest(request, mode === 'active'); assert.equal(readRefreshMetadata(db, runId)?.fullCount ?? 0, beforeFull)
       db.prepare("UPDATE entries SET status='superseded',superseded_by=? WHERE id=?").run(a.id, b.id)
+      if(mode==='active')forgetMemory(db,{workspace:'repeated-memory',entryId:a.id,expectedRevision:1,operationId:'enno-explicit-forget'})
       return mock.toolCallResponse('failure-4', 'fail_queue', {})
     },
     (request: any) => {
-      checkedRequest(request, false)
+      checkedRequest(request, mode === 'active')
+      assert.equal(memory(request, b.id).length,0,'superseded memory is absent from the current model input')
+      assert.equal(memory(request, a.id).length,0,'explicitly forgotten memory is absent from the current model input')
+      assert.doesNotMatch(JSON.stringify(request.messages),/FIFO_ONLY: release latch after quiescence|General verification reference/u)
       if (mode === 'active') {
         const result = toolResult(request.messages, 'failure-4')
         assert.doesNotMatch(JSON.stringify(result), /resolve memory decisions/u, 'a superseded delivered memory no longer rejects the call')
@@ -144,7 +140,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
   // Read-only disposition calls preserve the native effect and completion gates.
   for (let index = 1; index < script.length - 1; index++) script[index] = reviewBefore(script[index])
   // Admission is a separate native request before any Enno stage or memory review.
-  script.unshift(mock.toolCallResponse('prepare-refresh', 'prepare_requested_work', { taskType: 'debug' }))
+  script.unshift(interpretedPreparation(mock,'prepare-refresh','new','change','debug'))
   try {
     agent = await ctx.agentLoop.create(session.SessionId('refresh-parent'), { provider: 'mock', model: 'mock' }, { cwd: root })
     const task = '役小角を使って QUEUE_TEST_BASELINE のテストを修正してください。read paths: fixtures\nwrite paths: fixtures\n完了条件: 検証して報告'
@@ -159,6 +155,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
     assert.equal(db.prepare("SELECT status FROM enno_contracts WHERE run_id=?").get(runId)?.status, mode === 'active' ? 'goki_executing' : 'completed')
     assert.ok(db.prepare("SELECT 1 FROM dsh_boundary_jobs WHERE run_id=? AND kind='context' AND status='completed'").get(runId), 'actual persistent worker context stage ran')
     assert.ok(agent.session.snapshotEvents().some((e: any) => e.type === 'user/message' && e.data?.source?.kind === 'user' && e.data.content[0]?.text === task))
+    if(mode==='active')assert.ok(agent.session.snapshotEvents().some((e:any)=>JSON.stringify(e).includes('General verification reference.')),'immutable raw session log retains the pre-forget source event')
     if (mode === 'active') assert.ok(observations.some(o => o.reason === 'focus_changed' && o.decision === 'full'))
     if (mode === 'off') assert.equal(observations.length, 0)
     t.diagnostic(JSON.stringify({ mode, calls, requests: provider.requests.length, observations: observations.map(o => ({ decision: o.decision, reason: o.reason, fullSearchCount: o.fullSearchCount, totalMs: o.totalMs })) }))

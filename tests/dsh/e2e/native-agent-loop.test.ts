@@ -41,7 +41,9 @@ for (const finalMode of ['text', 'empty', 'error', 'stall', 'pause', 'verifier_m
 test(`real DSH agent loop: persisted resume, verification retry, completion (${finalMode})`, {
   skip: !dshSourceRoot && !dshPackageRoot ? 'requires the pinned DeepSeek Harness runtime' : false,
   timeout: 60_000,
-}, async () => {
+}, async (t) => {
+  let stage = 'bootstrap'
+  const startedAt = Date.now()
   const [cordis, llm, session, projection, systemPrompt, tools, agentRegistry, agentLoop, skills, fsLocal, workingDirectory, scope] = await Promise.all([
     import(dshModule('vendor/cordis/lib/index.js')),
     import(dshModule('packages/llm/llm/lib/index.js')),
@@ -223,6 +225,12 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   const confirmationDetails: string[] = []
   let liveAgent: any
   let liveScope: any
+  let memoryOffers = 0
+  const progress: { stage: string; elapsedMs: number; requests: number }[] = []
+  const mark = (value: string) => { stage = value; progress.push({ stage, elapsedMs: Date.now() - startedAt, requests: adapterScript.requests.length }) }
+  t.signal.addEventListener('abort', () => t.diagnostic(JSON.stringify({ stage, progress, requests: adapterScript.requests.length,
+    status: liveAgent?.status, confirmations, recoveryQuestions, memoryOffers,
+    recentTools: routedTools.slice(-12), events: liveAgent?.session.snapshotEvents().filter((e: any) => e.type === 'turn/end' || e.type === 'tool/result').slice(-6) })), { once: true })
   const boundaryFailures: string[] = []
   const questionFiber = ctx.plugin({
     name: 'kiokuko-dsh-real-loop-questions',
@@ -231,6 +239,11 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         async ask(request: any) {
           assert.equal(request.agent, liveAgent, 'every user question must use the exact live DSH Agent scope')
           const question = request.questions[0]
+          if (question.options?.some((option: any) => option.label === '整理して確認する')) {
+            assert.deepEqual(question.options.map((option: any) => option.label), ['整理して確認する', '今回は保存しない'])
+            memoryOffers++
+            return { answers: [{ id: question.id, selected: ['今回は保存しない'] }] }
+          }
           const selection = modelSelectionAnswer(question)
           if (selection) return { answers: [{ id: question.id, selected: [selection] }] }
           if (question.id.startsWith('boundary-')) {
@@ -401,18 +414,19 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       })
     })
     const completeTurn = async (task: string, ready: () => boolean | Promise<boolean>): Promise<void> => {
+      mark(`turn: ${task}`)
       liveAgent.followup(llm.createUserMessage({
         content: [{ type: 'text', text: task }], source: { kind: 'user' },
       }))
       for (let count = 0; count < 400; count++) {
         await new Promise(resolve => setTimeout(resolve, 25))
-        if (liveAgent.status === 'idle' && await ready()) return
+        if (liveAgent.status === 'idle' && await ready()) { mark(`settled: ${task}`); return }
       }
       const state = await adapter.host.runtime!.withDatabase(db => Object.fromEntries([
         'enno_contracts', 'dsh_turn_receipts', 'dsh_boundary_jobs', 'dsh_exploration_states', 'dsh_execution_evidence',
       ].map(table => [table, db.prepare(`SELECT * FROM ${table}`).all().map((row: any) => Object.fromEntries(Object.entries(row).filter(([key]) => !['contract_json', 'handoff_json', 'ideal_json', 'intake_discovery_json', 'meditation_json', 'payload_json'].includes(key))))])))
       const completion = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status='active'").all<{id:string}>().map(row => assessTaskCompletion(db,row.id)))
-      throw new Error('Native workflow did not settle: ' + JSON.stringify({ completion, state, events: liveAgent.session.snapshotEvents()
+      throw new Error('Native workflow did not settle: ' + JSON.stringify({ stage, progress, requests: adapterScript.requests.length, completion, state, events: liveAgent.session.snapshotEvents()
         .filter((e: any) => e.type === 'tool/result' || e.type === 'turn/end').slice(-16) }))
     }
     const completed = async (count: number) => adapter.host.runtime!.withDatabase(db =>
@@ -533,7 +547,9 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       !!db.prepare("SELECT job_id FROM dsh_boundary_jobs WHERE status = 'waiting_user'").get()))
     await completeTurn('計画を src のみに絞って再提出してください。', () => adapter.host.runtime!.withDatabase(db =>
       !!db.prepare("SELECT run_id FROM dsh_execution_selections WHERE json_extract(state_json, '$.status') = 'reselect'").get()))
+    mark('dispose before model reselection')
     await composition.dispose(); await adapter.dispose()
+    mark('reload after model reselection')
     priorObservations.push(...adapter.host.efficiency!.snapshot().observations)
     adapter = createAdapter(); composition = await mountDshComposition(ctx, adapter.host)
     await completeTurn('モデル構成を確認して続行してください。', () => completed(2))
@@ -630,6 +646,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         message.source?.kind === 'user' && message.content.some((block: any) => block.text === task))),
       'the original request reaches the model')
     }
+    mark('final assertions after both workflows')
     await adapter.host.memoryFinalizer!.whenIdle()
     const observations = [...priorObservations, ...adapter.host.efficiency!.snapshot().observations]
     if (finalMode === 'text') {
@@ -641,7 +658,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     }
     assert.ok(observations.some(item => item.task === 'main'), 'native model requests are observed')
     assert.ok(observations.some(item => item.task === 'child' && item.parentSessionId === liveAgent.session.id && item.runId), 'delegated native usage retains its parent run binding')
-    assert.ok(observations.some(item => item.task === 'memory-finalization' && item.status === 'completed'), 'post-completion auxiliary work is observed')
+    assert.equal(observations.some(item => item.task === 'memory-finalization'), false, 'retired automatic extraction never dispatches')
     assert.equal(new Set(observations.map(item => item.callId)).size, observations.length)
     const stored = openConnection(databasePath)
     try {
@@ -658,42 +675,16 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       assert.equal(runRows[0]?.runId, seededRunId)
       assert.notEqual(runRows[1]?.runId, seededRunId)
       assert.deepEqual(runRows.map((row) => row.routeEpoch), [0, 0])
-      const jobs = stored.prepare(`
-        SELECT run_id AS runId, status, cache_read_tokens AS cacheReadTokens,
-               source_start_seq AS sourceStartSeq, source_end_seq AS sourceEndSeq,
-               log_event_count AS logEventCount
-          FROM dsh_memory_finalizations
-         ORDER BY scheduled_at
-      `).all<{
-        runId: string
-        status: string
-        cacheReadTokens: number
-        sourceStartSeq: number
-        sourceEndSeq: number
-        logEventCount: number
-      }>()
-      const completedRuns = stored.prepare(`
-        SELECT run_id AS runId
-          FROM ledger_runs
-         WHERE status = 'completed'
-      `).all<{ runId: string }>()
-      assert.deepEqual(
-        jobs.map(({ runId }) => runId).sort(),
-        completedRuns.map(({ runId }) => runId).sort(),
-        'every completed run, including lightweight follow-ups, must be finalized from the DSH log',
-      )
-      assert.equal(jobs.every(({ status, cacheReadTokens }) => status === 'completed' && cacheReadTokens === 8), true)
-      assert.equal(jobs.every(({ sourceStartSeq, sourceEndSeq, logEventCount }) => (
-        sourceEndSeq >= sourceStartSeq && logEventCount === sourceEndSeq - sourceStartSeq + 1
-      )), true)
-      for (let index = 1; index < jobs.length; index += 1) {
-        assert.ok(jobs[index]!.sourceStartSeq > jobs[index - 1]!.sourceEndSeq, 'completed run log ranges must not overlap')
-      }
+      assert.equal(stored.prepare('SELECT count(*) AS n FROM dsh_memory_finalizations').get()?.n, 0,
+        'native completion does not schedule automatic memory extraction')
+      assert.equal(stored.prepare('SELECT count(*) AS n FROM entries').get()?.n, 0,
+        'declining post-task organization saves no memory')
       assert.equal(stored.prepare("SELECT COUNT(*) AS count FROM ledger_events WHERE source_type = 'dsh-session'").get<{ count: number }>()!.count, 0)
     } finally {
       stored.close()
     }
   } finally {
+    mark('final cleanup')
     observeRouting()
     composition.stopIngress()
     await liveScope?.dispose()
@@ -704,6 +695,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     readDisposer?.()
     await rm(fixtureRoot, { recursive: true, force: true })
     await rm(dataRoot, { recursive: true, force: true })
+    mark('cleanup completed')
   }
 })
 }

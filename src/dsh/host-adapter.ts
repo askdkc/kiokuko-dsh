@@ -1,3 +1,4 @@
+import { nativeExecutionOwnership } from './native-execution-ownership.js'
 import { NativeTaskAuthority } from './native-task-authority.js'
 import { readOwnedIdentity } from './owned-read-owner.js'
 import type { RoutableAgent } from './model-routing.js'
@@ -541,6 +542,23 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     answerContext: new DshAnswerContext(runtime, { root, cwd: answerCwd, projectOnly: false, memoryRetrieval: memoryRetrievalConfig,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills: skills as AnswerSkillRegistry, prompts: skillPrompts, decisions, cwd: answerCwd(input.agent) }),
     }),
+    nativeOwnership: async input => {
+      const agent = input.agent as NativeAgent
+      answerCwd(agent)
+      const session = agent.session
+      if (!session?.header) throw new Error('Native ownership requires the current session header')
+      const header = session.header as { parentSession?: unknown; isSeeded?: unknown }
+      if (header.parentSession || header.isSeeded) return 'owned'
+      const jobs = native.get('jobs', false) as { list(sessionId: string): Array<{ status: string }> } | undefined
+      if (jobs && jobs.list(session.id).some(job => !['completed', 'killed', 'failed'].includes(job.status))) return 'owned'
+      const current = currentSession(session.id)
+      const ownership = await runtime.withDatabase(db => nativeExecutionOwnership(db, session.id, current?.runId))
+      input.signal.throwIfAborted()
+      // Retire only the exact completed in-memory projection proven above.
+      // Durable history remains intact; no memory lookup or save is involved.
+      if (ownership === 'unowned' && current && currentSession(session.id) === current) turnState.releaseRun(current.runId, current.authority)
+      return ownership
+    },
     nativeChild: agent => agents?.get(agent.id) === agent && sessions?.get(agent.session?.id ?? '') === agent.session && isNativeSubagent(agent as NativeAgent),
     validate: async input => {
       const agent = input.agent, session = agent.session as { id: string; header?: { cwd?: string } } | undefined
@@ -638,10 +656,11 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
         && !selections.get(current.runId)?.value.discussion
     },
   }, { onlyWhenDeferred: !conversationFirst }) : undefined
+  if(demand)lifecycleMemory.connectIntake(demand)
   const taskWorkflow = demand && agents && sessions && skills?.snapshot && tools?.schemas
     ? new DshTaskWorkflow({ runtime, demand, agents, sessions, skills: { snapshot: options => skills.snapshot!(options) },
       tools: { schemas: agent => tools.schemas!(agent) }, lisp: () => native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined,
-      checkpointSource: async agent => { await sessions.flush?.(agent.session); await sessionMirror.checkpointAfterNativeFlush(agent.session as DshMirrorEventSession) },
+      checkpointSource: async agent => { await sessions.flush?.(agent.session); try { await sessionMirror.checkpointAfterNativeFlush(agent.session as DshMirrorEventSession) } catch { /* Optional mirror cannot veto native completion or Stop. */ } },
       kickFinalizer: () => memoryFinalizer.kick(), emit: task => { (ctx as any).emit(TASK_STATE_EVENT, task) } }) : undefined
   const demandEnd = demand ? onNativeEvent(ctx, 'session/event', (session, event) => {
     if (event.type === 'turn/end') demand.finish(session, (event.data as any)?.turn)
@@ -866,6 +885,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const nativeTaskAuthority = new NativeTaskAuthority({runtime,repositoryRoot:root,backend:native.get('subagents',false) as any,agents,sessions,resolveParent:resolveParentOwned})
   const ownedDisposer = tools ? mountOwnedExecution({tools:tools as any,on:(name,listener,options)=>onNativeServiceEvent(ctx,name,listener,options)}, {
     runtime,
+    unownedNative: execution => demand?.unownedNative(execution as any) === true,
     isTaskControl: execution => (ctx.get(TASK_WORKFLOW_SERVICE, false) as DshTaskWorkflow | undefined)?.isControl(execution) === true,
     resolve: execution => nativeTaskAuthority.resolve(execution) ?? resolveParentOwned(execution),
     async resolveRead(execution) {

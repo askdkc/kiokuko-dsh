@@ -4,7 +4,7 @@
 Kiokuko adds memory, planning, verification, and observability to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
-Automatic memory review saves or updates useful project candidates after eight completed human turns, even while a chat remains open. It is active by default and uses the session model. Check `/kioku-memory-review status` or exclude a conversation with `/kioku-memory-review exclude session`. [Settings, costs and recovery](docs/auto-memory-review.md).
+Memory is optional. After a task ends, Kiokuko asks whether to organize recorded experience, shows an ephemeral preview, and saves only the exact revision the user approves. Automatic memory writers are retired. [Review, recall and forgetting](docs/replay-memory-review.md).
 
 Inspect sources and corrections with `/kioku-memory explain ENTRY_ID`; explicitly forget a memory with `/kioku-memory forget ENTRY_ID --revision N`. [Evidence, explanations and forgetting](docs/memory-evidence.md).
 
@@ -16,8 +16,8 @@ Inspect sources and corrections with `/kioku-memory explain ENTRY_ID`; explicitl
 - **Deep planning** — Run bounded, read-only investigation with four roles. [Usage](docs/deep-planning.md)
 - **DSH subagents** — The standard preset provides `subagent` and `subagent_fork`; native children do not repeat Kiokuko's execution-mode choice. [Configuration](docs/dsh-plugin.md#subagents)
 - **Continuity** — Disabled by default. Set `continuity.mode: active` to summarize recent execution evidence for the model. [Setup](docs/continuity.md)
-- **Memory evolution** — Turn completed work into reusable episode and lesson candidates. [Settings](docs/memory-evolution.md)
-- **Verified automatic Global memory** — Three independent, host-observed successful applications can create a scoped `source_verified` Global memory. [Conditions and opt-out](docs/auto-globalization.md)
+
+
 - **AgenticReplay** — Record model/tool activity and export it as HTML. [Settings and commands](docs/agenticreplay-recording.md)
 - **Japanese output** — Give supported models a bundled Skill for natural Japanese. [Details](docs/japanese-output.md)
 

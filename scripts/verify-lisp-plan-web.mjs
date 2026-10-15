@@ -1,3 +1,5 @@
+import { declineOptionalMemoryOffers } from './lib/web-test-navigation.mjs';
+import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Packed Kiokuko, native agent-loop Plan tools and Web approval UI; scripted local generation.
 import assert from 'node:assert/strict'
@@ -53,11 +55,12 @@ ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan accepta
 `)
   const patch = join(base, 'patch.yml')
   await writeFile(patch, `- id: session-title-llm\n  disabled: true\n- id: agent-default-model\n  config: {provider: plan-fixture, model: mock}\n- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n    lisp: {enabled: true}\n- insert:\n    - id: lisp-plan-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, tools, agents, sessionProjections, llm]\n`)
-  host = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', '0'], { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  host = spawn(dsh, ['--profile', 'web', '--patch', patch, '--no-open', '--port', webTestPort()], { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] })
   for (const stream of [host.stdout, host.stderr]) stream.on('data', c => { logs += c })
   const url = await poll(() => logs.match(/https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/)?.[0])
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) })
   page = await browser.newPage()
+  await declineOptionalMemoryOffers(page)
   await page.goto(url)
   const welcome = page.getByRole('button', { name: 'Continue', exact: true })
   const credentials = page.getByRole('dialog', { name: 'Add an API key to get started', exact: true })

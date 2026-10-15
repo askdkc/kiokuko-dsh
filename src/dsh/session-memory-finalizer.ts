@@ -992,15 +992,13 @@ export class DshMemoryFinalizer {
   async observeIndexRequest(workspace:string,sessionId:string,events:readonly DshLogEvent[]):Promise<void> {try{await this.admitIndex(workspace,sessionId,latestEnvelope(events))}catch{/* optional enrichment never vetoes native work */}}
   async admitIndex(workspace:string,sessionId:string,envelope:unknown):Promise<void> {await this.#indexService?.admitIndex(workspace,sessionId,envelope)}
   async admitConversationIndex(workspace:string,sessionId:string,envelope:unknown,assertCurrent:()=>boolean):Promise<void> {await this.#indexService?.admitConversation(workspace,sessionId,envelope,assertCurrent)}
-  async indexCommand(sessionId:string,raw:string):Promise<Record<string,unknown>> {await this.start();return this.#indexService!.indexCommand(sessionId,raw)}
+  async indexCommand(sessionId:string,raw:string):Promise<Record<string,unknown>> {return {recorded:false,workMayContinue:true,reason:'post_task_memory_review_required'}}
 
   get lastDrainError(): unknown { return this.#lastDrainError }
 
   /** Recover a process-interrupted job once, then drain pending work in background. */
   async start(): Promise<void> {
-    if (this.#closed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'DSH memory finalizer is closed')
-    this.#startup ??= this.#startOnce()
-    await this.#startup
+    return; // Replaced by post-task native review; old pending jobs are not resumed.
   }
 
   async #startOnce(): Promise<void> {
@@ -1036,60 +1034,17 @@ export class DshMemoryFinalizer {
 
   /** Persist the first DSH turn boundary for a run before model execution continues. */
   async bindRunStart(input: BindDshRunLogStartInput): Promise<void> {
-    const now = this.#now()
-    await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-      bindDshRunLogStartInTransaction(database, input, now)
-    }))
+    return; // Optional memory cannot add a task-admission prerequisite.
   }
 
   /** Must be called inside the same transaction that terminalizes the run. */
   scheduleInTransaction(database: SqliteDatabase, input: ScheduleDshMemoryFinalizationInput): void {
-    this.#configured = true
-    const runId = validateIdentity(input.runId, 'runId')
-    const workspace = validateIdentity(input.workspace, 'workspace')
-    const sessionId = validateIdentity(input.dshSessionId, 'dshSessionId')
-    const sourceEndSeq = validatedSequence(input.sourceEndSeq, 'sourceEndSeq')
-    const existing = database.prepare('SELECT status,workspace,dsh_session_id,source_end_seq FROM dsh_memory_finalizations WHERE run_id = ?')
-      .get<{ status: string; workspace:string; dsh_session_id:string; source_end_seq:number }>(runId)
-    if (existing !== undefined) {
-      if (existing.workspace !== workspace || existing.dsh_session_id !== sessionId || existing.source_end_seq !== sourceEndSeq)
-        throw new KiokukoError('CONFLICT', 'Finalization replay changed its source range')
-      return
-    }
-    const boundary = database.prepare(`
-      SELECT source_start_seq AS sourceStartSeq
-        FROM dsh_run_log_boundaries
-       WHERE run_id = ? AND workspace = ? AND dsh_session_id = ?
-    `).get<{ sourceStartSeq: number }>(runId, workspace, sessionId)
-    if (boundary === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'Completed DSH run has no bound log start')
-    if (sourceEndSeq < boundary.sourceStartSeq) throw new KiokukoError('INTEGRITY_ERROR', 'Completed DSH run has a reversed log range')
-    const now = this.#now()
-    database.prepare(`
-      INSERT INTO dsh_memory_finalizations (
-        run_id, workspace, dsh_session_id, source_start_seq, source_end_seq,
-        status, attempt_count, input_mode, extraction_version, evidence_selection_version, memory_adoption_version, capture_admission, evidence_contract_version,
-        scheduled_at, updated_at, source_epoch
-      ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, 2, ?, ?, 4, ?, ?, (SELECT COALESCE(MAX(source_epoch),0)+1 FROM dsh_task_source_history WHERE run_id=?))
-    `).run(runId, workspace, sessionId, boundary.sourceStartSeq, sourceEndSeq, this.#inputMode, this.#evolutionConfig.mode === 'off' ? 1 : 2, 2, capturePolicy(database,workspace,sessionId).mode === 'allowed' ? 'ready' : capturePolicy(database,workspace,sessionId).mode, now, now, runId)
+    return; // No durable draft/finalization job before user review.
   }
 
   /** Schedule a background drain after the enclosing transaction commits. */
   kick(): void {
-    if (this.#closed) return
-    this.#autoGlobalWorker?.kick()
-    if (this.#drain !== undefined) {
-      this.#rerunRequested = true
-      return
-    }
-    const operation = this.#drainPending()
-    this.#drain = operation
-    void operation.catch((error) => { this.#lastDrainError = error }).finally(() => {
-      if (this.#drain === operation) this.#drain = undefined
-      if (this.#rerunRequested && !this.#closed) {
-        this.#rerunRequested = false
-        this.kick()
-      }
-    })
+    return; // Automatic derived-memory writes were replaced by exact human review.
   }
 
   /** Await currently queued work; intended for orderly shutdown and tests. */
@@ -1106,21 +1061,7 @@ export class DshMemoryFinalizer {
 
   /** Explicitly retry one contained failure without changing DSH session state. */
   async retryFailed(runId: string): Promise<void> {
-    const checked = validateIdentity(runId, 'runId')
-    await this.#runtime.withDatabase((database) => {
-      database.prepare(`
-        UPDATE dsh_memory_finalizations
-           SET status = 'pending', updated_at = ?
-         WHERE run_id = ? AND status = 'failed' AND COALESCE(last_error_code,'')<>'MEMORY_FORGOTTEN' AND attempt_count < ? AND capture_admission='ready' AND NOT EXISTS(SELECT 1 FROM memory_capture_exclusions x WHERE x.workspace=dsh_memory_finalizations.workspace AND x.native_session_id=dsh_memory_finalizations.dsh_session_id)
-      `).run(this.#now(), checked, this.#maximumAttempts)
-      for (const item of database.prepare('SELECT job_json FROM dsh_task_source_finalizations WHERE run_id=?').all<{job_json:string}>(checked)) {
-        const row=JSON.parse(item.job_json) as Record<string,unknown>,job=archiveJob(row)
-        if(row.status==='failed' && row.last_error_code!=='MEMORY_FORGOTTEN' && job.attemptCount<this.#maximumAttempts
-          && row.capture_admission==='ready' && capturePolicy(database,job.workspace,job.dshSessionId).mode==='allowed')
-          updateFinalization(database,job,{status:'pending',updated_at:this.#now()})
-      }
-    })
-    this.kick()
+    return; // A historical pending job does not carry approval of a shown revision.
   }
 
   async #claim(): Promise<FinalizationJob | undefined> {

@@ -88,7 +88,7 @@ for (const method of ['start-job', 'tool-call'] as const) {
     })
     const manager = new LispManager({ store, dataRoot, config: LispConfig.parse({ enabled: true, executionMode: 'development' }),
       toolCall: async (_owner, name, args) => {
-        if (name === 'kioku_result') { assert.equal(args.cancel, true); cancelled.push(String(args.operationId)); return { receipt: { state: 'cancelled', operationId: args.operationId } } }
+        if (name === 'kioku_result') { assert.equal(args.cancel, true); cancelled.push(String(args.operationId)); return { receipt: { state: 'cancelled', operationId: args.operationId, processStopped: true } } }
         assert.equal(name, 'kioku_exec')
         recordTaskEvidence(db, task, { ref: 'stopped', kind: 'stopped', generation: task.generation, verified: true })
         const pending = transitionTask(db, task, { operation: 'wait', operationId: 'wait', expectedRevision: task.revision, reason: 'Fixture revokes old authority', evidence: ['stopped'] })
@@ -126,7 +126,9 @@ test('cancellation keeps an owned job unresolved until its host receipt confirms
   const manager = new LispManager({ store, dataRoot, config: LispConfig.parse({ enabled: true, executionMode: 'development' }),
     toolCall: async (_owner, name, args) => {
       if (name === 'kioku_result') { assert.equal(args.cancel, true); cancelCalls++ }
-      return { receipt: { state: name === 'kioku_result' && terminated ? 'completed' : 'started', operationId: 'background-job' } }
+      // A terminal acknowledgement alone is not a confirmed process stop.
+      return { receipt: { state: name === 'kioku_result' ? 'completed' : 'started', operationId: 'background-job',
+        processStopped: name === 'kioku_result' && terminated } }
     } })
   try {
     await manager.enable(owner)

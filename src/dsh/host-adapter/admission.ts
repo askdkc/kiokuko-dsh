@@ -178,16 +178,12 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
       const identity = { taskId: result.prepared.run.runId, sessionId: event.sessionId,
         repositoryRoot: result.prepared.project.repositoryRoot }
       bindTaskRepository(database, identity)
-      return result.admitted ? captureTaskLease(database, identity) : undefined
-    })
-    const sourceStartSeq = event.sourceStartSeq
-      ?? dshTurnBoundarySeq(sessionEventSource(event.nativeSession), event.turn, 'start')
-    await memoryFinalizer.bindRunStart({
-      runId: result.prepared.run.runId,
-      workspace: result.prepared.project.workspace,
-      dshSessionId: event.sessionId,
-      sourceStartSeq,
-      sourceStartTurn: event.turn,
+      if (event.signal.aborted) return undefined
+      // A continued native turn can reuse an already Working task without a
+      // fresh admission. Capture its current lease from SQLite as well; never
+      // synthesize authority from the model or a cached turn record.
+      try { return captureTaskLease(database, identity) }
+      catch (error) { if (result.admitted) throw error; return undefined }
     })
     if (authority) await runtime.withDatabase(database => authorizeTaskLease(database, authority))
     turnState.record(event, result, generation, authority)
@@ -212,25 +208,8 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
         },
       })
     }
-    if (result.admitted && event.requestIntent?.relation !== 'scope_change' && result.prepared.run.status === 'active'
-      && result.prepared.memoryOwner?.kind === 'execution'
-      && currentSession(event.sessionId)?.prepareGeneration === generation && !delegation.isChild(event.nativeAgent ?? {})) {
-      assertMemoryOwner(result.prepared.memoryOwner, { agentId: event.agent.id, sessionId: event.sessionId, turn: event.turn,
-        requestDigest: canonicalContentHash(event.task), runId: result.prepared.run.runId }, 'execution')
-      await runtime.withDatabase(db => {
-        if (currentSession(event.sessionId)?.prepareGeneration !== generation) return
-        if (authority) authorizeTaskLease(db, authority)
-        bindMemoryApplication(db, {
-        runId: result.prepared.run.runId, workspace: result.prepared.project.workspace,
-        sessionId: event.sessionId, repositoryRoot: result.prepared.project.repositoryRoot,
-      }, result.prepared.intake.profile, result.prepared.context,
-      memoryRetrievalStatus(db, result.prepared.project.workspace, result.prepared.context, result.prepared.memoryPolicy.contextWithheld))
-      })
-    }
-    if(event.nativeSession && !delegation.isChild(event.nativeAgent??{})) {
-      try { await autoReview.bind({workspace:result.prepared.project.workspace,runId:result.prepared.run.runId,session:event.nativeSession as ReviewNativeSession,startSeq:sourceStartSeq}) }
-      catch { /* Unsupported or unavailable review source must not veto a native request. */ }
-    }
+    // Memory delivery/binding is not an admission prerequisite.
+
   }
 
   async function hasPendingExecutionDiscussion(sessionId: string, cwd: string): Promise<boolean> {
@@ -534,29 +513,8 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
             const next = policyState(refreshedWork.state, previous, previous.sessionId, refreshedWork.lease)
             turnState.applyPolicy(previous.runId, next)
           }
-          let continuedMemory:Pick<PreparedAgentTask,'context'|'memoryPolicy'>|undefined
-          if (scopeChanging) continuedMemory = { context: null,
-            memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false, withheldReason: null, deliveryEmpty: true } }
-          else if(!ennoMemory.ownsActiveRefresh(previous.prepared.ennoOduno)) {
-            const captured=previous.prepared, started=performance.now()
-            const inboxIdentity=()=>canonicalContentHash([...((event.nativeAgent as any)?.inbox?.nextStep??[]),...((event.nativeAgent as any)?.inbox?.nextTurn??[])].filter(isHumanMessage))
-            const pendingInput=inboxIdentity()
-            const assertCurrent=()=>{
-              event.signal.throwIfAborted()
-              if(inboxIdentity()!==pendingInput||previous.closed||previous.prepared!==captured||currentSession(event.sessionId)!==previous||prepareGeneration!==generation)
-                throw new KiokukoError('CONFLICT', 'continued_memory_stale')
-              if(event.nativeSession!==previous.nativeSession||event.nativeAgent!==previous.nativeAgent)throw new KiokukoError('CONFLICT', 'continued_memory_owner_changed')
-              if(performance.now()-started>1000+(decisions.memoryReuse.mode==='auto'?decisions.memoryReuse.budgetMs:0))throw new Error('continued_memory_deadline')
-            }
-            try { continuedMemory=await runtime.withDatabase(async (database,embedding)=>{
-              if(embedding.mode==='required')throw new Error('required_embedding_unavailable')
-              return refreshContinuedTaskContext({database, memoryReuse: await createMemoryReuseRuntime(decisions, `run:${captured.run.runId}`, event.signal), memoryRetrieval: memoryRetrievalConfig, prepared:captured,task:event.task,capabilities:[...event.capabilities.skills,...event.capabilities.tools],assertCurrent,
-                validateCapabilities:async()=>{const fresh=await capabilityCatalog(skills,tools,{agent:event.agent,...(event.nativeAgent?{nativeAgent:event.nativeAgent}:{}),cwd:event.cwd,signal:event.signal});this.assertCatalog(event.capabilities,fresh);assertCurrent()}})
-            }) } catch (error) {
-              if(event.signal.aborted || error instanceof KiokukoError && ['CONFLICT','SECURITY_REJECTION','AUTHENTICATION_ERROR','INTEGRITY_ERROR'].includes(error.code))throw error
-              /* Optional retrieval failure retains the previous delivery, whose state is validated before injection. */
-            }
-          }
+          const continuedMemory:Pick<PreparedAgentTask,'context'|'memoryPolicy'> = {context:null,
+            memoryPolicy:{memoryReasoningRequired:false,contextWithheld:false,withheldReason:null,deliveryEmpty:true}}
           const ownerKind = event.memoryOwner ?? memoryOwnerKind(intent, event.profileHints?.taskType ?? previous.prepared.intake.profile.taskType)
           const continuedPrepared: PreparedAgentTask = { ...previous.prepared, ...(continuedMemory ?? {}),
             memoryOwner: createMemoryOwner(ownerKind, { agentId: event.agent.id, sessionId: event.sessionId, turn: event.turn,
@@ -744,50 +702,10 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
     memoryRetrievalConfig,
   )
   const refreshMemoryOwner = async (item: TurnRecord, signal: AbortSignal): Promise<void> => {
-    const prepared = item.prepared
-    const owner = prepared.memoryOwner
-    if (!owner || owner.kind !== 'execution') throw new KiokukoError('CONFLICT', 'memory_owner_unavailable')
-    const ownerIdentity = { agentId: item.agentId, sessionId: item.sessionId, turn: item.turn,
-      requestDigest: canonicalContentHash(item.task), runId: item.runId }
-    assertMemoryOwner(owner, ownerIdentity, 'execution')
-    const started = performance.now()
-    const refreshed = await runtime.withDatabase(async (database, embedding) => {
-      const assertCurrent = () => {
-        signal.throwIfAborted()
-        if (item.authority) authorizeTaskLease(database, item.authority)
-        if (currentSession(item.sessionId) !== item || item.prepared !== prepared || item.closed || item.failed
-          || item.nativeAgent === undefined || agents?.get(item.nativeAgent.id) !== item.nativeAgent
-          || item.nativeSession === undefined || sessions?.get(item.sessionId) !== item.nativeSession) {
-          throw new KiokukoError('CONFLICT', 'memory_owner_changed')
-        }
-        assertMemoryOwner(owner, ownerIdentity, 'execution')
-        if (performance.now() - started > 1000 + (decisions.memoryReuse.mode === 'auto' ? decisions.memoryReuse.budgetMs : 0)) {
-          throw new KiokukoError('CONFLICT', 'memory_owner_rebuild_deadline')
-        }
-      }
-      if (embedding.mode === 'required') throw new KiokukoError('SERVICE_UNAVAILABLE', 'required_embedding_unavailable')
-      const capabilities = [...item.catalog.skills, ...item.catalog.tools]
-      const memoryReuse = await createMemoryReuseRuntime(decisions, `run:${item.runId}`, signal)
-      return refreshContinuedTaskContext({ database, memoryReuse, memoryRetrieval: memoryRetrievalConfig, prepared,
-        task: item.memoryInput ?? item.task, capabilities, assertCurrent,
-        validateCapabilities: async () => {
-          const fresh = await capabilityCatalog(skills, tools, { agent: { id: item.agentId },
-            ...(item.nativeAgent ? { nativeAgent: item.nativeAgent } : {}), cwd: item.cwd, signal })
-          gate.assertCatalog(item.catalog, fresh)
-          assertCurrent()
-        } })
-    })
     signal.throwIfAborted()
-    if (currentSession(item.sessionId) !== item || item.prepared !== prepared) throw new KiokukoError('CONFLICT', 'memory_owner_changed')
-    item.prepared = { ...prepared, ...refreshed }
-    await runtime.withDatabase(database => {
-      if (item.authority) authorizeTaskLease(database, item.authority)
-      return bindMemoryApplication(database, {
-        runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot,
-      }, item.prepared.intake.profile, item.prepared.context,
-      memoryRetrievalStatus(database, item.workspace, item.prepared.context, item.prepared.memoryPolicy.contextWithheld))
-    })
+    item.prepared={...item.prepared,context:null,memoryPolicy:{memoryReasoningRequired:false,contextWithheld:false,withheldReason:null,deliveryEmpty:true}}
   }
+
   resumeExistingRun = async (event): Promise<DshIntakeGateResult | undefined> => runtime.withDatabase(async (database) => {
     const project = await resolveProjectWorkspaceReadOnly(database, event.cwd, { allowDirectory: true })
     if (project === undefined) return undefined
@@ -1052,7 +970,8 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
     if (!reviewing && hasHumanInput(payload.messages) && !delegation.isChild(payload.agent) && intentTask.trim()) {
       requestIntentContext = await requestIntentContextFor(payload, sessionId, boundSession as object | undefined, activeRecord, intentTask)
       const requestId = dshTurnRequestId({ dshSessionId: sessionId, turn: payload.turn })
-      const establishedConversation = profile?.taskType === 'chat' && !requestIntentContext?.activeGoal && !requestIntentContext?.activeTask
+      const establishedConversation = profile?.taskType === 'chat' && !requestIntentContext?.activeGoal
+        && (!requestIntentContext?.activeTask || requestIntentContext.activeTask.type === 'chat')
       if (requestIntentContext && !establishedConversation) {
         requestIntent = await classifyRequestIntent(decisions, requestId, requestIntentContext, payload.signal)
       }

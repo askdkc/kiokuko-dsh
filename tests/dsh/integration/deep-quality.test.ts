@@ -24,8 +24,9 @@ for(const action of [undefined,'repair','synthesize'] as const) test(`quality ex
     assert.equal(root.quality!.correctionUsed,!!action);assert.equal(root.quality!.candidates.length,action?3:2)
     assert.equal(qualityInput(jobs[4]!).candidates.some((c:any)=>'model' in c||'attemptId'in c),false)
     const report=deepReport(state,[]);assert.match(report.text,/採用:/);assert.equal(report.protocolVersion,2)
-    const source=f.db.prepare('SELECT source_json FROM dsh_deep_finalizations WHERE run_id=?').get<{source_json:string}>(state.runId)!
-    DeepFinalizationSourceSchema.parse(JSON.parse(source.source_json))
+    assert.equal(f.db.prepare('SELECT source_json FROM dsh_deep_finalizations WHERE run_id=?').get(state.runId),undefined,'Verified Deep report is not permission to create a memory draft')
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM entries').get<any>()!.n,0)
+    assert.ok(report.text.includes('CORRECT'));assert.equal(root.receipt!.verifierVersion,2)
     const attempts=f.db.prepare('SELECT model_json,job_json FROM dsh_deep_attempts WHERE run_id=?').all<{model_json:string;job_json:string}>(state.runId)
     assert.ok(attempts.every(a=>JSON.parse(a.job_json).model.model===JSON.parse(a.model_json).model))
   } finally {await scheduler.dispose();await f.close()}

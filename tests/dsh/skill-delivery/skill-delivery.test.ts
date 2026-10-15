@@ -301,9 +301,12 @@ test('Lisp workflow reaches the next model request through native approval, evid
     assert.match(observedDetail, /-old-a\n\+new-a/u); assert.match(observedDetail, /-old-b\n\+new-b/u)
     const before = (await stat(join(f.dir, 'a.txt'))).mtimeMs
     await f.reload('compiled')
-    assert.equal((await f.ctx.commands.execute(f.agent, '/kioku-lisp recover', [], new AbortController().signal)).result.kind, 'success')
+    const resumed = await f.ctx.commands.execute(f.agent, '/kioku-task resume', [], new AbortController().signal)
+    assert.equal(resumed.result.kind, 'success', JSON.stringify(resumed.result))
+    const recovered = await f.ctx.commands.execute(f.agent, '/kioku-lisp recover', [], new AbortController().signal)
+    assert.equal(recovered.result.kind, 'success', JSON.stringify(recovered.result))
     const firstAfterRecovery = f.model.requests.length
-    f.responses.push(interpretedPreparation(f.mock, 'prepare-workflow-recovery', 'new', 'verify'), (request: any) => {
+    f.responses.push(interpretedPreparation(f.mock, 'prepare-workflow-recovery', 'same_scope_continuation', 'verify'), (request: any) => {
       assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
       const preparation = nativeToolResults(request.messages).find(result => result.toolCallId === 'prepare-workflow-recovery')
       assert.ok(preparation && !preparation.isError, JSON.stringify(preparation))

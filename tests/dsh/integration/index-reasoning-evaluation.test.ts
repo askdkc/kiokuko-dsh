@@ -12,5 +12,6 @@ test('four paired evaluation arms remain unmeasured and never communicate withou
     assert.equal(report.model, null);
     assert.equal(report.trials.length, 16);
     assert.deepEqual(Object.keys(report.deliveryMetrics), ['current', 'atomic', 'atomic+bridge', 'bridge-metadata-only']);
-    assert.ok(report.generation.every((row: any) => row.calls === 3 && row.inputTokens === null && row.outputTokens === null));
+    assert.ok(report.generation.every((row: any) => row.calls === 0 && row.inputTokens === null && row.outputTokens === null),
+      'unconfigured evaluation must make no automatic generation or remote model calls');
 });

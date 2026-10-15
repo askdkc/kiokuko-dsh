@@ -10,7 +10,6 @@ export function deepRoundScript(mock: ReturnType<typeof nativeMock>, round: numb
     { kind: 'leaf', reason: 'One read-only question' },
     { kind: 'candidate', answer: `Read-only plan ${round}: inspect the fixture schema.`, evidence: [], assumptions: [], unresolved: [] },
     { kind: 'supported', requirementIds: ['request'], reason: 'The answer addresses the requested read-only plan.', evidence: [] },
-    { schemaVersion: 1, memories: [{ kind: 'fact', title: `Read-only Deep observation ${round}`, body: `Plan ${round} inspects only the fixture schema.`, summary: null, confidence: 0.5, tags: [] }] },
   ].map(value => mock.textResponse(JSON.stringify(value)))
 }
 
@@ -26,20 +25,21 @@ export async function completeDeepRound(f: Awaited<ReturnType<typeof deepNativeF
   assert.ok(intent?.runId)
   const state = await f.deep.store.read(intent.runId)
   assert.equal(state.phase, 'answered', state.reason ?? '')
-  assert.equal(state.usage.requests, 4)
-  assert.equal(f.provider.requests.length - before, 4)
+  assert.equal(state.usage.requests, 3)
+  assert.equal(f.provider.requests.length - before, 3)
   const requests = f.provider.requests.slice(before)
   assert.equal(requests.filter(request => request.sessionId === f.parent.session.id && request.purpose !== 'compaction').length, 0)
   const job = await f.deep.store.database(db => {
     assert.equal(db.prepare('SELECT count(*) AS n FROM memory_episodes').get<{n:number}>()!.n, 0, 'Deep must not fabricate native episodes')
     assert.equal(db.prepare('SELECT count(*) AS n FROM enno_contracts').get<{n:number}>()!.n, 0)
     assert.equal(db.prepare("SELECT count(*) AS n FROM dsh_deep_finalizations WHERE status IN ('pending','processing')").get<{n:number}>()!.n, 0)
-    return db.prepare('SELECT status,entry_id,error FROM dsh_deep_finalizations WHERE run_id=?').get<{status:string;entry_id:string|null;error:string|null}>(state.runId)
+    assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_deep_finalizations WHERE run_id=?').get<{n:number}>(state.runId)!.n,0,'Deep completion cannot queue automatic extraction')
+    return db.prepare("SELECT 1 FROM sqlite_master WHERE name='replay_memories'").get()
+      ? db.prepare('SELECT count(*) AS n FROM replay_memories').get<{n:number}>()!.n : 0
   })
-  assert.equal(job?.status, 'completed', job?.error ?? '')
-  assert.ok(job.entry_id)
+  assert.equal(job,0,'the read-only Deep result was not offered for human approval')
   assert.ok((await f.deep.reports.snapshot(f.parent.session.id)).some(event => event.kind === 'report' && event.text.includes(`plan ${round}`)))
-  const report = { round, runId: state.runId, session: f.parent.session.id, finalization: job.status, memory: job.entry_id, modelCalls: 4, stages: ['admission','planning','execution','verification','report','memory-finalization','durable-state'] }
+  const report = { round, runId: state.runId, session: f.parent.session.id, finalization: 'not-scheduled', memory: 'not-approved', modelCalls: 3, stages: ['admission','planning','execution','verification','report','no-automatic-memory','durable-state'] }
   recordRepeatedStage(report)
   return report
 }

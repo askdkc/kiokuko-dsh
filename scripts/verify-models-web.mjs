@@ -1,3 +1,5 @@
+import { declineOptionalMemoryOffers, openSettings } from './lib/web-test-navigation.mjs';
+import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Packed package, native Web profile with no configured keys, real local API and tool loop.
 import assert from "node:assert/strict";
@@ -181,7 +183,7 @@ try {
   );
   const boot = async () => {
     logs = "";
-    host = spawn(dsh, ["--profile", "web", "--no-open", "--port", "0"], {
+    host = spawn(dsh, ["--profile", "web", "--no-open", "--port", webTestPort()], {
       cwd: project,
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -214,6 +216,7 @@ try {
       );
   });
   page.on("pageerror", (error) => console.error("Browser:", error.message));
+  await declineOptionalMemoryOffers(page);
   await page.goto(url);
   const welcome = page.getByRole("button", { name: "Continue", exact: true }),
     credentials = page.getByRole("dialog", {
@@ -225,7 +228,9 @@ try {
       .getByRole("button", { name: "Configure later", exact: true })
       .click(),
   );
-  await welcome.or(credentials).first().waitFor();
+  const getStarted = page.getByRole("dialog", { name: "Get started", exact: true });
+  await page.addLocatorHandler(getStarted, async () => getStarted.getByRole("button", { name: "Close", exact: true }).click());
+  await welcome.or(credentials).or(getStarted).or(page.getByRole("button", { name: "Account menu", exact: true })).first().waitFor();
   if (await welcome.isVisible()) {
     for (
       let attempt = 0;
@@ -237,7 +242,7 @@ try {
     }
     await welcome.waitFor({ state: "hidden" });
   }
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await openSettings(page);
   await page
     .getByRole("button", { name: "Kiokuko Models", exact: true })
     .click();
@@ -341,7 +346,7 @@ try {
   await editor.fill("Say hello and call models_test_tool");
   await editor.press("Enter");
   await poll(()=>bodies.length===1);
-  await page.getByRole('button',{name:'Settings',exact:true}).click();
+  await openSettings(page);
   await page.getByRole('button',{name:'Kiokuko Models',exact:true}).click();
   await panel.getByRole('button',{name:/^Infron · connected/}).click();
   await advanced(panel);
@@ -391,7 +396,7 @@ try {
   url = await boot();
   await page.goto(url);
   for (let attempt = 0; attempt < 5; attempt++) {
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await openSettings(page);
     try {
       await page
         .getByRole("button", { name: "Kiokuko Models", exact: true })

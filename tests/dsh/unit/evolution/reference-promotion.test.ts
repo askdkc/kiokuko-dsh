@@ -109,7 +109,12 @@ test('separate applicability conditions accumulate support independently', async
     const worker = new EvolutionWorker({ runtime: f.runtime, config: MemoryEvolutionConfig.parse({}), now: () => NOW })
     try { worker.kick(); await worker.whenIdle() }
     finally { await worker.dispose() }
-    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM memory_derivations WHERE algorithm='reference-promotion-v2'").get()?.n, 2)
+    // Scheduling compatibility is not authorization to save either historical proposal.
+    // Exact approved saves are exercised by integration/replay-memory-review.test.ts.
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM memory_derivations WHERE algorithm='reference-promotion-v2'").get()?.n, 0)
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM memory_evolution_jobs WHERE state='pending'").get()?.n, 2)
+    assert.ok(buildReferenceLesson([first, second, third], 'positive'))
+    assert.ok(buildReferenceLesson(windows, 'positive'))
     assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM memory_evolution_calls').get()?.n, 0)
     assert.equal(windows.length, 3)
   } finally { f.db.close() }

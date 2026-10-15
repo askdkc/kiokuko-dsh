@@ -1,3 +1,4 @@
+import { interpretedPreparation } from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -51,6 +52,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       const fiber = ctx.plugin(plugin,config); fibers.push(fiber); await fiber
     }
     const ui = ctx.plugin({ name:'answer-test-ui', apply(c: any) { return c.provide('userQuestions',{ ask: async (request: any) => {
+      if(request.questions.some((q:any)=>q.options?.some((o:any)=>o.label==='整理して確認する'))) return {answers:request.questions.map((q:any)=>({id:q.id,selected:['今回は保存しない']}))}
       questions++
       return { answers:request.questions.map((q:any)=>{
         // Explicit preparation supplies the advisory type; only execution choice
@@ -91,7 +93,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
         } finally { check.close() }
         assert.equal(questions,0,'answer-first ingress does not ask execution questions')
         assert.ok(request.tools.some((tool:any)=>tool.name===TASK_PREPARE_TOOL))
-        return mock.toolCallResponse('prepare-1',TASK_PREPARE_TOOL,{taskType:'research'})
+        return interpretedPreparation(mock,'prepare-1','new','research','research')(request)
       },
       verifyWork(1),
       mock.textResponse(paired ? 'The answer is five. [tool-call:check]' : 'The answer is five.'),
@@ -114,7 +116,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       assert.ok(request.tools.some((tool:any)=>tool.name===TASK_PREPARE_TOOL))
       expectedRequests++
       script.unshift(verifyWork(2))
-      return mock.toolCallResponse('prepare-2',TASK_PREPARE_TOOL,{taskType:'research'})
+      return interpretedPreparation(mock,'prepare-2','new','research','research')(request)
     },mock.textResponse('The checked sum is four.'))
     else if(correction) script.push(mock.textResponse('Correction: the answer is four.'))
     const model = new mock.MockAdapter(script)
@@ -155,10 +157,10 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()!.n,newRequest ? 2 : 1)
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()!.n,0)
       assert.equal(taskTypeQuestions,0,'explicit preparation supplies the advisory task type')
-      assert.equal(taskTypeCalls,newRequest?2:1,'each human request invokes classification once; corrective model requests do not');assert.equal(rows.length,scenario==='off'?0:newRequest ? 2 : 1);assert.equal(reviewCalls,scenario==='off'?0:newRequest ? 2 : 1)
+      assert.equal(taskTypeCalls,newRequest?1:0,'only superseding owned work consults task classification; corrective requests do not reopen it');assert.equal(rows.length,scenario==='off'?0:newRequest ? 2 : 1);assert.equal(reviewCalls,scenario==='off'?0:newRequest ? 2 : 1)
       assert.ok(rows.every(row=>row.status==='closed'))
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ledger_runs WHERE status='active'").get()!.n,0)
-      if(host==='full') assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_memory_finalizations').get()!.n,newRequest?2:1)
+      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_memory_finalizations').get()!.n,0,'answer correction cannot automatically schedule derived memory')
       if(expectedRequests>=2) assert.equal(model.requests.at(-1).provider,model.requests[0].provider);if(expectedRequests>=2) assert.equal(model.requests.at(-1).model,model.requests[0].model)
       const answers=agent.session.snapshotEvents().filter((event:any)=>event.type==='assistant/message' && event.data.message.content.some((b:any)=>b.type==='text'))
       assert.equal(answers.length,newRequest || correction ? 2 : 1);assert.match(JSON.stringify(answers[0]),/five/)

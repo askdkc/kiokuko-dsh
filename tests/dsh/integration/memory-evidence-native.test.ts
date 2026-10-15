@@ -32,7 +32,8 @@ for (const mode of ['core', 'full'] as const) test(`native ${mode}: conversation
     for(const plugin of [llm,session,projection,prompt,tools,agents,skills,commands])fibers.push(await ctx.plugin(plugin.default,plugin===prompt?{persona:''}:undefined))
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
     fibers.push(await ctx.plugin({name:'core-memory-questions',apply(c:any){return c.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']}))}}})}}))
-    const config={repositoryRoot:root,databasePath,answerReview:{mode:'off' as const},memoryIndexReasoning:{mode:'off' as const},typedDecisions:{mode:'off' as const}}
+    // Explicit eager mode exercises conversation retrieval/fencing; default unowned work has independent nonblocking native coverage.
+    const config={repositoryRoot:root,databasePath,intakeMode:'eager' as const,answerReview:{mode:'off' as const},memoryIndexReasoning:{mode:'off' as const},typedDecisions:{mode:'off' as const}}
     if(mode==='core') handle=await implementation.mountCore(ctx,config)
     else {
       const adapter=implementation.createDshHostAdapter(ctx,{...config,agenticReplay:{enabled:false}})
@@ -69,6 +70,11 @@ for (const mode of ['core', 'full'] as const) test(`native ${mode}: conversation
     assert.equal(preparation?.isError,false,JSON.stringify(preparation))
     assert.equal(JSON.parse(preparation.content.find((block:any)=>block.type==='text').text).prepared,true)
     assert.ok(requests.some(r=>r.tools?.some((tool:any)=>tool.name==='memory_explain')))
+    const inspected=agent.session.snapshotEvents().filter((event:any)=>event.type==='tool/result')
+      .flatMap((event:any)=>event.data.message?.role==='tool'?[event.data.message]:event.data.message?.content??[])
+      .find((result:any)=>result.toolCallId==='core-explain')
+    assert.ok(inspected,'explicit memory inspection must execute')
+    assert.equal(inspected.isError,false,JSON.stringify(inspected))
     const shown=await ctx.commands.execute(agent,`/kioku-memory explain ${memory.id} --json`,[],new AbortController().signal)
     assert.equal(shown.result.kind,'success',shown.result.text)
     assert.equal(JSON.parse(shown.result.text).evidenceStatus,'details_unavailable')

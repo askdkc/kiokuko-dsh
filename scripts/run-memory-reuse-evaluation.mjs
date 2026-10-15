@@ -1,3 +1,4 @@
+import { initializeEvaluationRepository } from './evaluation-git-fixture.mjs'
 import { completeVerification } from './verification-completion.mjs';
 import assert from 'node:assert/strict'
 import { readFile, mkdtemp, mkdir, rm } from 'node:fs/promises'
@@ -90,7 +91,7 @@ if (process.argv.includes('--probe')) {
     const evidence = [], service = serviceFor(mode, evidence)
     const root = await mkdtemp(join(tmpdir(), 'kioku-reuse-eval-')), db = openConnection(':memory:')
     try {
-      await mkdir(join(root, '.git')); migrateDatabase(db)
+      initializeEvaluationRepository(root); migrateDatabase(db)
       const project = await resolveProjectWorkspace(db, root)
       for (const m of fixture.memories) recordEntry(db, { workspace: project.workspace, kind: 'lesson', title: fixture.task.split(/[:： ]/)[0], body: m.body, scope: { visibility: 'project' }, createdBy: 'synthetic-evaluation' }, { idFactory: () => m.id })
       const input = { project, query: fixture.task, scope: 'project', readOnly: true, limit: 2, maxChars: 4000 }

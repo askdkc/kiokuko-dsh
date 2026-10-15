@@ -17,7 +17,6 @@ import { observedTaskCompletionEvidence } from './owned-completion-evidence.js'
 import { assessTaskCompletion } from './task-completion.js'
 import { stopTaskNativeChildren } from './native-task-authority.js'
 import { stopTaskOwnedExecutions } from './owned-execution.js'
-import { scheduleCompletedTaskFinalization, scheduleStoppedTaskFinalization } from './task-source-history.js'
 import { isNativeSubagent } from './native-subagent.js'
 import type { LispAssemblyService } from './lisp/request-surface.js'
 import type { OnDemandIntake } from './on-demand-intake.js'
@@ -302,7 +301,6 @@ export class DshTaskWorkflow {
       this.current(agent)
       await this.options.checkpointSource?.(agent)
       this.current(agent)
-      let scheduled = false
       const result = await this.options.runtime.withDatabase(db => withImmediateTransaction(db, () => {
         this.current(agent)
         if (agent.status !== 'idle') return undefined
@@ -311,12 +309,9 @@ export class DshTaskWorkflow {
         const ref = `stopped:${operationId}:${current.generation}`
         recordTaskEvidence(db, task, { ref, kind: 'stopped', generation: current.generation, verified: true })
         const confirmed = confirmTaskStop(db, task, { operationId, expectedRevision: current.revision, evidenceRef: ref })
-        const sourceEndSeq = this.sourceEndSeq(agent)
-        if (sourceEndSeq !== undefined) scheduled = scheduleStoppedTaskFinalization(db, task, { evidenceRef: ref, sourceEndSeq })
         return confirmed
       }))
       if (result) this.publish(result)
-      if (scheduled) try { this.options.kickFinalizer?.() } catch { /* The durable job remains retryable. */ }
     })().catch(() => { /* Preserve the durable unresolved stop and its denied authority. */ }).finally(() => this.#stops.delete(task.taskId))
     this.#stops.set(task.taskId, promise)
   }
@@ -330,19 +325,14 @@ export class DshTaskWorkflow {
       if (agent.status !== 'idle') return
       await this.options.checkpointSource?.(agent)
       this.current(agent)
-      let scheduled = false
       const completed = await this.options.runtime.withDatabase(db => withImmediateTransaction(db, () => {
         this.current(agent)
         if (agent.status !== 'idle') return false
         const current = readTaskSnapshot(db, task)
         if (current.state !== 'Done' || current.revision !== task.revision || current.generation !== task.generation) return false
-        const sourceEndSeq = this.sourceEndSeq(agent)
-        if (sourceEndSeq !== undefined) scheduled = scheduleCompletedTaskFinalization(db, task, {
-          expectedRevision: task.revision, expectedGeneration: task.generation, sourceEndSeq })
         return true
       }))
       if (completed) try { this.options.onCompleted?.(task) } catch { /* Optional local memory cannot undo completion. */ }
-      if (scheduled) try { this.options.kickFinalizer?.() } catch { /* The durable source job remains retryable. */ }
     })().catch(() => { /* A later native idle/reload retries the same canonical Done state. */ })
       .finally(() => this.#completions.delete(key))
     this.#completions.set(key, promise)
