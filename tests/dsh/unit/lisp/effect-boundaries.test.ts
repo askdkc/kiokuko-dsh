@@ -110,21 +110,21 @@ test('package command without authority refuses before executable lookup or scra
   assert.deepEqual(await readdir(f.root), [])
 })
 
-for (const boundary of ['policy', 'spawn'] as const) test(`package command rechecks authority before ${boundary}`, {
-  skip: process.platform !== 'darwin' ? 'macOS policy boundary' : false,
-}, async t => {
+for (const boundary of ['sandbox', 'spawn'] as const) test(`package command rechecks authority before ${boundary}`, async t => {
   const f = await fixture(t); let checks = 0
-  // Resolve a trusted OS executable without depending on the machine's npm
-  // packaging. The authority callback rejects before this fixture can execute.
+  // Resolve trusted OS executables without depending on package-manager or
+  // bwrap packaging. The authority callback rejects before either can execute.
   const bin = join(f.base, 'bin'); await mkdir(bin); await symlink('/usr/bin/true', join(bin, 'npm'))
+  if (process.platform === 'linux') await symlink('/usr/bin/true', join(bin, 'bwrap'))
   const previousPath = process.env.PATH
   process.env.PATH = bin
   try {
     await assert.rejects(runPackageCommand('npm', ['--version'], f.root, signal, async () => {
-      if (++checks === (boundary === 'policy' ? 2 : 3)) denied()
+      if (++checks === (boundary === 'sandbox' ? 2 : 3)) denied()
     }), { code: 'TASK_STALE' })
   } finally { if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath }
-  assert.equal((await readdir(f.root)).length, boundary === 'policy' ? 0 : 1)
+  assert.equal(checks, boundary === 'sandbox' ? 2 : 3)
+  assert.equal((await readdir(f.root)).length, process.platform === 'darwin' && boundary === 'spawn' ? 1 : 0)
 })
 
 // A protocol fixture exercises the public Worker request path without SBCL or

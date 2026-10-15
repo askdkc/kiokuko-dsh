@@ -44,6 +44,8 @@ export const runPackageCommand: PackageCommand = async (manager, args, directory
     await writeFile(path, policy, { flag: 'wx', mode: 0o600 })
     command = '/usr/bin/sandbox-exec'; argv = ['-f', path, binary, ...args]
   } else if (process.platform === 'linux') {
+    await beforeEffect()
+    signal.throwIfAborted()
     command = await executable('bwrap')
     argv = ['--unshare-all', '--share-net', '--die-with-parent', '--new-session', '--clearenv',
       ...Object.entries(env).flatMap(([key, value]) => ['--setenv', key, value!]),
