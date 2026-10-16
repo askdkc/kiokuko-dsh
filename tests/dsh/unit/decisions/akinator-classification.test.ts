@@ -4,6 +4,7 @@ import { buildAkinatorClassificationBatch, classifyTaskForIntake } from '../../.
 import { TypedDecisionsConfig } from '../../../../src/dsh/decisions/config.js'
 import { DecisionService } from '../../../../src/dsh/decisions/service.js'
 import { DecisionError } from '../../../../src/dsh/decisions/contracts.js'
+import { resolveGroundedIntakeProfile } from '../../../../src/dsh/intake-profile-resolver.js'
 
 const configuration = () => TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } })
 const signal = () => new AbortController().signal
@@ -89,3 +90,41 @@ test('quoted bug examples and negated changes are classified by requested intent
   assert.deepEqual(await classifyTaskForIntake(service, 'negative', task, undefined, signal()), { taskType: 'chat', deferInference: false })
   assert.equal(calls, 1)
 })
+
+for (const provider of ['typesafe', 'laya-coreml'] as const) {
+  const config = () => provider === 'typesafe' ? TypedDecisionsConfig.parse({ provider }) : configuration()
+  const requestedModel = provider === 'typesafe' ? 'jev-latest' : 'laya-rl-agent'
+  test(`${provider}: prior-context continuations and unresolved alternatives defer before provider dispatch`, async () => {
+    let calls = 0
+    const service = new DecisionService(config(), () => ({ capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 }, evaluate: async batch => {
+      calls++
+      return { provider, requestedModel, policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: 'debug' })) }
+    } }))
+    for (const task of ['yes', '続けて', 'Can you do that?', 'それを実装して', 'Fix the parser or build a replacement; I have not decided.', 'デバッグするか調査するかまだ迷っています']) {
+      const classified = await classifyTaskForIntake(service, task, task, undefined, signal())
+      assert.deepEqual(classified, { deferInference: true }, task)
+      const grounded = resolveGroundedIntakeProfile({ task, cwd: process.cwd(), deferTaskTypeInference: classified.deferInference })
+      assert.equal(grounded.profileHints.taskType, null, task)
+    }
+    assert.equal(calls, 0)
+  })
+  test(`${provider}: complete actionable requests keep their provider contract`, async () => {
+    let calls = 0
+    const task = 'Fix the failing parser in src/parser.ts and add regression tests.'
+    const service = new DecisionService(config(), () => ({ capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 }, evaluate: async batch => {
+      calls++
+      assert.deepEqual(batch.state, provider === 'typesafe' ? { task } : task)
+      return { provider, requestedModel, policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: 'debug' })) }
+    } }))
+    assert.deepEqual(await classifyTaskForIntake(service, 'complete', task, undefined, signal()), { taskType: 'debug', deferInference: false })
+    assert.equal(calls, 1)
+  })
+  test(`${provider}: explicit task type and disabled classification retain precedence over deferral`, async () => {
+    const service = new DecisionService(config(), () => { throw new Error('must not dispatch') })
+    assert.deepEqual(await classifyTaskForIntake(service, 'explicit-continuation', 'yes', 'build', signal()), { taskType: 'build', deferInference: false })
+    const off = config(); off.mode = 'off'
+    const disabled = new DecisionService(off, () => { throw new Error('must not dispatch') })
+    assert.deepEqual(await classifyTaskForIntake(disabled, 'disabled-continuation', 'yes', undefined, signal()), { deferInference: false })
+    assert.deepEqual(await classifyTaskForIntake(undefined, 'absent', 'yes', undefined, signal()), { deferInference: false })
+  })
+}

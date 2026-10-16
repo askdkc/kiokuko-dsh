@@ -718,3 +718,69 @@ for (const change of ['arguments','stop','owner'] as const) test(`unowned native
  t.after(mutate)
  assert.equal((await f.execute('read',{})).isError,true);assert.equal(bodies,0)
 })
+
+test('unowned preparation explains absent task and recovers without taskOperation', async t => {
+  let classifications = 0, nativeBodies = 0, workflowBodies = 0
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned',
+    classify: async () => { classifications++; return { deferInference: true } },
+  })
+  for (const name of ['bash', 'coding_workflow']) t.after(f.ctx.tools.register({ name,
+    parameters: { type: 'object' }, output: { schema: {}, render: () => [] },
+    execute: () => { if (name === 'bash') nativeBodies++; else workflowBodies++; return 'body' },
+  }))
+  const task = 'Fix the shortcut rendering in the local UI; do not publish.'
+  const messages = [human('repair-request', task)]
+  await f.capture(messages)
+  assert.equal(classifications, 0, 'unowned native work does not wait for optional classification')
+  const denied = await f.execute('coding_workflow')
+  assert.equal(denied.isError, true)
+  assert.match(JSON.stringify(denied), /call prepare_requested_work/)
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(messages, task) })!
+  const requestIntent = { relation: 'new', action: 'change', changeScope: 'implementation', evidenceRefs: requestIntentReferenceIds(context) }
+  const prepare = (intent: object) => f.execute(TASK_PREPARE_TOOL, { requestIntent: intent })
+  const invalid = await prepare({ ...requestIntent, taskOperation: 'start' })
+  assert.equal(invalid.isError, true)
+  assert.match(JSON.stringify(invalid), /No active SQLite task/)
+  assert.match(JSON.stringify(invalid), /omit taskOperation/)
+  assert.equal(f.admissions.length, 0)
+  assert.equal(workflowBodies, 0)
+  assert.equal((await f.execute('bash')).isError, false, 'invalid optional task operation cannot block unowned native Bash')
+  assert.equal(nativeBodies, 1)
+  const corrected = await prepare(requestIntent)
+  assert.equal(corrected.isError, false, JSON.stringify(corrected))
+  assert.equal(f.admissions.length, 1)
+  assert.equal((f.admissions[0]?.messages[0] as any)?.id, 'repair-request')
+  assert.equal(f.prepareRequests[0]?.requestIntent?.taskOperation, undefined)
+  assert.equal((await f.execute('coding_workflow')).isError, false)
+  assert.equal(workflowBodies, 1, 'only admitted coding workflow reaches its body')
+})
+
+for (const sample of [
+  { state: 'ToDo', runStatus: 'intake', operation: 'resume', allowed: 'start, wait, ignore' },
+  { state: 'Working', runStatus: 'active', operation: 'start', allowed: 'wait, complete, ignore' },
+  { state: 'Pending', runStatus: 'active', operation: 'complete', allowed: 'resume, ignore' },
+  { state: 'Done', runStatus: 'completed', operation: 'resume', allowed: 'resume' },
+] as const) test(`preparation reports the current ${sample.state} task without executing invalid ${sample.operation}`, async t => {
+  const task = 'Inspect the current task; do not publish.'
+  const messages = [human('inspection-request', task)]
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(messages, task), activeTask: {
+    taskId: 'synthetic-task', runId: 'synthetic-task', sessionId: 'review-session', sourceSessionId: 'review-session', repositoryRoot: '/synthetic',
+    type: 'research', state: sample.state, revision: 4, generation: 7, runStatus: sample.runStatus,
+    reason: 'Synthetic regression fixture', evidence: [], allowedOps: sample.allowed.split(', ') as any,
+    request: task, resumedFromTerminal: false,
+  } })!
+  const requestIntent = { relation: 'same_scope_continuation', action: 'research', evidenceRefs: requestIntentReferenceIds(context) }
+  const decision = bindMainModelRequestIntent(requestIntent, context)!
+  const original = structuredClone(context)
+  const f = await fixture(t, { interpret: async () => ({ context, decision }) })
+  await f.capture(messages)
+  const result = await f.execute(TASK_PREPARE_TOOL, { requestIntent: { ...requestIntent, taskOperation: sample.operation } })
+  assert.equal(result.isError, true)
+  assert.match(JSON.stringify(result), new RegExp(`state ${sample.state}`))
+  assert.match(JSON.stringify(result), /revision 4, generation 7/)
+  assert.ok(JSON.stringify(result).includes(`Allowed state operations: ${sample.allowed}.`))
+  if (sample.state === 'Done') assert.match(JSON.stringify(result), /terminal resume requires an explicit operation/)
+  assert.equal(f.admissions.length, 0)
+  assert.deepEqual(context, original, 'a rejected advisory operation never mutates the task snapshot')
+})

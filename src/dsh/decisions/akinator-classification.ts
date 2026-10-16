@@ -67,7 +67,7 @@ function legacyClassificationBatch(task: string): DecisionBatch {
 
 export interface AkinatorTaskClassification {
   readonly taskType?: TaskType
-  /** Host-owned deferral: a keyword fallback must not override known uncertainty. */
+  /** Defer task-type inference only, not the turn or tools; keyword fallback must not override uncertainty. */
   readonly deferInference: boolean
 }
 
@@ -78,6 +78,9 @@ export async function classifyTaskForIntake(service: DecisionService | undefined
   if (explicit) return { taskType: explicit, deferInference: false }
   if (configuration.mode === 'off') return { deferInference: false }
   const laya = configuration.provider === 'laya-coreml'
+  // Jev shares Laya's host-owned uncertainty guards, while retaining its own
+  // request envelope, question contract and provider capacity checks.
+  if (configuration.provider === 'typesafe' && (needsPriorContext(task) || hasUnresolvedAlternatives(task))) return { deferInference: true }
   const batch = laya ? buildAkinatorClassificationBatch(task) : legacyClassificationBatch(task)
   if (!batch) return { deferInference: true }
   const outcome = await service.evaluate(requestId, batch, signal, laya ? AKINATOR_CLASSIFICATION_POLICY : '')
