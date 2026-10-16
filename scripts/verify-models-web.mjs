@@ -56,6 +56,13 @@ const server = createServer(async (req, res) => {
   }
   const body = JSON.parse(raw);
   bodies.push(body);
+  const invalidTools = body.tools?.filter(tool => tool.function?.parameters?.type !== 'object') ?? [];
+  if (invalidTools.length) {
+    console.error('Invalid root tool schemas:', invalidTools.map(tool => tool.function?.name ?? tool.type));
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'Tool parameters require a root object' } }));
+    return;
+  }
   if(bodies.length===1){res.writeHead(429,{'content-type':'application/json','retry-after':'8'});res.end(JSON.stringify({error:{message:'fixture rate limit',type:'rate_limit_error'}}));return}
   const complete = body.messages.some((m) => m.role === "tool"),
     tools = body.tools?.some((t) => t.function?.name === "models_test_tool");

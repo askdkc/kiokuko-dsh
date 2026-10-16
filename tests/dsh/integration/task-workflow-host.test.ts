@@ -9,13 +9,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DshCoreRuntime } from '../../../src/dsh/core-runtime.js'
-import { DshTaskWorkflow, TASK_OPERATION_TOOL, type TaskNativeAgent } from '../../../src/dsh/task-state-host.js'
+import { DshTaskWorkflow, TASK_OPERATION_TOOL, TaskModelOperationSchema, type TaskNativeAgent } from '../../../src/dsh/task-state-host.js'
 import { taskWorkflowCommand, mountTaskWorkflowSurface } from '../../../src/dsh/task-state-surface.js'
 import { createRequestIntentContext, requestIntentMessageRefs, unresolvedRequestIntent } from '../../../src/dsh/decisions/request-intent.js'
 import { OnDemandIntake } from '../../../src/dsh/on-demand-intake.js'
 import { captureTaskLease, authorizeTaskLease, readTaskSnapshot, type TaskSnapshot } from '../../../src/dsh/task-state.js'
 import { mountOwnedExecution, OwnedExecutionService } from '../../../src/dsh/owned-execution.js'
 import { TASK_TYPES } from '../../../src/akinator/types.js'
+import { z } from 'zod'
+import { createUserMessage, ReasoningEffortId, type GenerateOptions, type LlmAdapter } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import { KiokukoModelsService } from '../../../src/dsh/models/service.js'
+import { ModelsConfigStore } from '../../../src/dsh/models/config-store.js'
+import { CredentialFile } from '../../../src/dsh/models/vendor/credentials.js'
 
 const signal = () => new AbortController().signal
 async function fixture() {
@@ -156,6 +162,69 @@ const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'te
 const available = existsSync(join(packages, '@deepseek-ai/dsh-tools/lib/index.js'))
 if (!available && (process.env.KIOKUKO_DSH_PACKAGE_ROOT !== undefined || process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1')) throw new Error('Configured native DSH runtime is required')
 const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
+test('native task schema streams through the managed OpenCode Go route while host validation stays operation-specific', { skip: !available }, async t => {
+  const f = await fixture(), [cordis, tools, prompt] = await Promise.all(['cordis', 'dsh-tools', 'dsh-system-prompt'].map(load))
+  const ctx = new cordis.Context(), fibers: any[] = []
+  let disposeSurface: (() => void) | undefined, models: KiokukoModelsService | undefined
+  const intake = new OnDemandIntake({ validate: async () => {}, existing: async () => false, classify: async () => ({ deferInference: true }),
+    prepare: async () => { throw new Error('Schema probe must not prepare a task') }, ready: () => false })
+  try {
+    fibers.push(await ctx.plugin(prompt.default, {}))
+    fibers.push(await ctx.plugin(tools.default, { mode: 'native' }))
+    disposeSurface = mountTaskWorkflowSurface(ctx, new DshTaskWorkflow({ ...f.options, demand: intake }), intake)
+    const schema = ctx.tools.schemas(f.agent).find((value: any) => value.name === TASK_OPERATION_TOOL)!
+    assert.ok(schema)
+    const credentials = new CredentialFile(join(f.root, 'unused-credentials.json'))
+    t.mock.method(credentials, 'read', async (provider: string) => {
+      assert.equal(provider, 'opencode-go')
+      return { type: 'api_key', key: 'offline-fixture' }
+    })
+    const config = new ModelsConfigStore(join(f.root, 'unused-models.json'))
+    const id = 'kiokuko-opencode-go-fixture', model = 'deepseek-v4.1-flash'
+    t.mock.method(config, 'read', async () => ({ version: 1, revision: 0, connections: [{ id, kind: 'opencode-go',
+      name: 'Offline Go', baseURL: 'https://opencode.ai/zen/go/v1', protocol: 'chat-completions', serviceTier: 'standard', models: [] }] }))
+    let adapter!: LlmAdapter
+    models = new KiokukoModelsService({ credentials, config, llm: {
+      registerAdapter: (_ids: string[], value: LlmAdapter) => { adapter = value; return () => {} },
+      resolveCallConfig: async () => { throw new Error('Unexpected resolution') }, discoverModels: async () => [],
+    } as any })
+    await models.start()
+    const requests: any[] = []
+    t.mock.method(globalThis, 'fetch', async (input: any, init: any) => {
+      assert.equal(String(input), 'https://opencode.ai/zen/go/v1/chat/completions')
+      assert.equal(new Headers(init.headers).get('x-opencode-session'), 'offline-task-schema')
+      const body = JSON.parse(init.body); requests.push(body)
+      if (body.tools.some((tool: any) => tool.function.parameters.type !== 'object')) {
+        return Response.json({ error: { message: 'Tool parameters require a root object' } }, { status: 400 })
+      }
+      const events = [{ id: 'offline', choices: [{ index: 0, delta: { content: 'SCHEMA CONNECTED' }, finish_reason: null }] },
+        { id: 'offline', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }]
+      return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
+        { headers: { 'content-type': 'text/event-stream' } })
+    })
+    const options: GenerateOptions = { provider: id, model, sessionId: SessionId('offline-task-schema'), reasoningEffort: ReasoningEffortId('high'),
+      messages: [createUserMessage({ content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })], tools: [schema] }
+    const collect = async (source: AsyncIterable<any>) => { const chunks = []; for await (const chunk of source) chunks.push(chunk); return chunks }
+    // The strict provider fixture rejects the pre-fix union through the same serializer.
+    await assert.rejects(collect(adapter.stream({ ...options, tools: [{ ...schema,
+      parameters: JSON.parse(JSON.stringify(z.toJSONSchema(TaskModelOperationSchema))) }] })), /HTTP 400/)
+    const chunks = await collect(adapter.stream(options))
+    assert.ok(chunks.some(chunk => chunk.type === 'text-delta' && chunk.text === 'SCHEMA CONNECTED'))
+    assert.equal(chunks.at(-1).reason.kind, 'stop')
+    assert.equal(requests[1].model, model)
+    assert.equal(requests[1].reasoning_effort, 'high')
+    assert.equal(requests[1].tools[0].function.parameters.type, 'object')
+    assert.equal(requests[1].tools[0].function.parameters.additionalProperties, false)
+    assert.equal(TaskModelOperationSchema.safeParse({ operation: 'create', taskType: 'research' }).success, true)
+    const start = { operation: 'start', taskId: 'task-fixture', expectedRevision: 1, expectedGeneration: 1, reason: 'Start requested work' }
+    assert.equal(TaskModelOperationSchema.safeParse(start).success, true)
+    for (const invalid of [{ ...start, expectedRevision: undefined }, { ...start, expectedGeneration: 0 },
+      { ...start, taskType: 'research' }, { operation: 'create', taskType: 'research', request: 'Rewritten request' }]) {
+      assert.equal(TaskModelOperationSchema.safeParse(invalid).success, false)
+    }
+  } finally { await models?.close(); disposeSurface?.(); await intake.dispose(); for (const fiber of fibers.reverse()) await fiber.dispose(); await f.cleanup() }
+})
+
 for (const mode of ['native', 'ptc'] as const) test(`${mode}: actual task control executor crosses ToDo/Pending while native denial and spoofed tools cannot`, { skip: !available, timeout: 30_000 }, async () => {
   const f = await fixture(), [cordis, tools, prompt] = await Promise.all(['cordis', 'dsh-tools', 'dsh-system-prompt'].map(load))
   const ctx = new cordis.Context(), fibers: any[] = []
