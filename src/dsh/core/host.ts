@@ -670,6 +670,8 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       disposers.push(mountCodingWorkflow({tools,on:ctx.on.bind(ctx) as any},{runtime,
         resolve:execution=>{const identity=resolveOwned(execution);return identity?{...identity,task:active.get(identity.sessionId)?.taskText}:undefined},
         ...(questions?{questions}:{}),lisp:()=>get(LISP_CODING_SERVICE) as LispCodingService|undefined,
+        nativeCommand:execution=>execution.parent!==undefined&&demand.nativeCommand(execution)===true,
+        nativeLisp:execution=>demand.nativeLisp(execution)===true,
         preparationOnly:execution=>demand?.preparationOnly(execution)===true}))
       disposers.push(mountPlanTransition({on:ctx.on.bind(ctx) as any},get('planMode')))
       const nativeLlm=get('llm')
@@ -712,6 +714,8 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       }))
       disposers.push(mountOwnedExecution({tools,on:ctx.on.bind(ctx) as any},{runtime,resolve:resolveOwned,resolveRead:resolveOwnedRead,
         unownedNative: execution => demand?.unownedNative(execution as any) === true,
+        nativeCommand: execution => (execution as any).parent!==undefined&&demand.nativeCommand(execution as any)===true,
+        nativeLisp: execution => demand.nativeLisp(execution as any)===true,
         isTaskControl: execution => (get(TASK_WORKFLOW_SERVICE) as DshTaskWorkflow | undefined)?.isControl(execution) === true,
         planActive:agent=>get('planMode')?.get(agent)?.active===true,
         async confirm(identity,detail,signal){

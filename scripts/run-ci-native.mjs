@@ -45,9 +45,14 @@ export function nativeCiPlan(suite, environment = process.env) {
       env: { ...plan.env, KIOKUKO_TEST_CONCURRENCY: concurrency } }
   }
   const fixtureRoot = join(root, 'tests/fixtures', fixture)
-  const manifest = JSON.parse(readFileSync(join(fixtureRoot, 'package.json'), 'utf8'))
-  const env = { ...environment, KIOKUKO_DSH_PACKAGE_ROOT: join(fixtureRoot, 'node_modules'),
-    KIOKUKO_EXPECTED_DSH_VERSION: manifest.dependencies['@deepseek-ai/dsh'], KIOKUKO_REQUIRE_DSH_NATIVE: '1' }
+  const packageRoot = resolve(environment.KIOKUKO_DSH_PACKAGE_ROOT ?? join(fixtureRoot, 'node_modules'))
+  const manifest = JSON.parse(readFileSync(join(packageRoot, '@deepseek-ai/dsh/package.json'), 'utf8'))
+  if (manifest.name !== '@deepseek-ai/dsh' || typeof manifest.version !== 'string' || !manifest.version.trim()) {
+    throw new Error('Invalid selected DSH package metadata')
+  }
+  const env = { ...environment, KIOKUKO_DSH_PACKAGE_ROOT: packageRoot,
+    KIOKUKO_EXPECTED_DSH_VERSION: manifest.version, KIOKUKO_REQUIRE_DSH_NATIVE: '1',
+    DSH_BIN: environment.DSH_BIN ?? join(packageRoot, '.bin/dsh') }
   delete env.KIOKUKO_DSH_SOURCE_ROOT
   delete env.KIOKUKO_REPEATED_SCENARIO
   if (suite === 'browser-approval' || suite === 'browser-shortcuts' || suite === 'browser-coding') {

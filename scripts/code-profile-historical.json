@@ -1,0 +1,8 @@
+{
+  "@deepseek-ai/cordis-plugin-group": "1.0.5-alpha.1",
+  "@deepseek-ai/cordis-plugin-loader": "1.0.6-alpha.1",
+  "@deepseek-ai/cordis-plugin-include": "1.0.10-alpha.1",
+  "@deepseek-ai/dsh": "0.2.1-alpha.2",
+  "@deepseek-ai/cordis": "4.0.5-alpha.1",
+  "@askdkc/dsh-cli": "0.14.4"
+}

@@ -4,6 +4,8 @@ import { promisify } from 'node:util'
 import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { resolve,join } from 'node:path'
 const root=resolve(import.meta.dirname,'..'),base=join(root,'.artifacts/code-intelligence'),profile=join(base,'profile'),exec=promisify(execFile)
+const historical=process.argv.includes('--historical')
+assert.ok(process.argv.slice(2).every(arg=>arg==='--historical'),'Unknown code-profile installer option')
 // npm run exports CLI configuration; allow-scripts is invalid as a project-install CLI flag.
 // This owned fixture permits no dependency lifecycle scripts and keeps --ignore-scripts.
 const installEnvironment={...process.env};delete installEnvironment.npm_config_allow_scripts
@@ -19,19 +21,24 @@ const pack=async(directory,label)=>{
 }
 const expectedPackageVersion=JSON.parse(await readFile(join(root,'package.json'),'utf8')).version
 const provider=await pack(join(base,'dsh-lsp-server'),'provider'),suite=await pack(root,'suite')
-// Pin the physically installed, canonical host ecosystem, including its peer-only services.
+// Reproduce the selected installed host graph, not a named historical release.
 const hostDependencies={}
-const hostDirectory=join(root,'tests/fixtures/dsh-runtime/node_modules/@deepseek-ai')
+const packageRoot=resolve(process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(root,'tests/fixtures/dsh-runtime/node_modules'))
+const hostDirectory=join(packageRoot,'@deepseek-ai')
 for(const packageName of await readdir(hostDirectory)){
  const manifest=JSON.parse(await readFile(join(hostDirectory,packageName,'package.json'),'utf8'))
+ assert.ok(typeof manifest.name==='string'&&typeof manifest.version==='string')
  hostDependencies[manifest.name]=manifest.version
 }
+const historicalDependencies=historical?JSON.parse(await readFile(join(root,'scripts/code-profile-historical.json'),'utf8')):{}
+const cli=!historical&&process.env.KIOKUKO_CODE_CLI_ROOT?`file:${await pack(resolve(process.env.KIOKUKO_CODE_CLI_ROOT),'cli')}`:'latest'
 await writeFile(join(profile,'package.json'),JSON.stringify({private:true,type:'module',allowScripts:{},dependencies:{...hostDependencies,
- '@deepseek-ai/cordis-plugin-group':'1.0.5-alpha.1','@deepseek-ai/cordis-plugin-loader':'1.0.6-alpha.1','@deepseek-ai/cordis-plugin-include':'1.0.10-alpha.1',
- '@deepseek-ai/dsh':'0.2.1-alpha.2','@deepseek-ai/cordis':'4.0.5-alpha.1','@askdkc/dsh-cli':'0.14.4',
+ '@askdkc/dsh-cli':cli,...historicalDependencies,
  '@askdkc/dsh-lsp-server':`file:${provider}`,'kiokuko-dsh':`file:${suite}`},
  dsh:{profile:{bundles:['@askdkc/dsh-lsp-server','kiokuko-dsh']}},
 },null,2)+'\n')
 await run('npm',['install','--ignore-scripts','--legacy-peer-deps'],profile)
-for(const [name,version] of [['@deepseek-ai/dsh','0.2.1-alpha.2'],['@askdkc/dsh-cli','0.14.4'],['kiokuko-dsh',expectedPackageVersion]])assert.equal(JSON.parse(await readFile(join(profile,'node_modules',name,'package.json'),'utf8')).version,version)
-console.log('Installed packed provider and Kiokuko in the isolated CLI 0.14.4 profile fixture.')
+for(const [name,version] of Object.entries({...hostDependencies,...historicalDependencies,'kiokuko-dsh':expectedPackageVersion}))assert.equal(JSON.parse(await readFile(join(profile,'node_modules',name,'package.json'),'utf8')).version,version)
+const installedCli=JSON.parse(await readFile(join(profile,'node_modules/@askdkc/dsh-cli/package.json'),'utf8'))
+assert.equal(installedCli.name,'@askdkc/dsh-cli');assert.ok(typeof installedCli.version==='string'&&installedCli.version!=='latest')
+console.log(`Installed packed provider and Kiokuko in the isolated ${historical?'historical regression':'selected host'} CLI ${installedCli.version} profile fixture.`)

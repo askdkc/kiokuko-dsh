@@ -29,11 +29,11 @@ Explicit hosts must implement `configureEfficiency` to accept non-default settin
 npm run typecheck
 npm test
 npm run test:efficiency
-# Requires the pinned DSH 0.2.1-alpha.2 CLI/runtime, using a disposable profile:
+# Uses the selected installed DSH CLI/runtime in a disposable profile:
 KIOKUKO_REQUIRE_DSH_CLI=1 npm run test:e2e:dsh
 ```
 
-`test:efficiency` uses synthetic inputs and makes no provider calls. It prints schema, memory and finalizer-request byte comparisons; token and cost savings remain null. It can save JSON with `-- --output report.json`. Native loop tests use the actual pinned DSH runtime with scripted model responses; they establish workflow compatibility, not live provider costs or memory quality.
+`test:efficiency` uses synthetic inputs and makes no provider calls. It prints schema, memory and finalizer-request byte comparisons; token and cost savings remain null. It can save JSON with `-- --output report.json`. Native loop tests use the selected installed DSH runtime with scripted model responses; they establish workflow compatibility, not live provider costs or memory quality.
 
 ### Verified on 2026-09-09
 
@@ -49,3 +49,11 @@ The packaged lifecycle artifact had integrity `sha512-o1eRC/puGlFbIvcVWRie1ypbE+
 [Synthetic comparison results](./token-efficiency-evaluation.json) show tool definitions at 28,117 → 27,130 bytes and identical summary/body presentation at 174 → 93 bytes; distinct exception text stays at 104 bytes. The bounded finalizer fixtures shrink substantially, but intentionally excerpt oversized evidence. Real token counts, total billed cost and generated-memory quality remain unmeasured, so `bounded_evidence` remains opt-in.
 
 To roll back the experimental input mode, select `prefix_reuse` for new jobs. Jobs already scheduled retain their immutable mode. Disable observation with `observe: false`. Do not restore an old database backup as a feature rollback or assume binary downgrade is compatible with the new migration.
+
+The code-provider acceptance installer follows `KIOKUKO_DSH_PACKAGE_ROOT`
+(default: the installed native fixture) and the CLI distribution channel.
+Set `KIOKUKO_CODE_CLI_ROOT` to pack a local CLI checkout for source acceptance.
+`node scripts/install-code-profile.mjs --historical` explicitly selects the old
+regression graph in `scripts/code-profile-historical.json`; it is not a current
+release requirement. `verify-code-profile.mjs` queries the installed boot
+runtime and exercises bundle discovery and the code-intelligence V1 contract.

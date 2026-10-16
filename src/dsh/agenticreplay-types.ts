@@ -42,7 +42,7 @@ export interface DshAgenticReplayHostServices {
   closeSessionRecording(sessionId: string, reason: string): Promise<void>
   shutdown(): Promise<void>
 }
-/** Structural subset verified against DSH 0.2.1-alpha.2. No runtime DSH dependency. */
+/** Structural execution contract checked against the native tool registry. No runtime DSH dependency. */
 export interface AgenticReplayToolExecution {
   readonly token: symbol
   readonly parent?: symbol

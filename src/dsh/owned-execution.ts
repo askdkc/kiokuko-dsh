@@ -52,6 +52,8 @@ export interface OwnedHost {
   confirm?(identity: ExecutionIdentity, detail: string, signal: AbortSignal): Promise<boolean>
   isTaskControl?(execution: NativeExecution): boolean
   unownedNative?(execution: NativeExecution): boolean
+  nativeCommand?(execution: NativeExecution): boolean
+  nativeLisp?(execution: NativeExecution): boolean
 }
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex')
 const within = (root: string, target: string) => { const relative = path.relative(root, target); return relative === '' || !relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative) }
@@ -524,6 +526,7 @@ export function mountOwnedExecution(ctx:{tools:{register(tool:any):()=>void;get?
   if (ctx.on) disposers.push(ctx.on('tools/pre-execute',async(execution:NativeExecution,next:()=>Promise<unknown>)=>{
     if(implementations.has(ctx.tools.get?.(execution.name,execution.agent)?.execute)) ownedCalls.add(execution)
     const effect = taskEffectTool(execution.name, execution.arguments) && host.isTaskControl?.(execution) !== true
+      && host.nativeCommand?.(execution) !== true
     // Pin an admitted owner before an approval can await a human. On-demand
     // admission without a task is allowed to finish before the first capture.
     if (effect && host.resolve(execution)) await service.captureAuthority(execution)
@@ -534,7 +537,7 @@ export function mountOwnedExecution(ctx:{tools:{register(tool:any):()=>void;get?
   },{prepend:true}))
   if (ctx.on) disposers.push(ctx.on('tools/execute',async(execution:NativeExecution,next:()=>Promise<unknown>)=>{
     if (host.isTaskControl?.(execution) === true) return next()
-    if (execution.name === 'bash' && host.unownedNative?.(execution) === true) return withNoTaskAuthority(next)
+    if (host.nativeCommand?.(execution) === true || execution.name === 'bash' && host.unownedNative?.(execution) === true) return withNoTaskAuthority(next)
     if (execution.name === 'run_code') return service.composite(execution,next)
     if (!taskEffectTool(execution.name, execution.arguments)) return next()
     const lease = await service.captureAuthority(execution)
@@ -543,7 +546,7 @@ export function mountOwnedExecution(ctx:{tools:{register(tool:any):()=>void;get?
     return withTaskAuthority(lease, next)
   }))
   if(ctx.on)disposers.push(ctx.on('tools/pre-execute',async(execution:NativeExecution,next:()=>Promise<unknown>)=>{
-    if(['lisp_eval','lisp_call','lisp_define','lisp_hot_install','lisp_hot_call'].includes(execution.name))await service.unknownEffects(execution)
+    if(host.nativeLisp?.(execution)!==true&&['lisp_eval','lisp_call','lisp_define','lisp_hot_install','lisp_hot_call'].includes(execution.name))await service.unknownEffects(execution)
     return next()
   },{prepend:true}))
   return async()=>{for(const dispose of disposers.reverse())dispose();await service.close()}

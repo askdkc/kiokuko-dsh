@@ -15,9 +15,10 @@ const versions = [
   { expectedPackageVersion: packageMetadata.version, mismatch: false },
   { expectedPackageVersion: `${major + 1}.${minor}.${patch}`, mismatch: false },
   { expectedPackageVersion: packageMetadata.version, mismatch: true },
+  { expectedPackageVersion: packageMetadata.version, mismatch: false, historical: true },
 ]
 
-for (const { expectedPackageVersion, mismatch } of versions) test(`packed fixture ${mismatch ? 'rejects a mismatched install' : 'follows local metadata'} (${expectedPackageVersion})`, async () => {
+for (const { expectedPackageVersion, mismatch, historical = false } of versions) test(`packed fixture ${mismatch ? 'rejects a mismatched install' : 'follows local metadata'} (${expectedPackageVersion}/${historical ? 'historical' : 'current'})`, async () => {
   const fixture = await mkdtemp(join(tmpdir(), 'kiokuko-code-package-'))
   const json = async (path: string, value: unknown) => {
     await mkdir(dirname(path), { recursive: true })
@@ -28,10 +29,11 @@ for (const { expectedPackageVersion, mismatch } of versions) test(`packed fixtur
     await cp(join(root, 'scripts/install-code-profile.mjs'), join(fixture, 'scripts/install-code-profile.mjs'))
     await json(join(fixture, 'package.json'), { name: packageMetadata.name, version: expectedPackageVersion })
     await json(join(fixture, '.artifacts/code-intelligence/dsh-lsp-server/package.json'), { name: '@askdkc/dsh-lsp-server', version: '1.2.3' })
-    // Deliberately historical host compatibility fixtures, not current releases.
-    for (const [name, version] of [['dsh', '0.2.1-alpha.2'], ['cordis', '4.0.5-alpha.1']] as const) {
+    // Selected host labels deliberately differ from the historical regression fixture.
+    for (const [name, version] of [['dsh', '0.3.0'], ['cordis', '4.1.0']] as const) {
       await json(join(fixture, 'tests/fixtures/dsh-runtime/node_modules/@deepseek-ai', name, 'package.json'), { name: `@deepseek-ai/${name}`, version })
     }
+    await json(join(fixture, 'scripts/code-profile-historical.json'), { '@deepseek-ai/dsh': '0.2.1-alpha.2', '@deepseek-ai/cordis': '4.0.5-alpha.1', '@askdkc/dsh-cli': '0.14.4' })
     const bin = join(fixture, 'bin')
     await mkdir(bin)
     const fakeNpm = join(bin, 'npm')
@@ -45,7 +47,7 @@ if (args[0] === 'pack') {
   fs.writeFileSync(path.join(destination, 'fixture.tgz'), JSON.stringify(manifest));
 } else if (args[0] === 'install') {
   for (const [name, spec] of Object.entries(manifest.dependencies)) {
-    const installed = spec.startsWith('file:') ? JSON.parse(fs.readFileSync(spec.slice(5), 'utf8')) : { name, version: spec };
+    const installed = spec.startsWith('file:') ? JSON.parse(fs.readFileSync(spec.slice(5), 'utf8')) : { name, version: spec === 'latest' ? '1.2.3' : spec };
     if (name === process.env.FIXTURE_SUITE_NAME && process.env.FIXTURE_INSTALLED_VERSION) installed.version = process.env.FIXTURE_INSTALLED_VERSION;
     const target = path.join(cwd, 'node_modules', name);
     fs.mkdirSync(target, { recursive: true });
@@ -57,7 +59,7 @@ if (args[0] === 'pack') {
     const envRoot = join(fixture, 'environment')
     await mkdir(envRoot)
     const log = join(fixture, 'commands.jsonl')
-    const execute = () => run(process.execPath, [join(fixture, 'scripts/install-code-profile.mjs')], {
+    const execute = () => run(process.execPath, [join(fixture, 'scripts/install-code-profile.mjs'), ...(historical ? ['--historical'] : [])], {
       cwd: fixture,
       timeout: 15000,
       env: { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: envRoot, TMPDIR: envRoot, XDG_CONFIG_HOME: envRoot, LANG: 'C.UTF-8', FIXTURE_COMMAND_LOG: log, FIXTURE_SUITE_NAME: packageMetadata.name, ...(mismatch ? { FIXTURE_INSTALLED_VERSION: `${major + 2}.${minor}.${patch}` } : {}) },
@@ -71,8 +73,8 @@ if (args[0] === 'pack') {
     const installed = JSON.parse(await readFile(join(fixture, '.artifacts/code-intelligence/profile/node_modules', packageMetadata.name, 'package.json'), 'utf8'))
     assert.equal(installed.version, expectedPackageVersion)
     const profile = JSON.parse(await readFile(join(fixture, '.artifacts/code-intelligence/profile/package.json'), 'utf8'))
-    assert.equal(profile.dependencies['@deepseek-ai/dsh'], '0.2.1-alpha.2', 'retain the deliberate historical DSH fixture')
-    assert.equal(profile.dependencies['@askdkc/dsh-cli'], '0.14.4', 'retain the deliberate historical CLI fixture')
+    assert.equal(profile.dependencies['@deepseek-ai/dsh'], historical ? '0.2.1-alpha.2' : '0.3.0', 'current selection and explicit historical regression are independent')
+    assert.equal(profile.dependencies['@askdkc/dsh-cli'], historical ? '0.14.4' : 'latest', 'the normal installer follows the selected distribution')
     const commands = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     assert.deepEqual(commands.map(args => args[0]), ['pack', 'pack', 'install'])
     assert.ok(commands.every(args => args.includes('--ignore-scripts')))

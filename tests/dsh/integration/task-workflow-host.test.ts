@@ -174,6 +174,12 @@ test('native task schema streams through the managed OpenCode Go route while hos
     disposeSurface = mountTaskWorkflowSurface(ctx, new DshTaskWorkflow({ ...f.options, demand: intake }), intake)
     const schema = ctx.tools.schemas(f.agent).find((value: any) => value.name === TASK_OPERATION_TOOL)!
     assert.ok(schema)
+    const publicInput = z.fromJSONSchema(schema.parameters)
+    const advertisedStart = { operation: 'start', taskId: 'task-fixture', expectedRevision: 1, expectedGeneration: 1 }
+    assert.equal(publicInput.safeParse(advertisedStart).success, false, 'the advertised start operation must require its reason')
+    assert.equal(publicInput.safeParse({ ...advertisedStart, reason: 'Start the current task' }).success, true)
+    assert.equal(publicInput.safeParse({ operation: 'create', taskType: 'research' }).success, true)
+    assert.equal(publicInput.safeParse({ operation: 'create', taskType: 'research', reason: 'Not a create field' }).success, false)
     const credentials = new CredentialFile(join(f.root, 'unused-credentials.json'))
     t.mock.method(credentials, 'read', async (provider: string) => {
       assert.equal(provider, 'opencode-go')
@@ -214,7 +220,7 @@ test('native task schema streams through the managed OpenCode Go route while hos
     assert.equal(requests[1].model, model)
     assert.equal(requests[1].reasoning_effort, 'high')
     assert.equal(requests[1].tools[0].function.parameters.type, 'object')
-    assert.equal(requests[1].tools[0].function.parameters.additionalProperties, false)
+    assert.equal(publicInput.safeParse({ ...advertisedStart, reason: 'Start the current task', unexpected: true }).success, false)
     assert.equal(TaskModelOperationSchema.safeParse({ operation: 'create', taskType: 'research' }).success, true)
     const start = { operation: 'start', taskId: 'task-fixture', expectedRevision: 1, expectedGeneration: 1, reason: 'Start requested work' }
     assert.equal(TaskModelOperationSchema.safeParse(start).success, true)

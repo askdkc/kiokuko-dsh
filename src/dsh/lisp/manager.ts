@@ -1,3 +1,4 @@
+import type { LispNativeCommands } from '../lisp-tool-identity.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
 import { CODE_METHODS } from './code-intelligence-contracts.js'
 import type { ApprovalQuestions } from './approval.js'
@@ -150,6 +151,8 @@ export class LispManager {
   private async authorizeCodingTask(owner:LispOwner):Promise<void> {
     const workflow=await this.#store.database(db=>sessionCodingWorkflow(db,owner.sessionId))
     if(workflow?.protocol && this.#config.executionMode !== 'protected') fail('PROTOCOL_PROTECTED_REQUIRED','This bounded protocol requires protected Lisp computation. Disable the existing Lisp session before binding, then select protected mode; use owned file/test tools for effects.')
+    const native = this.taskAuthority.current()?.nativeCommands
+    if (native && !workflow?.protocol) { native.assertCurrent(); return }
     if(workflow&&(workflow.repositoryRoot!==owner.root||workflow.choice.state!=='yes'||!workflow.definition||['cancelled','superseded','completed'].includes(workflow.state)))
       fail('CODING_CHOICE_PENDING','このタスクの Goal と条件を定め、Lisp の選択に回答してから実行してください。')
   }
@@ -523,6 +526,11 @@ export class LispManager {
       const input=z.object({program:z.string().min(1),argv:z.array(z.string()),timeoutMs:z.number().int().positive(),directory:z.string().optional()}).strict().parse(args)
       const quote=(value:string)=>"'" + value.replaceAll("'", "'\\''") + "'"
       const directory=input.directory??'.'
+      const native = this.taskAuthority.current()?.nativeCommands
+      if (method === 'run' && native && this.#config.executionMode === 'development') {
+        native.assertCurrent()
+        return this.ownedDispatch(state, signal => native.run(input, AbortSignal.any([signal, context.signal])))
+      }
       const lease = await this.taskAuthority.authorizeEffect(state.owner, 'owned')
       context.signal.throwIfAborted()
       const value=await this.ownedDispatch(state,signal=>this.options.toolCall!(state.owner,'kioku_exec',{command:[input.program,...input.argv].map(quote).join(' '),cwd:isAbsolute(directory)?directory:join(state.owner.root,directory),timeoutMs:input.timeoutMs,background:method==='start-job'},method==='start-job'?signal:AbortSignal.any([signal,context.signal]),`lisp-rpc:${context.generation}:${context.evaluationId}:${context.rpcId}`,lease)) as any
@@ -638,12 +646,12 @@ export class LispManager {
       changes: operations.filter(o => o.kind === 'proposal').slice(0, 100).map(o => ({ id: o.operation_id, state: o.state, details: JSON.parse(o.payload), result: o.result ? JSON.parse(o.result) : null })),
       inspect: '/kioku-lisp diagnostics OPERATION_ID で各操作の全内容を確認できます。' }
   }
-  execute(owner: LispOwner, tool: LispTool, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+  execute(owner: LispOwner, tool: LispTool, input: Record<string, unknown>, signal?: AbortSignal, nativeCommands?: LispNativeCommands): Promise<unknown> {
     const key = typeof input.operationId === 'string' ? JSON.stringify([owner.sessionId, owner.agentId, input.operationId]) : undefined
     const hash = digest({ tool, input }), pending = key ? this.#inflight.get(key) : undefined
     if (pending) return Promise.resolve(pending === hash ? { replay: true, code: 'IN_PROGRESS', state: 'RUNNING' } : failure(new LispError('ID_CONFLICT', '実行中の操作 ID に異なる入力があります。')))
     if (key) this.#inflight.set(key, hash)
-    const result = this.taskAuthority.run(owner, () => this.dispatch(owner, tool, input, signal)).catch(error => failure(error))
+    const result = this.taskAuthority.run(owner, () => this.dispatch(owner, tool, input, signal), nativeCommands).catch(error => failure(error))
     this.#executions.set(result, owner.sessionId)
     const finished = () => {
       this.#executions.delete(result); if (key) this.#inflight.delete(key)
@@ -1047,10 +1055,25 @@ export class LispManager {
     }
     catch (error) { this.halted(state, error); throw error }
   }
+  async canRecoverWorkerWithoutTask(owner: LispOwner): Promise<boolean> {
+    if (this.#config.executionMode !== 'development' || await this.isTaskMode(owner)) return false
+    const workflow = await this.#store.database(db => sessionCodingWorkflow(db, owner.sessionId))
+    return !workflow?.definition && !workflow?.protocol
+  }
+  /** Human conversation recovery only restarts a worker; it cannot grant effects. */
+  private async authorizeRecovery(owner: LispOwner): Promise<void> {
+    const native = this.taskAuthority.current()?.nativeCommands
+    if (native && await this.canRecoverWorkerWithoutTask(owner)) {
+      await this.authorizeCodingTask(owner)
+      native.assertCurrent()
+      return
+    }
+    await this.taskAuthority.authorizeEffect(owner)
+  }
   recover(owner: LispOwner, signal?: AbortSignal): Promise<unknown> {
     return this.taskAuthority.run(owner, async () => {
       this.entry(owner)
-      await this.taskAuthority.authorizeEffect(owner)
+      await this.authorizeRecovery(owner)
       return this.recoverBound(owner, signal)
     })
   }
@@ -1078,7 +1101,7 @@ export class LispManager {
       await this.#store.transition(boundOwner, op.operation_id, [op.state], 'ABANDONED', { ...await recordedResult(this.#store, boundOwner, op), ok: false, state: 'ABANDONED', humanRecovery: true })
     }
     signal?.throwIfAborted()
-    await this.taskAuthority.authorizeEffect(owner)
+    await this.authorizeRecovery(owner)
     await this.startWorker(state)
     return this.status(owner)
   }

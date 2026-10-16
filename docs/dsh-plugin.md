@@ -11,7 +11,7 @@ not remove files or dependencies from an installed full package.
 
 ## Compatibility
 
-The current runtime target is **DSH 0.2.1-alpha.2**. Older runtime records remain historical evidence only.
+The declared DSH minimum is **0.2.1-alpha.2**, with no unproven future ceiling. Tested-release records describe evidence, not an exclusive runtime target; compatibility also requires the native APIs exercised by the disposable-profile tests. Cordis supports the same-major lifecycle API (`^4.0.5-alpha.1`), including compatible minor updates.
 
 CI uses the canonical DSH fixture for native history, routing and packed Web lifecycle coverage. Historical source-repair CLI tests use the current catalog's historical codecs for v0/v3 fixtures. Local tests do not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
 
@@ -382,9 +382,9 @@ limit. The package is therefore not represented as a small, auto-approved
 plugin.
 
 The manifest declares MIT licensing, the canonical GitHub repository, Node.js
-`>=24.16.0`, DSH `0.2.1-alpha.2`, and the `web` and `dsh-cli` profiles. Other DSH
-releases and `headless` remain unverified until a matching disposable-profile
-run is recorded. The legacy `dsh-tui` profile declaration is retained for existing installations.
+`>=24.16.0`, DSH `>=0.2.1-alpha.2`, and the `web` and `dsh-cli` profiles.
+An untested release is not rejected merely for its version label. A matching
+disposable-profile run supplies behavior evidence; `headless` remains unverified. The legacy `dsh-tui` profile declaration is retained for existing installations.
 
 Runtime effects are explicit:
 

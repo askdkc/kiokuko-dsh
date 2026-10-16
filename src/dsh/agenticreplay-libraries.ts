@@ -41,6 +41,8 @@ export type CreateTraceWriter = (runsDir: string, init: {
   agenticreplayVersion: string; envAllowlist?: string[]
 }) => Promise<TraceWriter>
 export interface CoreLibrary {
+  Redactor?: new () => { redactString(value: string, context?: string): { value: string; hits: { rule: string; count: number }[] } }
+  BlobStore?: new (directory: string) => { put(value: string, mediaType?: string): Promise<Record<string, unknown>> }
   runIdFromDirectory?(name: string): string | undefined
   TraceWriter: { create: CreateTraceWriter }
   TraceReader: { open(runDir: string): Promise<{ events(): Promise<TraceEvent[]> }> }

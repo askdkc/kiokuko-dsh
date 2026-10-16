@@ -21,21 +21,21 @@ test('npm and pnpm resolve the canonical DSH release without a legacy package gr
   for (const name of ['@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-attachment', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-llm-pi-ai']) {
     assert.equal(root.peerDependencies[name], range, name)
   }
+  // Root development follows the channel; the repeatable fixture owns its graph.
   for (const [name, selected] of Object.entries(root.devDependencies)) {
-    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(selected, version, name)
+    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(selected, 'alpha', name)
   }
-  for (const file of ['package-lock.json', 'tests/fixtures/dsh-runtime/package-lock.json']) {
-    const lock = JSON.parse(await readFile(file, 'utf8'))
-    const packages = Object.entries(lock.packages).filter(([path]) => /node_modules\/@deepseek-ai\/dsh(?:-[^/]+)?$/.test(path))
-    assert.ok(packages.length > 0, file)
-    for (const [path, entry] of packages) assert.equal((entry as { version: string }).version, version, `${file}: ${path}`)
-  }
+  const fixtureLock = JSON.parse(await readFile('tests/fixtures/dsh-runtime/package-lock.json', 'utf8'))
+  const dshPackages = (lock: any) => Object.entries(lock.packages).filter(([path]) => /node_modules\/@deepseek-ai\/dsh(?:-[^/]+)?$/.test(path))
+  assert.ok(dshPackages(fixtureLock).length > 0)
+  for (const [path, entry] of dshPackages(fixtureLock)) assert.equal((entry as any).version, version, path)
+  const npm = JSON.parse(await readFile('package-lock.json', 'utf8'))
+  assert.deepEqual(npm.packages[''].devDependencies, root.devDependencies)
   const pnpm = parse(await readFile('pnpm-lock.yaml', 'utf8'))
-  const packages = Object.keys(pnpm.packages).filter(name => name.startsWith('@deepseek-ai/dsh-'))
-  assert.ok(packages.length > 0)
-  for (const name of packages) assert.equal(name.slice(name.lastIndexOf('@') + 1), version, name)
   for (const [name, entry] of Object.entries(pnpm.importers['.'].devDependencies)) {
-    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal((entry as { specifier: string }).specifier, version, name)
+    if (!name.startsWith('@deepseek-ai/dsh-')) continue
+    assert.equal((entry as any).specifier, 'alpha', name)
+    assert.equal(npm.packages[`node_modules/${name}`].version, (entry as any).version.split('(')[0], name)
   }
 })
 test('native CI runs every suite with the canonical current fixture', async () => {
@@ -103,3 +103,22 @@ test('recursive discovery executes import-only aliases through their declared le
     assert.equal(selected.env[({'code-provider':'KIOKUKO_REQUIRE_CODE_PROVIDER',p0:'KIOKUKO_REQUIRE_LISP_P0','packages-live':'KIOKUKO_PACKAGE_LIVE'} as Record<string,string>)[lane.profile]!],'1');
   }
  });
+
+test('an explicitly selected newer host is tested without replacing it with the historical fixture', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const selected = await mkdtemp(join(tmpdir(), 'kiokuko-selected-host-'))
+  try {
+    const dir = join(selected, '@deepseek-ai/dsh'); await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '1.0.0-next.7' }))
+    const env = { KIOKUKO_DSH_PACKAGE_ROOT: selected, KIOKUKO_EXPECTED_DSH_VERSION: 'old-stale-label' }
+    for (const suite of ['unit', 'integration', 'e2e', 'lisp', 'browser-approval', 'browser-shortcuts', 'browser-coding']) {
+      const plan = nativeCiPlan(suite, env)
+      assert.equal(plan.env.KIOKUKO_DSH_PACKAGE_ROOT, selected)
+      assert.equal(plan.env.KIOKUKO_EXPECTED_DSH_VERSION, '1.0.0-next.7')
+      assert.equal(plan.env.DSH_BIN, join(selected, '.bin/dsh'))
+    }
+    await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'other', version: '1.0.0-next.7' }))
+    assert.throws(() => nativeCiPlan('unit', env), /selected DSH package/)
+  } finally { await rm(selected, { recursive: true, force: true }) }
+})

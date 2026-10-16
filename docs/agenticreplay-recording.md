@@ -18,10 +18,12 @@ omitted count, and coverage. It stores no extra section text, and an unobserved
 section is never described as delivered. This is request-side provenance, not
 proof that a provider processed the bytes.
 For manual dependency updates and restarting DSH, see [the update guide](dsh-plugin.md#update).
-The integration is tested against **DSH 0.2.1-alpha.2**. The native E2E verifies
-installed package versions before executing. The trace labels that version as
-`verifiedDshVersion`; it does not invent an actual host version when the host
-does not expose one. See the bundled [Apache-2.0 license](AGENTICREPLAY-LICENSE.txt).
+Native E2E checks that the selected installed host graph is coherent before
+executing its API tests; tested-release records are evidence, not an allowlist.
+`run.start.runtime` records the actual Node version and the launcher package
+identified from the real entrypoint (following symlinks). `dshVersion` is null
+when the entrypoint is dsh-cli or another host that does not expose its DSH
+runtime version; the plugin's own dependencies are never used as host evidence. See the bundled [Apache-2.0 license](AGENTICREPLAY-LICENSE.txt).
 
 ## Upgrade from OrcaReplay
 

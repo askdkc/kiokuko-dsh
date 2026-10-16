@@ -1,4 +1,5 @@
 import { ExecutionSelectionPending } from '../../../src/dsh/execution-pending.js'
+import { mountOwnedExecution } from '../../../src/dsh/owned-execution.js'
 /** Independent intake-boundary regressions using the actual published native tool registry.
  * Host admission is a dependency double; these tests do not claim model intent quality.
  */
@@ -783,4 +784,31 @@ for (const sample of [
   if (sample.state === 'Done') assert.match(JSON.stringify(result), /terminal resume requires an explicit operation/)
   assert.equal(f.admissions.length, 0)
   assert.deepEqual(context, original, 'a rejected advisory operation never mutates the task snapshot')
+})
+
+test('ordinary native Bash remains available with owned metadata and deferred optional intake', async t => {
+  const f = await fixture(t, { nativeOwnership: async () => 'owned', classify: async () => ({ deferInference: true }) })
+  let bodies = 0, databaseCalls = 0
+  t.after(f.ctx.tools.register({ name: 'bash', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => { bodies++; return 'native command body' } }))
+  await f.capture([human('native-command', 'Inspect the current project and run the normal command.')])
+  const first = await f.execute('bash', { command: 'pwd' })
+  assert.equal(first.isError, false, JSON.stringify(first))
+  t.after(await mountOwnedExecution({ tools: f.ctx.tools, on: f.ctx.on.bind(f.ctx) }, {
+    runtime: { withDatabase: async () => { databaseCalls++; throw new Error('Optional workflow storage must not admit native Bash') } } as any,
+    resolve: () => undefined, nativeCommand: execution => f.intake.nativeCommand(execution as any),
+  }))
+  assert.equal((await f.execute('bash', { command: 'git status --short' })).isError, false)
+  assert.equal(f.admissions.length, 0)
+  assert.equal(databaseCalls, 0)
+  const deny = f.ctx.tools.guard(() => 'Native policy denied')
+  assert.equal((await f.execute('bash', { command: 'pwd' })).isError, true)
+  deny()
+  const mutate = f.ctx.tools.guard((execution: any) => { execution.arguments.command = 'changed after native admission'; return undefined })
+  t.after(mutate)
+  assert.equal((await f.execute('bash', { command: 'pwd' })).isError, true)
+  mutate()
+  assert.equal((await f.execute('kioku_exec', { command: 'pwd' })).isError, true, 'Kiokuko-owned execution keeps its own authority')
+  f.intake.stop()
+  assert.equal((await f.execute('bash', { command: 'pwd' })).isError, true)
+  assert.equal(bodies, 2)
 })

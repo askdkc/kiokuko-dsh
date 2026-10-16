@@ -1,3 +1,4 @@
+import type { LispNativeCommands } from '../lisp-tool-identity.js'
 import { readProtocol } from '../guardrail/service.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { SqliteDatabase } from '../../db/adapter.js'
@@ -9,6 +10,7 @@ import { currentTaskAuthority, hasNoTaskAuthority } from '../task-authority-cont
 export interface LispTaskExecution {
   readonly owner: LispOwner
   readonly lease?: TaskLease
+  readonly nativeCommands?: LispNativeCommands
   readonly unavailable?: unknown
   performedEffect: boolean
 }
@@ -21,20 +23,22 @@ export class LispTaskAuthority {
 
   current(): LispTaskExecution | undefined { return this.#scope.getStore() }
 
-  async run<T>(owner: LispOwner, action: () => Promise<T>): Promise<T> {
+  async run<T>(owner: LispOwner, action: () => Promise<T>, nativeCommands?: LispNativeCommands): Promise<T> {
     const current = this.current()
     if (current) { this.checkOwner(current, owner); return action() }
-    const inherited = currentTaskAuthority()
+    nativeCommands?.assertCurrent()
+    const inherited = nativeCommands ? undefined : currentTaskAuthority()
     if (inherited && (inherited.sessionId !== owner.sessionId || inherited.repositoryRoot !== owner.root))
       fail('TASK_OWNER_MISMATCH', '呼び出し元のタスクと Lisp のセッションが一致しません。')
     let task: TaskSnapshot | undefined, unavailable: unknown
     // A compiled outer execution which began without a task cannot acquire one
     // merely because another turn admitted work while it was awaiting.
-    if (!inherited && !hasNoTaskAuthority()) {
+    if (!nativeCommands && !inherited && !hasNoTaskAuthority()) {
       try { task = await this.database(db => findSessionTask(db, { sessionId: owner.sessionId, repositoryRoot: owner.root })) }
       catch (error) { unavailable = error }
     }
     const binding: LispTaskExecution = { owner: { ...owner }, performedEffect: false,
+      ...(nativeCommands ? { nativeCommands } : {}),
       ...(unavailable ? { unavailable } : {}),
       ...(inherited ? { lease: Object.freeze({ ...inherited }) } : task ? { lease: Object.freeze({ taskId: task.taskId, sessionId: task.sessionId, repositoryRoot: task.repositoryRoot,
         revision: task.revision, generation: task.generation }) } : {}) }

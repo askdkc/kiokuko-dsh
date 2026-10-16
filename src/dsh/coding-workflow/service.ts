@@ -104,12 +104,18 @@ export function proposeCodingWorkflow(db: SqliteDatabase, identity: CodingIdenti
       const changedGoal = canonicalContentHash({ ...old.goal, revision: 0 }) !== canonicalContentHash({ ...definition.goal, revision: 0 })
       if (definition.goal.revision < old.goal.revision || changedGoal && definition.goal.revision <= old.goal.revision)
         throw new KiokukoError('CONFLICT', 'Changed Goal requires a new revision')
-      for (const criterion of definition.criteria) {
+      const conflicts: { criterionId: string; path: string; providedRevision: number; currentRevision: number; minimumRevision: number; changedFields: string[] }[] = []
+      for (const [index, criterion] of definition.criteria.entries()) {
         const prior = old.criteria.find(item => item.criterionId === criterion.criterionId)
         if (value.retiredIds.includes(criterion.criterionId)) throw new KiokukoError('CONFLICT', 'Retired criterion ID cannot be reused')
-        if (prior && (criterion.revision < prior.revision || canonicalContentHash({ ...prior, revision: 0 }) !== canonicalContentHash({ ...criterion, revision: 0 })
-          && criterion.revision <= prior.revision)) throw new KiokukoError('CONFLICT', 'Changed criterion requires a new revision')
+        if (!prior) continue
+        const changedFields = (['outcome', 'procedure', 'expected', 'evidence'] as const).filter(field => prior[field] !== criterion[field])
+        const minimumRevision = prior.revision + (changedFields.length ? 1 : 0)
+        if (criterion.revision < minimumRevision) conflicts.push({ criterionId: criterion.criterionId,
+          path: `definition.criteria[${index}].revision`, providedRevision: criterion.revision, currentRevision: prior.revision, minimumRevision, changedFields })
       }
+      if (conflicts.length) throw new KiokukoError('CONFLICT',
+        `Changed criterion requires a new revision: ${conflicts.map(item => `${item.criterionId}: ${item.path} is ${item.providedRevision}, requires >= ${item.minimumRevision} (changed fields: ${item.changedFields.join(', ') || 'none'})`).join('; ')}. Update each listed criterion revision. Changing definition.goal.revision does not update criterion revisions.`, { conflicts })
       for (const item of definition.items) if (value.retiredIds.includes(item.itemId)) throw new KiokukoError('CONFLICT', 'Retired item ID cannot be reused')
       const newIds = new Set([...definition.criteria.map(item => item.criterionId), ...definition.items.map(item => item.itemId)])
       value.retiredIds.push(...[...old.criteria.map(item => item.criterionId), ...old.items.map(item => item.itemId)].filter(id => !newIds.has(id)))

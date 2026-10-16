@@ -1,3 +1,4 @@
+import { isLispImplementation, isLispNativeCommand, withRootLispAdmission, rememberLispConversation } from './lisp-tool-identity.js'
 import { ExecutionSelectionPending } from './execution-pending.js'
 import type { DshAnswerContext } from './answer-context.js'
 import { executionClarification } from './intake-clarification.js'
@@ -15,7 +16,7 @@ import { memoryOwnerKind, type MemoryOwnerIdentity, type MemoryOwnerKind } from 
 
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
-export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. Ordinary native Bash needs no memory, Goal or prepare_requested_work round trip when the host confirms there is no owned task; native permissions and human Stop remain authoritative. Owned or explicitly enrolled work retains its authority checks. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context. taskOperation is optional and describes a transition of an existing activeTask, not starting the requested work itself. Omit taskOperation when activeTask is null or the request does not ask for a state transition; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, Goal, cancellation, memory-owner and execution ownership still apply. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
+export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. Ordinary native Bash needs no memory, Goal or prepare_requested_work round trip, including when optional workflow metadata exists; native permissions and human Stop remain authoritative. Registered root Lisp tools delegate to the Lisp runtime without an optional preparation round trip; foreground processes use native Bash permissions, sandbox, approval and Stop. Explicitly prepared or protected workflow effects retain their task, Plan and coding-choice checks. Owned or explicitly enrolled work retains its authority checks. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context. taskOperation is optional and describes a transition of an existing activeTask, not starting the requested work itself. Omit taskOperation when activeTask is null or the request does not ask for a state transition; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, Goal, cancellation, memory-owner and execution ownership still apply. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(type => type !== 'chat')
 const NO_ACTIVE_GOAL_GUIDANCE = 'The current context has no active Goal. same_scope_continuation may refer to the exact current-session conversation without a formal Goal; it grants no execution permission. scope_change requires an active Goal or task. If the original request clearly specifies a self-contained task, use relation=new and the action it requests (verify for verification), with the exact current evidenceRefs. Otherwise clarify the intended target with the user. Preserve the original scope, constraints and native permissions.'
 
@@ -130,7 +131,7 @@ export function preparationCarrier(value: unknown): PreparationRequest | undefin
 /** Conversation entry and execution intake are distinct; neither this mode nor a type hint grants native permission. */
 export class OnDemandIntake {
   readonly #turns = new Map<string, Turn>()
-  readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; requestPreparation?: boolean; nativeUnownedDigest?: string }>()
+  readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; requestPreparation?: boolean; nativeUnownedDigest?: string; nativeCommandDigest?: string; nativeLispDigest?: string }>()
   readonly #disposers: (() => void)[] = []
   readonly #pending = new Set<Promise<unknown>>()
   readonly #controlTools = new Map<string, Definition['execute']>()
@@ -245,6 +246,8 @@ export class OnDemandIntake {
       humanContents: new Map(humanMessages(input.messages).map(message => [humanId(message), canonicalContentHash(message)])),
       status: 'capturing', intent: { deferInference: true }, memoryOwner: 'none', preparationCalls: new Set(), controller }
     this.#turns.set(sessionId, state)
+    rememberLispConversation(input.agent, () => !this.options.onlyWhenDeferred && !this.#stopped && this.#turns.get(sessionId) === state
+      && state.status === 'answer' && !state.input.signal.aborted && this.host.nativeChild?.(input.agent) !== true)
     const promise = (async () => {
       await this.host.validate(input)
       this.assertCurrent(state)
@@ -517,6 +520,28 @@ export class OnDemandIntake {
       && !!proof && proof.turn === state && proof.execute === this.definition(execution)?.execute
       && proof.nativeUnownedDigest === canonicalContentHash(execution.arguments)
   }
+  /** Direct native Bash follows native permissions, independently of optional task intake. */
+  nativeCommand(execution: Execution): boolean {
+    const state = this.bound(execution), actual = this.definition(execution), proof = this.#executions.get(execution)
+    if (!this.options.onlyWhenDeferred && !this.#stopped && actual && isLispNativeCommand(execution, actual.execute))
+      return !proof || proof.turn === state && proof.execute === actual.execute && proof.nativeCommandDigest === canonicalContentHash(execution.arguments)
+    if (this.options.onlyWhenDeferred || this.#stopped || execution.signal.aborted || execution.name !== 'bash'
+      || execution.parent !== undefined || !state || state.input.signal.aborted || !actual
+      || execution.agent && this.host.nativeChild?.(execution.agent)) return false
+    try { this.assertCurrent(state) } catch { return false }
+    return !proof || proof.turn === state && proof.execute === actual.execute
+      && proof.nativeCommandDigest === canonicalContentHash(execution.arguments)
+  }
+  /** Delegate real root Lisp tools to their own effect/lease/approval authority. */
+  nativeLisp(execution: Execution): boolean {
+    const state = this.bound(execution), actual = this.definition(execution), proof = this.#executions.get(execution)
+    if (this.options.onlyWhenDeferred || this.#stopped || execution.signal.aborted || execution.parent !== undefined
+      || !state || state.status !== 'answer' || state.input.signal.aborted || !actual || !isLispImplementation(actual.execute)
+      || execution.agent && this.host.nativeChild?.(execution.agent)) return false
+    try { this.assertCurrent(state) } catch { return false }
+    return !proof || proof.turn === state && proof.execute === actual.execute
+      && proof.nativeLispDigest === canonicalContentHash(execution.arguments)
+  }
   preparationOnly(execution: Execution): boolean {
     if (this.isControl(execution)) return true
     const state = this.bound(execution), proof = this.#executions.get(execution)
@@ -631,6 +656,16 @@ export class OnDemandIntake {
       try {
         this.assertCurrent(state)
         if (state.confirmationResume && execution.name !== TASK_PREPARE_TOOL && this.host.ready(state.input.agent, state.input.turn)) this.acknowledgeExisting(state)
+        if (this.nativeCommand(execution)) {
+          this.#executions.set(execution, { turn: state, execute: actual.execute, nativeCommandDigest: canonicalContentHash(execution.arguments) })
+          const decision = await next()
+          return decision?.kind === 'cancel' ? denied('Native tool policy cancelled this call') : decision
+        }
+        if (this.nativeLisp(execution)) {
+          this.#executions.set(execution, { turn: state, execute: actual.execute, nativeLispDigest: canonicalContentHash(execution.arguments) })
+          const decision = await next()
+          return decision?.kind === 'cancel' ? denied('Native tool policy cancelled this call') : decision
+        }
         if (state.nativeUnowned && UNOWNED_NATIVE_TOOLS.has(execution.name) && execution.parent === undefined) {
           if (await this.host.nativeOwnership?.(state.input) !== 'unowned') {
             state.nativeUnowned = false
@@ -688,6 +723,14 @@ export class OnDemandIntake {
        if (!state || proof.turn !== state || this.definition(execution)?.execute !== proof.execute) throw new Error('On-demand dispatch identity changed')
        this.assertCurrent(state)
        ;(execution as { signal: AbortSignal }).signal = AbortSignal.any([execution.signal, state.input.signal, this.#lifecycle.signal])
+       if (proof.nativeCommandDigest !== undefined) {
+         if (!this.nativeCommand(execution)) throw new Error('Native command identity or arguments changed')
+         return next()
+       }
+       if (proof.nativeLispDigest !== undefined) {
+         if (!this.nativeLisp(execution)) throw new Error('Native Lisp identity or arguments changed')
+         return withRootLispAdmission(execution, () => this.nativeLisp(execution), next)
+       }
        if (proof.nativeUnownedDigest !== undefined) {
          if (!this.unownedNative(execution) || await this.host.nativeOwnership?.(state.input) !== 'unowned') {
            state.nativeUnowned = false
@@ -734,6 +777,8 @@ export class OnDemandIntake {
       }
       const proof = this.#executions.get(execution)
       if (!proof || proof.turn !== state || proof.execute !== actual.execute || ['closed', 'stale', 'capturing'].includes(state.status)) return 'Tool execution has no current on-demand preparation'
+      if (proof.nativeCommandDigest !== undefined) return this.nativeCommand(execution) ? undefined : 'Native command identity or arguments changed'
+      if (proof.nativeLispDigest !== undefined) return this.nativeLisp(execution) ? undefined : 'Native Lisp identity or arguments changed'
       if (proof.nativeUnownedDigest !== undefined) return this.unownedNative(execution) ? undefined : 'Native unowned execution proof changed'
        if (proof.carrier) return (state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn))
          && canonicalContentHash(preparationCarrier(execution.arguments) ?? null) === proof.carrierDigest ? undefined : 'Preparation carrier is not current'

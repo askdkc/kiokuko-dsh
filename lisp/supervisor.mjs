@@ -3,12 +3,17 @@
 import { spawn } from 'node:child_process'
 import { openSync, closeSync, writeSync } from 'node:fs'
 const launch = JSON.parse(process.argv[2])
-let child, closing = false
+let child, closing = false, terminationSent = false
 const kill = () => {
+  if (!child?.pid || terminationSent) return
   try {
     if (launch.group && child?.pid) process.kill(-child.pid, 'SIGKILL')
-    else child?.kill('SIGKILL')
-  } catch (error) { if (error.code !== 'ESRCH') throw error }
+    else child.kill('SIGKILL')
+    terminationSent = true
+  } catch (error) {
+    if (error.code !== 'ESRCH') throw error
+    terminationSent = true
+  }
 }
 const stop = () => { closing = true; kill() }
 process.on('SIGTERM', stop)

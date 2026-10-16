@@ -376,3 +376,56 @@ test('current and restarted model snapshots expose pending and stale checks befo
     } finally { resumed.dispose() }
   } finally { support.dispose(); await f.close() }
 })
+
+test('criterion conflicts identify every stale criterion revision and a corrected retry preserves concurrency', async () => {
+  const f = await fixture()
+  try {
+    f.propose()
+    const before = readCodingWorkflow(f.db, f.identity.runId)!
+    const revised = structuredClone(definition)
+    revised.goal.revision = 2
+    revised.criteria.forEach(criterion => { criterion.expected = 'A revised observable assertion' })
+    const attempt = (callId: string) => proposeCodingWorkflow(f.db, f.identity, callId, before.revision, revised, true)
+    assert.throws(() => attempt('unchanged-criterion-revisions'), (error: any) => {
+      assert.match(error.message, /parser-check/)
+      assert.match(error.message, /goal-check/)
+      assert.equal(error.details.conflicts.length, 2)
+      assert.equal(error.details.conflicts[1].path, 'definition.criteria[1].revision')
+      assert.equal(error.details.conflicts[1].minimumRevision, 2)
+      assert.equal(error.details.conflicts[1].currentRevision, 1)
+      assert.equal(error.details.conflicts[1].providedRevision, 1)
+      assert.deepEqual(error.details.conflicts[1].changedFields, ['expected'])
+      return true
+    })
+    revised.criteria[0]!.revision = 2
+    assert.throws(() => attempt('only-first-criterion-fixed'), (error: any) => {
+      assert.match(error.message, /goal-check/)
+      assert.match(error.message, /goal\.revision/)
+      assert.equal(error.details.conflicts.length, 1)
+      assert.equal(error.details.conflicts[0].criterionId, 'goal-check')
+      return true
+    })
+    assert.deepEqual(readCodingWorkflow(f.db, f.identity.runId), before, 'rejected revisions never mutate or consume workflow state')
+    revised.criteria[1]!.revision = 2
+    const updated = attempt('all-criterion-revisions-fixed')
+    assert.equal(updated.definition!.criteria[1]!.revision, 2)
+    assert.throws(() => attempt('concurrent-stale-workflow'), /revision/i)
+  } finally { await f.close() }
+})
+
+test('worker-only human recovery does not waive a defined workflow or protected-mode authority', async () => {
+  const [{ LispManager }, { LispStore }, { LispConfig }] = await Promise.all([
+    import('../../../../src/dsh/lisp/manager.js'), import('../../../../src/dsh/lisp/store.js'), import('../../../../src/dsh/lisp/contracts.js'),
+  ])
+  const f = await fixture()
+  const owner = { sessionId: f.identity.sessionId, agentId: 'agent', root: f.root }
+  const options = { store: new LispStore(async fn => fn(f.db)), dataRoot: join(f.root, 'lisp') }
+  const manager = new LispManager({ ...options, config: LispConfig.parse({ enabled: true, executionMode: 'development' }) })
+  const protectedManager = new LispManager({ ...options, config: LispConfig.parse({ enabled: true, executionMode: 'protected' }) })
+  try {
+    assert.equal(await manager.canRecoverWorkerWithoutTask(owner), true, 'optional Goal-less metadata cannot require work preparation')
+    assert.equal(await protectedManager.canRecoverWorkerWithoutTask(owner), false)
+    f.propose()
+    assert.equal(await manager.canRecoverWorkerWithoutTask(owner), false, 'a defined workflow retains its task authority')
+  } finally { await manager.dispose(); await protectedManager.dispose(); await f.close() }
+})

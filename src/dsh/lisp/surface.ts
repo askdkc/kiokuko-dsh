@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { rememberLispImplementation, isLispConversation, rootLispAdmission, withLispNativeCommand, type LispNativeCommands } from '../lisp-tool-identity.js'
 import { assertProtocolRoute } from '../guardrail/service.js'
 import { isOwnedExecutionCall } from '../owned-execution.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
@@ -374,14 +375,55 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string }) => {
           try {
             const binding = owner(execution.agent), parsed = ToolInput.parse(args)
-            if(development && (ctx.get('planMode',false) as any)?.get(binding.agent)?.active && !['lisp_status','lisp_hot_status','lisp_inspect','lisp_cancel'].includes(name))fail('PLAN_ACTIVE','Plan 中の Lisp 実行・変更はできません。実装指示またはPlan承認後に実行してください。')
+            const admission = development ? rootLispAdmission(execution) : undefined
+            const agentSession = binding.agent.session, agentContext = binding.agent.ctx
+            const bash = admission ? tools.get('bash', binding.agent) : undefined
+            const pinned = bash ? { definition: bash, execute: bash.execute } : undefined
+            const nativeCommands: LispNativeCommands | undefined = admission ? {
+              assertCurrent() {
+                const current = owner(execution.agent)
+                if (!admission.current() || binding.signal.aborted || execution.signal?.aborted || current.signal !== binding.signal
+                  || current.owner.root !== binding.owner.root || binding.agent.session !== agentSession || binding.agent.ctx !== agentContext)
+                  fail('STALE_NATIVE_COMMAND', 'Native Lisp caller, turn or arguments changed.')
+              },
+              async run(input, signal) {
+                this.assertCurrent()
+                if (!pinned) fail('HOST_ADAPTER_UNAVAILABLE', 'The native Bash tool is unavailable.')
+                if (tools.get('bash', binding.agent) !== pinned.definition || tools.get('bash', binding.agent)?.execute !== pinned.execute)
+                  fail('STALE_NATIVE_COMMAND', 'Native Bash implementation changed.')
+                const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
+                const child = { name: 'bash', callId: `lisp-native-${randomUUID()}`, agent: binding.agent, parent: Symbol('lisp-native-command'),
+                  arguments: { command: [input.program, ...input.argv].map(quote).join(' '), description: 'Run the requested Lisp command through native Bash',
+                    workdir: input.directory ?? binding.owner.root, timeoutMs: input.timeoutMs }, signal: AbortSignal.any([binding.signal, signal]) }
+                const commandAdmission = { current: () => {
+                  try { this.assertCurrent(); return true } catch { return false }
+                } }
+                const result = await withLispNativeCommand(child, pinned.execute, commandAdmission, () => tools.execute(child)) as any
+                if (result.isError) fail('NATIVE_COMMAND_DENIED', JSON.stringify(result.content))
+                const value = result.value
+                if (value.kind === 'background' || value.kind === 'promoted') {
+                  const jobs = ctx.get('jobs', false) as any
+                  if (!jobs) fail('STOP_UNCONFIRMED', `Native job ${value.jobId} requires cancellation.`)
+                  jobs.kill(value.jobId, binding.agent.id, 'Lisp foreground deadline')
+                  const terminal = await jobs.wait(value.jobId, 5000, binding.agent.id)
+                  if (['running', 'stopping'].includes(terminal.status)) fail('STOP_UNCONFIRMED', `Native job ${value.jobId} has not stopped.`)
+                  jobs.remove(value.jobId, binding.agent.id)
+                  return { code: null, stdout: value.output ?? '', stderr: '', timedOut: true, receipt: { route: 'native', processStopped: true } }
+                }
+                this.assertCurrent()
+                return { code: value.exitCode, stdout: value.stdout?.text ?? '', stderr: value.stderr?.text ?? '',
+                  timedOut: value.timedOut, sandbox: value.sandbox, receipt: { route: 'native', callId: child.callId, processStopped: true } }
+              },
+            } : undefined
+            if(development && !admission && (ctx.get('planMode',false) as any)?.get(binding.agent)?.active && !['lisp_status','lisp_hot_status','lisp_inspect','lisp_cancel'].includes(name))fail('PLAN_ACTIVE','Plan 中の Lisp 実行・変更はできません。実装指示またはPlan承認後に実行してください。')
             if (name === 'lisp_cancel' && !await manager.isTaskMode(binding.owner)) { identifier.parse(parsed.operationId); identifier.parse(parsed.generation) }
             if (name !== 'lisp_status' && name !== 'lisp_hot_status' && !isSavedLispResultRead({ name, arguments: parsed, parent: undefined }))
               parsed.operationId = await store.bind(binding.owner, identifier.parse(execution.callId), identifier.parse(parsed.operationId), { name, input: parsed })
-            return await manager.execute(binding.owner, name, parsed, execution.signal ? AbortSignal.any([binding.signal, execution.signal]) : binding.signal)
+            return await manager.execute(binding.owner, name, parsed, execution.signal ? AbortSignal.any([binding.signal, execution.signal]) : binding.signal, nativeCommands)
           }
           catch (error) { return failure(error) }
         } }
+      rememberLispImplementation(definition.execute)
       fence!.definitions.set(`${agent.id}:${name}`, definition)
       local.push(scopedTools.register(definition))
     }
@@ -393,10 +435,26 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     }
   }
   const guide = skillPrompts ? await skillPrompts.require('kiokuko-lisp') : await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
+  const modeOnly = <T>(binding: ReturnType<typeof owner>, run: () => Promise<T>): Promise<T> => {
+    const agentContext = binding.agent.ctx
+    return manager.taskAuthority.run(binding.owner, run, {
+      assertCurrent() {
+        const current = owner(binding.agent)
+        if (binding.signal.aborted || current.signal.aborted || current.agent !== binding.agent || binding.agent.ctx !== agentContext
+          || current.owner.sessionId !== binding.owner.sessionId || current.owner.agentId !== binding.owner.agentId || current.owner.root !== binding.owner.root)
+          fail('SESSION_MISMATCH', 'Lisp mode owner changed.')
+      },
+      async run() { return fail('CAPABILITY_DENIED', 'Mode control cannot execute a command.') },
+    })
+  }
+  const recover = async (binding: ReturnType<typeof owner>, signal?: AbortSignal) => {
+    const restart = () => manager.recover(binding.owner, signal)
+    return await manager.canRecoverWorkerWithoutTask(binding.owner) ? modeOnly(binding, restart) : restart()
+  }
   fence.prepareAgent = async candidate => {
     const binding = owner(candidate)
     const workflow=await runtime.withDatabase(db=>sessionCodingWorkflow(db,binding.owner.sessionId))
-    if(workflow&&(workflow.choice.state!=='yes'||['preparing','awaiting_lisp_choice','cancelled','superseded'].includes(workflow.state))){unregister(binding.agent);return true}
+    if(workflow&&(!development||workflow.protocol||!isLispConversation(candidate))&&(workflow.choice.state!=='yes'||['preparing','awaiting_lisp_choice','cancelled','superseded'].includes(workflow.state))){unregister(binding.agent);return true}
     runtimePrompts.get(candidate.id)?.(); runtimePrompts.delete(candidate.id)
     manager.setAgentBusy(binding.owner, true)
     if (await manager.isTaskMode(binding.owner)) {
@@ -404,7 +462,8 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       register(binding.agent)
       return true
     }
-    const status = await manager.prepare(binding.owner) as { state: string; generation?: string; resumed?: boolean }
+    const prepare = () => manager.prepare(binding.owner)
+    const status = await (development && isLispConversation(candidate) ? modeOnly(binding, prepare) : prepare()) as { state: string; generation?: string; resumed?: boolean }
     binding.signal.throwIfAborted()
     register(binding.agent)
     const prompt = binding.agent.ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
@@ -427,13 +486,15 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     try { await manager.disposeSession(session.id) }
     finally { for (const agent of attached) unregister(agent) }
   }, { global: true }))
-  const enable = async (binding: ReturnType<typeof owner>): Promise<unknown> => {
+  const enable = async (binding: ReturnType<typeof owner>, standalone = false): Promise<unknown> => {
     const wasEnabled = manager.enabled.has(binding.owner.sessionId)
     hostFence?.protect(binding.owner.sessionId)
     try {
       const result = await manager.isTaskMode(binding.owner)
         ? await manager.status(binding.owner)
-        : await manager.enable(binding.owner, binding.agent.status !== undefined && binding.agent.status !== 'idle', binding.signal)
+        : await (standalone && development
+          ? modeOnly(binding, () => manager.enable(binding.owner, binding.agent.status !== undefined && binding.agent.status !== 'idle', binding.signal))
+          : manager.enable(binding.owner, binding.agent.status !== undefined && binding.agent.status !== 'idle', binding.signal))
       binding.signal.throwIfAborted()
       register(binding.agent)
       return result
@@ -494,7 +555,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     async project(candidate, assembly) {
       const binding = owner(candidate)
       const workflow = await runtime.withDatabase(db => sessionCodingWorkflow(db, binding.owner.sessionId))
-      if (workflow && (workflow.choice.state !== 'yes' || ['preparing', 'awaiting_lisp_choice', 'cancelled', 'superseded', 'completed'].includes(workflow.state))) {
+      if (workflow && (!development || workflow.protocol || !isLispConversation(candidate)) && (workflow.choice.state !== 'yes' || ['preparing', 'awaiting_lisp_choice', 'cancelled', 'superseded', 'completed'].includes(workflow.state))) {
         unregister(binding.agent)
         const surface = assembly as typeof assembly & { tools?: { name: string }[] }
         return { ...assembly, tools: surface.tools?.filter(tool => !LISP_TOOLS.includes(tool.name as LispTool)) ?? [] }
@@ -521,7 +582,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     if (binding.owner.sessionId !== sessionId) fail('SESSION_MISMATCH', 'セッションが一致しません。')
     if (recover && manager.enabled.has(sessionId)) register(binding.agent)
     return binding.owner
-  }))
+  }, (sessionId, signal) => recover(owner(agents.get(sessionId)), signal)))
   disposers.push(commands.register({ name: 'kioku-lisp', description: 'Common Lisp の開始・状態・停止・復旧', input: { hint: 'approval ask|auto|status | enable | enable-task | status [--json] | cancel | recover | abandon ID | restore ID | disable' },
     handler: async invocation => {
       try {
@@ -537,11 +598,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         if (['enable', 'enable-task', 'disable'].includes(action)) {
           await runtime.withDatabase(db => {
             const workflow = sessionCodingWorkflow(db, binding.owner.sessionId)
-            if (workflow) overrideCodingChoice(db, { runId: workflow.runId, sessionId: binding.owner.sessionId, repositoryRoot: binding.owner.root },
+            if (workflow && (action === 'enable-task' || workflow.definition)) overrideCodingChoice(db, { runId: workflow.runId, sessionId: binding.owner.sessionId, repositoryRoot: binding.owner.root },
               action === 'disable' ? 'no' : 'yes', `human-command:${randomUUID()}:${action}`)
           })
         }
-        if (action === 'enable') result = await enable(binding)
+        if (action === 'enable') result = await enable(binding, true)
         else if (action === 'enable-task') {
           const wasEnabled = manager.enabled.has(binding.owner.sessionId)
           hostFence?.protect(binding.owner.sessionId)
@@ -555,7 +616,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         else if (action === 'cancel') result = await manager.execute(binding.owner, 'lisp_cancel', {})
         else if (action === 'recover') {
           if (manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
-          result = await manager.recover(binding.owner, invocation.signal)
+          result = await recover(binding, invocation.signal)
         }
         else if (action === 'abandon') result = await manager.abandon(binding.owner, argument ?? '')
         else if (action === 'restore') result = await manager.restore(binding.owner, argument ?? '', invocation.signal)

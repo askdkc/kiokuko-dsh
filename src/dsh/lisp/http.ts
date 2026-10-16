@@ -3,7 +3,7 @@ import type { LispManager } from './manager.js'
 import { failure, identifier, type LispOwner } from './contracts.js'
 
 /** Human-only recovery entry point; no approval token or file-write action is accepted. */
-export function mountLispHttp(ctx: Context, manager: LispManager, resolveOwner: (session: string, recover?: boolean) => LispOwner): () => void {
+export function mountLispHttp(ctx: Context, manager: LispManager, resolveOwner: (session: string, recover?: boolean) => LispOwner, recover?: (session: string, signal: AbortSignal) => Promise<unknown>): () => void {
   const connection = ctx.get('connection', false) as { fetch?: { register(route: { path: string; methods: string[]; requestBody: 'buffered'; fetch(request: Request): Promise<Response> }): () => void } } | undefined
   if (!connection?.fetch) return () => {}
   return connection.fetch.register({ path: '/api/kiokuko.lisp', methods: ['GET', 'POST'], requestBody: 'buffered', fetch: async request => {
@@ -22,7 +22,7 @@ export function mountLispHttp(ctx: Context, manager: LispManager, resolveOwner: 
       if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length !== 1 || !('action' in parsed)) throw new Error('Invalid action')
       let result: unknown
       if (parsed.action === 'cancel') result = await manager.execute(owner, 'lisp_cancel', {})
-      else if (parsed.action === 'recover') result = await manager.recover(resolveOwner(id, true), request.signal)
+      else if (parsed.action === 'recover') { const current = resolveOwner(id, true); result = await (recover ? recover(id, request.signal) : manager.recover(current, request.signal)) }
       else throw new Error('Invalid action')
       return Response.json(result, { headers })
     } catch (error) { return Response.json(failure(error), { status: 409, headers }) }

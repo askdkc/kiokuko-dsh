@@ -848,6 +848,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     runtime, ...(userQuestions ? { questions: userQuestions } : {}),
     lisp: () => native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined,
     preparationOnly: execution => demand?.preparationOnly(execution) === true,
+    nativeCommand: execution => demand?.nativeCommand(execution) === true,
+    nativeLisp: execution => demand?.nativeLisp(execution) === true,
     resolve(execution) {
       const agent = execution.agent as NativeAgent | undefined, session = agent?.session
       if (!agent || !session || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session) return undefined
@@ -886,6 +888,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   const ownedDisposer = tools ? mountOwnedExecution({tools:tools as any,on:(name,listener,options)=>onNativeServiceEvent(ctx,name,listener,options)}, {
     runtime,
     unownedNative: execution => demand?.unownedNative(execution as any) === true,
+    nativeCommand: execution => demand?.nativeCommand(execution as any) === true,
+    nativeLisp: execution => demand?.nativeLisp(execution as any) === true,
     isTaskControl: execution => (ctx.get(TASK_WORKFLOW_SERVICE, false) as DshTaskWorkflow | undefined)?.isControl(execution) === true,
     resolve: execution => nativeTaskAuthority.resolve(execution) ?? resolveParentOwned(execution),
     async resolveRead(execution) {

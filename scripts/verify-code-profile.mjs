@@ -15,9 +15,9 @@ try{
  assert.ok(entries.some(entry=>entry.name==='@askdkc/dsh-lsp-server/provider'))
  for(const name of ['kiokuko-dsh','@askdkc/dsh-lsp-server']){
   const manifest=JSON.parse(await readFile(join(packages,name,'package.json'),'utf8'))
-  assert.equal(boot.evaluatePluginCompatibility(manifest,{},'0.2.1-alpha.2'),undefined)
+  assert.equal(boot.evaluatePluginCompatibility(manifest,{},boot.getDshRuntimeVersion()),undefined)
  }
  const contract=await import(pathToFileURL(join(packages,'@askdkc/dsh-lsp-server/lib/code-intelligence-contracts.js')).href)
  assert.equal(contract.CODE_INTELLIGENCE_VERSION,1);assert.equal(contract.CODE_INTELLIGENCE_SERVICE,'codeIntelligence')
- console.log('Packed CLI profile bundle discovery and DSH alpha.2 preflight passed.')
+ console.log('Packed CLI profile bundle discovery and installed DSH API preflight passed.')
 }finally{await ctx.fiber.dispose()}

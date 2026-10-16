@@ -4,20 +4,8 @@ import { TASK_TYPES, type TaskType } from '../akinator/types.js'
 import type { OnDemandIntake } from './on-demand-intake.js'
 import type { DshNativeCommandDefinition } from './commands.js'
 import { TASK_OPERATIONS, type TaskOperation } from './task-state.js'
-import { DshTaskWorkflow, TASK_OPERATION_TOOL, TASK_WORKFLOW_SERVICE,
+import { DshTaskWorkflow, TASK_OPERATION_TOOL, TASK_WORKFLOW_SERVICE, TaskModelOperationSchema,
   type TaskNativeAgent } from './task-state-host.js'
-
-// Providers require an object at the root. modelOperation validates each
-// operation's required fields and rejects fields from other operations.
-const taskOperationTransportSchema = z.object({
-  operation: z.enum(['create', ...TASK_OPERATIONS]),
-  taskType: z.enum(TASK_TYPES).optional(),
-  taskId: z.string().trim().min(1).max(4096).optional(),
-  expectedRevision: z.number().int().positive().optional(),
-  expectedGeneration: z.number().int().positive().optional(),
-  reason: z.string().trim().min(1).max(4096).optional(),
-  evidence: z.array(z.string().trim().min(1).max(512)).max(32).optional(),
-}).strict()
 
 const usage = '/kioku-task status | create <type> <request> | start | wait | resume [taskId] | complete [taskId] [--evidence <ref> ...] | ignore [taskId] --reason <text>'
 
@@ -82,7 +70,7 @@ export function mountTaskWorkflowSurface(ctx: Context, service: DshTaskWorkflow,
   if (tools?.register && demand) {
     const definition = { name: TASK_OPERATION_TOOL,
       description: 'Explicit structured operation on the exact current SQLite task. Read its current taskId, revision, generation and allowedOps. Create uses the original human request; it accepts no rewritten request. State changes do not grant native permission. Completion and stop require host-observed evidence. Completion must satisfy every existing criterion; for noncoding work without criteria, completion is an explicit human or model judgment grounded in the actual content of supplied current host receipts, not an automatic success inference. If only run_code is exposed, use only return await tools.task_operation(<one JSON object>) as the entire code; the host intercepts it without program evaluation.',
-      parameters: JSON.parse(JSON.stringify(z.toJSONSchema(taskOperationTransportSchema))),
+      parameters: { ...JSON.parse(JSON.stringify(z.toJSONSchema(TaskModelOperationSchema))), type: 'object' },
       output: { schema: {}, render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
       execute: (args: unknown, execution: any) => service.modelOperation(execution.agent, args, execution),
     }

@@ -1,3 +1,4 @@
+import {createServer} from 'node:http'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,readFile,rm,realpath} from 'node:fs/promises'
@@ -10,12 +11,14 @@ import {migrateDatabase} from '../../../../src/db/migrate.js'
 import {prepareAgentTask} from '../../../../src/dsh/task-intake.js'
 import {mountOwnedExecution as sourceOwnedExecution} from '../../../../src/dsh/owned-execution.js'
 import {mountLispSurface as sourceLispSurface} from '../../../../src/dsh/lisp/surface.js'
+import {OnDemandIntake as SourceOnDemandIntake} from '../../../../src/dsh/on-demand-intake.js'
 import {LispConfig} from '../../../../src/dsh/lisp/contracts.js'
 import {assessTaskCompletion,bindTaskCriterion} from '../../../../src/dsh/task-completion.js'
 
 const ownedPackageRoot=process.env.KIOKUKO_OWNED_PACKAGE_ROOT
 const mountOwnedExecution:typeof sourceOwnedExecution=ownedPackageRoot?(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/owned-execution.js')).href)).mountOwnedExecution:sourceOwnedExecution
 const mountLispSurface:typeof sourceLispSurface=ownedPackageRoot?(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/lisp/surface.js')).href)).mountLispSurface:sourceLispSurface
+const OnDemandIntake:typeof SourceOnDemandIntake=ownedPackageRoot?(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/on-demand-intake.js')).href)).OnDemandIntake:SourceOnDemandIntake
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT
 test('default development mode: native DSH, SBCL, shared file/process receipts, subdirectory tests and async final results',{
   skip:!packages||process.env.KIOKUKO_REQUIRE_LISP_RUNTIME!=='1'?'requires pinned native DSH and actual SBCL':false,timeout:120000,
@@ -28,8 +31,10 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
   const prepared=await prepareAgentTask(db,{requestId:'native-owned',cwd:root,dshSessionId:'owned-development',task:'Implement parser\n完了条件:\n- テストが成功する',completionMode:'enforce',profileHints:{taskType:'research',target:'src',expected:'verify',constraints:null},capabilities:[],skillDiscoveryMode:'off'})
   const runtime:any={executionJournalDirectory:join(base,'journal'),withDatabase:async(fn:any)=>fn(db)}
   const session=sessions.Session.create('owned-development',[],{version:4,id:'owned-development',createdAt:Date.now(),isSeeded:false,cwd:root})
+  session.append('turn/start',{turn:1})
   const agent:any={id:'owned-agent',session},ctx=new cordis.Context(),fibers:any[]=[],commands=new Map<string,any>()
   let plan=false
+  let intake:SourceOnDemandIntake|undefined
   let surface:any,local:any,unmountOwned:(()=>Promise<void>)|undefined,approvals=0
   const signal=new AbortController().signal
   try{
@@ -42,6 +47,9 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
       c.provide('userQuestions',{ask:async()=>{approvals++;throw new Error('No routine approvals expected')}})
     }}))
     local=scope.createScope(ctx,agent);agent.ctx=local.ctx
+    intake=new OnDemandIntake({validate:async()=>{},nativeOwnership:async()=>'owned',existing:async()=>true,replay:async input=>input.agent===agent&&input.turn===1,classify:async()=>({taskType:'research',deferInference:false}),prepare:async()=>{throw new Error('Existing task must need no additional preparation')},ready:()=>true})
+    intake.mount(ctx,ctx.tools)
+    await intake.capture({agent,turn:1,step:0,messages:[{id:'human-existing-task',role:'user',source:{kind:'user'},content:[{type:'text',text:'Continue the admitted task and verify the local fixture.'}]}],signal})
     unmountOwned=mountOwnedExecution(ctx,{runtime,resolve:execution=>execution.agent===agent?{runId:prepared.run.runId,sessionId:session.id,repositoryRoot:root,workspace:prepared.project.workspace,generation:'native-generation-1',agent}:undefined})
     ctx.tools.register({name:'fixture_native',modelFacing:true,parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>({available:true})})
     surface=await mountLispSurface(ctx,runtime,LispConfig.parse({enabled:true,startupTimeoutMs:60000}))
@@ -52,7 +60,8 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
       assert.equal(result.isError,false,JSON.stringify(result));assert.equal(result.value.ok,true,JSON.stringify(result))
       return result.value.value.json
     }
-    assert.equal((await ctx.tools.execute({callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})).value.available,true)
+    const native=await ctx.tools.execute({callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})
+    assert.equal(native.isError,false,JSON.stringify(native));assert.equal(native.value.available,true)
     await evaluate('(kioku.files:propose-write "new/deep/source.txt" "source result")')
     assert.equal(await readFile(join(root,'new/deep/source.txt'),'utf8'),'source result')
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_owned_operations WHERE state='completed' AND receipt_json LIKE '%kioku_write%'").get<any>().n,1)
@@ -60,6 +69,13 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     bindTaskCriterion(db,{runId:prepared.run.runId,callId:'bind',criterionId:assessTaskCompletion(db,prepared.run.runId).criteria[0]!.criterionId,method:{kind:'native_command',command,cwd:'src',sourcePaths:['src/check.test.mjs'],assertion:'selected_tests_pass'},approved:true})
     const checked=await evaluate('(kioku.process:run "node" (list "--test" "--test-reporter=tap" "check.test.mjs") :directory "src")')
     assert.equal(checked.code,0);assert.equal(checked.receipt.verification,'passed');assert.equal(checked.receipt.checks[0].outcome,'passed')
+    const server=createServer((_request,response)=>response.end('LOCAL_CURL_FIXTURE'))
+    await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve))
+    try {
+      const port=(server.address() as {port:number}).port
+      const fetched=await evaluate(`(kioku.process:run "curl" (list "-fsS" "--max-time" "5" "http://127.0.0.1:${port}/probe"))`)
+      assert.equal(fetched.code,0,JSON.stringify(fetched));assert.match(JSON.stringify(fetched.stdout),/LOCAL_CURL_FIXTURE/)
+    } finally {await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()))}
     const failed=await evaluate('(kioku.process:run "node" (list "-e" "console.log(JSON.stringify({passed:true}));process.exit(9)"))')
     assert.equal(failed.code,9);assert.equal(failed.receipt.verification,'failed')
     const job=await evaluate('(kioku.process:start-job "node" (list "-e" "require(\'fs\').appendFileSync(\'count\',\'x\')"))')
@@ -88,5 +104,5 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     surface=await mountLispSurface(ctx,runtime,LispConfig.parse({executionMode:'development',enabled:true,startupTimeoutMs:60000}))
     assert.equal((await ctx.tools.execute({callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})).value.available,true,'development reload releases the old ordinary-tool restriction')
     assert.equal((await ctx.tools.execute({callId:randomUUID(),name:'kioku_read',arguments:{path:'count'},agent,signal})).value.content,'x')
-  }finally{surface?.stop();await surface?.dispose();await unmountOwned?.();await local?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();db.close();await rm(base,{recursive:true,force:true})}
+  }finally{await intake?.dispose();surface?.stop();await surface?.dispose();await unmountOwned?.();await local?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();db.close();await rm(base,{recursive:true,force:true})}
 })

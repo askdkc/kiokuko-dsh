@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile, access, symlink, writeFile, mkdir, chmod } from 'node:fs/promises'
+import { readFile, access, symlink, writeFile, mkdir, chmod, rename } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { loadAgenticReplayLibrary } from '../../../src/dsh/agenticreplay-libraries.js'
@@ -542,3 +542,78 @@ test('native structured errors and process failures remain failures despite a fa
     assert.equal(JSON.stringify(events).includes('PRIVATE-ERROR-BODY'), false)
   } finally { await f.dispose() }
 })
+
+test('multiline directory output with high-entropy names remains valid redacted JSON and does not stop recording', async () => {
+  const f = await agenticReplayFixture()
+  try {
+    const exec = { token: Symbol('directory-list'), callId: 'directory-list', rootCallId: 'directory-list', name: 'bash', arguments: { command: 'fixture directory listing' } }
+    f.recorder.start(f.binding)
+    f.recorder.preTool(f.binding, exec)
+    f.recorder.toolDecision(exec, { kind: 'allow' })
+    f.recorder.toolDispatch(exec)
+    f.recorder.toolDispatched(exec)
+    f.recorder.toolResult(f.binding, exec, { isError: false, content: [{ type: 'text',
+      text: '\nCaptureFolder-D3pMyMs\nAPI_KEY=sk-unitsecret1234567890\nHarmless directory-list suffix' }] })
+    await collect(f.recorder.stream(f.binding, request, () => chunks(response('continued after directory listing'))))
+    await f.recorder.shutdown()
+    const row = (await f.reader.list(f.binding))[0]!
+    assert.equal(row.state, 'completed', JSON.stringify({ state: row.state, error: row.last_error_code }))
+    assert.equal(row.missing_event_count, 0)
+    const runDir = join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id)
+    const events = await (await TraceReader.open(runDir)).events()
+    const tool = events.find(event => event.type === 'tool.result')!
+    let payload: any = tool.payload
+    if (typeof payload?.$blob === 'string') {
+      const digest = payload.$blob.replace('sha256:', '')
+      payload = JSON.parse(await readFile(join(runDir, 'blobs', digest.slice(0, 2), digest), 'utf8'))
+    }
+    assert.ok(payload.content[0].text.includes('Harmless directory-list suffix'))
+    assert.equal(JSON.stringify(payload).includes('sk-unitsecret1234567890'), false)
+    assert.ok(events.some(event => event.type === 'model.response'))
+  } finally { await f.dispose() }
+})
+
+
+test('SDK changes its run directory on close without breaking recorder finalization', async () => {
+  let originalDirectory = '', relocatedDirectory = ''
+  const f = await agenticReplayFixture({ shutdownDrainTimeoutMs: 1000 }, { createWriter: async (...args) => {
+    const writer = await TraceWriter.create(...args)
+    let directory = writer.runDir
+    originalDirectory = directory
+    return {
+      get runDir() { return directory },
+      append: writer.append.bind(writer),
+      close: async () => {
+        const manifest = await writer.close()
+        relocatedDirectory = writer.runDir + '-sdk-session-title'
+        await rename(writer.runDir, relocatedDirectory)
+        directory = relocatedDirectory
+        return manifest
+      },
+    }
+  } })
+  try {
+    await collect(f.recorder.stream(f.binding, request, () => chunks(response())))
+    await f.recorder.shutdown()
+    const row = (await f.reader.list(f.binding))[0]!
+    assert.equal(row.state, 'completed', JSON.stringify({ state: row.state, error: row.last_error_code }))
+    assert.notEqual(originalDirectory, relocatedDirectory)
+    assert.equal(f.recorder.status(f.binding.sessionId).trace?.run_directory, relocatedDirectory)
+    await access(join(relocatedDirectory, 'events.jsonl'))
+    assert.equal(f.recorder.status(f.binding.sessionId).persistenceFailed, false)
+  } finally { await f.dispose() }
+})
+
+test('run.start records observed runtime evidence rather than a fixed verified release', async () => {
+  const f = await agenticReplayFixture();
+  try {
+    await collect(f.recorder.stream(f.binding, request, () => chunks(response())));
+    await f.recorder.shutdown();
+    const row = (await f.reader.list(f.binding))[0]!;
+    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events();
+    const payload = events.find(event => event.type === 'run.start')!.payload as any;
+    assert.equal(Object.hasOwn(payload, 'verifiedDshVersion'), false);
+    assert.equal(payload.runtime.nodeVersion, process.version);
+    assert.equal(payload.runtime.dshVersion, null, 'the test runner does not expose a DSH launcher version');
+  } finally { await f.dispose() }
+});

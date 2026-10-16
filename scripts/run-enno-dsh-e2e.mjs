@@ -14,8 +14,10 @@ const root = resolve(import.meta.dirname, '..')
 const dsh = process.env.DSH_BIN ?? 'dsh'
 const profile = 'web'
 const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-const fixtureManifest = JSON.parse(await readFile(join(root, 'tests/fixtures/dsh-runtime/package.json'), 'utf8'))
-const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? fixtureManifest.dependencies['@deepseek-ai/dsh']
+const selectedPackageRoot = await localDshPackageRoot()
+const selectedHost = selectedPackageRoot ? JSON.parse(await readFile(join(selectedPackageRoot, '@deepseek-ai/dsh/package.json'), 'utf8')) : undefined
+if (selectedHost && (selectedHost.name !== '@deepseek-ai/dsh' || typeof selectedHost.version !== 'string' || !selectedHost.version.trim())) throw new Error('Invalid selected DSH package metadata')
+const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? selectedHost?.version
 const requireDshCli = process.env.KIOKUKO_REQUIRE_DSH_CLI === '1'
 const cliOnly = process.env.KIOKUKO_DSH_CLI_ONLY === '1'
 if (cliOnly && !requireDshCli) throw new Error('CLI-only lifecycle verification requires KIOKUKO_REQUIRE_DSH_CLI=1')
@@ -158,7 +160,7 @@ async function runCordisComposition() {
   for (const name of ['cordis', 'dsh', 'dsh-agent', 'dsh-agent-loop', 'dsh-commands', 'dsh-llm', 'dsh-session', 'dsh-system-prompt', 'dsh-tools', 'dsh-subagent', 'dsh-subagent-spawn-in-process']) {
     const pkg = JSON.parse(await readFile(join(packageRoot, '@deepseek-ai', name, 'package.json'), 'utf8'))
     versions[pkg.name] = pkg.version
-    if (requireDshCli && name !== 'cordis' && pkg.version !== expectedDshVersion) throw new Error(`Native dependency ${pkg.name} is ${pkg.version}; expected ${expectedDshVersion}`)
+    if (requireDshCli && expectedDshVersion && name !== 'cordis' && pkg.version !== expectedDshVersion) throw new Error(`Native dependency ${pkg.name} is ${pkg.version}; expected ${expectedDshVersion}`)
   }
   return versions
 }
@@ -355,7 +357,7 @@ async function runCliLifecycle(nativeDependencies) {
     }
     const version = await runIsolated(dsh, ['--version'], env, workspace)
     const dshVersion = `${version.stdout}${version.stderr}`.trim()
-    if (!dshVersion.includes(expectedDshVersion)) throw new Error(`expected DSH ${expectedDshVersion}, got ${dshVersion}`)
+    if (expectedDshVersion && !dshVersion.includes(expectedDshVersion)) throw new Error(`expected DSH ${expectedDshVersion}, got ${dshVersion}`)
     const packageCommit = (await run('git', ['rev-parse', 'HEAD'], env)).stdout.trim()
     if (!/^[0-9a-f]{40}$/u.test(packageCommit)) throw new Error('git did not return an exact package Commit')
     const workingTreeClean = (await run('git', ['status', '--porcelain'], env)).stdout.trim().length === 0

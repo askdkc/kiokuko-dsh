@@ -46,3 +46,18 @@ test('DSH peer ranges cover tested releases without an unproven future ceiling',
     }
   }
 });
+
+// The major contract remains; minor/patch labels alone do not revoke the same APIs.
+test('Cordis compatible minor releases retain the real lifecycle contract', async () => {
+  const range = manifest.peerDependencies['@deepseek-ai/cordis'];
+  const { Context } = await import('@deepseek-ai/cordis');
+  const { mountDshRuntime } = await import('../../../src/dsh/index.js');
+  for (const version of ['4.0.5-alpha.2', '4.1.0', '4.99.0']) {
+    assert.equal(semver.satisfies(version, range, { includePrerelease: true }), true, version);
+    const ctx = new Context(); let starts = 0, closes = 0;
+    const effect = mountDshRuntime(ctx, { start: async () => { starts++ }, close: async () => { closes++ } } as any);
+    await effect; assert.equal(starts, 1);
+    await ctx.fiber.dispose(); assert.equal(closes, 1, 'the host must own and drain the actual runtime');
+  }
+  assert.throws(() => mountDshRuntime({} as any, {} as any), /effect/, 'a version label cannot substitute for the required API');
+});

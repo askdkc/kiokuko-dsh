@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto'
+import { runtimeEvidence } from './runtime-evidence.js'
+import { redactionSafeWriter } from './agenticreplay-writer.js'
 import { mkdir, open, rename, rm } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join } from 'node:path'
@@ -150,7 +152,7 @@ export class DshAgenticReplayRecorder {
     this.#traces.set(binding.sessionId, trace)
     trace.tail = this.#initialize(trace)
     this.#enqueue(trace, { type: 'run.start', actor: 'harness', payload: { ...AGENTICREPLAY_CAPTURE, reasoning: this.config.capture.reasoning,
-      content: this.config.capture.content, verifiedDshVersion: '0.2.1-alpha.2' } })
+      content: this.config.capture.content, runtime: runtimeEvidence() } })
     return trace
   }
   async #initialize(trace: ActiveTrace) {
@@ -160,7 +162,8 @@ export class DshAgenticReplayRecorder {
       let agenticreplayVersion: string
       try {
         const [core, , version] = await Promise.all([this.deps.loadCore?.() ?? loadAgenticReplayLibrary('core'), this.deps.loadSchema?.() ?? loadAgenticReplayLibrary('schema'), this.deps.loadCoreVersion?.() ?? installedAgenticReplayCoreVersion()])
-        create = this.deps.createWriter ?? core.TraceWriter.create
+        const factory = this.deps.createWriter ?? core.TraceWriter.create
+        create = async (...args) => redactionSafeWriter(await factory(...args), core)
         agenticreplayVersion = version
       } catch { this.markUnavailable('dependency_unavailable_reinstall_package'); trace.accepting = false; this.#traces.delete(trace.binding.sessionId); return }
       await this.#save(trace)

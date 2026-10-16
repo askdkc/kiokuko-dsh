@@ -24,6 +24,8 @@ export interface CodingHost {
   questions?: DshUserQuestions
   lisp(): LispCodingService | undefined
   preparationOnly?(execution: Execution): boolean
+  nativeCommand?(execution: Execution): boolean
+  nativeLisp?(execution: Execution): boolean
 }
 const statusSchema = z.object({ action: z.literal('status') }).strict()
 const nextSchema = z.object({ action: z.literal('next') }).strict()
@@ -175,6 +177,7 @@ export function mountCodingWorkflow(ctx: {
   definitions.push(ctx.tools.register(tool('coding_workflow_apply', applySchema, jsonSchema(applySchema), input => input)))
   definitions.push(ctx.tools.register(tool('coding_workflow_blocker', blockerSchema, jsonSchema(blockerSchema), input => ({ action: 'report_blocker', ...input }))))
   definitions.push(ctx.on('tools/pre-execute', async (execution: Execution, next: () => Promise<any>) => {
+    if (host.nativeCommand?.(execution) || host.nativeLisp?.(execution)) return next()
     const identity = host.resolve(execution)
     if (!identity || host.preparationOnly?.(execution)) return next()
     const carrier = codingLiteralCarrier(execution.name, execution.arguments)
