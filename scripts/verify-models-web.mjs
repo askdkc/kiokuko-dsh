@@ -26,6 +26,8 @@ const project = join(base, "project"),
     process.env.DSH_BIN ??
     join(root, "tests/fixtures/dsh-runtime/node_modules/.bin/dsh"),
   bodies = [];
+// Keep request ordering independent of how long the Settings save takes.
+const rateLimitResponse = Promise.withResolvers();
 let host,
   browser,
   page,
@@ -63,7 +65,11 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify({ error: { message: 'Tool parameters require a root object' } }));
     return;
   }
-  if(bodies.length===1){res.writeHead(429,{'content-type':'application/json','retry-after':'8'});res.end(JSON.stringify({error:{message:'fixture rate limit',type:'rate_limit_error'}}));return}
+  if(bodies.length===1){
+    await rateLimitResponse.promise;
+    res.writeHead(429,{'content-type':'application/json','retry-after':'0'});
+    res.end(JSON.stringify({error:{message:'fixture rate limit',type:'rate_limit_error'}}));return;
+  }
   const complete = body.messages.some((m) => m.role === "tool"),
     tools = body.tools?.some((t) => t.function?.name === "models_test_tool");
   const delta =
@@ -225,11 +231,15 @@ try {
   page.on("pageerror", (error) => console.error("Browser:", error.message));
   await declineOptionalMemoryOffers(page);
   await page.goto(url);
-  const welcome = page.getByRole("button", { name: "Continue", exact: true }),
+  const previewNotice = page.getByRole("dialog", { name: "Preview Notice", exact: true }),
     credentials = page.getByRole("dialog", {
       name: "Add an API key to get started",
       exact: true,
     });
+  // The shell may mount before this notice; handle it when it becomes visible.
+  await page.addLocatorHandler(previewNotice, async () =>
+    previewNotice.getByRole("button", { name: "Continue", exact: true }).click(),
+  );
   await page.addLocatorHandler(credentials, async () =>
     credentials
       .getByRole("button", { name: "Configure later", exact: true })
@@ -237,18 +247,7 @@ try {
   );
   const getStarted = page.getByRole("dialog", { name: "Get started", exact: true });
   await page.addLocatorHandler(getStarted, async () => getStarted.getByRole("button", { name: "Close", exact: true }).click());
-  await welcome.or(credentials).or(getStarted).or(page.getByRole("button", { name: "Account menu", exact: true })).first().waitFor();
-  if (await welcome.isVisible()) {
-    for (
-      let attempt = 0;
-      attempt < 5 && (await welcome.isVisible());
-      attempt++
-    ) {
-      await welcome.click();
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-    await welcome.waitFor({ state: "hidden" });
-  }
+  await previewNotice.or(credentials).or(getStarted).or(page.getByRole("button", { name: "Account menu", exact: true })).first().waitFor();
   await openSettings(page);
   await page
     .getByRole("button", { name: "Kiokuko Models", exact: true })
@@ -360,6 +359,9 @@ try {
   await panel.getByLabel('Service tier',{exact:true}).selectOption('standard');
   await panel.getByRole('button',{name:'Save connection',exact:true}).click();
   await panel.getByRole('status').filter({hasText:'Connection saved'}).waitFor();
+  // Retry the captured flex request only after standard is saved. Its tool-result
+  // continuation must then resolve the new tier, regardless of browser speed.
+  rateLimitResponse.resolve();
   await page.keyboard.press('Escape');
   await page
     .getByText("MODEL TOOL SUCCESS", { exact: true })
@@ -483,6 +485,7 @@ try {
   console.error("Evidence", base);
   throw error;
 } finally {
+  rateLimitResponse.resolve();
   await browser?.close();
   await stop();
   server.closeAllConnections();
