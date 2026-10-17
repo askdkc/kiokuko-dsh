@@ -853,7 +853,24 @@
       "exclusionReason": "Live public package registries are an explicitly selected integration lane."
     }
   ],
-  "testExclusions": [],
+  "testExclusions": [
+    {
+      "file": "scripts/verification-contract.test.mjs",
+      "name": "^SIGTERM forwards through a cooperating runner to its detached test group$",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "POSIX process groups are unavailable on Windows; the direct-child escalation case still runs."
+    },
+    {
+      "file": "scripts/verification-contract.test.mjs",
+      "name": "^SIGTERM never stops an unrelated process$",
+      "platforms": [
+        "win32"
+      ],
+      "reason": "This regression verifies POSIX process-group ownership using only test-owned processes."
+    }
+  ],
   "native": true,
   "coveredChecks": [
     {

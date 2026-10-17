@@ -1,3 +1,4 @@
+import { KiokukoError } from '../../../src/errors.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile,writeFile } from 'node:fs/promises'
@@ -8,8 +9,8 @@ import { DshCoreRuntime } from '../../../src/dsh/core-runtime.js'
 import { agenticReplayFixture,collect,chunks,request,response } from '../helpers/agenticreplay-fixture.js'
 
 class Host {
-  handlers=new Map<string,Function[]>();definitions=new Map<string,any>();agents=new Map<string,any>();sessions=new Map<string,any>();questions:any;asked:any[]=[]
-  get(name:string){return name==='agents'?{list:()=>[...this.agents.values()],get:(id:string)=>this.agents.get(id)}:name==='sessions'?{get:(id:string)=>this.sessions.get(id)}:name==='userQuestions'?{ask:async(q:any)=>{this.asked.push(q);return this.questions(q)}}:name==='tools'?{get:(n:string)=>this.definitions.get(n),register:(d:any)=>{this.definitions.set(d.name,d);return()=>this.definitions.delete(d.name)}}:undefined}
+  handlers=new Map<string,Function[]>();definitions=new Map<string,any>();agents=new Map<string,any>();sessions=new Map<string,any>();questions:any;asked:any[]=[];warnings:string[]=[]
+  get(name:string){return name==='logger'?{warn:(message:string)=>this.warnings.push(message)}:name==='agents'?{list:()=>[...this.agents.values()],get:(id:string)=>this.agents.get(id)}:name==='sessions'?{get:(id:string)=>this.sessions.get(id)}:name==='userQuestions'?{ask:async(q:any)=>{this.asked.push(q);return this.questions(q)}}:name==='tools'?{get:(n:string)=>this.definitions.get(n),register:(d:any)=>{this.definitions.set(d.name,d);return()=>this.definitions.delete(d.name)}}:undefined}
   on(name:string,fn:Function){const list=this.handlers.get(name)??[];list.push(fn);this.handlers.set(name,list);return()=>{this.handlers.set(name,(this.handlers.get(name)??[]).filter(x=>x!==fn))}}
 }
 async function fixture(){
@@ -19,10 +20,12 @@ async function fixture(){
   const host=new Host(),session={id:f.binding.sessionId,header:{cwd:f.root,version:4}},agent={id:'memory-review-agent',session,ctx:host};host.agents.set(agent.id,agent);host.sessions.set(session.id,session)
   const workspace=f.database.prepare('SELECT workspace FROM repository_locations JOIN repositories USING(repository_id) WHERE canonical_root=?').get<{workspace:string}>(f.root)!.workspace
   f.database.prepare(`INSERT INTO ledger_runs(run_id,workspace,dsh_session_id,protocol_version,capture_profile,coverage_json,status,metadata_json,title,started_at,created_at,updated_at) VALUES('memory-task',?,?,'1','test','{}','completed','{}','Check parser behavior',?,?,?)`).run(workspace,session.id,...Array(3).fill(new Date().toISOString()))
-  const memory=new DshLifecycleMemory(host as any,runtime,f.root)
+  let storageError:unknown
+  const memoryRuntime:Pick<DshCoreRuntime,'withDatabase'>={withDatabase:async operation=>{if(storageError)throw storageError;return runtime.withDatabase(operation)}}
+  const memory=new DshLifecycleMemory(host as any,memoryRuntime,f.root)
   memory.connectAgenticReplay({config:f.config,withIndex:f.withIndex,resolveSessionBinding:(a:object,s:object)=>a===agent&&s===session?f.binding:undefined} as any)
   const binding={...f.binding,kiokukoRunId:'memory-task'}
-  return {...f,host,session,agent,runtime,memory,workspace,binding,async close(){memory.stop();await memory.whenIdle();await runtime.close();await f.dispose()}}
+  return {...f,host,session,agent,runtime,memory,workspace,binding,failStorage(error:unknown){storageError=error},async close(){memory.stop();await memory.whenIdle();await runtime.close();await f.dispose()}}
 }
 const result=(q:any,label:string,custom?:string)=>({answers:[{id:q.questions[0].id,selected:custom?[]:[label],...(custom?{custom}:{})}]})
 async function record(f:Awaited<ReturnType<typeof fixture>>,count=1){
@@ -93,3 +96,22 @@ for(const selection of ['保存しない','修正する'])test(`native mixed ${s
   assert.equal(count(f.database,'replay_memories'),0);assert.equal(count(f.database,'entries'),0);assert.equal(n,selection==='修正する'?3:2)
  }finally{await f.close()}
 })
+
+test('approved save failure exposes safe diagnosis without saved memory or a changed task outcome',async()=>{
+  const f=await fixture();try{
+    await record(f);
+    f.host.questions=(q:any)=>{
+      const organize=q.questions[0].question.includes('整理');
+      if(!organize)f.failStorage(new KiokukoError('DATABASE_ERROR','SQLITE_BUSY while committing memory; api_key=short-fixture'));
+      return result(q,organize?'整理して確認する':'この内容を保存する');
+    };
+    f.memory.completed('memory-task','completed',f.session.id);await f.memory.whenIdle();
+    const status=await f.memory.reviewStatus() as {statuses:Array<{status:string;diagnostic?:{code:string;message:string;phase:string}}>};
+    assert.equal(status.statuses.length,1);assert.equal(status.statuses[0]!.status,'unavailable');
+    assert.equal(status.statuses[0]!.diagnostic?.code,'DATABASE_ERROR');assert.equal(status.statuses[0]!.diagnostic?.phase,'save');
+    assert.match(status.statuses[0]!.diagnostic!.message,/SQLITE_BUSY/);
+    assert.doesNotMatch(JSON.stringify(status)+f.host.warnings.join('\n'),/short-fixture/);
+    assert.equal(count(f.database,'replay_memories'),0);assert.equal(count(f.database,'entries'),0);
+    assert.equal(f.database.prepare("SELECT status FROM ledger_runs WHERE run_id='memory-task'").get()?.status,'completed');
+  }finally{await f.close()}
+});

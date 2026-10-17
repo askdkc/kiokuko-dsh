@@ -92,6 +92,8 @@ V4.1 Flashが未登録の場合、V4 Proや旧FlashのIDには置き換えませ
 `opencode-go`にはV4.1 Flashが掲載されていますが、Zenに相当する`opencode`にはありません。
 Zen・Ollamaで推奨テンプレートにないモデルを使う場合は、以下の登録済みモデル選択を使います。
 
+Kiokuko Modelsで追加したOpenCode接続はプラグイン所有の通信経路を使います。公式Zen/Goエンドポイントへのカスタム接続も、Chat Completions・Responses・Messagesのいずれでも会話ごとのルーティングを保ちます。DSH標準のprovider設定は変更しません。この経路を使う場合はKiokuko Modelsの接続を選択してください。
+
 [dsh-codex](https://github.com/askdkc/dsh-codex)を使う場合は、
 「おすすめテンプレートから選ぶ」→「OpenAI Codex・推奨（dsh-codex）」→
 「この構成で開始」の順に選びます。理想・計画・最終確認をAstra、実装の統括をSol、

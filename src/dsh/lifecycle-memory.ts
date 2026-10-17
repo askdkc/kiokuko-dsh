@@ -1,3 +1,4 @@
+import { memoryFailureDiagnostic, type MemoryFailureDiagnostic } from './memory-failure.js'
 import type { OnDemandIntake } from './on-demand-intake.js'
 import { randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
@@ -9,7 +10,7 @@ import { AgenticReplayConfig } from './config.js'
 import type { DshAgenticReplayHostServices } from './agenticreplay-types.js'
 import { workspaceKey, scrubAgenticReplayText } from './agenticreplay-security.js'
 import { replayKeywords } from './replay-memory-extract.js'
-import { reviewCompletedReplay, type ReplayMemoryProposal } from '../memory/replay-review.js'
+import { reviewCompletedReplay, type ReplayMemoryProposal, type ReviewFailurePhase } from '../memory/replay-review.js'
 import { createApprovedReplayMemoryStore } from '../memory/replay-store.js'
 import { readEntry, recordEntryInTransaction } from '../memory/entries.js'
 import { projectMemoryEntry, renderMemoryFields } from '../context/memory-projection.js'
@@ -31,6 +32,7 @@ type Session = { id: string; seq?: number; header?: { cwd?: string; origin?: str
 type Agent = { id:string;session:Session;cancel?:(...args:any[])=>unknown;ctx?:{on:(name:string,listener:(...args:any[])=>any,options?:unknown)=>()=>void} }
 type Host = { get(name:string,strict?:boolean):any;on(name:string,listener:(...args:any[])=>any,options?:unknown):()=>void }
 type State = { agent:Agent;request:{text:string;evidenceRefs:string[]};requestSeq?:number;callIds:Map<number,string>;finalTurn?:number;lastProjection?:string }
+type MemoryFailurePhase = ReviewFailurePhase | 'prepare'
 type NativeReviewScope = { requestSeq:number;terminalSeq:number;nativeCalls:{callId:string;sessionSeq:number}[] }
 const OWNER = Symbol.for('kiokuko.lifecycle-memory.owner')
 const contextInput = z.object({ cwd:z.string().min(1),query:z.string().max(8192).optional(),tags:z.array(z.string().min(1).max(80)).max(16).optional(),sessionId:z.string().max(256).optional(),limit:z.number().int().min(1).max(16).optional() }).strict()
@@ -49,7 +51,7 @@ export class DshLifecycleMemory {
   private readonly pending = new Set<Promise<unknown>>()
   private readonly controllers = new Map<AbortController,Agent>()
   private readonly offered = new Set<string>()
-  private readonly approved = new Map<string,{proposal:ReplayMemoryProposal;sessionId:string;status:'pending'|'saved'|'unavailable';reconcile?:()=> 'saved'|'unavailable'}>()
+  private readonly approved = new Map<string,{proposal:ReplayMemoryProposal;sessionId:string;status:'pending'|'saved'|'unavailable';diagnostic?:MemoryFailureDiagnostic&{phase:MemoryFailurePhase};reconcile?:()=> 'saved'|'unavailable'}>()
   private stopped=false
   private owners=1
   private replay:DshAgenticReplayHostServices|undefined
@@ -152,7 +154,7 @@ export class DshLifecycleMemory {
     const statuses:unknown[]=[]
     for(const [key,value] of this.approved){
       if(value.status!=='saved')try{value.status=value.reconcile?.()??'unavailable'}catch{value.status='unavailable'}
-      statuses.push({taskId:value.proposal.source.taskId,approvalKey:key,status:value.status,workMayContinue:true})
+      statuses.push({taskId:value.proposal.source.taskId,approvalKey:key,status:value.status,...(value.status==='unavailable'&&value.diagnostic?{diagnostic:value.diagnostic}:{}),workMayContinue:true})
     }
     return {statuses,workMayContinue:true}
   }
@@ -169,6 +171,12 @@ export class DshLifecycleMemory {
   }
   /** Called only after native task completion has committed. Returns before questions/extraction/storage. */
   completed(runId:string,status:string,sessionId:string,task?:{revision:number;generation:number;repositoryRoot:string}):void{this.review(runId,status,sessionId,task)}
+  private reportFailure(error:unknown,phase:MemoryFailurePhase,approvalKey?:string):void {
+    const diagnostic={...memoryFailureDiagnostic(error),phase}
+    const approved=approvalKey?this.approved.get(approvalKey):undefined
+    if(approved)approved.diagnostic=diagnostic
+    try{this.host.get('logger',false)?.warn?.(`Optional memory ${phase} unavailable [${diagnostic.code}]: ${diagnostic.message}; the completed task is unchanged.`)}catch{/* Diagnostics are non-vetoing. */}
+  }
   private review(runId:string,status:string,sessionId:string,task?:{revision:number;generation:number;repositoryRoot:string},native?:NativeReviewScope):void{
     const state=this.states.get(sessionId),questions=this.host.get('userQuestions',false) as DshUserQuestions|undefined
     if(!['completed','failed'].includes(status)||!state||!this.owned(state.agent)||!questions)return
@@ -191,6 +199,7 @@ export class DshLifecycleMemory {
       const signature=(row:Record<string,unknown>)=>JSON.stringify(['workspace','dsh_session_id','status','ended_at','task_owner_session_id','task_repository_root','task_state','task_revision','task_generation','task_pending_stop_json','task_human_hold_json'].map(key=>[key,row[key]??null]))
       const run=await optionalRead(this.runtime.withDatabase(terminalRow),controller.signal)
       if(!run||!this.owned(state.agent)||controller.signal.aborted)return
+      let approvedKeyForAttempt:string|undefined
       const receipt=await reviewCompletedReplay({completed:true,taskOutcome:status as 'completed'|'failed',taskId:runId,sessionId,workspace:run.workspace,signal:controller.signal,
         ask:async question=>{
           if(!this.owned(state.agent))throw new Error('native_review_identity_changed')
@@ -225,12 +234,12 @@ export class DshLifecycleMemory {
           if(rows.length>16)merged.findings.push({kind:'key_point',text:'Only the first 16 linked traces were included.',basis:'observed',evidenceRefs:[]})
           return merged
         },
-        onApproved:(proposal,approvalKey)=>{if(this.approved.size>=64){const saved=[...this.approved].find(([,value])=>value.status==='saved');if(saved)this.approved.delete(saved[0]);else throw new Error('memory_recovery_capacity')};this.approved.set(approvalKey,{proposal,sessionId,status:'pending'})},
+        onFailure:(error,phase)=>this.reportFailure(error,phase,approvedKeyForAttempt),
+        onApproved:(proposal,approvalKey)=>{approvedKeyForAttempt=approvalKey;if(this.approved.size>=64){const saved=[...this.approved].find(([,value])=>value.status==='saved');if(saved)this.approved.delete(saved[0]);else throw new Error('memory_recovery_capacity')};this.approved.set(approvalKey,{proposal,sessionId,status:'pending'})},
         save:async(proposal,approvalKey)=>{if(!this.owned(state.agent)||controller.signal.aborted||!nativeCurrent())throw new Error('review_cancelled');await this.runtime.withDatabase(db=>{if(!this.owned(state.agent)||controller.signal.aborted||!nativeCurrent())throw new Error('review_cancelled');const current=terminalRow(db);if(!current||signature(current)!==signature(run))throw new Error('review_task_scope_changed');const store=createApprovedReplayMemoryStore(db,run.workspace,p=>recordEntryInTransaction(db,{workspace:run.workspace,kind:'reference',title:`Approved experience: ${p.request.text.slice(0,100)||p.source.taskId}`,body:JSON.stringify(p),summary:p.findings.map(f=>f.text).join('\n').slice(0,2048)||p.request.text.slice(0,2048),tags:[...new Set([...p.tags,...p.keywords])].slice(0,20),scope:{visibility:'project'},provenance:{type:'user_approved_replay',reference:approvalKey,runId, evidenceIds:p.attempts.flatMap(a=>[a.callRef,...(a.resultRef?[a.resultRef]:[])]).slice(0,200)},trustLevel:'untrusted',confidence:.4,createdBy:'kiokuko-replay-review',actor:'user'}));const approved=this.approved.get(approvalKey);if(approved)approved.reconcile=()=>store.reconcile(proposal,approvalKey);store.save(proposal,approvalKey)})},
       })
       if(receipt.approvalKey){const approved=this.approved.get(receipt.approvalKey);if(approved)approved.status=receipt.status==='saved'?'saved':'unavailable'}
-      if(receipt.status==='unavailable'&&this.owned(state.agent))this.host.get('logger',false)?.warn?.('Optional memory review/save was unavailable; the completed task is unchanged.')
-    })().catch(()=>{this.host.get('logger',false)?.warn?.('Optional memory review was unavailable; the completed task is unchanged.')}).finally(()=>{this.controllers.delete(controller);this.pending.delete(operation)})
+    })().catch(error=>this.reportFailure(error,'prepare')).finally(()=>{this.controllers.delete(controller);this.pending.delete(operation)})
     this.pending.add(operation)
   }
   async whenIdle():Promise<void>{await Promise.allSettled([...this.pending])}

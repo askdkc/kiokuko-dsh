@@ -1,3 +1,4 @@
+import { layaReply, layaV1Reply, serveLaya } from '../helpers/laya.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile, writeFile, stat } from 'node:fs/promises'
@@ -8,6 +9,7 @@ import { nativeToolResults } from '../helpers/native-mock.js'
 import { deepSeekFixtureResponse, wireText } from '../helpers/deepseek-wire.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import { codingPrelude, interpretedPreparation } from '../helpers/coding-script.js'
+import { requireCommandSuccess, requireAdmissionRounds } from '../../../scripts/verification-diagnostics.mjs'
 
 isolateSkillHome()
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
@@ -40,8 +42,15 @@ function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' = 'com
   return nativeSkillFixture({ packages: packages!, ...(packageRoot ? { packageRoot } : {}), explicit, mode, extra, ...(nativeAnswer ? { nativeAnswer } : {}) })
 }
 
+async function enableLisp(f: Awaited<ReturnType<typeof fixture>>, command: string, point: string): Promise<void> {
+  let result: unknown
+  try { result = (await f.ctx.commands.execute(f.agent, `/kioku-lisp ${command}`, [], new AbortController().signal)).result }
+  catch (error) { result = { kind: 'error', error } }
+  requireCommandSuccess({ point, command, result })
+}
+
 for (const mode of ['full', 'compiled'] as const) for (const activation of ['enable', 'enable-task']) {
-  test(`Lisp planning delivery: ${mode}, ${activation}, first/follow-up/reload`, {
+  test(`Lisp planning delivery: ${mode}, ${activation}, fresh first/follow-up and protected reload recovery`, {
     ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
   }, async () => {
     const f = await fixture(false, mode, { lisp: { executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } })
@@ -50,12 +59,22 @@ for (const mode of ['full', 'compiled'] as const) for (const activation of ['ena
       const expected = mode === 'full' ? source : content('kiokuko-lisp')
       const contract = source.match(/<!-- kiokuko:runtime prototype-driven-planning -->\n([\s\S]*?)\n<!-- \/kiokuko:runtime -->/u)?.[1]
       assert.ok(contract)
-      const activated = await f.ctx.commands.execute(f.agent, `/kioku-lisp ${activation}`, [], new AbortController().signal)
-      assert.equal(activated.result.kind, 'success', JSON.stringify(activated.result))
+      await enableLisp(f, activation, 'skill-planning-enable')
       for (let turn = 0; turn < 3; turn++) {
         if (turn === 2) await f.reload(mode)
+        const firstRequest = f.model.requests.length
+        if (turn === 2 && activation === 'enable') {
+          const status = (await f.ctx.commands.execute(f.agent, '/kioku-lisp status --json', [], new AbortController().signal)).result
+          assert.equal(status.kind, 'success', status.text)
+          assert.equal(JSON.parse(status.text).state, 'RECOVERY_REQUIRED')
+          await f.turn('説明してください。')
+          assert.equal(f.model.requests.length, firstRequest, 'protected reload requires recovery; an earlier request cannot prove planning delivery')
+          assert.equal(f.agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1)?.data.reason.kind, 'blocked')
+          continue
+        }
         f.responses.push(f.mock.textResponse('現在の契約を確認しました。'))
         await f.turn('説明してください。')
+        assert.equal(f.model.requests.length, firstRequest + 1, 'planning must reach a fresh model request')
         const request = f.model.requests.at(-1)
         assert.ok(textOf(request).includes(expected))
         const system = request.system ?? request.messages.filter((m: any) => m.role === 'system')
@@ -178,8 +197,7 @@ test('compiled Skill delivery: protected Lisp enable and lisp_describe reach the
 },async()=>{
   const f=await fixture(false,'compiled',{lisp:{executionMode:'protected',enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}})
   try {
-    const enabled=await f.ctx.commands.execute(f.agent,'/kioku-lisp enable',[],new AbortController().signal)
-    assert.equal(enabled.result.kind,'success',JSON.stringify(enabled.result))
+    await enableLisp(f, 'enable', 'skill-describe-enable')
     const skill = await readFile(join(packageRoot ?? process.cwd(), 'skills/kiokuko-lisp/SKILL.md'), 'utf8')
     const toolkit = skill.slice(skill.indexOf('## Task toolkit example')).match(/```lisp\n([\s\S]*?)\n```/u)?.[1]
     assert.ok(toolkit, 'the shipped task toolkit example must be present')
@@ -247,8 +265,13 @@ test('Lisp selected during initial admission executes shared functions without s
         assert.equal(resultOf(request).value, 42, JSON.stringify(resultOf(request)))
         return f.mock.toolCallResponse('legacy-eval', 'lisp_eval', { operationId: 'legacy-eval', code: '(+ 20 22)' })
       }, f.mock.textResponse('Verified.'))
-    await f.turn('Fix the failing implementation in src/main.js and verify that its tests pass. 通常実行で。')
-    assert.equal(f.model.requests.length, 10, 'all ten scripted preparation, Goal, Lisp and final-response rounds ran exactly once')
+    const admission = (extra: { error?: unknown; turnFailed?: boolean } = {}) => ({
+      point: 'skill-admission', requests: f.model.requests, events: f.agent.session.snapshotEvents(),
+      status: f.agent.status, pendingResponses: f.responses.length, expectedRounds: 10, ...extra,
+    })
+    try { await f.turn('Fix the failing implementation in src/main.js and verify that its tests pass. 通常実行で。') }
+    catch (error) { requireAdmissionRounds(admission({ error, turnFailed: true })) }
+    requireAdmissionRounds(admission())
     assert.ok(f.model.requests[0].tools.some((tool: any) => tool.name === 'prepare_requested_work'))
     // Round 3 is the pending execution-mode discussion; protected Lisp is
     // delivered only after that host choice is resolved.
@@ -283,7 +306,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
   let hostId = ''
   try {
     await writeFile(join(f.dir, 'a.txt'), 'old-a'); await writeFile(join(f.dir, 'b.txt'), 'old-b')
-    assert.equal((await f.ctx.commands.execute(f.agent, '/kioku-lisp enable', [], new AbortController().signal)).result.kind, 'success')
+    await enableLisp(f, 'enable', 'skill-workflow-enable')
     f.responses.push(f.mock.toolCallResponse('prepare-workflow', 'prepare_requested_work', { taskType: 'research' }),
       f.mock.toolCallResponse('workflow-write', 'lisp_eval', args), (request: any) => {
       const result = latestResult(request); hostId = result.operationId
@@ -303,8 +326,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
     await f.reload('compiled')
     const resumed = await f.ctx.commands.execute(f.agent, '/kioku-task resume', [], new AbortController().signal)
     assert.equal(resumed.result.kind, 'success', JSON.stringify(resumed.result))
-    const recovered = await f.ctx.commands.execute(f.agent, '/kioku-lisp recover', [], new AbortController().signal)
-    assert.equal(recovered.result.kind, 'success', JSON.stringify(recovered.result))
+    await enableLisp(f, 'recover', 'skill-workflow-recover')
     const firstAfterRecovery = f.model.requests.length
     f.responses.push(interpretedPreparation(f.mock, 'prepare-workflow-recovery', 'same_scope_continuation', 'verify'), (request: any) => {
       assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
@@ -350,20 +372,98 @@ test('compiled Skill delivery: real DeepSeek serializer sends the bodies in the 
   } finally {off();http.mock.restore();await f.close()}
 })
 
-for (const taskMode of [false, true]) for (const representation of ['compiled', 'full'] as const) test(`Lisp ${taskMode ? 'task' : 'persistent'} ${representation} delivers auto policy on activation, follow-up and reload`, {
+for (const taskMode of [false, true]) for (const representation of ['compiled', 'full'] as const) test(`Lisp ${taskMode ? 'task' : 'persistent'} ${representation} delivers auto policy to fresh requests and respects protected reload recovery`, {
   ...native, skip: !enabled || (!taskMode && process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1'), timeout: 180000,
 }, async () => {
   const f = await fixture(false, representation, {lisp:{executionMode:'protected',enabled:true, approvalMode:'auto', startupTimeoutMs:60000}})
-  const enable = () => f.ctx.commands.execute(f.agent, taskMode ? '/kioku-lisp enable-task' : '/kioku-lisp enable', [], new AbortController().signal)
+  const enable = () => enableLisp(f, taskMode ? 'enable-task' : 'enable', 'skill-policy-enable')
   try {
-    assert.equal((await enable()).result.kind, 'success')
+    await enable()
     for (const phase of ['activation', 'follow-up', 'reload']) {
-      if (phase === 'reload') { await f.reload(representation); assert.equal((await enable()).result.kind, 'success') }
+      if (phase === 'reload') { await f.reload(representation); await enable() }
+      const firstRequest = f.model.requests.length
+      if (phase === 'reload' && !taskMode) {
+        const status = (await f.ctx.commands.execute(f.agent, '/kioku-lisp status --json', [], new AbortController().signal)).result
+        assert.equal(status.kind, 'success', status.text)
+        assert.equal(JSON.parse(status.text).state, 'RECOVERY_REQUIRED')
+        await f.turn('Explain the current Lisp approval policy without executing anything.')
+        assert.equal(f.model.requests.length, firstRequest, 'protected reload must not reuse an earlier model request as evidence of fresh delivery')
+        assert.equal(f.agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1)?.data.reason.kind, 'blocked')
+        continue
+      }
       f.responses.push(f.mock.textResponse('Policy received.'))
       await f.turn('Explain the current Lisp approval policy without executing anything.')
+      assert.equal(f.model.requests.length, firstRequest + 1, 'policy must reach a fresh model request')
       const delivered = textOf(f.model.requests.at(-1))
       assert.match(delivered, /Lisp execution mode: protected; approval mode: auto \(entire profile\)/)
       assert.match(delivered, /Do not ask permission to submit, resubmit, run verification or apply changes/)
     }
   } finally { await f.close() }
+})
+
+// Exercise the production plugin's wiring, rather than supplying a DecisionService
+// directly: native command -> credential/worker adapter -> protected Lisp -> next model request.
+for (const provider of ['jev', 'laya-strict', 'laya-v1'] as const) test(`decision families: ${provider} preserves selection across reload and executes through the native plugin on consecutive turns`, {
+  ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
+}, async t => {
+  const requests: any[] = [], operations: string[] = []
+  t.mock.method(globalThis, 'fetch', async (url: unknown, init: RequestInit) => {
+    assert.equal(String(url), 'https://api.typesafe.ai/v1/systemone', 'the fixture must intercept every external request')
+    assert.equal(new Headers(init.headers).get('Authorization'), 'Bearer fixture-family-key')
+    const request = JSON.parse(String(init.body)); requests.push(request)
+    return Response.json({ model: request.model, answers: Object.fromEntries(Object.entries(request.questions).map(([id, q]: [string, any]) => {
+      const keys = Object.keys(q.criteria), choice = keys[0]!
+      return [id, { type: 'choice', choice, confidence: 1, probabilities: Object.fromEntries(keys.map(key => [key, key === choice ? 1 : 0])) }]
+    })) })
+  })
+  const socket = provider === 'jev' ? undefined : await serveLaya(t, request => {
+    operations.push(request.op); requests.push(request)
+    return provider === 'laya-v1' ? layaV1Reply(request) : layaReply(request)
+  })
+  const f = await fixture(false, 'compiled', {
+    typedDecisions: { ...(socket ? { 'laya-coreml': { socketPath: socket.path } } : {}) },
+    answerReview: { mode: 'off' }, modelAutoMode: { mode: 'off' },
+    memoryReuse: { mode: 'off' }, semanticCompaction: { mode: 'off' },
+    lisp: { executionMode: 'protected', enabled: true, startupTimeoutMs: 60000 },
+  })
+  const credentials = await f.ctx.plugin({ name: 'family-fixture-credentials', apply(ctx: any) {
+    return ctx.provide('credentials', { resolve: async (ref: string) => {
+      assert.equal(ref, 'TYPESAFE_API_KEY'); return { value: 'fixture-family-key', source: 'env' }
+    } })
+  } })
+  const command = async (input: string) => (await f.ctx.commands.execute(f.agent, input, [], new AbortController().signal)).result
+  try {
+    const selected = await command(`/kioku-decisions use ${provider === 'jev' ? 'jev' : 'laya'}`)
+    assert.equal(selected.kind, 'success', selected.text)
+    // Reload before starting a worker: provider persistence is independent of
+    // the explicit recovery required by a previously enabled protected worker.
+    await f.reload('compiled')
+    for (const phase of ['initial', 'follow-up']) {
+      const status = await command('/kioku-decisions status')
+      assert.equal(status.kind, 'success', status.text)
+      assert.equal(JSON.parse(status.text).provider, provider === 'jev' ? 'typesafe' : 'laya-coreml')
+      if (phase === 'initial') {
+        const enabled = await command('/kioku-lisp enable')
+        assert.equal(enabled.kind, 'success', enabled.text)
+      }
+      const marker = `family-${provider}-${phase}`
+      const firstRequest = f.model.requests.length
+      f.responses.push(f.mock.toolCallResponse(marker, 'lisp_eval', {
+        operationId: marker, code: `(kioku.decisions:assess-change "${marker}" "before" "after")`,
+      }), f.mock.textResponse('Decision received.'))
+      await f.turn('Explain the proposed change using the protected Lisp decision helper. Do not change files.')
+      const delivered = f.model.requests.slice(firstRequest).flatMap((request: any) => nativeToolResults(request.messages))
+      const result = delivered.find((block: any) => block.toolCallId === marker)
+      assert.ok(result, JSON.stringify({ provider, phase, rounds: f.model.requests.length - firstRequest, pending: f.responses.length, observedCallIds: delivered.map((block: any) => block.toolCallId), stopReasons: f.agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').map((event: any) => event.data.reason) }))
+      assert.equal(result.isError, false, JSON.stringify(result))
+      const returned = JSON.parse(result.content.find((block: any) => block.type === 'text').text)
+      assert.equal(returned.ok, true, JSON.stringify(returned))
+      assert.equal(returned.value.json.status, 'completed', JSON.stringify(returned))
+      assert.equal(returned.value.json.result.provider, provider === 'jev' ? 'typesafe' : 'laya-coreml')
+      assert.equal(returned.value.json.result.answers[0].choiceId, 'yes')
+      assert.ok(requests.some(request => JSON.stringify(request.state ?? '').includes(marker)), 'the native tool must reach the selected real provider adapter')
+    }
+    if (provider === 'laya-strict') assert.ok(operations.includes('predict_strict') && !operations.includes('predict'))
+    if (provider === 'laya-v1') assert.ok(operations.includes('predict') && operations.every(op => op === 'health' || op === 'predict'))
+  } finally { try { await f.close() } finally { await credentials.dispose() } }
 })

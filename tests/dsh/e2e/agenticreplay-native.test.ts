@@ -1,3 +1,4 @@
+import { recordedRunDirectory } from '../helpers/agenticreplay-fixture.js'
 import { execFileSync } from 'node:child_process'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
@@ -133,7 +134,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     const exported = await command(a, `export ${id}`)
     assert.ok((await readFile(exported.path, 'utf8')).includes('kiokuko-dsh'))
     assert.ok(!JSON.stringify(page).includes(S),JSON.stringify(page.events.filter((e:any)=>JSON.stringify(e).includes(S))));assert.ok(!(await readFile(exported.path,'utf8')).includes(S))
-    assert.ok(!(await readFile(join(root,'.agenticreplay/runs',id,'events.jsonl'),'utf8')).includes(S))
+    assert.ok(!(await readFile(join(await recordedRunDirectory(root,id),'events.jsonl'),'utf8')).includes(S))
     execFileSync('git', ['-C', root, 'check-ignore', exported.path], { stdio: 'ignore' })
     const denied = await ctx.commands.execute(b, `/kioku-agenticreplay show ${id}`, [], signal)
     assert.equal(denied.result.text, 'trace_not_found')
@@ -144,7 +145,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     assert.equal(bRowsBefore.length, 1, 'history is scoped to the exact session even in one workspace')
     assert.notEqual(bRowsBefore[0].agenticreplay_run_id, id)
     const bId = bRowsBefore[0].agenticreplay_run_id
-    const manifest = JSON.parse(await readFile(join(root, '.agenticreplay/runs', id, 'manifest.json'), 'utf8'))
+    const manifest = JSON.parse(await readFile(join(await recordedRunDirectory(root,id), 'manifest.json'), 'utf8'))
     assert.deepEqual(manifest.env_allowlisted, {})
     // Unload while a native pre-execute gate is pending. Results must still be observed.
     let entered!: () => void
@@ -170,7 +171,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     const bRows = adapter ? await adapter.host.agenticReplay!.withIndex(store => store.list('agenticreplay-b', workspaceKey(root))) : undefined
     // The explicit host owns its DB past shutdown, until its adapter is disposed.
     if (bRows) assert.equal(bRows[0]?.state, 'completed')
-    const bEvents = (await readFile(join(root, '.agenticreplay/runs', bId, 'events.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    const bEvents = (await readFile(join(await recordedRunDirectory(root,bId), 'events.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     assert.equal(results.get('pending')?.isError, true, 'the drained call retains its final native policy result')
     assert.match(JSON.stringify(results.get('pending')), /fixture policy denial/u)
     assert.equal(bEvents.filter(e => e.type === 'model.request').length, 2, 'session B records only its preparation and tool request, with no session A calls')

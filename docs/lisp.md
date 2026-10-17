@@ -25,8 +25,9 @@ retain their recorded outcomes and require explicit resume.
 | Lisp path | Task-state behavior |
 | --- | --- |
 | Saved reads, status, cancellation, observe/stage/compare, pure eval and function calls | Remain available without a Working task; any managed effect reached inside a call is checked separately. |
-| Proposals/apply/restore, CI verification, package updates, artifact publication, shared-function changes, reset/recover | Require a Working task at the actual effect boundary. An unavailable validator denies the effect. |
-| `run`, `start-job`, owned-tool RPC and compiled `run_code` dispatch | Carry the host-pinned identity through native dispatch; old generations cannot publish a success receipt. `start-job` may outlive the evaluation's cancellation signal, but cannot acquire a newer task lease. |
+| Proposals/apply/restore, CI verification, package updates, artifact publication, shared-function changes, reset and task/protected recovery | Require a Working task at the actual effect boundary. An unavailable validator denies the effect. |
+| Ordinary conversational foreground `kioku.process:run` | Uses native Bash permissions, sandbox, approval and Stop without creating a memory task, Goal or coding choice. |
+| Admitted workflow `run`, `start-job`, owned-tool RPC and compiled `run_code` dispatch | Carry the host-pinned identity through native dispatch; old generations cannot publish a success receipt. `start-job` may outlive the evaluation's cancellation signal, but cannot acquire a newer task lease. |
 | CI list and failed-log reads | Remain read-only and do not need task execution authority. |
 
 These checks cover the managed host adapters. Development mode runs Common Lisp
@@ -248,6 +249,12 @@ remain available when the AI loop is stopped:
 /kioku-lisp cancel
 /kioku-lisp recover
 ```
+
+In ordinary development conversations, `recover` starts a fresh worker after a
+timeout, output limit or Stop, including between turns. It needs no task setup;
+old turn permissions remain expired, and definitions/heap values are discarded.
+Task mode, protected mode and a defined coding workflow retain their task
+authority. Recovery never replays the interrupted expression.
 
 Inspect every UNKNOWN file operation and its backup before abandoning it:
 

@@ -419,6 +419,9 @@ test('worker-only human recovery does not waive a defined workflow or protected-
   ])
   const f = await fixture()
   const owner = { sessionId: f.identity.sessionId, agentId: 'agent', root: f.root }
+  const { claimExecutionOwner } = await import('../../../../src/dsh/orchestration/execution-owner.js')
+  const workspace = f.db.prepare('SELECT workspace FROM ledger_runs WHERE run_id=?').get<{ workspace: string }>(f.identity.runId)!.workspace
+  claimExecutionOwner(f.db, { sessionId: owner.sessionId, workspace, mode: 'normal', startId: 'worker-recovery-boundary', runId: f.identity.runId })
   const options = { store: new LispStore(async fn => fn(f.db)), dataRoot: join(f.root, 'lisp') }
   const manager = new LispManager({ ...options, config: LispConfig.parse({ enabled: true, executionMode: 'development' }) })
   const protectedManager = new LispManager({ ...options, config: LispConfig.parse({ enabled: true, executionMode: 'protected' }) })

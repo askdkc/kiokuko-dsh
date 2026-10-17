@@ -72,7 +72,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   assert.ok(packageManifest.files?.includes('dsh/cordis.patch.yml'))
   const cordis = JSON.parse(await readFile(join(repositoryRoot, 'node_modules/@deepseek-ai/cordis/package.json'), 'utf8'))
   const cordisRange = packageManifest.peerDependencies?.['@deepseek-ai/cordis']
-  assert.ok(cordisRange && satisfies(cordis.version, cordisRange), 'the published peer range must admit the Cordis version used by native tests')
+  assert.ok(cordisRange && satisfies(cordis.version, cordisRange, { includePrerelease: true }), 'the published peer range must admit the Cordis version used by native tests')
   for (const name of ['agenticreplay']) {
     const range = packageManifest.dependencies?.[name]
     assert.ok(range, `${name} must be installed as a runtime dependency`)

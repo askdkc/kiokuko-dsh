@@ -11,7 +11,8 @@ export function runtimeEvidence(entry = process.argv[1]) {
       let manifest: { name?: unknown; version?: unknown } | undefined
       try { manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return unknown }
-      if (manifest) {
+      if (manifest !== undefined) {
+        if (!manifest) return unknown
         if (!['@deepseek-ai/dsh', '@deepseek-ai/dsh-app-boot', '@askdkc/dsh-cli'].includes(String(manifest.name))
           || typeof manifest.version !== 'string' || !/^[0-9][0-9A-Za-z.+-]{0,127}$/u.test(manifest.version)) return unknown
         const launcher = { name: String(manifest.name), version: manifest.version }

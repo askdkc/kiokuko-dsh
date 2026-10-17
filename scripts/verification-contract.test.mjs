@@ -253,3 +253,100 @@ test('request-intent evaluation covers exact change scopes and writes a check-bo
   assert.equal(validCompletion(JSON.parse(readFileSync(completion, 'utf8')),
     'intent-evaluation', 'intent-evaluation-regression'), true);
 });
+
+// Keep safe failure observations in the ordinary verification contract lane.
+await import('./verification-diagnostics.test.mjs');
+
+
+test('SIGTERM forwards through a cooperating runner to its detached test group', { skip: process.platform === 'win32' ? 'POSIX process groups' : false }, async () => {
+ const root=fixture([{...check,argv:['node','bridge.mjs'],result:'script'}]);
+ writeFileSync(path.join(root,'.gitignore'),'leaf-pid\nleaf-exited\n');
+ writeFileSync(path.join(root,'leaf.mjs'),"import{writeFileSync}from'node:fs';process.on('SIGTERM',()=>{writeFileSync('leaf-exited','stopped');process.exit(0)});console.log('leaf-ready');setInterval(()=>{},1000)");
+ writeFileSync(path.join(root,'bridge.mjs'),"import{spawn}from'node:child_process';import{writeFileSync}from'node:fs';const leaf=spawn(process.execPath,['leaf.mjs'],{detached:true,stdio:['ignore','inherit','inherit']});writeFileSync('leaf-pid',String(leaf.pid));process.on('SIGTERM',()=>{try{process.kill(-leaf.pid,'SIGTERM')}catch(e){if(e.code!=='ESRCH')throw e}});leaf.on('exit',()=>process.exit(1));");
+ const output=mkdtempSync(path.join(tmpdir(),'verify-nested-interrupt-'));
+ const child=(await import('node:child_process')).spawn(process.execPath,['scripts/verify.mjs','--output',output],{cwd:root,stdio:['ignore','pipe','pipe']});
+ let stdout='',signalled=false,timer;const closed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve)});child.stderr.resume();
+ child.stdout.on('data',chunk=>{stdout+=chunk;if(!signalled&&stdout.includes('leaf-ready')){signalled=true;child.kill('SIGTERM')}});
+ try {
+  await Promise.race([closed,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('verifier did not drain its detached test group')),3000)})]);
+  assert.equal(readFileSync(path.join(root,'leaf-exited'),'utf8'),'stopped','graceful forwarding must reach the detached child');
+  const report=JSON.parse(readFileSync(path.join(output,'result.json')));assert.equal(report.status,'interrupted');assert.equal(report.completionReady,false);
+ } finally {
+  clearTimeout(timer);child.kill('SIGKILL');
+  if(existsSync(path.join(root,'leaf-pid')))try{process.kill(-Number(readFileSync(path.join(root,'leaf-pid'),'utf8')),'SIGKILL')}catch(error){if(error.code!=='ESRCH')throw error}
+  await closed;
+ }
+});
+
+test('SIGTERM terminates a non-cooperating check with an interrupted result', async () => {
+ const root=fixture([{...check,argv:['node','stubborn.mjs'],result:'script'}]);
+ writeFileSync(path.join(root,'.gitignore'),'check-pid\n');
+ writeFileSync(path.join(root,'stubborn.mjs'),"import{writeFileSync}from'node:fs';writeFileSync('check-pid',String(process.pid));process.on('SIGTERM',()=>{});console.log('stubborn-ready');setInterval(()=>{},1000)");
+ const output=mkdtempSync(path.join(tmpdir(),'verify-stubborn-interrupt-'));
+ const child=(await import('node:child_process')).spawn(process.execPath,['scripts/verify.mjs','--output',output],{cwd:root,stdio:['ignore','pipe','pipe']});
+ let stdout='',signalled=false,timer;const closed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve)});child.stderr.resume();
+ child.stdout.on('data',chunk=>{stdout+=chunk;if(!signalled&&stdout.includes('stubborn-ready')){signalled=true;child.kill('SIGTERM')}});
+ try {
+  await Promise.race([closed,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('verifier did not escalate its stubborn check')),12000)})]);
+  const report=JSON.parse(readFileSync(path.join(output,'result.json')));assert.equal(report.status,'interrupted');assert.equal(report.completionReady,false);assert.equal(report.checks[0].signal,process.platform==='win32'?'SIGTERM':'SIGKILL');
+ } finally {
+  clearTimeout(timer);child.kill('SIGKILL');
+  if(existsSync(path.join(root,'check-pid')))try{const pid=Number(readFileSync(path.join(root,'check-pid'),'utf8'));if(process.platform==='win32')process.kill(pid,'SIGKILL');else process.kill(-pid,'SIGKILL')}catch(error){if(error.code!=='ESRCH')throw error}
+  await closed;
+ }
+});
+
+
+test('SIGTERM never stops an unrelated process', { skip: process.platform === 'win32' ? 'POSIX process groups' : false }, async () => {
+ const root=fixture([{...check,argv:['node','waiting.mjs'],result:'script'}]);
+ writeFileSync(path.join(root,'waiting.mjs'),"console.log('check-ready');setInterval(()=>{},1000)");
+ writeFileSync(path.join(root,'bystander.mjs'),"process.on('SIGTERM',()=>console.log('BYSTANDER_SIGNAL'));process.stdin.on('data',()=>console.log('PONG'));process.stdin.on('end',()=>process.exit(0));console.log('BYSTANDER_READY')");
+ const {spawn}=await import('node:child_process');
+ // This separate group is owned by this test, not by the verifier. It stands
+ // in for an unrelated user process without touching any real user process.
+ const bystander=spawn(process.execPath,['bystander.mjs'],{cwd:root,detached:true,stdio:['pipe','pipe','pipe']});
+ const bystanderClosed=new Promise(resolve=>bystander.once('close',resolve));let bystanderText='';bystander.stderr.resume();bystander.stdout.on('data',chunk=>{bystanderText+=chunk});
+ const observe=token=>new Promise((resolve,reject)=>{let timer;const check=()=>{if(bystanderText.includes(token)){clearTimeout(timer);bystander.stdout.off('data',check);resolve()}};timer=setTimeout(()=>{bystander.stdout.off('data',check);reject(new Error('bystander did not respond'))},2000);bystander.stdout.on('data',check);check()});
+ let child,closed,timer;
+ try {
+  await observe('BYSTANDER_READY');
+  const output=mkdtempSync(path.join(tmpdir(),'verify-owned-interrupt-'));
+  child=spawn(process.execPath,['scripts/verify.mjs','--output',output],{cwd:root,stdio:['ignore','pipe','pipe']});
+  let stdout='',signalled=false;closed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve)});child.stderr.resume();
+  child.stdout.on('data',chunk=>{stdout+=chunk;if(!signalled&&stdout.includes('check-ready')){signalled=true;child.kill('SIGTERM')}});
+  await Promise.race([closed,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('owned verifier did not stop')),3000)})]);
+  const report=JSON.parse(readFileSync(path.join(output,'result.json')));assert.equal(report.status,'interrupted');assert.equal(report.completionReady,false);
+  assert.equal(bystander.exitCode,null);assert.equal(bystander.signalCode,null);
+  bystander.stdin.write('ping\n');await observe('PONG');
+  assert.equal(bystanderText.includes('BYSTANDER_SIGNAL'),false,'verifier cancellation must not signal a different process group');
+ } finally {
+  clearTimeout(timer);child?.kill('SIGKILL');if(closed)await closed;
+  bystander.stdin.end();const cleanup=setTimeout(()=>bystander.kill('SIGKILL'),1000);await bystanderClosed;clearTimeout(cleanup);
+ }
+});
+
+
+test('prepare reproducibility installs its build dependencies even under NODE_ENV production', async () => {
+ const require=createRequire(import.meta.url),ts=require('typescript');
+ const source=readFileSync(new URL('./verify-prepare-reproducibility.mjs',import.meta.url),'utf8');
+ const parsed=ts.createSourceFile('prepare.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const functions=parsed.statements.filter(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='buildOnce');assert.equal(functions.length,1);
+ const calls=[],copies=[],workspace=path.join(tmpdir(),'prepare-build-contract'),userConfig=path.join(workspace,'npmrc');
+ const exec=async(command,args,options)=>{
+  calls.push({command,args,options});assert.equal(command,'npm');assert.ok(options.cwd.startsWith(workspace+path.sep));
+  assert.equal(options.env.NODE_ENV,'production','retain the requested production build mode');
+  if(args[0]==='ci'){
+   assert.ok(args.includes('--include=dev'),'a source build needs its declared dev dependencies even when npm defaults to omitting them');
+   assert.ok(args.includes('--include=optional'));assert.ok(args.includes('--ignore-scripts'));
+  }
+  assert.equal(options.env.npm_config_userconfig,userConfig);assert.equal(options.env.NPM_CONFIG_USERCONFIG,userConfig);
+  assert.equal(options.env.npm_config_allow_scripts,undefined);assert.equal(options.env.NPM_CONFIG_ALLOW_SCRIPTS,undefined);
+  return {stdout:'',stderr:''};
+ };
+ const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+ const execute=new AsyncFunction('workspace','join','copySource','exec','process','digestDirectory','userConfig',functions[0].getText(parsed)+';return [await buildOnce(1),await buildOnce(2)];');
+ const builds=await execute(workspace,path.join,async target=>copies.push(target),exec,{env:{NODE_ENV:'production',npm_config_omit:'dev',npm_config_allow_scripts:'fixture',NPM_CONFIG_ALLOW_SCRIPTS:'fixture'}},async()=>({hash:'same',fileCount:1,bytes:1}),userConfig);
+ assert.equal(copies.length,2);assert.notEqual(copies[0],copies[1]);assert.deepEqual(calls.map(call=>call.args[0]),['ci','run','ci','run']);
+ assert.notEqual(calls[0].options.env.npm_config_cache,calls[2].options.env.npm_config_cache,'each reproducibility build owns its cache');
+ assert.deepEqual(builds[0].digest,builds[1].digest);
+});

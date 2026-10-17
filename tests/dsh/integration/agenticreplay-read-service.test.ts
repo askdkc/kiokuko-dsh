@@ -7,7 +7,7 @@ import { mountDshAgenticReplayCommand } from '../../../src/dsh/agenticreplay-com
 import { DshAgenticReplayReadService } from '../../../src/dsh/agenticreplay-read-service.js'
 import type { DshNativeCommandDefinition } from '../../../src/dsh/commands.js'
 import type { DshAgenticReplayHostServices } from '../../../src/dsh/agenticreplay-types.js'
-import { agenticReplayFixture, request, response, chunks, collect } from '../helpers/agenticreplay-fixture.js'
+import { recordedRunDirectory, agenticReplayFixture, request, response, chunks, collect } from '../helpers/agenticreplay-fixture.js'
 import { captureRedactionCase } from '../helpers/agenticreplay-redaction.js'
 import { S } from '../helpers/agenticreplay-redaction-cases.js'
 
@@ -45,7 +45,7 @@ test('legacy OrcaReplay manifests are rejected even inside the new storage names
   const f = await agenticReplayFixture()
   try {
     const row = await completed(f)
-    const file = join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'manifest.json')
+    const file = join(await recordedRunDirectory(f.root, row.agenticreplay_run_id), 'manifest.json')
     const manifest = JSON.parse(await readFile(file, 'utf8'))
     manifest.schema_version = '0.3.0'
     manifest.orca_version = manifest.agenticreplay_version
@@ -67,7 +67,7 @@ test('timeline cursor is signed, run-bound, seek-based, and limited by bytes and
     assert.equal(page2.events[0]?.seq, 2)
     await assert.rejects(f.reader.show(f.binding, row.agenticreplay_run_id, page1.cursor + 'bad'), /invalid_cursor/u)
     // An invalid prefix is never rescanned by a subsequent page; full export still detects it.
-    const file = join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'events.jsonl')
+    const file = join(await recordedRunDirectory(f.root, row.agenticreplay_run_id), 'events.jsonl')
     const data = await readFile(file); data[0] = 120; await writeFile(file, data)
     assert.equal((await f.reader.show(f.binding, row.agenticreplay_run_id, page1.cursor)).events[0]?.seq, 2)
     await assert.rejects(f.reader.export(f.binding, row.agenticreplay_run_id))
@@ -88,7 +88,7 @@ test('stale index totals, missing newline, changed events and unsafe modes rejec
     f.store.save({ ...row, export_input_bytes: row.export_input_bytes + 1 })
     await assert.rejects(f.reader.export(f.binding, row.agenticreplay_run_id), /trace_integrity_mismatch/u)
     f.store.save(row)
-    const file = join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'events.jsonl')
+    const file = join(await recordedRunDirectory(f.root, row.agenticreplay_run_id), 'events.jsonl')
     const bytes = await readFile(file)
     await writeFile(file, bytes.subarray(0, -1))
     await assert.rejects(f.reader.export(f.binding, row.agenticreplay_run_id), /truncated_jsonl/u)
@@ -152,8 +152,8 @@ test('crash reconciliation never changes live owners or reopens trace files', as
     f.store.save({ ...row, state: 'recording', recorder_instance_id: 'unknown-owner' })
     // Existing immutable identity is retained; this row belongs to this still-live process.
     assert.equal((await f.reader.list(f.binding))[0]?.state, 'recording')
-    const original = await readFile(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'events.jsonl'))
-    assert.deepEqual(await readFile(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'events.jsonl')), original)
+    const original = await readFile(join(await recordedRunDirectory(f.root, row.agenticreplay_run_id), 'events.jsonl'))
+    assert.deepEqual(await readFile(join(await recordedRunDirectory(f.root, row.agenticreplay_run_id), 'events.jsonl')), original)
   } finally { await f.dispose() }
 })
 
@@ -213,9 +213,9 @@ test('hot reload binds an existing session at exact pre-step without scanning or
 test('stable run IDs resolve titled directories, an empty exclusive claim, and close-time title rename',async()=>{
  const f=await agenticReplayFixture()
  try{
-  const row=await completed(f),runs=join(f.root,'.agenticreplay','runs'),legacy=join(runs,row.agenticreplay_run_id)
+  const row=await completed(f),runs=join(f.root,'.agenticreplay','runs'),actual=await recordedRunDirectory(f.root,row.agenticreplay_run_id),legacy=join(runs,row.agenticreplay_run_id)
   const first=join(runs,'20261013010101-dsh-session-'+row.agenticreplay_run_id.slice(4))
-  await rename(legacy,first);await mkdir(legacy,{mode:0o700})
+  await rename(actual,first);await mkdir(legacy,{mode:0o700,recursive:true})
   assert.ok((await f.reader.show(f.binding,row.agenticreplay_run_id)).events.length>0)
   const titled=join(runs,'20261013010101-dsh-current-title-'+row.agenticreplay_run_id.slice(4));await rename(first,titled)
   assert.ok((await readFile(await f.reader.export(f.binding,row.agenticreplay_run_id))).length>0)
@@ -224,8 +224,8 @@ test('stable run IDs resolve titled directories, an empty exclusive claim, and c
 test('duplicate physical runs and nonempty manifest-less reservations are never selected',async()=>{
  const f=await agenticReplayFixture()
  try{
-  const row=await completed(f),runs=join(f.root,'.agenticreplay','runs'),legacy=join(runs,row.agenticreplay_run_id),named=join(runs,'20261013010101-dsh-session-'+row.agenticreplay_run_id.slice(4))
-  await cp(legacy,named,{recursive:true});await assert.rejects(f.reader.show(f.binding,row.agenticreplay_run_id),/trace_ambiguous/)
-  await rm(join(legacy,'manifest.json'));await assert.rejects(f.reader.show(f.binding,row.agenticreplay_run_id),/trace_integrity_mismatch/)
+  const row=await completed(f),runs=join(f.root,'.agenticreplay','runs'),actual=await recordedRunDirectory(f.root,row.agenticreplay_run_id),legacy=join(runs,row.agenticreplay_run_id),named=join(runs,'20261013010101-dsh-session-'+row.agenticreplay_run_id.slice(4))
+  await cp(actual,named,{recursive:true});await assert.rejects(f.reader.show(f.binding,row.agenticreplay_run_id),/trace_ambiguous/)
+  await rm(named,{recursive:true});await rm(join(legacy,'manifest.json'),{force:true});await writeFile(join(legacy,'unexpected'),'nonempty reservation');await assert.rejects(f.reader.show(f.binding,row.agenticreplay_run_id),/trace_integrity_mismatch/)
  }finally{await f.dispose()}
 })

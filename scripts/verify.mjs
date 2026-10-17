@@ -49,11 +49,15 @@ async function command(argv,env=baseEnv,log='command') {
   const child=spawn(resolved[0],resolved.slice(1),{cwd:root,env,shell:false,stdio:['ignore','pipe','pipe'],detached:process.platform!=='win32'});
   let stdout='',stderr='',timedOut=false;
   child.stdout.on('data',chunk=>{stdout+=chunk;process.stdout.write(chunk);});child.stderr.on('data',chunk=>{stderr+=chunk;process.stderr.write(chunk);});
-  const stop=()=>{if(child.exitCode!==null||child.signalCode!==null)return;try {if(process.platform!=='win32'&&child.pid)process.kill(-child.pid,'SIGKILL');else child.kill('SIGKILL');}catch(e){if(e.code!=='ESRCH')throw e;}};
+  let killTimer;
+  const signalGroup=signal=>{if(child.exitCode!==null||child.signalCode!==null)return;try {if(process.platform!=='win32'&&child.pid)process.kill(-child.pid,signal);else child.kill(signal);}catch(e){if(e.code!=='ESRCH')throw e;}};
+  // Native runners own detached test groups. Give their signal handlers time to
+  // forward cancellation and reap those children before escalating a stuck check.
+  const stop=()=>{if(killTimer||child.exitCode!==null||child.signalCode!==null)return;signalGroup('SIGTERM');killTimer=setTimeout(()=>signalGroup('SIGKILL'),5000);killTimer.unref();};
   const interrupt=()=>{interrupted=true;stop();};process.on('SIGINT',interrupt);process.on('SIGTERM',interrupt);
   const timer=setTimeout(()=>{timedOut=true;stop();},30*60*1000);
   const result=await new Promise(resolve=>{child.once('error',error=>resolve({exitCode:null,error:error.message}));child.once('close',(exitCode,signal)=>resolve({exitCode,signal}));});
-  clearTimeout(timer);process.off('SIGINT',interrupt);process.off('SIGTERM',interrupt);stop();
+  clearTimeout(timer);clearTimeout(killTimer);process.off('SIGINT',interrupt);process.off('SIGTERM',interrupt);stop();
   writeFileSync(path.join(output,`${log}.log`),stdout+'\n'+stderr);
   return {...result,argv:resolved,cwd:root,started,ended:new Date().toISOString(),timedOut,stdout,stderr};
 }

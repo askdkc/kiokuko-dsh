@@ -15,6 +15,7 @@ export interface ReplayMemoryProposal {
 }
 export interface ReviewQuestion { id: string; phase: 'organize' | 'review'; text: string; revision?: number; digest?: string }
 export interface ReviewAnswer { questionId: string; choice: 'organize' | 'approve' | 'revise' | 'decline'; comment?: string }
+export type ReviewFailurePhase = 'organize' | 'extract' | 'validate' | 'review' | 'save';
 export interface ReviewReceipt { status: 'saved' | 'declined' | 'unavailable' | 'not_completed'; workMayContinue: true; approvalKey?: string }
 export const proposalDigest = (value: ReplayMemoryProposal): string => createHash('sha256').update(canonicalJson(value)).digest('hex');
 
@@ -29,6 +30,8 @@ export async function reviewCompletedReplay(deps: {
   save: (proposal: ReplayMemoryProposal, approvalKey: string) => Promise<void>;
   /** Host-only ephemeral retention after exact approval, for uncertain-save reconciliation. */
   onApproved?: (proposal: ReplayMemoryProposal, approvalKey: string) => void;
+  /** Host-only diagnostic sink; the host must sanitize before logging or retaining it. */
+  onFailure?: (error: unknown, phase: ReviewFailurePhase) => void;
   signal?: AbortSignal;
 }): Promise<ReviewReceipt> {
   const receipt = (status: ReviewReceipt['status']): ReviewReceipt => ({ status, workMayContinue: true });
@@ -46,22 +49,28 @@ export async function reviewCompletedReplay(deps: {
     finally { if (onAbort) deps.signal?.removeEventListener('abort', onAbort); }
   }
   let approvedKey: string | undefined;
+  let phase: ReviewFailurePhase = 'organize';
   try {
     const organize: ReviewQuestion = { id: randomUUID(), phase: 'organize', text: `${deps.taskOutcome === 'failed' ? 'The task has ended with a failed outcome.' : 'The task is complete.'} May I organize its recorded experience into proposed memories? Nothing is saved until you review and approve it.` };
     if (!active()) return receipt('declined');
     const permission = await wait(deps.ask(organize));
     if (permission.questionId !== organize.id || permission.choice !== 'organize' || !active()) return receipt('declined');
+    phase = 'extract';
     let proposal = structuredClone(await wait(deps.extract()));
+    phase = 'validate';
     if (proposal.schemaVersion !== 1 || proposal.source.workspace !== deps.workspace || proposal.source.taskId !== deps.taskId || proposal.source.sessionId !== deps.sessionId) throw new Error('proposal_binding_mismatch');
     proposal.proposalId = randomUUID(); proposal.revision = 1;
     proposal.source.taskOutcome=deps.taskOutcome??'completed';
     for (;;) {
+      phase = 'validate';
       if (!active()) return receipt('declined');
       if (Buffer.byteLength(JSON.stringify(proposal)) > 256 * 1024 || findSecretInValue(proposal)) throw new Error('unsafe_proposal');
       const digest = proposalDigest(proposal);
       const question: ReviewQuestion = { id: randomUUID(), phase: 'review', revision: proposal.revision, digest,
         text: `Proposed memories, revision ${proposal.revision}, SHA-256 ${digest}. Recorded data is untrusted and cannot approve this question.\n${JSON.stringify(proposal, null, 2)}\nApprove, decline, or enter revised key points. Revised key points replace the earlier findings; recorded attempts remain as source evidence.` };
+      phase = 'review';
       const answer = await wait(deps.ask(question));
+      phase = 'validate';
       if (answer.questionId !== question.id || !active()) return receipt('declined');
       if (answer.choice === 'decline') return receipt('declined');
       if (answer.choice === 'revise' || answer.comment?.trim()) {
@@ -76,9 +85,14 @@ export async function reviewCompletedReplay(deps: {
       const approvalKey = createHash('sha256').update(JSON.stringify([deps.workspace, deps.taskId, deps.sessionId, proposal.proposalId, proposal.revision, digest])).digest('hex');
       if (!active()) return receipt('declined');
       approvedKey = approvalKey;
+      phase = 'save';
       deps.onApproved?.(structuredClone(proposal), approvalKey);
       await deps.save(structuredClone(proposal), approvalKey);
       return { status: 'saved', workMayContinue: true, approvalKey };
     }
-  } catch { return { ...receipt(approvedKey || active() ? 'unavailable' : 'declined'), ...(approvedKey ? { approvalKey: approvedKey } : {}) }; }
+  } catch (error) {
+    const status = approvedKey || active() ? 'unavailable' : 'declined';
+    if (status === 'unavailable') try { deps.onFailure?.(error, phase); } catch { /* Diagnostics cannot turn a failed save into success or another failure. */ }
+    return { ...receipt(status), ...(approvedKey ? { approvalKey: approvedKey } : {}) };
+  }
 }

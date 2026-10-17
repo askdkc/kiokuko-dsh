@@ -1,3 +1,4 @@
+import { failedFinalizationPatch, memoryStreamFailure } from './memory-failure.js'
 import { MemoryIndexReasoningConfig, type IndexReasoningConfig } from '../memory/index-reasoning/contracts.js'
 import { ownedRunEvidence, ownedReviewEvidence, linkOwnedMemoryEvidence, boundedOwnedEvidence } from './owned-evidence.js'
 import {findSecret} from '../memory/secrets.js'
@@ -37,7 +38,6 @@ const MAX_OUTPUT_TOKENS = 16_384
 const MAX_EVIDENCE_BYTES = 4 * 1024 * 1024
 const DEFAULT_EVIDENCE_BYTES = 256 * 1024
 const MAX_EVIDENCE_CANDIDATES = 4_096
-const MAX_ERROR_LENGTH = 2_000
 const MAX_ATTEMPTS = 3
 const FINALIZATION_TIMEOUT_MS = 5 * 60_000
 
@@ -224,13 +224,6 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
-}
-
-function boundedError(error: unknown): { code: string; message: string } {
-  const item = record(error)
-  const code = typeof item?.code === 'string' && item.code.length > 0 ? item.code : 'FINALIZATION_FAILED'
-  const raw = error instanceof Error ? error.message : String(error)
-  return { code: code.slice(0, 128), message: raw.slice(0, MAX_ERROR_LENGTH) }
 }
 
 function validateIdentity(value: string, label: string): string {
@@ -1171,7 +1164,7 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
     }
     const reason = record(finish?.reason)
     if (finish === undefined || reason?.kind !== 'stop') {
-      throw new KiokukoError('SERVICE_UNAVAILABLE', `DSH memory finalizer did not stop normally (${String(reason?.kind ?? 'missing-finish')})`)
+      throw memoryStreamFailure(reason)
     }
     if(reconciliation){
       const parsed=(job.evidenceContractVersion===4?FinalizerResultV4:FinalizerResult).parse(JSON.parse(text))
@@ -1357,19 +1350,18 @@ Use schemaVersion 4 with memoryOperations and optional episode. Use only supplie
         this.#lastDrainError = error
         return
       }
-      const failure = boundedError(error)
       try {
-        await this.#runtime.withDatabase((database) => {
+        await this.#runtime.withDatabase((database) => withImmediateTransaction(database, () => {
           const current=storedFinalization(database,job)
-          if(current?.status==='processing' && current.claim_nonce===job.claimNonce)
-            updateFinalization(database,job,{status:'failed',claim_nonce:null,lease_until:null,last_error_code:failure.code,last_error_message:failure.code,updated_at:this.#now()})
+          const failure=failedFinalizationPatch(current,job.claimNonce,error)
+          if(failure)updateFinalization(database,job,{...failure,updated_at:this.#now()})
           if(!job.archived){
             database.prepare("UPDATE memory_review_states SET handoff_status='finalizer_failed' WHERE run_id=? AND lease_nonce=?").run(job.runId,job.claimNonce)
             releaseMemoryLease(database,job.runId,job.claimNonce)
           }
           if(current?.last_error_code==='MEMORY_FORGOTTEN')updateFinalization(database,job,{input_tokens:attempt.usage.inputTokens??null,
             output_tokens:attempt.usage.outputTokens??null,cache_read_tokens:attempt.usage.cacheReadTokens??null,cache_write_tokens:attempt.usage.cacheWriteTokens??null})
-        })
+        }))
       } catch (markError) {
         this.#lastDrainError = new AggregateError([error, markError], 'DSH memory finalization and failure recording both failed')
       }

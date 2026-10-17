@@ -1,5 +1,6 @@
 import { resolveGuardrail } from './guardrail-artifacts.mjs'
 import { completeVerification } from './verification-completion.mjs';
+import { observeProcess, processDiagnostic } from './verification-diagnostics.mjs'
 import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, extname, join, relative, resolve } from 'node:path'
@@ -9,6 +10,8 @@ import { Script } from 'node:vm'
 import { satisfies, subset, validRange } from 'semver'
 
 const exec = promisify(execFile)
+const checkStarted = performance.now()
+let failureDiagnostic
 const root = process.cwd()
 const cache = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-cache-'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
@@ -317,7 +320,12 @@ async function createAndSmokeTestTarball() {
     cwd: extractRoot, env: { PATH: process.env.PATH, HOME: work },
   })
   await writeFile(join(consumerRoot, 'package.json'), '{"private":true,"type":"module"}\n')
-  await exec('npm', ['install', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', tarball], { cwd: consumerRoot, env: { PATH: process.env.PATH, HOME: work, npm_config_cache: cache }, timeout: 180_000, maxBuffer: 16 * 1024 * 1024 })
+  const installation = await observeProcess(signal => exec('npm', ['install', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', tarball], {
+    cwd: consumerRoot, env: { PATH: process.env.PATH, HOME: work, npm_config_cache: cache },
+    signal, killSignal: 'SIGTERM', maxBuffer: 16 * 1024 * 1024,
+  }), { point: 'pack-install', timeoutMs: 180_000 })
+  process.stderr.write(`${JSON.stringify(installation.diagnostic)}\n`)
+  if (!installation.ok) { failureDiagnostic = installation.diagnostic; throw new Error('Consumer installation failed') }
   const packageRoot = join(consumerRoot, 'node_modules', 'kiokuko-dsh')
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
   await assertDshClientArtifact(packageRoot)
@@ -523,10 +531,9 @@ try {
     bundledGuardrailNativeSmoke: 'passed',
   }, null, 2)}\n`)
 } catch (error) {
-  if (typeof error?.stdout === 'string') process.stdout.write(error.stdout)
-  if (typeof error?.stderr === 'string') process.stderr.write(error.stderr)
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
-  process.exitCode = typeof error?.code === 'number' ? error.code : 1
+  const diagnostic = failureDiagnostic ?? processDiagnostic({ point: 'pack-check', error, elapsedMs: performance.now() - checkStarted })
+  if (!failureDiagnostic) process.stderr.write(`${JSON.stringify(diagnostic)}\n`)
+  process.exitCode = typeof diagnostic.exitCode === 'number' && diagnostic.exitCode !== 0 ? diagnostic.exitCode : 1
 } finally {
   await Promise.all([
     rm(cache, { recursive: true, force: true }),

@@ -64,6 +64,8 @@ test('only a pre-provider error can consume one recovery', async () => {
       dshSessionId: 'recoverable-session', nativeTurn: 1, turnEndedWithError: true,
     }))
     assert.equal(settled?.status, 'recoverable')
+    assert.equal(settled?.providerStarted, false)
+    assert.equal(settled?.sideEffectStarted, false)
     const recovered = withImmediateTransaction(f.database, () => takeRecoverableInputClaimInTransaction(
       f.database, 'recoverable-session', 1,
     ))
@@ -85,9 +87,55 @@ test('only a pre-provider error can consume one recovery', async () => {
       dshSessionId: 'unsafe-session', nativeTurn: 2, turnEndedWithError: true,
     }))
     assert.equal(unsafe?.status, 'unsafe')
+    assert.equal(unsafe?.providerStarted, true)
+    assert.equal(unsafe?.sideEffectStarted, false)
     assert.equal(withImmediateTransaction(f.database, () => takeRecoverableInputClaimInTransaction(
       f.database, 'unsafe-session', 2,
     )), undefined)
+  } finally {
+    await f.cleanup()
+  }
+})
+
+test('side effects alone forbid input recovery without consuming or mutating the claim', async () => {
+  const f = await fixture()
+  try {
+    withImmediateTransaction(f.database, () => {
+      backupInputClaimInTransaction(f.database, {
+        dshSessionId: 'side-effect-session', nativeTurn: 1, messages: exactMessages,
+      })
+      markClaimProgressInTransaction(f.database, {
+        dshSessionId: 'side-effect-session', nativeTurn: 1,
+        providerStarted: false, sideEffectStarted: true,
+      })
+    })
+    const settled = withImmediateTransaction(f.database, () => settleInputClaimInTransaction(f.database, {
+      dshSessionId: 'side-effect-session', nativeTurn: 1, turnEndedWithError: true,
+    }))
+    assert.equal(settled?.status, 'unsafe')
+    assert.equal(settled?.providerStarted, false)
+    assert.equal(settled?.sideEffectStarted, true)
+    assert.equal(settled?.recoveryCount, 0)
+
+    const snapshot = () => f.database.prepare('SELECT * FROM dsh_input_claim_backups').all()
+    const changes = () => f.database.prepare('SELECT total_changes() AS count').get<{ count: number }>()!.count
+    const assertRecoveryRefused = () => {
+      const before = snapshot()
+      const changesBefore = changes()
+      assert.equal(withImmediateTransaction(f.database, () => takeRecoverableInputClaimInTransaction(
+        f.database, 'side-effect-session', 1,
+      )), undefined, 'executed input must not be returned for native steering')
+      assert.deepEqual(snapshot(), before, 'refusal preserves every stored field, including payload and timestamps')
+      assert.equal(changes(), changesBefore, 'refusal performs no database writes')
+      assert.deepEqual(readInputClaim(f.database, 'side-effect-session', 1)?.messages, exactMessages)
+    }
+    assertRecoveryRefused()
+
+    // Even stale eligibility metadata must not override the persisted execution flag.
+    f.database.prepare("UPDATE dsh_input_claim_backups SET status = 'recoverable' WHERE claim_id = ?")
+      .run(settled!.claimId)
+    assertRecoveryRefused()
+    assertRecoveryRefused()
   } finally {
     await f.cleanup()
   }

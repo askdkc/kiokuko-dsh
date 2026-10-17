@@ -17,6 +17,8 @@ Recorded tool payloads/results are read with exact call identities and source ha
 
 `memory_review_status` only reconciles uncertain saves whose exact approval remains in this process's bounded in-memory cache. It cannot approve or retry a write. Restart does not revive an unapproved draft or an unresolved save.
 
+A failed approved save remains `unavailable`. Its read-only status can include the failed phase, a bounded error code and explanatory text with credential, URL and path redaction; raw error objects, response/request fields and stacks are not copied. Diagnostic logging cannot change a failed save into success. A read-only reconciliation must verify the exact persisted approval receipt before reporting `saved`. Historical finalization diagnostics use the same safe projection; old failures are not rewritten or retried.
+
 `/kioku-memory explain ENTRY_ID` inspects indexed evidence. `/kioku-memory forget ENTRY_ID --revision N` removes the approved memory and its replay projection, including dependent indexed content; original native logs, external copies and backups remain. These native commands use the current project without requiring Goal enrollment.
 
 ## Legacy compatibility

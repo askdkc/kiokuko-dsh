@@ -22,6 +22,10 @@ test('runtime evidence follows the actual launcher, preserving unknown host iden
       await writeFile(manifest, metadata)
       assert.deepEqual(runtimeEvidence(link), { nodeVersion: process.version, dshVersion: null, launcher: null })
     }
+    await writeFile(manifest, JSON.stringify({ name: '@deepseek-ai/dsh', version: '1.0.0' }))
+    const nested = join(root, 'nested'); await mkdir(nested)
+    await writeFile(join(nested, 'package.json'), 'null'); await writeFile(join(nested, 'entry.js'), '')
+    assert.equal(runtimeEvidence(join(nested, 'entry.js')).dshVersion, null, 'invalid nearest metadata must not borrow an outer host version')
     assert.equal(runtimeEvidence(join(root, 'missing')).dshVersion, null)
   } finally { await rm(root, { recursive: true, force: true }) }
 })

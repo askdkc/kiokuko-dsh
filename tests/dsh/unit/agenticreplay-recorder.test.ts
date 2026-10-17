@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { loadAgenticReplayLibrary } from '../../../src/dsh/agenticreplay-libraries.js'
 import { Config, AgenticReplayConfig } from '../../../src/dsh/config.js'
 import { projectAgenticReplayJson } from '../../../src/dsh/agenticreplay-security.js'
-import { agenticReplayFixture, chunks, collect, request, response } from '../helpers/agenticreplay-fixture.js'
+import { recordedRunDirectory, agenticReplayFixture, chunks, collect, request, response } from '../helpers/agenticreplay-fixture.js'
 import { secretCases, benignCases } from '../helpers/agenticreplay-redaction-cases.js'
 import { captureRedactionCase } from '../helpers/agenticreplay-redaction.js'
 
@@ -31,7 +31,7 @@ test('oversized model requests keep bounded metadata and a correlated response',
     await f.recorder.shutdown()
     const row = (await f.reader.list(f.binding))[0]!
     assert.equal(row.state, 'completed', JSON.stringify(row))
-    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    const events = await (await TraceReader.open(await recordedRunDirectory(f.root, row.agenticreplay_run_id))).events()
     const modelRequest = events.find(event => event.type === 'model.request')!
     const modelResponse = events.find(event => event.type === 'model.response')!
     assert.equal(modelRequest.attrs?.content_omitted, true)
@@ -122,10 +122,10 @@ test('new recordings use the AgenticReplay manifest contract and storage namespa
     await f.recorder.shutdown()
     const row = (await f.reader.list(f.binding))[0]!
     assert.equal(row.state, 'completed')
-    const manifest = JSON.parse(await readFile(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'manifest.json'), 'utf8'))
+    const manifest = JSON.parse(await readFile(join(await recordedRunDirectory(f.root, row.agenticreplay_run_id), 'manifest.json'), 'utf8'))
     assert.equal(typeof manifest.agenticreplay_version, 'string')
     assert.equal(manifest.orca_version, undefined)
-    await access(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'manifest.json'))
+    await access(join(await recordedRunDirectory(f.root, row.agenticreplay_run_id), 'manifest.json'))
     await assert.rejects(access(join(f.root, '.orca')))
   } finally { await f.dispose() }
 })
@@ -178,11 +178,11 @@ test('concurrent model calls share a writer, retain identity and causal seqs, pr
       assert.equal(cause.attrs?.modelCallId, event.attrs?.modelCallId)
       assert.equal(event.attrs?.input_tokens, 12)
     }
-    const manifest = JSON.parse(await readFile(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'manifest.json'), 'utf8'))
+    const manifest = JSON.parse(await readFile(join(await recordedRunDirectory(f.root, row.agenticreplay_run_id), 'manifest.json'), 'utf8'))
     assert.deepEqual(manifest.env_allowlisted, {})
     assert.equal(manifest.agenticreplay_version, '0.2.99')
     assert.equal(manifest.exit_code, undefined)
-    const nativeReader = await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))
+    const nativeReader = await TraceReader.open(await recordedRunDirectory(f.root, row.agenticreplay_run_id))
     assert.equal((await nativeReader.events()).length, row.event_count)
     assert.ok((await f.reader.export(f.binding, row.agenticreplay_run_id)).endsWith('.html'))
   } finally { await f.dispose() }
@@ -247,7 +247,7 @@ test('pre-execute survives permission wait and shutdown until the final rejected
     await closing
     const row = (await f.reader.list(f.binding))[0]!
     assert.equal(row.state, 'completed')
-    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    const events = await (await TraceReader.open(await recordedRunDirectory(f.root, row.agenticreplay_run_id))).events()
     assert.equal(events.filter(e => e.type === 'tool.call').length, 1)
     const result = events.find(e => e.type === 'tool.result')!
     assert.equal(result.attrs?.is_error, true)
@@ -304,7 +304,7 @@ test('oversized event and cyclic/accessor values cannot bypass the projection bu
     assert.deepEqual(await collect(f.recorder.stream(f.binding, request, () => chunks(response('later event')))), response('later event'))
     await f.recorder.shutdown()
     const row = (await f.reader.list(f.binding))[0]!
-    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    const events = await (await TraceReader.open(await recordedRunDirectory(f.root, row.agenticreplay_run_id))).events()
     assert.equal(row.state, 'completed', JSON.stringify({ row, diagnostics: f.recorder.status(f.binding.sessionId).diagnostics,
       events: events.map(({ type, attrs, causes }) => ({ type, attrs, causes })) })); assert.equal(row.missing_event_count, 0)
     const responses = events.filter(e => e.type === 'model.response')
@@ -325,7 +325,7 @@ test('oversized tool call and result bodies retain correlated metadata and diagn
     f.recorder.toolResult(f.binding, exec, { isError: true, content: [{ type: 'text', text: 'b'.repeat(20_000) }] })
     await f.recorder.shutdown()
     const row = (await f.reader.list(f.binding))[0]!
-    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    const events = await (await TraceReader.open(await recordedRunDirectory(f.root, row.agenticreplay_run_id))).events()
     assert.equal(row.state, 'completed', JSON.stringify({ row, diagnostics: f.recorder.status(f.binding.sessionId).diagnostics,
       events: events.map(({ type, attrs, causes }) => ({ type, attrs, causes })) }))
     const call = events.find(e => e.type === 'tool.call')!, result = events.find(e => e.type === 'tool.result')!
@@ -386,7 +386,7 @@ test('global queue and open trace ceilings apply during writer creation', { time
     assert.equal(rows.length, 1)
     assert.notEqual(rows[0]?.state, 'completed')
     assert.equal(rows[0]?.last_error_code, 'queue_limit')
-    const diagnostic = JSON.parse(await readFile(join(f.root, '.agenticreplay/runs', rows[0]!.agenticreplay_run_id, 'capture-status.json'), 'utf8'))
+    const diagnostic = JSON.parse(await readFile(join(await recordedRunDirectory(f.root, rows[0]!.agenticreplay_run_id), 'capture-status.json'), 'utf8'))
     assert.equal(diagnostic.lastErrorCode, 'queue_limit')
     assert.ok(diagnostic.missingEvents > 0)
   } finally { release(); await f.dispose() }
@@ -458,7 +458,7 @@ test('malformed string arguments are redacted in a bounded envelope and capture 
 
     const row = (await f.reader.list(f.binding))[0]!
     assert.equal(row.state, 'completed')
-    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    const events = await (await TraceReader.open(await recordedRunDirectory(f.root, row.agenticreplay_run_id))).events()
     const calls = events.filter(event => event.type === 'tool.call')
     const results = events.filter(event => event.type === 'tool.result')
     assert.equal(calls.length, 2)
@@ -487,7 +487,7 @@ test('writer failure persists safe phase, event type, call id and code without a
     await f.recorder.shutdown()
 
     const row = (await f.reader.list(f.binding))[0]!
-    const diagnostic = JSON.parse(await readFile(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id, 'capture-status.json'), 'utf8'))
+    const diagnostic = JSON.parse(await readFile(join(await recordedRunDirectory(f.root, row.agenticreplay_run_id), 'capture-status.json'), 'utf8'))
     assert.equal(diagnostic.lastErrorCode, 'recording_io_failed')
     assert.deepEqual(diagnostic.failure, { phase: 'tool_call_append', eventType: 'tool.call', callId: 'safe-call-id', code: 'recording_io_failed' })
     const serialized = JSON.stringify(diagnostic)
@@ -533,7 +533,7 @@ test('native structured errors and process failures remain failures despite a fa
     }
     await f.recorder.shutdown()
     const row = (await f.reader.list(f.binding))[0]!
-    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events()
+    const events = await (await TraceReader.open(await recordedRunDirectory(f.root, row.agenticreplay_run_id))).events()
     const results = events.filter(event => event.type === 'tool.result')
     assert.deepEqual(results.map(event => event.attrs?.is_error), [true, true, true, true, false])
     assert.ok(results.every(event => event.attrs?.native_is_error === false))
@@ -559,7 +559,7 @@ test('multiline directory output with high-entropy names remains valid redacted 
     const row = (await f.reader.list(f.binding))[0]!
     assert.equal(row.state, 'completed', JSON.stringify({ state: row.state, error: row.last_error_code }))
     assert.equal(row.missing_event_count, 0)
-    const runDir = join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id)
+    const runDir = await recordedRunDirectory(f.root, row.agenticreplay_run_id)
     const events = await (await TraceReader.open(runDir)).events()
     const tool = events.find(event => event.type === 'tool.result')!
     let payload: any = tool.payload
@@ -610,7 +610,7 @@ test('run.start records observed runtime evidence rather than a fixed verified r
     await collect(f.recorder.stream(f.binding, request, () => chunks(response())));
     await f.recorder.shutdown();
     const row = (await f.reader.list(f.binding))[0]!;
-    const events = await (await TraceReader.open(join(f.root, '.agenticreplay/runs', row.agenticreplay_run_id))).events();
+    const events = await (await TraceReader.open(await recordedRunDirectory(f.root, row.agenticreplay_run_id))).events();
     const payload = events.find(event => event.type === 'run.start')!.payload as any;
     assert.equal(Object.hasOwn(payload, 'verifiedDshVersion'), false);
     assert.equal(payload.runtime.nodeVersion, process.version);

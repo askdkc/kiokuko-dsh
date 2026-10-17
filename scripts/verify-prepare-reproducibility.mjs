@@ -56,7 +56,7 @@ async function buildOnce(index) {
   const npmEnvironment = { ...process.env, npm_config_cache: cache, npm_config_userconfig: userConfig, NPM_CONFIG_USERCONFIG: userConfig }
   delete npmEnvironment.npm_config_allow_scripts
   delete npmEnvironment.NPM_CONFIG_ALLOW_SCRIPTS
-  await exec('npm', ['ci', '--ignore-scripts', '--include=optional'], {
+  await exec('npm', ['ci', '--ignore-scripts', '--include=dev', '--include=optional'], {
     cwd: checkout,
     env: npmEnvironment,
     maxBuffer: 16 * 1024 * 1024,

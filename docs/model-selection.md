@@ -84,6 +84,8 @@ on 2026-09-11. Its `opencode-go` entry includes V4.1 Flash; its Zen entry (`open
 does not. Registry entries can lag provider changes. Zen and Ollama
 use the configured-model selector for models without a verified template ID.
 
+OpenCode connections added in Kiokuko Models use the plugin's own transport. Custom connections to the official Zen/Go endpoints also retain conversation routing across Chat Completions, Responses and Messages. Native DSH provider profiles remain owned by DSH; select the Kiokuko Models connection to use this transport.
+
 For [dsh-codex](https://github.com/askdkc/dsh-codex), choose **OpenAI Codex・推奨（dsh-codex）**
 from the template menu, then confirm the configuration. It assigns Astra to
 ideal/planning/check, Sol to the Goki head and Luna to workers, following the

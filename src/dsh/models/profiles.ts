@@ -1,4 +1,5 @@
 import { resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
+import { openCodeSessionProvider } from "./opencode-session.js";
 import type { ResolvedPiAiProviderProfile } from "@deepseek-ai/dsh-llm-pi-ai";
 import {
   adapterBuiltinProviders,
@@ -241,6 +242,7 @@ export function connectionProfile(
   delete (provider as { refreshModels?: unknown }).refreshModels;
   if (connection.kind === "infron")
     provider = infronProvider(provider, connection.serviceTier, report);
+  provider = openCodeSessionProvider(provider, connection.baseURL);
   return {
     provider: connection.id,
     displayName: connection.name,
