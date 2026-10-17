@@ -268,7 +268,7 @@ test('CI-only profile preserves all main checks through Linux ownership and leav
   }
 });
 
-test('CI workflow keeps the complete Protected Lisp platform matrix owning CI main omissions', () => {
+test('CI workflow requires every Protected Lisp and semantic matrix result', () => {
   // Parse YAML rather than matching comments or unrelated runner declarations.
   const workflow = (createRequire(import.meta.url)('yaml')).parse(readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
   const lisp = workflow.jobs['lisp-runtime'];
@@ -279,18 +279,29 @@ test('CI workflow keeps the complete Protected Lisp platform matrix owning CI ma
   assert.ok(lisp.steps.some(step => step.run?.includes('--profile lisp --output')));
   assert.ok(workflow.jobs['verify-main'].steps.some(step => step.run?.includes('--profile ci-main --output')));
   assert.ok(!workflow.jobs['verify-main'].steps.some(step => step.run?.includes('--profile main --output')));
-  assert.deepEqual(workflow.jobs.verify.needs, ['verify-main', 'lisp-runtime']);
+  const semantic = workflow.jobs['semantic-platform-smoke'];
+  assert.equal(semantic.if, undefined, 'semantic evidence must remain unconditional');
+  assert.equal(semantic['continue-on-error'], undefined, 'semantic evidence must remain blocking');
+  assert.equal(semantic.strategy['fail-fast'], false);
+  assert.deepEqual(semantic.strategy.matrix.include, [
+    { platform: 'linux-x64', runner: 'ubuntu-24.04' },
+    { platform: 'linux-arm64', runner: 'ubuntu-24.04-arm' },
+    { platform: 'macos-arm64', runner: 'macos-15' },
+  ]);
+  assert.ok(semantic.steps.some(step => step.run?.includes('--profile semantic --output')));
+  assert.deepEqual(workflow.jobs.verify.needs, ['verify-main', 'lisp-runtime', 'semantic-platform-smoke']);
   assert.equal(workflow.jobs.verify.if, 'always()');
   const aggregate = workflow.jobs.verify.steps[0];
   assert.equal(aggregate.env.MAIN_RESULT, '${{ needs.verify-main.result }}');
   assert.equal(aggregate.env.LISP_RESULT, '${{ needs.lisp-runtime.result }}');
-  for (const main of ['success', 'failure', 'cancelled', 'skipped']) {
-    for (const lisp of ['success', 'failure', 'cancelled', 'skipped']) {
-      const result = spawnSync('bash', ['-c', aggregate.run], {
-        env: { ...process.env, MAIN_RESULT: main, LISP_RESULT: lisp }, encoding: 'utf8',
-      });
-      assert.equal(result.status === 0, main === 'success' && lisp === 'success', main + '/' + lisp);
-    }
+  assert.equal(aggregate.env.SEMANTIC_RESULT, '${{ needs.semantic-platform-smoke.result }}');
+  const outcomes = ['success', 'failure', 'cancelled', 'skipped', ''];
+  for (const main of outcomes) for (const lisp of outcomes) for (const semantic of outcomes) {
+    const result = spawnSync('bash', ['-c', aggregate.run], {
+      env: { ...process.env, MAIN_RESULT: main, LISP_RESULT: lisp, SEMANTIC_RESULT: semantic }, encoding: 'utf8',
+    });
+    assert.equal(result.status === 0, main === 'success' && lisp === 'success' && semantic === 'success',
+      JSON.stringify({main,lisp,semantic}));
   }
 });
 

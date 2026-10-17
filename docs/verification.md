@@ -15,6 +15,10 @@ Native fixture preparation is deferred until a selected, executable check declar
 root dependencies (`npm ci`), not the DSH runtime fixture. Missing or invalid native
 fixtures remain `prerequisite-missing` for checks that require them.
 
+The required CI `verify` aggregate waits for `verify-main`, the complete Protected
+Lisp matrix and the complete semantic platform matrix. All three dependency results
+must be `success`; failure, cancellation, skipped or missing results fail the aggregate.
+
 Output defaults to a fresh OS temporary directory. Supply an empty directory
 outside the repository with `--output`. `plan.json`, per-command logs, official
 Node lifecycle reports, `progress.json`, `result.json` and the candidate archive

@@ -96,17 +96,19 @@ jobs:
           path: ${{ runner.temp }}/verification-verify
           if-no-files-found: error
   # Preserve the existing required check: omitted main tests are owned by Lisp.
+  # Semantic platform failures must also fail this required aggregate.
   verify:
-    needs: [verify-main, lisp-runtime]
+    needs: [verify-main, lisp-runtime, semantic-platform-smoke]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require main and every protected runtime result
+      - name: Require main, protected Lisp and semantic platform results
         env:
           MAIN_RESULT: ${{ needs.verify-main.result }}
           LISP_RESULT: ${{ needs.lisp-runtime.result }}
-        run: test "$MAIN_RESULT" = success && test "$LISP_RESULT" = success
+          SEMANTIC_RESULT: ${{ needs.semantic-platform-smoke.result }}
+        run: test "$MAIN_RESULT" = success && test "$LISP_RESULT" = success && test "$SEMANTIC_RESULT" = success
   dsh-runtime-macos:
     name: DSH runtime smoke (macOS)
     runs-on: macos-15
