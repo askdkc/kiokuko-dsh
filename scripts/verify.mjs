@@ -38,7 +38,23 @@ function declaredColorEnvironment(environment, declaration = {}) {
 }
 const baseEnv=declaredColorEnvironment({...process.env,...contract.environment,npm_config_cache:path.join(output,'npm-cache'),npm_config_userconfig:npmrc,NPM_CONFIG_USERCONFIG:npmrc},contract.environment);
 delete baseEnv.npm_config_allow_scripts;delete baseEnv.NPM_CONFIG_ALLOW_SCRIPTS;
-if(contract.native){const {nativeCiPlan}=await import('./run-ci-native.mjs');Object.assign(baseEnv,nativeCiPlan('unit',baseEnv).env);baseEnv.KIOKUKO_REQUIRE_LISP_RUNTIME='1';baseEnv.KIOKUKO_REQUIRE_DSH_CLI='1';const bin=path.join(baseEnv.KIOKUKO_DSH_PACKAGE_ROOT,'.bin');baseEnv.PATH=bin+path.delimiter+baseEnv.PATH;if(existsSync(path.join(bin,'dsh')))baseEnv.DSH_BIN=path.join(bin,'dsh');}
+// A partial profile only prepares the runtime when an executable check needs it.
+let nativePreparation;
+function prepareNativeEnvironment() {
+  return nativePreparation??=(async()=>{
+    try {
+      const {nativeCiPlan}=await import('./run-ci-native.mjs');
+      Object.assign(baseEnv,nativeCiPlan('unit',baseEnv).env);
+      baseEnv.KIOKUKO_REQUIRE_LISP_RUNTIME='1';baseEnv.KIOKUKO_REQUIRE_DSH_CLI='1';
+      const bin=path.join(baseEnv.KIOKUKO_DSH_PACKAGE_ROOT,'.bin');
+      baseEnv.PATH=bin+path.delimiter+baseEnv.PATH;
+      if(existsSync(path.join(bin,'dsh')))baseEnv.DSH_BIN=path.join(bin,'dsh');
+      return null;
+    } catch(error) {
+      return `dsh-native fixture preparation failed: ${error.message}`;
+    }
+  })();
+}
 baseEnv.KIOKUKO_REQUIRE_SQLITE_VEC_SMOKE='1';
 delete baseEnv.NODE_PATH;delete baseEnv.NODE_TEST_CONTEXT;
 async function command(argv,env=baseEnv,log='command') {
@@ -61,11 +77,18 @@ async function command(argv,env=baseEnv,log='command') {
   writeFileSync(path.join(output,`${log}.log`),stdout+'\n'+stderr);
   return {...result,argv:resolved,cwd:root,started,ended:new Date().toISOString(),timedOut,stdout,stderr};
 }
-async function missingCapabilities(check) {
+async function missingCapabilities(check, record) {
   const missing=[];
   for(const capability of check.requires??[]) {
     if(capability==='sqlite-vec'){try{require.resolve('sqlite-vec');}catch{missing.push(capability);}continue;}
-    if(capability==='dsh-native'){if(!existsSync(path.join(baseEnv.KIOKUKO_DSH_PACKAGE_ROOT??'','@deepseek-ai/dsh-agent-loop/lib/index.js')))missing.push(capability);continue;}
+    if(capability==='dsh-native'){
+      const failure=contract.native?await prepareNativeEnvironment():null;
+      if(failure||!existsSync(path.join(baseEnv.KIOKUKO_DSH_PACKAGE_ROOT??'','@deepseek-ai/dsh-agent-loop/lib/index.js'))){
+        missing.push(capability);
+        record.reason=failure??'dsh-native fixture is missing @deepseek-ai/dsh-agent-loop/lib/index.js';
+      }
+      continue;
+    }
     const declaration=contract.capabilities?.[capability];
     const binary=declaration?(baseEnv[declaration.environment]??declaration.binary):capability;
     const candidates=path.isAbsolute(binary)?[binary]:(baseEnv.PATH??'').split(path.delimiter).map(dir=>path.join(dir,process.platform==='win32'?binary+'.cmd':binary));
@@ -109,10 +132,10 @@ for(const check of checks) {
   if(['platform-excluded','scope-excluded'].includes(check.status)){record.status=check.status;record.reason=check.exclusionReason;continue;}
   if(sourceDigest(root)!==initial){record.status='stale';record.reason='source changed during verification';continue;}
   if((check.dependsOn??[]).some(id=>!['passed','platform-excluded'].includes(results.find(r=>r.id===id)?.status))){record.reason='dependency did not pass';continue;}
-  const missing=await missingCapabilities(check);if(missing.length){record.status='prerequisite-missing';record.missing=missing;continue;}
+  const missing=await missingCapabilities(check,record);if(missing.length){record.status='prerequisite-missing';record.missing=missing;continue;}
   if(check.packed&&!artifact){try{await prepareArtifact();}catch(e){record.status='failed';record.reason=e.message;continue;}}
   if(artifact&&(artifact.hash!==hashFile(artifact.path)||artifact.distDigest!==treeDigest(path.join(root,'dist')))){record.status='stale';record.reason='artifact changed';continue;}
-  const missingTests=await missingCapabilities({id:check.id,requires:check.testCapabilities??[]});
+  const missingTests=await missingCapabilities({id:check.id,requires:check.testCapabilities??[]},record);
   if(missingTests.length){record.status='prerequisite-missing';record.missingTestCapabilities=missingTests;continue;}
   const reportDir=path.join(output,check.id);mkdirSync(reportDir);
   const nonce=randomUUID(),completionFile=path.join(output,'receipts',check.id,'complete.json');mkdirSync(path.dirname(completionFile),{recursive:true});

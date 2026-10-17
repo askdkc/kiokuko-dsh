@@ -10,6 +10,10 @@ CI prepares environments, selects profiles and retains output. Missing required
 capabilities are `prerequisite-missing`; unexpected skips, empty Node suites and
 failed assertions are non-success. Platform exclusions are declared before execution
 and recorded with a reason. Exclusions never imply a result on that platform.
+Native fixture preparation is deferred until a selected, executable check declares
+`dsh-native` in `requires` or `testCapabilities`. The `semantic` profile needs only
+root dependencies (`npm ci`), not the DSH runtime fixture. Missing or invalid native
+fixtures remain `prerequisite-missing` for checks that require them.
 
 Output defaults to a fresh OS temporary directory. Supply an empty directory
 outside the repository with `--output`. `plan.json`, per-command logs, official

@@ -52,17 +52,78 @@ test('source, runtime, verification contract, archive or built artifact changes 
  assert.equal(evidenceCurrent(report,state),true);
  for(const key of Object.keys(state))assert.equal(evidenceCurrent(report,{...state,[key]:'changed'}),false,key);
 });
-function fixture(checks){
+function fixture(checks, declaration = {}){
  const root=mkdtempSync(path.join(tmpdir(),'verify-contract-fixture-'));mkdirSync(path.join(root,'scripts'));
  for(const f of ['verify.mjs','verification-contract.mjs','verification-reporter.mjs','verification-test-environment.mjs','verification-completion.mjs'])cpSync(new URL(f,import.meta.url),path.join(root,'scripts',f));
  writeFileSync(path.join(root,'package.json'),'{"private":true,"type":"module"}');
- writeFileSync(path.join(root,'scripts/verification.json'),JSON.stringify({package:'fixture',profiles:['full'],checks,testExclusions:[]}));
+ writeFileSync(path.join(root,'scripts/verification.json'),JSON.stringify({package:'fixture',profiles:['full'],checks,testExclusions:[],...declaration}));
  execFileSync('git',['init','-q'],{cwd:root});return root;
 }
 function execute(root){const output=mkdtempSync(path.join(tmpdir(),'verify-contract-results-'));const child=spawnSync(process.execPath,['scripts/verify.mjs','--output',output],{cwd:root,encoding:'utf8'});return {child,report:JSON.parse(readFileSync(path.join(output,'result.json')))};}
 test('the real entry reports missing required native capability as prerequisite-missing',()=>{
  const root=fixture([{...check,requires:['required-native-that-is-absent'],result:'command'}]);const {child,report}=execute(root);
  assert.equal(child.status,1);assert.equal(report.checks[0].status,'prerequisite-missing');assert.equal(report.completionReady,false);
+});
+function nativeFixture(checks) {
+ const root=fixture(checks,{native:true,nativeScopeExclusions:[],testAliases:[]});
+ const declarationPath=path.join(root,'scripts/verification.json');
+ const declaration=JSON.parse(readFileSync(declarationPath));
+ const packageRoot=path.join(root,'tests/fixtures/dsh-runtime/node_modules');
+ declaration.environment={KIOKUKO_DSH_PACKAGE_ROOT:packageRoot,DSH_BIN:path.join(packageRoot,'.bin/dsh')};
+ writeFileSync(declarationPath,JSON.stringify(declaration));
+ for(const file of ['run-ci-native.mjs','repeated-memory-scenarios.mjs'])cpSync(new URL(file,import.meta.url),path.join(root,'scripts',file));
+ mkdirSync(path.join(root,'tests/dsh/unit'),{recursive:true});
+ writeFileSync(path.join(root,'tests/dsh/unit/probe.test.ts'),'// suite discovery only\n');
+ return root;
+}
+function selectedNativeMetadata(root) {
+ const packageRoot=path.join(root,'tests/fixtures/dsh-runtime/node_modules');
+ mkdirSync(path.join(packageRoot,'@deepseek-ai/dsh'),{recursive:true});
+ writeFileSync(path.join(packageRoot,'@deepseek-ai/dsh/package.json'),JSON.stringify({name:'@deepseek-ai/dsh',version:'test-fixture'}));
+ return packageRoot;
+}
+test('native-enabled verification does not import the native planner for independent or excluded checks',()=>{
+ const root=fixture([{...check,argv:['node','--eval',''],result:'command'},
+  {...check,id:'excluded-native',requires:['dsh-native'],optIn:true,exclusionReason:'explicit optional scope'}],{native:true});
+ // No native planner or installed runtime exists in this checkout.
+ const {child,report}=execute(root);
+ assert.equal(child.status,0,child.stderr);assert.equal(report.checks[0].status,'passed');
+ assert.equal(report.checks[1].status,'scope-excluded');assert.equal(report.completionReady,true);
+});
+test('required DSH fixture failures are recorded without running the native check',()=>{
+ for(const capabilityKey of ['requires','testCapabilities'])for(const state of ['missing','invalid','agent-loop-missing']){
+  const root=nativeFixture([{...check,id:'independent',argv:['node','--eval',''],result:'command'},
+   {...check,argv:['node','must-not-run.mjs'],result:'command',[capabilityKey]:['dsh-native']}]);
+  if(state!=='missing'){
+   const packageRoot=selectedNativeMetadata(root);
+   if(state==='invalid')writeFileSync(path.join(packageRoot,'@deepseek-ai/dsh/package.json'),'{}');
+  }
+  writeFileSync(path.join(root,'must-not-run.mjs'),"import{writeFileSync}from'node:fs';writeFileSync('executed','unexpected');");
+  const {child,report}=execute(root);
+  assert.equal(child.status,1,child.stderr);assert.equal(report.checks[0].status,'passed');
+  assert.equal(report.checks[1].status,'prerequisite-missing',state);
+  assert.deepEqual(report.checks[1][capabilityKey==='requires'?'missing':'missingTestCapabilities'],['dsh-native']);
+  assert.match(report.checks[1].reason,/dsh-native.*(?:fixture|agent-loop)/i);
+  assert.equal(report.completionReady,false);assert.equal(existsSync(path.join(root,'executed')),false);
+ }
+});
+test('required native checks retain the selected fixture environment and CLI path',()=>{
+ for(const capabilityKey of ['requires','testCapabilities']){
+  const root=nativeFixture(['first','second'].map(id=>({...check,id,argv:['node','assert-native.mjs'],result:'command',[capabilityKey]:['dsh-native']})));
+  const packageRoot=selectedNativeMetadata(root);
+  mkdirSync(path.join(packageRoot,'@deepseek-ai/dsh-agent-loop/lib'),{recursive:true});
+  writeFileSync(path.join(packageRoot,'@deepseek-ai/dsh-agent-loop/lib/index.js'),'// capability presence only\n');
+  writeFileSync(path.join(root,'assert-native.mjs'),`import assert from 'node:assert/strict';import path from 'node:path';
+   const root=${JSON.stringify(packageRoot)};assert.equal(process.env.KIOKUKO_DSH_PACKAGE_ROOT,root);
+   assert.equal(process.env.KIOKUKO_EXPECTED_DSH_VERSION,'test-fixture');
+   for(const key of ['KIOKUKO_REQUIRE_DSH_NATIVE','KIOKUKO_REQUIRE_LISP_RUNTIME','KIOKUKO_REQUIRE_DSH_CLI'])assert.equal(process.env[key],'1');
+   const searchPath=process.env.PATH.split(path.delimiter);
+   assert.equal(searchPath[0],path.join(root,'.bin'));
+   assert.equal(searchPath.filter(entry=>entry===path.join(root,'.bin')).length,1);
+   assert.equal(process.env.DSH_BIN,path.join(root,'.bin/dsh'));`);
+  const {child,report}=execute(root);
+  assert.equal(child.status,0,child.stdout+'\n'+child.stderr);assert.ok(report.checks.every(check=>check.status==='passed'));assert.equal(report.completionReady,true);
+ }
 });
 test('the real entry rejects an exit-zero Node suite with no tests',()=>{
  const root=fixture([{...check,argv:['node','--test','empty.test.mjs'],result:'node'}]);writeFileSync(path.join(root,'empty.test.mjs'),'// no tests\n');
@@ -147,19 +208,22 @@ export async function sandboxLaunch(layout){assert.equal(layout.protected,true);
 
 test('CI main source partition has exact coverage union and a single Linux owner per omitted file', async () => {
   const { nativeCiPlan } = await import('./run-ci-native.mjs');
+  // Partition coverage is a source plan contract, not an installed-runtime check.
+  const packageRoot = selectedNativeMetadata(mkdtempSync(path.join(tmpdir(),'verification-native-plan-')));
+  const environment = { KIOKUKO_DSH_PACKAGE_ROOT: packageRoot };
   const actual = JSON.parse(readFileSync(new URL('./verification.json', import.meta.url)));
-  const lisp = nativeCiPlan('lisp', {}).args.slice(1);
+  const lisp = nativeCiPlan('lisp', environment).args.slice(1);
   const owned = actual.checks.find(check => check.id === 'owned-native').argv.slice(2);
   const owners = [...lisp, ...owned];
   assert.equal(new Set(owners).size, owners.length, 'source ownership must be disjoint');
   const original = [], partitioned = [];
   for (const suite of ['unit', 'integration', 'e2e']) {
-    const full = nativeCiPlan(suite, {}), ci = nativeCiPlan('ci-' + suite, {});
+    const full = nativeCiPlan(suite, environment), ci = nativeCiPlan('ci-' + suite, environment);
     original.push(...full.args.slice(1)); partitioned.push(...ci.args.slice(1));
     assert.ok(ci.args.length > 1, 'partition must not become empty');
     assert.ok(ci.args.slice(1).every(file => full.args.includes(file)), 'no invented tests');
     assert.equal(ci.env.KIOKUKO_TEST_CONCURRENCY, full.args.some(file => file.includes('/lisp/')) ? '2' : '4');
-    assert.equal(nativeCiPlan('ci-' + suite, { KIOKUKO_TEST_CONCURRENCY: '1' }).env.KIOKUKO_TEST_CONCURRENCY, '1');
+    assert.equal(nativeCiPlan('ci-' + suite, { ...environment, KIOKUKO_TEST_CONCURRENCY: '1' }).env.KIOKUKO_TEST_CONCURRENCY, '1');
     for (const key of ['KIOKUKO_DSH_PACKAGE_ROOT', 'KIOKUKO_EXPECTED_DSH_VERSION', 'KIOKUKO_REQUIRE_DSH_NATIVE'])
       assert.equal(ci.env[key], full.env[key], key + ' must retain the same fixture');
   }
