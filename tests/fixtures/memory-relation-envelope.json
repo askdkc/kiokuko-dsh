@@ -1,0 +1,76 @@
+{
+  "schema": "memory-relation-envelope-fixtures-v1",
+  "unit": "unicode_code_points",
+  "serialization": "compact_json_including_relationDelivery_key",
+  "cases": [
+    {
+      "name": "complete-unicode",
+      "relationDelivery": {
+        "scope": "provided_items",
+        "status": "complete",
+        "edges": [
+          {
+            "from": {
+              "workspace": "project:日本😀",
+              "entryId": "A😀"
+            },
+            "to": {
+              "workspace": "global",
+              "entryId": "B"
+            },
+            "type": "contradicts"
+          }
+        ],
+        "selectionOmissions": []
+      },
+      "serializedEnvelope": "{\"relationDelivery\":{\"scope\":\"provided_items\",\"status\":\"complete\",\"edges\":[{\"from\":{\"workspace\":\"project:日本😀\",\"entryId\":\"A😀\"},\"to\":{\"workspace\":\"global\",\"entryId\":\"B\"},\"type\":\"contradicts\"}],\"selectionOmissions\":[]}}",
+      "codePoints": 216,
+      "utf16CodeUnits": 218,
+      "utf8Bytes": 226
+    },
+    {
+      "name": "omitted-budget",
+      "relationDelivery": {
+        "scope": "provided_items",
+        "status": "omitted_budget",
+        "edges": [],
+        "selectionOmissions": [
+          "body_budget"
+        ]
+      },
+      "serializedEnvelope": "{\"relationDelivery\":{\"scope\":\"provided_items\",\"status\":\"omitted_budget\",\"edges\":[],\"selectionOmissions\":[\"body_budget\"]}}",
+      "codePoints": 121,
+      "utf16CodeUnits": 121,
+      "utf8Bytes": 121
+    },
+    {
+      "name": "omitted-legacy",
+      "relationDelivery": {
+        "scope": "provided_items",
+        "status": "omitted_legacy",
+        "edges": [],
+        "selectionOmissions": []
+      },
+      "serializedEnvelope": "{\"relationDelivery\":{\"scope\":\"provided_items\",\"status\":\"omitted_legacy\",\"edges\":[],\"selectionOmissions\":[]}}",
+      "codePoints": 108,
+      "utf16CodeUnits": 108,
+      "utf8Bytes": 108
+    }
+  ],
+  "packingBoundary": {
+    "rows": [
+      {
+        "kind": "edge",
+        "from_id": "A😀",
+        "from_workspace": "project:日本😀",
+        "to_id": "B",
+        "to_workspace": "global",
+        "relation": "contradicts"
+      }
+    ],
+    "exactBudget": 216,
+    "underBudget": 215,
+    "expectedAtExact": "complete",
+    "expectedBelow": "omitted_budget"
+  }
+}

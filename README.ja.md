@@ -1,5 +1,7 @@
 # Kiokuko(記憶庫) DeepSeek Harness Plugin
 
+メモリ本文の既定上限は Unicode 16,000文字です。関係メタデータは別枠で制限します。[配信予算と関係情報](docs/memory-delivery.md)を参照してください。
+
 [English](README.md) | 日本語 | [简体中文](README.zh-CN.md) | [한국어](README.ko.md)
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) に、記憶・計画・検証・動作記録を追加するプラグインです。

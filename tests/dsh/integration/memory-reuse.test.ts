@@ -167,7 +167,9 @@ test('migration 22 preserves historical deliveries and omissions with their immu
     const deliveries = f.db.prepare('SELECT * FROM context_deliveries ORDER BY delivery_id').all()
     assert.ok(before.length > 0); assert.deepEqual(migrateDatabase(f.db).applied, CURRENT_MIGRATION_VERSIONS.filter(version => version > 21))
     assert.deepEqual(f.db.prepare('SELECT * FROM context_delivery_omissions ORDER BY delivery_id, entry_id').all(), before)
-    assert.deepEqual(f.db.prepare('SELECT * FROM context_deliveries ORDER BY delivery_id').all(), deliveries)
+    const upgraded = f.db.prepare('SELECT * FROM context_deliveries ORDER BY delivery_id').all()
+    assert.deepEqual(upgraded.map(({relation_delivery_json,relation_character_budget,relation_edge_cap,...row})=>row), deliveries.map(row=>({...row})))
+    assert.ok(upgraded.every(row=>row.relation_delivery_json===null&&row.relation_character_budget===null&&row.relation_edge_cap===null))
     assert.throws(() => f.db.prepare("UPDATE context_delivery_omissions SET reason='semantic_not_applicable'").run(), /immutable/)
     assert.deepEqual(f.db.prepare('PRAGMA foreign_key_check').all(), [])
   } finally { await f.cleanup(); await rm(directory, { recursive: true, force: true }) }

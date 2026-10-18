@@ -41,7 +41,8 @@
     "migrations/039_memory_lifecycle.sql",
     "migrations/040_task_state.sql",
     "migrations/041_task_source_history.sql",
-    "migrations/042_evolution_source_epochs.sql"
+    "migrations/042_evolution_source_epochs.sql",
+    "migrations/043_relation_delivery.sql"
   ],
   "runtimeAssets": [
     "lisp/supervisor.mjs",

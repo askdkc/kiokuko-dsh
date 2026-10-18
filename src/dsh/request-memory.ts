@@ -1,9 +1,11 @@
+import { renderModelMemory, renderModelRelations } from '../context/model-memory.js'
+import { filterRelationDelivery } from '../memory/relation-delivery.js'
 import { KiokukoError } from '../errors.js'
 import { captureProjectManifestSnapshot, resolveProjectFingerprint } from '../repository/project-fingerprint.js'
 import { currentScopedEntry } from '../context/scoped-memory-gate.js'
 import type { SqliteDatabase } from '../db/adapter.js'
 import type { PreparedAgentTask } from './task-intake.js'
-import { projectMemoryEntry, renderMemoryFields } from '../context/memory-projection.js'
+import { projectMemoryEntry } from '../context/memory-projection.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { randomUUID } from 'node:crypto'
 import { retainedEvents } from './context-projection.js'
@@ -17,11 +19,12 @@ export function currentRequestMemory(db: SqliteDatabase, prepared: PreparedAgent
   if (prepared.memoryPolicy.contextWithheld) return allowed
   const fingerprint = prepared.context?.items.some(item => item.origin === 'ecosystem')
     ? resolveProjectFingerprint(db, prepared.project, captureProjectManifestSnapshot(prepared.project), { readOnly: true }) : undefined
-  return currentContextMemory(db,prepared.project.workspace,prepared.context?.items??[],fingerprint)
+  return currentContextMemory(db,prepared.project.workspace,prepared.context?.items??[],fingerprint,prepared.context ?? undefined)
 }
 
-export function currentContextMemory(db:SqliteDatabase,workspace:string,items:readonly ScopedContextItem[],fingerprint?:ProjectFingerprint):ReadonlyMap<string,string> {
+export function currentContextMemory(db:SqliteDatabase,workspace:string,items:readonly ScopedContextItem[],fingerprint?:ProjectFingerprint, options?: Pick<NonNullable<PreparedAgentTask['context']>, 'relationDelivery' | 'relationCharacterBudget' | 'relationEdgeCap'>):ReadonlyMap<string,string> {
   const allowed=new Map<string,string>()
+  const provided: Array<{workspace:string;entryId:string}> = []
   for (const item of items) {
     let entry
     let projected
@@ -30,8 +33,16 @@ export function currentContextMemory(db:SqliteDatabase,workspace:string,items:re
       throw error
     }
     if (!projected || item.projection && canonicalContentHash(item.projection) !== canonicalContentHash(projected.projection)) continue
-    const text = renderMemoryFields(item)
-    if (text !== null) allowed.set(`memory:memory:${item.entryId}`, text)
+    const text = renderModelMemory({ ...item, workspace: entry.workspace })
+    if (text !== null) { allowed.set(`memory:memory:${item.entryId}`, text); provided.push({ workspace: entry.workspace, entryId: item.entryId }) }
+  }
+  if (items.length || options?.relationDelivery) {
+    const relationDelivery = filterRelationDelivery(options?.relationDelivery, provided, {
+      ...(options?.relationCharacterBudget === undefined ? {} : { relationCharacterBudget: options.relationCharacterBudget }),
+      ...(options?.relationEdgeCap === undefined ? {} : { relationEdgeCap: options.relationEdgeCap }),
+      finalFilter: provided.length !== items.length,
+    })
+    allowed.set('memory:relations', renderModelRelations(relationDelivery))
   }
   return allowed
 }
@@ -43,7 +54,7 @@ export function filterRequestMemory<T>(messages: readonly T[], allowed: Readonly
     const message = value as any
     if (!isKiokukoDshSource(message?.source) || message.source.form !== 'snapshot') return true
     const sections = message.source.sections
-    if (!Array.isArray(sections) || !sections.some((section: any) => typeof section?.name === 'string' && section.name.startsWith('memory:memory:'))) return true
+    if (!Array.isArray(sections) || !sections.some((section: any) => typeof section?.name === 'string' && (section.name.startsWith('memory:memory:') || section.name === 'memory:relations'))) return true
     if (sections.length !== 1 || message.content?.length !== 1) return false
     const section = sections[0], text = allowed.get(section.name)
     if (text === undefined || text !== section.text || message.content[0]?.type !== 'text' || message.content[0].text !== text || seen.has(section.name)) return false

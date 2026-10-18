@@ -11,7 +11,7 @@ function prepared(overrides: Record<string, unknown> = {}): PreparedAgentTask {
     memoryPolicy: { memoryReasoningRequired: true, contextWithheld: false, withheldReason: null },
     context: {
       untrusted: true,
-      items: [{ title: 'Prior lesson', summary: 'Use a focused test', bodyPreview: 'Keep the change small.', selectionReasons: ['word_match'] }],
+      items: [{ entryId: 'test-entry', workspace: 'project:test', title: 'Prior lesson', summary: 'Use a focused test', bodyPreview: 'Keep the change small.', selectionReasons: ['word_match'] }],
     },
     ...overrides,
   } as unknown as PreparedAgentTask
@@ -24,7 +24,7 @@ test('model context has a fixed trusted-prefix order and user task last', async 
     routeSkillNames: ['kiokuko-single-purpose-functions'],
     expertRefs: [{ skillName: 'kiokuko-single-purpose-functions', relativePath: 'references/problem-shaping-and-language.md' }],
   })
-  assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'route-skill', 'expert', 'memory', 'user-task'])
+  assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'route-skill', 'expert', 'memory', 'memory', 'user-task'])
   assert.equal(messages.every((message) => message.role === 'user'), true)
   assert.ok(messages[0]?.content.startsWith(await loadSoulPrompt()))
   assert.match(messages[0]?.content ?? '', /DSH host completed the Akinator intake gate/u)
@@ -47,8 +47,8 @@ test('advisory evidence remains untrusted and precedes memory and the final user
       }],
     },
   })
-  assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'advisory', 'memory', 'user-task'])
-  assert.match(messages.at(-3)?.content ?? '', /acceptance criterion/u)
+  assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'advisory', 'memory', 'memory', 'user-task'])
+  assert.match(messages.at(-4)?.content ?? '', /acceptance criterion/u)
   assert.equal(messages.at(-1)?.content, 'Finish the approved review.\n\nFinalized intake:\nsrc/index.ts\ntests pass')
 })
 
@@ -57,7 +57,7 @@ test('ordinary memory remains untrusted and removes path/internal-id material', 
     prepared: prepared({
       context: {
         untrusted: true,
-        items: [{ title: 'Run lesson', summary: 'runId=abc12345', bodyPreview: 'Read /Users/dkc/private-note.txt before editing.', selectionReasons: ['exact_signal_match'] }],
+        items: [{ entryId: 'test-entry', workspace: 'project:test', title: 'Run lesson', summary: 'runId=abc12345', bodyPreview: 'Read /Users/dkc/private-note.txt before editing.', selectionReasons: ['exact_signal_match'] }],
       },
     }),
     task: 'Review the repository change.',

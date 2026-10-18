@@ -178,9 +178,9 @@ test('a bridge with two roots is erased as a whole and a retained request cannot
       sources:[root,other].map(e=>({entryId:e.id,revision:e.revision,contentHash:e.contentHash,supportingText:e.body}))}))
     assert.equal(explainMemory(f.db,{workspace:root.workspace,entryId:fact.id}).lineage.sources.find(s=>s.entryId===root.id)?.claims[0]?.id,'experiment')
     const snapshot={entryId:fact.id,revision:1,origin:'project' as const,...projectMemoryEntry(f.db,fact)!,score:0,scoreComponents:{} as never,selectionReasons:[],metadata:{storedData:true,untrusted:true,instructions:false} as const}
-    assert.equal(currentContextMemory(f.db,root.workspace,[snapshot]).size,1)
+    assert.equal([...currentContextMemory(f.db,root.workspace,[snapshot]).keys()].filter(name=>name.startsWith('memory:memory:')).length,1)
     assert.equal(retire(f.db,root).count,2)
-    assert.equal(currentContextMemory(f.db,root.workspace,[snapshot]).size,0)
+    const retiredMemory=currentContextMemory(f.db,root.workspace,[snapshot]);assert.equal([...retiredMemory.keys()].filter(name=>name.startsWith('memory:memory:')).length,0);assert.equal(JSON.stringify([...retiredMemory.values()]).includes(fact.id),false)
     const owned={source:{kind:'plugin:kiokuko-dsh',form:'snapshot',sections:[{name:`memory:memory:${fact.id}`,text:'old'}]},content:[{type:'text',text:'old'}]}
     assert.equal(filterRequestMemory([owned],new Map()).length,0)
     assert.equal(searchEntries(f.db,{workspace:root.workspace,query:'Python'}).items.some(e=>e.id===fact.id),false)

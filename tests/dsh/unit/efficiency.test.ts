@@ -81,9 +81,15 @@ test('stream failure, early return, missing finish and cancellation preserve nat
 })
 
 test('memory presentation removes exact duplicates only, preserves exceptions and rejects secrets before rendering', async () => {
-  const render = async (item: Partial<ScopedContextItem>) => (await buildDshMessageSources({ task: '', soulInSystemPrompt: true,
+  const render = async (item: Partial<ScopedContextItem>) => {
+    const source = (await buildDshMessageSources({ task: '', soulInSystemPrompt: true,
     intakeStatus: 'ready', nextAction: 'proceed', memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false },
-    context: { untrusted: true, items: [item as ScopedContextItem] } })).find(source => source.kind === 'memory')
+    context: { untrusted: true, items: [{workspace: 'project:test', entryId: 'memory', ...item} as ScopedContextItem] } })).find(source => source.kind === 'memory' && source.name === 'memory:memory')
+    if (!source) return undefined
+    const payload=JSON.parse(source.text)
+    assert.equal(payload.workspace,'project:test'); assert.equal(payload.entryId,'memory')
+    return {...source,text:payload.text}
+  }
   const item = { title: '保存条件', summary: '検証後に保存🙂', bodyPreview: '検証後に保存🙂' }
   const before = structuredClone(item)
   assert.equal((await render(item))?.text, '保存条件\n検証後に保存🙂')

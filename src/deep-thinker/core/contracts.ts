@@ -104,7 +104,7 @@ export const DeepStateSchema = z.object({
   revision: z.number().int().min(0), requirementRevision: z.number().int().positive(),
   ownerEpoch: z.number().int().min(0), ownerId: id.nullable(), leaseUntil: z.number().nonnegative(),
   phase: z.enum(['ready', 'running', 'paused', 'answered', 'partial', 'blocked', 'failed', 'cancelled']),
-  task: text, constraints: strings, context: z.string().max(32_768), reason: z.string().max(32_768),
+  task: text, constraints: strings, context: z.string().max(131_072), reason: z.string().max(32_768),
   configuration: LegacyDeepConfigurationSchema,
   usage: z.object({ jobs: z.number().int().nonnegative(), requests: z.number().int().nonnegative(), tokens: z.number().nonnegative(), reservedTokens: z.number().nonnegative(), estimated: z.boolean(), activeMs: z.number().nonnegative(), activeSince: z.number().nonnegative().nullable() }).strict(),
   nodes: z.array(GoalNodeSchema).min(1).max(128),

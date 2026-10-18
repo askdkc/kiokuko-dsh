@@ -1,4 +1,6 @@
 # Kiokuko(記憶庫) DeepSeek Harness Plugin
+
+Memory body delivery defaults to 16,000 Unicode characters; relation metadata has separate bounded coverage. See [memory delivery budgets](docs/memory-delivery.md).
 [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [한국어](README.ko.md)
 
 Kiokuko adds memory, planning, verification, and observability to

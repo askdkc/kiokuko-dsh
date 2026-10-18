@@ -1,3 +1,4 @@
+import { normalizeStoredModelContext } from '../context/model-memory.js'
 import { qualityJobFor, qualityReplySchema } from './quality-prompts.js'
 import { z } from 'zod'
 import { canonicalContentHash } from '../serialization/validate.js'
@@ -13,7 +14,7 @@ export function jobFor(state: DeepState, node: GoalNode, role: DeepRole, artifac
     assumptions: node.assumptions, priorIssue: node.reason, proposal: node.proposal, candidate: node.candidate,
     children: state.nodes.filter(n => n.parentId === node.id && n.status === 'accepted').map(n => ({ question: n.question, candidate: n.candidate })),
     dependencies: node.dependencies.map(id => { const n = state.nodes.find(n => n.id === id)!; return { question: n.question, candidate: n.candidate } }),
-    context: state.context,
+    context: normalizeStoredModelContext(state.context),
     availableEvidence: artifacts.map(a => ({ artifactId: a.id, path: a.path, startLine: a.startLine, endLine: a.endLine, content: a.content })),
   }
   const encoded = JSON.stringify(input)

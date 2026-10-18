@@ -1,3 +1,5 @@
+import type { RelationDeliveryOptions } from './relation-delivery.js';
+import { DEFAULT_CONTEXT_CHARACTERS } from './context-budget.js';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { reuseProjectMemory, type ProjectMemoryReuseEffect } from './project-reuse.js';
 import { KiokukoError } from '../errors.js';
@@ -124,7 +126,7 @@ export function resolveCheckpointSourceCommit(
 
 export type MemoryScope = FederatedScope;
 
-export interface ScopedRecallInput {
+export interface ScopedRecallInput extends RelationDeliveryOptions {
   query: string;
   cwd?: string;
   project?: ResolvedProjectWorkspace;
@@ -446,11 +448,15 @@ export async function recallScopedMemory(
     ...(input.scope === undefined ? {} : { scope: input.scope }),
     ...(input.limit === undefined ? {} : { limit: input.limit }),
     ...(input.maxChars === undefined ? {} : { maxChars: input.maxChars }),
+    ...(input.relationCharacterBudget === undefined ? {} : { relationCharacterBudget: input.relationCharacterBudget }),
+    ...(input.relationEdgeCap === undefined ? {} : { relationEdgeCap: input.relationEdgeCap }),
     ...(input.readOnly === undefined ? {} : { readOnly: input.readOnly }),
   }, effectiveRuntime);
   if (memoryReuse && input.scope === 'project' && baseline.project) {
     return reuseProjectMemory(database, { project: baseline.project.target, query: input.query,
-      limit: Math.min(input.limit ?? 5, 10), maxChars: input.maxChars ?? 8000 }, baseline, effectiveRuntime, memoryReuse);
+      limit: Math.min(input.limit ?? 5, 10), maxChars: input.maxChars ?? DEFAULT_CONTEXT_CHARACTERS,
+      ...(input.relationCharacterBudget === undefined ? {} : { relationCharacterBudget: input.relationCharacterBudget }),
+      ...(input.relationEdgeCap === undefined ? {} : { relationEdgeCap: input.relationEdgeCap }) }, baseline, effectiveRuntime, memoryReuse);
   }
   return baseline;
 }

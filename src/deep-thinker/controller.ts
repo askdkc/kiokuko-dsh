@@ -1,3 +1,4 @@
+import { serializeModelMemoryContext } from '../context/model-memory.js'
 import type { DecisionService } from '../dsh/decisions/service.js'
 import { isSyntheticContextSource } from '../dsh/plugin-source.js'
 import { createMemoryReuseRuntime } from '../dsh/memory-reuse.js'
@@ -244,11 +245,11 @@ export class DeepPlanningController {
       signal.throwIfAborted()
       const memoryReuse = await createMemoryReuseRuntime(this.options.decisions, intent.startId, signal)
       const prepared = await withDeepAbort(this.options.runtime.withDatabase(db => { signal.throwIfAborted(); return prepareAgentTask(db, { requestId: intent.startId, memoryReuse, task: intent.task, cwd: intent.rootPath,
-        dshSessionId: intent.sessionId, deepSelection: { startId: intent.startId, configuration: intent.configuration! }, maxContextChars: 8_192,
+        dshSessionId: intent.sessionId, deepSelection: { startId: intent.startId, configuration: intent.configuration! },
         profileHints: { taskType: 'analysis', target: intent.rootPath, expected: '調査・分析・設計・計画の回答。リポジトリの変更は行わない。' }, signal,
         ...(capabilities === undefined ? {} : { capabilities }), skillDiscoveryMode: 'off' }) }), signal)
       signal.throwIfAborted()
-      const state = initialDeepState(intent, prepared.run.runId, JSON.stringify(prepared.context ?? {}).slice(0, 32_768))
+      const state = initialDeepState(intent, prepared.run.runId, serializeModelMemoryContext(prepared.context))
       await this.store.createRun(state)
       this.executor.setParent(state.runId, agent)
       // The scheduler starts only after the parent pre-step has intentionally consumed the input.

@@ -1,3 +1,4 @@
+import type { RelationDeliveryOptions } from './relation-delivery.js';
 import type { SqliteDatabase } from '../db/adapter.js'
 import { KiokukoError } from '../errors.js'
 import { canonicalContentHash } from '../serialization/validate.js'
@@ -20,7 +21,7 @@ export interface ProjectMemoryReuseEffect {
 
 export async function reuseProjectMemory(database: SqliteDatabase, input: {
   query: string; project: ResolvedProjectWorkspace; limit: number; maxChars: number;
-}, baseline: FederatedRecallResult, runtime: HybridSearchRuntime, effect: ProjectMemoryReuseEffect): Promise<FederatedRecallResult> {
+} & RelationDeliveryOptions, baseline: FederatedRecallResult, runtime: HybridSearchRuntime, effect: ProjectMemoryReuseEffect): Promise<FederatedRecallResult> {
   const { project } = input, before = contextRetrievalStateHash(database, [project.workspace])
   const manifest = captureProjectManifestSnapshot(project)
   const fingerprint = resolveProjectFingerprint(database, project, manifest, { readOnly: true })
@@ -43,7 +44,9 @@ export async function reuseProjectMemory(database: SqliteDatabase, input: {
   if (result.verdicts.every(v => v === 'uncertain')) return baseline
   const verdicts = new Map(selected.map((c, index) => [c.entry.id, result.verdicts[index]!]))
   const applied = applyMemoryReuse(candidates, candidates.map(c => verdicts.get(c.entry.id) ?? 'uncertain'))
-  const memory = recallEntryHits(database, { workspace: project.workspace, query: input.query, limit: input.limit, maxChars: input.maxChars },
+  const memory = recallEntryHits(database, { workspace: project.workspace, query: input.query, limit: input.limit, maxChars: input.maxChars,
+      ...(input.relationCharacterBudget === undefined ? {} : { relationCharacterBudget: input.relationCharacterBudget }),
+      ...(input.relationEdgeCap === undefined ? {} : { relationEdgeCap: input.relationEdgeCap }) },
     { hits: applied.items.map(c => c.hit), truncated: ranked.truncated || applied.items.length > input.limit })
   const hitById = new Map(applied.items.map(c => [c.entry.id, c.hit]))
   return { ...baseline, project: { target: project, memory }, combined: { ...memory,

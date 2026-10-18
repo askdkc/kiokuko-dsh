@@ -6,7 +6,7 @@ import { readAkinatorSession } from '../akinator/store.js'
 import { readContextRunRetrievalState } from '../context/run-state.js'
 import { contextRetrievalStateHash } from '../context/selection-state.js'
 import { scopedMemoryUseSignal, assertScopedMemoryUseSignal } from '../context/scoped-memory-gate.js'
-import { queryScopedContextGated, type ScopedContextQuery } from '../context/scoped-broker.js'
+import { queryScopedContextGated, SCOPED_CONTEXT_DEFAULT_CHARACTER_BUDGET, type ScopedContextQuery } from '../context/scoped-broker.js'
 import { captureProjectManifestSnapshot, resolveProjectFingerprint } from '../repository/project-fingerprint.js'
 import { currentRequestMemory } from './request-memory.js'
 import { GLOBAL_WORKSPACE } from '../memory/workspaces.js'
@@ -17,7 +17,7 @@ import { decideMemoryRefresh, type MemoryRefreshReason } from '../enno-oduno/mem
 import type { WorkUnit } from '../enno-oduno/types.js'
 import { readRefreshMetadata, reserveMemoryRefresh, commitMemoryRefresh } from './enno-memory-refresh-store.js'
 import { EnnoMemoryConfig } from './config.js'
-import type { PreparedAgentTask } from './task-intake.js'
+import { boundTaskContextCharacterBudget, type PreparedAgentTask } from './task-intake.js'
 import type { DshRuntime } from './runtime.js'
 
 export interface EnnoMemoryObservation {
@@ -97,7 +97,7 @@ export class DshEnnoMemoryRefresh {
         corpus: null, manifest: null, config: canonicalContentHash(this.#config), fullCount: 0, cold: input.prepared.context === null,
         baseline: initial, selected: initial, verifierCursor: 0, unit: null, apply: input.apply }
       owner.focus = buildEnnoMemoryFocus({ state: input.prepared.ennoOduno, root: input.prepared.project.repositoryRoot,
-        signals: owner.signals, constraints: input.constraints, characterBudget: 8000 }).retrievalDomainDigest
+        signals: owner.signals, constraints: input.constraints, characterBudget: SCOPED_CONTEXT_DEFAULT_CHARACTER_BUDGET }).retrievalDomainDigest
       this.#owners.set(input.runId, owner)
     }
     owner.apply = input.apply
@@ -120,9 +120,13 @@ export class DshEnnoMemoryRefresh {
     try {
       owner.unit = input.prepared.ennoOduno.directive?.workUnit ?? owner.unit
       const state = input.prepared.ennoOduno
-      let focus = buildEnnoMemoryFocus({ state: state.directive ? { ...state, directive: { ...state.directive, workUnit: owner.unit } } : state,
-        root: input.prepared.project.repositoryRoot, signals: owner.signals, constraints: input.constraints, characterBudget: 8000 })
-      if(input.query!==undefined)focus={...focus,retrievalDomainDigest:canonicalContentHash({focus:focus.retrievalDomainDigest,query:input.query})}
+      const focusForBudget = (characterBudget: number) => {
+        const focus = buildEnnoMemoryFocus({ state: state.directive ? { ...state, directive: { ...state.directive, workUnit: owner.unit } } : state,
+          root: input.prepared.project.repositoryRoot, signals: owner.signals, constraints: input.constraints, characterBudget })
+        return input.query === undefined ? focus : { ...focus,
+          retrievalDomainDigest: canonicalContentHash({ focus: focus.retrievalDomainDigest, query: input.query }) }
+      }
+      let focus = focusForBudget(SCOPED_CONTEXT_DEFAULT_CHARACTER_BUDGET)
       if (config.mode === 'observe') {
         const decision = decideMemoryRefresh({ active: true, previousFocus: owner.focus ?? focus.retrievalDomainDigest,
           focus: focus.retrievalDomainDigest, corpusChanged: false, configChanged: owner.config !== configDigest,
@@ -133,6 +137,8 @@ export class DshEnnoMemoryRefresh {
       await this.runtime.withDatabase(async (db, embedding) => {
         assertLive()
         const run = readContextRunRetrievalState(db, input.runId)
+        const characterBudget = boundTaskContextCharacterBudget(run.run.metadata)
+        focus = focusForBudget(characterBudget)
         const snapshot = readEnnoSnapshot(db, { runId: input.runId, workspace: input.prepared.project.workspace,
           orchestrationId: state.orchestrationId! })
         const assertAuthority = () => {
@@ -161,9 +167,7 @@ export class DshEnnoMemoryRefresh {
             timedOut: result.status === 'timeout', spawnFailed: result.status === 'spawn_failed' }, content: [] }, snapshot.repositoryRoot))
           owner.verifierCursor = result.cursor
         }
-        if (verifiers.length) focus = buildEnnoMemoryFocus({ state: state.directive ? { ...state, directive: { ...state.directive, workUnit: owner.unit } } : state,
-          root: snapshot.repositoryRoot, signals: owner.signals, constraints: input.constraints, characterBudget: 8000 })
-        if(verifiers.length&&input.query!==undefined)focus={...focus,retrievalDomainDigest:canonicalContentHash({focus:focus.retrievalDomainDigest,query:input.query})}
+        if (verifiers.length) focus = focusForBudget(characterBudget)
         const manifest = captureProjectManifestSnapshot(input.prepared.project).manifestDigest
         const fingerprint = resolveProjectFingerprint(db, input.prepared.project,
           captureProjectManifestSnapshot(input.prepared.project), { readOnly: true })
@@ -179,7 +183,7 @@ export class DshEnnoMemoryRefresh {
         if (decision.decision === 'skip') return
         if (decision.decision === 'reuse' && owner.selected.context === null) { assertAuthority(); input.apply(owner.selected); return }
         const query: ScopedContextQuery = { project: input.prepared.project, task: input.query ?? readAkinatorSession(db, { workspace: snapshot.workspace, sessionId: run.intakeSessionId }).task,
-          taskProfile: run.profile, recommendedTags: run.recommendedTags, runId: input.runId, characterBudget: 8000,
+          taskProfile: run.profile, recommendedTags: run.recommendedTags, runId: input.runId, characterBudget,
           errorSignatures: focus.observedErrorSignals, changedPaths: focus.targetPaths,
           focus: { objective: focus.workUnitObjective, identifiers: focus.observedIdentifiers, constraints: focus.constraints,
             retrievalDomainDigest: focus.retrievalDomainDigest, rankingFocusDigest: focus.rankingFocusDigest } }
@@ -189,7 +193,7 @@ export class DshEnnoMemoryRefresh {
         if (decision.decision === 'reuse' && owner.selected.context && owner.deliveryIdentity === deliveryIdentity) {
           assertAuthority()
           let current = false
-          try { current = currentRequestMemory(db, { ...input.prepared, context: owner.selected.context }).size === owner.selected.context.items.length }
+          try { current = [...currentRequestMemory(db, { ...input.prepared, context: owner.selected.context }).keys()].filter(name => name.startsWith('memory:memory:')).length === owner.selected.context.items.length }
           catch { /* Revalidate through the existing broker when an identity read is unavailable. */ }
           if (current) {
             await input.validateCapabilities?.()

@@ -1,5 +1,7 @@
 # Kiokuko(記憶庫) DeepSeek Harness Plugin
 
+记忆正文默认上限为 16,000 个 Unicode 字符，关系元数据有独立限额。请参阅[记忆传递预算](docs/memory-delivery.md)。
+
 [English](README.md) | [日本語](README.ja.md) | 简体中文 | [한국어](README.ko.md)
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 添加项目记忆、任务规划和验证支持。

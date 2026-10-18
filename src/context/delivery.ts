@@ -1,3 +1,5 @@
+import { validateRelationDelivery, readRelationDelivery, legacyRelationDelivery, type RelationDelivery } from '../memory/relation-delivery.js';
+import { DEFAULT_RELATION_CHARACTERS, DEFAULT_RELATION_EDGE_CAP } from '../memory/context-budget.js';
 import { deliveryForgotten } from '../memory/forgotten.js'
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { KiokukoError } from '../errors.js';
@@ -48,6 +50,9 @@ export interface ContextDeliveryItemInput {
 }
 
 export interface ContextDeliveryInput {
+  relationDelivery?: RelationDelivery;
+  relationCharacterBudget?: number;
+  relationEdgeCap?: number;
   workspace: string;
   deliveryId: string;
   runId: string;
@@ -92,6 +97,9 @@ interface ValidatedContextDeliveryInput extends ContextDeliveryInput {
 }
 
 interface DeliveryHeaderRow extends SqliteRow {
+  relation_delivery_json: unknown;
+  relation_character_budget: unknown;
+  relation_edge_cap: unknown;
   delivery_id: unknown;
   run_id: unknown;
   through_sequence: unknown;
@@ -431,7 +439,7 @@ function validateContextDeliveryInput(value: unknown): ValidatedContextDeliveryI
     const object = objectInput(value, [
       'workspace', 'deliveryId', 'runId', 'throughSequence', 'intakeSessionId', 'taskProfileHash',
       'queryHash', 'policyVersion', 'charBudget', 'charCount', 'truncated',
-      'createdAt', 'items',
+      'createdAt', 'items', 'relationDelivery', 'relationCharacterBudget', 'relationEdgeCap',
     ], false);
     for (const field of ['workspace', 'deliveryId', 'runId', 'throughSequence', 'intakeSessionId', 'taskProfileHash', 'queryHash', 'policyVersion', 'charBudget', 'charCount', 'truncated', 'createdAt', 'items']) {
       if (!hasOwn(object, field)) validation();
@@ -453,12 +461,16 @@ function validateContextDeliveryInput(value: unknown): ValidatedContextDeliveryI
     const createdAt = timestamp(readField(object, 'createdAt'));
     if (!storedDeliveryPolicyMatches(policyVersion)) validation();
     const items = validateDeliveryItems(readField(object, 'items'));
+    const relations = relationIdentity(object as unknown as ContextDeliveryInput);
+    if (relations.relationDelivery) validateRelationDelivery(relations.relationDelivery, relations);
+    else if (object.relationCharacterBudget !== undefined || object.relationEdgeCap !== undefined) validation();
     if (policyRequiresProjection(policyVersion) && (items.some(item => !item.projection || item.projection.sourceRevision !== item.entryRevision
       || policyVersion === 'context-ranking-v10' && item.projection.version !== 2
       || policyVersion === deliveryPolicyVersion() && item.projection.version !== 1)
       || items.reduce((sum,item) => sum + item.projection!.characters, 0) !== charCount)) validation();
     if (policyVersion === 'context-ranking-v6' && items.some(item => item.projection !== undefined)) validation();
     return {
+      ...relations,
       workspace,
       deliveryId,
       runId,
@@ -531,8 +543,17 @@ function validateListInput(value: unknown): { workspace: string; runId: string; 
   }
 }
 
+function relationIdentity(input: Pick<ContextDeliveryInput, 'relationDelivery' | 'relationCharacterBudget' | 'relationEdgeCap'>): Pick<ContextDeliveryInput, 'relationDelivery' | 'relationCharacterBudget' | 'relationEdgeCap'> {
+  return input.relationDelivery === undefined || input.relationDelivery.status === 'omitted_legacy' ? {} : {
+    relationDelivery: input.relationDelivery,
+    relationCharacterBudget: input.relationCharacterBudget ?? DEFAULT_RELATION_CHARACTERS,
+    relationEdgeCap: input.relationEdgeCap ?? DEFAULT_RELATION_EDGE_CAP,
+  };
+}
+
 function canonicalDeliveryBody(input: ContextDeliveryInput): string {
   return canonicalJson({
+    ...relationIdentity(input),
     workspace: input.workspace,
     deliveryId: input.deliveryId,
     runId: input.runId,
@@ -561,6 +582,7 @@ function canonicalDeliveryBody(input: ContextDeliveryInput): string {
 export function scopedDeliveryId(input: Omit<ContextDeliveryInput, 'deliveryId'>): string {
   return `context-${canonicalContentHash({
     kind: 'scoped-context-delivery-v1',
+    ...relationIdentity(input),
     workspace: input.workspace,
     runId: input.runId,
     throughSequence: input.throughSequence,
@@ -589,11 +611,22 @@ function storedScopedDeliveryIdentityMatches(input: ContextDeliveryInput): boole
   return input.deliveryId === scopedDeliveryId(input);
 }
 
+export function relationDeliveryStorageAvailable(database: SqliteDatabase): boolean {
+  const columns = new Set(database.prepare('PRAGMA table_info(context_deliveries)').all<{name:string}>().map(column => column.name));
+  return ['relation_delivery_json', 'relation_character_budget', 'relation_edge_cap'].every(column => columns.has(column));
+}
+function relationHeaderColumns(database: SqliteDatabase): string {
+  return relationDeliveryStorageAvailable(database)
+    ? 'cd.relation_delivery_json, cd.relation_character_budget, cd.relation_edge_cap,'
+    : 'NULL AS relation_delivery_json, NULL AS relation_character_budget, NULL AS relation_edge_cap,';
+}
+
 function selectHeaderByDeliveryId(database: SqliteDatabase, deliveryId: string): DeliveryHeaderRow | undefined {
   return database.prepare(`
     SELECT cd.delivery_id, cd.run_id, cd.through_sequence, cd.intake_session_id,
            cd.task_profile_hash, cd.query_hash, cd.policy_version,
            cd.char_budget, cd.char_count, cd.truncated, cd.created_at, cd.score_schema_version,
+           ${relationHeaderColumns(database)}
            lr.workspace AS run_workspace, lr.last_sequence AS run_last_sequence
       FROM context_deliveries AS cd
       LEFT JOIN ledger_runs AS lr ON lr.run_id = cd.run_id
@@ -703,7 +736,18 @@ function validateStoredHeader(row: DeliveryHeaderRow, workspace: string): Contex
   if (charCount > charBudget) integrity();
   const truncated = storedBoolean(row.truncated);
   const createdAt = storedTimestamp(row.created_at);
+  let relations: ReturnType<typeof relationIdentity> = {};
+  if (row.relation_delivery_json != null) {
+    try {
+      const relationCharacterBudget = storedPositiveSafeInteger(row.relation_character_budget);
+      const relationEdgeCap = storedPositiveSafeInteger(row.relation_edge_cap);
+      relations = { relationDelivery: validateRelationDelivery(validateStoredJson(row.relation_delivery_json),
+        { relationCharacterBudget, relationEdgeCap }), relationCharacterBudget, relationEdgeCap };
+    } catch { integrity(); }
+  } else if (row.relation_character_budget != null || row.relation_edge_cap != null) integrity();
+
   return {
+    ...relations,
     workspace,
     deliveryId,
     runId,
@@ -800,6 +844,7 @@ function readStoredDelivery(database: SqliteDatabase, workspace: string, deliver
   if (!storedScopedDeliveryIdentityMatches(complete)) scopedIdentityIntegrity();
   const view: ContextDeliveryView = {
     ...complete,
+    relationDelivery: header.relationDelivery ?? legacyRelationDelivery(),
     items: items.map((item) => ({ ...item, scoreComponents: { ...item.scoreComponents }, selectionReasons: [...item.selectionReasons], untrusted: true })),
     untrusted: true,
   };
@@ -813,6 +858,13 @@ function writeContextDelivery(
 ): ContextDeliveryView {
   if (input.deliveryId !== scopedDeliveryId(input)) validation();
   assertRunForWrite(database, input);
+  if (input.relationDelivery) {
+    const expected = readRelationDelivery(database, input.items.map(item => ({ entryId: item.entryId, revision: item.entryRevision })),
+      { relationCharacterBudget: input.relationCharacterBudget ?? DEFAULT_RELATION_CHARACTERS, relationEdgeCap: input.relationEdgeCap ?? DEFAULT_RELATION_EDGE_CAP,
+        selectionOmissions: input.relationDelivery.selectionOmissions });
+    if (canonicalJson(expected) !== canonicalJson(input.relationDelivery)) conflict();
+  }
+
   const existing = selectHeaderByDeliveryId(database, input.deliveryId);
   if (existing) {
     if (existing.run_workspace !== input.workspace) conflict();
@@ -824,26 +876,18 @@ function writeContextDelivery(
     conflict();
   }
   options.assertBeforePersist?.();
+  const relationStorage = relationDeliveryStorageAvailable(database);
+  if (input.relationDelivery && !relationStorage) validation();
   database.prepare(`
     INSERT INTO context_deliveries (
       delivery_id, run_id, through_sequence, intake_session_id, task_profile_hash, query_hash,
       policy_version, external_sync_summary_json, char_budget, char_count, truncated, created_at, score_schema_version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    input.deliveryId,
-    input.runId,
-    input.throughSequence,
-    input.intakeSessionId,
-    input.taskProfileHash,
-    input.queryHash,
-    input.policyVersion,
-    '{}',
-    input.charBudget,
-    input.charCount,
-    input.truncated ? 1 : 0,
-    input.createdAt,
-    DELIVERY_SCORE_SCHEMA_VERSION,
-  );
+      ${relationStorage ? ', relation_delivery_json, relation_character_budget, relation_edge_cap' : ''}
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${relationStorage ? ', ?, ?, ?' : ''})
+  `).run(input.deliveryId, input.runId, input.throughSequence, input.intakeSessionId, input.taskProfileHash, input.queryHash,
+    input.policyVersion, '{}', input.charBudget, input.charCount, input.truncated ? 1 : 0, input.createdAt, DELIVERY_SCORE_SCHEMA_VERSION,
+    ...(relationStorage ? [input.relationDelivery === undefined ? null : canonicalJson(input.relationDelivery),
+      input.relationCharacterBudget ?? null, input.relationEdgeCap ?? null] : []));
   for (const item of input.items) {
     database.prepare(`
       INSERT INTO context_delivery_entries (
@@ -905,6 +949,7 @@ export function listContextDeliveries(database: SqliteDatabase, input: unknown):
       SELECT cd.delivery_id, cd.run_id, cd.through_sequence, cd.intake_session_id,
              cd.task_profile_hash, cd.query_hash, cd.policy_version,
              cd.char_budget, cd.char_count, cd.truncated, cd.created_at, cd.score_schema_version,
+           ${relationHeaderColumns(database)}
              lr.workspace AS run_workspace, lr.last_sequence AS run_last_sequence
         FROM context_deliveries AS cd
         LEFT JOIN ledger_runs AS lr ON lr.run_id = cd.run_id

@@ -1,5 +1,7 @@
 # Kiokuko(記憶庫) DeepSeek Harness Plugin
 
+메모리 본문의 기본 한도는 Unicode 16,000자이며 관계 메타데이터에는 별도 한도가 적용됩니다. [메모리 전달 예산](docs/memory-delivery.md)을 참고하세요.
+
 [English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | 한국어
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)에 프로젝트 기억, 작업 계획, 검증 지원을 추가합니다.

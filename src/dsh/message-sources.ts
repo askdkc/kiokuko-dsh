@@ -1,6 +1,8 @@
+import { renderModelMemory, renderModelRelations } from '../context/model-memory.js'
+import { filterRelationDelivery } from '../memory/relation-delivery.js'
 import { MEMORY_APPLICATION_GUIDANCE } from './memory-application.js'
 import { findSecret } from '../memory/secrets.js'
-import { assertMemoryProjection, redactDshSourceText, renderMemoryFields } from '../context/memory-projection.js'
+import { assertMemoryProjection, redactDshSourceText } from '../context/memory-projection.js'
 export { redactDshSourceText } from '../context/memory-projection.js'
 import type { ScopedContextItem, ScopedContextResult } from '../context/scoped-broker.js'
 import { DSH_INTAKE_OWNERSHIP_GUIDANCE } from './standard-skills.js'
@@ -35,7 +37,7 @@ export interface DshMessageSourceInput {
     readonly memoryReasoningRequired: boolean
     readonly contextWithheld: boolean
   }
-  readonly context: Pick<ScopedContextResult, 'items' | 'untrusted'> | null
+  readonly context: Pick<ScopedContextResult, 'items' | 'untrusted' | 'relationDelivery' | 'relationCharacterBudget' | 'relationEdgeCap'> | null
   readonly directive?: Pick<RoleDirective, 'role' | 'instructions' | 'objective' | 'requiredSkills' | 'workUnit' | 'stopConditions' | 'reportSchema'>
   readonly routeSkillNames?: readonly string[]
   readonly expertRefs?: readonly DshExpertReference[]
@@ -62,7 +64,7 @@ function directiveSource(directive: DshMessageSourceInput['directive']): DshMess
 
 function memorySource(item: ScopedContextItem): DshMessageSource | null {
   assertMemoryProjection(item)
-  const text = renderMemoryFields(item)
+  const text = renderModelMemory(item)
   if (text === null) return null
   const title = redactDshSourceText(item.title) ?? 'item'
   return { kind: 'memory', name: `memory:${item.entryId ?? title}`, text, trust: 'untrusted' }
@@ -126,12 +128,20 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
     sources.push({ kind: 'expert', name: `${reference.skillName}/${reference.relativePath}`, text: await readSkill(reference.skillName, reference.relativePath), trust: 'system' })
   }
   if (input.advisoryEvidence !== undefined) sources.push(advisorySource(input.advisoryEvidence))
-  if (!input.memoryPolicy.contextWithheld) {
-    for (const item of input.context?.items ?? []) {
+  if (!input.memoryPolicy.contextWithheld && input.context !== null) {
+    const provided: ScopedContextItem[] = []
+    for (const item of input.context.items) {
       await input.assertMemoryCurrent?.(item)
       const source = memorySource(item)
-      if (source !== null) sources.push(source)
+      if (source !== null) { sources.push(source); provided.push(item) }
     }
+    const relationDelivery = filterRelationDelivery(input.context.relationDelivery,
+      provided.map(item => ({ workspace: item.workspace!, entryId: item.entryId })), {
+        ...(input.context.relationCharacterBudget === undefined ? {} : { relationCharacterBudget: input.context.relationCharacterBudget }),
+        ...(input.context.relationEdgeCap === undefined ? {} : { relationEdgeCap: input.context.relationEdgeCap }),
+        finalFilter: provided.length !== input.context.items.length,
+      })
+    sources.push({ kind: 'memory', name: 'relations', text: renderModelRelations(relationDelivery), trust: 'untrusted' })
   }
   if (input.task.length > 0) sources.push({ kind: 'user-task', name: 'user-task', text: input.task, trust: 'user' })
   return Object.freeze(sources.map((source) => Object.freeze(source)))

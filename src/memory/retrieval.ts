@@ -1,3 +1,5 @@
+import { attachRelationDelivery, configuredRelationDeliveryOptions, type RelationDelivery, type RelationDeliveryOptions } from './relation-delivery.js';
+import { DEFAULT_CONTEXT_CHARACTERS } from './context-budget.js';
 import type { SqliteDatabase } from '../db/adapter.js';
 import { KiokukoError } from '../errors.js';
 import { readEntry, type EntryRecord } from './entries.js';
@@ -23,11 +25,13 @@ export interface SearchResult {
   truncated: boolean;
 }
 
-export interface RecallEntriesInput extends SearchEntriesInput {
+export interface RecallEntriesInput extends SearchEntriesInput, RelationDeliveryOptions {
   maxChars?: number;
 }
 
 export interface RecallItem {
+  entryId?: string;
+  revision?: number;
   evidence?: import('./evidence.js').EvidenceIdentity;
   id: string;
   workspace: string;
@@ -45,6 +49,7 @@ export interface RecallItem {
 }
 
 export interface RecallResult {
+  relationDelivery?: RelationDelivery;
   items: RecallItem[];
   count: number;
   characterCount: number;
@@ -65,7 +70,7 @@ export interface RankedRecallResult {
 
 const DEFAULT_SEARCH_LIMIT = 20;
 const DEFAULT_RECALL_LIMIT = 5;
-const DEFAULT_RECALL_MAX_CHARS = 8000;
+const DEFAULT_RECALL_MAX_CHARS = DEFAULT_CONTEXT_CHARACTERS;
 const MAX_LIMIT = 1000;
 const MAX_RECALL_CHARS = 100_000;
 
@@ -168,7 +173,7 @@ export function recallEntryHits(database: SqliteDatabase, input: RecallEntriesIn
     if (characterCount(snippet) < characterCount(fullSource)
       || characterCount(entry.body) > characterCount(snippet)) truncated = true;
     items.push({
-      id: entry.id,
+      id: entry.id, entryId: entry.id, revision: entry.revision,
       workspace: entry.workspace,
       kind: entry.kind,
       status: entry.status,
@@ -184,5 +189,10 @@ export function recallEntryHits(database: SqliteDatabase, input: RecallEntriesIn
   }
 
   if (items.length < rows.length || selected.truncated) truncated = true;
-  return { items, count: items.length, characterCount: characters, truncated };
+  return attachRelationDelivery(database, { items, count: items.length, characterCount: characters, truncated }, {
+    ...configuredRelationDeliveryOptions(input), selectionOmissions: [
+      ...(selected.truncated || rows.length < selected.hits.length ? ['item_limit' as const] : []),
+      ...(truncated && !selected.truncated ? ['body_budget' as const] : []),
+    ],
+  });
 }

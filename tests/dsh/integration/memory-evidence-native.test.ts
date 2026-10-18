@@ -92,11 +92,20 @@ for (const mode of ['core', 'full'] as const) test(`native ${mode}: conversation
       assert.equal(stored.prepare('SELECT count(*) AS n FROM memory_forget_tombstones WHERE entry_id=?').get(foreign.id)?.n,0)}finally{stored.close()}
     const raceDb=openConnection(databasePath)
     const late=recordEntry(raceDb,{workspace,kind:'fact',title:'CYCLELATE',body:'CYCLELATE private memory assembled before forgetting.',scope:{visibility:'project'}})
+    const linked=recordEntry(raceDb,{workspace,kind:'fact',title:'CYCLELATE linked',body:'CYCLELATE linked evidence.',scope:{visibility:'project'}})
+    for(const relation of ['supports','contradicts','derived_from','related_to']) raceDb.prepare('INSERT INTO entry_links VALUES(?,?,?,?,?)')
+      .run(late.id,linked.id,relation,'2026-10-18T00:00:00.000Z','fixture')
     raceDb.close()
     for (let i=0;i<3;i++) {
       await turn('CYCLELATE の内容を説明して。')
       assert.ok(JSON.stringify(requests.at(-1).messages).includes(late.body), 'fresh conversation memory must survive a previous execution owner')
     }
+    const deliveredRelations=requests.flatMap(r=>r.messages??[]).flatMap((m:any)=>m.content??[])
+      .filter((block:any)=>typeof block.text==='string'&&block.text.startsWith('Stored relation data.'))
+      .map((block:any)=>JSON.parse(block.text.slice(block.text.indexOf('{'))))
+    assert.ok(deliveredRelations.some((delivery:any)=>delivery.status==='complete'&&delivery.edges.length===4
+      &&delivery.edges.every((edge:any)=>edge.from.workspace===workspace&&edge.from.entryId===late.id&&edge.to.entryId===linked.id)),
+      'real native provider request carries all four typed links between the exact supplied items')
     const eventsBeforeRace=agent.session.snapshotEvents()
     const lateSnapshots=new Set(eventsBeforeRace.filter((e:any)=>e.type==='user/message'&&JSON.stringify(e.data).includes(late.body)).map((e:any)=>e.seq))
     assert.ok(!eventsBeforeRace.some((e:any)=>e.surfaceOp?.op==='replace'&&e.sourceEventSeqs?.some((seq:number)=>lateSnapshots.has(seq))), 'current conversation snapshots must not be retired by a prior execution owner')

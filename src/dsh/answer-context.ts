@@ -64,7 +64,7 @@ export class DshAnswerContext {
           project, projectOnly: this.options.projectOnly, task,
           // Retrieval context is neither an inferred intent nor an execution profile.
           taskProfile: { taskType: null, target: null, expected: null, constraints: null },
-          limit: 5, characterBudget: 4000,
+          limit: 5,
         }, candidate => ({ persist: false, value: candidate, assertBeforePersist: () => input.signal.throwIfAborted() }),
         { memoryRetrieval, ...(timeConstraint ? { timeConstraint } : {}) })
         context = result.value
@@ -95,7 +95,7 @@ export class DshAnswerContext {
       const items = state.context?.items ?? []
       const fingerprint = items.some(item => item.origin !== 'project')
         ? resolveProjectFingerprint(db, currentProject, captureProjectManifestSnapshot(currentProject), { readOnly: true }) : undefined
-      return { allowed: currentContextMemory(db, state.project.workspace, items, fingerprint), retired: retiredExplanationCalls(db, session.id) }
+      return { allowed: currentContextMemory(db, state.project.workspace, items, fingerprint, state.context ?? undefined), retired: retiredExplanationCalls(db, session.id) }
     })
   }
   async beforeRequest(input: DemandInput, identity: MemoryOwnerIdentity): Promise<void> {
@@ -139,7 +139,7 @@ export class DshAnswerContext {
       const timeConstraint = timeConstraintForRequest(humanTask(input.messages), memoryRetrieval, Date.now())
       const result = await queryScopedContextGated(db, {
         project, projectOnly: this.options.projectOnly, task: state.task,
-        taskProfile: { taskType: null, target: null, expected: null, constraints: null }, limit: 5, characterBudget: 4000,
+        taskProfile: { taskType: null, target: null, expected: null, constraints: null }, limit: 5,
       }, candidate => ({ persist: false, value: candidate, assertBeforePersist: () => input.signal.throwIfAborted() }),
       { memoryRetrieval, ...(timeConstraint ? { timeConstraint } : {}) })
       input.signal.throwIfAborted()

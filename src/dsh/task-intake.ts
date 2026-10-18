@@ -255,7 +255,8 @@ function bindTaskContextRequest(metadata: JsonObject, maxContextChars: number): 
   };
 }
 
-function assertTaskContextRequestBinding(metadata: JsonObject, maxContextChars: number): void {
+/** Reuse the persisted request budget at every later memory refresh. */
+export function boundTaskContextCharacterBudget(metadata: JsonObject): number {
   const binding = metadata[AGENT_TASK_CONTEXT_BINDING_METADATA_KEY];
   if (typeof binding !== 'object'
     || binding === null
@@ -270,7 +271,11 @@ function assertTaskContextRequestBinding(metadata: JsonObject, maxContextChars: 
     || binding.maxContextChars > SCOPED_CONTEXT_MAX_CHARACTER_BUDGET) {
     throw new KiokukoError('INTEGRITY_ERROR', 'Run task context binding is missing or invalid');
   }
-  if (binding.maxContextChars !== maxContextChars) {
+  return binding.maxContextChars;
+}
+
+function assertTaskContextRequestBinding(metadata: JsonObject, maxContextChars: number): void {
+  if (boundTaskContextCharacterBudget(metadata) !== maxContextChars) {
     throw new KiokukoError('CONFLICT', 'Task context request differs from the request bound when the run was opened');
   }
 }
@@ -712,7 +717,7 @@ export async function refreshContinuedTaskContext(input: {
   const assertCurrent = () => { input.assertCurrent(); assertCurrentProjectManifest(prepared.project,snapshot);if(readContextRunRetrievalState(database,prepared.run.runId).stateHash!==runState.stateHash)throw new KiokukoError('CONFLICT', 'continued_run_changed') }
   assertCurrent()
   const query = { project:prepared.project, task:input.task, taskProfile:prepared.intake.profile,
-    recommendedTags:prepared.intake.recommendedTags, runId:prepared.run.runId, characterBudget:8000 }
+    recommendedTags:prepared.intake.recommendedTags, runId:prepared.run.runId, characterBudget:boundTaskContextCharacterBudget(runState.run.metadata) }
   const gated = await queryScopedContextGated(database,query,candidate=>{
     assertCurrent()
     const memoryUse=scopedMemoryUseSignal(database,prepared.project.workspace,candidate)

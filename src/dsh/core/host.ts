@@ -392,7 +392,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     if (memoryOwner?.kind === 'execution') {
       assertMemoryOwner(memoryOwner, { agentId: current.agent.id, sessionId: current.task.sessionId, turn: current.turn,
         requestDigest: canonicalContentHash(current.taskText), runId: current.task.runId }, 'execution')
-      allowed = await runtime.withDatabase(db => currentContextMemory(db, current.task.workspace, current.task.context?.items ?? []))
+      allowed = await runtime.withDatabase(db => currentContextMemory(db, current.task.workspace, current.task.context?.items ?? [], undefined, current.task.context ?? undefined))
     }
     pruneDshMemorySurface(current.agent.session,allowed)
     const retired=await runtime.withDatabase(db=>retiredExplanationCalls(db,current.agent.session.id))
@@ -781,7 +781,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
             const current = active.get(agent.session.id)
             if (demand?.pending(agent)) await demand.beforeRequest(agent)
             else if (current?.agent === agent && current.turn === memoryFence.turn && current.task.admitted) {
-              const allowed = await runtime.withDatabase(db => currentContextMemory(db, current.task.workspace, current.task.context?.items ?? []))
+              const allowed = await runtime.withDatabase(db => currentContextMemory(db, current.task.workspace, current.task.context?.items ?? [], undefined, current.task.context ?? undefined))
               pruneDshMemorySurface(agent.session, allowed)
               const retired = await runtime.withDatabase(db => retiredExplanationCalls(db, agent.session.id))
               pruneExplainedMemorySurface(agent.session, retired)
@@ -804,7 +804,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           if (!demand?.pending(agent) && current?.agent === agent && current.task.memoryOwner?.kind === 'execution' && current.turn === memoryFence.turn && request.sessionId === agent.session.id && request.purpose !== 'compaction') {
             if (current.task.memoryOwner?.kind !== 'execution') throw new KiokukoError('CONFLICT', 'memory_owner_changed')
             assertMemoryOwner(current.task.memoryOwner, { agentId: agent.id, sessionId: agent.session.id, turn: memoryFence.turn, requestDigest: canonicalContentHash(current.taskText), runId: current.task.runId }, 'execution')
-            const allowed = await runtime.withDatabase(db => currentContextMemory(db,current.task.workspace,current.task.context?.items??[]))
+            const allowed = await runtime.withDatabase(db => currentContextMemory(db,current.task.workspace,current.task.context?.items??[],undefined,current.task.context ?? undefined))
             const retired = await runtime.withDatabase(db => retiredExplanationCalls(db,agent.session.id))
             if (filterRequestMemory(request.messages,allowed).length !== request.messages.length
               || JSON.stringify(filterExplainedMemory(request.messages,retired)) !== JSON.stringify(request.messages)) {

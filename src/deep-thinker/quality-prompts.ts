@@ -1,3 +1,4 @@
+import { normalizeStoredModelContext } from '../context/model-memory.js'
 import { z } from 'zod'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { findSecretInValue } from '../memory/secrets.js'
@@ -34,7 +35,7 @@ export function qualityJobFor(state: DeepState, node: GoalNode, artifacts: reado
     priorIssue:draft?'':node.reason, candidates, issues:draft?[]:q.issues, review:draft?null:q.review,
     children:state.nodes.filter(n=>n.parentId===node.id&&n.status==='accepted').map(n=>({question:n.question,candidate:n.candidate,checks:n.quality?.checks, findings:n.receipt?.verifierVersion === 2 ? n.quality?.candidates.find(c=>n.receipt?.verifierVersion === 2 && c.id===n.receipt.selectedCandidateId)?.reply.findings : undefined})),
     dependencies:node.dependencies.map(id=>{const n=state.nodes.find(n=>n.id===id)!;return {question:n.question,candidate:n.candidate}}),
-    context:state.context,
+    context:normalizeStoredModelContext(state.context),
     availableEvidence:artifacts.map(a=>({artifactId:a.id,path:a.path,startLine:a.startLine,endLine:a.endLine,
       quotes:[...new Set(refs.filter(r=>r.artifactId===a.id&&r.quote).map(r=>r.quote!))]})),
   }

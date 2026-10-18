@@ -1,3 +1,5 @@
+import { readRelationDelivery, legacyRelationDelivery, configuredRelationDeliveryOptions, type RelationDelivery, type RelationDeliveryOptions, type SelectionOmission } from '../memory/relation-delivery.js';
+import { DEFAULT_CONTEXT_CHARACTERS } from '../memory/context-budget.js';
 import { deliveryForgotten } from '../memory/forgotten.js'
 import { indexSettings } from '../memory/index-reasoning/store.js'
 import { applyMemoryReuse, type MemoryReuseRuntime } from '../memory/reuse.js';
@@ -14,7 +16,7 @@ import { applicabilityCompatibility, federatedEntries, type FederatedOrigin } fr
 import { isRetrievableEntry } from '../memory/hybrid-retrieval.js';
 import { effectiveRetrievalScope, hasExplicitApplicability } from '../memory/structured-memory.js';
 import type { TaskProfile } from '../akinator/types.js';
-import { readContextDelivery, recordContextDeliveryInTransaction, scopedDeliveryId, type ContextDeliveryInput, type ContextDeliveryView } from './delivery.js';
+import { readContextDelivery, recordContextDeliveryInTransaction, scopedDeliveryId, relationDeliveryStorageAvailable, type ContextDeliveryInput, type ContextDeliveryView } from './delivery.js';
 import { CONTEXT_SELECTION_REASON_ORDER } from './ranking.js';
 import { withImmediateTransaction } from '../db/transaction.js';
 import { contextFeedbackSignals } from './feedback.js';
@@ -35,10 +37,10 @@ import { MemoryRetrievalConfig, validateMemoryTimeConstraint } from '../memory/r
 
 export const SCOPED_CONTEXT_POLICY_VERSION = 'context-ranking-v7' as const;
 export type ScopedContextPolicy = typeof SCOPED_CONTEXT_POLICY_VERSION | 'context-ranking-v8' | 'context-ranking-v9' | 'context-ranking-v10' | 'context-ranking-v11';
-export const SCOPED_CONTEXT_DEFAULT_CHARACTER_BUDGET = 8_000;
+export const SCOPED_CONTEXT_DEFAULT_CHARACTER_BUDGET = DEFAULT_CONTEXT_CHARACTERS;
 export const SCOPED_CONTEXT_MAX_CHARACTER_BUDGET = 100_000;
 
-export interface ScopedContextQuery {
+export interface ScopedContextQuery extends Pick<RelationDeliveryOptions, 'relationCharacterBudget' | 'relationEdgeCap'> {
   cwd?: string;
   project?: ResolvedProjectWorkspace;
   fingerprint?: ProjectFingerprint;
@@ -60,6 +62,7 @@ export interface ScopedContextQuery {
 }
 
 export interface ScopedContextItem {
+  workspace?: string;
   evidence?: import('../memory/evidence.js').EvidenceIdentity;
   entryId: string;
   revision: number;
@@ -94,6 +97,9 @@ export interface ScopedContextItem {
 }
 
 export interface ScopedContextResult {
+  relationDelivery?: RelationDelivery;
+  relationCharacterBudget?: number;
+  relationEdgeCap?: number;
   project: ResolvedProjectWorkspace | null;
   taskProfileHash: string;
   queryHash: string;
@@ -297,6 +303,7 @@ function entryScore(entry: EntryRecord, origin: FederatedOrigin, retrieval: numb
   const reasons = [scope === 'project' ? 'project_origin' : scope === 'ecosystem' ? 'ecosystem_origin' : 'global_origin', ...(entry.status === 'verified' ? ['verified'] : ['candidate']), ...applicability.reasons, ...(exact ? ['exact_signal_match'] : [])];
   return {
     entryId: entry.id,
+    workspace: entry.workspace,
     revision: entry.revision,
     origin: scope,
     title: entry.title,
@@ -575,6 +582,7 @@ function storedScopedItems(database: SqliteDatabase, delivery: ContextDeliveryVi
     }
     return {
       entryId: item.entryId,
+      workspace: current.workspace,
       revision: item.entryRevision,
       origin: item.origin ?? 'project',
       title: revision.title,
@@ -689,7 +697,7 @@ async function collectScopedCandidates(
   return [...candidates.values()].sort((left, right) => right.score - left.score || compareCanonicalStrings(left.entryId, right.entryId));
 }
 
-async function prepareScopedContext(
+async function prepareScopedContextBody(
   database: SqliteDatabase,
   raw: ScopedContextQuery,
   requestedRuntime: HybridSearchRuntime,
@@ -770,6 +778,7 @@ async function prepareScopedContext(
     },
     limit,
     characterBudget,
+    relationLimits: configuredRelationDeliveryOptions(raw),
     policyVersion,
     retrievalStateHash,
     runStateHash: run?.stateHash ?? null,
@@ -878,6 +887,25 @@ async function prepareScopedContext(
     run,
     projectState,
   };
+}
+
+async function prepareScopedContext(...args: Parameters<typeof prepareScopedContextBody>): Promise<PreparedScopedContext> {
+  const prepared = await prepareScopedContextBody(...args);
+  const [database, raw] = args;
+  const configured = configuredRelationDeliveryOptions(raw);
+  const omissionReasons = [...new Set((prepared.result.omissions ?? []).map(omission =>
+    omission.reason === 'budget' ? 'body_budget' : omission.reason === 'limit' ? 'item_limit' : 'final_filter'))] as SelectionOmission[];
+  const storage = relationDeliveryStorageAvailable(database);
+  const relationDelivery = !storage ? legacyRelationDelivery({ ...configured, selectionOmissions: omissionReasons }) : prepared.replayDelivery
+    ? prepared.replayDelivery.relationDelivery ?? legacyRelationDelivery({ ...configured, selectionOmissions: omissionReasons })
+    : readRelationDelivery(database, prepared.result.items.map(item => ({ entryId: item.entryId,
+      ...(item.workspace === undefined ? {} : { workspace: item.workspace }), revision: item.revision })),
+      { ...configured, selectionOmissions: omissionReasons });
+  const options = prepared.replayDelivery?.relationDelivery && prepared.replayDelivery.relationDelivery.status !== 'omitted_legacy' ? {
+    relationCharacterBudget: prepared.replayDelivery.relationCharacterBudget!, relationEdgeCap: prepared.replayDelivery.relationEdgeCap!,
+  } : configured;
+  return { ...prepared, result: { ...prepared.result, ...options, relationDelivery },
+    pendingDelivery: prepared.pendingDelivery === null ? null : storage ? { ...prepared.pendingDelivery, ...options, relationDelivery } : prepared.pendingDelivery };
 }
 
 function assertPreparedScopedRun(database: SqliteDatabase, run: ScopedRunContext): void {
