@@ -390,7 +390,7 @@ test('legacy memory checkpoint checks native identity but never saves without po
   } finally { await handle.dispose(); await f.cleanup() }
 })
 
-test('reload resumes the exact ordinary request and a completed checkpoint cannot be replayed', async () => {
+test('reload after a legacy checkpoint asks for clarification without admitting or duplicating work', async () => {
   const f = await fixture(), databasePath = join(f.root, 'memory.sqlite3')
   const config = { repositoryRoot: f.root, databasePath }
   let handle = await mountCore(f.ctx, config)
@@ -404,7 +404,30 @@ test('reload resumes the exact ordinary request and a completed checkpoint canno
     await f.tools.find(tool => tool.name === 'memory_checkpoint').execute({ outcome: 'completed', memories: [{ kind: 'fact', title: 'One saved fact', body: 'This exact request is saved once.' }] }, { name: 'memory_checkpoint', agent: f.agent, signal: new AbortController().signal })
     await handle.dispose(); handle = await mountCore(f.ctx, config)
     assert.equal((await prepare()).kind, 'enter')
-    await assert.rejects(f.prepare('research'), /not admit|not open|terminal|complete|request_intent_unresolved|Clarify whether this request/i)
+    const workflow = f.services.kiokukoTaskWorkflow as DshTaskWorkflow
+    const before = await workflow.snapshot(f.agent)
+    const readDurableState = () => {
+      const db = openConnection(databasePath)
+      try {
+        return {
+          runs: db.prepare('SELECT * FROM ledger_runs ORDER BY run_id').all(),
+          owners: db.prepare('SELECT * FROM dsh_execution_owners ORDER BY dsh_session_id').all(),
+          entries: db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n,
+        }
+      } finally { db.close() }
+    }
+    const durableBefore = readDurableState()
+    const clarification = await f.prepare('research')
+    assert.equal(clarification.prepared, false, 'uncertain replay must not grant preparation')
+    assert.equal(clarification.status, 'awaiting_clarification')
+    assert.equal(clarification.nextAction, 'ask_user_once', 'this fixture has no native question service')
+    assert.equal(clarification.permissions, 'unchanged_native_policy')
+    assert.equal(clarification.originalTask, messages[0]!.content)
+    assert.ok(clarification.question.trim())
+    assert.ok(clarification.questionId)
+    assert.deepEqual(await f.prepare('research'), clarification, 'unanswered retries reuse the same question')
+    assert.deepEqual(await workflow.snapshot(f.agent), before, 'no task or lifecycle transition is authorized')
+    assert.deepEqual(readDurableState(), durableBefore, 'no new run, owner change, or memory write')
     const db = openConnection(databasePath)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, 1)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n, 0)
