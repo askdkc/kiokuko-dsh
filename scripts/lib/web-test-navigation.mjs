@@ -1,20 +1,31 @@
 // Versioned native navigation and an explicit decline of the separate optional memory offer.
-export async function openSettings(page) {
-  // Onboarding can make the shell aria-hidden before its locator handler runs.
+export async function openSettings(page, { timeout = 30000 } = {}) {
+  const deadline = Date.now() + timeout
+  const remaining = () => Math.max(1, deadline - Date.now())
   const visible = page.locator(':visible')
+  const opened = page.locator('[data-shortcut-modal="settings"][role="dialog"]')
+    .or(page.getByRole('dialog', { name: 'Settings', exact: true })).and(visible).first()
+  if (await opened.isVisible()) return
   const menu = page.getByRole('button', { name: 'Account menu', exact: true, includeHidden: true }).and(visible)
   const direct = page.getByRole('button', { name: 'Settings', exact: true, includeHidden: true }).and(visible)
-  await menu.or(direct).first().waitFor()
-  if (await menu.isVisible()) {
-    const settings = page.getByRole('menuitem', { name: 'Settings', exact: true })
-    // A later onboarding handler can close the popover during this click's
-    // actionability checks. Reconcile its current state on every such check.
-    await page.addLocatorHandler(menu, async () => {
-      if (!(await settings.isVisible())) await menu.click()
-    }, { noWaitAfter: true })
-    try { await settings.click() }
-    finally { await page.removeLocatorHandler(menu) }
-  } else await direct.click()
+  await menu.or(direct).first().waitFor({ timeout: remaining() })
+  const settings = page.getByRole('menuitem', { name: 'Settings', exact: true })
+  const closedAccount = menu.and(page.locator('[aria-expanded="false"]'))
+  // Keep pointer actions outside locator handlers so onboarding handlers can run.
+  // If onboarding closes the menu during a retry, resolve the next action from
+  // the current DOM again instead of waiting forever for the missing menu item.
+  const action = settings.or(closedAccount).or(direct).first()
+  let lastTimeout
+  while (Date.now() < deadline) {
+    if (await opened.isVisible()) return
+    try { await action.click({ timeout: Math.min(1000, remaining()) }) }
+    catch (error) {
+      if (error?.name !== 'TimeoutError') throw error
+      lastTimeout = error
+    }
+  }
+  if (await opened.isVisible()) return
+  throw lastTimeout ?? new Error('Settings navigation timed out')
 }
 export async function declineOptionalMemoryOffers(page) {
   const decline = page.getByRole('button', { name: /今回は保存しない/ })

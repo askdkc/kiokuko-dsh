@@ -168,7 +168,10 @@ try {
   const endpoint = `http://127.0.0.1:${server.address().port}/v1`;
   for (const name of ["home", "dsh", "data", "project"])
     await mkdir(join(base, name));
-  const navigation = await exec(process.execPath, ['scripts/run-tests.mjs', 'scripts/lib/web-test-navigation.test.ts'], { cwd: root, env, timeout: 60000, maxBuffer: 4 * 1024 ** 2 });
+  // Browser discovery must match the caller; the disposable DSH HOME hides
+  // Playwright's installed browser cache in a freshly spawned test process.
+  const navigationEnv = { ...process.env, KIOKUKO_BROWSER_PARENT_EXECUTABLE: chromium.executablePath() };
+  const navigation = await exec(process.execPath, ['scripts/run-tests.mjs', 'scripts/lib/web-test-navigation.test.ts'], { cwd: root, env: navigationEnv, timeout: 60000, maxBuffer: 4 * 1024 ** 2 });
   process.stdout.write(navigation.stdout);
   process.stderr.write(navigation.stderr);
   await exec("git", ["init", "-q"], { cwd: project });
