@@ -15,7 +15,8 @@ import { nativeMock } from '../helpers/native-mock.js'
 import { interpretedPreparation } from '../helpers/coding-script.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
-const expected = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+const expected = process.env.KIOKUKO_EXPECTED_DSH_VERSION
+  ?? JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
 assert.equal(JSON.parse(readFileSync(join(packages, '@deepseek-ai/dsh/package.json'), 'utf8')).version, expected)
 const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
 

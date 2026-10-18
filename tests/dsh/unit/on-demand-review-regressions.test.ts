@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import nativeTest, { type TestContext } from 'node:test'
 import { OnDemandIntake, TASK_PREPARE_TOOL, type DemandAgent, type DemandInput } from '../../../src/dsh/on-demand-intake.js'
-import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds,
+import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds, unresolvedRequestIntent,
   type RequestIntentContext, type RequestIntentDecision, type RequestRelationship, type RequestAction } from '../../../src/dsh/decisions/request-intent.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
@@ -97,13 +97,14 @@ function activeIntent(messages: readonly unknown[], task: string, relation: Requ
   return { context, decision }
 }
 
-test('automatic native read preparation can be acknowledged explicitly without another admission', async t => {
+test('native evidence read leaves intent uncommitted; explicit preparation stays immutable', async t => {
   const f = await fixture(t, { classify: async () => ({ taskType: 'research', deferInference: false }) })
   const release = f.ctx.tools.register({ name: 'read', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => 'source' })
   t.after(release)
   await f.capture()
   assert.equal((await f.execute('read')).isError, false)
-  assert.equal(f.admissions.length, 1)
+  assert.equal(f.admissions.length, 0)
+  assert.equal(f.intake.snapshot(f.session.id)?.status, 'answer')
   assert.equal((await f.prepare()).isError, false)
   assert.equal((await f.prepare()).isError, false, 'a receipt may be requested more than once')
   assert.equal(f.admissions.length, 1)
@@ -542,18 +543,19 @@ function webTool(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, name = 
   return calls
 }
 for (const taskType of [undefined, 'chat', 'writing'] as const) for (const name of ['read', 'glob', 'grep']) {
-  test(`automatic file preparation: ${name} preserves ${taskType ?? 'unclassified'} advice and the original request`, async t => {
+  test(`native file evidence: ${name} preserves ${taskType ?? 'unclassified'} advice and the original request`, async t => {
     const f = await fixture(t, { classify: async () => ({ ...(taskType ? { taskType } : {}), deferInference: !taskType }) })
     const calls = webTool(t, f, name), messages = [human('original', 'Read PLAN.md and compare the alternatives. Do not modify files.')]
     await f.capture(messages)
     assert.equal((await f.execute(name, { file_path: 'PLAN.md' })).isError, false)
-    assert.deepEqual(f.advice, [taskType === 'writing' ? 'writing' : 'research'])
-    assert.deepEqual(f.admissions[0]!.messages, messages)
+    assert.deepEqual(f.advice, [])
+    assert.equal(f.intake.snapshot(f.session.id)?.task, messages[0]!.content[0]!.text)
+    assert.equal(f.intake.snapshot(f.session.id)?.status, 'answer')
     assert.equal((await f.execute(name, { file_path: 'PLAN.md' })).isError, false)
-    assert.equal(f.admissions.length, 1); assert.equal(calls.length, 2)
+    assert.equal(f.admissions.length, 0); assert.equal(calls.length, 2)
   })
 }
-test('automatic file preparation: concurrent file demands share one admission', async t => {
+test('native file evidence: concurrent file demands need no execution admission', async t => {
   const gate = deferred(); let preparations = 0
   const f = await fixture(t, { prepare: async () => { preparations++; await gate.promise; f.ready(1); return true } })
   const reads = webTool(t, f, 'read'), searches = webTool(t, f, 'grep')
@@ -561,41 +563,42 @@ test('automatic file preparation: concurrent file demands share one admission', 
   const first = f.execute('read'), second = f.execute('grep')
   await new Promise(resolve => setImmediate(resolve)); gate.resolve()
   assert.ok((await Promise.all([first, second])).every(result => !result.isError))
-  assert.equal(preparations, 1); assert.equal(reads.length, 1); assert.equal(searches.length, 1)
+  assert.equal(preparations, 0); assert.equal(reads.length, 1); assert.equal(searches.length, 1)
 })
-test('automatic file preparation: foreign agent and pending memory cannot borrow read admission', async t => {
+test('native file evidence: foreign agent and pending memory cannot borrow read admission', async t => {
   const f = await fixture(t), calls = webTool(t, f, 'read')
   await f.capture()
   assert.equal((await f.execute('read', {}, { agent: { ...f.agent } })).isError, true)
   assert.equal(f.admissions.length, 0); assert.equal(calls.length, 0)
   t.after(f.ctx.tools.guard(() => 'resolve memory decisions before native work'))
   assert.equal((await f.execute('read')).isError, true)
-  assert.equal(f.admissions.length, 1); assert.equal(calls.length, 0)
+  assert.equal(f.admissions.length, 0); assert.equal(calls.length, 0)
 })
 for (const taskType of [undefined, 'chat', 'debug'] as const) for (const name of ['web_search', 'web_fetch']) {
-  test(`automatic web preparation: ${name} with ${taskType ?? 'unclassified'} advice`, async t => {
+  test(`native web evidence: ${name} with ${taskType ?? 'unclassified'} advice`, async t => {
     const f = await fixture(t, { classify: async () => ({ ...(taskType ? { taskType } : {}), deferInference: !taskType }) })
     const calls = webTool(t, f, name), messages = [human('original', 'vmware toolsの最新の脆弱性でクリティカルレベルのものある？')]
     await f.capture(messages)
     const args = name === 'web_search' ? { queries: ['VMware Tools critical CVE'] } : { url: 'https://example.com/advisory' }
     assert.equal((await f.execute(name, args, { callId: 'original-call' })).isError, false)
-    assert.deepEqual(f.advice, [taskType === 'debug' ? 'debug' : 'research'])
-    assert.deepEqual(f.admissions[0]!.messages, messages)
+    assert.deepEqual(f.advice, [])
+    assert.equal(f.intake.snapshot(f.session.id)?.task, messages[0]!.content[0]!.text)
+    assert.equal(f.intake.snapshot(f.session.id)?.status, 'answer')
     assert.equal(calls.length, 1); assert.deepEqual(calls[0].args, args)
     assert.equal(calls[0].execution.callId, 'original-call'); assert.equal(calls[0].execution.agent, f.agent)
     assert.equal((await f.execute(name, args)).isError, false)
-    assert.equal(f.admissions.length, 1); assert.equal(calls.length, 2)
+    assert.equal(f.admissions.length, 0); assert.equal(calls.length, 2)
   })
 }
 for (const task of ['それを検索して', 'search that', 'look up it', 'それを消して？', 'Delete that.', 'search A or B, I am undecided']) {
-  test(`automatic web preparation: missing scope stops ${task}`, async t => {
+  test(`native web evidence: missing scope stops ${task}`, async t => {
     const f = await fixture(t), calls = webTool(t, f)
     await f.capture([human('original', task)])
     assert.equal((await f.execute('web_search', { queries: ['invented target'] })).isError, true)
     assert.equal(f.admissions.length, 0); assert.equal(calls.length, 0)
   })
 }
-test('automatic web preparation: concurrent web calls share one pending admission', async t => {
+test('native web evidence: concurrent web calls need no pending admission', async t => {
   const gate = deferred(); let preparations = 0
   const f = await fixture(t, { prepare: async () => { preparations++; await gate.promise; f.ready(1); return true } })
   const calls = webTool(t, f)
@@ -603,11 +606,11 @@ test('automatic web preparation: concurrent web calls share one pending admissio
   const first = f.execute('web_search'), second = f.execute('web_search')
   await new Promise(resolve => setImmediate(resolve)); gate.resolve()
   assert.ok((await Promise.all([first, second])).every(result => !result.isError))
-  assert.equal(preparations, 1); assert.equal(calls.length, 2)
+  assert.equal(preparations, 0); assert.equal(calls.length, 2)
 })
-for (const failure of ['admission', 'readiness', 'deny', 'cancel', 'closed'] as const) {
-  test(`automatic web preparation: ${failure} prevents web body`, async t => {
-    const f = await fixture(t, failure === 'admission' ? { prepare: async () => false } : failure === 'readiness' ? { ready: () => false } : {})
+for (const failure of ['deny', 'cancel', 'closed'] as const) {
+  test(`native web evidence: ${failure} prevents web body`, async t => {
+    const f = await fixture(t)
     const calls = webTool(t, f)
     if (failure === 'deny' || failure === 'cancel') t.after(f.ctx.on('tools/pre-execute', async () => ({ kind: failure, reason: 'native policy' })))
     if (failure === 'closed') t.after(f.ctx.on('tools/execute', async (_execution: any, next: () => Promise<unknown>) => { f.intake.finish(f.session, 1); return next() }))
@@ -616,9 +619,13 @@ for (const failure of ['admission', 'readiness', 'deny', 'cancel', 'closed'] as 
   })
 }
 
-for (const invalidation of ['definition', 'turn', 'cancel'] as const) test(`automatic web preparation: ${invalidation} during admission revokes dispatch`, async t => {
+for (const invalidation of ['definition', 'turn', 'cancel'] as const) test(`native web evidence: ${invalidation} before dispatch revokes evidence read`, { timeout: 5000 }, async t => {
   const started = deferred(), gate = deferred()
-  const f = await fixture(t, { prepare: async () => { started.resolve(); await gate.promise; f.ready(1); return true } })
+  const f = await fixture(t)
+  t.after(f.ctx.on('tools/pre-execute', async (execution: any, next: () => Promise<unknown>) => {
+    if (execution.name === 'web_search') { started.resolve(); await gate.promise }
+    return next()
+  }))
   const calls = webTool(t, f), controller = new AbortController()
   await f.capture()
   const pending = f.execute('web_search', {}, { signal: controller.signal })
@@ -634,12 +641,12 @@ for (const invalidation of ['definition', 'turn', 'cancel'] as const) test(`auto
   assert.equal((await pending).isError, true); assert.equal(calls.length, 0)
 })
 
-test('automatic web preparation: pending memory guard remains authoritative after admission', async t => {
+test('native web evidence: downstream native guard remains authoritative without admission', async t => {
   const f = await fixture(t), calls = webTool(t, f)
   t.after(f.ctx.tools.guard(() => 'resolve memory decisions before native work'))
   await f.capture()
   assert.equal((await f.execute('web_search')).isError, true)
-  assert.equal(f.admissions.length, 1); assert.equal(calls.length, 0)
+  assert.equal(f.admissions.length, 0); assert.equal(calls.length, 0)
 })
 
 
@@ -811,4 +818,46 @@ test('ordinary native Bash remains available with owned metadata and deferred op
   f.intake.stop()
   assert.equal((await f.execute('bash', { command: 'pwd' })).isError, true)
   assert.equal(bodies, 2)
+})
+
+for (const reason of ['decision_service_disabled', 'proposal_reference_uncertain'] as const) test(`current-source interpretation after evidence read: ${reason}`, async t => {
+  const messages = [human('current-implementation', 'Implement src/main.rs as described. 通常実行で。')]
+  const task = messages[0]!.content[0]!.text
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(messages, task),
+    proposals: [{ id: 'same-session-proposal', revision: null, digest: 'a'.repeat(64), text: 'Implement the Rust command.' }] })!
+  const f = await fixture(t, { nativeOwnership: async () => 'owned', classify: async () => ({ taskType: 'writing', deferInference: false }),
+    interpret: async () => ({ context, decision: unresolvedRequestIntent(context, reason) }) })
+  const calls = webTool(t, f, 'read')
+  await f.capture(messages)
+  const before = f.intake.snapshot(f.session.id)
+  assert.equal((await f.execute('read', { path: 'src/main.rs' })).isError, false)
+  assert.equal(calls.length, 1); assert.equal(f.admissions.length, 0)
+  assert.deepEqual(f.intake.snapshot(f.session.id), before, 'evidence cannot commit the advisory writing classification')
+  const requestIntent = { relation: 'same_scope_continuation', action: 'change', changeScope: 'implementation',
+    evidenceRefs: requestIntentReferenceIds(context).filter(ref => !ref.startsWith('proposal:')) }
+  const stale = { ...requestIntent, evidenceRefs: ['message:foreign-request'] }
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, { requestIntent: stale })).isError, true)
+  assert.equal(f.admissions.length, 0)
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, { requestIntent })).isError, false)
+  assert.equal(f.admissions.length, 1); assert.equal(f.advice[0], 'build')
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, { requestIntent })).isError, false, 'exact same-turn retry stays idempotent')
+  assert.equal(f.admissions.length, 1)
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, { taskType: 'writing' })).isError, true, 'explicit prepared intent cannot be changed back')
+})
+for (const unavailable of ['admission', 'readiness'] as const) test(`native evidence is independent of optional ${unavailable}`, async t => {
+  const f = await fixture(t, unavailable === 'admission'
+    ? { prepare: async () => { throw new Error('optional admission unavailable') } } : { ready: () => false })
+  const calls = webTool(t, f, 'read'); await f.capture()
+  assert.equal((await f.execute('read')).isError, false); assert.equal(calls.length, 1); assert.equal(f.admissions.length, 0)
+})
+test('owned-context native evidence rejects changed arguments before dispatch', async t => {
+  const f = await fixture(t, { nativeOwnership: async () => 'owned' }), calls: unknown[] = []
+  let mutationReached = false
+  t.after(f.ctx.tools.register({ name: 'read', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    output: { schema: {}, render: () => [] }, execute: (args: unknown) => { calls.push(args); return 'source' } }))
+  await f.capture()
+  t.after(f.ctx.tools.guard((execution: any) => { if (execution.name === 'read') { mutationReached = true; execution.arguments.path = 'other-source' } return undefined }))
+  assert.equal((await f.execute('read', { path: 'src/main.rs' })).isError, true)
+  assert.equal(mutationReached, true, 'the original valid request reaches the native guard before its declared path changes')
+  assert.equal(calls.length, 0); assert.equal(f.admissions.length, 0)
 })

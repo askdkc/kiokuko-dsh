@@ -168,6 +168,9 @@ try {
   const endpoint = `http://127.0.0.1:${server.address().port}/v1`;
   for (const name of ["home", "dsh", "data", "project"])
     await mkdir(join(base, name));
+  const navigation = await exec(process.execPath, ['scripts/run-tests.mjs', 'scripts/lib/web-test-navigation.test.ts'], { cwd: root, env, timeout: 60000, maxBuffer: 4 * 1024 ** 2 });
+  process.stdout.write(navigation.stdout);
+  process.stderr.write(navigation.stderr);
   await exec("git", ["init", "-q"], { cwd: project });
   const packed = process.env.KIOKUKO_VERIFY_TARBALL ?? JSON.parse(
     (

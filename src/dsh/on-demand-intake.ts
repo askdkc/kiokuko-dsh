@@ -109,6 +109,7 @@ function automaticPreparationType(intent: AkinatorTaskClassification, requestInt
   if (intent.taskType && intent.taskType !== 'chat') return intent.taskType
   return ['read', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name) ? 'research' : undefined
 }
+const NATIVE_EVIDENCE_READS = new Set(['read', 'glob', 'grep', 'web_search', 'web_fetch'])
 const UNOWNED_NATIVE_TOOLS = new Set(['bash', 'read', 'glob', 'grep', 'web_search', 'web_fetch', 'skill'])
 function denied(reason: string): { kind: 'deny'; reason: string } { return { kind: 'deny', reason } }
 /** A protocol carrier, not JavaScript evaluation. Only this exact JSON-literal call is recognized. */
@@ -132,7 +133,7 @@ export function preparationCarrier(value: unknown): PreparationRequest | undefin
 /** Conversation entry and execution intake are distinct; neither this mode nor a type hint grants native permission. */
 export class OnDemandIntake {
   readonly #turns = new Map<string, Turn>()
-  readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; requestPreparation?: boolean; nativeUnownedDigest?: string; nativeCommandDigest?: string; nativeLispDigest?: string }>()
+  readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; evidenceReadDigest?: string; requestPreparation?: boolean; nativeUnownedDigest?: string; nativeCommandDigest?: string; nativeLispDigest?: string }>()
   readonly #disposers: (() => void)[] = []
   readonly #pending = new Set<Promise<unknown>>()
   readonly #controlTools = new Map<string, Definition['execute']>()
@@ -669,6 +670,16 @@ export class OnDemandIntake {
           const decision = await next()
           return decision?.kind === 'cancel' ? denied('Native tool policy cancelled this call') : decision
         }
+        // Evidence gathering does not decide the request's action or scope.
+        // In particular, an inherited owner must not turn a read into an
+        // immutable research preparation before the main model can interpret it.
+        if (state.status === 'answer' && !state.nativeUnowned && execution.parent === undefined && NATIVE_EVIDENCE_READS.has(execution.name)) {
+          const clarification = executionClarification(state.task, state.requestIntent, state.requestIntentContext)
+          if (clarification) return denied(clarification)
+          this.#executions.set(execution, { turn: state, execute: actual.execute, evidenceReadDigest: canonicalContentHash(execution.arguments) })
+          const decision = await next()
+          return decision?.kind === 'cancel' ? denied('Native tool policy cancelled this call') : decision
+        }
         if (state.nativeUnowned && UNOWNED_NATIVE_TOOLS.has(execution.name) && execution.parent === undefined) {
           if (await this.host.nativeOwnership?.(state.input) !== 'unowned') {
             state.nativeUnowned = false
@@ -734,6 +745,11 @@ export class OnDemandIntake {
          if (!this.nativeLisp(execution)) throw new Error('Native Lisp identity or arguments changed')
          return withRootLispAdmission(execution, () => this.nativeLisp(execution), next)
        }
+       if (proof.evidenceReadDigest !== undefined) {
+         if (state.status !== 'answer' || execution.parent !== undefined || !NATIVE_EVIDENCE_READS.has(execution.name)
+           || canonicalContentHash(execution.arguments) !== proof.evidenceReadDigest) throw new Error('Native evidence read identity or arguments changed')
+         return next()
+       }
        if (proof.nativeUnownedDigest !== undefined) {
          if (!this.unownedNative(execution) || await this.host.nativeOwnership?.(state.input) !== 'unowned') {
            state.nativeUnowned = false
@@ -782,6 +798,9 @@ export class OnDemandIntake {
       if (!proof || proof.turn !== state || proof.execute !== actual.execute || ['closed', 'stale', 'capturing'].includes(state.status)) return 'Tool execution has no current on-demand preparation'
       if (proof.nativeCommandDigest !== undefined) return this.nativeCommand(execution) ? undefined : 'Native command identity or arguments changed'
       if (proof.nativeLispDigest !== undefined) return this.nativeLisp(execution) ? undefined : 'Native Lisp identity or arguments changed'
+      if (proof.evidenceReadDigest !== undefined) return state.status === 'answer' && execution.parent === undefined
+        && NATIVE_EVIDENCE_READS.has(execution.name) && canonicalContentHash(execution.arguments) === proof.evidenceReadDigest
+        ? undefined : 'Native evidence read identity or arguments changed'
       if (proof.nativeUnownedDigest !== undefined) return this.unownedNative(execution) ? undefined : 'Native unowned execution proof changed'
        if (proof.carrier) return (state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn))
          && canonicalContentHash(preparationCarrier(execution.arguments) ?? null) === proof.carrierDigest ? undefined : 'Preparation carrier is not current'

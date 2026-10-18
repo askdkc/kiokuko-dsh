@@ -22,7 +22,9 @@ test('published boot admits release labels while actual lifecycle APIs remain re
   incompatible.peerDependencies[hostPeer] = '<0.0.0'
   const mismatch = boot.evaluatePluginCompatibility(incompatible, {}, runtimeVersion)
   assert.ok(mismatch); assert.equal(mismatch.exempted, false)
-  assert.deepEqual(mismatch.peers, { [hostPeer]: '<0.0.0' })
+  // DSH renamed this diagnostic field while keeping peer-range rejection.
+  assert.deepEqual(mismatch.requirements ?? mismatch.peers, { [hostPeer]: '<0.0.0' })
+  assert.equal(mismatch.runtimeVersion, runtimeVersion)
   let starts = 0
   assert.throws(() => mountDshRuntime({ version: runtimeVersion } as any,
     { start: async () => { starts++ }, close: async () => {} } as any), /effect/)
