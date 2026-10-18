@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { realpathSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,6 +25,8 @@ function continuation(task:TaskSnapshot, text:string, action='research') {
 }
 for(const type of ['research','writing'] as const)test(`Core cold ${type} admission reuses explicit task across ToDo, start, Pending and native owner transfer`,async()=>{
   const root=realpathSync(await mkdtemp(join(tmpdir(),'existing-task-core-')))
+  // Keep discovery inside the fixture even when a parent temporary directory is a repository.
+  await mkdir(join(root,'.git'))
   const options={repositoryRoot:root,databasePath:join(root,'state.sqlite3'),autoRegisterRepository:true,
     embeddingConfig:{mode:'off' as const,provider:'openai-compatible' as const,allowRemote:false,vectorBackend:'auto' as const,timeoutMs:1000,batchSize:1}}
   let runtime=new DshCoreRuntime(options);await runtime.start()

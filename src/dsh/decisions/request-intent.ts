@@ -146,7 +146,7 @@ const actionChoices = [
   { id: 'verify', description: 'Inspect behavior, run or review checks, or establish whether something works.' },
   { id: 'change', description: 'Modify code, files, configuration, or another project artifact.' },
   { id: 'operate', description: 'Perform deployment, restart, installation, or other system/service operation.' },
-  { id: 'unknown', description: 'The requested action is ambiguous, mixed without a dominant action, or not supported by the current evidence.' },
+  { id: 'unknown', description: 'The requested action or target is ambiguous, or not supported by the current evidence. Multiple compatible requested actions alone are not ambiguity.' },
 ] as const
 const changeScopeChoices = [
   { id: 'implementation', description: 'The requested artifact change affects code, tests, runtime behavior, or configuration behavior. If documentation is changed together with implementation, choose implementation.' },
@@ -170,7 +170,7 @@ export function buildRequestIntentBatch(raw: unknown): DecisionBatch | undefined
     },
     questions: [
       { id: 'request-relation', instructions: 'Classify the relationship of the current user message to the supplied active Goal and proposals. Respect negation, quotation, actor, and omitted references. An exact continuation phrase is not required. If the intended reference or scope is not established, choose unknown.', choices: [...relationshipChoices], abstainId: 'unknown' },
-      { id: 'request-action', instructions: 'Classify the action the user requests now, not a quoted example or an action they forbid. “See whether it works” is verify/research, not a file edit. Classification grants no permission. If the action is unclear, choose unknown.', choices: [...actionChoices], abstainId: 'unknown' },
+      { id: 'request-action', instructions: 'Classify the action the user requests now, not a quoted example or an action they forbid. “See whether it works” is verify/research, not a file edit. When explanation or inspection accompanies an explicit edit request, choose change and preserve every requested action and prohibition. Do not turn a verification-only request into an edit. Classification grants no permission. If the action or target is unclear, choose unknown.', choices: [...actionChoices], abstainId: 'unknown' },
       { id: 'request-change-scope', instructions: 'For action=change, classify the exact current requested artifact scope using only the current message and supplied Goal/proposal references. Code, tests, runtime behavior, or behavior configuration is implementation; a request that mixes implementation with documentation is implementation. Prose-only document edits are document. Do not infer scope from an advisory task label, wording style, or whether the message happens to say “write”. For other actions choose unknown.', choices: [...changeScopeChoices], abstainId: 'unknown' },
       ...(parsed.data.activeTask ? [{ id: 'request-task-operation', instructions: 'Propose only a structured state operation clearly requested by the current human message for the exact SQLite task. Do not mutate state, fabricate completion or stop evidence, or infer approval from a keyword. Choose none when no state transition is requested; choose unknown when ambiguous. Terminal resume requires an explicit user operation.',
         choices: [{ id: 'none', description: 'No task state operation is requested.' },
@@ -196,6 +196,11 @@ export function requestIntentReferenceIds(context: RequestIntentContext): string
   if (context.activeTask) refs.push(`task:${canonicalContentHash([context.activeTask.taskId, context.activeTask.revision, context.activeTask.generation])}`)
   refs.push(...context.proposals.map(item => `proposal:${canonicalContentHash([item.id, item.revision, item.digest])}`))
   return refs
+}
+
+/** Current identity is mandatory; proposal references are optional evidence of selection. */
+export function requestIntentRequiredReferenceIds(context: RequestIntentContext): string[] {
+  return requestIntentReferenceIds(context).filter(reference => !reference.startsWith('proposal:'))
 }
 
 function evidenceFor(context: RequestIntentContext, selectedProposalIds: ReadonlySet<string> = new Set()): RequestIntentEvidence {
@@ -236,9 +241,7 @@ export function validateMainModelRequestIntent(raw: unknown, context: RequestInt
   if (parsed.data.relation === 'unknown' || parsed.data.action === 'unknown') return { ok: false, reason: 'unresolved_intent' }
   const allowed = new Set(requestIntentReferenceIds(context))
   if (parsed.data.evidenceRefs.some(reference => !allowed.has(reference))) return { ok: false, reason: 'unknown_reference' }
-  const requiredRefs = requestIntentReferenceIds(context).filter(reference =>
-    reference.startsWith('message:') || reference.startsWith('run:') || reference.startsWith('workflow:')
-      || reference.startsWith('goal:') || reference.startsWith('scope:') || reference.startsWith('task:'))
+  const requiredRefs = requestIntentRequiredReferenceIds(context)
   if (!requiredRefs.every(reference => parsed.data.evidenceRefs.includes(reference))) return { ok: false, reason: 'missing_reference' }
   if (parsed.data.relation === 'scope_change' && !context.activeGoal && !context.activeTask) return { ok: false, reason: 'no_active_goal' }
   if (parsed.data.taskOperation) {
@@ -353,15 +356,21 @@ export async function classifyRequestIntent(service: DecisionService | undefined
     const taskOperationAnswer = outcome.result.answers.find(answer => answer.id === 'request-task-operation')
     const taskOperation = taskOperationAnswer?.status === 'selected' && (TASK_OPERATIONS as readonly string[]).includes(taskOperationAnswer.choiceId)
       ? taskOperationAnswer.choiceId as TaskOperation : undefined
-    if (context.activeTask && (!taskOperationAnswer || taskOperationAnswer.status !== 'selected' || taskOperationAnswer.choiceId === 'unknown'))
-      return unresolvedRequestIntent(context, 'task_operation_unresolved', providerSent)
+    // A task operation is a separate advisory candidate, not a prerequisite for
+    // ordinary work on an already authorized task. Abstention must not erase
+    // independently resolved action/scope or fabricate a lifecycle transition.
+    // Keep the diagnostic and fallback source so the main model can resolve it;
+    // actual task state, lease, scope and native permission checks still apply.
+    const taskOperationUnresolved = !!context.activeTask && (!taskOperationAnswer
+      || taskOperationAnswer.status !== 'selected' || taskOperationAnswer.choiceId === 'unknown')
     if (!unresolved) {
       const refs = requestIntentReferenceIds(context).filter(reference => !reference.startsWith('proposal:')
         || context.proposals.some(proposal => selected.has(proposal.id) && reference === `proposal:${canonicalContentHash([proposal.id, proposal.revision, proposal.digest])}`))
       const bound = validateMainModelRequestIntent({ relation: relationValue, action: actionValue, changeScope: changeScopeValue,
         ...(taskOperation ? { taskOperation } : {}), evidenceRefs: refs }, context)
       if (!bound.ok) return unresolvedRequestIntent(context, bound.reason, providerSent)
-      return { ...bound.decision, source: 'decision-provider', providerSent }
+      return { ...bound.decision, source: taskOperationUnresolved ? 'unresolved' : 'decision-provider', providerSent,
+        ...(taskOperationUnresolved ? { unresolvedReason: 'task_operation_unresolved' } : {}) }
     }
     return { relation: relationValue, action: actionValue, changeScope: changeScopeValue, source: unresolved ? 'unresolved' : 'decision-provider',
       policyVersion: REQUEST_INTENT_POLICY_VERSION, evidence: evidenceFor(context, selected), providerSent,

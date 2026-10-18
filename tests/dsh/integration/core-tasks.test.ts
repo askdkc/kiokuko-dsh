@@ -209,3 +209,31 @@ test('finalization rolls back coding state, task authority and owner release tog
     assert.equal(JSON.parse(String(cancelled.workflows[0]?.snapshot_json)).state, 'cancelled')
   } finally { await f.cleanup() }
 })
+
+for (const operation of ['abstained', 'none', 'main-model'] as const) test(`unresolved change scope cannot admit work (${operation})`, async () => {
+  const { classifyRequestIntent, createRequestIntentContext, requestIntentMessageRefs, bindMainModelRequestIntent, requestIntentReferenceIds } = await import('../../../src/dsh/decisions/request-intent.js')
+  const { parseDecisionResult } = await import('../../../src/dsh/decisions/contracts.js')
+  const f = await fixture(), tasks = new CoreTasks(f.runtime)
+  try {
+    const prior = await tasks.prepare(f.input)
+    const activeTask = await f.runtime.withDatabase(db => readTaskSnapshot(db, prior.authority!))
+    const task = 'Continue changing the current artifact.'
+    const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([], task), activeTask })!
+    const service: any = { bind: async () => ({ mode: 'on' }), evaluate: async (_id: string, batch: any) => ({ status: 'completed',
+      result: parseDecisionResult({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture',
+        answers: batch.questions.map((question: any) => question.id === 'request-relation'
+          ? { id: question.id, status: 'selected', choiceId: 'same_scope_continuation' }
+          : question.id === 'request-action' ? { id: question.id, status: 'selected', choiceId: 'change' }
+            : question.id === 'request-task-operation' && operation === 'none' ? { id: question.id, status: 'selected', choiceId: 'none' }
+              : { id: question.id, status: 'abstained', reason: 'uncertain' }) }, batch) }) }
+    const decision = operation === 'main-model'
+      ? bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'change', evidenceRefs: requestIntentReferenceIds(context) }, context)
+      : await classifyRequestIntent(service, 'missing-required-scope', context, f.input.signal)
+    const before = await f.state()
+    await assert.rejects(tasks.prepare({ ...f.input, requestId: 'missing-required-scope', turn: 2, task,
+      requestIntent: decision!, requestIntentContext: context }), /request_intent_unresolved/)
+    await assert.rejects(tasks.resume({ ...f.input, requestId: 'missing-required-scope-direct', turn: 2, task,
+      requestIntent: decision!, requestIntentContext: context }), /does not authorize continuation/)
+    assert.deepEqual(await f.state(), before, 'uncertain required scope cannot mutate or replace active work')
+  } finally { await f.cleanup() }
+})

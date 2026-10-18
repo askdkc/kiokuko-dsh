@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { bindMainModelRequestIntent, buildRequestIntentBatch, classifyRequestIntent, createRequestIntentContext,
-  rebindRequestIntentDecision, requestIntentMessageRefs, requestIntentReferenceIds, requestIntentTaskType,
+  rebindRequestIntentDecision, requestIntentMessageRefs, requestIntentReferenceIds, requestIntentIsUnresolved, requestIntentTaskType,
   validateMainModelRequestIntent } from '../../../src/dsh/decisions/request-intent.js'
+import { parseDecisionResult } from '../../../src/dsh/decisions/contracts.js'
 import { executionClarification } from '../../../src/dsh/intake-clarification.js'
 
 const task = 'A/B/C をまとめて入れて。前の案で続けて。'
@@ -116,4 +117,63 @@ test('task operation candidates share state validation across provider, main mod
   const withDiagnostic = createRequestIntentContext({ task, messageRefs: current.messageRefs, activeTask: { ...snapshot,
     unresolved: { requestId: 'request', contextDigest: 'a'.repeat(64), revision: 4, reason: 'DECISION_AUTH', evidence: [] } } })!
   assert.deepEqual(withDiagnostic, current, 'Saving the unresolved reason does not make its own retry context stale')
+})
+
+test('optional task-operation abstention preserves independently resolved work without granting a transition', async () => {
+  for (const state of ['Working', 'Pending', 'Done'] as const) for (const choice of ['abstained', 'unknown', 'missing']) {
+    const request = 'Explain the current parser result, inspect src/parser.ts, and continue the requested verification.'
+    const activeTask = { taskId: 'same-task', runId: 'same-task', sessionId: 'session', sourceSessionId: 'session', repositoryRoot: '/repo',
+      type: 'review' as const, state, revision: 2, generation: 3, runStatus: 'active' as const,
+      reason: 'Current work', evidence: [], allowedOps: [], request: 'Verify src/parser.ts', resumedFromTerminal: false }
+    const current = createRequestIntentContext({ task: request, messageRefs: requestIntentMessageRefs([], request), activeTask })!
+    const original = structuredClone(current)
+    const service: any = { bind: async () => ({ mode: 'on' }), evaluate: async (_id: string, batch: any) => {
+      const result = { provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture',
+        answers: batch.questions.filter((q: any) => choice !== 'missing' || q.id !== 'request-task-operation').map((q: any) =>
+          q.id === 'request-relation' ? { id: q.id, status: 'selected', choiceId: 'same_scope_continuation' }
+            : q.id === 'request-action' ? { id: q.id, status: 'selected', choiceId: 'verify' }
+              : choice === 'abstained' ? { id: q.id, status: 'abstained', reason: 'uncertain' }
+                : { id: q.id, status: 'selected', choiceId: 'unknown' }) }
+      // Abstained is the production wire form; the other cases are defensive service-boundary checks.
+      return { status: 'completed', result: choice === 'abstained' ? parseDecisionResult(result, batch) : result }
+    } }
+    const decision = await classifyRequestIntent(service, `partial-${state}-${choice}`, current, new AbortController().signal)
+    assert.equal(decision?.relation, 'same_scope_continuation')
+    assert.equal(decision?.action, 'verify')
+    assert.equal(decision?.taskOperation, undefined)
+    assert.equal(decision?.source, 'unresolved', 'the main model can resolve advisory uncertainty using exact current evidence')
+    assert.equal(decision?.unresolvedReason, 'task_operation_unresolved')
+    assert.equal(rebindRequestIntentDecision(decision, current)?.action, 'verify')
+    assert.equal(rebindRequestIntentDecision(decision, { ...current, activeTask: { ...activeTask, generation: 4 } }), undefined)
+    assert.deepEqual(current, original, 'classification never starts, resumes, completes, or otherwise mutates a task')
+  }
+})
+
+test('mixed work guidance preserves explicit edits rather than treating composition itself as uncertainty', () => {
+  const batch = buildRequestIntentBatch(context)!
+  const action = batch.questions.find(question => question.id === 'request-action')!
+  assert.match(action.instructions, /explanation.*inspection.*explicit.*change/iu)
+  assert.ok('choices' in action)
+  assert.doesNotMatch(action.choices.find(choice => choice.id === 'unknown')!.description, /mixed without a dominant action/iu)
+})
+
+test('optional operation fallback does not resolve unknown action, relation, scope or proposal authority', async () => {
+  for (const uncertain of ['request-relation', 'request-action', 'request-change-scope', 'request-proposal-0']) {
+    const current = createRequestIntentContext({ ...context, activeTask: { taskId: 'same-task', runId: 'same-task',
+      sessionId: 'session', sourceSessionId: 'session', repositoryRoot: '/repo', type: 'build', state: 'Working',
+      revision: 2, generation: 3, runStatus: 'active', reason: 'Current work', evidence: [], allowedOps: ['wait', 'complete'],
+      request: task, resumedFromTerminal: false } })!
+    const choices: Record<string, string> = { 'request-relation': 'same_scope_continuation', 'request-action': 'change',
+      'request-change-scope': 'implementation', 'request-proposal-0': 'not_selected' }
+    const service: any = { bind: async () => ({ mode: 'on' }), evaluate: async (_id: string, batch: any) => ({ status: 'completed',
+      result: parseDecisionResult({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture',
+        answers: batch.questions.map((q: any) => q.id === uncertain || q.id === 'request-task-operation'
+          ? { id: q.id, status: 'abstained', reason: 'uncertain' }
+          : { id: q.id, status: 'selected', choiceId: choices[q.id] }) }, batch) }) }
+    const decision = await classifyRequestIntent(service, `required-${uncertain}`, current, new AbortController().signal)
+    assert.equal(requestIntentIsUnresolved(decision), true, uncertain)
+    assert.equal(decision?.source, 'unresolved')
+    assert.equal(decision?.taskOperation, undefined)
+    assert.deepEqual(decision?.evidence.proposalRefs, [])
+  }
 })

@@ -539,6 +539,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     return realpathSync(session.header.cwd)
   }
   const demand = hasDemandTools && agents && sessions ? new OnDemandIntake({
+    ...(userQuestions ? { questions: userQuestions } : {}),
     answerContext: new DshAnswerContext(runtime, { root, cwd: answerCwd, projectOnly: false, memoryRetrieval: memoryRetrievalConfig,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills: skills as AnswerSkillRegistry, prompts: skillPrompts, decisions, cwd: answerCwd(input.agent) }),
     }),
@@ -936,12 +937,14 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     modelAuto, root, autoReview, reviewBinding, sessionMirror, executionSupport,
     kickBoundary: (sessionId, agent) => {
       if (agent && isGenericNativeChild(agent as NativeAgent)) return
-      const nativeAgent = agents?.get(agent?.id ?? sessionId)
+      const nativeAgent = agents?.get(agent?.id ?? currentSession(sessionId)?.agentId ?? sessionId)
+      if (nativeAgent && demand?.awaitingClarification(nativeAgent)) return
       if (!nativeAgent || !isGenericNativeChild(nativeAgent)) boundaryWorker.kick(sessionId, agent)
     },
     stateForRun, objectRecord, isHumanMessage, eventContinuationId,
   })
   const lifecycle = createLifecycle({
+    awaitingClarification: agent => demand?.awaitingClarification(agent) ?? false,
     runtime, sessions, sessionMirror, memoryFinalizer, autoReview, answerReview, ennoController,
     ennoMemory, executionSupport, gate, turnState, getSelection: runId => selections.get(runId),
     currentSession, currentForAgentEvent, stateForRun, deliverCompletionReport, reviewBinding,

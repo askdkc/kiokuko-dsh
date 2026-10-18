@@ -49,6 +49,7 @@ interface LifecycleDependencies {
   readonly evolutionConfig: import('zod').z.infer<typeof MemoryEvolutionConfig>
   readonly clearToolRun: (runId: string) => void
   readonly sessionEventSource: (session: object | undefined) => DshSessionEventSource
+  readonly awaitingClarification?: (agent: NativeAgent) => boolean
   readonly onRunClosed?: (runId: string, status: string, sessionId: string) => void
 }
 
@@ -87,6 +88,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
     }
   })
   const resolveIdleClose = async (agentId: string, sessionId?: string, nativeSession?: object, nativeAgent?: object): Promise<DshCloseIntent | undefined> => {
+    if (nativeAgent && deps.awaitingClarification?.(nativeAgent as NativeAgent)) return undefined
     await deliverCompletionReport(nativeSession)
     const item = currentForAgentEvent(agentId, sessionId, undefined, nativeSession, nativeAgent)
     if (item === undefined || item.closed || executionSupport.paused(item.sessionId)) return undefined

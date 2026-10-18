@@ -1,3 +1,5 @@
+import { abortable } from './boundary-worker.js'
+import type { DshUserQuestions } from './intake-questions.js'
 import { isLispImplementation, isLispNativeCommand, withRootLispAdmission, rememberLispConversation } from './lisp-tool-identity.js'
 import { ExecutionSelectionPending } from './execution-pending.js'
 import type { DshAnswerContext } from './answer-context.js'
@@ -9,10 +11,12 @@ import { TASK_TYPES, type TaskType } from '../akinator/types.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import type { AkinatorTaskClassification } from './decisions/akinator-classification.js'
-import { taskAllowedOperations, type TaskSnapshot } from './task-state.js'
-import { createRequestIntentContext, unresolvedRequestIntent, validateMainModelRequestIntent, requestIntentReferenceIds, requestIntentMessageRefs, requestIntentTaskType, RequestIntentSubmissionSchema,
+import { taskAllowedOperations, taskCanExecute, type TaskSnapshot } from './task-state.js'
+import { createRequestIntentContext, unresolvedRequestIntent, validateMainModelRequestIntent, requestIntentReferenceIds, requestIntentRequiredReferenceIds, requestIntentIsUnresolved, requestIntentMessageRefs, requestIntentTaskType, RequestIntentSubmissionSchema,
   type RequestIntentContext, type RequestIntentDecision, type RequestIntentInterpretation, type RequestIntentSubmission } from './decisions/request-intent.js'
 import { memoryOwnerKind, type MemoryOwnerIdentity, type MemoryOwnerKind } from './memory-owner.js'
+
+class RequestClarification extends Error {}
 
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
@@ -30,7 +34,7 @@ function parsePreparationRequest(value: unknown): PreparationRequest | undefined
   return parsed.success && (parsed.data.taskType !== undefined || parsed.data.requestIntent !== undefined) ? parsed.data : undefined
 }
 
-export interface DemandAgent { readonly ctx?: unknown; readonly id: string; readonly session?: { readonly id: string; snapshotEvents?(): readonly DshLogEvent[] } }
+export interface DemandAgent { readonly ctx?: unknown; readonly id: string; followup?(message: any): unknown; readonly session?: { readonly id: string; snapshotEvents?(): readonly DshLogEvent[] } }
 export interface DemandInput { readonly agent: DemandAgent; readonly turn: number; readonly step: number; readonly messages: readonly unknown[]; readonly signal: AbortSignal }
 interface Execution { readonly agent?: DemandAgent; readonly callId: string; readonly name: string; readonly arguments: unknown; readonly signal: AbortSignal; readonly parent?: unknown }
 interface Definition { readonly name: string; readonly execute: (...args: any[]) => unknown }
@@ -40,6 +44,8 @@ interface NativeTools {
   guard(callback: (execution: Execution) => string | undefined): () => void
 }
 interface Dependencies {
+  readonly questions?: DshUserQuestions
+
   readonly answerContext?: DshAnswerContext | undefined
   readonly nativeChild?: (agent: DemandAgent) => boolean
   readonly validate: (input: DemandInput) => Promise<void>
@@ -98,7 +104,7 @@ function eventTurn(event: { data?: unknown } | undefined): number | undefined {
 /** Tool names select advice only; admission and native permissions remain authoritative. */
 function automaticPreparationType(intent: AkinatorTaskClassification, requestIntent: RequestIntentDecision | undefined,
   name: string): TaskType | undefined {
-  if (requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown') {
+  if (requestIntent !== undefined && requestIntentIsUnresolved(requestIntent)) {
     // Gathering evidence grants no change/process authority. An active Goal
     // still requires its reference to be resolved before opening another run.
     return ['read', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name) ? 'research' : undefined
@@ -133,6 +139,7 @@ export function preparationCarrier(value: unknown): PreparationRequest | undefin
 /** Conversation entry and execution intake are distinct; neither this mode nor a type hint grants native permission. */
 export class OnDemandIntake {
   readonly #turns = new Map<string, Turn>()
+  readonly #clarifications = new Map<string, { agent: DemandAgent; turn: number; key: string; status: 'waiting' | 'queued'; result?: unknown; operation?: Promise<unknown> | undefined }>()
   readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; evidenceReadDigest?: string; requestPreparation?: boolean; nativeUnownedDigest?: string; nativeCommandDigest?: string; nativeLispDigest?: string }>()
   readonly #disposers: (() => void)[] = []
   readonly #pending = new Set<Promise<unknown>>()
@@ -286,6 +293,9 @@ export class OnDemandIntake {
       } catch (error) {
         input.signal.throwIfAborted()
       }
+      const pendingClarification = this.#clarifications.get(sessionId)
+      if (pendingClarification?.agent === input.agent && state.requestIntent && !requestIntentIsUnresolved(state.requestIntent)
+        && !executionClarification(state.task, state.requestIntent, state.requestIntentContext)) this.#clarifications.delete(sessionId)
       state.memoryOwner = memoryOwnerKind(state.requestIntent, state.intent.taskType)
       this.assertCurrent(state)
       if (previous?.input.turn !== input.turn) await this.host.advance?.(input, state.requestIntent)
@@ -312,7 +322,7 @@ export class OnDemandIntake {
         return false
       }
       const canContinue = state.requestIntent?.relation === 'same_scope_continuation'
-        && state.requestIntent.action !== 'answer' && state.requestIntent.action !== 'unknown'
+        && !requestIntentIsUnresolved(state.requestIntent) && state.requestIntent.action !== 'answer'
       if (previous?.input.turn !== input.turn && state.task && canContinue
         && await this.host.existing(input, state.requestIntent)) {
         // Persisted ownership is only an acknowledgement when this exact native
@@ -326,13 +336,15 @@ export class OnDemandIntake {
       // Eager mode still binds known work before generation. Classifier uncertainty
       // instead reaches ordinary reasoning, with no execution grant or purpose UI.
       const requestIntentUnresolved = state.requestIntent !== undefined
-        && (state.requestIntent.relation === 'unknown' || state.requestIntent.action === 'unknown')
+        && requestIntentIsUnresolved(state.requestIntent)
       const requestAsAnswer = state.requestIntent?.action === 'answer'
       const knownIntent = this.host.interpret === undefined
         ? !state.intent.deferInference && state.intent.taskType !== undefined && state.intent.taskType !== 'chat'
         : state.requestIntent !== undefined && !requestIntentUnresolved && !requestAsAnswer
           && state.requestIntent.relation !== 'unknown' && state.requestIntent.action !== 'unknown'
-      if (this.options.onlyWhenDeferred && knownIntent) {
+      const missingExecutionDetail = executionClarification(state.task, state.requestIntent, state.requestIntentContext)
+        || state.requestIntentContext?.activeTask && !taskCanExecute(state.requestIntentContext.activeTask)
+      if (this.options.onlyWhenDeferred && knownIntent && !missingExecutionDetail) {
         this.#turns.delete(sessionId)
         state.status = 'closed'
         controller.abort(new Error('Known intent continues through eager admission'))
@@ -381,8 +393,18 @@ export class OnDemandIntake {
     this.assertCurrent(state); signal.throwIfAborted()
     if (state.selectionPending) throw new ExecutionSelectionPending()
     const resolved = requestIntent ?? state.requestIntent
+    if (resolved?.action === 'change' && resolved.changeScope === 'unknown') {
+      throw new RequestClarification('The requested change scope is unresolved. Specify implementation or document using the current request evidence before preparing work.')
+    }
+    if (resolved && requestIntentIsUnresolved(resolved) && (state.requestIntentContext?.activeGoal || state.requestIntentContext?.activeTask)) {
+      throw new RequestClarification('Clarify the request before preparing work')
+    }
+    const activeTask = state.requestIntentContext?.activeTask
+    if (activeTask && resolved?.relation === 'same_scope_continuation' && !taskCanExecute(activeTask) && !resolved.taskOperation) {
+      throw new RequestClarification('The current task requires an explicit user-selected state operation before execution.')
+    }
     const clarification = executionClarification(state.task, resolved, state.requestIntentContext)
-    if (clarification) throw new Error(clarification)
+    if (clarification) throw new RequestClarification(clarification)
     if (!ACTION_TYPES.includes(taskType)) throw new Error('Answer conversational questions directly; prepare_requested_work is for requested work')
     if (state.status === 'prepared' && state.confirmationResume && explicitIntent
       && (state.requestIntent?.relation === 'unknown' || state.requestIntent?.action === 'unknown')) state.status = 'answer'
@@ -427,8 +449,84 @@ export class OnDemandIntake {
     }
     finally { delete state.preparation }
   }
+  /** A question is a waiting state, never an execution grant. */
+  awaitingClarification(agent: DemandAgent): boolean {
+    const pending = agent.session && this.#clarifications.get(agent.session.id)
+    if (this.#stopped || pending?.agent !== agent) return false
+    const boundary = agent.session?.snapshotEvents?.().filter(event => event.type === 'turn/end').at(-1)
+    const data = boundary?.data as { turn?: number; reason?: { kind?: string } } | undefined
+    if (data?.turn !== undefined && data.turn >= pending.turn && ['aborted', 'error', 'max-tokens', 'blocked'].includes(data.reason?.kind ?? '')) {
+      this.#clarifications.delete(agent.session!.id)
+      return false
+    }
+    return true
+  }
+  private async clarify(state: Turn, executionSignal: AbortSignal, reason: RequestClarification): Promise<unknown> {
+    this.assertCurrent(state)
+    const signal = AbortSignal.any([executionSignal, state.input.signal, state.controller.signal])
+    const context = state.requestIntentContext
+    const sessionId = state.input.agent.session!.id
+    const scope = state.requestIntent?.action === 'change' && state.requestIntent.changeScope === 'unknown'
+      || reason.message.startsWith('The requested change scope')
+    const target = !!executionClarification(state.task, state.requestIntent, context)
+    const transition = context?.activeTask && !taskCanExecute(context.activeTask)
+    const question = transition ? `現在のタスクは ${context!.activeTask!.state} です。続けるために、どの操作を希望しますか？（${taskAllowedOperations(context!.activeTask!).join(' / ')}）`
+      : target ? 'どの具体的なファイル・項目・相手・操作を対象にしますか？'
+      : scope ? '変更するのは文章だけですか、それともコード・テスト・設定も含みますか？'
+        : state.requestIntent?.action === 'unknown' ? 'その対象に、具体的に何をしてほしいですか？'
+          : '今回の依頼は現在の作業の続きですか、それとも別の作業ですか？'
+    const key = canonicalContentHash({ context: context ?? null, task: state.task, humanEvidence: [...state.humanContents], question })
+    const previous = this.#clarifications.get(sessionId)
+    if (previous?.agent === state.input.agent && previous.key === key) return previous.operation ?? previous.result
+    const id = `request-clarification-${key.slice(0, 20)}`
+    const result = { prepared: false, status: 'awaiting_clarification', question, questionId: id, originalTask: state.task,
+      permissions: 'unchanged_native_policy', nextAction: this.host.questions ? 'wait_for_user' : 'ask_user_once' }
+    const pending = { agent: state.input.agent, turn: state.input.turn, key, status: 'waiting' as 'waiting' | 'queued', result: result as unknown,
+      operation: undefined as Promise<unknown> | undefined }
+    this.#clarifications.set(sessionId, pending)
+    if (!this.host.questions || !state.input.agent.followup) return result
+    const operation = (async () => {
+      try {
+        const response = await abortable(this.host.questions!.ask({ agent: state.input.agent, signal,
+          questions: [{ id, question, ...(scope && !target && !transition ? { options: [{ label: '文章のみ' }, { label: 'コード・テスト・設定を含む' }] } : {}) }] }), signal)
+        signal.throwIfAborted(); this.assertCurrent(state)
+        await this.host.validate(state.input)
+        signal.throwIfAborted(); this.assertCurrent(state)
+        const current = await this.host.interpret?.(state.input, state.task)
+        signal.throwIfAborted(); this.assertCurrent(state)
+        if (context && (!current || canonicalContentHash(current.context) !== canonicalContentHash(context))) {
+          if (current) { state.requestIntentContext = current.context; state.requestIntent = current.decision; state.requestIntentContextDigest = canonicalContentHash(current.context) }
+          pending.result = { ...result, ...(current ? { currentReferences: requestIntentRequiredReferenceIds(current.context) } : {}), status: 'clarification_context_changed', detail: 'The task or current evidence changed while awaiting the answer. Refresh the current request before asking again.' }
+          return pending.result
+        }
+        const answer = response.answers[0]
+        const value = answer?.custom?.trim() || answer?.selected[0]?.trim()
+        if (answer?.id !== id || !value || value.length > 8192) return result
+        // Both texts originate from the human: preserve the original verbatim,
+        // label the actual UI answer separately, and re-enter ordinary native
+        // capture. The reply itself is never mapped to execution authority.
+        const content = `Original user request (unchanged):\n${state.task}\n\nUser answer to clarification "${question}":\n${value}`
+        signal.throwIfAborted(); this.assertCurrent(state)
+        state.input.agent.followup!({ id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: content }] })
+        pending.status = 'queued'
+        pending.result = { ...result, status: 'clarification_answer_queued', answer: value }
+        return pending.result
+      } catch (error) {
+        if (signal.aborted) { if (this.#clarifications.get(sessionId) === pending) this.#clarifications.delete(sessionId); throw error }
+        // A dismissed/unavailable question surface remains waiting, never approved.
+        return result
+      } finally { pending.operation = undefined }
+    })()
+    pending.operation = operation
+    return this.watch(operation)
+  }
   private bindIntent(state: Turn, submission?: RequestIntentSubmission): RequestIntentDecision | undefined {
-    if (!submission) return state.requestIntent
+    if (!submission) {
+      if (state.requestIntent?.action === 'change' && state.requestIntent.changeScope === 'unknown') {
+        throw new RequestClarification('The requested change scope is unresolved. Specify implementation or document using the current request evidence before preparing work.')
+      }
+      return state.requestIntent
+    }
     if (!state.requestIntentContext || state.requestIntentContextDigest !== canonicalContentHash(state.requestIntentContext)) {
       throw new Error('Request interpretation context is stale')
     }
@@ -438,7 +536,7 @@ export class OnDemandIntake {
         case 'no_active_goal': throw new Error(`Request relation ${submission.relation} cannot be used without an active Goal. ${NO_ACTIVE_GOAL_GUIDANCE}`)
         case 'missing_reference': throw new Error('Request interpretation is missing required current message or active Goal references. Use the exact current evidenceRefs from the supplied context.')
         case 'unknown_reference': throw new Error('Request interpretation references another request, stale revision, or unknown proposal. Use only the exact current evidenceRefs from the supplied context.')
-        case 'unresolved_intent': throw new Error('Request relation or action is unresolved. Interpret the original request and current context; clarify with the user if its action or target remains unclear.')
+        case 'unresolved_intent': throw new RequestClarification('Request relation or action is unresolved. Interpret the original request and current context; clarify with the user if its action or target remains unclear.')
         case 'invalid_submission': throw new Error('Invalid request interpretation. Supply a relation, action and unique exact current evidenceRefs.')
         case 'invalid_task_operation': {
           const task = state.requestIntentContext.activeTask
@@ -449,6 +547,9 @@ export class OnDemandIntake {
       }
     }
     const bound = result.decision
+    if (bound.action === 'change' && bound.changeScope === 'unknown') {
+      throw new RequestClarification('The requested change scope is unresolved. Specify implementation or document using the current request evidence before preparing work.')
+    }
     const prior = state.requestIntent
     if (prior?.source === 'decision-provider' && prior.relation !== 'unknown' && prior.action !== 'unknown') {
       if (prior.relation !== bound.relation || prior.action !== bound.action) {
@@ -484,12 +585,14 @@ export class OnDemandIntake {
     const interpretation = state?.requestIntent
     const intentText = context ? `\n\nCurrent request references and same-session work (host-bound, advisory only):\n${JSON.stringify({
       references: requestIntentReferenceIds(context),
+      requiredReferences: requestIntentRequiredReferenceIds(context),
       activeGoal: context.activeGoal ?? null,
       activeTask: context.activeTask ?? null,
-      proposals: context.proposals.map(({ id, revision, digest, text }) => ({ id, revision, digest, text })),
+      proposals: context.proposals.map(({ id, revision, digest, text }) => ({ id, revision, digest, text,
+        evidenceRef: `proposal:${canonicalContentHash([id, revision, digest])}` })),
       decision: interpretation ? { relation: interpretation.relation, action: interpretation.action, source: interpretation.source,
         policyVersion: interpretation.policyVersion, evidence: interpretation.evidence, unresolvedReason: interpretation.unresolvedReason ?? null } : null,
-    })}\nUse only these exact references in requestIntent.evidenceRefs. The original human message remains unchanged.` : ''
+    })}\nInclude every requiredReferences entry in requestIntent.evidenceRefs. Add a proposal evidenceRef only when the current user request actually adopts or refers to that proposal; do not copy all proposals automatically. Use only these exact references. The original human message remains unchanged.` : ''
     const text = ON_DEMAND_GUIDANCE + intentText + (context && !context.activeGoal && !context.activeTask ? `\n${NO_ACTIVE_GOAL_GUIDANCE}` : '')
     return [...messages, { id: randomUUID(), role: 'user', content: [{ type: 'text', text }],
       source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'snapshot', sections: [{ name: 'on-demand-intake', text }] } }]
@@ -587,18 +690,19 @@ export class OnDemandIntake {
         if (!state || execution.name !== TASK_PREPARE_TOOL || this.definition(execution)?.execute !== definition.execute || !value) throw new Error('Invalid task preparation request')
         if (state.preparationCalls.has(execution.callId) || !(state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn))) throw new Error('Task preparation was already consumed for this turn')
         state.preparationCalls.add(execution.callId)
+        try {
         if (state.existing) {
           this.assertCurrent(state); execution.signal.throwIfAborted()
           const boundIntent = this.bindIntent(state, value.requestIntent)
-          if (boundIntent?.relation === 'same_scope_continuation' && boundIntent.action !== 'answer' && boundIntent.action !== 'unknown') {
+          if (boundIntent?.relation === 'same_scope_continuation' && !requestIntentIsUnresolved(boundIntent) && boundIntent.action !== 'answer') {
             const intentType = requestIntentTaskType(boundIntent, state.taskType ?? state.intent.taskType ?? value.taskType)
             if (value.taskType !== undefined && intentType !== undefined && value.taskType !== intentType) {
               throw new Error('The advisory taskType conflicts with the bound request action')
             }
             state.requestIntent = boundIntent
           } else {
-            if (!boundIntent || boundIntent.relation === 'unknown' || boundIntent.action === 'unknown' || boundIntent.action === 'answer') {
-              throw new Error('Clarify whether this request continues, changes, or starts work before preparing it')
+            if (!boundIntent || requestIntentIsUnresolved(boundIntent) || boundIntent.action === 'answer') {
+              throw new RequestClarification('Clarify whether this request continues, changes, or starts work before preparing it')
             }
             const intentType = requestIntentTaskType(boundIntent, state.taskType ?? state.intent.taskType ?? value.taskType)
             if (!intentType || intentType === 'chat' || value.taskType !== undefined && value.taskType !== intentType) {
@@ -612,24 +716,28 @@ export class OnDemandIntake {
         } else {
           const suppliedIntent = this.bindIntent(state, value.requestIntent)
           const currentIntent = suppliedIntent ?? state.requestIntent
-          const unresolved = currentIntent?.relation === 'unknown' || currentIntent?.action === 'unknown'
-          if (unresolved && (state.requestIntentContext?.activeGoal || value.requestIntent !== undefined || value.taskType === undefined)) {
-            throw new Error('Clarify the request before preparing work')
+          const unresolved = currentIntent !== undefined && requestIntentIsUnresolved(currentIntent)
+          if (unresolved && (state.requestIntentContext?.activeGoal || state.requestIntentContext?.activeTask || value.requestIntent !== undefined || value.taskType === undefined)) {
+            throw new RequestClarification('Clarify the request before preparing work')
           }
           if (state.requestIntentContext?.activeGoal && currentIntent === undefined) {
-            throw new Error('Clarify whether this request continues, changes, or starts the active Goal')
+            throw new RequestClarification('Clarify whether this request continues, changes, or starts the active Goal')
           }
           const intentType = unresolved ? undefined : requestIntentTaskType(currentIntent, state.taskType ?? state.intent.taskType ?? value.taskType)
           if (value.taskType !== undefined && intentType !== undefined && value.taskType !== intentType) {
             throw new Error('The advisory taskType conflicts with the bound request action')
           }
           const taskType = intentType ?? value.taskType
-          if (!taskType || taskType === 'chat' || !ACTION_TYPES.includes(taskType)) throw new Error('Answer ordinary questions directly; clarify unknown actions before preparing work')
+          if (!taskType || taskType === 'chat' || !ACTION_TYPES.includes(taskType)) throw new RequestClarification('Answer ordinary questions directly; clarify unknown actions before preparing work')
           state.memoryOwner = memoryOwnerKind(currentIntent, taskType)
           await this.prepare(state, taskType, execution.signal, currentIntent, value.requestIntent !== undefined)
         }
         return { prepared: true, taskType: state.taskType ?? value.taskType ?? requestIntentTaskType(state.requestIntent), originalTask: state.task,
           ...(state.requestIntent ? { requestIntent: state.requestIntent } : {}), memoryOwner: state.memoryOwner, permissions: 'unchanged_native_policy' }
+        } catch (error) {
+          if (!(error instanceof RequestClarification)) throw error
+          return this.clarify(state, execution.signal, error)
+        }
       } }
     this.#disposers.push(tools.register(definition))
     this.#disposers.push(context.on('tools/pre-execute', async (execution: Execution, next: () => Promise<any>) => {
@@ -718,7 +826,13 @@ export class OnDemandIntake {
         const decision = await next()
         // DSH 0.1.5 does not understand cancel and otherwise dispatches it without running guards.
         return decision?.kind === 'cancel' ? denied('Native tool policy cancelled this call') : decision
-      } catch (error) { return denied(error instanceof Error ? error.message : 'Execution preparation failed') }
+      } catch (error) {
+        if (error instanceof RequestClarification) {
+          try { await this.clarify(state, execution.signal, error); return denied('Awaiting user clarification; no work was executed. Continue through the clarified human request.') }
+          catch (cancelled) { return denied(cancelled instanceof Error ? cancelled.message : 'Clarification cancelled') }
+        }
+        return denied(error instanceof Error ? error.message : 'Execution preparation failed')
+      }
     }, { prepend: true }))
     this.#disposers.push(context.on('tools/execute', async (execution: Execution, next: () => Promise<unknown>) => {
       if (execution.agent && this.host.nativeChild?.(execution.agent)) return next()
@@ -763,18 +877,19 @@ export class OnDemandIntake {
         if (!(state.status === 'answer' || state.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)) || state.preparationCalls.has(execution.callId)
           || !carrier || canonicalContentHash(carrier) !== proof.carrierDigest) throw new Error('Preparation carrier was already consumed or changed')
         state.preparationCalls.add(execution.callId)
+        try {
         const requestIntent = this.bindIntent(state, carrier.requestIntent)
         const clarification = executionClarification(state.task, requestIntent, state.requestIntentContext)
-        if (clarification) throw new Error(clarification)
-        const unresolved = requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown'
-        const legacyTaskTypeAllowed = carrier.taskType !== undefined && !state.requestIntentContext?.activeGoal
+        if (clarification) throw new RequestClarification(clarification)
+        const unresolved = requestIntent !== undefined && requestIntentIsUnresolved(requestIntent)
+        const legacyTaskTypeAllowed = carrier.taskType !== undefined && !state.requestIntentContext?.activeGoal && !state.requestIntentContext?.activeTask
           && (state.requestIntentContext?.proposals.length ?? 0) === 0
-        if (unresolved && !legacyTaskTypeAllowed) throw new Error('Clarify the requested action and scope before preparing work')
+        if (unresolved && !legacyTaskTypeAllowed) throw new RequestClarification('Clarify the requested action and scope before preparing work')
         const intentType = unresolved ? undefined : requestIntentTaskType(requestIntent, state.taskType ?? state.intent.taskType ?? carrier.taskType)
         const taskType = intentType ?? carrier.taskType
         if (carrier.taskType !== undefined && taskType !== carrier.taskType) throw new Error('The advisory taskType conflicts with the bound request action')
         if (!taskType || taskType === 'chat') {
-          throw new Error('Clarify the requested action and scope before preparing work')
+          throw new RequestClarification('Clarify the requested action and scope before preparing work')
         }
         state.memoryOwner = memoryOwnerKind(requestIntent, taskType)
         await this.prepare(state, taskType, execution.signal, requestIntent, carrier.requestIntent !== undefined)
@@ -782,6 +897,11 @@ export class OnDemandIntake {
          ...(state.requestIntent ? { requestIntent: state.requestIntent } : {}), memoryOwner: state.memoryOwner,
          permissions: 'unchanged_native_policy', programExecuted: false }
        return { isError: false, value: { logs: ['Host intake prepared. No program was evaluated.'], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
+        } catch (error) {
+          if (!(error instanceof RequestClarification)) throw error
+          const result = { ...(await this.clarify(state, execution.signal, error) as object), programExecuted: false }
+          return { isError: false, value: { logs: ['Awaiting user clarification. No program was evaluated.'], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
+        }
     }, { prepend: true }))
     this.#disposers.push(tools.guard(execution => {
       if (this.#stopped || execution.signal.aborted) return 'On-demand intake is stopped or cancelled'
@@ -823,8 +943,9 @@ export class OnDemandIntake {
     state.controller.abort(new Error('Native agent disposed'))
     state.status = 'closed'
     this.#turns.delete(agent.session!.id)
+    this.#clarifications.delete(agent.session!.id)
   }
-  stop(): void { this.#stopped = true; this.#lifecycle.abort(new Error('On-demand intake stopped')) }
+  stop(): void { this.#clarifications.clear(); this.#stopped = true; this.#lifecycle.abort(new Error('On-demand intake stopped')) }
   async drain(): Promise<void> { while (this.#pending.size) await Promise.allSettled([...this.#pending]) }
   async dispose(): Promise<void> { this.stop(); await this.drain(); for (const dispose of this.#disposers.reverse()) dispose() }
 }

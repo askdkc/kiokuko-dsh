@@ -88,12 +88,12 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}, skil
   }
 }
 
-function activeIntent(messages: readonly unknown[], task: string, relation: RequestRelationship, action: RequestAction) {
+function activeIntent(messages: readonly unknown[], task: string, relation: RequestRelationship, action: RequestAction, changeScope: 'implementation' | 'document' | 'unknown' = 'unknown') {
   const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(messages, task), activeGoal: {
     runId: 'run-current', workflowRevision: 4, goalId: 'goal-current', goalRevision: 2, scopeRevision: 3,
     ideal: 'Finish the parser task', target: 'src/parser.ts', outOfScope: ['Publishing'], constraints: ['Keep the public API stable'],
   }, proposals: [] })!
-  const decision = bindMainModelRequestIntent({ relation, action, evidenceRefs: requestIntentReferenceIds(context) }, context)!
+  const decision = bindMainModelRequestIntent({ relation, action, changeScope, evidenceRefs: requestIntentReferenceIds(context) }, context)!
   return { context, decision }
 }
 
@@ -222,7 +222,7 @@ test('on-demand review: exact request replay is separate from same-scope continu
 test('scope-changing preparation updates the exact existing request instead of acknowledging the old Goal', async t => {
   const message = human('scope-change', 'Add the new API endpoint to this parser task.')
   const task = 'Add the new API endpoint to this parser task.'
-  const intent = activeIntent([message], task, 'scope_change', 'change')
+  const intent = activeIntent([message], task, 'scope_change', 'change', 'implementation')
   const f = await fixture(t, {
     existing: async () => true,
     interpret: async () => intent,
@@ -258,7 +258,8 @@ test('unknown relationship cannot borrow an active Goal through a legacy taskTyp
   const f = await fixture(t, { existing: async () => true, interpret: async () => intent })
   f.ready(1)
   assert.equal(await f.capture([message]), true)
-  assert.equal((await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })).isError, true)
+  const waiting = await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })
+  assert.equal(waiting.isError, false); assert.equal(waiting.value.prepared, false); assert.equal(waiting.value.status, 'awaiting_clarification')
   assert.equal(f.admissions.length, 0)
   assert.equal(f.bodies(), 0)
 })
@@ -266,7 +267,7 @@ test('unknown relationship cannot borrow an active Goal through a legacy taskTyp
 test('a new request never consults the existing-run continuation lookup', async t => {
   const message = human('new-scope', 'Start a separate parser benchmark.')
   const task = 'Start a separate parser benchmark.'
-  const intent = activeIntent([message], task, 'new', 'change')
+  const intent = activeIntent([message], task, 'new', 'change', 'implementation')
   let ownerLookups = 0
   const f = await fixture(t, { existing: async () => { ownerLookups++; return true }, interpret: async () => intent })
   f.ready(1)
@@ -520,7 +521,9 @@ test('on-demand review: successful preparation cannot override a native monotoni
 for (const task of ['それを消して？', 'Delete that.']) test(`on-demand review: advisory type cannot resolve a known missing destructive target: ${task}`, async t => {
   const f = await fixture(t)
   await f.capture([human('original', task)])
-  assert.equal((await f.prepare()).isError, true, 'a model-generated research hint cannot establish the missing deletion target')
+  const waiting = await f.prepare()
+  assert.equal(waiting.isError, false); assert.equal(waiting.value.status, 'awaiting_clarification'); assert.equal(waiting.value.prepared, false)
+  assert.match(waiting.value.question, /対象/)
   assert.equal(f.admissions.length, 0, 'reject before the host can default the target to cwd')
   assert.equal((await f.execute()).isError, true)
   assert.equal(f.bodies(), 0)
@@ -860,4 +863,93 @@ test('owned-context native evidence rejects changed arguments before dispatch', 
   assert.equal((await f.execute('read', { path: 'src/main.rs' })).isError, true)
   assert.equal(mutationReached, true, 'the original valid request reaches the native guard before its declared path changes')
   assert.equal(calls.length, 0); assert.equal(f.admissions.length, 0)
+})
+
+for (const relation of ['new', 'same_scope_continuation', 'scope_change'] as const) test(`unknown change scope cannot borrow existing authority (${relation})`, async t => {
+  const task = 'Continue changing the current artifact.'
+  const message = human('unknown-change-scope', task)
+  const intent = activeIntent([message], task, relation, 'change')
+  let ownerLookups = 0
+  const f = await fixture(t, { existing: async () => { ownerLookups++; return true }, interpret: async () => intent })
+  f.ready(1)
+  assert.equal(await f.capture([message]), true)
+  for (const args of [{ taskType: 'build' }, { requestIntent: { relation, action: 'change', evidenceRefs: requestIntentReferenceIds(intent.context) } }]) {
+    const result = await f.execute(TASK_PREPARE_TOOL, args)
+    assert.equal(result.isError, false); assert.equal(result.value.prepared, false); assert.equal(result.value.status, 'awaiting_clarification')
+  }
+  assert.equal(ownerLookups, 0)
+  assert.equal(f.admissions.length, 0)
+  assert.equal(f.bodies(), 0)
+})
+
+// A real native tool result carries waiting state; only the question service is doubled.
+test('clarification deduplicates semantic retries and never turns dismissal into admission', async t => {
+  const task = 'Inspect the requested artifact.', message = human('clarification-original', task)
+  const intent = activeIntent([message], task, 'unknown', 'unknown')
+  let asks = 0, followups = 0
+  const f = await fixture(t, { interpret: async () => intent, questions: { async ask(request) {
+    asks++; return { answers: [{ id: request.questions[0].id, selected: [] }] }
+  } } })
+  ;(f.agent as any).followup = () => { followups++ }
+  await f.capture([message])
+  const first = await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })
+  const second = await f.execute(TASK_PREPARE_TOOL, { requestIntent: { relation: 'unknown', action: 'unknown', evidenceRefs: requestIntentReferenceIds(intent.context) } })
+  for (const result of [first, second]) { assert.equal(result.isError, false); assert.equal(result.value.prepared, false); assert.equal(result.value.status, 'awaiting_clarification') }
+  assert.equal(first.value.questionId, second.value.questionId); assert.equal(asks, 1); assert.equal(followups, 0)
+  assert.equal(f.admissions.length, 0); assert.equal(f.bodies(), 0)
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' }, { agent: { ...f.agent } })).isError, true)
+  assert.equal(asks, 1, 'another agent cannot reuse the pending question')
+  assert.equal(f.intake.awaitingClarification(f.agent), true)
+  f.events.push({ ...event('turn/end', 1), data: { turn: 1, reason: { kind: 'aborted' } } } as any)
+  f.intake.finish(f.session, 1)
+  assert.equal(f.intake.awaitingClarification(f.agent), false, 'Stop after dismissal must not suppress cancellation cleanup')
+})
+
+test('Stop during clarification revalidation cannot enqueue a late human followup', async t => {
+  const task = 'Inspect the requested artifact.', message = human('clarification-stop', task)
+  const intent = activeIntent([message], task, 'unknown', 'unknown')
+  let calls = 0, followups = 0, release!: () => void, entered!: () => void
+  const blocked = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  const f = await fixture(t, { interpret: async () => { if (++calls > 1) { entered(); await blocked } return intent },
+    questions: { async ask(request) { return { answers: [{ id: request.questions[0].id, selected: [], custom: 'Only inspect PLAN.md.' }] } } } })
+  ;(f.agent as any).followup = () => { followups++ }
+  await f.capture([message]); const controller = new AbortController()
+  const pending = f.execute(TASK_PREPARE_TOOL, { taskType: 'review' }, { signal: controller.signal })
+  await ready; controller.abort(new Error('Human Stop')); release()
+  const result = await pending
+  assert.equal(result.isError, true); assert.equal(followups, 0); assert.equal(f.admissions.length, 0); assert.equal(f.bodies(), 0)
+  assert.equal(f.intake.awaitingClarification(f.agent), false)
+})
+
+test('clarification without a context never reuses another human request question', async t => {
+  let asks = 0
+  const f = await fixture(t, { questions: { async ask(request) { asks++; return { answers: [{ id: request.questions[0].id, selected: [] }] } } } })
+  ;(f.agent as any).followup = () => { throw new Error('Dismissal must not enqueue') }
+  await f.capture([human('first-unknown-target', 'Delete that.')])
+  const first = await f.prepare()
+  f.intake.finish(f.session, 1)
+  f.events.push(event('turn/end', 1), event('turn/start', 2))
+  await f.capture([human('second-unknown-target', 'Send that.')], 2)
+  const second = await f.prepare()
+  assert.equal(first.value.status, 'awaiting_clarification'); assert.equal(second.value.status, 'awaiting_clarification')
+  assert.notEqual(first.value.questionId, second.value.questionId); assert.equal(asks, 2); assert.equal(f.admissions.length, 0)
+})
+
+test('a Pending task asks for an explicit transition without starting or duplicating work', async t => {
+  const task = 'Continue the current inspection.', message = human('pending-authority', task)
+  const activeTask = { taskId: 'pending-task', runId: 'pending-task', sessionId: 'review-session', sourceSessionId: 'review-session', repositoryRoot: '/repo',
+    type: 'research' as const, state: 'Pending' as const, revision: 4, generation: 7, runStatus: 'active' as const,
+    reason: 'Waiting for information', evidence: [], allowedOps: ['resume', 'ignore'] as const, request: 'Inspect PLAN.md', resumedFromTerminal: false }
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([message], task), activeTask: { ...activeTask, allowedOps: [...activeTask.allowedOps] } })!
+  const decision = bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'verify', evidenceRefs: requestIntentReferenceIds(context) }, context)!
+  let asks = 0
+  const f = await fixture(t, { interpret: async () => ({ context, decision }), questions: { async ask(request) {
+    asks++; assert.match(request.questions[0].question, /Pending/); return { answers: [{ id: request.questions[0].id, selected: [] }] }
+  } } })
+  ;(f.agent as any).followup = () => { throw new Error('An unanswered question is not a transition') }
+  await f.capture([message])
+  const result = await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })
+  assert.equal(result.isError, false); assert.equal(result.value.status, 'awaiting_clarification')
+  assert.equal(asks, 1); assert.equal(f.admissions.length, 0); assert.equal(f.bodies(), 0)
+  assert.equal(context.activeTask!.state, 'Pending'); assert.equal(context.activeTask!.revision, 4); assert.equal(context.activeTask!.generation, 7)
 })

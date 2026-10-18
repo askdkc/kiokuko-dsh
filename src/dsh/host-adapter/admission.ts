@@ -322,6 +322,9 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
       return { ...result, prepared: { ...result.prepared, ennoOduno } }
     }
     override async prepare(event: DshPreStepEvent): Promise<DshIntakeGateResult> {
+      if (event.requestIntent?.action === 'change' && event.requestIntent.changeScope === 'unknown') {
+        throw new KiokukoError('CONFLICT', 'request_intent_change_scope_unresolved')
+      }
       // Capture completion ordering before any asynchronous database or intake
       // work. Revision ordering alone cannot distinguish two same-revision
       // context deliveries that finish out of order.
@@ -332,9 +335,19 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
         const current = await runtime.withDatabase(database => readTaskSnapshot(database, canonical))
         if (current.revision !== canonical.revision || current.generation !== canonical.generation)
           throw new KiokukoError('CONFLICT', 'Task continuation revision changed')
+        const canonicalContinuation = event.requestIntent?.relation === 'same_scope_continuation'
+          && !!event.requestIntentContext && !!rebindRequestIntentDecision(event.requestIntent, event.requestIntentContext)
+          && event.requestIntent.evidence.taskId === current.taskId && taskCanExecute(current)
+          && prior?.runId === current.taskId && !!prior.authority
+          && prior.authority.revision === current.revision && prior.authority.generation === current.generation
         // An explicit resume invalidates the old in-memory preparation and memory
         // delivery, even when the native session and logical run ID are unchanged.
-        if (!taskCanExecute(current) || prior?.runId === current.taskId && prior.authority
+        // Reuse the existing resume path before advisory completion retires a
+        // normal task; it also initializes any newly required coding workflow.
+        const resumeCanonicalContinuation = canonicalContinuation && prior && !prior.closed && !prior.failed
+          && prior.turn < event.turn && !prior.prepared.ennoOduno.applicable
+          && !await runtime.withDatabase(db => readCodingWorkflow(db, current.taskId))
+        if (resumeCanonicalContinuation || !taskCanExecute(current) || prior?.runId === current.taskId && prior.authority
           && (prior.authority.revision !== current.revision || prior.authority.generation !== current.generation)) {
           const refreshed = await resumeExistingRun?.(event)
           if (!refreshed) throw new KiokukoError('CONFLICT', 'Current task could not be resumed')

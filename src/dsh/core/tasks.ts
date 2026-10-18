@@ -33,7 +33,7 @@ import { readAkinatorSession, readRunIntakeLink } from '../../akinator/store.js'
 import { codingWorkRequested } from '../coding-workflow/intent.js'
 import { markCodingScopeChange, stopCodingWorkflow, synchronizeCodingWorkflow } from '../coding-workflow/service.js'
 import { saveExecutionFrame, updateExecutionFrame } from '../execution-frame.js'
-import { requestIntentReferenceIds, requestIntentTaskType, rebindRequestIntentDecision, type RequestIntentContext, type RequestIntentDecision } from '../decisions/request-intent.js'
+import { requestIntentReferenceIds, requestIntentTaskType, rebindRequestIntentDecision, requestIntentIsUnresolved, type RequestIntentContext, type RequestIntentDecision } from '../decisions/request-intent.js'
 import { assertMemoryOwner, createMemoryOwner, memoryOwnerKind, type MemoryOwnerBinding } from '../memory-owner.js'
 import { authorizeTaskLease, bindTaskRepository, captureTaskLease, readTaskSnapshot,
   taskCanExecute, type TaskLease } from '../task-state.js'
@@ -140,7 +140,7 @@ export class CoreTasks {
     const requestIntentContext = input.requestIntentContext
     if (!input.requestIntent || !requestIntentContext) throw new Error('A source-bound request interpretation is required to resume a Core task')
     const intent = rebindRequestIntentDecision(input.requestIntent, requestIntentContext)
-    if (!intent || intent.relation === 'new' || intent.relation === 'unknown' || intent.action === 'unknown' || intent.action === 'answer') {
+    if (!intent || requestIntentIsUnresolved(intent) || intent.relation === 'new' || intent.action === 'answer') {
       throw new Error('The current request does not authorize continuation of the active Core Goal')
     }
     return this.runtime.withDatabase(async db => {
@@ -194,8 +194,8 @@ export class CoreTasks {
       if (!requestIntent) throw new KiokukoError('CONFLICT', 'request_intent_evidence_stale')
     }
     if (requestIntent?.action === 'answer') throw new KiokukoError('CONFLICT', 'request_intent_is_conversation')
-    const unresolvedIntent = requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown'
-    if (unresolvedIntent && (requestIntentContext?.activeGoal || requestIntentContext?.activeTask)) throw new KiokukoError('CONFLICT', 'request_intent_unresolved')
+    const unresolvedIntent = requestIntent !== undefined && requestIntentIsUnresolved(requestIntent)
+    if (unresolvedIntent && (requestIntent?.action === 'change' || requestIntentContext?.activeGoal || requestIntentContext?.activeTask)) throw new KiokukoError('CONFLICT', 'request_intent_unresolved')
     if ((requestIntentContext?.activeGoal || requestIntentContext?.activeTask) && requestIntent === undefined) {
       throw new KiokukoError('CONFLICT', 'request_intent_required_for_active_goal')
     }

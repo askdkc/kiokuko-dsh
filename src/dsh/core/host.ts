@@ -251,6 +251,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     return decision ? { context, decision } : undefined
   }
   const demand = new OnDemandIntake({
+    ...(questions ? { questions } : {}),
     answerContext: new DshAnswerContext(runtime, { root, projectOnly: true, memoryRetrieval: config.memoryRetrieval,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills, prompts, decisions, cwd: root }),
     }),
@@ -311,7 +312,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         throw new Error('Previous task has not reached its confirmed native boundary')
       }
       // Uncertainty must reach the main model without retiring unfinished work.
-      if (reason === 'completed' && (requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown')) return
+      if (reason === 'completed' && requestIntent !== undefined && requestIntentIsUnresolved(requestIntent)) return
       const retainsGoal = (requestIntent?.relation === 'same_scope_continuation' || requestIntent?.relation === 'scope_change')
         && requestIntent.action !== 'answer'
         && (requestIntent.evidence.runId === current.task.runId || requestIntent.evidence.taskId === current.task.runId)
@@ -377,6 +378,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     const boundary = [...current.agent.session.snapshotEvents()].reverse().find(event => event.type === 'turn/end' && event.data?.turn === current.turn)
     const reason = boundary?.data?.reason?.kind
     if (!['completed', 'error', 'aborted', 'max-tokens', 'blocked'].includes(reason)) return
+    if (reason === 'completed' && demand.awaitingClarification(current.agent)) return
     if (reason === 'completed' && !current.failed && !current.checkpointed && answerReview.hold(current.agent as ReviewAgent)) return
     if (reason === 'completed' && !current.failed && await runtime.withDatabase(db => taskCompletionBlocksClose(assessTaskCompletion(db, current.task.runId)))) return
     current.finishing = (async () => {
@@ -456,10 +458,10 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       requestIntent = await classifyRequestIntent(decisions, requestId, requestIntentContext, signal)
     }
     if (requestIntentContext) await persistRequestIntent(requestId, requestIntentContext, requestIntent)
-    const intentUnresolved = requestIntent?.relation === 'unknown' || requestIntent?.action === 'unknown'
+    const intentUnresolved = requestIntent !== undefined && requestIntentIsUnresolved(requestIntent)
     const legacyTaskTypeAllowed = advisoryType !== undefined && advisoryType !== 'chat'
       && !requestIntentContext?.activeGoal && !requestIntentContext?.activeTask && (requestIntentContext?.proposals.length ?? 0) === 0
-    if ((intentUnresolved && !legacyTaskTypeAllowed) || requestIntent?.action === 'answer') {
+    if ((intentUnresolved && (!legacyTaskTypeAllowed || requestIntent?.action === 'change')) || requestIntent?.action === 'answer') {
       throw new KiokukoError('CONFLICT', 'request_intent_unresolved')
     }
     const clarification = executionClarification(requestTask, requestIntent, requestIntentContext)
