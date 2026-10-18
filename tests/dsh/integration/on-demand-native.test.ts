@@ -113,6 +113,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       return context.provide('userQuestions', { async ask(request: any) {
         questions.push(request.questions)
         questionPhases.push({ modelRequests: requests.length, dispatched: dispatches.map(call => call.name) })
+        if (scenario === 'unknown-action') return { answers: request.questions.map((question: any) => ({ id: question.id, selected: [] })) }
         return { answers: request.questions.map((question: any) => ({ id: question.id,
           selected: [(question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')) ? '使わない' : question.id === 'enno-execution-mode' ? '通常実行'
             : question.id === 'taskType' ? taskType : question.options?.[0]?.label ?? taskType] })) }
@@ -323,7 +324,22 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
     } else if (scenario === 'replace-task' || scenario === 'ptc-malicious' || scenario === 'unknown-action' || scenario === 'carrier-ask-reject' || scenario === 'incomplete-catalog') {
       assert.equal(bodies.length, 0); assert.equal(state.runs.length, 0)
       if (scenario === 'incomplete-catalog') { assert.equal(state.intakes.length, 0); assert.ok(JSON.stringify(toolResults).includes('Mandatory bundled Skill catalog')) }
-      if (scenario === 'unknown-action') { assert.equal(state.intakes.length, 0); assert.equal(questions.length, 0); assert.equal(toolResults.length, 2) }
+      if (scenario === 'unknown-action') {
+        assert.equal(state.intakes.length, 0); assert.equal(questions.length, 1); assert.equal(toolResults.length, 2)
+        assert.equal(questions[0].length, 1, 'ask only for the missing concrete target')
+        const preparation = toolResults.find((result: any) => result.toolCallId === 'prepare-native')
+        assert.equal(preparation?.isError, false, 'uncertain target is a recoverable question')
+        const waiting = JSON.parse(preparation.content[0].text)
+        assert.equal(waiting.prepared, false)
+        assert.equal(waiting.status, 'awaiting_clarification')
+        assert.equal(waiting.nextAction, 'wait_for_user')
+        assert.equal(waiting.questionId, questions[0][0].id)
+        assert.equal(waiting.originalTask, task)
+        assert.equal(waiting.permissions, 'unchanged_native_policy')
+        assert.equal(toolResults.find((result: any) => result.toolCallId === 'probe-native')?.isError, true,
+          'an unanswered target question must not authorize even a research probe')
+        assert.equal(writes.length, 0); assert.equal(runtimeRuns.length, 0)
+      }
       if (scenario === 'carrier-ask-reject') {
         assert.equal(state.intakes.length, 0); assert.equal(runtimeRuns.length, 0)
         assert.equal(approvals.filter((event: any) => event.type === 'approval/asked').length, 1)

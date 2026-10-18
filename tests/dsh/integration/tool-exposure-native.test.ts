@@ -103,8 +103,9 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     const referenceLine = strings(body).flatMap(text => text.split('Current request references and same-session work (host-bound, advisory only):\n').slice(1).map(part => part.split('\n')[0])).at(-1)
     assert.ok(!preparing || referenceLine, 'the provider must receive the current request evidence')
     const action = ['research', 'analysis'].includes(fixtureTaskType) ? 'research' : fixtureTaskType === 'review' ? 'verify' : fixtureTaskType === 'devops' ? 'operate' : 'change'
+    const changeScope = action === 'change' ? fixtureTaskType === 'writing' ? 'document' : 'implementation' : 'unknown'
     const toolArguments = preparing ? JSON.stringify(fixtureTaskType === 'analysis' ? { taskType: fixtureTaskType } : { taskType: fixtureTaskType, requestIntent: {
-      relation: 'new', action, evidenceRefs: JSON.parse(referenceLine!).references,
+      relation: 'new', action, changeScope, evidenceRefs: JSON.parse(referenceLine!).requiredReferences,
     } }) : '{"message":"payload-1"}'
     const toolCallId = preparing ? 'call_fixture_prepare' : 'call_fixture_external'
     if (preparing) {
@@ -165,14 +166,27 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     }
     return new Response(JSON.stringify({ error: { message: 'intentional recording fixture response' } }), { status: 400, headers: { 'content-type': 'application/json' } })
   }
-  let fixtureTaskType = 'build'
+  const fixtureRequests = {
+    build: 'Implement phase-aware tool exposure in src/dsh/tool-exposure.ts and report the result.',
+    debug: 'Fix phase-aware tool exposure in src/dsh/tool-exposure.ts and report the result.',
+    devops: 'Restart the fixture service and report the result.',
+    research: 'Inspect src/dsh/tool-exposure.ts and report the result without changing files.',
+    analysis: 'Analyze src/dsh/tool-exposure.ts and report the result without changing files.',
+    writing: 'Revise the tool-exposure documentation in README.md without changing code.',
+    review: 'Review src/dsh/tool-exposure.ts and report the result without changing files.',
+  } as const
+  let fixtureTaskType: keyof typeof fixtureRequests = 'build'
   const preparedTurn = async (agent: any, executeExternal = false) => {
     roundtrip = 'prepare'; afterPreparation = executeExternal ? 'tool-call' : 'capture'
-    await turn(h, agent, 'Inspect the repository and report the result.')
+    await turn(h, agent, fixtureRequests[fixtureTaskType])
     const events = agent.session.snapshotEvents()
     const call = events.flatMap((event: any) => event.type === 'assistant/message' ? event.data.message.content : []).find((block: any) => block.type === 'tool-call' && block.name === TASK_PREPARE_TOOL)
     const preparation = events.find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId === call?.id)
     assert.ok(preparation && !preparation.data.message.isError, 'public preparation must execute successfully before phase assertions')
+    const result = JSON.parse(preparation.data.message.content.filter((block: any) => block.type === 'text').map((block: any) => block.text).join(''))
+    assert.equal(result.prepared, true, `public preparation must admit this request before phase assertions: ${JSON.stringify(result)}`)
+    assert.equal(result.taskType, fixtureTaskType)
+    assert.equal(result.originalTask, fixtureRequests[fixtureTaskType])
   }
   let questions: any, credentials: any, settings: any
   let wire: any, adapter: ReturnType<typeof createDshHostAdapter> | undefined, composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
@@ -218,7 +232,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   }
   try {
     questions = h.ctx.plugin({ name: 'tool-exposure-baseline-ui', apply(ctx: any) {
-      return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((question: any) => ({ id: question.id, selected: [({ taskType: fixtureTaskType, target: 'src/dsh/tool-exposure.ts', expected: 'phase-eligible tools are the only Kiokuko tools in the native request' } as Record<string, string>)[question.id] ?? '通常実行'] })) }) })
+      return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((question: any) => ({ id: question.id, selected: [({ taskType: fixtureTaskType, target: fixtureTaskType === 'writing' ? 'README.md' : fixtureTaskType === 'devops' ? 'fixture service' : 'src/dsh/tool-exposure.ts', expected: 'phase-eligible tools are the only Kiokuko tools in the native request' } as Record<string, string>)[question.id] ?? '通常実行'] })) }) })
     } }); await questions
     credentials = h.ctx.plugin({ name: 'tool-exposure-baseline-credentials', apply(ctx: any) {
       return ctx.provide('credentials', { resolve: async () => ({ value: 'fixture-token' }), read: async () => undefined, list: async () => [], registerOwner: () => () => {} })
@@ -254,7 +268,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
       return [...DSH_MODEL_FACING_OPERATIONS].filter(name => names.includes(name)).sort()
     }
     const fullAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-baseline'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
-    try { await preparedTurn(fullAgent) } catch { /* The fake provider deliberately returns HTTP 400 after capture. */ }
+    await preparedTurn(fullAgent)
     const fullBody = requests[1]?.body
     assert.ok(fullBody)
     assert.deepEqual(modelFacingNames(fullBody), [...DSH_MODEL_FACING_OPERATIONS].sort())
@@ -263,7 +277,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     const phaseWarnings: string[] = []
     const previousWarn = console.warn
     console.warn = (...args: unknown[]) => { phaseWarnings.push(args.map(String).join(' ')); previousWarn(...args) }
-    try { await preparedTurn(phaseAgent) } catch { /* The fake provider deliberately returns HTTP 400 after capture. */ } finally { console.warn = previousWarn }
+    try { await preparedTurn(phaseAgent) } finally { console.warn = previousWarn }
     assert.equal(requests.length, 4)
     const phaseBody = requests[3]!.body
     const phaseNames = modelFacingNames(phaseBody)
@@ -370,7 +384,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
       await mountFixture('full')
       const fullResearchAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-full-research'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
       const fullResearchBefore = requests.length
-      try { await preparedTurn(fullResearchAgent) } catch { /* Capture precedes intentional HTTP 400. */ }
+      await preparedTurn(fullResearchAgent)
       assert.equal(requests.length, fullResearchBefore + 2)
       const fullResearchBody = requests[fullResearchBefore + 1]!.body
       assert.deepEqual(modelFacingNames(fullResearchBody), [...DSH_MODEL_FACING_OPERATIONS].sort(), 'explicit full must override research minimization')
@@ -393,7 +407,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
           if (taskType === 'research') {
             await preparedTurn(autoAgent, true)
           } else {
-            try { await preparedTurn(autoAgent) } catch { /* Capture precedes intentional HTTP 400. */ }
+            await preparedTurn(autoAgent)
           }
         } finally { console.info = previousInfo }
         assert.ok(diagnostics.some(line => line.includes(`"requestedMode":"auto","mode":"${effectiveMode}"`) && line.includes(`:${taskType}:`)), `observed task/mode must match ${taskType}/${effectiveMode}`)
@@ -444,7 +458,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
           for (let index = 0; index < 2; index++) {
             const collisionAgent = await h.ctx.agentLoop.create(h.session.SessionId(`tool-exposure-${mode}-collision-${index}`), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
             const before: number = requests.length
-            try { await preparedTurn(collisionAgent) } catch { /* Capture precedes intentional HTTP 400. */ }
+            await preparedTurn(collisionAgent)
             assert.equal(requests.length, before + 2)
             assert.deepEqual(requests[before + 1]!.body.tools, fullBody.tools, 'ownership collisions must retain the entire full surface')
           }
@@ -473,7 +487,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
         const previousWarn = console.warn
         console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); previousWarn(...args) }
         try {
-          try { await preparedTurn(agent) } catch { /* Invalid injected assembly or intentional HTTP 400. */ }
+          await preparedTurn(agent)
           assert.ok(originalTools, 'the native assembly must reach the injected failure')
           assert.strictEqual(observedTools, originalTools, `${failure} must retain the exact native tool array`)
           const reason = failure === 'ptc' || failure === 'both' ? 'unsupported_presentation' : failure

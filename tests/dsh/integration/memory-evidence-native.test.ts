@@ -53,7 +53,7 @@ for (const mode of ['core', 'full'] as const) test(`native ${mode}: conversation
         if(request.purpose==='compaction'){yield*mock.textResponse('{"schemaVersion":4,"memoryOperations":[]}');return}
         if(prepare){prepare=false;const guidance = request.messages.flatMap((m:any)=>m.content??[]).find((b:any)=>b.text?.includes('Current request references and same-session work'))?.text
           assert.ok(guidance, 'main model must receive current request references')
-          const context = JSON.parse(guidance.split('Current request references and same-session work (host-bound, advisory only):\n')[1].split('\nUse only')[0])
+          const context = JSON.parse(guidance.split('Current request references and same-session work (host-bound, advisory only):\n')[1].split('\n')[0])
           yield*mock.toolCallResponse('prepare-memory-inspection','prepare_requested_work',{taskType:'research',requestIntent:{relation:'new',action:'research',evidenceRefs:context.references}});return}
         if(explain){explain=false;yield*mock.toolCallResponse('core-explain','memory_explain',{entryId:memory.id});return}
         yield*mock.textResponse('Acknowledged.')

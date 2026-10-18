@@ -623,7 +623,7 @@ for (const kind of ['direct', 'carrier', 'resumed'] as const) test(`host-only ${
     existing: async () => kind === 'resumed', classify: async () => ({ deferInference: true, ...(kind === 'resumed' ? { taskType: 'debug' as const } : {}) }),
     ...(kind === 'resumed' ? { interpret: async (input: any, task: string) => {
       const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(input.messages, task), activeGoal: { runId: f.task.runId, outOfScope: [], constraints: [] } })!
-      return { context, decision: bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'change', evidenceRefs: requestIntentReferenceIds(context) }, context)! }
+      return { context, decision: bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'change', changeScope: 'implementation', evidenceRefs: requestIntentReferenceIds(context) }, context)! }
     } } : {}),
     prepare: async () => { preparations++; ready = true; return true },
     ready: candidate => candidate === agent && ready,
@@ -649,6 +649,9 @@ for (const kind of ['direct', 'carrier', 'resumed'] as const) test(`host-only ${
     try { assert.equal((await invoke(name, args)).isError, true); assert.equal(preparations, 0) } finally { releaseDenial() }
     const result = await invoke(name, args)
     assert.equal(result.isError, false, JSON.stringify(result))
+    const preparation = kind === 'carrier' ? result.value.result : result.value
+    assert.equal(preparation.prepared, true, 'host-only preparation must admit this exact request')
+    assert.equal(preparation.permissions, 'unchanged_native_policy')
     assert.equal(preparations, kind === 'resumed' ? 0 : 1)
     assert.equal(f.status().ready, false, 'preparation must not resolve or bypass memory decisions')
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM task_memory_executions WHERE run_id=?').get(f.task.runId)?.n, 0, 'control preparation must not create an execution receipt')
