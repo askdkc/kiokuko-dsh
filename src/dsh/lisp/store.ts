@@ -50,6 +50,22 @@ export class LispStore {
     })
   }
   session(id: string): Promise<Session | undefined> { return this.database(db => db.prepare('SELECT * FROM dsh_lisp_sessions WHERE session_id=?').get<Session>(id)) }
+  /** Manual ON is session metadata: one atomic insert, never an unfinished effect journal. */
+  manualMode(owner: LispOwner, remember = false): Promise<boolean> {
+    return this.database(db => {
+      const session = db.prepare('SELECT * FROM dsh_lisp_sessions WHERE session_id=?').get<Session>(owner.sessionId)
+      if (!session?.enabled || session.root_path !== owner.root) return false
+      const id = `manual-mode-${session.epoch}`, hash = digest({root:owner.root,epoch:session.epoch})
+      if (remember) db.prepare(`INSERT OR IGNORE INTO dsh_lisp_operations
+        SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS
+        (SELECT 1 FROM dsh_lisp_sessions WHERE session_id=? AND root_path=? AND enabled=1 AND epoch=?)`)
+        .run(owner.sessionId,'__session__',id,'manual_mode',hash,'host','SUCCEEDED',JSON.stringify({root:owner.root,epoch:session.epoch}),JSON.stringify({enabled:true}),new Date().toISOString(),owner.sessionId,owner.root,session.epoch)
+      const saved = db.prepare('SELECT * FROM dsh_lisp_operations WHERE session_id=? AND agent_id=? AND operation_id=?').get<Operation>(owner.sessionId,'__session__',id)
+      const selected = saved?.kind === 'manual_mode' && saved.state === 'SUCCEEDED' && saved.digest === hash
+      if (remember && !selected) fail('SCOPE_CONFLICT', 'Manual Lisp selection changed; inspect the session before retrying.')
+      return selected
+    })
+  }
   async decline(owner: LispOwner): Promise<void> {
     await this.database(db => {
       const old = db.prepare('SELECT * FROM dsh_lisp_sessions WHERE session_id=?').get<Session>(owner.sessionId)

@@ -20,7 +20,11 @@ description: バグ修正・機能追加・挙動に関わる設定や配布物�
 
 DSH の実装タスクでは、初回の変更前に `coding_workflow status` を読み、`propose` で Goal・依存関係付きの全項目・各項目の観測可能な条件・別の最終 Goal 条件を原子的に登録する。先に必要な読取調査を行ってよい。元依頼の権限と対象を広げない。Enno では既存 ideal・plan を提出し、その共通表示を使う。別の Goal を提案しない。
 
-ホストが Goal・項目・条件を示し、そのタスクで Lisp を使うか人間に確認する。未回答・閉じる・切断は pending。モデルは回答を代行せず、選択前に変更・プロセス・Lisp を起動しない。`next` は再表示と依存達成済みの項目の確認に使う。no では通常ツールで同じ条件を進め、Lisp を勧め直さない。yes の起動失敗はブロッカーとして扱う。
+通常 native 実装依頼ではモデル要求前に Lisp を提案し、ON 済みならその経路を使う。Goal 準備は同じ依頼の人間の回答を再利用する。全ての goal.criterionIds を、実装を担当する少なくとも1つの items[].goalCriterionIds に対応付ける。未対応 ID の診断では該当 item を自分で選んで修正し、最終条件を消したり対応を捏造しない。
+
+Lisp ON の native coding preparation は小さい関連試作を lisp_eval（prototype:true）で実行し、成功した保存 operationId を lisp_inspect（resultOperationId、section:"result"）で読み取ってから実装する。ON 表示や自己申告は試作の証拠ではない。2回失敗したら自動再試行を止め、原因修復または明示的な OFF を選ぶ。
+
+Goal・項目・条件を定義し、早期回答がない場合はホストが Lisp を使うか人間に確認する。未回答・閉じる・切断は pending。モデルは回答を代行せず、選択前に変更・プロセス・Lisp を起動しない。`next` は再表示と依存達成済みの項目の確認に使う。no では通常ツールで同じ条件を進め、Lisp を勧め直さない。yes の起動失敗はブロッカーとして扱う。
 
 選択後は各項目を自律的に進める。実行前に `task_completion bind` でチェックを対応付け、owned tools または Lisp の実子プロセスから host receipt を得る。全項目が達成済みになった後、最新成果物で通常の利用入口を確かめる最終 Goal チェックを実行する。状態と未達理由は `coding_workflow status` で確認し、自己申告で完了にしない。
 

@@ -18,7 +18,7 @@ Persistent mode: coding choice or /kioku-lisp enable. Task mode uses /kioku-lisp
 
 Use kioku_read, kioku_write, kioku_edit, kioku_remove, kioku_exec and kioku_result for observed development. PATH commands, bash/zsh, builds/tests, coding-needed external investigation and project edits need no routine confirmation. Source/data deletion and existing durable user database mutation need a concrete review; generated/temp/disposable artifacts are ordinary development. Memory organization waits until task completion and user permission; saving requires approval of the exact shown content. Declare destructiveTargets when executing commands with destructive intent. The host does not attempt to classify every side effect of arbitrary code.
 
-Ordinary foreground kioku.process:run uses native Bash sandbox/approval/Stop; no memory task, Goal or coding choice. Admitted workflows, owned tools, async jobs and protected mode retain task/protocol authority. Prefer kioku.tools:call-tool or broker receipts; direct Lisp/FFI effects or generated passed fields prove no verification. Bind task_completion conditions/source paths before checks (subdirectories too); collect async receipts with kioku_result. Cancellation/ownership remain authoritative. In admitted work, Plan permits read/search/status until human implementation instructions or approval exit at the next accepted boundary. Conversation keeps native policy.
+Foreground kioku.process:run uses native Bash sandbox/approval/Stop without a memory task/Goal. Selected coding requires prototype/result inspection. Admitted workflows, owned tools, async jobs and protected mode keep task/protocol authority. Use kioku.tools:call-tool/broker receipts; direct Lisp/FFI or generated passed fields prove no verification. Bind task_completion conditions/source paths (subdirs too) before checks; collect async receipts with kioku_result. Cancellation/ownership remain authoritative. Admitted Plan allows read/search/status until human implementation/approval exits at the next boundary. Conversation: native policy.
 
 Schemas define arguments; never guess. `lisp_describe` without a symbol gives the
 API/verifier map, even during recovery. Persistent `lisp_eval`: declared inputs;
@@ -138,6 +138,10 @@ ask_user_question/exit_plan_mode preserve ownership, cancellation and the select
 <!-- /kiokuko:runtime -->
 
 <!-- kiokuko:documentation examples -->
+## Native coding preparation
+
+Clear native implementation requests offer Lisp before model generation. A task choice is reused at Goal preparation; explicit manual session ON persists across reload. Run one small relevant `lisp_eval` with `prototype: true`, then read its successful saved `operationId` using `lisp_inspect` (`resultOperationId`, `section: "result"`, complete page from zero) before implementation. ON is not evidence or completion. Two failed attempts stop automatic retries: repair the cause or explicitly disable Lisp. New requests and formal Goal scopes need fresh proof. These steps are also supplied by the live coding-preparation status and tool schemas; conversation and research are unaffected.
+
 ## Project-shared functions
 
 Project-shared functions work in both Lisp modes without a mode switch after the

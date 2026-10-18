@@ -542,6 +542,10 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     answerContext: new DshAnswerContext(runtime, { root, cwd: answerCwd, projectOnly: false, memoryRetrieval: memoryRetrievalConfig,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills: skills as AnswerSkillRegistry, prompts: skillPrompts, decisions, cwd: answerCwd(input.agent) }),
     }),
+    prepareNativeCoding: async (input, task) => {
+      const lisp = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
+      await lisp?.prepareNative?.({ agent: input.agent, turn: input.turn, task, taskType: null, signal: input.signal })
+    },
     nativeOwnership: async input => {
       const agent = input.agent as NativeAgent
       answerCwd(agent)

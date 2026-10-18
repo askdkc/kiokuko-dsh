@@ -38,6 +38,8 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
     f.responses.push(...codingPrelude(f.mock, 'coding'))
     const call = (id: string, name: string, args: object) => f.responses.push(f.mock.toolCallResponse(id, name, args))
     if (choice === '使う') {
+      call('prototype', 'lisp_eval', {operationId:'prototype', prototype:true, code:'(progn (assert (= (+ 40 2) 42)) (assert (/= (+ 40 1) 42)) 42)'})
+      f.responses.push((request:any)=>f.mock.toolCallResponse('prototype-read','lisp_inspect',{operationId:'prototype-read',resultOperationId:toolValue(request,'prototype').operationId,section:'result'}))
       call('write-program', 'lisp_eval', { operationId: 'program', code: `(kioku.files:propose-write "src/parser.mjs" ${lispString(program)})` })
       call('write-test', 'lisp_eval', { operationId: 'test', code: `(kioku.files:propose-write "src/parser.test.mjs" ${lispString(check)})` })
     } else {

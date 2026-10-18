@@ -1,3 +1,4 @@
+import { isCodingWorkflowTool } from '../coding-workflow/host.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { rememberLispImplementation, isLispConversation, rootLispAdmission, withLispNativeCommand, type LispNativeCommands } from '../lisp-tool-identity.js'
 import { assertProtocolRoute } from '../guardrail/service.js'
@@ -25,7 +26,8 @@ import type { DshUserQuestions } from '../user-interaction.js'
 import { LispManager } from './manager.js'
 import { LispStore } from './store.js'
 import { HotCallInput, HotContractInput, HotDeactivateInput, HotInstallInput, HotStatusInput } from './hot-contracts.js'
-import { createLispCodingChoice, LISP_CODING_SERVICE } from './coding-choice.js'
+import { LispCodingPreparation } from './coding-preparation.js'
+import { createLispCodingChoice, LISP_CODING_SERVICE, type LispCodingInput } from './coding-choice.js'
 import { sessionCodingWorkflow } from '../coding-workflow/store.js'
 import { overrideCodingChoice } from '../coding-workflow/service.js'
 import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from './request-surface.js'
@@ -53,7 +55,7 @@ const PROTOCOL_OWNED_EFFECTS = new Set<string>(['kioku_write', 'kioku_edit', 'ki
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill', 'observation_read'] as const
 // Keep host-owned review, questions and Plan approval reachable while Lisp blocks native effects.
 // Pin its implementation just like reads; its own run/session checks still apply.
-const LISP_NATIVE_TOOLS = [...LISP_READ_TOOLS, TASK_PREPARE_TOOL, 'task_memory_review', 'task_completion', 'coding_workflow', 'ask_user_question', 'exit_plan_mode'] as const
+const LISP_NATIVE_TOOLS = [...LISP_READ_TOOLS, TASK_PREPARE_TOOL, 'task_memory_review', 'task_completion', 'coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'ask_user_question', 'exit_plan_mode'] as const
 
 /** Keep admitted inherited tools without naming agent-owned tools in restrict(). */
 function restrictInheritedTools(tools: Tools, scopedTools: Tools, agent: Agent, names: string[]): () => void {
@@ -72,11 +74,13 @@ function text(value: unknown): string {
   const result = value as { state?: string; enabled?: boolean; ok?: boolean; message?: string; recovery?: string; error?: { message?: string; recovery?: string }; operations?: { id: string; state: string }[] }
   const hot = value as { tools?: { name: string; revision: number; bundleRef: string | null }[]; hot?: { tools: { name: string; revision: number; bundleRef: string | null }[] } }
   const shared = hot.tools ?? hot.hot?.tools
+  const phase = (value as {codingPreparation?:{phase:string}}).codingPreparation?.phase
+  const preparationText = phase && ({choice_pending:'Lisp の選択待ち',prototype_required:'試作待ち（未検証）',result_pending:'試作結果の確認待ち（未検証）',reviewed:'試作結果を確認済み（タスクの検証は別）',declined:'通常ツールを使用',failed:'試作失敗・自動再試行停止'} as Record<string,string>)[phase]
   if (result.message) return `${result.message}\n${result.recovery ?? ''}`
-  return `Lisp: ${result.state ?? (result.ok ? '処理完了' : '状態不明')}\n${result.error?.message ?? ''}\n${result.error?.recovery ?? result.recovery ?? ''}\n${result.operations?.map(o => `${o.id}: ${o.state}`).join('\n') ?? ''}\n${shared ? `共有関数（表示中）: ${shared.length}\n${shared.map(t => `${t.name}: 版 ${t.revision} / ${t.bundleRef ? '有効' : '無効'}`).join('\n')}` : ''}`.trim()
+  return `Lisp: ${result.state ?? (result.ok ? '処理完了' : '状態不明')}\n${preparationText ? `試作: ${preparationText}\n` : ''}${result.error?.message ?? ''}\n${result.error?.recovery ?? result.recovery ?? ''}\n${result.operations?.map(o => `${o.id}: ${o.state}`).join('\n') ?? ''}\n${shared ? `共有関数（表示中）: ${shared.length}\n${shared.map(t => `${t.name}: 版 ${t.revision} / ${t.bundleRef ? '有効' : '無効'}`).join('\n')}` : ''}`.trim()
 }
 export const ToolInput = z.object({ operationId: identifier.optional(), code: z.string().max(262144).optional(), inputs: z.array(z.string().max(4096)).max(100).optional(),
-  name: z.string().max(64).optional(), description: z.string().max(1000).optional(), source: z.string().max(262144).optional(),
+  prototype: z.boolean().optional(), name: z.string().max(64).optional(), description: z.string().max(1000).optional(), source: z.string().max(262144).optional(),
   inputSchema: z.unknown().optional(), outputSchema: z.unknown().optional(), dependencies: z.unknown().optional(), examples: z.unknown().optional(), firstInput: z.unknown().optional(),
   properties: z.unknown().optional(), contractRef: z.uuid().optional(), expectedContractRef: z.uuid().nullable().optional(), expectedRevision: z.number().int().nonnegative().optional(),
   contractOffset: z.number().int().nonnegative().optional(),
@@ -256,6 +260,10 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (!agent || agents.get(agent.id) !== agent || sessions.get(agent.session.id) !== agent.session) return 'Lisp のセッションを確認できません。'
       if (agent.session.id !== scope) return '保護中の子セッションでは任意ツールを実行できません。親セッションの Lisp を使用してください。'
       if (persistent.protocolBridge?.(execution)) return undefined
+      // Goal preparation temporarily removes Lisp registrations. Keep this
+      // plugin's actual controls reachable without admitting same-name replacements.
+      if (['coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker'].includes(execution.name)
+        && isCodingWorkflowTool(tools.get(execution.name, agent))) return undefined
       const registered = persistent.definitions.get(`${agent.id}:${execution.name}`)
       if (registered && tools.get(execution.name, agent)?.execute === (registered as { execute: unknown }).execute) return undefined
       return 'Lisp 保護中は Lisp ツールと DSH の読み取り・検索・スキル読み込み・質問・計画提出を使えます。変更は Lisp 経由で行い、削除・既存ファイルの置換には利用者の確認が必要です。'
@@ -375,10 +383,12 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string }) => {
           try {
             const binding = owner(execution.agent), parsed = ToolInput.parse(args)
+            const codingRequest = preparation.binding(binding.agent)
             const admission = development ? rootLispAdmission(execution) : undefined
             const agentSession = binding.agent.session, agentContext = binding.agent.ctx
             const bash = admission ? tools.get('bash', binding.agent) : undefined
             const pinned = bash ? { definition: bash, execute: bash.execute } : undefined
+            let prototypeProcessFailed = false
             const nativeCommands: LispNativeCommands | undefined = admission ? {
               assertCurrent() {
                 const current = owner(execution.agent)
@@ -408,9 +418,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                   const terminal = await jobs.wait(value.jobId, 5000, binding.agent.id)
                   if (['running', 'stopping'].includes(terminal.status)) fail('STOP_UNCONFIRMED', `Native job ${value.jobId} has not stopped.`)
                   jobs.remove(value.jobId, binding.agent.id)
+                  prototypeProcessFailed = true
                   return { code: null, stdout: value.output ?? '', stderr: '', timedOut: true, receipt: { route: 'native', processStopped: true } }
                 }
                 this.assertCurrent()
+                if (value.exitCode !== 0 || value.timedOut) prototypeProcessFailed = true
                 return { code: value.exitCode, stdout: value.stdout?.text ?? '', stderr: value.stderr?.text ?? '',
                   timedOut: value.timedOut, sandbox: value.sandbox, receipt: { route: 'native', callId: child.callId, processStopped: true } }
               },
@@ -418,8 +430,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
             if(development && !admission && (ctx.get('planMode',false) as any)?.get(binding.agent)?.active && !['lisp_status','lisp_hot_status','lisp_inspect','lisp_cancel'].includes(name))fail('PLAN_ACTIVE','Plan 中の Lisp 実行・変更はできません。実装指示またはPlan承認後に実行してください。')
             if (name === 'lisp_cancel' && !await manager.isTaskMode(binding.owner)) { identifier.parse(parsed.operationId); identifier.parse(parsed.generation) }
             if (name !== 'lisp_status' && name !== 'lisp_hot_status' && !isSavedLispResultRead({ name, arguments: parsed, parent: undefined }))
-              parsed.operationId = await store.bind(binding.owner, identifier.parse(execution.callId), identifier.parse(parsed.operationId), { name, input: parsed })
-            return await manager.execute(binding.owner, name, parsed, execution.signal ? AbortSignal.any([binding.signal, execution.signal]) : binding.signal, nativeCommands)
+              parsed.operationId = await store.bind(binding.owner, identifier.parse(execution.callId), identifier.parse(parsed.operationId), { name, input: parsed, ...(parsed.prototype === true ? {codingRequest} : {}) })
+            const result = await manager.execute(binding.owner, name, parsed, execution.signal ? AbortSignal.any([binding.signal, execution.signal]) : binding.signal, nativeCommands)
+            const outcome = parsed.prototype && prototypeProcessFailed ? { ...result as object, ok:false, code:'LISP_PROTOTYPE_PROCESS_FAILED', message:'A managed process failed or timed out; this is not successful prototype evidence.' } : result
+            preparation.observed(binding.agent, name, parsed, outcome, codingRequest)
+            return name === 'lisp_status' ? { ...outcome as object, codingPreparation:preparation.status(binding.agent) } : outcome
           }
           catch (error) { return failure(error) }
         } }
@@ -505,7 +520,35 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       throw error
     }
   }
-  if (config.enabled) disposers.push((ctx as any).provide(LISP_CODING_SERVICE, createLispCodingChoice({ optional:development,
+  // A manual command is a session preference; a task's yes is not a future task's answer.
+  const manualMode = (candidate: LispCodingInput['agent'], remember = false) => store.manualMode(owner(candidate).owner, remember)
+  const preparation = new LispCodingPreparation({
+    identity: candidate => { const binding = owner(candidate); return { sessionId: binding.owner.sessionId, root: binding.owner.root } },
+    enabled: candidate => manager.enabled.has(owner(candidate).owner.sessionId),
+    selected: candidate => manualMode(candidate),
+    activate: async candidate => { await enable(owner(candidate), true) },
+    deactivate: async candidate => { const binding=owner(candidate); if(manager.enabled.has(binding.owner.sessionId))await manager.disable(binding.owner);else await store.decline(binding.owner);unregister(binding.agent);hostFence?.release(binding.owner.sessionId) },
+    choose: async input => {
+      if (!questions) return undefined
+      const binding = owner(input.agent), questionId = `lisp-early-${dshTurnRequestId({dshSessionId: binding.owner.sessionId, turn: input.turn})}`
+      const response = await questions.ask({ agent: binding.agent, signal: input.signal, questions: [{
+        id: questionId, header: '実装の準備', question: 'この実装に Lisp モードを使いますか？',
+        detail: `依頼: ${input.task}\n使う場合は小さな試作を実行し、保存結果を確認してから実装します。通常の権限と Stop は引き続き適用されます。`,
+        options: ['使う', '使わない', '取消・作業を保持'].map(label => ({label})),
+      }] })
+      input.signal.throwIfAborted()
+      const answer = response.answers?.[0]
+      if (!answer || answer.id !== questionId) return undefined
+      const selected = answer.custom?.trim() || (answer.selected?.length === 1 ? answer.selected[0] : undefined)
+      const choice = /^(?:1|使う|yes|use lisp)$/iu.test(selected ?? '') ? 'yes' : /^(?:2|使わない|no|do not use lisp)$/iu.test(selected ?? '') ? 'no' : undefined
+      return choice ? {choice, answerRef: `userQuestions:${questionId}`} : undefined
+    },
+  })
+  disposers.push((ctx as any).on('tools/pre-execute', async (execution: any, next: () => Promise<unknown>) => {
+    if (execution.agent) { const reason = preparation.denial(execution.agent, execution.name, execution.arguments, execution.parent); if (reason) return {kind:'deny', reason} }
+    return next()
+  }, {global:true, prepend:true}))
+  if (config.enabled) disposers.push((ctx as any).provide(LISP_CODING_SERVICE, { ...createLispCodingChoice({ optional:development,
     ...(questions ? { questions } : {}),
     enabled: candidate => manager.enabled.has(owner(candidate).owner.sessionId),
     decided: async candidate => {
@@ -518,7 +561,8 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       const result = await enable(owner(candidate)) as { state?: string }
       if (!['READY', 'EVALUATING', 'TASK_READY'].includes(result.state ?? '')) fail('RECOVERY_REQUIRED', 'Lisp の起動・復旧が必要です。/kioku-lisp status で状態を確認してください。')
     },
-  })))
+  }), prepareNative: (input: LispCodingInput) => preparation.prepare(input), choiceFor: (agent: LispCodingInput['agent'], task: string) => preparation.choiceFor(agent, task),
+    answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string) => preparation.answered(agent,task,choice,answerRef) }))
   const requestSurface: LispAssemblyService = {
     capabilities: LISP_TOOLS.map(name => ({ name, description: description(name) })),
     inventory: candidate => inventoryReaders.get(candidate.id)?.() ?? tools.schemas(candidate),
@@ -560,7 +604,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         const surface = assembly as typeof assembly & { tools?: { name: string }[] }
         return { ...assembly, tools: surface.tools?.filter(tool => !LISP_TOOLS.includes(tool.name as LispTool)) ?? [] }
       }
-      if (!manager.enabled.has(binding.owner.sessionId)) return assembly
+      if (!manager.enabled.has(binding.owner.sessionId)) return { ...assembly, sections: [...assembly.sections, { name:'kiokuko:lisp-coding-preparation', text:JSON.stringify(preparation.status(binding.agent)) }] }
       register(binding.agent)
       // Native DSH snapshots providers before its assembly waterfall. Admission
       // can activate Lisp inside that waterfall: refresh this request, not only
@@ -570,6 +614,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       const sections = assembly.sections.filter(section => section.name !== 'kiokuko:lisp')
       sections.splice(Math.max(0, sections.findIndex(section => section.name === 'kiokuko:soul') + 1), 0,
         { name: 'kiokuko:lisp', text: '{{kiokuko_lisp}}' })
+      sections.push({ name:'kiokuko:lisp-coding-preparation', text:JSON.stringify(preparation.status(binding.agent)) })
       const projected = { ...assembly, sections, variables: { ...assembly.variables, kiokuko_lisp: guide },
         tools: schemas.sort((a, b) => a.name.localeCompare(b.name)) }
       return projected
@@ -595,24 +640,25 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
           if (argument === 'ask' || argument === 'auto') await approvalPolicy.set(argument)
           return { kind: 'success', text: `Lisp approvals: ${approvalPolicy.mode()} · Profile` }
         }
+        const routeRef = `human-command:${randomUUID()}:${action}`
         if (['enable', 'enable-task', 'disable'].includes(action)) {
           await runtime.withDatabase(db => {
             const workflow = sessionCodingWorkflow(db, binding.owner.sessionId)
             if (workflow && (action === 'enable-task' || workflow.definition)) overrideCodingChoice(db, { runId: workflow.runId, sessionId: binding.owner.sessionId, repositoryRoot: binding.owner.root },
-              action === 'disable' ? 'no' : 'yes', `human-command:${randomUUID()}:${action}`)
+              action === 'disable' ? 'no' : 'yes', routeRef)
           })
         }
-        if (action === 'enable') result = await enable(binding, true)
+        if (action === 'enable') { result = await enable(binding, true); await manualMode(binding.agent,true); preparation.manual(binding.agent, true, routeRef) }
         else if (action === 'enable-task') {
           const wasEnabled = manager.enabled.has(binding.owner.sessionId)
           hostFence?.protect(binding.owner.sessionId)
-          try { result = await manager.enableTask(binding.owner, binding.signal); register(binding.agent) }
+          try { result = await manager.enableTask(binding.owner, binding.signal); register(binding.agent); await manualMode(binding.agent,true); preparation.manual(binding.agent, true, routeRef) }
           catch (error) {
             if (!wasEnabled && !manager.enabled.has(binding.owner.sessionId)) hostFence?.release(binding.owner.sessionId)
             throw error
           }
         }
-        else if (action === 'disable') { result = await manager.disable(binding.owner); unregister(binding.agent); hostFence?.release(binding.owner.sessionId) }
+        else if (action === 'disable') { result = await manager.disable(binding.owner); preparation.manual(binding.agent, false, routeRef); unregister(binding.agent); hostFence?.release(binding.owner.sessionId) }
         else if (action === 'cancel') result = await manager.execute(binding.owner, 'lisp_cancel', {})
         else if (action === 'recover') {
           if (manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
@@ -622,7 +668,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         else if (action === 'restore') result = await manager.restore(binding.owner, argument ?? '', invocation.signal)
         else if (action === 'diagnostics') result = await manager.diagnostics(binding.owner, argument === '--json' ? undefined : argument)
         else if (action === 'hot') result = await manager.execute(binding.owner, 'lisp_hot_status', argument && argument !== '--json' ? { name: argument } : {}, binding.signal)
-        else if (action === 'status') result = await manager.status(binding.owner)
+        else if (action === 'status') result = { ...await manager.status(binding.owner) as object, codingPreparation: preparation.status(binding.agent) }
         else fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|status|diagnostics|cancel|recover|abandon ID|disable')
         return { kind: 'success', text: argument === '--json' || action === 'diagnostics' || (result as {code?:string}).code ? JSON.stringify(result, null, 2) : text(result) }
       } catch (error) { const problem = failure(error); return { kind: 'error', text: `${problem.message}\n${problem.recovery}` } }
@@ -638,7 +684,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }
 }
 function description(name: LispTool): string {
-  return ({ lisp_eval: 'Evaluate Common Lisp. In persistent mode, define and reuse cohesive functions in one worker generation; proposals use the current host approval policy. In enable-task mode, each evaluation is a disposable scratch experiment without workspace inputs or proposals. Exact operationId replay never re-evaluates.',
+  return ({ lisp_eval: 'Evaluate Common Lisp. For an active coding preparation use prototype:true, then lisp_inspect its successful operationId before implementation. In persistent mode, define and reuse cohesive functions in one worker generation; proposals use the current host approval policy. In enable-task mode, each evaluation is a disposable scratch experiment without workspace inputs or proposals. Exact operationId replay never re-evaluates.',
     lisp_hot_contract: 'Authorize immutable schemas through the current host approval policy and finite input/expected cases for a project-shared function. Profile auto-approval or explicit human consent grants approval; model declarations do not. Requires enable-task.',
     lisp_hot_install: 'Validate a candidate against the current approved contract in workers using the selected execution mode, then atomically select it at expectedRevision. Dependency code is snapshotted. Failed checks preserve the active version.',
     lisp_hot_call: 'Call a project-shared function by name, pinning its active immutable version. Input/result refs remain private to this session and agent. Exact operationId replay never executes again.',
@@ -668,7 +714,7 @@ export function lispToolSchema(name: LispTool): object {
   const properties: Record<string, unknown> = name === 'lisp_status' ? {} : { operationId: { type: 'string', minLength: 1, maxLength: 256 } }
   const required = Object.keys(properties)
   if (name === 'lisp_status') properties.offset = { type: 'integer', minimum: 0, description: 'Read the next 10 operation summaries using nextOffset.' }
-  if (name === 'lisp_eval') { Object.assign(properties, { code: { type: 'string', maxLength: 262144 }, inputs: { type: 'array', items: { type: 'string' }, maxItems: 100, description: 'Workspace-relative files or exact host paths of files uploaded by the user in this session. Copied read-only; other absolute paths are refused.' }, timeoutMs: { type: 'integer', minimum: 100, maximum: 600000 } }); required.push('code') }
+  if (name === 'lisp_eval') { Object.assign(properties, { prototype: { type:'boolean', description:'Mark the small coding prototype. After success inspect its saved resultOperationId before implementation.' }, code: { type: 'string', maxLength: 262144 }, inputs: { type: 'array', items: { type: 'string' }, maxItems: 100, description: 'Workspace-relative files or exact host paths of files uploaded by the user in this session. Copied read-only; other absolute paths are refused.' }, timeoutMs: { type: 'integer', minimum: 100, maximum: 600000 } }); required.push('code') }
   if (name === 'lisp_define') { Object.assign(properties, { name: { type: 'string', maxLength: 64 }, description: { type: 'string', maxLength: 1000 }, source: { type: 'string', maxLength: 262144 }, inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, dependencies: { type: 'array', items: { type: 'object' }, maxItems: 32 }, examples: { type: 'array', items: { type: 'object' }, maxItems: 10 }, firstInput: {} }); required.push('name', 'description', 'source', 'inputSchema', 'outputSchema') }
   if (name === 'lisp_call') { Object.assign(properties, { toolRef: { type: 'string', format: 'uuid' }, input: {}, inputRef: { type: 'string', format: 'uuid' }, fields: { type: 'array', items: { type: 'string' }, maxItems: 20 } }); required.push('toolRef') }
   if (name === 'lisp_observe') { Object.assign(properties, { paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 }, format: { type: 'string', enum: ['text', 'json'] } }); required.push('paths') }

@@ -7,8 +7,7 @@ small authorized target-runtime probes, choose controls/counterexamples before
 execution, retain observations and failures, and use that evidence in one plan.
 Existing permissions, read-only inputs, scratch, host approvals, generation and
 result ownership, recovery and verification contracts remain authoritative.
-Non-coding tasks do not acquire a coding-experiment requirement. There is no new
-host execution gate, schema, tool or fixed experiment-count limit.
+Non-coding tasks do not acquire a coding-experiment requirement. Native coding preparation now enforces actual prototype execution and complete saved-result inspection before implementation, with a two-failure retry budget. Planning relevance remains model guidance; a successful probe does not prove task completion. The evaluation records below describe their original source snapshots.
 
 The full representation remains the default. Runtime compilation preserves the
 new block and the previous contract. The unchanged fixed size baseline still

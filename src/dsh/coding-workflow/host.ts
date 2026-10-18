@@ -50,11 +50,18 @@ function parseInput<T extends z.ZodTypeAny>(schema: T, raw: unknown, toolName: s
   if (parsed.success) return parsed.data
   const issues = parsed.error.issues.map(issue => {
     const field = issue.path.map(String).join('.') || 'input'
-    return { field, reason: issue.message.slice(0, 240), correction: validationCorrection(field) }
+    return { field, reason: issue.message.slice(0, 240), correction: issue.message.startsWith('Duplicate IDs:') ? 'Use unique goalId/itemId/criterionId declaration values; keep reference arrays pointing to the intended declarations.' : issue.message.includes('Goal criterion has no implementing item') ? 'Preserve the final Goal check. Add its named ID to the responsible definition.items[].goalCriterionIds; do not invent which item implements it.' : issue.message.includes('Unknown Goal criterion') ? 'Use a declared definition.goal.criterionIds value in this item reference.' : validationCorrection(field) }
   })
   const summary = issues.map(issue => `${issue.field}: ${issue.reason}. Correction: ${issue.correction}`).join('\n')
   throw new KiokukoError('VALIDATION_ERROR', `Invalid ${toolName} input.\n${summary}`, { issues })
 }
+const codingToolDefinitions = new WeakSet<object>()
+function codingTool<T extends { execute: (...args: any[]) => unknown }>(definition: T): T { codingToolDefinitions.add(definition.execute); return definition }
+/** Only definitions produced by this plugin may join an already active Lisp fence. */
+export function isCodingWorkflowTool(definition: unknown): boolean {
+  return typeof definition === 'object' && definition !== null && codingToolDefinitions.has((definition as { execute: object }).execute)
+}
+
 export const CODING_GUIDANCE = 'For this coding task, use coding_workflow status/next to inspect the current revision and pending action. Submit new or revised Goals with coding_workflow_apply (action propose/revise, expectedRevision, definition); register blockers with coding_workflow_blocker. Legacy coding_workflow propose/revise/report_blocker calls remain accepted for compatibility. Preserve the exact request interpretation and evidence references shown by the host. A pending scope change requires a revised Goal before implementation; a same-scope continuation keeps its existing Goal, Lisp choice, and unfinished items. The host shows the Goal/items/criteria and asks once whether to use Lisp for this task. Pending choice blocks implementation, not conversation or reads. Bind checks with task_completion before executing them. Use host-observed selected tests, output/artifact assertions or browser assertions; exit 0 and model claims alone cannot complete this workflow. Fix failures autonomously within existing permissions. Final Goal verification must run after item checks on the current artifact. Report the Goal, evidence, ordinary-use result and remaining blockers.'
 
 export function codingChoiceDetail(value: CodingWorkflow): string {
@@ -91,6 +98,7 @@ export function mountCodingWorkflow(ctx: {
     await host.runtime.withDatabase(db => projectEnnoCodingWorkflow(db, identity))
     const value = await host.runtime.withDatabase(db => readCodingWorkflow(db, identity.runId))
     if (!value?.definition || ['cancelled', 'superseded', 'completed'].includes(value.state)) return
+    if (value.choice.state === 'yes' || value.choice.state === 'no') host.lisp()?.answered?.(identity.agent, value.request, value.choice.state, value.choice.answerRef ?? `stored-choice:${value.choice.questionId}`)
     if (value.choice.state !== 'pending') {
       if (value.choice.state === 'yes') {
         try {
@@ -108,13 +116,14 @@ export function mountCodingWorkflow(ctx: {
       else await host.lisp()?.exclude?.(identity.agent)
       return
     }
-    if (!host.questions) return // Durable pending; never invent a default.
+    const early = host.lisp()?.choiceFor?.(identity.agent, value.request)
+    if (!host.questions && !early) return // Durable pending; never invent a default.
     const key = `${value.workflowId}:${value.scopeVersion}`
     const existing = questions.get(key)
     if (existing) return existing
     const operation = (async () => {
       let response: Awaited<ReturnType<DshUserQuestions['ask']>>
-      try { response = await host.questions!.ask({ agent: identity.agent, signal: execution.signal, questions: [{
+      try { response = early ? { answers: [{ id: value.choice.questionId, selected: [early.choice === 'yes' ? '使う' : '使わない'] }] } : await host.questions!.ask({ agent: identity.agent, signal: execution.signal, questions: [{
         id: value.choice.questionId, header: 'Goal と実装項目', question: 'このタスクで Lisp モードを使いますか？',
         detail: codingChoiceDetail(value), options: ['使う', '使わない', '取消・作業を保持'].map(label => ({ label })),
       }] }) } catch (error) { execution.signal.throwIfAborted(); return }
@@ -126,10 +135,11 @@ export function mountCodingWorkflow(ctx: {
       const saved = await host.runtime.withDatabase(db => answerCodingChoice(db, identity, {
         callId: `human:${value.choice.questionId}:${canonicalContentHash(answer)}`, expectedRevision: value.revision,
         workflowId: value.workflowId, scopeVersion: value.scopeVersion, questionId: value.choice.questionId,
-        questionRevision: value.choice.revision, answerRef: `userQuestions:${value.choice.questionId}:${canonicalContentHash(answer)}`, choice,
+        questionRevision: value.choice.revision, answerRef: early?.answerRef ?? `userQuestions:${value.choice.questionId}:${canonicalContentHash(answer)}`, choice,
       }))
       current(identity, execution)
       if (choice === 'cancelled') { controllers.get(identity.runId)?.controller.abort(new Error('Coding task cancelled')); return }
+      host.lisp()?.answered?.(identity.agent, value.request, choice, saved.choice.answerRef!)
       if (choice === 'no') { await host.lisp()?.exclude?.(identity.agent); return }
       try {
         const lisp = host.lisp()
@@ -163,7 +173,7 @@ export function mountCodingWorkflow(ctx: {
     current(identity, execution)
     return host.runtime.withDatabase(db => { synchronizeCodingWorkflow(db, identity.runId); return nextCodingWork(db, identity) })
   }
-  const tool = (name: string, schema: z.ZodTypeAny, parameters: Record<string, unknown>, normalize: (value: any) => LegacyInput) => ({
+  const tool = (name: string, schema: z.ZodTypeAny, parameters: Record<string, unknown>, normalize: (value: any) => LegacyInput) => codingTool({
     name, modelFacing: true, description: CODING_GUIDANCE, parameters,
     output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: JSON.stringify(result) }] },
     execute: async (raw: unknown, execution: Execution) => {

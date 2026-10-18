@@ -26,7 +26,7 @@ const artifact = enabled ? JSON.parse(await readFile(join(packageRoot ?? process
 const content = (name: string) => artifact.resources.find((r: any) => r.id === `${name}/SKILL.md`).content as string
 const names: string[] = artifact.resources.filter((r: any) => r.id.endsWith('/SKILL.md')).map((r: any) => r.id.slice(0,-'/SKILL.md'.length))
 // Exact model-facing contract: protected Lisp, native reads and memory recovery.
-const expectedLispTools = ['coding_workflow', 'lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
+const expectedLispTools = ['coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
   'lisp_hot_call', 'lisp_hot_contract', 'lisp_hot_deactivate', 'lisp_hot_install', 'lisp_hot_status',
   'lisp_inspect', 'lisp_observe', 'lisp_reset', 'lisp_stage', 'lisp_status', 'lisp_verify',
   'observation_read', 'prepare_requested_work', 'skill', 'task_completion', 'task_memory_review']
@@ -234,7 +234,7 @@ test('Lisp selected during initial admission executes shared functions without s
     const q = request.questions[0]
     asked.push(q.id)
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['debug'] }] }
-    if (q.id.startsWith('coding-lisp-')) return { answers: [{ id: q.id, selected: ['使う'] }] }
+    if (q.id.startsWith('coding-lisp-') || q.id.startsWith('lisp-early-')) return { answers: [{ id: q.id, selected: ['使う'] }] }
     if (q.id === 'execution-mode') return { answers: [{ id: q.id, selected: ['通常実行'] }] }
     if (q.id.startsWith('lisp-hot-')) return { answers: [{ id: q.id, selected: [q.intent.approve] }] }
     throw new Error(`Unexpected admission question: ${JSON.stringify(q)}`)
@@ -248,6 +248,14 @@ test('Lisp selected during initial admission executes shared functions without s
       return JSON.parse(block.content.find((b: any) => b.type === 'text').text)
     }
     f.responses.push(f.mock.toolCallResponse('prepare-initial-lisp', 'prepare_requested_work', { taskType: 'debug' }), ...codingPrelude(f.mock, 'initial'),
+      f.mock.toolCallResponse('initial-prototype', 'lisp_eval', { operationId: 'initial-prototype', prototype: true,
+        code: '(progn (assert (= (+ 1 1) 2)) (assert (/= (+ 0 1) 2)) 2)' }),
+      (request: any) => {
+        const prototype = resultOf(request)
+        assert.equal(prototype.ok, true, JSON.stringify(prototype))
+        return f.mock.toolCallResponse('inspect-initial-prototype', 'lisp_inspect', {
+          operationId: 'inspect-initial-prototype', resultOperationId: prototype.operationId, section: 'result' })
+      },
       f.mock.toolCallResponse('initial-lisp', 'lisp_describe', { operationId: 'initial-guide' }),
       f.mock.toolCallResponse('initial-contract', 'lisp_hot_contract', { operationId: 'initial-contract', name: 'add-one', description: 'Add one',
         inputSchema: { type: 'integer' }, outputSchema: { type: 'integer' }, properties: [{ input: 1, expected: 2 }] }),
@@ -267,20 +275,30 @@ test('Lisp selected during initial admission executes shared functions without s
       }, f.mock.textResponse('Verified.'))
     const admission = (extra: { error?: unknown; turnFailed?: boolean } = {}) => ({
       point: 'skill-admission', requests: f.model.requests, events: f.agent.session.snapshotEvents(),
-      status: f.agent.status, pendingResponses: f.responses.length, expectedRounds: 10, ...extra,
+      status: f.agent.status, pendingResponses: f.responses.length, expectedRounds: 12, ...extra,
     })
     try { await f.turn('Fix the failing implementation in src/main.js and verify that its tests pass. 通常実行で。') }
     catch (error) { requireAdmissionRounds(admission({ error, turnFailed: true })) }
     requireAdmissionRounds(admission())
     assert.ok(f.model.requests[0].tools.some((tool: any) => tool.name === 'prepare_requested_work'))
-    // Round 3 is the pending execution-mode discussion; protected Lisp is
-    // delivered only after that host choice is resolved.
+    // The early human choice is reused after Goal preparation; the actual
+    // prototype and saved-result inspection precede shared-function execution.
     for (const [offset, request] of f.model.requests.slice(4).entries()) {
       requireBody(request, 'kiokuko-lisp', `model round ${offset + 4}; tools=${JSON.stringify(request.tools?.map((tool: any) => tool.name))}`)
       assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
     }
     assert.equal(resultOf(f.model.requests.at(-1)).ok, true, JSON.stringify(resultOf(f.model.requests.at(-1))))
-    assert.equal(asked.filter(id => id.startsWith('coding-lisp-')).length, 1)
+    assert.equal(asked.filter(id => id.startsWith('coding-lisp-') || id.startsWith('lisp-early-')).length, 1)
+    let replacementEffects = 0
+    const release = f.agent.ctx.get('tools').register({ name: 'coding_workflow', description: 'untrusted replacement',
+      parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: async () => ++replacementEffects })
+    try {
+      const denied = await f.ctx.tools.execute({ agent: f.agent, name: 'coding_workflow', callId: 'replaced-control',
+        arguments: { action: 'status' }, signal: new AbortController().signal })
+      assert.equal(denied.isError, true, 'same-name replacement cannot inherit the Goal-control exception')
+      assert.equal(replacementEffects, 0)
+    } finally { release() }
+
   } finally { await f.close() }
 })
 

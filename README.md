@@ -110,10 +110,8 @@ Install SBCL first:
 
 Add this to the `kiokuko-dsh` row in the selected profile’s
 `~/.dsh/profiles/<profile>/cordis.patch.yml` (`web` or `dsh-cli`)
-(keep other `config` values), then reload the plugin. Each implementation task
-shows its Goal, items and observable checks before asking whether to use Lisp.
-The choice belongs to that task and scope; a new task asks again.
-You can also enable it with `/kioku-lisp enable`.
+(keep other `config` values), then reload the plugin. A clear native implementation request offers Lisp before the first model request, including the default on-demand Bash path. Conversation, research and plan-only requests do not trigger the offer. A declined choice stays with that request; Goal preparation reuses its human answer.
+`/kioku-lisp enable` explicitly enables this session. When Lisp was manually enabled, coding starts with a small relevant `lisp_eval` prototype (`prototype: true`), then `lisp_inspect` of its successful saved result before implementation tools proceed. ON alone is not prototype evidence. Two failed prototypes stop automatic retries; inspect the failure, repair it or explicitly disable Lisp. `/kioku-lisp disable` releases this routine. Native permissions and Stop remain authoritative. Tool exposure `full` does not enable Lisp. A fresh request needs fresh prototype evidence; no task completion is inferred from it.
 Check it with `dsh --profile <profile> --dump-config`, using the same profile name.
 
 ```yaml

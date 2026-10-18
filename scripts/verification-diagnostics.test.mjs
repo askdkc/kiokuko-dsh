@@ -97,12 +97,12 @@ test('safe diagnostic: real Skill enable assertion safely records returned error
 test('safe diagnostic: real admission assertion captures post-turn session evidence and a safe failure when the turn throws',async()=>{
  const tree=skillSource();const call=walk(tree,node=>ts.isCallExpression(node)&&node.arguments[0]?.text==='Lisp selected during initial admission executes shared functions without switching mode')[0];assert.ok(call)
  const callback=call.arguments.at(-1);const outerTry=callback.body.statements.find(ts.isTryStatement)
- const statements=outerTry.tryBlock.statements.filter(node=>ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>d.name.getText(tree)==='admission')||ts.isTryStatement(node)||ts.isExpressionStatement(node)&&ts.isCallExpression(node.expression)&&node.expression.expression.getText(tree)==='requireAdmissionRounds')
+ const statements=outerTry.tryBlock.statements.filter(node=>ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>d.name.getText(tree)==='admission')||ts.isTryStatement(node)&&node.catchClause?.getText(tree).includes('requireAdmissionRounds')||ts.isExpressionStatement(node)&&ts.isCallExpression(node.expression)&&node.expression.expression.getText(tree)==='requireAdmissionRounds')
  assert.equal(statements.length,3,'admission must capture turn execution and assert its safe diagnostic')
  const run=new Function('requireAdmissionRounds',`return async f=>{${emit(statements.map(n=>n.getText(tree)).join('\n'))}}`)(requireAdmissionRounds)
  const events=[{type:'tool/result',data:{message:{role:'tool',content:[{type:'text',text:JSON.stringify({state:'blocked',next:'resolve_blocker',blocker:{kind:'runtime',cause:'sandbox_apply: Operation not permitted '+mixed}})}]}}},{type:'turn/end',data:{reason:{kind:'completed'}}}]
  const f={turn:async()=>{},model:{requests:Array.from({length:4},()=>({messages:[]}))},responses:Array(6),agent:{status:'idle',session:{snapshotEvents:()=>events}}}
- await assert.rejects(run(f),error=>{clean(error.message);const d=JSON.parse(error.message);return d.observedRounds===4&&d.expectedRounds===10&&d.lastToolResult.state==='blocked'&&d.stopReason==='completed'})
+ await assert.rejects(run(f),error=>{clean(error.message);const d=JSON.parse(error.message);return d.observedRounds===4&&d.expectedRounds===12&&d.lastToolResult.state==='blocked'&&d.stopReason==='completed'})
  f.turn=async()=>{throw Object.assign(new Error(mixed),{code:'EPERM'})}
  await assert.rejects(run(f),error=>{clean(error.message);return JSON.parse(error.message).turnFailed===true})
 })

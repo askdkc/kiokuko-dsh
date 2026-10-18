@@ -114,7 +114,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
         questions.push(request.questions)
         questionPhases.push({ modelRequests: requests.length, dispatched: dispatches.map(call => call.name) })
         return { answers: request.questions.map((question: any) => ({ id: question.id,
-          selected: [question.id.startsWith('coding-lisp-') ? '使わない' : question.id === 'enno-execution-mode' ? '通常実行'
+          selected: [(question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')) ? '使わない' : question.id === 'enno-execution-mode' ? '通常実行'
             : question.id === 'taskType' ? taskType : question.options?.[0]?.label ?? taskType] })) }
       } })
     } }); fibers.push(questionFiber); await questionFiber
@@ -187,7 +187,9 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
           toolNames: options.tools?.map((tool: any) => tool.name), messages: options.messages }
         requests.push(row)
         if (options.sessionId === handle?.agent.session.id && requests.length === 1) {
-          assert.equal(questions.length, 0, 'no purpose or execution UI before the first model request')
+          const earlyQuestions = questions.flat()
+          assert.equal(earlyQuestions.length, lispEnabled && isCoding ? 1 : 0, 'only an enabled coding Lisp offer may precede the first model request')
+          assert.ok(earlyQuestions.every((question:any)=>question.id.startsWith('lisp-early-')), 'no purpose or execution selection may precede the first model request')
           assert.equal(databaseState().runs.length, 0, 'answer-only assembly must not open a task run')
           if (scenario !== 'text' && scenario !== 'clarify' && scenario !== 'scope-spoof' && scenario !== 'answer-memory') assert.ok(row.toolNames.includes(presentation !== 'native' ? 'run_code' : TASK_PREPARE_TOOL), 'model must see the explicit preparation contract')
         }
@@ -283,8 +285,8 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       assert.equal(state.lispOperationCount, 0, 'answer or declined Lisp choice must never start Lisp work')
       assert.ok(!state.lispSessions?.some((entry: any) => entry.enabled === 1), 'fixture must never enable Lisp')
       assert.equal(questions.flat().filter((question: any) => question.id === 'taskType').length, 0, 'Lisp must not reopen the old purpose modal')
-      assert.equal(questions.flat().filter((question: any) => question.id.startsWith('coding-lisp-')).length, scenario === 'build-write' ? 1 : 0)
-      assert.ok(questionPhases.every(phase => phase.modelRequests >= 1), 'Lisp/execution choice occurs only after model demand')
+      assert.equal(questions.flat().filter((question: any) => question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')).length, scenario === 'build-write' ? 1 : 0)
+      assert.ok(questionPhases.every((phase,index) => questions[index]?.some((q:any)=>q.id.startsWith('lisp-early-')) ? phase.modelRequests === 0 : phase.modelRequests >= 1), 'Lisp offers precede generation; later Goal preparation reuses the same human answer')
     }
     assert.ok(events.some((event: any) => event.type === 'assistant/message' && JSON.stringify(event.data.message).includes(answerText)), 'native model text must reach session')
     if (scenario === 'text' || scenario === 'clarify' || scenario === 'scope-spoof' || scenario === 'answer-memory') {
@@ -434,7 +436,7 @@ if (process.env.PR72_MATRIX_ONLY !== '1') for (const mode of ['core', 'full'] as
     test(`default native ${mode}: dotted filename eligibility boundary rejects premature demand and preserves explicit preparation`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'uncertain-recovery', 'Fix the failing test in parser.test.ts', 'debug'))
   }
   test(`default native ${mode}: mounted Lisp ingress leaves ordinary answers alone`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'text', 'レビュー依頼からマージまでどれくらいかかる？', 'research', 'native', true))
-  test(`default native ${mode}: mounted Lisp asks its existing choice only after explicit build preparation`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'build-write', 'srcに検証用ファイルを作って。外部への公開やデプロイはしないで。', 'build', 'native', true))
+  test(`default native ${mode}: mounted Lisp offers before generation and reuses its choice after Goal preparation`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'build-write', 'srcに検証用ファイルを作って。外部への公開やデプロイはしないで。', 'build', 'native', true))
   test(`default native ${mode}: preparation cannot replace the original user request`, { skip: nativeAvailable ? false : 'requires a pinned DSH native fixture', timeout: 120_000 }, () => runNative(mode, 'replace-task', '変更もデプロイもしないで。設計を説明して。'))
 }
 

@@ -108,8 +108,8 @@ DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復
 - Arch Linux: `sudo pacman -S sbcl`
 
 使用するプロファイルの `~/.dsh/profiles/<profile>/cordis.patch.yml`（`web` または `dsh-cli`）の `kiokuko-dsh` 行に次を追加し（他の `config` 値は保持）、
-プラグインを再読み込みすると、実装タスクごとに Goal・実装項目・観測可能な条件を示してから Lisp モードを使うか確認します。
-選択はそのタスクと範囲に保存し、新しいタスクでは再確認します。`/kioku-lisp enable` は明示的な手動切替です。
+再読み込み後、明確な通常実装依頼では既定 on-demand の native Bash 経路も含め、最初のモデル要求前に Lisp を提案します。会話・調査・計画だけの依頼には提案を強制しません。その依頼での「使わない」を保持し、Goal 登録後も同じ人間の回答を再利用します。
+`/kioku-lisp enable` はこのセッションの明示的な ON です。ON の実装依頼では、小さな関連試作を `lisp_eval`（`prototype: true`）で実行し、成功した保存結果を `lisp_inspect` で確認してから実装ツールへ進みます。ON 表示だけを試作の証拠にしません。試作が2回失敗したら自動再試行を止め、原因修復または `/kioku-lisp disable` で通常経路を選びます。既存の権限と Stop は維持します。ツール表示の `full` は Lisp ON ではありません。新しい依頼には新しい試作証拠が必要で、試作成功だけではタスク完了になりません。
 読み込まれた設定は、同じプロファイル名で `dsh --profile <profile> --dump-config` を実行して確認できます。
 
 ```yaml

@@ -45,6 +45,7 @@ interface Dependencies {
   readonly validate: (input: DemandInput) => Promise<void>
   /** Positive host authority lookup; unavailable storage must reject, never mean absent. */
   readonly nativeOwnership?: (input: DemandInput) => Promise<'unowned' | 'owned'>
+  readonly prepareNativeCoding?: (input: DemandInput, task: string) => Promise<void>
   /** Exact idempotent request replay; never accepts a new turn as continuation. */
   readonly replay?: (input: DemandInput) => Promise<boolean>
   /** Finalize or preserve the prior native turn only after its matching boundary is observed. */
@@ -259,6 +260,8 @@ export class OnDemandIntake {
       // Native authority is independent of optional memory, Skills and model
       // classification. Never manufacture an owned task merely to run Bash.
       if (!this.options.onlyWhenDeferred && await this.host.nativeOwnership?.(state.input) === 'unowned') {
+        this.assertCurrent(state)
+        await this.host.prepareNativeCoding?.(state.input, state.task)
         this.assertCurrent(state)
         state.nativeUnowned = true
         const context = createRequestIntentContext({ task: state.task, messageRefs: requestIntentMessageRefs(state.input.messages, state.task) })

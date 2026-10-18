@@ -51,3 +51,19 @@ test('declining Lisp persists without enabling a worker and cannot undo an enabl
     assert.equal((await restarted.session(owner.sessionId))?.enabled, 1)
   } finally { db.close() }
 })
+
+test('manual selection is atomic, idempotent, session/root/epoch scoped and survives restart without a pending effect',async()=>{
+ const db=new NodeSqliteAdapter(':memory:',new DatabaseSync(':memory:'))
+ db.exec(readFileSync(new URL('../../../../migrations/019_dsh_lisp.sql',import.meta.url),'utf8'))
+ db.exec(readFileSync(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql',import.meta.url),'utf8'))
+ const store=new LispStore(async fn=>fn(db)),owner={sessionId:'manual-session',agentId:'a',root:'/workspace'}
+ try{
+ assert.equal(await store.manualMode(owner),false)
+ await store.enable(owner);assert.equal(await store.manualMode(owner),false,'task yes is not manual ON')
+ assert.equal(await store.manualMode(owner,true),true);assert.equal(await store.manualMode(owner,true),true);assert.equal(await store.hasPending(owner.sessionId),false)
+ assert.equal(await store.countByKind(owner.sessionId,'manual_mode'),1)
+ const restarted=new LispStore(async fn=>fn(db));await restarted.start();assert.equal(await restarted.manualMode(owner),true)
+ assert.equal(await restarted.manualMode({...owner,sessionId:'other'}),false);assert.equal(await restarted.manualMode({...owner,root:'/other'}),false)
+ await restarted.disable(owner.sessionId);assert.equal(await restarted.manualMode(owner),false);await restarted.enable(owner);assert.equal(await restarted.manualMode(owner),false,'new epoch must not inherit the old marker')
+ }finally{db.close()}
+})

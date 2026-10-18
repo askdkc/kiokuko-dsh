@@ -108,3 +108,8 @@ pnpm dsh plugin --profile web update @askdkc/dsh-lsp-server --latest
 ```
 
 详见[设置、支持的语言和限制](docs/code-intelligence.md)。
+
+
+## Lisp
+
+明确的常规实现请求会在第一次模型请求前提议使用 Lisp，包括默认 on-demand native Bash 路径；对话、调研和仅规划请求不强制提议。同一请求的拒绝回答会在 Goal 准备时复用。`/kioku-lisp enable` 开启当前会话。ON 状态下的实现先运行小型相关 `lisp_eval` 试作（`prototype: true`），再用 `lisp_inspect` 查看成功的保存结果，然后才能使用实现工具。ON 显示本身不是验证证据。两次失败后停止自动重试，应修复原因或通过 `/kioku-lisp disable` 选择普通路径。原有权限和 Stop 保持有效。工具显示 `full` 不会开启 Lisp；新请求需要新的试作证据，试作成功不等于任务完成。

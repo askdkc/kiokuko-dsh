@@ -109,3 +109,8 @@ pnpm dsh plugin --profile web update @askdkc/dsh-lsp-server --latest
 ```
 
 [설정, 지원 언어 및 제한](docs/code-intelligence.md)을 참고하세요.
+
+
+## Lisp
+
+명확한 일반 구현 요청은 기본 on-demand native Bash 경로에서도 첫 모델 요청 전에 Lisp 사용을 제안합니다. 대화·조사·계획만 하는 요청에는 강제하지 않으며, 같은 요청의 거절 답변을 Goal 준비에서도 재사용합니다. `/kioku-lisp enable`은 현재 세션을 켭니다. ON 상태의 구현은 작은 관련 `lisp_eval` 시험(`prototype: true`)을 실행하고 성공한 저장 결과를 `lisp_inspect`로 확인한 뒤 구현 도구를 사용합니다. ON 표시만으로 검증 성공을 주장하지 않습니다. 두 번 실패하면 자동 재시도를 멈추고 원인을 고치거나 `/kioku-lisp disable`로 일반 경로를 선택합니다. 기존 권한과 Stop은 유지됩니다. `full` 도구 표시는 Lisp ON이 아니며, 새 요청은 새 시험 증거가 필요합니다. 시험 성공은 작업 완료가 아닙니다.

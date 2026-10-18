@@ -12,6 +12,9 @@ export interface LispCodingInput {
 export interface LispCodingResult { taskType: TaskType; clarification?: string }
 export interface LispCodingService {
   prepare(input: LispCodingInput): Promise<LispCodingResult>
+  prepareNative?(input: LispCodingInput): Promise<void>
+  answered?(agent: DshUserQuestionAgent, task: string, choice: 'yes'|'no', answerRef: string): void
+  choiceFor?(agent: DshUserQuestionAgent, task: string): { choice: 'yes'|'no'; answerRef: string } | undefined
   enabled(agent: DshUserQuestionAgent): boolean
   discussing(agent: DshUserQuestionAgent): boolean
   activate?(agent: DshUserQuestionAgent): Promise<void>

@@ -11,7 +11,7 @@ export const CodingCriterionSchema = z.object({
 }).strict()
 export const CodingItemSchema = z.object({
   itemId: CodingId, change: text, dependsOn: z.array(CodingId).max(64),
-  goalCriterionIds: z.array(CodingId).min(1).max(64), criterionIds: z.array(CodingId).min(1).max(64),
+  goalCriterionIds: z.array(CodingId).min(1).max(64).describe('Final Goal criteria implemented by this item. Every declared Goal criterion must appear in at least one items[].goalCriterionIds; choose the responsible item, never invent coverage.'), criterionIds: z.array(CodingId).min(1).max(64),
 }).strict()
 export const CodingGoalSchema = z.object({
   goalId: CodingId, revision, ideal: text, target: text,
@@ -21,7 +21,7 @@ export const CodingGoalSchema = z.object({
 const definition = z.object({ goal: CodingGoalSchema, items: z.array(CodingItemSchema).min(1).max(64),
   criteria: z.array(CodingCriterionSchema).min(2).max(128) }).strict()
 export const CodingDefinitionSchema = definition.superRefine((value, ctx) => {
-  const reject = (message: string) => ctx.addIssue({ code: 'custom', message })
+  const reject = (message: string, path: (string|number)[] = []) => ctx.addIssue({ code: 'custom', message, path })
   const ids = (values: string[]) => {
     const duplicates = [...new Set(values.filter((id, index) => values.indexOf(id) !== index))]
     if (duplicates.length) reject(`Duplicate IDs: ${duplicates.join(', ')}`)
@@ -32,14 +32,15 @@ export const CodingDefinitionSchema = definition.superRefine((value, ctx) => {
   ids(value.goal.criterionIds)
   ids([value.goal.goalId, ...items, ...criteria])
   const referenced = new Set(value.goal.criterionIds)
-  for (const id of value.goal.criterionIds) {
-    if (!criteria.has(id)) reject('Missing Goal criterion')
-    if (!value.items.some(item => item.goalCriterionIds.includes(id))) reject('Goal criterion has no implementing item')
+  for (const [index, id] of value.goal.criterionIds.entries()) {
+    const path = ['goal', 'criterionIds', index]
+    if (!criteria.has(id)) reject(`Missing Goal criterion: ${id}; declare it in criteria[].criterionId`, path)
+    if (!value.items.some(item => item.goalCriterionIds.includes(id))) reject(`Goal criterion has no implementing item: ${id}; add this ID to the responsible items[].goalCriterionIds`, path)
   }
-  for (const item of value.items) {
+  for (const [index, item] of value.items.entries()) {
     ids(item.dependsOn); ids(item.criterionIds); ids(item.goalCriterionIds)
     for (const id of item.dependsOn) if (!items.has(id)) reject('Missing dependency')
-    for (const id of item.goalCriterionIds) if (!value.goal.criterionIds.includes(id)) reject('Unknown Goal criterion')
+    for (const [reference, id] of item.goalCriterionIds.entries()) if (!value.goal.criterionIds.includes(id)) reject(`Unknown Goal criterion: ${id}; reference a declared goal.criterionIds value`, ['items', index, 'goalCriterionIds', reference])
     for (const id of item.criterionIds) {
       referenced.add(id)
       if (!criteria.has(id)) reject('Missing item criterion')
@@ -62,7 +63,7 @@ export type CodingCriterion = z.infer<typeof CodingCriterionSchema>
 export const CODING_MINIMUM_DEFINITION_EXAMPLE: CodingDefinition = {
   goal: { goalId: 'goal-example', revision: 1, ideal: 'The requested outcome is observable.', target: 'one-target',
     outOfScope: [], constraints: [], requestBasis: 'The exact current user request.', criterionIds: ['goal-check'] },
-  items: [{ itemId: 'implementation', change: 'Implement the requested behavior.', dependsOn: [],
+  items: [{ itemId: 'implementation', change: 'Implement the requested behavior and cover every final Goal criterion through goalCriterionIds.', dependsOn: [],
     goalCriterionIds: ['goal-check'], criterionIds: ['item-check'] }],
   criteria: [
     { criterionId: 'item-check', revision: 1, outcome: 'The requested behavior is implemented',

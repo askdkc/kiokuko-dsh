@@ -58,8 +58,8 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
       const questions = await import(pathToFileURL(join(packages!, '@deepseek-ai/dsh-user-questions/lib/index.js')).href)
       fibers.push(await ctx.plugin(questions.default, {}))
     } else fibers.push(await ctx.plugin({name:'delivery-intent-answer',apply(c:any){return c.provide('userQuestions',{ask:async(r:any)=>({answers:r.questions.map((q:any)=>{
-      assert.ok((['taskType','enno-execution-mode'].includes(q.id) || q.id.startsWith('coding-lisp-')),JSON.stringify(q))
-      return{id:q.id,selected:[q.id.startsWith('coding-lisp-') ? '使わない' : q.id==='taskType'?'chat':'通常実行']}
+      assert.ok((['taskType','enno-execution-mode'].includes(q.id) || q.id.startsWith('coding-lisp-') || q.id.startsWith('lisp-early-')),JSON.stringify(q))
+      return{id:q.id,selected:[(q.id.startsWith('coding-lisp-') || q.id.startsWith('lisp-early-')) ? '使わない' : q.id==='taskType'?'chat':'通常実行']}
     })})})}}))
   }
   const initial=explicit==='prompt-only'?[llm,prompt,skills]:[llm,session,projection,prompt,tools,agents,skills,commands,subagents,skillTool]
