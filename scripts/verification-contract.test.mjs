@@ -273,6 +273,10 @@ test('CI workflow requires every Protected Lisp and semantic matrix result', () 
   const workflow = (createRequire(import.meta.url)('yaml')).parse(readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
   const lisp = workflow.jobs['lisp-runtime'];
   assert.deepEqual(lisp.strategy.matrix.os, ['ubuntu-24.04', 'ubuntu-24.04-arm', 'macos-latest']);
+  assert.equal(lisp['timeout-minutes'], '${{ matrix.timeout_minutes || 20 }}');
+  assert.deepEqual(lisp.strategy.matrix.os.map(os => [os,
+    lisp.strategy.matrix.include.find(entry => entry.os === os)?.timeout_minutes ?? 20]),
+    [['ubuntu-24.04', 25], ['ubuntu-24.04-arm', 20], ['macos-latest', 25]]);
   assert.equal(lisp.if, undefined, 'the owning matrix must not become conditional');
   assert.equal(lisp['continue-on-error'], undefined, 'owned evidence must remain blocking');
   assert.equal(lisp.strategy['fail-fast'], false);

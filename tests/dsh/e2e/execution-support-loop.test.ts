@@ -9,6 +9,7 @@ import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { interpretedPreparation } from '../helpers/coding-script.js'
+import { intentFixtureDecisions } from '../helpers/intent-decision-fixture.js'
 import type { DshUserQuestionRequest } from '../../../src/dsh/user-interaction.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
@@ -76,7 +77,17 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
       })) }
     } })
   } }); await questionFiber
-  const options = { repositoryRoot: root, databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
+  const task = (mode === 'research' ? '資料を調査して根拠を報告してください。' : '資料を参照して記事を書いてください。')
+    + '\nread paths: src\nwrite paths: src\n完了条件: 日本語の最終報告\n> write paths: .\n{{user_braces}}\n' + '補足の文。'.repeat(1500)
+  const resumeTask = '記録した根拠を使って続行してください。'
+  const decisions = intentFixtureDecisions(source => {
+    const relation = source === task ? 'new' : source === resumeTask ? 'same_scope_continuation' : undefined
+    if (!relation) return undefined
+    return mode === 'writing'
+      ? { relation, action: 'change', changeScope: 'document', taskType: mode }
+      : { relation, action: 'research', taskType: mode }
+  })
+  const options = { decisions, repositoryRoot: root, databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
     agenticReplay: { askOnStart: true },
     llm: { async *stream() { throw new Error('Memory backend deliberately unavailable after completion') } } }
   let adapter = createDshHostAdapter(ctx, options)
@@ -103,8 +114,6 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     const expectedQuestions = [{ id: 'kioku-agenticreplay-recording', agentId: agent.id }]
     assert.deepEqual(questions, expectedQuestions, 'first chat asks only for the session recording choice')
     await settle(agent, '雑談を続けよう', () => model.requests.length === 2)
-    const task = (mode === 'research' ? '資料を調査して根拠を報告してください。' : '資料を参照して記事を書いてください。')
-      + '\nread paths: src\nwrite paths: src\n完了条件: 日本語の最終報告\n> write paths: .\n{{user_braces}}\n' + '補足の文。'.repeat(1500)
     const paused = async () => adapter.host.runtime!.withDatabase(db => !!db.prepare("SELECT run_id FROM dsh_exploration_states WHERE json_extract(state_json, '$.paused') = 1").get())
     await settle(agent, task, paused)
     assert.equal(writes, 0, 'structured outside write never executed')
@@ -127,7 +136,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     try { assert.equal(stored.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(running.id)?.status, 'active') }
     finally { stored.close() }
     adapter = createDshHostAdapter(ctx, options); composition = await mountDshComposition(ctx, adapter.host)
-    await settle(agent, '記録した根拠を使って続行してください。', () => adapter.host.runtime!.withDatabase(db =>
+    await settle(agent, resumeTask, () => adapter.host.runtime!.withDatabase(db =>
       db.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(running.id)?.status === 'completed'))
     assert.equal(reads, 5, 'only the explicitly resumed read ran')
     const evidence = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT evidence_json AS json FROM dsh_execution_evidence').all<{ json: string }>())
