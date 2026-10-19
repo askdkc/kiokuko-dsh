@@ -75,6 +75,13 @@ export const DiffReviewConfig = z.object({
   ttlMs: z.number().int().min(60_000).max(86_400_000).default(1_800_000),
 }).strict()
 export type DiffReviewConfig = z.infer<typeof DiffReviewConfig>
+/**
+ * The plugin chooses profile-memory suggestions by default. Library callers keep
+ * `AkinatorMemoryConfig`'s conservative `off` default and must opt in explicitly.
+ */
+const PluginAkinatorMemoryConfig = AkinatorMemoryConfig.extend({
+  mode: AkinatorMemoryConfig.shape.mode.unwrap().default('suggest'),
+})
 /** Runtime configuration accepted by the dsh bundle entrypoint. */
 export const Config = z.object({
   intakeMode: IntakeModeConfig,
@@ -90,7 +97,7 @@ export const Config = z.object({
   modelHandoff: ModelHandoffConfig.prefault({}),
   modelAutoMode: ModelAutoConfig.prefault({}),
   observationPack: ObservationPackConfig.prefault({}),
-  akinatorMemory: AkinatorMemoryConfig.prefault({}),
+  akinatorMemory: PluginAkinatorMemoryConfig.prefault({}),
   deepPlanning: DeepThinkerConfigSchema.prefault({}),
   modelRoutes: z.array(ModelRouteSchema).max(128).default([]).refine(routes => new Set(routes.map(r => r.provider)).size === routes.length, 'Each DSH provider must have one route declaration'),
   agenticReplay: AgenticReplayConfig.prefault({}),

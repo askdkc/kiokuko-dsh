@@ -320,7 +320,7 @@ test('v15 upgrades without scanning history; migration failure rolls back, then 
   } finally { f.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('the DSH gate keeps optional historical hints detached from native admission without replacing question choices', async () => {
+test('the DSH gate offers optional historical suggestions without source provenance or replacing question choices', async () => {
   const { DshIntakeGate } = await import('../../../src/dsh/intake-gate.js');
   const { createDshCapabilityCatalog } = await import('../../../src/dsh/capability-catalog.js');
   const { createStandardSkillProvider } = await import('../../../src/dsh/standard-skill-provider.js');
@@ -350,7 +350,8 @@ test('the DSH gate keeps optional historical hints detached from native admissio
       capabilities });
     assert.equal(result.admitted, true);
     assert.equal(questions, 1);
-    assert.equal(detail.includes(source.runId), false, 'historical memory is optional and cannot become an admission prerequisite');
+    assert.equal(detail.includes(source.runId), false, 'native admission must not reveal the source run identity');
+    assert.match(detail, /前回の例/u, 'missing-field questions keep optional historical suggestions');
     assert.equal(result.prepared.intake.profile.taskType, 'build');
     assert.equal(readRunIntakeLink(f.db, { workspace: f.scope.workspace, runId: result.prepared.run.runId }).profileSources.taskType, 'user_answer');
   } finally { f.close(); }

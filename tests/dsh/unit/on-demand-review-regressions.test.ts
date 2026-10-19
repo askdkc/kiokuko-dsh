@@ -796,6 +796,29 @@ for (const sample of [
   assert.deepEqual(context, original, 'a rejected advisory operation never mutates the task snapshot')
 })
 
+test('unowned native coding preparation receives the exact request-intent context before the callback', async t => {
+  let captured: { task: string; context?: RequestIntentContext } | undefined
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned',
+    classify: async () => { throw new Error('optional classifier unavailable') },
+    prepareNativeCoding: async (_input, task, context) => { captured = { task, ...(context === undefined ? {} : { context }) } },
+  })
+  const task = 'Okay okay, improve this source base. What do you do to make that happen?'
+  const messages = [human('improve-request', task)]
+  await f.capture(messages)
+  assert.ok(captured)
+  const context = captured.context
+  assert.ok(context)
+  assert.equal(captured.task, task)
+  assert.equal(context.task, task)
+  assert.deepEqual(context.messageRefs, requestIntentMessageRefs(messages, task))
+  const state = f.intake.snapshot(f.session.id)!
+  assert.equal(state.requestIntent?.source, 'unresolved')
+  assert.equal(state.requestIntent?.unresolvedReason, 'native_unowned_request')
+  assert.equal(state.status, 'answer')
+  assert.equal(f.admissions.length, 0)
+})
+
 test('ordinary native Bash remains available with owned metadata and deferred optional intake', async t => {
   const f = await fixture(t, { nativeOwnership: async () => 'owned', classify: async () => ({ deferInference: true }) })
   let bodies = 0, databaseCalls = 0

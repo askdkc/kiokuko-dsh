@@ -3,6 +3,8 @@ import test from 'node:test'
 import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
+import {DecisionService} from '../../../src/dsh/decisions/service.js'
+import {TypedDecisionsConfig} from '../../../src/dsh/decisions/config.js'
 import {nativeSkillFixture} from '../helpers/skill-native.js'
 import {nativeToolResults} from '../helpers/native-mock.js'
 import {isolateSkillHome} from '../helpers/skill-home.js'
@@ -18,6 +20,26 @@ for(const explicit of [false,true])test(`ordinary implementation offers Lisp bef
  f.responses.push(f.mock.textResponse('Continuing.'));await f.turn('この作業を続行してください');assert.equal(asked,1)
  f.responses.push(f.mock.textResponse('Research only.'));await f.turn('コードは変更しないで。原因を調査して説明して。');assert.equal(asked,1)
  }finally{await f.close()}
+})
+test('a configured request-intent decision arms the early Lisp offer for conversational implementation wording',{timeout:120000},async()=>{
+ let asked=0,requestIntentBatches=0
+ const decisions=new DecisionService(TypedDecisionsConfig.parse({provider:'typesafe'}),()=> ({
+  capabilities:{maxQuestions:256,maxChoices:256,maxBytes:262144},
+  async evaluate(batch:any){
+   if(batch.purpose==='request-intent'){
+    requestIntentBatches++
+    assert.match((batch.state as any).currentUserMessage,/improve this/u)
+    return {provider:'fixture',requestedModel:'fixture',policyVersion:'request-intent-task-state-v3',
+     answers:batch.questions.map((q:any)=>q.id==='request-relation'?{id:q.id,status:'selected',choiceId:'new'}
+      :q.id==='request-action'?{id:q.id,status:'selected',choiceId:'change'}
+      :q.id==='request-change-scope'?{id:q.id,status:'selected',choiceId:'implementation'}
+      :{id:q.id,status:'abstained',reason:'insufficient'})}
+   }
+   return {provider:'fixture',requestedModel:'fixture',policyVersion:'fixture',answers:batch.questions.map((q:any)=>({id:q.id,status:'abstained',reason:'insufficient'}))}
+  }
+ }) as any)
+ const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit:true,mode:'compiled',decisions,extra:{...extra,typedDecisions:{provider:'typesafe'}},nativeAnswer:async q=>{if(q.questions[0].id.startsWith('lisp-early-')){asked++;assert.equal(f.model.requests.length,0);return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}throw new Error('unexpected question')}})
+ try{f.responses.push(f.mock.textResponse('Prepared ordinary coding.'));await f.turn('Okay okay, improve this source base. AI Memory and coding skills are efficient and handle what user intention should be. What do you do to make that happen with this source bases?');assert.equal(asked,1);assert.equal(requestIntentBatches,1)}finally{await f.close()}
 })
 test('manual ON requires a real prototype and its saved result before native implementation; OFF preserves ordinary tools',{timeout:120000},async()=>{
  let asked=0;const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),mode:'compiled',extra,nativeAnswer:async q=>{asked++;return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}}),fibers:any[]=[]

@@ -69,19 +69,25 @@ export interface DshUserQuestions {
   ask(request: DshUserQuestionRequest): Promise<DshUserQuestionAnswer>
 }
 
+export interface DshIntakeAnswerOptions {
+  /** Native admission keeps suggestions but omits the source run identity. */
+  provenance?: boolean
+}
+
 export interface DshIntakeAnswerer {
-  ask(question: AkinatorQuestion, signal?: AbortSignal, agent?: DshUserQuestionAgent, memoryHints?: readonly ProfileMemoryHint[]): Promise<string>
+  ask(question: AkinatorQuestion, signal?: AbortSignal, agent?: DshUserQuestionAgent, memoryHints?: readonly ProfileMemoryHint[], options?: DshIntakeAnswerOptions): Promise<string>
 }
 
 function conflict(message: string): never { throw new KiokukoError('CONFLICT', message) }
 
 export function createDshIntakeAnswerer(service: DshUserQuestions): DshIntakeAnswerer {
   return {
-    async ask(question, signal, agent, memoryHints) {
+    async ask(question, signal, agent, memoryHints, options) {
       const presentation = intakePresentation(question)
       const hints = (memoryHints ?? []).filter(hint => hint.field === question.id).slice(0, 3)
+      const showProvenance = options?.provenance !== false
       const hintDetail = hints.length ? '\n前回の例（今回の回答は自由に変更できます）:\n'
-        + hints.map(hint => `${hint.value} — ${hint.source.observedAt.slice(0, 10)} / ${hint.source.runId}`).join('\n') : ''
+        + hints.map(hint => `${hint.value} — ${hint.source.observedAt.slice(0, 10)}${showProvenance ? ` / ${hint.source.runId}` : ''}`).join('\n') : ''
       const result = await service.ask({
         questions: [{
           id: question.id,

@@ -15,7 +15,7 @@ import { DshTaskWorkflow, TASK_STATE_EVENT, TASK_WORKFLOW_SERVICE } from './task
 import { mountOwnedExecution } from './owned-execution.js'
 import { mountPlanTransition } from './plan-transition.js'
 import { classifyTaskForIntake } from './decisions/workflows.js'
-import { requestIntentMessageRefs, type RequestIntentDecision } from './decisions/request-intent.js'
+import { classifyRequestIntent, requestIntentMessageRefs, type RequestIntentDecision } from './decisions/request-intent.js'
 import { authorizeTaskLease } from './task-state.js'
 import { dshTurnRequestId } from './intake-profile-resolver.js'
 import { resolveProjectWorkspaceReadOnly } from '../memory/workspaces.js'
@@ -543,9 +543,15 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     answerContext: new DshAnswerContext(runtime, { root, cwd: answerCwd, projectOnly: false, memoryRetrieval: memoryRetrievalConfig,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills: skills as AnswerSkillRegistry, prompts: skillPrompts, decisions, cwd: answerCwd(input.agent) }),
     }),
-    prepareNativeCoding: async (input, task) => {
+    prepareNativeCoding: async (input, task, requestIntentContext) => {
       const lisp = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
-      await lisp?.prepareNative?.({ agent: input.agent, turn: input.turn, task, taskType: null, signal: input.signal })
+      const sessionId = input.agent.session?.id
+      if (!lisp?.prepareNative || !sessionId) return
+      const requestIntent = requestIntentContext
+        ? await classifyRequestIntent(decisions, dshTurnRequestId({ dshSessionId: sessionId, turn: input.turn }), requestIntentContext, input.signal)
+        : undefined
+      await lisp.prepareNative({ agent: input.agent, turn: input.turn, task, taskType: null, signal: input.signal,
+        ...(requestIntent ? { requestIntent } : {}) })
     },
     nativeOwnership: async input => {
       const agent = input.agent as NativeAgent

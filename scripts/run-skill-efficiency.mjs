@@ -2,6 +2,7 @@ import { completeVerification } from './verification-completion.mjs';
 import assert from 'node:assert/strict'
 import {readFile,writeFile} from 'node:fs/promises'
 import {DshSkillPrompts} from '../dist/dsh/skill-prompts.js'
+import {SkillPromptsConfig} from '../dist/dsh/skill-prompt-contracts.js'
 import {requestSize} from '../dist/dsh/efficiency.js'
 
 const baseline=JSON.parse(await readFile(new URL('../tests/fixtures/skill-prompts/baseline.json',import.meta.url),'utf8'))
@@ -23,10 +24,13 @@ for(const [name,skills]of cases){
 assert.ok(prompts.diagnostics().every(d=>d.representation==='compiled'&&!d.fallback),'Fallback is not compiled efficiency evidence')
 const reduction=1-results.reduce((s,r)=>s+r.compiledSkillBytes,0)/results.reduce((s,r)=>s+r.baselineSkillBytes,0)
 const gates={reductionAtLeast30Percent:reduction>=0.3,noRequestGrowth:results.every(r=>r.compiledRequestBytes<=r.baselineRequestBytes)}
-const report={format:1,evidence:'fixed representative serialized fixtures; native/wire delivery is checked separately',cases:results,reduction,gates,providerCalls:0,tokensSaved:null,costSaved:null,liveQuality:'unmeasured',defaultMode:'full'}
+const defaultMode=SkillPromptsConfig.parse({}).mode
+const promotion={defaultMode,machineGatesPassed:Object.values(gates).every(Boolean),liveQualityComparison:'unmeasured',japaneseReview:'unmeasured',nativeAndPackagedDelivery:'checked separately by npm run test:skill-delivery',readyToPromote:false}
+const report={format:1,evidence:'fixed representative serialized fixtures; native/wire delivery is checked separately',cases:results,reduction,gates,providerCalls:0,tokensSaved:null,costSaved:null,liveQuality:'unmeasured',defaultMode,promotion}
 if(process.argv[2]==='--output'&&process.argv.length===4)await writeFile(process.argv[3],JSON.stringify(report,null,2)+'\n')
 else if(process.argv.length!==2)throw new Error('Usage: run-skill-efficiency.mjs [--output path]')
 console.log(JSON.stringify(report,null,2))
 assert.ok(Object.values(gates).every(Boolean),'Skill efficiency target not met; do not enable compiled by default')
+assert.equal(defaultMode,'full','Compiled Skill prompts stay non-default until the live quality comparison, Japanese review and native/packed delivery gates recorded in docs/skill-compiler.md pass')
 
 completeVerification({});

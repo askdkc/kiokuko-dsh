@@ -10,6 +10,7 @@ import { openConnection } from '../../../src/db/connection.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
 import { createDshCapabilityCatalog } from '../../../src/dsh/capability-catalog.js'
 import { DshIntakeGate, type DshPreStepEvent } from '../../../src/dsh/intake-gate.js'
+import { AkinatorMemoryConfig } from '../../../src/akinator/memory-probe-types.js'
 import { createDshIntakeAnswerer } from '../../../src/dsh/user-interaction.js'
 import { createStandardSkillProvider } from '../../../src/dsh/standard-skill-provider.js'
 import { DshRuntime } from '../../../src/dsh/runtime.js'
@@ -359,5 +360,21 @@ for (const kind of ['typesafe', 'nimble'] as const) test(`full gate ${kind}: pro
     assert.ok(messages.some(m => m.name === 'z-fixture-selection' && m.content.includes('native Skill tool')))
     assert.ok(messages.some(m => m.name === 'kiokuko-single-purpose-functions'))
     assert.equal(calls, 2); await gate.prepare(input); assert.equal(calls, 2)
+  } finally { await runtime.close(); await rm(f.root, { recursive: true, force: true }) }
+})
+
+test('configured profile-memory mode reaches run creation instead of being forced off', async () => {
+  const f = await makeFixture()
+  const runtime = new DshRuntime({ repositoryRoot: f.root, databasePath: f.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'), embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 } })
+  const capabilities = await catalog()
+  try {
+    for (const [mode, expected] of [['off', 0], ['suggest', 1]] as const) {
+      const gate = new DshIntakeGate(runtime, undefined, undefined, false, AkinatorMemoryConfig.parse({ mode, maxElapsedMs: 1000 }))
+      const result = await gate.prepare({ ...event(f.root, capabilities), sessionId: `session-memory-${mode}` })
+      const stored = await runtime.withDatabase(database => database
+        .prepare('SELECT count(*) AS n FROM akinator_memory_resolutions WHERE run_id = ?')
+        .get<{ n: number }>(result.prepared.run.runId))
+      assert.equal(stored?.n, expected, mode === 'suggest' ? 'configured mode must reach run creation' : 'off must stay off')
+    }
   } finally { await runtime.close(); await rm(f.root, { recursive: true, force: true }) }
 })

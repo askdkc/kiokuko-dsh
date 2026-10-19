@@ -255,9 +255,15 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     answerContext: new DshAnswerContext(runtime, { root, projectOnly: true, memoryRetrieval: config.memoryRetrieval,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills, prompts, decisions, cwd: root }),
     }),
-    prepareNativeCoding: async (input, task) => {
+    prepareNativeCoding: async (input, task, requestIntentContext) => {
       const lisp = get(LISP_CODING_SERVICE) as LispCodingService | undefined
-      await lisp?.prepareNative?.({ agent: input.agent, turn: input.turn, task, taskType: null, signal: input.signal })
+      const sessionId = input.agent.session?.id
+      if (!lisp?.prepareNative || !sessionId) return
+      const requestIntent = requestIntentContext
+        ? await classifyRequestIntent(decisions, dshTurnRequestId({ dshSessionId: sessionId, turn: input.turn }), requestIntentContext, input.signal)
+        : undefined
+      await lisp.prepareNative({ agent: input.agent, turn: input.turn, task, taskType: null, signal: input.signal,
+        ...(requestIntent ? { requestIntent } : {}) })
     },
     nativeOwnership: async input => {
       const agent = input.agent as NativeAgent

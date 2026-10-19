@@ -218,7 +218,7 @@ export class DshIntakeGate {
         ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
         memoryRetrieval: this.memoryRetrieval,
         signal: event.signal,
-      }, { akinatorMemory: {...this.akinatorMemory, mode: 'off'} })))
+      }, { akinatorMemory: this.akinatorMemory })))
       await this.decisions?.alias(`run:${prepared.run.runId}`, requestId)
       while (prepared.intake.status === 'needs_answer') {
         if (event.signal.aborted) break
@@ -234,7 +234,7 @@ export class DshIntakeGate {
           })
           return result
         }
-        const value = await this.#answerer.ask(prepared.intake.question, event.signal, event.nativeAgent, prepared.intake.memoryHints)
+        const value = await this.#answerer.ask(prepared.intake.question, event.signal, event.nativeAgent, prepared.intake.memoryHints, { provenance: false })
         const currentCapabilities = this.#readCapabilities === undefined
           ? event.capabilities
           : await this.#readCapabilities({
@@ -256,7 +256,7 @@ export class DshIntakeGate {
           ...(event.skillDiscoveryMode === undefined ? {} : { skillDiscoveryMode: event.skillDiscoveryMode }),
           memoryRetrieval: this.memoryRetrieval,
           signal: event.signal,
-        }, { akinatorMemory: {...this.akinatorMemory, mode: 'off'} })))
+        }, { akinatorMemory: this.akinatorMemory })))
       }
       if (prepared.nextAction === 'proceed') prepared.selectedSkills = await selectInstalledSkills(this.decisions, requestId, grounded.task, [...event.capabilities.skills, ...event.capabilities.tools], prepared.capabilities, event.signal)
       const result = prepared.nextAction !== 'proceed'

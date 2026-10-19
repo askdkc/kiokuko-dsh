@@ -29,7 +29,10 @@ export class LispCodingPreparation {
   }
   async prepare(input:LispCodingInput):Promise<void> {
     const previous=this.current(input.agent)
-    if (!codingIntent(input.task)) {
+    // A resolved provider decision is a positive signal only. Negative, unresolved or
+    // unavailable decisions keep the deterministic detector and never replace the request intent.
+    const semanticCoding = input.requestIntent?.action === 'change' && input.requestIntent.changeScope === 'implementation'
+    if (!semanticCoding && !codingIntent(input.task)) {
       if (!codingContinuation(input.task)) this.states.delete(input.agent)
       return
     }

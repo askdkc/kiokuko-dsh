@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {LispCodingPreparation} from '../../../../src/dsh/lisp/coding-preparation.js'
+import {codingIntent} from '../../../../src/dsh/coding-workflow/intent.js'
 function observe(f:ReturnType<typeof fixture>,name:string,args:any,result:any){f.p.observed(f.agent,name,args,result,f.p.binding(f.agent))}
 function fixture(){let root='/one',enabled=false,choices=0,activations=0;const agent={id:'agent',session:{id:'session'}};const input={agent,turn:1,task:'Implement src/parser.ts',taskType:'build' as const,signal:new AbortController().signal};const p=new LispCodingPreparation({identity:a=>({sessionId:(a as typeof agent).session.id,root}),enabled:()=>enabled,choose:async()=>{choices++;return{choice:'yes',answerRef:'human:choice'}},activate:async()=>{activations++;enabled=true}});return{p,agent,input,enabled:(v:boolean)=>{enabled=v},root:(v:string)=>{root=v},counts:()=>({choices,activations})}}
 test('early choice is once per request, native reads stay available and ON alone is unverified',async()=>{const f=fixture();await Promise.all([f.p.prepare(f.input),f.p.prepare(f.input)]);assert.equal(f.counts().choices,1);assert.equal((f.p.status(f.agent)as any).verified,false);assert.equal(f.p.denial(f.agent,'read',{}),undefined);assert.match(f.p.denial(f.agent,'bash',{})!,/LISP_PROTOTYPE_REQUIRED/u)})
@@ -54,4 +55,24 @@ test('the same recorded manual answer preserves an already reviewed prototype wh
  observe(f,'lisp_inspect',{resultOperationId:'fresh',section:'result'},{ok:true,state:'SUCCEEDED',nextOffset:null})
  const key=f.p.binding(f.agent);f.p.answered(f.agent,f.input.task,'yes','human-command:one:enable')
  assert.equal(f.p.binding(f.agent),key);assert.equal((f.p.status(f.agent)as any).verified,true)
+})
+
+test('a positive request-intent decision arms the early gate for wording the deterministic detector misses',async()=>{
+ const f=fixture();f.enabled(true)
+ const task='Okay okay, improve this source base. What do you do to make that happen?'
+ assert.equal(codingIntent(task),false)
+ await f.p.prepare({...f.input,task,requestIntent:{relation:'new',action:'change',changeScope:'implementation',source:'decision-provider',policyVersion:'request-intent-task-state-v3',providerSent:true,evidence:{} as any} as any})
+ assert.equal((f.p.status(f.agent)as any).phase,'prototype_required')
+ assert.equal(f.p.denial(f.agent,'read',{}),undefined)
+ assert.match(f.p.denial(f.agent,'bash',{})!,/LISP_PROTOTYPE_REQUIRED/u)
+})
+
+test('an unresolved decision keeps the deterministic coding fallback and does not gate conversation',async()=>{
+ const unresolved={relation:'unknown',action:'unknown',changeScope:'unknown',source:'unresolved',policyVersion:'request-intent-task-state-v3',providerSent:false,evidence:{} as any} as any
+ const f=fixture();f.enabled(true)
+ await f.p.prepare({...f.input,task:'Implement src/parser.ts',requestIntent:unresolved})
+ assert.match(f.p.denial(f.agent,'bash',{})!,/LISP_PROTOTYPE_REQUIRED/u)
+ const g=fixture();g.enabled(true)
+ await g.p.prepare({...g.input,task:'Explain the parser',requestIntent:unresolved})
+ assert.equal(g.p.denial(g.agent,'bash',{}),undefined)
 })

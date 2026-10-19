@@ -4,10 +4,13 @@ import { ExecutionSelectionPending } from '../execution-pending.js'
 import { createDshIntakeAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from '../intake-questions.js'
 import { LISP_CODING_SERVICE } from '../lisp-service-key.js'
 import { codingIntent } from '../coding-workflow/intent.js'
+import type { RequestIntentDecision } from '../decisions/request-intent.js'
 
 export { LISP_CODING_SERVICE }
 export interface LispCodingInput {
   agent: DshUserQuestionAgent; turn: number; task: string; taskType: TaskType | null; signal: AbortSignal
+  /** Advisory positive signal from the configured request-intent decision; never the stored intent. */
+  requestIntent?: RequestIntentDecision
 }
 export interface LispCodingResult { taskType: TaskType; clarification?: string }
 export interface LispCodingService {

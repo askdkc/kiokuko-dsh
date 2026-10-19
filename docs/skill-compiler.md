@@ -127,7 +127,10 @@ loss, and native/packed delivery passing. No byte counter or file hash can pass
 the Japanese-quality gate. The runner never changes configuration automatically.
 
 Current status: implementation and local delivery can be tested independently;
-live model quality and cost are unmeasured. Keep `full` as the default.
+the fixed-fixture efficiency gate reports 30.04% reduction with no envelope
+growth, but live model quality and cost are unmeasured. Keep `full` as the
+default. `run-skill-efficiency.mjs` reports `defaultMode` and `promotion`, and
+fails if the delivered default changes before the live evidence above exists.
 
 ## Verification recorded on 2026-09-17
 

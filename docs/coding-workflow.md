@@ -4,6 +4,8 @@ An explicit request to implement or repair code starts a task-bound workflow. Qu
 
 Clear unowned native implementation requests offer Lisp before the first model request. A manually enabled session selects its explicit Lisp route without another question; a declined early answer is reused for the exact request at Goal preparation. This offer does not create a memory task or grant native permission.
 
+Before that offer, the host may use the configured request-intent decision as an advisory positive signal. A resolved change/implementation decision arms the same offer for conversational wording; abstention, unavailability, a non-positive decision or no decision service falls back to the deterministic detector. The decision never replaces the main model's request interpretation or grants permission.
+
 Before the first implementation effect in an admitted workflow the agent defines an ideal Goal, implementation items and dependencies, observable item criteria, and a separate final check through the user's ordinary entry point. The host presents these together and asks **このタスクで Lisp モードを使いますか？**
 
 - **使う** permits Lisp for this task. SBCL and the enabled Lisp module must be available. Startup failures remain visible blockers.
