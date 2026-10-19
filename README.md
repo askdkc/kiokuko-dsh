@@ -29,6 +29,8 @@ Tool exposure defaults to `auto`: task type and current phase determine the Kiok
 
 Runtime compatibility target: **DSH 0.2.1-alpha.2**, with the `web` and `dsh-cli` profiles. See the [verification scope](docs/dsh-plugin.md#compatibility).
 
+Supported platforms: Linux x64/ARM64 and macOS Apple Silicon; Intel Mac and Windows are unsupported.
+
 Requires Node.js **24.16.0+** and pnpm.
 From the DSH source directory, install and start the Web profile:
 

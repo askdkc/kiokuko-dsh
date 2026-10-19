@@ -15,7 +15,9 @@ Use an external `CARGO_TARGET_DIR` to keep build output outside the source tree.
 
     python3 crates/guardrail/scripts/test.py /absolute/path/to/cargo /absolute/path/to/rustc all
 
-## Reproducing the recorded release
+## Reproducing supported targets from the recorded release
+
+The current shipping targets are Linux x64, Linux ARM64 and macOS Apple Silicon (ARM64). Intel Mac is unsupported, and `release.py` rejects `x86_64-apple-darwin`.
 
 The recorded builds use official Rust 1.99.0 components and, for macOS cross-builds, Zig 0.17.0. `release-provenance.json` records the official distribution URLs and SHA-256 values, compiler/linker identities, target-specific original build inputs and per-target verification status. Install those tools yourself into a dedicated directory, verify their distribution hashes, and pass their explicit executable paths. This repository does not download or install toolchains during npm install or guardrail enrollment.
 
@@ -27,18 +29,17 @@ Example Linux x64 static-musl reproduction (substitute your installed, verified 
 
 Remove `--plan` to perform the two builds and package verification. The helper binds Cargo’s target linker directly to the verified `cc`. The `ld` hash records an environment input; the compiler driver’s effective linker search is not enforced. Final binary/archive identity checks remain necessary. Compiler arguments are passed through `CARGO_ENCODED_RUSTFLAGS` with 0x1f separators so source/temporary paths containing spaces remain single arguments (see the [Cargo environment-variable reference](https://doc.rust-lang.org/cargo/reference/environment-variables.html)). The pinned `cc`/`ld` hashes describe the recorded Debian build environment; a different compiler/linker is rejected rather than silently producing an unverified replacement. The recorded helper is for a Linux x64 toolchain host. Ordinary native source development uses Cargo directly.
 
-Existing cross-target recipes use the same helper and explicit target tool paths:
+Supported cross-target recipes use the same helper and explicit target tool paths:
 
 - Linux ARM64 musl: `--target aarch64-unknown-linux-musl --rust-lld /absolute/rust/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld`. The recipe adds `-C linker-flavor=ld.lld -C link-self-contained=yes`.
-- macOS Intel: `--target x86_64-apple-darwin --zig /absolute/zig/zig`.
 - macOS Apple Silicon: `--target aarch64-apple-darwin --zig /absolute/zig/zig`.
-- macOS recipes use `zig cc -s`, a target minimum of macOS 13, `MACOSX_DEPLOYMENT_TARGET=13.0`, and isolated Zig caches.
+- The macOS ARM64 recipe uses `zig cc -s`, a target minimum of macOS 13, `MACOSX_DEPLOYMENT_TARGET=13.0`, and isolated Zig caches.
 
-The four target JSON files retain the exact normalized build-input records used for the shipped archives. Compiler binaries alone do not pin every sysroot/system-library byte; distribution hashes and recorded linker identities are relevant inputs. This is not a fully isolated derivation, a signed supply-chain attestation, or a promise that a different host reproduces identical output. Mismatched results fail visibly.
+The four historical target JSON files and `release-provenance.json` retain the exact normalized build-input records for the original archives, including Intel Mac. They are historical provenance, not the current shipping support catalog. The frozen `../guardrail/README.md` and `../guardrail/scripts/package.py` likewise retain their original four-target descriptions and packaging catalog byte-for-byte so the 22-file source digest and original release identities remain verifiable. Current shipping support is defined by the three targets accepted by this release helper and the runtime manifests; the historical Intel Mac records do not restore support. Compiler binaries alone do not pin every sysroot/system-library byte; distribution hashes and recorded linker identities are relevant inputs. This is not a fully isolated derivation, a signed supply-chain attestation, or a promise that a different host reproduces identical output. Mismatched results fail visibly.
 
 This parameterized wrapper is adapted from the recorded build commands. Its input/plan validation is separate from executing a build; no adapted-wrapper cross-target reproduction is claimed. Original two-build identity records refer to the original captured toolchain executions.
 
-Only Linux x64 smoke execution was performed for this release. Linux ARM64 and both macOS executables were cross-built and structurally checked; native execution remains unrun. The helper never treats cross-build success as native verification. There is no Windows artifact or new platform work in this delivery.
+Only Linux x64 smoke execution was performed for the recorded release. Its Linux ARM64 and macOS ARM64 executables were cross-built and structurally checked; native execution remains unrun. The historical Intel Mac executable was also cross-built and structurally checked without native execution, but is no longer shipped. The helper never treats cross-build success as native verification. There is no Windows artifact or new platform work in this delivery.
 
 ## Updating a release
 

@@ -116,3 +116,14 @@ test('explicit typed-decision OFF does not fabricate a solver verdict; missing e
   const missing=await assessRequestIntent(undefined,'missing-provider',context,candidate.decision,signal())
   assert.equal(missing?.outcome,'unavailable');assert.equal(missing?.semantic,'unavailable')
 })
+
+test('removed Intel host is unavailable even with a stale artifact root and cannot fall back',async()=>{
+  const platform=Object.getOwnPropertyDescriptor(process,'platform')!,arch=Object.getOwnPropertyDescriptor(process,'arch')!
+  try {
+    Object.defineProperty(process,'platform',{value:'darwin'})
+    Object.defineProperty(process,'arch',{value:'x64'})
+    const result=await runMicroJudge(problem,hash('intel-unsupported'),signal(),{artifactRoot:'/nonexistent-intel-fixture'})
+    assert.equal(result.state,'unavailable')
+    if(result.state==='unavailable')assert.equal(result.reason,'unsupported_platform')
+  } finally {Object.defineProperty(process,'platform',platform);Object.defineProperty(process,'arch',arch)}
+})

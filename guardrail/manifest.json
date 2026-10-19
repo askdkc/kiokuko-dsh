@@ -41,28 +41,6 @@
         "status": "cross-built; not executed on ARM64 Linux"
       }
     },
-    "x86_64-apple-darwin": {
-      "platform": "darwin",
-      "arch": "x64",
-      "binary": "guardrail/x86_64-apple-darwin/kiokuko-guardrail",
-      "manifest": "guardrail/x86_64-apple-darwin/manifest.json",
-      "manifestSha256": "48e718f7c8d23cae7d11f11c722c85785f78ad53abff33eb7d25c6ddb01e9d66",
-      "bytes": 414856,
-      "sha256": "673e9b26eda59ba18e217034c6502daa65a2ab10f22403685c4aaf42181631f0",
-      "verification": {
-        "imports": [
-          "/usr/lib/libSystem.B.dylib"
-        ],
-        "independent_builds_equal": true,
-        "interpreter": "/usr/lib/dyld",
-        "linker_ad_hoc_signature": false,
-        "minimum_os": "13.0.0",
-        "native_smoke": "not run",
-        "package_sha256": "fb3a2c767f2a077dbe86af44814b93ae9ef81722359423882c029db0f5afdcb3",
-        "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
-        "status": "cross-built; not executed on macOS"
-      }
-    },
     "aarch64-apple-darwin": {
       "platform": "darwin",
       "arch": "arm64",

@@ -30,8 +30,6 @@ const requiredFiles = [
   'guardrail/x86_64-unknown-linux-musl/manifest.json',
   'guardrail/aarch64-unknown-linux-musl/kiokuko-guardrail',
   'guardrail/aarch64-unknown-linux-musl/manifest.json',
-  'guardrail/x86_64-apple-darwin/kiokuko-guardrail',
-  'guardrail/x86_64-apple-darwin/manifest.json',
   'guardrail/aarch64-apple-darwin/kiokuko-guardrail',
   'guardrail/aarch64-apple-darwin/manifest.json',
 
@@ -188,6 +186,10 @@ const requiredFiles = [
 ]
 const requiredDirectories = ['dist/', 'migrations/', 'skills/', 'docs/']
 const forbiddenPrefixes = [
+  'guardrail/x86_64-apple-darwin/',
+  'micro-judge/darwin-x64/',
+  'micro-judge/native-verification-darwin-x64.json',
+  'micro-judge/native-acceptance-darwin-x64.tap',
   'crates/',
   'lisp/vendor/cl-unicode/test/derived-properties',
   'lisp/vendor/cl-unicode/test/normalization-forms',

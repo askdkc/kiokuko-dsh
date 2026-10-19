@@ -5,7 +5,7 @@ import { lstat, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export const nativeTargets = Object.freeze({
-  'darwin-arm64': 'aarch64-apple-darwin', 'darwin-x64': 'x86_64-apple-darwin',
+  'darwin-arm64': 'aarch64-apple-darwin',
   'linux-arm64': 'aarch64-unknown-linux-gnu', 'linux-x64': 'x86_64-unknown-linux-gnu',
 })
 export const sha256 = value => createHash('sha256').update(value).digest('hex')

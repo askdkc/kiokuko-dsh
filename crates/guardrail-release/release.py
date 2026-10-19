@@ -14,7 +14,7 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 SOURCE = HERE.parent / 'guardrail'
 REPOSITORY = HERE.parent.parent
-TARGETS = ('x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl', 'x86_64-apple-darwin', 'aarch64-apple-darwin')
+TARGETS = ('x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl', 'aarch64-apple-darwin')
 
 
 def sha(data):
@@ -107,7 +107,7 @@ def release(args):
                 target_key: recipe(temp)['targetLinker'],
             }
             if args.target.endswith('-apple-darwin'):
-                zig_target = ('aarch64' if args.target.startswith('aarch64') else 'x86_64') + '-macos.13.0.0'
+                zig_target = 'aarch64-macos.13.0.0'
                 wrapper = temp / 'mac-linker'
                 wrapper.write_text('#!/bin/sh\nexec ' + shlex.quote(str(linker)) + ' cc -s -target ' + zig_target + ' "$@"\n')
                 wrapper.chmod(0o755)

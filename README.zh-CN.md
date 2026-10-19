@@ -23,6 +23,8 @@ ObservationPack 默认保持 `observationPack: { mode: auto }`。若完整行摘
 
 运行时兼容目标为 **DSH 0.2.1-alpha.2** 的 `web` 和 `dsh-cli` profile。请参阅[验证范围](docs/dsh-plugin.md#compatibility)。
 
+支持 Linux x64/ARM64 和 macOS Apple Silicon，不支持 Intel Mac 和 Windows。
+
 需要 Node.js **24.16.0 以上**和 pnpm。
 在 DSH 源码目录中首次安装并启动 Web 版：
 

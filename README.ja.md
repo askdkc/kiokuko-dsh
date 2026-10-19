@@ -29,6 +29,8 @@ Tool exposure の既定値は `auto`。タスク種別と現在の phase に応�
 
 実行環境の対応対象は **DSH 0.2.1-alpha.2** の `web` と `dsh-cli` プロファイルです。[検証範囲](docs/dsh-plugin.md#compatibility)を参照してください。
 
+対応環境は Linux x64/ARM64 と macOS Apple Silicon です（Intel Mac・Windows は非対応）。
+
 Node.js **24.16.0 以上**と pnpm が必要です。
 DSH のソースディレクトリで、Web版を初回導入して起動します。
 

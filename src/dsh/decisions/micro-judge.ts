@@ -43,7 +43,7 @@ export function encodeFiniteDomain(problem: FiniteDomainProblem): string {
   if (Buffer.byteLength(payload)>120000)throw new Error('bytes')
   return payload
 }
-const manifestSchema=z.object({version:z.literal(MICRO_JUDGE_VERSION),artifacts:z.array(z.object({platform:z.enum(['darwin','linux','win32']),arch:z.enum(['arm64','x64']),sha256:hex,bytes:z.number().int().positive(),file:z.string(),nativeVerified:z.boolean(),sourceDigest:hex.optional(),compiler:z.string().max(256).optional()}).strict()).max(6)}).strict()
+const manifestSchema=z.object({version:z.literal(MICRO_JUDGE_VERSION),artifacts:z.array(z.object({platform:z.enum(['darwin','linux']),arch:z.enum(['arm64','x64']),sha256:hex,bytes:z.number().int().positive(),file:z.string(),nativeVerified:z.boolean(),sourceDigest:hex.optional(),compiler:z.string().max(256).optional()}).strict().refine(entry => entry.platform !== 'darwin' || entry.arch === 'arm64')).max(3)}).strict()
 /** No PATH fallback, compiler, download, environment override, or provider authority. */
 export async function runMicroJudge(problem: FiniteDomainProblem, inputId: string, signal: AbortSignal,
   options: { artifactRoot?: string; timeoutMs?: number } = {}): Promise<MicroJudgeResult> {
@@ -52,6 +52,7 @@ export async function runMicroJudge(problem: FiniteDomainProblem, inputId: strin
   let payload: string
   try {hex.parse(inputId);payload=encodeFiniteDomain(problem);inputDigest=hash(payload)}catch{return unavailable('invalid_input')}
   if(signal.aborted)return unavailable('cancelled')
+  if (!['linux-x64','linux-arm64','darwin-arm64'].includes(`${process.platform}-${process.arch}`)) return unavailable('unsupported_platform')
   const root=options.artifactRoot ?? fileURLToPath(new URL('../../../micro-judge/',import.meta.url))
   let executable: string
   try {

@@ -23,6 +23,8 @@ ObservationPack은 기본값 `observationPack: { mode: auto }`를 유지합니�
 
 런타임 호환 대상은 **DSH 0.2.1-alpha.2**의 `web` 및 `dsh-cli` 프로필입니다. [검증 범위](docs/dsh-plugin.md#compatibility)를 참고하세요.
 
+지원 환경은 Linux x64/ARM64 및 macOS Apple Silicon이며, Intel Mac과 Windows는 지원하지 않습니다.
+
 Node.js **24.16.0 이상**과 pnpm이 필요합니다.
 DSH 소스 디렉터리에서 Web 버전을 처음 설치하고 시작합니다.
 

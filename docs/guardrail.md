@@ -23,11 +23,11 @@ The full package and core module include precompiled artifacts, protocol, Node r
 
 - Linux x64: static musl ELF; native CLI smoke and reproducible-build checks passed on Linux x64.
 - Linux ARM64: static musl ELF, cloud cross-built; native execution not run.
-- macOS Intel and Apple Silicon: cloud cross-built Mach-O, minimum macOS 13; native execution not run. ARM64 ad-hoc signature structure was checked.
-- Other hosts: unsupported; no substitute architecture is selected.
+- macOS Apple Silicon (ARM64): cloud cross-built Mach-O, minimum macOS 13; native execution not run. ARM64 ad-hoc signature structure was checked.
+- Intel Mac and other hosts: unsupported; no substitute architecture is selected.
 
 Cross-build, format and hash checks do not establish native compatibility, arbitrary runtime behavior, notarization or developer signing. Package smoke execution applies only to its actual host. Linux musl binaries have no dynamic ELF interpreter.
 
 ## Repository source and maintenance
 
-The repository includes the actual dependency-free Rust library/CLI at [crates/guardrail](../crates/guardrail/README.md), including the restricted-language/evidence-wire specification, protocol, Cargo lockfile and tests. [Build and release instructions](../crates/guardrail-release/BUILDING.md) accompany the pinned official-source toolchain inputs and portable offline recipe. This source/build layer is excluded from npm runtime tarballs; runtime [third-party notices](guardrail-licenses/README.md) remain included. Original recorded repeat-build evidence does not mean an adapted wrapper has reproduced every target.
+The repository includes the actual dependency-free Rust library/CLI at [crates/guardrail](../crates/guardrail/README.md), including the restricted-language/evidence-wire specification, protocol, Cargo lockfile and tests. [Build and release instructions](../crates/guardrail-release/BUILDING.md) accompany the pinned official-source toolchain inputs and portable offline recipe. This source/build layer is excluded from npm runtime tarballs; runtime [third-party notices](guardrail-licenses/README.md) remain included. Original recorded repeat-build evidence does not mean an adapted wrapper has reproduced every target. Historical Intel Mac records remain in the frozen source and release provenance for identity verification; they do not describe current shipping support.

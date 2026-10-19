@@ -6,11 +6,12 @@ import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
 import { acceptanceSummary, nativeTargets, sourceDigest, validateNativeArtifact } from './micro-judge-artifacts.mjs'
 const root=resolve(import.meta.dirname,'..')
-test('every native package consumer requires four actual native build results before dependency prepare',async()=>{
+test('every native package consumer requires three actual native build results before dependency prepare',async()=>{
   const workflow=parse(await readFile(join(root,'.github/workflows/ci.yml'),'utf8'))
+  assert.deepEqual(Object.keys(nativeTargets).sort(), ['darwin-arm64','linux-arm64','linux-x64'])
   const native=workflow.jobs['micro-judge-native']
   assert.deepEqual(native.strategy.matrix.include.map(item=>item.platform).sort(),Object.keys(nativeTargets).sort())
-  assert.equal(new Set(native.strategy.matrix.include.map(item=>item.runner)).size,4)
+  assert.equal(new Set(native.strategy.matrix.include.map(item=>item.runner)).size,3)
   assert.ok(native.steps.some(step=>step.run?.includes('build-verify-micro-judge.mjs')))
   for(const name of ['verify-main','lisp-runtime','shortcut-browser','dsh-runtime-macos','semantic-platform-smoke']){
     const job=workflow.jobs[name];assert.equal(job.needs,'micro-judge-native')
@@ -37,4 +38,42 @@ test('actual native receipt transport detects stale source, byte corruption and 
   await writeFile(binaryPath,result.binary)
   await writeFile(join(bundle,result.receipt.log),'# tests 18\n# pass 18\n')
   await assert.rejects(validateNativeArtifact(bundle,entry,digest))
+})
+
+test('removed Intel native transport is rejected before artifact access', async()=>{
+  await assert.rejects(validateNativeArtifact('/nonexistent-test-fixture', {
+    platform:'darwin', arch:'x64', file:'darwin-x64/kiokuko-micro-judge', bytes:1,
+    compiler:'rustc 1.85.0 fixture', nativeVerified:true, sha256:'0'.repeat(64), sourceDigest:'0'.repeat(64),
+  }, '0'.repeat(64)), /Unsupported native target: darwin-x64/)
+})
+
+test('synthetic transport fixtures require exactly three targets and reject missing, duplicate, stale, corrupt and Intel inputs',async t=>{
+  // Structural transport fixtures only: these headers/logs are not executable or native acceptance evidence.
+  const {mkdir}=await import('node:fs/promises'),{spawnSync}=await import('node:child_process')
+  const {sha256}=await import('./micro-judge-artifacts.mjs')
+  const directory=await mkdtemp(join(tmpdir(),'micro-merge-contract-'));t.after(()=>rm(directory,{recursive:true,force:true}))
+  await mkdir(join(directory,'scripts'));await mkdir(join(directory,'micro-judge'));await mkdir(join(directory,'crates/micro-judge/src'),{recursive:true})
+  for(const file of ['micro-judge-artifacts.mjs','merge-micro-judge-artifacts.mjs'])await cp(join(root,'scripts',file),join(directory,'scripts',file))
+  for(const file of ['Cargo.toml','src/main.rs','src/digest.rs'])await cp(join(root,'crates/micro-judge',file),join(directory,'crates/micro-judge',file))
+  const digest=await sourceDigest(directory),input=join(directory,'input');await mkdir(input)
+  const tap=Buffer.from('actual Rust agrees with an independent exhaustive oracle on 200 deterministic small problems\nactual Rust MRV 8 queens has 92 solutions\nmissing or unsupported binary is explicit unavailable, never an allow\n# tests 18\n# pass 18\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n')
+  async function artifact(key,folder=key){
+    const [platform,arch]=key.split('-'),base=join(input,folder);await mkdir(join(base,key),{recursive:true})
+    const binary=Buffer.alloc(64);if(platform==='linux'){binary.write('7f454c46',0,'hex');binary[4]=2;binary[5]=1;binary.writeUInt16LE(arch==='arm64'?183:62,18)}else{binary.write('cffaedfe',0,'hex');binary.writeUInt32LE(arch==='arm64'?0x100000c:0x1000007,4)}
+    const entry={platform,arch,file:`${key}/kiokuko-micro-judge`,bytes:binary.length,sha256:sha256(binary),compiler:'rustc 1.85.0 synthetic-transport-fixture',sourceDigest:digest,nativeVerified:true}
+    const receipt={schemaVersion:1,target:nativeTargets[key]??'x86_64-apple-darwin',platform,arch,binarySha256:entry.sha256,sourceDigest:digest,compiler:entry.compiler,exitCode:0,log:`native-acceptance-${key}.tap`,logSha256:sha256(tap),summary:acceptanceSummary(tap.toString())}
+    await writeFile(join(base,entry.file),binary);await writeFile(join(base,receipt.log),tap);await writeFile(join(base,`native-verification-${key}.json`),JSON.stringify(receipt));await writeFile(join(base,'manifest.json'),JSON.stringify({version:'kiokuko-fd-v1',artifacts:[entry]}))
+  }
+  for(const key of Object.keys(nativeTargets))await artifact(key)
+  await writeFile(join(directory,'micro-judge/manifest.json'),JSON.stringify({version:'kiokuko-fd-v1',artifacts:[]}))
+  const invoke=()=>spawnSync(process.execPath,[join(directory,'scripts/merge-micro-judge-artifacts.mjs'),input],{encoding:'utf8'})
+  assert.equal(invoke().status,0)
+  assert.deepEqual(JSON.parse(await readFile(join(directory,'micro-judge/manifest.json'),'utf8')).artifacts.map(a=>`${a.platform}-${a.arch}`).sort(),['darwin-arm64','linux-arm64','linux-x64'])
+  const before=await readFile(join(directory,'micro-judge/manifest.json'))
+  async function rejected(pattern){const result=invoke();assert.notEqual(result.status,0);assert.match(result.stderr,pattern);assert.deepEqual(await readFile(join(directory,'micro-judge/manifest.json')),before)}
+  await rm(join(input,'linux-arm64'),{recursive:true});await rejected(/All supported native targets/);await artifact('linux-arm64')
+  await artifact('linux-x64','duplicate');await rejected(/Duplicate native target/);await rm(join(input,'duplicate'),{recursive:true})
+  const path=join(input,'linux-x64/manifest.json'),original=await readFile(path),manifest=JSON.parse(original);manifest.artifacts[0].sourceDigest='0'.repeat(64);await writeFile(path,JSON.stringify(manifest));await rejected(/stale source/);await writeFile(path,original)
+  await writeFile(join(input,'linux-x64/linux-x64/kiokuko-micro-judge'),'corrupt');await rejected(/AssertionError/);await artifact('linux-x64')
+  await artifact('darwin-x64');await rejected(/Unsupported native target: darwin-x64/)
 })

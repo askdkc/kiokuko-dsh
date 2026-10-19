@@ -121,3 +121,13 @@ test('repository delivers the exact Rust crate, protocol specification and porta
     } finally { rmSync(directory, { recursive: true, force: true }) }
   })
 })
+
+test('current release CLI admits three shipping targets and rejects historical Intel Mac', () => {
+  const script=join(root,'crates/guardrail-release/release.py')
+  const help=spawnSync('python3',[script,'--help'],{encoding:'utf8'})
+  assert.equal(help.status,0,help.stderr)
+  for(const target of ['x86_64-unknown-linux-musl','aarch64-unknown-linux-musl','aarch64-apple-darwin'])assert.ok(help.stdout.includes(target))
+  assert.ok(!help.stdout.includes('x86_64-apple-darwin'))
+  const intel=spawnSync('python3',[script,'--target','x86_64-apple-darwin'],{encoding:'utf8'})
+  assert.equal(intel.status,2);assert.match(intel.stderr,/invalid choice.*x86_64-apple-darwin/)
+})

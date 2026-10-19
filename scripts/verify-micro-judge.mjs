@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 const root=resolve(process.argv.find(a=>a.startsWith('--root='))?.slice(7)??resolve(import.meta.dirname,'..'))
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 const manifest=JSON.parse(await readFile(join(root,'micro-judge/manifest.json'),'utf8'))
-assert.equal(manifest.version,'kiokuko-fd-v1');assert.ok(Array.isArray(manifest.artifacts)&&manifest.artifacts.length<=6)
+assert.equal(manifest.version,'kiokuko-fd-v1');assert.ok(Array.isArray(manifest.artifacts)&&manifest.artifacts.length<=3)
 const platforms=new Set();let executedNative=false
 let sourceDigest
 try {sourceDigest=hash(Buffer.concat(await Promise.all(['Cargo.toml','src/main.rs','src/digest.rs'].map(file=>readFile(join(root,'crates/micro-judge',file))))))}catch(error){if(error.code!=='ENOENT')throw error}
@@ -16,7 +16,7 @@ assert.deepEqual(Object.keys(licenses).sort(),['COPYRIGHT-Rust-1.85.0.txt','LICE
 for(const [name,digest]of Object.entries(licenses))assert.equal(hash(await readFile(join(root,'micro-judge/licenses',name))),digest)
 for(const entry of manifest.artifacts){
   const key=`${entry.platform}-${entry.arch}`;assert.ok(!platforms.has(key));platforms.add(key)
-  assert.ok(['darwin-arm64','darwin-x64','linux-arm64','linux-x64','win32-arm64','win32-x64'].includes(key))
+  assert.ok(['darwin-arm64','linux-arm64','linux-x64'].includes(key))
   assert.equal(entry.file,`${key}/kiokuko-micro-judge${entry.platform==='win32'?'.exe':''}`)
   for(const path of [join(root,'micro-judge'),join(root,'micro-judge',key)]){const stat=await lstat(path);assert.ok(stat.isDirectory()&&!stat.isSymbolicLink())}
   const file=join(root,'micro-judge',entry.file),stat=await lstat(file)

@@ -24,8 +24,9 @@ test('guardrail shipping contract verifies bundled bytes and fails closed before
   const { resolveGuardrail } = await import('../../../scripts/guardrail-artifacts.mjs')
   const manifest = readJson(join(root, 'guardrail/manifest.json'))
   assert.equal(packageMetadata.guardrail.manifestSha256, sha(readFileSync(join(root, 'guardrail/manifest.json'))))
-  assert.deepEqual(Object.keys(manifest.targets), ['x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl', 'x86_64-apple-darwin', 'aarch64-apple-darwin'])
+  assert.deepEqual(Object.keys(manifest.targets), ['x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl', 'aarch64-apple-darwin'])
   assert.deepEqual(manifest.unavailableTargets, [])
+  assert.equal(existsSync(join(root, 'guardrail/x86_64-apple-darwin')), false)
 
   function fixture(fn: (directory: string) => void) {
     const directory = mkdtempSync(join(tmpdir(), 'guardrail-package-'))
@@ -67,7 +68,7 @@ test('guardrail shipping contract verifies bundled bytes and fails closed before
     assert.ok((lstatSync(result.binary).mode & 0o111) !== 0)
   })
   await t.test('missing platforms report unavailable; unsupported hosts never select another architecture', () => {
-    for (const options of [{ platform: 'darwin', arch: 'arm64' }, { platform: 'darwin', arch: 'x64' }, { platform: 'linux', arch: 'arm64' }]) {
+    for (const options of [{ platform: 'darwin', arch: 'arm64' }, { platform: 'linux', arch: 'arm64' }]) {
       const selected = resolveGuardrail(root, options)
       assert.equal(manifest.targets[selected.target].verification.native_smoke, 'not run')
       fixture(directory => {
@@ -77,7 +78,7 @@ test('guardrail shipping contract verifies bundled bytes and fails closed before
         assert.throws(() => resolveGuardrail(directory, options), /unavailable.*not bundled/i)
       })
     }
-    for (const options of [{ platform: 'win32', arch: 'x64' }, { platform: 'linux', arch: 'ia32' }, { platform: '../../linux', arch: 'x64' }]) {
+    for (const options of [{ platform: 'darwin', arch: 'x64' }, { platform: 'win32', arch: 'x64' }, { platform: 'linux', arch: 'ia32' }, { platform: '../../linux', arch: 'x64' }]) {
       assert.throws(() => resolveGuardrail(root, options), /unsupported host/i)
     }
   })
@@ -219,7 +220,9 @@ test('composed core package preserves declared guardrail files, executable modes
     assert.deepEqual(composedMetadata.dsh.permissions.failureBoundaries, metadata.dsh.permissions.failureBoundaries)
     assert.equal(lstatSync(join(composed, 'scripts/unrelated.mjs')).mode & 0o111, 0)
     assert.equal(lstatSync(join(composed, 'guardrail', target, 'kiokuko-guardrail')).mode & 0o777, 0o755)
-    for (const options of [host, { platform: 'linux', arch: 'arm64' }, { platform: 'darwin', arch: 'x64' }, { platform: 'darwin', arch: 'arm64' }]) resolveGuardrail(composed, options)
+    for (const options of [host, { platform: 'linux', arch: 'arm64' }, { platform: 'darwin', arch: 'arm64' }]) resolveGuardrail(composed, options)
+    assert.equal(existsSync(join(composed, 'guardrail/x86_64-apple-darwin')), false)
+    assert.throws(() => resolveGuardrail(composed, { platform: 'darwin', arch: 'x64' }), /unsupported host.*no binary fallback/i)
     if (process.platform === 'linux' && process.arch === 'x64') {
       const selected = resolveGuardrail(composed)
       const checked = spawnSync(selected.binary, ['validate', selected.protocol], { encoding: 'utf8', env: { PATH: '', HOME: directory }, timeout: 5_000 })

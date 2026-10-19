@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 const root=resolve(import.meta.dirname,'..'),rustc=process.argv[2]
 if(!rustc || !isAbsolute(rustc))throw new Error('Pass the absolute path to an existing rustc; no automatic install')
-const triples={ 'darwin-arm64':'aarch64-apple-darwin','darwin-x64':'x86_64-apple-darwin','linux-x64':'x86_64-unknown-linux-gnu','linux-arm64':'aarch64-unknown-linux-gnu' }
+const triples={ 'darwin-arm64':'aarch64-apple-darwin','linux-x64':'x86_64-unknown-linux-gnu','linux-arm64':'aarch64-unknown-linux-gnu' }
 const key=`${process.platform}-${process.arch}`,target=triples[key]
 if(!target)throw new Error(`Unsupported native build platform ${key}`)
 const version=spawnSync(rustc,['-vV'],{encoding:'utf8'})
