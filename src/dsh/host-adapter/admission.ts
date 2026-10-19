@@ -331,7 +331,17 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
       const generation = ++prepareGeneration
       const prior=currentForAgentEvent(event.agent.id,event.sessionId,undefined,event.nativeSession,event.nativeAgent)
       const canonical = event.requestIntentContext?.activeTask
-      if (canonical && continuesCodingScope(event)) {
+      // Once this exact native turn has been admitted, its execution lease is
+      // the authority for generated steps. The interpretation remains evidence
+      // of the original human request: admission may have retired that source
+      // task and opened a new run, so its source revision must not be treated as
+      // the new run's execution authority. Human input still takes the source
+      // revision check below; never refresh a stale interpretation implicitly.
+      const admittedStep = !!canonical && continuesCodingScope(event) && !hasHumanInput(event.nativeMessages ?? []) && prior?.turn === event.turn
+        && !prior.closed && !prior.failed && prior.task === event.task && !!prior.authority
+        && prior.requestIntent === event.requestIntent && prior.requestIntentContext === event.requestIntentContext
+      if (admittedStep) await runtime.withDatabase(database => authorizeTaskLease(database, prior.authority!))
+      if (canonical && continuesCodingScope(event) && !admittedStep) {
         const current = await runtime.withDatabase(database => readTaskSnapshot(database, canonical))
         if (current.revision !== canonical.revision || current.generation !== canonical.generation)
           throw new KiokukoError('CONFLICT', 'Task continuation revision changed')

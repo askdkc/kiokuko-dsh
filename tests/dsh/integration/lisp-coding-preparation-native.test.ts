@@ -7,6 +7,7 @@ import {DecisionService} from '../../../src/dsh/decisions/service.js'
 import {TypedDecisionsConfig} from '../../../src/dsh/decisions/config.js'
 import {nativeSkillFixture} from '../helpers/skill-native.js'
 import {nativeToolResults} from '../helpers/native-mock.js'
+import {codingPrelude, toolValue} from '../helpers/coding-script.js'
 import {isolateSkillHome} from '../helpers/skill-home.js'
 isolateSkillHome()
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(),'tests/fixtures/dsh-runtime/node_modules')
@@ -81,4 +82,32 @@ test('manual ON survives same-session reload and a new coding request starts unv
  assert.equal(questions,0);assert.equal(status.codingPreparation.verified,false);assert.equal(status.codingPreparation.phase,'prototype_required');assert.equal(status.codingPreparation.attempts,0)
  assert.match((await f.ctx.commands.execute(f.agent,'/kioku-lisp status',[],new AbortController().signal)).result.text,/試作待ち（未検証）/u)
  }finally{await f.close()}
+})
+
+for (const reload of [false, true]) test(`manual ON supplies a formal Goal choice without an early matching request (${reload ? 'reload' : 'current'})`, {timeout:120000}, async () => {
+ let questions = 0
+ const f = await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),mode:'compiled',extra,nativeAnswer:async q=>{
+   if (q.questions[0].id.startsWith('coding-lisp-') || q.questions[0].id.startsWith('lisp-early-')) questions++
+   return {answers:[{id:q.questions[0].id,selected:['通常実行']}]}
+ }})
+ try {
+   const enabled = (await f.ctx.commands.execute(f.agent,'/kioku-lisp enable',[],new AbortController().signal)).result
+   assert.equal(enabled.kind,'success',enabled.text)
+   if (reload) await f.reload('compiled')
+   assert.equal(await f.agent.ctx.get('kiokukoLispCoding').manualSelected(f.agent), true)
+   f.responses.push(...codingPrelude(f.mock,'manual'), (request:any) => {
+     const workflow = toolValue(request,'manual-propose')
+     assert.equal(workflow.choice.state,'yes')
+     assert.match(workflow.choice.answerRef,/^manual-session:/u)
+     assert.equal(workflow.assessment.verified,false)
+     return f.mock.textResponse('Goal prepared; the prototype and verification remain pending.')
+   })
+   // Structured interpretation admits the implementation; the opaque text has
+   // no lexical early-preparation choice for the formal workflow to reuse.
+   await f.turn('A/B/C をまとめて入れて。通常実行で。')
+   assert.equal(questions,0)
+   const status = JSON.parse((await f.ctx.commands.execute(f.agent,'/kioku-lisp status --json',[],new AbortController().signal)).result.text)
+   assert.equal(status.codingPreparation.phase,'prototype_required')
+   assert.equal(status.codingPreparation.verified,false)
+ } finally {await f.close()}
 })

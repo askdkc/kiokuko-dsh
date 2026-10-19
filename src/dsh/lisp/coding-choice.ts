@@ -18,6 +18,8 @@ export interface LispCodingService {
   prepareNative?(input: LispCodingInput): Promise<void>
   answered?(agent: DshUserQuestionAgent, task: string, choice: 'yes'|'no', answerRef: string): void
   choiceFor?(agent: DshUserQuestionAgent, task: string): { choice: 'yes'|'no'; answerRef: string } | undefined
+  /** Explicit session preference only; runtime availability or a previous task yes is insufficient. */
+  manualSelected?(agent: DshUserQuestionAgent): Promise<boolean>
   enabled(agent: DshUserQuestionAgent): boolean
   discussing(agent: DshUserQuestionAgent): boolean
   activate?(agent: DshUserQuestionAgent): Promise<void>

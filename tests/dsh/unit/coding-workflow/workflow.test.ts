@@ -432,3 +432,54 @@ test('worker-only human recovery does not waive a defined workflow or protected-
     assert.equal(await manager.canRecoverWorkerWithoutTask(owner), false, 'a defined workflow retains its task authority')
   } finally { await manager.dispose(); await protectedManager.dispose(); await f.close() }
 })
+
+for (const mode of ['manual-on', 'runtime-only', 'explicit-no', 'no-questions'] as const) test(`formal Goal honors only explicit manual Lisp selection: ${mode}`, async () => {
+  const f = await fixture(); let asked = 0, activated = 0, excluded = 0
+  const manual = mode !== 'runtime-only'
+  const lisp = { enabled: () => true, manualSelected: async () => manual,
+    choiceFor: () => mode === 'explicit-no' ? { choice: 'no', answerRef: 'human:task-no' } : undefined,
+    activate: async () => { activated++ }, exclude: async () => { excluded++ }, answered: () => {} }
+  const host = mounted(f, { lisp: () => lisp, ...(mode === 'no-questions' ? {} : { questions: { ask: async (q: any) => {
+    asked++; return { answers: [{ id: q.questions[0].id, selected: ['使わない'] }] }
+  } } }) })
+  try {
+    const workflow = f.propose()
+    const execution = { name: 'coding_workflow', callId: 'manual-selection', agent: host.agent, arguments: { action: 'next' }, signal: new AbortController().signal }
+    await host.tools.get('coding_workflow').execute(execution.arguments, execution)
+    const saved = readCodingWorkflow(f.db, f.identity.runId)!
+    assert.equal(asked, mode === 'runtime-only' ? 1 : 0)
+    assert.equal(saved.choice.state, mode === 'runtime-only' || mode === 'explicit-no' ? 'no' : 'yes')
+    assert.equal(activated, saved.choice.state === 'yes' ? 1 : 0)
+    assert.equal(excluded, saved.choice.state === 'no' ? 1 : 0)
+    assert.deepEqual(saved.definition, workflow.definition, 'manual preference does not replace the Goal')
+    assert.equal(assessTaskCompletion(f.db, f.identity.runId).verified, false, 'manual ON is not verification')
+    if (saved.choice.state === 'yes') assert.match(saved.choice.answerRef!, /^manual-session:/u)
+    if (mode === 'explicit-no') assert.equal(saved.choice.answerRef, 'human:task-no')
+  } finally { host.unmount(); await f.close() }
+})
+
+for (const changed of ['abort', 'identity', 'choice'] as const) test(`delayed manual selection cannot cross ${changed}`, async () => {
+  const f = await fixture(); let resolveSelection!: (selected: boolean) => void, entered!: () => void
+  const waiting = new Promise<void>(resolve => { entered = resolve })
+  const agent = { id: 'delayed-agent' }; let currentAgent = agent, activated = 0, asked = 0
+  const controller = new AbortController()
+  const host = mounted(f, {
+    resolve: () => ({ ...f.identity, agent: currentAgent, task: 'Implement the parser' }),
+    lisp: () => ({ manualSelected: () => { entered(); return new Promise<boolean>(resolve => { resolveSelection = resolve }) },
+      activate: async () => { activated++ } }),
+    questions: { ask: async () => { asked++; return {answers: []} } },
+  })
+  try {
+    f.propose()
+    const execution = { name: 'coding_workflow', callId: 'delayed', agent, arguments: { action: 'next' }, signal: controller.signal }
+    const pending = host.tools.get('coding_workflow').execute(execution.arguments, execution)
+    await waiting
+    if (changed === 'abort') controller.abort(new Error('Cancelled before selection'))
+    else if (changed === 'identity') currentAgent = { id: 'another-agent' }
+    else f.choose('no')
+    resolveSelection(true)
+    await assert.rejects(pending, changed === 'abort' ? /Cancelled/ : changed === 'identity' ? /task changed/i : /revision|changed/i)
+    assert.equal(activated, 0); assert.equal(asked, 0)
+    assert.equal(readCodingWorkflow(f.db, f.identity.runId)!.choice.state, changed === 'choice' ? 'no' : 'pending')
+  } finally { host.unmount(); await f.close() }
+})

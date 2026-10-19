@@ -116,7 +116,14 @@ export function mountCodingWorkflow(ctx: {
       else await host.lisp()?.exclude?.(identity.agent)
       return
     }
-    const early = host.lisp()?.choiceFor?.(identity.agent, value.request)
+    const lisp = host.lisp()
+    // A request-specific answer takes precedence; only an explicit persisted
+    // session selection can supply a missing answer. Enabled is capability, not consent.
+    const early = lisp?.choiceFor?.(identity.agent, value.request)
+      ?? (await lisp?.manualSelected?.(identity.agent)
+        ? { choice: 'yes' as const, answerRef: `manual-session:${identity.sessionId}:${value.workflowId}:${value.scopeVersion}` }
+        : undefined)
+    execution.signal.throwIfAborted(); current(identity, execution)
     if (!host.questions && !early) return // Durable pending; never invent a default.
     const key = `${value.workflowId}:${value.scopeVersion}`
     const existing = questions.get(key)

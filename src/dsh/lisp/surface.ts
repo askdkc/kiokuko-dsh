@@ -561,7 +561,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       const result = await enable(owner(candidate)) as { state?: string }
       if (!['READY', 'EVALUATING', 'TASK_READY'].includes(result.state ?? '')) fail('RECOVERY_REQUIRED', 'Lisp の起動・復旧が必要です。/kioku-lisp status で状態を確認してください。')
     },
-  }), prepareNative: (input: LispCodingInput) => preparation.prepare(input), choiceFor: (agent: LispCodingInput['agent'], task: string) => preparation.choiceFor(agent, task),
+  }), manualSelected: (agent: LispCodingInput['agent']) => manualMode(agent), prepareNative: (input: LispCodingInput) => preparation.prepare(input), choiceFor: (agent: LispCodingInput['agent'], task: string) => preparation.choiceFor(agent, task),
     answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string) => preparation.answered(agent,task,choice,answerRef) }))
   const requestSurface: LispAssemblyService = {
     capabilities: LISP_TOOLS.map(name => ({ name, description: description(name) })),
