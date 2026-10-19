@@ -17,6 +17,7 @@ import {
   readTurnSeal,
 } from '../../../src/dsh/turn-process.js'
 import { KiokukoError } from '../../../src/errors.js'
+import { recordDiagnosticAdmission, readDecisionDiagnostics } from '../../../src/dsh/decisions/diagnostics.js'
 
 const capabilities = [
   { kind: 'skill', name: 'kiokuko-soul', description: 'Routes work to Kiokuko Skills.' },
@@ -54,6 +55,7 @@ test('Enno completion atomically creates the turn receipt, handoff, boundary job
       orchestrationId: f.prepared.intake.sessionId,
     }
     const idempotencyKey = 'turn-process-ideal'
+    recordDiagnosticAdmission(f.database,{sessionId:'turn-process-session',turn:1,runId:identity.runId,task:'Implement one durable phase per turn'})
     const inputDigest = canonicalContentHash({ objective: 'one phase' })
     const intent = prepareTurnIntent(f.database, {
       runId: identity.runId,
@@ -82,6 +84,10 @@ test('Enno completion atomically creates the turn receipt, handoff, boundary job
     assert.equal(seal?.receiptId, intent.receiptId)
     assert.equal(seal?.outcomeKind, 'applied')
     assert.equal(seal?.nextAction, 'review_plan')
+    const diagnostic=readDecisionDiagnostics(f.database,'turn-process-session')
+    assert.ok(diagnostic.attempts.some(a=>a.events.some(e=>e.kind==='receipt' && e.receiptId===intent.receiptId)))
+    assert.equal(diagnostic.completeness.missingReceiptLinks,0)
+    assert.equal(diagnostic.completeness.missingContinuationLinks,0)
     assert.equal(f.database.prepare('SELECT COUNT(*) AS count FROM dsh_turn_handoffs').get<{ count: number }>()?.count, 1)
     assert.equal(f.database.prepare('SELECT COUNT(*) AS count FROM dsh_boundary_jobs').get<{ count: number }>()?.count, 1)
     const outbox = readPendingOutbox(f.database, 'turn-process-session')

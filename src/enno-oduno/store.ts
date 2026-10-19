@@ -1,6 +1,7 @@
 import { registerCompletionVerifiers } from '../dsh/completion-verifiers.js'
 import { completionSourceDigest } from '../dsh/task-completion.js'
 import { readCodingWorkflow } from '../dsh/coding-workflow/store.js'
+import { recordDiagnosticEnnoCommit } from '../dsh/decisions/diagnostics.js'
 import { ennoCodingProjection } from './coding-workflow.js'
 import { executeIdempotentInTransaction } from '../dsh/intake-idempotency.js'
 import { readPlanDraft } from './plan-draft.js'
@@ -1088,6 +1089,7 @@ export function completeOperationInTransaction(
     finishedAt,
   );
   if (updated?.runId !== runId) throw new KiokukoError('CONFLICT', 'Enno operation receipt changed concurrently');
+  recordDiagnosticEnnoCommit(database,runId,operation.operation,operation.idempotencyKey);
 }
 
 export function terminalizeLedgerRunInTransaction(database: SqliteDatabase, runId: string, status: 'completed' | 'failed' | 'cancelled'): void {

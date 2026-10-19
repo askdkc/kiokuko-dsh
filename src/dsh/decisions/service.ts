@@ -11,21 +11,28 @@ import { MemoryReuseConfig, type MemoryReuseConfiguration } from '../../memory/r
 import { evaluateMemoryBatches } from './memory-batches.js'
 import { MemoryDecisionConcurrency } from './concurrency.js'
 import type { DecisionSelectionStore } from './selection-store.js'
+import { observeDiagnostic, createDiagnosticAttempt, appendDiagnosticEvent, diagnosticId, diagnosticEventId } from './diagnostics.js'
+import type { ChoiceDiagnostic, ChoiceDiagnosticObserver } from './choice-diagnostics.js'
 
 export type DecisionOutcome = { status: 'completed'; result: DecisionBatchResult } | { status: 'fallback'; reason: string }
 export interface DecisionEvaluationHooks {
   /** Fires immediately before a provider receives this decision batch; cache hits do not fire it. */
   readonly onProviderDispatch?: () => void
+  readonly onEvaluation?: (observation: DecisionObservation) => void
 }
 export interface DecisionObservation { purpose: DecisionBatch['purpose']; questionTypes: Record<string, number>; provider: string; requestedModel: string | null;
+  decisionId?: string; requestRef?: string; inputDigest?: string;
+  providerDispatched?: boolean;
   returnedModel: string | null; policyVersion: string; cacheHit: boolean; selected: number; measured: number; abstained: number;
   fallbackReason: string | null; elapsedMs: number; inputBytes: number; inputTokens: number | null; outputTokens: number | null;
+  returnedRevision?: string; choiceDiagnostics?: ChoiceDiagnostic[];
   memoryCandidates?: { policy: string; attempted: number; applicable: number; excluded: number; uncertain: number; unassessed: number } }
 export interface DecisionStore {
   binding?(id: string): Promise<DecisionConfiguration | undefined>
   bind(id: string, config: DecisionConfiguration): Promise<DecisionConfiguration>
   read(id: string, digest: string): Promise<DecisionOutcome | undefined>
   write(id: string, digest: string, result: DecisionOutcome): Promise<void>
+  observe?(id: string, digest: string, observation: DecisionObservation): Promise<void>
 }
 const DEFAULT_CACHE_MAX_ENTRIES = 256
 
@@ -62,6 +69,28 @@ export function databaseDecisionStore(runtime: { withDatabase<T>(operation: (db:
       return row ? JSON.parse(String(row.result_json)) as DecisionOutcome : undefined
     }),
     write: (id, digest, outcome) => runtime.withDatabase(db => { db.prepare('INSERT OR IGNORE INTO dsh_decision_results VALUES (?,?,?)').run(id, digest, JSON.stringify(outcome)) }),
+    observe: (requestId, inputDigest, observation) => observeDiagnostic(runtime,requestId,db=>{
+      const decisionId=observation.decisionId ?? diagnosticId()
+      createDiagnosticAttempt(db,decisionId,{origin:'provider',purpose:observation.purpose,requestRef:canonicalContentHash(requestId),inputDigest,
+        policyRef:canonicalContentHash(observation.policyVersion)})
+      const fallback=observation.fallbackReason
+      const allowed=['DECISION_UNAVAILABLE','DECISION_AUTH','DECISION_TIMEOUT','DECISION_CANCELLED','DECISION_INVALID_INPUT','DECISION_UNSUPPORTED','DECISION_TOO_LARGE','DECISION_MALFORMED_RESPONSE'] as const
+      const resultExists=db.prepare('SELECT 1 FROM dsh_decision_results WHERE request_id=? AND input_digest=?').get(requestId,inputDigest)
+      appendDiagnosticEvent(db,decisionId,diagnosticEventId(decisionId,'provider'),{kind:'provider',status:'observed',
+        reason:fallback==='provider_failed'?'evaluation_failed':fallback==='DECISION_CANCELLED'?'provider_cancelled':fallback?'provider_fallback':'provider_completed',
+        ...(['typesafe','nimble','laya-coreml'].includes(observation.provider)?{provider:observation.provider as 'typesafe'|'nimble'|'laya-coreml'}:{}),
+        modelRef:canonicalContentHash([observation.requestedModel,observation.returnedModel]),policyRef:canonicalContentHash(observation.policyVersion),
+        ...(observation.returnedRevision ? {providerRevisionRef:canonicalContentHash(observation.returnedRevision)} : {}),
+        elapsedMs:observation.elapsedMs,cacheHit:observation.cacheHit,providerDispatched:observation.providerDispatched ?? false,selected:observation.selected,abstained:observation.abstained,measured:observation.measured,
+        ...(fallback ? {fallback:allowed.includes(fallback as typeof allowed[number])?fallback as typeof allowed[number]:'other' as const}:{}),
+        ...(resultExists?{resultRef:{requestId,inputDigest}}:{})})
+      for(const [index,choice] of (observation.choiceDiagnostics ?? []).entries()) {
+        appendDiagnosticEvent(db,decisionId,diagnosticEventId(decisionId,['choice',index]),{kind:'choice',status:'observed',reason:'observed',choice:{
+          questionRef:canonicalContentHash(choice.questionId),choiceRef:canonicalContentHash(choice.choice),topProbability:choice.topProbability,
+          runnerUpProbability:choice.runnerUpProbability,margin:choice.margin,confidence:choice.confidence,gate:choice.gate,
+          acceptance:choice.acceptance,status:choice.status,failedChecks:choice.failedChecks}})
+      }
+    }),
   }
 }
 export class DecisionService {
@@ -90,7 +119,7 @@ export class DecisionService {
   private readonly pending = new Map<string, Promise<DecisionOutcome>>()
   private readonly cacheMaxEntries: number
   private lastFallback: string | null = null
-  constructor(private config: DecisionConfiguration, private readonly provider: (config: DecisionConfiguration) => DecisionProvider, private readonly store?: DecisionStore,
+  constructor(private config: DecisionConfiguration, private readonly provider: (config: DecisionConfiguration, observer?: ChoiceDiagnosticObserver) => DecisionProvider, private readonly store?: DecisionStore,
     private readonly options: ReadinessOptions & { memoryReuse?: MemoryReuseConfiguration; semanticCompaction?: SemanticCompactionConfiguration; repositoryRoot?: string;
       selectionStore?: DecisionSelectionStore; resolveConfiguration?: (config: DecisionConfiguration, signal: AbortSignal) => Promise<DecisionConfiguration>;
       onEvaluation?: (observation: DecisionObservation) => void; cacheMaxEntries?: number } = {}) {
@@ -103,12 +132,13 @@ export class DecisionService {
     this.semanticCompaction = SemanticCompactionConfig.parse(options.semanticCompaction ?? {})
     this.readiness = new DecisionReadinessMonitor(config => this.memoryProvider(config), options)
   }
-  private memoryProvider(config: DecisionConfiguration): DecisionProvider {
-    const provider = this.provider(config)
+  private memoryProvider(config: DecisionConfiguration, observer?: ChoiceDiagnosticObserver, onDispatch?:()=>void): DecisionProvider {
+    const provider = this.provider(config,observer)
     return { capabilities: provider.capabilities,
       ...(provider.preflight ? { preflight: (batch: Parameters<DecisionProvider['evaluate']>[0], signal: AbortSignal) => this.memoryConcurrency.run(signal, () => abortable(provider.preflight!(batch, signal), signal)) } : {}),
       evaluate: (batch, signal) => this.memoryConcurrency.run(signal,
       async () => {
+        onDispatch?.()
         if (batch.purpose !== 'compaction') return abortable(provider.evaluate(batch, signal), signal)
         const started = performance.now(); this.compactionMetrics.calls++; this.compactionMetrics.inputBytes += Buffer.byteLength(JSON.stringify(batch))
         try {
@@ -186,8 +216,8 @@ export class DecisionService {
   invalidateReadiness(): void { this.readiness.invalidate() }
   configurationDigest(): string { return canonicalContentHash({ config: this.config, semanticCompaction: this.semanticCompaction, policyVersion: POLICY_VERSION }) }
   async skillSelection(requestId: string, signal: AbortSignal): Promise<DecisionConfiguration['skillSelection']> { return (await this.bind(requestId, signal)).skillSelection }
-  private observe(batch: DecisionBatch, config: DecisionConfiguration, outcome: DecisionOutcome, cacheHit: boolean, elapsedMs: number,
-    memoryCandidateTotal?: number): void {
+  private async observe(batch: DecisionBatch, config: DecisionConfiguration, outcome: DecisionOutcome, cacheHit: boolean, elapsedMs: number,
+    requestId: string, inputDigest: string, memoryCandidateTotal?: number, choiceDiagnostics?: ChoiceDiagnostic[], hooks?: DecisionEvaluationHooks, providerDispatched=false): Promise<void> {
     const answers = outcome.status === 'completed' ? outcome.result.answers : []
     const selection = config.memorySelection ?? { mode: 'choice' as const }
     const memoryCandidates = batch.purpose === 'memory-reuse' ? {
@@ -213,6 +243,7 @@ export class DecisionService {
       }
     }
     const observation: DecisionObservation = {
+      decisionId:diagnosticId(),requestRef:canonicalContentHash(requestId),inputDigest,providerDispatched,
       purpose: batch.purpose, questionTypes: Object.fromEntries(['choice', 'noul', 'score'].map(type => [type, batch.questions.filter(q => questionType(q) === type).length])),
       provider: config.provider, requestedModel: outcome.status === 'completed' ? outcome.result.requestedModel : selectedDecisionSettings(config)?.model ?? null,
       returnedModel: outcome.status === 'completed' ? outcome.result.returnedModel ?? null : null,
@@ -223,10 +254,14 @@ export class DecisionService {
       inputTokens: cacheHit ? null : outcome.status === 'completed' ? outcome.result.usage?.input_tokens ?? null : null,
       outputTokens: cacheHit ? null : outcome.status === 'completed' ? outcome.result.usage?.output_tokens ?? null : null,
       ...(memoryCandidates ? { memoryCandidates } : {}),
+      ...(outcome.status==='completed' && outcome.result.revision ? {returnedRevision:outcome.result.revision} : {}),
+      ...(choiceDiagnostics?.length ? {choiceDiagnostics} : {}),
     }
     this.decisionObservations.push(observation)
     if (this.decisionObservations.length > 128) this.decisionObservations.shift()
     try { this.options.onEvaluation?.(structuredClone(observation)) } catch { /* Observation cannot change a decision. */ }
+    try { await this.store?.observe?.(requestId,inputDigest,observation) } catch { /* Diagnostics cannot change a decision. */ }
+    try { hooks?.onEvaluation?.(structuredClone(observation)) } catch { /* Advisory only. */ }
   }
   groundingReviewEnabled(): boolean { return !!this.config.groundingReview && this.config.groundingReview.mode !== 'legacy' }
   async bind(requestId: string, signal = new AbortController().signal): Promise<DecisionConfiguration> {
@@ -306,7 +341,7 @@ export class DecisionService {
       const policy = layaCompactionStatus(config)
       if (policy.state !== 'shadow') {
         const outcome: DecisionOutcome = { status: 'fallback', reason: policy.reason }
-        this.observe(batch, config, outcome, false, performance.now() - started)
+        await this.observe(batch, config, outcome, false, performance.now() - started, requestId, canonicalContentHash({batch,config,catalogDigest}),undefined,undefined,hooks)
         return outcome
       }
       const settings = config['laya-coreml']
@@ -318,6 +353,7 @@ export class DecisionService {
     const key = `${requestId}:${digest}`
     const existing = this.pending.get(key)
     if (existing) return abortable(existing, signal)
+    let providerDispatched=false
     const operation = (async (): Promise<DecisionOutcome> => {
       const cached = recent(this.results, key, this.store ? this.cacheMaxEntries : undefined)
         ?? await this.store?.read(requestId, digest)
@@ -337,7 +373,7 @@ export class DecisionService {
           }
         }
         remember(this.results, key, structuredClone(cached), this.store ? this.cacheMaxEntries : undefined)
-        this.observe(batch, config, cached, true, performance.now() - started, memoryCandidateTotal)
+        await this.observe(batch, config, cached, true, performance.now() - started, requestId, digest, memoryCandidateTotal,undefined,hooks)
         return structuredClone(cached)
       }
       const timeout = new AbortController(), timeoutMs = selectedDecisionSettings(config)?.timeoutMs ?? 5000
@@ -345,6 +381,7 @@ export class DecisionService {
         batch.purpose === 'model-handoff' || batch.purpose === 'model-routing' ? 5000 : semantic ? this.semanticCompaction.budgetMs : this.memoryReuse.budgetMs) : timeoutMs)
       const combined = AbortSignal.any([signal, timeout.signal])
       let outcome: DecisionOutcome
+      const choiceDiagnostics: ChoiceDiagnostic[]=[]
       try {
         if (decisionConfigurationIssue(config)) throw new DecisionError('UNAVAILABLE')
         const grounding = config.groundingReview
@@ -353,7 +390,8 @@ export class DecisionService {
           && batch.questions.every(q => q.id.startsWith('grounding:'))
         const effective = isolatedGrounding && grounding && grounding.mode !== 'legacy' && config.provider === 'laya-coreml' && config['laya-coreml']
           ? { ...config, 'laya-coreml': { ...config['laya-coreml'], acceptance: { minProbability: grounding.minProbability, minMargin: grounding.minMargin } } } : config
-        const provider = managed ? this.memoryProvider(config) : this.provider(effective), limits = provider.capabilities
+        const observer: ChoiceDiagnosticObserver = diagnostic => { if(choiceDiagnostics.length<300) choiceDiagnostics.push(diagnostic) }
+        const provider = managed ? this.memoryProvider(config,observer,()=>{providerDispatched=true}) : this.provider(effective,observer), limits = provider.capabilities
         if (semantic && config.provider === 'laya-coreml' && limits.maxPromptTokens !== 1024) throw new DecisionError('UNSUPPORTED')
         if (!Number.isSafeInteger(limits.maxQuestions) || limits.maxQuestions < 1) throw new DecisionError('UNSUPPORTED')
         if (batch.questions.some(q => !(limits.questionTypes ?? ['choice']).includes(questionType(q)))) throw new DecisionError('UNSUPPORTED')
@@ -383,6 +421,7 @@ export class DecisionService {
           for (const part of inputs) {
             combined.throwIfAborted()
             hooks?.onProviderDispatch?.()
+            providerDispatched=true
             parts.push(parseDecisionResult(await abortable(provider.evaluate(part, combined), combined), part))
           }
         }
@@ -410,10 +449,14 @@ export class DecisionService {
       await this.store?.write(requestId, digest, outcome)
       if (signal.aborted) throw new DecisionError('CANCELLED')
       remember(this.results, key, structuredClone(outcome), this.store ? this.cacheMaxEntries : undefined)
-      this.observe(batch, config, outcome, false, performance.now() - started, memoryCandidateTotal)
+      await this.observe(batch, config, outcome, false, performance.now() - started, requestId, digest, memoryCandidateTotal, choiceDiagnostics,hooks,providerDispatched)
       return outcome
     })()
     this.pending.set(key, operation)
-    try { return await operation } finally { if (this.pending.get(key) === operation) this.pending.delete(key) }
+    try { return await operation }
+    catch (error) {
+      await this.observe(batch,config,{status:'fallback',reason:signal.aborted?'DECISION_CANCELLED':'provider_failed'},false,performance.now()-started,requestId,digest,undefined,undefined,hooks,providerDispatched)
+      throw error
+    } finally { if (this.pending.get(key) === operation) this.pending.delete(key) }
   }
 }

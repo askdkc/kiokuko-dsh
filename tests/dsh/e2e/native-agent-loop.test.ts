@@ -280,6 +280,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   const createAdapter = () => createDshHostAdapter(ctx, {
     skillPrompts: new DshSkillPrompts({mode:process.env.KIOKUKO_TEST_COMPILED_SKILLS==='1'?'compiled':'full'}),
     modelRoutes: mockModelRoutes,
+    typedDecisions: { mode: 'off' }, // This scripted lifecycle fixture has no independent decision provider.
     efficiency: { observe: true },
     continuity: { mode: finalMode === 'text' ? 'active' : 'off' },
     finalization: { inputMode: finalMode === 'text' ? 'bounded_evidence' : 'prefix_reuse' },

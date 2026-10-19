@@ -51,6 +51,10 @@ for (const scenario of ['verify', 'change', 'unknown', 'scope-unknown'] as const
     () => ({ capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 }, async evaluate(batch) {
       if (batch.purpose === 'request-intent') requestBatches.push({ task: batch.state, questionIds: batch.questions.map(question => question.id) })
       return { provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture', answers: batch.questions.map(question => {
+        if(question.id.startsWith('semantic-')) {
+          assert.equal((batch.state as {source:{task:string}}).source.task,task,'independent comparison preserves this exact current human source')
+          return {id:question.id,status:'selected' as const,choiceId:'supported'}
+        }
         const choiceId = question.id === 'task-type' ? taskType : question.id === 'request-relation' ? 'same_scope_continuation'
           : question.id === 'request-action' && action !== 'unknown' ? action
             : question.id === 'request-change-scope' && action === 'change' && scenario !== 'scope-unknown' ? 'document'

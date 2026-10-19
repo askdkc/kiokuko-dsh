@@ -4,6 +4,7 @@ import { withImmediateTransaction } from '../db/transaction.js'
 import { KiokukoError, type ErrorCode } from '../errors.js'
 import type { AkinatorQuestion } from '../akinator/types.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
+import { recordDiagnosticTurn } from './decisions/diagnostics.js'
 
 export const DSH_TURN_HANDOFF_MAX_BYTES = 32 * 1024
 export const DSH_TURN_FAILURE_MAX_BYTES = 8 * 1024
@@ -350,6 +351,7 @@ export function enqueueUnsubmittedTurn(database: SqliteDatabase, input: PrepareT
     database.prepare(`INSERT INTO dsh_continuation_outbox(continuation_id, receipt_id, run_id, dsh_session_id,
       causal_revision, message_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
       .run(intent.continuationId, intent.receiptId, input.runId, input.dshSessionId, input.contractRevision, JSON.stringify(message), now, now)
+    recordDiagnosticTurn(database,intent.receiptId)
   })
 }
 
@@ -479,6 +481,7 @@ export function commitExpectedFailureInTransaction(
     intent.continuationId, intent.receiptId, intent.runId, intent.dshSessionId,
     intent.contractRevision, boundedJson(message, DSH_TURN_HANDOFF_MAX_BYTES, 'continuation message'), now, now,
   )
+  recordDiagnosticTurn(database,intent.receiptId)
   return clarify
     ? { kind: 'clarify', question: questionFor(reason), handoff }
     : { kind: 'retry', reason, handoff }

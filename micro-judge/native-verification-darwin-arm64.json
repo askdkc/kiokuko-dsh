@@ -1,0 +1,22 @@
+{
+  "platform": "darwin",
+  "arch": "arm64",
+  "binarySha256": "fc677ed5d858001452bc3716cbefb93f072493fdafbbb36f4dbb5b8aefa69ef1",
+  "sourceDigest": "fb105717ea188e0a2c47f0b469b8f0f9761fd058f28d6eecf68ffe171188dfcf",
+  "compiler": "rustc 1.85.0 (4d91de4e4 2025-02-17)",
+  "evidence": {
+    "repaired-regressions.log": "1dd8344836b7e94bf4ba1ccb90c5cd1c7e7a04d284639d37b2832fad8f9fe25e",
+    "sensitivity-final.json": "40560f0667573f6af62cd6a094be076d000d94b0b8d9fa73aeae8a9ec93746eb",
+    "graph-bound-red.log": "47378fa9e7def96db1c53826fc214629b1b3aada111264da1203f5fc184a8b83",
+    "graph-bound-green.log": "e90525af96930a97da6acc8281279626843fea9d8c329687171683c90ae6483e"
+  },
+  "scope": "Actual native Rust FD solver; 200 independent exhaustive oracle cases; Core/public adapter with scripted independent provider, clarification/new-source re-evaluation/same-task effect and SQLite lineage; final source disabled/disconnected negative sensitivity. No live-model accuracy or other-platform verification claim.",
+  "hostSourceDigests": {
+    "src/dsh/core/host.ts": "a9cff6746387cea6c11ab98078ec408d8121b4b542587f983db54d612022ed98",
+    "src/dsh/host-adapter.ts": "c269325eec0cdcb698ef3dd83859c4f717b5de942b2174852ef1a8f0416925b0",
+    "src/dsh/on-demand-intake.ts": "188b8e9c20d735312acf82f2dd788b333b1dc2b6217046e8e64375ea0250499a",
+    "src/dsh/decisions/intent-assessment.ts": "1ab27c7f240fcf7d8dc5b804ad39ae5619c7897ba708eb03dfe5e708a3f4237e",
+    "src/dsh/decisions/micro-judge.ts": "2c95915942e891d386c798ce8de50c777f67d8ad62f527a7da2adeddca0a3e64",
+    "src/dsh/decisions/diagnostics.ts": "c60e5bc5b0952275da4a5176778ac2c4e2905860b6070efd8be1949d0b8fa8d7"
+  }
+}

@@ -57,7 +57,7 @@ for (const mode of ['full-nested', 'core-nested', 'full-non-git-binding'] as con
     ])
     ctx.llm.registerAdapter(['nested-mock'], model)
     const options = { repositoryRoot: mode === 'core-nested' ? cwd : repositoryRoot, databasePath,
-      migrationsDirectory: join(process.cwd(), 'migrations') }
+      migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' as const } }
     if (mode === 'core-nested') core = await mountCore(ctx, options)
     else { adapter = createDshHostAdapter(ctx, options); composition = await mountDshComposition(ctx, adapter.host) }
     const agent = await ctx.agentLoop.create(session.SessionId('nested-owner-session'), { provider: 'nested-mock', model: 'mock' }, { cwd })

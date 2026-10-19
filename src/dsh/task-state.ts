@@ -1,5 +1,6 @@
 import { reopenTerminalCodingWorkflow } from './coding-workflow/service.js'
 import { rotateTaskSourceInTransaction } from './task-source-history.js'
+import { recordDiagnosticTaskResume } from './decisions/diagnostics.js'
 import * as z from 'zod/v4'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { withImmediateTransaction } from '../db/transaction.js'
@@ -209,6 +210,7 @@ export function transitionTask(db: SqliteDatabase, identity: TaskIdentity, raw: 
         repositoryRoot: identity.repositoryRoot }, input.operationId, { terminalOutcome: executionTerminal(current.runStatus) || isTaskTerminal(current) })
       const updated = readTaskSnapshot(db, identity)
       if (updated.revision !== current.revision + 1) conflict('Task revision compare-and-swap failed')
+      if (input.operation==='resume') recordDiagnosticTaskResume(db,identity.taskId,identity.sessionId,input.operationId)
       return updated as unknown as JsonValue
     }) as unknown as TaskSnapshot
   })
@@ -289,6 +291,7 @@ export function transferTaskOwner(db: SqliteDatabase, identity: TaskIdentity, in
       .run(input.sessionId, input.sessionId, identity.taskId, identity.sessionId)
     db.prepare('UPDATE enno_contracts SET dsh_session_id=? WHERE run_id=? AND dsh_session_id=?')
       .run(input.sessionId, identity.taskId, identity.sessionId)
+    recordDiagnosticTaskResume(db,identity.taskId,input.sessionId,input.operationId)
     return readTaskSnapshot(db, { ...identity, sessionId: input.sessionId }) as unknown as JsonValue
   }) as unknown as TaskSnapshot)
 }

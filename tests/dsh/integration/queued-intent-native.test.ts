@@ -16,7 +16,7 @@ import { DecisionService } from '../../../src/dsh/decisions/service.js'
 import { DecisionError } from '../../../src/dsh/decisions/contracts.js'
 import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
 import { openConnection } from '../../../src/db/connection.js'
-import { nativeMock } from '../helpers/native-mock.js'
+import { nativeMock, nativeToolResults } from '../helpers/native-mock.js'
 import { interpretedPreparation } from '../helpers/coding-script.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 
@@ -49,6 +49,12 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       if (batch.purpose === 'akinator' || batch.purpose === 'request-intent') classified.push(batch.state)
       if (batch.purpose === 'request-intent') intentQuestionSets.push(batch.questions.map(question => question.id))
       if (host === 'full-laya-unavailable') throw new DecisionError('UNAVAILABLE')
+      if(batch.purpose==='intent-semantic-match') {
+        const source=(batch.state as {source:{task:string}}).source.task
+        assert.ok(instructions.some(text=>source.includes(text)),'independent comparison retains the exact scripted queued source')
+        return {provider:config.provider,requestedModel:config.provider==='laya-coreml'?'laya-rl-agent':config.typesafe.model,policyVersion:'queued-semantic-fixture',
+          answers:batch.questions.map(q=>({id:q.id,status:'selected' as const,choiceId:'supported'}))}
+      }
       // Queued follow-up requests keep the active task without requesting a state transition.
       return { provider: config.provider, requestedModel: config.provider === 'laya-coreml' ? 'laya-rl-agent' : config.typesafe.model, policyVersion: 'queued-fixture', answers: batch.questions.map(q => (['task-type', 'request-relation', 'request-action', 'request-change-scope', 'request-task-operation'].includes(q.id) || q.id.startsWith('request-proposal-')) && host !== 'full-laya-abstain'
         ? { id: q.id, status: 'selected' as const, choiceId: ({ 'task-type': 'debug', 'request-relation': (batch.state as { currentUserMessage?: string }).currentUserMessage === instructions[1] ? 'same_scope_continuation' : 'new', 'request-action': 'change', 'request-change-scope': 'implementation', 'request-task-operation': 'none' } as Record<string, string>)[q.id] ?? 'not_selected' } : { id: q.id, status: 'abstained' as const, reason: 'insufficient' as const }) }
@@ -66,8 +72,12 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       ctx.on('agent/error', (event: any) => errors.push(String(event.error)))
       ctx.tools.register({ name: 'fixture_probe', [CODING_READ_ONLY]: true, description: 'Harmless read-only fixture probe.', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => { probes++; return 'probe result' } })
       const mock = nativeMock(llm), provider = new mock.MockAdapter(instructions.flatMap((_, index) => {
+        if(host==='full-laya-unavailable')return [
+          interpretedPreparation(mock,`queued-unavailable-${index}`,index===0?'new':'same_scope_continuation','change','debug'),
+          (request:any)=>{const result=nativeToolResults(request.messages).find(r=>r.toolCallId===`queued-unavailable-${index}`);assert.ok(result&&!result.isError);const value=JSON.parse(result.content.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join(''));assert.equal(value.status,'assessment_unavailable');assert.equal(value.prepared,false);return mock.textResponse('The independent provider is unavailable; the original request is retained without executing work.')},
+        ]
         const work = [mock.toolCallResponse(`queued-probe-${index}`, 'fixture_probe', {}), mock.textResponse('QUEUED_NATIVE_RESULT')]
-        return intakeMode === 'on-demand' || host === 'full-laya-abstain' || host === 'full-laya-unavailable' || host === 'core-off' ? mock.prepareWork(work, 'debug', `queued-prepare-${index}`, interpretedPreparation(mock, `queued-prepare-${index}`, index === 0 ? 'new' : 'same_scope_continuation', 'change', 'debug')) : work
+        return intakeMode === 'on-demand' || host === 'full-laya-abstain' || host === 'core-off' ? mock.prepareWork(work, 'debug', `queued-prepare-${index}`, interpretedPreparation(mock, `queued-prepare-${index}`, index === 0 ? 'new' : 'same_scope_continuation', 'change', 'debug')) : work
       }))
       ctx.llm.registerAdapter(['fixture'], provider)
       const common = { repositoryRoot: root, databasePath, intakeMode, answerReview: { mode: 'off' as const }, modelAutoMode: { mode: 'off' as const }, memoryReuse: { mode: 'off' as const }, semanticCompaction: { mode: 'off' as const } }
@@ -80,13 +90,14 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       handle = await ctx.agents.create({ sessionId: session.SessionId('queued-intake'), agentOptions: { provider: 'fixture', model: 'mock' }, meta: { cwd: root } })
       for (const text of instructions) handle.agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }))
       await handle.agent.whenIdle()
-      assert.deepEqual(errors, [], JSON.stringify(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message))); assert.equal(probes, instructions.length, JSON.stringify({ asked, results: handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message) })); assert.ok(!asked.includes('taskType'))
+      assert.deepEqual(errors, [], JSON.stringify(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message))); assert.equal(probes, host==='full-laya-unavailable'?0:instructions.length, JSON.stringify({ asked, results: handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message) })); assert.ok(!asked.includes('taskType'))
       assert.deepEqual(asked.filter(id => id.startsWith('coding-lisp-')), [], 'read-only probes cannot ask before Goal/items/criteria exist')
-      assert.ok(handle.agent.session.snapshotEvents().some((event: any) => event.type === 'assistant/message' && JSON.stringify(event.data).includes('QUEUED_NATIVE_RESULT')))
+      assert.ok(handle.agent.session.snapshotEvents().some((event: any) => event.type === 'assistant/message' && JSON.stringify(event.data).includes(host==='full-laya-unavailable'?'independent provider is unavailable':'QUEUED_NATIVE_RESULT')))
       const db = openConnection(databasePath)
       try {
         const rows = db.prepare('SELECT task_text AS task FROM akinator_sessions').all() as Array<{ task: string }>
-        assert.ok(rows.some(row => row.task.includes(instructions[0]!)), JSON.stringify(rows))
+        if(host==='full-laya-unavailable')assert.equal(rows.length,0,'unavailable matching cannot admit an execution run')
+        else assert.ok(rows.some(row => row.task.includes(instructions[0]!)), JSON.stringify(rows))
         for (const text of instructions) assert.ok(provider.requests.some(request => JSON.stringify(request.messages).includes(text)), 'every original queued request reaches the native model')
         assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_lisp_sessions WHERE enabled=1').get()?.n, 0)
       } finally { db.close() }

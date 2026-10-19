@@ -976,3 +976,53 @@ test('a Pending task asks for an explicit transition without starting or duplica
   assert.equal(asks, 1); assert.equal(f.admissions.length, 0); assert.equal(f.bodies(), 0)
   assert.equal(context.activeTask!.state, 'Pending'); assert.equal(context.activeTask!.revision, 4); assert.equal(context.activeTask!.generation, 7)
 })
+
+// Assessment dependency doubles exercise native question/dispatch authority, not Rust or model quality.
+for (const outcome of ['clarify'] as const) test(`independent assessment ${outcome} asks once and does not admit the candidate`,async t=>{
+  const task='Implement the change in src/parser.ts.',message=human(`assessment-${outcome}`,task),intent=activeIntent([message],task,'same_scope_continuation','change','implementation')
+  let asks=0,assessments=0
+  const f=await fixture(t,{interpret:async()=>intent,assess:async()=>{assessments++;return {semantic:'contradicted',semanticInputDigest:'a'.repeat(64),detector:{state:'unavailable',reason:'artifact_unavailable',elapsedMs:0},outcome}},
+    questions:{async ask(r){asks++;return {answers:[{id:r.questions[0].id,selected:[]}]}}}})
+  ;(f.agent as any).followup=()=>assert.fail('Dismissal is not an answer')
+  await f.capture([message])
+  const args={requestIntent:{relation:'same_scope_continuation',action:'change',changeScope:'implementation',evidenceRefs:requestIntentReferenceIds(intent.context)}}
+  const first=await f.execute(TASK_PREPARE_TOOL,args),second=await f.execute(TASK_PREPARE_TOOL,args)
+  assert.equal(first.isError,false);assert.equal(first.value.status,'awaiting_clarification');assert.equal(second.value.questionId,first.value.questionId)
+  assert.equal(asks,1);assert.equal(assessments,1);assert.equal(f.admissions.length,0);assert.equal(f.bodies(),0)
+})
+test('ordinary explanation does not require Rust, provider availability or optional Lisp answers',async t=>{
+  const task='Explain the current parser design.',message=human('explain-no-optional-state',task),intent=activeIntent([message],task,'same_scope_continuation','answer')
+  const f=await fixture(t,{interpret:async()=>intent,assess:async()=>assert.fail('Explanations do not invoke the execution judge')})
+  assert.equal(await f.capture([message]),true);assert.equal(f.admissions.length,0)
+})
+test('accepted native clarification creates a fresh source revision and preserves the latest explicit answer',async t=>{
+  const task='Only explain src/parser.ts; do not change it.',message=human('superseded-prohibition',task)
+  const original=activeIntent([message],task,'same_scope_continuation','change','implementation')
+  let asks=0;const followups:any[]=[]
+  const f=await fixture(t,{interpret:async()=>original,assess:async()=>({semantic:'contradicted',semanticInputDigest:'b'.repeat(64),detector:{state:'unavailable',reason:'artifact_unavailable',elapsedMs:0},outcome:'clarify'}),
+    questions:{async ask(r){asks++;return {answers:[{id:r.questions[0].id,selected:[],custom:'I now explicitly request the implementation in src/parser.ts. Replace the earlier explanation-only instruction for this file.'}]}}}})
+  ;(f.agent as any).followup=(m:any)=>followups.push(m)
+  await f.capture([message]);const args={requestIntent:{relation:'same_scope_continuation',action:'change',changeScope:'implementation',evidenceRefs:requestIntentReferenceIds(original.context)}}
+  const result=await f.execute(TASK_PREPARE_TOOL,args);assert.equal(result.value.status,'clarification_answer_queued')
+  await f.execute(TASK_PREPARE_TOOL,args)
+  assert.equal(asks,1);assert.equal(followups.length,1);assert.equal(f.admissions.length,0)
+  const fresh=followups[0];assert.notEqual(fresh.id,message.id);assert.equal(fresh.source.kind,'user')
+  assert.match(fresh.content[0].text,/Latest native user answer/);assert.match(fresh.content[0].text,/source revision request-clarification-/)
+  assert.match(fresh.content[0].text,/Replace the earlier explanation-only/);assert.match(fresh.content[0].text,/Preserve unrelated constraints/)
+})
+test('a foreign question answer cannot become a source revision',async t=>{
+  const task='Implement src/parser.ts.',message=human('foreign-answer-check',task),intent=activeIntent([message],task,'same_scope_continuation','change','implementation')
+  let followups=0
+  const f=await fixture(t,{interpret:async()=>intent,assess:async()=>({semantic:'insufficient',semanticInputDigest:'c'.repeat(64),detector:{state:'unavailable',reason:'artifact_unavailable',elapsedMs:0},outcome:'clarify'}),
+    questions:{async ask(){return {answers:[{id:'a-question-from-another-session',selected:[],custom:'Proceed'}]}}}})
+  ;(f.agent as any).followup=()=>followups++
+  await f.capture([message]);const r=await f.execute(TASK_PREPARE_TOOL,{requestIntent:{relation:'same_scope_continuation',action:'change',changeScope:'implementation',evidenceRefs:requestIntentReferenceIds(intent.context)}})
+  assert.equal(r.value.status,'awaiting_clarification');assert.equal(followups,0);assert.equal(f.admissions.length,0)
+})
+
+test('unavailable assessment reports infrastructure failure without asking the human to repair a missing binary',async t=>{
+  const task='Implement src/parser.ts.',message=human('unavailable-not-an-answer',task),intent=activeIntent([message],task,'same_scope_continuation','change','implementation')
+  const f=await fixture(t,{interpret:async()=>intent,assess:async()=>({semantic:'supported',semanticInputDigest:'d'.repeat(64),detector:{state:'unavailable',reason:'artifact_unavailable',elapsedMs:0},outcome:'unavailable'}),questions:{async ask(){assert.fail('Infrastructure failure is not a semantic question')}}})
+  await f.capture([message]);const r=await f.execute(TASK_PREPARE_TOOL,{requestIntent:{relation:'same_scope_continuation',action:'change',changeScope:'implementation',evidenceRefs:requestIntentReferenceIds(intent.context)}})
+  assert.equal(r.value.status,'assessment_unavailable');assert.equal(r.value.detector,'artifact_unavailable');assert.equal(f.admissions.length,0)
+})

@@ -173,7 +173,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     }
     adapter = createDshHostAdapter(ctx as typeof cordis.Context, {
       repositoryRoot: repository, databasePath: join(temporary, 'kiokuko.sqlite3'),
-      migrationsDirectory: join(process.cwd(), 'migrations'), agenticReplay: { enabled: false },
+      migrationsDirectory: join(process.cwd(), 'migrations'), agenticReplay: { enabled: false }, typedDecisions: { mode: 'off' },
     })
     composition = await mountDshComposition(ctx, adapter.host)
     parent = await ctx.agents.create({ sessionId: session.SessionId('standard-parent'),

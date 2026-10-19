@@ -1,3 +1,4 @@
+import { assessRequestIntent } from '../decisions/intent-assessment.js'
 import { nativeExecutionOwnership } from '../native-execution-ownership.js'
 import { NativeTaskAuthority } from '../native-task-authority.js'
 import { readOwnedIdentity } from '../owned-read-owner.js'
@@ -41,6 +42,7 @@ import { MemoryRetrievalConfig } from '../../memory/retrieval-contracts.js'
 import { classifyTaskForIntake } from '../decisions/workflows.js'
 import { TypedDecisionsConfig } from '../decisions/config.js'
 import { createDecisionService, mountDecisionCommand } from '../decisions/host.js'
+import { createIntakeDiagnosticSink, recordDiagnosticAdmission, observeDiagnostic } from '../decisions/diagnostics.js'
 import type { DecisionService } from '../decisions/service.js'
 import { mountTypeSafeCommand, typeSafeCredentials } from '../typesafe/command.js'
 import { randomUUID } from 'node:crypto'
@@ -251,6 +253,8 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
     return decision ? { context, decision } : undefined
   }
   const demand = new OnDemandIntake({
+    diagnostic: createIntakeDiagnosticSink(runtime),
+    assess: (input,context,decision) => assessRequestIntent(decisions,dshTurnRequestId({dshSessionId:input.agent.session!.id,turn:input.turn}),context,decision,input.signal),
     ...(questions ? { questions } : {}),
     answerContext: new DshAnswerContext(runtime, { root, projectOnly: true, memoryRetrieval: config.memoryRetrieval,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills, prompts, decisions, cwd: root }),
@@ -551,6 +555,8 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         } }
       const resuming = !!resumesScope
       let task = resuming ? await tasks.resume(request) : await tasks.prepare(request)
+      await observeDiagnostic(runtime,request.sessionId,db=>recordDiagnosticAdmission(db,{sessionId:request.sessionId,turn:request.turn,runId:task.runId,task:request.task,
+        ...(requestIntentContext?{context:requestIntentContext}:{}),...(requestIntent?{decision:requestIntent}:{})}))
       if (resuming && requestIntent?.relation === 'same_scope_continuation' && task.memoryOwner?.kind === 'execution') {
         const refreshed = await tasks.refresh(task, request.task, signal, async () => {
           bind(payload.agent)
@@ -650,7 +656,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         const agentId = invocation.agent?.id
         return sessionId && agentId && (agents?.get(agentId) as NativeAgent | undefined)?.session === sessions?.get(sessionId)
           ? modelAuto.status(sessionId) : { state: 'session_unavailable' }
-      }))
+      }, runtime))
     await modules.mount({ intakeMode: config.intakeMode, context: ctx, repositoryRoot: root, runtime, prompts, decisions, semanticCompaction, answerReviewConfig: config.answerReview, memoryIndexReasoningConfig: config.memoryIndexReasoning, admitModules: bindings => modules.admit(bindings), claimNativeIngress() { if (claimed) throw new Error('Native ingress already has an owner'); claimed = true },
       beforeTask(handler) { beforeTask.add(handler); return () => { beforeTask.delete(handler) } } })
     if (!claimed) {

@@ -12,15 +12,16 @@ import { LayaCoreMLDecisionProvider, discoverLayaConfiguration } from './laya-co
 import { LayaV1DecisionProvider } from './laya-v1.js'
 import { DecisionService, databaseDecisionStore } from './service.js'
 import { databaseDecisionSelection } from './selection-store.js'
+import { readDecisionDiagnostics, diagnosticRuntimeLosses, type DiagnosticRuntime } from './diagnostics.js'
 
 export function createDecisionService(ctx: { get(name: string, strict?: boolean): unknown }, runtime: Pick<DshCoreRuntime, 'withDatabase'>, configuration: DecisionConfiguration = TypedDecisionsConfig.parse({}), memoryReuse: MemoryReuseConfiguration = MemoryReuseConfig.parse({}), semanticCompaction: SemanticCompactionConfiguration = SemanticCompactionConfig.parse({}), repositoryRoot = process.cwd()): DecisionService {
   const credentials = typeSafeCredentials(ctx)
-  return new DecisionService(configuration, config => {
+  return new DecisionService(configuration, (config, observer) => {
     switch (config.provider) {
-    case 'laya-coreml': return config['laya-coreml']?.protocol === 'v1' ? new LayaV1DecisionProvider(config['laya-coreml']) : new LayaCoreMLDecisionProvider(config['laya-coreml'])
+    case 'laya-coreml': return config['laya-coreml']?.protocol === 'v1' ? new LayaV1DecisionProvider(config['laya-coreml'],undefined,observer) : new LayaCoreMLDecisionProvider(config['laya-coreml'],undefined,observer)
     case 'typesafe': return new TypeSafeDecisionProvider(config.typesafe, async () => {
       try { return await credentials.resolve() } catch { throw new DecisionError('AUTH') }
-    })
+    }, undefined, observer)
     case 'nimble': return new NimbleDecisionProvider(config.nimble, async () => {
       if (!config.nimble.credentialRef) return undefined
       try {
@@ -29,7 +30,7 @@ export function createDecisionService(ctx: { get(name: string, strict?: boolean)
         if (!value) throw new DecisionError('AUTH')
         return value
       } catch { throw new DecisionError('AUTH') }
-    })
+    }, undefined, observer)
     }
   }, databaseDecisionStore(runtime), { memoryReuse, semanticCompaction, repositoryRoot,
     selectionStore: databaseDecisionSelection(runtime, repositoryRoot, resolveDecisionConfiguration(configuration, repositoryRoot)),
@@ -49,7 +50,7 @@ export function createDecisionService(ctx: { get(name: string, strict?: boolean)
     } })
 }
 export function mountDecisionCommand(commands: { register(definition: DshNativeCommandDefinition): () => void }, service: DecisionService,
-  modelAutoStatus?: (invocation: Parameters<DshNativeCommandDefinition['handler']>[0]) => Promise<unknown>): () => void {
+  modelAutoStatus?: (invocation: Parameters<DshNativeCommandDefinition['handler']>[0]) => Promise<unknown>, diagnosticRuntime?: DiagnosticRuntime): () => void {
   const usage = '/kioku-decisions use jev | use laya | use nimble | use default | status | probe | install-laya'
   const providers: Record<string, DecisionConfiguration['provider'] | 'default'> = { jev: 'typesafe', typesafe: 'typesafe', laya: 'laya-coreml', 'laya-coreml': 'laya-coreml', nimble: 'nimble', default: 'default' }
   return commands.register({ name: 'kioku-decisions', description: 'Switch Jev / Laya / Nimble or inspect status. install-laya connects to an existing worker or shows setup instructions.', input: { hint: 'use jev | use laya | use nimble | use default | status | probe | install-laya' },
@@ -57,6 +58,15 @@ export function mountDecisionCommand(commands: { register(definition: DshNativeC
       const action = invocation.rawInput.trim(), args = action.split(/\s+/)
       try {
         invocation.signal.throwIfAborted()
+        if(args[0]==='diagnostics') {
+          const sessionId=invocation.agent?.session?.id ?? invocation.agent?.sessionId
+          if(!diagnosticRuntime || !sessionId || args.length>2) return {kind:'error',text:'DIAGNOSTIC_UNAVAILABLE: select a native session; /kioku-decisions diagnostics [decision_id]'}
+          try {
+            const view=await diagnosticRuntime.withDatabase(db=>readDecisionDiagnostics(db,sessionId,args[1]))
+            return {kind:'success',text:JSON.stringify({...view,completeness:{...view.completeness,runtimeLosses:diagnosticRuntimeLosses(diagnosticRuntime)}},null,2)}
+          }
+          catch { return {kind:'error',text:'DIAGNOSTIC_UNAVAILABLE: diagnostic storage could not be read.'} }
+        }
         if (action === 'install-laya' || args[0] === 'use' && args.length === 2 && Object.hasOwn(providers, args[1]!)) {
           await service.selectProvider(action === 'install-laya' ? 'laya-coreml' : providers[args[1]!]!, invocation.signal)
           const status = service.status() as { provider: string; model: string | null }

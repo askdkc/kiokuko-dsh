@@ -14,6 +14,7 @@ import { openConnection } from '../../../src/db/connection.js'
 import { nativeSkillFixture } from '../helpers/skill-native.js'
 import { withIsolatedSkillHome } from '../helpers/skill-home.js'
 import { nativeToolResults } from '../helpers/native-mock.js'
+import { assertNativeDecisionDiagnostics } from '../helpers/decision-diagnostics.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const packageRoot = process.env.KIOKUKO_SKILL_PACKAGE_ROOT
@@ -70,12 +71,12 @@ for (const scenario of ['answered', 'dismissed', 'foreign-answer'] as const) {
       return originalKick.apply(this, args)
     })
     const inference = mock.method(providerModule.LayaV1DecisionProvider.prototype, 'evaluate', async (batch: DecisionBatch) => {
-      const task = typeof batch.state === 'string' ? batch.state : (batch.state as { currentUserMessage?: string }).currentUserMessage ?? ''
+      const task = typeof batch.state === 'string' ? batch.state : (batch.state as { currentUserMessage?: string; source?: {task:string} }).currentUserMessage ?? (batch.state as {source?:{task:string}}).source?.task ?? ''
       const first = task === firstRequest, clarified = task.includes(answer)
       classified.push(task)
       return { provider: 'laya-coreml', requestedModel: 'laya-rl-agent', policyVersion: 'public-clarification-fixture',
         answers: batch.questions.map(question => {
-          const choiceId = question.id === 'task-type' ? first ? 'research' : 'writing'
+          const choiceId = question.id.startsWith('semantic-') ? 'supported' : question.id === 'task-type' ? first ? 'research' : 'writing'
             : question.id === 'request-relation' ? 'same_scope_continuation'
               : question.id === 'request-action' ? first ? 'verify' : 'change'
                 : question.id === 'request-change-scope' && clarified ? 'document'
@@ -180,6 +181,7 @@ for (const scenario of ['answered', 'dismissed', 'foreign-answer'] as const) {
       await Promise.all(idlePromises)
       await Promise.all([...workers].map(worker => worker.whenIdle()))
       assert.equal(asked.length, 1, `clarification ask count: ${JSON.stringify(asked.map(request => request.questions))}`)
+      database(db=>assertNativeDecisionDiagnostics(db,f.agent.session.id,answered))
       if (answered) { assert.equal(wrote, true); assert.ok(classified.some(task => task.includes(answer))) }
       else {
         unchanged()

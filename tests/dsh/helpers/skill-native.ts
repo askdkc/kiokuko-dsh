@@ -69,7 +69,8 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   const responses: any[] = [], model = new mock.MockAdapter(responses)
   ctx.llm.registerAdapter(['mock'],model)
   if(explicit===true) {
-    adapterOptions = {databasePath:join(dir,'state.sqlite3'),repositoryRoot:workspace,agenticReplay:{enabled:false}, ...(decisions ? { decisions } : {}), ...(prompts ? {
+    adapterOptions = {databasePath:join(dir,'state.sqlite3'),repositoryRoot:workspace,agenticReplay:{enabled:false},
+      ...('typedDecisions' in extra ? {typedDecisions:subject.Config.parse(extra).typedDecisions} : {}), ...(decisions ? { decisions } : {}), ...(prompts ? {
       skillPrompts: prompts, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, typedDecisions: { mode: 'off' },
       // Auxiliary finalization must not consume evaluation scripts or provider
       // budgets. Foreground native model and tool dispatch remain unchanged.

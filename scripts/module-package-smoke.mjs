@@ -58,10 +58,16 @@ ctx.on('tools/result', (execution, result) => toolResults.set(execution.callId, 
 const registeredCommands = new Map()
 ctx.on('agent/error', payload => failures.push(String(payload.error?.stack ?? JSON.stringify(payload))))
 let handle
-let semanticReady = false, semanticCalls = 0
+let semanticReady = false, semanticCalls = 0, intentReady = false, intentComparisons = 0
 const originalFetch = globalThis.fetch
 globalThis.fetch = async (_url, init) => {
   const body = JSON.parse(String(init?.body))
+  const intentQuestions=Object.keys(body.questions??{})
+  if(intentQuestions.length&&intentQuestions.every(id=>['semantic-action','semantic-reference','semantic-constraints','semantic-latest-answer'].includes(id))){
+    assert.ok(intentReady&&typeof body.state?.source?.task==='string'&&body.state?.candidate,'the independent provider receives actual source and candidate')
+    intentComparisons++
+    return Response.json({model:body.model,answers:Object.fromEntries(Object.entries(body.questions).map(([id,q])=>[id,{type:'choice',choice:'supported',confidence:1,probabilities:Object.fromEntries(Object.keys(q.criteria).map(key=>[key,key==='supported'?1:0]))}]))})
+  }
   if (!body.questions?.fruit && body.state?.policy !== 'semantic-results-v2') return new Response('', { status: 503 })
   if (body.state?.policy === 'semantic-results-v2') semanticCalls++
   return Response.json({ model: body.model, answers: Object.fromEntries(Object.entries(body.questions).map(([id, question]) => {
@@ -75,8 +81,8 @@ try {
   fibers.push(await ctx.plugin({ name: 'module-questions', apply(context) { context.provide('userQuestions', { async ask(request) { const question = request.questions[0]; questions.push(question.id); if (question.id === 'taskType') return { answers: [{ id: question.id, selected: ['文章作成'] }] }; if (question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')) return { answers: [{ id: question.id, selected: ['使わない'] }] }; if (question.id === 'execution-mode') return { answers: [{ id: question.id, selected: ['通常実行'] }] }; throw new Error('Unexpected packed question: '+question.id) } }) } }))
   fibers.push(await ctx.plugin(compaction.default, { thresholdRatio: .8 }))
   fibers.push(await ctx.plugin({ name: 'semantic-fixture-credentials', apply(context) { context.provide('credentials', {
-    resolve: async () => semanticReady ? { value: 'fixture-only', source: 'env' } : undefined,
-    describe: async () => ({ configured: semanticReady, writable: false }),
+    resolve: async () => semanticReady || intentReady ? { value: 'fixture-only', source: 'env' } : undefined,
+    describe: async () => ({ configured: semanticReady || intentReady, writable: false }),
   }) } }))
   ctx.llm.registerAdapter(['fixture'], provider)
   const registerCommand = ctx.commands.register.bind(ctx.commands)
@@ -208,6 +214,7 @@ try {
     assert.ok(result && !result.isError && result.value, `Native ${id} failed: ${JSON.stringify(result)}`)
     return result.value
   }
+  intentReady=true
   const coding = await ctx.agentLoop.create(session.SessionId('packed-coding'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
   const command = 'node --test --test-reporter=tap module-entry.test.mjs'
   const criterion = id => ({criterionId:id,revision:1,outcome:'Public entry returns 42',procedure:'Run actual public entry assertions',expected:'All selected assertions pass',evidence:'selected_tests'})
@@ -245,6 +252,7 @@ try {
   assert.deepEqual(webBodies, [{ callId: 'packed-first-web', args: { queries: ['VMware Tools critical CVE'] } }])
   releaseWeb()
   // Exercise the delivered full/core coordinator, not an imported test-only instance.
+  intentReady=false
   semanticReady = true
   const message = (id, text) => ({ id, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] })
   // Exercise native pressure with a payload inside the decision-provider byte limit.
@@ -329,6 +337,7 @@ try {
     assert.ok(deliveredText.includes(expected), 'the packed core+Lisp model receives the complete compiled contract')
     assert.ok(expected.includes('settle testable doubts'), 'the package contains the new mandatory contract')
     const arguments_ = { operationId: 'packed-eval', code: '(+ 20 22)' }
+    intentReady=true
     const [result, discovery, status, replay, codeCapabilities] = await runTools(parent, 'protected Lisp で (+ 20 22) を実行し、TypeSafeの状態と保存済みの実行結果を検証してください。', [
       ['packed-lisp-eval', 'lisp_eval', arguments_],
       ['packed-typesafe-discovery', 'lisp_describe', { operationId: 'typesafe-discovery' }],
@@ -358,7 +367,10 @@ try {
   assert.equal(ctx.commands.list(parent).some(command => command.name === 'kioku-typesafe-key'), false)
   const first = provider.requests[0]
   const system = first.system ?? first.messages.filter(message => message.role === 'system').flatMap(message => message.content).map(block => block.text ?? '').join('\n')
-  console.log(JSON.stringify({ combination, status: 'passed', nativeRequests: provider.requests.length, skills: names, startupModules: imported.map(url => url.slice(pathToFileURL(packageRoot).href.length + 1)), constantPromptBytes: Buffer.byteLength(system), protectedLisp: combination.includes('lisp'), semanticCompaction: semanticCalls === 1, liveModelQuality: 'unmeasured' }))
+  assert.ok(intentComparisons>0,'packed native coding must independently compare its source')
+  const judgeDb=openConnection(configuration.databasePath)
+  try {assert.ok(judgeDb.prepare("SELECT document_json FROM dsh_diagnostic_events WHERE kind='detector'").all().some(row=>{const event=JSON.parse(row.document_json);return event.judge?.state==='available'&&event.judge.status==='entailed'&&event.judge.complete===true}),'packed native host must execute the actual finite-domain binary')}finally{judgeDb.close()}
+  console.log(JSON.stringify({ combination, status: 'passed', intentComparisons, nativeRequests: provider.requests.length, skills: names, startupModules: imported.map(url => url.slice(pathToFileURL(packageRoot).href.length + 1)), constantPromptBytes: Buffer.byteLength(system), protectedLisp: combination.includes('lisp'), semanticCompaction: semanticCalls === 1, liveModelQuality: 'unmeasured' }))
   }
 } finally {
   globalThis.fetch = originalFetch

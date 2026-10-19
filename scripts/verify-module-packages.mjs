@@ -27,6 +27,12 @@ async function command(executable, args, cwd, extraEnv = {}) {
   try { return await exec(executable, args, { cwd, env: { ...env, ...extraEnv }, maxBuffer: 16 * 1024 * 1024, timeout: 60_000 }) }
   catch (error) { process.stderr.write(error.stdout ?? ''); process.stderr.write(error.stderr ?? ''); throw error }
 }
+async function verifyMicroJudge(packageRoot) {
+  const output=await command(process.execPath,[join(packageRoot,'scripts/verify-micro-judge.mjs'),`--root=${packageRoot}`,'--execute'],packageRoot)
+  const result=output.stdout.trim().split('\n').map(line=>{try{return JSON.parse(line)}catch{return null}}).find(value=>value?.actualExecution===true)
+  assert.ok(result,'the matching bundled finite-domain executable must actually run')
+  return result
+}
 async function pack(directory, destination) {
   await mkdir(destination, { recursive: true })
   const result = JSON.parse((await command('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', destination], directory)).stdout)[0]
@@ -89,6 +95,7 @@ try {
     const manifest = await composeModules(Object.fromEntries(['core', ...configuration].map(name => [name, packed[name].directory])), consumer)
     assert.ok(manifest.dsh.permissions.externalServices.some(service => service.includes('Laya-CoreML Unix socket')))
     const composed = await pack(consumer, join(work, `configured-${combination}`))
+    const microJudge=await verifyMicroJudge(composed.directory)
     if (configuration.includes('lisp')) {
       for (const path of ['docs/typesafe.md', 'PERMISSIONS.md', 'scripts/smoke-typesafe.mjs', 'dist/dsh/typesafe/client.js']) assert.ok(composed.files.some(file => file.path === path), `Missing TypeSafe module asset: ${path}`)
       assert.ok(manifest.dsh.permissions.externalServices.some(service => service.includes('TypeSafe')))
@@ -104,7 +111,7 @@ try {
     const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, nativeRoot, combination], consumer)
     const result = smoke.stdout.trim().split('\n').map(line => { try { return JSON.parse(line) } catch { return null } }).find(value => value?.combination === combination)
     assert.equal(result?.status, 'passed')
-    results.push({ ...result, defaultIntake, packedBytes: composed.size, unpackedBytes: composed.unpackedSize, fileCount: composed.files.length, resolvedDependencies })
+    results.push({ ...result, microJudge, defaultIntake, packedBytes: composed.size, unpackedBytes: composed.unpackedSize, fileCount: composed.files.length, resolvedDependencies })
     console.log(`${combination}: packed native startup, ordinary requests and teardown passed`)
   }
   packed.full = await pack(root, join(work, 'pack-full'))
@@ -119,11 +126,12 @@ try {
     const manifest = JSON.parse(await readFile(join(consumer, 'package.json'), 'utf8'))
     const dependencies = { ...manifest.dependencies, ...Object.fromEntries(Object.entries(manifest.peerDependencies ?? {}).filter(([name]) => !manifest.peerDependenciesMeta?.[name]?.optional)) }
     const resolvedDependencies = await isolatedDependencies(consumer, dependencies)
+    const microJudge=combination==='full'?await verifyMicroJudge(consumer):undefined
     const defaultIntake = combination === 'full' ? await verifyDefault(consumer, combination) : undefined
     const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, nativeRoot, combination], consumer)
     const result = smoke.stdout.trim().split('\n').map(line => { try { return JSON.parse(line) } catch { return null } }).find(value => value?.combination === combination)
     assert.equal(result?.status, 'passed')
-    results.push({ ...result, ...(defaultIntake ? { defaultIntake } : {}), resolvedDependencies })
+    results.push({ ...result, ...(microJudge?{microJudge}:{}), ...(defaultIntake ? { defaultIntake } : {}), resolvedDependencies })
     console.log(`${combination}: isolated compatibility package passed`)
   }
   const output = resolve(process.env.KIOKUKO_MODULE_REPORT ?? join(root, '.artifacts/module-report.json'))

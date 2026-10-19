@@ -281,7 +281,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
         const sessionId = invocation.agent?.session?.id ?? invocation.agent?.sessionId
         return sessionId && invocation.agent && host.modelAuto!.validSession(invocation.agent.id, sessionId)
           ? host.modelAuto!.coordinator.status(sessionId) : { state: 'session_unavailable' }
-      } : undefined))
+      } : undefined, host.runtime))
     if (host.commands && host.modelAuto) ingressDisposers.push(mountModelAutoCommand(host.commands, host.modelAuto.coordinator, host.modelAuto.validSession))
     if (host.commands && options.typeSafeCommand !== false) ingressDisposers.push(mountTypeSafeCommand(host.commands, typeSafeCredentials(ctx), () => host.decisions?.invalidateReadiness()))
     const historyCompatibility = mountSessionHistoryCompatibility(ctx)

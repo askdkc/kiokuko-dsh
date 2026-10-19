@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { resolveGuardrail } from './guardrail-artifacts.mjs'
@@ -31,6 +32,12 @@ export async function composeModules(sources, destination) {
       executableArtifacts.set(entry.binary, checked.engineDigest)
     }
   }
+  const hasMicroJudge=manifest.files?.includes('micro-judge/')===true
+  if(hasMicroJudge){
+    execFileSync(process.execPath,[fileURLToPath(new URL('./verify-micro-judge.mjs',import.meta.url)),`--root=${sources.core}`],{stdio:'pipe',timeout:5000})
+    const index=JSON.parse(await readFile(join(sources.core,'micro-judge/manifest.json'),'utf8'))
+    for(const entry of index.artifacts)executableArtifacts.set(`micro-judge/${entry.file}`,entry.sha256)
+  }
   const resources = new Map(), owned = new Map()
   for (const [name, directory] of Object.entries(sources)) {
     const descriptor = JSON.parse(await readFile(join(directory, `module-${name}.json`), 'utf8'))
@@ -55,7 +62,7 @@ export async function composeModules(sources, destination) {
   }
   for (const [path, bytes] of owned) {
     const expected = executableArtifacts.get(path)
-    if (expected && createHash('sha256').update(bytes).digest('hex') !== expected) throw new Error(`Guardrail artifact changed during composition: ${path}`)
+    if (expected && createHash('sha256').update(bytes).digest('hex') !== expected) throw new Error(`Verified executable artifact changed during composition: ${path}`)
     await mkdir(dirname(join(destination, path)), { recursive: true })
     // Only exact, resolver-verified declared engine artifacts acquire executable bits.
     await writeFile(join(destination, path), bytes, { mode: expected ? 0o755 : 0o644 })
@@ -80,7 +87,7 @@ export async function composeModules(sources, destination) {
   const permissionLists = ['readPaths', 'writePaths', 'commands', 'externalServices', 'credentials', 'failureBoundaries', 'lifecycleEvidence']
   manifest.dsh.permissions = { ...inheritedPermissions, ...manifest.dsh.permissions,
     ...Object.fromEntries(permissionLists.filter(key => inheritedPermissions[key] || manifest.dsh.permissions[key]).map(key => [key, [...new Set([...(inheritedPermissions[key] ?? []), ...(manifest.dsh.permissions[key] ?? [])])]])) }
-  manifest.files = ['dist/', 'skills/', 'scripts/', 'migrations/', 'docs/', 'PERMISSIONS.md', 'dsh/cordis.patch.yml', ...(manifest.guardrail ? ['guardrail/'] : []), ...(sources.lisp ? ['lisp/'] : ['lisp/supervisor.mjs']), ...Object.keys(sources).map(name => `module-${name}.json`), 'LICENSE', 'THIRD_PARTY_NOTICES.md']
+  manifest.files = ['dist/', 'skills/', 'scripts/', 'migrations/', 'docs/', 'PERMISSIONS.md', 'dsh/cordis.patch.yml', ...(manifest.guardrail ? ['guardrail/'] : []), ...(hasMicroJudge ? ['micro-judge/'] : []), ...(sources.lisp ? ['lisp/'] : ['lisp/supervisor.mjs']), ...Object.keys(sources).map(name => `module-${name}.json`), 'LICENSE', 'THIRD_PARTY_NOTICES.md']
   await writeFile(join(destination, 'package.json'), JSON.stringify(manifest, null, 2) + '\n')
   return manifest
 }

@@ -1,3 +1,4 @@
+import { assessRequestIntent } from './decisions/intent-assessment.js'
 import { nativeExecutionOwnership } from './native-execution-ownership.js'
 import { NativeTaskAuthority } from './native-task-authority.js'
 import { readOwnedIdentity } from './owned-read-owner.js'
@@ -58,6 +59,7 @@ import { MemoryReuseConfig } from '../memory/reuse.js'
 
 
 import { createDecisionService } from './decisions/host.js'
+import { createIntakeDiagnosticSink } from './decisions/diagnostics.js'
 import { TypedDecisionsConfig } from './decisions/config.js'
 import type { DecisionService } from './decisions/service.js'
 
@@ -539,6 +541,8 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     return realpathSync(session.header.cwd)
   }
   const demand = hasDemandTools && agents && sessions ? new OnDemandIntake({
+    diagnostic: createIntakeDiagnosticSink(runtime),
+    assess: (input,context,decision) => assessRequestIntent(decisions,dshTurnRequestId({dshSessionId:input.agent.session!.id,turn:input.turn}),context,decision,input.signal),
     ...(userQuestions ? { questions: userQuestions } : {}),
     answerContext: new DshAnswerContext(runtime, { root, cwd: answerCwd, projectOnly: false, memoryRetrieval: memoryRetrievalConfig,
       instructions: (input, task, taskType) => answerSkillContext(input, task, taskType, { skills: skills as AnswerSkillRegistry, prompts: skillPrompts, decisions, cwd: answerCwd(input.agent) }),

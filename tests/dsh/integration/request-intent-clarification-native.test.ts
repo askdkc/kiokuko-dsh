@@ -13,6 +13,7 @@ import { readTaskSnapshot, taskCanExecute, type TaskSnapshot } from '../../../sr
 import { openConnection } from '../../../src/db/connection.js'
 import { withIsolatedSkillHome } from '../helpers/skill-home.js'
 import { nativeMock, nativeToolResults } from '../helpers/native-mock.js'
+import { assertNativeDecisionDiagnostics } from '../helpers/decision-diagnostics.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const packageRoot = process.env.KIOKUKO_SKILL_PACKAGE_ROOT
@@ -42,26 +43,26 @@ const boundIntent = (request: any) => {
   return JSON.parse(text.split('advisory only):\n')[1]!.split('\n')[0]!)
 }
 
-for (const scenario of ['answered', 'target-answered', 'dismissed', 'stopped', 'stale', 'foreign-answer'] as const) {
+for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dismissed', 'stopped', 'stale', 'foreign-answer'] as const) {
   test(`direct Core native semantic clarification: ${scenario}`, { skip: !available, timeout: 30_000 },
     async () => withIsolatedSkillHome(async () => {
     const providerModule = await import(packageRoot
       ? pathToFileURL(join(packageRoot, 'dist/dsh/decisions/laya-v1.js')).href : '../../../src/dsh/decisions/laya-v1.js')
     const coreModule = await import(packageRoot
       ? pathToFileURL(join(packageRoot, 'dist/dsh/core/host.js')).href : '../../../src/dsh/core/host.js')
-    const answeredScenario = scenario === 'answered' || scenario === 'target-answered'
-    const requested = scenario === 'target-answered' ? 'Change that.' : ambiguousRequest
+    const answeredScenario = scenario === 'answered' || scenario === 'target-answered' || scenario === 'reversed-answered'
+    const requested = scenario === 'target-answered' ? 'Change that.' : scenario==='reversed-answered'?'Only explain PLAN.md. Do not modify it; no document edit is requested.':ambiguousRequest
     const providerMessages: string[] = []
     const inference = mock.method(providerModule.LayaV1DecisionProvider.prototype, 'evaluate', async (batch: DecisionBatch) => {
-      const task = typeof batch.state === 'string' ? batch.state : (batch.state as { currentUserMessage?: string }).currentUserMessage ?? ''
+      const task = typeof batch.state === 'string' ? batch.state : (batch.state as { currentUserMessage?: string; source?: {task:string} }).currentUserMessage ?? (batch.state as {source?:{task:string}}).source?.task ?? ''
       const first = task === firstRequest, answered = task.includes(clarifiedAnswer)
       providerMessages.push(task)
       return { provider: 'laya-coreml', requestedModel: 'laya-rl-agent', policyVersion: 'clarification-fixture',
         answers: batch.questions.map(question => {
-          const choiceId = question.id === 'task-type' ? first ? 'research' : 'writing'
+          const choiceId = question.id.startsWith('semantic-') ? scenario==='reversed-answered'&&task===requested?'contradicted':'supported' : question.id === 'task-type' ? first ? 'research' : 'writing'
             : question.id === 'request-relation' ? !first && !answered && scenario === 'target-answered' ? 'scope_change' : 'same_scope_continuation'
               : question.id === 'request-action' ? first ? 'verify' : 'change'
-                : question.id === 'request-change-scope' && (answered || scenario === 'target-answered') ? 'document'
+                : question.id === 'request-change-scope' && (answered || scenario === 'target-answered' || scenario==='reversed-answered') ? 'document'
                   : question.id.startsWith('request-proposal-') ? 'not_selected' : undefined
           return choiceId ? { id: question.id, status: 'selected' as const, choiceId }
             : { id: question.id, status: 'abstained' as const, reason: 'uncertain' as const }
@@ -103,7 +104,8 @@ for (const scenario of ['answered', 'target-answered', 'dismissed', 'stopped', '
           selected: [question.id === 'taskType' ? 'research' : question.id === 'target' ? 'PLAN.md'
             : question.id === 'expected' ? 'A concise explanation' : '通常実行'] }] }
         asked.push(request)
-        if (scenario === 'target-answered') assert.match(question.question, /具体的|対象/)
+        if (scenario === 'reversed-answered') assert.match(question.question,/照合|対象|操作/)
+        else if (scenario === 'target-answered') assert.match(question.question, /具体的|対象/)
         else assert.match(question.question, /文章|コード|設定/)
         assert.equal(request.questions.length, 1, 'ask only the unresolved semantic question')
         questionObserved()
@@ -212,9 +214,15 @@ for (const scenario of ['answered', 'target-answered', 'dismissed', 'stopped', '
         assert.equal(taskCanExecute(readCurrent()), false, 'stopped work has no executable authority')
       }
       assert.equal(asked.length, 1, 'a single unresolved scope gets a single native question')
+      database(db=>assertNativeDecisionDiagnostics(db,agent.session.id,answeredScenario,scenario==='reversed-answered'||scenario==='target-answered'))
       if (answeredScenario || scenario === 'dismissed' || scenario === 'foreign-answer') {
         assert.deepEqual(errors, []); assert.equal(checked, true)
       }
+      if(scenario==='reversed-answered')database(db=>{
+        const rows=db.prepare("SELECT document_json FROM dsh_diagnostic_events WHERE kind='detector' ORDER BY created_at").all().map(r=>JSON.parse(String(r.document_json)))
+        assert.ok(rows.some(r=>r.judge?.state==='available'&&r.judge.status==='refuted'&&r.judge.complete===true),'actual finite-domain subprocess must refute the reversed extraction')
+        assert.ok(rows.some(r=>r.judge?.state==='available'&&r.judge.status==='entailed'&&r.judge.complete===true),'new same-scope answer must pass a fresh finite-domain assessment')
+      })
       if (answeredScenario) assert.ok(providerMessages.some(task => task.includes(clarifiedAnswer)))
       else {
         assert.equal(await readFile(join(dir, 'PLAN.md'), 'utf8'), originalContent)

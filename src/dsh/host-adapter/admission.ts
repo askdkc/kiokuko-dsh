@@ -1,4 +1,5 @@
 import { isNativeSubagent } from '../native-subagent.js'
+import { recordDiagnosticAdmission, observeDiagnostic } from '../decisions/diagnostics.js'
 import type { TaskType } from '../../akinator/types.js'
 import { createTurnState, policyState } from '../host-adapter/turn-state.js'
 import { bindMemoryApplication, memoryRetrievalStatus } from '../../memory/application.js'
@@ -187,6 +188,8 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
     })
     if (authority) await runtime.withDatabase(database => authorizeTaskLease(database, authority))
     turnState.record(event, result, generation, authority)
+    await observeDiagnostic(runtime,event.sessionId,db=>recordDiagnosticAdmission(db,{sessionId:event.sessionId,turn:event.turn,runId:result.prepared.run.runId,
+      task:event.task,...(event.requestIntentContext?{context:event.requestIntentContext}:{}),...(event.requestIntent?{decision:event.requestIntent}:{})}))
     const reviewItem = currentSession(event.sessionId)
     const reviewAgent = event.nativeAgent as ReviewAgent | undefined
     if (reviewItem && reviewAgent?.session && typeof reviewAgent.session.snapshotEvents === 'function') {

@@ -15,8 +15,10 @@ import { taskAllowedOperations, taskCanExecute, type TaskSnapshot } from './task
 import { createRequestIntentContext, unresolvedRequestIntent, validateMainModelRequestIntent, requestIntentReferenceIds, requestIntentRequiredReferenceIds, requestIntentIsUnresolved, requestIntentMessageRefs, requestIntentTaskType, RequestIntentSubmissionSchema,
   type RequestIntentContext, type RequestIntentDecision, type RequestIntentInterpretation, type RequestIntentSubmission } from './decisions/request-intent.js'
 import { memoryOwnerKind, type MemoryOwnerIdentity, type MemoryOwnerKind } from './memory-owner.js'
+import type { IntentAssessment } from './decisions/intent-assessment.js'
+import type { IntakeDiagnosticObservation } from './decisions/diagnostics.js'
 
-class RequestClarification extends Error {}
+class RequestClarification extends Error { constructor(message:string,readonly assessment=false){super(message)} }
 
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
@@ -44,6 +46,8 @@ interface NativeTools {
   guard(callback: (execution: Execution) => string | undefined): () => void
 }
 interface Dependencies {
+  readonly assess?: (input: DemandInput, context: RequestIntentContext, decision: RequestIntentDecision) => Promise<IntentAssessment | undefined>
+  readonly diagnostic?: (input: DemandInput, observation: IntakeDiagnosticObservation) => Promise<void>
   readonly questions?: DshUserQuestions
 
   readonly answerContext?: DshAnswerContext | undefined
@@ -75,6 +79,7 @@ interface Turn {
   requestIntentContext?: RequestIntentContext
   requestIntentContextDigest?: string
   preparedIntentDigest?: string
+  assessment?: { digest: string; result: IntentAssessment }
   memoryOwner: MemoryOwnerKind
   taskType?: TaskType
   existing?: boolean
@@ -138,6 +143,9 @@ export function preparationCarrier(value: unknown): PreparationRequest | undefin
 
 /** Conversation entry and execution intake are distinct; neither this mode nor a type hint grants native permission. */
 export class OnDemandIntake {
+  private async diagnose(state: Turn, observation: Omit<IntakeDiagnosticObservation,'context'|'decision'>): Promise<void> {
+    try { await this.host.diagnostic?.(state.input,{...observation,...(state.requestIntentContext?{context:state.requestIntentContext}:{}),...(state.requestIntent?{decision:state.requestIntent}:{})}) } catch { /* Diagnostic loss cannot authorize or veto work. */ }
+  }
   readonly #turns = new Map<string, Turn>()
   readonly #clarifications = new Map<string, { agent: DemandAgent; turn: number; key: string; status: 'waiting' | 'queued'; result?: unknown; operation?: Promise<unknown> | undefined }>()
   readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; evidenceReadDigest?: string; requestPreparation?: boolean; nativeUnownedDigest?: string; nativeCommandDigest?: string; nativeLispDigest?: string }>()
@@ -279,6 +287,8 @@ export class OnDemandIntake {
           state.requestIntent = unresolvedRequestIntent(context, 'native_unowned_request')
         }
         state.status = 'answer'
+        await this.diagnose(state,{kind:'native_unowned'})
+        await this.diagnose(state,{kind:'resume'})
         return true
       }
       try { state.intent = await this.host.classify(input, state.task) }
@@ -294,6 +304,8 @@ export class OnDemandIntake {
         input.signal.throwIfAborted()
       }
       const pendingClarification = this.#clarifications.get(sessionId)
+      await this.diagnose(state,{kind:'interpretation'})
+      await this.diagnose(state,{kind:'resume'})
       if (pendingClarification?.agent === input.agent && state.requestIntent && !requestIntentIsUnresolved(state.requestIntent)
         && !executionClarification(state.task, state.requestIntent, state.requestIntentContext)) this.#clarifications.delete(sessionId)
       state.memoryOwner = memoryOwnerKind(state.requestIntent, state.intent.taskType)
@@ -321,7 +333,9 @@ export class OnDemandIntake {
         this.acknowledgeExisting(state)
         return false
       }
-      const canContinue = state.requestIntent?.relation === 'same_scope_continuation'
+      const assessmentConsistent = state.requestIntent && state.requestIntent.action!=='answer'
+        ? await this.assess(state,state.requestIntent) : true
+      const canContinue = assessmentConsistent && state.requestIntent?.relation === 'same_scope_continuation'
         && !requestIntentIsUnresolved(state.requestIntent) && state.requestIntent.action !== 'answer'
       if (previous?.input.turn !== input.turn && state.task && canContinue
         && await this.host.existing(input, state.requestIntent)) {
@@ -344,7 +358,7 @@ export class OnDemandIntake {
           && state.requestIntent.relation !== 'unknown' && state.requestIntent.action !== 'unknown'
       const missingExecutionDetail = executionClarification(state.task, state.requestIntent, state.requestIntentContext)
         || state.requestIntentContext?.activeTask && !taskCanExecute(state.requestIntentContext.activeTask)
-      if (this.options.onlyWhenDeferred && knownIntent && !missingExecutionDetail) {
+      if (this.options.onlyWhenDeferred && knownIntent && !missingExecutionDetail && assessmentConsistent) {
         this.#turns.delete(sessionId)
         state.status = 'closed'
         controller.abort(new Error('Known intent continues through eager admission'))
@@ -388,17 +402,33 @@ export class OnDemandIntake {
   private definition(execution: Execution): Definition | undefined {
     try { return this.#tools?.get(execution.name, execution.agent) } catch { return undefined }
   }
+  private async assess(state: Turn, decision: RequestIntentDecision | undefined): Promise<boolean> {
+    if (!this.host.assess || decision?.action === 'answer' || decision?.action === 'research' || requestIntentIsUnresolved(decision)) return true
+    if (!decision || !state.requestIntentContext) throw new RequestClarification('The source or candidate is unresolved',true)
+    const context=state.requestIntentContext,digest=canonicalContentHash([context,decision])
+    if(state.assessment?.digest!==digest){
+      const result=await this.host.assess(state.input,context,decision)
+      this.assertCurrent(state)
+      if(!result){await this.diagnose(state,{kind:'assessment_disabled'});return true} // Explicit mode=off: no detector verdict or new authority.
+      if(canonicalContentHash([state.requestIntentContext,decision])!==digest)throw new Error('Assessment source changed')
+      state.assessment={digest,result}
+      await this.diagnose(state,{kind:'assessment',assessment:result})
+    }
+    return state.assessment!.result.outcome==='consistent'
+  }
   private async prepare(state: Turn, taskType: TaskType, signal: AbortSignal, requestIntent?: RequestIntentDecision,
     explicitIntent = false): Promise<void> {
     this.assertCurrent(state); signal.throwIfAborted()
     if (state.selectionPending) throw new ExecutionSelectionPending()
     const resolved = requestIntent ?? state.requestIntent
+    try { await this.host.diagnostic?.(state.input,{kind:'interpretation',...(state.requestIntentContext?{context:state.requestIntentContext}:{}),...(resolved?{decision:resolved}:{})}) } catch { /* Advisory only. */ }
     if (resolved?.action === 'change' && resolved.changeScope === 'unknown') {
       throw new RequestClarification('The requested change scope is unresolved. Specify implementation or document using the current request evidence before preparing work.')
     }
     if (resolved && requestIntentIsUnresolved(resolved) && (state.requestIntentContext?.activeGoal || state.requestIntentContext?.activeTask)) {
       throw new RequestClarification('Clarify the request before preparing work')
     }
+    if (!await this.assess(state,resolved)) throw new RequestClarification('Independent source comparison or finite-domain verification requires clarification',true)
     const activeTask = state.requestIntentContext?.activeTask
     if (activeTask && resolved?.relation === 'same_scope_continuation' && !taskCanExecute(activeTask) && !resolved.taskOperation) {
       throw new RequestClarification('The current task requires an explicit user-selected state operation before execution.')
@@ -466,11 +496,17 @@ export class OnDemandIntake {
     const signal = AbortSignal.any([executionSignal, state.input.signal, state.controller.signal])
     const context = state.requestIntentContext
     const sessionId = state.input.agent.session!.id
+    if(reason.assessment && state.assessment?.result.outcome==='unavailable') {
+      const a=state.assessment.result
+      return {prepared:false,status:'assessment_unavailable',semantic:a.semantic,detector:a.detector.state==='unavailable'?a.detector.reason:a.detector.result.status,
+        originalTask:state.task,permissions:'unchanged_native_policy',detail:'原文照合または有限領域検査を利用できません。実行は準備されていません。'}
+    }
     const scope = state.requestIntent?.action === 'change' && state.requestIntent.changeScope === 'unknown'
       || reason.message.startsWith('The requested change scope')
     const target = !!executionClarification(state.task, state.requestIntent, context)
     const transition = context?.activeTask && !taskCanExecute(context.activeTask)
-    const question = transition ? `現在のタスクは ${context!.activeTask!.state} です。続けるために、どの操作を希望しますか？（${taskAllowedOperations(context!.activeTask!).join(' / ')}）`
+    const question = reason.assessment ? '現在の依頼と実行候補の対象・操作・制約を照合できませんでした。今回の対象と希望する操作、以前の指示を変更する範囲を教えてください。'
+      : transition ? `現在のタスクは ${context!.activeTask!.state} です。続けるために、どの操作を希望しますか？（${taskAllowedOperations(context!.activeTask!).join(' / ')}）`
       : target ? 'どの具体的なファイル・項目・相手・操作を対象にしますか？'
       : scope ? '変更するのは文章だけですか、それともコード・テスト・設定も含みますか？'
         : state.requestIntent?.action === 'unknown' ? 'その対象に、具体的に何をしてほしいですか？'
@@ -484,12 +520,14 @@ export class OnDemandIntake {
     const pending = { agent: state.input.agent, turn: state.input.turn, key, status: 'waiting' as 'waiting' | 'queued', result: result as unknown,
       operation: undefined as Promise<unknown> | undefined }
     this.#clarifications.set(sessionId, pending)
+    await this.diagnose(state,{kind:'question',questionRef:id,reason:transition?'transition_required':target?'target_unknown':scope?'scope_unknown':'clarification_required'})
     if (!this.host.questions || !state.input.agent.followup) return result
     const operation = (async () => {
       try {
         const response = await abortable(this.host.questions!.ask({ agent: state.input.agent, signal,
           questions: [{ id, question, ...(scope && !target && !transition ? { options: [{ label: '文章のみ' }, { label: 'コード・テスト・設定を含む' }] } : {}) }] }), signal)
         signal.throwIfAborted(); this.assertCurrent(state)
+        if(this.#clarifications.get(sessionId)!==pending || pending.status!=='waiting')return result
         await this.host.validate(state.input)
         signal.throwIfAborted(); this.assertCurrent(state)
         const current = await this.host.interpret?.(state.input, state.task)
@@ -505,9 +543,11 @@ export class OnDemandIntake {
         // Both texts originate from the human: preserve the original verbatim,
         // label the actual UI answer separately, and re-enter ordinary native
         // capture. The reply itself is never mapped to execution authority.
-        const content = `Original user request (unchanged):\n${state.task}\n\nUser answer to clarification "${question}":\n${value}`
+        const answerMessageId=randomUUID()
+        const content = `Original user request (unchanged):\n${state.task}\n\nLatest native user answer to clarification "${question}" (source revision ${id}:${answerMessageId}; same question and current scope):\n${value}\n\nInterpret this latest explicit answer as a revision only where it changes the earlier instruction within this question’s scope. Preserve unrelated constraints. Native permissions and task ownership still apply.`
         signal.throwIfAborted(); this.assertCurrent(state)
-        state.input.agent.followup!({ id: randomUUID(), role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: content }] })
+        state.input.agent.followup!({ id: answerMessageId, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: content }] })
+        await this.diagnose(state,{kind:'answer',questionRef:id,answerRef:answerMessageId})
         pending.status = 'queued'
         pending.result = { ...result, status: 'clarification_answer_queued', answer: value }
         return pending.result

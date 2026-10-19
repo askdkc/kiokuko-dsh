@@ -4,6 +4,7 @@ import type { TaskType } from '../../akinator/types.js'
 import { DecisionError, type DecisionBatch } from './contracts.js'
 import type { DecisionService } from './service.js'
 import { TaskSnapshotSchema, TASK_OPERATIONS, validateTaskOperation, type TaskOperation } from '../task-state.js'
+import { correlateRequestIntent,requestIntentDiagnosticId } from './diagnostic-correlation.js'
 
 export const REQUEST_INTENT_POLICY_VERSION = 'request-intent-task-state-v3'
 export const MAX_REQUEST_INTENT_BYTES = 32 * 1024
@@ -58,20 +59,7 @@ export const RequestIntentContextSchema = z.object({
 })
 export type RequestIntentContext = z.infer<typeof RequestIntentContextSchema>
 
-/** Bind exact current user messages; injected/plugin messages are never candidates. */
-export function requestIntentMessageRefs(messages: readonly unknown[], task: string): RequestIntentContext['messageRefs'] {
-  const refs = messages.flatMap(value => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return []
-    const message = value as Record<string, unknown>
-    const source = message.source && typeof message.source === 'object' && !Array.isArray(message.source)
-      ? message.source as Record<string, unknown> : undefined
-    if (message.role !== 'user' || source !== undefined && source.kind !== 'user') return []
-    const id = typeof message.id === 'string' && message.id.length > 0 ? message.id : `message:${canonicalContentHash(message)}`
-    return [{ id, digest: canonicalContentHash(message) }]
-  })
-  if (refs.length) return refs.slice(-16)
-  return [{ id: `input:${canonicalContentHash(task)}`, digest: canonicalContentHash(task) }]
-}
+export { requestIntentMessageRefs } from './message-refs.js'
 
 export function createRequestIntentContext(input: {
   readonly task: string
@@ -301,7 +289,10 @@ export function rebindRequestIntentDecision(raw: unknown, context: RequestIntent
         || context.proposals.some(proposal => selected.has(proposal.id) && reference === `proposal:${canonicalContentHash([proposal.id, proposal.revision, proposal.digest])}`)) }, context)
     if (!validated.ok) return undefined
   }
-  return { ...value, evidence: evidenceFor(context, selected) }
+  const rebound={ ...value, evidence: evidenceFor(context, selected) }
+  const diagnosticId=requestIntentDiagnosticId(raw)
+  if(diagnosticId)correlateRequestIntent(rebound,diagnosticId)
+  return rebound
 }
 
 /** A selected action can advise intake type; it never supplies a target or execution permission. */
@@ -320,6 +311,13 @@ export function requestIntentTaskType(decision: RequestIntentDecision | undefine
 
 export async function classifyRequestIntent(service: DecisionService | undefined, requestId: string, rawContext: unknown,
   signal: AbortSignal): Promise<RequestIntentDecision | undefined> {
+  let diagnosticId: string | undefined
+  const result=await classifyRequestIntentAttempt(service,requestId,rawContext,signal,id=>{diagnosticId=id})
+  if(result && diagnosticId)correlateRequestIntent(result,diagnosticId)
+  return result
+}
+async function classifyRequestIntentAttempt(service: DecisionService | undefined, requestId: string, rawContext: unknown,
+  signal: AbortSignal, observeId:(id:string)=>void): Promise<RequestIntentDecision | undefined> {
   const parsed = RequestIntentContextSchema.safeParse(rawContext)
   if (!parsed.success) return undefined
   const context = parsed.data
@@ -332,6 +330,7 @@ export async function classifyRequestIntent(service: DecisionService | undefined
     if (!batch) return unresolvedRequestIntent(context, 'context_not_usable')
     const outcome = await service.evaluate(requestId, batch, signal, REQUEST_INTENT_POLICY_VERSION, undefined, {
       onProviderDispatch: () => { providerSent = true },
+      onEvaluation: observation => { if(observation.decisionId)observeId(observation.decisionId) },
     })
     if (outcome.status !== 'completed') return unresolvedRequestIntent(context, outcome.reason, providerSent)
     const relation = outcome.result.answers.find(answer => answer.id === 'request-relation')

@@ -98,3 +98,7 @@ are shipped in `dist/dsh/models/vendor/THIRD_PARTY_NOTICES.txt`.
 # Bundled Rust protocol guardrail
 
 The `kiokuko-guardrail` engine source is included under `crates/guardrail` and uses the repository MIT license. Precompiled runtime artifacts contain Rust standard-library code. The unchanged official standard-library copyright bundle and license texts are preserved in [docs/guardrail-licenses](docs/guardrail-licenses/README.md), alongside clearly labeled conservative musl/libunwind notice supplements. Zig is a build tool only, not a bundled runtime dependency. See the repository's `crates/guardrail-release` for recorded compiler/component provenance and target-specific native verification status.
+
+# Bundled finite-domain micro judge
+
+The `kiokuko-micro-judge` source under `crates/micro-judge` uses the repository MIT license. Its Apple Silicon macOS executable contains standard-library code from the official Rust 1.85.0 distribution. The unchanged official component copyright notice and MIT/Apache license texts are preserved in [micro-judge/licenses](micro-judge/licenses). Compiler and component archive checksums and native verification are recorded with the build evidence; this artifact makes no native verification claim for another platform.

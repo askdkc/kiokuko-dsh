@@ -5,6 +5,8 @@ Use this map to find the current entry point and a focused check before editing.
 | Concern | Entry and owner | Focused checks |
 | --- | --- | --- |
 | Task admission and execution choice | `src/dsh/intake-gate.ts`, `src/dsh/host-adapter/admission.ts` | `node scripts/run-tests.mjs tests/dsh/unit/task-completion.test.ts tests/dsh/integration/turn-process.test.ts` |
+| Advisory decision provenance and diagnostics | `src/dsh/decisions/diagnostics.ts`, `src/dsh/decisions/service.ts`, `src/dsh/on-demand-intake.ts`; [contract](decision-diagnostics.md) | `node scripts/run-tests.mjs tests/dsh/integration/decision-diagnostics.test.ts tests/dsh/integration/decision-diagnostics-native.test.ts tests/dsh/integration/turn-process.test.ts` |
+| Independent intent comparison and finite-domain judge | `src/dsh/decisions/intent-assessment.ts`, `src/dsh/decisions/micro-judge.ts`, `crates/micro-judge/src/main.rs`; [contract](micro-judge.md) | `KIOKUKO_REQUIRE_MICRO_JUDGE=1 node scripts/run-tests.mjs tests/dsh/integration/micro-judge.test.ts tests/dsh/integration/request-intent-clarification-native.test.ts` |
 | Task conditions and structured file scope | `src/dsh/execution-frame.ts`, `src/dsh/execution-support.ts` | `node scripts/run-tests.mjs tests/dsh/unit/execution-support.test.ts` |
 | Normal and Enno completion evidence | `src/dsh/task-completion.ts`, `src/enno-oduno/service.ts` | `node scripts/run-tests.mjs tests/dsh/unit/task-completion.test.ts tests/dsh/integration/final-verification` |
 | Durable continuation and recovery | `src/dsh/turn-process.ts`, `src/dsh/boundary-worker.ts` | `node scripts/run-tests.mjs tests/dsh/integration/boundary-worker.test.ts` |

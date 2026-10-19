@@ -63,6 +63,17 @@ Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
 
 ## Processes and network
 
+- Resolved, enabled typed request candidates are compared with the original
+  source by an independent call to the selected TypeSafe, Nimble or Laya decision
+  provider. Exact source references and that observation enter the bundled
+  finite-domain micro judge through bounded stdin/stdout. The host verifies the
+  platform artifact hash, enforces a deadline and retains native permissions,
+  ownership and revision checks. No runtime compilation, download, worker startup
+  or PATH fallback occurs. Apple Silicon macOS is the current native-verified
+  target; other platforms report unavailable. An enabled unavailable/incomplete
+  check is not proof. Explicit typed-decision OFF records no assessment.
+  [Protocol, scope and limits](docs/micro-judge.md).
+
 - Source-backed index reasoning is active by default in both compatibility and
   configured core: admitted DSH provider/model, up to eight bounded calls per
   workspace per UTC day across extraction, bridging and entailment checking.
