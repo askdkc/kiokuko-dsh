@@ -12,6 +12,7 @@ import { isolateSkillHome } from '../helpers/skill-home.js'
 
 isolateSkillHome()
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
+const packageRoot = process.env.KIOKUKO_SKILL_PACKAGE_ROOT
 const installed = existsSync(join(packages, '@deepseek-ai/dsh/package.json'))
 if (!installed && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Pinned native DSH is required')
 const program = "export function parse(value){return Number(value)+1}\nif(process.argv[1]?.endsWith('parser.mjs'))console.log(String(parse(process.argv[2])))\n"
@@ -23,7 +24,7 @@ const extra = { lisp: { enabled: true, startupTimeoutMs: 60000 }, answerReview: 
 
 for (const choice of ['使わない', '使う'] as const) test(`native coding session ${choice}: real artifact, item evidence, fresh user-entry Goal`, { skip: !installed, timeout: 120000 }, async () => {
   const questions: any[] = []
-  const f = await nativeSkillFixture({ packages, explicit: true, mode: 'full', extra, nativeAnswer: async request => {
+  const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: true, mode: 'full', extra, nativeAnswer: async request => {
     const question = request.questions[0]; questions.push(question)
     if (question.id.startsWith('coding-lisp-')) {
       assert.match(question.detail, /Goal:.*public parser/u)
@@ -77,7 +78,7 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
 })
 
 for (const answer of ['closed', 'empty', 'disconnected', 'cancel'] as const) test(`native coding ${answer}: no effects, reads and explanation remain available`, { skip: !installed, timeout: 30000 }, async () => {
-  const f = await nativeSkillFixture({ packages, explicit: true, extra, nativeAnswer: async request => {
+  const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: true, extra, nativeAnswer: async request => {
     const question = request.questions[0]
     if (!question.id.startsWith('coding-lisp-')) return { answers: [{ id: question.id, selected: ['通常実行'] }] }
     if (answer === 'disconnected') throw new Error('Disconnected')
@@ -101,7 +102,7 @@ for (const answer of ['closed', 'empty', 'disconnected', 'cancel'] as const) tes
 
 for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: a new task requires a new choice even with the previous Lisp runtime enabled`, { skip: !installed, timeout: 120000 }, async () => {
   const questions: any[] = []
-  const f = await nativeSkillFixture({ packages, explicit: mode === 'full', mode, extra, nativeAnswer: async request => {
+  const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: mode === 'full', mode, extra, nativeAnswer: async request => {
     const question = request.questions[0]
     const coding = question.id.startsWith('coding-lisp-')
     if (coding) questions.push(question)
@@ -129,7 +130,7 @@ for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: a new ta
 
 test('native core reload restores the exact pending task and question before allowing an ordinary write', { skip: !installed, timeout: 120000 }, async () => {
   const questions: any[] = []
-  const f = await nativeSkillFixture({ packages, explicit: false, mode: 'compiled', extra, nativeAnswer: async request => {
+  const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: false, mode: 'compiled', extra, nativeAnswer: async request => {
     const question = request.questions[0]
     if (question.id.startsWith('coding-lisp-')) {
       questions.push(question)

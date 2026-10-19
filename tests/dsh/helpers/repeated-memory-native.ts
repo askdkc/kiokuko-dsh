@@ -1,3 +1,4 @@
+import { intentFixtureDecisions } from './intent-decision-fixture.js'
 import { recordRepeatedStage } from './repeated-memory-report.js'
 import assert from 'node:assert/strict'
 import { execFile, execFileSync } from 'node:child_process'
@@ -134,7 +135,9 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       }) }
     } })
   } }))
-  const adapter = createDshHostAdapter(ctx, { repositoryRoot: root, databasePath: join(root, '.git', 'state.sqlite3'),
+  const knownRequests = new Set(Array.from({length:30},(_,index)=>{const number=index+1;return [false,true].map(readonly=>`${route === 'normal' ? '通常実行で' : '役小角を使って'}、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測の適用範囲を検証' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`)}).flat())
+  const decisions = intentFixtureDecisions(task => knownRequests.has(task) ? {action:'verify',taskType:'review'} : undefined)
+  const adapter = createDshHostAdapter(ctx, { decisions, repositoryRoot: root, databasePath: join(root, '.git', 'state.sqlite3'),
     ...options,
     modelRoutes: mockModelRoutes, agenticReplay: { enabled: true, askOnStart: false }, efficiency: { observe: true }, finalization: { inputMode },
     advisory: { verifyReadOnly: () => true, execute: async call => ({ slotId: call.slotId, outcome: 'completed', summary: 'Reviewed the immutable fixture contract.', recommendations: [], risks: [], evidence: [] }) },

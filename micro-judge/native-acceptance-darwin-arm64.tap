@@ -1,0 +1,118 @@
+TAP version 13
+# Subtest: typed finite domains preserve unknown and reject integer truthiness and unbounded graphs
+ok 1 - typed finite domains preserve unknown and reject integer truthiness and unbounded graphs
+  ---
+  duration_ms: 0.615416
+  type: 'test'
+  ...
+# Subtest: independent source comparison uses a distinct purpose and source, not extraction probabilities
+ok 2 - independent source comparison uses a distinct purpose and source, not extraction probabilities
+  ---
+  duration_ms: 2.127416
+  type: 'test'
+  ...
+# Subtest: missing or unsupported binary is explicit unavailable, never an allow
+ok 3 - missing or unsupported binary is explicit unavailable, never an allow
+  ---
+  duration_ms: 7.25125
+  type: 'test'
+  ...
+# Subtest: corrupt executable is rejected before spawning
+ok 4 - corrupt executable is rejected before spawning
+  ---
+  duration_ms: 2.971292
+  type: 'test'
+  ...
+# Subtest: actual packaged executable distinguishes all four complete statuses and incomplete budget exhaustion
+ok 5 - actual packaged executable distinguishes all four complete statuses and incomplete budget exhaustion
+  ---
+  duration_ms: 19.495125
+  type: 'test'
+  ...
+# Subtest: actual Rust MRV 4 queens has 2 solutions
+ok 6 - actual Rust MRV 4 queens has 2 solutions
+  ---
+  duration_ms: 2.232583
+  type: 'test'
+  ...
+# Subtest: actual Rust MRV 6 queens has 4 solutions
+ok 7 - actual Rust MRV 6 queens has 4 solutions
+  ---
+  duration_ms: 3.096167
+  type: 'test'
+  ...
+# Subtest: actual Rust MRV 8 queens has 92 solutions
+ok 8 - actual Rust MRV 8 queens has 92 solutions
+  ---
+  duration_ms: 14.89725
+  type: 'test'
+  ...
+# Subtest: actual Rust agrees with an independent exhaustive oracle on 200 deterministic small problems
+ok 9 - actual Rust agrees with an independent exhaustive oracle on 200 deterministic small problems
+  ---
+  duration_ms: 401.608666
+  type: 'test'
+  ...
+# Subtest: all eight proposals with current Task and Goal fit the declared host bounds
+ok 10 - all eight proposals with current Task and Goal fit the declared host bounds
+  ---
+  duration_ms: 4.827292
+  type: 'test'
+  ...
+# Subtest: host source/candidate relation graph detects stale source and preserves semantic unknown
+ok 11 - host source/candidate relation graph detects stale source and preserves semantic unknown
+  ---
+  duration_ms: 9.531958
+  type: 'test'
+  ...
+# Subtest: subprocess malformed is explicit unavailable
+ok 12 - subprocess malformed is explicit unavailable
+  ---
+  duration_ms: 37.859208
+  type: 'test'
+  ...
+# Subtest: subprocess version is explicit unavailable
+ok 13 - subprocess version is explicit unavailable
+  ---
+  duration_ms: 37.804167
+  type: 'test'
+  ...
+# Subtest: subprocess digest is explicit unavailable
+ok 14 - subprocess digest is explicit unavailable
+  ---
+  duration_ms: 37.819916
+  type: 'test'
+  ...
+# Subtest: subprocess output_limit is explicit unavailable
+ok 15 - subprocess output_limit is explicit unavailable
+  ---
+  duration_ms: 34.880125
+  type: 'test'
+  ...
+# Subtest: subprocess timeout is explicit unavailable
+ok 16 - subprocess timeout is explicit unavailable
+  ---
+  duration_ms: 103.301083
+  type: 'test'
+  ...
+# Subtest: subprocess process_failed is explicit unavailable
+ok 17 - subprocess process_failed is explicit unavailable
+  ---
+  duration_ms: 40.533209
+  type: 'test'
+  ...
+# Subtest: explicit typed-decision OFF does not fabricate a solver verdict; missing enabled provider is unavailable
+ok 18 - explicit typed-decision OFF does not fabricate a solver verdict; missing enabled provider is unavailable
+  ---
+  duration_ms: 4.572541
+  type: 'test'
+  ...
+1..18
+# tests 18
+# suites 0
+# pass 18
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1069.852792

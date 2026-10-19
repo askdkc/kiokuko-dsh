@@ -1,3 +1,4 @@
+import { intentDecisionWebFixture } from './lib/intent-decision-web-fixture.mjs'
 import { declineOptionalMemoryOffers } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
@@ -17,7 +18,7 @@ const project = join(base, 'project'), receipts = join(base, 'receipts.jsonl')
 const runtime = process.env.KIOKUKO_LISP_APPROVAL_RUNTIME ?? 'dsh-runtime'
 const dsh = process.env.DSH_BIN ?? join(root, `tests/fixtures/${runtime}/node_modules/.bin/dsh`)
 const env = { ...process.env, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'cache') }
-let host, browser, page, logs = ''
+let host, browser, page, decisionFixture, logs = ''
 async function poll(fn, timeout = 60000) {
   const end = Date.now() + timeout
   while (Date.now() < end) { const value = await fn(); if (value) return value; await new Promise(r => setTimeout(r, 100)) }
@@ -40,6 +41,7 @@ import {nativeMock,nativeToolResults} from ${JSON.stringify(pathToFileURL(mockPa
 export const name='lisp-approval-fixture'; export const inject=['workspaceRegistry','commands','tools','agents','llm'];
 export async function apply(ctx){
 const mock=nativeMock(llm), responses=[], attempts=[];
+ctx.on('agent/error',event=>appendFile(${JSON.stringify(receipts)},JSON.stringify({fixtureError:String(event.error?.stack??event.error)})+'\\n'));
 class FixtureAdapter extends mock.MockAdapter {
  async *stream(input){
   const attempt={purpose:input.purpose??'conversation',sessionId:input.sessionId,pending:responses.length,messages:input.messages.map(message=>({role:message.role,id:message.id,source:message.source?.kind,toolCallId:message.toolCallId,calls:(message.content??[]).filter(block=>block.type==='tool-call').map(block=>({id:block.id,name:block.name}))})).slice(-6)};
@@ -78,8 +80,9 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
  await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode,result})+'\\n'); return {kind:'success',text:'Recorded '+mode};
 }});}
 `)
+  decisionFixture = await intentDecisionWebFixture()
   const patch = join(env.DSH_HOME, 'profiles', 'web', 'cordis.patch.yml')
-  await writeFile(patch, `- id: session-title-llm\n  disabled: true\n- id: agent-default-model\n  config: {provider: approval-fixture, model: mock}\n- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n    memoryReview: {mode: off}\n    memoryEvolution: {mode: off}\n    memoryIndexReasoning: {mode: off}\n    lisp: {enabled: true, executionMode: protected}\n- insert:\n    - id: lisp-approval-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, tools, agents, sessionProjections, llm]\n`)
+  await writeFile(patch, `- id: session-title-llm\n  disabled: true\n- id: agent-default-model\n  config: {provider: approval-fixture, model: mock}\n- id: kiokuko-dsh\n  config:\n    enabled: true\n    agenticReplay: {enabled: false}\n    memoryReview: {mode: off}\n    memoryEvolution: {mode: off}\n    memoryIndexReasoning: {mode: off}\n    typedDecisions: {provider: nimble, nimble: {endpoint: ${JSON.stringify(decisionFixture.endpoint)}, model: independent-fixture}}\n    lisp: {enabled: true, executionMode: protected}\n- insert:\n    - id: lisp-approval-fixture\n      name: ${JSON.stringify(fixture)}\n      inject: [workspaceRegistry, commands, tools, agents, sessionProjections, llm]\n`)
   const boot = async () => {
     logs = ''
     host = spawn(dsh, ['--profile', 'web', '--no-open', '--port', webTestPort()], { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -122,6 +125,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
     await page.getByRole('button', { name: 'Send message', exact: true }).click()
   }
   const records = async () => (await readFile(receipts, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse)
+  const waitApproval = () => poll(async()=>{const failure=(await records()).find(row=>row.fixtureError);if(failure)throw new Error(failure.fixtureError);return await page.getByText('Auto-approve all Lisp actions for this profile and continue',{exact:false}).first().isVisible()},30000)
   await newSession()
   await command('/lisp-approval-fixture seed')
   await poll(async()=> (await records()).find(r=>r.mode==='seed'))
@@ -132,7 +136,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   await command('/lisp-approval-fixture approval-status')
   assert.match((await poll(async()=> (await records()).find(r=>r.mode==='approval-status'))).result.text,/ask/)
   await command('/lisp-approval-fixture apply-default')
-  await page.getByText('Auto-approve all Lisp actions for this profile and continue',{exact:false}).first().waitFor()
+  await waitApproval()
   assert.equal(await readFile(join(project,'change.txt'),'utf8'),'before','default policy cannot write before consent')
   await page.keyboard.press('2'); await page.keyboard.press('Enter')
   const defaultDenied=await poll(async()=> (await records()).find(r=>r.mode==='apply-default'))
@@ -140,7 +144,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   assert.equal(await readFile(join(project,'change.txt'),'utf8'),'before','denial preserves existing bytes')
   // A later independent operation can explicitly enable profile auto-approval.
   await command('/lisp-approval-fixture apply')
-  await page.getByText('Auto-approve all Lisp actions for this profile and continue', {exact:false}).first().waitFor()
+  await waitApproval()
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true,'approval fits narrow viewport')
   await page.keyboard.press('4')
   assert.equal(await page.getByRole('button',{name:/^4\. Auto-approve all Lisp actions/}).getAttribute('aria-pressed'),'true')
@@ -182,15 +186,17 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   assert.equal((await poll(async()=>{const rows=await records();return rows.length>resetCount ? rows.at(-1).result : undefined})).kind,'success')
   const deniedCount=(await records()).length
   await command('/lisp-approval-fixture verify')
-  await page.getByText('Auto-approve all Lisp actions for this profile and continue',{exact:false}).first().waitFor()
+  await waitApproval()
   await page.keyboard.press('2'); await page.keyboard.press('Enter')
   const denied=await poll(async()=>{const rows=await records();return rows.length>deniedCount ? rows.at(-1) : undefined})
   assert.match(JSON.stringify(denied.result),/NOT_APPLIED/,'disabling auto-approval restores denial without execution')
+  assert.ok(decisionFixture.calls.filter(call=>call.semantic).length>=6,'approval operations must pass independent semantic comparison and the actual detector')
   console.log(JSON.stringify({result:'passed',runtime,checks:['ordinary chat has no Lisp approval selector','fresh profile asks by default','denial preserves bytes','explicit enable and continue','file effect','multiple file changes','consecutive verifiers','cold restart and new chat','disable restores manual'],externalModelCalls:0}))
 
 } catch (e) { console.error(await readFile(receipts,'utf8').catch(()=>'')); console.error(logs.slice(-5000)); if (page) console.error((await page.locator('body').innerText().catch(() => '')).slice(-4000)); throw e }
 finally {
   await browser?.close()
+  await decisionFixture?.close()
   if (host && host.exitCode === null) { host.kill('SIGTERM'); await Promise.race([new Promise(r => host.once('exit', r)), new Promise(r => setTimeout(r, 5000))]); if (host.exitCode === null) host.kill('SIGKILL') }
   await rm(base, { recursive: true, force: true })
 }

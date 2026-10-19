@@ -77,7 +77,7 @@ test('an unresolved decision keeps the deterministic coding fallback and does no
  assert.equal(g.p.denial(g.agent,'bash',{}),undefined)
 })
 
-test('an enabled session is selected without asking the early question',async()=>{
+test('an explicitly selected manual session skips the early question but still requires a fresh prototype',async()=>{
  const agent={id:'enabled-agent',session:{id:'enabled-session'}}
  let choices=0,activations=0
  const p=new LispCodingPreparation({
@@ -91,4 +91,18 @@ test('an enabled session is selected without asking the early question',async()=
  assert.equal(choices,0);assert.equal(activations,1)
  assert.equal((p.status(agent)as any).phase,'prototype_required')
  assert.match(p.denial(agent,'bash',{})!,/LISP_PROTOTYPE_REQUIRED/u)
+})
+
+
+test('an enabled runtime without a manual preference asks for each new task',async()=>{
+ const agent={id:'task-agent'},answers:string[]=[]
+ const p=new LispCodingPreparation({identity:()=>({sessionId:'session',root:'/one'}),enabled:()=>true,selected:async()=>false,
+  choose:async input=>{answers.push(input.task);return {choice:answers.length===1?'yes':'no',answerRef:`human:${answers.length}`}},activate:async()=>{}})
+ const signal=new AbortController().signal
+ await p.prepare({agent,turn:1,task:'Implement first.ts',taskType:'build',signal})
+ assert.match(p.denial(agent,'write',{})!,/PROTOTYPE/u)
+ await p.prepare({agent,turn:2,task:'Implement second.ts',taskType:'build',signal})
+ assert.deepEqual(answers,['Implement first.ts','Implement second.ts'])
+ assert.equal(p.choiceFor(agent,'Implement second.ts')?.choice,'no')
+ assert.equal(p.denial(agent,'write',{}),undefined)
 })

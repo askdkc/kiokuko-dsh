@@ -117,13 +117,12 @@ export function mountCodingWorkflow(ctx: {
       return
     }
     const lisp = host.lisp()
-    // An explicit task answer takes precedence. An already enabled session is
-    // the user's selected route; manual ON is only the persisted preference.
+    // Reuse only this task's answer or an explicit manual session preference.
+    // A runtime left enabled by another task is not a human answer for this Goal.
     const explicit = lisp?.choiceFor?.(identity.agent, value.request)
     const manual = !explicit && await lisp?.manualSelected?.(identity.agent) === true
-    const enabled = !explicit && lisp?.enabled?.(identity.agent) === true
-    const early = explicit ?? (manual || enabled
-      ? { choice: 'yes' as const, answerRef: `${manual ? 'manual-session' : 'enabled-session'}:${identity.sessionId}:${value.workflowId}:${value.scopeVersion}` }
+    const early = explicit ?? (manual
+      ? { choice: 'yes' as const, answerRef: `manual-session:${identity.sessionId}:${value.workflowId}:${value.scopeVersion}` }
       : undefined)
     execution.signal.throwIfAborted(); current(identity, execution)
     if (!host.questions && !early) return // Durable pending; never invent a default.

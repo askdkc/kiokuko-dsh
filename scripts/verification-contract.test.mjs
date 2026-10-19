@@ -289,19 +289,25 @@ test('CI workflow requires every Protected Lisp and semantic matrix result', () 
     { platform: 'macos-arm64', runner: 'macos-15' },
   ]);
   assert.ok(semantic.steps.some(step => step.run?.includes('--profile semantic --output')));
-  assert.deepEqual(workflow.jobs.verify.needs, ['verify-main', 'lisp-runtime', 'semantic-platform-smoke']);
+  assert.deepEqual(workflow.jobs.verify.needs, ['verify-main', 'lisp-runtime', 'semantic-platform-smoke', 'micro-judge-native', 'shortcut-browser']);
   assert.equal(workflow.jobs.verify.if, 'always()');
   const aggregate = workflow.jobs.verify.steps[0];
+  assert.equal(aggregate.env.NATIVE_RESULT, '${{ needs.micro-judge-native.result }}');
+  assert.equal(aggregate.env.BROWSER_RESULT, '${{ needs.shortcut-browser.result }}');
   assert.equal(aggregate.env.MAIN_RESULT, '${{ needs.verify-main.result }}');
   assert.equal(aggregate.env.LISP_RESULT, '${{ needs.lisp-runtime.result }}');
   assert.equal(aggregate.env.SEMANTIC_RESULT, '${{ needs.semantic-platform-smoke.result }}');
   const outcomes = ['success', 'failure', 'cancelled', 'skipped', ''];
   for (const main of outcomes) for (const lisp of outcomes) for (const semantic of outcomes) {
     const result = spawnSync('bash', ['-c', aggregate.run], {
-      env: { ...process.env, MAIN_RESULT: main, LISP_RESULT: lisp, SEMANTIC_RESULT: semantic }, encoding: 'utf8',
+      env: { ...process.env, MAIN_RESULT: main, LISP_RESULT: lisp, SEMANTIC_RESULT: semantic, NATIVE_RESULT: 'success', BROWSER_RESULT: 'success' }, encoding: 'utf8',
     });
     assert.equal(result.status === 0, main === 'success' && lisp === 'success' && semantic === 'success',
       JSON.stringify({main,lisp,semantic}));
+  }
+  for (const key of ['NATIVE_RESULT','BROWSER_RESULT']) for (const outcome of outcomes) {
+    const result = spawnSync('bash',['-c',aggregate.run], {env:{...process.env,MAIN_RESULT:'success',LISP_RESULT:'success',SEMANTIC_RESULT:'success',NATIVE_RESULT:'success',BROWSER_RESULT:'success',[key]:outcome},encoding:'utf8'});
+    assert.equal(result.status === 0,outcome === 'success',JSON.stringify({key,outcome}));
   }
 });
 

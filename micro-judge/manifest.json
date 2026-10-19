@@ -5,7 +5,7 @@
       "platform": "darwin",
       "arch": "arm64",
       "file": "darwin-arm64/kiokuko-micro-judge",
-      "sha256": "fc677ed5d858001452bc3716cbefb93f072493fdafbbb36f4dbb5b8aefa69ef1",
+      "sha256": "03b8b94e8a0bd243056e633e6048bf292f9e8fcecb0327c3e93c1b2ee11811e0",
       "bytes": 386320,
       "sourceDigest": "fb105717ea188e0a2c47f0b469b8f0f9761fd058f28d6eecf68ffe171188dfcf",
       "compiler": "rustc 1.85.0 (4d91de4e4 2025-02-17)",

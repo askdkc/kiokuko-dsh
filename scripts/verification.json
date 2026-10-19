@@ -26,7 +26,8 @@
       "argv": [
         "node",
         "--test",
-        "scripts/verification-contract.test.mjs"
+        "scripts/verification-contract.test.mjs",
+        "scripts/micro-judge-artifacts.test.mjs"
       ],
       "profiles": [
         "main",

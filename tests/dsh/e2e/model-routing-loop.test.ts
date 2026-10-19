@@ -1,3 +1,4 @@
+import { intentFixtureDecisions, semanticFixtureAnswers } from '../helpers/intent-decision-fixture.js'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -100,7 +101,7 @@ for (const failure of ['insert', 'first-request', 'late-request', 'late-request-
     const decisions = new DecisionService(TypedDecisionsConfig.parse({ mode: 'auto' }), () => ({
       capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 },
       evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'input-recovery-fixture',
-        answers: batch.questions.map(question => {
+        answers: semanticFixtureAnswers(batch, task => task === 'README.mdを修正してください。' ? {action:'change',changeScope:'document'} : undefined) ?? batch.questions.map(question => {
           const choiceId = ({ 'task-type': 'writing', 'request-relation': 'new', 'request-action': 'change',
             'request-change-scope': 'document' } as Record<string, string>)[question.id] ?? (question.id.startsWith('request-proposal-') ? 'not_selected' : undefined)
           return choiceId ? { id: question.id, status: 'selected' as const, choiceId }
@@ -373,7 +374,7 @@ test('native README document execution: reload, write, verification and next tas
     }
     return { answers }
   } }) } }); await questionHost
-  const options = { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'),
+  const options = { decisions: intentFixtureDecisions(task => ['README.mdを修正してください。','README.mdの追記も実装してください。'].includes(task) ? {action:'change',changeScope:'document'} : undefined), repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'),
     llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } }
   let adapter = createDshHostAdapter(h.ctx, options)
   let composition = await mountDshComposition(h.ctx, adapter.host)
@@ -436,7 +437,7 @@ test('native code normal execution: cancel, plugin reload, original input recove
   const decisions = new DecisionService(TypedDecisionsConfig.parse({ mode: 'auto' }), () => ({
     capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 },
     evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'cancel-reload-fixture',
-      answers: batch.questions.map(question => {
+      answers: semanticFixtureAnswers(batch, task => ['続けてください。','feature.mjsを実装してください。','別のfeature.mjsの変更も実装してください。'].includes(task) ? {action:'change',changeScope:'implementation'} : undefined) ?? batch.questions.map(question => {
         const choiceId = ({ 'task-type': 'debug', 'request-action': 'change', 'request-change-scope': 'implementation', 'request-task-operation': 'none',
           'request-relation': (batch.state as { currentUserMessage?: string }).currentUserMessage === '続けてください。' ? 'same_scope_continuation' : 'new' } as Record<string, string>)[question.id] ?? (question.id.startsWith('request-proposal-') ? 'not_selected' : undefined)
         return choiceId ? { id: question.id, status: 'selected' as const, choiceId }

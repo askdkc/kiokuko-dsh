@@ -34,7 +34,7 @@ export function nativeMock(llm: any) {
         : (message.content ?? []).filter((block: any) => block.type === 'tool-result' && block.toolCallId === id)).at(-1)
       assert.ok(result && !result.isError, 'native preparation must succeed before consuming the workflow')
       const value = JSON.parse(result.content.filter((block: any) => block.type === 'text').map((block: any) => block.text).join(''))
-      assert.equal(value.prepared, true)
+      assert.equal(value.prepared, true, `Native preparation did not admit work: ${JSON.stringify(value)}`)
       assert.equal(value.permissions, 'unchanged_native_policy')
       assert.equal(typeof value.originalTask, 'string')
       assert.ok(value.originalTask.length)

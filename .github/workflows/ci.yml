@@ -8,7 +8,43 @@ permissions:
 env:
   ONNXRUNTIME_NODE_INSTALL: skip
 jobs:
+  micro-judge-native:
+    name: Native micro-judge (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin-arm64
+            runner: macos-15
+          - platform: darwin-x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Install the pinned official Rust toolchain on this disposable runner
+        shell: bash
+        run: rustup toolchain install 1.85.0 --profile minimal --no-self-update
+      - name: Build and accept the actual native binary
+        shell: bash
+        run: node scripts/build-verify-micro-judge.mjs "$(rustup which --toolchain 1.85.0 rustc)" --output="${{ runner.temp }}/micro-judge-${{ matrix.platform }}"
+      - run: node --test scripts/micro-judge-artifacts.test.mjs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: micro-judge-${{ matrix.platform }}
+          path: ${{ runner.temp }}/micro-judge-${{ matrix.platform }}
+          if-no-files-found: error
   lisp-runtime:
+    needs: micro-judge-native
     name: Protected Lisp (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -41,6 +77,13 @@ jobs:
           else
             brew install sbcl python
           fi
+      - name: Download all natively accepted micro-judge targets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: micro-judge-*
+          path: ${{ runner.temp }}/micro-judge-input
+      - name: Assemble the multi-platform package bundle
+        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/dsh-runtime
       - name: Export DSH fixture version
@@ -55,7 +98,8 @@ jobs:
           path: ${{ runner.temp }}/verification-lisp-runtime
           if-no-files-found: error
   verify-main:
-    runs-on: ubuntu-latest
+    needs: micro-judge-native
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env: {}
     steps:
@@ -70,6 +114,13 @@ jobs:
         uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
+      - name: Download all natively accepted micro-judge targets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: micro-judge-*
+          path: ${{ runner.temp }}/micro-judge-input
+      - name: Assemble the multi-platform package bundle
+        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
       - name: Install dependencies
         run: npm ci
       - name: Install actual coding Lisp runtime
@@ -88,6 +139,16 @@ jobs:
         run: node -e "const p=require('./tests/fixtures/dsh-runtime/package.json'); console.log('KIOKUKO_EXPECTED_DSH_VERSION='+p.dependencies['@deepseek-ai/dsh'])" >> "$GITHUB_ENV"
       - name: Run repository verification (CI main partition)
         run: npm run verify -- --profile ci-main --output "${{ runner.temp }}/verification-verify"
+      - name: Pack the tested multi-platform distribution candidate
+        run: |
+          mkdir -p "${{ runner.temp }}/distribution"
+          npm pack --ignore-scripts --pack-destination "${{ runner.temp }}/distribution"
+      - name: Retain the multi-platform package for release review
+        uses: actions/upload-artifact@v7
+        with:
+          name: multi-platform-package-${{ github.sha }}
+          path: ${{ runner.temp }}/distribution/*.tgz
+          if-no-files-found: error
       - name: Retain verification plan, logs and results
         if: always()
         uses: actions/upload-artifact@v7
@@ -98,18 +159,21 @@ jobs:
   # Preserve the existing required check: omitted main tests are owned by Lisp.
   # Semantic platform failures must also fail this required aggregate.
   verify:
-    needs: [verify-main, lisp-runtime, semantic-platform-smoke]
+    needs: [verify-main, lisp-runtime, semantic-platform-smoke, micro-judge-native, shortcut-browser]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require main, protected Lisp and semantic platform results
+      - name: Require native artifacts, browser, main, protected Lisp and semantic results
         env:
+          NATIVE_RESULT: ${{ needs.micro-judge-native.result }}
+          BROWSER_RESULT: ${{ needs.shortcut-browser.result }}
           MAIN_RESULT: ${{ needs.verify-main.result }}
           LISP_RESULT: ${{ needs.lisp-runtime.result }}
           SEMANTIC_RESULT: ${{ needs.semantic-platform-smoke.result }}
-        run: test "$MAIN_RESULT" = success && test "$LISP_RESULT" = success && test "$SEMANTIC_RESULT" = success
+        run: test "$NATIVE_RESULT" = success && test "$BROWSER_RESULT" = success && test "$MAIN_RESULT" = success && test "$LISP_RESULT" = success && test "$SEMANTIC_RESULT" = success
   dsh-runtime-macos:
+    needs: micro-judge-native
     name: DSH runtime smoke (macOS)
     runs-on: macos-15
     timeout-minutes: 20
@@ -126,6 +190,13 @@ jobs:
         uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
+      - name: Download all natively accepted micro-judge targets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: micro-judge-*
+          path: ${{ runner.temp }}/micro-judge-input
+      - name: Assemble the multi-platform package bundle
+        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
       - name: Install dependencies
         run: npm ci
       - name: Install actual coding Lisp runtime
@@ -148,8 +219,9 @@ jobs:
           path: ${{ runner.temp }}/verification-dsh-runtime-macos
           if-no-files-found: error
   shortcut-browser:
+    needs: micro-judge-native
     name: Keyboard UI (${{ matrix.fixture }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -165,6 +237,13 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           version: 11.24.0
+      - name: Download all natively accepted micro-judge targets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: micro-judge-*
+          path: ${{ runner.temp }}/micro-judge-input
+      - name: Assemble the multi-platform package bundle
+        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/${{ matrix.fixture }}
       - run: npx playwright install --with-deps chromium
@@ -183,6 +262,7 @@ jobs:
           path: ${{ runner.temp }}/verification-shortcut-browser
           if-no-files-found: error
   semantic-platform-smoke:
+    needs: micro-judge-native
     name: Semantic smoke (${{ matrix.platform }})
     strategy:
       fail-fast: false
@@ -204,6 +284,13 @@ jobs:
         with:
           node-version: 24.16.0
           cache: npm
+      - name: Download all natively accepted micro-judge targets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: micro-judge-*
+          path: ${{ runner.temp }}/micro-judge-input
+      - name: Assemble the multi-platform package bundle
+        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
       - name: Install dependencies
         run: npm ci
       - name: Run repository verification (semantic)

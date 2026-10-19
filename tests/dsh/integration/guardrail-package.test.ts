@@ -199,6 +199,8 @@ test('composed core package preserves declared guardrail files, executable modes
     mkdirSync(join(core, 'dist/dsh'), { recursive: true })
     mkdirSync(join(core, 'scripts')); mkdirSync(join(core, 'lisp'))
     cpSync(join(root, 'guardrail'), join(core, 'guardrail'), { recursive: true })
+    cpSync(join(root, 'micro-judge'), join(core, 'micro-judge'), { recursive: true })
+    cpSync(join(root, 'scripts/verify-micro-judge.mjs'), join(core, 'scripts/verify-micro-judge.mjs'))
     for (const file of ['guardrail-artifacts.mjs', 'guardrail-artifacts.d.mts']) cpSync(join(root, 'scripts', file), join(core, 'scripts', file))
     cpSync(join(root, 'lisp/supervisor.mjs'), join(core, 'lisp/supervisor.mjs'))
     const metadata = readJson(join(root, 'package.json'))
@@ -209,6 +211,7 @@ test('composed core package preserves declared guardrail files, executable modes
     // An unrelated executable mode must not become executable merely because composition copies it.
     writeFileSync(join(core, 'scripts/unrelated.mjs'), 'export const unrelated = true\n', { mode: 0o755 })
     const composedMetadata = await composeModules({ core }, composed)
+    assert.ok(composedMetadata.files.includes('micro-judge/'), 'composed package retains the required semantic detector')
     assert.ok(composedMetadata.files.includes('guardrail/'), 'composed package files must preserve bundled guardrail assets')
     assert.ok(composedMetadata.files.includes('lisp/supervisor.mjs'), 'core-only composition retains the owned process supervisor')
     assert.ok(composedMetadata.dsh.permissions.commands.includes('Bundled Rust guardrail check/validate'))

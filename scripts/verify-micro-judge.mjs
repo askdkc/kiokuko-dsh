@@ -25,7 +25,18 @@ for(const entry of manifest.artifacts){
   assert.equal(entry.nativeVerified,true,'Only artifacts with native acceptance evidence may be packaged')
   const receipt=JSON.parse(await readFile(join(root,`micro-judge/native-verification-${key}.json`),'utf8'))
   assert.equal(receipt.binarySha256,entry.sha256);assert.equal(receipt.sourceDigest,entry.sourceDigest)
-  if(entry.platform==='darwin')assert.ok(['cffaedfe','cefaedfe','feedfacf','feedface'].includes(bytes.subarray(0,4).toString('hex')))
+  if(receipt.schemaVersion===1){
+    assert.equal(receipt.platform,entry.platform);assert.equal(receipt.arch,entry.arch);assert.equal(receipt.compiler,entry.compiler);assert.equal(receipt.exitCode,0)
+    assert.equal(receipt.log,`native-acceptance-${key}.tap`)
+    const logPath=join(root,'micro-judge',receipt.log),info=await lstat(logPath);assert.ok(info.isFile()&&!info.isSymbolicLink()&&info.size<8000000)
+    const log=await readFile(logPath);assert.equal(hash(log),receipt.logSha256)
+    assert.ok(receipt.summary.tests>=18);assert.equal(receipt.summary.tests,receipt.summary.pass)
+    for(const name of ['tests','pass','fail','cancelled','skipped','todo']){
+      const matches=[...log.toString().matchAll(new RegExp(`^# ${name} (\\d+)$`,'gm'))];assert.equal(matches.length,1);assert.equal(Number(matches[0][1]),receipt.summary[name]);if(!['tests','pass'].includes(name))assert.equal(receipt.summary[name],0)
+    }
+  }
+  if(entry.platform==='darwin'){assert.equal(bytes.subarray(0,4).toString('hex'),'cffaedfe');assert.equal(bytes.readUInt32LE(4),entry.arch==='arm64'?0x100000c:0x1000007)}
+  if(entry.platform==='linux'){assert.equal(bytes.subarray(0,4).toString('hex'),'7f454c46');assert.equal(bytes[4],2);assert.equal(bytes[5],1);assert.equal(bytes.readUInt16LE(18),entry.arch==='arm64'?183:62)}
   if(entry.platform===process.platform&&entry.arch===process.arch&&process.argv.includes('--execute')){
     const version=spawnSync(file,['--version'],{encoding:'utf8',timeout:1500,maxBuffer:16384,env:{}})
     assert.equal(version.status,0);assert.equal(version.stdout.trim(),'kiokuko-micro-judge 0.1.0 kiokuko-fd-v1')
