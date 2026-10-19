@@ -525,7 +525,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const preparation = new LispCodingPreparation({
     identity: candidate => { const binding = owner(candidate); return { sessionId: binding.owner.sessionId, root: binding.owner.root } },
     enabled: candidate => manager.enabled.has(owner(candidate).owner.sessionId),
-    selected: candidate => manualMode(candidate),
+    selected: async candidate => await manualMode(candidate) || manager.enabled.has(owner(candidate).owner.sessionId),
     activate: async candidate => { await enable(owner(candidate), true) },
     deactivate: async candidate => { const binding=owner(candidate); if(manager.enabled.has(binding.owner.sessionId))await manager.disable(binding.owner);else await store.decline(binding.owner);unregister(binding.agent);hostFence?.release(binding.owner.sessionId) },
     choose: async input => {

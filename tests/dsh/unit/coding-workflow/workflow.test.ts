@@ -433,7 +433,7 @@ test('worker-only human recovery does not waive a defined workflow or protected-
   } finally { await manager.dispose(); await protectedManager.dispose(); await f.close() }
 })
 
-for (const mode of ['manual-on', 'runtime-only', 'explicit-no', 'no-questions'] as const) test(`formal Goal honors only explicit manual Lisp selection: ${mode}`, async () => {
+for (const mode of ['manual-on', 'runtime-only', 'explicit-no', 'no-questions'] as const) test(`formal Goal uses an explicit answer or an enabled/manual session: ${mode}`, async () => {
   const f = await fixture(); let asked = 0, activated = 0, excluded = 0
   const manual = mode !== 'runtime-only'
   const lisp = { enabled: () => true, manualSelected: async () => manual,
@@ -447,13 +447,13 @@ for (const mode of ['manual-on', 'runtime-only', 'explicit-no', 'no-questions'] 
     const execution = { name: 'coding_workflow', callId: 'manual-selection', agent: host.agent, arguments: { action: 'next' }, signal: new AbortController().signal }
     await host.tools.get('coding_workflow').execute(execution.arguments, execution)
     const saved = readCodingWorkflow(f.db, f.identity.runId)!
-    assert.equal(asked, mode === 'runtime-only' ? 1 : 0)
-    assert.equal(saved.choice.state, mode === 'runtime-only' || mode === 'explicit-no' ? 'no' : 'yes')
+    assert.equal(asked, 0)
+    assert.equal(saved.choice.state, mode === 'explicit-no' ? 'no' : 'yes')
     assert.equal(activated, saved.choice.state === 'yes' ? 1 : 0)
     assert.equal(excluded, saved.choice.state === 'no' ? 1 : 0)
-    assert.deepEqual(saved.definition, workflow.definition, 'manual preference does not replace the Goal')
-    assert.equal(assessTaskCompletion(f.db, f.identity.runId).verified, false, 'manual ON is not verification')
-    if (saved.choice.state === 'yes') assert.match(saved.choice.answerRef!, /^manual-session:/u)
+    assert.deepEqual(saved.definition, workflow.definition, 'session or task selection does not replace the Goal')
+    assert.equal(assessTaskCompletion(f.db, f.identity.runId).verified, false, 'an enabled session is not verification')
+    if (saved.choice.state === 'yes') assert.match(saved.choice.answerRef!, mode === 'runtime-only' ? /^enabled-session:/u : /^manual-session:/u)
     if (mode === 'explicit-no') assert.equal(saved.choice.answerRef, 'human:task-no')
   } finally { host.unmount(); await f.close() }
 })

@@ -76,3 +76,19 @@ test('an unresolved decision keeps the deterministic coding fallback and does no
  await g.p.prepare({...g.input,task:'Explain the parser',requestIntent:unresolved})
  assert.equal(g.p.denial(g.agent,'bash',{}),undefined)
 })
+
+test('an enabled session is selected without asking the early question',async()=>{
+ const agent={id:'enabled-agent',session:{id:'enabled-session'}}
+ let choices=0,activations=0
+ const p=new LispCodingPreparation({
+  identity:()=>({sessionId:'enabled-session',root:'/one'}),
+  enabled:()=>true,
+  selected:async()=>true,
+  choose:async()=>{choices++;return{choice:'yes',answerRef:'enabled-session:test'}},
+  activate:async()=>{activations++},
+ })
+ await p.prepare({agent,turn:1,task:'Implement src/parser.ts',taskType:'build',signal:new AbortController().signal})
+ assert.equal(choices,0);assert.equal(activations,1)
+ assert.equal((p.status(agent)as any).phase,'prototype_required')
+ assert.match(p.denial(agent,'bash',{})!,/LISP_PROTOTYPE_REQUIRED/u)
+})

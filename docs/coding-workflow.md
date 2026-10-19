@@ -2,7 +2,7 @@
 
 An explicit request to implement or repair code starts a task-bound workflow. Questions, explanations, quotations, undecided alternatives and plan-only requests retain the conversation/read-only path. Classification is advisory and cannot authorize an unrequested change.
 
-Clear unowned native implementation requests offer Lisp before the first model request. A manually enabled session selects its explicit Lisp route without another question; a declined early answer is reused for the exact request at Goal preparation. This offer does not create a memory task or grant native permission.
+Clear unowned native implementation requests offer Lisp before the first model request. A session with Lisp already enabled selects its explicit Lisp route without another question; an explicit task answer still takes precedence, and a declined early answer is reused for the exact request at Goal preparation. This offer does not create a memory task or grant native permission.
 
 Before that offer, the host may use the configured request-intent decision as an advisory positive signal. A resolved change/implementation decision arms the same offer for conversational wording; abstention, unavailability, a non-positive decision or no decision service falls back to the deterministic detector. The decision never replaces the main model's request interpretation or grants permission.
 
