@@ -43,14 +43,15 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
   }
   const mock = nativeMock(llm)
   const read = (id: string) => mock.toolCallResponse(id, 'read', { file_path: 'src/facts.md' })
+  const resumedPreparation = mock.prepareWork([read('read-resumed')], mode, 'prepare-resume',
+    interpretedPreparation(mock, 'prepare-resume', 'same_scope_continuation', mode === 'writing' ? 'change' : 'research', mode))
   const model = new mock.MockAdapter([
     mock.textResponse('こんにちは。'), mock.textResponse('会話を続けられます。'),
     ...mock.prepareWork([mock.toolCallResponse('outside-write', 'write', { file_path: 'outside.txt', content: 'denied' })], mode, 'prepare-initial',
       interpretedPreparation(mock, 'prepare-initial', 'new', mode === 'writing' ? 'change' : 'research', mode)),
     read('read-1'), read('read-2'), read('read-3'), read('read-4'),
     mock.textResponse('別のセッションの回答です。'),
-    ...mock.prepareWork([read('read-resumed')], mode, 'prepare-resume',
-      interpretedPreparation(mock, 'prepare-resume', 'same_scope_continuation', mode === 'writing' ? 'change' : 'research', mode)), mock.textResponse('記録済みの根拠を使い、調査と文章作成を完了しました。'),
+    ...resumedPreparation, mock.textResponse('記録済みの根拠を使い、調査と文章作成を完了しました。'),
   ])
   ctx.llm.registerAdapter(['execution-mock'], model)
   let writes = 0; let reads = 0
@@ -110,24 +111,28 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
       throw new Error('Native execution path timed out: ' + JSON.stringify({ state: await snapshots(),
         events: target.session.snapshotEvents().filter((event: any) => ['turn/end', 'tool/result'].includes(event.type)).slice(-5), requests: model.requests.length, reads, writes }))
     }
-    await settle(agent, 'こんにちは', () => model.requests.length === 1)
+    const beforeChat = model.requests.length
+    await settle(agent, 'こんにちは', () => model.requests.length === beforeChat + 1)
     const expectedQuestions = [{ id: 'kioku-agenticreplay-recording', agentId: agent.id }]
     assert.deepEqual(questions, expectedQuestions, 'first chat asks only for the session recording choice')
-    await settle(agent, '雑談を続けよう', () => model.requests.length === 2)
+    const beforeFollowup = model.requests.length
+    await settle(agent, '雑談を続けよう', () => model.requests.length === beforeFollowup + 1)
     const paused = async () => adapter.host.runtime!.withDatabase(db => !!db.prepare("SELECT run_id FROM dsh_exploration_states WHERE json_extract(state_json, '$.paused') = 1").get())
     await settle(agent, task, paused)
     assert.equal(writes, 0, 'structured outside write never executed')
     assert.equal(reads, 4)
-    assert.equal(model.requests.length, 8, 'pause does not issue another model request')
+    const pausedRequests = model.requests.length
+    await new Promise(resolve => setTimeout(resolve, 40))
+    assert.equal(model.requests.length, pausedRequests, 'pause does not issue another model request')
     const notices = () => adapter.host.runtime!.withDatabase(db => db.prepare("SELECT * FROM dsh_session_notices WHERE kind='status'").all())
     assert.equal((await notices()).length, 1)
     assert.equal(agent.session.snapshotEvents().some((event: any) => event.type === 'user/message' && event.data?.content?.some((block: any) => block.text === task)), true)
-    assert.match(JSON.stringify(model.requests[7]), /three times/)
+    assert.match(JSON.stringify(model.requests.at(-1)), /three times/)
     const running = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status = 'active' AND dsh_session_id = 'execution-session'").get<{ id: string }>())
     assert.ok(running)
     const other = await ctx.agentLoop.create(session.SessionId('other-session'), { provider: 'execution-mock', model: 'mock' }, { cwd: root })
     otherScope = scope.createScope(ctx, other); other.ctx = otherScope.ctx; releaseOtherNative = other.ctx.get('tools').presentAs('native')
-    await settle(other, 'こんにちは', () => model.requests.length === 9)
+    await settle(other, 'こんにちは', () => model.requests.length === pausedRequests + 1)
     expectedQuestions.push({ id: 'kioku-agenticreplay-recording', agentId: other.id })
     assert.deepEqual(questions, expectedQuestions, 'each session asks once, without task clarification or approval')
     assert.equal(await paused(), true, 'another session cannot clear the pause')
@@ -136,6 +141,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     try { assert.equal(stored.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(running.id)?.status, 'active') }
     finally { stored.close() }
     adapter = createDshHostAdapter(ctx, options); composition = await mountDshComposition(ctx, adapter.host)
+    const beforeResume = model.requests.length
     await settle(agent, resumeTask, () => adapter.host.runtime!.withDatabase(db =>
       db.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(running.id)?.status === 'completed'))
     assert.equal(reads, 5, 'only the explicitly resumed read ran')
@@ -153,7 +159,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     }
     assert.equal(writes, 0)
     assert.equal((await notices()).length, 1)
-    assert.equal(model.requests.length, 12)
+    assert.equal(model.requests.length - beforeResume, resumedPreparation.length + 1, 'resume consumes its preparation and final response without another request')
     assert.match(JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'assistant/message').at(-1)), /完了しました/)
     const reviewDeadline = Date.now() + 2000
     while (!memoryQuestions.length && Date.now() < reviewDeadline) await new Promise(resolve => setTimeout(resolve, 10))

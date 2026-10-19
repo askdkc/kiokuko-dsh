@@ -153,6 +153,24 @@ test('arbitrary stdout, missing or wrong completion identities never satisfy a s
  for(const code of ["console.log('starting assertions')","import{writeFileSync}from'node:fs';writeFileSync(process.env.KIOKUKO_VERIFY_COMPLETION_FILE,JSON.stringify({schema:'verification-completion-v1',id:'other-check',nonce:process.env.KIOKUKO_VERIFY_NONCE,status:'passed',evidence:{}}));"]){
  const root=fixture([{...check,argv:['node','script.mjs'],result:'script'}]);writeFileSync(path.join(root,'script.mjs'),code);const {child,report}=execute(root);assert.equal(child.status,1);assert.equal(report.completionReady,false);}
 });
+test('only this invocation\'s clean unchanged build is reused for its final archive',()=>{
+ for(const mutation of ['unchanged','bytes','mode']){
+  const root=fixture([
+   {...check,id:'build',argv:['npm','run','build'],result:'command'},
+   {...check,id:'intervening',argv:['node','intervening.mjs'],dependsOn:['build'],result:'command'},
+   {...check,id:'consumer',argv:['node','consumer.mjs'],dependsOn:['build'],result:'script',packed:true},
+  ]);
+  writeFileSync(path.join(root,'package.json'),JSON.stringify({name:'verification-build-reuse',version:'1.0.0',type:'module',files:['dist'],scripts:{build:'node build.mjs'}}));
+  const definition=JSON.parse(readFileSync(path.join(root,'scripts/verification.json')));definition.package='verification-build-reuse';writeFileSync(path.join(root,'scripts/verification.json'),JSON.stringify(definition));
+  writeFileSync(path.join(root,'.gitignore'),'dist/\nbuild-count\n');
+  mkdirSync(path.join(root,'dist'));writeFileSync(path.join(root,'dist/stale.js'),'old');
+  writeFileSync(path.join(root,'build.mjs'),"import{mkdirSync,writeFileSync,readFileSync,existsSync}from'node:fs';import assert from'node:assert/strict';assert.equal(existsSync('dist/stale.js'),false);const count=existsSync('build-count')?Number(readFileSync('build-count')):0;mkdirSync('dist',{recursive:true});writeFileSync('dist/index.js','fresh');writeFileSync('build-count',String(count+1));");
+  writeFileSync(path.join(root,'intervening.mjs'),mutation==='bytes'?"import{writeFileSync}from'node:fs';writeFileSync('dist/index.js','changed');":mutation==='mode'?"import{chmodSync}from'node:fs';chmodSync('dist/index.js',0o755);":'');
+  writeFileSync(path.join(root,'consumer.mjs'),"import assert from'node:assert/strict';import{readFileSync}from'node:fs';import{completeVerification}from'./scripts/verification-completion.mjs';assert.equal(readFileSync('dist/index.js','utf8'),'fresh');completeVerification({});");
+  const {child,report}=execute(root);assert.equal(child.status,0,child.stdout+'\n'+child.stderr);assert.equal(report.status,'passed');
+  assert.equal(Number(readFileSync(path.join(root,'build-count'))),mutation==='unchanged'?1:2,mutation);
+ }
+});
 test('a missing terminal result or progress array is incomplete, never successful',()=>{
  const root=fixture([check]);const file=path.join(tmpdir(),'verification-progress-'+Date.now()+'.json');writeFileSync(file,JSON.stringify([{id:'suite',status:'passed'}]));
  const r=spawnSync(process.execPath,['scripts/verify.mjs','--status',file],{cwd:root,encoding:'utf8'});assert.equal(r.status,1);assert.equal(JSON.parse(r.stdout).status,'incomplete');
@@ -214,7 +232,13 @@ test('CI main source partition has exact coverage union and a single Linux owner
   const actual = JSON.parse(readFileSync(new URL('./verification.json', import.meta.url)));
   const lisp = nativeCiPlan('lisp', environment).args.slice(1);
   const owned = actual.checks.find(check => check.id === 'owned-native').argv.slice(2);
-  const owners = [...lisp, ...owned];
+  const modules = actual.checks.find(check => check.id === 'modules').sourceFiles;
+  const skills = actual.checks.find(check => check.id === 'skill-delivery').sourceFiles;
+  const owners = [...lisp, ...owned, ...modules, ...skills];
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)));
+  assert.equal(manifest.scripts['test:modules'], `node scripts/run-tests.mjs ${modules.join(' ')} && node scripts/verify-module-packages.mjs`);
+  const skillRunner = readFileSync(new URL('./run-skill-delivery.mjs', import.meta.url), 'utf8');
+  for (const file of skills) assert.ok(skillRunner.includes(`'${file}'`), 'the Skill owner must execute ' + file);
   assert.equal(new Set(owners).size, owners.length, 'source ownership must be disjoint');
   const original = [], partitioned = [];
   for (const suite of ['unit', 'integration', 'e2e']) {
@@ -268,52 +292,44 @@ test('CI-only profile preserves all main checks through Linux ownership and leav
   }
 });
 
-test('CI workflow requires every Protected Lisp and semantic matrix result', () => {
-  // Parse YAML rather than matching comments or unrelated runner declarations.
-  const workflow = (createRequire(import.meta.url)('yaml')).parse(readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
-  const lisp = workflow.jobs['lisp-runtime'];
-  assert.deepEqual(lisp.strategy.matrix.os, ['ubuntu-24.04', 'ubuntu-24.04-arm', 'macos-latest']);
-  assert.equal(lisp['timeout-minutes'], '${{ matrix.timeout_minutes || 20 }}');
-  assert.deepEqual(lisp.strategy.matrix.os.map(os => [os,
-    lisp.strategy.matrix.include.find(entry => entry.os === os)?.timeout_minutes ?? 20]),
-    [['ubuntu-24.04', 25], ['ubuntu-24.04-arm', 20], ['macos-latest', 25]]);
-  assert.equal(lisp.if, undefined, 'the owning matrix must not become conditional');
-  assert.equal(lisp['continue-on-error'], undefined, 'owned evidence must remain blocking');
-  assert.equal(lisp.strategy['fail-fast'], false);
-  assert.ok(lisp.steps.some(step => step.run?.includes('--profile lisp --output')));
-  assert.ok(workflow.jobs['verify-main'].steps.some(step => step.run?.includes('--profile ci-main --output')));
-  assert.ok(!workflow.jobs['verify-main'].steps.some(step => step.run?.includes('--profile main --output')));
-  const semantic = workflow.jobs['semantic-platform-smoke'];
-  assert.equal(semantic.if, undefined, 'semantic evidence must remain unconditional');
-  assert.equal(semantic['continue-on-error'], undefined, 'semantic evidence must remain blocking');
-  assert.equal(semantic.strategy['fail-fast'], false);
-  assert.deepEqual(semantic.strategy.matrix.include, [
-    { platform: 'linux-x64', runner: 'ubuntu-24.04' },
-    { platform: 'linux-arm64', runner: 'ubuntu-24.04-arm' },
-    { platform: 'macos-arm64', runner: 'macos-15' },
+test('CI workflow schedules every declared partition and retains blocking OS coverage', async () => {
+  const {partitionPlans}=await import('./verification-contract.mjs');
+  const {requiredJobs,ciTargets}=await import('./verify-ci-results.mjs');
+  const actual=JSON.parse(readFileSync(new URL('./verification.json',import.meta.url)));
+  const workflow=createRequire(import.meta.url)('yaml').parse(readFileSync(new URL('../.github/workflows/ci.yml',import.meta.url),'utf8'));
+  for(const [profile,id] of [['ci-main','verify-main'],['lisp','lisp-runtime']]){
+    const job=workflow.jobs[id];
+    assert.equal(job.if,undefined);assert.equal(job['continue-on-error'],undefined);assert.equal(job.strategy['fail-fast'],false);
+    assert.deepEqual(job.strategy.matrix.partition,partitionPlans(actual,profile).map(plan=>plan.partition));
+    assert.ok(job.steps.some(step=>step.run?.includes('--profile '+profile+' --partition "${{ matrix.partition }}" --output')));
+    assert.equal(job['timeout-minutes'],20,'parallel work must replace extended budgets');
+    const evidence=job.steps.find(step=>step.with?.name?.startsWith('verification-ci-'));
+    assert.ok(evidence.with.path.includes('!${{ runner.temp }}/'));
+    assert.ok(evidence.with.path.includes('/npm-cache/**'),'downloaded CI evidence must exclude package caches');
+  }
+  assert.deepEqual(workflow.jobs['lisp-runtime'].strategy.matrix.os,ciTargets.lisp.map(target=>target.runner));
+  assert.equal(workflow.jobs['verify-main']['runs-on'],ciTargets['ci-main'][0].runner);
+  const semantic=workflow.jobs['semantic-platform-smoke'];
+  assert.equal(semantic.if,undefined);assert.equal(semantic['continue-on-error'],undefined);assert.equal(semantic.strategy['fail-fast'],false);
+  assert.deepEqual(semantic.strategy.matrix.include,[
+    {platform:'linux-x64',runner:'ubuntu-24.04'},
+    {platform:'linux-arm64',runner:'ubuntu-24.04-arm'},
+    {platform:'macos-arm64',runner:'macos-15'},
   ]);
-  assert.ok(semantic.steps.some(step => step.run?.includes('--profile semantic --output')));
-  assert.deepEqual(workflow.jobs.verify.needs, ['verify-main', 'lisp-runtime', 'semantic-platform-smoke', 'micro-judge-native', 'shortcut-browser']);
-  assert.equal(workflow.jobs.verify.if, 'always()');
-  const aggregate = workflow.jobs.verify.steps[0];
-  assert.equal(aggregate.env.NATIVE_RESULT, '${{ needs.micro-judge-native.result }}');
-  assert.equal(aggregate.env.BROWSER_RESULT, '${{ needs.shortcut-browser.result }}');
-  assert.equal(aggregate.env.MAIN_RESULT, '${{ needs.verify-main.result }}');
-  assert.equal(aggregate.env.LISP_RESULT, '${{ needs.lisp-runtime.result }}');
-  assert.equal(aggregate.env.SEMANTIC_RESULT, '${{ needs.semantic-platform-smoke.result }}');
-  const outcomes = ['success', 'failure', 'cancelled', 'skipped', ''];
-  for (const main of outcomes) for (const lisp of outcomes) for (const semantic of outcomes) {
-    const result = spawnSync('bash', ['-c', aggregate.run], {
-      env: { ...process.env, MAIN_RESULT: main, LISP_RESULT: lisp, SEMANTIC_RESULT: semantic, NATIVE_RESULT: 'success', BROWSER_RESULT: 'success' }, encoding: 'utf8',
-    });
-    assert.equal(result.status === 0, main === 'success' && lisp === 'success' && semantic === 'success',
-      JSON.stringify({main,lisp,semantic}));
-  }
-  for (const key of ['NATIVE_RESULT','BROWSER_RESULT']) for (const outcome of outcomes) {
-    const result = spawnSync('bash',['-c',aggregate.run], {env:{...process.env,MAIN_RESULT:'success',LISP_RESULT:'success',SEMANTIC_RESULT:'success',NATIVE_RESULT:'success',BROWSER_RESULT:'success',[key]:outcome},encoding:'utf8'});
-    assert.equal(result.status === 0,outcome === 'success',JSON.stringify({key,outcome}));
-  }
+  assert.ok(semantic.steps.some(step=>step.run?.includes('--profile semantic --output')));
+  const aggregate=workflow.jobs.verify;
+  assert.deepEqual(aggregate.needs,requiredJobs);assert.equal(aggregate.if,'always()');
+  const gate=aggregate.steps.find(step=>step.run?.includes('scripts/verify-ci-results.mjs'));
+  assert.equal(gate.env.NEEDS_JSON,'${{ toJSON(needs) }}');
+  assert.ok(aggregate.steps.some(step=>step.with?.pattern==='verification-ci-*'));
+  const main=workflow.jobs['verify-main'];
+  assert.ok(!main.steps.some(step=>step.run?.includes('npm pack')),'release review must use the tested archive');
+  const candidate=main.steps.find(step=>step.with?.name==='multi-platform-package-${{ github.sha }}');
+  assert.equal(candidate.if,"matrix.partition == 'consumers'");
+  assert.equal(candidate.with.path,'${{ runner.temp }}/verification-verify/*.tgz');
 });
+
+await import('./ci-partitions.test.mjs');
 
 test('request-intent evaluation covers exact change scopes and writes a check-bound completion receipt', async () => {
   const { validCompletion } = await import('./verification-completion.mjs');

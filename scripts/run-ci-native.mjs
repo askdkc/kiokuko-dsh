@@ -35,7 +35,11 @@ export function nativeCiPlan(suite, environment = process.env) {
       || owned.argv.slice(2).some(file => !file.endsWith('.test.ts'))) {
       throw new Error('Protected Lisp source ownership is missing or unsupported')
     }
-    const covered = new Set([...lisp.args.slice(1), ...owned.argv.slice(2)])
+    const modules = contract.checks.find(check => check.id === 'modules')
+    if (!modules?.profiles.includes('lisp') || !modules.sourceFiles?.length) throw new Error('Module source ownership is missing')
+    const skills = contract.checks.find(check => check.id === 'skill-delivery')
+    if (!skills?.profiles.includes('lisp') || !skills.sourceFiles?.length) throw new Error('Skill source ownership is missing')
+    const covered = new Set([...lisp.args.slice(1), ...owned.argv.slice(2), ...modules.sourceFiles, ...skills.sourceFiles])
     const files = plan.args.slice(1).filter(file => !covered.has(file))
     if (!files.length) throw new Error('CI main source partition is empty')
     // Removing Lisp paths must not silently increase the test runner's concurrency.
@@ -55,6 +59,7 @@ export function nativeCiPlan(suite, environment = process.env) {
     DSH_BIN: environment.DSH_BIN ?? join(packageRoot, '.bin/dsh') }
   delete env.KIOKUKO_DSH_SOURCE_ROOT
   delete env.KIOKUKO_REPEATED_SCENARIO
+  delete env.KIOKUKO_REPEATED_SCENARIOS
   if (suite === 'browser-approval' || suite === 'browser-shortcuts' || suite === 'browser-coding') {
     env.KIOKUKO_LISP_APPROVAL_RUNTIME = fixture
     env.KIOKUKO_SHORTCUT_RUNTIME = fixture
@@ -77,6 +82,19 @@ export function nativeCiPlan(suite, environment = process.env) {
   return { command: process.execPath, args: ['scripts/run-tests.mjs', ...scopedFiles], cwd: root, env, scenarios }
 }
 
+export function shardNativePlan(plan, shard) {
+  if(!/^[1-9][0-9]*\/[1-9][0-9]*$/.test(shard))throw new Error('Invalid native shard');
+  const [index,count]=shard.split('/').map(Number),files=plan.args.slice(1);
+  if(!Number.isSafeInteger(index)||!Number.isSafeInteger(count)||index>count||count>files.length||plan.scenarios)throw new Error('Empty or invalid native shard');
+  // This long file registers independent lifecycle scenarios. Share the file,
+  // partition its scenarios, and retain exact file ownership everywhere else.
+  const repeated='tests/dsh/e2e/repeated-memory-lifecycle.test.ts';
+  const selected=files.filter((file,i)=>file===repeated||i%count===index-1);
+  const env={...plan.env};
+  if(files.includes(repeated))env.KIOKUKO_REPEATED_SCENARIOS=JSON.stringify(repeatedMemoryScenarios.filter((_,i)=>i%count===index-1));
+  return {...plan,args:[plan.args[0],...selected],env};
+}
+
 async function run(plan) {
   const child = spawn(plan.command, plan.args, { cwd: plan.cwd, env: plan.env, stdio: 'inherit', shell: false })
   const term = () => child.kill('SIGTERM'), interrupt = () => child.kill('SIGINT')
@@ -93,8 +111,9 @@ async function run(plan) {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
-    if (process.argv.length !== 3) throw new Error('Select exactly one suite')
-    const plan = nativeCiPlan(process.argv[2])
+    if (process.argv.length !== 3 && !(process.argv.length === 5 && process.argv[3] === '--shard')) throw new Error('Select one suite and optional --shard index/count')
+    const original = nativeCiPlan(process.argv[2])
+    const plan = process.argv[4] ? shardNativePlan(original,process.argv[4]) : original
     if (plan.scenarios) {
       process.exitCode = 0
       for (const scenario of plan.scenarios) {

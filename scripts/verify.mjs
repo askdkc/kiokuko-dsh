@@ -7,17 +7,18 @@ import { accessSync, constants, realpathSync, existsSync, mkdirSync, mkdtempSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { digest, sourceDigest, treeDigest, verificationPlan, validateNodeResult, evidenceCurrent } from './verification-contract.mjs';
+import { digest, sourceDigest, treeDigest, verificationPlan, partitionPlan, validateNodeResult, evidenceCurrent } from './verification-contract.mjs';
 const root=path.resolve(import.meta.dirname,'..');
-const {values}=parseArgs({options:{profile:{type:'string'},plan:{type:'boolean'},output:{type:'string'},status:{type:'string'}}});
+const {values}=parseArgs({options:{profile:{type:'string'},partition:{type:'string'},plan:{type:'boolean'},output:{type:'string'},status:{type:'string'}}});
 const contractBytes=readFileSync(path.join(root,'scripts/verification.json'));
 const contract=JSON.parse(contractBytes),contractDigest=digest(contractBytes);
-const plan=verificationPlan(contract,values.profile??'full');
+const selectPlan=(profile,partition,platform)=>partition?partitionPlan(contract,profile,partition,platform):verificationPlan(contract,profile,platform);
+const plan=selectPlan(values.profile??'full',values.partition);
 if(values.plan){console.log(JSON.stringify(plan,null,2));process.exit(0);}
 const hashFile=file=>digest(readFileSync(file));
 const gitHead=()=>{try{return execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{return null;}};
 if(values.status){let report;try{report=JSON.parse(readFileSync(values.status));}catch{}let current=false;
-if(report?.schema==='verification-result-v1'&&report.platform===process.platform&&report.architecture===process.arch&&Array.isArray(report.checks))try{const requiredPlan=verificationPlan(contract,report.profile,report.platform);current=report.checks.length===requiredPlan.checks.length&&new Set(report.checks.map(c=>c.id)).size===requiredPlan.checks.length&&requiredPlan.checks.every(c=>report.checks.some(r=>r.id===c.id&&(['passed'].includes(r.status)||c.status===r.status&&['scope-excluded','platform-excluded'].includes(c.status))))&&evidenceCurrent(report,{sourceDigest:sourceDigest(root),runtime:process.version,contractDigest,artifactHash:report.artifact?hashFile(report.artifact.path):undefined,distDigest:report.artifact?treeDigest(path.join(root,'dist')):undefined});}catch{}
+if(report?.schema==='verification-result-v1'&&report.platform===process.platform&&report.architecture===process.arch&&Array.isArray(report.checks))try{const requiredPlan=selectPlan(report.profile,report.partition,report.platform);current=report.checks.length===requiredPlan.checks.length&&new Set(report.checks.map(c=>c.id)).size===requiredPlan.checks.length&&requiredPlan.checks.every(c=>report.checks.some(r=>r.id===c.id&&(['passed'].includes(r.status)||c.status===r.status&&['scope-excluded','platform-excluded'].includes(c.status))))&&evidenceCurrent(report,{sourceDigest:sourceDigest(root),runtime:process.version,contractDigest,artifactHash:report.artifact?hashFile(report.artifact.path):undefined,distDigest:report.artifact?treeDigest(path.join(root,'dist')):undefined});}catch{}
 console.log(JSON.stringify({...report,testedCommit:report?.commit,commit:gitHead(),schema:'verification-result-v1',status:current?'passed':report?.schema==='verification-result-v1'?'stale':'incomplete',completionReady:current&&report.completeScope}));process.exit(current?0:1);}
 const output=values.output?path.resolve(values.output):mkdtempSync(path.join(tmpdir(),`${contract.package}-verify-`));
 if(existsSync(output)&&readdirSync(output).length)throw new Error('Verification output must be empty');
@@ -25,7 +26,7 @@ if(existsSync(output)&&readdirSync(output).length)throw new Error('Verification 
 if(output===root||output.startsWith(root+path.sep))throw new Error('Verification output must be outside the repository');
 mkdirSync(output,{recursive:true});
 writeFileSync(path.join(output,'plan.json'),JSON.stringify(plan,null,2));
-const initial=sourceDigest(root),commit=gitHead(),results=[];let artifact, interrupted=false;
+const initial=sourceDigest(root),commit=gitHead(),results=[];let artifact, builtArtifact, interrupted=false;
 const interruption=()=>{interrupted=true;};process.on('SIGTERM',interruption);process.on('SIGINT',interruption);
 const require=createRequire(path.join(root,'package.json'));
 const npmrc=path.join(output,'empty.npmrc');writeFileSync(npmrc,'');
@@ -110,8 +111,13 @@ async function missingCapabilities(check, record) {
   return missing;
 }
 async function prepareArtifact() {
-  rmSync(path.join(root,'dist'),{recursive:true,force:true});
-  const built=await command(['npm','run','build'],baseEnv,'final-build');
+  // Reuse only this invocation's successful clean build while source and bytes
+  // remain identical. Standalone packed checks still force a fresh build.
+  let built=builtArtifact&&existsSync(path.join(root,'dist'))&&builtArtifact.distDigest===treeDigest(path.join(root,'dist'))?builtArtifact.execution:undefined;
+  if(!built){
+    rmSync(path.join(root,'dist'),{recursive:true,force:true});
+    built=await command(['npm','run','build'],baseEnv,'final-build');
+  }
   if(built.exitCode!==0||sourceDigest(root)!==initial)throw new Error('Final build failed or source changed');
   const packed=await command(['npm','pack','--json','--ignore-scripts','--pack-destination',output],baseEnv,'final-pack');
   if(interrupted||packed.exitCode!==0)throw new Error('Final pack failed');
@@ -141,6 +147,8 @@ for(const check of checks) {
   const nonce=randomUUID(),completionFile=path.join(output,'receipts',check.id,'complete.json');mkdirSync(path.dirname(completionFile),{recursive:true});
   const env=declaredColorEnvironment({...baseEnv,KIOKUKO_VERIFY_CHECK_ID:check.id,KIOKUKO_VERIFY_NONCE:nonce,KIOKUKO_VERIFY_COMPLETION_FILE:completionFile,...check.env,KIOKUKO_VERIFY_REPORT_DIR:reportDir,KIOKUKO_HARNESS_REPORT:path.join(output,'harness.json'),KIOKUKO_DSH_EVIDENCE_PATH:path.join(output,'dsh-lifecycle.json')},check.env);
   console.log(`VERIFY ${check.id}`);
+  const buildsDist=check.id==='build'&&check.argv.join(' ')==='npm run build';
+  if(buildsDist)rmSync(path.join(root,'dist'),{recursive:true,force:true});
   const observed=await command(check.argv,env,check.id);
   const reports=readdirSync(reportDir).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(path.join(reportDir,f))));
   let passed=observed.exitCode===0&&!observed.timedOut;
@@ -149,11 +157,12 @@ for(const check of checks) {
   if(check.result==='python')passed&&=/Ran [1-9][0-9]* tests? in/.test(observed.stderr)&&/\nOK\s*$/.test(observed.stderr);
   if(reports.length)passed&&=reports.every(r=>validateNodeResult(r,contract.testExclusions??[]));
   record.status=passed?'passed':missingTests.length&&reports.every(r=>(r.counts?.failed??0)===0)?'prerequisite-missing':'failed';
-  if(missingTests.length)record.missingTestCapabilities=missingTests;record.exitCode=observed.exitCode;record.signal=observed.signal;record.error=observed.error;record.reportFiles=readdirSync(reportDir);
+  if(missingTests.length)record.missingTestCapabilities=missingTests;record.started=observed.started;record.ended=observed.ended;record.durationMs=Date.parse(observed.ended)-Date.parse(observed.started);record.exitCode=observed.exitCode;record.signal=observed.signal;record.error=observed.error;record.reportFiles=readdirSync(reportDir);
   if(sourceDigest(root)!==initial||artifact&&(artifact.hash!==hashFile(artifact.path)||artifact.distDigest!==treeDigest(path.join(root,'dist')))){record.status='stale';record.reason='source or artifact changed during check';}
+  if(buildsDist&&record.status==='passed'&&existsSync(path.join(root,'dist')))builtArtifact={execution:observed,distDigest:treeDigest(path.join(root,'dist'))};
   writeFileSync(path.join(output,'progress.json'),JSON.stringify(results,null,2));
 }
 const stable=sourceDigest(root)===initial&&(!artifact||hashFile(artifact.path)===artifact.hash&&treeDigest(path.join(root,'dist'))===artifact.distDigest);
 const passed=stable&&results.every(r=>['passed','platform-excluded','scope-excluded'].includes(r.status));
-const report={schema:'verification-result-v1',package:contract.package,commit,profile:plan.profile,completeScope:plan.completeScope,runtime:process.version,platform:process.platform,architecture:process.arch,sourceDigest:initial,contractDigest,artifact,status:interrupted?'interrupted':stable?(passed?'passed':'failed'):'stale',completionReady:passed&&plan.completeScope,checks:results};
+const report={schema:'verification-result-v1',package:contract.package,commit,profile:plan.profile,partition:plan.partition,completeScope:plan.completeScope,runtime:process.version,platform:process.platform,architecture:process.arch,sourceDigest:initial,contractDigest,artifact,status:interrupted?'interrupted':stable?(passed?'passed':'failed'):'stale',completionReady:passed&&plan.completeScope,checks:results};
 writeFileSync(path.join(output,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({output,status:report.status,profile:plan.profile,completionReady:report.completionReady}));process.exitCode=passed?0:1;

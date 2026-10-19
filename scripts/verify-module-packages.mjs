@@ -114,7 +114,12 @@ try {
     results.push({ ...result, microJudge, defaultIntake, packedBytes: composed.size, unpackedBytes: composed.unpackedSize, fileCount: composed.files.length, resolvedDependencies })
     console.log(`${combination}: packed native startup, ordinary requests and teardown passed`)
   }
-  packed.full = await pack(root, join(work, 'pack-full'))
+  if(process.env.KIOKUKO_VERIFY_TARBALL){
+    const destination=join(work,'pack-full');await mkdir(destination)
+    const metadata=JSON.parse(await readFile(process.env.KIOKUKO_VERIFY_PACK_METADATA,'utf8'))[0]
+    await command('tar',['-xzf',process.env.KIOKUKO_VERIFY_TARBALL,'-C',destination],root)
+    packed.full={...metadata,directory:join(destination,'package')}
+  }else packed.full = await pack(root, join(work, 'pack-full'))
   const baselines = [['full', packed.full.directory]]
   if (process.env.KIOKUKO_MODULE_BASELINE) {
     const directory = join(work, 'baseline')

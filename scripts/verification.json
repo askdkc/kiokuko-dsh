@@ -287,9 +287,8 @@
     {
       "id": "retrieval",
       "argv": [
-        "npm",
-        "run",
-        "test:evaluation"
+        "node",
+        "scripts/run-retrieval-evaluation.mjs"
       ],
       "profiles": [
         "main",
@@ -341,9 +340,8 @@
     {
       "id": "answer-evaluation",
       "argv": [
-        "npm",
-        "run",
-        "test:evaluation:answer-review"
+        "node",
+        "scripts/evaluate-answer-review.mjs"
       ],
       "profiles": [
         "main",
@@ -379,9 +377,10 @@
     {
       "id": "sampledb",
       "argv": [
-        "npm",
-        "run",
-        "test:sampledb"
+        "node",
+        "--import",
+        "tsx",
+        "tests/ci/verify-sample-database.ts"
       ],
       "profiles": [
         "main",
@@ -489,9 +488,9 @@
     {
       "id": "lisp-native",
       "argv": [
-        "npm",
-        "run",
-        "test:ci:lisp"
+        "node",
+        "scripts/run-ci-native.mjs",
+        "lisp"
       ],
       "profiles": [
         "lisp"
@@ -548,7 +547,12 @@
       "expected": "existing independent assertions finish, emit their result and exit 0",
       "dependsOn": [
         "build"
-      ]
+      ],
+      "sourceFiles": [
+        "tests/dsh/unit/core-modules.test.ts",
+        "tests/dsh/integration/core-host.test.ts"
+      ],
+      "packed": true
     },
     {
       "id": "models-web",
@@ -690,7 +694,10 @@
       "dependsOn": [
         "build"
       ],
-      "packed": true
+      "packed": true,
+      "sourceFiles": [
+        "tests/dsh/unit/skill-startup-native.test.ts"
+      ]
     },
     {
       "id": "consumer-npm",
@@ -975,6 +982,100 @@
         "node",
         "scripts/verify-protected-python-capability.mjs"
       ]
+    }
+  },
+  "ciPartitions": {
+    "ci-main": {
+      "shared": [
+        "build"
+      ],
+      "splits": {
+        "ci-native-integration": {
+          "kind": "native",
+          "count": 2
+        },
+        "ci-native-e2e": {
+          "kind": "native",
+          "count": 2
+        }
+      },
+      "lanes": {
+        "unit": [
+          "verification-contract",
+          "typecheck",
+          "ci-native-unit",
+          "skill-efficiency",
+          "coding-offline"
+        ],
+        "integration-1": [
+          "ci-native-integration-1"
+        ],
+        "integration-2": [
+          "ci-native-integration-2"
+        ],
+        "e2e-1": [
+          "ci-native-e2e-1"
+        ],
+        "e2e-2": [
+          "ci-native-e2e-2"
+        ],
+        "evaluations": [
+          "harness",
+          "retrieval",
+          "decision-evaluation",
+          "intent-evaluation",
+          "answer-evaluation",
+          "memory-reuse-evaluation",
+          "sampledb",
+          "publint",
+          "prepare-reproducibility",
+          "sqlite-vec"
+        ],
+        "consumers": [
+          "consumer-npm",
+          "consumer-pnpm",
+          "dsh-lifecycle"
+        ]
+      }
+    },
+    "lisp": {
+      "shared": [
+        "build"
+      ],
+      "splits": {
+        "lisp-native": {
+          "kind": "native",
+          "count": 2
+        },
+        "skill-delivery": {
+          "kind": "skill-phases"
+        }
+      },
+      "lanes": {
+        "native-1": [
+          "lisp-native-1",
+          "owned-native"
+        ],
+        "native-2": [
+          "verification-contract",
+          "native-search",
+          "laya-worker",
+          "lisp-vendor",
+          "lisp-native-2"
+        ],
+        "modules": [
+          "modules"
+        ],
+        "package": [
+          "pack-check"
+        ],
+        "skills-source": [
+          "skill-delivery-source"
+        ],
+        "skills-packed": [
+          "skill-delivery-packed"
+        ]
+      }
     }
   }
 }

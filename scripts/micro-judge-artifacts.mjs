@@ -9,6 +9,12 @@ export const nativeTargets = Object.freeze({
   'linux-arm64': 'aarch64-unknown-linux-gnu', 'linux-x64': 'x86_64-unknown-linux-gnu',
 })
 export const sha256 = value => createHash('sha256').update(value).digest('hex')
+// Compiler text is provenance, not an executable compatibility gate. Actual
+// compilation and native acceptance establish the required capabilities.
+export function compilerIdentity(value) {
+  assert.ok(typeof value === 'string' && value.length <= 256 && !/[\x00-\x1f\x7f]/.test(value) && /^rustc [0-9]+\.[0-9]+\.[0-9]+(?:[- ][\x20-\x7e]+)?$/.test(value), 'Invalid Rust compiler identity')
+  return value
+}
 export async function sourceDigest(root) {
   return sha256(Buffer.concat(await Promise.all(['Cargo.toml', 'src/main.rs', 'src/digest.rs'].map(file => readFile(join(root, 'crates/micro-judge', file))))))
 }
@@ -53,7 +59,7 @@ export async function validateNativeArtifact(root, entry, expectedSource) {
   assert.equal(receipt.schemaVersion, 1); assert.equal(receipt.target, nativeTargets[key])
   assert.equal(receipt.platform, entry.platform); assert.equal(receipt.arch, entry.arch)
   assert.equal(receipt.binarySha256, entry.sha256); assert.equal(receipt.sourceDigest, expectedSource)
-  assert.equal(receipt.compiler, entry.compiler); assert.match(receipt.compiler, /^rustc 1\.85\.0 /)
+  assert.equal(receipt.compiler, compilerIdentity(entry.compiler), 'Native compiler identity mismatch')
   assert.equal(receipt.exitCode, 0); assert.equal(receipt.log, `native-acceptance-${key}.tap`)
   const tap = await regular(join(root,receipt.log))
   assert.equal(sha256(tap), receipt.logSha256)

@@ -1,7 +1,7 @@
 import nativeTest, { type TestOptions } from 'node:test'
 import { withRepeatedReport, recordRepeatedStage } from '../helpers/repeated-memory-report.js'
 // @ts-expect-error Shared runner manifest is an ESM script.
-import { repeatedMemoryScenarios } from '../../../scripts/repeated-memory-scenarios.mjs'
+import { selectedRepeatedScenarios } from '../../../scripts/repeated-memory-scenarios.mjs'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -15,8 +15,7 @@ import { configureEvolution } from '../../../src/memory/evolution/store.js'
 import { repeatedDeepHost, completeDeepRound } from '../helpers/repeated-deep-native.js'
 import { openConnection } from '../../../src/db/connection.js'
 
-const requestedScenario = process.env.KIOKUKO_REPEATED_SCENARIO
-if (requestedScenario && !repeatedMemoryScenarios.includes(requestedScenario)) throw new Error('Unknown required lifecycle scenario')
+const selectedScenarios: string[] = selectedRepeatedScenarios()
 const registered = new Set<string>()
 const test = (title: string, options: TestOptions, operation: () => Promise<void>) => {
   const name = title.replace('repeated memory lifecycle: ', '')
@@ -30,7 +29,7 @@ if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packages) throw new Error
 const kind = 'deep' as const
 const mode = 'dedicated' as const
 const interruptionName = 'deep/dispatched-interruption'
-if (!process.env.KIOKUKO_REPEATED_SCENARIO || process.env.KIOKUKO_REPEATED_SCENARIO === interruptionName) {
+if (selectedScenarios.includes(interruptionName)) {
   test(`repeated memory lifecycle: ${interruptionName}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
     const root = realpathSync(await mkdtemp(join(tmpdir(),'repeated-interruption-')))
     const env = { ...process.env }; delete env.NODE_TEST_CONTEXT
@@ -89,7 +88,7 @@ if (!process.env.KIOKUKO_REPEATED_SCENARIO || process.env.KIOKUKO_REPEATED_SCENA
 
 for (const scenario of ['same-session','restart'] as const) {
   const name = `deep/${scenario}`
-  if (process.env.KIOKUKO_REPEATED_SCENARIO && process.env.KIOKUKO_REPEATED_SCENARIO !== name) continue
+  if (!selectedScenarios.includes(name)) continue
   test(`repeated memory lifecycle: ${name}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'repeated-deep-')))
     let f: Awaited<ReturnType<typeof repeatedDeepHost>> | undefined
@@ -113,7 +112,7 @@ for (const scenario of ['same-session','restart'] as const) {
 
 for (const route of ['normal', 'enno'] as const) for (const mode of ['prefix_reuse', 'bounded_evidence'] as const) for (const scenario of ['same-session', 'new-session', 'restart'] as const) {
   const name = `${route}/${mode}/${scenario}`
-  if (process.env.KIOKUKO_REPEATED_SCENARIO && process.env.KIOKUKO_REPEATED_SCENARIO !== name) continue
+  if (!selectedScenarios.includes(name)) continue
   test(`repeated memory lifecycle: ${name}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'repeated-memory-')))
     let host: Awaited<ReturnType<typeof repeatedNativeHost>> | undefined
@@ -151,7 +150,7 @@ for (const route of ['normal', 'enno'] as const) for (const mode of ['prefix_reu
 
 for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scenario of ['duplicate-completion','save-failure','correction'] as const) {
   const name = `normal/${mode}/${scenario}`
-  if (process.env.KIOKUKO_REPEATED_SCENARIO && process.env.KIOKUKO_REPEATED_SCENARIO !== name) continue
+  if (!selectedScenarios.includes(name)) continue
   test(`repeated memory lifecycle: ${name}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'repeated-memory-fault-')))
     let host: Awaited<ReturnType<typeof repeatedNativeHost>> | undefined
@@ -191,7 +190,7 @@ for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scen
 
 for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scenario of ['stale-revision','stale-lease'] as const) {
   const name = `enno/${mode}/${scenario}`
-  if (requestedScenario && requestedScenario !== name) continue
+  if (!selectedScenarios.includes(name)) continue
   test(`repeated memory lifecycle: ${name}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'repeated-enno-fence-')))
     let host: Awaited<ReturnType<typeof repeatedNativeHost>> | undefined
@@ -205,7 +204,7 @@ for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scen
 
 for (const mode of ['prefix_reuse','bounded_evidence'] as const) {
   const name = `normal/${mode}/upgrade`
-  if (requestedScenario && requestedScenario !== name) continue
+  if (!selectedScenarios.includes(name)) continue
   test(`repeated memory lifecycle: ${name}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'repeated-upgrade-')))
     let host: Awaited<ReturnType<typeof repeatedNativeHost>> | undefined
@@ -222,4 +221,4 @@ for (const mode of ['prefix_reuse','bounded_evidence'] as const) {
   })
 }
 
-assert.deepEqual([...registered].sort(), (requestedScenario ? [requestedScenario] : [...repeatedMemoryScenarios]).sort(), 'every required scenario must be registered exactly once')
+assert.deepEqual([...registered].sort(), [...selectedScenarios].sort(), 'every required scenario must be registered exactly once')
