@@ -292,54 +292,36 @@ test('CI-only profile preserves all main checks through Linux ownership and leav
   }
 });
 
-test('CI workflow schedules every declared partition and retains blocking OS coverage', async () => {
-  const {partitionPlans}=await import('./verification-contract.mjs');
-  const {requiredJobs,ciTargets}=await import('./verify-ci-results.mjs');
+test('CI workflow schedules the explicit selected plan and retains blocking full coverage', async () => {
+  const {requiredJobs}=await import('./verify-ci-results.mjs');
+  const {createCiPlan}=await import('./ci-plan.mjs');
   const actual=JSON.parse(readFileSync(new URL('./verification.json',import.meta.url)));
-  const workflow=createRequire(import.meta.url)('yaml').parse(readFileSync(new URL('../.github/workflows/ci.yml',import.meta.url),'utf8'));
-  for(const [profile,id] of [['ci-main','verify-main'],['lisp','lisp-runtime']]){
-    const job=workflow.jobs[id];
-    assert.equal(job.if,undefined);assert.equal(job['continue-on-error'],undefined);assert.equal(job.strategy['fail-fast'],false);
-    assert.deepEqual(job.strategy.matrix.partition,partitionPlans(actual,profile).map(plan=>plan.partition));
-    assert.ok(job.steps.some(step=>step.run?.includes('--profile '+profile+' --partition "${{ matrix.partition }}" --output')));
-    assert.equal(job['timeout-minutes'],profile==='lisp' ? "${{ matrix.partition == 'native' && 25 || 20 }}" : 20,'combined native budget retains measured headroom; Skills remain separate');
-    const evidence=job.steps.find(step=>step.with?.name?.startsWith('verification-ci-'));
-    assert.ok(evidence.with.path.includes('!${{ runner.temp }}/'));
-    assert.ok(evidence.with.path.includes('/npm-cache/**'),'downloaded CI evidence must exclude package caches');
-  }
-  assert.deepEqual(workflow.jobs['lisp-runtime'].strategy.matrix.os,ciTargets.lisp.map(target=>target.runner));
-  assert.equal(workflow.jobs['verify-main']['runs-on'],ciTargets['ci-main'][0].runner);
-  const semantic=workflow.jobs['semantic-platform-smoke'];
-  assert.ok(actual.checks.find(check=>check.id==='verification-contract').profiles.includes('semantic'),'FD4 and POSIX lifecycle assertions retain all native platforms');
-  assert.equal(semantic.if,undefined);assert.equal(semantic['continue-on-error'],undefined);assert.equal(semantic.strategy['fail-fast'],false);
-  assert.deepEqual(semantic.strategy.matrix.include,[
-    {platform:'linux-x64',runner:'ubuntu-24.04'},
-    {platform:'linux-arm64',runner:'ubuntu-24.04-arm'},
-    {platform:'macos-arm64',runner:'macos-15'},
-  ]);
-  assert.ok(semantic.steps.some(step=>step.run?.includes('--profile semantic --output')));
-  const runtime=workflow.jobs['dsh-runtime-macos'];
-  assert.equal(runtime['runs-on'],ciTargets.runtime[0].runner);
-  assert.ok(runtime.steps.some(step=>step.with?.name==='verification-ci-runtime-macos'));
-  const cli=actual.checks.find(check=>check.id==='dsh-cli-profile');
+  const text=readFileSync(new URL('../.github/workflows/ci.yml',import.meta.url),'utf8');
+  const workflow=createRequire(import.meta.url)('yaml').parse(text),jobs=workflow.jobs;
+  assert.deepEqual(Object.keys(jobs),['select','micro-judge-native','checks','verify']);
+  assert.ok(jobs.select.steps.some(s=>s.run?.includes('scripts/ci-plan.mjs')));
+  assert.ok(jobs.select.steps.some(s=>s.with?.['fetch-depth']===0));
+  assert.equal(jobs['micro-judge-native'].strategy.matrix.include,'${{ fromJSON(needs.select.outputs.native) }}');
+  assert.equal(jobs.checks.strategy.matrix.include,'${{ fromJSON(needs.select.outputs.lanes) }}');
+  assert.equal(jobs.checks['runs-on'],'${{ matrix.runner }}');assert.equal(jobs.checks['timeout-minutes'],'${{ matrix.timeout }}');
+  for(const job of [jobs.checks,jobs['micro-judge-native']]){assert.equal(job['continue-on-error'],undefined);assert.equal(job.strategy['fail-fast'],false)}
+  assert.ok(jobs.checks.if.includes('always()'));assert.ok(jobs.checks.if.includes("needs.select.result == 'success'"));assert.ok(jobs.checks.if.includes("needs.micro-judge-native.result == 'success'"));
+  assert.ok(jobs.checks.steps.some(s=>s.run?.includes('scripts/verify.mjs --ci-plan')&&s.run.includes('--lane')));
+  const prep=jobs.checks.steps.find(s=>s.run==='npm ci --prefix tests/fixtures/dsh-runtime');assert.ok(prep);assert.equal(prep.if,'matrix.fixture');
+  assert.doesNotMatch(text,/--legacy-peer-deps|--force|--package-lock=false|npm install.*fixtures/);
+  const fixture=JSON.parse(readFileSync(new URL('../tests/fixtures/dsh-runtime/package.json',import.meta.url))),lock=JSON.parse(readFileSync(new URL('../tests/fixtures/dsh-runtime/package-lock.json',import.meta.url)));
+  assert.deepEqual(fixture.dependencies,{'@deepseek-ai/dsh':'0.2.1-alpha.3','@askdkc/dsh-cli':'0.14.11','@xterm/headless':'6.0.0'});
+  assert.deepEqual(lock.packages[''].dependencies,fixture.dependencies);assert.equal(lock.packages['node_modules/@askdkc/dsh-cli'].version,'0.14.11');assert.equal(lock.packages['node_modules/@deepseek-ai/cordis-plugin-group'].version,'1.0.5-alpha.2');
+  const cli=actual.checks.find(c=>c.id==='dsh-cli-profile');assert.equal(cli.argv[1],'scripts/verify-cli-profile.mjs');assert.equal(cli.argv.at(-1),'source');
   assert.deepEqual(cli.completionEvidence,{profile:'dsh-cli',interactive:true,cliVersion:'0.14.11',sourceEntry:true});
-  assert.equal(cli.argv[1],'scripts/verify-cli-profile.mjs');assert.equal(cli.argv.at(-1),'source');
-  assert.ok(cli.profiles.includes('runtime'));assert.ok(actual.ciPartitions['ci-main'].lanes.consumers.includes(cli.id));
-  for(const job of [workflow.jobs['verify-main'],runtime]) {
-    const setup=job.steps.find(step=>step.run?.includes('@askdkc/dsh-cli@0.14.11'));
-    assert.ok(setup);assert.ok(setup.run.includes('@xterm/headless@6.0.0'));
-  }
-  assert.equal(workflow.jobs['verify-main'].steps.find(step=>step.run?.includes('@askdkc/dsh-cli@0.14.11')).if,"matrix.partition == 'consumers'");
-  const aggregate=workflow.jobs.verify;
-  assert.deepEqual(aggregate.needs,requiredJobs);assert.equal(aggregate.if,'always()');
-  const gate=aggregate.steps.find(step=>step.run?.includes('scripts/verify-ci-results.mjs'));
-  assert.equal(gate.env.NEEDS_JSON,'${{ toJSON(needs) }}');
-  assert.ok(aggregate.steps.some(step=>step.with?.pattern==='verification-ci-*'));
-  const main=workflow.jobs['verify-main'];
-  assert.ok(!main.steps.some(step=>step.run?.includes('npm pack')),'release review must use the tested archive');
-  const candidate=main.steps.find(step=>step.with?.name==='multi-platform-package-${{ github.sha }}');
-  assert.equal(candidate.if,"matrix.partition == 'consumers'");
-  assert.equal(candidate.with.path,'${{ runner.temp }}/verification-verify/*.tgz');
+  assert.ok(actual.checks.find(c=>c.id==='verification-contract').profiles.includes('semantic'));
+  const complete=createCiPlan(actual,{full:true},{});assert.equal(complete.jobCount,27);assert.equal(complete.lanes.length,22);
+  const ordinary=createCiPlan(actual,{available:true,changes:[{status:'M',path:'src/dsh/task-state.ts'}]},{});assert.equal(ordinary.jobCount,5);assert.equal(ordinary.lanes.length,2);
+  const aggregate=jobs.verify;assert.deepEqual(aggregate.needs,requiredJobs);assert.equal(aggregate.if,'always()');
+  const gate=aggregate.steps.find(s=>s.run?.includes('scripts/verify-ci-results.mjs'));assert.equal(gate.env.NEEDS_JSON,'${{ toJSON(needs) }}');assert.ok(gate.run.includes('--ci-plan'));
+  assert.ok(aggregate.steps.some(s=>s.with?.pattern==='verification-ci-*'));assert.ok(aggregate.steps.some(s=>s.run?.includes('merge-micro-judge-artifacts.mjs')&&s.run.includes('--ci-plan')));
+  const candidate=jobs.checks.steps.find(s=>s.with?.name==='multi-platform-package-${{ github.sha }}');assert.equal(candidate.if,"needs.select.outputs.full == 'true' && matrix.release");assert.equal(candidate.with.path,'${{ runner.temp }}/verification/*.tgz');
+  assert.ok(!jobs.checks.steps.some(s=>s.run?.includes('npm pack')),'release review uses the already tested complete archive');
 });
 
 await import('./ci-partitions.test.mjs');

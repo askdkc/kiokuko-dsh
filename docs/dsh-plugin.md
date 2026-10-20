@@ -619,12 +619,32 @@ disabled for the current session. Task resume changes task state only. The
 runner checks that input stays blocked, invokes the displayed
 `/kioku-lisp enable` recovery command, and then verifies admitted input.
 
-CI combines Main unit/evaluations and the two integration shards, and combines
-Protected Lisp native shards and module/package checks. Source and packed
-Skills remain separate after the earlier combined job exceeded 20 minutes.
-All three native platforms remain; the required aggregate also requires the
-macOS runtime result and its current verification evidence. The matrix has
-26 jobs, down from 34; new elapsed time and runner usage require a CI run.
+CI uses a source-bound selected plan. Known application changes run five jobs:
+selection, one Linux native build, combined Linux core/Lisp checks, combined
+consumer/runtime/terminal checks, and the required aggregate. UI changes add
+the browser job. Host/platform boundaries add the affected CPU/OS checks.
+Only genuine prose documentation can select the two lightweight jobs; Skills
+Markdown remains runtime input. Dependency, exports, package, build, test or
+verification changes, releases and manual runs select complete CI coverage.
+Unknown paths, unavailable/empty diffs, renames and deletions also select full.
+Consequently this CI/fixture repair itself selects full coverage.
+
+Full mode has 27 jobs, including selection, and 22 required verification
+reports. It retains all Main partitions, all four Lisp partitions on each OS,
+three semantic platforms, macOS runtime and browser coverage. Lisp still tests
+`macos-latest`; source and packed Skills remain separate. Ordinary mode has
+two required reports, each combining existing checks with a shared build.
+Required selected jobs cannot be missing, skipped, failed or cancelled.
+Unselected jobs remain explicitly unselected, never reported as executed tests.
+
+The fixture declares exact DSH, terminal UI and headless-terminal versions in
+one npm lockfile and uses one normal `npm ci`, preserving the DSH peer graph.
+Native test artifacts bind to the selected commit, source, contract and
+Node/npm/Rust toolchain. Representative bundles remove unselected binaries,
+carry their limited scope, and cannot become complete release-review artifacts.
+Only full-mode consumer verification retains a release-review tarball. Local
+host validation plans have a separate scope and are rejected by GitHub CI.
+Future GitHub runs are still needed to measure actual runner usage.
 
 The compatibility coverage is:
 

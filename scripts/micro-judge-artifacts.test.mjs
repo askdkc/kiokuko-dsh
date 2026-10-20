@@ -6,21 +6,17 @@ import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
 import { acceptanceSummary, compilerIdentity, nativeTargets, sourceDigest, validateNativeArtifact } from './micro-judge-artifacts.mjs'
 const root=resolve(import.meta.dirname,'..')
-test('every native package consumer requires three actual native build results before dependency prepare',async()=>{
-  const workflow=parse(await readFile(join(root,'.github/workflows/ci.yml'),'utf8'))
-  assert.deepEqual(Object.keys(nativeTargets).sort(), ['darwin-arm64','linux-arm64','linux-x64'])
-  const native=workflow.jobs['micro-judge-native']
-  assert.deepEqual(native.strategy.matrix.include.map(item=>item.platform).sort(),Object.keys(nativeTargets).sort())
-  assert.equal(new Set(native.strategy.matrix.include.map(item=>item.runner)).size,3)
-  assert.ok(native.steps.some(step=>step.run?.includes('build-verify-micro-judge.mjs')))
-  for(const name of ['verify-main','lisp-runtime','shortcut-browser','dsh-runtime-macos','semantic-platform-smoke']){
-    const job=workflow.jobs[name];assert.equal(job.needs,'micro-judge-native')
-    const merge=job.steps.findIndex(step=>step.run?.includes('merge-micro-judge-artifacts.mjs'))
-    assert.ok(merge>=0&&merge<job.steps.findIndex(step=>step.run==='npm ci'))
-  }
-  assert.ok(workflow.jobs.verify.needs.includes('micro-judge-native'))
-  assert.ok(workflow.jobs.verify.needs.includes('shortcut-browser'))
-})
+test('selected native consumers merge current accepted targets and retain all release platforms',async()=>{
+  const workflow=parse(await readFile(join(root,'.github/workflows/ci.yml'),'utf8'));
+  const {createCiPlan}=await import('./ci-plan.mjs');const c=JSON.parse(await readFile(join(root,'scripts/verification.json'),'utf8'));
+  assert.deepEqual(Object.keys(nativeTargets).sort(),['darwin-arm64','linux-arm64','linux-x64']);
+  const full=createCiPlan(c,{full:true},{});assert.deepEqual(full.nativeTargets.map(t=>t.key).sort(),Object.keys(nativeTargets).sort());
+  const native=workflow.jobs['micro-judge-native'];assert.equal(native.strategy.matrix.include,'${{ fromJSON(needs.select.outputs.native) }}');
+  assert.ok(native.steps.some(s=>s.run?.includes('build-verify-micro-judge.mjs')&&s.run.includes('--ci-plan=')));
+  const job=workflow.jobs.checks;assert.deepEqual(job.needs,['select','micro-judge-native']);const merge=job.steps.findIndex(s=>s.run?.includes('merge-micro-judge-artifacts.mjs'));assert.ok(merge>=0&&merge<job.steps.findIndex(s=>s.run==='npm ci'));
+  assert.ok(workflow.jobs.verify.needs.includes('micro-judge-native'));assert.ok(workflow.jobs.verify.steps.some(s=>s.run?.includes('merge-micro-judge-artifacts.mjs')));
+});
+
 test('native acceptance rejects skipped, incomplete, empty and forged count-only logs',()=>{
   for(const text of ['', '# tests 0\n# pass 0\n', '# tests 18\n# pass 18\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n'])assert.throws(()=>acceptanceSummary(text))
 })
@@ -122,4 +118,27 @@ test('synthetic transport fixtures require exactly three targets and reject miss
   const path=join(input,'linux-x64/manifest.json'),original=await readFile(path),manifest=JSON.parse(original);manifest.artifacts[0].sourceDigest='0'.repeat(64);await writeFile(path,JSON.stringify(manifest));await rejected(/stale source/);await writeFile(path,original)
   await writeFile(join(input,'linux-x64/linux-x64/kiokuko-micro-judge'),'corrupt');await rejected(/AssertionError/);await artifact('linux-x64')
   await artifact('darwin-x64');await rejected(/Unsupported native target: darwin-x64/)
+  await rm(join(input,'darwin-x64'),{recursive:true});
+  for(const file of ['ci-plan.mjs','verification-contract.mjs','verification.json'])await cp(join(root,'scripts',file),join(directory,'scripts',file));
+  const external=await mkdtemp(join(tmpdir(),'micro-selected-input-'));t.after(()=>rm(external,{recursive:true,force:true}));
+  for(const key of Object.keys(nativeTargets))await cp(join(input,key),join(external,key),{recursive:true});await rm(input,{recursive:true});
+  const {createCiPlan,checkoutIdentity,nativeSelection,ciToolchain}=await import('./ci-plan.mjs');
+  const previous={GIT_DIR:process.env.GIT_DIR,GIT_WORK_TREE:process.env.GIT_WORK_TREE};process.env.GIT_DIR=join(root,'.git');process.env.GIT_WORK_TREE=directory;
+  try{
+    const contract=JSON.parse(await readFile(join(directory,'scripts/verification.json'),'utf8')),selection=createCiPlan(contract,{available:true,changes:[{status:'M',path:'src/dsh/task-state.ts'}]},checkoutIdentity(directory));
+    const planFile=join(external,'..',`selected-${external.split('/').at(-1)}.json`);t.after(()=>rm(planFile,{force:true}));await writeFile(planFile,JSON.stringify(selection));
+    for(const key of Object.keys(nativeTargets)){
+      const base=join(external,key),manifest=JSON.parse(await readFile(join(base,'manifest.json'),'utf8'));manifest.artifacts[0].compiler=ciToolchain.rust;await writeFile(join(base,'manifest.json'),JSON.stringify(manifest));
+      const receiptFile=join(base,`native-verification-${key}.json`),receipt=JSON.parse(await readFile(receiptFile,'utf8'));receipt.compiler=ciToolchain.rust;await writeFile(receiptFile,JSON.stringify(receipt));
+      await writeFile(join(base,'selection.json'),JSON.stringify(key==='linux-x64'?nativeSelection(selection,manifest.artifacts[0]):{unselected:true}));
+    }
+    const selected=()=>spawnSync(process.execPath,[join(directory,'scripts/merge-micro-judge-artifacts.mjs'),external,`--ci-plan=${planFile}`],{encoding:'utf8'});
+    assert.notEqual(selected().status,0,'extra native targets are not silently accepted');await rm(join(external,'linux-arm64'),{recursive:true});await rm(join(external,'darwin-arm64'),{recursive:true});
+    const good=selected();assert.equal(good.status,0,good.stderr);const narrow=JSON.parse(await readFile(join(directory,'micro-judge/manifest.json'),'utf8'));assert.equal(narrow.artifacts.length,1);assert.equal(narrow.artifacts[0].arch,'x64');
+    assert.equal(JSON.parse(await readFile(join(directory,'micro-judge/selection.json'),'utf8')).bundleScope,'representative');
+    await assert.rejects(readFile(join(directory,'micro-judge/darwin-arm64/kiokuko-micro-judge')),'unselected stale binaries are removed');
+    assert.notEqual(spawnSync(process.execPath,[join(directory,'scripts/merge-micro-judge-artifacts.mjs'),external],{encoding:'utf8'}).status,0,'narrow test bundle is not complete release input');
+    const wrapper=join(external,'linux-x64/selection.json'),saved=await readFile(wrapper,'utf8');const bad=JSON.parse(saved);bad.bundleScope='release-review';await writeFile(wrapper,JSON.stringify(bad));assert.notEqual(selected().status,0);await writeFile(wrapper,saved);
+    const changed=JSON.parse(saved);changed.planDigest='old';await writeFile(wrapper,JSON.stringify(changed));assert.notEqual(selected().status,0);
+  }finally{for(const key of Object.keys(previous)){if(previous[key]===undefined)delete process.env[key];else process.env[key]=previous[key]}}
 })

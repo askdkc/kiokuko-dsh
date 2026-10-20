@@ -4,8 +4,9 @@ import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, readlinkSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 export const digest = value => createHash('sha256').update(value).digest('hex');
-export function sourceDigest(root) {
-  const files = [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {cwd:root,encoding:'utf8'}).split('\0').filter(Boolean))].sort();
+export function sourceDigest(root, { nativeTransport = true } = {}) {
+  const generatedNative = /^micro-judge\/(?:manifest\.json|selection\.json|(?:darwin-arm64|linux-arm64|linux-x64)\/kiokuko-micro-judge|native-acceptance-(?:darwin-arm64|linux-arm64|linux-x64)\.tap|native-verification-(?:darwin-arm64|linux-arm64|linux-x64)\.json)$/;
+  const files = [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {cwd:root,encoding:'utf8'}).split('\0').filter(Boolean))].filter(file => nativeTransport || !generatedNative.test(file)).sort();
   return digest(JSON.stringify(files.map(file => {
     try { const p=path.join(root,file),s=lstatSync(p);return [file,s.mode,s.isSymbolicLink()?readlinkSync(p):s.isFile()?digest(readFileSync(p)):'directory']; }
     catch(e) {if(e.code==='ENOENT')return [file,'missing'];throw e;}

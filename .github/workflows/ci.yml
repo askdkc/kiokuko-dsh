@@ -3,23 +3,45 @@ on:
   push: null
   pull_request: null
   workflow_dispatch: null
+  release:
+    types: [published]
 permissions:
   contents: read
 env:
   ONNXRUNTIME_NODE_INSTALL: skip
 jobs:
+  select:
+    name: Select required coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.plan.outputs.native }}
+      lanes: ${{ steps.plan.outputs.lanes }}
+      has_native: ${{ steps.plan.outputs.has_native }}
+      has_lanes: ${{ steps.plan.outputs.has_lanes }}
+      full: ${{ steps.plan.outputs.full }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+      - id: plan
+        run: node scripts/ci-plan.mjs "${{ runner.temp }}/selected-ci.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: selected-ci-plan
+          path: ${{ runner.temp }}/selected-ci.json
+          if-no-files-found: error
   micro-judge-native:
-    name: Native micro-judge (${{ matrix.platform }})
+    needs: select
+    if: needs.select.outputs.has_native == 'true'
+    name: Native micro-judge (${{ matrix.key }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: linux-x64
-            runner: ubuntu-24.04
-          - platform: linux-arm64
-            runner: ubuntu-24.04-arm
-          - platform: darwin-arm64
-            runner: macos-15
+        include: ${{ fromJSON(needs.select.outputs.native) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
@@ -28,144 +50,91 @@ jobs:
         with:
           node-version: 24.16.0
           cache: npm
+      - uses: actions/download-artifact@v8
+        with:
+          name: selected-ci-plan
+          path: ${{ runner.temp }}/ci-plan
       - run: npm ci --ignore-scripts
-      # Fixed CI/MSRV build input; local builds use an existing capable compiler.
-      - name: Install the CI baseline Rust toolchain on this disposable runner
-        shell: bash
+      - name: Install the fixed CI Rust toolchain on the disposable runner
         run: rustup toolchain install 1.85.0 --profile minimal --no-self-update
-      - name: Build and accept the actual native binary
+      - name: Build and accept the selected native target
         shell: bash
-        run: node scripts/build-verify-micro-judge.mjs "$(rustup which --toolchain 1.85.0 rustc)" --output="${{ runner.temp }}/micro-judge-${{ matrix.platform }}"
+        run: node scripts/build-verify-micro-judge.mjs "$(rustup which --toolchain 1.85.0 rustc)" --ci-plan="${{ runner.temp }}/ci-plan/selected-ci.json" --output="${{ runner.temp }}/native-${{ matrix.key }}"
       - run: node --test scripts/micro-judge-artifacts.test.mjs
       - uses: actions/upload-artifact@v7
         with:
-          name: micro-judge-${{ matrix.platform }}
-          path: ${{ runner.temp }}/micro-judge-${{ matrix.platform }}
+          name: micro-judge-${{ matrix.key }}
+          path: ${{ runner.temp }}/native-${{ matrix.key }}
           if-no-files-found: error
-  lisp-runtime:
-    needs: micro-judge-native
-    name: Protected Lisp (${{ matrix.os }}, ${{ matrix.partition }})
+  checks:
+    needs: [select, micro-judge-native]
+    if: always() && needs.select.result == 'success' && needs.select.outputs.has_lanes == 'true' && needs.micro-judge-native.result == 'success'
+    name: Verify (${{ matrix.id }})
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-24.04
-          - ubuntu-24.04-arm
-          - macos-latest
-        partition: [native, distribution, skills-source, skills-packed]
-    runs-on: ${{ matrix.os }}
-    # Previous macOS native verification steps: 433 + 242 seconds.
-    # Merge their setup/build once; keep both shards and allow measured headroom.
-    timeout-minutes: ${{ matrix.partition == 'native' && 25 || 20 }}
+        include: ${{ fromJSON(needs.select.outputs.lanes) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: 24.16.0
           cache: npm
-      - name: Install test runtimes
+      - uses: actions/download-artifact@v8
+        with:
+          name: selected-ci-plan
+          path: ${{ runner.temp }}/ci-plan
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: micro-judge-*
+          path: ${{ runner.temp }}/native-input
+      - name: Assemble exactly the selected, current native test bundle
+        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/native-input" --ci-plan="${{ runner.temp }}/ci-plan/selected-ci.json"
+      - uses: pnpm/action-setup@v6
+        if: matrix.pnpm
+        with:
+          version: ${{ matrix.pnpmVersion }}
+      - name: Install selected native test prerequisites
+        if: matrix.sbcl
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then
             sudo apt-get update
             sudo apt-get install -y sbcl bubblewrap python3
-            # Dedicated CI runner: permit the user namespaces required by bwrap.
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           else
             brew install sbcl python
           fi
-      - name: Download all natively accepted micro-judge targets
-        uses: actions/download-artifact@v8
-        with:
-          pattern: micro-judge-*
-          path: ${{ runner.temp }}/micro-judge-input
-      - name: Assemble the multi-platform package bundle
-        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
       - run: npm ci
-      - run: npm ci --prefix tests/fixtures/dsh-runtime
-      - name: Export DSH fixture version
-        run: node -e "const p=require('./tests/fixtures/dsh-runtime/package.json'); console.log('KIOKUKO_EXPECTED_DSH_VERSION='+p.dependencies['@deepseek-ai/dsh'])" >> "$GITHUB_ENV"
-      - name: Run repository verification (lisp)
-        run: npm run verify -- --profile lisp --partition "${{ matrix.partition }}" --output "${{ runner.temp }}/verification-lisp-runtime"
-      - name: Retain verification plan, logs and results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: verification-ci-lisp-${{ strategy.job-index }}
-          path: |
-            ${{ runner.temp }}/verification-lisp-runtime/**
-            !${{ runner.temp }}/verification-lisp-runtime/npm-cache/**
-          if-no-files-found: error
-  verify-main:
-    needs: micro-judge-native
-    name: Main (${{ matrix.partition }})
-    strategy:
-      fail-fast: false
-      matrix:
-        partition: [unit-evaluations, integration, e2e-1, e2e-2, consumers]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    env: {}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.16.0
-          cache: npm
-      - name: Set up pnpm for DSH CLI
-        uses: pnpm/action-setup@v6
-        with:
-          version: 11.7.0
-      - name: Download all natively accepted micro-judge targets
-        uses: actions/download-artifact@v8
-        with:
-          pattern: micro-judge-*
-          path: ${{ runner.temp }}/micro-judge-input
-      - name: Assemble the multi-platform package bundle
-        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
-      - name: Install dependencies
-        run: npm ci
-      - name: Install actual coding Lisp runtime
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sbcl bubblewrap
-          # Dedicated CI runner: permit the user namespaces required by bwrap.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Install DeepSeek Harness CLI
-        run: |-
-          npm ci --prefix tests/fixtures/dsh-runtime
-          echo "$PWD/tests/fixtures/dsh-runtime/node_modules/.bin" >> "$GITHUB_PATH"
-        env:
-          npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
-      - name: Prepare pinned terminal UI for the existing consumer checks
-        if: matrix.partition == 'consumers'
-        run: npm install --prefix tests/fixtures/dsh-runtime --no-save --package-lock=false --ignore-scripts --legacy-peer-deps @askdkc/dsh-cli@0.14.11 @xterm/headless@6.0.0
-      - name: Export DSH fixture version
-        run: node -e "const p=require('./tests/fixtures/dsh-runtime/package.json'); console.log('KIOKUKO_EXPECTED_DSH_VERSION='+p.dependencies['@deepseek-ai/dsh'])" >> "$GITHUB_ENV"
-      - name: Run repository verification (CI main partition)
-        run: npm run verify -- --profile ci-main --partition "${{ matrix.partition }}" --output "${{ runner.temp }}/verification-verify"
-      - name: Retain the tested multi-platform package for release review
-        if: matrix.partition == 'consumers'
+      - name: Install the single coherent locked DSH and CLI fixture
+        if: matrix.fixture
+        run: npm ci --prefix tests/fixtures/dsh-runtime
+      - name: Install browser runtime only for UI coverage
+        if: matrix.browser
+        run: npx playwright install --with-deps chromium
+      - name: Execute the selected existing checks with shared setup and build
+        run: node scripts/verify.mjs --ci-plan "${{ runner.temp }}/ci-plan/selected-ci.json" --lane "${{ matrix.id }}" --output "${{ runner.temp }}/verification"
+      - name: Retain a complete tested release-review candidate only in full mode
+        if: needs.select.outputs.full == 'true' && matrix.release
         uses: actions/upload-artifact@v7
         with:
           name: multi-platform-package-${{ github.sha }}
-          path: ${{ runner.temp }}/verification-verify/*.tgz
+          path: ${{ runner.temp }}/verification/*.tgz
           if-no-files-found: error
-      - name: Retain verification plan, logs and results
+      - name: Retain selected verification evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: verification-ci-main-${{ strategy.job-index }}
+          name: verification-ci-${{ matrix.id }}
           path: |
-            ${{ runner.temp }}/verification-verify/**
-            !${{ runner.temp }}/verification-verify/npm-cache/**
+            ${{ runner.temp }}/verification/**
+            !${{ runner.temp }}/verification/npm-cache/**
           if-no-files-found: error
-  # Preserve the existing required check: omitted main tests are owned by Lisp.
-  # Semantic platform failures must also fail this required aggregate.
   verify:
-    needs: [verify-main, lisp-runtime, semantic-platform-smoke, micro-judge-native, shortcut-browser, dsh-runtime-macos]
+    name: Required selected verification
+    needs: [select, micro-judge-native, checks]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -175,147 +144,24 @@ jobs:
         with:
           node-version: 24.16.0
       - uses: actions/download-artifact@v8
+        if: needs.select.result == 'success'
+        with:
+          name: selected-ci-plan
+          path: ${{ runner.temp }}/ci-plan
+      - uses: actions/download-artifact@v8
+        if: needs.micro-judge-native.result == 'success'
         with:
           pattern: micro-judge-*
-          path: ${{ runner.temp }}/micro-judge-input
-      - run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
+          path: ${{ runner.temp }}/native-input
+      - name: Verify selected native identities before aggregate acceptance
+        if: needs.micro-judge-native.result == 'success'
+        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/native-input" --ci-plan="${{ runner.temp }}/ci-plan/selected-ci.json"
       - uses: actions/download-artifact@v8
+        if: needs.select.outputs.has_lanes == 'true'
         with:
           pattern: verification-ci-*
           path: ${{ runner.temp }}/ci-evidence
-      - name: Require every job and current partition evidence
+      - name: Require every selected job and current report
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-        run: node scripts/verify-ci-results.mjs "${{ runner.temp }}/ci-evidence"
-  dsh-runtime-macos:
-    needs: micro-judge-native
-    name: DSH runtime smoke (macOS)
-    runs-on: macos-15
-    timeout-minutes: 20
-    env: {}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.16.0
-          cache: npm
-      - name: Set up pnpm for DSH CLI
-        uses: pnpm/action-setup@v6
-        with:
-          version: 11.7.0
-      - name: Download all natively accepted micro-judge targets
-        uses: actions/download-artifact@v8
-        with:
-          pattern: micro-judge-*
-          path: ${{ runner.temp }}/micro-judge-input
-      - name: Assemble the multi-platform package bundle
-        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
-      - name: Install dependencies
-        run: npm ci
-      - name: Install actual coding Lisp runtime
-        run: brew install sbcl
-      - name: Install DeepSeek Harness CLI
-        run: |-
-          npm ci --prefix tests/fixtures/dsh-runtime
-          echo "$PWD/tests/fixtures/dsh-runtime/node_modules/.bin" >> "$GITHUB_PATH"
-        env:
-          npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
-      - name: Prepare pinned terminal UI for the existing consumer checks
-        run: npm install --prefix tests/fixtures/dsh-runtime --no-save --package-lock=false --ignore-scripts --legacy-peer-deps @askdkc/dsh-cli@0.14.11 @xterm/headless@6.0.0
-      - name: Export DSH fixture version
-        run: node -e "const p=require('./tests/fixtures/dsh-runtime/package.json'); console.log('KIOKUKO_EXPECTED_DSH_VERSION='+p.dependencies['@deepseek-ai/dsh'])" >> "$GITHUB_ENV"
-      - name: Run repository verification (runtime)
-        run: npm run verify -- --profile runtime --output "${{ runner.temp }}/verification-dsh-runtime-macos"
-      - name: Retain verification plan, logs and results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: verification-ci-runtime-macos
-          path: ${{ runner.temp }}/verification-dsh-runtime-macos
-          if-no-files-found: error
-  shortcut-browser:
-    needs: micro-judge-native
-    name: Keyboard UI (${{ matrix.fixture }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        fixture:
-          - dsh-runtime
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.16.0
-          cache: npm
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 11.24.0
-      - name: Download all natively accepted micro-judge targets
-        uses: actions/download-artifact@v8
-        with:
-          pattern: micro-judge-*
-          path: ${{ runner.temp }}/micro-judge-input
-      - name: Assemble the multi-platform package bundle
-        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
-      - run: npm ci
-      - run: npm ci --prefix tests/fixtures/${{ matrix.fixture }}
-      - run: npx playwright install --with-deps chromium
-      - name: Install protected Lisp runtime
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sbcl bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Run repository verification (browser)
-        run: npm run verify -- --profile browser --output "${{ runner.temp }}/verification-shortcut-browser"
-      - name: Retain verification plan, logs and results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: verification-shortcut-browser-${{ strategy.job-index }}
-          path: ${{ runner.temp }}/verification-shortcut-browser
-          if-no-files-found: error
-  semantic-platform-smoke:
-    needs: micro-judge-native
-    name: Semantic smoke (${{ matrix.platform }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux-x64
-            runner: ubuntu-24.04
-          - platform: linux-arm64
-            runner: ubuntu-24.04-arm
-          - platform: macos-arm64
-            runner: macos-15
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.16.0
-          cache: npm
-      - name: Download all natively accepted micro-judge targets
-        uses: actions/download-artifact@v8
-        with:
-          pattern: micro-judge-*
-          path: ${{ runner.temp }}/micro-judge-input
-      - name: Assemble the multi-platform package bundle
-        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/micro-judge-input"
-      - name: Install dependencies
-        run: npm ci
-      - name: Run repository verification (semantic)
-        run: npm run verify -- --profile semantic --output "${{ runner.temp }}/verification-semantic-platform-smoke"
-      - name: Retain verification plan, logs and results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: verification-semantic-platform-smoke-${{ strategy.job-index }}
-          path: ${{ runner.temp }}/verification-semantic-platform-smoke
-          if-no-files-found: error
+        run: node scripts/verify-ci-results.mjs --ci-plan "${{ runner.temp }}/ci-plan/selected-ci.json" "${{ runner.temp }}/ci-evidence"

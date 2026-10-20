@@ -9,16 +9,34 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { digest, sourceDigest, treeDigest, verificationPlan, partitionPlan, validateNodeResult, evidenceCurrent } from './verification-contract.mjs';
 const root=path.resolve(import.meta.dirname,'..');
-const {values}=parseArgs({options:{profile:{type:'string'},partition:{type:'string'},plan:{type:'boolean'},output:{type:'string'},status:{type:'string'}}});
+const {values}=parseArgs({options:{profile:{type:'string'},partition:{type:'string'},plan:{type:'boolean'},output:{type:'string'},status:{type:'string'},'ci-plan':{type:'string'},lane:{type:'string'}}});
 const contractBytes=readFileSync(path.join(root,'scripts/verification.json'));
 const contract=JSON.parse(contractBytes),contractDigest=digest(contractBytes);
-const selectPlan=(profile,partition,platform)=>partition?partitionPlan(contract,profile,partition,platform):verificationPlan(contract,profile,platform);
+const selectedModule=values['ci-plan']?await import('./ci-plan.mjs'):undefined;
+const selection=selectedModule?.readCiPlan(root,values['ci-plan']);
+if(selection&&(values.profile||values.partition||!values.lane))throw new Error('Selected CI requires only --ci-plan and --lane');
+if(values.lane&&!selection)throw new Error('--lane requires --ci-plan');
+const selectPlan=(profile,partition,platform)=>selection?selectedModule.lanePlan(contract,selection,values.lane):partition?partitionPlan(contract,profile,partition,platform):verificationPlan(contract,profile,platform);
 const plan=selectPlan(values.profile??'full',values.partition);
+if(selection&&plan.platform!==process.platform)throw new Error('Selected CI lane platform mismatch');
+if(selection&&selection.lanes.find(lane=>lane.id===values.lane).architecture!==process.arch)throw new Error('Selected CI lane architecture mismatch');
 if(values.plan){console.log(JSON.stringify(plan,null,2));process.exit(0);}
 const hashFile=file=>digest(readFileSync(file));
 const gitHead=()=>{try{return execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{return null;}};
 if(values.status){let report;try{report=JSON.parse(readFileSync(values.status));}catch{}let current=false;
-if(report?.schema==='verification-result-v1'&&report.platform===process.platform&&report.architecture===process.arch&&Array.isArray(report.checks))try{const requiredPlan=selectPlan(report.profile,report.partition,report.platform);current=report.checks.length===requiredPlan.checks.length&&new Set(report.checks.map(c=>c.id)).size===requiredPlan.checks.length&&requiredPlan.checks.every(c=>report.checks.some(r=>r.id===c.id&&(['passed'].includes(r.status)||c.status===r.status&&['scope-excluded','platform-excluded'].includes(c.status))))&&evidenceCurrent(report,{sourceDigest:sourceDigest(root),runtime:process.version,contractDigest,artifactHash:report.artifact?hashFile(report.artifact.path):undefined,distDigest:report.artifact?treeDigest(path.join(root,'dist')):undefined});}catch{}
+if(report?.schema==='verification-result-v1'&&report.platform===process.platform&&report.architecture===process.arch&&Array.isArray(report.checks))try{
+  let requiredPlan;
+  if(report.selectionDigest){
+    const module=await import('./ci-plan.mjs');
+    const saved=module.readCiPlan(root,path.join(path.dirname(path.resolve(values.status)),'selection.json'));
+    if(saved.digest!==report.selectionDigest||saved.bundleScope!==report.bundleScope)throw new Error('Selected result identity mismatch');
+    requiredPlan=module.lanePlan(contract,saved,report.partition);
+  }else requiredPlan=selectPlan(report.profile,report.partition,report.platform);
+  current=report.profile===requiredPlan.profile&&report.partition===requiredPlan.partition&&report.completeScope===requiredPlan.completeScope
+    &&report.checks.length===requiredPlan.checks.length&&new Set(report.checks.map(c=>c.id)).size===requiredPlan.checks.length
+    &&requiredPlan.checks.every(c=>report.checks.some(r=>r.id===c.id&&(['passed'].includes(r.status)||c.status===r.status&&['scope-excluded','platform-excluded'].includes(c.status))))
+    &&evidenceCurrent(report,{sourceDigest:sourceDigest(root),runtime:process.version,contractDigest,artifactHash:report.artifact?hashFile(report.artifact.path):undefined,distDigest:report.artifact?treeDigest(path.join(root,'dist')):undefined});
+}catch{}
 console.log(JSON.stringify({...report,testedCommit:report?.commit,commit:gitHead(),schema:'verification-result-v1',status:current?'passed':report?.schema==='verification-result-v1'?'stale':'incomplete',completionReady:current&&report.completeScope}));process.exit(current?0:1);}
 const output=values.output?path.resolve(values.output):mkdtempSync(path.join(tmpdir(),`${contract.package}-verify-`));
 if(existsSync(output)&&readdirSync(output).length)throw new Error('Verification output must be empty');
@@ -26,6 +44,7 @@ if(existsSync(output)&&readdirSync(output).length)throw new Error('Verification 
 if(output===root||output.startsWith(root+path.sep))throw new Error('Verification output must be outside the repository');
 mkdirSync(output,{recursive:true});
 writeFileSync(path.join(output,'plan.json'),JSON.stringify(plan,null,2));
+if(selection)writeFileSync(path.join(output,'selection.json'),JSON.stringify(selection,null,2));
 const initial=sourceDigest(root),commit=gitHead(),results=[];let artifact, builtArtifact, interrupted=false;
 const interruption=()=>{interrupted=true;};process.on('SIGTERM',interruption);process.on('SIGINT',interruption);
 const require=createRequire(path.join(root,'package.json'));
@@ -127,7 +146,7 @@ async function prepareArtifact() {
   artifact={path:archive,hash:hashFile(archive),distDigest:treeDigest(path.join(root,'dist')),metadataPath};
   const artifactReport=path.join(output,'artifact.json');
   const receipt=({stdout,stderr,...command})=>command;
-  writeFileSync(artifactReport,JSON.stringify({...artifact,sourceDigest:initial,buildExecution:receipt(built),packExecution:receipt(packed)},null,2));
+writeFileSync(artifactReport,JSON.stringify({...artifact,sourceDigest:initial,...(selection?{selectionDigest:selection.digest,bundleScope:selection.bundleScope}:{}),buildExecution:receipt(built),packExecution:receipt(packed)},null,2));
   Object.assign(baseEnv,{KIOKUKO_VERIFY_TARBALL:archive,KIOKUKO_VERIFY_PACK_METADATA:metadataPath,KIOKUKO_VERIFY_ARTIFACT_REPORT:artifactReport});
 }
 // Package consumers execute last against a single final source build/tarball.
@@ -164,5 +183,5 @@ for(const check of checks) {
 }
 const stable=sourceDigest(root)===initial&&(!artifact||hashFile(artifact.path)===artifact.hash&&treeDigest(path.join(root,'dist'))===artifact.distDigest);
 const passed=stable&&results.every(r=>['passed','platform-excluded','scope-excluded'].includes(r.status));
-const report={schema:'verification-result-v1',package:contract.package,commit,profile:plan.profile,partition:plan.partition,completeScope:plan.completeScope,runtime:process.version,platform:process.platform,architecture:process.arch,sourceDigest:initial,contractDigest,artifact,status:interrupted?'interrupted':stable?(passed?'passed':'failed'):'stale',completionReady:passed&&plan.completeScope,checks:results};
+const report={schema:'verification-result-v1',package:contract.package,commit,profile:plan.profile,partition:plan.partition,completeScope:plan.completeScope,runtime:process.version,platform:process.platform,architecture:process.arch,sourceDigest:initial,contractDigest,artifact,...(selection?{selectionDigest:selection.digest,bundleScope:selection.bundleScope}:{}),status:interrupted?'interrupted':stable?(passed?'passed':'failed'):'stale',completionReady:passed&&plan.completeScope,checks:results};
 writeFileSync(path.join(output,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({output,status:report.status,profile:plan.profile,completionReady:report.completionReady}));process.exitCode=passed?0:1;
