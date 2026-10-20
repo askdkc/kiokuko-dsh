@@ -604,6 +604,28 @@ scripted offline fixture: this checks host integration, not real-model behavior.
 paths and versions are recorded with the result. Missing prerequisites and
 runtime errors fail the runner rather than count as successful acceptance.
 
+The same runner also has an explicit `source` stage for the existing Linux
+consumer lane and macOS runtime job. It loads the current Kiokuko build and the
+pinned `@askdkc/dsh-cli@0.14.11` bundle through source patch overlays, using the
+canonical DSH fixture and a private profile. This stage performs no package
+operations and does not prove installation or registry-update behavior. The
+npm/pnpm consumer checks and packed module/Skills checks remain separate.
+The terminal run checks task completion rejection without evidence, task
+wait/resume, model-switch state transfer, persisted task recovery, and clean
+exit as well as ordinary input, cancellation and Lisp evaluation. It declines
+the fixture's derived-memory proposal through the native terminal UI.
+A cold model continuation can retain its ancestor's protection while Lisp is
+disabled for the current session. Task resume changes task state only. The
+runner checks that input stays blocked, invokes the displayed
+`/kioku-lisp enable` recovery command, and then verifies admitted input.
+
+CI combines Main unit/evaluations and the two integration shards, and combines
+Protected Lisp native shards and module/package checks. Source and packed
+Skills remain separate after the earlier combined job exceeded 20 minutes.
+All three native platforms remain; the required aggregate also requires the
+macOS runtime result and its current verification evidence. The matrix has
+26 jobs, down from 34; new elapsed time and runner usage require a CI run.
+
 The compatibility coverage is:
 
 | Harness profile | Status |

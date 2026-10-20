@@ -32,9 +32,6 @@
       "profiles": [
         "main",
         "semantic",
-        "lisp",
-        "browser",
-        "runtime",
         "ci-main"
       ],
       "result": "node",
@@ -757,7 +754,7 @@
         "pnpm",
         "sbcl"
       ],
-      "expected": "existing independent assertions finish, emit their result and exit 0",
+      "expected": "existing web-profile lifecycle and independent assertions finish with a check-bound receipt",
       "dependsOn": [
         "build"
       ],
@@ -768,6 +765,40 @@
       "completionEvidence": {
         "cliOnly": true,
         "requireDshCli": true
+      }
+    },
+    {
+      "id": "dsh-cli-profile",
+      "argv": [
+        "node",
+        "scripts/verify-cli-profile.mjs",
+        "{root}/tests/fixtures/dsh-runtime/node_modules/@deepseek-ai/dsh/lib/bin.js",
+        "{root}/tests/fixtures/dsh-runtime/node_modules/@askdkc/dsh-cli/package.json",
+        "{root}/package.json",
+        "{root}/tests/fixtures/dsh-runtime/package.json",
+        "{root}/tests/fixtures/dsh-runtime/package.json",
+        "-",
+        "source"
+      ],
+      "profiles": [
+        "main",
+        "runtime",
+        "ci-main"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "expected": "real dsh-cli PTY input, cancellation, Lisp result, task fences, model transfer and persisted resume pass with the offline provider",
+      "dependsOn": [
+        "build"
+      ],
+      "completionEvidence": {
+        "profile": "dsh-cli",
+        "interactive": true,
+        "cliVersion": "0.14.11",
+        "sourceEntry": true
       }
     },
     {
@@ -1000,26 +1031,12 @@
         }
       },
       "lanes": {
-        "unit": [
+        "unit-evaluations": [
           "verification-contract",
           "typecheck",
           "ci-native-unit",
           "skill-efficiency",
-          "coding-offline"
-        ],
-        "integration-1": [
-          "ci-native-integration-1"
-        ],
-        "integration-2": [
-          "ci-native-integration-2"
-        ],
-        "e2e-1": [
-          "ci-native-e2e-1"
-        ],
-        "e2e-2": [
-          "ci-native-e2e-2"
-        ],
-        "evaluations": [
+          "coding-offline",
           "harness",
           "retrieval",
           "decision-evaluation",
@@ -1031,10 +1048,21 @@
           "prepare-reproducibility",
           "sqlite-vec"
         ],
+        "integration": [
+          "ci-native-integration-1",
+          "ci-native-integration-2"
+        ],
+        "e2e-1": [
+          "ci-native-e2e-1"
+        ],
+        "e2e-2": [
+          "ci-native-e2e-2"
+        ],
         "consumers": [
           "consumer-npm",
           "consumer-pnpm",
-          "dsh-lifecycle"
+          "dsh-lifecycle",
+          "dsh-cli-profile"
         ]
       }
     },
@@ -1052,21 +1080,16 @@
         }
       },
       "lanes": {
-        "native-1": [
+        "native": [
           "lisp-native-1",
-          "owned-native"
-        ],
-        "native-2": [
-          "verification-contract",
+          "owned-native",
           "native-search",
           "laya-worker",
           "lisp-vendor",
           "lisp-native-2"
         ],
-        "modules": [
-          "modules"
-        ],
-        "package": [
+        "distribution": [
+          "modules",
           "pack-check"
         ],
         "skills-source": [

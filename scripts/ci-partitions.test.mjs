@@ -4,13 +4,13 @@ import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { partitionPlans, partitionPlan, digest, sourceDigest } from './verification-contract.mjs';
+import { partitionPlans, partitionPlan, verificationPlan, digest, sourceDigest } from './verification-contract.mjs';
 import { nativeCiPlan, shardNativePlan } from './run-ci-native.mjs';
 import { repeatedMemoryScenarios, selectedRepeatedScenarios } from './repeated-memory-scenarios.mjs';
 import { ciTargets, requiredJobs, requiredJobsSucceeded, validateCiEvidence } from './verify-ci-results.mjs';
 const root=path.resolve(import.meta.dirname,'..');
 const contractBytes=readFileSync(path.join(root,'scripts/verification.json')),contract=JSON.parse(contractBytes);
-const plans=()=>Object.entries(ciTargets).flatMap(([profile,targets])=>targets.flatMap(target=>partitionPlans(contract,profile,target.platform).map(plan=>({...target,...plan}))));
+const plans=()=>Object.entries(ciTargets).flatMap(([profile,targets])=>targets.flatMap(target=>(contract.ciPartitions?.[profile] ? partitionPlans(contract,profile,target.platform) : [verificationPlan(contract,profile,target.platform)]).map(plan=>({...target,...plan}))));
 const state={sourceDigest:'source',contractDigest:'contract',commit:'commit',runtime:process.version};
 function goodEntries(identity=state){return plans().map(plan=>({report:{schema:'verification-result-v1',package:contract.package,...identity,
   profile:plan.profile,partition:plan.partition,platform:plan.platform,architecture:plan.architecture,status:'passed',completeScope:false,completionReady:false,
@@ -20,10 +20,10 @@ function goodEntries(identity=state){return plans().map(plan=>({report:{schema:'
 
 test('partition ownership rejects empty, duplicate, missing, unknown and dependency-free lanes',()=>{
   for(const mutation of [
-    c=>{c.ciPartitions.lisp.lanes.modules=[]},
-    c=>{delete c.ciPartitions.lisp.lanes.modules},
-    c=>{c.ciPartitions.lisp.lanes.modules.push('owned-native')},
-    c=>{c.ciPartitions.lisp.lanes.modules.push('invented')},
+    c=>{c.ciPartitions.lisp.lanes.distribution=[]},
+    c=>{delete c.ciPartitions.lisp.lanes.distribution},
+    c=>{c.ciPartitions.lisp.lanes.distribution.push('owned-native')},
+    c=>{c.ciPartitions.lisp.lanes.distribution.push('invented')},
     c=>{c.ciPartitions.lisp.shared=['verification-contract']},
     c=>{c.ciPartitions.lisp.splits['lisp-native'].count=0},
     c=>{c.ciPartitions.lisp.splits.invented={kind:'native',count:2}},
@@ -67,7 +67,7 @@ test('all required job outcomes are checked without spawning a shell for each tr
 });
 
 test('CI evidence requires each complete, fresh OS/lane and rejects altered archives or build receipts',()=>{
-  const entries=goodEntries();assert.equal(entries.length,25);assert.equal(validateCiEvidence(contract,entries,state),true);
+  const entries=goodEntries();assert.equal(entries.length,18);assert.equal(validateCiEvidence(contract,entries,state),true);
   assert.equal(validateCiEvidence(contract,[],state),false);
   for(let i=0;i<entries.length;i++){
     assert.equal(validateCiEvidence(contract,entries.filter((_,n)=>n!==i),state),false,'missing lane '+i);

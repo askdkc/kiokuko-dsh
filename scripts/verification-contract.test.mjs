@@ -302,7 +302,7 @@ test('CI workflow schedules every declared partition and retains blocking OS cov
     assert.equal(job.if,undefined);assert.equal(job['continue-on-error'],undefined);assert.equal(job.strategy['fail-fast'],false);
     assert.deepEqual(job.strategy.matrix.partition,partitionPlans(actual,profile).map(plan=>plan.partition));
     assert.ok(job.steps.some(step=>step.run?.includes('--profile '+profile+' --partition "${{ matrix.partition }}" --output')));
-    assert.equal(job['timeout-minutes'],20,'parallel work must replace extended budgets');
+    assert.equal(job['timeout-minutes'],profile==='lisp' ? "${{ matrix.partition == 'native' && 25 || 20 }}" : 20,'combined native budget retains measured headroom; Skills remain separate');
     const evidence=job.steps.find(step=>step.with?.name?.startsWith('verification-ci-'));
     assert.ok(evidence.with.path.includes('!${{ runner.temp }}/'));
     assert.ok(evidence.with.path.includes('/npm-cache/**'),'downloaded CI evidence must exclude package caches');
@@ -310,6 +310,7 @@ test('CI workflow schedules every declared partition and retains blocking OS cov
   assert.deepEqual(workflow.jobs['lisp-runtime'].strategy.matrix.os,ciTargets.lisp.map(target=>target.runner));
   assert.equal(workflow.jobs['verify-main']['runs-on'],ciTargets['ci-main'][0].runner);
   const semantic=workflow.jobs['semantic-platform-smoke'];
+  assert.ok(actual.checks.find(check=>check.id==='verification-contract').profiles.includes('semantic'),'FD4 and POSIX lifecycle assertions retain all native platforms');
   assert.equal(semantic.if,undefined);assert.equal(semantic['continue-on-error'],undefined);assert.equal(semantic.strategy['fail-fast'],false);
   assert.deepEqual(semantic.strategy.matrix.include,[
     {platform:'linux-x64',runner:'ubuntu-24.04'},
@@ -317,6 +318,18 @@ test('CI workflow schedules every declared partition and retains blocking OS cov
     {platform:'macos-arm64',runner:'macos-15'},
   ]);
   assert.ok(semantic.steps.some(step=>step.run?.includes('--profile semantic --output')));
+  const runtime=workflow.jobs['dsh-runtime-macos'];
+  assert.equal(runtime['runs-on'],ciTargets.runtime[0].runner);
+  assert.ok(runtime.steps.some(step=>step.with?.name==='verification-ci-runtime-macos'));
+  const cli=actual.checks.find(check=>check.id==='dsh-cli-profile');
+  assert.deepEqual(cli.completionEvidence,{profile:'dsh-cli',interactive:true,cliVersion:'0.14.11',sourceEntry:true});
+  assert.equal(cli.argv[1],'scripts/verify-cli-profile.mjs');assert.equal(cli.argv.at(-1),'source');
+  assert.ok(cli.profiles.includes('runtime'));assert.ok(actual.ciPartitions['ci-main'].lanes.consumers.includes(cli.id));
+  for(const job of [workflow.jobs['verify-main'],runtime]) {
+    const setup=job.steps.find(step=>step.run?.includes('@askdkc/dsh-cli@0.14.11'));
+    assert.ok(setup);assert.ok(setup.run.includes('@xterm/headless@6.0.0'));
+  }
+  assert.equal(workflow.jobs['verify-main'].steps.find(step=>step.run?.includes('@askdkc/dsh-cli@0.14.11')).if,"matrix.partition == 'consumers'");
   const aggregate=workflow.jobs.verify;
   assert.deepEqual(aggregate.needs,requiredJobs);assert.equal(aggregate.if,'always()');
   const gate=aggregate.steps.find(step=>step.run?.includes('scripts/verify-ci-results.mjs'));

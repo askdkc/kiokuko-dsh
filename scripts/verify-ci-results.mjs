@@ -2,11 +2,12 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { digest, sourceDigest, partitionPlans } from './verification-contract.mjs';
+import { digest, sourceDigest, partitionPlans, verificationPlan } from './verification-contract.mjs';
 
-export const requiredJobs=['verify-main','lisp-runtime','semantic-platform-smoke','micro-judge-native','shortcut-browser'];
+export const requiredJobs=['verify-main','lisp-runtime','semantic-platform-smoke','micro-judge-native','shortcut-browser','dsh-runtime-macos'];
 export const ciTargets={
   'ci-main':[{runner:'ubuntu-24.04',platform:'linux',architecture:'x64'}],
+  runtime:[{runner:'macos-15',platform:'darwin',architecture:'arm64'}],
   lisp:[{runner:'ubuntu-24.04',platform:'linux',architecture:'x64'},
     {runner:'ubuntu-24.04-arm',platform:'linux',architecture:'arm64'},
     {runner:'macos-latest',platform:'darwin',architecture:'arm64'}],
@@ -18,7 +19,7 @@ const key=r=>[r.profile,r.partition,r.platform,r.architecture].join('/');
 // one current, nonempty, complete report for every declared lane and OS as well.
 export function validateCiEvidence(contract,entries,state) {
   const expected=Object.entries(ciTargets).flatMap(([profile,targets])=>targets.flatMap(target=>
-    partitionPlans(contract,profile,target.platform).map(plan=>({...target,...plan}))));
+    (contract.ciPartitions?.[profile] ? partitionPlans(contract,profile,target.platform) : [verificationPlan(contract,profile,target.platform)]).map(plan=>({...target,...plan}))));
   if(entries.length!==expected.length||new Set(entries.map(entry=>key(entry.report??{}))).size!==expected.length)return false;
   return expected.every(plan=>{
     const entry=entries.find(entry=>key(entry.report??{})===key(plan)),report=entry?.report;

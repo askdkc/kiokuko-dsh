@@ -52,9 +52,11 @@ jobs:
           - ubuntu-24.04
           - ubuntu-24.04-arm
           - macos-latest
-        partition: [native-1, native-2, modules, package, skills-source, skills-packed]
+        partition: [native, distribution, skills-source, skills-packed]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Previous macOS native verification steps: 433 + 242 seconds.
+    # Merge their setup/build once; keep both shards and allow measured headroom.
+    timeout-minutes: ${{ matrix.partition == 'native' && 25 || 20 }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -100,7 +102,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        partition: [unit, integration-1, integration-2, e2e-1, e2e-2, evaluations, consumers]
+        partition: [unit-evaluations, integration, e2e-1, e2e-2, consumers]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env: {}
@@ -137,6 +139,9 @@ jobs:
           echo "$PWD/tests/fixtures/dsh-runtime/node_modules/.bin" >> "$GITHUB_PATH"
         env:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
+      - name: Prepare pinned terminal UI for the existing consumer checks
+        if: matrix.partition == 'consumers'
+        run: npm install --prefix tests/fixtures/dsh-runtime --no-save --package-lock=false --ignore-scripts --legacy-peer-deps @askdkc/dsh-cli@0.14.11 @xterm/headless@6.0.0
       - name: Export DSH fixture version
         run: node -e "const p=require('./tests/fixtures/dsh-runtime/package.json'); console.log('KIOKUKO_EXPECTED_DSH_VERSION='+p.dependencies['@deepseek-ai/dsh'])" >> "$GITHUB_ENV"
       - name: Run repository verification (CI main partition)
@@ -160,7 +165,7 @@ jobs:
   # Preserve the existing required check: omitted main tests are owned by Lisp.
   # Semantic platform failures must also fail this required aggregate.
   verify:
-    needs: [verify-main, lisp-runtime, semantic-platform-smoke, micro-judge-native, shortcut-browser]
+    needs: [verify-main, lisp-runtime, semantic-platform-smoke, micro-judge-native, shortcut-browser, dsh-runtime-macos]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -217,6 +222,8 @@ jobs:
           echo "$PWD/tests/fixtures/dsh-runtime/node_modules/.bin" >> "$GITHUB_PATH"
         env:
           npm_config_cache: ${{ runner.temp }}/npm-cache-dsh
+      - name: Prepare pinned terminal UI for the existing consumer checks
+        run: npm install --prefix tests/fixtures/dsh-runtime --no-save --package-lock=false --ignore-scripts --legacy-peer-deps @askdkc/dsh-cli@0.14.11 @xterm/headless@6.0.0
       - name: Export DSH fixture version
         run: node -e "const p=require('./tests/fixtures/dsh-runtime/package.json'); console.log('KIOKUKO_EXPECTED_DSH_VERSION='+p.dependencies['@deepseek-ai/dsh'])" >> "$GITHUB_ENV"
       - name: Run repository verification (runtime)
@@ -225,7 +232,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: verification-dsh-runtime-macos-${{ strategy.job-index }}
+          name: verification-ci-runtime-macos
           path: ${{ runner.temp }}/verification-dsh-runtime-macos
           if-no-files-found: error
   shortcut-browser:
