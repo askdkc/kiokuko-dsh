@@ -120,7 +120,9 @@ test('native admission, public review actions, and checkpoint stay memory-write-
       assert.deepEqual(snapshot(), before)
     }
     assert.equal(refreshes, 0, 'the public refresh action cannot call the former retrieval writer')
-    assert.deepEqual(await f.tasks.refresh(f.task, 'migration expectations', new AbortController().signal), { memory: null, context: null })
+    const refreshed=await f.tasks.refresh(f.task,'migration expectations',new AbortController().signal)
+    assert.equal(refreshed.memory,null);assert.equal(refreshed.context,null)
+    assert.equal(refreshed.corrections?.retrieval,'no_correction','ordinary memory is not treated as a user correction')
     assert.deepEqual(await f.tasks.checkpoint(f.task, { outcome: 'completed', memories: [{ kind: 'lesson',
       title: 'Model-only memory', body: 'Do not persist this unapproved claim.' }] }, new AbortController().signal), {
       project: null, entries: [], recorded: false, workMayContinue: true, reason: 'post_task_memory_review_required',

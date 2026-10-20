@@ -186,7 +186,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     const registeredNames = registered.map((definition: any) => definition.name)
     assert.equal(new Set(registeredNames).size, registeredNames.length, 'each public operation must be registered exactly once')
     assert.deepEqual([...registeredNames].sort(), [
-      'coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker',
+      'coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'correction_check',
       'curator_check', 'enno_delegate', 'enno_finish', 'enno_ideal_submit',
       'enno_meditation_submit', 'enno_plan_review', 'enno_plan_submit', 'enno_work_report',
       'kioku_edit', 'kioku_exec', 'kioku_read', 'kioku_remove', 'kioku_result', 'kioku_write',

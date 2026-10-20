@@ -13,6 +13,11 @@ import { isOwnedExecutionCall } from './owned-execution.js'
 import { authorizeTaskLease, type TaskLease, type TaskAuthorityExecution } from './task-state.js'
 import { captureExecutionTaskLease } from './task-authority-context.js'
 import { withImmediateTransaction } from '../db/transaction.js'
+import {correctionDecisionSchema,checkCorrectionDecision,literalVersionGate,recordCorrectionObservation,type CorrectionDecision} from './correction-decision.js'
+import type {CorrectionReceipt} from './correction-context.js'
+import type {DshUserQuestions} from './intake-questions.js'
+import {canonicalContentHash} from '../serialization/validate.js'
+import {KiokukoError} from '../errors.js'
 
 const inputSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('status') }).strict(),
@@ -29,7 +34,7 @@ const transportSchema = z.object({
   query: z.string().trim().min(1).max(4000).optional(),
   timeConstraint: MemoryTimeConstraint.optional(),
 }).strict()
-export const MEMORY_APPLICATION_GUIDANCE = 'Memory references and past application status are optional advisory data. Missing, stale or failed memory evidence never blocks tools or task completion. Native permissions, explicit Stop and actual task verification remain authoritative. New memory saving happens only after task completion, permission to organize, and approval of the exact shown revision.'
+export const MEMORY_APPLICATION_GUIDANCE = 'Memory references and past application status are optional advisory data. Missing, stale or failed memory evidence never blocks tools or task completion. Native permissions, explicit Stop and actual task verification remain authoritative. correction_check checks compiler compatibility and completion judgments against host-delivered corrections and actual verification; self-reported use is not proof. A supported literal conflicting version-only write asks a scoped native question. New memory saving happens only after task completion, permission to organize, and approval of the exact shown revision.'
 
 interface NativeExecution extends TaskAuthorityExecution { callId: string; rootCallId?: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
 interface SurfaceContext {
@@ -40,7 +45,8 @@ interface SurfaceContext {
 export interface ApplicationHost {
   runtime: DshCoreRuntime
   /** Exact native Agent and Session matching is the caller's responsibility. */
-  resolve(execution: NativeExecution): MemoryApplicationIdentity | undefined
+  resolve(execution: NativeExecution): (MemoryApplicationIdentity & {corrections?:CorrectionReceipt}) | undefined
+  questions?:DshUserQuestions
   session?(agent: unknown): { sessionId: string; repositoryRoot: string } | undefined
   /** Exact current preparation proof supplied by the owning on-demand host. */
   preparationOnly?(execution: NativeExecution): boolean
@@ -48,7 +54,7 @@ export interface ApplicationHost {
 }
 // Exact native read tools only; never classify arbitrary shell strings as read-only.
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Skill', 'read', 'read_file', 'glob', 'grep', 'skill', 'observation_read', 'memory_explain', 'lisp_status', 'lisp_hot_status'])
-const CONTROL_TOOLS = new Set(['task_memory_review', 'task_completion', 'memory_checkpoint', 'curator_check', 'enno_finish', 'enno_work_report', 'enno_plan_review', 'enno_plan_submit', 'enno_ideal_submit', 'enno_meditation_submit'])
+const CONTROL_TOOLS = new Set(['correction_check', 'task_memory_review', 'task_completion', 'memory_checkpoint', 'curator_check', 'enno_finish', 'enno_work_report', 'enno_plan_review', 'enno_plan_submit', 'enno_ideal_submit', 'enno_meditation_submit'])
 
 /** Only an exact foreground native Bash invocation at the bound repository root is proof-eligible. */
 export function foregroundNativeCommand(execution: Pick<NativeExecution, 'name' | 'arguments' | 'parent'>, repositoryRoot: string): string | null {
@@ -79,6 +85,75 @@ export function isSavedLispResultRead(execution: Pick<NativeExecution, 'name' | 
 export function mountMemoryApplication(ctx: SurfaceContext, host: ApplicationHost): () => void {
   const pending = new WeakMap<object, { identity: MemoryApplicationIdentity; lease: TaskLease }>()
   const disposers: (() => void)[] = []
+  const answered=new Map<string,'revise'|'cancel'>()
+  const checkDecision=async(execution:NativeExecution,decision:CorrectionDecision)=>{
+    const identity=host.resolve(execution)
+    if(!identity)throw new KiokukoError('CONFLICT','No exact native task for correction check')
+    const receipt=identity.corrections
+    if(receipt&&(receipt.runId!==identity.runId||receipt.workspace!==identity.workspace||receipt.repositoryRoot!==realpathSync(identity.repositoryRoot)))
+      throw new KiokukoError('CONFLICT','Correction receipt belongs to another native task')
+    const operationDigest=canonicalContentHash({name:execution.name,arguments:execution.arguments})
+    let verdict:ReturnType<typeof checkCorrectionDecision>
+    try {verdict=await host.runtime.withDatabase(db=>checkCorrectionDecision(db,receipt,decision))}
+    catch(error){
+      execution.signal.throwIfAborted()
+      if(error instanceof KiokukoError&&['SECURITY_REJECTION','CONFLICT','VALIDATION_ERROR','INTEGRITY_ERROR'].includes(error.code))throw error
+      return {state:'unavailable',reason:'correction_observer_unavailable',retrieval:receipt?.retrieval??'not_requested',delivery:receipt?.delivery??'not_delivered',verification:'unverified',allowed:true,authorizationGranted:false,recorded:false}
+    }
+    const knownGate=decision.kind==='compatibility'&&decision.basis==='version_only'&&receipt?.sources.some(source=>source.rule==='capability_compatibility')
+    const conflict=verdict.state==='contradiction'||verdict.state==='handoff_missing'&&knownGate
+    let confirmation:'not_needed'|'unavailable'|'approve'|'revise'|'cancel'='not_needed'
+    if(conflict){
+      const key=canonicalContentHash({runId:identity.runId,request:receipt?.requestDigest,sources:receipt?.sources,decision})
+      const previous=answered.get(key)
+      confirmation=previous??'unavailable'
+      if(!previous&&host.questions&&execution.agent?.id){
+        const result=await host.questions.ask({agent:execution.agent,signal:execution.signal,questions:[{id:`correction-${key.slice(0,24)}`,header:'訂正との矛盾',
+          question:verdict.reason==='verified_work_marked_incomplete_for_version'
+            ?'対象の試験は成功しています。版数だけを理由に未完了とする判断を見直しますか？'
+            :'この操作は、能力で互換性を確認するという訂正と矛盾する完全一致チェックを含みます。どう扱いますか？',
+          detail:`対象: ${decision.target}`,
+          options:[{label:'見直す'},{label:'この操作だけ許可'},{label:'この操作を中止'}]}]})
+        execution.signal.throwIfAborted()
+        const current=host.resolve(execution)
+        if(current?.runId!==identity.runId||canonicalContentHash(current.corrections??null)!==canonicalContentHash(receipt??null))throw new KiokukoError('CONFLICT','Correction request changed during confirmation')
+        if(canonicalContentHash({name:execution.name,arguments:execution.arguments})!==operationDigest)throw new KiokukoError('CONFLICT','Correction operation changed during confirmation')
+        const fresh=await host.runtime.withDatabase(db=>checkCorrectionDecision(db,receipt,decision))
+        if(fresh.state==='stale')throw new KiokukoError('CONFLICT','Correction source changed during confirmation')
+        if(fresh.targetDigest!==verdict.targetDigest||fresh.state!==verdict.state||fresh.verification!==verdict.verification)
+          throw new KiokukoError('CONFLICT','Correction target or verification changed during confirmation')
+        const answer=result.answers.find(answer=>answer.id===`correction-${key.slice(0,24)}`)?.selected[0]
+        confirmation=answer==='この操作だけ許可'?'approve':answer==='見直す'?'revise':'cancel'
+        if(confirmation!=='approve'){
+          if(answered.size>=128)answered.delete(answered.keys().next().value!)
+          answered.set(key,confirmation)
+        }
+      }
+    }
+    const result={...verdict,allowed:!conflict||confirmation==='approve',authorizationGranted:false,confirmation,operationDigest,decisionDigest:canonicalContentHash(decision)}
+    let recorded=false
+    if(receipt)try {recorded=await host.runtime.withDatabase(db=>recordCorrectionObservation(db,receipt,{decision:decision.kind,target:decision.target,...result}))}catch {execution.signal.throwIfAborted()}
+    return {...result,recorded}
+  }
+  disposers.push(ctx.tools.register({name:'correction_check',modelFacing:true,
+    description:'Check a compiler compatibility or completion judgment against host-retrieved corrections and actual current verification. A model claim never proves application. Only a concrete conflicting operation asks a scoped native question.',
+    parameters:JSON.parse(JSON.stringify(z.toJSONSchema(z.object({decision:correctionDecisionSchema}).strict()))),
+    output:{schema:{},render:(_:unknown,value:unknown)=>[{type:'text',text:JSON.stringify(value)}]},
+    execute:async(args:unknown,execution:NativeExecution)=>{
+      if(execution.name!=='correction_check'||execution.parent!==undefined)throw new KiokukoError('CONFLICT','Correction check requires a root native call')
+      return checkDecision(execution,z.object({decision:correctionDecisionSchema}).strict().parse(args).decision)
+    }}))
+  // Existing authorization hooks still own the operation. This guard never grants
+  // permission, executes a verifier, or blocks unrelated/missing-memory work.
+  disposers.push(ctx.on('tools/pre-execute',async(execution:NativeExecution,next:()=>Promise<unknown>)=>{
+    const identity=host.resolve(execution)
+    if(!identity?.corrections?.sources.some(source=>source.rule==='capability_compatibility'))return next()
+    const decision=literalVersionGate(execution.name,execution.arguments,identity.repositoryRoot)
+    if(!decision)return next()
+    const result=await checkDecision(execution,decision)
+    if(!result.allowed)throw new KiokukoError('CONFLICT',`Correction conflict: ${result.reason}; only this operation is held`)
+    return next()
+  },{prepend:true}))
   if (ctx.commands && host.session) disposers.push(ctx.commands.register({ name: 'kioku-memory-application',
     description: 'Show memory application and regression verification status for this native session.', input: { hint: 'status [--json]' },
     handler: async invocation => {

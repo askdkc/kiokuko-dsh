@@ -126,6 +126,10 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     } finally { removeLate() }
     assert.equal(assembly.inventory(parent).some((schema: any) => schema.name === 'late_inventory_probe'), false, 'removed definitions are not cached')
     assert.ok(projected.tools.some((s: any) => s.name === 'task_memory_review'), 'memory recovery must reach the model in Lisp mode')
+    assert.ok(projected.tools.some((s: any) => s.name === 'correction_check'), 'correction diagnosis must remain reachable without enabling native effects')
+    const correction=await call('correction_check',{decision:{kind:'compatibility',target:'check.mjs',basis:'capability',requiredVersion:'1.85.0',observedVersion:'1.99.1'}})
+    assert.equal(correction.isError,false,JSON.stringify(correction))
+    assert.equal(correction.value.verification,'unverified')
     for (const name of ['ask_user_question', 'exit_plan_mode']) {
       assert.equal(projected.tools.some((s: any) => s.name === name), false, 'unregistered control tools are not invented')
       assert.equal((await call(name)).isError, true)

@@ -55,7 +55,7 @@ const PROTOCOL_OWNED_EFFECTS = new Set<string>(['kioku_write', 'kioku_edit', 'ki
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill', 'observation_read'] as const
 // Keep host-owned review, questions and Plan approval reachable while Lisp blocks native effects.
 // Pin its implementation just like reads; its own run/session checks still apply.
-const LISP_NATIVE_TOOLS = [...LISP_READ_TOOLS, TASK_PREPARE_TOOL, 'task_memory_review', 'task_completion', 'coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'ask_user_question', 'exit_plan_mode'] as const
+const LISP_NATIVE_TOOLS = [...LISP_READ_TOOLS, TASK_PREPARE_TOOL, 'correction_check', 'task_memory_review', 'task_completion', 'coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'ask_user_question', 'exit_plan_mode'] as const
 
 /** Keep admitted inherited tools without naming agent-owned tools in restrict(). */
 function restrictInheritedTools(tools: Tools, scopedTools: Tools, agent: Agent, names: string[]): () => void {

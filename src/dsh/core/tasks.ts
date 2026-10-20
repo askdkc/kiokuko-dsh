@@ -1,4 +1,5 @@
 import { readEntry } from '../../memory/entries.js'
+import {readTaskCorrections,type CorrectionReceipt} from '../correction-context.js'
 import { assertCapabilityCatalogBinding } from '../../akinator/capability-binding.js'
 import { bindMemoryApplication, memoryRetrievalStatus } from '../../memory/application.js'
 import { queryScopedContextGated, type ScopedContextResult } from '../../context/scoped-broker.js'
@@ -64,6 +65,7 @@ export interface CoreTask {
   readonly profile: TaskProfile
   readonly memory: ScopedRecallResult | null
   readonly context: ScopedContextResult | null
+  readonly corrections?: CorrectionReceipt
   readonly capabilities: CoreTaskInput['capabilities']
   readonly selectedSkills?: readonly string[]
   readonly admitted: boolean
@@ -119,9 +121,9 @@ function recallView(db: SqliteDatabase, context: ScopedContextResult | null): Sc
   if (!context?.project) return null
   const project = context.project
   const items = context.items.map(item => {
-    const entry = readEntry(db, { workspace: project.workspace, entryId: item.entryId })
+    const entry = readEntry(db, { workspace: item.workspace??project.workspace, entryId: item.entryId })
     return { id: entry.id, workspace: entry.workspace, kind: entry.kind, status: entry.status, title: item.title,
-      summary: item.summary, snippet: item.bodyPreview, tags: entry.tags, origin: 'project' as const, selectionReasons: item.selectionReasons,
+      summary: item.summary, snippet: item.bodyPreview, tags: entry.tags, origin: item.origin, selectionReasons: item.selectionReasons,
       ...(entry.evidence?{evidence:entry.evidence}:{}),
       metadata: { storedData: true as const, untrusted: true as const, instructions: false as const } }
   })
@@ -176,8 +178,12 @@ export class CoreTasks {
       const ownerKind = memoryOwnerKind(intent, intake.profile.taskType)
       const memoryOwner = input.agent ? createMemoryOwner(ownerKind, { agentId: input.agent.id, sessionId: input.sessionId,
         turn: input.turn, requestDigest: canonicalContentHash(input.task), runId: taskId }) : undefined
+      const selected=admitted&&ownerKind==='execution'
+        ? await readTaskCorrections(db,{project,runId:taskId,task:input.task,profile:intake.profile,signal:input.signal,
+          runtime:retrievalRuntimeForRequest(this.memoryRetrieval,input.task,Date.now(),input.timeConstraint)}) : {context:null}
       return Object.freeze({ requestId: owner?.start_id ?? input.requestId, sessionId: input.sessionId, runId: taskId, workspace: project.workspace,
-        cwd: realpathSync(input.cwd), profile: intake.profile, admitted, memory: null, context: null, capabilities: input.capabilities,
+        cwd: realpathSync(input.cwd), profile: intake.profile, admitted, memory:recallView(db,selected.context),context:selected.context,capabilities:input.capabilities,
+        ...('corrections' in selected?{corrections:selected.corrections}:{}),
         ...(admitted ? { authority: captureTaskLease(db, taskIdentity) } : {}),
         ...(memoryOwner ? { memoryOwner } : {}), requestIntent: intent, requestIntentContext })
     })
@@ -259,7 +265,11 @@ export class CoreTasks {
         const admitted = state.status !== 'needs_answer' && run?.status === 'active' && !hasBlockingRequiredCapability(capabilities)
         if (admitted) authority = captureTaskLease(db, taskIdentity)
         const selectedSkills = admitted ? await selectInstalledSkills(this.decisions, input.requestId, input.task, input.capabilities, capabilities, input.signal) : []
-        const memory: ScopedContextResult | null = null // Optional lookup runs after native admission.
+        const selected = admitted && ownerKind==='execution'
+          ? await readTaskCorrections(db,{project,runId:identity.runId,task:input.task,profile:state.session.profile,signal:input.signal,
+            runtime:retrievalRuntimeForRequest(this.memoryRetrieval,input.task,retrievalAnchorTimeMs,input.timeConstraint)})
+          : {context:null}
+        const memory=selected.context
         input.signal.throwIfAborted()
         assertPreparation()
         if(admitted){initializeTaskCompletion(db,identity.runId,'shadow');saveExecutionFrame(db,identity.runId,updateExecutionFrame(undefined,project.repositoryRoot,input.task))
@@ -269,6 +279,7 @@ export class CoreTasks {
           ...(authority ? { authority } : {}),
           memory: ownerKind === 'execution' ? recallView(db, memory) : null,
           context: ownerKind === 'execution' ? memory : null, capabilities: input.capabilities, selectedSkills,
+          ...('corrections' in selected?{corrections:selected.corrections}:{}),
           ...(memoryOwner ? { memoryOwner } : {}),
           ...(requestIntent ? { requestIntent, requestIntentContext: input.requestIntentContext } : {}) })
       } catch (error) {
@@ -284,10 +295,19 @@ export class CoreTasks {
       }
     })
   }
-  async refresh(task: CoreTask, query: string, signal: AbortSignal, validateCapabilities?: () => Promise<void>, timeConstraint?: MemoryTimeConstraint): Promise<Pick<CoreTask, 'memory' | 'context'>> {
+  async refresh(task: CoreTask, query: string, signal: AbortSignal, validateCapabilities?: () => Promise<void>, timeConstraint?: MemoryTimeConstraint): Promise<Pick<CoreTask, 'memory' | 'context' | 'corrections'>> {
     signal.throwIfAborted()
     await validateCapabilities?.()
-    return this.runtime.withDatabase(db=>{assertCoreTaskIdentity(db,task,'refresh');if(task.authority)authorizeTaskLease(db,task.authority);return {memory:null,context:null}})
+    return this.runtime.withDatabase(async db=>{
+      assertCoreTaskIdentity(db,task,'refresh');if(task.authority)authorizeTaskLease(db,task.authority)
+      const project=await resolveProjectWorkspaceReadOnly(db,task.cwd,{allowDirectory:true})
+      if(!project||!task.admitted||task.memoryOwner?.kind==='conversation')return {memory:null,context:null}
+      const selected=await readTaskCorrections(db,{project,runId:task.runId,task:query,profile:task.profile,signal,
+        runtime:retrievalRuntimeForRequest(this.memoryRetrieval,query,Date.now(),timeConstraint)})
+      await validateCapabilities?.()
+      assertCoreTaskIdentity(db,task,'refresh');if(task.authority)authorizeTaskLease(db,task.authority)
+      return {...selected,memory:recallView(db,selected.context)}
+    })
   }
 
   async checkpoint(task: CoreTask, input: { memories?: unknown; evidence?: unknown; outcome: string }, signal: AbortSignal): Promise<unknown> {

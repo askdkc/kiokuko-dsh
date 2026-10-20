@@ -831,7 +831,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     refreshMemoryOwner: admission.refreshMemoryOwner,
   })
   const contextMessages = createContextMessages({
-    ctx, runtime, deepPlanning, executionSupport, continuityMode: continuityConfig.mode,
+    ctx, runtime, memoryRetrievalConfig, deepPlanning, executionSupport, continuityMode: continuityConfig.mode,
     getSkillPrompts: () => skillPrompts, systemSkillsFor: routing.systemSkillsFor,
     getSelection: runId => selections.get(runId), currentForAgentEvent, advisoryEvidenceFor: (item, state) => toolHostModule.advisoryEvidenceFor(item, state),
     executionBinding, sessionEventSource,
@@ -855,6 +855,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
   })
   const { boundaryWorker, ennoController, deliverCompletionReport, boundarySessionStartDisposer } = boundaries
   const applicationDisposer = mountHostMemoryApplication({
+    questions:userQuestions,
     ctx, runtime, tools, commands, skills, agents, sessions, delegation, currentSession,
     turnState, gate, capabilityCatalog, memoryRetrievalConfig, demand,
   })

@@ -13,8 +13,10 @@ import type { OnDemandIntake } from '../on-demand-intake.js'
 import { refreshContinuedTaskContext } from '../task-intake.js'
 import { bindMemoryApplication, memoryRetrievalStatus } from '../../memory/application.js'
 import type { MemoryRetrievalConfig } from '../../memory/retrieval-contracts.js'
+import type {DshUserQuestions} from '../intake-questions.js'
 
 interface MemoryApplicationHostDependencies {
+  readonly questions?:DshUserQuestions|undefined
   readonly ctx: Context
   readonly runtime: DshCoreRuntime
   readonly demand?: OnDemandIntake | undefined
@@ -36,6 +38,7 @@ export function mountHostMemoryApplication(deps: MemoryApplicationHostDependenci
     currentSession, turnState, gate, capabilityCatalog, memoryRetrievalConfig } = deps
   return tools ? mountMemoryApplication({ tools: tools as any, on: (name: string, listener: (...args: any[]) => unknown, options?: { prepend?: boolean }) => onNativeServiceEvent(ctx, name, listener, options), ...(commands ? { commands: commands as any } : {}) }, {
     runtime,
+    ...(deps.questions?{questions:deps.questions}:{}),
     preparationOnly: execution => deps.demand?.preparationOnly(execution) === true,
     session(value) {
       const agent = value as NativeAgent | undefined
@@ -46,7 +49,8 @@ export function mountHostMemoryApplication(deps: MemoryApplicationHostDependenci
       const agent = execution.agent, session = agent?.session
       const item = session ? currentSession(session.id) : undefined
       if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || delegation.isChild(agent)) return undefined
-      return { runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot }
+      return { runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot,
+        ...(item.prepared.corrections?{corrections:item.prepared.corrections}:{}) }
     },
     async refresh(execution, query, timeConstraint) {
       const item = currentSession(execution.agent.session.id)!

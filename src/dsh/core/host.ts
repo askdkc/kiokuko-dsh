@@ -66,6 +66,8 @@ import { mountOwnedExecution } from '../owned-execution.js'
 import { mountPlanTransition } from '../plan-transition.js'
 import { mountTaskCompletion } from '../task-completion-host.js'
 import { assessTaskCompletion, taskCompletionBlocksClose } from '../task-completion.js'
+import {observeCorrectionInput} from '../correction-context.js'
+import {recordCorrectionObservation} from '../correction-decision.js'
 import { mountCodingWorkflow, CODING_GUIDANCE } from '../coding-workflow/host.js'
 import { codingWorkRequested } from '../coding-workflow/intent.js'
 import { readCodingWorkflow } from '../coding-workflow/store.js'
@@ -700,6 +702,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
         try{bind(agent);return {kind:'success',text:JSON.stringify(await indexReasoning!.indexCommand(agent.session.id,invocation.rawInput))}}catch{return {kind:'error',text:'索引操作を実行できません。status --json で確認してください。'}}
       }}))
       disposers.push(mountMemoryApplication({ tools, on: ctx.on.bind(ctx) as any, ...(get('commands') ? { commands: get('commands') } : {}) }, { runtime,
+        ...(questions?{questions}:{}),
         preparationOnly: execution => demand?.preparationOnly(execution) === true,
         session(agent) {
           if (!agent) return undefined
@@ -823,6 +826,11 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
             if (current.task.memoryOwner?.kind !== 'execution') throw new KiokukoError('CONFLICT', 'memory_owner_changed')
             assertMemoryOwner(current.task.memoryOwner, { agentId: agent.id, sessionId: agent.session.id, turn: memoryFence.turn, requestDigest: canonicalContentHash(current.taskText), runId: current.task.runId }, 'execution')
             const allowed = await runtime.withDatabase(db => currentContextMemory(db,current.task.workspace,current.task.context?.items??[],undefined,current.task.context ?? undefined))
+            if(current.task.corrections){
+              const receipt=observeCorrectionInput(current.task.corrections,allowed,request.messages)
+              current.task={...current.task,corrections:receipt}
+              try {await runtime.withDatabase(db=>recordCorrectionObservation(db,receipt))}catch {if(request.signal instanceof AbortSignal)request.signal.throwIfAborted()}
+            }
             const retired = await runtime.withDatabase(db => retiredExplanationCalls(db,agent.session.id))
             if (filterRequestMemory(request.messages,allowed).length !== request.messages.length
               || JSON.stringify(filterExplainedMemory(request.messages,retired)) !== JSON.stringify(request.messages)) {

@@ -129,6 +129,7 @@ export interface AnswerAgentTaskInput {
 }
 
 export interface PreparedAgentTask {
+  corrections?:import('./correction-context.js').CorrectionReceipt;
   memoryOwner?: MemoryOwnerBinding;
   selectedSkills?: readonly string[];
   executionFrame?: TaskExecutionFrame;

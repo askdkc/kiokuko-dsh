@@ -1,6 +1,8 @@
 import type { NativeWorkerRouting } from '../native-worker-routing.js'
 import { isNativeSubagent } from '../native-subagent.js'
 import { MemoryRequestFence, MemorySnapshotStale } from '../memory-request-fence.js'
+import {observeCorrectionInput} from '../correction-context.js'
+import {recordCorrectionObservation} from '../correction-decision.js'
 import { assertMemoryOwner } from '../memory-owner.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import type { OnDemandIntake } from '../on-demand-intake.js'
@@ -372,6 +374,11 @@ export function createRouting({
         if (item.nativeAgent !== agent || item.nativeSession !== agent.session || item.prepared.memoryOwner?.kind !== 'execution') throw new KiokukoError('CONFLICT', 'memory_owner_changed')
         assertMemoryOwner(item.prepared.memoryOwner, { agentId: agent.id, sessionId: item.sessionId, turn: memoryFence.turn, requestDigest: canonicalContentHash(item.task), runId: item.runId }, 'execution')
         allowed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared))
+        if(item.prepared.corrections){
+          const receipt=observeCorrectionInput(item.prepared.corrections,allowed,request.messages)
+          item.prepared={...item.prepared,corrections:receipt}
+          try {await runtime.withDatabase(db=>recordCorrectionObservation(db,receipt))}catch {if(request.signal instanceof AbortSignal)request.signal.throwIfAborted()}
+        }
         const retired=await runtime.withDatabase(db=>retiredExplanationCalls(db,agent.session!.id))
         if (JSON.stringify(filterExplainedMemory(request.messages,retired))!==JSON.stringify(request.messages)) {
           pruneExplainedMemorySurface(agent.session!,retired)

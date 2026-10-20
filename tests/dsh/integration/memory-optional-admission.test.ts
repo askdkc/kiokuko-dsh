@@ -34,5 +34,11 @@ for(const entry of ['core','full-gate'] as const)test(`owned ${entry} admission 
  const runtime={withDatabase:async<T>(op:(db:SqliteDatabase)=>T|Promise<T>)=>op(gated)}
  const capabilities=STANDARD_SKILL_MANIFESTS.map(({name})=>({kind:'skill' as const,name})),profileHints={taskType:'research' as const,target:'check.mjs',expected:'Report output',constraints:null}
  const run=async(id:string)=>entry==='core'?new CoreTasks(runtime as any).prepare({requestId:id,sessionId:id,turn:1,task:'Inspect check.mjs without modifying it.',cwd:root,capabilities,profileHints,signal:new AbortController().signal}):new DshIntakeGate(runtime as any).prepare({agent:{id},sessionId:id,turn:1,step:1,sourceStartSeq:1,task:'Inspect check.mjs without modifying it.',cwd:root,profileHints,capabilities:createDshCapabilityCatalog(capabilities),skillDiscoveryMode:'off',signal:new AbortController().signal})
- try{const task=await run('allowed');assert.equal(task.admitted,true);assert.deepEqual(attempts,[],'admission does not touch optional memory');assert.equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get()!.n,0);rejectAuthority=true;await assert.rejects(run('blocked'),/Native authority unavailable/)}finally{db.close();await rm(base,{recursive:true,force:true})}
+ try{const task=await run('allowed');assert.equal(task.admitted,true)
+   if(entry==='core'){
+     assert.equal(attempts.length,1,'one bounded correction lookup may fail after admission without holding the task')
+     assert.equal((task as any).corrections?.retrieval,'unavailable','failed lookup must not become an empty successful result')
+   }else assert.deepEqual(attempts,[],'full gate admission remains independent of optional lookup')
+   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM entries').get()!.n,0);rejectAuthority=true;await assert.rejects(run('blocked'),/Native authority unavailable/)
+ }finally{db.close();await rm(base,{recursive:true,force:true})}
 })

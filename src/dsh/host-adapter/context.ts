@@ -17,10 +17,15 @@ import type { DshAdvisoryRoundResult } from '../advisory-runner.js'
 import type { TurnRecord } from './turn-state.js'
 import { codingStatus } from '../coding-workflow/service.js'
 import { CODING_GUIDANCE } from '../coding-workflow/host.js'
+import {readTaskCorrections} from '../correction-context.js'
+import {canonicalContentHash} from '../../serialization/validate.js'
+import {timeConstraintForRequest,type MemoryRetrievalConfig} from '../../memory/retrieval-contracts.js'
+import {reportMemoryRetrievalObservation} from '../memory-retrieval-observer.js'
 
 interface ContextDependencies {
   readonly ctx: Context
   readonly runtime: DshCoreRuntime
+  readonly memoryRetrievalConfig: MemoryRetrievalConfig
   readonly deepPlanning: DeepPlanningController
   readonly executionSupport: DshExecutionSupport
   readonly continuityMode: 'off' | 'shadow' | 'active'
@@ -34,7 +39,7 @@ interface ContextDependencies {
 }
 
 export function createContextMessages({
-  ctx, runtime, deepPlanning, executionSupport, continuityMode, getSkillPrompts,
+  ctx, runtime, memoryRetrievalConfig, deepPlanning, executionSupport, continuityMode, getSkillPrompts,
   systemSkillsFor, getSelection, currentForAgentEvent, advisoryEvidenceFor,
   executionBinding, sessionEventSource,
 }: ContextDependencies) {
@@ -47,6 +52,18 @@ export function createContextMessages({
     // inject from that current host state instead of replaying the intake-time
     // directive from the cached gate result.
     const discussion = getSelection(item.runId)?.value.discussion
+    const correctionContextMissing=item.prepared.corrections?.retrieval==='retrieved'&&item.prepared.corrections.sources.some(source=>
+      !item.prepared.context?.items.some(candidate=>candidate.entryId===source.entryId&&candidate.revision===source.revision))
+    if(!discussion&&item.prepared.memoryOwner?.kind==='execution'&&!item.prepared.memoryPolicy.contextWithheld
+      &&(item.prepared.corrections?.requestDigest!==canonicalContentHash(event.task)||correctionContextMissing)){
+      const timeConstraint=memoryRetrievalConfig.mode==='off'?undefined:timeConstraintForRequest(event.task,memoryRetrievalConfig,Date.now())
+      const selected=await runtime.withDatabase(db=>readTaskCorrections(db,{project:item.prepared.project,runId:item.runId,
+        task:event.task,profile:item.prepared.intake.profile,signal:event.signal,runtime:{memoryRetrieval:memoryRetrievalConfig,
+          ...(timeConstraint?{timeConstraint}:{}),...(memoryRetrievalConfig.mode==='observe'?{onMemoryRetrievalObservation:reportMemoryRetrievalObservation}:{})}}))
+      event.signal.throwIfAborted()
+      item.prepared={...item.prepared,context:selected.context??item.prepared.context,corrections:selected.corrections,
+        memoryPolicy:{...item.prepared.memoryPolicy,memoryReasoningRequired:selected.context!==null||item.prepared.memoryPolicy.memoryReasoningRequired}}
+    }
     const prepared = discussion ? { ...item.prepared, ennoOduno: inapplicableEnnoState() } : item.prepared
     const directive = projectDshDirective(prepared.ennoOduno)
     const selection = directive === null ? { routeSkillNames: [], expertRefs: [] } : selectDshDirectiveSources(directive)
