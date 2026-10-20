@@ -8,7 +8,48 @@ import { type OpenCodeCatalog, type OpenCodeModel, type OpenCodeRoute } from './
 import type { CredentialFile } from './credentials.js'
 import { abortable } from './abortable.js'
 import { randomUUID } from 'node:crypto'
+import { parseTree, type Node as JsonNode, type ParseError } from 'jsonc-parser'
 import { record, mergeMetadata } from './opencode-replay.js'
+
+/** Exact decimal normalization: no floating-point rounding, including huge exponents. */
+function canonicalJsonNumber(token: string): string {
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token)
+  if (!match) throw new Error('Invalid tool JSON number')
+  const fraction = match[3] ?? ''
+  const digits = (match[2]! + fraction).replace(/^0+/, '')
+  // Preserve signed zero: changing it can affect downstream numeric operations.
+  if (!digits) return `${match[1]}0`
+  const significant = digits.replace(/0+$/, '')
+  const exponent = BigInt(match[4] ?? '0') - BigInt(fraction.length) + BigInt(digits.length - significant.length)
+  return `${match[1]}${significant}e${exponent}`
+}
+
+/** Ignore JSON formatting, but never round numeric tokens or erase duplicate keys. */
+function sameToolArguments(streamed: string, complete: string): boolean {
+  if (streamed === complete) return true
+  const canonical = (source: string): string => {
+    const errors: ParseError[] = []
+    const root = parseTree(source, errors, { disallowComments: true, allowTrailingComma: false })
+    if (!root || errors.length) throw new Error('Invalid tool JSON')
+    const visit = (node: JsonNode): unknown => {
+      if (node.type === 'object') {
+        const seen = new Set<string>()
+        const entries = (node.children ?? []).map(property => {
+          const key = property.children![0]!.value as string
+          if (seen.has(key)) throw new Error('Ambiguous tool JSON key')
+          seen.add(key)
+          return [key, visit(property.children![1]!)] as const
+        }).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        return ['object', entries]
+      }
+      if (node.type === 'array') return ['array', (node.children ?? []).map(visit)]
+      // JSON.parse would alias distinct integers above Number.MAX_SAFE_INTEGER.
+      return [node.type, node.type === 'number' ? canonicalJsonNumber(source.slice(node.offset, node.offset + node.length)) : node.value]
+    }
+    return JSON.stringify(visit(root))
+  }
+  try { return canonical(streamed) === canonical(complete) } catch { return false }
+}
 
 interface Options {
   catalogs: ReadonlyMap<OpenCodeRoute, OpenCodeCatalog>; store: CredentialFile
@@ -76,18 +117,26 @@ export class OpenCodeAdapter extends LlmAdapter {
         if (part.type === 'error') throw part.error
         if (part.type === 'response-metadata') { responseId = part.id; continue }
         if (part.type === 'text-start' || part.type === 'reasoning-start' || part.type === 'tool-input-start') {
+          if (part.type === 'tool-input-start' && part.providerExecuted) throw new LlmError('Unexpected provider-executed tool', 'PROTOCOL_ERROR')
+          // IDs remain reserved after a block closes: reusing one would overwrite
+          // replay state and alias assembler indexes.
+          if (blocks.has(part.id)) throw new LlmError('Duplicate stream block ID', 'PROTOCOL_ERROR')
           const block: ContentBlock = part.type === 'tool-input-start' ? { type: 'tool-call', id: part.id as Extract<ContentBlock, { type: 'tool-call' }>['id'], name: part.toolName, arguments: '' } : { type: part.type === 'text-start' ? 'text' : 'reasoning', text: '' }
           const entry = { index: blocks.size, block, ended: false, providerOptions: part.providerMetadata }; blocks.set(part.id, entry)
           yield { type: 'block-start', index: entry.index, blockType: block.type }; continue
         }
         if (part.type === 'text-delta' || part.type === 'reasoning-delta' || part.type === 'tool-input-delta') {
           const entry = blocks.get(part.id); if (!entry || entry.ended || entry.inputEnded) throw new LlmError('Unmatched stream delta', 'PROTOCOL_ERROR')
+          const expected = part.type === 'tool-input-delta' ? 'tool-call' : part.type === 'text-delta' ? 'text' : 'reasoning'
+          if (entry.block.type !== expected) throw new LlmError('Mismatched stream delta type', 'PROTOCOL_ERROR')
           if (entry.block.type === 'tool-call') { entry.block.arguments += part.delta; yield { type: 'tool-call-delta', index: entry.index, id: entry.block.id, argumentsDelta: part.delta } }
           else if (entry.block.type === 'text' || entry.block.type === 'reasoning') { entry.block.text += part.delta; yield { type: entry.block.type === 'text' ? 'text-delta' : 'reasoning-delta', index: entry.index, text: part.delta } }
           if (part.providerMetadata) entry.providerOptions = mergeMetadata(entry.providerOptions, part.providerMetadata); continue
         }
         if (part.type === 'text-end' || part.type === 'reasoning-end' || part.type === 'tool-input-end') {
-          const entry = blocks.get(part.id); if (!entry || entry.ended) throw new LlmError('Unmatched stream end', 'PROTOCOL_ERROR')
+          const entry = blocks.get(part.id); if (!entry || entry.ended || entry.inputEnded) throw new LlmError('Unmatched stream end', 'PROTOCOL_ERROR')
+          const expected = part.type === 'tool-input-end' ? 'tool-call' : part.type === 'text-end' ? 'text' : 'reasoning'
+          if (entry.block.type !== expected) throw new LlmError('Mismatched stream end type', 'PROTOCOL_ERROR')
           if (part.providerMetadata) entry.providerOptions = mergeMetadata(entry.providerOptions, part.providerMetadata)
           if (entry.block.type === 'tool-call') { entry.inputEnded = true; continue }
           entry.ended = true; yield { type: 'block-end', index: entry.index, block: entry.block }; continue
@@ -99,7 +148,9 @@ export class OpenCodeAdapter extends LlmAdapter {
             const entry = blocks.get(part.toolCallId)!
             if (entry.block.type !== 'tool-call' || entry.ended || entry.block.name !== part.toolName) throw new LlmError('Mismatched final tool call', 'PROTOCOL_ERROR')
             // Some providers send the complete arguments only in the final
-            // tool event. Preserve streamed raw JSON when it was supplied.
+            // tool event. When both exist, require equivalent JSON while
+            // retaining the original streamed bytes for lossless replay.
+            if (entry.block.arguments && !sameToolArguments(entry.block.arguments, part.input)) throw new LlmError('Conflicting final tool arguments', 'PROTOCOL_ERROR')
             if (!entry.block.arguments) entry.block.arguments = part.input
             if (part.providerMetadata) entry.providerOptions = mergeMetadata(entry.providerOptions, part.providerMetadata)
             entry.ended = true; yield { type: 'block-end', index: entry.index, block: entry.block }

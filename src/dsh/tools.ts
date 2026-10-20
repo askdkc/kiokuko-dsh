@@ -1,3 +1,5 @@
+import * as z from 'zod/v4'
+import { cloneBoundaryJson } from '../serialization/boundary-json.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { MODEL_TOOL_OPERATION_NAMES, type ModelToolOperationName } from '../model-tools/names.js'
 import { modelFacingInputSchema, modelFacingTransportSchema, modelToolContract, type JsonSchema } from '../model-tools/registry.js'
@@ -271,40 +273,66 @@ function renderDshToolResult(value: unknown): readonly { readonly type: 'text'; 
   return Object.freeze(blocks)
 }
 
-/** Build the exact eight-operation model tool set. */
+function freezeJson<T>(value: T): T {
+  if (typeof value === 'object' && value !== null) {
+    for (const child of Object.values(value)) freezeJson(child)
+    Object.freeze(value)
+  }
+  return value
+}
+
+/** Build the exact model tool set, including the raw-registration input boundary. */
 export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDefinition[] {
-  return Object.freeze(MODEL_TOOL_OPERATION_NAMES.map((operation) => Object.freeze({
-    name: operation,
-    description: descriptionFor(operation),
-    // DSH validates this transport schema before invoking the handler. Publish
-    // the actual JSON shape so a nested object cannot arrive double-encoded as
-    // a string, but leave requiredness and value rules to business validation.
-    parameters: Object.freeze(modelFacingTransportSchema(operation)),
-    modelFacing: modelFacingSet.has(operation),
-    // `{}` is the dsh JSON-schema spelling for any lossless JSON value. The
-    // Kiokuko operation registry owns the input/output semantic schemas; this
-    // declaration only satisfies dsh's native tool registration contract.
-    output: {
-      schema: Object.freeze({}),
-      render: (_args: unknown, value: unknown) => renderDshToolResult(value),
-    },
-    execute: async (args: unknown, rawExecution: DshToolExecution | DshNativeToolExecution): Promise<unknown> => {
-      const normalized = normalizeExecution(rawExecution)
-      if (normalized.name !== operation) throw new KiokukoError('CONFLICT', 'dsh tool definition and execution operation differ')
-      // The first argument is the actual parsed tool payload. Rebind it onto
-      // the execution before checking host-owned fields; never rely on a
-      // duplicate metadata copy supplied by the native runtime.
-      const execution = Object.freeze({ ...normalized, arguments: args })
-      const binding = bindDshToolInvocation(execution, host.bind(execution))
-      const value = await host.execute(operation, args, binding, execution.signal)
-      // The result's nextAction, rather than the operation name, owns the turn
-      // boundary. DSH appends successful tool/results before observing
-      // concludeTurn. Terminal results deliberately stay open for one final,
-      // visible assistant response.
-      if (operation !== 'enno_plan_review' && concludesDshTurn(value)) rawExecution.concludeTurn?.()
-      return value
-    },
-  })))
+  return Object.freeze(MODEL_TOOL_OPERATION_NAMES.map((operation) => {
+    const parameters = freezeJson(modelFacingTransportSchema(operation))
+    const transport = z.fromJSONSchema(parameters as z.core.JSONSchema.BaseSchema)
+    const forbidden = new Set(modelToolContract(operation).hostOwnedFields)
+    return Object.freeze({
+      name: operation,
+      description: descriptionFor(operation),
+      // Raw DSH register() does not validate inputs (defineTool() does). Validate
+      // this exact published shape below; requiredness/value rules stay in the host.
+      parameters,
+      modelFacing: modelFacingSet.has(operation),
+      // `{}` is the dsh JSON-schema spelling for any lossless JSON value. The
+      // Kiokuko operation registry owns the input/output semantic schemas; this
+      // declaration only satisfies dsh's native tool registration contract.
+      output: {
+        schema: Object.freeze({}),
+        render: (_args: unknown, value: unknown) => renderDshToolResult(value),
+      },
+      execute: async (args: unknown, rawExecution: DshToolExecution | DshNativeToolExecution): Promise<unknown> => {
+        const normalized = normalizeExecution(rawExecution)
+        if (normalized.name !== operation) throw new KiokukoError('CONFLICT', 'dsh tool definition and execution operation differ')
+        // The first argument is the actual parsed tool payload. Rebind it onto
+        // the execution before checking host-owned fields; never rely on a
+        // duplicate metadata copy supplied by the native runtime.
+        normalized.signal.throwIfAborted()
+        const snapshot = freezeJson(cloneBoundaryJson(args, {
+          failure: () => new KiokukoError('VALIDATION_ERROR', 'dsh tool arguments must be lossless JSON'),
+        }))
+        // Security classification takes precedence over shape rejection. Neither
+        // rejection may bind host state or reserve a business idempotency key.
+        if (containsHostIdentity(snapshot, forbidden)) {
+          throw new KiokukoError('SECURITY_REJECTION', 'dsh tool arguments contain host-owned identity')
+        }
+        if (!transport.safeParse(snapshot).success) {
+          throw new KiokukoError('VALIDATION_ERROR', 'dsh tool arguments do not match the published transport schema')
+        }
+        // Use the lossless snapshot, never Zod's parsed/transformed output.
+        const execution = Object.freeze({ ...normalized, arguments: snapshot })
+        const binding = bindDshToolInvocation(execution, host.bind(execution))
+        execution.signal.throwIfAborted()
+        const value = await host.execute(operation, snapshot, binding, execution.signal)
+        // The result's nextAction, rather than the operation name, owns the turn
+        // boundary. DSH appends successful tool/results before observing
+        // concludeTurn. Terminal results deliberately stay open for one final,
+        // visible assistant response.
+        if (operation !== 'enno_plan_review' && concludesDshTurn(value)) rawExecution.concludeTurn?.()
+        return value
+      },
+    })
+  }))
 }
 
 /** Return the exact tools that DSH may expose to the model. */

@@ -705,3 +705,31 @@ test('memory proof binds the actual working directory and keeps legacy root revi
     f.reopen(); assert.equal(f.status().ready, true)
   } finally { await f.close() }
 })
+
+
+test('memory evidence cannot reuse old command normalization or shell-sensitive collisions', async () => {
+  const f=await fixture()
+  try {
+    recordMemoryApplicationReview(f.db,f.identity,'identity-review',{...f.review(),command:"printf '%s' '~'"})
+    beginMemoryExecution(f.db,f.identity,'collision',"printf '%s' ~")
+    completeMemoryExecution(f.db,f.identity,'collision',{value:{exitCode:0}})
+    assert.equal(f.status().ready,false,'unquoted tilde is not the reviewed literal')
+    beginMemoryExecution(f.db,f.identity,'exact',"printf '%s' '~'")
+    completeMemoryExecution(f.db,f.identity,'exact',{value:{exitCode:0}})
+    assert.equal(f.status().ready,true)
+    const {canonicalContentHash}=await import('../../../src/serialization/validate.js')
+    f.db.prepare('UPDATE task_memory_executions SET command_hash=? WHERE call_id=?').run(canonicalContentHash('printf %s ~'),'exact')
+    assert.equal(f.status().ready,false,'historical v1 key cannot become current proof')
+    f.reopen();assert.equal(f.status().ready,false,'restart cannot revive old proof')
+  }finally{await f.close()}
+})
+test('memory pipeline exit zero without independent test evidence remains unknown', async()=>{
+  const f=await fixture()
+  try{
+    recordMemoryApplicationReview(f.db,f.identity,'pipeline-review',{...f.review(),command:'false | cat'})
+    beginMemoryExecution(f.db,f.identity,'pipeline','false | cat')
+    completeMemoryExecution(f.db,f.identity,'pipeline',{value:{exitCode:0}})
+    assert.equal(f.status().ready,false)
+    assert.equal(f.db.prepare('SELECT outcome FROM task_memory_executions WHERE call_id=?').get('pipeline')?.outcome,'unknown')
+  }finally{await f.close()}
+})

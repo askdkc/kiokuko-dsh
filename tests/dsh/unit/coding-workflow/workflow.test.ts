@@ -10,8 +10,8 @@ import { CodingDefinitionSchema, type CodingDefinition } from '../../../../src/d
 import { codingControlOrRead, codingIntent, codingContinuation, documentEditIntent, documentContinuation } from '../../../../src/dsh/coding-workflow/intent.js'
 import { initializeCodingWorkflow, readCodingWorkflow } from '../../../../src/dsh/coding-workflow/store.js'
 import { answerCodingChoice, assertCodingDispatch, codingItems, codingStatus, nextCodingWork, proposeCodingWorkflow,
-  recordCodingAttempt, stopCodingWorkflow, synchronizeCodingWorkflow, codingVerificationText, reportCodingBlocker } from '../../../../src/dsh/coding-workflow/service.js'
-import { assessTaskCompletion, bindTaskCriterion, taskCompletionBlocksClose, beginTaskCompletionExecution, finishTaskCompletionExecution } from '../../../../src/dsh/task-completion.js'
+  assertCodingCommandRetry, recordCodingAttempt, stopCodingWorkflow, synchronizeCodingWorkflow, codingVerificationText, reportCodingBlocker } from '../../../../src/dsh/coding-workflow/service.js'
+import { completionSourceDigest, assessTaskCompletion, bindTaskCriterion, taskCompletionBlocksClose, beginTaskCompletionExecution, finishTaskCompletionExecution } from '../../../../src/dsh/task-completion.js'
 import { OwnedExecutionService, runOwnedProcess } from '../../../../src/dsh/owned-execution.js'
 import { parseCodingChoice, mountCodingWorkflow } from '../../../../src/dsh/coding-workflow/host.js'
 import { DshExecutionSupport } from '../../../../src/dsh/execution-support.js'
@@ -483,4 +483,21 @@ for (const changed of ['abort', 'identity', 'choice'] as const) test(`delayed ma
     assert.equal(activated, 0); assert.equal(asked, 0)
     assert.equal(readCodingWorkflow(f.db, f.identity.runId)!.choice.state, changed === 'choice' ? 'no' : 'pending')
   } finally { host.unmount(); await f.close() }
+})
+
+
+
+test('textual command changes cannot evade failure throttling without granting evidence equivalence',async()=>{
+  const f=await fixture()
+  try{
+    f.propose();f.choose();f.bind('parser-check')
+    assert.equal(readCodingWorkflow(f.db,f.identity.runId)!.protocol,undefined,'no exact-command protocol masks this check')
+    recordCodingAttempt(f.db,f.identity,'failed','parser-check','failure',Date.now(),completionSourceDigest(f.db,f.identity.runId,f.root,['src/check.test.mjs']))
+    for(const command of [f.command, f.command.replace('node ', 'node  '), f.command.replace('node', "'node'")]) {
+      assert.throws(()=>assertCodingCommandRetry(f.db,f.identity,command),/Unchanged verification failure/)
+    }
+    assert.doesNotThrow(()=>assertCodingCommandRetry(f.db,f.identity,'cat src/check.test.mjs'),'read-only inspection is not the same retry')
+    const changed=f.command.replace('node', "'node'")
+    assert.equal(beginTaskCompletionExecution(f.db,{runId:f.identity.runId,callId:'changed',command:changed,repositoryRoot:f.root}),false,'throttling similarity never creates proof equivalence')
+  }finally{await f.close()}
 })

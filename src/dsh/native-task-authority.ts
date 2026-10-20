@@ -16,7 +16,19 @@ interface Options {
   sessions: { get(id: string): object | undefined } | undefined
   resolveParent(execution: Execution): ExecutionIdentity | undefined
 }
-type Proof = { parent: Agent; identity: ExecutionIdentity; lease: TaskLease; child?: Agent; live: boolean; completed?: boolean; launch?: Promise<any> }
+type Proof = { parent: Agent; identity: ExecutionIdentity; lease: TaskLease; child?: Agent; live: boolean; completed?: boolean; launch?: Promise<any>; stopRequested?: boolean; stop?: Promise<boolean> }
+
+/** A caller may leave a stop wait; the host must still track its cleanup. */
+function waitForStop<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation
+  signal.throwIfAborted()
+  return new Promise<T>((resolve, reject) => {
+    const aborted = () => { signal.removeEventListener('abort', aborted); reject(signal.reason) }
+    signal.addEventListener('abort', aborted, { once: true })
+    operation.then(value => { signal.removeEventListener('abort', aborted); resolve(value) },
+      error => { signal.removeEventListener('abort', aborted); reject(error) })
+  })
+}
 
 const hosts = new WeakMap<DshCoreRuntime, Set<NativeTaskAuthority>>()
 export async function stopTaskNativeChildren(runtime: DshCoreRuntime, task: {taskId:string;repositoryRoot:string}, signal?: AbortSignal): Promise<boolean> {
@@ -54,6 +66,7 @@ export class NativeTaskAuthority {
       const lease = await options.runtime.withDatabase(db => captureExecutionTaskLease(db, {
         taskId: pinned.runId, sessionId: pinned.workflowSessionId ?? pinned.sessionId, repositoryRoot: pinned.repositoryRoot,
       }, execution))
+      if (host.stopped) throw new KiokukoError('CONFLICT', 'Native task authority disposed')
       host.exact(parent)
       const current = host.resolve(execution) ?? options.resolveParent(execution)
       if (!current || !host.same(pinned, current)) throw new KiokukoError('CONFLICT', 'Native child task owner changed')
@@ -61,11 +74,12 @@ export class NativeTaskAuthority {
       const childId = spec.childId ?? randomUUID()
       if (host.proofs.has(childId)) throw new KiokukoError('CONFLICT', 'Native child identity already reserved')
       const proof: Proof = { parent, identity: pinned, lease, live: true }
-      await host.receipt(childId,proof,'started',true)
       host.proofs.set(childId, proof)
-      try {
-        proof.launch = withTaskAuthority(lease, () => original.call(this, { ...spec, childId }))
-        const result = await proof.launch
+      proof.launch = withTaskAuthority(lease, async () => {
+       try {
+        await host.receipt(childId,proof,'started',true)
+        if (host.stopped) throw new KiokukoError('CONFLICT', 'Native task authority disposed')
+        const result = await original.call(this, { ...spec, childId })
         if (result.childId !== childId) throw new KiokukoError('INTEGRITY_ERROR', 'Native child identity changed')
         const child = options.agents?.list?.().find(agent => agent.session?.id === childId)
         if (child) {
@@ -80,7 +94,9 @@ export class NativeTaskAuthority {
             void host.observeNaturalCompletion(childId, proof, result).catch(() => {})
         }
         return result
-      } catch (error) { proof.live = false; throw error }
+       } catch (error) { proof.live = false; throw error }
+      })
+      return proof.launch
     }
     backend.startActivation = this.wrapper
   }
@@ -99,7 +115,7 @@ export class NativeTaskAuthority {
     const agent = execution.agent as Agent | undefined
     if (!agent?.session || !isNativeSubagent(agent)) return undefined
     const proof = this.proofs.get(agent.session.id)
-    if (this.stopped || !proof?.live) return undefined
+    if (this.stopped || !proof?.live || proof.stopRequested) return undefined
     this.exact(agent); this.exact(proof.parent)
     if (!this.local(agent) || agent.session.header?.parentSession !== proof.parent.session!.id || proof.child && proof.child !== agent)
       throw new KiokukoError('CONFLICT', 'Native child lineage changed')
@@ -149,29 +165,43 @@ export class NativeTaskAuthority {
     if(!this.local(child)||!isNativeSubagent(child)||child.session.header?.parentSession!==proof.parent.session?.id)return
     await this.receipt(childId,proof,'completed')
   }
-  async stopTask(task:{taskId:string;repositoryRoot:string},signal?:AbortSignal):Promise<boolean> {
-    const pending=[...this.proofs].filter(([,proof])=>proof.lease.taskId===task.taskId&&proof.lease.repositoryRoot===task.repositoryRoot)
-    await Promise.allSettled(pending.map(([,proof])=>proof.launch))
-    let confirmed=true
-    for(const [id,proof] of pending){
-      signal?.throwIfAborted()
-      if(proof.completed)continue
+  private requestStop(id:string, proof:Proof):Promise<boolean> {
+    proof.stopRequested=true
+    if (proof.stop) return proof.stop
+    // Memoize before doing any backend work: concurrent callers own separate
+    // waits, not separate cancellation/receipt lifecycles.
+    const operation=Promise.resolve().then(async()=>{
+      await Promise.allSettled([proof.launch])
+      if(proof.completed)return true
       const child=proof.child??this.options.agents?.list?.().find(agent=>agent.session?.id===id)
-      if(!child){confirmed=false;continue}
+      if(!child)return false
       this.exact(child)
-      if(!isNativeSubagent(child)||child.session?.header?.parentSession!==proof.parent.session?.id){confirmed=false;continue}
+      if(!this.local(child)||!isNativeSubagent(child)||child.session?.header?.parentSession!==proof.parent.session?.id)return false
       proof.child=child
       if(child.status!=='idle')child.cancel?.({kind:'hook',reason:'Kiokuko task stopped'})
-      if(!child.whenIdle){confirmed=false;continue}
-      await child.whenIdle();signal?.throwIfAborted()
+      if(!child.whenIdle)return false
+      await child.whenIdle()
       this.exact(child)
-      if(child.status!=='idle'){confirmed=false;continue}
+      if(child.status!=='idle'||this.stopped)return false
       await this.receipt(id,proof,'completed')
-    }
-    return confirmed
+      return true
+    })
+    proof.stop=operation
+    // Retain the launch proof if confirmation fails, allowing a later stop to
+    // retry. Attach a rejection handler even if all callers have aborted.
+    void operation.then(confirmed=>{if(!confirmed)delete proof.stop},()=>{delete proof.stop})
+    return operation
+  }
+  async stopTask(task:{taskId:string;repositoryRoot:string},signal?:AbortSignal):Promise<boolean> {
+    signal?.throwIfAborted()
+    const pending=[...this.proofs].filter(([,proof])=>proof.lease.taskId===task.taskId&&proof.lease.repositoryRoot===task.repositoryRoot)
+    const cleanup=Promise.all(pending.map(([id,proof])=>this.requestStop(id,proof)))
+    return (await waitForStop(cleanup,signal)).every(Boolean)
   }
   dispose(): void {
-    this.stopped = true; this.proofs.clear(); hosts.get(this.options.runtime)?.delete(this)
+    this.stopped = true
+    for(const [id,proof] of this.proofs)void this.requestStop(id,proof).catch(()=>{})
+    this.proofs.clear(); hosts.get(this.options.runtime)?.delete(this)
     const backend = this.options.backend
     if (backend && backend.startActivation === this.wrapper && this.original) backend.startActivation = this.original
   }

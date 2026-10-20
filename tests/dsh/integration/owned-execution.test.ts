@@ -50,7 +50,7 @@ test('edit -> real test -> durable evidence -> candidate memory -> restart -> re
   try {
     const edited=await f.execute('kioku_edit',{path:'src/check.test.mjs',oldText:'actual process',newText:'Parser'},'edit')
     assert.equal(edited.applied,true);assert.notEqual(edited.receipt.targets[0].before,edited.receipt.targets[0].after)
-    const command='node --test --test-reporter=tap check.test.mjs';f.bind(command)
+    const command="'node' '--test' '--test-reporter=tap' 'check.test.mjs'";f.bind(command)
     const result=await f.execute('kioku_exec',{command:"'node' '--test' '--test-reporter=tap' 'check.test.mjs'",cwd:'src'},'test')
     assert.equal(result.exitCode,0);assert.equal(result.receipt.processStarted,true);assert.equal(result.receipt.verification,'passed');assert.equal(result.receipt.checks[0].outcome,'passed')
     assert.equal(f.approvals(),0)

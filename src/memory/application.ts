@@ -8,7 +8,7 @@ import { captureProjectManifestSnapshot, resolveProjectFingerprint } from '../re
 import { canonicalContentHash } from '../serialization/validate.js'
 import { findSecret } from './secrets.js'
 import { isHostExecutionResult } from '../dsh/execution-result.js'
-import { executionCommand } from '../dsh/execution-command.js'
+import { executionCommand, hasShellPipeline } from '../dsh/execution-command.js'
 import { readEntry } from './entries.js'
 import { isRetrievableEntry, retrievableWorkspaceEntryCount } from './hybrid-retrieval.js'
 import { hasActionableMemorySelection, memoryReasoningRequired, hasExplicitCodingIntent } from '../akinator/capabilities.js'
@@ -35,7 +35,7 @@ export const memoryApplicationReviewSchema = z.object({
   }
 })
 export type MemoryApplicationReview = z.infer<typeof memoryApplicationReviewSchema>
-/** Root executions retain their historical key; subdirectory proofs bind the actual directory. */
+/** Versioned command identity invalidates historical normalization; bind actual directory. */
 function executionKey(root: string, command: string | null, cwd = root): string {
   const actual = realpathSync(path.resolve(root, cwd)), relative = path.relative(root, actual)
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) conflict('Verification directory is outside the repository')
@@ -385,6 +385,7 @@ export function completeMemoryExecution(db: SqliteDatabase, identity: MemoryAppl
     const skipped = value?.skipped === true || /(?:# SKIP\b|\b[1-9]\d* (?:skipped|pending)\b|# (?:skipped|todo) [1-9])/iu.test(content)
     const hostSummary = isHostExecutionResult(result) ? result.value.summary : undefined
     const unknown = !isHostExecutionResult(result) && rawContent.length > 64_000 || !Number.isSafeInteger(exit) || value?.kind === 'background' || skipped
+      || !hostSummary && selected.some(row=>hasShellPipeline((JSON.parse(row.review_json) as MemoryApplicationReview).command??''))
       || isHostExecutionResult(result) && selected.some(row=>/\btest\b/iu.test((JSON.parse(row.review_json) as MemoryApplicationReview).command??'')) && !hostSummary
     const failed=exit!==undefined&&exit!==0 || r?.isError || value?.timedOut || value?.aborted || value?.signal!=null || hostSummary && (hostSummary.fail>0 || hostSummary.skipped>0 || hostSummary.cancelled>0 || hostSummary.todo>0)
     const outcome = value?.kind === 'background' ? 'running' : !fresh ? 'stale' : failed ? 'failed' : unknown ? 'unknown' : 'passed'

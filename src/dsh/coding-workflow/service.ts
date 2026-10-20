@@ -6,7 +6,7 @@ import { canonicalContentHash } from '../../serialization/validate.js'
 import { assessTaskCompletion, bindTaskCriterion, completionSourceDigest, type CompletionAssessment, type CompletionMethod } from '../task-completion.js'
 import { redactDshSourceText } from '../../context/memory-projection.js'
 import { completionVerifiers } from '../completion-verifiers.js'
-import { executionCommand } from '../execution-command.js'
+import { mayRepeatCommand } from '../execution-command.js'
 import { CODING_MINIMUM_DEFINITION_EXAMPLE, CodingBlockerSchema, CodingDefinitionSchema, type CodingDefinition, type CodingIdentity, type CodingWorkflow } from './contracts.js'
 import { assertCodingIdentity, mutateCodingWorkflow, readCodingWorkflow } from './store.js'
 
@@ -337,7 +337,7 @@ export function assertCodingCommandRetry(db: SqliteDatabase, identity: CodingIde
     .all<{ criterion_id: string; method_json: string }>(identity.runId)
   for (const row of rows) {
     const method = JSON.parse(row.method_json) as CompletionMethod
-    if (method.kind !== 'native_command' || executionCommand(method.command) !== executionCommand(command)) continue
+    if (method.kind !== 'native_command' || !mayRepeatCommand(method.command, command)) continue
     const id = row.criterion_id.slice(`coding:${workflow.workflowId}:`.length), attempt = workflow.attempts[id]
     if (!attempt || attempt.sourceDigest !== completionSourceDigest(db, identity.runId, identity.repositoryRoot, method.sourcePaths)) continue
     if (attempt.count >= 3 || Date.now() < attempt.retryAt) throw new KiokukoError('CONFLICT', 'Unchanged verification failure needs inspection or repair before retrying')

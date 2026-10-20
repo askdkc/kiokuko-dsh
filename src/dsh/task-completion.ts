@@ -13,7 +13,7 @@ import { completionVerifiers } from './completion-verifiers.js'
 import { readExecutionFrame } from './execution-frame.js'
 import { hasExplicitTestCases, parseNodeTapSummary, parseTestSummary, selectedNodeTestCommand, type TapSummary } from './node-tap-summary.js'
 import { isHostExecutionResult } from './execution-result.js'
-import { executionCommand } from './execution-command.js'
+import { executionCommand, EXECUTION_COMMAND_VERSION, hasShellPipeline } from './execution-command.js'
 import { readCodingWorkflow } from './coding-workflow/store.js'
 import { recordCodingAttempt } from './coding-workflow/service.js'
 
@@ -246,7 +246,7 @@ export function finishTaskCompletionExecution(database: SqliteDatabase, input: {
   const outcome = sourceDigest !== row.source_digest || coding&&(row.coding_scope!==coding.scopeVersion||['cancelled','superseded'].includes(coding.state)) ? 'stale'
     : response?.isError || response?.value?.timedOut || response?.value?.aborted || response?.value?.signal || response?.value?.kind === 'background'
       || Number.isSafeInteger(exit) && exit !== 0 ? 'failed'
-      : coding && !isHostExecutionResult(input.result) || !Number.isSafeInteger(exit) || method.assertion === 'selected_tests_pass' && !tap ? 'unknown'
+      : coding && !isHostExecutionResult(input.result) || !Number.isSafeInteger(exit) || method.assertion === 'exit_zero' && hasShellPipeline(method.command) || method.assertion === 'selected_tests_pass' && !tap ? 'unknown'
         : tap && (tap.fail>0||tap.cancelled>0||tap.skipped>0||tap.todo>0) || !observable ? 'failed' : 'passed'
   database.prepare(`UPDATE dsh_completion_executions SET outcome=?,exit_code=?,tap_summary_json=?,result_digest=?,updated_at=?
     WHERE run_id=? AND call_id=? AND outcome='started'`)
@@ -309,7 +309,7 @@ export function assessTaskCompletion(database: SqliteDatabase, runId: string): C
     return { criterionId: criterion.id, description: criterion.description,
       state: execution.outcome === 'failed' || skipped ? 'unmet' : execution.outcome === 'passed' && complete ? 'satisfied' : 'unknown',
       reason: execution.outcome === 'failed' ? 'command_failed' : skipped ? 'selected_tests_unmet'
-        : execution.outcome === 'passed' && complete ? 'observed_command' : 'coverage_unknown',
+        : execution.outcome === 'passed' && complete ? 'observed_command' : method.assertion === 'exit_zero' && hasShellPipeline(method.command) ? 'pipeline_stage_status_unknown_use_direct_verifier' : 'coverage_unknown',
       evidenceRef: execution.call_id }
   })
   const workflowReady=!coding||Boolean(protocolCompletionReady(database,runId)&&coding.definition&&['yes','no'].includes(coding.choice.state)&&!['cancelled','superseded','blocked'].includes(coding.state))
@@ -360,9 +360,9 @@ export function taskCompletionBlocksClose(assessment: CompletionAssessment): boo
 /** Include the consumer configuration and runtime alongside selected source paths. */
 export function completionSourceDigest(database:SqliteDatabase,runId:string,root:string,paths:string[]):string {
   const workflow = readCodingWorkflow(database,runId)
-  if(!workflow)return applicationSourceDigest(root,paths)
+  if(!workflow)return canonicalContentHash({commandIdentityVersion:EXECUTION_COMMAND_VERSION,source:applicationSourceDigest(root,paths)})
   const configuration=['package.json','package-lock.json','pnpm-lock.yaml','tsconfig.json'].filter(file=>existsSync(path.join(root,file)))
-  return canonicalContentHash({source:applicationSourceDigest(root,[...new Set([...paths,...configuration])]),scopeVersion:workflow.scopeVersion,
+  return canonicalContentHash({commandIdentityVersion:EXECUTION_COMMAND_VERSION,source:applicationSourceDigest(root,[...new Set([...paths,...configuration])]),scopeVersion:workflow.scopeVersion,
     runtime:{node:process.version,executable:process.execPath,pathDigest:canonicalContentHash(process.env.PATH??''),platform:process.platform,arch:process.arch}})
 }
 function artifactMatches(root:string,method:Extract<CompletionMethod,{kind:'native_command'}>):boolean {
