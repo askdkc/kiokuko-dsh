@@ -65,7 +65,7 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     await evaluate('(kioku.files:propose-write "new/deep/source.txt" "source result")')
     assert.equal(await readFile(join(root,'new/deep/source.txt'),'utf8'),'source result')
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_owned_operations WHERE state='completed' AND receipt_json LIKE '%kioku_write%'").get<any>().n,1)
-    const command='node --test --test-reporter=tap check.test.mjs'
+    const command="'node' '--test' '--test-reporter=tap' 'check.test.mjs'"
     bindTaskCriterion(db,{runId:prepared.run.runId,callId:'bind',criterionId:assessTaskCompletion(db,prepared.run.runId).criteria[0]!.criterionId,method:{kind:'native_command',command,cwd:'src',sourcePaths:['src/check.test.mjs'],assertion:'selected_tests_pass'},approved:true})
     const checked=await evaluate('(kioku.process:run "node" (list "--test" "--test-reporter=tap" "check.test.mjs") :directory "src")')
     assert.equal(checked.code,0);assert.equal(checked.receipt.verification,'passed');assert.equal(checked.receipt.checks[0].outcome,'passed')

@@ -50,7 +50,7 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
     for (const id of ['regression', 'user-entry']) f.responses.push((request: any) => {
       const workflow = toolValue(request, 'coding-propose')
       return f.mock.toolCallResponse('bind-'+id, 'task_completion', { action: 'bind', criterionId: `coding:${workflow.workflowId}:${id}`,
-        method: { kind: 'native_command', command, cwd: '.', sourcePaths: ['src/parser.mjs', 'src/parser.test.mjs'], assertion: 'selected_tests_pass' } })
+        method: { kind: 'native_command', command: choice === '使う' ? "'node' '--test' '--test-reporter=tap' 'src/parser.test.mjs'" : command, cwd: '.', sourcePaths: ['src/parser.mjs', 'src/parser.test.mjs'], assertion: 'selected_tests_pass' } })
     })
     for (const id of ['item-check', 'goal-check']) call(id, choice === '使う' ? 'lisp_eval' : 'kioku_exec', choice === '使う'
       ? { operationId: id, code: '(kioku.process:run "node" (list "--test" "--test-reporter=tap" "src/parser.test.mjs"))' } : { command })
