@@ -6,6 +6,8 @@ import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { setImmediate } from 'node:timers/promises'
 import { encodeFiniteDomain, runMicroJudge, type FiniteDomainProblem } from '../../../src/dsh/decisions/micro-judge.js'
 import { assessRequestIntent, buildIntentAssessmentBatch, compileIntentRelations } from '../../../src/dsh/decisions/intent-assessment.js'
 import { createRequestIntentContext, validateMainModelRequestIntent, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
@@ -97,14 +99,42 @@ if(process.env.KIOKUKO_REQUIRE_MICRO_JUDGE==='1') {
   })
 }
 
-for(const fault of ['malformed','version','digest','output_limit','timeout','process_failed'] as const)test(`subprocess ${fault} is explicit unavailable`,async t=>{
+for(const fault of ['valid','malformed','version','digest','output_limit','timeout','process_failed'] as const)test(fault==='valid'?'subprocess valid response is accepted':`subprocess ${fault} is explicit unavailable`,{timeout:5000},async t=>{
   const root=await mkdtemp(join(tmpdir(),'fd-process-fault-'));t.after(()=>rm(root,{recursive:true,force:true}))
   const file=`${process.platform}-${process.arch}/kiokuko-micro-judge`;await mkdir(join(root,`${process.platform}-${process.arch}`))
-  const body=fault==='malformed'?`process.stdout.write('malformed')`:fault==='output_limit'?`process.stdout.write('x'.repeat(20000))`:fault==='timeout'?`setInterval(()=>{},1000)`:fault==='process_failed'?`process.exit(2)`:
-    `let s='';for await(const chunk of process.stdin)s+=chunk;const f=s.split('\\t');console.log(JSON.stringify({version:${JSON.stringify(fault==='version'?'other':'kiokuko-fd-v1')},inputId:f[1],inputDigest:'${'0'.repeat(64)}',complete:true,status:'entailed',solutions:1,truth:1,nodes:1,work:1,elapsedMicros:1,peakRssBytes:null}))`
+  const readyFile=join(root,'ready')
+  const body=fault==='malformed'?`process.stdout.write('malformed')`:fault==='output_limit'?`process.stdout.write('x'.repeat(20000))`:fault==='timeout'?`require('node:fs').writeFileSync(${JSON.stringify(readyFile)},'ready');setInterval(()=>{},1000)`:fault==='process_failed'?`process.exit(2)`:
+    `let s='';for await(const chunk of process.stdin)s+=chunk;const f=s.trimEnd().split(String.fromCharCode(9));console.log(JSON.stringify({version:${JSON.stringify(fault==='version'?'other':'kiokuko-fd-v1')},inputId:f[1],inputDigest:${fault==='digest'?JSON.stringify('0'.repeat(64)):'f[2]'},complete:true,status:'entailed',solutions:1,truth:1,nodes:1,work:1,elapsedMicros:1,peakRssBytes:null}))`
   const script=`#!${process.execPath}\n${body}\n`;await writeFile(join(root,file),script,{mode:0o755})
   await writeFile(join(root,'manifest.json'),JSON.stringify({version:'kiokuko-fd-v1',artifacts:[{file,platform:process.platform,arch:process.arch,bytes:Buffer.byteLength(script),sha256:hash(script),nativeVerified:false}]}))
-  const result=await runMicroJudge(problem,hash('fault'),signal(),{artifactRoot:root,timeoutMs:100})
+  // Schema/identity faults must not race the real Node executable's startup.
+  // Only the deadline case advances this clock, after the hung child is ready.
+  t.mock.timers.enable({apis:['setTimeout']})
+  const schedule=globalThis.setTimeout
+  let deadlineFired=false
+  t.mock.method(globalThis,'setTimeout',(callback:(...args:unknown[])=>void,delay?:number,...args:unknown[])=>{
+    assert.equal(delay,100,'the subprocess deadline remains 100ms')
+    return schedule(()=>{deadlineFired=true;callback(...args)},delay)
+  })
+  const controller=new AbortController();t.after(()=>controller.abort())
+  let settled=false
+  const pending=runMicroJudge(problem,hash('fault'),controller.signal,{artifactRoot:root,timeoutMs:100}).then(result=>{settled=true;return result})
+  if(fault==='timeout'){
+    while(!existsSync(readyFile)){controller.signal.throwIfAborted();await setImmediate()}
+    t.mock.timers.tick(99)
+    assert.equal(deadlineFired,false,'the deadline must not fire at 99ms')
+    assert.equal(settled,false,'a ready, hung child must not expire before the deadline')
+    t.mock.timers.tick(1)
+    assert.equal(deadlineFired,true,'the deadline must fire at 100ms')
+  }
+  const result=await pending
+  t.mock.timers.tick(100)
+  assert.equal(deadlineFired,fault==='timeout','completed children must clear their deadline')
+  if(fault==='valid'){
+    assert.equal(result.state,'available',JSON.stringify(result))
+    if(result.state==='available')assert.equal(result.result.inputDigest,hash(encodeFiniteDomain(problem)))
+    return
+  }
   assert.equal(result.state,'unavailable');if(result.state==='unavailable')assert.equal(result.reason,['malformed','version','digest'].includes(fault)?'malformed_response':fault)
 })
 

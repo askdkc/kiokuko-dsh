@@ -26,7 +26,7 @@ const artifact = enabled ? JSON.parse(await readFile(join(packageRoot ?? process
 const content = (name: string) => artifact.resources.find((r: any) => r.id === `${name}/SKILL.md`).content as string
 const names: string[] = artifact.resources.filter((r: any) => r.id.endsWith('/SKILL.md')).map((r: any) => r.id.slice(0,-'/SKILL.md'.length))
 // Exact model-facing contract: protected Lisp, native reads and memory recovery.
-const expectedLispTools = ['coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
+const expectedLispTools = ['coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'correction_check', 'lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
   'lisp_hot_call', 'lisp_hot_contract', 'lisp_hot_deactivate', 'lisp_hot_install', 'lisp_hot_status',
   'lisp_inspect', 'lisp_observe', 'lisp_reset', 'lisp_stage', 'lisp_status', 'lisp_verify',
   'observation_read', 'prepare_requested_work', 'skill', 'task_completion', 'task_memory_review']
