@@ -15,6 +15,16 @@ const catalog: ModelCatalogSnapshot = {
 }
 const pair = { preset: 'gpt-6.1-sol-deepseek-v4.1-flash' as const, head: { provider: 'sol', model: 'gpt-6.1-sol' }, worker: { provider: 'flash', model: 'deepseek-flash' } }
 const llm: DshModelCatalog = { listProviders: () => catalog.providers, listModels: async provider => catalog.models.filter(m => m.provider === provider), resolveCallConfig: async binding => binding }
+test('pair validation never lists an unselected provider', async () => {
+  const called: string[] = []
+  const scoped = { ...llm, listModels: async (provider: string) => {
+    called.push(provider)
+    assert.notEqual(provider, 'zen', 'unselected authentication must remain untouched')
+    return catalog.models.filter(m => m.provider === provider)
+  } }
+  assert.deepEqual(await validateHeadWorker(pair, scoped, []), [])
+  assert.deepEqual(called.sort(), ['flash', 'sol'])
+})
 test('pair discovers exact available routes, including mixed providers, never display-name aliases', async () => {
   const result = await headWorkerCandidates(catalog, [])
   assert.deepEqual(result.heads, [pair.head, { provider: 'zen', model: 'gpt-6.1-sol' }])

@@ -10,6 +10,7 @@
 (defpackage :kioku.typesafe (:use :cl) (:export :status :evaluate :service-error :error-code))
 (defpackage :kioku.tools (:use :cl) (:export :describe-tools :describe-symbol :available-tools :call-tool))
 (defpackage :kioku.code (:use :cl) (:shadow :open) (:export :capabilities :open :outline :enclosing :query :span :semantic :release :with-snapshot :service-error :error-code))
+(defpackage :kioku.recovery (:use :cl) (:export :select-restart :service-error :error-code))
 (defpackage :kioku.user (:use :cl))
 (in-package :kioku.internal)
 (defvar *wire*)
@@ -43,6 +44,8 @@
         (let ((code (gethash "code" reply "")))
           (when (and (stringp code) (alexandria:starts-with-subseq "CODE_" code))
             (error 'kioku.code:service-error :code code :message (gethash "error" reply)))
+          (when (and (stringp code) (alexandria:starts-with-subseq "RECOVERY_" code))
+            (error 'kioku.recovery:service-error :code code :message (gethash "error" reply)))
           (when (and (stringp code) (alexandria:starts-with-subseq "DECISION_" code))
             (error 'kioku.decisions:service-error :code code :message (gethash "error" reply)))
           (when (and (stringp code) (alexandria:starts-with-subseq "TYPESAFE_" code))
@@ -277,6 +280,35 @@
   (evaluate (kioku.internal:object "requirement" requirement "before" before "after" after)
     (vector (question "change" "Does the change satisfy the requirement without an evident regression?"
       (vector (choice "yes" "Satisfies requirement") (choice "no" "Missing requirement or regression") (choice "abstain" "Insufficient evidence"))))))
+(in-package :kioku.recovery)
+(define-condition service-error (error)
+  ((code :initarg :code :reader error-code) (message :initarg :message :reader service-message))
+  (:report (lambda (condition stream) (format stream "~A: ~A" (error-code condition) (service-message condition)))))
+(defun select-restart (condition context choices &key (timeout-ms 10000))
+  "Inside HANDLER-BIND, select one live zero-argument restart. CONTEXT is explicit JSON evidence;
+CHOICES contains 1-8 (restart-name description) pairs. No expression replay or automatic retry."
+  (unless (and (typep condition 'condition) (listp choices) (<= 1 (length choices) 8)
+               (integerp timeout-ms) (<= 100 timeout-ms 30000))
+    (error "RECOVERY_INVALID_INPUT"))
+  (let* ((ticket (format nil "~A/~A/~D" kioku.internal:*generation* kioku.internal::*request* (incf kioku.internal::*counter*)))
+         (restarts (mapcar (lambda (choice)
+                     (unless (and (listp choice) (= (length choice) 2) (symbolp (first choice))
+                                  (stringp (second choice)) (<= 1 (length (second choice)) 1024))
+                       (error "RECOVERY_INVALID_INPUT"))
+                     (or (find-restart (first choice) condition) (error "RECOVERY_RESTART_MISSING"))) choices))
+         (ids (loop for i below (length choices) collect (format nil "~A/~D" ticket i))))
+    (unless (= (length restarts) (length (remove-duplicates restarts))) (error "RECOVERY_DUPLICATE_RESTART"))
+    (let* ((reply (kioku.internal:rpc "recovery-select"
+                    (kioku.internal:object "ticket" ticket "condition" (symbol-name (type-of condition))
+                      "context" context "timeoutMs" timeout-ms
+                      "restarts" (coerce (loop for choice in choices for id in ids
+                                          collect (kioku.internal:object "id" id "description" (second choice))) 'vector))))
+           (selected (and (equal ticket (gethash "ticket" reply))
+                          (position (gethash "restartId" reply) ids :test #'equal))))
+      (unless selected (error "RECOVERY_STALE"))
+      (let ((restart (nth selected restarts)))
+        (unless (member restart (compute-restarts condition)) (error "RECOVERY_STALE"))
+        (invoke-restart restart)))))
 (in-package :kioku.environment)
 (defun status () (kioku.internal:object "generation" kioku.internal:*generation* "sbcl" (lisp-implementation-version) "os" (software-type) "architecture" (machine-type) "scratch" (namestring (kioku.files:scratch)) "executionMode" (or (uiop:getenv "KIOKU_EXECUTION_MODE") "protected") "network" (if (equal (uiop:getenv "KIOKU_EXECUTION_MODE") "development") "normal user environment" yason:false) "hostWrites" (if (equal (uiop:getenv "KIOKU_EXECUTION_MODE") "development") "owned tools and direct Lisp; only host receipts prove observed effects" "proposals only") "libraries" #("yason" "cl-ppcre" "cl-csv")))
 (in-package :kioku.tools)
@@ -285,7 +317,7 @@
   (kioku.internal:rpc "tool-call" (kioku.internal:object "name" name "args" arguments)))
 (defun describe-tools ()
   (mapcar (lambda (package) (cons package (sort (loop for symbol being the external-symbols of (find-package package) collect (symbol-name symbol)) #'string<)))
-          '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS")))
+          '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS" "KIOKU.RECOVERY")))
 (defun task-functions ()
   "List functions and macros defined in this worker's KIOKU.USER package."
   (let ((package (find-package :kioku.user)))
@@ -299,7 +331,7 @@
       (kioku.internal:object "package" "kioku.user" "generation" kioku.internal:*generation*
                             "symbols" (coerce (task-functions) 'vector))))
   (let ((package (find-package (string-upcase name))))
-    (when (and package (member (package-name package) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.CODE") :test #'equal))
+    (when (and package (member (package-name package) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS" "KIOKU.RECOVERY" "KIOKU.CODE") :test #'equal))
       (return-from describe-symbol
         (kioku.internal:object "package" (string-downcase (package-name package))
           "symbols" (coerce (sort (loop for symbol being the external-symbols of package
@@ -309,7 +341,7 @@
         (multiple-value-bind (symbol end) (read-from-string name)
           (unless (and (symbolp symbol) (symbol-package symbol) (fboundp symbol)
                        (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq name end))))
-                       (member (package-name (symbol-package symbol)) '("KIOKU.USER" "KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.CODE") :test #'equal))
+                       (member (package-name (symbol-package symbol)) '("KIOKU.USER" "KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS" "KIOKU.RECOVERY" "KIOKU.CODE") :test #'equal))
             (error "UNKNOWN_SYMBOL"))
           (kioku.internal:object "symbol" name "arguments" (kioku.internal::printed (sb-introspect:function-lambda-list symbol)) "documentation" (or (documentation symbol 'function) "No function documentation."))))))
 

@@ -5,6 +5,7 @@ import {
   ReasoningEffortId,
   LlmAdapter,
   type LlmDiscoveredModel,
+  type LlmModelInfo,
   type LlmRuntime,
   type GenerateOptions,
   type StreamChunk,
@@ -51,6 +52,7 @@ type Route = {
   connection: Connection;
   adapter: LlmAdapter;
   underlying: string;
+  models?: () => readonly LlmModelInfo[];
 };
 /**
  * Capacities for a discovered model whose endpoint and catalog disclose none.
@@ -128,7 +130,7 @@ class ModelsAdapter extends ProjectionAwareAdapter {
       !(await this.store.read(credentialKey(r.connection)))
     )
       return [];
-    return (await r.adapter.listModels(r.underlying)).map((m) => ({
+    return (r.models ? r.models() : await r.adapter.listModels(r.underlying)).map((m) => ({
       ...m,
       provider: id,
     }));
@@ -216,6 +218,7 @@ export interface ModelsServiceOptions {
     LlmRuntime,
     "registerAdapter" | "resolveCallConfig" | "discoverModels"
   >;
+  /** Optional host-attested read-only metadata. Never inject native discovery here. */
   catalog?: DshModelCatalog;
   sessionCreatedAt?: (sessionId: string) => number | undefined;
   now?: () => number;
@@ -337,10 +340,11 @@ export class KiokukoModelsService {
   }
   private catalog(): DshModelCatalog {
     if (this.options.catalog) return this.options.catalog;
-    const native = this.options.llm as ModelsServiceOptions["llm"] & Partial<DshModelCatalog>;
     return {
-      listProviders: () => native.listProviders?.() ?? this.document.connections.map(c => ({ id: c.id, name: c.name, route: this.routeMetadata(c.id)! })),
-      listModels: id => native.listModels?.(id) ?? this.adapter.listModels(id),
+      // The Models page owns these saved connections. Native global discovery
+      // may authenticate unrelated providers; it is not a read-only inventory.
+      listProviders: () => this.document.connections.map(c => ({ id: c.id, name: c.name, route: this.routeMetadata(c.id)! })),
+      listModels: id => this.adapter.listModels(id),
       resolveCallConfig: binding => this.options.llm.resolveCallConfig({ provider: binding.provider, model: binding.model,
         ...(binding.reasoningEffort !== undefined ? { reasoningEffort: ReasoningEffortId(binding.reasoningEffort) } : {}) }),
     };
@@ -490,7 +494,8 @@ export class KiokukoModelsService {
             ? { resolveAttachments: this.options.attachments }
             : {}),
         });
-        routes.set(c.id, { connection: c, underlying: c.id, adapter });
+        routes.set(c.id, { connection: c, underlying: c.id, adapter,
+          models: () => profile.piProvider!.getModels().map(m => ({provider:c.id,id:m.id,name:m.name,inputModalities:[...m.input]})) });
       }
     }
     return routes;
@@ -511,6 +516,7 @@ export class KiokukoModelsService {
     }
   }
   private async apiKey(c: Connection): Promise<string | undefined> {
+    this.lifecycle.signal.throwIfAborted();
     if (c.kind === "ollama") return "ollama";
     const current = await this.options.credentials.read(credentialKey(c));
     if (!current)
@@ -519,10 +525,14 @@ export class KiokukoModelsService {
     if (c.kind !== "nous") return undefined;
     const refreshed = await this.options.credentials.modify(
       "nous",
-      async (latest) =>
-        latest?.type === "oauth" && latest.expires <= Date.now() + 60_000
-          ? refreshNous(latest, "hermes-cli")
-          : latest,
+      async (latest) => {
+        this.lifecycle.signal.throwIfAborted();
+        const value = latest?.type === "oauth" && latest.expires <= Date.now() + 60_000
+          ? await refreshNous(latest, "hermes-cli", this.lifecycle.signal)
+          : latest;
+        this.lifecycle.signal.throwIfAborted();
+        return value;
+      },
     );
     if (refreshed?.type !== "oauth")
       throw new Error("Nous requires reauthentication");

@@ -100,6 +100,111 @@ function connection(baseURL: string, kind = "infron", id = "kiokuko-infron") {
   });
 }
 
+test('listing an expired Nous connection never refreshes or writes credentials', async (t) => {
+  const f = await fixture();
+  let refreshes = 0, mutations = 0;
+  try {
+    const c = connection('https://inference-api.nousresearch.com/v1', 'nous', 'kiokuko-nous');
+    await f.service.save(c, 0);
+    await f.store.modify('nous', async () => ({type:'oauth',access:'synthetic-access',refresh:'synthetic-refresh',expires:0}));
+    t.mock.method(globalThis, 'fetch', async () => { refreshes++; return Response.json({access_token:'synthetic-new',refresh_token:'synthetic-new-refresh',expires_in:3600}); });
+    const original = f.store.modify.bind(f.store);
+    t.mock.method(f.store, 'modify', async (...args: Parameters<CredentialFile['modify']>) => { mutations++; return original(...args); });
+    assert.equal((await f.service.models(c.id)).length, 1);
+    assert.equal(refreshes, 0);
+    assert.equal(mutations, 0);
+    assert.equal((await f.store.read('nous') as any).access, 'synthetic-access');
+  } finally { await f.close(); }
+});
+
+test('Web connection inventory never discovers unrelated native providers', async (t) => {
+  const f = await fixture();
+  let discoveries = 0;
+  try {
+    (f.llm as any).listProviders = () => [{id:'unselected',name:'Unselected'}];
+    (f.llm as any).listModels = async () => { discoveries++; throw new Error('must not authenticate'); };
+    await f.service.list();
+    assert.equal(discoveries, 0);
+  } finally { await f.close(); }
+});
+
+test('startup and repeated HTTP inventory of a saved expired connection have no authentication effects', async (t) => {
+  const f = await fixture();
+  let reopened: KiokukoModelsService | undefined, requests = 0, mutations = 0;
+  try {
+    const c = connection(CONNECTION_DEFAULTS.nous[1], 'nous', 'kiokuko-nous');
+    await f.service.save(c, 0);
+    await f.store.modify('nous', async () => ({type:'oauth',access:'synthetic-access',refresh:'synthetic-refresh',expires:0}));
+    await f.service.close();
+    t.mock.method(globalThis, 'fetch', async () => { requests++; throw new Error('inventory must not authenticate'); });
+    t.mock.method(f.store, 'modify', async () => { mutations++; throw new Error('inventory must not mutate credentials'); });
+    reopened = new KiokukoModelsService({llm:f.llm,config:f.config,credentials:f.store});
+    await reopened.start();
+    for (const query of ['', '', '?op=models&id='+c.id]) {
+      const response = await modelsResponse(reopened, new Request('http://localhost/api/kiokuko.models'+query));
+      assert.equal(response.status, 200);
+      assert.doesNotMatch(await response.text(), /synthetic-access|synthetic-refresh/);
+    }
+    assert.equal(requests, 0);
+    assert.equal(mutations, 0);
+    assert.equal((await f.store.read('nous') as any).access, 'synthetic-access');
+  } finally { await reopened?.close();await f.close(); }
+});
+
+test('shutdown cancels Nous refresh without publishing a replacement credential', {timeout:10000}, async (t) => {
+  const f = await fixture();
+  let started!: () => void;
+  const pending = new Promise<void>(resolve => { started = resolve; });
+  try {
+    const c = connection(CONNECTION_DEFAULTS.nous[1], 'nous', 'kiokuko-nous');
+    await f.service.save(c, 0);
+    await f.store.modify('nous', async () => ({type:'oauth',access:'synthetic-access',refresh:'synthetic-refresh',expires:0}));
+    t.mock.method(globalThis, 'fetch', async (_url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
+      assert.equal(init?.redirect, 'error');
+      const signal = init!.signal!;
+      started();
+      return await new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), {once:true});
+        if (signal.aborted) reject(signal.reason);
+      });
+    });
+    const call = assert.rejects(collect(f.adapter().stream({provider:c.id,model:model.id,messages:[createUserMessage({content:[{type:'text',text:'synthetic cancellation'}],source:{kind:'user'}})]})), /cancelled|abort/i);
+    await pending;
+    await f.service.close();
+    await call;
+    assert.equal((await f.store.read('nous') as any).access, 'synthetic-access');
+  } finally { await f.close(); }
+});
+
+test('Web current-model selection validates its native call configuration exactly once', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'models-single-validation-'));
+  const previous = process.env.DSH_AUTH_CREDENTIALS;
+  process.env.DSH_AUTH_CREDENTIALS = join(dir, 'synthetic-credentials.json');
+  let fetchHandler: (request: Request) => Promise<Response>, validations = 0;
+  const c = connection(CONNECTION_DEFAULTS.infron[1]);
+  const config = new ModelsConfigStore(join(dir, 'kiokuko-models.json'));
+  await config.write({version:1,revision:1,connections:[c]}, 0);
+  await new CredentialFile(process.env.DSH_AUTH_CREDENTIALS).modify('infron', async () => ({type:'api_key',key:'synthetic-only'}));
+  const agent = {status:'idle',ctx:{on:()=>()=>{}},session:{append:()=>{}}};
+  const services: any = {
+    profileContext:{name:'web',dir}, agents:{get:()=>agent},
+    llm:{registerAdapter:()=>Object.assign(()=>{}, {replace:()=>{}}), resolveCallConfig:async (binding:unknown)=>{validations++;return binding;}},
+    connection:{fetch:{register:(value:any)=>{fetchHandler=value.fetch;return ()=>{};}}},
+  };
+  const ctx = {get:(name:string)=>services[name],on:()=>()=>{}} as any;
+  let close: (()=>Promise<void>) | undefined;
+  try {
+    close = await mountKiokukoModels(ctx);
+    const response = await fetchHandler!(new Request('http://localhost/api/kiokuko.models',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({op:'select',id:c.id,model:model.id,scope:'current',sessionId:'synthetic-session'})}));
+    assert.equal(response.status,200,await response.text());
+    assert.equal(validations,1);
+  } finally {
+    await close?.();
+    if(previous===undefined)delete process.env.DSH_AUTH_CREDENTIALS;else process.env.DSH_AUTH_CREDENTIALS=previous;
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test("all supported connection kinds register stable owned routes and custom protocols remain explicit", async () => {
   const f = await fixture();
   try {

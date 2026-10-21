@@ -51,7 +51,7 @@ export async function headWorkerCandidates(catalog: ModelCatalogSnapshot, declar
 export async function validateHeadWorker(configuration: HeadWorkerConfiguration, llm: DshModelCatalog, declared: readonly ModelRoute[] = [], compatibility?: DshModelCompatibility): Promise<string[]> {
   const parsed = HeadWorkerConfigurationSchema.safeParse(configuration)
   if (!parsed.success) return ['ヘッドとサブエージェントのモデル構成が不正です。選び直してください。']
-  const catalog = safeCatalog(await readModelCatalog(llm)), routes = modelRoutesForCatalog(catalog, declared)
+  const catalog = safeCatalog(await readModelCatalog(llm, [parsed.data.head.provider, parsed.data.worker.provider])), routes = modelRoutesForCatalog(catalog, declared)
   const problems = await modelBindingProblems([{ label: 'ヘッド', binding: parsed.data.head }, { label: 'サブエージェント', binding: parsed.data.worker }], catalog, routes, compatibility)
   if (!workerForRoute(parsed.data.worker, routes)) problems.push('DeepSeek V4.1 Flash の接続とモデルIDが一致しません。接続を選び直してください。')
   return [...new Set(problems)]

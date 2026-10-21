@@ -14,6 +14,7 @@ async function post(path: string, fields: Record<string, string>, signal: AbortS
   try {
     response = await fetch(`${PORTAL}${path}`, {
       method: 'POST',
+      redirect: 'error',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
       body: new URLSearchParams(fields),
       signal,
@@ -83,8 +84,8 @@ export async function loginNous(bridge: AuthInteraction, clientId: string): Prom
 }
 
 /** Called only while CredentialFile.modify holds the cross-process lock. */
-export async function refreshNous(current: StoredOAuthCredential, clientId: string): Promise<StoredOAuthCredential> {
-  const result = await post('/api/oauth/token', { grant_type: 'refresh_token', client_id: clientId }, AbortSignal.timeout(15_000), {
+export async function refreshNous(current: StoredOAuthCredential, clientId: string, signal?: AbortSignal): Promise<StoredOAuthCredential> {
+  const result = await post('/api/oauth/token', { grant_type: 'refresh_token', client_id: clientId }, AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]), {
     'x-nous-refresh-token': current.refresh,
   })
   if (!result.response.ok) {

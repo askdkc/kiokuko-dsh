@@ -1,3 +1,4 @@
+import { LispRecoverySession } from './recovery.js'
 import type { LispNativeCommands } from '../lisp-tool-identity.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
 import { CODE_METHODS } from './code-intelligence-contracts.js'
@@ -32,6 +33,7 @@ import type { TaskLease } from '../task-state.js'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus
   execution?: LispTaskExecution | undefined;
+  recovery?: LispRecoverySession;
   taskSettlement?: Promise<void>;
   codeLease?: { evaluationId: string; adapter: CodeIntelligenceAdapterV1 };
   ownedJobs?:Set<string>; ownedCalls?:Set<Promise<unknown>>; ownedDispatches?:Set<AbortController>; ownedStop?:Promise<void>;
@@ -488,6 +490,21 @@ export class LispManager {
       if (this.#closed || state.state !== 'EVALUATING' || state.worker.generation !== context.generation || context.signal.aborted) fail('STALE_RPC', 'Code evaluation is no longer current.')
       return value
     }
+    if (method === 'recovery-select') {
+      if (!this.options.decisionCall) fail('DECISION_UNAVAILABLE', 'Typed decision host is unavailable.')
+      if (state.recovery?.evaluationId !== context.evaluationId || state.recovery.generation !== context.generation)
+        state.recovery = new LispRecoverySession(context.generation, context.evaluationId)
+      return state.recovery.select(args, context,
+        (batch, scoped) => this.options.decisionCall!(state.owner, 'decisions-evaluate', batch, scoped), async () => {
+          if (this.#closed || state.state !== 'EVALUATING' || !state.worker?.healthy || state.worker.generation !== context.generation || context.signal.aborted)
+            fail('RECOVERY_STALE', 'Recovery evaluation ended.')
+          const authority = await this.taskAuthority.authorizeEffect(state.owner)
+          const uncertain = state.ownedJobs?.size || state.worker?.hasRunningJobs || await this.#store.database(db =>
+            db.prepare("SELECT 1 FROM dsh_lisp_operations WHERE session_id=? AND state IN ('UNKNOWN','APPLYING','AWAITING_APPROVAL') LIMIT 1").get(state.owner.sessionId)
+            || db.prepare("SELECT 1 FROM dsh_owned_operations WHERE run_id=? AND session_id=? AND state IN ('unknown','started') LIMIT 1").get(authority.taskId, state.owner.sessionId))
+          if (uncertain) fail('RECOVERY_UNCERTAIN', 'Unresolved effects require receipt inspection; no restart was selected.')
+        })
+    }
     if (method === 'decisions-status' || method === 'decisions-evaluate') {
       if (!this.options.decisionCall) fail('DECISION_UNAVAILABLE', 'Typed decision host is unavailable.')
       if (method === 'decisions-status' && !z.object({}).strict().safeParse(args).success) fail('DECISION_INVALID_INPUT', 'Status takes no arguments.')
@@ -685,8 +702,8 @@ export class LispManager {
           hot: 'lisp_hot_contract authorizes schemas through the current profile approval policy and finite input/expected cases. lisp_hot_install validates and atomically selects immutable code by name for this project. lisp_hot_call pins the active version. lisp_hot_status reads revisions; lisp_hot_deactivate uses the current profile approval policy to stop new calls. Results remain session/agent-local.',
         } }
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
-        packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.packages', 'kioku.typesafe', 'kioku.decisions', 'kioku.code'],
-        api: { code: 'kioku.code:capabilities, open, outline, enclosing, query, span, semantic, release, with-snapshot. Read-only disk snapshots; handles expire at evaluation end. Check status before using data.', packages: 'kioku.packages:metadata, audit and update-lockfiles use an approval-gated public npm broker. Updates generate in protected scratch and propose frozen files, never install dependencies or write the repository directly.', scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
+        packages: ['kioku.tools', 'kioku.process', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.packages', 'kioku.typesafe', 'kioku.decisions', 'kioku.recovery', 'kioku.code'],
+        api: { recovery: 'In an explicit handler-bind, call kioku.recovery:select-restart with the condition, selected JSON state and 1-8 (restart-symbol description) pairs. The configured decision provider selects one zero-argument restart on the live stack, at most 4 times per evaluation and 30 seconds per choice. Working task required; abstention/errors abort; no expression replay. Protected disposable task workers deny RPC.', code: 'kioku.code:capabilities, open, outline, enclosing, query, span, semantic, release, with-snapshot. Read-only disk snapshots; handles expire at evaluation end. Check status before using data.', packages: 'kioku.packages:metadata, audit and update-lockfiles use an approval-gated public npm broker. Updates generate in protected scratch and propose frozen files, never install dependencies or write the repository directly.', scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
           decisions: '(kioku.decisions:status), evaluate, assess-relevance, classify-failure, assess-change. Consume selected/abstained results; ordinary reasoning on fallback, cancellation is terminal.',
           typesafe: '(kioku.typesafe:status); (kioku.typesafe:evaluate state questions :model "jev-latest" :timeout-ms 30000). Explicit semantic decisions via the host; consume answers with gethash. Strings/hash tables/vectors use JSON conventions. Catch kioku.typesafe:service-error; no retries or approval bypass. Configure with /kioku-typesafe-key.',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',

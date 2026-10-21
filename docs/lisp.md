@@ -499,3 +499,5 @@ Clean installation and platform status: [code intelligence setup](code-intellige
 ## Coding task choice and recovery
 
 For a new coding task, `coding_workflow` first defines and displays the Goal, implementation items and observable conditions. The host then asks whether to use Lisp. Configuration alone never implies yes; an explicit manual session ON is reused as the selected route. Closing the question leaves it pending and `coding_workflow next` reopens the same question. Explicit continuation after a host restart restores the task choice; a new task or material scope change asks again. A saved yes followed by startup failure remains a visible blocker; recover the runtime or explicitly change the task route with `/kioku-lisp disable`. No uses ordinary tools and still requires fresh item checks followed by a final user-entry Goal check. Lisp evaluation success alone is insufficient: bind `task_completion` and collect actual host process evidence. See [coding workflow](coding-workflow.md).
+
+Live opt-in condition/restart recovery: see [bounded recovery](lisp-recovery.md).

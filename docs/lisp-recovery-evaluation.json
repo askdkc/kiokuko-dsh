@@ -1,0 +1,693 @@
+{
+  "version": 1,
+  "baseCommit": "f59448c2e492e3dd8f9c00b16e76172cfb1d7e09",
+  "recordedAt": "2026-10-21T08:41:49.650600+00:00",
+  "sourceIdentity": {
+    "lisp/tools.lisp": "a16bd242eab2bce839ab1ee518c34654344571951967a0bea5c3d7b0cc39b193",
+    "src/dsh/lisp/recovery.ts": "94215c7f768142e4d7f6ef87e9eeaf1142a9ed5c0e44f093b04601d14dfc0388",
+    "src/dsh/lisp/manager.ts": "e2e74bb7ccc8875fa277878d68600569bd1c710300501899bef8366993c39af6",
+    "src/dsh/lisp/worker.ts": "cabfd5db7bd4df850b0fb851d45b18cb4b824a6b84b68cc70ab068aec9783edb",
+    "tests/dsh/unit/lisp/recovery.test.ts": "4ce64b9d3ecb7b1b0ffad8389395d52af6acf6589f532cf0b806676f03839acb",
+    "tests/dsh/integration/lisp/recovery-runtime.test.ts": "bc7d3126a2d1e484d0dd5618bab1a8855228ad9eb994fa4f26035bcb465b6dc8",
+    "scripts/run-lisp-recovery-evaluation.mjs": "b66985772c52e1576887861be00f26c42dcc9c0f904ef1406cfe04cc6e340901",
+    "scripts/run-lisp-typed-recovery-evaluation.mjs": "43806ec9f61839e6e0da3db9fbf5b52b701ec1466a82f0480535f177392ef0d8"
+  },
+  "checks": {
+    "focused": {
+      "tests": 10,
+      "pass": 10,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "lispSuite": {
+      "tests": 333,
+      "pass": 308,
+      "fail": 3,
+      "cancelled": 0,
+      "skipped": 22
+    },
+    "skillDelivery": {
+      "tests": 11,
+      "pass": 11,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "typecheck": {
+      "status": "passed",
+      "command": "npm run typecheck"
+    },
+    "baselinePython": {
+      "tests": 3,
+      "pass": 0,
+      "fail": 3,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "diffCheck": "passed"
+  },
+  "mutations": [
+    {
+      "mutation": "duplicate-guard",
+      "exit": 1,
+      "detected": true,
+      "assertionFailure": true
+    },
+    {
+      "mutation": "stale-guard",
+      "exit": 1,
+      "detected": true,
+      "assertionFailure": true
+    },
+    {
+      "mutation": "publication-authority",
+      "exit": 1,
+      "detected": true,
+      "assertionFailure": true
+    },
+    {
+      "mutation": "unknown-effect-gate",
+      "exit": 1,
+      "detected": true,
+      "assertionFailure": true,
+      "specificFailure": true
+    }
+  ],
+  "modelComparison": {
+    "version": 1,
+    "scope": "live-synthetic",
+    "binding": {
+      "provider": "configured-infron-route",
+      "model": "qwen/qwen3.8-27b-abliterated-cyber:free"
+    },
+    "modelRequests": 20,
+    "status": "completed",
+    "records": [
+      {
+        "family": "recovery",
+        "attempt": 0,
+        "arm": "unwound-error",
+        "uncertain": false,
+        "executionSuccess": false,
+        "recoveredValueCorrect": false,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": null,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "selection": 0,
+        "state": "FAILED",
+        "elapsedMs": 841
+      },
+      {
+        "family": "recovery",
+        "attempt": 0,
+        "arm": "live-restart",
+        "uncertain": false,
+        "executionSuccess": true,
+        "recoveredValueCorrect": true,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": null,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "selection": 0,
+        "state": "SUCCEEDED",
+        "elapsedMs": 2003
+      },
+      {
+        "family": "prototype",
+        "attempt": 0,
+        "arm": "direct",
+        "expected": 0,
+        "selected": "0",
+        "choiceCorrect": true,
+        "executionSuccess": true,
+        "probeSucceeded": null,
+        "inspected": false,
+        "workflowSatisfied": null,
+        "elapsedMs": 422
+      },
+      {
+        "family": "prototype",
+        "attempt": 0,
+        "arm": "prototype-inspected",
+        "expected": 0,
+        "selected": "0",
+        "choiceCorrect": true,
+        "executionSuccess": true,
+        "probeSucceeded": true,
+        "inspected": true,
+        "workflowSatisfied": true,
+        "elapsedMs": 421
+      },
+      {
+        "family": "recovery",
+        "attempt": 1,
+        "arm": "live-restart",
+        "uncertain": true,
+        "executionSuccess": false,
+        "recoveredValueCorrect": false,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": true,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "selection": "abstain",
+        "state": "FAILED",
+        "elapsedMs": 2096
+      },
+      {
+        "family": "recovery",
+        "attempt": 1,
+        "arm": "unwound-error",
+        "uncertain": true,
+        "executionSuccess": false,
+        "recoveredValueCorrect": false,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": true,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "selection": "abstain",
+        "state": "FAILED",
+        "elapsedMs": 412
+      },
+      {
+        "family": "prototype",
+        "attempt": 1,
+        "arm": "prototype-inspected",
+        "expected": 1,
+        "selected": "1",
+        "choiceCorrect": true,
+        "executionSuccess": true,
+        "probeSucceeded": true,
+        "inspected": true,
+        "workflowSatisfied": true,
+        "elapsedMs": 431
+      },
+      {
+        "family": "prototype",
+        "attempt": 1,
+        "arm": "direct",
+        "expected": 1,
+        "selected": "1",
+        "choiceCorrect": true,
+        "executionSuccess": true,
+        "probeSucceeded": null,
+        "inspected": false,
+        "workflowSatisfied": null,
+        "elapsedMs": 428
+      },
+      {
+        "family": "recovery",
+        "attempt": 2,
+        "arm": "unwound-error",
+        "uncertain": false,
+        "executionSuccess": false,
+        "recoveredValueCorrect": false,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": null,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "selection": 0,
+        "state": "FAILED",
+        "elapsedMs": 423
+      },
+      {
+        "family": "recovery",
+        "attempt": 2,
+        "arm": "live-restart",
+        "uncertain": false,
+        "executionSuccess": true,
+        "recoveredValueCorrect": true,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": null,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "selection": 0,
+        "state": "SUCCEEDED",
+        "elapsedMs": 2065
+      },
+      {
+        "family": "prototype",
+        "attempt": 2,
+        "arm": "direct",
+        "expected": 0,
+        "selected": "0",
+        "choiceCorrect": true,
+        "executionSuccess": true,
+        "probeSucceeded": null,
+        "inspected": false,
+        "workflowSatisfied": null,
+        "elapsedMs": 401
+      },
+      {
+        "family": "prototype",
+        "attempt": 2,
+        "arm": "prototype-inspected",
+        "expected": 0,
+        "selected": "0",
+        "choiceCorrect": true,
+        "executionSuccess": true,
+        "probeSucceeded": true,
+        "inspected": true,
+        "workflowSatisfied": true,
+        "elapsedMs": 420
+      },
+      {
+        "family": "recovery",
+        "attempt": 3,
+        "arm": "live-restart",
+        "uncertain": true,
+        "executionSuccess": false,
+        "recoveredValueCorrect": false,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": true,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "selection": "abstain",
+        "state": "FAILED",
+        "elapsedMs": 2112
+      },
+      {
+        "family": "recovery",
+        "attempt": 3,
+        "arm": "unwound-error",
+        "uncertain": true,
+        "executionSuccess": false,
+        "recoveredValueCorrect": false,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": true,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "selection": "abstain",
+        "state": "FAILED",
+        "elapsedMs": 397
+      },
+      {
+        "family": "prototype",
+        "attempt": 3,
+        "arm": "prototype-inspected",
+        "expected": 1,
+        "selected": "1",
+        "choiceCorrect": true,
+        "executionSuccess": true,
+        "probeSucceeded": true,
+        "inspected": true,
+        "workflowSatisfied": true,
+        "elapsedMs": 420
+      },
+      {
+        "family": "prototype",
+        "attempt": 3,
+        "arm": "direct",
+        "expected": 1,
+        "selected": "1",
+        "choiceCorrect": true,
+        "executionSuccess": true,
+        "probeSucceeded": null,
+        "inspected": false,
+        "workflowSatisfied": null,
+        "elapsedMs": 401
+      },
+      {
+        "family": "recovery",
+        "attempt": 4,
+        "arm": "unwound-error",
+        "uncertain": false,
+        "executionSuccess": false,
+        "recoveredValueCorrect": false,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": null,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "selection": 0,
+        "state": "FAILED",
+        "elapsedMs": 543
+      },
+      {
+        "family": "recovery",
+        "attempt": 4,
+        "arm": "live-restart",
+        "uncertain": false,
+        "executionSuccess": true,
+        "recoveredValueCorrect": true,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": null,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "selection": 0,
+        "state": "SUCCEEDED",
+        "elapsedMs": 2021
+      },
+      {
+        "family": "prototype",
+        "attempt": 4,
+        "arm": "direct",
+        "expected": 0,
+        "selected": "0",
+        "choiceCorrect": true,
+        "executionSuccess": true,
+        "probeSucceeded": null,
+        "inspected": false,
+        "workflowSatisfied": null,
+        "elapsedMs": 426
+      },
+      {
+        "family": "prototype",
+        "attempt": 4,
+        "arm": "prototype-inspected",
+        "expected": 0,
+        "selected": "0",
+        "choiceCorrect": true,
+        "executionSuccess": true,
+        "probeSucceeded": true,
+        "inspected": true,
+        "workflowSatisfied": true,
+        "elapsedMs": 418
+      }
+    ],
+    "limitations": [
+      "Five interleaved runs per arm; selected synthetic finite choices only. No general quality or superiority claim.",
+      "Recovery uses a harness decisionCall backed by the saved ordinary model adapter, not the deployed typed-decision service or native UI.",
+      "Prototype workflow is scripted: successful prototype:true evaluation and full saved-result inspection before model choice. Autonomous tool-use is unmeasured.",
+      "Source worker only; installed/running user processes are not changed. Latency includes model/worker path and excludes first worker compilation."
+    ],
+    "budget": {
+      "maxRequests": 20,
+      "maxOutputTokens": 256,
+      "maxDurationMs": 600000
+    },
+    "configurationAndCredentialsUnchanged": true,
+    "sourceHashes": {
+      "lisp/tools.lisp": "a16bd242eab2bce839ab1ee518c34654344571951967a0bea5c3d7b0cc39b193",
+      "src/dsh/lisp/recovery.ts": "94215c7f768142e4d7f6ef87e9eeaf1142a9ed5c0e44f093b04601d14dfc0388",
+      "src/dsh/lisp/manager.ts": "e2e74bb7ccc8875fa277878d68600569bd1c710300501899bef8366993c39af6",
+      "src/dsh/lisp/worker.ts": "cabfd5db7bd4df850b0fb851d45b18cb4b824a6b84b68cc70ab068aec9783edb",
+      "scripts/run-lisp-recovery-evaluation.mjs": "b66985772c52e1576887861be00f26c42dcc9c0f904ef1406cfe04cc6e340901"
+    },
+    "runtime": {
+      "node": "v26.5.0",
+      "platform": "darwin",
+      "architecture": "arm64"
+    },
+    "compilation": {
+      "state": "ready",
+      "key": "b83d85fb817a579ba6cb1e1ee9e3569ac7eb198d50e771f20c0be17b1f5007d7",
+      "reused": false,
+      "prepareMs": 6947
+    }
+  },
+  "typedDecisions": {
+    "version": 1,
+    "scope": "public-typed-decisions-live-synthetic",
+    "status": "completed",
+    "requestedModel": "jev-latest",
+    "configurationSource": "profile typedDecisions or shipped default; no user-DB selection read",
+    "records": [
+      {
+        "attempt": 0,
+        "uncertain": false,
+        "executionSuccess": true,
+        "valueCorrect": true,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": null,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "outcome": "completed",
+        "fallbackReason": null,
+        "answerStatus": "selected",
+        "returnedModel": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 644,
+          "output_tokens": 401
+        },
+        "elapsedMs": 243
+      },
+      {
+        "attempt": 1,
+        "uncertain": true,
+        "executionSuccess": false,
+        "valueCorrect": false,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": true,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "outcome": "completed",
+        "fallbackReason": null,
+        "answerStatus": "abstained",
+        "returnedModel": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 631,
+          "output_tokens": 386
+        },
+        "elapsedMs": 158
+      },
+      {
+        "attempt": 2,
+        "uncertain": false,
+        "executionSuccess": true,
+        "valueCorrect": true,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": null,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "outcome": "completed",
+        "fallbackReason": null,
+        "answerStatus": "selected",
+        "returnedModel": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 632,
+          "output_tokens": 381
+        },
+        "elapsedMs": 185
+      },
+      {
+        "attempt": 3,
+        "uncertain": true,
+        "executionSuccess": false,
+        "valueCorrect": false,
+        "selectionAppropriate": true,
+        "stoppedOnUnknown": true,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "outcome": "completed",
+        "fallbackReason": null,
+        "answerStatus": "abstained",
+        "returnedModel": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 640,
+          "output_tokens": 401
+        },
+        "elapsedMs": 160
+      },
+      {
+        "attempt": 4,
+        "uncertain": false,
+        "executionSuccess": false,
+        "valueCorrect": false,
+        "selectionAppropriate": false,
+        "stoppedOnUnknown": null,
+        "effectCount": 1,
+        "duplicateEffects": 0,
+        "outcome": "completed",
+        "fallbackReason": null,
+        "answerStatus": "abstained",
+        "returnedModel": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 641,
+          "output_tokens": 396
+        },
+        "elapsedMs": 151
+      }
+    ],
+    "budget": {
+      "maxRequests": 5,
+      "maxDurationMs": 60000
+    },
+    "limitations": [
+      "Five synthetic cases, not a general quality benchmark.",
+      "Real LispManager/worker to DecisionService/TypeSafe serializer, HTTP and result validation. Native UI and installed user process unmeasured."
+    ],
+    "configurationAndCredentialsUnchanged": true,
+    "credential": {
+      "configured": true,
+      "writable": true,
+      "source": "file"
+    },
+    "sourceHashes": {
+      "lisp/tools.lisp": "a16bd242eab2bce839ab1ee518c34654344571951967a0bea5c3d7b0cc39b193",
+      "src/dsh/lisp/recovery.ts": "94215c7f768142e4d7f6ef87e9eeaf1142a9ed5c0e44f093b04601d14dfc0388",
+      "src/dsh/lisp/manager.ts": "e2e74bb7ccc8875fa277878d68600569bd1c710300501899bef8366993c39af6",
+      "src/dsh/lisp/worker.ts": "cabfd5db7bd4df850b0fb851d45b18cb4b824a6b84b68cc70ab068aec9783edb",
+      "src/dsh/decisions/service.ts": "f7423d0a82b8fab07189f419507f539d53641ac941e99845b902ebc8c89b4f44",
+      "src/dsh/decisions/providers.ts": "ac81c87a2a1553bfcd14a173c7060b204ed2133d93889d845f5e45575c61802f",
+      "src/dsh/decisions/contracts.ts": "829121e8788ee4cea9f34335985ca368bca638924d04c170a444e41fd9f971b3",
+      "scripts/run-lisp-typed-recovery-evaluation.mjs": "43806ec9f61839e6e0da3db9fbf5b52b701ec1466a82f0480535f177392ef0d8"
+    },
+    "runtime": {
+      "node": "v26.5.0",
+      "platform": "darwin",
+      "architecture": "arm64"
+    },
+    "compilation": {
+      "state": "ready",
+      "key": "b83d85fb817a579ba6cb1e1ee9e3569ac7eb198d50e771f20c0be17b1f5007d7",
+      "reused": false,
+      "prepareMs": 7146
+    },
+    "modelRequests": 5
+  },
+  "summary": [
+    {
+      "family": "recovery",
+      "arm": "unwound-error",
+      "n": 5,
+      "executionSuccess": 0,
+      "correct": 0,
+      "appropriateSelection": 5,
+      "unknownStopped": 2,
+      "duplicateCounterEffects": 0,
+      "completeInspection": 0,
+      "latencyMs": {
+        "min": 397,
+        "median": 423,
+        "max": 841
+      }
+    },
+    {
+      "family": "recovery",
+      "arm": "live-restart",
+      "n": 5,
+      "executionSuccess": 3,
+      "correct": 3,
+      "appropriateSelection": 5,
+      "unknownStopped": 2,
+      "duplicateCounterEffects": 0,
+      "completeInspection": 0,
+      "latencyMs": {
+        "min": 2003,
+        "median": 2065,
+        "max": 2112
+      }
+    },
+    {
+      "family": "prototype",
+      "arm": "direct",
+      "n": 5,
+      "executionSuccess": 5,
+      "correct": 5,
+      "appropriateSelection": 0,
+      "unknownStopped": 0,
+      "duplicateCounterEffects": 0,
+      "completeInspection": 0,
+      "latencyMs": {
+        "min": 401,
+        "median": 422,
+        "max": 428
+      }
+    },
+    {
+      "family": "prototype",
+      "arm": "prototype-inspected",
+      "n": 5,
+      "executionSuccess": 5,
+      "correct": 5,
+      "appropriateSelection": 0,
+      "unknownStopped": 0,
+      "duplicateCounterEffects": 0,
+      "completeInspection": 5,
+      "latencyMs": {
+        "min": 418,
+        "median": 420,
+        "max": 431
+      }
+    }
+  ],
+  "generatedProtectedArtifact": {
+    "manifest": {
+      "format": 1,
+      "key": "e50c3508b41c6e6969cef7bdd0281f8da376c5cb6f164e29befa45e3fbc9a075",
+      "hash": "5c1ff482dbaf6f0fb802f4b5b27d9199926bb54a583d1b0c35058640d8d6a25c",
+      "bytes": 6794503
+    },
+    "executedValue": 42,
+    "generation": "dc9ea2d7-11d9-46bf-b6e2-b49fe50b2694",
+    "protected": true,
+    "artifactInstalled": false
+  },
+  "exploratoryMeasurements": [
+    {
+      "modelRequests": 20,
+      "harnessValid": false,
+      "reason": "Prototype inspection used an invalid page limit; not evidence of prototype workflow.",
+      "sourceHashes": null
+    },
+    {
+      "modelRequests": 20,
+      "harnessValid": true,
+      "reason": "Earlier implementation revision; superseded by final source-bound measurement.",
+      "sourceHashes": {
+        "lisp/tools.lisp": "6e7d30fa01ca1ad0ec95305c6043bd5d9e31965680b7ae3665ad7663e34e9952",
+        "src/dsh/lisp/recovery.ts": "751f55d9ed824f7ec4c74689990fd7623896b50b6bf2585153e0aaaaf9bfe301",
+        "src/dsh/lisp/manager.ts": "571f173135bf3b006e49e28e0d07a606b10ce1186d9eacf1b175ae00d2d56572",
+        "src/dsh/lisp/worker.ts": "cabfd5db7bd4df850b0fb851d45b18cb4b824a6b84b68cc70ab068aec9783edb",
+        "scripts/run-lisp-recovery-evaluation.mjs": "b66985772c52e1576887861be00f26c42dcc9c0f904ef1406cfe04cc6e340901"
+      }
+    },
+    {
+      "modelRequests": 20,
+      "harnessValid": true,
+      "reason": "Earlier implementation revision; superseded by final source-bound measurement.",
+      "sourceHashes": {
+        "lisp/tools.lisp": "a16bd242eab2bce839ab1ee518c34654344571951967a0bea5c3d7b0cc39b193",
+        "src/dsh/lisp/recovery.ts": "94215c7f768142e4d7f6ef87e9eeaf1142a9ed5c0e44f093b04601d14dfc0388",
+        "src/dsh/lisp/manager.ts": "56fdb44984d951bed6b4b5f86bf65a13027da721c6d4c0ed2bb171bbf383cb52",
+        "src/dsh/lisp/worker.ts": "cabfd5db7bd4df850b0fb851d45b18cb4b824a6b84b68cc70ab068aec9783edb",
+        "scripts/run-lisp-recovery-evaluation.mjs": "b66985772c52e1576887861be00f26c42dcc9c0f904ef1406cfe04cc6e340901"
+      }
+    },
+    {
+      "modelRequests": 5,
+      "harnessValid": true,
+      "reason": "Earlier implementation revision; superseded by final source-bound measurement.",
+      "sourceHashes": {
+        "lisp/tools.lisp": "a16bd242eab2bce839ab1ee518c34654344571951967a0bea5c3d7b0cc39b193",
+        "src/dsh/lisp/recovery.ts": "94215c7f768142e4d7f6ef87e9eeaf1142a9ed5c0e44f093b04601d14dfc0388",
+        "src/dsh/lisp/manager.ts": "56fdb44984d951bed6b4b5f86bf65a13027da721c6d4c0ed2bb171bbf383cb52",
+        "src/dsh/lisp/worker.ts": "cabfd5db7bd4df850b0fb851d45b18cb4b824a6b84b68cc70ab068aec9783edb",
+        "src/dsh/decisions/service.ts": "f7423d0a82b8fab07189f419507f539d53641ac941e99845b902ebc8c89b4f44",
+        "src/dsh/decisions/providers.ts": "ac81c87a2a1553bfcd14a173c7060b204ed2133d93889d845f5e45575c61802f",
+        "src/dsh/decisions/contracts.ts": "829121e8788ee4cea9f34335985ca368bca638924d04c170a444e41fd9f971b3",
+        "scripts/run-lisp-typed-recovery-evaluation.mjs": "43806ec9f61839e6e0da3db9fbf5b52b701ec1466a82f0480535f177392ef0d8"
+      }
+    }
+  ],
+  "evaluationRequestAccounting": {
+    "final": 25,
+    "earlier": 65,
+    "total": 90,
+    "readiness": "Two separate startup probes; one unusable response under restricted execution, one confirmed synthetic 42. Excluded from quality results."
+  },
+  "runtimeScope": {
+    "sourceTested": true,
+    "temporaryGeneratedWorkerTested": true,
+    "installedOrUserProcessUpdated": false,
+    "fullNativeUISessionTested": false
+  },
+  "baselineEnvironmentFailure": {
+    "tests": [
+      "project-workflow.test.ts",
+      "protected-python-capability.test.ts",
+      "runtime.test.ts"
+    ],
+    "cause": "/usr/bin/python3 invokes xcrun, whose libxcrun under /Applications/Xcode.app is outside the existing protected read roots. Baseline HEAD and candidate both fail these same three tests.",
+    "sandboxSourceMatchesBase": true,
+    "baselineBuild": "git archive HEAD in /tmp, shared read-only installed dependencies, tsc -p tsconfig.build.json passed",
+    "settingsChanged": false
+  },
+  "environment": {
+    "node": "v26.5.0",
+    "sbcl": "2.6.8",
+    "platform": "darwin",
+    "architecture": "arm64"
+  }
+}

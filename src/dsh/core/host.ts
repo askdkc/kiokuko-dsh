@@ -137,6 +137,7 @@ function humanTask(messages: readonly unknown[]): string {
 /** One runtime and one resource manifest shared by every configured local feature. */
 export async function mountCore(ctx: Context, input: CoreConfig = {}, registrations: readonly ModuleRegistration<CoreModuleHost>[] = []): Promise<ModuleHandle> {
   const config = CoreConfig.parse(input)
+  if (!config.enabled) return { stopIngress() {}, async drain() {}, async dispose() {} }
   const disposers: (() => void|Promise<void>)[] = [], beforeTask = new Set<(input: CoreTaskInput) => Promise<Partial<TaskProfile> | void>>()
   const disposalWork:Promise<void>[]=[]
   const active = new Map<string, { agent: NativeAgent; turn: number; task: CoreTask; taskText: string; attachmentTypes: readonly string[];

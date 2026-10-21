@@ -28,7 +28,8 @@ async function fixture() {
       return binding;
     },
   };
-  const options = { llm, config, credentials, now: () => 1_000, sessionCreatedAt: (_id: string): number | undefined => 2_000, assertCurrent: (id: string) => {
+  // This injected catalog is a read-only fixture, unlike native discovery.
+  const options = { llm, catalog:llm, config, credentials, now: () => 1_000, sessionCreatedAt: (_id: string): number | undefined => 2_000, assertCurrent: (id: string) => {
     if (!["a", "b", "c"].includes(id)) throw new Error("Open a chat before selecting its model");
     if (running) throw new Error("Connection selection must wait until this chat is idle");
   } };

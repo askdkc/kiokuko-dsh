@@ -1,7 +1,6 @@
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
 import type { Context } from "@deepseek-ai/cordis";
 import { join } from "node:path";
-import { nativeModelCatalog } from "../native-model-catalog.js";
 import { KiokukoModelsService } from "./service.js";
 import { ModelsConfigStore } from "./config-store.js";
 import { mounted } from "./session-selection.js";
@@ -123,7 +122,6 @@ export async function mountKiokukoModels(
   >();
   const service = new KiokukoModelsService({
     llm,
-    catalog: nativeModelCatalog(llm, get("settings"))!,
     sessionCreatedAt: sessionId => {
       const session = agents?.get(sessionId)?.session ?? sessions?.get(sessionId);
       return session?.id === sessionId && typeof session.header?.createdAt === "number" ? session.header.createdAt : undefined;
@@ -144,7 +142,6 @@ export async function mountKiokukoModels(
         throw new Error(
           "Connection selection must wait until this chat is idle",
         );
-      await llm.resolveCallConfig(binding);
       let selection = selections.get(agent);
       if (!selection) {
         const ref = {

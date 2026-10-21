@@ -270,9 +270,11 @@ export interface ModelCatalogSnapshot {
 }
 export async function readModelCatalog(
   llm: DshModelCatalog,
+  onlyProviders?: readonly string[],
 ): Promise<ModelCatalogSnapshot> {
   const providers = (await llm.listProviders()).filter(
-    (provider) => provider.id !== "orcarouter" && provider.route?.family !== "orcarouter",
+    (provider) => provider.id !== "orcarouter" && provider.route?.family !== "orcarouter"
+      && (onlyProviders === undefined || onlyProviders.includes(provider.id)),
   );
   const results = await Promise.allSettled(
     providers.map((provider) => llm.listModels(provider.id)),
