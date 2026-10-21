@@ -179,7 +179,7 @@ export class DiffReviewController {
     if (current.snapshot.files.some(file => file.kind === 'conflict')) throw new DiffReviewError('unmerged_conflict', 409)
     if (input.purpose && !safeReviewInput(input.purpose)) throw new DiffReviewError('unsafe_review_input', 400)
     if (!this.host.llm || !this.host.catalog) throw new DiffReviewError('model_unavailable', 503)
-    const catalog = await readModelCatalog(this.host.catalog)
+    const catalog = await readModelCatalog(this.host.catalog, [input.provider])
     if (!catalog.models.some(model => model.provider === input.provider && model.id === input.model)) throw new DiffReviewError('model_unavailable', 503)
     if (catalog.resolveCallConfig) {
       const resolved = await catalog.resolveCallConfig({ provider: input.provider, model: input.model })

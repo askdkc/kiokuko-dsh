@@ -1,7 +1,7 @@
 import { HEAD_WORKER_LABEL, HEAD_WORKER_PRESET, headWorkerCandidates, headWorkerEnnoConfiguration, validateHeadWorker, type HeadWorkerConfiguration } from './head-worker-configuration.js'
 import type { DshUserQuestionAgent, DshUserQuestions } from './user-interaction.js'
 import { explicitExecutionMode, type StoredExecutionSelection, type ExecutionSelection } from './execution-selection.js'
-import { MODEL_ROLES, MODEL_TEMPLATES, ROLE_LABELS, ModelConfigurationSchema, configurationProblems, modelRoutesForCatalog, readModelCatalog, templateBindings,
+import { MODEL_ROLES, MODEL_TEMPLATES, ROLE_LABELS, ModelBindingSchema, ModelConfigurationSchema, configurationProblems, modelRoutesForCatalog, readModelCatalog, templateBindings,
   type DshModelCatalog, type DshModelCompatibility, type ModelBinding, type ModelCatalogSnapshot, type ModelConfigurationDraft, type ModelRole, type ModelRoute, type ModelTemplate } from './model-configuration.js'
 
 import { ExecutionSelectionPending } from './execution-pending.js'
@@ -22,6 +22,7 @@ interface SelectionUiInput {
 }
 const BACK = '戻る', CANCEL = '取消・作業を保持', NEXT_PAGE = '次のページ', PREVIOUS_PAGE = '前のページ', CHANGE_PROVIDER = '接続を変更'
 const CLEAR_SEARCH = '検索をクリア', RELOAD = '一覧を再取得'
+const ENTER_MODEL_ID = 'モデルIDを直接指定'
 class SelectionDiscussion extends Error {
   constructor(readonly questionId: string, readonly text: string) { super('User requested discussion') }
 }
@@ -56,10 +57,10 @@ async function ask(input: SelectionUiInput, id: string, question: string, choice
     validation = '表示されている選択肢を選んでください。'
   }
 }
-async function selectionCatalog(input: SelectionUiInput): Promise<ModelCatalogSnapshot> {
+async function selectionCatalog(input: SelectionUiInput, onlyProviders?: readonly string[]): Promise<ModelCatalogSnapshot> {
   if (!input.llm) throw new ExecutionSelectionPending()
   while (true) {
-    try { return await readModelCatalog(input.llm) } catch {
+    try { return await readModelCatalog(input.llm, onlyProviders) } catch {
       await ask(input, 'enno-catalog-retry', 'DSHのモデル一覧を取得できません。作業を保持しています。', ['再取得'])
     }
   }
@@ -98,16 +99,25 @@ async function pickModel(input: SelectionUiInput, catalog: ModelCatalogSnapshot,
     let search = ''
     let modelPage = 0
     while (true) {
+      const unverified = catalog.unverifiedProviders?.includes(selectedProvider.id)
       const filteredModels = catalog.models.filter(m => m.provider === selectedProvider.id && `${m.id} ${m.name}`.toLowerCase().includes(search))
       const models = filteredModels.slice(modelPage * 20, (modelPage + 1) * 20)
       const displayed = models.map(m => `${m.name} [${m.id}]`)
-      const model = await ask(input, `enno-model-${role}`, `${selectedProvider.name} [${selectedProvider.id}]: ${ROLE_LABELS[role]}のモデル`, [...displayed, ...(filteredModels.length > (modelPage + 1) * 20 ? [NEXT_PAGE] : []), ...(modelPage ? [PREVIOUS_PAGE] : []), ...(search ? [CLEAR_SEARCH] : []), RELOAD, CHANGE_PROVIDER, ...copies.map(c => c.label), BACK],
-        catalog.failures.includes(selectedProvider.id) ? 'この接続のモデル一覧を取得できません。「一覧を再取得」で再試行できます。' : `${filteredModels.length ? '' : '該当するモデルがありません。'}自由入力でモデルを検索できます。別の接続を使う場合は「接続を変更」を選んでください。未登録モデルの入力や自動ダウンロードは行いません。`, true)
+      const model = await ask(input, `enno-model-${role}`, `${selectedProvider.name} [${selectedProvider.id}]: ${ROLE_LABELS[role]}のモデル`, [...displayed, ...(unverified ? [ENTER_MODEL_ID] : []), ...(filteredModels.length > (modelPage + 1) * 20 ? [NEXT_PAGE] : []), ...(modelPage ? [PREVIOUS_PAGE] : []), ...(search ? [CLEAR_SEARCH] : []), RELOAD, CHANGE_PROVIDER, ...copies.map(c => c.label), BACK],
+        unverified ? '認証なしのモデル一覧がありません。使用する正確なモデルIDを指定できます。開始の確定後にDSHで接続・モデルを検証します。'
+          : catalog.failures.includes(selectedProvider.id) ? 'この接続のモデル一覧を取得できません。「一覧を再取得」で再試行できます。' : `${filteredModels.length ? '' : '該当するモデルがありません。'}自由入力でモデルを検索できます。別の接続を使う場合は「接続を変更」を選んでください。未登録モデルの入力や自動ダウンロードは行いません。`, true)
       if (model === BACK) {
         if (!selectedFromProviderList) return undefined
         break
       }
       if (model === CHANGE_PROVIDER) break
+      if (model === ENTER_MODEL_ID && unverified) {
+        const id = await ask(input, `enno-model-id-${role}`, 'DSHに設定済みの正確なモデルID', [BACK], '利用可能とは未確認です。開始の確定後に検証し、失敗した構成は保存しません。', true)
+        if (id === BACK) continue
+        const binding = ModelBindingSchema.safeParse({ provider: selectedProvider.id, model: id })
+        if (binding.success) return binding.data
+        continue
+      }
       if (model === CLEAR_SEARCH) { search = ''; modelPage = 0; continue }
       if (model === RELOAD) { catalog = await selectionCatalog(input); modelPage = 0; continue }
       if (model === NEXT_PAGE) { modelPage++; continue }
@@ -141,7 +151,7 @@ async function templateStatus(input: SelectionUiInput, template: ModelTemplate, 
     const configuration = ModelConfigurationSchema.safeParse({ roles: templateBindings(template, route.provider, catalog), custom: false, maxConcurrentChildren: template.maxConcurrentChildren })
     if (!configuration.success) continue
     complete = true
-    if (!(await configurationProblems(configuration.data, catalog, routes, input.compatibility)).length) return '適用可能'
+    if (!(await configurationProblems(configuration.data, catalog, routes, undefined, 'catalog')).length) return '候補・接続未検証'
   }
   return complete ? '互換性の確認が必要' : 'モデル不足'
 }
@@ -172,6 +182,7 @@ async function pickHeadWorker(input: SelectionUiInput): Promise<HeadWorkerConfig
     const pair = { preset: HEAD_WORKER_PRESET, head, worker }
     const answer = await ask(input, 'head-worker-review', HEAD_WORKER_LABEL, ['この構成で開始', BACK],
       [`ヘッド: ${modelLabel(catalog, head)}`, `サブエージェント: ${modelLabel(catalog, worker)}`,
+        '候補の接続は未検証です。開始を確定した後に検証します。',
         '通常実行・Lispでは親と明示的に委譲した子、役小角では親の各役割とworkerに適用します。自動的な委譲は追加しません。',
         'この作業だけに保存します。既定値は Settings → Kiokuko Models から変更できます。'].join('\n'))
     if (answer === BACK) return undefined
@@ -279,7 +290,7 @@ async function selectExecutionChoices(input: SelectionUiInput): Promise<StoredEx
       continue
     }
     const complete = ModelConfigurationSchema.safeParse(draft)
-    const problems = complete.success ? await configurationProblems(complete.data, catalog, input.routes, input.compatibility) : ['未設定の役割を選択してください。']
+    const problems = complete.success ? await configurationProblems(complete.data, catalog, input.routes, undefined, 'catalog') : ['未設定の役割を選択してください。']
     const detail = [draft.custom ? 'カスタム' : MODEL_TEMPLATES.find(t => t.id === draft.template?.id)?.name ?? (draft.template?.id === HEAD_WORKER_PRESET ? HEAD_WORKER_LABEL : 'カスタム'),
       ...MODEL_ROLES.map(role => `${ROLE_LABELS[role]}: ${draft.roles[role] ? modelLabel(catalog, draft.roles[role]!) : '未設定'}`),
       ...problems, ...(catalog.failures.length ? [`一覧取得失敗: ${catalog.failures.join(', ')}`] : []),
@@ -290,12 +301,12 @@ async function selectExecutionChoices(input: SelectionUiInput): Promise<StoredEx
     if (selected === BACK) { screen = 'source'; continue }
     if (selected === 'この構成で開始' && complete.success && !problems.length) {
       // Revalidate immediately before adoption. No provider defaults or credentials are written.
-      const latest = await selectionCatalog(input)
+      const latest = await selectionCatalog(input, [...new Set(MODEL_ROLES.map(role => complete.data.roles[role].provider))])
+      const headWorker = savedPair && MODEL_ROLES.every(role => { const actual = complete.data.roles[role], expected = role === 'worker' ? savedPair.worker : savedPair.head; return actual.provider === expected.provider && actual.model === expected.model && actual.reasoningEffort === expected.reasoningEffort }) ? savedPair : undefined
       if ((await configurationProblems(complete.data, latest, input.routes, input.compatibility)).length) continue
+      if (headWorker && !(await headWorkerCandidates(latest, input.routes)).workers.some(binding => binding.provider === headWorker.worker.provider && binding.model === headWorker.worker.model)) continue
       const routes = modelRoutesForCatalog(latest, [...input.routes, ...(complete.data.routeBindings ?? [])])
       const usesOllama = MODEL_ROLES.some(role => routes.some(r => r.provider === complete.data.roles[role].provider && (r.family === 'ollama' || r.connection === 'local')))
-      const headWorker = savedPair && MODEL_ROLES.every(role => { const actual = complete.data.roles[role], expected = role === 'worker' ? savedPair.worker : savedPair.head; return actual.provider === expected.provider && actual.model === expected.model && actual.reasoningEffort === expected.reasoningEffort }) ? savedPair : undefined
-      if (headWorker && (await validateHeadWorker(headWorker, input.llm!, input.routes, input.compatibility)).length) continue
       await save({ mode: 'enno', status: 'ready', ...(headWorker ? { headWorker } : {}), ...(stored.value.ordinaryModel ? { ordinaryModel: stored.value.ordinaryModel } : {}), configuration: { ...complete.data, maxConcurrentChildren: usesOllama ? 1 : complete.data.maxConcurrentChildren } })
       return stored
     }

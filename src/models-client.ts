@@ -397,6 +397,7 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
           jsx("p", { children: "GPT-6.1-Sol head + DeepSeek V4.1 Flash subagents for normal chat, Lisp and Enno. Both exact models must be available; there is no automatic replacement. An approved Enno task keeps its selected models until the next task." }),
           jsx("p", { children: "Current chat: " + (sessionId ? pairSummary(pair?.current) : "Open a chat to select its pair") }),
           jsx("p", { children: "Default for new chats: " + pairSummary(pair?.default) }),
+          jsx("p", { children: "Candidates are catalog entries. Connection availability is checked when you apply the pair." }),
           ...(pair?.currentAvailable === false ? [jsx("p", { role: "status", children: "The saved head/worker pair is unavailable. Reconnect its exact models or choose another available pair." })] : []),
           ...((pair?.candidates?.problems ?? []) as string[]).map(problem => jsx("p", { role: "status", children: problem }, problem)),
           pairSelect("Head connection · GPT-6.1-Sol", headChoice, headCandidates, setHeadChoice),

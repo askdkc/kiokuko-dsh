@@ -367,10 +367,12 @@ export class KiokukoModelsService {
       revision: this.document.revision,
       headWorker: {
         candidates, current: this.selectionFor(sessionId) ?? null, default: this.document.defaultHeadWorker ?? null,
-        currentAvailable: !this.selectionFor(sessionId) || (
+        // Listing establishes catalog membership only. Authentication is checked
+        // when the user adopts the exact pair, never while rendering settings.
+        currentAvailable: !this.selectionFor(sessionId) ? true : (
           candidates.heads.some(b => b.provider === this.selectionFor(sessionId)!.head.provider && b.model === this.selectionFor(sessionId)!.head.model) &&
           candidates.workers.some(b => b.provider === this.selectionFor(sessionId)!.worker.provider && b.model === this.selectionFor(sessionId)!.worker.model)
-        ),
+        ) ? null : false,
       },
       connections: this.document.connections.map((c) => {
         const row = auth.find((a) => a.provider === credentialKey(c));

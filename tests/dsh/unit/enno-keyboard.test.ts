@@ -412,7 +412,7 @@ test('keyboard-only native card answers drive the Codex template selector throug
   let stored: StoredExecutionSelection = { revision: 0, value: { mode: 'pending', status: 'selecting' } }
   const answers = new Map([
     ['enno-execution-mode', '役小角を使う'], ['enno-model-source', 'おすすめテンプレートから選ぶ'],
-    ['enno-template', 'OpenAI Codex・推奨（dsh-codex） — 適用可能'], ['enno-model-review', 'この構成で開始'],
+    ['enno-template', 'OpenAI Codex・推奨（dsh-codex） — 候補・接続未検証'], ['enno-model-review', 'この構成で開始'],
   ])
   const seen: string[] = []
   try {

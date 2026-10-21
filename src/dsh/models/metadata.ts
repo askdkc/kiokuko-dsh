@@ -1,13 +1,18 @@
-import type { ModelRoute } from "../model-configuration.js";
+import type { ConfiguredModel, ModelRoute } from "../model-configuration.js";
+
+interface ModelOwner {
+  routeMetadata(provider: string): ModelRoute | undefined;
+  models(provider: string): PromiseLike<readonly ConfiguredModel[]>;
+}
 
 const owners = new WeakMap<
   object,
-  { routeMetadata(provider: string): ModelRoute | undefined }
+  ModelOwner
 >();
 /** Keep catalog metadata independent of optional transport libraries. */
 export function registerOwnedModels(
   llm: object,
-  owner: { routeMetadata(provider: string): ModelRoute | undefined },
+  owner: ModelOwner,
 ): () => void {
   owners.set(llm, owner);
   return () => {
@@ -19,4 +24,8 @@ export function ownedModelRoute(
   provider: string,
 ): ModelRoute | undefined {
   return owners.get(llm)?.routeMetadata(provider);
+}
+export function ownedModelsForDisplay(llm: object, provider: string): PromiseLike<readonly ConfiguredModel[]> | undefined {
+  const owner = owners.get(llm);
+  return owner?.routeMetadata(provider) ? owner.models(provider) : undefined;
 }

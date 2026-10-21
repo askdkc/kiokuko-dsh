@@ -130,7 +130,7 @@ test('an existing model draft resumes without asking for provider type or protoc
 test('dsh-codex recommendation binds its exact plugin route and starts without redundant route questions', async () => {
   const { result } = await navigate([
     ['enno-model-source', 'おすすめテンプレートから選ぶ'],
-    ['enno-template', 'OpenAI Codex・推奨（dsh-codex） — 適用可能', hasChoice('OpenAI Codex・推奨（dsh-codex） — 適用可能')],
+    ['enno-template', 'OpenAI Codex・推奨（dsh-codex） — 候補・接続未検証', hasChoice('OpenAI Codex・推奨（dsh-codex） — 候補・接続未検証')],
     ['enno-model-review', 'この構成で開始'],
   ], { routes: [] })
   assert.equal(result?.value.status, 'ready')
@@ -145,7 +145,7 @@ test('native model validation owns transport even when a legacy declaration is s
   const declared = { ...codexRoute, protocol: 'chat-completions' as const }
   const { result } = await navigate([
     ['enno-model-source', 'おすすめテンプレートから選ぶ'],
-    ['enno-template', 'OpenAI Codex・推奨（dsh-codex） — 適用可能'],
+    ['enno-template', 'OpenAI Codex・推奨（dsh-codex） — 候補・接続未検証'],
     ['enno-model-review', 'この構成で開始'],
   ], { routes: [declared] })
   assert.equal(result?.value.status, 'ready')
@@ -261,7 +261,7 @@ test('catalog changes at final adoption return to review with no ready selection
   let reads = 0
   const { result, saved } = await navigate([
     ['enno-model-source', 'おすすめテンプレートから選ぶ'],
-    ['enno-template', 'OpenAI Codex・推奨（dsh-codex） — 適用可能'],
+    ['enno-template', 'OpenAI Codex・推奨（dsh-codex） — 候補・接続未検証'],
     ['enno-model-review', 'この構成で開始'],
     ['enno-model-review', null, q => assert.equal(q.options?.some(o => o.label === 'この構成で開始'), false)],
   ], { routes: [], llm: { ...codexCatalog, listModels: async provider => {
@@ -325,7 +325,7 @@ for (const template of MODEL_TEMPLATES) test(`${template.id}: template adoption,
   const options = { llm, routes: [route], compatibility }
   const { stored } = await navigate([
     ['enno-model-source', 'おすすめテンプレートから選ぶ'],
-    ['enno-template', `${template.name} — 適用可能`, hasChoice(`${template.name} — 適用可能`)],
+    ['enno-template', `${template.name} — 候補・接続未検証`, hasChoice(`${template.name} — 候補・接続未検証`)],
     ['enno-model-review', '取消・作業を保持'],
   ], options)
   assert.deepEqual(stored.value.draft?.roles, templateBindings(template, route.provider, { providers, models, failures: [] }))

@@ -41,6 +41,24 @@ async function fixture() {
 }
 const post = (service: KiokukoModelsService, body: Record<string, unknown>) => modelsResponse(service, new Request("http://localhost/api/kiokuko.models", {method: "POST", headers: {"content-type":"application/json"}, body: JSON.stringify(body)}));
 
+test("HTTP inventory never authenticates candidates and a saved matching pair stays unverified", async () => {
+  const f = await fixture();
+  let resolutions = 0;
+  f.llm.resolveCallConfig = async binding => { resolutions++; return binding; };
+  try {
+    for (let i = 0; i < 2; i++) {
+      const response = await modelsResponse(f.service, new Request("http://localhost/api/kiokuko.models"));
+      assert.equal(response.status, 200);
+      assert.equal(resolutions, 0);
+    }
+    await f.service.selectHeadWorker(pair, "default", (await f.service.list()).revision);
+    assert.equal(resolutions, 2, "one resolution for each exact selected binding");
+    const selected = await f.service.list();
+    assert.equal(selected.headWorker.currentAvailable, null, "inventory cannot attest authentication");
+    assert.equal(resolutions, 2);
+  } finally { await f.close(); }
+});
+
 test("pair settings stay opt-in, persist per chat and freeze defaults for previously seen chats", async () => {
   const f = await fixture();
   try {

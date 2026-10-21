@@ -7,6 +7,27 @@ credential-resolving `listModels` just to show that inventory. Validation of an
 existing head/worker pair lists only those two selected providers. Current model
 selection validates its call configuration once, in the Models service.
 
+Head/worker candidates and template previews check catalog membership only. They
+do not resolve call configurations or inspect authenticated transports. Preview
+labels say the connection is unverified; a saved pair with matching catalog
+entries reports `currentAvailable: null`. Missing entries remain unavailable.
+Final adoption re-reads only selected providers and validates each distinct
+binding once; errors prevent a ready selection.
+
+The native catalog's display seam uses Kiokuko-owned read-only model metadata or
+the installed pi-ai public discovery with **only** a provider ID. The latter
+answers from its installed catalog, or refuses before credentials when the ID is
+unknown and no endpoint was supplied. It never receives a base URL, credential,
+or fallback request. Redacted configured `models` IDs and `modelOverrides` keys
+also remain candidate metadata for aliases and the DeepSeek account provider.
+Providers lacking static metadata are marked **unverified**, separately from an
+actual catalog failure. Existing draft IDs and shipped template IDs remain
+candidates; the custom picker permits an explicit exact model ID. This preserves
+selection without pretending the account's remote catalog was read. The host's
+dynamic account model names cannot be shown before confirmation without its own
+non-authenticating metadata API. Explicit validation retains native `listModels`
+and `resolveCallConfig` for the selected providers only; absent models still fail.
+
 The legacy Models transport still accepts an explicitly injected `CredentialFile`
 and owns OAuth/API-key transport authentication. Read-only listing must never
 refresh OAuth or acquire its mutation lock. Explicit Nous refresh uses the plugin

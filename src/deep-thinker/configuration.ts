@@ -33,7 +33,10 @@ export class DeepConfigurationUI {
     readonly routes: readonly ModelRoute[], readonly compatibility: DshModelCompatibility | undefined, readonly budget: DeepBudget) {}
   async problems(configuration: DeepConfiguration): Promise<string[]> {
     if (!this.catalog) return ['DSHのモデル一覧がありません']
-    const catalog = await readModelCatalog(this.catalog)
+    const catalog = await readModelCatalog(this.catalog, [...new Set([
+      ...DEEP_ROLES.map(role => configuration.roles[role].provider),
+      ...(configuration.reasoningMode === 'quality' && configuration.alternativeSolver ? [configuration.alternativeSolver.provider] : []),
+    ])])
     if (configuration.reasoningMode === 'quality' && !configuration.alternativeSolver) return ['品質重視では別案のモデルを選択してください。同じモデルも使えます。']
     const bindings = DEEP_ROLES.map(role => ({ label: labels[role] as string, binding: configuration.roles[role] }))
     if (configuration.reasoningMode === 'quality' && configuration.alternativeSolver) bindings.push({ label: '別案のモデル', binding: configuration.alternativeSolver })

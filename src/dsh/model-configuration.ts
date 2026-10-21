@@ -249,6 +249,10 @@ export interface DshModelCatalog {
   listProviders():
     readonly ConfiguredProvider[] | PromiseLike<readonly ConfiguredProvider[]>;
   listModels(provider: string): PromiseLike<readonly ConfiguredModel[]>;
+  /** Optional non-authenticating inventory seam. Native adapters must not use listModels for display. */
+  listModelsForDisplay?(provider: string): PromiseLike<readonly ConfiguredModel[] | {
+    readonly models: readonly ConfiguredModel[]; readonly complete: boolean;
+  }>;
   resolveModelInfo?(
     provider: string,
     model: string,
@@ -264,6 +268,8 @@ export interface ModelCatalogSnapshot {
   readonly providers: readonly ConfiguredProvider[];
   readonly models: readonly ConfiguredModel[];
   readonly failures: readonly string[];
+  /** Registered providers with no non-authenticating catalog; selected IDs still require live validation. */
+  readonly unverifiedProviders?: readonly string[];
   readonly resolveCallConfig?: (
     binding: ModelBinding,
   ) => PromiseLike<ModelBinding>;
@@ -277,18 +283,21 @@ export async function readModelCatalog(
       && (onlyProviders === undefined || onlyProviders.includes(provider.id)),
   );
   const results = await Promise.allSettled(
-    providers.map((provider) => llm.listModels(provider.id)),
+    providers.map((provider) => onlyProviders === undefined && llm.listModelsForDisplay
+      ? llm.listModelsForDisplay(provider.id) : llm.listModels(provider.id)),
   );
   const models: ConfiguredModel[] = [],
-    failures: string[] = [];
+    failures: string[] = [], unverifiedProviders: string[] = [];
   results.forEach((result, index) => {
     const provider = providers[index]!;
     if (result.status === "rejected") {
       failures.push(provider.id);
       return;
     }
+    const metadata = 'models' in result.value ? result.value : undefined;
+    if (metadata?.complete === false) unverifiedProviders.push(provider.id);
     const seen = new Set<string>();
-    for (const model of result.value) {
+    for (const model of metadata ? metadata.models : result.value as readonly ConfiguredModel[]) {
       if (
         model.provider !== provider.id ||
         !identity.safeParse(model.id).success ||
@@ -314,6 +323,7 @@ export async function readModelCatalog(
     }),
     models,
     failures,
+    ...(unverifiedProviders.length ? { unverifiedProviders } : {}),
     ...(llm.resolveCallConfig
       ? {
           resolveCallConfig: (binding: ModelBinding) =>
@@ -352,6 +362,7 @@ export async function configurationProblems(
   catalog: ModelCatalogSnapshot,
   routes: readonly ModelRoute[],
   compatibility?: DshModelCompatibility,
+  validation: 'catalog' | 'connection' = 'connection',
 ): Promise<string[]> {
   return modelBindingProblems(
     MODEL_ROLES.map((role) => ({
@@ -366,6 +377,7 @@ export async function configurationProblems(
       ),
     ]),
     compatibility,
+    validation,
   );
 }
 export async function modelBindingProblems(
@@ -373,6 +385,7 @@ export async function modelBindingProblems(
   catalog: ModelCatalogSnapshot,
   routes: readonly ModelRoute[],
   compatibility?: DshModelCompatibility,
+  validation: 'catalog' | 'connection' = 'connection',
 ): Promise<string[]> {
   const problems: string[] = [];
   const validations = new Map<string, PromiseLike<ModelBinding>>();
@@ -391,12 +404,16 @@ export async function modelBindingProblems(
       !catalog.models.some(
         (m) => m.provider === binding.provider && m.id === binding.model,
       )
+      && !(validation === 'catalog' && catalog.unverifiedProviders?.includes(binding.provider)
+        && catalog.providers.some(provider => provider.id === binding.provider))
     ) {
       problems.push(
         `${label}: 設定済みモデルがありません (${binding.provider} / ${binding.model})`,
       );
       continue;
     }
+    // A catalog match is a candidate, not authentication or transport evidence.
+    if (validation === 'catalog') continue;
     if (catalog.resolveCallConfig) {
       try {
         const key = JSON.stringify(binding);
@@ -452,7 +469,8 @@ export function templateBindings(
     MODEL_ROLES.flatMap((role) => {
       const id = template.models[role].find((id) =>
         catalog.models.some((m) => m.provider === provider && m.id === id),
-      );
+      ) ?? (catalog.unverifiedProviders?.includes(provider) && catalog.providers.some(p => p.id === provider)
+        ? template.models[role][0] : undefined);
       return id === undefined ? [] : [[role, { provider, model: id }]];
     }),
   );

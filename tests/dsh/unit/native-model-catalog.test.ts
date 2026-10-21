@@ -33,7 +33,7 @@ test('native connection metadata recognizes aliases without reading credentials 
     assert.deepEqual(options, { redactSecrets: true })
     descriptions++
     return [{ ns: 'llm-pi-ai', value: { providers: profiles } }]
-  } })!)
+  } })!, [...Object.keys(profiles), 'deepseek-official', 'custom-plugin'])
   assert.equal(descriptions, 1, 'read redacted connection metadata once per catalog')
   const routes = modelRoutesForCatalog(catalog, [{ provider: 'my-orca', family: 'openai', connection: 'api', protocol: 'responses' }])
   const route = (provider: string) => routes.find(r => r.provider === provider)
@@ -56,6 +56,7 @@ test('a live settings descriptor allows the recommended template to reach review
     listProviders: () => [{ id: provider, name: 'OpenAI' }],
     listConfigurableProviders: () => [{ provider, settingsNs: 'llm-pi-ai', settingsPath: ['providers', provider], declared: true }],
     listModels: async () => ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].map(id => ({ provider, id, name: id })),
+    discoverModels: async () => ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].map(id => ({ id, name: id })),
   }
   const catalog = nativeModelCatalog(llm, { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { openai: { baseURL: 'https://api.openai.com/v1', api: 'openai-responses' } } } }] })!
   let stored: StoredExecutionSelection = { revision: 0, value: { mode: 'enno', status: 'selecting' } }
@@ -65,9 +66,9 @@ test('a live settings descriptor allows the recommended template to reach review
     questions: { ask: async request => {
       const question = request.questions[0]!
       seen.push(question.id)
-      if (question.id === 'enno-template') assert.ok(question.options?.some(option => option.label === 'OpenAI — 適用可能'))
+      if (question.id === 'enno-template') assert.ok(question.options?.some(option => option.label === 'OpenAI — 候補・接続未検証'))
       const selected = question.id === 'enno-model-source' ? 'おすすめテンプレートから選ぶ'
-        : question.id === 'enno-template' ? 'OpenAI — 適用可能' : '取消・作業を保持'
+        : question.id === 'enno-template' ? 'OpenAI — 候補・接続未検証' : '取消・作業を保持'
       return { answers: [{ id: question.id, selected: [selected] }] }
     } },
   }), ExecutionSelectionPending)
@@ -81,7 +82,7 @@ test('optional settings metadata failure cannot block the DSH model catalog', as
     listConfigurableProviders: () => [{ provider: 'openai', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openai'] }],
     listModels: async () => [{ provider: 'openai', id: 'gpt-6-astra', name: 'Astra' }],
   }
-  const catalog = await readModelCatalog(nativeModelCatalog(llm, { describe: () => { throw new Error('settings unavailable') } })!)
+  const catalog = await readModelCatalog(nativeModelCatalog(llm, { describe: () => { throw new Error('settings unavailable') } })!, ['openai'])
   assert.deepEqual(catalog.providers, [{ id: 'openai', name: 'OpenAI', route: { provider: 'openai', family: 'other', connection: 'api', protocol: 'unknown' } }])
   assert.deepEqual(catalog.models, [{ provider: 'openai', id: 'gpt-6-astra', name: 'Astra' }])
 })
@@ -98,7 +99,7 @@ test('DSH validation keeps the native service receiver and rejects unavailable o
       return mode === 'substitute' ? { ...input, provider: 'another-router' } : input
     },
   }
-  const catalog = await readModelCatalog(nativeModelCatalog(llm)!)
+  const catalog = await readModelCatalog(nativeModelCatalog(llm)!, [binding.provider])
   const roles = ['分解', '解決', '検証', '集約'].map(label => ({ label, binding }))
   assert.deepEqual(await modelBindingProblems(roles, catalog, []), [])
   assert.equal(calls, 1, 'validate a shared binding only once per review')
@@ -119,7 +120,7 @@ test('DSH validation rejects a dropped or changed explicit reasoning effort', as
     listProviders: () => [{ id: binding.provider, name: 'DeepSeek' }],
     listModels: async () => [{ provider: binding.provider, id: binding.model, name: 'Flash' }],
     resolveCallConfig: async (input: ModelBinding) => ({ ...input, reasoningEffort: resolvedEffort }),
-  })!)
+  })!, [binding.provider])
   const check = (requested: ModelBinding) => modelBindingProblems([{ label: '解決', binding: requested }], catalog, [])
   assert.deepEqual(await check(binding), [])
   resolvedEffort = undefined

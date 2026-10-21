@@ -31,15 +31,24 @@ function workerForRoute(binding: ModelBinding, routes: readonly ModelRoute[]): b
 export async function headWorkerCandidates(catalog: ModelCatalogSnapshot, declared: readonly ModelRoute[] = [], compatibility?: DshModelCompatibility): Promise<{
   heads: ModelBinding[]; workers: ModelBinding[]; problems: string[]
 }> {
-  catalog = safeCatalog(catalog)
   const routes = modelRoutesForCatalog(catalog, declared)
   const heads: ModelBinding[] = [], workers: ModelBinding[] = [], problems: string[] = []
-  for (const model of catalog.models) {
+  // The preset supplies exact candidate IDs even when a native account cannot
+  // expose its remote catalog without authenticating. Adoption still validates
+  // that exact provider/model through the normal host connection.
+  const unverified = (catalog.unverifiedProviders ?? []).flatMap(provider => {
+    const family = routes.find(route => route.provider === provider)?.family
+    const id = family === 'deepseek' ? workerIds[0]
+      : family === 'opencode-go' || family === 'opencode-zen' ? workerIds[1]
+        : family === 'openrouter' ? workerIds[2] : family === 'openai' ? 'gpt-6.1-sol' : undefined
+    return id && !catalog.models.some(model => model.provider === provider && model.id === id) ? [{ provider, id, name: id }] : []
+  })
+  for (const model of [...catalog.models, ...unverified]) {
     const binding = { provider: model.provider, model: model.id }
     const head = model.id === 'gpt-6.1-sol'
     const worker = workerForRoute(binding, routes)
     if (!head && !worker) continue
-    const failures = await modelBindingProblems([{ label: head ? 'ヘッド' : 'サブエージェント', binding }], catalog, routes, compatibility)
+    const failures = await modelBindingProblems([{ label: head ? 'ヘッド' : 'サブエージェント', binding }], catalog, routes, undefined, 'catalog')
     if (failures.length) { problems.push(...failures); continue }
     ;(head ? heads : workers).push(binding)
   }
