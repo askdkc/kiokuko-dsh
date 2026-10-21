@@ -28,6 +28,13 @@ dynamic account model names cannot be shown before confirmation without its own
 non-authenticating metadata API. Explicit validation retains native `listModels`
 and `resolveCallConfig` for the selected providers only; absent models still fail.
 
+Deep's role and alternative-model picker follows the same incomplete-inventory
+contract: select a registered provider and enter an exact model ID, then validate
+only on Save. Unknown providers, absent models and connection failures cannot
+become an applied configuration. Native test adapters explicitly attest their
+pure display metadata; separate native cases disable that seam to exercise the
+real incomplete-inventory path rather than authenticating during display.
+
 The legacy Models transport still accepts an explicitly injected `CredentialFile`
 and owns OAuth/API-key transport authentication. Read-only listing must never
 refresh OAuth or acquire its mutation lock. Explicit Nous refresh uses the plugin

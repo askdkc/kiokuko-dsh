@@ -2,7 +2,7 @@ import { LegacyDeepConfigurationSchema } from './core/contracts.js'
 import { z } from 'zod'
 import { modelBindingProblems, modelRoutesForCatalog, readModelCatalog, type DshModelCatalog, type DshModelCompatibility, type ModelCatalogSnapshot, type ModelRoute } from '../dsh/model-configuration.js'
 import type { DshUserQuestions } from '../dsh/user-interaction.js'
-import { DeepBudgetSchema, DeepConfigurationSchema, DEEP_ROLES, type DeepConfiguration, type DeepModel, type DeepBudget } from './core/contracts.js'
+import { DeepBudgetSchema, DeepConfigurationSchema, DeepModelSchema, DEEP_ROLES, type DeepConfiguration, type DeepModel, type DeepBudget } from './core/contracts.js'
 import { currentDeepModel } from './current-model.js'
 import type { DeepStore } from './store.js'
 import type { DeepNativeAgent } from './native-executor.js'
@@ -118,12 +118,26 @@ export class DeepConfigurationUI {
     }
   }
   async #pickModel(agent: DeepNativeAgent, signal: AbortSignal, catalog: ModelCatalogSnapshot, role: string, copy?: DeepModel): Promise<DeepModel | undefined> {
-    let query = '', page = 0
+    let query = '', page = 0, inputProblem = ''
     while (true) {
       const matches = catalog.models.filter(m => `${m.provider} ${m.id} ${m.name}`.toLowerCase().includes(query))
       const models = matches.slice(page * 20, (page + 1) * 20), labels = models.map(m => `${m.provider} / ${m.name} [${m.id}]`)
-      const choice = await deepQuestion(this.questions, agent, signal, 'deep-role-model', `${role}のモデル`, [...labels, ...(copy ? ['設定済みの役割からコピー'] : []), ...(page ? ['前のページ'] : []), ...(matches.length > (page + 1) * 20 ? ['次のページ'] : []), '戻る'], '自由入力で接続ID・モデルID・名前を検索できます。')
+      const unverified = catalog.providers.filter(provider => catalog.unverifiedProviders?.includes(provider.id))
+      const choice = await deepQuestion(this.questions, agent, signal, 'deep-role-model', `${role}のモデル`, [...labels, ...(unverified.length ? ['接続とモデルIDを指定'] : []), ...(copy ? ['設定済みの役割からコピー'] : []), ...(page ? ['前のページ'] : []), ...(matches.length > (page + 1) * 20 ? ['次のページ'] : []), '戻る'],
+        ['自由入力で接続ID・モデルID・名前を検索できます。', unverified.length ? '認証なしの一覧がない接続は正確なIDを指定できます。利用可能とは未確認です。保存を確定した後に検証します。' : '', inputProblem].filter(Boolean).join('\n'))
       if (choice === '戻る') return undefined
+      if (choice === '接続とモデルIDを指定' && unverified.length) {
+        const names = unverified.map(provider => `${provider.name} [${provider.id}]`)
+        const selected = await deepQuestion(this.questions, agent, signal, 'deep-role-provider', '登録済みの接続ID', [...names, '戻る'], '表示された接続、またはその正確な接続IDを指定してください。')
+        if (selected === '戻る') continue
+        const provider = unverified.find((provider, index) => selected === names[index] || selected === provider.id)
+        if (!provider) { inputProblem = '指定された接続は登録されていません。表示された接続IDを選択してください。'; continue }
+        const model = await deepQuestion(this.questions, agent, signal, 'deep-role-model-id', `${provider.name} [${provider.id}] の正確なモデルID`, ['戻る'], '接続とモデルは保存確定時に検証します。利用できないモデルは保存しません。')
+        if (model === '戻る') continue
+        const binding = DeepModelSchema.safeParse({ provider: provider.id, model })
+        if (binding.success) return binding.data
+        inputProblem = 'モデルIDが不正です。正確なモデルIDを指定してください。'; continue
+      }
       if (choice === '前のページ') { page--; continue }
       if (choice === '次のページ') { page++; continue }
       if (choice === '設定済みの役割からコピー' && copy) return { ...copy }

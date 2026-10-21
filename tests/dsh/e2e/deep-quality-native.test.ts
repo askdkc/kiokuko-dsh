@@ -32,7 +32,8 @@ test('quality uses native command, alternative model, reservations and read-only
   f.provider.listModels=async(provider:string)=>[{provider,id:'mock',name:'Mock'},{provider,id:'alternative',name:'Alternative'}]
   let unmount: (() => unknown) | undefined, connectionFiber: any
   try {
-    await f.command('/deep-planning --configure');assert.equal(steps.length,0)
+    const configured = await f.command('/deep-planning --configure')
+    assert.equal(configured.result.kind, 'success', JSON.stringify(configured));assert.equal(steps.length,0)
     await f.command('/deep-planning Design a bounded read-only quality analysis')
     const intent=await f.complete();assert.ok(intent?.runId)
     const state=await f.deep.store.read(intent.runId),root=state.nodes[0]!

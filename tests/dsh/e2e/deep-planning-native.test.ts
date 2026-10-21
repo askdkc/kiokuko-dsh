@@ -87,7 +87,7 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
 })
 
 const nativeOptions = { skip: packages ? false : 'requires the pinned DSH package runtime', timeout: 30_000 }
-for (const [providerId, modelId] of [['openrouter', 'deepseek/deepseek-v4.1-flash'], ['deepseek-official', 'deepseek-flash']]) {
+for (const [providerId, modelId] of [['openrouter', 'deepseek/deepseek-v4.1-flash'], ['deepseek-official', 'deepseek-flash']] as const) {
   test(`Deep native: select ${providerId} once per role, save, reopen and dispatch without connection questions`, nativeOptions, async () => {
     const steps = ['分解', '解決', '検証', '集約'].flatMap(role => [
       { id: 'deep-configuration', prefix: `${role}:` },
@@ -110,13 +110,15 @@ for (const [providerId, modelId] of [['openrouter', 'deepseek/deepseek-v4.1-flas
       f.mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),
 
     ], [modelId!])
-    const unregister = f.ctx.llm.registerAdapter([providerId], selected)
+    const unregister = f.registerAdapter([providerId], selected)
     try {
       // The parent model is absent: all four roles must be explicitly selected.
       f.parent.options.provider = 'unregistered-parent'
-      assert.equal((await f.command('/deep-planning --configure')).result.kind, 'success')
+      const first = await f.command('/deep-planning --configure')
+      assert.equal(first.result.kind, 'success', JSON.stringify(first))
       assert.equal(await f.deep.configuration.resolve('deep-cases', f.parent), null, 'closing saves only a draft')
-      assert.equal((await f.command('/deep-planning --configure')).result.kind, 'success')
+      const reopened = await f.command('/deep-planning --configure')
+      assert.equal(reopened.result.kind, 'success', JSON.stringify(reopened))
       const saved = await f.deep.configuration.resolve('deep-cases', f.parent)
       assert.ok(saved)
       for (const role of Object.values(saved.roles)) assert.deepEqual(role, { provider: providerId, model: modelId })
@@ -135,6 +137,70 @@ for (const [providerId, modelId] of [['openrouter', 'deepseek/deepseek-v4.1-flas
       }
       assert.equal(f.provider.requests.length, 0, 'the original provider is never substituted')
       assert.equal(observed.length, 10, 'reopening and execution do not repeat model or connection selection')
+    } finally { unregister(); await f.close() }
+  })
+}
+for (const outcome of ['success', 'unknown-provider', 'missing-model', 'connection-failure'] as const) {
+  test(`Deep native: incomplete inventory exact IDs ${outcome}`, nativeOptions, async () => {
+    let chosen = 0, confirmed = false, unknownEntered = false, diagnostic = ''
+    let listings = 0, resolutions = 0
+    const providerId = 'incomplete-native', modelId = 'configured-model'
+    const labels = ['分解', '解決', '検証', '集約']
+    const f = await deepNativeFixture(() => [], { displayMetadata: false, questions: async request => {
+      const q = request.questions[0]
+      if (!confirmed) { assert.equal(listings, 0, 'preview must not authenticate'); assert.equal(resolutions, 0) }
+      let answer: string
+      if (q.id === 'deep-configuration') {
+        if (confirmed) { diagnostic = q.detail; answer = '閉じる・下書きを保持' }
+        else if (chosen < labels.length) answer = q.options.find((o: any) => o.label.startsWith(`${labels[chosen]}:`))!.label
+        else { confirmed = true; answer = '保存' }
+      } else if (q.id === 'deep-role-model') {
+        if (unknownEntered) { diagnostic = q.detail; answer = '閉じる・下書きを保持' }
+        else {
+          assert.ok(q.options.some((o: any) => o.label === '接続とモデルIDを指定'), JSON.stringify(q))
+          answer = '接続とモデルIDを指定'
+        }
+      } else if (q.id === 'deep-role-provider') {
+        answer = outcome === 'unknown-provider' ? 'not-registered' : providerId
+        unknownEntered = outcome === 'unknown-provider'
+      } else {
+        assert.equal(q.id, 'deep-role-model-id', JSON.stringify(q))
+        answer = outcome === 'missing-model' ? 'not-advertised' : modelId; chosen++
+      }
+      return { answers: [{ id: q.id, selected: [answer] }] }
+    } })
+    const selected = new f.mock.MockAdapter([
+      f.mock.textResponse('{"kind":"leaf","reason":"bounded"}'),
+      f.mock.textResponse('{"kind":"candidate","answer":"Use the explicitly configured route.","evidence":[],"assumptions":[],"unresolved":[]}'),
+      f.mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"covered","evidence":[]}'),
+    ], [modelId])
+    selected.listModels = async id => { listings++; return [{ provider: id, id: modelId, name: modelId }] }
+    selected.resolveModel = async (provider, id) => {
+      resolutions++
+      if (outcome === 'connection-failure') throw Error('synthetic native connection unavailable')
+      return { provider, id, name: id }
+    }
+    const unregister = f.registerAdapter([providerId], selected)
+    try {
+      assert.equal(f.ctx.llm.listModelsForDisplay, undefined, 'exercise the real incomplete native inventory seam')
+      f.parent.options.provider = 'unregistered-parent'
+      const configured = await f.command('/deep-planning --configure')
+      assert.equal(configured.result.kind, 'success', JSON.stringify(configured))
+      const saved = await f.deep.configuration.resolve('deep-cases', f.parent)
+      if (outcome !== 'success') {
+        assert.equal(saved, null); assert.ok(diagnostic, 'a rejection must remain visible')
+        assert.equal(listings, outcome === 'unknown-provider' ? 0 : 1)
+        assert.equal(resolutions, outcome === 'connection-failure' ? 1 : 0)
+        return
+      }
+      assert.ok(saved)
+      for (const binding of Object.values(saved.roles)) assert.deepEqual(binding, { provider: providerId, model: modelId })
+      assert.equal(listings, 1); assert.equal(resolutions, 1)
+      const dispatched = await f.command('/deep-planning Verify the explicit route')
+      assert.equal(dispatched.result.kind, 'success', JSON.stringify(dispatched))
+      const intent = await f.complete(), state = await f.deep.store.read(intent!.runId!)
+      assert.equal(state.phase, 'answered', state.reason ?? '')
+      assert.equal(selected.requests.length, 3); assert.equal(f.provider.requests.length, 0)
     } finally { unregister(); await f.close() }
   })
 }
