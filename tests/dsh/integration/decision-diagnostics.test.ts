@@ -54,13 +54,15 @@ test('migration adds decision attempts and causal events without changing existi
 test('migration upgrades a populated 043 DB, is idempotent and rolls back an interrupted schema change', t=>{
   const root=mkdtempSync(join(tmpdir(),'diagnostic-upgrade-'));t.after(()=>rmSync(root,{recursive:true,force:true}))
   const old=join(root,'old');mkdirSync(old)
-  for(const source of loadMigrationSnapshot().migrations.filter(m=>m.version<=43))writeFileSync(join(old,source.name),source.sql)
+  const snapshot=loadMigrationSnapshot()
+  for(const source of snapshot.migrations.filter(m=>m.version<=43))writeFileSync(join(old,source.name),source.sql)
   const db=openConnection(join(root,'old.sqlite3'));t.after(()=>db.close());migrateDatabase(db,old)
   db.prepare('INSERT INTO dsh_decision_bindings VALUES(?,?,?)').run('existing','{}',hash({}))
   db.prepare('INSERT INTO dsh_decision_results VALUES(?,?,?)').run('existing',hash('old'),'OLD_RESULT_RETAINED')
   assert.throws(()=>migrateDatabase(db,undefined,{beforeMarkApplied(_db,m){if(m.version===44)throw new Error('crash-cut')}}),/crash-cut/)
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='dsh_diagnostic_attempts'").get(),undefined)
-  assert.deepEqual(migrateDatabase(db).applied,[44]);assert.deepEqual(migrateDatabase(db).applied,[])
+  assert.equal(db.prepare('SELECT max(version) AS version FROM schema_migrations').get()!.version,43)
+  assert.deepEqual(migrateDatabase(db).applied,snapshot.migrations.filter(m=>m.version>43).map(m=>m.version));assert.deepEqual(migrateDatabase(db).applied,[])
   assert.equal(db.prepare('SELECT result_json FROM dsh_decision_results WHERE request_id=?').get('existing')!.result_json,'OLD_RESULT_RETAINED')
 })
 

@@ -167,6 +167,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'context_delivery_entries',
         'context_delivery_omissions',
         'context_feedback',
+        'correction_classifications',
         'dsh_agenticreplay_session_choices',
         'dsh_agenticreplay_trace_run_links',
         'dsh_agenticreplay_traces',
