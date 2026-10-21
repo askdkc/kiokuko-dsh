@@ -51,18 +51,32 @@ test('migration adds decision attempts and causal events without changing existi
   } finally { db.close() }
 })
 
-test('migration upgrades a populated 043 DB, is idempotent and rolls back an interrupted schema change', t=>{
+test('migration upgrades a populated pre-diagnostics DB, is idempotent and rolls back an interrupted schema change', t=>{
   const root=mkdtempSync(join(tmpdir(),'diagnostic-upgrade-'));t.after(()=>rmSync(root,{recursive:true,force:true}))
   const old=join(root,'old');mkdirSync(old)
   const snapshot=loadMigrationSnapshot()
-  for(const source of snapshot.migrations.filter(m=>m.version<=43))writeFileSync(join(old,source.name),source.sql)
+  const targets=snapshot.migrations.filter(m=>m.name.slice(m.name.indexOf('_')+1,-'.sql'.length)==='decision_diagnostics')
+  assert.equal(targets.length,1,'Expected exactly one decision_diagnostics migration')
+  const target=targets[0]!,targetIndex=snapshot.migrations.indexOf(target)
+  assert.ok(targetIndex>0,'Diagnostics migration needs a preceding storage schema')
+  for(const source of snapshot.migrations.slice(0,targetIndex))writeFileSync(join(old,source.name),source.sql)
   const db=openConnection(join(root,'old.sqlite3'));t.after(()=>db.close());migrateDatabase(db,old)
   db.prepare('INSERT INTO dsh_decision_bindings VALUES(?,?,?)').run('existing','{}',hash({}))
   db.prepare('INSERT INTO dsh_decision_results VALUES(?,?,?)').run('existing',hash('old'),'OLD_RESULT_RETAINED')
-  assert.throws(()=>migrateDatabase(db,undefined,{beforeMarkApplied(_db,m){if(m.version===44)throw new Error('crash-cut')}}),/crash-cut/)
+  const historyBefore=db.prepare('SELECT version,name,checksum FROM schema_migrations ORDER BY version').all()
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='dsh_diagnostic_attempts'").get(),undefined)
-  assert.equal(db.prepare('SELECT max(version) AS version FROM schema_migrations').get()!.version,43)
-  assert.deepEqual(migrateDatabase(db).applied,snapshot.migrations.filter(m=>m.version>43).map(m=>m.version));assert.deepEqual(migrateDatabase(db).applied,[])
+  const interruption=new Error('diagnostics migration interrupted')
+  assert.throws(()=>migrateDatabase(db,undefined,{beforeMarkApplied(database,m){if(m.name===target.name){
+    for(const table of ['dsh_diagnostic_attempts','dsh_diagnostic_events','dsh_diagnostic_gaps','dsh_diagnostic_reviews'])
+      assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table),table)
+    assert.equal(database.prepare('SELECT version FROM schema_migrations WHERE name=?').get(target.name),undefined)
+    throw interruption
+  }}}),error=>error===interruption)
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='dsh_diagnostic_attempts'").get(),undefined)
+  assert.deepEqual(db.prepare('SELECT version,name,checksum FROM schema_migrations ORDER BY version').all(),historyBefore)
+  assert.equal(db.prepare('SELECT result_json FROM dsh_decision_results WHERE request_id=?').get('existing')!.result_json,'OLD_RESULT_RETAINED')
+  assert.deepEqual(migrateDatabase(db).applied,snapshot.migrations.slice(targetIndex).map(m=>m.version));assert.deepEqual(migrateDatabase(db).applied,[])
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='dsh_diagnostic_attempts'").get())
   assert.equal(db.prepare('SELECT result_json FROM dsh_decision_results WHERE request_id=?').get('existing')!.result_json,'OLD_RESULT_RETAINED')
 })
 
